@@ -719,10 +719,10 @@ private:
     {
         AstNode* defined = nullptr;
         std::optional<Location> function;
-        bool import = false;
-        bool used = false;
-        bool softUsed = false;
-        bool arg = false;
+        bool import;
+        bool used;
+        bool softUsed;
+        bool arg;
     };
 
     struct Global
@@ -809,13 +809,22 @@ private:
         LintWarning::Code warning;
 
         if (info.function)
-        {
-            warning = LintWarning::Code_FunctionUnused;
             if (info.softUsed)
-                msg = "Function '%s' is never used outside its own body; prefix with '_' to silence";
+                emitWarning(
+                    *context,
+                    LintWarning::Code_FunctionUnused,
+                    local->location,
+                    "Function '%s' is never used outside its own body; prefix with '_' to silence",
+                    local->name.value
+                );
             else
-                msg = "Function '%s' is never used; prefix with '_' to silence";
-        }
+                emitWarning(
+                    *context,
+                    LintWarning::Code_FunctionUnused,
+                    local->location,
+                    "Function '%s' is never used; prefix with '_' to silence",
+                    local->name.value
+                );
         else if (info.import)
         {
             warning = LintWarning::Code_ImportUnused;
@@ -890,18 +899,14 @@ private:
         l.defined = node;
         l.function = true;
 
-        l.scopeDepth++;
-        node->func->visit(this);
-        l.scopeDepth--;
-
-        return false;
+        return true;
     }
 
     bool visit(AstExprLocal* node) override
     {
         Local& l = locals[node->local];
 
-        if (FFlag::LuauFunctionUnusedRecursiveLinting && l.function && l.scopeDepth > 0)
+        if (l.function && l.function.value().contains(node->location.begin))
             l.softUsed = true;
         else
             l.used = true;
@@ -976,12 +981,10 @@ private:
 
     struct Global
     {
-        unsigned int scopeDepth = 0;
-        bool func = false;
-        bool used = false;
-        bool softUsed = false;
-
-        Location nameLocation;
+        Location location;
+        std::optional<Location> function;
+        bool softUsed;
+        bool used;
     };
 
     DenseHashMap<AstName, Global> globals;
@@ -995,16 +998,24 @@ private:
     {
         for (auto& g : globals)
         {
-            if (!g.second.func || g.second.used || g.first.value[0] == '_')
+            if (!g.second.function || g.second.used || g.first.value[0] == '_')
                 continue;
-
-            const char* msg;
             if (g.second.softUsed)
-                msg = "Function '%s' is never used outside its own body; prefix with '_' to silence";
+                emitWarning(
+                    *context,
+                    LintWarning::Code_FunctionUnused,
+                    g.second.location,
+                    "Function '%s' is never used outside its own body; prefix with '_' to silence",
+                    g.first.value
+                );
             else
-                msg = "Function '%s' is never used; prefix with '_' to silence";
-
-            emitWarning(*context, LintWarning::Code_FunctionUnused, g.second.nameLocation, msg, g.first.value);
+                emitWarning(
+                    *context,
+                    LintWarning::Code_FunctionUnused,
+                    g.second.location,
+                    "Function '%s' is never used; prefix with '_' to silence",
+                    g.first.value
+                );
         }
     }
 
@@ -1018,9 +1029,10 @@ private:
         g.func = true;
         g.nameLocation = expr->location;
 
-        g.scopeDepth++;
-        node->func->visit(this);
-        g.scopeDepth--;
+            g.function.emplace(node->location);
+            g.location = expr->location;
+
+            node->func->visit(this);
 
         return false;
     }
@@ -1029,7 +1041,7 @@ private:
     {
         Global& g = globals[node->name];
 
-        if (g.func && g.scopeDepth > 0)
+        if (g.function && g.function.value().contains(node->location.begin))
             g.softUsed = true;
         else
             g.used = true;
