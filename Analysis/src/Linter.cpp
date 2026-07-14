@@ -835,9 +835,12 @@ private:
                 *context, LintWarning::Code_ImportUnused, local->location, "Import '%s' is never used; prefix with '_' to silence", local->name.value
             );
         else
-            emitWarning(
-                *context, LintWarning::Code_LocalUnused, local->location, "Variable '%s' is never used; prefix with '_' to silence", local->name.value
-            );
+        {
+            warning = LintWarning::Code_LocalUnused;
+            msg = "Variable '%s' is never used; prefix with '_' to silence";
+        }
+
+        emitWarning(*context, warning, local->location, msg, local->name.value);
     }
 
     bool isRequireCall(AstExpr* expr)
