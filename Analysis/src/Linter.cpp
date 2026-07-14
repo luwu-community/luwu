@@ -976,18 +976,12 @@ private:
 
     struct Global
     {
-<<<<<<< HEAD
-        Location location;
-        bool function;
-        bool used;
-=======
         unsigned int scopeDepth = 0;
         bool func = false;
-        bool usedOutsideSelf = false;
-        bool usedRecursively = false;
+        bool used = false;
+        bool softUsed = false;
 
         Location nameLocation;
->>>>>>> d7d2be8e (renames)
     };
 
     DenseHashMap<AstName, Global> globals;
@@ -1001,52 +995,41 @@ private:
     {
         for (auto& g : globals)
         {
-<<<<<<< HEAD
-            if (g.second.function && !g.second.used && g.first.value[0] != '_')
-                emitWarning(
-                    *context,
-                    LintWarning::Code_FunctionUnused,
-                    g.second.location,
-                    "Function '%s' is never used; prefix with '_' to silence",
-                    g.first.value
-                );
-=======
-            if (!g.second.func || g.second.usedOutsideSelf || g.first.value[0] == '_')
+            if (!g.second.func || g.second.used || g.first.value[0] == '_')
                 continue;
 
             const char* msg;
-            if (g.second.usedRecursively)
+            if (g.second.softUsed)
                 msg = "Function '%s' is never used outside its own body; prefix with '_' to silence";
             else
                 msg = "Function '%s' is never used; prefix with '_' to silence";
 
             emitWarning(*context, LintWarning::Code_FunctionUnused, g.second.nameLocation, msg, g.first.value);
->>>>>>> d7d2be8e (renames)
         }
     }
 
     bool visit(AstStatFunction* node) override
     {
-        if (AstExprGlobal* expr = node->name->as<AstExprGlobal>())
-        {
-            Global& g = globals[expr->name];
+        AstExprGlobal* expr = node->name->as<AstExprGlobal>();
+        if (!expr)
+            return true;
 
-            g.function = true;
-            g.location = expr->location;
+        Global& g = globals[expr->name];
+        g.func = true;
+        g.nameLocation = expr->location;
 
-            node->func->visit(this);
+        g.scopeDepth++;
+        node->func->visit(this);
+        g.scopeDepth--;
 
-            return false;
-        }
-
-        return true;
+        return false;
     }
 
     bool visit(AstExprGlobal* node) override
     {
         Global& g = globals[node->name];
 
-        if (FFlag::LuauFunctionUnusedRecursiveLinting && g.func && g.scopeDepth > 0)
+        if (g.func && g.scopeDepth > 0)
             g.softUsed = true;
         else
             g.used = true;
