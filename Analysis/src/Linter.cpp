@@ -718,13 +718,11 @@ private:
     struct Local
     {
         AstNode* defined = nullptr;
-        unsigned int scopeDepth = 0;
-        bool function = false;
+        std::optional<Location> function;
         bool import = false;
-        bool usedOutsideSelf = false;
-        bool usedRecursively = false;
+        bool used = false;
+        bool softUsed = false;
         bool arg = false;
->>>>>>> d7d2be8e (renames)
     };
 
     struct Global
