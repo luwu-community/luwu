@@ -96,12 +96,22 @@ LUAU_FASTFLAGVARIABLE(LuauPromoteProto)
         } \
     }
 
-#define LUAU_FAST_TYPED_MATH(OP) \
+#define LUAU_FAST_TYPED_MATH(OP, BUILTIN_OP, FALLBACK) \
     do { \
         uint64_t va = rb->value.l; \
         uint64_t vb = rc->value.l; \
         uint64_t res = 0; \
         switch (rb->extra[0]) { \
+            case BigIntMode_Dynamic: { \
+                int64_t sres; \
+                if (!BUILTIN_OP((int64_t)va, (int64_t)vb, &sres)) { \
+                    setbigintsmi(ra, sres, BigIntMode_Dynamic); \
+                    VM_NEXT(); \
+                } else { \
+                    FALLBACK(L, rb, rc, ra); \
+                    VM_NEXT(); \
+                } \
+            } \
             case BigIntMode_I8: res = (int64_t)(int8_t)((uint8_t)va OP (uint8_t)vb); break; \
             case BigIntMode_U8: res = (uint64_t)(uint8_t)((uint8_t)va OP (uint8_t)vb); break; \
             case BigIntMode_I16: res = (int64_t)(int16_t)((uint16_t)va OP (uint16_t)vb); break; \
@@ -113,6 +123,7 @@ LUAU_FASTFLAGVARIABLE(LuauPromoteProto)
             default: LUAU_UNREACHABLE(); \
         } \
         setbigintsmi(ra, res, (BigIntMode)rb->extra[0]); \
+        VM_NEXT(); \
     } while (0)
 
 #define VM_DISPATCH_OP(op) &&CASE_##op
@@ -1792,19 +1803,7 @@ reentry:
                 }
                 else if (LUAU_LIKELY(ttype(rb) == LUA_TBIGINT && ttype(rc) == LUA_TBIGINT && rb->extra[0] == rc->extra[0]))
                 {
-                    if (rb->extra[0] == BigIntMode_Dynamic) {
-                        int64_t res;
-                        if (!__builtin_add_overflow(rb->value.l, rc->value.l, &res)) {
-                            setbigintsmi(ra, res, BigIntMode_Dynamic);
-                            VM_NEXT();
-                        } else {
-                            luaZ_bigint_add(L, rb, rc, ra);
-                            VM_NEXT();
-                        }
-                    } else {
-                        LUAU_FAST_TYPED_MATH(+);
-                        VM_NEXT();
-                    }
+                    LUAU_FAST_TYPED_MATH(+, __builtin_add_overflow, luaZ_bigint_add);
                 }
                 else if (ttisbigint(rb) && ttisbigint(rc))
                 {
@@ -1859,19 +1858,7 @@ reentry:
                 }
                 else if (LUAU_LIKELY(ttype(rb) == LUA_TBIGINT && ttype(rc) == LUA_TBIGINT && rb->extra[0] == rc->extra[0]))
                 {
-                    if (rb->extra[0] == BigIntMode_Dynamic) {
-                        int64_t res;
-                        if (!__builtin_sub_overflow(rb->value.l, rc->value.l, &res)) {
-                            setbigintsmi(ra, res, BigIntMode_Dynamic);
-                            VM_NEXT();
-                        } else {
-                            luaZ_bigint_sub(L, rb, rc, ra);
-                            VM_NEXT();
-                        }
-                    } else {
-                        LUAU_FAST_TYPED_MATH(-);
-                        VM_NEXT();
-                    }
+                    LUAU_FAST_TYPED_MATH(-, __builtin_sub_overflow, luaZ_bigint_sub);
                 }
                 else if (ttisbigint(rb) && ttisbigint(rc))
                 {
@@ -1926,19 +1913,7 @@ reentry:
                 }
                 else if (LUAU_LIKELY(ttype(rb) == LUA_TBIGINT && ttype(rc) == LUA_TBIGINT && rb->extra[0] == rc->extra[0]))
                 {
-                    if (rb->extra[0] == BigIntMode_Dynamic) {
-                        int64_t res;
-                        if (!__builtin_mul_overflow(rb->value.l, rc->value.l, &res)) {
-                            setbigintsmi(ra, res, BigIntMode_Dynamic);
-                            VM_NEXT();
-                        } else {
-                            luaZ_bigint_mul(L, rb, rc, ra);
-                            VM_NEXT();
-                        }
-                    } else {
-                        LUAU_FAST_TYPED_MATH(*);
-                        VM_NEXT();
-                    }
+                    LUAU_FAST_TYPED_MATH(*, __builtin_mul_overflow, luaZ_bigint_mul);
                 }
                 else if (ttisbigint(rb) && ttisbigint(rc))
                 {
