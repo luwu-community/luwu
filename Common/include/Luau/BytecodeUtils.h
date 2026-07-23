@@ -39,8 +39,6 @@ inline int getOpLength(LuauOpcode op)
     case LOP_NEWCLASSMEMBER:
     case LOP_CALLFB:
     case LOP_CMPPROTO:
-    case LOP_TYPED_ADD:
-    case LOP_TYPED_SUB:
         return 2;
 
     default:

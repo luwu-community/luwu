@@ -138,8 +138,7 @@ LUAU_FASTFLAGVARIABLE(LuauPromoteProto)
         VM_DISPATCH_OP(LOP_FASTCALL2), VM_DISPATCH_OP(LOP_FASTCALL2K), VM_DISPATCH_OP(LOP_FORGPREP), VM_DISPATCH_OP(LOP_JUMPXEQKNIL), \
         VM_DISPATCH_OP(LOP_JUMPXEQKB), VM_DISPATCH_OP(LOP_JUMPXEQKN), VM_DISPATCH_OP(LOP_JUMPXEQKS), VM_DISPATCH_OP(LOP_IDIV), \
         VM_DISPATCH_OP(LOP_IDIVK), VM_DISPATCH_OP(LOP_GETUDATAKS), VM_DISPATCH_OP(LOP_SETUDATAKS), VM_DISPATCH_OP(LOP_NAMECALLUDATA), \
-        VM_DISPATCH_OP(LOP_NEWCLASSMEMBER), VM_DISPATCH_OP(LOP_CALLFB), VM_DISPATCH_OP(LOP_CMPPROTO), VM_DISPATCH_OP(LOP_TYPED_ADD), \
-        VM_DISPATCH_OP(LOP_TYPED_SUB),
+        VM_DISPATCH_OP(LOP_NEWCLASSMEMBER), VM_DISPATCH_OP(LOP_CALLFB), VM_DISPATCH_OP(LOP_CMPPROTO), 
 
 #if defined(__GNUC__) || defined(__clang__)
 #define VM_USE_CGOTO 1
@@ -1776,60 +1775,6 @@ reentry:
                     VM_ASSERT_PC(pc);
                     VM_NEXT();
                 }
-            }
-
-            VM_CASE(LOP_TYPED_ADD)
-            {
-                Instruction insn = *pc++;
-                StkId ra = VM_REG(LUAU_INSN_A(insn));
-                StkId rb = VM_REG(LUAU_INSN_B(insn));
-                StkId rc = VM_REG(LUAU_INSN_C(insn));
-                uint32_t aux = *pc++;
-
-                uint64_t va = luaZ_bigint_get_bottom_64(rb);
-                uint64_t vb = luaZ_bigint_get_bottom_64(rc);
-                uint64_t res = 0;
-                
-                switch (aux) {
-                    case BigIntMode_I8: res = (int64_t)(int8_t)((uint8_t)va + (uint8_t)vb); break;
-                    case BigIntMode_U8: res = (uint64_t)(uint8_t)((uint8_t)va + (uint8_t)vb); break;
-                    case BigIntMode_I16: res = (int64_t)(int16_t)((uint16_t)va + (uint16_t)vb); break;
-                    case BigIntMode_U16: res = (uint64_t)(uint16_t)((uint16_t)va + (uint16_t)vb); break;
-                    case BigIntMode_I32: res = (int64_t)(int32_t)((uint32_t)va + (uint32_t)vb); break;
-                    case BigIntMode_U32: res = (uint64_t)(uint32_t)((uint32_t)va + (uint32_t)vb); break;
-                    case BigIntMode_I64: res = (int64_t)(int64_t)((uint64_t)va + (uint64_t)vb); break;
-                    case BigIntMode_U64: res = (uint64_t)(uint64_t)((uint64_t)va + (uint64_t)vb); break;
-                }
-                
-                setbigintsmi(ra, res, (BigIntMode)aux);
-                VM_NEXT();
-            }
-
-            VM_CASE(LOP_TYPED_SUB)
-            {
-                Instruction insn = *pc++;
-                StkId ra = VM_REG(LUAU_INSN_A(insn));
-                StkId rb = VM_REG(LUAU_INSN_B(insn));
-                StkId rc = VM_REG(LUAU_INSN_C(insn));
-                uint32_t aux = *pc++;
-
-                uint64_t va = luaZ_bigint_get_bottom_64(rb);
-                uint64_t vb = luaZ_bigint_get_bottom_64(rc);
-                uint64_t res = 0;
-                
-                switch (aux) {
-                    case BigIntMode_I8: res = (int64_t)(int8_t)((uint8_t)va - (uint8_t)vb); break;
-                    case BigIntMode_U8: res = (uint64_t)(uint8_t)((uint8_t)va - (uint8_t)vb); break;
-                    case BigIntMode_I16: res = (int64_t)(int16_t)((uint16_t)va - (uint16_t)vb); break;
-                    case BigIntMode_U16: res = (uint64_t)(uint16_t)((uint16_t)va - (uint16_t)vb); break;
-                    case BigIntMode_I32: res = (int64_t)(int32_t)((uint32_t)va - (uint32_t)vb); break;
-                    case BigIntMode_U32: res = (uint64_t)(uint32_t)((uint32_t)va - (uint32_t)vb); break;
-                    case BigIntMode_I64: res = (int64_t)(int64_t)((uint64_t)va - (uint64_t)vb); break;
-                    case BigIntMode_U64: res = (uint64_t)(uint64_t)((uint64_t)va - (uint64_t)vb); break;
-                }
-                
-                setbigintsmi(ra, res, (BigIntMode)aux);
-                VM_NEXT();
             }
 
             VM_CASE(LOP_ADD)

@@ -996,19 +996,6 @@ void analyzeBytecodeTypes(IrFunction& function, const HostIrHooks& hostHooks)
                 bcType.result = regTags[ra];
                 break;
             }
-            case LOP_TYPED_ADD:
-            case LOP_TYPED_SUB:
-            {
-                int ra = LUAU_INSN_A(*pc);
-                int rb = LUAU_INSN_B(*pc);
-                int rc = LUAU_INSN_C(*pc);
-
-                bcType.a = getRegTag(regTags, bcTypeInfo, rb, i);
-                bcType.b = getRegTag(regTags, bcTypeInfo, rc, i);
-                regTags[ra] = LBC_TYPE_BIGINT;
-                bcType.result = regTags[ra];
-                break;
-            }
             case LOP_MUL:
             case LOP_DIV:
             case LOP_IDIV:

@@ -452,20 +452,6 @@ enum LuauOpcode
     // AUX: proto id
     LOP_CMPPROTO,
 
-    // TYPED_ADD: compute a + b for bigints, mode in AUX
-    // A: target register
-    // B: source register 1
-    // C: source register 2
-    // AUX: type mode
-    LOP_TYPED_ADD,
-
-    // TYPED_SUB: compute a - b for bigints, mode in AUX
-    // A: target register
-    // B: source register 1
-    // C: source register 2
-    // AUX: type mode
-    LOP_TYPED_SUB,
-
     // Enum entry for number of opcodes, not a valid opcode by itself!
     LOP__COUNT
 };
