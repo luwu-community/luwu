@@ -812,6 +812,14 @@ struct BytecodeGraphParser
                 addProducer(LUAU_INSN_A(insn), nodeOp);
                 break;
 
+            case LOP_TYPED_ADD:
+            case LOP_TYPED_SUB:
+                addVmRegInput(node, LUAU_INSN_B(insn));
+                addVmRegInput(node, LUAU_INSN_C(insn));
+                addImmInput(node, static_cast<int32_t>(aux));
+                addProducer(LUAU_INSN_A(insn), nodeOp);
+                break;
+
             case LOP_CONCAT:
             {
                 LUAU_ASSERT(LUAU_INSN_B(insn) <= LUAU_INSN_C(insn));

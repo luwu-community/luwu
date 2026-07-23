@@ -393,6 +393,12 @@ struct BytecodeGraphSerializer
             bcb.emitABC(insn.op, getRegister(insnOp), getRegInput(insn, 0), getVmConstInputABC(insn, 1));
             break;
 
+        case LOP_TYPED_ADD:
+        case LOP_TYPED_SUB:
+            bcb.emitABC(insn.op, getRegister(insnOp), getRegInput(insn, 0), getRegInput(insn, 1));
+            bcb.emitAux(getImmInt(insn, 2));
+            break;
+
         case LOP_CONCAT:
             LUAU_ASSERT(insn.ops.size() > 0);
             bcb.emitABC(LOP_CONCAT, getRegister(insnOp), getRegInput(insn, 0), getRegInput(insn, insn.ops.size() - 1));

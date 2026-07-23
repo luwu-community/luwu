@@ -4,45 +4,37 @@
 #include "lobject.h"
 #include "lapi.h"
 
-static BigInt check_bigint(lua_State* L, int idx) {
+static const TValue* check_bigint(lua_State* L, int idx) {
     luaL_checktype(L, idx, LUA_TBIGINT);
-    return bigintvalue(luaA_toobject(L, idx));
+    return luaA_toobject(L, idx);
 }
 
 static int bigint_fromstring(lua_State* L)
 {
     size_t len;
     const char* str = luaL_checklstring(L, 1, &len);
-    BigInt b = luaZ_bigint_fromstring(L, str);
-    setbigintvalue(L->top, b);
+    luaZ_bigint_fromstring(L, str, L->top);
     L->top++;
     return 1;
 }
 
-static uint64_t get_bottom_64(BigInt b) {
-    if (!b.heap) return (uint64_t)b.smi;
-    uint64_t val = 0;
-    if (b.heap->size > 0) val |= b.heap->digits[0];
-    if (b.heap->size > 1) val |= ((uint64_t)b.heap->digits[1] << 32);
-    if (b.heap->isNegative) val = ~val + 1;
-    return val;
-}
-
 static int bigint_dynamic(lua_State* L) {
-    BigInt b = check_bigint(L, 1);
-    b.mode = BigIntMode_Dynamic;
-    setbigintvalue(L->top, b);
+    const TValue* b = check_bigint(L, 1);
+    if (ttype(b) == LUA_TBIGINT) {
+        setbigintsmi(L->top, b->value.l, BigIntMode_Dynamic);
+    } else {
+        setbigintheap(L->top, (HeapBigInt*)b->value.gc, BigIntMode_Dynamic);
+    }
     L->top++;
     return 1;
 }
 
 #define BIGINT_MODE_WRAP(name, mode_enum, c_type, is_unsigned) \
 static int bigint_##name(lua_State* L) { \
-    BigInt b = check_bigint(L, 1); \
-    c_type casted = (c_type)get_bottom_64(b); \
+    const TValue* b = check_bigint(L, 1); \
+    c_type casted = (c_type)luaZ_bigint_get_bottom_64(b); \
     int64_t res_smi = is_unsigned ? (int64_t)(uint64_t)casted : (int64_t)casted; \
-    BigInt res = luaZ_newbigint(res_smi, mode_enum); \
-    setbigintvalue(L->top, res); \
+    setbigintsmi(L->top, res_smi, mode_enum); \
     L->top++; \
     return 1; \
 }

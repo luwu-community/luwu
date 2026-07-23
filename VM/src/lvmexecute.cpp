@@ -119,7 +119,8 @@ LUAU_FASTFLAGVARIABLE(LuauPromoteProto)
         VM_DISPATCH_OP(LOP_FASTCALL2), VM_DISPATCH_OP(LOP_FASTCALL2K), VM_DISPATCH_OP(LOP_FORGPREP), VM_DISPATCH_OP(LOP_JUMPXEQKNIL), \
         VM_DISPATCH_OP(LOP_JUMPXEQKB), VM_DISPATCH_OP(LOP_JUMPXEQKN), VM_DISPATCH_OP(LOP_JUMPXEQKS), VM_DISPATCH_OP(LOP_IDIV), \
         VM_DISPATCH_OP(LOP_IDIVK), VM_DISPATCH_OP(LOP_GETUDATAKS), VM_DISPATCH_OP(LOP_SETUDATAKS), VM_DISPATCH_OP(LOP_NAMECALLUDATA), \
-        VM_DISPATCH_OP(LOP_NEWCLASSMEMBER), VM_DISPATCH_OP(LOP_CALLFB), VM_DISPATCH_OP(LOP_CMPPROTO),
+        VM_DISPATCH_OP(LOP_NEWCLASSMEMBER), VM_DISPATCH_OP(LOP_CALLFB), VM_DISPATCH_OP(LOP_CMPPROTO), VM_DISPATCH_OP(LOP_TYPED_ADD), \
+        VM_DISPATCH_OP(LOP_TYPED_SUB),
 
 #if defined(__GNUC__) || defined(__clang__)
 #define VM_USE_CGOTO 1
@@ -1758,6 +1759,60 @@ reentry:
                 }
             }
 
+            VM_CASE(LOP_TYPED_ADD)
+            {
+                Instruction insn = *pc++;
+                StkId ra = VM_REG(LUAU_INSN_A(insn));
+                StkId rb = VM_REG(LUAU_INSN_B(insn));
+                StkId rc = VM_REG(LUAU_INSN_C(insn));
+                uint32_t aux = *pc++;
+
+                uint64_t va = luaZ_bigint_get_bottom_64(rb);
+                uint64_t vb = luaZ_bigint_get_bottom_64(rc);
+                uint64_t res = 0;
+                
+                switch (aux) {
+                    case BigIntMode_I8: res = (int64_t)(int8_t)((uint8_t)va + (uint8_t)vb); break;
+                    case BigIntMode_U8: res = (uint64_t)(uint8_t)((uint8_t)va + (uint8_t)vb); break;
+                    case BigIntMode_I16: res = (int64_t)(int16_t)((uint16_t)va + (uint16_t)vb); break;
+                    case BigIntMode_U16: res = (uint64_t)(uint16_t)((uint16_t)va + (uint16_t)vb); break;
+                    case BigIntMode_I32: res = (int64_t)(int32_t)((uint32_t)va + (uint32_t)vb); break;
+                    case BigIntMode_U32: res = (uint64_t)(uint32_t)((uint32_t)va + (uint32_t)vb); break;
+                    case BigIntMode_I64: res = (int64_t)(int64_t)((uint64_t)va + (uint64_t)vb); break;
+                    case BigIntMode_U64: res = (uint64_t)(uint64_t)((uint64_t)va + (uint64_t)vb); break;
+                }
+                
+                setbigintsmi(ra, res, (BigIntMode)aux);
+                VM_NEXT();
+            }
+
+            VM_CASE(LOP_TYPED_SUB)
+            {
+                Instruction insn = *pc++;
+                StkId ra = VM_REG(LUAU_INSN_A(insn));
+                StkId rb = VM_REG(LUAU_INSN_B(insn));
+                StkId rc = VM_REG(LUAU_INSN_C(insn));
+                uint32_t aux = *pc++;
+
+                uint64_t va = luaZ_bigint_get_bottom_64(rb);
+                uint64_t vb = luaZ_bigint_get_bottom_64(rc);
+                uint64_t res = 0;
+                
+                switch (aux) {
+                    case BigIntMode_I8: res = (int64_t)(int8_t)((uint8_t)va - (uint8_t)vb); break;
+                    case BigIntMode_U8: res = (uint64_t)(uint8_t)((uint8_t)va - (uint8_t)vb); break;
+                    case BigIntMode_I16: res = (int64_t)(int16_t)((uint16_t)va - (uint16_t)vb); break;
+                    case BigIntMode_U16: res = (uint64_t)(uint16_t)((uint16_t)va - (uint16_t)vb); break;
+                    case BigIntMode_I32: res = (int64_t)(int32_t)((uint32_t)va - (uint32_t)vb); break;
+                    case BigIntMode_U32: res = (uint64_t)(uint32_t)((uint32_t)va - (uint32_t)vb); break;
+                    case BigIntMode_I64: res = (int64_t)(int64_t)((uint64_t)va - (uint64_t)vb); break;
+                    case BigIntMode_U64: res = (uint64_t)(uint64_t)((uint64_t)va - (uint64_t)vb); break;
+                }
+                
+                setbigintsmi(ra, res, (BigIntMode)aux);
+                VM_NEXT();
+            }
+
             VM_CASE(LOP_ADD)
             {
                 VM_CASE_INSTRUCTION insn = *pc++;
@@ -1771,12 +1826,20 @@ reentry:
                     setnvalue(ra, nvalue(rb) + nvalue(rc));
                     VM_NEXT();
                 }
+                else if (LUAU_LIKELY(ttype(rb) == LUA_TBIGINT && ttype(rc) == LUA_TBIGINT && rb->extra[0] == BigIntMode_Dynamic && rc->extra[0] == BigIntMode_Dynamic))
+                {
+                    int64_t res;
+                    if (!__builtin_add_overflow(rb->value.l, rc->value.l, &res)) {
+                        setbigintsmi(ra, res, BigIntMode_Dynamic);
+                        VM_NEXT();
+                    } else {
+                        luaZ_bigint_add(L, rb, rc, ra);
+                        VM_NEXT();
+                    }
+                }
                 else if (ttisbigint(rb) && ttisbigint(rc))
                 {
-                    BigInt bb = bigintvalue(rb);
-                    BigInt bc = bigintvalue(rc);
-                    BigInt res = luaZ_bigint_add(L, bb, bc);
-                    setbigintvalue(ra, res);
+                    luaZ_bigint_add(L, rb, rc, ra);
                     VM_NEXT();
                 }
                 else if (ttisvector(rb) && ttisvector(rc))
@@ -1825,12 +1888,20 @@ reentry:
                     setnvalue(ra, nvalue(rb) - nvalue(rc));
                     VM_NEXT();
                 }
+                else if (LUAU_LIKELY(ttype(rb) == LUA_TBIGINT && ttype(rc) == LUA_TBIGINT && rb->extra[0] == BigIntMode_Dynamic && rc->extra[0] == BigIntMode_Dynamic))
+                {
+                    int64_t res;
+                    if (!__builtin_sub_overflow(rb->value.l, rc->value.l, &res)) {
+                        setbigintsmi(ra, res, BigIntMode_Dynamic);
+                        VM_NEXT();
+                    } else {
+                        luaZ_bigint_sub(L, rb, rc, ra);
+                        VM_NEXT();
+                    }
+                }
                 else if (ttisbigint(rb) && ttisbigint(rc))
                 {
-                    BigInt bb = bigintvalue(rb);
-                    BigInt bc = bigintvalue(rc);
-                    BigInt res = luaZ_bigint_sub(L, bb, bc);
-                    setbigintvalue(ra, res);
+                    luaZ_bigint_sub(L, rb, rc, ra);
                     VM_NEXT();
                 }
                 else if (ttisvector(rb) && ttisvector(rc))
@@ -1879,12 +1950,20 @@ reentry:
                     setnvalue(ra, nvalue(rb) * nvalue(rc));
                     VM_NEXT();
                 }
+                else if (LUAU_LIKELY(ttype(rb) == LUA_TBIGINT && ttype(rc) == LUA_TBIGINT && rb->extra[0] == BigIntMode_Dynamic && rc->extra[0] == BigIntMode_Dynamic))
+                {
+                    int64_t res;
+                    if (!__builtin_mul_overflow(rb->value.l, rc->value.l, &res)) {
+                        setbigintsmi(ra, res, BigIntMode_Dynamic);
+                        VM_NEXT();
+                    } else {
+                        luaZ_bigint_mul(L, rb, rc, ra);
+                        VM_NEXT();
+                    }
+                }
                 else if (ttisbigint(rb) && ttisbigint(rc))
                 {
-                    BigInt bb = bigintvalue(rb);
-                    BigInt bc = bigintvalue(rc);
-                    BigInt res = luaZ_bigint_mul(L, bb, bc);
-                    setbigintvalue(ra, res);
+                    luaZ_bigint_mul(L, rb, rc, ra);
                     VM_NEXT();
                 }
                 else if (ttisvector(rb) && ttisnumber(rc))
@@ -1950,10 +2029,7 @@ reentry:
                 }
                 else if (ttisbigint(rb) && ttisbigint(rc))
                 {
-                    BigInt bb = bigintvalue(rb);
-                    BigInt bc = bigintvalue(rc);
-                    BigInt res = luaZ_bigint_div(L, bb, bc);
-                    setbigintvalue(ra, res);
+                    luaZ_bigint_div(L, rb, rc, ra);
                     VM_NEXT();
                 }
                 else if (ttisvector(rb) && ttisnumber(rc))
@@ -2074,10 +2150,7 @@ reentry:
                 }
                 else if (ttisbigint(rb) && ttisbigint(rc))
                 {
-                    BigInt bb = bigintvalue(rb);
-                    BigInt bc = bigintvalue(rc);
-                    BigInt res = luaZ_bigint_mod(L, bb, bc);
-                    setbigintvalue(ra, res);
+                    luaZ_bigint_mod(L, rb, rc, ra);
                     VM_NEXT();
                 }
                 else

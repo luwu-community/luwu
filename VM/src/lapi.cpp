@@ -502,20 +502,13 @@ int64_t lua_tointeger64(lua_State* L, int idx, int* isinteger)
     }
 }
 
-BigInt lua_tobigint(lua_State* L, int idx)
-{
-    const TValue* o = index2addr(L, idx);
-    if (ttisbigint(o)) {
-        return bigintvalue(o);
-    }
-    return luaZ_newbigint(0);
-}
+
 
 void lua_pushbigint_string(lua_State* L, int idx)
 {
     const TValue* o = index2addr(L, idx);
     if (ttisbigint(o)) {
-        lua_pushbigint_string(L, bigintvalue(o));
+        lua_pushbigint_string(L, o);
     } else {
         lua_pushliteral(L, "0");
     }

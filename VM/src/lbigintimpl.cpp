@@ -9,7 +9,50 @@
 #include <stdio.h>
 #include <string.h>
 
-static uint64_t get_bottom_64(BigInt b) {
+struct BigInt {
+    int64_t smi;
+    HeapBigInt* heap;
+    BigIntMode mode;
+};
+
+inline BigInt unpack_bigint(const TValue* o) {
+    BigInt b;
+    if (ttype(o) == LUA_TBIGINT) {
+        b.smi = o->value.l;
+        b.heap = nullptr;
+    } else {
+        b.smi = 0;
+        b.heap = (HeapBigInt*)o->value.gc;
+    }
+    b.mode = (BigIntMode)o->extra[0];
+    return b;
+}
+
+inline void pack_bigint(TValue* obj, BigInt b) {
+    if (b.heap) {
+        setbigintheap(obj, b.heap, b.mode);
+    } else {
+        setbigintsmi(obj, b.smi, b.mode);
+    }
+}
+
+inline BigInt new_bigint(int64_t v, BigIntMode mode = BigIntMode_Dynamic) {
+    BigInt b;
+    b.smi = v;
+    b.heap = nullptr;
+    b.mode = mode;
+    return b;
+}
+
+inline BigInt new_bigint_from_heap(HeapBigInt* h) {
+    BigInt b;
+    b.smi = 0;
+    b.heap = h;
+    b.mode = BigIntMode_Dynamic;
+    return b;
+}
+
+uint64_t internal_get_bottom_64(BigInt b) {
     if (!b.heap) return (uint64_t)b.smi;
     uint64_t val = 0;
     if (b.heap->size > 0) val |= b.heap->digits[0];
@@ -17,6 +60,11 @@ static uint64_t get_bottom_64(BigInt b) {
     if (b.heap->isNegative) val = ~val + 1;
     return val;
 }
+
+uint64_t luaZ_bigint_get_bottom_64(const TValue* o) {
+    return internal_get_bottom_64(unpack_bigint(o));
+}
+
 #define DO_TYPED_MATH(TYPE, UTYPE, OP) { res = (int64_t)(TYPE)((UTYPE)va OP (UTYPE)vb); }
 #define DO_TYPED_UMATH(UTYPE, OP) { res = (uint64_t)(UTYPE)((UTYPE)va OP (UTYPE)vb); }
 
@@ -26,8 +74,8 @@ static uint64_t get_bottom_64(BigInt b) {
             luaG_runerror(L, "attempt to perform arithmetic on mixed typed bigints"); \
         } \
         BigIntMode mode = a.mode; \
-        uint64_t va = get_bottom_64(a); \
-        uint64_t vb = get_bottom_64(b); \
+        uint64_t va = internal_get_bottom_64(a); \
+        uint64_t vb = internal_get_bottom_64(b); \
         uint64_t res = 0; \
         switch (mode) { \
             case BigIntMode_I8: DO_TYPED_MATH(int8_t, uint8_t, OP); break; \
@@ -40,7 +88,7 @@ static uint64_t get_bottom_64(BigInt b) {
             case BigIntMode_U64: DO_TYPED_UMATH(uint64_t, OP); break; \
             default: break; \
         } \
-        return luaZ_newbigint((int64_t)res, mode); \
+        return new_bigint((int64_t)res, mode); \
     }
 
 #define DO_TYPED_DIV(TYPE, UTYPE, OP) { UTYPE ta = (UTYPE)va, tb = (UTYPE)vb; if (tb == (UTYPE)-1 && ta == (UTYPE)((TYPE)1 << (sizeof(TYPE)*8-1))) { res = (int64_t)(TYPE)ta; } else { res = (int64_t)(TYPE)((TYPE)ta OP (TYPE)tb); } }
@@ -52,8 +100,8 @@ static uint64_t get_bottom_64(BigInt b) {
             luaG_runerror(L, "attempt to perform arithmetic on mixed typed bigints"); \
         } \
         BigIntMode mode = a.mode; \
-        uint64_t va = get_bottom_64(a); \
-        uint64_t vb = get_bottom_64(b); \
+        uint64_t va = internal_get_bottom_64(a); \
+        uint64_t vb = internal_get_bottom_64(b); \
         if (vb == 0) luaG_runerror(L, is_mod ? "attempt to perform modulo by zero" : "attempt to divide by zero"); \
         uint64_t res = 0; \
         switch (mode) { \
@@ -67,17 +115,8 @@ static uint64_t get_bottom_64(BigInt b) {
             case BigIntMode_U64: DO_TYPED_UDIV(uint64_t, OP); break; \
             default: break; \
         } \
-        return luaZ_newbigint((int64_t)res, mode); \
+        return new_bigint((int64_t)res, mode); \
     }
-
-BigInt luaZ_newbigint(int64_t v, BigIntMode mode)
-{
-    BigInt b;
-    b.smi = v;
-    b.heap = nullptr;
-    b.mode = mode;
-    return b;
-}
 
 
 static HeapBigInt* lua_newheapbigint(lua_State* L, uint32_t capacity)
@@ -123,8 +162,10 @@ static BigIntView get_view(const BigInt& b, uint32_t temp[2]) {
     }
 }
 
-bool luaZ_bigint_eq(BigInt a, BigInt b)
+bool luaZ_bigint_eq(const TValue* a_val, const TValue* b_val)
 {
+    BigInt a = unpack_bigint(a_val);
+    BigInt b = unpack_bigint(b_val);
     uint32_t ta[2], tb[2];
     BigIntView va = get_view(a, ta);
     BigIntView vb = get_view(b, tb);
@@ -135,8 +176,9 @@ bool luaZ_bigint_eq(BigInt a, BigInt b)
     return memcmp(va.digits, vb.digits, va.size * sizeof(uint32_t)) == 0;
 }
 
-uint32_t luaZ_bigint_hash(BigInt b)
+uint32_t luaZ_bigint_hash(const TValue* b_val)
 {
+    BigInt b = unpack_bigint(b_val);
     uint32_t t[2];
     BigIntView v = get_view(b, t);
     
@@ -166,10 +208,10 @@ static void normalize(HeapBigInt* h) {
     }
 }
 
-static BigInt pack_bigint(lua_State* L, HeapBigInt* h) {
+static BigInt pack_bigint_impl(lua_State* L, HeapBigInt* h) {
     normalize(h);
     if (h->size == 0) {
-        return luaZ_newbigint(0);
+        return new_bigint(0);
     }
     if (h->size <= 2) {
         uint64_t val = h->digits[0];
@@ -177,22 +219,15 @@ static BigInt pack_bigint(lua_State* L, HeapBigInt* h) {
             val |= ((uint64_t)h->digits[1] << 32);
         }
         if (!h->isNegative && val <= (uint64_t)INT64_MAX) {
-            return luaZ_newbigint((int64_t)val);
+            return new_bigint((int64_t)val);
         } else if (h->isNegative && val <= (uint64_t)INT64_MAX + 1) {
-            return luaZ_newbigint(val == (uint64_t)INT64_MAX + 1 ? INT64_MIN : -(int64_t)val);
+            return new_bigint(val == (uint64_t)INT64_MAX + 1 ? INT64_MIN : -(int64_t)val);
         }
     }
-    return luaZ_bigint_from_heap(h);
+    return new_bigint_from_heap(h);
 }
 
-BigInt luaZ_bigint_from_heap(HeapBigInt* h)
-{
-    BigInt b;
-    b.smi = 0;
-    b.heap = h;
-    b.mode = BigIntMode_Dynamic;
-    return b;
-}
+
 
 static int cmp_abs(const BigIntView& a, const BigIntView& b) {
     if (a.size != b.size) {
@@ -302,13 +337,13 @@ static void div_mod_abs(lua_State* L, const BigIntView& n, const BigIntView& d, 
     }
 }
 
-BigInt luaZ_bigint_add(lua_State* L, BigInt a, BigInt b)
+static BigInt bigint_add_impl(lua_State* L, BigInt a, BigInt b)
 {
     HANDLE_TYPED_MATH(L, a, b, +)
     if (!a.heap && !b.heap) {
         int64_t sum;
         if (!__builtin_add_overflow(a.smi, b.smi, &sum))
-            return luaZ_newbigint(sum);
+            return new_bigint(sum);
     }
     
     uint32_t ta[2], tb[2];
@@ -330,16 +365,16 @@ BigInt luaZ_bigint_add(lua_State* L, BigInt a, BigInt b)
             sub_abs(res, vb, va);
         }
     }
-    return pack_bigint(L, res);
+    return pack_bigint_impl(L, res);
 }
 
-BigInt luaZ_bigint_sub(lua_State* L, BigInt a, BigInt b)
+static BigInt bigint_sub_impl(lua_State* L, BigInt a, BigInt b)
 {
     HANDLE_TYPED_MATH(L, a, b, -)
     if (!a.heap && !b.heap) {
         int64_t diff;
         if (!__builtin_sub_overflow(a.smi, b.smi, &diff))
-            return luaZ_newbigint(diff);
+            return new_bigint(diff);
     }
     
     uint32_t ta[2], tb[2];
@@ -361,16 +396,16 @@ BigInt luaZ_bigint_sub(lua_State* L, BigInt a, BigInt b)
             sub_abs(res, vb, va);
         }
     }
-    return pack_bigint(L, res);
+    return pack_bigint_impl(L, res);
 }
 
-BigInt luaZ_bigint_mul(lua_State* L, BigInt a, BigInt b)
+static BigInt bigint_mul_impl(lua_State* L, BigInt a, BigInt b)
 {
     HANDLE_TYPED_MATH(L, a, b, *)
     if (!a.heap && !b.heap) {
         int64_t prod;
         if (!__builtin_mul_overflow(a.smi, b.smi, &prod))
-            return luaZ_newbigint(prod);
+            return new_bigint(prod);
     }
     
     uint32_t ta[2], tb[2];
@@ -383,10 +418,10 @@ BigInt luaZ_bigint_mul(lua_State* L, BigInt a, BigInt b)
     res->isNegative = va.isNegative != vb.isNegative;
     mul_abs(res, va, vb);
     
-    return pack_bigint(L, res);
+    return pack_bigint_impl(L, res);
 }
 
-BigInt luaZ_bigint_div(lua_State* L, BigInt a, BigInt b)
+static BigInt bigint_div_impl(lua_State* L, BigInt a, BigInt b)
 {
     HANDLE_TYPED_DIV(L, a, b, /, false)
     if (!a.heap && !b.heap) {
@@ -395,7 +430,7 @@ BigInt luaZ_bigint_div(lua_State* L, BigInt a, BigInt b)
             if (a.smi == INT64_MIN && b.smi == -1) {
                 // Will overflow int64, fallback to heap
             } else {
-                return luaZ_newbigint(a.smi / b.smi);
+                return new_bigint(a.smi / b.smi);
             }
         } else {
             luaG_runerror(L, "attempt to divide by zero");
@@ -413,22 +448,22 @@ BigInt luaZ_bigint_div(lua_State* L, BigInt a, BigInt b)
     
     div_mod_abs(L, va, vb, q, nullptr);
     
-    return pack_bigint(L, q);
+    return pack_bigint_impl(L, q);
 }
 
-BigInt luaZ_bigint_mod(lua_State* L, BigInt a, BigInt b)
+static BigInt bigint_mod_impl(lua_State* L, BigInt a, BigInt b)
 {
     HANDLE_TYPED_DIV(L, a, b, %, true)
     if (!a.heap && !b.heap) {
         if (b.smi != 0) {
             if (a.smi == INT64_MIN && b.smi == -1) {
-                return luaZ_newbigint(0);
+                return new_bigint(0);
             }
             int64_t r = a.smi % b.smi;
             if (r != 0 && (a.smi ^ b.smi) < 0) {
                 r += b.smi;
             }
-            return luaZ_newbigint(r);
+            return new_bigint(r);
         } else {
             luaG_runerror(L, "attempt to perform 'n%%0'");
         }
@@ -451,21 +486,21 @@ BigInt luaZ_bigint_mod(lua_State* L, BigInt a, BigInt b)
         res->isNegative = vb.isNegative;
         BigIntView rv = {r->digits, r->size, false};
         sub_abs(res, vb, rv);
-        return pack_bigint(L, res);
+        return pack_bigint_impl(L, res);
     }
     
-    return pack_bigint(L, r);
+    return pack_bigint_impl(L, r);
 }
 
-BigInt luaZ_bigint_rem(lua_State* L, BigInt a, BigInt b)
+static BigInt bigint_rem_impl(lua_State* L, BigInt a, BigInt b)
 {
     HANDLE_TYPED_DIV(L, a, b, %, true)
     if (!a.heap && !b.heap) {
         if (b.smi != 0) {
             if (a.smi == INT64_MIN && b.smi == -1) {
-                return luaZ_newbigint(0);
+                return new_bigint(0);
             }
-            return luaZ_newbigint(a.smi % b.smi);
+            return new_bigint(a.smi % b.smi);
         } else {
             luaG_runerror(L, "attempt to perform 'n%%0'");
         }
@@ -481,10 +516,10 @@ BigInt luaZ_bigint_rem(lua_State* L, BigInt a, BigInt b)
     r->isNegative = va.isNegative; // C-style remainder follows dividend
     div_mod_abs(L, va, vb, nullptr, r);
     
-    return pack_bigint(L, r);
+    return pack_bigint_impl(L, r);
 }
 
-BigInt luaZ_bigint_neg(lua_State* L, BigInt a)
+static BigInt bigint_neg_impl(lua_State* L, BigInt a)
 {
     if (!a.heap) {
         if (a.smi == INT64_MIN) {
@@ -495,9 +530,9 @@ BigInt luaZ_bigint_neg(lua_State* L, BigInt a)
             res->digits[0] = 0;
             res->digits[1] = 0;
             res->digits[2] = 0x80000000;
-            return pack_bigint(L, res);
+            return pack_bigint_impl(L, res);
         }
-        return luaZ_newbigint(-a.smi);
+        return new_bigint(-a.smi);
     }
     
     HeapBigInt* res = lua_newheapbigint(L, a.heap->size);
@@ -506,12 +541,12 @@ BigInt luaZ_bigint_neg(lua_State* L, BigInt a)
     for (uint32_t i = 0; i < a.heap->size; ++i) {
         res->digits[i] = a.heap->digits[i];
     }
-    return pack_bigint(L, res);
+    return pack_bigint_impl(L, res);
 }
 
-BigInt luaZ_bigint_fromstring(lua_State* L, const char* str)
+static BigInt bigint_fromstring_impl(lua_State* L, const char* str)
 {
-    BigInt res = luaZ_newbigint(0);
+    BigInt res = new_bigint(0);
     bool isNegative = false;
     if (*str == '-')
     {
@@ -527,9 +562,9 @@ BigInt luaZ_bigint_fromstring(lua_State* L, const char* str)
     {
         if (*str >= '0' && *str <= '9')
         {
-            BigInt ten = luaZ_newbigint(10);
-            BigInt digit = luaZ_newbigint(*str - '0');
-            res = luaZ_bigint_add(L, luaZ_bigint_mul(L, res, ten), digit);
+            BigInt ten = new_bigint(10);
+            BigInt digit = new_bigint(*str - '0');
+            res = bigint_add_impl(L, bigint_mul_impl(L, res, ten), digit);
         }
         else
         {
@@ -540,12 +575,12 @@ BigInt luaZ_bigint_fromstring(lua_State* L, const char* str)
 
     if (isNegative)
     {
-        res = luaZ_bigint_neg(L, res);
+        res = bigint_neg_impl(L, res);
     }
     return res;
 }
 
-void lua_pushbigint_string(lua_State* L, BigInt b)
+static void bigint_push_string_impl(lua_State* L, BigInt b)
 {
     if (!b.heap)
     {
@@ -562,13 +597,13 @@ void lua_pushbigint_string(lua_State* L, BigInt b)
     char buf[400];
     int pos = 0;
     
-    BigInt ten = luaZ_newbigint(10);
+    BigInt ten = new_bigint(10);
     BigInt current = b;
     bool isNegative = current.heap->isNegative;
     
     BigInt absCurrent;
     if (isNegative) {
-        absCurrent = luaZ_bigint_neg(L, current);
+        absCurrent = bigint_neg_impl(L, current);
     } else {
         absCurrent = current;
     }
@@ -583,8 +618,8 @@ void lua_pushbigint_string(lua_State* L, BigInt b)
         }
         if (isZero) break;
         
-        BigInt rem = luaZ_bigint_rem(L, absCurrent, ten);
-        BigInt div = luaZ_bigint_div(L, absCurrent, ten);
+        BigInt rem = bigint_rem_impl(L, absCurrent, ten);
+        BigInt div = bigint_div_impl(L, absCurrent, ten);
         
         buf[pos++] = '0' + (char)(rem.heap ? 0 : rem.smi);
         absCurrent = div;
@@ -605,4 +640,52 @@ void lua_pushbigint_string(lua_State* L, BigInt b)
     
     lua_pushlstring(L, buf, pos);
 }
+void luaZ_bigint_add(lua_State* L, const TValue* a_val, const TValue* b_val, TValue* res_out) {
+    BigInt a = unpack_bigint(a_val);
+    BigInt b = unpack_bigint(b_val);
+    pack_bigint(res_out, bigint_add_impl(L, a, b));
+}
 
+void luaZ_bigint_sub(lua_State* L, const TValue* a_val, const TValue* b_val, TValue* res_out) {
+    BigInt a = unpack_bigint(a_val);
+    BigInt b = unpack_bigint(b_val);
+    pack_bigint(res_out, bigint_sub_impl(L, a, b));
+}
+
+void luaZ_bigint_mul(lua_State* L, const TValue* a_val, const TValue* b_val, TValue* res_out) {
+    BigInt a = unpack_bigint(a_val);
+    BigInt b = unpack_bigint(b_val);
+    pack_bigint(res_out, bigint_mul_impl(L, a, b));
+}
+
+void luaZ_bigint_div(lua_State* L, const TValue* a_val, const TValue* b_val, TValue* res_out) {
+    BigInt a = unpack_bigint(a_val);
+    BigInt b = unpack_bigint(b_val);
+    pack_bigint(res_out, bigint_div_impl(L, a, b));
+}
+
+void luaZ_bigint_mod(lua_State* L, const TValue* a_val, const TValue* b_val, TValue* res_out) {
+    BigInt a = unpack_bigint(a_val);
+    BigInt b = unpack_bigint(b_val);
+    pack_bigint(res_out, bigint_mod_impl(L, a, b));
+}
+
+void luaZ_bigint_rem(lua_State* L, const TValue* a_val, const TValue* b_val, TValue* res_out) {
+    BigInt a = unpack_bigint(a_val);
+    BigInt b = unpack_bigint(b_val);
+    pack_bigint(res_out, bigint_rem_impl(L, a, b));
+}
+
+void luaZ_bigint_neg(lua_State* L, const TValue* a_val, TValue* res_out) {
+    BigInt a = unpack_bigint(a_val);
+    pack_bigint(res_out, bigint_neg_impl(L, a));
+}
+
+void luaZ_bigint_fromstring(lua_State* L, const char* str, TValue* res_out) {
+    pack_bigint(res_out, bigint_fromstring_impl(L, str));
+}
+
+void lua_pushbigint_string(lua_State* L, const TValue* b_val) {
+    BigInt b = unpack_bigint(b_val);
+    bigint_push_string_impl(L, b);
+}

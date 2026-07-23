@@ -355,56 +355,33 @@ enum BigIntMode : uint8_t {
     BigIntMode_U64
 };
 
-typedef struct BigInt
-{
-    int64_t smi;
-    HeapBigInt* heap;
-    BigIntMode mode;
-} BigInt;
+void luaZ_bigint_add(lua_State* L, const TValue* a, const TValue* b, TValue* res);
+void luaZ_bigint_sub(lua_State* L, const TValue* a, const TValue* b, TValue* res);
+void luaZ_bigint_mul(lua_State* L, const TValue* a, const TValue* b, TValue* res);
+void luaZ_bigint_div(lua_State* L, const TValue* a, const TValue* b, TValue* res);
+void luaZ_bigint_mod(lua_State* L, const TValue* a, const TValue* b, TValue* res);
+void luaZ_bigint_rem(lua_State* L, const TValue* a, const TValue* b, TValue* res);
+void luaZ_bigint_neg(lua_State* L, const TValue* a, TValue* res);
 
-BigInt luaZ_newbigint(int64_t v, BigIntMode mode = BigIntMode_Dynamic);
-BigInt luaZ_bigint_from_heap(HeapBigInt* h);
-bool luaZ_bigint_eq(BigInt a, BigInt b);
-uint32_t luaZ_bigint_hash(BigInt b);
+bool luaZ_bigint_eq(const TValue* a, const TValue* b);
+uint32_t luaZ_bigint_hash(const TValue* b);
+LUAI_FUNC uint64_t luaZ_bigint_get_bottom_64(const TValue* b);
 
-BigInt luaZ_bigint_add(lua_State* L, BigInt a, BigInt b);
-BigInt luaZ_bigint_sub(lua_State* L, BigInt a, BigInt b);
-BigInt luaZ_bigint_mul(lua_State* L, BigInt a, BigInt b);
-BigInt luaZ_bigint_div(lua_State* L, BigInt a, BigInt b);
-BigInt luaZ_bigint_mod(lua_State* L, BigInt a, BigInt b);
-BigInt luaZ_bigint_rem(lua_State* L, BigInt a, BigInt b);
-BigInt luaZ_bigint_neg(lua_State* L, BigInt a);
-BigInt luaZ_bigint_fromstring(lua_State* L, const char* str);
-void lua_pushbigint_string(lua_State* L, BigInt b);
+void luaZ_bigint_fromstring(lua_State* L, const char* str, TValue* res);
+void lua_pushbigint_string(lua_State* L, const TValue* b);
 
 void lua_freebigint(lua_State* L, HeapBigInt* h, struct lua_Page* page);
 
-inline BigInt bigintvalue(const TValue* o) {
-    if (ttype(o) == LUA_TBIGINT) {
-        BigInt b;
-        b.smi = o->value.l;
-        b.heap = nullptr;
-        b.mode = (BigIntMode)o->extra[0];
-        return b;
-    } else {
-        BigInt b;
-        b.smi = 0;
-        b.heap = (HeapBigInt*)o->value.gc;
-        b.mode = (BigIntMode)o->extra[0];
-        return b;
-    }
+inline void setbigintsmi(TValue* obj, int64_t smi, BigIntMode mode) {
+    obj->value.l = smi;
+    obj->tt = LUA_TBIGINT;
+    obj->extra[0] = mode;
 }
 
-inline void setbigintvalue(TValue* obj, BigInt b) {
-    if (b.heap) {
-        obj->value.gc = (GCObject*)b.heap;
-        obj->tt = LUA_THEAPBIGINT;
-        obj->extra[0] = b.mode;
-    } else {
-        obj->value.l = b.smi;
-        obj->tt = LUA_TBIGINT;
-        obj->extra[0] = b.mode;
-    }
+inline void setbigintheap(TValue* obj, HeapBigInt* heap, BigIntMode mode) {
+    obj->value.gc = (GCObject*)heap;
+    obj->tt = LUA_THEAPBIGINT;
+    obj->extra[0] = mode;
 }
 
 enum FeedbackVectorSlotKind
@@ -586,21 +563,7 @@ typedef struct LuaNode
     TKey key;
 } LuaNode;
 
-inline BigInt bigintvalue(const TKey* o) {
-    if (ttype(o) == LUA_TBIGINT) {
-        BigInt b;
-        b.smi = o->value.l;
-        b.heap = nullptr;
-        b.mode = (BigIntMode)o->extra[0];
-        return b;
-    } else {
-        BigInt b;
-        b.smi = 0;
-        b.heap = (HeapBigInt*)o->value.gc;
-        b.mode = (BigIntMode)o->extra[0];
-        return b;
-    }
-}
+
 
 // copy a value into a key
 #define setnodekey(L, node, obj) \
