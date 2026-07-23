@@ -119,6 +119,9 @@ struct RuntimeBytecodeBuilder : public BytecodeBuilder
         case LUA_TBIGINT:
             formatAppend(result, "%lld", (long long)(int64_t)lvalue(c));
             break;
+        case LUA_THEAPBIGINT:
+            formatAppend(result, "heapbigint");
+            break;
         case LUA_TVECTOR:
         {
             float* vec = vvalue(c);
