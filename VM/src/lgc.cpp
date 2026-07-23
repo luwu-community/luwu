@@ -249,6 +249,11 @@ static void reallymarkobject(global_State* g, GCObject* o)
     {
         return;
     }
+    case LUA_THEAPBIGINT:
+    {
+        gray2black(o); // BigInts have no children, mark them black
+        return;
+    }
     case LUA_TUSERDATA:
     {
         LuaTable* mt = gco2u(o)->metatable;
@@ -744,6 +749,9 @@ static void freeobj(lua_State* L, GCObject* o, lua_Page* page)
         break;
     case LUA_TOBJECT:
         luaR_freeobject(L, gco2object(o), page);
+        break;
+    case LUA_THEAPBIGINT:
+        lua_freebigint(L, gco2bigint(o), page);
         break;
     default:
         LUAU_ASSERT(0);

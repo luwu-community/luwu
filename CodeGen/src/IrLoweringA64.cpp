@@ -607,7 +607,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             RegisterA64 temp = tempDouble(OP_C(inst));
             build.str(temp, addr);
         }
-        else if (tagOp(OP_B(inst)) == LUA_TINTEGER)
+        else if (tagOp(OP_B(inst)) == LUA_TBIGINT)
         {
             RegisterA64 temp = tempInt64(OP_C(inst));
             build.str(temp, addr);
@@ -1564,7 +1564,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             build.fcmp(temp1, temp2);
             build.cset(inst.regA64, getConditionFP(cond));
         }
-        else if (tagOp(OP_B(inst)) == LUA_TINTEGER)
+        else if (tagOp(OP_B(inst)) == LUA_TBIGINT)
         {
             RegisterA64 temp1 = tempInt64(OP_C(inst));
             RegisterA64 temp2 = tempInt64(OP_D(inst));

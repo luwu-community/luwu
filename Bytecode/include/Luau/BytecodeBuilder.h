@@ -67,6 +67,7 @@ public:
     int32_t addConstantBoolean(bool value);
     int32_t addConstantNumber(double value);
     int32_t addConstantInteger(int64_t value);
+    int32_t addConstantBigIntHeap(StringRef value);
     int32_t addConstantVector(float x, float y, float z, float w);
     int32_t addConstantString(StringRef value);
     int32_t addImport(uint32_t iid);
@@ -193,6 +194,7 @@ protected:
             Type_Table,
             Type_Closure,
             Type_ClassShape,
+            Type_BigIntHeap,
         };
 
         Type type;

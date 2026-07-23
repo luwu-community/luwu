@@ -14,6 +14,7 @@
 #include <string.h>
 
 LUAU_FASTFLAG(LuauDirectFieldGet)
+LUAU_FASTFLAGVARIABLE(LuauBigInt)
 
 /*
 ** Main thread combines a thread state and the global state

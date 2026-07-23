@@ -26,7 +26,7 @@ static LuauBytecodeType getPrimitiveType(AstName name)
     else if (name == "number")
         return LBC_TYPE_NUMBER;
     else if (name == "integer")
-        return LBC_TYPE_INTEGER;
+        return LBC_TYPE_BIGINT;
     else if (name == "string")
         return LBC_TYPE_STRING;
     else if (name == "thread")
@@ -560,7 +560,7 @@ struct TypeMapVisitor : AstVisitor
                     case LBC_TYPE_NUMBER:
                         resolvedExprs[node] = &builtinTypes.numberType;
                         break;
-                    case LBC_TYPE_INTEGER:
+                    case LBC_TYPE_BIGINT:
                         resolvedExprs[node] = &builtinTypes.integerType;
                         break;
                     case LBC_TYPE_STRING:

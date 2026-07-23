@@ -348,7 +348,8 @@ void lua_pushvalue(lua_State* L, int idx)
 int lua_type(lua_State* L, int idx)
 {
     StkId o = index2addr(L, idx);
-    return (o == luaO_nilobject) ? LUA_TNONE : ttype(o);
+    int tt = (o == luaO_nilobject) ? LUA_TNONE : ttype(o);
+    return tt == LUA_THEAPBIGINT ? LUA_TBIGINT : tt;
 }
 
 const char* lua_typename(lua_State* L, int t)
@@ -483,10 +484,11 @@ int lua_toboolean(lua_State* L, int idx)
     return !l_isfalse(o);
 }
 
+
 int64_t lua_tointeger64(lua_State* L, int idx, int* isinteger)
 {
     const TValue* o = index2addr(L, idx);
-    if (ttisinteger(o))
+    if (ttype(o) == LUA_TBIGINT)
     {
         if (isinteger)
             *isinteger = 1;
@@ -497,6 +499,25 @@ int64_t lua_tointeger64(lua_State* L, int idx, int* isinteger)
         if (isinteger)
             *isinteger = 0;
         return 0;
+    }
+}
+
+BigInt lua_tobigint(lua_State* L, int idx)
+{
+    const TValue* o = index2addr(L, idx);
+    if (ttisbigint(o)) {
+        return bigintvalue(o);
+    }
+    return lua_newbigint(0);
+}
+
+void lua_pushbigint_string(lua_State* L, int idx)
+{
+    const TValue* o = index2addr(L, idx);
+    if (ttisbigint(o)) {
+        lua_pushbigint_string(L, bigintvalue(o));
+    } else {
+        lua_pushliteral(L, "0");
     }
 }
 

@@ -364,6 +364,19 @@ int32_t BytecodeBuilder::addConstantInteger(int64_t value)
     return addConstant(k, c);
 }
 
+int32_t BytecodeBuilder::addConstantBigIntHeap(StringRef value)
+{
+    unsigned int index = addStringTableEntry(value);
+
+    Constant c = {Constant::Type_BigIntHeap};
+    c.valueString = index;
+
+    ConstantKey k = {Constant::Type_BigIntHeap};
+    k.value = index;
+
+    return addConstant(k, c);
+}
+
 int32_t BytecodeBuilder::addConstantVector(float x, float y, float z, float w)
 {
     Constant c = {Constant::Type_Vector};
@@ -839,6 +852,11 @@ void BytecodeBuilder::writeFunction(std::string& ss, uint32_t id, uint8_t flags,
                 writeByte(ss, 0);
                 writeVarInt(ss, c.valueInteger64);
             }
+            break;
+
+        case Constant::Type_BigIntHeap:
+            writeByte(ss, LBC_CONSTANT_BIGINT_HEAP);
+            writeVarInt(ss, c.valueString);
             break;
 
         case Constant::Type_Vector:
@@ -2074,6 +2092,12 @@ void BytecodeBuilder::dumpConstant(std::string& result, int k, bool detailed) co
     case Constant::Type_Integer:
         formatAppend(result, "%lld", (long long)(int64_t)data.valueInteger64);
         break;
+    case Constant::Type_BigIntHeap:
+    {
+        const StringRef& str = debugStrings[data.valueString - 1];
+        formatAppend(result, "%.*si", int(str.length), str.data);
+        break;
+    }
     case Constant::Type_Vector:
         // 3-vectors is the most common configuration, so truncate to three components if possible
         if (data.valueVector[3] == 0.0)
@@ -2677,8 +2701,8 @@ static const char* getBaseTypeString(uint8_t type)
         return "boolean";
     case LBC_TYPE_NUMBER:
         return "number";
-    case LBC_TYPE_INTEGER:
-        return "integer";
+    case LBC_TYPE_BIGINT:
+        return "bigint";
     case LBC_TYPE_STRING:
         return "string";
     case LBC_TYPE_TABLE:

@@ -618,6 +618,19 @@ static int loadsafe(
                 break;
             }
 
+            case LBC_CONSTANT_BIGINT_HEAP:
+            {
+                uint32_t sid = readVarInt(data, size, offset);
+                if (sid == 0 || sid > strings.count)
+                    LUAU_ASSERT(!"String ID is out of bounds");
+
+                TString* str = strings.data[sid - 1];
+
+                BigInt parsed = lua_bigint_fromstring(L, getstr(str));
+                setbigintvalue(&p->k[j], parsed);
+                break;
+            }
+
             default:
                 LUAU_ASSERT(!"Unexpected constant kind");
             }

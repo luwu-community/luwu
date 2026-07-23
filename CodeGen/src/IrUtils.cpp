@@ -1078,7 +1078,7 @@ void foldConstants(IrBuilder& build, IrFunction& function, IrBlock& block, uint3
                     sameValue = compare(function.intOp(OP_C(inst)), function.intOp(OP_D(inst)), IrCondition::Equal);
                 else if (function.tagOp(OP_B(inst)) == LUA_TNUMBER)
                     sameValue = compare(function.doubleOp(OP_C(inst)), function.doubleOp(OP_D(inst)), IrCondition::Equal);
-                else if (function.tagOp(OP_B(inst)) == LUA_TINTEGER)
+                else if (function.tagOp(OP_B(inst)) == LUA_TBIGINT)
                     sameValue = compare(function.int64Op(OP_C(inst)), function.int64Op(OP_D(inst)), IrCondition::Equal);
                 else
                     CODEGEN_ASSERT(!"unsupported type");
@@ -1107,7 +1107,7 @@ void foldConstants(IrBuilder& build, IrFunction& function, IrBlock& block, uint3
                     differentValue = compare(function.intOp(OP_C(inst)), function.intOp(OP_D(inst)), IrCondition::NotEqual);
                 else if (function.tagOp(OP_B(inst)) == LUA_TNUMBER)
                     differentValue = compare(function.doubleOp(OP_C(inst)), function.doubleOp(OP_D(inst)), IrCondition::NotEqual);
-                else if (function.tagOp(OP_B(inst)) == LUA_TINTEGER)
+                else if (function.tagOp(OP_B(inst)) == LUA_TBIGINT)
                     differentValue = compare(function.int64Op(OP_C(inst)), function.int64Op(OP_D(inst)), IrCondition::NotEqual);
                 else
                     CODEGEN_ASSERT(!"unsupported type");
@@ -1922,8 +1922,8 @@ std::optional<uint8_t> tryGetLuauTagForBcType(uint8_t bcType, bool ignoreOptiona
         return LUA_TBOOLEAN;
     case LBC_TYPE_NUMBER:
         return LUA_TNUMBER;
-    case LBC_TYPE_INTEGER:
-        return LUA_TINTEGER;
+    case LBC_TYPE_BIGINT:
+        return LUA_TBIGINT;
     case LBC_TYPE_STRING:
         return LUA_TSTRING;
     case LBC_TYPE_TABLE:

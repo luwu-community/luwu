@@ -659,8 +659,10 @@ struct ConstantVisitor : AstVisitor
         }
         else if (AstExprConstantInteger* expr = node->as<AstExprConstantInteger>())
         {
-            result.type = Constant::Type_Integer;
-            result.valueInteger64 = expr->value;
+            if (expr->parseResult != ConstantNumberParseResult::HeapBigInt) {
+                result.type = Constant::Type_Integer;
+                result.valueInteger64 = expr->value;
+            }
         }
         else if (AstExprConstantString* expr = node->as<AstExprConstantString>())
         {

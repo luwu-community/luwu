@@ -143,16 +143,21 @@ LUALIB_API int luaopen_utf8(lua_State* L);
 #define LUA_CLASSLIBNAME "class"
 LUALIB_API int luaopen_class(lua_State* L);
 
+#define LUA_BIGINTLIBNAME "bigint"
+LUALIB_API int luaopen_bigint(lua_State* L);
+
 #define LUA_MATHLIBNAME "math"
 LUALIB_API int luaopen_math(lua_State* L);
 
 #define LUA_DBLIBNAME "debug"
 LUALIB_API int luaopen_debug(lua_State* L);
 
+#define LUA_VECBUILTINNAME "vector"
+
 #define LUA_VECLIBNAME "vector"
 LUALIB_API int luaopen_vector(lua_State* L);
 
-#define LUA_INTLIBNAME "integer"
+#define LUA_INTLIBNAME "integer64"
 LUALIB_API int luaopen_integer(lua_State* L);
 
 // open all builtin libraries

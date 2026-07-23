@@ -345,6 +345,7 @@ enum class ConstantNumberParseResult
     BinOverflow,
     HexOverflow,
     IntOverflow,
+    HeapBigInt,
 };
 
 class AstExprConstantNumber : public AstExpr
@@ -366,10 +367,12 @@ public:
     LUAU_RTTI(AstExprConstantInteger)
 
     AstExprConstantInteger(const Location& location, int64_t value, ConstantNumberParseResult parseResult = ConstantNumberParseResult::Ok);
+    AstExprConstantInteger(const Location& location, const char* stringValue, ConstantNumberParseResult parseResult = ConstantNumberParseResult::HeapBigInt);
 
     void visit(AstVisitor* visitor) override;
 
     int64_t value;
+    const char* stringValue; // Set when parseResult == HeapBigInt
     ConstantNumberParseResult parseResult;
 };
 class AstExprConstantString : public AstExpr

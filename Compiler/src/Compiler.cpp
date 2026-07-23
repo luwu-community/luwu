@@ -2927,11 +2927,21 @@ struct Compiler
         }
         else if (AstExprConstantInteger* expr = node->as<AstExprConstantInteger>())
         {
-            int32_t cid = bytecode.addConstantInteger(expr->value);
-            if (cid < 0)
-                CompileError::raise(expr->location, "Exceeded constant limit; simplify the code to compile");
+            if (expr->parseResult == ConstantNumberParseResult::HeapBigInt)
+            {
+                int32_t cid = bytecode.addConstantBigIntHeap({expr->stringValue, strlen(expr->stringValue)});
+                if (cid < 0)
+                    CompileError::raise(expr->location, "Exceeded constant limit; simplify the code to compile");
+                emitLoadK(target, cid);
+            }
+            else
+            {
+                int32_t cid = bytecode.addConstantInteger(expr->value);
+                if (cid < 0)
+                    CompileError::raise(expr->location, "Exceeded constant limit; simplify the code to compile");
 
-            emitLoadK(target, cid);
+                emitLoadK(target, cid);
+            }
         }
         else if (AstExprConstantString* expr = node->as<AstExprConstantString>())
         {

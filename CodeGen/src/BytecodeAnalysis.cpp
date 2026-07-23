@@ -219,8 +219,9 @@ static uint8_t getBytecodeConstantTag(Proto* proto, unsigned ki)
         return LBC_TYPE_USERDATA;
     case LUA_TNUMBER:
         return LBC_TYPE_NUMBER;
-    case LUA_TINTEGER:
-        return LBC_TYPE_INTEGER;
+    case LUA_TBIGINT:
+    case LUA_THEAPBIGINT:
+        return LBC_TYPE_BIGINT;
     case LUA_TVECTOR:
         return LBC_TYPE_VECTOR;
     case LUA_TSYMNONE:
@@ -510,7 +511,7 @@ static void applyBuiltinCall(LuauBuiltinFunction bfid, BytecodeTypes& types)
         types.c = LBC_TYPE_NUMBER;
         break;
     case LBF_BUFFER_READINTEGER:
-        types.result = LBC_TYPE_INTEGER;
+        types.result = LBC_TYPE_BIGINT;
         types.a = LBC_TYPE_BUFFER;
         types.b = LBC_TYPE_NUMBER;
         break;
@@ -518,7 +519,7 @@ static void applyBuiltinCall(LuauBuiltinFunction bfid, BytecodeTypes& types)
         types.result = LBC_TYPE_NIL;
         types.a = LBC_TYPE_BUFFER;
         types.b = LBC_TYPE_NUMBER;
-        types.c = LBC_TYPE_INTEGER;
+        types.c = LBC_TYPE_BIGINT;
         break;
     case LBF_BUFFER_ISFROZEN:
         types.result = LBC_TYPE_BOOLEAN;
@@ -600,8 +601,8 @@ static void applyBuiltinCall(LuauBuiltinFunction bfid, BytecodeTypes& types)
     case LBF_INTEGER_BNOT:
     case LBF_INTEGER_COUNTLZ:
     case LBF_INTEGER_COUNTRZ:
-        types.result = LBC_TYPE_INTEGER;
-        types.a = LBC_TYPE_INTEGER;
+        types.result = LBC_TYPE_BIGINT;
+        types.a = LBC_TYPE_BIGINT;
         break;
 
     case LBF_INTEGER_MIN:
@@ -609,10 +610,10 @@ static void applyBuiltinCall(LuauBuiltinFunction bfid, BytecodeTypes& types)
     case LBF_INTEGER_BAND:
     case LBF_INTEGER_BOR:
     case LBF_INTEGER_BXOR:
-        types.a = LBC_TYPE_INTEGER;
-        types.b = LBC_TYPE_INTEGER;
-        types.c = LBC_TYPE_INTEGER; // We can mark optional arguments
-        types.result = LBC_TYPE_INTEGER;
+        types.a = LBC_TYPE_BIGINT;
+        types.b = LBC_TYPE_BIGINT;
+        types.c = LBC_TYPE_BIGINT; // We can mark optional arguments
+        types.result = LBC_TYPE_BIGINT;
         break;
 
     case LBF_INTEGER_ADD:
@@ -629,21 +630,21 @@ static void applyBuiltinCall(LuauBuiltinFunction bfid, BytecodeTypes& types)
     case LBF_INTEGER_RROTATE:
     case LBF_INTEGER_RSHIFT:
     case LBF_INTEGER_ARSHIFT:
-        types.a = LBC_TYPE_INTEGER;
-        types.b = LBC_TYPE_INTEGER;
-        types.result = LBC_TYPE_INTEGER;
+        types.a = LBC_TYPE_BIGINT;
+        types.b = LBC_TYPE_BIGINT;
+        types.result = LBC_TYPE_BIGINT;
         break;
     case LBF_INTEGER_CLAMP:
     case LBF_INTEGER_EXTRACT:
-        types.a = LBC_TYPE_INTEGER;
-        types.b = LBC_TYPE_INTEGER;
-        types.c = LBC_TYPE_INTEGER;
-        types.result = LBC_TYPE_INTEGER;
+        types.a = LBC_TYPE_BIGINT;
+        types.b = LBC_TYPE_BIGINT;
+        types.c = LBC_TYPE_BIGINT;
+        types.result = LBC_TYPE_BIGINT;
         break;
     case LBF_INTEGER_BTEST:
-        types.a = LBC_TYPE_INTEGER;
-        types.b = LBC_TYPE_INTEGER;
-        types.c = LBC_TYPE_INTEGER; // We can mark optional arguments
+        types.a = LBC_TYPE_BIGINT;
+        types.b = LBC_TYPE_BIGINT;
+        types.c = LBC_TYPE_BIGINT; // We can mark optional arguments
         types.result = LBC_TYPE_BOOLEAN;
         break;
     case LBF_INTEGER_LT:
@@ -654,17 +655,17 @@ static void applyBuiltinCall(LuauBuiltinFunction bfid, BytecodeTypes& types)
     case LBF_INTEGER_ULE:
     case LBF_INTEGER_UGT:
     case LBF_INTEGER_UGE:
-        types.a = LBC_TYPE_INTEGER;
-        types.b = LBC_TYPE_INTEGER;
+        types.a = LBC_TYPE_BIGINT;
+        types.b = LBC_TYPE_BIGINT;
         types.result = LBC_TYPE_BOOLEAN;
         break;
     case LBF_INTEGER_TONUMBER:
-        types.a = LBC_TYPE_INTEGER;
+        types.a = LBC_TYPE_BIGINT;
         types.result = LBC_TYPE_NUMBER;
         break;
     case LBF_INTEGER_CREATE:
         types.a = LBC_TYPE_NUMBER;
-        types.result = LBC_TYPE_INTEGER;
+        types.result = LBC_TYPE_BIGINT;
         break;
     }
 }

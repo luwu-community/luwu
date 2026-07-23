@@ -98,7 +98,7 @@ static uint8_t tryGetTagForTypename(std::string_view name, bool forTypeof)
         return LUA_TNUMBER;
 
     if (name == "integer")
-        return LUA_TINTEGER;
+        return LUA_TBIGINT;
 
     // typeof(vector) can be changed by environment
     // TODO: support the environment option
@@ -445,7 +445,7 @@ struct ConstPropState
                 if (uint32_t* prevIdx = getPreviousVersionedLoadIndex(IrCmd::LOAD_DOUBLE, vmReg))
                     return std::make_pair(IrCmd::LOAD_DOUBLE, *prevIdx);
             }
-            else if (tag == LUA_TINTEGER)
+            else if (tag == LUA_TBIGINT)
             {
                 if (uint32_t* prevIdx = getPreviousVersionedLoadIndex(IrCmd::LOAD_INT64, vmReg))
                     return std::make_pair(IrCmd::LOAD_INT64, *prevIdx);
@@ -2005,7 +2005,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
             else if (tag == LUA_TNUMBER &&
                      (value.kind == IrOpKind::Inst || (value.kind == IrOpKind::Constant && function.constOp(value).kind == IrConstKind::Double)))
                 canSplitTvalueStore = true;
-            else if (tag == LUA_TINTEGER &&
+            else if (tag == LUA_TBIGINT &&
                      (value.kind == IrOpKind::Inst || (value.kind == IrOpKind::Constant && function.constOp(value).kind == IrConstKind::Int64)))
                 canSplitTvalueStore = true;
             else if (tag != 0xff && isGCO(tag) && value.kind == IrOpKind::Inst)
@@ -2206,7 +2206,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
                 if (function.constOp(value).kind == IrConstKind::Double)
                     tag = LUA_TNUMBER;
                 else if (function.constOp(value).kind == IrConstKind::Int64)
-                    tag = LUA_TINTEGER;
+                    tag = LUA_TBIGINT;
             }
         }
 

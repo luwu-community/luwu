@@ -518,6 +518,7 @@ enum LuauBytecodeTag
     LBC_CONSTANT_TABLE_WITH_CONSTANTS,
     LBC_CONSTANT_INTEGER,
     LBC_CONSTANT_CLASS_SHAPE,
+    LBC_CONSTANT_BIGINT_HEAP,
 
     /** WARNING: This must always be last. */
     LBC_CONSTANT__COUNT
@@ -538,6 +539,7 @@ enum LuauBytecodeType
     LBC_TYPE_BUFFER,
     LBC_TYPE_INTEGER,
     LBC_TYPE_SYMNONE,
+    LBC_TYPE_BIGINT,
 
     LBC_TYPE_ANY = 15,
 

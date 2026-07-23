@@ -55,7 +55,7 @@ struct RuntimeBytecodeBuilder : public BytecodeBuilder
         case Constant::Type_Number:
             return LUA_TNUMBER;
         case Constant::Type_Integer:
-            return LUA_TINTEGER;
+            return LUA_TBIGINT;
         case Constant::Type_Vector:
             return LUA_TVECTOR;
         case Constant::Type_String:
@@ -116,7 +116,7 @@ struct RuntimeBytecodeBuilder : public BytecodeBuilder
         case LUA_TNUMBER:
             formatAppend(result, "%.17g", nvalue(c));
             break;
-        case LUA_TINTEGER:
+        case LUA_TBIGINT:
             formatAppend(result, "%lld", (long long)(int64_t)lvalue(c));
             break;
         case LUA_TVECTOR:

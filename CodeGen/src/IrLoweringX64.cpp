@@ -363,7 +363,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
                 build.vmovsd(valueLhs, regOp(OP_C(inst)));
             }
         }
-        else if (tagOp(OP_B(inst)) == LUA_TINTEGER)
+        else if (tagOp(OP_B(inst)) == LUA_TBIGINT)
         {
             OperandX64 valueLhs = OP_A(inst).kind == IrOpKind::Inst ? qword[regOp(OP_A(inst)) + offsetof(TValue, value) + addrOffset]
                                                                     : luauRegValueInt64(vmRegOp(OP_A(inst)));
@@ -1685,7 +1685,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
                 }
             }
         }
-        else if (tagOp(OP_B(inst)) == LUA_TINTEGER)
+        else if (tagOp(OP_B(inst)) == LUA_TBIGINT)
         {
             if (OP_C(inst).kind == IrOpKind::Constant)
                 build.cmp(regOp(OP_D(inst)), memRegInt64Op(OP_C(inst))); // swapped arguments

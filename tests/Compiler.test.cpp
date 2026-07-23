@@ -11232,7 +11232,7 @@ end)";
     Luau::compileOrThrow(bcb, source, options);
 
     CHECK_EQ("\n" + bcb.dumpFunction(0), R"(
-R0: integer from 0 to 2
+R0: bigint from 0 to 2
 LOADK R0 K0 [123]
 RETURN R0 1
 )");
@@ -11951,7 +11951,7 @@ TEST_CASE("LBCConstantRegressionTest")
     CHECK_EQ(LBC_CONSTANT_INTEGER, 9);
     CHECK_EQ(LBC_CONSTANT_CLASS_SHAPE, 10);
 
-    CHECK_EQ(LBC_CONSTANT__COUNT, 11);
+    CHECK_EQ(LBC_CONSTANT__COUNT, 12);
 }
 
 TEST_CASE("ExportClass")

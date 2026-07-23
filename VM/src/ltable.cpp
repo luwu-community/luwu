@@ -162,8 +162,9 @@ static LuaNode* mainposition(const LuaTable* t, const TValue* key)
     {
     case LUA_TNUMBER:
         return hashnum(t, nvalue(key));
-    case LUA_TINTEGER:
-        return hashint(t, lvalue(key));
+    case LUA_TBIGINT:
+    case LUA_THEAPBIGINT:
+        return hashpow2(t, lua_bigint_hash(bigintvalue(key)));
     case LUA_TVECTOR:
         return hashvec(t, vvalue(key));
     case LUA_TSTRING:

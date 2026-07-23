@@ -17,7 +17,7 @@
 #include <string_view>
 
 LUAU_FASTFLAG(LuauIntegerFastcalls)
-LUAU_FASTFLAG(LuauCodegenInteger3)
+LUAU_FASTFLAG(LuauIntegerLibrary)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuauCodegenLoadPropagateOrigin)
 LUAU_FASTFLAG(LuauCodegenVmExitSyncMultiUse)
@@ -7026,7 +7026,7 @@ _()
 TEST_CASE_FIXTURE(LoweringFixture, "FuzzTest26")
 {
     ScopedFastFlag luauIntegerFastcalls{FFlag::LuauIntegerFastcalls, true};
-    ScopedFastFlag LuauCodegenInteger3{FFlag::LuauCodegenInteger3, true};
+    ScopedFastFlag LuauIntegerLibrary{FFlag::LuauIntegerLibrary, true};
     ScopedFastFlag luauIntegerType{FFlag::LuauIntegerType2, true};
     ScopedFastFlag luauCodegenA64ExitUseCheck{FFlag::LuauCodegenA64ExitUseCheck, true};
 
@@ -8261,7 +8261,7 @@ bb_2:
 TEST_CASE_FIXTURE(LoweringFixture, "IntegerMultiargValidate")
 {
     ScopedFastFlag luauIntegerFastcalls{FFlag::LuauIntegerFastcalls, true};
-    ScopedFastFlag LuauCodegenInteger3{FFlag::LuauCodegenInteger3, true};
+    ScopedFastFlag LuauIntegerLibrary{FFlag::LuauIntegerLibrary, true};
     ScopedFastFlag luauIntegerType{FFlag::LuauIntegerType2, true};
 
     CHECK_EQ(
@@ -8293,7 +8293,7 @@ bb_bytecode_0:
 TEST_CASE_FIXTURE(LoweringFixture, "IntegerMultiargValidate2")
 {
     ScopedFastFlag luauIntegerFastcalls{FFlag::LuauIntegerFastcalls, true};
-    ScopedFastFlag LuauCodegenInteger3{FFlag::LuauCodegenInteger3, true};
+    ScopedFastFlag LuauIntegerLibrary{FFlag::LuauIntegerLibrary, true};
     ScopedFastFlag luauIntegerType{FFlag::LuauIntegerType2, true};
 
     CHECK_EQ(
@@ -8326,7 +8326,7 @@ bb_bytecode_0:
 TEST_CASE_FIXTURE(LoweringFixture, "IntegerMultiargValidate3")
 {
     ScopedFastFlag luauIntegerFastcalls{FFlag::LuauIntegerFastcalls, true};
-    ScopedFastFlag LuauCodegenInteger3{FFlag::LuauCodegenInteger3, true};
+    ScopedFastFlag LuauIntegerLibrary{FFlag::LuauIntegerLibrary, true};
     ScopedFastFlag luauIntegerType{FFlag::LuauIntegerType2, true};
 
     CHECK_EQ(
@@ -8361,7 +8361,7 @@ bb_bytecode_0:
 TEST_CASE_FIXTURE(LoweringFixture, "IntegerFastcallWrongConst")
 {
     ScopedFastFlag luauIntegerFastcalls{FFlag::LuauIntegerFastcalls, true};
-    ScopedFastFlag LuauCodegenInteger3{FFlag::LuauCodegenInteger3, true};
+    ScopedFastFlag LuauIntegerLibrary{FFlag::LuauIntegerLibrary, true};
 
     // Check that this compiles with no assertions
     CHECK(
@@ -8409,7 +8409,7 @@ end
 
 TEST_CASE_FIXTURE(LoweringFixture, "NumberFastcallWrongConst")
 {
-    ScopedFastFlag LuauCodegenInteger3{FFlag::LuauCodegenInteger3, true};
+    ScopedFastFlag LuauIntegerLibrary{FFlag::LuauIntegerLibrary, true};
     ScopedFastFlag luauIntegerType{FFlag::LuauIntegerType2, true};
 
     // Check that this compiles with no assertions
@@ -8461,7 +8461,7 @@ end
 TEST_CASE_FIXTURE(LoweringFixture, "IntegerFastcallConstant")
 {
     ScopedFastFlag luauIntegerFastcalls{FFlag::LuauIntegerFastcalls, true};
-    ScopedFastFlag LuauCodegenInteger3{FFlag::LuauCodegenInteger3, true};
+    ScopedFastFlag LuauIntegerLibrary{FFlag::LuauIntegerLibrary, true};
     ScopedFastFlag luauIntegerType{FFlag::LuauIntegerType2, true};
 
     CHECK_EQ(

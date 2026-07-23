@@ -21,6 +21,7 @@ static const luaL_Reg lualibs[] = {
     {LUA_BUFFERLIBNAME, luaopen_buffer},
     {LUA_VECLIBNAME, luaopen_vector},
     {LUA_INTLIBNAME, luaopen_integer},
+    {LUA_BIGINTLIBNAME, luaopen_bigint},
     {NULL, NULL},
 };
 
@@ -36,6 +37,7 @@ static const luaL_Reg lualibs_NOINTEGER[] = {
     {LUA_BITLIBNAME, luaopen_bit32},
     {LUA_BUFFERLIBNAME, luaopen_buffer},
     {LUA_VECLIBNAME, luaopen_vector},
+    {LUA_BIGINTLIBNAME, luaopen_bigint},
     {NULL, NULL},
 };
 

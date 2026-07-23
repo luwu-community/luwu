@@ -5075,10 +5075,18 @@ AstExpr* Parser::parseNumber()
         if (result == ConstantNumberParseResult::Malformed)
             return reportExprError(start, {}, "Malformed integer");
 
-        if (result != ConstantNumberParseResult::Ok)
-            return reportExprError(start, {}, "Integer overflow");
+        AstExprConstantInteger* node;
+        if (result == ConstantNumberParseResult::IntOverflow)
+        {
+            scratchData.pop_back(); // remove 'i'
+            char* stringValue = copy(scratchData).data;
+            node = allocator.alloc<AstExprConstantInteger>(start, stringValue, ConstantNumberParseResult::HeapBigInt);
+        }
+        else
+        {
+            node = allocator.alloc<AstExprConstantInteger>(start, value, result);
+        }
 
-        AstExprConstantInteger* node = allocator.alloc<AstExprConstantInteger>(start, value, result);
         if (options.storeCstData)
             cstNodeMap[node] = allocator.alloc<CstExprConstantInteger>(sourceData);
         return node;
