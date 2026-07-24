@@ -81,8 +81,8 @@ static void buildArgumentTypeChecks(IrBuilder& build, IrOp entry)
         case LBC_TYPE_NUMBER:
             build.inst(IrCmd::CHECK_TAG, load, build.constTag(LUA_TNUMBER), build.vmExit(kVmExitEntryGuardPc));
             break;
-        case LBC_TYPE_BIGINT:
-            build.inst(IrCmd::CHECK_TAG, load, build.constTag(LUA_TBIGINT), build.vmExit(kVmExitEntryGuardPc));
+        case LBC_TYPE_INTEGER:
+            build.inst(IrCmd::CHECK_TAG, load, build.constTag(LUA_TINTEGER), build.vmExit(kVmExitEntryGuardPc));
             break;
         case LBC_TYPE_STRING:
             build.inst(IrCmd::CHECK_TAG, load, build.constTag(LUA_TSTRING), build.vmExit(kVmExitEntryGuardPc));

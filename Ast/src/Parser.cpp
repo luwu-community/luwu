@@ -4007,7 +4007,7 @@ static ConstantNumberParseResult parseInteger64(int64_t& result, const char* dat
     {
         result = strtoll(data, &end, 10);
 
-        if (end == data || *end != 'i' || end[1] != '\0')
+        if (end == data || *end != '\0')
             return ConstantNumberParseResult::Malformed;
 
         if (((result == LLONG_MIN) || (result == LLONG_MAX)) && (errno == ERANGE))
@@ -4032,7 +4032,7 @@ static ConstantNumberParseResult parseInteger64(int64_t& result, const char* dat
         // hex and binary literals represent bit patterns covering the full uint64 range
         unsigned long long u = strtoull(data, &end, base);
 
-        if (end == data || *end != 'i' || end[1] != '\0')
+        if (end == data || *end != '\0')
             return ConstantNumberParseResult::Malformed;
 
         if ((u == ULLONG_MAX) && (errno == ERANGE))
@@ -5059,12 +5059,34 @@ AstExpr* Parser::parseNumber()
         scratchData.erase(std::remove(scratchData.begin(), scratchData.end(), '_'), scratchData.end());
     }
 
-    if (FFlag::LuauIntegerType2 && (scratchData.back() == 'i'))
+    bool isIntegerSuffix = false;
+    uint8_t mode = 0;
+    
+    struct SuffixMap { const char* s; uint8_t m; };
+    const SuffixMap intSuffixes[] = {
+        {"i8", 1}, {"u8", 2}, {"i16", 3}, {"u16", 4}, 
+        {"i32", 5}, {"u32", 6}, {"i64", 7}, {"u64", 8}, 
+        {"i", 0}, {"u", 0}
+    };
+
+    for (const auto& suffix : intSuffixes)
+    {
+        size_t len = strlen(suffix.s);
+        if (scratchData.size() >= len && scratchData.compare(scratchData.size() - len, len, suffix.s) == 0)
+        {
+            isIntegerSuffix = true;
+            mode = suffix.m;
+            scratchData.erase(scratchData.size() - len);
+            break;
+        }
+    }
+
+    if (FFlag::LuauIntegerType2 && isIntegerSuffix)
     {
         int64_t value = 0;
         ConstantNumberParseResult result;
         if ((strncmp(scratchData.c_str(), "0x", 2) == 0) || (strncmp(scratchData.c_str(), "0X", 2) == 0))
-            result = parseInteger64(value, scratchData.c_str(), 16); // pass in '0x' prefix, it's handled by strtoll
+            result = parseInteger64(value, scratchData.c_str(), 16);
         else if ((strncmp(scratchData.c_str(), "0b", 2) == 0) || (strncmp(scratchData.c_str(), "0B", 2) == 0))
             result = parseInteger64(value, scratchData.c_str() + 2, 2);
         else
@@ -5078,14 +5100,15 @@ AstExpr* Parser::parseNumber()
         AstExprConstantInteger* node;
         if (result == ConstantNumberParseResult::IntOverflow)
         {
-            scratchData.pop_back(); // remove 'i'
             char* stringValue = copy(scratchData).data;
-            node = allocator.alloc<AstExprConstantInteger>(start, stringValue, ConstantNumberParseResult::HeapBigInt);
+            node = allocator.alloc<AstExprConstantInteger>(start, stringValue, ConstantNumberParseResult::HeapInteger);
         }
         else
         {
             node = allocator.alloc<AstExprConstantInteger>(start, value, result);
         }
+
+        node->mode = mode;
 
         if (options.storeCstData)
             cstNodeMap[node] = allocator.alloc<CstExprConstantInteger>(sourceData);

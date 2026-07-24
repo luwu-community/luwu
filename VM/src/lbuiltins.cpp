@@ -1331,7 +1331,7 @@ static int luauF_tostring(lua_State* L, StkId res, TValue* arg0, int nresults, S
             setsvalue(L, res, tsvalue(arg0));
             return 1;
         }
-        case LUA_TBIGINT:
+        case LUA_TINTEGER:
         {
             if (luaC_needsGC(L))
                 return -1; // we can't call luaC_checkGC so fall back to C implementation
@@ -1800,7 +1800,7 @@ static int luauF_isfinite(lua_State* L, StkId res, TValue* arg0, int nresults, S
 
 static int luauF_integertonumber(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams >= 1 && nresults <= 1 && ttisbigint(arg0))
+    if (nparams >= 1 && nresults <= 1 && ttisinteger(arg0))
     {
         setnvalue(res, cast_num(lvalue(arg0)));
         return 1;
@@ -1811,7 +1811,7 @@ static int luauF_integertonumber(lua_State* L, StkId res, TValue* arg0, int nres
 
 static int luauF_integeradd(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams >= 2 && nresults <= 1 && ttisbigint(arg0) && ttisbigint(args))
+    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
     {
         int64_t a1 = lvalue(arg0);
         int64_t a2 = lvalue(args);
@@ -1824,7 +1824,7 @@ static int luauF_integeradd(lua_State* L, StkId res, TValue* arg0, int nresults,
 
 static int luauF_integersub(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams >= 2 && nresults <= 1 && ttisbigint(arg0) && ttisbigint(args))
+    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
     {
         int64_t a1 = lvalue(arg0);
         int64_t a2 = lvalue(args);
@@ -1837,7 +1837,7 @@ static int luauF_integersub(lua_State* L, StkId res, TValue* arg0, int nresults,
 
 static int luauF_integerneg(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams >= 1 && nresults <= 1 && ttisbigint(arg0))
+    if (nparams >= 1 && nresults <= 1 && ttisinteger(arg0))
     {
         setlvalue(res, (int64_t)(~(uint64_t)lvalue(arg0) + 1));
         return 1;
@@ -1848,7 +1848,7 @@ static int luauF_integerneg(lua_State* L, StkId res, TValue* arg0, int nresults,
 
 static int luauF_integerdiv(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams >= 2 && nresults <= 1 && ttisbigint(arg0) && ttisbigint(args))
+    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
     {
         int64_t a = lvalue(arg0);
         int64_t b = lvalue(args);
@@ -1865,7 +1865,7 @@ static int luauF_integerdiv(lua_State* L, StkId res, TValue* arg0, int nresults,
 
 static int luauF_integerudiv(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams >= 2 && nresults <= 1 && ttisbigint(arg0) && ttisbigint(args))
+    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
     {
         uint64_t a = (uint64_t)lvalue(arg0);
         uint64_t b = (uint64_t)lvalue(args);
@@ -1882,13 +1882,13 @@ static int luauF_integerudiv(lua_State* L, StkId res, TValue* arg0, int nresults
 
 static int luauF_integerband(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams >= 1 && nresults <= 1 && ttisbigint(arg0))
+    if (nparams >= 1 && nresults <= 1 && ttisinteger(arg0))
     {
         uint64_t r = (uint64_t)lvalue(arg0);
 
         for (int i = 2; i <= nparams; ++i)
         {
-            if (!ttisbigint(args + (i - 2)))
+            if (!ttisinteger(args + (i - 2)))
                 return -1;
 
             r &= (uint64_t)lvalue(args + (i - 2));
@@ -1903,13 +1903,13 @@ static int luauF_integerband(lua_State* L, StkId res, TValue* arg0, int nresults
 
 static int luauF_integerbor(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams >= 1 && nresults <= 1 && ttisbigint(arg0))
+    if (nparams >= 1 && nresults <= 1 && ttisinteger(arg0))
     {
         uint64_t r = (uint64_t)lvalue(arg0);
 
         for (int i = 2; i <= nparams; ++i)
         {
-            if (!ttisbigint(args + (i - 2)))
+            if (!ttisinteger(args + (i - 2)))
                 return -1;
 
             r |= (uint64_t)lvalue(args + (i - 2));
@@ -1924,13 +1924,13 @@ static int luauF_integerbor(lua_State* L, StkId res, TValue* arg0, int nresults,
 
 static int luauF_integerbxor(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams >= 1 && nresults <= 1 && ttisbigint(arg0))
+    if (nparams >= 1 && nresults <= 1 && ttisinteger(arg0))
     {
         uint64_t r = (uint64_t)lvalue(arg0);
 
         for (int i = 2; i <= nparams; ++i)
         {
-            if (!ttisbigint(args + (i - 2)))
+            if (!ttisinteger(args + (i - 2)))
                 return -1;
 
             r ^= (uint64_t)lvalue(args + (i - 2));
@@ -1945,7 +1945,7 @@ static int luauF_integerbxor(lua_State* L, StkId res, TValue* arg0, int nresults
 
 static int luauF_integerbnot(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams >= 1 && nresults <= 1 && ttisbigint(arg0))
+    if (nparams >= 1 && nresults <= 1 && ttisinteger(arg0))
     {
         setlvalue(res, ~(uint64_t)lvalue(arg0));
         return 1;
@@ -1956,7 +1956,7 @@ static int luauF_integerbnot(lua_State* L, StkId res, TValue* arg0, int nresults
 
 static int luauF_integerbswap(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams >= 1 && nresults <= 1 && ttisbigint(arg0))
+    if (nparams >= 1 && nresults <= 1 && ttisinteger(arg0))
     {
         uint64_t a = (uint64_t)lvalue(arg0);
 
@@ -1974,13 +1974,13 @@ static int luauF_integerbswap(lua_State* L, StkId res, TValue* arg0, int nresult
 
 static int luauF_integerbtest(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams >= 1 && nresults <= 1 && ttisbigint(arg0))
+    if (nparams >= 1 && nresults <= 1 && ttisinteger(arg0))
     {
         uint64_t r = (uint64_t)lvalue(arg0);
 
         for (int i = 2; i <= nparams; ++i)
         {
-            if (!ttisbigint(args + (i - 2)))
+            if (!ttisinteger(args + (i - 2)))
                 return -1;
 
             r &= (uint64_t)lvalue(args + (i - 2));
@@ -1995,7 +1995,7 @@ static int luauF_integerbtest(lua_State* L, StkId res, TValue* arg0, int nresult
 
 static int luauF_integerlt(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams >= 2 && nresults <= 1 && ttisbigint(arg0) && ttisbigint(args))
+    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
     {
         int64_t a = lvalue(arg0);
         int64_t b = lvalue(args);
@@ -2009,7 +2009,7 @@ static int luauF_integerlt(lua_State* L, StkId res, TValue* arg0, int nresults, 
 
 static int luauF_integerle(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams >= 2 && nresults <= 1 && ttisbigint(arg0) && ttisbigint(args))
+    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
     {
         int64_t a = lvalue(arg0);
         int64_t b = lvalue(args);
@@ -2023,7 +2023,7 @@ static int luauF_integerle(lua_State* L, StkId res, TValue* arg0, int nresults, 
 
 static int luauF_integergt(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams >= 2 && nresults <= 1 && ttisbigint(arg0) && ttisbigint(args))
+    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
     {
         int64_t a = lvalue(arg0);
         int64_t b = lvalue(args);
@@ -2037,7 +2037,7 @@ static int luauF_integergt(lua_State* L, StkId res, TValue* arg0, int nresults, 
 
 static int luauF_integerge(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams >= 2 && nresults <= 1 && ttisbigint(arg0) && ttisbigint(args))
+    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
     {
         int64_t a = lvalue(arg0);
         int64_t b = lvalue(args);
@@ -2051,7 +2051,7 @@ static int luauF_integerge(lua_State* L, StkId res, TValue* arg0, int nresults, 
 
 static int luauF_integerult(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams >= 2 && nresults <= 1 && ttisbigint(arg0) && ttisbigint(args))
+    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
     {
         uint64_t a = (uint64_t)lvalue(arg0);
         uint64_t b = (uint64_t)lvalue(args);
@@ -2065,7 +2065,7 @@ static int luauF_integerult(lua_State* L, StkId res, TValue* arg0, int nresults,
 
 static int luauF_integerule(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams >= 2 && nresults <= 1 && ttisbigint(arg0) && ttisbigint(args))
+    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
     {
         uint64_t a = (uint64_t)lvalue(arg0);
         uint64_t b = (uint64_t)lvalue(args);
@@ -2079,7 +2079,7 @@ static int luauF_integerule(lua_State* L, StkId res, TValue* arg0, int nresults,
 
 static int luauF_integerugt(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams >= 2 && nresults <= 1 && ttisbigint(arg0) && ttisbigint(args))
+    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
     {
         uint64_t a = (uint64_t)lvalue(arg0);
         uint64_t b = (uint64_t)lvalue(args);
@@ -2093,7 +2093,7 @@ static int luauF_integerugt(lua_State* L, StkId res, TValue* arg0, int nresults,
 
 static int luauF_integeruge(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams >= 2 && nresults <= 1 && ttisbigint(arg0) && ttisbigint(args))
+    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
     {
         uint64_t a = (uint64_t)lvalue(arg0);
         uint64_t b = (uint64_t)lvalue(args);
@@ -2107,7 +2107,7 @@ static int luauF_integeruge(lua_State* L, StkId res, TValue* arg0, int nresults,
 
 static int luauF_integerurem(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams >= 2 && nresults <= 1 && ttisbigint(arg0) && ttisbigint(args))
+    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
     {
         uint64_t a = (uint64_t)lvalue(arg0);
         uint64_t b = (uint64_t)lvalue(args);
@@ -2124,7 +2124,7 @@ static int luauF_integerurem(lua_State* L, StkId res, TValue* arg0, int nresults
 
 static int luauF_integerrem(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams >= 2 && nresults <= 1 && ttisbigint(arg0) && ttisbigint(args))
+    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
     {
         int64_t a = lvalue(arg0);
         int64_t b = lvalue(args);
@@ -2142,7 +2142,7 @@ static int luauF_integerrem(lua_State* L, StkId res, TValue* arg0, int nresults,
 
 static int luauF_integercountlz(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams >= 1 && nresults <= 1 && ttisbigint(arg0))
+    if (nparams >= 1 && nresults <= 1 && ttisinteger(arg0))
     {
         uint64_t n = (uint64_t)lvalue(arg0);
         int result;
@@ -2171,7 +2171,7 @@ static int luauF_integercountlz(lua_State* L, StkId res, TValue* arg0, int nresu
 
 static int luauF_integercountrz(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams >= 1 && nresults <= 1 && ttisbigint(arg0))
+    if (nparams >= 1 && nresults <= 1 && ttisinteger(arg0))
     {
         uint64_t n = (uint64_t)lvalue(arg0);
         int result;
@@ -2200,10 +2200,10 @@ static int luauF_integercountrz(lua_State* L, StkId res, TValue* arg0, int nresu
 
 static int luauF_integerextract(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if ((nparams >= 3) && !ttisbigint(args + 1))
+    if ((nparams >= 3) && !ttisinteger(args + 1))
         return -1;
 
-    if (nparams >= 2 && nresults <= 1 && ttisbigint(arg0) && ttisbigint(args))
+    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
     {
         int64_t n = lvalue(arg0);
         int64_t f = lvalue(args);
@@ -2221,7 +2221,7 @@ static int luauF_integerextract(lua_State* L, StkId res, TValue* arg0, int nresu
 
 static int luauF_integerclamp(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams >= 3 && nresults <= 1 && ttisbigint(arg0) && ttisbigint(args) && ttisbigint(args + 1))
+    if (nparams >= 3 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args) && ttisinteger(args + 1))
     {
         int64_t a = lvalue(arg0);
         int64_t rmin = lvalue(args);
@@ -2239,7 +2239,7 @@ static int luauF_integerclamp(lua_State* L, StkId res, TValue* arg0, int nresult
 
 static int luauF_integerlrotate(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams >= 2 && nresults <= 1 && ttisbigint(arg0) && ttisbigint(args))
+    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
     {
         uint64_t n = (uint64_t)lvalue(arg0);
         unsigned s = (unsigned)((uint64_t)lvalue(args) % 64);
@@ -2254,7 +2254,7 @@ static int luauF_integerlrotate(lua_State* L, StkId res, TValue* arg0, int nresu
 
 static int luauF_integerrrotate(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams >= 2 && nresults <= 1 && ttisbigint(arg0) && ttisbigint(args))
+    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
     {
         uint64_t n = (uint64_t)lvalue(arg0);
         unsigned s = (unsigned)((uint64_t)lvalue(args) % 64);
@@ -2269,7 +2269,7 @@ static int luauF_integerrrotate(lua_State* L, StkId res, TValue* arg0, int nresu
 
 static int luauF_integerlshift(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams >= 2 && nresults <= 1 && ttisbigint(arg0) && ttisbigint(args))
+    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
     {
         uint64_t n = (uint64_t)lvalue(arg0);
         int64_t i = lvalue(args);
@@ -2284,7 +2284,7 @@ static int luauF_integerlshift(lua_State* L, StkId res, TValue* arg0, int nresul
 
 static int luauF_integerarshift(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams >= 2 && nresults <= 1 && ttisbigint(arg0) && ttisbigint(args))
+    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
     {
         int64_t n = lvalue(arg0);
         int64_t i = lvalue(args);
@@ -2310,7 +2310,7 @@ static int luauF_integerarshift(lua_State* L, StkId res, TValue* arg0, int nresu
 
 static int luauF_integerrshift(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams >= 2 && nresults <= 1 && ttisbigint(arg0) && ttisbigint(args))
+    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
     {
         uint64_t n = (uint64_t)lvalue(arg0);
         int64_t i = lvalue(args);
@@ -2325,7 +2325,7 @@ static int luauF_integerrshift(lua_State* L, StkId res, TValue* arg0, int nresul
 
 static int luauF_integermin(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams >= 2 && nresults <= 1 && ttisbigint(arg0) && ttisbigint(args))
+    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
     {
         int64_t a1 = lvalue(arg0);
         int64_t a2 = lvalue(args);
@@ -2334,7 +2334,7 @@ static int luauF_integermin(lua_State* L, StkId res, TValue* arg0, int nresults,
 
         for (int i = 3; i <= nparams; ++i)
         {
-            if (!ttisbigint(args + (i - 2)))
+            if (!ttisinteger(args + (i - 2)))
                 return -1;
 
             int64_t a = lvalue(args + (i - 2));
@@ -2351,7 +2351,7 @@ static int luauF_integermin(lua_State* L, StkId res, TValue* arg0, int nresults,
 
 static int luauF_integermax(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams >= 2 && nresults <= 1 && ttisbigint(arg0) && ttisbigint(args))
+    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
     {
         int64_t a1 = lvalue(arg0);
         int64_t a2 = lvalue(args);
@@ -2360,7 +2360,7 @@ static int luauF_integermax(lua_State* L, StkId res, TValue* arg0, int nresults,
 
         for (int i = 3; i <= nparams; ++i)
         {
-            if (!ttisbigint(args + (i - 2)))
+            if (!ttisinteger(args + (i - 2)))
                 return -1;
 
             int64_t a = lvalue(args + (i - 2));
@@ -2377,7 +2377,7 @@ static int luauF_integermax(lua_State* L, StkId res, TValue* arg0, int nresults,
 
 static int luauF_integermul(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams >= 2 && nresults <= 1 && ttisbigint(arg0) && ttisbigint(args))
+    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
     {
         int64_t a1 = lvalue(arg0);
         int64_t a2 = lvalue(args);
@@ -2390,7 +2390,7 @@ static int luauF_integermul(lua_State* L, StkId res, TValue* arg0, int nresults,
 
 static int luauF_integermod(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams >= 2 && nresults <= 1 && ttisbigint(arg0) && ttisbigint(args))
+    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
     {
         int64_t a1 = lvalue(arg0);
         int64_t a2 = lvalue(args);
@@ -2417,7 +2417,7 @@ static int luauF_integermod(lua_State* L, StkId res, TValue* arg0, int nresults,
 
 static int luauF_integeridiv(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams >= 2 && nresults <= 1 && ttisbigint(arg0) && ttisbigint(args))
+    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
     {
         int64_t a1 = lvalue(arg0);
         int64_t a2 = lvalue(args);
@@ -2487,7 +2487,7 @@ static int luauF_bufferreadlong(lua_State* L, StkId res, TValue* arg0, int nresu
 static int luauF_bufferwritelong(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
 #if !defined(LUAU_BIG_ENDIAN)
-    if (nparams >= 3 && nresults <= 0 && ttisbuffer(arg0) && ttisnumber(args) && ttisbigint(args + 1) && bufvalue(arg0)->mode != LUA_BHOST_IMMUTABLE)
+    if (nparams >= 3 && nresults <= 0 && ttisbuffer(arg0) && ttisnumber(args) && ttisinteger(args + 1) && bufvalue(arg0)->mode != LUA_BHOST_IMMUTABLE)
     {
         int offset;
         luai_num2int(offset, nvalue(args));

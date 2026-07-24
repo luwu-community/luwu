@@ -89,10 +89,10 @@ static const char* getTagName(uint8_t tag)
         return "tclass";
     case LUA_TOBJECT:
         return "tobject";
-    case LUA_TBIGINT:
+    case LUA_TINTEGER:
         return "tinteger";
-    case LUA_THEAPBIGINT:
-        return "theapbigint";
+    case LUA_THEAPINTEGER:
+        return "theapinteger";
     default:
         CODEGEN_ASSERT(!"Unknown type tag");
         LUAU_UNREACHABLE();
@@ -642,7 +642,7 @@ static void appendVmConstant(std::string& result, Proto* proto, int index)
         else
             append(result, "%.17g", constant.value.n);
     }
-    else if (constant.tt == LUA_TBIGINT)
+    else if (constant.tt == LUA_TINTEGER)
     {
         append(result, "%lldi", (long long)constant.value.l);
     }
@@ -798,7 +798,7 @@ const char* getBytecodeTypeName(uint8_t type, const char* const* userdataTypes)
         return "boolean";
     case LBC_TYPE_NUMBER:
         return "number";
-    case LBC_TYPE_BIGINT:
+    case LBC_TYPE_INTEGER:
         return "integer";
     case LBC_TYPE_STRING:
         return "string";

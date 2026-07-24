@@ -72,6 +72,12 @@ static void foldUnary(Constant& result, AstExprUnary::Op op, const Constant& arg
             result.type = Constant::Type_Number;
             result.valueNumber = -arg.valueNumber;
         }
+        else if (arg.type == Constant::Type_Integer)
+        {
+            result.type = Constant::Type_Integer;
+            result.valueInteger64 = (int64_t)(~(uint64_t)arg.valueInteger64 + 1);
+            result.mode = arg.mode;
+        }
         else if (arg.type == Constant::Type_Vector)
         {
             result.type = Constant::Type_Vector;
@@ -659,9 +665,10 @@ struct ConstantVisitor : AstVisitor
         }
         else if (AstExprConstantInteger* expr = node->as<AstExprConstantInteger>())
         {
-            if (expr->parseResult != ConstantNumberParseResult::HeapBigInt) {
+            if (expr->parseResult != ConstantNumberParseResult::HeapInteger) {
                 result.type = Constant::Type_Integer;
                 result.valueInteger64 = expr->value;
+                result.mode = expr->mode;
             }
         }
         else if (AstExprConstantString* expr = node->as<AstExprConstantString>())

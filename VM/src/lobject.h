@@ -54,7 +54,7 @@ typedef struct lua_TValue
 #define ttisnil(o) (ttype(o) == LUA_TNIL)
 #define ttissymnone(o) (ttype(o) == LUA_TSYMNONE)
 #define ttisnumber(o) (ttype(o) == LUA_TNUMBER)
-#define ttisbigint(o) (ttype(o) == LUA_TBIGINT || ttype(o) == LUA_THEAPBIGINT)
+#define ttisinteger(o) (ttype(o) == LUA_TINTEGER || ttype(o) == LUA_THEAPINTEGER)
 #define ttisstring(o) (ttype(o) == LUA_TSTRING)
 #define ttistable(o) (ttype(o) == LUA_TTABLE)
 #define ttisfunction(o) (ttype(o) == LUA_TFUNCTION)
@@ -73,7 +73,7 @@ typedef struct lua_TValue
 #define gcvalue(o) check_exp(iscollectable(o), (o)->value.gc)
 #define pvalue(o) check_exp(ttislightuserdata(o), (o)->value.p)
 #define nvalue(o) check_exp(ttisnumber(o), (o)->value.n)
-#define lvalue(o) check_exp(ttisbigint(o), (o)->value.l)
+#define lvalue(o) check_exp(ttisinteger(o), (o)->value.l)
 #define vvalue(o) check_exp(ttisvector(o), (o)->value.v)
 #define tsvalue(o) check_exp(ttisstring(o), &(o)->value.gc->ts)
 #define uvalue(o) check_exp(ttisuserdata(o), &(o)->value.gc->u)
@@ -115,7 +115,7 @@ typedef struct lua_TValue
     { \
         TValue* i_o = (obj); \
         i_o->value.l = (x); \
-        i_o->tt = LUA_TBIGINT; \
+        i_o->tt = LUA_TINTEGER; \
         i_o->extra[0] = 0; \
     }
 
@@ -334,53 +334,53 @@ typedef struct LuauBuffer
     alignas(8) char inline_data[1];
 } Buffer;
 
-typedef struct HeapBigInt
+typedef struct HeapInteger
 {
     CommonHeader;
     bool isNegative;
     uint32_t size;
     uint32_t capacity;
     uint32_t* digits;
-} HeapBigInt;
+} HeapInteger;
 
-enum BigIntMode : uint8_t {
-    BigIntMode_Dynamic = 0,
-    BigIntMode_I8,
-    BigIntMode_U8,
-    BigIntMode_I16,
-    BigIntMode_U16,
-    BigIntMode_I32,
-    BigIntMode_U32,
-    BigIntMode_I64,
-    BigIntMode_U64
+enum IntegerMode : uint8_t {
+    IntegerMode_Dynamic = 0,
+    IntegerMode_I8,
+    IntegerMode_U8,
+    IntegerMode_I16,
+    IntegerMode_U16,
+    IntegerMode_I32,
+    IntegerMode_U32,
+    IntegerMode_I64,
+    IntegerMode_U64
 };
 
-void luaZ_bigint_add(lua_State* L, const TValue* a, const TValue* b, TValue* res);
-void luaZ_bigint_sub(lua_State* L, const TValue* a, const TValue* b, TValue* res);
-void luaZ_bigint_mul(lua_State* L, const TValue* a, const TValue* b, TValue* res);
-void luaZ_bigint_div(lua_State* L, const TValue* a, const TValue* b, TValue* res);
-void luaZ_bigint_mod(lua_State* L, const TValue* a, const TValue* b, TValue* res);
-void luaZ_bigint_rem(lua_State* L, const TValue* a, const TValue* b, TValue* res);
-void luaZ_bigint_neg(lua_State* L, const TValue* a, TValue* res);
+void luaZ_integer_add(lua_State* L, const TValue* a, const TValue* b, TValue* res);
+void luaZ_integer_sub(lua_State* L, const TValue* a, const TValue* b, TValue* res);
+void luaZ_integer_mul(lua_State* L, const TValue* a, const TValue* b, TValue* res);
+void luaZ_integer_div(lua_State* L, const TValue* a, const TValue* b, TValue* res);
+void luaZ_integer_mod(lua_State* L, const TValue* a, const TValue* b, TValue* res);
+void luaZ_integer_rem(lua_State* L, const TValue* a, const TValue* b, TValue* res);
+void luaZ_integer_neg(lua_State* L, const TValue* a, TValue* res);
 
-bool luaZ_bigint_eq(const TValue* a, const TValue* b);
-uint32_t luaZ_bigint_hash(const TValue* b);
-LUAI_FUNC uint64_t luaZ_bigint_get_bottom_64(const TValue* b);
+bool luaZ_integer_eq(const TValue* a, const TValue* b);
+uint32_t luaZ_integer_hash(const TValue* b);
+LUAI_FUNC uint64_t luaZ_integer_get_bottom_64(const TValue* b);
 
-void luaZ_bigint_fromstring(lua_State* L, const char* str, TValue* res);
-void lua_pushbigint_string(lua_State* L, const TValue* b);
+void luaZ_integer_fromstring(lua_State* L, const char* str, TValue* res);
+void lua_pushinteger_string(lua_State* L, const TValue* b);
 
-void lua_freebigint(lua_State* L, HeapBigInt* h, struct lua_Page* page);
+void lua_freeinteger(lua_State* L, HeapInteger* h, struct lua_Page* page);
 
-inline void setbigintsmi(TValue* obj, int64_t smi, BigIntMode mode) {
+inline void setintegersmi(TValue* obj, int64_t smi, IntegerMode mode) {
     obj->value.l = smi;
-    obj->tt = LUA_TBIGINT;
+    obj->tt = LUA_TINTEGER;
     obj->extra[0] = mode;
 }
 
-inline void setbigintheap(TValue* obj, HeapBigInt* heap, BigIntMode mode) {
+inline void setintegerheap(TValue* obj, HeapInteger* heap, IntegerMode mode) {
     obj->value.gc = (GCObject*)heap;
-    obj->tt = LUA_THEAPBIGINT;
+    obj->tt = LUA_THEAPINTEGER;
     obj->extra[0] = mode;
 }
 

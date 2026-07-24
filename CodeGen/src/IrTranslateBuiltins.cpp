@@ -48,7 +48,7 @@ static void builtinCheckInt64(IrBuilder& build, IrOp arg, int pcpos)
     if (arg.kind == IrOpKind::Constant)
         CODEGEN_ASSERT(build.function.constOp(arg).kind == IrConstKind::Int64);
     else
-        build.loadAndCheckTag(arg, LUA_TBIGINT, build.vmExit(pcpos));
+        build.loadAndCheckTag(arg, LUA_TINTEGER, build.vmExit(pcpos));
 }
 
 static IrOp builtinLoadInt64(IrBuilder& build, IrOp arg)
@@ -1285,7 +1285,7 @@ static BuiltinImplResult translateBuiltinInt64Create(
     build.inst(IrCmd::CHECK_CMP_NUM, backToDouble, argValue, build.cond(IrCondition::Equal), build.vmExit(pcpos));
 
     build.inst(IrCmd::STORE_INT64, build.vmReg(ra), integerValue);
-    build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TBIGINT));
+    build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TINTEGER));
 
     return {BuiltinImplType::Full, 1};
 }
@@ -1389,7 +1389,7 @@ static BuiltinImplResult translateBuiltinInt64Binary(
     }
 
     build.inst(IrCmd::STORE_INT64, build.vmReg(ra), binOp);
-    build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TBIGINT));
+    build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TINTEGER));
 
     return {BuiltinImplType::Full, 1};
 }
@@ -1441,7 +1441,7 @@ static BuiltinImplResult translateBuiltinInt64MinMax(
     }
 
     build.inst(IrCmd::STORE_INT64, build.vmReg(ra), selectOp);
-    build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TBIGINT));
+    build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TINTEGER));
 
     return {BuiltinImplType::Full, 1};
 }
@@ -1457,7 +1457,7 @@ static BuiltinImplResult translateBuiltinInt64Neg(IrBuilder& build, int nparams,
     IrOp result = build.inst(IrCmd::SUB_INT64, build.constInt64(0), va);
 
     build.inst(IrCmd::STORE_INT64, build.vmReg(ra), result);
-    build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TBIGINT));
+    build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TINTEGER));
 
     return {BuiltinImplType::Full, 1};
 }
@@ -1493,7 +1493,7 @@ static BuiltinImplResult translateBuiltinInt64MultiargOp(
         else
         {
             build.inst(IrCmd::STORE_INT64, build.vmReg(ra), build.constInt64(identity));
-            build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TBIGINT));
+            build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TINTEGER));
         }
         return {BuiltinImplType::Full, 1};
     }
@@ -1538,7 +1538,7 @@ static BuiltinImplResult translateBuiltinInt64MultiargOp(
     else
     {
         build.inst(IrCmd::STORE_INT64, build.vmReg(ra), res);
-        build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TBIGINT));
+        build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TINTEGER));
     }
 
     return {BuiltinImplType::Full, 1};
@@ -1589,7 +1589,7 @@ static BuiltinImplResult translateBuiltinInt64Extract(IrBuilder& build, int npar
     }
 
     build.inst(IrCmd::STORE_INT64, build.vmReg(ra), value);
-    build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TBIGINT));
+    build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TINTEGER));
 
     return {BuiltinImplType::Full, 1};
 }
@@ -1608,7 +1608,7 @@ static BuiltinImplResult translateBuiltinInt64Rotate(IrBuilder& build, IrCmd cmd
     IrOp result = build.inst(cmd, va, vb);
 
     build.inst(IrCmd::STORE_INT64, build.vmReg(ra), result);
-    build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TBIGINT));
+    build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TINTEGER));
 
     return {BuiltinImplType::Full, 1};
 }
@@ -1624,7 +1624,7 @@ static BuiltinImplResult translateBuiltinInt64Unary(IrBuilder& build, IrCmd cmd,
     IrOp result = build.inst(cmd, va);
 
     build.inst(IrCmd::STORE_INT64, build.vmReg(ra), result);
-    build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TBIGINT));
+    build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TINTEGER));
 
     return {BuiltinImplType::Full, 1};
 }
@@ -1643,7 +1643,7 @@ static BuiltinImplResult translateBuiltinInt64Shift(IrBuilder& build, IrCmd cmd,
     IrOp result = build.inst(cmd, va, vb);
 
     build.inst(IrCmd::STORE_INT64, build.vmReg(ra), result);
-    build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TBIGINT));
+    build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TINTEGER));
 
     return {BuiltinImplType::Full, 1};
 }
@@ -1659,7 +1659,7 @@ static BuiltinImplResult translateBuiltinInt64Bnot(IrBuilder& build, int nparams
     IrOp result = build.inst(IrCmd::BITNOT_INT64, va);
 
     build.inst(IrCmd::STORE_INT64, build.vmReg(ra), result);
-    build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TBIGINT));
+    build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TINTEGER));
 
     return {BuiltinImplType::Full, 1};
 }
@@ -1712,7 +1712,7 @@ static BuiltinImplResult translateBuiltinInt64Clamp(IrBuilder& build, int nparam
     IrOp result = build.inst(IrCmd::SELECT_INT64, clamped, mx, clamped, mx, build.cond(IrCondition::Greater));
 
     build.inst(IrCmd::STORE_INT64, build.vmReg(ra), result);
-    build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TBIGINT));
+    build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TINTEGER));
 
     return {BuiltinImplType::Full, 1};
 }
@@ -1773,7 +1773,6 @@ BuiltinImplResult translateBuiltin(
         case LBF_BUFFER_WRITEF32:
         case LBF_BUFFER_READF64:
         case LBF_BUFFER_WRITEF64:
-        case LBF_BUFFER_READINTEGER:
             if (!isCompatibleConstant(build, args, IrConstKind::Double))
                 return {BuiltinImplType::None, -1};
 
@@ -1782,53 +1781,7 @@ BuiltinImplResult translateBuiltin(
 
             break;
 
-        case LBF_BUFFER_WRITEINTEGER:
-            if (!isCompatibleConstant(build, args, IrConstKind::Double))
-                return {BuiltinImplType::None, -1};
 
-            if (!isCompatibleConstant(build, arg3, IrConstKind::Int64))
-                return {BuiltinImplType::None, -1};
-
-            break;
-
-        case LBF_INTEGER_ADD:
-        case LBF_INTEGER_SUB:
-        case LBF_INTEGER_MUL:
-        case LBF_INTEGER_DIV:
-        case LBF_INTEGER_IDIV:
-        case LBF_INTEGER_UDIV:
-        case LBF_INTEGER_REM:
-        case LBF_INTEGER_UREM:
-        case LBF_INTEGER_MOD:
-        case LBF_INTEGER_MIN:
-        case LBF_INTEGER_MAX:
-        case LBF_INTEGER_CLAMP:
-        case LBF_INTEGER_LT:
-        case LBF_INTEGER_LE:
-        case LBF_INTEGER_GT:
-        case LBF_INTEGER_GE:
-        case LBF_INTEGER_ULT:
-        case LBF_INTEGER_ULE:
-        case LBF_INTEGER_UGT:
-        case LBF_INTEGER_UGE:
-        case LBF_INTEGER_BAND:
-        case LBF_INTEGER_BOR:
-        case LBF_INTEGER_BXOR:
-        case LBF_INTEGER_BNOT:
-        case LBF_INTEGER_BTEST:
-        case LBF_INTEGER_LSHIFT:
-        case LBF_INTEGER_RSHIFT:
-        case LBF_INTEGER_ARSHIFT:
-        case LBF_INTEGER_LROTATE:
-        case LBF_INTEGER_RROTATE:
-        case LBF_INTEGER_EXTRACT:
-            if (!isCompatibleConstant(build, args, IrConstKind::Int64))
-                return {BuiltinImplType::None, -1};
-
-            if (!isCompatibleConstant(build, arg3, IrConstKind::Int64))
-                return {BuiltinImplType::None, -1};
-
-            break;
         }
     }
 
@@ -1948,18 +1901,8 @@ BuiltinImplResult translateBuiltin(
         return translateBuiltinBufferRead(build, nparams, ra, arg, args, arg3, nresults, pcpos, IrCmd::BUFFER_READF64, 8, IrCmd::NOP);
     case LBF_BUFFER_WRITEF64:
         return translateBuiltinBufferWrite(build, nparams, ra, arg, args, arg3, nresults, pcpos, IrCmd::BUFFER_WRITEF64, 8, IrCmd::NOP);
-    case LBF_BUFFER_READINTEGER:
-        if (FFlag::LuauCodegenBufferInteger)
-            return translateBuiltinBufferRead(
-                build, nparams, ra, arg, args, arg3, nresults, pcpos, IrCmd::BUFFER_READI64, 8, IrCmd::NOP, IrCmd::STORE_INT64, LUA_TBIGINT
-            );
-        return {BuiltinImplType::None, -1};
     case LBF_BUFFER_ISFROZEN:
         return translateBuiltinBufferIsFrozen(build, nparams, ra, arg, args, nresults, pcpos);
-    case LBF_BUFFER_WRITEINTEGER:
-        if (FFlag::LuauCodegenBufferInteger)
-            return translateBuiltinBufferWrite(build, nparams, ra, arg, args, arg3, nresults, pcpos, IrCmd::BUFFER_WRITEI64, 8, IrCmd::NOP, true);
-        return {BuiltinImplType::None, -1};
     case LBF_VECTOR_MAGNITUDE:
         return translateBuiltinVectorMagnitude(build, nparams, ra, arg, args, arg3, nresults, pcpos);
     case LBF_VECTOR_NORMALIZE:
@@ -1988,154 +1931,6 @@ BuiltinImplResult translateBuiltin(
         return translateBuiltinMathLerp(build, nparams, ra, arg, args, arg3, nresults, fallback, pcpos);
     case LBF_MATH_ISNAN:
         return translateBuiltinMathIsNan(build, nparams, ra, arg, args, nresults, pcpos);
-    case LBF_INTEGER_CREATE:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64Create(build, nparams, ra, arg, nresults, pcpos);
-        return {BuiltinImplType::None, -1};
-    case LBF_INTEGER_TONUMBER:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64ToNumber(build, nparams, ra, arg, nresults, pcpos);
-        return {BuiltinImplType::None, -1};
-    case LBF_INTEGER_ADD:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64Binary(build, nparams, ra, arg, args, nresults, pcpos, Int64Binary::Add);
-        return {BuiltinImplType::None, -1};
-    case LBF_INTEGER_SUB:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64Binary(build, nparams, ra, arg, args, nresults, pcpos, Int64Binary::Sub);
-        return {BuiltinImplType::None, -1};
-    case LBF_INTEGER_MUL:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64Binary(build, nparams, ra, arg, args, nresults, pcpos, Int64Binary::Mul);
-        return {BuiltinImplType::None, -1};
-    case LBF_INTEGER_DIV:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64Binary(build, nparams, ra, arg, args, nresults, pcpos, Int64Binary::Div);
-        return {BuiltinImplType::None, -1};
-    case LBF_INTEGER_IDIV:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64Binary(build, nparams, ra, arg, args, nresults, pcpos, Int64Binary::Idiv);
-        return {BuiltinImplType::None, -1};
-    case LBF_INTEGER_UDIV:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64Binary(build, nparams, ra, arg, args, nresults, pcpos, Int64Binary::Udiv);
-        return {BuiltinImplType::None, -1};
-    case LBF_INTEGER_REM:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64Binary(build, nparams, ra, arg, args, nresults, pcpos, Int64Binary::Rem);
-        return {BuiltinImplType::None, -1};
-    case LBF_INTEGER_UREM:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64Binary(build, nparams, ra, arg, args, nresults, pcpos, Int64Binary::Urem);
-        return {BuiltinImplType::None, -1};
-    case LBF_INTEGER_MOD:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64Binary(build, nparams, ra, arg, args, nresults, pcpos, Int64Binary::Mod);
-        return {BuiltinImplType::None, -1};
-    case LBF_INTEGER_MIN:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64MinMax(build, nparams, ra, arg, args, arg3, nresults, pcpos, true);
-        return {BuiltinImplType::None, -1};
-    case LBF_INTEGER_MAX:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64MinMax(build, nparams, ra, arg, args, arg3, nresults, pcpos, false);
-        return {BuiltinImplType::None, -1};
-    case LBF_INTEGER_NEG:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64Neg(build, nparams, ra, arg, nresults, pcpos);
-        return {BuiltinImplType::None, -1};
-    case LBF_INTEGER_CLAMP:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64Clamp(build, nparams, ra, arg, args, arg3, nresults, pcpos);
-        return {BuiltinImplType::None, -1};
-    case LBF_INTEGER_LT:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64Compare(build, nparams, ra, arg, args, nresults, pcpos, IrCondition::Less);
-        return {BuiltinImplType::None, -1};
-    case LBF_INTEGER_LE:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64Compare(build, nparams, ra, arg, args, nresults, pcpos, IrCondition::LessEqual);
-        return {BuiltinImplType::None, -1};
-    case LBF_INTEGER_GT:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64Compare(build, nparams, ra, arg, args, nresults, pcpos, IrCondition::Greater);
-        return {BuiltinImplType::None, -1};
-    case LBF_INTEGER_GE:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64Compare(build, nparams, ra, arg, args, nresults, pcpos, IrCondition::GreaterEqual);
-        return {BuiltinImplType::None, -1};
-    case LBF_INTEGER_ULT:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64Compare(build, nparams, ra, arg, args, nresults, pcpos, IrCondition::UnsignedLess);
-        return {BuiltinImplType::None, -1};
-    case LBF_INTEGER_ULE:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64Compare(build, nparams, ra, arg, args, nresults, pcpos, IrCondition::UnsignedLessEqual);
-        return {BuiltinImplType::None, -1};
-    case LBF_INTEGER_UGT:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64Compare(build, nparams, ra, arg, args, nresults, pcpos, IrCondition::UnsignedGreater);
-        return {BuiltinImplType::None, -1};
-    case LBF_INTEGER_UGE:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64Compare(build, nparams, ra, arg, args, nresults, pcpos, IrCondition::UnsignedGreaterEqual);
-        return {BuiltinImplType::None, -1};
-    case LBF_INTEGER_BAND:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64MultiargOp(build, IrCmd::BITAND_INT64, false, int64_t(-1), nparams, ra, arg, args, arg3, nresults, pcpos);
-        return {BuiltinImplType::None, -1};
-    case LBF_INTEGER_BOR:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64MultiargOp(build, IrCmd::BITOR_INT64, false, int64_t(0), nparams, ra, arg, args, arg3, nresults, pcpos);
-        return {BuiltinImplType::None, -1};
-    case LBF_INTEGER_BXOR:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64MultiargOp(build, IrCmd::BITXOR_INT64, false, int64_t(0), nparams, ra, arg, args, arg3, nresults, pcpos);
-        return {BuiltinImplType::None, -1};
-    case LBF_INTEGER_BNOT:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64Bnot(build, nparams, ra, arg, nresults, pcpos);
-        return {BuiltinImplType::None, -1};
-    case LBF_INTEGER_BTEST:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64MultiargOp(build, IrCmd::BITAND_INT64, true, int64_t(-1), nparams, ra, arg, args, arg3, nresults, pcpos);
-        return {BuiltinImplType::None, -1};
-    case LBF_INTEGER_LSHIFT:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64Shift(build, IrCmd::BITLSHIFT_INT64, nparams, ra, arg, args, nresults, pcpos);
-        return {BuiltinImplType::None, -1};
-    case LBF_INTEGER_RSHIFT:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64Shift(build, IrCmd::BITRSHIFT_INT64, nparams, ra, arg, args, nresults, pcpos);
-        return {BuiltinImplType::None, -1};
-    case LBF_INTEGER_ARSHIFT:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64Shift(build, IrCmd::BITARSHIFT_INT64, nparams, ra, arg, args, nresults, pcpos);
-        return {BuiltinImplType::None, -1};
-    case LBF_INTEGER_LROTATE:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64Rotate(build, IrCmd::BITLROTATE_INT64, nparams, ra, arg, args, nresults, pcpos);
-        return {BuiltinImplType::None, -1};
-    case LBF_INTEGER_RROTATE:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64Rotate(build, IrCmd::BITRROTATE_INT64, nparams, ra, arg, args, nresults, pcpos);
-        return {BuiltinImplType::None, -1};
-    case LBF_INTEGER_COUNTLZ:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64Unary(build, IrCmd::BITCOUNTLZ_INT64, nparams, ra, arg, nresults, pcpos);
-        return {BuiltinImplType::None, -1};
-    case LBF_INTEGER_COUNTRZ:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64Unary(build, IrCmd::BITCOUNTRZ_INT64, nparams, ra, arg, nresults, pcpos);
-        return {BuiltinImplType::None, -1};
-    case LBF_INTEGER_BSWAP:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64Unary(build, IrCmd::BYTESWAP_INT64, nparams, ra, arg, nresults, pcpos);
-        return {BuiltinImplType::None, -1};
-    case LBF_INTEGER_EXTRACT:
-        if (FFlag::LuauIntegerLibrary)
-            return translateBuiltinInt64Extract(build, nparams, ra, arg, args, arg3, nresults, pcpos);
-        return {BuiltinImplType::None, -1};
     default:
         return {BuiltinImplType::None, -1};
     }

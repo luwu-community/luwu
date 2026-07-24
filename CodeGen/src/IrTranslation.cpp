@@ -106,10 +106,10 @@ static void translateInstLoadConstant(IrBuilder& build, int ra, int k)
         build.inst(IrCmd::STORE_INT, build.vmReg(ra), build.constInt(protok.value.b));
         build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TBOOLEAN));
     }
-    else if (FFlag::LuauIntegerLibrary && protok.tt == LUA_TBIGINT)
+    else if (FFlag::LuauIntegerLibrary && protok.tt == LUA_TINTEGER)
     {
         build.inst(IrCmd::STORE_INT64, build.vmReg(ra), build.constInt64(protok.value.l));
-        build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TBIGINT));
+        build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TINTEGER));
     }
     else if (protok.tt == LUA_TNUMBER)
     {
@@ -265,23 +265,23 @@ void translateInstJumpIfEqShortcut(IrBuilder& build, const Instruction* pc, int 
         // Note that if the number fast-path is not taken at all code that would have been in the fallback is actually the main path
         build.beginBlock(fallback);
     }
-    else if (FFlag::LuauIntegerLibrary && isExpectedOrUnknownBytecodeType(bcTypes.a, LBC_TYPE_BIGINT) &&
-             isExpectedOrUnknownBytecodeType(bcTypes.b, LBC_TYPE_BIGINT))
+    else if (FFlag::LuauIntegerLibrary && isExpectedOrUnknownBytecodeType(bcTypes.a, LBC_TYPE_INTEGER) &&
+             isExpectedOrUnknownBytecodeType(bcTypes.b, LBC_TYPE_INTEGER))
     {
         IrOp ta = build.inst(IrCmd::LOAD_TAG, build.vmReg(ra));
         build.inst(
             IrCmd::CHECK_TAG,
             ta,
-            build.constTag(LUA_TBIGINT),
-            bcTypes.a == LBC_TYPE_BIGINT ? build.vmExit(pcpos) : getInitializedFallback(build, fallback, pcpos)
+            build.constTag(LUA_TINTEGER),
+            bcTypes.a == LBC_TYPE_INTEGER ? build.vmExit(pcpos) : getInitializedFallback(build, fallback, pcpos)
         );
 
         IrOp tb = build.inst(IrCmd::LOAD_TAG, build.vmReg(rb));
         build.inst(
             IrCmd::CHECK_TAG,
             tb,
-            build.constTag(LUA_TBIGINT),
-            bcTypes.b == LBC_TYPE_BIGINT ? build.vmExit(pcpos) : getInitializedFallback(build, fallback, pcpos)
+            build.constTag(LUA_TINTEGER),
+            bcTypes.b == LBC_TYPE_INTEGER ? build.vmExit(pcpos) : getInitializedFallback(build, fallback, pcpos)
         );
 
         IrOp va = build.inst(IrCmd::LOAD_INT64, build.vmReg(ra));
@@ -289,8 +289,8 @@ void translateInstJumpIfEqShortcut(IrBuilder& build, const Instruction* pc, int 
 
         IrOp result = build.inst(
             IrCmd::CMP_SPLIT_TVALUE,
-            build.constTag(LUA_TBIGINT),
-            build.constTag(LUA_TBIGINT),
+            build.constTag(LUA_TINTEGER),
+            build.constTag(LUA_TINTEGER),
             va,
             vb,
             build.cond(not_ ? IrCondition::NotEqual : IrCondition::Equal)
@@ -1038,7 +1038,7 @@ IrOp translateFastCallN(IrBuilder& build, const Instruction* pc, int pcpos, bool
 
         if (protok.tt == LUA_TNUMBER)
             builtinArgs = build.constDouble(protok.value.n);
-        else if (FFlag::LuauIntegerLibrary && protok.tt == LUA_TBIGINT)
+        else if (FFlag::LuauIntegerLibrary && protok.tt == LUA_TINTEGER)
             builtinArgs = build.constInt64(protok.value.l);
     }
 

@@ -352,26 +352,28 @@ int32_t BytecodeBuilder::addConstantNumber(double value)
     return addConstant(k, c);
 }
 
-int32_t BytecodeBuilder::addConstantInteger(int64_t value)
+int32_t BytecodeBuilder::addConstantInteger(int64_t value, uint8_t mode)
 {
-    Constant c = {Constant::Type_Integer};
+    Constant c = {Constant::Type_Integer, mode};
     c.valueInteger64 = value;
 
     ConstantKey k = {Constant::Type_Integer};
+    k.extra = mode;
     static_assert(sizeof(k.value) == sizeof(value), "Expecting integer to be 64-bit");
     memcpy(&k.value, &value, sizeof(value));
 
     return addConstant(k, c);
 }
 
-int32_t BytecodeBuilder::addConstantBigIntHeap(StringRef value)
+int32_t BytecodeBuilder::addConstantIntegerHeap(StringRef value, uint8_t mode)
 {
     unsigned int index = addStringTableEntry(value);
 
-    Constant c = {Constant::Type_BigIntHeap};
+    Constant c = {Constant::Type_IntegerHeap, mode};
     c.valueString = index;
 
-    ConstantKey k = {Constant::Type_BigIntHeap};
+    ConstantKey k = {Constant::Type_IntegerHeap};
+    k.extra = mode;
     k.value = index;
 
     return addConstant(k, c);
@@ -844,18 +846,19 @@ void BytecodeBuilder::writeFunction(std::string& ss, uint32_t id, uint8_t flags,
             writeByte(ss, LBC_CONSTANT_INTEGER);
             if (c.valueInteger64 < 0)
             {
-                writeByte(ss, 1);
+                writeByte(ss, (c.mode << 1) | 1);
                 writeVarInt(ss, ~(uint64_t)c.valueInteger64 + 1);
             }
             else
             {
-                writeByte(ss, 0);
+                writeByte(ss, (c.mode << 1) | 0);
                 writeVarInt(ss, c.valueInteger64);
             }
             break;
 
-        case Constant::Type_BigIntHeap:
-            writeByte(ss, LBC_CONSTANT_BIGINT_HEAP);
+        case Constant::Type_IntegerHeap:
+            writeByte(ss, LBC_CONSTANT_INTEGER_HEAP);
+            writeByte(ss, c.mode);
             writeVarInt(ss, c.valueString);
             break;
 
@@ -2092,7 +2095,7 @@ void BytecodeBuilder::dumpConstant(std::string& result, int k, bool detailed) co
     case Constant::Type_Integer:
         formatAppend(result, "%lld", (long long)(int64_t)data.valueInteger64);
         break;
-    case Constant::Type_BigIntHeap:
+    case Constant::Type_IntegerHeap:
     {
         const StringRef& str = debugStrings[data.valueString - 1];
         formatAppend(result, "%.*si", int(str.length), str.data);
@@ -2701,8 +2704,8 @@ static const char* getBaseTypeString(uint8_t type)
         return "boolean";
     case LBC_TYPE_NUMBER:
         return "number";
-    case LBC_TYPE_BIGINT:
-        return "bigint";
+    case LBC_TYPE_INTEGER:
+        return "integer";
     case LBC_TYPE_STRING:
         return "string";
     case LBC_TYPE_TABLE:

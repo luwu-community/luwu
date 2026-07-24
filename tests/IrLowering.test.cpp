@@ -15,8 +15,6 @@
 
 #include <memory>
 #include <string_view>
-
-LUAU_FASTFLAG(LuauIntegerFastcalls)
 LUAU_FASTFLAG(LuauIntegerLibrary)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuauCodegenLoadPropagateOrigin)
@@ -7025,7 +7023,6 @@ _()
 
 TEST_CASE_FIXTURE(LoweringFixture, "FuzzTest26")
 {
-    ScopedFastFlag luauIntegerFastcalls{FFlag::LuauIntegerFastcalls, true};
     ScopedFastFlag LuauIntegerLibrary{FFlag::LuauIntegerLibrary, true};
     ScopedFastFlag luauIntegerType{FFlag::LuauIntegerType2, true};
     ScopedFastFlag luauCodegenA64ExitUseCheck{FFlag::LuauCodegenA64ExitUseCheck, true};
@@ -8258,109 +8255,14 @@ bb_2:
     );
 }
 
-TEST_CASE_FIXTURE(LoweringFixture, "IntegerMultiargValidate")
-{
-    ScopedFastFlag luauIntegerFastcalls{FFlag::LuauIntegerFastcalls, true};
-    ScopedFastFlag LuauIntegerLibrary{FFlag::LuauIntegerLibrary, true};
-    ScopedFastFlag luauIntegerType{FFlag::LuauIntegerType2, true};
 
-    CHECK_EQ(
-        "\n" + getCodegenAssembly(
-                   R"(
-local function f(a, b)
-    return integer.bxor(a, b, a)
-end
-)"
-               ),
-        R"(
-; function f($arg0, $arg1) line 2
-bb_bytecode_0:
-  implicit CHECK_SAFE_ENV exit(0)
-  CHECK_TAG R0, tinteger, exit(2)
-  CHECK_TAG R1, tinteger, exit(2)
-  %7 = LOAD_INT64 R0
-  %8 = LOAD_INT64 R1
-  %9 = BITXOR_INT64 %7, %8
-  %11 = BITXOR_INT64 %9, %7
-  STORE_INT64 R2, %11
-  STORE_TAG R2, tinteger
-  INTERRUPT 8u
-  RETURN R2, 1i
-)"
-    );
-}
 
-TEST_CASE_FIXTURE(LoweringFixture, "IntegerMultiargValidate2")
-{
-    ScopedFastFlag luauIntegerFastcalls{FFlag::LuauIntegerFastcalls, true};
-    ScopedFastFlag LuauIntegerLibrary{FFlag::LuauIntegerLibrary, true};
-    ScopedFastFlag luauIntegerType{FFlag::LuauIntegerType2, true};
 
-    CHECK_EQ(
-        "\n" + getCodegenAssembly(
-                   R"(
-local function f(a, b)
-    return integer.clamp(a, b, a)
-end
-)"
-               ),
-        R"(
-; function f($arg0, $arg1) line 2
-bb_bytecode_0:
-  implicit CHECK_SAFE_ENV exit(0)
-  CHECK_TAG R0, tinteger, exit(2)
-  CHECK_TAG R1, tinteger, exit(2)
-  %7 = LOAD_INT64 R0
-  %8 = LOAD_INT64 R1
-  CHECK_CMP_INT64 %8, %7, le, exit(2)
-  %11 = SELECT_INT64 %7, %8, %7, %8, lt
-  %12 = SELECT_INT64 %11, %7, %11, %7, gt
-  STORE_INT64 R2, %12
-  STORE_TAG R2, tinteger
-  INTERRUPT 8u
-  RETURN R2, 1i
-)"
-    );
-}
 
-TEST_CASE_FIXTURE(LoweringFixture, "IntegerMultiargValidate3")
-{
-    ScopedFastFlag luauIntegerFastcalls{FFlag::LuauIntegerFastcalls, true};
-    ScopedFastFlag LuauIntegerLibrary{FFlag::LuauIntegerLibrary, true};
-    ScopedFastFlag luauIntegerType{FFlag::LuauIntegerType2, true};
 
-    CHECK_EQ(
-        "\n" + getCodegenAssembly(
-                   R"(
-local function f(a, b)
-    return integer.mul(integer.min(a, b, a), integer.max(a, b, a))
-end
-)"
-               ),
-        R"(
-; function f($arg0, $arg1) line 2
-bb_bytecode_0:
-  implicit CHECK_SAFE_ENV exit(0)
-  CHECK_TAG R0, tinteger, exit(2)
-  CHECK_TAG R1, tinteger, exit(2)
-  %7 = LOAD_INT64 R0
-  %8 = LOAD_INT64 R1
-  %9 = SELECT_INT64 %7, %8, %8, %7, le
-  %11 = SELECT_INT64 %7, %9, %9, %7, le
-  %24 = SELECT_INT64 %7, %8, %8, %7, gt
-  %26 = SELECT_INT64 %7, %24, %24, %7, gt
-  %37 = MUL_INT64 %11, %26
-  STORE_INT64 R2, %37
-  STORE_TAG R2, tinteger
-  INTERRUPT 21u
-  RETURN R2, 1i
-)"
-    );
-}
 
 TEST_CASE_FIXTURE(LoweringFixture, "IntegerFastcallWrongConst")
 {
-    ScopedFastFlag luauIntegerFastcalls{FFlag::LuauIntegerFastcalls, true};
     ScopedFastFlag LuauIntegerLibrary{FFlag::LuauIntegerLibrary, true};
 
     // Check that this compiles with no assertions
@@ -8458,40 +8360,5 @@ end
     );
 }
 
-TEST_CASE_FIXTURE(LoweringFixture, "IntegerFastcallConstant")
-{
-    ScopedFastFlag luauIntegerFastcalls{FFlag::LuauIntegerFastcalls, true};
-    ScopedFastFlag LuauIntegerLibrary{FFlag::LuauIntegerLibrary, true};
-    ScopedFastFlag luauIntegerType{FFlag::LuauIntegerType2, true};
 
-    CHECK_EQ(
-        "\n" + getCodegenAssembly(
-                   R"(
-local function foo(x: integer)
-    return integer.band(x, 5i)
-end
-)",
-                   true,
-                   1,
-                   2
-               ),
-        R"(
-; function foo($arg0) line 2
-; R0: integer [argument]
-bb_0:
-  CHECK_TAG R0, tinteger, exit(entry)
-  JUMP bb_2
-bb_2:
-  JUMP bb_bytecode_1
-bb_bytecode_1:
-  implicit CHECK_SAFE_ENV exit(0)
-  %7 = LOAD_INT64 R0
-  %8 = BITAND_INT64 %7, 5i
-  STORE_INT64 R1, %8
-  STORE_TAG R1, tinteger
-  INTERRUPT 7u
-  RETURN R1, 1i
-)"
-    );
-}
 TEST_SUITE_END();

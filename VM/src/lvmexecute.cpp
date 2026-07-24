@@ -16,7 +16,7 @@
 #include "lbytecode.h"
 
 #include <string.h>
-LUAU_FASTFLAG(LuauBigInt)
+LUAU_FASTFLAG(LuauInteger)
 
 LUAU_FASTFLAGVARIABLE(LuauDirectFieldGet)
 LUAU_FLAGVERSION(LuauDirectFieldGet, 3)
@@ -102,27 +102,27 @@ LUAU_FASTFLAGVARIABLE(LuauPromoteProto)
         uint64_t vb = rc->value.l; \
         uint64_t res = 0; \
         switch (rb->extra[0]) { \
-            case BigIntMode_Dynamic: { \
+            case IntegerMode_Dynamic: { \
                 int64_t sres; \
                 if (!BUILTIN_OP((int64_t)va, (int64_t)vb, &sres)) { \
-                    setbigintsmi(ra, sres, BigIntMode_Dynamic); \
+                    setintegersmi(ra, sres, IntegerMode_Dynamic); \
                     VM_NEXT(); \
                 } else { \
                     FALLBACK(L, rb, rc, ra); \
                     VM_NEXT(); \
                 } \
             } \
-            case BigIntMode_I8: res = (int64_t)(int8_t)((uint8_t)va OP (uint8_t)vb); break; \
-            case BigIntMode_U8: res = (uint64_t)(uint8_t)((uint8_t)va OP (uint8_t)vb); break; \
-            case BigIntMode_I16: res = (int64_t)(int16_t)((uint16_t)va OP (uint16_t)vb); break; \
-            case BigIntMode_U16: res = (uint64_t)(uint16_t)((uint16_t)va OP (uint16_t)vb); break; \
-            case BigIntMode_I32: res = (int64_t)(int32_t)((uint32_t)va OP (uint32_t)vb); break; \
-            case BigIntMode_U32: res = (uint64_t)(uint32_t)((uint32_t)va OP (uint32_t)vb); break; \
-            case BigIntMode_I64: res = (int64_t)(int64_t)((uint64_t)va OP (uint64_t)vb); break; \
-            case BigIntMode_U64: res = (uint64_t)(uint64_t)((uint64_t)va OP (uint64_t)vb); break; \
+            case IntegerMode_I8: res = (int64_t)(int8_t)((uint8_t)va OP (uint8_t)vb); break; \
+            case IntegerMode_U8: res = (uint64_t)(uint8_t)((uint8_t)va OP (uint8_t)vb); break; \
+            case IntegerMode_I16: res = (int64_t)(int16_t)((uint16_t)va OP (uint16_t)vb); break; \
+            case IntegerMode_U16: res = (uint64_t)(uint16_t)((uint16_t)va OP (uint16_t)vb); break; \
+            case IntegerMode_I32: res = (int64_t)(int32_t)((uint32_t)va OP (uint32_t)vb); break; \
+            case IntegerMode_U32: res = (uint64_t)(uint32_t)((uint32_t)va OP (uint32_t)vb); break; \
+            case IntegerMode_I64: res = (int64_t)(int64_t)((uint64_t)va OP (uint64_t)vb); break; \
+            case IntegerMode_U64: res = (uint64_t)(uint64_t)((uint64_t)va OP (uint64_t)vb); break; \
             default: LUAU_UNREACHABLE(); \
         } \
-        setbigintsmi(ra, res, (BigIntMode)rb->extra[0]); \
+        setintegersmi(ra, res, (IntegerMode)rb->extra[0]); \
         VM_NEXT(); \
     } while (0)
 
@@ -1481,8 +1481,8 @@ reentry:
                         // need to invoke metamethods).
                         break;
 
-                    case LUA_TBIGINT:
-                        if (FFlag::LuauBigInt)
+                    case LUA_TINTEGER:
+                        if (FFlag::LuauInteger)
                         {
                             pc += ra->value.l == rb->value.l ? LUAU_INSN_D(insn) : 1;
                             VM_ASSERT_PC(pc);
@@ -1490,7 +1490,7 @@ reentry:
                         }
                         break;
 
-                    case LUA_THEAPBIGINT:
+                    case LUA_THEAPINTEGER:
                         break;
 
                     default:
@@ -1622,8 +1622,8 @@ reentry:
                         // need to invoke metamethods).
                         break;
 
-                    case LUA_TBIGINT:
-                        if (FFlag::LuauBigInt)
+                    case LUA_TINTEGER:
+                        if (FFlag::LuauInteger)
                         {
                             pc += ra->value.l != rb->value.l ? LUAU_INSN_D(insn) : 1;
                             VM_ASSERT_PC(pc);
@@ -1631,7 +1631,7 @@ reentry:
                         }
                         break;
 
-                    case LUA_THEAPBIGINT:
+                    case LUA_THEAPINTEGER:
                         break;
 
                     default:
@@ -1801,13 +1801,13 @@ reentry:
                     setnvalue(ra, nvalue(rb) + nvalue(rc));
                     VM_NEXT();
                 }
-                else if (LUAU_LIKELY(ttype(rb) == LUA_TBIGINT && ttype(rc) == LUA_TBIGINT && rb->extra[0] == rc->extra[0]))
+                else if (LUAU_LIKELY(ttype(rb) == LUA_TINTEGER && ttype(rc) == LUA_TINTEGER && rb->extra[0] == rc->extra[0]))
                 {
-                    LUAU_FAST_TYPED_MATH(+, __builtin_add_overflow, luaZ_bigint_add);
+                    LUAU_FAST_TYPED_MATH(+, __builtin_add_overflow, luaZ_integer_add);
                 }
-                else if (ttisbigint(rb) && ttisbigint(rc))
+                else if (ttisinteger(rb) && ttisinteger(rc))
                 {
-                    luaZ_bigint_add(L, rb, rc, ra);
+                    luaZ_integer_add(L, rb, rc, ra);
                     VM_NEXT();
                 }
                 else if (ttisvector(rb) && ttisvector(rc))
@@ -1856,13 +1856,13 @@ reentry:
                     setnvalue(ra, nvalue(rb) - nvalue(rc));
                     VM_NEXT();
                 }
-                else if (LUAU_LIKELY(ttype(rb) == LUA_TBIGINT && ttype(rc) == LUA_TBIGINT && rb->extra[0] == rc->extra[0]))
+                else if (LUAU_LIKELY(ttype(rb) == LUA_TINTEGER && ttype(rc) == LUA_TINTEGER && rb->extra[0] == rc->extra[0]))
                 {
-                    LUAU_FAST_TYPED_MATH(-, __builtin_sub_overflow, luaZ_bigint_sub);
+                    LUAU_FAST_TYPED_MATH(-, __builtin_sub_overflow, luaZ_integer_sub);
                 }
-                else if (ttisbigint(rb) && ttisbigint(rc))
+                else if (ttisinteger(rb) && ttisinteger(rc))
                 {
-                    luaZ_bigint_sub(L, rb, rc, ra);
+                    luaZ_integer_sub(L, rb, rc, ra);
                     VM_NEXT();
                 }
                 else if (ttisvector(rb) && ttisvector(rc))
@@ -1911,13 +1911,13 @@ reentry:
                     setnvalue(ra, nvalue(rb) * nvalue(rc));
                     VM_NEXT();
                 }
-                else if (LUAU_LIKELY(ttype(rb) == LUA_TBIGINT && ttype(rc) == LUA_TBIGINT && rb->extra[0] == rc->extra[0]))
+                else if (LUAU_LIKELY(ttype(rb) == LUA_TINTEGER && ttype(rc) == LUA_TINTEGER && rb->extra[0] == rc->extra[0]))
                 {
-                    LUAU_FAST_TYPED_MATH(*, __builtin_mul_overflow, luaZ_bigint_mul);
+                    LUAU_FAST_TYPED_MATH(*, __builtin_mul_overflow, luaZ_integer_mul);
                 }
-                else if (ttisbigint(rb) && ttisbigint(rc))
+                else if (ttisinteger(rb) && ttisinteger(rc))
                 {
-                    luaZ_bigint_mul(L, rb, rc, ra);
+                    luaZ_integer_mul(L, rb, rc, ra);
                     VM_NEXT();
                 }
                 else if (ttisvector(rb) && ttisnumber(rc))
@@ -1981,9 +1981,9 @@ reentry:
                     setnvalue(ra, nvalue(rb) / nvalue(rc));
                     VM_NEXT();
                 }
-                else if (ttisbigint(rb) && ttisbigint(rc))
+                else if (ttisinteger(rb) && ttisinteger(rc))
                 {
-                    luaZ_bigint_div(L, rb, rc, ra);
+                    luaZ_integer_div(L, rb, rc, ra);
                     VM_NEXT();
                 }
                 else if (ttisvector(rb) && ttisnumber(rc))
@@ -2102,9 +2102,9 @@ reentry:
                     setnvalue(ra, luai_nummod(nb, nc));
                     VM_NEXT();
                 }
-                else if (ttisbigint(rb) && ttisbigint(rc))
+                else if (ttisinteger(rb) && ttisinteger(rc))
                 {
-                    luaZ_bigint_mod(L, rb, rc, ra);
+                    luaZ_integer_mod(L, rb, rc, ra);
                     VM_NEXT();
                 }
                 else

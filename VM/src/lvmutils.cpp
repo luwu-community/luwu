@@ -12,7 +12,7 @@
 #include "lnumutils.h"
 
 #include <string.h>
-LUAU_FASTFLAG(LuauBigInt)
+LUAU_FASTFLAG(LuauInteger)
 
 // limit for table tag-method chains (to avoid loops)
 #define MAXTAGLOOP 100
@@ -346,9 +346,9 @@ int luaV_equalval(lua_State* L, const TValue* t1, const TValue* t2)
         return 1;
     case LUA_TNUMBER:
         return luai_numeq(nvalue(t1), nvalue(t2));
-    case LUA_TBIGINT:
-    case LUA_THEAPBIGINT:
-        return luaZ_bigint_eq(t1, t2);
+    case LUA_TINTEGER:
+    case LUA_THEAPINTEGER:
+        return luaZ_integer_eq(t1, t2);
     case LUA_TVECTOR:
         return luai_veceq(vvalue(t1), vvalue(t2));
     case LUA_TBOOLEAN:
@@ -557,19 +557,19 @@ void luaV_doarithimpl(lua_State* L, StkId ra, const TValue* rb, const TValue* rc
         }
     }
 
-    if (ttisbigint(rb) && ttisbigint(rc))
+    if (ttisinteger(rb) && ttisinteger(rc))
     {
         switch (op)
         {
-        case TM_ADD: luaZ_bigint_add(L, rb, rc, ra); break;
-        case TM_SUB: luaZ_bigint_sub(L, rb, rc, ra); break;
-        case TM_MUL: luaZ_bigint_mul(L, rb, rc, ra); break;
-        case TM_DIV: luaZ_bigint_div(L, rb, rc, ra); break;
-        case TM_IDIV: luaZ_bigint_div(L, rb, rc, ra); break; // BigInt div is already floor div
-        case TM_MOD: luaZ_bigint_mod(L, rb, rc, ra); break;
-        case TM_UNM: luaZ_bigint_neg(L, rb, ra); break;
+        case TM_ADD: luaZ_integer_add(L, rb, rc, ra); break;
+        case TM_SUB: luaZ_integer_sub(L, rb, rc, ra); break;
+        case TM_MUL: luaZ_integer_mul(L, rb, rc, ra); break;
+        case TM_DIV: luaZ_integer_div(L, rb, rc, ra); break;
+        case TM_IDIV: luaZ_integer_div(L, rb, rc, ra); break; // Integer div is already floor div
+        case TM_MOD: luaZ_integer_mod(L, rb, rc, ra); break;
+        case TM_UNM: luaZ_integer_neg(L, rb, ra); break;
         default:
-            luaG_runerror(L, "attempt to perform arithmetic on bigints");
+            luaG_runerror(L, "attempt to perform arithmetic on integers");
             return;
         }
         return;

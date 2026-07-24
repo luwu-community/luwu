@@ -246,9 +246,9 @@ int luaL_checkinteger(lua_State* L, int narg)
 int64_t luaL_checkinteger64(lua_State* L, int narg)
 {
     if (!lua_isinteger64(L, narg)) {
-        if (lua_type(L, narg) == LUA_TBIGINT)
-            luaL_error(L, "integer64 library only supports SMI bigints");
-        tag_error(L, narg, LUA_TBIGINT);
+        if (lua_type(L, narg) == LUA_TINTEGER)
+            luaL_error(L, "number has no 64-bit integer representation");
+        tag_error(L, narg, LUA_TINTEGER);
     }
     return lua_tointeger64(L, narg, nullptr);
 }
@@ -632,7 +632,7 @@ void luaL_addvalueany(luaL_Strbuf* B, int idx)
         luaL_addlstring(B, s, len);
         break;
     }
-    case LUA_TBIGINT:
+    case LUA_TINTEGER:
     {
         int64_t n = lua_tointeger64(L, idx, nullptr);
         char s[LUAI_MAXINT2STR];
@@ -734,9 +734,9 @@ const char* luaL_tolstring(lua_State* L, int idx, size_t* len)
     case LUA_TSTRING:
         lua_pushvalue(L, idx);
         break;
-    case LUA_TBIGINT:
+    case LUA_TINTEGER:
     {
-        lua_pushbigint_string(L, idx);
+        lua_pushinteger_string(L, idx);
         break;
     }
     default:
