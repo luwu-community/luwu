@@ -1718,6 +1718,32 @@ static BuiltinImplResult translateBuiltinInt64Clamp(IrBuilder& build, int nparam
     return {BuiltinImplType::Full, 1};
 }
 
+static BuiltinImplResult translateBuiltinInt64Sadd(IrBuilder& build, int nparams, int ra, int arg, IrOp args, IrOp arg3, int nresults, int pcpos)
+{
+    if (nparams < 3 || nresults > 1)
+        return {BuiltinImplType::None, -1};
+
+    builtinCheckInt64(build, build.vmReg(arg), pcpos);
+    builtinCheckInt64(build, args, pcpos);
+    builtinCheckInt64(build, arg3, pcpos);
+
+    IrOp va = builtinLoadInt64(build, build.vmReg(arg));
+    IrOp vb = builtinLoadInt64(build, args);
+    IrOp mx = builtinLoadInt64(build, arg3);
+
+    // sum = a + b (wrapping)
+    IrOp sum = build.inst(IrCmd::ADD_INT64, va, vb);
+
+    // saturate: if sum > max, use max
+    IrOp result = build.inst(IrCmd::SELECT_INT64, sum, mx, sum, mx, build.cond(IrCondition::Greater));
+
+    build.inst(IrCmd::STORE_INT64, build.vmReg(ra), result);
+    build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TINTEGER));
+    build.inst(IrCmd::STORE_EXTRA, build.vmReg(ra), build.constInt(0));
+
+    return {BuiltinImplType::Full, 1};
+}
+
 BuiltinImplResult translateBuiltin(
     IrBuilder& build,
     int bfid,
@@ -1781,28 +1807,6 @@ BuiltinImplResult translateBuiltin(
                 return {BuiltinImplType::None, -1};
 
             break;
-
-        case LBF_INTEGER_ADD:
-        case LBF_INTEGER_SUB:
-        case LBF_INTEGER_MUL:
-        case LBF_INTEGER_DIV:
-        case LBF_INTEGER_LT:
-        case LBF_INTEGER_LE:
-        case LBF_INTEGER_GT:
-        case LBF_INTEGER_GE:
-        case LBF_INTEGER_ULT:
-        case LBF_INTEGER_ULE:
-        case LBF_INTEGER_UGT:
-        case LBF_INTEGER_UGE:
-            if (!isCompatibleConstant(build, build.vmReg(arg), IrConstKind::Int64))
-                return {BuiltinImplType::None, -1};
-
-            if (!isCompatibleConstant(build, args, IrConstKind::Int64))
-                return {BuiltinImplType::None, -1};
-
-            break;
-
-
         }
     }
 
@@ -1952,14 +1956,6 @@ BuiltinImplResult translateBuiltin(
         return translateBuiltinMathLerp(build, nparams, ra, arg, args, arg3, nresults, fallback, pcpos);
     case LBF_MATH_ISNAN:
         return translateBuiltinMathIsNan(build, nparams, ra, arg, args, nresults, pcpos);
-    case LBF_INTEGER_ADD:
-        return translateBuiltinInt64Binary(build, nparams, ra, arg, args, nresults, pcpos, Int64Binary::Add);
-    case LBF_INTEGER_SUB:
-        return translateBuiltinInt64Binary(build, nparams, ra, arg, args, nresults, pcpos, Int64Binary::Sub);
-    case LBF_INTEGER_MUL:
-        return translateBuiltinInt64Binary(build, nparams, ra, arg, args, nresults, pcpos, Int64Binary::Mul);
-    case LBF_INTEGER_DIV:
-        return translateBuiltinInt64Binary(build, nparams, ra, arg, args, nresults, pcpos, Int64Binary::Div);
     default:
         return {BuiltinImplType::None, -1};
     }

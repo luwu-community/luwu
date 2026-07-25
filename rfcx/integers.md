@@ -117,10 +117,6 @@ Rotates `n` to the left by `i` bits (if `i` is negative, a right rotate is perfo
 
 Rotates `n` to the right by `i` bits (if `i` is negative, a left rotate is performed instead).
 
-`function integer.wadd(a: integer, b: integer): integer`
-
-Returns the wrapping addition of `a` and `b`.
-
 `function integer.sadd(a: integer, b: integer, max: integer): integer`
 
 Returns the saturating addition of `a` and `b` up to `max`.
