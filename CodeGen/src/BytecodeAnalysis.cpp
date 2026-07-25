@@ -508,12 +508,12 @@ static void applyBuiltinCall(LuauBuiltinFunction bfid, BytecodeTypes& types)
         types.b = LBC_TYPE_NUMBER;
         types.c = LBC_TYPE_NUMBER;
         break;
-    case LBF_BUFFER_READLONG:
+    case LBF_BUFFER_READINTEGER:
         types.result = LBC_TYPE_INTEGER;
         types.a = LBC_TYPE_BUFFER;
         types.b = LBC_TYPE_NUMBER;
         break;
-    case LBF_BUFFER_WRITELONG:
+    case LBF_BUFFER_WRITEINTEGER:
         types.result = LBC_TYPE_NIL;
         types.a = LBC_TYPE_BUFFER;
         types.b = LBC_TYPE_NUMBER;
@@ -593,26 +593,6 @@ static void applyBuiltinCall(LuauBuiltinFunction bfid, BytecodeTypes& types)
     case LBF_MATH_ISFINITE:
         types.result = LBC_TYPE_BOOLEAN;
         types.a = LBC_TYPE_NUMBER;
-        break;
-    case LBF_INTEGER_ADD:
-    case LBF_INTEGER_SUB:
-    case LBF_INTEGER_MUL:
-    case LBF_INTEGER_DIV:
-        types.result = LBC_TYPE_INTEGER;
-        types.a = LBC_TYPE_INTEGER;
-        types.b = LBC_TYPE_INTEGER;
-        break;
-    case LBF_INTEGER_LT:
-    case LBF_INTEGER_LE:
-    case LBF_INTEGER_ULT:
-    case LBF_INTEGER_ULE:
-    case LBF_INTEGER_GT:
-    case LBF_INTEGER_GE:
-    case LBF_INTEGER_UGT:
-    case LBF_INTEGER_UGE:
-        types.result = LBC_TYPE_BOOLEAN;
-        types.a = LBC_TYPE_INTEGER;
-        types.b = LBC_TYPE_INTEGER;
         break;
     }
 }
