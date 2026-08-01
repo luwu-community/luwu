@@ -38,6 +38,7 @@ LUAU_FASTFLAGVARIABLE(LuauCheckFunctionStatementTypes)
 LUAU_FASTFLAGVARIABLE(LuauPropertyModifierMismatchErrors)
 LUAU_FASTFLAG(LuauTweakAccessViolationReporting)
 LUAU_FASTFLAG(LuauReadOnlyIndexers)
+LUAU_FASTFLAGVARIABLE(LuauIndexerModifierMismatchErrors)
 LUAU_FASTFLAG(LuauImproveUniqueTableWidthSubtyping)
 LUAU_FASTFLAG(LuauBidirectionalInferenceSimplifyTables)
 LUAU_FASTFLAGVARIABLE(LuauBetterPackAndVariadicMismatchErrors)
@@ -3099,6 +3100,7 @@ Reasonings TypeChecker2::explainReasonings_(TID subTy, TID superTy, Location loc
                 auto last = reasoning.subPath.last();
                 bool isReadOnly = true;
                 std::string path = "something";
+<<<<<<< HEAD
 
                 if (last)
                 {
@@ -3133,11 +3135,48 @@ Reasonings TypeChecker2::explainReasonings_(TID subTy, TID superTy, Location loc
                         isReadOnly = prop->isRead;
                     }
                 }
+=======
+>>>>>>> b33b0145 (the implement, do)
 
-            if (isReadOnly)
-                reason << propName << " is a read-only property in the latter type, but the former type requires a read-write property";
+                if (last)
+                {
+                    if (auto* prop = get_if<TypePath::Property>(&*last))
+                    {
+                        path = "`" + prop->name + "`";
+                        isReadOnly = prop->isRead;
+                    }
+                    else if (auto* field = get_if<TypePath::TypeField>(&*last); field && *field == TypePath::TypeField::IndexResult)
+                        path = "the indexer";
+                }
+
+                if (isReadOnly)
+                    reason << path << " is read-only in the latter type, but the former type requires it to be read-write";
+                else
+                    reason << path << " is write-only in the latter type, but the former type requires it to be read-write";
+            }
             else
-                reason << propName << " is a write-only property in the latter type, but the former type requires a read-write property";
+            {
+                // The leaf types at the end of the paths are the same type, so a
+                // plain "X is not a subtype of X" message would be misleading.
+                // Instead, explain that the mismatch is about the property modifier.
+                std::string propName = "a property";
+                bool isReadOnly = true;
+                auto last = reasoning.subPath.last();
+                LUAU_ASSERT(last && get_if<TypePath::Property>(&*last));
+                if (last)
+                {
+                    if (auto* prop = get_if<TypePath::Property>(&*last))
+                    {
+                        propName = "`" + prop->name + "`";
+                        isReadOnly = prop->isRead;
+                    }
+                }
+
+                if (isReadOnly)
+                    reason << propName << " is a read-only property in the latter type, but the former type requires a read-write property";
+                else
+                    reason << propName << " is a write-only property in the latter type, but the former type requires a read-write property";
+            }
         }
         else if (reasoning.subPath == reasoning.superPath)
             reason << toStringHuman(reasoning.subPath) << "`" << subLeafAsString << "` in the latter type and `" << superLeafAsString
