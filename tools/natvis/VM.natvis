@@ -3,6 +3,7 @@
 
   <Type Name="lua_TValue">
     <DisplayString Condition="tt == lua_Type::LUA_TNIL">nil</DisplayString>
+    <DisplayString Condition="tt == lua_Type::LUA_TNULL">null</DisplayString>
     <DisplayString Condition="tt == lua_Type::LUA_TBOOLEAN">{(bool)value.b}</DisplayString>
     <DisplayString Condition="tt == lua_Type::LUA_TLIGHTUSERDATA">lightuserdata {(uintptr_t)value.p,h} tag: {extra[0]}</DisplayString>
     <DisplayString Condition="tt == lua_Type::LUA_TNUMBER">number = {value.n}</DisplayString>
@@ -41,6 +42,7 @@
 
   <Type Name="TKey">
     <DisplayString Condition="tt == lua_Type::LUA_TNIL">nil</DisplayString>
+    <DisplayString Condition="tt == lua_Type::LUA_TNULL">null</DisplayString>
     <DisplayString Condition="tt == lua_Type::LUA_TBOOLEAN">{(bool)value.b}</DisplayString>
     <DisplayString Condition="tt == lua_Type::LUA_TLIGHTUSERDATA">lightuserdata {(uintptr_t)value.p,h} tag: {extra[0]}</DisplayString>
     <DisplayString Condition="tt == lua_Type::LUA_TNUMBER">number = {value.n}</DisplayString>

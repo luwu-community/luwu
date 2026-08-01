@@ -82,6 +82,7 @@ enum lua_Type
     LUA_TNUMBER,
     LUA_TINTEGER,
     LUA_TVECTOR,
+    LUA_TNULL,
 
     LUA_TSTRING, // all types above this must be value types, all types below this must be GC types - see iscollectable
 
@@ -186,6 +187,7 @@ LUA_API const void* lua_topointer(lua_State* L, int idx);
 ** push functions (C -> stack)
 */
 LUA_API void lua_pushnil(lua_State* L);
+LUA_API void lua_pushnull(lua_State* L);
 LUA_API void lua_pushnumber(lua_State* L, double n);
 LUA_API void lua_pushinteger(lua_State* L, int n);
 LUA_API void lua_pushinteger64(lua_State* L, int64_t n);
@@ -439,6 +441,7 @@ LUA_API void lua_unref(lua_State* L, int ref);
 #define lua_istable(L, n) (lua_type(L, (n)) == LUA_TTABLE)
 #define lua_islightuserdata(L, n) (lua_type(L, (n)) == LUA_TLIGHTUSERDATA)
 #define lua_isnil(L, n) (lua_type(L, (n)) == LUA_TNIL)
+#define lua_isnull(L, n) (lua_type(L, (n)) == LUA_TNULL)
 #define lua_isboolean(L, n) (lua_type(L, (n)) == LUA_TBOOLEAN)
 #define lua_isinteger64(L, n) (lua_type(L, (n)) == LUA_TINTEGER)
 #define lua_isvector(L, n) (lua_type(L, (n)) == LUA_TVECTOR)

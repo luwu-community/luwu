@@ -12,6 +12,7 @@
 #include <stdlib.h>
 
 LUAU_FASTFLAG(LuauCustomYieldablePcalls)
+LUAU_FASTFLAGVARIABLE(LuauNullPrimitive)
 
 static void writestring(const char* s, size_t l)
 {
@@ -501,6 +502,12 @@ int luaopen_base(lua_State* L)
     luaL_register(L, "_G", base_funcs);
     lua_pushliteral(L, "Luau");
     lua_setglobal(L, "_VERSION"); // set global _VERSION
+
+    if (FFlag::LuauNullPrimitive)
+    {
+        lua_pushnull(L);
+        lua_setglobal(L, "null");
+    }
 
     // `ipairs' and `pairs' need auxiliary functions as upvalues
     auxopen(L, "ipairs", luaB_ipairs, luaB_inext);

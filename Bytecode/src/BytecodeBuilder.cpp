@@ -2693,6 +2693,8 @@ static const char* getBaseTypeString(uint8_t type)
         return "vector";
     case LBC_TYPE_BUFFER:
         return "buffer";
+    case LBC_TYPE_NULL:
+        return "null";
     case LBC_TYPE_ANY:
         return "any";
     }

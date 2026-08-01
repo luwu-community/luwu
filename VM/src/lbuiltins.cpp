@@ -1302,6 +1302,12 @@ static int luauF_tostring(lua_State* L, StkId res, TValue* arg0, int nresults, S
             setsvalue(L, res, s);
             return 1;
         }
+        case LUA_TNULL:
+        {
+            TString* s = L->global->ttname[LUA_TNULL];
+            setsvalue(L, res, s);
+            return 1;
+        }
         case LUA_TBOOLEAN:
         {
             TString* s = bvalue(arg0) ? luaS_newliteral(L, "true") : luaS_newliteral(L, "false");

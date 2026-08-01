@@ -685,6 +685,13 @@ void lua_pushnil(lua_State* L)
     api_incr_top(L);
 }
 
+void lua_pushnull(lua_State* L)
+{
+    ensure_stack(L, 1);
+    setnullvalue(L->top);
+    api_incr_top(L);
+}
+
 void lua_pushnumber(lua_State* L, double n)
 {
     ensure_stack(L, 1);

@@ -74,6 +74,7 @@ LUAU_DYNAMIC_FASTFLAG(LuauGcTableStepFix)
 LUAU_FASTFLAG(LuauCodegenFixTwoResA64Builtin)
 LUAU_FASTFLAG(LuauMathRoundNegZero)
 LUAU_FASTFLAG(LuauDefaultArguments)
+LUAU_FASTFLAG(LuauNullPrimitive)
 
 #ifndef LUAU_CONFORMANCE_SOURCE_DIR
 // Walks up from the current directory looking for the Client folder,
@@ -1957,6 +1958,7 @@ static void populateRTTI(lua_State* L, Luau::TypeId type)
 TEST_CASE("Types")
 {
     ScopedFastFlag integerType{FFlag::LuauIntegerType2, true};
+    ScopedFastFlag nullPrimitive{FFlag::LuauNullPrimitive, true};
 
     runConformance(
         "types.luau",
@@ -4780,6 +4782,13 @@ TEST_CASE("DefaultArguments")
     ScopedFastFlag sff{FFlag::LuauDefaultArguments, true};
 
     runConformance("defaultarg.luau");
+}
+
+TEST_CASE("Null")
+{
+    ScopedFastFlag sff{FFlag::LuauNullPrimitive, true};
+
+    runConformance("null.luau");
 }
 
 TEST_SUITE_END();

@@ -18,6 +18,7 @@ static constexpr const char* kBuiltinDefinitionBaseSrc = R"BUILTIN_SRC(
 
 declare _G: any
 declare _VERSION: string
+declare null: any
 
 declare function gcinfo(): number
 
