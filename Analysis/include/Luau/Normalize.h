@@ -230,6 +230,10 @@ struct NormalizedType
     // This type is either never or buffer.
     TypeId buffers;
 
+    // The none part of the type.
+    // This type is either never or none.
+    TypeId nones;
+
     // The (meta)table part of the type.
     // Each element of this set is a (meta)table type, or the top `table` type.
     // An empty set denotes never.

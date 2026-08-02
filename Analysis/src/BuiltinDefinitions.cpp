@@ -539,6 +539,7 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
         "buffer",
 
         // Globals
+        "none",
         "assert",
         "error",
         "print",

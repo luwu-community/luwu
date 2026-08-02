@@ -475,6 +475,7 @@ public:
     const TypeId booleanType;
     const TypeId threadType;
     const TypeId bufferType;
+    const TypeId noneType;
     const TypeId anyType;
     const TypeId unknownType;
     const TypeId neverType;

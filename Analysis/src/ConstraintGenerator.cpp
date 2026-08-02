@@ -3518,6 +3518,8 @@ std::tuple<TypeId, TypeId, RefinementId> ConstraintGenerator::checkBinary(
             discriminantTy = builtinTypes->threadType;
         else if (typeguard->type == "buffer")
             discriminantTy = builtinTypes->bufferType;
+        else if (typeguard->type == "none")
+            discriminantTy = builtinTypes->noneType;
         else if (typeguard->type == "table")
             discriminantTy = builtinTypes->tableType;
         else if (typeguard->type == "function")

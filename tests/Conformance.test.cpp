@@ -1912,6 +1912,10 @@ static void populateRTTI(lua_State* L, Luau::TypeId type)
             lua_pushstring(L, "buffer");
             break;
 
+        case Luau::PrimitiveType::NoneType:
+            lua_pushstring(L, "none");
+            break;
+
         default:
             LUAU_ASSERT(!"Unknown primitive type");
         }

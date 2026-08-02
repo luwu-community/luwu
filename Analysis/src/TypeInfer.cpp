@@ -218,6 +218,7 @@ TypeChecker::TypeChecker(const ScopePtr& globalScope, ModuleResolver* resolver, 
     , booleanType(builtinTypes->booleanType)
     , threadType(builtinTypes->threadType)
     , bufferType(builtinTypes->bufferType)
+    , noneType(builtinTypes->noneType)
     , anyType(builtinTypes->anyType)
     , unknownType(builtinTypes->unknownType)
     , neverType(builtinTypes->neverType)

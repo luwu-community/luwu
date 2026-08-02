@@ -45,6 +45,7 @@ struct TypeFunctionPrimitiveType
         String,
         Thread,
         Buffer,
+        None,
     };
 
     Type type;

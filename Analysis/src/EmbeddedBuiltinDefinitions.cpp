@@ -18,7 +18,7 @@ static constexpr const char* kBuiltinDefinitionBaseSrc = R"BUILTIN_SRC(
 
 declare _G: any
 declare _VERSION: string
-declare none: any
+declare none: none
 
 declare function gcinfo(): number
 
@@ -653,6 +653,7 @@ declare types: {
     string: type,
     thread: type,
     buffer: type,
+    none: type,
     integer: type,
 
     singleton: @checked (arg: string | boolean | nil) -> type,
@@ -678,6 +679,7 @@ declare types: {
     string: type,
     thread: type,
     buffer: type,
+    none: type,
 
     singleton: @checked (arg: string | boolean | nil) -> type,
     optional: @checked (arg: type) -> type,
