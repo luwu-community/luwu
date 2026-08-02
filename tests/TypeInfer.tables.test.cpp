@@ -5281,7 +5281,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "metatable_union_type")
     )");
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK_EQ(
-        "Cannot add indexer to table '{ @metatable t1, (nil & ~(false?)) | {  } } where t1 = { new: <a>(a) -> { @metatable t1, (a & ~(false?)) | {  "
+        "Cannot add indexer to table '{ @metatable t1, (nil & ~((false | none)?)) | {  } } where t1 = { new: <a>(a) -> { @metatable t1, (a & ~((false | none)?)) | {  "
         "} } }'",
         toString(result.errors[0])
     );

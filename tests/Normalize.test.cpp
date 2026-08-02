@@ -668,6 +668,20 @@ TEST_CASE_FIXTURE(NormalizeFixture, "negate_boolean_2")
     )")));
 }
 
+TEST_CASE_FIXTURE(NormalizeFixture, "negate_none")
+{
+    CHECK("none" == toString(normal(R"(
+        none & Not<number>
+    )")));
+}
+
+TEST_CASE_FIXTURE(NormalizeFixture, "negate_none_2")
+{
+    CHECK("never" == toString(normal(R"(
+        none & Not<none>
+    )")));
+}
+
 TEST_CASE_FIXTURE(NormalizeFixture, "double_negation")
 {
     CHECK("number" == toString(normal(R"(

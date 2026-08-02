@@ -682,6 +682,24 @@ TEST_CASE_FIXTURE(Fixture, "lvalue_is_not_nil")
         CHECK_EQ(toString(requireTypeAtPosition({5, 28})), "(number | string)?"); // a == nil
 }
 
+TEST_CASE_FIXTURE(BuiltinsFixture, "lvalue_is_not_none_truthy_refinement")
+{
+    CheckResult result = check(R"(
+        local function f(a: string | none)
+            if a then
+                local foo = a
+            else
+                local foo = a
+            end
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+
+    CHECK_EQ("string", toString(requireTypeAtPosition({3, 28})));
+    CHECK_EQ("none", toString(requireTypeAtPosition({5, 28})));
+}
+
 TEST_CASE_FIXTURE(Fixture, "free_type_is_equal_to_an_lvalue")
 {
     CheckResult result = check(R"(

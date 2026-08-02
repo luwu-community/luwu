@@ -292,6 +292,7 @@ struct NormalizedType
     bool hasStrings() const;
     bool hasThreads() const;
     bool hasBuffers() const;
+    bool hasNones() const;
     bool hasTables() const;
     bool hasFunctions() const;
     bool hasTyvars() const;
