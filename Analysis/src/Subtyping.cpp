@@ -2545,15 +2545,10 @@ SubtypingResult Subtyping::isCovariantWith(
             result.andAlso(isInvariantWith(env, subIndexer.indexResultType, superIndexer.indexResultType, scope)
                                .withBothComponent(TypePath::TypeField::IndexResult));
 
-        return result;
-    }
-    else
-    {
-        return isInvariantWith(env, subIndexer.indexType, superIndexer.indexType, scope)
-            .withBothComponent(TypePath::TypeField::IndexLookup)
-            .andAlso(isInvariantWith(env, subIndexer.indexResultType, superIndexer.indexResultType, scope)
-                         .withBothComponent(TypePath::TypeField::IndexResult));
-    }
+    if (FFlag::LuauIndexerModifierMismatchErrors && (subIndexer.isReadOnly && !superIndexer.isReadOnly))
+        result.andAlso(SubtypingResult{false}.withBothComponent(TypePath::TypeField::IndexResult).withAccessModifierViolation());
+
+    return result;
 }
 
 SubtypingResult Subtyping::isCovariantWith(
