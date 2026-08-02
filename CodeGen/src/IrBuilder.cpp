@@ -105,8 +105,8 @@ static void buildArgumentTypeChecks(IrBuilder& build, IrOp entry)
         case LBC_TYPE_BUFFER:
             build.inst(IrCmd::CHECK_TAG, load, build.constTag(LUA_TBUFFER), build.vmExit(kVmExitEntryGuardPc));
             break;
-        case LBC_TYPE_NULL:
-            build.inst(IrCmd::CHECK_TAG, load, build.constTag(LUA_TNULL), build.vmExit(kVmExitEntryGuardPc));
+        case LBC_TYPE_NONE:
+            build.inst(IrCmd::CHECK_TAG, load, build.constTag(LUA_TNONE), build.vmExit(kVmExitEntryGuardPc));
             break;
         default:
             if (tag >= LBC_TYPE_TAGGED_USERDATA_BASE && tag < LBC_TYPE_TAGGED_USERDATA_END)

@@ -4,4 +4,4 @@
 
 - LuauExternallyManagedBuffers and LuauBufferIsFrozen: @cheesycod
 - LuauDefaultArguments: @Bottersnike
-- LuauNullPrimitive: @cheesycod
+- LuauNonePrimitive: @cheesycod

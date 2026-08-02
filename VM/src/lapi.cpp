@@ -341,14 +341,14 @@ void lua_pushvalue(lua_State* L, int idx)
 int lua_type(lua_State* L, int idx)
 {
     StkId o = index2addr(L, idx);
-    return (o == luaO_nilobject) ? LUA_TNONE : ttype(o);
+    return (o == luaO_nilobject) ? LUA_TNOVAL : ttype(o);
 }
 
 const char* lua_typename(lua_State* L, int t)
 {
-    api_check(L, t >= LUA_TNONE && t < LUA_T_COUNT);
+    api_check(L, t >= LUA_TNOVAL && t < LUA_T_COUNT);
 
-    return (t == LUA_TNONE) ? "no value" : luaT_typenames[t];
+    return (t == LUA_TNOVAL) ? "no value" : luaT_typenames[t];
 }
 
 int lua_iscfunction(lua_State* L, int idx)
@@ -685,10 +685,10 @@ void lua_pushnil(lua_State* L)
     api_incr_top(L);
 }
 
-void lua_pushnull(lua_State* L)
+void lua_pushnone(lua_State* L)
 {
     ensure_stack(L, 1);
-    setnullvalue(L->top);
+    setnonevalue(L->top);
     api_incr_top(L);
 }
 

@@ -74,7 +74,7 @@ LUAU_DYNAMIC_FASTFLAG(LuauGcTableStepFix)
 LUAU_FASTFLAG(LuauCodegenFixTwoResA64Builtin)
 LUAU_FASTFLAG(LuauMathRoundNegZero)
 LUAU_FASTFLAG(LuauDefaultArguments)
-LUAU_FASTFLAG(LuauNullPrimitive)
+LUAU_FASTFLAG(LuauNonePrimitive)
 
 #ifndef LUAU_CONFORMANCE_SOURCE_DIR
 // Walks up from the current directory looking for the Client folder,
@@ -1958,7 +1958,7 @@ static void populateRTTI(lua_State* L, Luau::TypeId type)
 TEST_CASE("Types")
 {
     ScopedFastFlag integerType{FFlag::LuauIntegerType2, true};
-    ScopedFastFlag nullPrimitive{FFlag::LuauNullPrimitive, true};
+    ScopedFastFlag nonePrimitive{FFlag::LuauNonePrimitive, true};
 
     runConformance(
         "types.luau",
@@ -2926,7 +2926,7 @@ TEST_CASE("ApiType")
     CHECK(lua_type(L, 1) == LUA_TNUMBER);
 
     CHECK(strcmp(luaL_typename(L, 2), "no value") == 0);
-    CHECK(lua_type(L, 2) == LUA_TNONE);
+    CHECK(lua_type(L, 2) == LUA_TNOVAL);
     CHECK(strcmp(lua_typename(L, lua_type(L, 2)), "no value") == 0);
 
     lua_newuserdata(L, 0);
@@ -4784,11 +4784,11 @@ TEST_CASE("DefaultArguments")
     runConformance("defaultarg.luau");
 }
 
-TEST_CASE("Null")
+TEST_CASE("None")
 {
-    ScopedFastFlag sff{FFlag::LuauNullPrimitive, true};
+    ScopedFastFlag sff{FFlag::LuauNonePrimitive, true};
 
-    runConformance("null.luau");
+    runConformance("none.luau");
 }
 
 TEST_SUITE_END();

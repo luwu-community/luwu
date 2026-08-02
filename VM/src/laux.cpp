@@ -180,7 +180,7 @@ void luaL_checktype(lua_State* L, int narg, int t)
 
 void luaL_checkany(lua_State* L, int narg)
 {
-    if (lua_type(L, narg) == LUA_TNONE)
+    if (lua_type(L, narg) == LUA_TNOVAL)
         luaL_error(L, "missing argument #%d", narg);
 }
 
@@ -597,7 +597,7 @@ void luaL_addvalueany(luaL_Strbuf* B, int idx)
 
     switch (lua_type(L, idx))
     {
-    case LUA_TNONE:
+    case LUA_TNOVAL:
     {
         LUAU_ASSERT(!"expected value");
         break;
@@ -605,8 +605,8 @@ void luaL_addvalueany(luaL_Strbuf* B, int idx)
     case LUA_TNIL:
         luaL_addstring(B, "nil");
         break;
-    case LUA_TNULL:
-        luaL_addstring(B, "null");
+    case LUA_TNONE:
+        luaL_addstring(B, "none");
         break;
     case LUA_TBOOLEAN:
         if (lua_toboolean(L, idx))
@@ -696,8 +696,8 @@ const char* luaL_tolstring(lua_State* L, int idx, size_t* len)
     case LUA_TNIL:
         lua_pushliteral(L, "nil");
         break;
-    case LUA_TNULL:
-        lua_pushliteral(L, "null");
+    case LUA_TNONE:
+        lua_pushliteral(L, "none");
         break;
     case LUA_TBOOLEAN:
         lua_pushstring(L, (lua_toboolean(L, idx) ? "true" : "false"));

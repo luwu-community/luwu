@@ -41,7 +41,7 @@ int luaO_rawequalObj(const TValue* t1, const TValue* t2)
         switch (ttype(t1))
         {
         case LUA_TNIL:
-        case LUA_TNULL:
+        case LUA_TNONE:
             return 1;
         case LUA_TNUMBER:
             return luai_numeq(nvalue(t1), nvalue(t2));
@@ -67,7 +67,7 @@ int luaO_rawequalKey(const TKey* t1, const TValue* t2)
         switch (ttype(t1))
         {
         case LUA_TNIL:
-        case LUA_TNULL:
+        case LUA_TNONE:
             return 1;
         case LUA_TNUMBER:
             return luai_numeq(nvalue(t1), nvalue(t2));
