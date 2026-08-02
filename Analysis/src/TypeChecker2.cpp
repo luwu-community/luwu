@@ -3089,23 +3089,50 @@ Reasonings TypeChecker2::explainReasonings_(TID subTy, TID superTy, Location loc
 
         std::stringstream reason;
 
-        if (FFlag::LuauPropertyModifierMismatchErrors && reasoning.isPropertyModifierViolation)
+        if ((FFlag::LuauPropertyModifierMismatchErrors || FFlag::LuauIndexerModifierMismatchErrors) && reasoning.isAccessModifierViolation)
         {
-            // The leaf types at the end of the paths are the same type, so a
-            // plain "X is not a subtype of X" message would be misleading.
-            // Instead, explain that the mismatch is about the property modifier.
-            std::string propName = "a property";
-            bool isReadOnly = true;
-            auto last = reasoning.subPath.last();
-            LUAU_ASSERT(last && get_if<TypePath::Property>(&*last));
-            if (last)
+            if (FFlag::LuauPropertyModifierMismatchErrors && FFlag::LuauIndexerModifierMismatchErrors)
             {
-                if (auto* prop = get_if<TypePath::Property>(&*last))
+                // The leaf types at the end of the paths are the same type, so a
+                // plain "X is not a subtype of X" message would be misleading.
+                // Instead, explain that the mismatch is about the access modifier.
+                auto last = reasoning.subPath.last();
+                bool isReadOnly = true;
+                std::string path = "something";
+
+                if (last)
                 {
-                    propName = "`" + prop->name + "`";
-                    isReadOnly = prop->isRead;
+                    if (auto* prop = get_if<TypePath::Property>(&*last))
+                    {
+                        path = "`" + prop->name + "`";
+                        isReadOnly = prop->isRead;
+                    }
+                    else if (auto* field = get_if<TypePath::TypeField>(&*last); field && *field == TypePath::TypeField::IndexResult)
+                        path = "the indexer";
                 }
+
+                if (isReadOnly)
+                    reason << path << " is read-only in the latter type, but the former type requires it to be read-write";
+                else
+                    reason << path << " is write-only in the latter type, but the former type requires it to be read-write";
             }
+            else if (FFlag::LuauPropertyModifierMismatchErrors)
+            {
+                // The leaf types at the end of the paths are the same type, so a
+                // plain "X is not a subtype of X" message would be misleading.
+                // Instead, explain that the mismatch is about the property modifier.
+                std::string propName = "a property";
+                bool isReadOnly = true;
+                auto last = reasoning.subPath.last();
+                LUAU_ASSERT(last && get_if<TypePath::Property>(&*last));
+                if (last)
+                {
+                    if (auto* prop = get_if<TypePath::Property>(&*last))
+                    {
+                        propName = "`" + prop->name + "`";
+                        isReadOnly = prop->isRead;
+                    }
+                }
 
             if (isReadOnly)
                 reason << propName << " is a read-only property in the latter type, but the former type requires a read-write property";
