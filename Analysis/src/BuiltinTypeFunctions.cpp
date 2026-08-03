@@ -1462,8 +1462,8 @@ TypeFunctionReductionResult<TypeId> singletonTypeFunction(
     if (auto negation = get<NegationType>(followed))
         followed = follow(negation->ty);
 
-    // if we have a singleton type or `nil`, which is its own singleton type...
-    if (get<SingletonType>(followed) || isNil(followed))
+    // if we have a singleton type or `nil` or `none`, which are their own singleton types...
+    if (get<SingletonType>(followed) || isNil(followed) || isNone(followed))
         return {type, Reduction::MaybeOk, {}, {}};
 
     // otherwise, we'll return the top type, `unknown`.

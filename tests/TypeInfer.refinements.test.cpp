@@ -700,6 +700,24 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "lvalue_is_not_none_truthy_refinement")
     CHECK_EQ("none", toString(requireTypeAtPosition({5, 28})));
 }
 
+TEST_CASE_FIXTURE(BuiltinsFixture, "lvalue_is_equal_to_none_refinement")
+{
+    CheckResult result = check(R"(
+        local function f(a: {b: string} | none)
+            if a == none then
+                local b = a
+            else
+                local c = a
+            end
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+
+    CHECK_EQ("none", toString(requireTypeAtPosition({3, 26})));
+    CHECK_EQ("{ b: string }", toString(requireTypeAtPosition({5, 26})));
+}
+
 TEST_CASE_FIXTURE(Fixture, "free_type_is_equal_to_an_lvalue")
 {
     CheckResult result = check(R"(
