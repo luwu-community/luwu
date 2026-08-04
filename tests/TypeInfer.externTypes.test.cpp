@@ -16,6 +16,8 @@ using std::nullopt;
 
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(LuauDropUnionSubtypeReasoning)
+LUAU_FASTFLAG(LuauExternTypeGenericMethods)
+LUAU_FASTFLAG(LuauExternTypeUseDefinitionScope)
 
 TEST_SUITE_BEGIN("TypeInferExternTypes");
 
@@ -1235,6 +1237,193 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "extern_type_intersection_with_table_type_2")
     LUAU_CHECK_NO_ERRORS(result);
 
     CHECK_EQ("Instance & { brushes: Instance }", toString(requireTypeAtPosition({2, 18})));
+}
+
+TEST_CASE_FIXTURE(Fixture, "extern_type_generic_method_property_syntax_resolves_without_leak")
+{
+    // Regression test: type references inside an extern type's body (here, a generic
+    // method's own type parameter, declared using the pre-existing colon-property syntax)
+    // must resolve against the extern type's own definition scope. Before
+    // LuauExternTypeUseDefinitionScope, the per-method generic scope was created as a
+    // sibling of the (unused) extern type definition scope rather than a child of it, so
+    // TypeChecker2's location-based scope lookup could never find it, and `T` was reported
+    // as an unresolved global.
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuauExternTypeUseDefinitionScope, true},
+    };
+
+    loadDefinition(R"(
+        declare extern type Cat with
+            meow: <T>(self: Cat, whatever: T) -> T
+        end
+    )");
+
+    CheckResult result = check(R"(
+        local c: Cat = nil :: any
+        local x = c:meow(5)
+    )");
+
+    LUAU_CHECK_NO_ERRORS(result);
+    CHECK_EQ("number", toString(requireType("x")));
+}
+
+TEST_CASE_FIXTURE(Fixture, "extern_type_generic_method_property_syntax_still_broken_without_flag")
+{
+    // Without the fix, `T` fails to resolve while checking the definition file itself
+    // (not the code that uses Cat), so loading the definition file is where this fails.
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    unfreeze(getFrontend().globals.globalTypes);
+    LoadDefinitionFileResult loadResult = getFrontend().loadDefinitionFile(
+        getFrontend().globals, getFrontend().globals.globalScope, R"(
+        declare extern type Cat with
+            meow: <T>(self: Cat, whatever: T) -> T
+        end
+    )",
+        "@test",
+        /* captureComments */ false,
+        /* typecheckForAutocomplete */ false
+    );
+    freeze(getFrontend().globals.globalTypes);
+
+    CHECK(!loadResult.success);
+    REQUIRE(loadResult.module);
+    CHECK(!loadResult.module->errors.empty());
+}
+
+TEST_CASE_FIXTURE(Fixture, "extern_type_function_sugar_generic_method_resolves")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuauExternTypeUseDefinitionScope, true},
+        {FFlag::LuauExternTypeGenericMethods, true},
+    };
+
+    loadDefinition(R"(
+        declare extern type Cat with
+            function meow<T>(self, whatever: T): T
+        end
+    )");
+
+    CheckResult result = check(R"(
+        local c: Cat = nil :: any
+        local x = c:meow(5)
+    )");
+
+    LUAU_CHECK_NO_ERRORS(result);
+    CHECK_EQ("number", toString(requireType("x")));
+}
+
+TEST_CASE_FIXTURE(Fixture, "extern_type_generic_method_multiple_params")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuauExternTypeUseDefinitionScope, true},
+        {FFlag::LuauExternTypeGenericMethods, true},
+    };
+
+    loadDefinition(R"(
+        declare extern type Cat with
+            function pair<T, U>(self, a: T, b: U): (T, U)
+        end
+    )");
+
+    CheckResult result = check(R"(
+        local c: Cat = nil :: any
+        local x, y = c:pair(5, "hello")
+    )");
+
+    LUAU_CHECK_NO_ERRORS(result);
+    CHECK_EQ("number", toString(requireType("x")));
+    CHECK_EQ("string", toString(requireType("y")));
+}
+
+TEST_CASE_FIXTURE(Fixture, "extern_type_generic_method_infers_union_return_from_argument")
+{
+    // Method that takes T as a parameter and returns T | string: T should be inferred
+    // from the argument, and the call's result type should reflect the full union.
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuauExternTypeUseDefinitionScope, true},
+        {FFlag::LuauExternTypeGenericMethods, true},
+    };
+
+    loadDefinition(R"(
+        declare extern type Cat with
+            function meowOrName<T>(self, whatever: T): T | string
+        end
+    )");
+
+    CheckResult result = check(R"(
+        local c: Cat = nil :: any
+        local result = c:meowOrName(5)
+    )");
+
+    LUAU_CHECK_NO_ERRORS(result);
+
+    TypeId resultTy = requireType("result");
+    const UnionType* ut = get<UnionType>(follow(resultTy));
+    REQUIRE_MESSAGE(ut, "Expected a union type, got " << toString(resultTy));
+
+    bool hasNumber = false;
+    bool hasString = false;
+    for (TypeId option : ut)
+    {
+        option = follow(option);
+        if (get<PrimitiveType>(option) && toString(option) == "number")
+            hasNumber = true;
+        if (get<PrimitiveType>(option) && toString(option) == "string")
+            hasString = true;
+    }
+
+    CHECK(hasNumber);
+    CHECK(hasString);
+}
+
+TEST_CASE_FIXTURE(Fixture, "extern_type_generic_method_explicit_instantiation")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuauExternTypeUseDefinitionScope, true},
+        {FFlag::LuauExternTypeGenericMethods, true},
+    };
+
+    loadDefinition(R"(
+        declare extern type HttpResponse with
+            function try_json<T>(self): T?
+        end
+    )");
+
+    CheckResult result = check(R"(
+        local response: HttpResponse = nil :: any
+        local data = response:try_json<<{ name: string }>>()
+    )");
+
+    LUAU_CHECK_NO_ERRORS(result);
+    CHECK_EQ("{ name: string }?", toString(requireType("data")));
+}
+
+TEST_CASE_FIXTURE(Fixture, "extern_type_generic_method_explicit_instantiation_mismatch")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuauExternTypeUseDefinitionScope, true},
+        {FFlag::LuauExternTypeGenericMethods, true},
+    };
+
+    loadDefinition(R"(
+        declare extern type HttpResponse with
+            function try_json<T>(self): T?
+        end
+    )");
+
+    CheckResult result = check(R"(
+        local response: HttpResponse = nil :: any
+        local data: number = response:try_json<<string>>()
+    )");
+
+    LUAU_REQUIRE_ERRORS(result);
 }
 
 TEST_SUITE_END();

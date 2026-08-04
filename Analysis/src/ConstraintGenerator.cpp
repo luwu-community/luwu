@@ -51,6 +51,7 @@ LUAU_FLAGVERSION(LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier, 2)
 LUAU_FASTFLAGVARIABLE(LuauDeprecatedAttributeOnAnonymousFunctions)
 LUAU_FASTFLAGVARIABLE(DebugLuauCFG)
 LUAU_FASTFLAG(LuauDefaultArguments)
+LUAU_FASTFLAGVARIABLE(LuauExternTypeUseDefinitionScope)
 
 namespace Luau
 {
@@ -1033,6 +1034,9 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
             }
 
             ScopePtr defnScope = childScope(classDeclaration, scope);
+
+            if (FFlag::LuauExternTypeUseDefinitionScope)
+                astExternTypeDefiningScopes[classDeclaration] = defnScope;
 
             TypeId initialType = arena->addType(BlockedType{});
             TypeFun initialFun{initialType};
@@ -2257,6 +2261,17 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatDeclareExte
     TypeId classBindTy = bindingIt->second.type;
     emplaceType<BoundType>(asMutable(classBindTy), externTy);
 
+    // Indexer and property types are resolved against the extern type's own definition scope
+    // (rather than the enclosing scope) so that per-property type references - e.g. a generic
+    // method's own type parameters - nest under it instead of becoming sibling scopes that
+    // TypeChecker2's location-based scope lookup can never find. See LuauExternTypeUseDefinitionScope.
+    ScopePtr bodyScope = scope;
+    if (FFlag::LuauExternTypeUseDefinitionScope)
+    {
+        if (ScopePtr* defnScopePtr = astExternTypeDefiningScopes.find(declaredExternType))
+            bodyScope = *defnScopePtr;
+    }
+
     if (declaredExternType->indexer)
     {
         if (recursionCount >= DFInt::LuauConstraintGeneratorRecursionLimit)
@@ -2270,14 +2285,14 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatDeclareExte
             // mixed.
             etv->indexer = TableIndexer{
                 resolveType(
-                    scope,
+                    bodyScope,
                     declaredExternType->indexer->indexType,
                     /* inTypeArguments */ false,
                     /* replaceErrorWithFresh */ false,
                     /* initialPolarity */ Polarity::Mixed
                 ),
                 resolveType(
-                    scope,
+                    bodyScope,
                     declaredExternType->indexer->resultType,
                     /* inTypeArguments */ false,
                     /* replaceErrorWithFresh */ false,
@@ -2290,8 +2305,9 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatDeclareExte
     for (const AstDeclaredExternTypeProperty& externProp : declaredExternType->props)
     {
         Name propName(externProp.name.value);
-        TypeId propTy =
-            resolveType(scope, externProp.ty, /* inTypeArguments */ false, /* replaceErrorWithFresh */ false, /* initialPolarity */ Polarity::Mixed);
+        TypeId propTy = resolveType(
+            bodyScope, externProp.ty, /* inTypeArguments */ false, /* replaceErrorWithFresh */ false, /* initialPolarity */ Polarity::Mixed
+        );
 
         bool assignToMetatable = isMetamethod(propName);
 
