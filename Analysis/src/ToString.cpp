@@ -20,6 +20,7 @@
 
 LUAU_FASTFLAG(LuauSolverV2)
 LUAU_FASTFLAG(LuauIntegerType2)
+LUAU_FASTFLAG(LuauGenericNominals)
 
 /*
  * Enables increasing levels of verbosity for Luau type names when stringifying.
@@ -872,6 +873,18 @@ struct TypeStringifier
     void operator()(TypeId ty, const ExternType& etv)
     {
         state.emitAndRecordSpan(etv.name, ty);
+        if (FFlag::LuauGenericNominals)
+        {
+            if (state.hasSeen(&etv))
+            {
+                state.result.cycle = true;
+                state.emit("<*CYCLE*>");
+                return;
+            }
+
+            stringify(etv.instantiatedTypeParams, etv.instantiatedTypePackParams);
+            state.unsee(&etv);
+        }
     }
 
     void operator()(TypeId, const AnyType&)

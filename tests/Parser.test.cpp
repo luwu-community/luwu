@@ -25,6 +25,7 @@ LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAG(LuauTrackPrefixLocal)
 LUAU_FASTFLAG(LuauDefaultArguments)
 LUAU_FASTFLAG(LuauExternTypeGenericMethods)
+LUAU_FASTFLAG(LuauGenericNominals)
 
 LUAU_FASTFLAG(LuauNoDuplicateBinaryPrefix)
 
@@ -2749,6 +2750,92 @@ TEST_CASE_FIXTURE(Fixture, "extern_type_generic_property_syntax_workaround_is_un
     REQUIRE(meow != nullptr);
     REQUIRE_EQ(1, meow->generics.size);
     CHECK_EQ(meow->generics.data[0]->name, "T");
+}
+
+TEST_CASE_FIXTURE(Fixture, "extern_type_generics_are_gated")
+{
+    matchParseError(
+        R"(
+        declare extern type Box<T> with
+            value: T
+        end
+        )",
+        "Expected `with` keyword before listing properties of the external type, but got (null) instead"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "extern_type_generics")
+{
+    ScopedFastFlag sff{FFlag::LuauGenericNominals, true};
+
+    AstStatBlock* stat = parseEx(R"(
+        declare extern type Box<T> with
+            value: T
+        end
+    )")
+                             .root;
+
+    REQUIRE(stat != nullptr);
+    REQUIRE_EQ(1, stat->body.size);
+
+    AstStatDeclareExternType* box = stat->body.data[0]->as<AstStatDeclareExternType>();
+    REQUIRE(box != nullptr);
+    REQUIRE_EQ(1, box->generics.size);
+    CHECK_EQ(box->generics.data[0]->name, "T");
+    CHECK_EQ(0, box->genericPacks.size);
+}
+
+TEST_CASE_FIXTURE(Fixture, "extern_type_generics_support_multiple_params_and_packs")
+{
+    ScopedFastFlag sff{FFlag::LuauGenericNominals, true};
+
+    AstStatBlock* stat = parseEx(R"(
+        declare extern type Result<T, E, Rest...> with
+            value: T
+        end
+    )")
+                             .root;
+
+    REQUIRE(stat != nullptr);
+    REQUIRE_EQ(1, stat->body.size);
+
+    AstStatDeclareExternType* result = stat->body.data[0]->as<AstStatDeclareExternType>();
+    REQUIRE(result != nullptr);
+    REQUIRE_EQ(2, result->generics.size);
+    CHECK_EQ(result->generics.data[0]->name, "T");
+    CHECK_EQ(result->generics.data[1]->name, "E");
+    REQUIRE_EQ(1, result->genericPacks.size);
+    CHECK_EQ(result->genericPacks.data[0]->name, "Rest");
+}
+
+TEST_CASE_FIXTURE(Fixture, "extern_type_and_method_generics_together")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauGenericNominals, true},
+        {FFlag::LuauExternTypeGenericMethods, true},
+    };
+
+    AstStatBlock* stat = parseEx(R"(
+        declare extern type Box<T> with
+            value: T
+            function map<U>(self, f: (T) -> U): Box<U>
+        end
+    )")
+                             .root;
+
+    REQUIRE(stat != nullptr);
+    REQUIRE_EQ(1, stat->body.size);
+
+    AstStatDeclareExternType* box = stat->body.data[0]->as<AstStatDeclareExternType>();
+    REQUIRE(box != nullptr);
+    REQUIRE_EQ(1, box->generics.size);
+    CHECK_EQ(box->generics.data[0]->name, "T");
+    REQUIRE_EQ(2, box->props.size);
+
+    AstTypeFunction* map = box->props.data[1].ty->as<AstTypeFunction>();
+    REQUIRE(map != nullptr);
+    REQUIRE_EQ(1, map->generics.size);
+    CHECK_EQ(map->generics.data[0]->name, "U");
 }
 
 TEST_CASE_FIXTURE(Fixture, "missing_declaration_prop")

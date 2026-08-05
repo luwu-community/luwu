@@ -52,6 +52,7 @@ LUAU_FASTFLAGVARIABLE(LuauDeprecatedAttributeOnAnonymousFunctions)
 LUAU_FASTFLAGVARIABLE(DebugLuauCFG)
 LUAU_FASTFLAG(LuauDefaultArguments)
 LUAU_FASTFLAGVARIABLE(LuauExternTypeUseDefinitionScope)
+LUAU_FASTFLAG(LuauGenericNominals)
 
 namespace Luau
 {
@@ -1035,12 +1036,23 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
 
             ScopePtr defnScope = childScope(classDeclaration, scope);
 
-            if (FFlag::LuauExternTypeUseDefinitionScope)
+            if (FFlag::LuauExternTypeUseDefinitionScope || FFlag::LuauGenericNominals)
                 astExternTypeDefiningScopes[classDeclaration] = defnScope;
 
             TypeId initialType = arena->addType(BlockedType{});
             TypeFun initialFun{initialType};
             initialFun.definitionLocation = classDeclaration->location;
+
+            if (FFlag::LuauGenericNominals)
+            {
+                for (const auto& [name, gen] : createGenerics(defnScope, classDeclaration->generics, /* useCache */ true, /* addTypes */ false))
+                    initialFun.typeParams.push_back(gen);
+
+                for (const auto& [name, genPack] :
+                     createGenericPacks(defnScope, classDeclaration->genericPacks, /* useCache */ true, /* addTypes */ false))
+                    initialFun.typePackParams.push_back(genPack);
+            }
+
             scope->exportedTypeBindings[classDeclaration->name.value] = std::move(initialFun);
 
             if (FFlag::LuauTidyTypePrototyping)
@@ -2226,8 +2238,26 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatDeclareExte
             return ControlFlow::None;
         }
 
-        // We don't have generic extern typeArguments, so this assertion _should_ never be hit.
-        LUAU_ASSERT(lookupType->typeParams.size() == 0 && lookupType->typePackParams.size() == 0);
+        if (FFlag::LuauGenericNominals && (lookupType->typeParams.size() != 0 || lookupType->typePackParams.size() != 0))
+        {
+            // `extends Base<T>` isn't supported yet -- the parser doesn't even accept type
+            // arguments after a supertype name -- so the only way to reach this is a generic
+            // supertype referenced without any arguments, which we don't allow.
+            reportError(
+                declaredExternType->location,
+                GenericError{format("Generic extern type '%s' cannot be used as a superclass without type arguments", superName.c_str())}
+            );
+
+            emplaceType<BoundType>(asMutable(bindingIt->second.type), builtinTypes->errorType);
+
+            return ControlFlow::None;
+        }
+        else if (!FFlag::LuauGenericNominals)
+        {
+            // We don't have generic extern typeArguments, so this assertion _should_ never be hit.
+            LUAU_ASSERT(lookupType->typeParams.size() == 0 && lookupType->typePackParams.size() == 0);
+        }
+
         superTy = follow(lookupType->type);
 
         if (!get<ExternType>(follow(*superTy)))
@@ -2266,10 +2296,43 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatDeclareExte
     // method's own type parameters - nest under it instead of becoming sibling scopes that
     // TypeChecker2's location-based scope lookup can never find. See LuauExternTypeUseDefinitionScope.
     ScopePtr bodyScope = scope;
-    if (FFlag::LuauExternTypeUseDefinitionScope)
+    if (FFlag::LuauExternTypeUseDefinitionScope || FFlag::LuauGenericNominals)
     {
         if (ScopePtr* defnScopePtr = astExternTypeDefiningScopes.find(declaredExternType))
             bodyScope = *defnScopePtr;
+    }
+
+    // Bind the extern type's own generics (e.g. the `T` in `declare extern type Box<T> with ... end`)
+    // into its definition scope, so that references to `T` inside the indexer, properties, and
+    // methods resolve to these type-level generics rather than erroring or (worse) accidentally
+    // resolving to an unrelated same-named generic elsewhere in the file.
+    if (FFlag::LuauGenericNominals)
+    {
+        LUAU_ASSERT(declaredExternType->generics.size == bindingIt->second.typeParams.size());
+        for (size_t i = 0; i < declaredExternType->generics.size; ++i)
+        {
+            AstGenericType* astTy = declaredExternType->generics.data[i];
+            const GenericTypeDefinition& param = bindingIt->second.typeParams[i];
+            bodyScope->privateTypeBindings[astTy->name.value] = TypeFun{param.ty};
+        }
+
+        LUAU_ASSERT(declaredExternType->genericPacks.size == bindingIt->second.typePackParams.size());
+        for (size_t i = 0; i < declaredExternType->genericPacks.size; ++i)
+        {
+            AstGenericTypePack* astPack = declaredExternType->genericPacks.data[i];
+            const GenericTypePackDefinition& param = bindingIt->second.typePackParams[i];
+            bodyScope->privateTypePackBindings[astPack->name.value] = param.tp;
+        }
+
+        // Methods implicitly take `self`, typed below as the bare extern type (externTy). For a
+        // generic extern type, `self` needs to be `Box<T>` (applied to the type's own generics),
+        // not the bare, unparameterized `Box` -- otherwise calling a method on `Box<number>`
+        // fails to match against `self`, since neither side would look like the other nominally.
+        for (const GenericTypeDefinition& param : bindingIt->second.typeParams)
+            etv->instantiatedTypeParams.push_back(param.ty);
+        for (const GenericTypePackDefinition& param : bindingIt->second.typePackParams)
+            etv->instantiatedTypePackParams.push_back(param.tp);
+        etv->hasUnresolvedGenerics = !etv->instantiatedTypeParams.empty() || !etv->instantiatedTypePackParams.empty();
     }
 
     if (declaredExternType->indexer)
@@ -2283,6 +2346,10 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatDeclareExte
             // I don't think extern types can *be* generic, but if they
             // have an indexer over those generics, the polarity is
             // mixed.
+            //
+            // mluau fork note (deviaze): extern types can now be generic, behind
+            // LuauGenericNominals. When enabled, this indexer's index/result types
+            // may reference the extern type's own generics, bound into bodyScope above.
             etv->indexer = TableIndexer{
                 resolveType(
                     bodyScope,
@@ -2608,7 +2675,12 @@ InferencePack ConstraintGenerator::checkPack(
     InferencePack result;
 
     if (AstExprCall* call = expr->as<AstExprCall>())
-        result = checkPack(scope, call);
+    {
+        std::optional<TypeId> expectedType;
+        if (FFlag::LuauGenericNominals && !expectedTypes.empty())
+            expectedType = expectedTypes[0];
+        result = checkPack(scope, call, expectedType);
+    }
     else if (expr->is<AstExprVarargs>())
     {
         if (scope->varargPack)
@@ -2630,7 +2702,7 @@ InferencePack ConstraintGenerator::checkPack(
     return result;
 }
 
-InferencePack ConstraintGenerator::checkPack(const ScopePtr& scope, AstExprCall* call)
+InferencePack ConstraintGenerator::checkPack(const ScopePtr& scope, AstExprCall* call, std::optional<TypeId> expectedType)
 {
     Checkpoint funcBeginCheckpoint = checkpoint(this);
 
@@ -2642,7 +2714,7 @@ InferencePack ConstraintGenerator::checkPack(const ScopePtr& scope, AstExprCall*
 
     Checkpoint funcEndCheckpoint = checkpoint(this);
 
-    return checkExprCall(scope, call, fnType, funcBeginCheckpoint, funcEndCheckpoint);
+    return checkExprCall(scope, call, fnType, funcBeginCheckpoint, funcEndCheckpoint, expectedType);
 }
 
 InferencePack ConstraintGenerator::checkExprCall(
@@ -2650,7 +2722,8 @@ InferencePack ConstraintGenerator::checkExprCall(
     AstExprCall* call,
     TypeId fnType,
     Checkpoint funcBeginCheckpoint,
-    Checkpoint funcEndCheckpoint
+    Checkpoint funcEndCheckpoint,
+    std::optional<TypeId> expectedType
 )
 {
     std::vector<AstExpr*> exprArgs;
@@ -2892,6 +2965,7 @@ InferencePack ConstraintGenerator::checkExprCall(
             std::move(explicitTypeIds),
             std::move(explicitTypePackIds),
             &module->astOverloadResolvedTypes,
+            FFlag::LuauGenericNominals ? expectedType : std::nullopt,
         }
     );
 
@@ -2953,7 +3027,7 @@ Inference ConstraintGenerator::check(const ScopePtr& scope, AstExpr* expr, std::
     else if (expr->is<AstExprVarargs>())
         result = flattenPack(scope, expr->location, checkPack(scope, expr));
     else if (auto call = expr->as<AstExprCall>())
-        result = flattenPack(scope, expr->location, checkPack(scope, call)); // TODO: needs predicates too
+        result = flattenPack(scope, expr->location, checkPack(scope, call, expectedType)); // TODO: needs predicates too
     else if (auto a = expr->as<AstExprFunction>())
         result = check(scope, a, expectedType, generalize);
     else if (auto indexName = expr->as<AstExprIndexName>())
@@ -3552,7 +3626,9 @@ std::tuple<TypeId, TypeId, RefinementId> ConstraintGenerator::checkBinary(
         }
         else if (!typeguard->isTypeof)
             discriminantTy = builtinTypes->neverType;
-        else if (auto typeFun = globalScope->lookupType(typeguard->type); typeFun && typeFun->typeParams.empty() && typeFun->typePackParams.empty())
+        else if (auto typeFun = globalScope->lookupType(typeguard->type);
+                 typeFun && (FFlag::LuauGenericNominals ? get<ExternType>(follow(typeFun->type)) != nullptr
+                                                         : (typeFun->typeParams.empty() && typeFun->typePackParams.empty())))
         {
             TypeId ty = follow(typeFun->type);
 
@@ -4655,7 +4731,9 @@ std::vector<std::pair<Name, GenericTypeDefinition>> ConstraintGenerator::createG
 
         if (auto it = scope->parent->typeAliasTypeParameters.find(generic->name.value);
             useCache && it != scope->parent->typeAliasTypeParameters.end())
+        {
             genericTy = it->second;
+        }
         else
         {
             genericTy = arena->addType(GenericType{scope.get(), generic->name.value, Polarity::None});

@@ -2,6 +2,7 @@
 #include "Luau/BuiltinDefinitions.h"
 #include "Luau/Common.h"
 #include "Luau/Error.h"
+#include "Luau/ExperimentalFlags.h"
 #include "Luau/TypeInfer.h"
 #include "Luau/Type.h"
 
@@ -11,6 +12,8 @@
 #include "ScopedFlags.h"
 #include "doctest.h"
 
+#include <cstring>
+
 using namespace Luau;
 using std::nullopt;
 
@@ -18,6 +21,9 @@ LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(LuauDropUnionSubtypeReasoning)
 LUAU_FASTFLAG(LuauExternTypeGenericMethods)
 LUAU_FASTFLAG(LuauExternTypeUseDefinitionScope)
+LUAU_FASTFLAG(LuauGenericNominals)
+LUAU_FASTFLAG(LuauHigherOrderGenericInference)
+LUAU_FASTFLAG(LuauSolverV2)
 
 TEST_SUITE_BEGIN("TypeInferExternTypes");
 
@@ -1424,6 +1430,488 @@ TEST_CASE_FIXTURE(Fixture, "extern_type_generic_method_explicit_instantiation_mi
     )");
 
     LUAU_REQUIRE_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(Fixture, "extern_type_generics_instantiate")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuauExternTypeUseDefinitionScope, true},
+        {FFlag::LuauGenericNominals, true},
+    };
+
+    loadDefinition(R"(
+        declare extern type Box<T> with
+            value: T
+        end
+
+        declare Box: {
+            new: <T>(value: T) -> Box<T>
+        }
+    )");
+
+    CheckResult result = check(R"(
+        local b = Box.new(5)
+        local x = b.value
+    )");
+
+    LUAU_CHECK_NO_ERRORS(result);
+    CHECK_EQ("Box<number>", toString(requireType("b")));
+    CHECK_EQ("number", toString(requireType("x")));
+}
+
+TEST_CASE_FIXTURE(Fixture, "extern_type_generics_nested_instantiation")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuauExternTypeUseDefinitionScope, true},
+        {FFlag::LuauGenericNominals, true},
+    };
+
+    loadDefinition(R"(
+        declare extern type Box<T> with
+            value: T
+        end
+
+        declare Box: {
+            new: <T>(value: T) -> Box<T>
+        }
+    )");
+
+    CheckResult result = check(R"(
+        type Nested = Box<Box<string>>
+        local n = (nil :: any) :: Nested
+        local inner = n.value
+    )");
+
+    LUAU_CHECK_NO_ERRORS(result);
+    CHECK_EQ("Box<Box<string>>", toString(requireType("n")));
+    CHECK_EQ("Box<string>", toString(requireType("inner")));
+}
+
+TEST_CASE_FIXTURE(Fixture, "extern_type_generics_nested_instantiation_with_unused_param")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuauExternTypeUseDefinitionScope, true},
+        {FFlag::LuauGenericNominals, true},
+    };
+
+    // `T` does not appear anywhere in Result's own body, so the type argument used to
+    // instantiate the outer Result<...> is the only place a nested, still-unresolved
+    // generic instantiation (like `Result<string>`) can be found.
+    loadDefinition(R"(
+        declare extern type Result<T> with
+            cats: string
+        end
+    )");
+
+    CheckResult result = check(R"(
+        type meow = Result<Result<string>>
+        local meo = (nil :: any) :: meow
+        local cats = meo.cats
+    )");
+
+    LUAU_CHECK_NO_ERRORS(result);
+    CHECK_EQ("Result<Result<string>>", toString(requireType("meo")));
+    CHECK_EQ("string", toString(requireType("cats")));
+}
+
+TEST_CASE_FIXTURE(Fixture, "extern_type_generics_two_params_with_method")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuauExternTypeUseDefinitionScope, true},
+        {FFlag::LuauGenericNominals, true},
+    };
+
+    loadDefinition(R"(
+        declare extern type Result<Ok, Err> with
+            inner: Ok | Err
+            function is_ok(self): boolean
+            function expect(self, assertion: string?): Ok
+        end
+
+        declare function try_<T, E>(f: () -> T): Result<T, E>
+    )");
+
+    CheckResult result = check(R"(
+        local function get_sketchy(): string
+            return "x"
+        end
+
+        local r = try_(get_sketchy)
+        if r:is_ok() then
+            local response = r:expect()
+        end
+    )");
+
+    LUAU_CHECK_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(Fixture, "extern_type_generics_explicit_partial_instantiation_KNOWN_BUG_produces_cyclic_type")
+{
+    // KNOWN BUG, not yet fixed: explicitly instantiating only a leading subset of a function's
+    // generics (e.g. `try_<<string>>(...)`, pinning E and leaving Args/T to be inferred) while its
+    // return type expands a generic nominal type (`declare extern type Result<Ok, Err> with ...`)
+    // produces a corrupted, self-referential result type (toString shows `Result<Result<*CYCLE*>,
+    // string>` -- guarded against hanging/unbounded output by the cycle check in ToString.cpp, but
+    // the underlying type is still wrong) and an "outstanding free or blocked type" internal error
+    // from TypeChecker2 on any subsequent method call. Traced to a single TypeAliasExpansionConstraint
+    // dispatch for `Result<T, E>` whose own `T` argument ends up bound back to the result type itself
+    // -- likely a Unifier2/instantiate2 issue unifying a still-pending return type against the fresh
+    // inferred return pack, not something in the substitution/display work this test file otherwise
+    // covers. The identical explicit-partial-instantiation pattern against a plain table return type
+    // works correctly, so this is specific to generic nominal (extern type) expansion.
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuauExternTypeUseDefinitionScope, true},
+        {FFlag::LuauGenericNominals, true},
+    };
+
+    loadDefinition(R"(
+        declare extern type Result<Ok, Err> with
+            inner: Ok | Err
+            function is_ok(self): boolean
+            function expect(self, assertion: string?): Ok
+        end
+
+        declare function try_<E, Args, T>(f: (...Args) -> T, ...: Args): Result<T, E>
+    )");
+
+    CheckResult result = check(R"(
+        local function get_sketchy(url: string): string
+            return "x"
+        end
+
+        local r = try_<<string>>(get_sketchy, "someurl")
+        if r:is_ok() then
+            local response = r:expect()
+        end
+    )");
+
+    // Once fixed, this should be LUAU_CHECK_NO_ERRORS(result) with r typed as Result<string, string>.
+    CHECK(!result.errors.empty());
+}
+
+TEST_CASE_FIXTURE(Fixture, "extern_type_generics_independent_instantiations_are_compatible")
+{
+    // Two independently-produced clones of the same generic nominal instantiation (one from
+    // resolving the `List<string>` annotation, one from substituting the vararg constructor's
+    // return type) are different TypeIds but must still be recognized as the same nominal type.
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuauExternTypeUseDefinitionScope, true},
+        {FFlag::LuauGenericNominals, true},
+        {FFlag::LuauHigherOrderGenericInference, true},
+    };
+
+    loadDefinition(R"(
+        declare extern type List<T> with
+            function get(self, idx: number): T?
+        end
+
+        declare list: {
+            new: <T>(...T) -> List<T>,
+        }
+    )");
+
+    CheckResult result = check(R"(
+        local listy: List<string> = list.new("cats", "dogs")
+        local res = listy:get(1)
+    )");
+
+    LUAU_CHECK_NO_ERRORS(result);
+    CHECK_EQ("List<string>", toString(requireType("listy")));
+    CHECK_EQ("string?", toString(requireType("res")));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "extern_type_generics_typeof_refines_generic_instantiation")
+{
+    // `typeof(x) == "ClassName"` refinement already narrows unions for non-generic extern
+    // types; it used to silently do nothing for generic ones because the lookup that finds the
+    // class by name required `typeFun->typeParams.empty()`, which is never true for a generic
+    // extern type's TypeFun.
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuauExternTypeUseDefinitionScope, true},
+        {FFlag::LuauGenericNominals, true},
+        {FFlag::LuauHigherOrderGenericInference, true},
+    };
+
+    loadDefinition(R"(
+        declare extern type Exception<Data> with
+            inner: Data
+        end
+    )");
+
+    CheckResult result = check(R"(
+        local function can_fail(): string | Exception<{kind: string}>
+            return nil :: any
+        end
+
+        local ress = can_fail()
+        if typeof(ress) == "Exception" then
+            local inner = ress.inner
+            local k = inner.kind
+        end
+    )");
+
+    LUAU_CHECK_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(Fixture, "extern_type_generics_unconstrained_generic_resolved_from_expected_type")
+{
+    // A generic that only appears in the return type, never in any argument (e.g. `E` in
+    // `function ok<T, E>(value: T): Result<T, E>`), has nothing to bind it at the call site,
+    // so it used to default to `unknown` -- which then failed a subtype check against whatever
+    // the call's surrounding context actually expected. If the call site has a known expected
+    // type shaped like the same generic nominal type, that should resolve the otherwise-free
+    // generic instead.
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuauExternTypeUseDefinitionScope, true},
+        {FFlag::LuauGenericNominals, true},
+        {FFlag::LuauHigherOrderGenericInference, true},
+    };
+
+    loadDefinition(R"(
+        declare extern type List<T> with
+            function front(self): T?
+        end
+
+        declare list: {
+            new: <T>(...T) -> List<T>,
+        }
+
+        declare extern type Result<T, E> with
+            function is_ok(self): boolean
+        end
+
+        declare result: {
+            ok: <T, E>(ok: T) -> Result<T, E>,
+        }
+    )");
+
+    CheckResult result = check(R"(
+        local list_res: Result<List<string>, string> = result.ok(list.new("cats", "dogs"))
+    )");
+
+    LUAU_CHECK_NO_ERRORS(result);
+    CHECK_EQ("Result<List<string>, string>", toString(requireType("list_res")));
+}
+
+TEST_CASE_FIXTURE(Fixture, "extern_type_generics_independent_instantiations_are_compatible_when_nested")
+{
+    // Same idea as extern_type_generics_independent_instantiations_are_compatible, but the
+    // mismatched clones are *nested inside another generic nominal type's type arguments*
+    // (`Result<string, Option<T>>`), so isSameGenericNominalInstantiation must compare those
+    // type arguments recursively (via nominal identity) rather than by raw TypeId/follow()
+    // equality, since two `Option<T>` instantiations built at different call sites are
+    // different TypeIds.
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuauExternTypeUseDefinitionScope, true},
+        {FFlag::LuauGenericNominals, true},
+        {FFlag::LuauHigherOrderGenericInference, true},
+    };
+
+    loadDefinition(R"(
+        declare extern type List<T> with
+            function front(self): T?
+        end
+
+        declare list: {
+            new: <T>(...T) -> List<T>,
+        }
+
+        declare extern type Option<T> with
+            function try_some(self): T?
+        end
+
+        declare option: {
+            some: <T>(T) -> Option<T>,
+        }
+
+        declare extern type Result<T, E> with
+            function is_ok(self): boolean
+        end
+
+        declare result: {
+            err: <T, E>(err: E) -> Result<T, E>,
+        }
+    )");
+
+    CheckResult result = check(R"(
+        local function get(): Result<string, Option<List<string>>>
+            local listy = list.new("cats", "dogs")
+            return result.err<<string, Option<List<string>>>>(option.some(listy))
+        end
+    )");
+
+    LUAU_CHECK_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(Fixture, "extern_type_generics_vararg_constructor_method_only_generic")
+{
+    // Covers a combination the other tests in this file don't: a vararg generic constructor
+    // (`<T>(...T) -> List<T>`), a forward reference (`list` declared before `List<T>` itself,
+    // matching how real-world definition files are usually written), and a generic that only
+    // appears inside a method's signature (`function get(self, idx): T?`), never in a plain
+    // field. All three needed their own fix:
+    //  - Tarjan::visitChildren (Substitution.cpp) never walked ExternType::instantiatedTypeParams,
+    //    so dirty-detection could miss a generic that's otherwise only reachable through it.
+    //  - Clone.cpp's cloneChildren(ExternType*) never remapped instantiatedTypeParams/PackParams
+    //    through shallowClone, so a deep-cloned instance (e.g. at a call site) kept pointing at
+    //    the pre-clone generic instead of the fresh one used everywhere else in the clone.
+    // Also enables every FFlag the way luau-lsp's --flag-enabled-by-default does (see
+    // Luau::isAnalysisFlagExperimental), since a narrower hand-picked flag set didn't reproduce
+    // this; something else enabled by that broader set (not yet identified) was also load-bearing.
+    std::vector<ScopedFastFlag> allFlags;
+    for (Luau::FValue<bool>* flag = Luau::FValue<bool>::list; flag; flag = flag->next)
+    {
+        if (strncmp(flag->name, "Luau", 4) == 0 && !Luau::isAnalysisFlagExperimental(flag->name))
+            allFlags.emplace_back(*flag, true);
+    }
+    ScopedFastFlag solverV2{FFlag::LuauSolverV2, true};
+
+    loadDefinition(R"(
+        declare list: {
+            new: <T>(...T) -> List<T>,
+        }
+
+        declare extern type List<T> with
+            function get(self, idx: number): T?
+        end
+    )");
+
+    CheckResult result = check(R"(
+        local listy: List<string> = list.new("cats", "dogs")
+        local res = listy:get(1)
+    )");
+
+    LUAU_CHECK_NO_ERRORS(result);
+    CHECK_EQ("List<string>", toString(requireType("listy")));
+}
+
+TEST_CASE_FIXTURE(Fixture, "extern_type_generics_method_with_own_generic_does_not_corrupt_constructors")
+{
+    // Regression test: a method with its own generic (`map<To>(self): Option<To>`) on a generic
+    // extern type used to make InfiniteTypeFinder mistake the method's own generic `To` for a
+    // recursive/infinite expansion of `Option`, silently binding `Option<T>` to *error-type*
+    // with no diagnostics anywhere, which broke every constructor call (`option.some(...)`).
+    std::vector<ScopedFastFlag> allFlags;
+    for (Luau::FValue<bool>* flag = Luau::FValue<bool>::list; flag; flag = flag->next)
+    {
+        if (strncmp(flag->name, "Luau", 4) == 0 && !Luau::isAnalysisFlagExperimental(flag->name))
+            allFlags.emplace_back(*flag, true);
+    }
+    ScopedFastFlag solverV2{FFlag::LuauSolverV2, true};
+
+    auto defResult = loadDefinition(R"(
+        declare option: {
+            some: <T>(T) -> Option<T>,
+            none: <T>() -> Option<T>
+        }
+
+        declare extern type Option<T> with
+            inner: T?
+            function map<To>(self): Option<To>
+            function unwrap_or(self, default: T): T
+        end
+    )");
+
+    REQUIRE(defResult.module != nullptr);
+    CHECK(defResult.module->errors.empty());
+
+    CheckResult result = check(R"(
+        local somee = option.some("hello")
+    )");
+
+    LUAU_CHECK_NO_ERRORS(result);
+    CHECK_EQ("Option<string>", toString(requireType("somee")));
+}
+
+TEST_CASE_FIXTURE(Fixture, "extern_type_generics_method_self_type_is_parameterized")
+{
+    // A generic extern type's methods implicitly take `self`. `self` needs to be typed as
+    // `ListGivesOption<T>` (applied to the type's own generics), not the bare, unparameterized
+    // `ListGivesOption` -- otherwise calling a method on a properly-instantiated `ListGivesOption<string>`
+    // fails to match against `self`, since the two would be nominally unrelated.
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuauExternTypeUseDefinitionScope, true},
+        {FFlag::LuauGenericNominals, true},
+        {FFlag::LuauHigherOrderGenericInference, true},
+    };
+
+    loadDefinition(R"(
+        declare extern type Option<T> with
+            inner: T?
+            function unwrap_or(self, default: T): T
+        end
+
+        declare extern type ListGivesOption<T> with
+            function get(self, idx: number): Option<T>
+        end
+
+        declare list: {
+            new_returns_option: <T>(...T) -> ListGivesOption<T>,
+        }
+    )");
+
+    CheckResult result = check(R"(
+        local listyy: ListGivesOption<string> = list.new_returns_option("cats", "dogs")
+        local opt = listyy:get(1)
+        local val = opt:unwrap_or("default")
+    )");
+
+    LUAU_CHECK_NO_ERRORS(result);
+    CHECK_EQ("string", toString(requireType("val")));
+}
+
+TEST_CASE_FIXTURE(Fixture, "extern_type_generics_do_not_crash_old_solver")
+{
+    // The old solver never reads AstStatDeclareExternType::generics/genericPacks, so it should
+    // just silently treat a generic extern type as non-generic (and referencing it with type
+    // arguments should produce an ordinary user-facing type error, not a crash). This test only
+    // asserts we don't crash/assert; it deliberately does not assert on the resulting types,
+    // since the old solver isn't expected to actually support this feature. Confirmed by hand
+    // that this currently produces ordinary UnknownSymbol/IncorrectGenericParameterCount errors,
+    // not a crash.
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, true},
+        {FFlag::LuauExternTypeUseDefinitionScope, true},
+        {FFlag::LuauGenericNominals, true},
+        {FFlag::LuauExternTypeGenericMethods, true},
+    };
+
+    unfreeze(getFrontend().globals.globalTypes);
+    LoadDefinitionFileResult loadResult = getFrontend().loadDefinitionFile(
+        getFrontend().globals, getFrontend().globals.globalScope, R"(
+        declare extern type Box<T> with
+            function map<U>(self, f: (T) -> U): Box<U>
+        end
+
+        declare Box: {
+            new: <T>(value: T) -> Box<T>
+        }
+    )",
+        "@test",
+        /* captureComments */ false,
+        /* typecheckForAutocomplete */ false
+    );
+    freeze(getFrontend().globals.globalTypes);
+
+    if (!loadResult.success)
+        return;
+
+    CheckResult result = check(R"(
+        local b = Box.new(5)
+        local x = b:map(function(v) return tostring(v) end)
+    )");
+
+    (void)result;
 }
 
 TEST_SUITE_END();

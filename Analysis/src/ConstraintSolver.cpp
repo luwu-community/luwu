@@ -44,6 +44,7 @@ LUAU_FASTFLAGVARIABLE(DebugLuauLogSolver)
 LUAU_FASTFLAGVARIABLE(DebugLuauLogBindings)
 LUAU_FASTFLAGVARIABLE(LuauFixPropReadsOnMetatableTypes)
 LUAU_FASTFLAGVARIABLE(LuauAlsoInstantiateInferredArguments)
+LUAU_FASTFLAG(LuauGenericNominals)
 LUAU_FLAGVERSION(LuauAlsoInstantiateInferredArguments, 2)
 LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
 LUAU_FASTFLAGVARIABLE(LuauRemoveConstraintSolverEmplace)
@@ -287,6 +288,35 @@ size_t HashInstantiationSignature::operator()(const InstantiationSignature& sign
     return hash;
 }
 
+// Like GenericTypeFinder, but also treats an unresolved PendingExpansionType (e.g. a nested
+// generic nominal instantiation like `Box<Box<T>>` where the inner `Box<T>` hasn't been expanded
+// yet) as something that still needs to be found and resolved. See ExternType::hasUnresolvedGenerics.
+struct UnresolvedGenericNominalFinder : GenericTypeFinder
+{
+    using GenericTypeFinder::visit;
+
+    bool visit(TypeId ty, const PendingExpansionType&) override
+    {
+        found = true;
+        return false;
+    }
+
+    // A method with its own generics (e.g. `To` in `function map<To>(self): Option<To>`) doesn't
+    // mean the enclosing extern type still has an unresolved reference to its own generic -- but
+    // the base class's check treats it as "found" regardless, which would permanently mark every
+    // instantiation of the enclosing type as unresolved. Skip such methods instead.
+    bool visit(TypeId ty, const Luau::FunctionType& ftv) override
+    {
+        if (ftv.hasNoFreeOrGenericTypes)
+            return false;
+
+        if (!ftv.generics.empty() || !ftv.genericPacks.empty())
+            return false;
+
+        return !found;
+    }
+};
+
 struct InstantiationQueuer : IterativeTypeVisitor
 {
     ConstraintSolver* solver;
@@ -323,6 +353,9 @@ struct InstantiationQueuer : IterativeTypeVisitor
 
     bool visit(TypeId ty, const ExternType& etv) override
     {
+        if (FFlag::LuauGenericNominals && etv.hasUnresolvedGenerics)
+            return true;
+
         return false;
     }
 };
@@ -401,6 +434,22 @@ struct InfiniteTypeFinder : IterativeTypeVisitor
         }
 
         return false;
+    }
+
+    bool visit(TypeId ty, const FunctionType& ftv) override
+    {
+        if (foundInfiniteType)
+            return false;
+
+        // A method that declares its own generics (e.g. `function map<To>(self): Option<To>`
+        // on `extern type Option<T>`) is not eagerly expanded the way a table type alias body
+        // is: `To` is bound fresh at each call site, not at Option's own definition. Without
+        // this carve-out, this reference to `Option<To>` looks identical to the genuinely
+        // infinite `type Foo<T> = { x: Foo<SomeOtherType> }` case, since `To != T`.
+        if (FFlag::LuauGenericNominals && (!ftv.generics.empty() || !ftv.genericPacks.empty()))
+            return false;
+
+        return true;
     }
 };
 
@@ -1376,6 +1425,8 @@ bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNul
     // e.g. `<T...>(T...) -> T...` instantiated with `any` for `T...` becomes
     // `<any>(any) -> any`, where none of these things are _generics_.
     ApplyTypeFunction applyTypeFunction{arena};
+    if (FFlag::LuauGenericNominals)
+        applyTypeFunction.genericNominalRoot = follow(tf->type);
     for (size_t i = 0; i < typeArguments.size(); ++i)
     {
         applyTypeFunction.typeArguments[tf->typeParams[i].ty] = typeArguments[i];
@@ -1393,13 +1444,45 @@ bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNul
 
     if (!maybeInstantiated.has_value())
     {
-        // TODO (CLI-56761): Report an error.
+        // TODO (CLI-56761): Report an error unconditionally, not just under this flag.
+        if (FFlag::LuauGenericNominals)
+            reportError(CodeTooComplex{}, constraint->location);
         bindResult(builtinTypes->errorType);
         return true;
     }
 
     TypeId instantiated = *maybeInstantiated;
     TypeId target = follow(instantiated);
+
+    // Record whether this freshly-instantiated generic nominal type still contains an
+    // unresolved generic anywhere inside it. See ExternType::hasUnresolvedGenerics.
+    if (FFlag::LuauGenericNominals && get<ExternType>(follow(tf->type)))
+    {
+        // If none of the type arguments were actually used in the template body, substitution
+        // hands back tf->type unchanged (no clone). We still want a distinct object per
+        // instantiation so that e.g. `type SpecificResult = Result<SpecificType>` can display
+        // `Result<SpecificType>` rather than losing that argument -- so clone it here, the same
+        // way the TableType case below does for the analogous "generic saturatedTypeArguments go
+        // unused" situation.
+        if (target == follow(tf->type) && (!tf->typeParams.empty() || !tf->typePackParams.empty()))
+        {
+            CloneState cloneState{builtinTypes};
+            instantiated = shallowClone(target, *arena.get(), cloneState, true);
+            target = follow(instantiated);
+        }
+
+        if (ExternType* targetExternType = getMutable<ExternType>(target); targetExternType && !target->persistent)
+        {
+            // Must run before the marker traversal below, since it inspects instantiatedTypeParams.
+            targetExternType->instantiatedTypeParams = typeArguments;
+            targetExternType->instantiatedTypePackParams = packArguments;
+
+            UnresolvedGenericNominalFinder marker;
+            marker.root = target;
+            marker.traverse(target);
+            targetExternType->hasUnresolvedGenerics = marker.found;
+        }
+    }
 
     // The application is not recursive, so we need to queue up application of
     // any child type function instantiations within the result in order for it
@@ -1480,6 +1563,67 @@ void ConstraintSolver::fillInDiscriminantTypes(NotNull<const Constraint> constra
         // We also need to unconditionally unblock these types, otherwise
         // you end up with funky looking "Blocked on *no-refine*."
         unblock(*ty, constraint->location);
+    }
+}
+
+// Argument matching alone often leaves a generic nominal type's type argument totally
+// unconstrained (e.g. `E` in `function ok<T, E>(value: T): Result<T, E>` -- nothing about the
+// call site's arguments says anything about `E`). Left alone, that generic defaults to
+// `unknown` (see Instantiation2.cpp's `pickBound`), which then fails a subtype check against
+// whatever the call site actually expected. If the call has a known expected type shaped like
+// the same generic nominal type, and a given generic is otherwise completely unconstrained,
+// prefer binding it directly to the expected type's corresponding argument instead of
+// defaulting it -- this is the return-type-directed half of bidirectional inference that
+// already exists for lambda arguments and table literals, extended to generic nominal types.
+static void patchUnconstrainedGenericsFromExpectedType(TypeId overloadFn, TypeId expectedType, DenseHashMap<TypeId, TypeId>& genericSubstitutions)
+{
+    const FunctionType* ftv = get<FunctionType>(overloadFn);
+    if (!ftv)
+        return;
+
+    TypePackId retPack = follow(ftv->retTypes);
+    auto it = begin(retPack);
+    if (it == end(retPack))
+        return;
+
+    const ExternType* retEt = get<ExternType>(follow(*it));
+    const ExternType* expectedEt = get<ExternType>(follow(expectedType));
+    if (!retEt || !expectedEt)
+        return;
+
+    if (retEt->name != expectedEt->name || retEt->definitionModuleName != expectedEt->definitionModuleName ||
+        retEt->definitionLocation != expectedEt->definitionLocation)
+        return;
+
+    if (retEt->instantiatedTypeParams.size() != expectedEt->instantiatedTypeParams.size())
+        return;
+
+    for (size_t i = 0; i < retEt->instantiatedTypeParams.size(); ++i)
+    {
+        TypeId param = follow(retEt->instantiatedTypeParams[i]);
+        if (!get<GenericType>(param))
+            continue;
+
+        TypeId* subst = genericSubstitutions.find(param);
+        if (!subst)
+            continue;
+
+        // The instantiation machinery (Instantiation2_DEPRECATED::clean in particular) asserts
+        // that a generic's substitution entry is always a FreeType, so we pin its bounds rather
+        // than replacing the entry outright -- that keeps the invariant intact while still
+        // making `pickBound` (Instantiation2.cpp) resolve to the expected type.
+        FreeType* ft = getMutable<FreeType>(follow(*subst));
+        if (!ft)
+            continue;
+
+        // Only patch generics that argument matching left completely unconstrained; if
+        // arguments already pinned a lower bound, trust that over the expected type.
+        if (!is<NeverType>(follow(ft->lowerBound)) || !is<UnknownType>(follow(ft->upperBound)))
+            continue;
+
+        TypeId expectedArg = expectedEt->instantiatedTypeParams[i];
+        ft->lowerBound = expectedArg;
+        ft->upperBound = expectedArg;
     }
 }
 
@@ -1644,6 +1788,9 @@ bool ConstraintSolver::tryDispatch(const FunctionCallConstraint& c, NotNull<cons
         trackInteriorFreeType(constraint->scope, freeTy);
     for (TypePackId freeTp : u2.newFreshTypePacks)
         trackInteriorFreeTypePack(constraint->scope, freeTp);
+
+    if (FFlag::LuauGenericNominals && c.expectedType)
+        patchUnconstrainedGenericsFromExpectedType(overloadToUse, follow(*c.expectedType), u2.genericSubstitutions);
 
     if (!u2.genericSubstitutions.empty() || !u2.genericPackSubstitutions.empty())
     {
@@ -3036,7 +3183,11 @@ TypeId ConstraintSolver::instantiateFunctionType(
 
     auto result = r.substitute(clonedFunctionTypeId);
     if (!result)
+    {
+        if (FFlag::LuauGenericNominals)
+            reportError(CodeTooComplex{}, location);
         return builtinTypes->errorType;
+    }
     return *result;
 }
 
