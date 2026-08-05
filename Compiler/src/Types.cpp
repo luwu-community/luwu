@@ -35,6 +35,8 @@ static LuauBytecodeType getPrimitiveType(AstName name)
         return LBC_TYPE_BUFFER;
     else if (name == "vector")
         return LBC_TYPE_VECTOR;
+    else if (name == "none")
+        return LBC_TYPE_NONE;
     else if (name == "any" || name == "unknown")
         return LBC_TYPE_ANY;
     else

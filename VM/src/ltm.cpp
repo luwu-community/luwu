@@ -23,6 +23,7 @@ const char* const luaT_typenames[] = {
     "number",
     "integer",
     "vector",
+    "none",
 
     "string",
 

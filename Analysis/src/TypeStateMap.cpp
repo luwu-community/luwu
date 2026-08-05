@@ -179,6 +179,8 @@ TypeId TypeStateMap::getDiscriminantOf(const Refine& refine)
         discriminantTy = builtinTypes->threadType;
     else if (name == "buffer")
         discriminantTy = builtinTypes->bufferType;
+    else if (name == "none")
+        discriminantTy = builtinTypes->noneType;
     else if (name == "table")
         discriminantTy = builtinTypes->tableType;
     else if (name == "function")

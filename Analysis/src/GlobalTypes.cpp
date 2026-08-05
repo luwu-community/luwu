@@ -24,6 +24,7 @@ GlobalTypes::GlobalTypes(NotNull<BuiltinTypes> builtinTypes, SolverMode mode)
     globalScope->addBuiltinTypeBinding("boolean", TypeFun{{}, builtinTypes->booleanType});
     globalScope->addBuiltinTypeBinding("thread", TypeFun{{}, builtinTypes->threadType});
     globalScope->addBuiltinTypeBinding("buffer", TypeFun{{}, builtinTypes->bufferType});
+    globalScope->addBuiltinTypeBinding("none", TypeFun{{}, builtinTypes->noneType});
     globalScope->addBuiltinTypeBinding("unknown", TypeFun{{}, builtinTypes->unknownType});
     globalScope->addBuiltinTypeBinding("never", TypeFun{{}, builtinTypes->neverType});
     if (FFlag::DebugLuauUserDefinedClasses)

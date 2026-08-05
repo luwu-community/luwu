@@ -173,6 +173,7 @@ struct PrimitiveType
         Function,
         Table,
         Buffer,
+        NoneType,
     };
 
     Type type;
@@ -986,6 +987,7 @@ bool isInteger(TypeId ty);
 bool isString(TypeId ty);
 bool isThread(TypeId ty);
 bool isBuffer(TypeId ty);
+bool isNone(TypeId ty);
 bool isOptional(TypeId ty);
 bool isTableIntersection(TypeId ty);
 bool isTableUnion(TypeId ty);
@@ -1046,6 +1048,7 @@ public:
     const TypeId booleanType;
     const TypeId threadType;
     const TypeId bufferType;
+    const TypeId noneType;
     const TypeId functionType;
     const TypeId externType;
     const TypeId objectType;

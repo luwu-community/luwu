@@ -122,11 +122,11 @@ public:
     static const int tnumber = 3;
     static const int tinteger = 4;
     static const int tvector = 5;
-    static const int tstring = 6;
-    static const int ttable = 7;
-    static const int tfunction = 8;
-    static const int tuserdata = 9;
-    static const int tbuffer = 11;
+    static const int tstring = 7;
+    static const int ttable = 8;
+    static const int tfunction = 9;
+    static const int tuserdata = 10;
+    static const int tbuffer = 12;
 };
 
 TEST_SUITE_BEGIN("Optimization");

@@ -434,6 +434,8 @@ static std::string getTag(lua_State* L, TypeFunctionTypeId ty)
         return "thread";
     else if (auto s = get<TypeFunctionPrimitiveType>(ty); s && s->type == TypeFunctionPrimitiveType::Type::Buffer)
         return "buffer";
+    else if (auto s = get<TypeFunctionPrimitiveType>(ty); s && s->type == TypeFunctionPrimitiveType::Type::None)
+        return "none";
     else if (get<TypeFunctionUnknownType>(ty))
         return "unknown";
     else if (get<TypeFunctionNeverType>(ty))
@@ -527,6 +529,14 @@ static int createThread(lua_State* L)
 static int createBuffer(lua_State* L)
 {
     allocTypeUserData(L, TypeFunctionPrimitiveType{TypeFunctionPrimitiveType::Buffer});
+
+    return 1;
+}
+
+// Luau: `type.none`
+static int createNone(lua_State* L)
+{
+    allocTypeUserData(L, TypeFunctionPrimitiveType{TypeFunctionPrimitiveType::None});
 
     return 1;
 }
@@ -1920,6 +1930,7 @@ void registerTypesLibrary(lua_State* L)
         {"string", createString},
         {"thread", createThread},
         {"buffer", createBuffer},
+        {"none", createNone},
         {nullptr, nullptr}
     };
 
@@ -2661,6 +2672,9 @@ private:
                 break;
             case TypeFunctionPrimitiveType::Buffer:
                 target = typeFunctionRuntime->typeArena.allocate(TypeFunctionPrimitiveType(TypeFunctionPrimitiveType::Buffer));
+                break;
+            case TypeFunctionPrimitiveType::None:
+                target = typeFunctionRuntime->typeArena.allocate(TypeFunctionPrimitiveType(TypeFunctionPrimitiveType::None));
                 break;
             default:
                 break;

@@ -34,7 +34,7 @@ TEST_CASE_FIXTURE(Fixture, "or_joins_types")
     if (!FFlag::DebugLuauForceOldSolver)
     {
         // FIXME: Regression
-        CHECK("(string & ~(false?)) | number" == toString(*requireType("s")));
+        CHECK("(string & ~((false | none)?)) | number" == toString(*requireType("s")));
         CHECK("number | string" == toString(*requireType("x")));
     }
     else
@@ -56,7 +56,7 @@ TEST_CASE_FIXTURE(Fixture, "or_joins_types_with_no_extras")
     if (!FFlag::DebugLuauForceOldSolver)
     {
         // FIXME: Regression.
-        CHECK("(string & ~(false?)) | number" == toString(*requireType("s")));
+        CHECK("(string & ~((false | none)?)) | number" == toString(*requireType("s")));
         CHECK("number | string" == toString(*requireType("y")));
     }
     else
@@ -77,7 +77,7 @@ TEST_CASE_FIXTURE(Fixture, "or_joins_types_with_no_superfluous_union")
     if (!FFlag::DebugLuauForceOldSolver)
     {
         // FIXME: Regression
-        CHECK("(string & ~(false?)) | string" == toString(requireType("s")));
+        CHECK("(string & ~((false | none)?)) | string" == toString(requireType("s")));
     }
     else
         CHECK("string" == toString(requireType("s")));

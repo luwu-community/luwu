@@ -234,6 +234,11 @@ bool isBuffer(TypeId ty)
     return isPrim(ty, PrimitiveType::Buffer);
 }
 
+bool isNone(TypeId ty)
+{
+    return isPrim(ty, PrimitiveType::NoneType);
+}
+
 bool isOptional(TypeId ty)
 {
     if (isNil(ty))
@@ -852,6 +857,7 @@ BuiltinTypes::BuiltinTypes()
     , booleanType(arena->addType(Type{PrimitiveType{PrimitiveType::Boolean}, /*persistent*/ true}))
     , threadType(arena->addType(Type{PrimitiveType{PrimitiveType::Thread}, /*persistent*/ true}))
     , bufferType(arena->addType(Type{PrimitiveType{PrimitiveType::Buffer}, /*persistent*/ true}))
+    , noneType(arena->addType(Type{PrimitiveType{PrimitiveType::NoneType}, /*persistent*/ true}))
     , functionType(arena->addType(Type{PrimitiveType{PrimitiveType::Function}, /*persistent*/ true}))
     , externType(arena->addType(Type{ExternType{"userdata", {}, std::nullopt, std::nullopt, {}, {}, {}, {}}, /*persistent*/ true}))
     , objectType(arena->addType(Type{ExternType{"object", {}, std::nullopt, std::nullopt, {}, {}, {}, {}}, /*persistent*/ true}))
@@ -865,7 +871,7 @@ BuiltinTypes::BuiltinTypes()
     , neverType(arena->addType(Type{NeverType{}, /*persistent*/ true}))
     , errorType(arena->addType(Type{ErrorType{}, /*persistent*/ true}))
     , noRefineType(arena->addType(Type{NoRefineType{}, /*persistent*/ true}))
-    , falsyType(arena->addType(Type{UnionType{{falseType, nilType}}, /*persistent*/ true}))
+    , falsyType(arena->addType(Type{UnionType{{falseType, nilType, noneType}}, /*persistent*/ true}))
     , truthyType(arena->addType(Type{NegationType{falsyType}, /*persistent*/ true}))
     , notNilType(arena->addType(Type{NegationType{nilType}, /*persistent*/ true}))
     , optionalNumberType(arena->addType(Type{UnionType{{numberType, nilType}}, /*persistent*/ true}))

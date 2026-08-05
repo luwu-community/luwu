@@ -178,6 +178,7 @@ NormalizedType::NormalizedType(NotNull<BuiltinTypes> builtinTypes)
     , strings{NormalizedStringType::never}
     , threads(builtinTypes->neverType)
     , buffers(builtinTypes->neverType)
+    , nones(builtinTypes->neverType)
 {
 }
 
@@ -191,12 +192,12 @@ bool NormalizedType::isUnknown() const
     if (FFlag::LuauIntegerType2)
     {
         hasAllPrimitives = isPrim(booleans, PrimitiveType::Boolean) && isPrim(nils, PrimitiveType::NilType) && isNumber(numbers) &&
-                           strings.isString() && isThread(threads) && isBuffer(buffers) && isInteger(integers);
+                           strings.isString() && isThread(threads) && isBuffer(buffers) && isNone(nones) && isInteger(integers);
     }
     else
     {
         hasAllPrimitives = isPrim(booleans, PrimitiveType::Boolean) && isPrim(nils, PrimitiveType::NilType) && isNumber(numbers) &&
-                           strings.isString() && isThread(threads) && isBuffer(buffers);
+                           strings.isString() && isThread(threads) && isBuffer(buffers) && isNone(nones);
     }
 
     // Check is extern type
@@ -230,30 +231,30 @@ bool NormalizedType::isExactlyNumber() const
 {
     if (FFlag::LuauIntegerType2)
         return hasNumbers() && !hasTops() && !hasBooleans() && !hasExternTypes() && !hasErrors() && !hasNils() && !hasStrings() && !hasThreads() &&
-               !hasBuffers() && !hasTables() && !hasFunctions() && !hasTyvars() && !hasIntegers();
+               !hasBuffers() && !hasNones() && !hasTables() && !hasFunctions() && !hasTyvars() && !hasIntegers();
     else
         return hasNumbers() && !hasTops() && !hasBooleans() && !hasExternTypes() && !hasErrors() && !hasNils() && !hasStrings() && !hasThreads() &&
-               !hasBuffers() && !hasTables() && !hasFunctions() && !hasTyvars();
+               !hasBuffers() && !hasNones() && !hasTables() && !hasFunctions() && !hasTyvars();
 }
 
 bool NormalizedType::isSubtypeOfString() const
 {
     if (FFlag::LuauIntegerType2)
         return hasStrings() && !hasTops() && !hasBooleans() && !hasExternTypes() && !hasErrors() && !hasNils() && !hasNumbers() && !hasThreads() &&
-               !hasBuffers() && !hasTables() && !hasFunctions() && !hasTyvars() && !hasIntegers();
+               !hasBuffers() && !hasNones() && !hasTables() && !hasFunctions() && !hasTyvars() && !hasIntegers();
     else
         return hasStrings() && !hasTops() && !hasBooleans() && !hasExternTypes() && !hasErrors() && !hasNils() && !hasNumbers() && !hasThreads() &&
-               !hasBuffers() && !hasTables() && !hasFunctions() && !hasTyvars();
+               !hasBuffers() && !hasNones() && !hasTables() && !hasFunctions() && !hasTyvars();
 }
 
 bool NormalizedType::isSubtypeOfBooleans() const
 {
     if (FFlag::LuauIntegerType2)
         return hasBooleans() && !hasTops() && !hasExternTypes() && !hasErrors() && !hasNils() && !hasNumbers() && !hasStrings() && !hasThreads() &&
-               !hasBuffers() && !hasTables() && !hasFunctions() && !hasTyvars() && !hasIntegers();
+               !hasBuffers() && !hasNones() && !hasTables() && !hasFunctions() && !hasTyvars() && !hasIntegers();
     else
         return hasBooleans() && !hasTops() && !hasExternTypes() && !hasErrors() && !hasNils() && !hasNumbers() && !hasStrings() && !hasThreads() &&
-               !hasBuffers() && !hasTables() && !hasFunctions() && !hasTyvars();
+               !hasBuffers() && !hasNones() && !hasTables() && !hasFunctions() && !hasTyvars();
 }
 
 bool NormalizedType::shouldSuppressErrors() const
@@ -328,6 +329,11 @@ bool NormalizedType::hasBuffers() const
     return !get<NeverType>(buffers);
 }
 
+bool NormalizedType::hasNones() const
+{
+    return !get<NeverType>(nones);
+}
+
 bool NormalizedType::hasTables() const
 {
     return !tables.isNever();
@@ -355,10 +361,10 @@ bool NormalizedType::isFalsy() const
 
     if (FFlag::LuauIntegerType2)
         return (hasAFalse || hasNils()) && (!hasTops() && !hasExternTypes() && !hasErrors() && !hasNumbers() && !hasStrings() && !hasThreads() &&
-                                            !hasBuffers() && !hasTables() && !hasFunctions() && !hasTyvars() && !hasIntegers());
+                                            !hasBuffers() && !hasNones() && !hasTables() && !hasFunctions() && !hasTyvars() && !hasIntegers());
     else
         return (hasAFalse || hasNils()) && (!hasTops() && !hasExternTypes() && !hasErrors() && !hasNumbers() && !hasStrings() && !hasThreads() &&
-                                            !hasBuffers() && !hasTables() && !hasFunctions() && !hasTyvars());
+                                            !hasBuffers() && !hasNones() && !hasTables() && !hasFunctions() && !hasTyvars());
 }
 
 bool NormalizedType::isTruthy() const
@@ -372,10 +378,10 @@ bool NormalizedType::isNil() const
         return false;
 
     if (FFlag::LuauIntegerType2)
-        return !hasTops() && !hasBooleans() && !hasExternTypes() && !hasNumbers() && !hasStrings() && !hasThreads() && !hasBuffers() &&
+        return !hasTops() && !hasBooleans() && !hasExternTypes() && !hasNumbers() && !hasStrings() && !hasThreads() && !hasBuffers() && !hasNones() &&
                !hasTables() && !hasFunctions() && !hasTyvars() && !hasIntegers();
     else
-        return !hasTops() && !hasBooleans() && !hasExternTypes() && !hasNumbers() && !hasStrings() && !hasThreads() && !hasBuffers() &&
+        return !hasTops() && !hasBooleans() && !hasExternTypes() && !hasNumbers() && !hasStrings() && !hasThreads() && !hasBuffers() && !hasNones() &&
                !hasTables() && !hasFunctions() && !hasTyvars();
 }
 
@@ -386,14 +392,14 @@ static bool isShallowInhabited(const NormalizedType& norm)
     {
         return !get<NeverType>(norm.tops) || !get<NeverType>(norm.booleans) || !norm.externTypes.isNever() || !get<NeverType>(norm.errors) ||
                !get<NeverType>(norm.nils) || !get<NeverType>(norm.numbers) || !norm.strings.isNever() || !get<NeverType>(norm.threads) ||
-               (get<NeverType>(norm.buffers) == nullptr) || !norm.functions.isNever() || !norm.tables.empty() || !norm.tyvars.empty() ||
+               (get<NeverType>(norm.buffers) == nullptr) || (get<NeverType>(norm.nones) == nullptr) || !norm.functions.isNever() || !norm.tables.empty() || !norm.tyvars.empty() ||
                (get<NeverType>(norm.integers) == nullptr);
     }
     else
     {
         return !get<NeverType>(norm.tops) || !get<NeverType>(norm.booleans) || !norm.externTypes.isNever() || !get<NeverType>(norm.errors) ||
                !get<NeverType>(norm.nils) || !get<NeverType>(norm.numbers) || !norm.strings.isNever() || !get<NeverType>(norm.threads) ||
-               !get<NeverType>(norm.buffers) || !norm.functions.isNever() || !norm.tables.empty() || !norm.tyvars.empty();
+               !get<NeverType>(norm.buffers) || !get<NeverType>(norm.nones) || !norm.functions.isNever() || !norm.tables.empty() || !norm.tyvars.empty();
     }
 }
 
@@ -422,14 +428,14 @@ NormalizationResult Normalizer::isInhabited(const NormalizedType* norm, Set<Type
     if (FFlag::LuauIntegerType2)
     {
         if (!get<NeverType>(norm->tops) || !get<NeverType>(norm->booleans) || !get<NeverType>(norm->errors) || !get<NeverType>(norm->nils) ||
-            !get<NeverType>(norm->numbers) || !get<NeverType>(norm->threads) || !get<NeverType>(norm->buffers) || !norm->externTypes.isNever() ||
+            !get<NeverType>(norm->numbers) || !get<NeverType>(norm->threads) || !get<NeverType>(norm->buffers) || !get<NeverType>(norm->nones) || !norm->externTypes.isNever() ||
             !get<NeverType>(norm->integers) || !norm->strings.isNever() || !norm->functions.isNever())
             return NormalizationResult::True;
     }
     else
     {
         if (!get<NeverType>(norm->tops) || !get<NeverType>(norm->booleans) || !get<NeverType>(norm->errors) || !get<NeverType>(norm->nils) ||
-            !get<NeverType>(norm->numbers) || !get<NeverType>(norm->threads) || !get<NeverType>(norm->buffers) || !norm->externTypes.isNever() ||
+            !get<NeverType>(norm->numbers) || !get<NeverType>(norm->threads) || !get<NeverType>(norm->buffers) || !get<NeverType>(norm->nones) || !norm->externTypes.isNever() ||
             !norm->strings.isNever() || !norm->functions.isNever())
             return NormalizationResult::True;
     }
@@ -720,6 +726,16 @@ static bool isNormalizedBuffer(TypeId ty)
         return false;
 }
 
+static bool isNormalizedNone(TypeId ty)
+{
+    if (get<NeverType>(ty))
+        return true;
+    else if (const PrimitiveType* ptv = get<PrimitiveType>(ty))
+        return ptv->type == PrimitiveType::NoneType;
+    else
+        return false;
+}
+
 static bool areNormalizedFunctions(const NormalizedFunctionType& tys)
 {
     for (TypeId ty : tys.parts)
@@ -844,6 +860,7 @@ static void assertInvariant(const NormalizedType& norm)
     LUAU_ASSERT(isNormalizedString(norm.strings));
     LUAU_ASSERT(isNormalizedThread(norm.threads));
     LUAU_ASSERT(isNormalizedBuffer(norm.buffers));
+    LUAU_ASSERT(isNormalizedNone(norm.nones));
     LUAU_ASSERT(areNormalizedFunctions(norm.functions));
     LUAU_ASSERT(areNormalizedTables(norm.tables));
     LUAU_ASSERT(isNormalizedTyvar(norm.tyvars));
@@ -1005,6 +1022,7 @@ void Normalizer::clearNormal(NormalizedType& norm)
     norm.strings.resetToNever();
     norm.threads = builtinTypes->neverType;
     norm.buffers = builtinTypes->neverType;
+    norm.nones = builtinTypes->neverType;
     norm.tables.clear();
     norm.functions.resetToNever();
     norm.tyvars.clear();
@@ -1738,6 +1756,7 @@ NormalizationResult Normalizer::unionNormals(NormalizedType& here, const Normali
     unionStrings(here.strings, there.strings);
     here.threads = (get<NeverType>(there.threads) ? here.threads : there.threads);
     here.buffers = (get<NeverType>(there.buffers) ? here.buffers : there.buffers);
+    here.nones = (get<NeverType>(there.nones) ? here.nones : there.nones);
     unionFunctions(here.functions, there.functions);
     unionTables(here.tables, there.tables);
 
@@ -1898,6 +1917,8 @@ NormalizationResult Normalizer::unionNormalWithTy(
             here.threads = there;
         else if (ptv->type == PrimitiveType::Buffer)
             here.buffers = there;
+        else if (ptv->type == PrimitiveType::NoneType)
+            here.nones = there;
         else if (ptv->type == PrimitiveType::Function)
         {
             here.functions.resetToTop();
@@ -2035,6 +2056,7 @@ std::optional<NormalizedType> Normalizer::negateNormal(const NormalizedType& her
 
     result.threads = get<NeverType>(here.threads) ? builtinTypes->threadType : builtinTypes->neverType;
     result.buffers = get<NeverType>(here.buffers) ? builtinTypes->bufferType : builtinTypes->neverType;
+    result.nones = get<NeverType>(here.nones) ? builtinTypes->noneType : builtinTypes->neverType;
 
     /*
      * Things get weird and so, so complicated if we allow negations of
@@ -2135,6 +2157,9 @@ void Normalizer::subtractPrimitive(NormalizedType& here, TypeId ty)
         break;
     case PrimitiveType::Buffer:
         here.buffers = builtinTypes->neverType;
+        break;
+    case PrimitiveType::NoneType:
+        here.nones = builtinTypes->neverType;
         break;
     case PrimitiveType::Function:
         here.functions.resetToNever();
@@ -3282,6 +3307,7 @@ NormalizationResult Normalizer::intersectNormals(NormalizedType& here, const Nor
     intersectStrings(here.strings, there.strings);
     here.threads = (get<NeverType>(there.threads) ? there.threads : here.threads);
     here.buffers = (get<NeverType>(there.buffers) ? there.buffers : here.buffers);
+    here.nones = (get<NeverType>(there.nones) ? there.nones : here.nones);
     intersectFunctions(here.functions, there.functions);
     intersectTables(here.tables, there.tables);
 
@@ -3425,6 +3451,7 @@ NormalizationResult Normalizer::intersectNormalWithTy(
         NormalizedFunctionType functions = std::move(here.functions);
         TypeId threads = here.threads;
         TypeId buffers = here.buffers;
+        TypeId nones = here.nones;
         TypeIds tables = std::move(here.tables);
 
         clearNormal(here);
@@ -3443,6 +3470,8 @@ NormalizationResult Normalizer::intersectNormalWithTy(
             here.threads = threads;
         else if (ptv->type == PrimitiveType::Buffer)
             here.buffers = buffers;
+        else if (ptv->type == PrimitiveType::NoneType)
+            here.nones = nones;
         else if (ptv->type == PrimitiveType::Function)
             here.functions = std::move(functions);
         else if (ptv->type == PrimitiveType::Table)
@@ -3679,6 +3708,8 @@ TypeId Normalizer::typeFromNormal(const NormalizedType& norm)
         result.push_back(builtinTypes->threadType);
     if (!get<NeverType>(norm.buffers))
         result.push_back(builtinTypes->bufferType);
+    if (!get<NeverType>(norm.nones))
+        result.push_back(builtinTypes->noneType);
 
     if (useNewLuauSolver())
     {

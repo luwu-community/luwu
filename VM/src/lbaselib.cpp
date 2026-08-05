@@ -12,6 +12,7 @@
 #include <stdlib.h>
 
 LUAU_FASTFLAG(LuauCustomYieldablePcalls)
+LUAU_FASTFLAGVARIABLE(LuauNonePrimitive)
 
 static void writestring(const char* s, size_t l)
 {
@@ -446,7 +447,7 @@ static int luaB_tostring(lua_State* L)
 static int luaB_newproxy(lua_State* L)
 {
     int t = lua_type(L, 1);
-    luaL_argexpected(L, t == LUA_TNONE || t == LUA_TNIL || t == LUA_TBOOLEAN, 1, "nil or boolean");
+    luaL_argexpected(L, t == LUA_TNOVAL || t == LUA_TNIL || t == LUA_TBOOLEAN, 1, "nil or boolean");
 
     bool needsmt = lua_toboolean(L, 1);
 
@@ -501,6 +502,12 @@ int luaopen_base(lua_State* L)
     luaL_register(L, "_G", base_funcs);
     lua_pushliteral(L, "Luau");
     lua_setglobal(L, "_VERSION"); // set global _VERSION
+
+    if (FFlag::LuauNonePrimitive)
+    {
+        lua_pushnone(L);
+        lua_setglobal(L, "none");
+    }
 
     // `ipairs' and `pairs' need auxiliary functions as upvalues
     auxopen(L, "ipairs", luaB_ipairs, luaB_inext);

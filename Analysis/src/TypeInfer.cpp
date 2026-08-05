@@ -218,6 +218,7 @@ TypeChecker::TypeChecker(const ScopePtr& globalScope, ModuleResolver* resolver, 
     , booleanType(builtinTypes->booleanType)
     , threadType(builtinTypes->threadType)
     , bufferType(builtinTypes->bufferType)
+    , noneType(builtinTypes->noneType)
     , anyType(builtinTypes->anyType)
     , unknownType(builtinTypes->unknownType)
     , neverType(builtinTypes->neverType)
@@ -2764,7 +2765,7 @@ TypeId TypeChecker::checkRelationalOperation(
     case AstExprBinary::CompareNe:
     case AstExprBinary::CompareEq:
     {
-        if (isNonstrictMode() && (isNil(lhsType) || isNil(rhsType)))
+        if (isNonstrictMode() && (isNil(lhsType) || isNil(rhsType) || isNone(lhsType) || isNone(rhsType)))
             return booleanType;
 
         const bool rhsIsAny = get<AnyType>(rhsType) || get<ErrorType>(rhsType) || get<NeverType>(rhsType);

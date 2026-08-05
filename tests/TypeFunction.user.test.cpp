@@ -228,7 +228,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_number_methods_work")
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
-TEST_CASE_FIXTURE(BuiltinsFixture, "thread_and_buffer_types")
+TEST_CASE_FIXTURE(BuiltinsFixture, "thread_and_buffer_and_none_types")
 {
     ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
 
@@ -252,6 +252,17 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "thread_and_buffer_types")
         end
         type X = buffer
         local function ok(idx: work_with_buffer<X>): buffer return idx end
+    )"));
+
+    LUAU_REQUIRE_NO_ERRORS(check(R"(
+        type function work_with_none(x)
+            if x:is("none") then
+                return types.none
+            end
+            return types.string
+        end
+        type X = none
+        local function ok(idx: work_with_none<X>): none return idx end
     )"));
 }
 

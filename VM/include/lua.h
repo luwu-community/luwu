@@ -66,7 +66,7 @@ typedef void (*lua_Destructor)(lua_State* L, void* userdata);
 /*
 ** basic types
 */
-#define LUA_TNONE (-1)
+#define LUA_TNOVAL (-1)
 
 /*
  * WARNING: if you change the order of this enumeration,
@@ -82,6 +82,7 @@ enum lua_Type
     LUA_TNUMBER,
     LUA_TINTEGER,
     LUA_TVECTOR,
+    LUA_TNONE,
 
     LUA_TSTRING, // all types above this must be value types, all types below this must be GC types - see iscollectable
 
@@ -186,6 +187,7 @@ LUA_API const void* lua_topointer(lua_State* L, int idx);
 ** push functions (C -> stack)
 */
 LUA_API void lua_pushnil(lua_State* L);
+LUA_API void lua_pushnone(lua_State* L);
 LUA_API void lua_pushnumber(lua_State* L, double n);
 LUA_API void lua_pushinteger(lua_State* L, int n);
 LUA_API void lua_pushinteger64(lua_State* L, int64_t n);

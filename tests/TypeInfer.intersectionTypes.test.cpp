@@ -1513,7 +1513,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "narrow_intersection_nevers")
         end
     )"));
 
-    CHECK_EQ("Player & { read Character: ~(false?) }", toString(requireTypeAtPosition({3, 23})));
+    CHECK_EQ("Player & { read Character: ~((false | none)?) }", toString(requireTypeAtPosition({3, 23})));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "bounds_propagate_into_free_intersection_bounds")

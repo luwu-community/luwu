@@ -57,6 +57,7 @@ const LuaNode luaH_dummynode = {
 
 #define hashstr(t, str) hashpow2(t, (str)->hash)
 #define hashboolean(t, p) hashpow2(t, p)
+#define hashnone(t) hashpow2(t, 2)
 
 static LuaNode* hashpointer(const LuaTable* t, const void* p)
 {
@@ -169,6 +170,8 @@ static LuaNode* mainposition(const LuaTable* t, const TValue* key)
         return hashstr(t, tsvalue(key));
     case LUA_TBOOLEAN:
         return hashboolean(t, bvalue(key));
+    case LUA_TNONE:
+        return hashnone(t);
     case LUA_TLIGHTUSERDATA:
         return hashpointer(t, pvalue(key));
     default:

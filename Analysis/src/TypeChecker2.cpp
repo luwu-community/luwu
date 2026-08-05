@@ -2277,8 +2277,8 @@ static bool isOkToCompare(
     if (NormalizationResult::False != typesHaveIntersection)
         return true;
 
-    // We allow anything to be compared to nil.
-    if (normLeft->isNil() || normRight->isNil())
+    // We allow anything to be compared to nil or none.
+    if (normLeft->isNil() || normRight->isNil() || normLeft->hasNones() || normRight->hasNones())
         return true;
 
     // Comparison with never is always ok.
@@ -2372,7 +2372,7 @@ TypeId TypeChecker2::visit(AstExprBinary* expr, AstNode* overrideKey)
             return builtinTypes->errorType;
         }
 
-        auto eitherExprIsNil = (normLeft && normLeft->isNil()) || (normRight && normRight->isNil());
+        auto eitherExprIsNil = (normLeft && (normLeft->isNil() || normLeft->hasNones())) || (normRight && (normRight->isNil() || normRight->hasNones()));
 
         // For equality operations, if either operand is nil, we should allow this comparison through
         if (isEquality && eitherExprIsNil)
