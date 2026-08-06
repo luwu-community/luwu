@@ -179,7 +179,7 @@ static int os_date(lua_State* L)
 static int os_time(lua_State* L)
 {
     time_t t;
-    if (lua_isnoneornil(L, 1)) // called without args?
+    if (lua_isnovalornil(L, 1)) // called without args?
         t = time(NULL);        // get current time
     else
     {

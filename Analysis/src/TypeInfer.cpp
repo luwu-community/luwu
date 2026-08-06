@@ -2765,7 +2765,7 @@ TypeId TypeChecker::checkRelationalOperation(
     case AstExprBinary::CompareNe:
     case AstExprBinary::CompareEq:
     {
-        if (isNonstrictMode() && (isNil(lhsType) || isNil(rhsType) || isNone(lhsType) || isNone(rhsType)))
+        if (isNonstrictMode() && (isNil(lhsType) || isNil(rhsType)))
             return booleanType;
 
         const bool rhsIsAny = get<AnyType>(rhsType) || get<ErrorType>(rhsType) || get<NeverType>(rhsType);

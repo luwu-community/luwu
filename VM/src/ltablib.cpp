@@ -202,7 +202,7 @@ static int tmove(lua_State* L)
     int f = luaL_checkinteger(L, 2);
     int e = luaL_checkinteger(L, 3);
     int t = luaL_checkinteger(L, 4);
-    int tt = !lua_isnoneornil(L, 5) ? 5 : 1; // destination table
+    int tt = !lua_isnovalornil(L, 5) ? 5 : 1; // destination table
     luaL_checktype(L, tt, LUA_TTABLE);
 
     if (e >= f)
@@ -481,7 +481,7 @@ static int tsort(lua_State* L)
         luaG_readonlyerror(L);
 
     SortPredicate pred = luaV_lessthan;
-    if (!lua_isnoneornil(L, 2)) // is there a 2nd argument?
+    if (!lua_isnovalornil(L, 2)) // is there a 2nd argument?
     {
         luaL_checktype(L, 2, LUA_TFUNCTION);
         pred = sort_func;
@@ -499,7 +499,7 @@ static int tcreate(lua_State* L)
     if (size < 0)
         luaL_argerror(L, 1, "size out of range");
 
-    if (!lua_isnoneornil(L, 2))
+    if (!lua_isnovalornil(L, 2))
     {
         lua_createtable(L, size, 0);
         LuaTable* t = hvalue(L->top - 1);

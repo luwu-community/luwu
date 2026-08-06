@@ -194,7 +194,7 @@ const char* luaL_checklstring(lua_State* L, int narg, size_t* len)
 
 const char* luaL_optlstring(lua_State* L, int narg, const char* def, size_t* len)
 {
-    if (lua_isnoneornil(L, narg))
+    if (lua_isnovalornil(L, narg))
     {
         if (len)
             *len = (def ? strlen(def) : 0);

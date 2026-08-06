@@ -147,7 +147,7 @@ static int math_log(lua_State* L)
 {
     double x = luaL_checknumber(L, 1);
     double res;
-    if (lua_isnoneornil(L, 2))
+    if (lua_isnovalornil(L, 2))
         res = log(x);
     else
     {
@@ -374,8 +374,8 @@ static int math_noise(lua_State* L)
     double z = lua_tonumberx(L, 3, &nz);
 
     luaL_argexpected(L, nx, 1, "number");
-    luaL_argexpected(L, ny || lua_isnoneornil(L, 2), 2, "number");
-    luaL_argexpected(L, nz || lua_isnoneornil(L, 3), 3, "number");
+    luaL_argexpected(L, ny || lua_isnovalornil(L, 2), 2, "number");
+    luaL_argexpected(L, nz || lua_isnovalornil(L, 3), 3, "number");
 
     if (FFlag::FixMathNoisePrecision)
     {

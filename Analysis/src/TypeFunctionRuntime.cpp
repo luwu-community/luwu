@@ -411,7 +411,7 @@ TypeFunctionTypeId getTypeUserData(lua_State* L, int idx)
 
 std::optional<TypeFunctionTypeId> optionalTypeUserData(lua_State* L, int idx)
 {
-    if (lua_isnoneornil(L, idx))
+    if (lua_isnovalornil(L, idx))
         return std::nullopt;
     else
         return getTypeUserData(L, idx);
@@ -849,7 +849,7 @@ static int createTable(lua_State* L)
             lua_pop(L, 1);
         }
     }
-    else if (!lua_isnoneornil(L, 1))
+    else if (!lua_isnovalornil(L, 1))
         luaL_typeerrorL(L, 1, "table");
 
     // Parse indexer
@@ -867,7 +867,7 @@ static int createTable(lua_State* L)
 
         indexer = TypeFunctionTableIndexer(keyType, valueType);
     }
-    else if (!lua_isnoneornil(L, 2))
+    else if (!lua_isnovalornil(L, 2))
         luaL_typeerrorL(L, 2, "table");
 
     // Parse metatable
@@ -1205,7 +1205,7 @@ static std::tuple<std::vector<TypeFunctionTypeId>, std::vector<TypeFunctionTypeP
 
         lua_pop(L, 1);
     }
-    else if (!lua_isnoneornil(L, idx))
+    else if (!lua_isnovalornil(L, idx))
     {
         luaL_typeerrorL(L, idx, "table");
     }
@@ -1330,7 +1330,7 @@ static int createFunction(lua_State* L)
 
         lua_pop(L, 2);
     }
-    else if (!lua_isnoneornil(L, 1))
+    else if (!lua_isnovalornil(L, 1))
     {
         luaL_typeerrorL(L, 1, "table");
     }
@@ -1350,7 +1350,7 @@ static int createFunction(lua_State* L)
 
         lua_pop(L, 2);
     }
-    else if (!lua_isnoneornil(L, 2))
+    else if (!lua_isnovalornil(L, 2))
     {
         luaL_typeerrorL(L, 2, "table");
     }

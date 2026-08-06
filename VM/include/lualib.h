@@ -82,7 +82,7 @@ LUALIB_API void luaL_traceback(lua_State* L, lua_State* L1, const char* msg, int
 
 #define luaL_getmetatable(L, n) (lua_getfield(L, LUA_REGISTRYINDEX, (n)))
 
-#define luaL_opt(L, f, n, d) (lua_isnoneornil(L, (n)) ? (d) : f(L, (n)))
+#define luaL_opt(L, f, n, d) (lua_isnovalornil(L, (n)) ? (d) : f(L, (n)))
 
 // generic buffer manipulation
 

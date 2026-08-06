@@ -75,7 +75,7 @@ typedef void (*lua_Destructor)(lua_State* L, void* userdata);
 // clang-format off
 enum lua_Type
 {
-    LUA_TNIL = 0,     // must be 0 due to lua_isnoneornil
+    LUA_TNIL = 0,     // must be 0 due to lua_isnovalornil
     LUA_TBOOLEAN = 1, // must be 1 due to l_isfalse
 
     LUA_TLIGHTUSERDATA,
@@ -447,7 +447,8 @@ LUA_API void lua_unref(lua_State* L, int ref);
 #define lua_isthread(L, n) (lua_type(L, (n)) == LUA_TTHREAD)
 #define lua_isbuffer(L, n) (lua_type(L, (n)) == LUA_TBUFFER)
 #define lua_isnone(L, n) (lua_type(L, (n)) == LUA_TNONE)
-#define lua_isnoneornil(L, n) (lua_type(L, (n)) <= LUA_TNIL)
+#define lua_isnoval(L, n) (lua_type(L, (n)) == LUA_TNOVAL)
+#define lua_isnovalornil(L, n) (lua_type(L, (n)) <= LUA_TNIL)
 #define lua_isclass(L, n) (lua_type(L, (n)) == LUA_TCLASS)
 #define lua_isobject(L, n) (lua_type(L, (n)) == LUA_TOBJECT)
 
