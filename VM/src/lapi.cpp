@@ -1563,6 +1563,7 @@ void* lua_getbufferuserdata(lua_State* L, int idx)
     return ttisbuffer(p) ? bufvalue(p)->userdata : nullptr;
 }
 
+#if LUA_ENABLE_EXTERNAL_STRING
 const char* lua_newexternalstring(lua_State* L, const char* data, size_t len, void* userdata, lua_StringFree free_cb)
 {
     luaC_checkGC(L);
@@ -1589,6 +1590,7 @@ void* lua_getstringexternaluserdata(lua_State* L, int idx)
     }
     return nullptr;
 }
+#endif
 
 static const char* aux_upvalue(StkId fi, int n, TValue** val)
 {

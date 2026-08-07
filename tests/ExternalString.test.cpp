@@ -30,6 +30,8 @@ static int dostring(lua_State* L, const char* code)
 
 TEST_SUITE_BEGIN("ExternalStrings");
 
+#if LUA_ENABLE_EXTERNAL_STRING
+
 TEST_CASE("ExternalStringBasic")
 {
     std::unique_ptr<lua_State, void (*)(lua_State*)> state(luaL_newstate(), lua_close);
@@ -123,5 +125,7 @@ TEST_CASE("ExternalStringDedupReverse")
     // Callback called during GC
     CHECK(s_externalStringFreeCount == 1);
 }
+
+#endif
 
 TEST_SUITE_END();

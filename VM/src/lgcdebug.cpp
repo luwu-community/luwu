@@ -343,7 +343,11 @@ static void dumpstringdata(FILE* f, const char* data, size_t len)
 
 static void dumpstring(FILE* f, TString* ts)
 {
+#if LUA_ENABLE_EXTERNAL_STRING
     int size = tsisinline(ts) ? int(sizestring(ts->len)) : int(offsetof(TString, data) + sizeof(ExternalStringMeta) + ts->len);
+#else
+    int size = int(sizestring(ts->len));
+#endif
     fprintf(f, "{\"type\":\"string\",\"cat\":%d,\"size\":%d,\"data\":\"", ts->memcat, size);
     dumpstringdata(f, getstr(ts), ts->len);
     fprintf(f, "\"}");
@@ -755,7 +759,11 @@ static void enumedges(EnumContext* ctx, GCObject* from, TValue* data, size_t siz
 
 static void enumstring(EnumContext* ctx, TString* ts)
 {
+#if LUA_ENABLE_EXTERNAL_STRING
     enumnode(ctx, obj2gco(ts), tsisinline(ts) ? sizestring(ts->len) : (offsetof(TString, data) + sizeof(ExternalStringMeta) + ts->len), NULL);
+#else
+    enumnode(ctx, obj2gco(ts), sizestring(ts->len), NULL);
+#endif
 }
 
 static void enumtable(EnumContext* ctx, LuaTable* h)

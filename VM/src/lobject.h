@@ -283,11 +283,14 @@ typedef struct TString
     unsigned int hash;
     unsigned int len;
 
+#if LUA_ENABLE_EXTERNAL_STRING
     char* dataptr; // points to data[] for inline strings, or external memory
+#endif
 
     char data[1]; // string data is allocated right after the header
 } TString;
 
+#if LUA_ENABLE_EXTERNAL_STRING
 struct ExternalStringMeta
 {
     lua_StringFree free_cb;
@@ -297,6 +300,10 @@ struct ExternalStringMeta
 #define getstr(ts) ((ts)->dataptr)
 #define tsisinline(ts) ((ts)->dataptr == (ts)->data)
 #define getexternalmeta(ts) ((ExternalStringMeta*)(ts)->data)
+#else
+#define getstr(ts) ((ts)->data)
+#define tsisinline(ts) 1
+#endif
 
 #define svalue(o) getstr(tsvalue(o))
 

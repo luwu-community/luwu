@@ -39,21 +39,21 @@ The Luau C API is expanded with the following functions and types:
 
 Unlike buffers, Luau strings are always interned (deduplicated) in a global string table so that equality comparisons can be performed via fast pointer equality. Additionally, short strings may be assigned "atoms" for fast property lookups. External strings fully participate in this interning and atom process. 
 
-Because of interning and atoms, **garbage collection (and thus the `free_cb`) may not happen when you expect it**:
+Because of interning and atoms, garbage collection (and `free_cb`) may not happen when you expect it:
 
-- If a matching string is already in the string table when you create an external string, your new allocation is deduplicated and the `free_cb` fires *immediately*.
+- If a matching string is already in the string table when you create an external string, your new allocation is deduplicated and the `free_cb` will be called prior to returning from `lua_newexternalstring`.
 
-- Conversely, even if your Lua code loses all references to the string, the string might be kept alive by the VM internals (e.g., as an atom) longer than anticipated, delaying the `free_cb`.
+- Also, even if your Luau code loses all references to the external string, the string might be kept alive by the VM internals (as an atom etc.) for longer than anticipated, delaying the `free_cb`.
 
 When `lua_newexternalstring` is called:
 
 1. The external data is hashed and the string table is checked.
 
-2. If an identical string (either inline or external) already exists in the VM, that existing string is returned. 
+2. If an identical string (either inline or external) already exists in the VM, that existing string is returned.
 
-3. **Crucially**, if a duplicate is found, the provided `free_cb` is invoked *immediately* (before `lua_newexternalstring` returns) on the new external data, as the new allocation is not needed.
+3. **Crucially**, if a duplicate is found, the provided `free_cb` is invoked (before `lua_newexternalstring` returns) on the new external data, as the new allocation is not needed and the previous string is used instead (whether that be external or not).
 
-From the perspective of Lua scripts, external strings are completely indistinguishable from normal strings. They can be concatenated, used as table keys, and queried with `string.sub` identically.
+From the perspective of Luau code, external strings are completely indistinguishable from normal strings. They can be concatenated, used as table keys, and queried with `string.sub` identically.
 
 ### Immutability and Undefined Behavior
 
@@ -67,5 +67,4 @@ Because strings are interned and hashed, modifying the underlying bytes of an ac
 
 ## Alternatives
 
-* **Branching Data Access:** To avoid the 8-byte memory overhead mentioned above, we could use a single bit-flag to indicate if a string is external, and introduce a conditional branch every time string data is accessed. However, given how frequently string data is accessed in the VM (especially in hot paths and Native Code Generation), a branch-on-access approach was deemed too costly for execution speed.
 * **Userdata:** Expose host data through a `userdata`. This prevents the data from being used in standard string library functions (`string.sub`, `string.match`), prevents it from being easily concatenated, and prevents it from being used effectively as table keys (due to lack of interning).
