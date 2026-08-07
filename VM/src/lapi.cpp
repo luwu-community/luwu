@@ -1578,12 +1578,14 @@ const char* lua_pushexternalstring(lua_State* L, const char* data, size_t len, v
 
 int lua_isstringexternal(lua_State* L, int idx)
 {
+    LUAU_ASSERT(FFlag::LuauExternalString);
     StkId p = index2addr(L, idx);
     return ttisstring(p) ? (!tsisinline(tsvalue(p))) : 0;
 }
 
 void* lua_getstringexternaluserdata(lua_State* L, int idx)
 {
+    LUAU_ASSERT(FFlag::LuauExternalString);
     StkId p = index2addr(L, idx);
     if (ttisstring(p) && !tsisinline(tsvalue(p)))
     {

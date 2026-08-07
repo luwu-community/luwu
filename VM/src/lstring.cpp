@@ -8,6 +8,7 @@
 
 #include <string.h>
 
+LUAU_FASTFLAG(LuauExternalString)
 
 unsigned int luaS_hash(const char* str, size_t len)
 {
@@ -166,6 +167,7 @@ TString* luaS_newlstr(lua_State* L, const char* str, size_t l)
 
 TString* luaS_newexternallstr(lua_State* L, const char* str, size_t l, void* userdata, lua_StringFree free_cb)
 {
+    LUAU_ASSERT(FFlag::LuauExternalString);
     if (l > MAXSSIZE)
     {
         if (free_cb)
