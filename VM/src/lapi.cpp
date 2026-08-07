@@ -1586,7 +1586,7 @@ void* lua_getstringexternaluserdata(lua_State* L, int idx)
     StkId p = index2addr(L, idx);
     if (ttisstring(p) && !tsisinline(tsvalue(p)))
     {
-        return getexternalmeta(tsvalue(p))->userdata;
+        return tsvalue(p)->ext.userdata;
     }
     return nullptr;
 }

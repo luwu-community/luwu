@@ -119,12 +119,8 @@ static_assert(sizeof(TValue) == ABISWITCH(16, 16, 16), "size mismatch for value"
 static_assert(sizeof(LuaNode) == ABISWITCH(32, 32, 32), "size mismatch for table entry");
 #endif
 
-#if LUA_ENABLE_EXTERNAL_STRING
-// TString has a new dataptr field (+8 bytes on 64-bit, +4 on 32-bit)
-static_assert(offsetof(TString, data) == ABISWITCH(32, 24, 24), "size mismatch for string header");
-#else
+// TString uses an overlay for external strings, header size remains the same
 static_assert(offsetof(TString, data) == ABISWITCH(24, 20, 20), "size mismatch for string header");
-#endif
 static_assert(sizeof(LuaTable) == ABISWITCH(48, 32, 32), "size mismatch for table header");
 static_assert(offsetof(Buffer, data) == ABISWITCH(8, 8, 8), "size mismatch for buffer header");
 

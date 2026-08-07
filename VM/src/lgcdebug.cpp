@@ -344,7 +344,7 @@ static void dumpstringdata(FILE* f, const char* data, size_t len)
 static void dumpstring(FILE* f, TString* ts)
 {
 #if LUA_ENABLE_EXTERNAL_STRING
-    int size = tsisinline(ts) ? int(sizestring(ts->len)) : int(offsetof(TString, data) + sizeof(ExternalStringMeta) + ts->len);
+    int size = tsisinline(ts) ? int(sizestring(ts->len)) : int(sizeof(TString) + ts->len);
 #else
     int size = int(sizestring(ts->len));
 #endif
@@ -760,7 +760,7 @@ static void enumedges(EnumContext* ctx, GCObject* from, TValue* data, size_t siz
 static void enumstring(EnumContext* ctx, TString* ts)
 {
 #if LUA_ENABLE_EXTERNAL_STRING
-    enumnode(ctx, obj2gco(ts), tsisinline(ts) ? sizestring(ts->len) : (offsetof(TString, data) + sizeof(ExternalStringMeta) + ts->len), NULL);
+    enumnode(ctx, obj2gco(ts), tsisinline(ts) ? sizestring(ts->len) : (sizeof(TString) + ts->len), NULL);
 #else
     enumnode(ctx, obj2gco(ts), sizestring(ts->len), NULL);
 #endif

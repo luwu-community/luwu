@@ -80,7 +80,7 @@ static TString* newlstr(lua_State* L, const char* str, size_t l, unsigned int h)
     ts->hash = h;
     ts->len = unsigned(l);
 #if LUA_ENABLE_EXTERNAL_STRING
-    ts->dataptr = ts->data;
+    ts->is_external = 0;
 #endif
 
     memcpy(ts->data, str, l);
@@ -109,7 +109,7 @@ TString* luaS_bufstart(lua_State* L, size_t size)
     ts->hash = 0; // computed in luaS_buffinish
     ts->len = unsigned(size);
 #if LUA_ENABLE_EXTERNAL_STRING
-    ts->dataptr = ts->data;
+    ts->is_external = 0;
 #endif
 
     ts->next = NULL;
@@ -190,20 +190,18 @@ TString* luaS_newexternallstr(lua_State* L, const char* str, size_t l, void* use
     if (l > MAXSSIZE)
         luaM_toobig(L);
 
-    // Allocate just enough for the header and the ExternalStringMeta in data[]
-    TString* ts = luaM_newgco(L, TString, offsetof(TString, data) + sizeof(ExternalStringMeta), L->activememcat);
+    // Allocate just enough for the header and the ExternalStringMeta fields (using sizeof(TString))
+    TString* ts = luaM_newgco(L, TString, sizeof(TString), L->activememcat);
     luaC_init(L, ts, LUA_TSTRING);
     ts->atom = ATOM_UNDEF;
+    ts->is_external = 1;
     ts->hash = h;
     ts->len = unsigned(l);
     
-    // Set dataptr to external memory (making tsisinline(ts) false)
-    ts->dataptr = (char*)str;
-    
-    // Store metadata in the data[] array
-    ExternalStringMeta* meta = getexternalmeta(ts);
-    meta->free_cb = free_cb;
-    meta->userdata = userdata;
+    // Set ext metadata
+    ts->ext.dataptr = (char*)str;
+    ts->ext.free_cb = free_cb;
+    ts->ext.userdata = userdata;
 
     // Account for external memory
     L->global->totalbytes += l;
@@ -254,14 +252,13 @@ void luaS_free(lua_State* L, TString* ts, lua_Page* page)
 #if LUA_ENABLE_EXTERNAL_STRING
     if (!tsisinline(ts))
     {
-        ExternalStringMeta* meta = getexternalmeta(ts);
-        if (meta->free_cb)
-            meta->free_cb(L, ts->dataptr, ts->len, meta->userdata);
+        if (ts->ext.free_cb)
+            ts->ext.free_cb(L, ts->ext.dataptr, ts->len, ts->ext.userdata);
         
         L->global->totalbytes -= ts->len;
         L->global->memcatbytes[ts->memcat] -= ts->len;
         
-        luaM_freegco(L, ts, offsetof(TString, data) + sizeof(ExternalStringMeta), ts->memcat, page);
+        luaM_freegco(L, ts, sizeof(TString), ts->memcat, page);
     }
     else
 #endif

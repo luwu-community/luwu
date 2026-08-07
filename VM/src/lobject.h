@@ -272,34 +272,37 @@ typedef TValue* StkId; // index to stack elements
 typedef struct TString
 {
     CommonHeader;
-    // 1 byte padding
-
     int16_t atom;
+    
+#if LUA_ENABLE_EXTERNAL_STRING
+    uint8_t is_external;
+#endif
 
-    // 2 byte padding
-
-    TString* next; // next string in the hash table bucket
+    TString* next; // for chaining
 
     unsigned int hash;
     unsigned int len;
 
 #if LUA_ENABLE_EXTERNAL_STRING
-    char* dataptr; // points to data[] for inline strings, or external memory
-#endif
-
+    union
+    {
+        char data[1]; // string data is allocated right after the header
+        struct
+        {
+            char* dataptr; // points to external memory
+            lua_StringFree free_cb;
+            void* userdata;
+        } ext;
+    };
+#else
     char data[1]; // string data is allocated right after the header
+#endif
 } TString;
 
 #if LUA_ENABLE_EXTERNAL_STRING
-struct ExternalStringMeta
-{
-    lua_StringFree free_cb;
-    void* userdata;
-};
-
-#define getstr(ts) ((ts)->dataptr)
-#define tsisinline(ts) ((ts)->dataptr == (ts)->data)
-#define getexternalmeta(ts) ((ExternalStringMeta*)(ts)->data)
+#define getstr(ts) ((ts)->is_external ? (ts)->ext.dataptr : (ts)->data)
+#define tsisinline(ts) (!((ts)->is_external))
+#define getexternalmeta(ts) (&(ts)->ext)
 #else
 #define getstr(ts) ((ts)->data)
 #define tsisinline(ts) 1
