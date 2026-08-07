@@ -2,11 +2,13 @@
 
 ## Summary
 
-Add support for externally managed/allocated strings to the Luau VM, allowing host applications to create Luau strings that wrap existing immutable memory without copying. These strings are fully interned into the string table and behave identically to normal strings from Lua's perspective.
+Add support for externally managed/allocated strings to the Luau VM, allowing embedders to create zero-copy Luau strings that fully participate in all existing Luau features (like interning etc.) and behave identically to normal strings to the user.
 
 ## Motivation
 
-Luau's `string` type represents immutable byte sequences. Currently, creating a string in Luau requires copying the bytes from the host application into a VM-managed allocation. In embedding scenarios, it is common for the host to already possess large strings (such as errors w/ stack traces, data from a JSON file etc.).  
+Luau's `string` type represents immutable byte sequences. Currently, creating a string in Luau requires copying the bytes from the host application into a VM-managed allocation. In embedding scenarios, it is common for the host to already possess large strings (such as errors w/ stack traces, data from a JSON file etc.). 
+
+While external buffers do exist in Luau now, buffers cannot be manipulated by the `string` library (and other string-related operations/infrastructure) nor can they easily be used as table keys etc. Furthermore, it is expected/idiomatic for certain things in Luau to be a `string` and not a `buffer` (error tracebacks, strings in a json etc.). 
 
 External strings (which also have existing precedence in Lua 5.5) allows embedders to wrap these existing string allocations without copying while maintaining full access to existing string infrastructure (`string` library, tables w/ string keys etc.)
 
