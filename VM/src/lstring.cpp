@@ -165,6 +165,13 @@ TString* luaS_newlstr(lua_State* L, const char* str, size_t l)
 
 TString* luaS_newexternallstr(lua_State* L, const char* str, size_t l, void* userdata, lua_StringFree free_cb)
 {
+    if (l > MAXSSIZE)
+    {
+        if (free_cb)
+            free_cb(L, str, l, userdata);
+        luaM_toobig(L);
+    }
+
     unsigned int h = luaS_hash(str, l);
     for (TString* el = L->global->strt.hash[lmod(h, L->global->strt.size)]; el != NULL; el = el->next)
     {
@@ -181,9 +188,6 @@ TString* luaS_newexternallstr(lua_State* L, const char* str, size_t l, void* use
             return el;
         }
     }
-    
-    if (l > MAXSSIZE)
-        luaM_toobig(L);
 
     // Allocate just enough for the header and the ExternalStringMeta fields (using sizeof(TString))
     TString* ts = luaM_newgco(L, TString, sizeof(TString), L->activememcat);
