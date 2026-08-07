@@ -272,10 +272,14 @@ typedef TValue* StkId; // index to stack elements
 typedef struct TString
 {
     CommonHeader;
+    // 1 byte padding
+
     int16_t atom;
     uint8_t is_external;
 
-    TString* next; // for chaining
+    // 1 byte padding
+
+    TString* next; // next string in the hash table bucket
 
     unsigned int hash;
     unsigned int len;
