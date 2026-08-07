@@ -61,7 +61,7 @@ From the perspective of Luau code, external strings are completely indistinguish
 
 Luau strings are strictly immutable. When an external string wraps host memory, the host **must** guarantee that the underlying bytes are never modified for the lifetime of the string object. 
 
-Because strings are interned and hashed, modifying the underlying bytes of an active external string violates VM invariants. Doing so will corrupt the string table hash buckets, break string equality, and result in **Undefined Behavior (UB)**. If you need mutable shared memory, use External Buffers instead.
+Because strings are interned and hashed, modifying the underlying bytes of an active external string violates VM invariants. Doing so will result in **Undefined Behavior (UB)**. If you need mutable shared memory, use External Buffers instead.
 
 ## Drawbacks
 
