@@ -1567,6 +1567,7 @@ void* lua_getbufferuserdata(lua_State* L, int idx)
 const char* lua_pushexternalstring(lua_State* L, const char* data, size_t len, void* userdata, lua_StringFree free_cb)
 {
     LUAU_ASSERT(FFlag::LuauExternalString);
+    api_check(L, data[len] == '\0', "external string must be null-terminated");
     luaC_checkGC(L);
     luaC_threadbarrier(L);
     ensure_stack(L, 1);

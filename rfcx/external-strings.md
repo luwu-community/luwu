@@ -31,7 +31,7 @@ The Luau C API is expanded with the following functions and types (similar to ex
     LUA_API int lua_isstringexternal(lua_State* L, int idx);
     LUA_API void* lua_getstringexternaluserdata(lua_State* L, int idx);
 
-* `lua_pushexternalstring` creates a new string that wraps the `data` pointer of length `len`. 
+* `lua_pushexternalstring` creates a new string that wraps the `data` pointer of length `len`. Like Lua 5.5's design of external strings, the string provided must be null-terminated (i.e. `data[len] == '\0'`), even though `len` does not include the null terminator. This is required to maintain compatibility with C APIs that use `lua_tostring`.
 * `userdata` is an opaque pointer that will be passed to `free_cb` alongside the string information.
 * `free_cb` is an optional callback invoked when the string object is garbage collected.
 * `lua_isstringexternal` returns `1` if the string at the given index is an external string, and `0` otherwise.
