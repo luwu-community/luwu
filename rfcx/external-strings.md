@@ -63,7 +63,7 @@ Because strings are interned and hashed, modifying the underlying bytes of an ac
 
 ## Drawbacks
 
-* **Memory Overhead for Normal Strings:** To ensure that accessing string data (via the internal `getstr()` macro) remains branchless and zero-cost for performance, we introduce a single pointer overhead (8 bytes on 64-bit platforms) to *all* string objects. Normal inline strings will use this pointer to point to their own inline memory, while external strings will use it to point to the host memory. This represents a minor memory increase across the board for string-heavy workloads. To avoid the overhead caused by this in cases where external strings are not needed, a new `LUA_ENABLE_EXTERNAL_STRING` compile time option will be added.
+* **Performance Overhead for Normal Strings:** To support external strings without increasing the memory footprint of normal strings, `getstr()` requires a conditional check (`is_external`) to determine whether the data pointer is inline or external. While this introduces a minor branch penalty to string lookups, benchmarks have showed that this results in a negligible performance change in practice.
 
 ## Alternatives
 
