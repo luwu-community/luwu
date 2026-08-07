@@ -18,7 +18,7 @@ The Luau C API is expanded with the following functions and types (similar to ex
 
     typedef void (*lua_StringFree)(lua_State* L, const char* data, size_t sz, void* userdata);
 
-    LUA_API const char* lua_newexternalstring(
+    LUA_API const char* lua_pushexternalstring(
         lua_State* L, 
         const char* data, 
         size_t len, 
@@ -29,7 +29,7 @@ The Luau C API is expanded with the following functions and types (similar to ex
     LUA_API int lua_isstringexternal(lua_State* L, int idx);
     LUA_API void* lua_getstringexternaluserdata(lua_State* L, int idx);
 
-* `lua_newexternalstring` creates a new string that wraps the `data` pointer of length `len`. 
+* `lua_pushexternalstring` creates a new string that wraps the `data` pointer of length `len`. 
 * `userdata` is an opaque pointer that will be passed to `free_cb` alongside the string information.
 * `free_cb` is an optional callback invoked when the string object is garbage collected.
 * `lua_isstringexternal` returns `1` if the string at the given index is an external string, and `0` otherwise.
@@ -41,17 +41,17 @@ Unlike buffers, Luau strings are always interned (deduplicated) in a global stri
 
 Because of interning and atoms, garbage collection (and `free_cb`) may not happen when you expect it:
 
-- If a matching string is already in the string table when you create an external string, your new allocation is deduplicated and the `free_cb` will be called prior to returning from `lua_newexternalstring`.
+- If a matching string is already in the string table when you create an external string, your new allocation is deduplicated and the `free_cb` will be called prior to returning from `lua_pushexternalstring`.
 
 - Also, even if your Luau code loses all references to the external string, the string might be kept alive by the VM internals (as an atom etc.) for longer than anticipated, delaying the `free_cb`.
 
-When `lua_newexternalstring` is called:
+When `lua_pushexternalstring` is called:
 
 1. The external data is hashed and the string table is checked.
 
 2. If an identical string (either inline or external) already exists in the VM, that existing string is returned.
 
-3. **Crucially**, if a duplicate is found, the provided `free_cb` is invoked (before `lua_newexternalstring` returns) on the new external data, as the new allocation is not needed and the previous string is used instead (whether that be external or not).
+3. **Crucially**, if a duplicate is found, the provided `free_cb` is invoked (before `lua_pushexternalstring` returns) on the new external data, as the new allocation is not needed and the previous string is used instead (whether that be external or not).
 
 From the perspective of Luau code, external strings are completely indistinguishable from normal strings. They can be concatenated, used as table keys, and queried with `string.sub` identically.
 

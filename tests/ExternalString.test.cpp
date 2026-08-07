@@ -44,7 +44,7 @@ TEST_CASE("ExternalStringBasic")
     size_t len = strlen(my_string);
     int test_userdata = 42;
 
-    lua_newexternalstring(L, my_string, len, &test_userdata, test_string_free_cb);
+    lua_pushexternalstring(L, my_string, len, &test_userdata, test_string_free_cb);
     
     CHECK(lua_isstringexternal(L, -1) == 1);
     CHECK(lua_getstringexternaluserdata(L, -1) == &test_userdata);
@@ -81,7 +81,7 @@ TEST_CASE("ExternalStringDedup")
     
     // Now push external string with same content
     const char* my_string = "hello";
-    lua_newexternalstring(L, my_string, 5, nullptr, test_string_free_cb);
+    lua_pushexternalstring(L, my_string, 5, nullptr, test_string_free_cb);
     
     // Should be exactly the same pointer due to interning
     CHECK(lua_topointer(L, -1) == lua_topointer(L, -2));
@@ -107,7 +107,7 @@ TEST_CASE("ExternalStringDedupReverse")
     
     // Push external string first
     const char* my_string = "hello";
-    lua_newexternalstring(L, my_string, 5, nullptr, test_string_free_cb);
+    lua_pushexternalstring(L, my_string, 5, nullptr, test_string_free_cb);
     
     CHECK(lua_isstringexternal(L, -1) == 1);
     

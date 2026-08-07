@@ -75,7 +75,7 @@
 
 // Can be used to compile without external strings to avoid overhead
 #ifndef LUA_ENABLE_EXTERNAL_STRING
-#define LUA_ENABLE_EXTERNAL_STRING 0
+#define LUA_ENABLE_EXTERNAL_STRING 1
 #endif
 
 // LUA_IDSIZE gives the maximum size for the description of the source

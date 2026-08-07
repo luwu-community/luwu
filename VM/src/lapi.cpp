@@ -1564,7 +1564,7 @@ void* lua_getbufferuserdata(lua_State* L, int idx)
 }
 
 #if LUA_ENABLE_EXTERNAL_STRING
-const char* lua_newexternalstring(lua_State* L, const char* data, size_t len, void* userdata, lua_StringFree free_cb)
+const char* lua_pushexternalstring(lua_State* L, const char* data, size_t len, void* userdata, lua_StringFree free_cb)
 {
     luaC_checkGC(L);
     luaC_threadbarrier(L);

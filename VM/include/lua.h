@@ -201,7 +201,7 @@ LUA_API void lua_pushlstring(lua_State* L, const char* s, size_t l);
 LUA_API void lua_pushstring(lua_State* L, const char* s);
 #if LUA_ENABLE_EXTERNAL_STRING
 typedef void (*lua_StringFree)(lua_State* L, const char* data, size_t sz, void* userdata);
-LUA_API const char* lua_newexternalstring(lua_State* L, const char* data, size_t len, void* userdata, lua_StringFree free_cb);
+LUA_API const char* lua_pushexternalstring(lua_State* L, const char* data, size_t len, void* userdata, lua_StringFree free_cb);
 #endif
 LUA_API const char* lua_pushvfstring(lua_State* L, const char* fmt, va_list argp);
 LUA_API LUA_PRINTF_ATTR(2, 3) const char* lua_pushfstringL(lua_State* L, const char* fmt, ...);
