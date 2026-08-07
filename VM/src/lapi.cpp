@@ -22,6 +22,7 @@ LUAU_FASTFLAGVARIABLE(LuauAutoStack)
 LUAU_FASTFLAGVARIABLE(LuauCloneTableFix)
 LUAU_FASTFLAGVARIABLE(LuauExternallyManagedBuffers)
 LUAU_FASTFLAGVARIABLE(LuauExternalString)
+LUAU_FASTFLAGVARIABLE(DebugLuauAllowNonNullTerminatedStrings)
 
 /*
  * This file contains most implementations of core Lua APIs from lua.h.
@@ -1567,7 +1568,8 @@ void* lua_getbufferuserdata(lua_State* L, int idx)
 const char* lua_pushexternalstring(lua_State* L, const char* data, size_t len, void* userdata, lua_StringFree free_cb)
 {
     LUAU_ASSERT(FFlag::LuauExternalString);
-    api_check(L, data[len] == '\0', "external string must be null-terminated");
+    if (!FFlag::DebugLuauAllowNonNullTerminatedStrings)
+        api_check(L, data[len] == '\0');
     luaC_checkGC(L);
     luaC_threadbarrier(L);
     ensure_stack(L, 1);
