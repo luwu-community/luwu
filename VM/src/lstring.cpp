@@ -2,6 +2,7 @@
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 #include "lstring.h"
 
+#include "ldo.h"
 #include "lgc.h"
 #include "lmem.h"
 
@@ -122,7 +123,7 @@ TString* luaS_buffinish(lua_State* L, TString* ts)
     // search if we already have this string in the hash table
     for (TString* el = tb->hash[bucket]; el != NULL; el = el->next)
     {
-        if (el->len == ts->len && memcmp(el->data, ts->data, ts->len) == 0)
+        if (el->len == ts->len && memcmp(getstr(el), ts->data, ts->len) == 0)
         {
             // string may be dead
             if (isdead(L->global, obj2gco(el)))
@@ -189,8 +190,29 @@ TString* luaS_newexternallstr(lua_State* L, const char* str, size_t l, void* use
         }
     }
 
-    // Allocate just enough for the header and the ExternalStringMeta fields (using sizeof(TString))
-    TString* ts = luaM_newgco(L, TString, sizeof(TString), L->activememcat);
+    // Allocate just enough for the header and the ExternalStringMeta fields (using sizeof(TString)).
+    // This allocation can fail with an OOM error (thrown via luaD_throw); run it protected so we can
+    // still hand the external buffer back to the caller via free_cb instead of leaking it.
+    struct AllocContext
+    {
+        TString* ts = nullptr;
+
+        static void run(lua_State* L, void* ud)
+        {
+            AllocContext* ctx = static_cast<AllocContext*>(ud);
+            ctx->ts = luaM_newgco(L, TString, sizeof(TString), L->activememcat);
+        }
+    } ctx;
+
+    int status = luaD_rawrunprotected(L, &AllocContext::run, &ctx);
+    if (status != 0)
+    {
+        if (free_cb)
+            free_cb(L, str, l, userdata);
+        luaD_throw(L, status);
+    }
+
+    TString* ts = ctx.ts;
     luaC_init(L, ts, LUA_TSTRING);
     ts->atom = ATOM_UNDEF;
     ts->is_external = 1;

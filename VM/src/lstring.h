@@ -21,7 +21,7 @@
 #define luaS_updateatom(L, ts) \
     { \
         if (ts->atom == ATOM_UNDEF) \
-            ts->atom = L->global->cb.useratom ? L->global->cb.useratom(L, ts->data, ts->len) : -1; \
+            ts->atom = L->global->cb.useratom ? L->global->cb.useratom(L, getstr(ts), ts->len) : -1; \
     }
 
 LUAI_FUNC unsigned int luaS_hash(const char* str, size_t len);

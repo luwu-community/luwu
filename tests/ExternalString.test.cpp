@@ -152,4 +152,34 @@ TEST_CASE("ExternalStringDedupReverse")
     CHECK(s_externalStringFreeCount == 1);
 }
 
+TEST_CASE("ExternalStringBuffinishOverread")
+{
+    ScopedFastFlag sff{FFlag::LuauExternalString, true};
+    std::unique_ptr<lua_State, void (*)(lua_State*)> state(luaL_newstate(), lua_close);
+    lua_State* L = state.get();
+    luaL_openlibs(L);
+
+    s_externalStringFreeCount = 0;
+
+    // must be >= LUA_BUFFERSIZE (512) so luaV_concat routes through
+    // luaS_bufstart/luaS_buffinish instead of the small-buffer luaS_newlstr path
+    std::string content(600, 'x');
+    char* my_string = new char[content.size()];
+    memcpy(my_string, content.data(), content.size());
+
+    lua_pushexternalstring(L, my_string, content.size(), nullptr, test_string_free_cb);
+    lua_setglobal(L, "ext_str");
+
+    // build an equal-content, equal-length string via runtime concatenation so it
+    // goes through luaS_buffinish's intern lookup and probes the external TString
+    const char* lua_code = R"(
+        local a = string.rep("x", 300)
+        local b = string.rep("x", 300)
+        local c = a .. b
+        assert(c == ext_str)
+    )";
+
+    CHECK(dostring(L, lua_code) == 0);
+}
+
 TEST_SUITE_END();
