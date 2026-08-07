@@ -29,9 +29,7 @@ LUAI_FUNC unsigned int luaS_hash(const char* str, size_t len);
 LUAI_FUNC void luaS_resize(lua_State* L, int newsize);
 
 LUAI_FUNC TString* luaS_newlstr(lua_State* L, const char* str, size_t l);
-#if LUA_ENABLE_EXTERNAL_STRING
 LUAI_FUNC TString* luaS_newexternallstr(lua_State* L, const char* str, size_t l, void* userdata, lua_StringFree free_cb);
-#endif
 LUAI_FUNC void luaS_free(lua_State* L, TString* ts, struct lua_Page* page);
 
 LUAI_FUNC TString* luaS_bufstart(lua_State* L, size_t size);

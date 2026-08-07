@@ -79,9 +79,7 @@ static TString* newlstr(lua_State* L, const char* str, size_t l, unsigned int h)
     ts->atom = ATOM_UNDEF;
     ts->hash = h;
     ts->len = unsigned(l);
-#if LUA_ENABLE_EXTERNAL_STRING
     ts->is_external = 0;
-#endif
 
     memcpy(ts->data, str, l);
     ts->data[l] = '\0'; // ending 0
@@ -108,9 +106,7 @@ TString* luaS_bufstart(lua_State* L, size_t size)
     ts->atom = ATOM_UNDEF;
     ts->hash = 0; // computed in luaS_buffinish
     ts->len = unsigned(size);
-#if LUA_ENABLE_EXTERNAL_STRING
     ts->is_external = 0;
-#endif
 
     ts->next = NULL;
 
@@ -167,7 +163,6 @@ TString* luaS_newlstr(lua_State* L, const char* str, size_t l)
     return newlstr(L, str, l, h); // not found
 }
 
-#if LUA_ENABLE_EXTERNAL_STRING
 TString* luaS_newexternallstr(lua_State* L, const char* str, size_t l, void* userdata, lua_StringFree free_cb)
 {
     unsigned int h = luaS_hash(str, l);
@@ -218,7 +213,6 @@ TString* luaS_newexternallstr(lua_State* L, const char* str, size_t l, void* use
 
     return ts;
 }
-#endif
 
 static bool unlinkstr(lua_State* L, TString* ts)
 {
@@ -249,7 +243,6 @@ void luaS_free(lua_State* L, TString* ts, lua_Page* page)
     else
         LUAU_ASSERT(ts->next == NULL); // orphaned string buffer
 
-#if LUA_ENABLE_EXTERNAL_STRING
     if (!tsisinline(ts))
     {
         if (ts->ext.free_cb)
@@ -261,7 +254,6 @@ void luaS_free(lua_State* L, TString* ts, lua_Page* page)
         luaM_freegco(L, ts, sizeof(TString), ts->memcat, page);
     }
     else
-#endif
     {
         luaM_freegco(L, ts, sizestring(ts->len), ts->memcat, page);
     }

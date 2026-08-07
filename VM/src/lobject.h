@@ -273,17 +273,13 @@ typedef struct TString
 {
     CommonHeader;
     int16_t atom;
-    
-#if LUA_ENABLE_EXTERNAL_STRING
     uint8_t is_external;
-#endif
 
     TString* next; // for chaining
 
     unsigned int hash;
     unsigned int len;
 
-#if LUA_ENABLE_EXTERNAL_STRING
     union
     {
         char data[1]; // string data is allocated right after the header
@@ -294,19 +290,11 @@ typedef struct TString
             void* userdata;
         } ext;
     };
-#else
-    char data[1]; // string data is allocated right after the header
-#endif
 } TString;
 
-#if LUA_ENABLE_EXTERNAL_STRING
 #define getstr(ts) ((ts)->is_external ? (ts)->ext.dataptr : (ts)->data)
 #define tsisinline(ts) (!((ts)->is_external))
 #define getexternalmeta(ts) (&(ts)->ext)
-#else
-#define getstr(ts) ((ts)->data)
-#define tsisinline(ts) 1
-#endif
 
 #define svalue(o) getstr(tsvalue(o))
 

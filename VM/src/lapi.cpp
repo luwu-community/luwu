@@ -21,6 +21,7 @@ LUAU_FASTFLAG(LuauDirectFieldGet)
 LUAU_FASTFLAGVARIABLE(LuauAutoStack)
 LUAU_FASTFLAGVARIABLE(LuauCloneTableFix)
 LUAU_FASTFLAGVARIABLE(LuauExternallyManagedBuffers)
+LUAU_FASTFLAGVARIABLE(LuauExternalString)
 
 /*
  * This file contains most implementations of core Lua APIs from lua.h.
@@ -1563,9 +1564,9 @@ void* lua_getbufferuserdata(lua_State* L, int idx)
     return ttisbuffer(p) ? bufvalue(p)->userdata : nullptr;
 }
 
-#if LUA_ENABLE_EXTERNAL_STRING
 const char* lua_pushexternalstring(lua_State* L, const char* data, size_t len, void* userdata, lua_StringFree free_cb)
 {
+    LUAU_ASSERT(FFlag::LuauExternalString);
     luaC_checkGC(L);
     luaC_threadbarrier(L);
     ensure_stack(L, 1);
@@ -1590,7 +1591,6 @@ void* lua_getstringexternaluserdata(lua_State* L, int idx)
     }
     return nullptr;
 }
-#endif
 
 static const char* aux_upvalue(StkId fi, int n, TValue** val)
 {

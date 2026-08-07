@@ -4,6 +4,9 @@
 #include "luacode.h"
 
 #include "doctest.h"
+#include "ScopedFlags.h"
+
+LUAU_FASTFLAG(LuauExternalString)
 
 #include <memory>
 #include <string.h>
@@ -30,10 +33,10 @@ static int dostring(lua_State* L, const char* code)
 
 TEST_SUITE_BEGIN("ExternalStrings");
 
-#if LUA_ENABLE_EXTERNAL_STRING
 
 TEST_CASE("ExternalStringBasic")
 {
+    ScopedFastFlag sff{FFlag::LuauExternalString, true};
     std::unique_ptr<lua_State, void (*)(lua_State*)> state(luaL_newstate(), lua_close);
     lua_State* L = state.get();
     luaL_openlibs(L);
@@ -71,6 +74,7 @@ TEST_CASE("ExternalStringBasic")
 
 TEST_CASE("ExternalStringDedup")
 {
+    ScopedFastFlag sff{FFlag::LuauExternalString, true};
     std::unique_ptr<lua_State, void (*)(lua_State*)> state(luaL_newstate(), lua_close);
     lua_State* L = state.get();
 
@@ -100,6 +104,7 @@ TEST_CASE("ExternalStringDedup")
 
 TEST_CASE("ExternalStringDedupReverse")
 {
+    ScopedFastFlag sff{FFlag::LuauExternalString, true};
     std::unique_ptr<lua_State, void (*)(lua_State*)> state(luaL_newstate(), lua_close);
     lua_State* L = state.get();
 
@@ -125,7 +130,5 @@ TEST_CASE("ExternalStringDedupReverse")
     // Callback called during GC
     CHECK(s_externalStringFreeCount == 1);
 }
-
-#endif
 
 TEST_SUITE_END();
