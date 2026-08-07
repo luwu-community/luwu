@@ -20,6 +20,7 @@
 
 LUAU_FASTFLAG(LuauSolverV2)
 LUAU_FASTFLAG(LuauIntegerType2)
+LUAU_FASTFLAGVARIABLE(LuauTruthyFalsy)
 
 /*
  * Enables increasing levels of verbosity for Luau type names when stringifying.
@@ -362,6 +363,107 @@ private:
         emit(std::string(indentation, ' '));
     }
 };
+
+// Structurally matches exactly `false | nil | none` (the canonical falsy union), independent of
+// member order, so it can be displayed as the single word "falsy" (and its negation as "truthy")
+// instead of expanding into its constituent parts.
+static bool isExactlyFalsyUnion(const UnionType& uv)
+{
+    if (uv.options.size() != 3)
+        return false;
+
+    bool hasFalse = false;
+    bool hasNil = false;
+    bool hasNone = false;
+
+    for (TypeId option : uv.options)
+    {
+        option = follow(option);
+
+        if (const PrimitiveType* pt = Luau::get<PrimitiveType>(option); pt && pt->type == PrimitiveType::NilType)
+            hasNil = true;
+        else if (const PrimitiveType* pt = Luau::get<PrimitiveType>(option); pt && pt->type == PrimitiveType::NoneType)
+            hasNone = true;
+        else if (const SingletonType* st = Luau::get<SingletonType>(option))
+        {
+            const BooleanSingleton* bs = Luau::get<BooleanSingleton>(st);
+            if (bs && !bs->value)
+                hasFalse = true;
+            else
+                return false;
+        }
+        else
+            return false;
+    }
+
+    return hasFalse && hasNil && hasNone;
+}
+
+// True for `~(false | nil | none)` (the "truthy" negation), independent of member order.
+static bool isTruthyNegation(TypeId ty)
+{
+    const NegationType* nt = Luau::get<NegationType>(follow(ty));
+    if (!nt)
+        return false;
+
+    const UnionType* ut = Luau::get<UnionType>(follow(nt->ty));
+    return ut && isExactlyFalsyUnion(*ut);
+}
+
+// True when `ty` can structurally never be falsy (false, nil, or none), so intersecting it with
+// "truthy" is a no-op. This is intentionally conservative: it only recognizes shapes where every
+// possible runtime value of the type is already truthy, and defers (returns false) on anything
+// that requires deeper analysis (unions, generics, free types, etc.).
+static bool isProvablyNeverFalsy(TypeId ty)
+{
+    ty = follow(ty);
+
+    if (const PrimitiveType* pt = Luau::get<PrimitiveType>(ty))
+        return pt->type != PrimitiveType::NilType && pt->type != PrimitiveType::Boolean && pt->type != PrimitiveType::NoneType;
+
+    if (const SingletonType* st = Luau::get<SingletonType>(ty))
+    {
+        if (const BooleanSingleton* bs = Luau::get<BooleanSingleton>(st))
+            return bs->value;
+        return true; // string singletons are never falsy
+    }
+
+    return Luau::get<TableType>(ty) || Luau::get<FunctionType>(ty) || Luau::get<ExternType>(ty) || Luau::get<MetatableType>(ty);
+}
+
+// True when `ty` is an IntersectionType that will render with more than one visible part after
+// dropping redundant `truthy` parts (see isProvablyNeverFalsy) -- used to decide whether a caller
+// needs to wrap it in parens. Without this, `string & truthy` collapsing to `string` would still
+// get wrapped as `(string)` by a surrounding union, since the underlying node is still structurally
+// an IntersectionType even though only one part is displayed.
+static bool intersectionRendersWithMultipleParts(TypeId ty)
+{
+    const IntersectionType* it = Luau::get<IntersectionType>(follow(ty));
+    if (!it)
+        return false;
+
+    if (!FFlag::LuauTruthyFalsy)
+        return it->parts.size() > 1;
+
+    bool hasProvablyNeverFalsyPart = false;
+    for (TypeId part : it->parts)
+    {
+        if (isProvablyNeverFalsy(follow(part)))
+        {
+            hasProvablyNeverFalsyPart = true;
+            break;
+        }
+    }
+
+    size_t visibleCount = 0;
+    for (TypeId part : it->parts)
+    {
+        if (hasProvablyNeverFalsyPart && isTruthyNegation(follow(part)))
+            continue;
+        ++visibleCount;
+    }
+    return visibleCount > 1;
+}
 
 struct TypeStringifier
 {
@@ -889,6 +991,12 @@ struct TypeStringifier
 
     void operator()(TypeId, const UnionType& uv)
     {
+        if (FFlag::LuauTruthyFalsy && isExactlyFalsyUnion(uv))
+        {
+            state.emit("falsy");
+            return;
+        }
+
         if (state.hasSeen(&uv))
         {
             state.result.cycle = true;
@@ -922,7 +1030,7 @@ struct TypeStringifier
             std::string saved = std::move(state.result.name);
             size_t savedSpansSize = state.result.typeSpans.size();
 
-            bool needParens = !state.cycleNames.contains(el) && (get<IntersectionType>(el) != nullptr || get<FunctionType>(el) != nullptr);
+            bool needParens = !state.cycleNames.contains(el) && (intersectionRendersWithMultipleParts(el) || get<FunctionType>(el) != nullptr);
 
             if (needParens)
                 state.emit("(");
@@ -1008,6 +1116,21 @@ struct TypeStringifier
             return;
         }
 
+        // `T & truthy` is redundant when every value of `T` is already truthy, so drop the
+        // `truthy` part rather than displaying (e.g.) `string & truthy` when it's just `string`.
+        bool hasProvablyNeverFalsyPart = false;
+        if (FFlag::LuauTruthyFalsy)
+        {
+            for (TypeId part : uv.parts)
+            {
+                if (isProvablyNeverFalsy(follow(part)))
+                {
+                    hasProvablyNeverFalsyPart = true;
+                    break;
+                }
+            }
+        }
+
         std::vector<ElementResult> results = {};
         size_t resultsLength = 0;
         bool lengthLimitHit = false;
@@ -1015,6 +1138,9 @@ struct TypeStringifier
         for (auto el : uv.parts)
         {
             el = follow(el);
+
+            if (hasProvablyNeverFalsyPart && isTruthyNegation(el))
+                continue;
 
             std::string saved = std::move(state.result.name);
             size_t savedSpansSize = state.result.typeSpans.size();
@@ -1120,10 +1246,20 @@ struct TypeStringifier
 
     void operator()(TypeId, const NegationType& ntv)
     {
+        TypeId followed = follow(ntv.ty);
+
+        if (FFlag::LuauTruthyFalsy)
+        {
+            if (const UnionType* ut = get<UnionType>(followed); ut && isExactlyFalsyUnion(*ut))
+            {
+                state.emit("truthy");
+                return;
+            }
+        }
+
         state.emit("~");
 
         // The precedence of `~` should be less than `|` and `&`.
-        TypeId followed = follow(ntv.ty);
         bool parens = get<UnionType>(followed) || get<IntersectionType>(followed);
 
         if (parens)

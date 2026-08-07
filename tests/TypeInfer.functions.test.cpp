@@ -16,6 +16,7 @@
 using namespace Luau;
 
 LUAU_FASTFLAG(DebugLuauAssertOnForcedConstraint)
+LUAU_FASTFLAG(LuauTruthyFalsy)
 
 LUAU_FASTFLAG(LuauInstantiateInSubtyping)
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
@@ -2897,6 +2898,7 @@ TEST_CASE_FIXTURE(Fixture, "unifier_should_not_bind_free_types")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier, true},
+        {FFlag::LuauTruthyFalsy, true},
     };
 
     CheckResult result = check(R"(
@@ -2931,7 +2933,7 @@ TEST_CASE_FIXTURE(Fixture, "unifier_should_not_bind_free_types")
         auto tm2 = get<TypeMismatch>(result.errors[1]);
         REQUIRE(tm2);
         CHECK(toString(tm2->wantedType) == "string");
-        CHECK(toString(tm2->givenType) == "unknown & ~(false?)");
+        CHECK(toString(tm2->givenType) == "truthy & unknown");
     }
 }
 

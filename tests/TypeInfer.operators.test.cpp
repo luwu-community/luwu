@@ -20,11 +20,14 @@ using namespace Luau;
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(LuauSolverAgnosticStringification)
 LUAU_FASTFLAG(LuauConcatDoesntAlwaysReturnString)
+LUAU_FASTFLAG(LuauTruthyFalsy)
 
 TEST_SUITE_BEGIN("TypeInferOperators");
 
 TEST_CASE_FIXTURE(Fixture, "or_joins_types")
 {
+    ScopedFastFlag sff{FFlag::LuauTruthyFalsy, true};
+
     CheckResult result = check(R"(
         local s = "a" or 10
         local x:string|number = s
@@ -33,8 +36,10 @@ TEST_CASE_FIXTURE(Fixture, "or_joins_types")
 
     if (!FFlag::DebugLuauForceOldSolver)
     {
-        // FIXME: Regression
-        CHECK("(string & ~((false | none)?)) | number" == toString(*requireType("s")));
+        // The underlying type is still `(string & truthy) | number` (an unsimplified regression --
+        // see CLI-115281-style issues), but with LuauTruthyFalsy on, ToString recognizes that the
+        // `truthy` part of `string & truthy` is redundant and hides it from display.
+        CHECK("number | string" == toString(*requireType("s")));
         CHECK("number | string" == toString(*requireType("x")));
     }
     else
@@ -46,6 +51,8 @@ TEST_CASE_FIXTURE(Fixture, "or_joins_types")
 
 TEST_CASE_FIXTURE(Fixture, "or_joins_types_with_no_extras")
 {
+    ScopedFastFlag sff{FFlag::LuauTruthyFalsy, true};
+
     CheckResult result = check(R"(
         local s = "a" or 10
         local x:number|string = s
@@ -55,8 +62,8 @@ TEST_CASE_FIXTURE(Fixture, "or_joins_types_with_no_extras")
 
     if (!FFlag::DebugLuauForceOldSolver)
     {
-        // FIXME: Regression.
-        CHECK("(string & ~((false | none)?)) | number" == toString(*requireType("s")));
+        // See the comment in "or_joins_types" above.
+        CHECK("number | string" == toString(*requireType("s")));
         CHECK("number | string" == toString(*requireType("y")));
     }
     else
@@ -68,6 +75,8 @@ TEST_CASE_FIXTURE(Fixture, "or_joins_types_with_no_extras")
 
 TEST_CASE_FIXTURE(Fixture, "or_joins_types_with_no_superfluous_union")
 {
+    ScopedFastFlag sff{FFlag::LuauTruthyFalsy, true};
+
     CheckResult result = check(R"(
         local s = "a" or "b"
         local x:string = s
@@ -76,8 +85,10 @@ TEST_CASE_FIXTURE(Fixture, "or_joins_types_with_no_superfluous_union")
 
     if (!FFlag::DebugLuauForceOldSolver)
     {
-        // FIXME: Regression
-        CHECK("(string & ~((false | none)?)) | string" == toString(requireType("s")));
+        // The underlying type is still a redundant `(string & truthy) | string` union (see the
+        // comment in "or_joins_types" above); ToString hides the `truthy` half of the first member,
+        // but the two members still render as textually-identical, undeduplicated "string"s.
+        CHECK("string | string" == toString(requireType("s")));
     }
     else
         CHECK("string" == toString(requireType("s")));
@@ -1327,6 +1338,72 @@ TEST_CASE_FIXTURE(Fixture, "unrelated_primitives_cannot_be_compared")
 
     LUAU_CHECK_ERROR_COUNT(1, result);
     LUAU_CHECK_ERROR(result, CannotCompareUnrelatedTypes);
+}
+
+TEST_CASE_FIXTURE(Fixture, "unrelated_types_in_union_with_none_can_still_be_compared")
+{
+    CheckResult result = check(R"(
+        local x: string | none = "a"
+        local c = x == 5
+    )");
+
+    LUAU_CHECK_ERROR_COUNT(1, result);
+    LUAU_CHECK_ERROR(result, CannotCompareUnrelatedTypes);
+}
+
+TEST_CASE_FIXTURE(Fixture, "none_itself_can_be_compared_to_anything")
+{
+    CheckResult result = check(R"(
+        local x: none = nil :: any
+        local c = x == 5
+        local d = x == "hello"
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(Fixture, "union_with_none_can_still_be_compared_to_a_member_of_the_union")
+{
+    CheckResult result = check(R"(
+        local x: string | none = "a"
+        local c = x == "hello"
+        local d = x == nil
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(Fixture, "union_with_none_can_be_compared_to_another_union_with_none")
+{
+    CheckResult result = check(R"(
+        local x: string | none = "a"
+        local y: number | none = 5
+        local c = x == y
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(Fixture, "assigning_an_optional_none_value_where_it_is_unchecked_reports_a_friendly_error")
+{
+    CheckResult result = check(R"(
+        local x: string | none = "a"
+        local y: string = x
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ("this 'string' value is optional and may be 'none', use an if condition to check", toString(result.errors[0]));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "calling_a_method_on_an_optional_none_value_reports_a_friendly_error")
+{
+    CheckResult result = check(R"(
+        local cats = if math.random(1, 4) > 2 then "meow" else none
+        cats:sub(1, 2)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ("this 'string' value is optional and may be 'none', use an if condition to check", toString(result.errors[0]));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "mm_comparisons_must_return_a_boolean")

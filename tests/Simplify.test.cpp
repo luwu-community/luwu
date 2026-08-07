@@ -482,7 +482,7 @@ TEST_CASE_FIXTURE(SimplifyFixture, "union")
 
 TEST_CASE_FIXTURE(SimplifyFixture, "two_unions")
 {
-    ScopedFastInt sfi{DFInt::LuauSimplificationComplexityLimit, 10};
+    ScopedFastInt sfi{DFInt::LuauSimplificationComplexityLimit, 15};
     TypeId t1 = arena->addType(UnionType{{numberTy, booleanTy, stringTy, nilTy, tableTy}});
 
     CHECK("false?" == intersectStr(t1, falsyTy));

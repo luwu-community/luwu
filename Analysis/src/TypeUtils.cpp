@@ -790,7 +790,7 @@ bool isOptionalType(TypeId ty, NotNull<BuiltinTypes> builtinTypes)
     if (ty == builtinTypes->nilType || ty == builtinTypes->anyType || ty == builtinTypes->unknownType)
         return true;
     else if (const PrimitiveType* pt = get<PrimitiveType>(ty))
-        return pt->type == PrimitiveType::NilType;
+        return pt->type == PrimitiveType::NilType || pt->type == PrimitiveType::NoneType;
     else if (const UnionType* ut = get<UnionType>(ty))
     {
         for (TypeId option : ut)
@@ -799,7 +799,7 @@ bool isOptionalType(TypeId ty, NotNull<BuiltinTypes> builtinTypes)
 
             if (option == builtinTypes->nilType || option == builtinTypes->anyType || option == builtinTypes->unknownType)
                 return true;
-            else if (const PrimitiveType* pt = get<PrimitiveType>(option); pt && pt->type == PrimitiveType::NilType)
+            else if (const PrimitiveType* pt = get<PrimitiveType>(option); pt && (pt->type == PrimitiveType::NilType || pt->type == PrimitiveType::NoneType))
                 return true;
         }
 
@@ -814,19 +814,23 @@ bool isApproximatelyFalsyType(TypeId ty)
     ty = follow(ty);
     bool seenNil = false;
     bool seenFalse = false;
+    // none is also falsy, alongside false and nil
+    bool seenNone = false;
     if (auto ut = get<UnionType>(ty))
     {
         for (auto option : ut)
         {
             if (auto pt = get<PrimitiveType>(option); pt && pt->type == PrimitiveType::NilType)
                 seenNil = true;
+            else if (auto pt = get<PrimitiveType>(option); pt && pt->type == PrimitiveType::NoneType)
+                seenNone = true;
             else if (auto st = get<SingletonType>(option); st && st->variant == BooleanSingleton{false})
                 seenFalse = true;
             else
                 return false;
         }
     }
-    return seenFalse && seenNil;
+    return seenFalse && seenNil && seenNone;
 }
 
 bool isApproximatelyTruthyType(TypeId ty)

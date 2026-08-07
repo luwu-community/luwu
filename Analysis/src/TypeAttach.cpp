@@ -441,7 +441,7 @@ public:
     {
         AstArray<AstTypeOrPack> params;
         params.size = 1;
-        params.data = static_cast<AstTypeOrPack*>(allocator->allocate(sizeof(AstType*)));
+        params.data = static_cast<AstTypeOrPack*>(allocator->allocate(sizeof(AstTypeOrPack)));
         params.data[0] = AstTypeOrPack{Luau::visit(*this, ntv.ty->ty), nullptr};
 
         return allocator->alloc<AstTypeReference>(Location(), std::nullopt, AstName("negate"), std::nullopt, Location(), true, params);

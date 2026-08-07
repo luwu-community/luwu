@@ -18,6 +18,7 @@
 #include <string.h>
 
 LUAU_FASTFLAG(LuauDirectFieldGet)
+LUAU_FASTFLAG(LuauNonePrimitive)
 LUAU_FASTFLAGVARIABLE(LuauAutoStack)
 LUAU_FASTFLAGVARIABLE(LuauCloneTableFix)
 LUAU_FASTFLAGVARIABLE(LuauExternallyManagedBuffers)
@@ -687,6 +688,7 @@ void lua_pushnil(lua_State* L)
 
 void lua_pushnone(lua_State* L)
 {
+    LUAU_ASSERT(FFlag::LuauNonePrimitive);
     ensure_stack(L, 1);
     setnonevalue(L->top);
     api_incr_top(L);

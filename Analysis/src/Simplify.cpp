@@ -998,6 +998,8 @@ std::optional<TypeId> TypeSimplifier::basicIntersectWithTruthy(TypeId target) co
         {
         case PrimitiveType::NilType:
             return builtinTypes->neverType;
+        case PrimitiveType::NoneType:
+            return builtinTypes->neverType;
         case PrimitiveType::Boolean:
             return builtinTypes->trueType;
         default:
@@ -1040,6 +1042,8 @@ std::optional<TypeId> TypeSimplifier::basicIntersectWithFalsy(TypeId target) con
         {
         case PrimitiveType::NilType:
             return builtinTypes->nilType;
+        case PrimitiveType::NoneType:
+            return builtinTypes->noneType;
         case PrimitiveType::Boolean:
             return builtinTypes->falseType;
         default:
