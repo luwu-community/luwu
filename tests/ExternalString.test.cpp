@@ -33,6 +33,27 @@ static int dostring(lua_State* L, const char* code)
 
 TEST_SUITE_BEGIN("ExternalStrings");
 
+static int too_big_external_string_cb(lua_State* L)
+{
+    const char* my_string = "fake";
+    size_t len = (1 << 30) + 1; // MAXSSIZE + 1
+    int test_userdata = 42;
+    lua_pushexternalstring(L, my_string, len, &test_userdata, test_string_free_cb);
+    return 0;
+}
+
+TEST_CASE("ExternalStringTooBig")
+{
+    ScopedFastFlag sff{FFlag::LuauExternalString, true};
+    std::unique_ptr<lua_State, void (*)(lua_State*)> state(luaL_newstate(), lua_close);
+    lua_State* L = state.get();
+    
+    s_externalStringFreeCount = 0;
+    
+    int result = lua_cpcall(L, too_big_external_string_cb, NULL);
+    CHECK(result == LUA_ERRRUN);
+    CHECK(s_externalStringFreeCount == 1);
+}
 
 TEST_CASE("ExternalStringBasic")
 {
