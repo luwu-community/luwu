@@ -6,15 +6,15 @@ Add support for externally managed/allocated strings to the Luau VM, allowing ho
 
 ## Motivation
 
-Luau's `string` type represents immutable byte sequences. Currently, creating a string in Luau requires copying the bytes from the host application into a VM-managed allocation. In embedding scenarios, it is common for the host to already possess large string payloads (e.g. database query results, large JSON documents, or memory-mapped files). 
+Luau's `string` type represents immutable byte sequences. Currently, creating a string in Luau requires copying the bytes from the host application into a VM-managed allocation. In embedding scenarios, it is common for the host to already possess large strings (such as errors w/ stack traces, data from a JSON file etc.).  
 
-By introducing external strings, we allow embeddings to wrap these existing memory allocations without copying, while still allowing the Luau garbage collector to accurately track the memory footprint of externally allocated data. This follows the same pattern and motivation as the recently added External Buffers, but tailored for string interning semantics.
+External strings (which also have existing precedence in Lua 5.5) allows embedders to wrap these existing string allocations without copying while maintaining full access to existing string infrastructure (`string` library, tables w/ string keys etc.)
 
 ## Design
 
 ### C API Additions
 
-The Luau C API is expanded with the following functions and types:
+The Luau C API is expanded with the following functions and types (similar to external buffers except w/o the mode flag as Luau strings are *always* immutable):
 
     typedef void (*lua_StringFree)(lua_State* L, const char* data, size_t sz, void* userdata);
 
@@ -63,7 +63,7 @@ Because strings are interned and hashed, modifying the underlying bytes of an ac
 
 ## Drawbacks
 
-* **Memory Overhead for Normal Strings:** To ensure that accessing string data (via the internal `getstr()` macro) remains branchless and zero-cost for performance, we introduce a single pointer overhead (8 bytes on 64-bit platforms) to *all* string objects. Normal inline strings will use this pointer to point to their own inline memory, while external strings will use it to point to the host memory. This represents a minor memory increase across the board for string-heavy workloads.
+* **Memory Overhead for Normal Strings:** To ensure that accessing string data (via the internal `getstr()` macro) remains branchless and zero-cost for performance, we introduce a single pointer overhead (8 bytes on 64-bit platforms) to *all* string objects. Normal inline strings will use this pointer to point to their own inline memory, while external strings will use it to point to the host memory. This represents a minor memory increase across the board for string-heavy workloads. To avoid the overhead caused by this in cases where external strings are not needed, a new `LUA_ENABLE_EXTERNAL_STRING` compile time option will be added.
 
 ## Alternatives
 
