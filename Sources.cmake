@@ -598,6 +598,7 @@ if(TARGET Luau.Conformance)
     # Luau.Conformance Sources
     target_sources(Luau.Conformance PRIVATE
         tests/ExternalBuffer.test.cpp
+        tests/ExternalString.test.cpp
         tests/RegisterCallbacks.h
         tests/RegisterCallbacks.cpp
         tests/ConformanceIrHooks.h

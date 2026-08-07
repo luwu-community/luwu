@@ -1563,6 +1563,33 @@ void* lua_getbufferuserdata(lua_State* L, int idx)
     return ttisbuffer(p) ? bufvalue(p)->userdata : nullptr;
 }
 
+const char* lua_newexternalstring(lua_State* L, const char* data, size_t len, void* userdata, lua_StringFree free_cb)
+{
+    luaC_checkGC(L);
+    luaC_threadbarrier(L);
+    ensure_stack(L, 1);
+    TString* ts = luaS_newexternallstr(L, data, len, userdata, free_cb);
+    setsvalue(L, L->top, ts);
+    api_incr_top(L);
+    return getstr(ts);
+}
+
+int lua_isstringexternal(lua_State* L, int idx)
+{
+    StkId p = index2addr(L, idx);
+    return ttisstring(p) ? (!tsisinline(tsvalue(p))) : 0;
+}
+
+void* lua_getstringexternaluserdata(lua_State* L, int idx)
+{
+    StkId p = index2addr(L, idx);
+    if (ttisstring(p) && !tsisinline(tsvalue(p)))
+    {
+        return getexternalmeta(tsvalue(p))->userdata;
+    }
+    return nullptr;
+}
+
 static const char* aux_upvalue(StkId fi, int n, TValue** val)
 {
     Closure* f;

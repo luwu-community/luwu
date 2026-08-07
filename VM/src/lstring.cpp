@@ -79,6 +79,7 @@ static TString* newlstr(lua_State* L, const char* str, size_t l, unsigned int h)
     ts->atom = ATOM_UNDEF;
     ts->hash = h;
     ts->len = unsigned(l);
+    ts->dataptr = ts->data;
 
     memcpy(ts->data, str, l);
     ts->data[l] = '\0'; // ending 0
@@ -105,6 +106,7 @@ TString* luaS_bufstart(lua_State* L, size_t size)
     ts->atom = ATOM_UNDEF;
     ts->hash = 0; // computed in luaS_buffinish
     ts->len = unsigned(size);
+    ts->dataptr = ts->data;
 
     ts->next = NULL;
 
@@ -161,6 +163,59 @@ TString* luaS_newlstr(lua_State* L, const char* str, size_t l)
     return newlstr(L, str, l, h); // not found
 }
 
+TString* luaS_newexternallstr(lua_State* L, const char* str, size_t l, void* userdata, lua_StringFree free_cb)
+{
+    unsigned int h = luaS_hash(str, l);
+    for (TString* el = L->global->strt.hash[lmod(h, L->global->strt.size)]; el != NULL; el = el->next)
+    {
+        if (el->len == l && (memcmp(str, getstr(el), l) == 0))
+        {
+            // string may be dead
+            if (isdead(L->global, obj2gco(el)))
+                changewhite(obj2gco(el));
+            
+            // Duplicate found, we don't need the new external allocation
+            if (free_cb)
+                free_cb(L, str, l, userdata);
+                
+            return el;
+        }
+    }
+    
+    if (l > MAXSSIZE)
+        luaM_toobig(L);
+
+    // Allocate just enough for the header and the ExternalStringMeta in data[]
+    TString* ts = luaM_newgco(L, TString, offsetof(TString, data) + sizeof(ExternalStringMeta), L->activememcat);
+    luaC_init(L, ts, LUA_TSTRING);
+    ts->atom = ATOM_UNDEF;
+    ts->hash = h;
+    ts->len = unsigned(l);
+    
+    // Set dataptr to external memory (making tsisinline(ts) false)
+    ts->dataptr = (char*)str;
+    
+    // Store metadata in the data[] array
+    ExternalStringMeta* meta = getexternalmeta(ts);
+    meta->free_cb = free_cb;
+    meta->userdata = userdata;
+
+    // Account for external memory
+    L->global->totalbytes += l;
+    L->global->memcatbytes[L->activememcat] += l;
+
+    stringtable* tb = &L->global->strt;
+    h = lmod(h, tb->size);
+    ts->next = tb->hash[h]; // chain new entry
+    tb->hash[h] = ts;
+
+    tb->nuse++;
+    if (tb->nuse > cast_to(uint32_t, tb->size) && tb->size <= INT_MAX / 2)
+        luaS_resize(L, tb->size * 2); // too crowded
+
+    return ts;
+}
+
 static bool unlinkstr(lua_State* L, TString* ts)
 {
     global_State* g = L->global;
@@ -190,5 +245,19 @@ void luaS_free(lua_State* L, TString* ts, lua_Page* page)
     else
         LUAU_ASSERT(ts->next == NULL); // orphaned string buffer
 
-    luaM_freegco(L, ts, sizestring(ts->len), ts->memcat, page);
+    if (!tsisinline(ts))
+    {
+        ExternalStringMeta* meta = getexternalmeta(ts);
+        if (meta->free_cb)
+            meta->free_cb(L, ts->dataptr, ts->len, meta->userdata);
+        
+        L->global->totalbytes -= ts->len;
+        L->global->memcatbytes[ts->memcat] -= ts->len;
+        
+        luaM_freegco(L, ts, offsetof(TString, data) + sizeof(ExternalStringMeta), ts->memcat, page);
+    }
+    else
+    {
+        luaM_freegco(L, ts, sizestring(ts->len), ts->memcat, page);
+    }
 }
