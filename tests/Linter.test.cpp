@@ -425,6 +425,46 @@ return foo()
     CHECK_EQ(result.warnings[1].text, "Function 'qux' is never used; prefix with '_' to silence");
 }
 
+TEST_CASE_FIXTURE(Fixture, "FunctionUnusedFutureImprovement")
+{
+    ScopedFastFlag sff{FFlag::LuauFunctionUnusedRecursiveLinting, true};
+
+    LintResult result = lint(R"(
+-- note: ideally, these would both give warnings, but currently neither of them do (https://github.com/luau-lang/luau/pull/2553/changes#r3738290571)
+
+purr = function(n)
+    return if n < 0 then 1 else n * purr(n - 1)
+end
+
+local hiss
+hiss = function(n)
+    return if n < 0 then 1 else n * hiss(n - 1)
+end
+)");
+
+    REQUIRE(0 == result.warnings.size());
+}
+
+TEST_CASE_FIXTURE(Fixture, "FunctionUnusedRuntimeChange")
+{
+    ScopedFastFlag sff{FFlag::LuauFunctionUnusedRecursiveLinting, true};
+
+    LintResult result = lint(R"(
+-- note: ideally, these would both give warnings, but currently neither of them do (https://github.com/luau-lang/luau/pull/2553/changes#r3738290571)
+
+purr = function(n)
+    return if n < 0 then 1 else n * purr(n - 1)
+end
+
+local hiss
+hiss = function(n)
+    return if n < 0 then 1 else n * hiss(n - 1)
+end
+)");
+
+    REQUIRE(0 == result.warnings.size());
+}
+
 TEST_CASE_FIXTURE(Fixture, "UnreachableCodeBasic")
 {
     LintResult result = lint(R"(
