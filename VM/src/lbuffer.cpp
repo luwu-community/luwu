@@ -5,6 +5,7 @@
 #include "lmem.h"
 
 #include "lstate.h"
+#include "ldo.h"
 #include <string.h>
 
 Buffer* luaB_newbuffer(lua_State* L, size_t s)
@@ -26,9 +27,32 @@ Buffer* luaB_newexternalbuffer(lua_State* L, size_t s, void* data, void* userdat
 {
     LUAU_ASSERT(mode == 1 || mode == 2);
     if (s > MAX_BUFFER_SIZE)
+    {
+        if (free_cb)
+            free_cb(L, data, s, userdata);
         luaM_toobig(L);
+    }
 
-    Buffer* b = luaM_newgco(L, Buffer, offsetof(Buffer, inline_data), L->activememcat);
+    struct AllocContext
+    {
+        Buffer* b = nullptr;
+
+        static void run(lua_State* L, void* ud)
+        {
+            AllocContext* ctx = static_cast<AllocContext*>(ud);
+            ctx->b = luaM_newgco(L, Buffer, offsetof(Buffer, inline_data), L->activememcat);
+        }
+    } ctx;
+
+    int status = luaD_rawrunprotected(L, &AllocContext::run, &ctx);
+    if (status != 0)
+    {
+        if (free_cb)
+            free_cb(L, data, s, userdata);
+        luaD_throw(L, status);
+    }
+
+    Buffer* b = ctx.b;
     luaC_init(L, b, LUA_TBUFFER);
     b->len = unsigned(s);
     b->mode = mode;

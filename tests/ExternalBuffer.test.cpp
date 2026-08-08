@@ -49,6 +49,28 @@ static int dostring_ncg(lua_State* L, const char* code)
 
 TEST_SUITE_BEGIN("ExternalBuffers");
 
+static int too_big_external_buffer_cb(lua_State* L)
+{
+    size_t len = (1 << 30) + 1; // MAX_BUFFER_SIZE + 1
+    int test_userdata = 42;
+    lua_newexternalbuffer(L, len, nullptr, &test_userdata, test_buffer_free_cb, LUA_BHOST_MUTABLE);
+    return 0;
+}
+
+TEST_CASE("ExternalBufferTooBig")
+{
+    ScopedFastFlag sff{FFlag::LuauExternallyManagedBuffers, true};
+    std::unique_ptr<lua_State, void (*)(lua_State*)> state(luaL_newstate(), lua_close);
+    lua_State* L = state.get();
+    
+    s_externalBufferFreeCount = 0;
+    
+    int result = lua_cpcall(L, too_big_external_buffer_cb, NULL);
+    CHECK(result == LUA_ERRRUN);
+    CHECK(s_externalBufferFreeCount == 1);
+}
+
+
 TEST_CASE("ExternalBufferMutable")
 {
     ScopedFastFlag sff{FFlag::LuauExternallyManagedBuffers, true};
