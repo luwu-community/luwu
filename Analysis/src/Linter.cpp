@@ -716,10 +716,19 @@ private:
     struct Local
     {
         AstNode* defined = nullptr;
+<<<<<<< HEAD
         bool function;
         bool import;
         bool used;
         bool arg;
+=======
+        unsigned int scopeDepth = 0;
+        bool function = false;
+        bool import = false;
+        bool usedOutsideSelf = false;
+        bool usedRecursively = false;
+        bool arg = false;
+>>>>>>> d7d2be8e (renames)
     };
 
     struct Global
@@ -744,7 +753,7 @@ private:
     {
         for (auto& l : locals)
         {
-            if (l.second.used)
+            if (l.second.usedOutsideSelf)
                 reportUsedLocal(l.first, l.second);
             else if (l.second.defined)
                 reportUnusedLocal(l.first, l.second);
@@ -803,6 +812,7 @@ private:
             return;
 
         if (info.function)
+<<<<<<< HEAD
             emitWarning(
                 *context,
                 LintWarning::Code_FunctionUnused,
@@ -810,6 +820,15 @@ private:
                 "Function '%s' is never used; prefix with '_' to silence",
                 local->name.value
             );
+=======
+        {
+            warning = LintWarning::Code_FunctionUnused;
+            if (info.usedRecursively)
+                msg = "Function '%s' is never used outside its own body; prefix with '_' to silence";
+            else
+                msg = "Function '%s' is never used; prefix with '_' to silence";
+        }
+>>>>>>> d7d2be8e (renames)
         else if (info.import)
             emitWarning(
                 *context, LintWarning::Code_ImportUnused, local->location, "Import '%s' is never used; prefix with '_' to silence", local->name.value
@@ -887,7 +906,14 @@ private:
     {
         Local& l = locals[node->local];
 
+<<<<<<< HEAD
         l.used = true;
+=======
+        if (FFlag::LuauFunctionUnusedRecursiveLinting && l.function && l.scopeDepth > 0)
+            l.usedRecursively = true;
+        else
+            l.usedOutsideSelf = true;
+>>>>>>> d7d2be8e (renames)
 
         return true;
     }
@@ -924,7 +950,7 @@ private:
         AstLocal* astLocal = imports[*node->prefix];
         Local& local = locals[astLocal];
         LUAU_ASSERT(local.import);
-        local.used = true;
+        local.usedOutsideSelf = true;
 
         return true;
     }
@@ -959,9 +985,18 @@ private:
 
     struct Global
     {
+<<<<<<< HEAD
         Location location;
         bool function;
         bool used;
+=======
+        unsigned int scopeDepth = 0;
+        bool func = false;
+        bool usedOutsideSelf = false;
+        bool usedRecursively = false;
+
+        Location nameLocation;
+>>>>>>> d7d2be8e (renames)
     };
 
     DenseHashMap<AstName, Global> globals;
@@ -975,6 +1010,7 @@ private:
     {
         for (auto& g : globals)
         {
+<<<<<<< HEAD
             if (g.second.function && !g.second.used && g.first.value[0] != '_')
                 emitWarning(
                     *context,
@@ -983,6 +1019,18 @@ private:
                     "Function '%s' is never used; prefix with '_' to silence",
                     g.first.value
                 );
+=======
+            if (!g.second.func || g.second.usedOutsideSelf || g.first.value[0] == '_')
+                continue;
+
+            const char* msg;
+            if (g.second.usedRecursively)
+                msg = "Function '%s' is never used outside its own body; prefix with '_' to silence";
+            else
+                msg = "Function '%s' is never used; prefix with '_' to silence";
+
+            emitWarning(*context, LintWarning::Code_FunctionUnused, g.second.nameLocation, msg, g.first.value);
+>>>>>>> d7d2be8e (renames)
         }
     }
 
@@ -1007,7 +1055,14 @@ private:
     {
         Global& g = globals[node->name];
 
+<<<<<<< HEAD
         g.used = true;
+=======
+        if (FFlag::LuauFunctionUnusedRecursiveLinting && g.func && g.scopeDepth > 0)
+            g.usedRecursively = true;
+        else
+            g.usedOutsideSelf = true;
+>>>>>>> d7d2be8e (renames)
 
         return true;
     }
