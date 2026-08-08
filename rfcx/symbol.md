@@ -12,7 +12,7 @@ Luau (under the `none` rfcx) now includes a primitive whole sole job is to be a 
 
 ### The `symbol` Primitive
 
-A symbol is a new primitive type in Luau. It is passed by value (though its uniqueness is reference-based) and is immutable.
+A symbol is a new primitive type in Luau. It is passed by value (equality is reference-based so all symbols created by `symbol.create` are unique and do not equal each other) and is immutable.
 
 - **Equality**: Symbol equality is strictly reference-based (similar to `lightuserdata`). `symbol.create("A") ~= symbol.create("A")`.
 - **Truthiness**: Each symbol carries a boolean flag determining if it evaluates to `true` or `false` in conditionals.
