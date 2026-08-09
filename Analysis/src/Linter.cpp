@@ -747,7 +747,7 @@ private:
     {
         for (auto& l : locals)
         {
-            if (l.second.usedOutsideSelf)
+            if (l.second.used)
                 reportUsedLocal(l.first, l.second);
             else if (l.second.defined)
                 reportUnusedLocal(l.first, l.second);
@@ -805,9 +805,6 @@ private:
         if (local->name.value[0] == '_')
             return;
 
-        const char* msg;
-        LintWarning::Code warning;
-
         if (info.function)
             if (info.softUsed)
                 emitWarning(
@@ -827,16 +824,13 @@ private:
                 );
         else if (info.import)
         {
-            warning = LintWarning::Code_ImportUnused;
-            msg = "Import '%s' is never used; prefix with '_' to silence";
+            emitWarning(*context, LintWarning::Code_ImportUnused, local->location, "Import '%s' is never used; prefix with '_' to silence", local->name.value);
         }
         else
         {
-            warning = LintWarning::Code_LocalUnused;
-            msg = "Variable '%s' is never used; prefix with '_' to silence";
+            emitWarning(*context, LintWarning::Code_LocalUnused, local->location, "Variable '%s' is never used; prefix with '_' to silence", local->name.value);
         }
 
-        emitWarning(*context, LintWarning::Code_FunctionUnused, local->location, msg, local->name.value);
     }
 
     bool isRequireCall(AstExpr* expr)
@@ -897,7 +891,7 @@ private:
         Local& l = locals[node->name];
 
         l.defined = node;
-        l.function = true;
+        l.function.emplace(node->location);
 
         return true;
     }
@@ -946,7 +940,7 @@ private:
         AstLocal* astLocal = imports[*node->prefix];
         Local& local = locals[astLocal];
         LUAU_ASSERT(local.import);
-        local.usedOutsideSelf = true;
+        local.used = true;
 
         return true;
     }
@@ -1022,19 +1016,18 @@ private:
     bool visit(AstStatFunction* node) override
     {
         AstExprGlobal* expr = node->name->as<AstExprGlobal>();
-        if (!expr)
-            return true;
-
-        Global& g = globals[expr->name];
-        g.func = true;
-        g.nameLocation = expr->location;
+        if (expr) {
+            Global& g = globals[expr->name];
 
             g.function.emplace(node->location);
             g.location = expr->location;
 
             node->func->visit(this);
 
-        return false;
+            return false;
+        }
+
+        return true;
     }
 
     bool visit(AstExprGlobal* node) override
