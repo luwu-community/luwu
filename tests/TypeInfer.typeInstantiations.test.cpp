@@ -297,6 +297,31 @@ TEST_CASE_FIXTURE(Fixture, "not_a_function")
     }
 }
 
+TEST_CASE_FIXTURE(Fixture, "unknown_type_reports_error")
+{
+    ScopedFastFlag sffSolver{FFlag::DebugLuauForceOldSolver, false};
+
+    CheckResult result = check(R"(
+    --!strict
+    local function domeow<T>(x: T): T
+        return x
+    end
+
+    type CoinbaseTicker = {
+        product_id: string,
+        price: string,
+        side: string,
+    }
+
+    local res = domeow<<CoinbasTicker>>({price = "12", product_id = "4", side = "upside down"})
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    LUAU_REQUIRE_ERROR(result, UnknownSymbol);
+
+    CHECK_EQ("Unknown type 'CoinbasTicker'", toString(result.errors[0]));
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "metatable_call")
 {
     SUBCASE_BOTH_SOLVERS()

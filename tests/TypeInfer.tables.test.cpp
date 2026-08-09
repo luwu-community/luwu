@@ -19,6 +19,7 @@
 using namespace Luau;
 
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
+LUAU_FASTFLAG(LuauTruthyFalsy)
 
 LUAU_FASTFLAG(LuauInstantiateInSubtyping)
 LUAU_FASTFLAG(LuauFixIndexerSubtypingOrdering)
@@ -5287,11 +5288,21 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "metatable_union_type")
         end
     )");
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    CHECK_EQ(
-        "Cannot add indexer to table '{ @metatable t1, (nil & ~((false | none)?)) | {  } } where t1 = { new: <a>(a) -> { @metatable t1, (a & ~((false | none)?)) | {  "
-        "} } }'",
-        toString(result.errors[0])
-    );
+    if (FFlag::LuauTruthyFalsy)
+    {
+        CHECK_EQ(
+            "Cannot add indexer to table '{ @metatable t1, (nil & truthy) | {  } } where t1 = { new: <a>(a) -> { @metatable t1, (a & truthy) | {  } } }'",
+            toString(result.errors[0])
+        );
+    }
+    else
+    {
+        CHECK_EQ(
+            "Cannot add indexer to table '{ @metatable t1, (nil & ~((false | none)?)) | {  } } where t1 = { new: <a>(a) -> { @metatable t1, (a & ~((false | none)?)) | {  "
+            "} } }'",
+            toString(result.errors[0])
+        );
+    }
 }
 
 TEST_CASE_FIXTURE(Fixture, "function_check_constraint_too_eager")

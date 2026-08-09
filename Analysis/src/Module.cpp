@@ -135,14 +135,19 @@ struct ClonePublicInterface : Substitution
 
     bool isDirty(TypeId ty) override
     {
-        if (ty->owningArena == module->internalTypes.get())
-            return true;
+        bool dirty = [&]
+        {
+            if (ty->owningArena == module->internalTypes.get())
+                return true;
 
-        if (const FunctionType* ftv = get<FunctionType>(ty))
-            return ftv->level.level != 0;
-        if (const TableType* ttv = get<TableType>(ty))
-            return ttv->level.level != 0;
-        return false;
+            if (const FunctionType* ftv = get<FunctionType>(ty))
+                return ftv->level.level != 0;
+            if (const TableType* ttv = get<TableType>(ty))
+                return ttv->level.level != 0;
+            return false;
+        }();
+
+        return dirty;
     }
 
     bool isDirty(TypePackId tp) override
@@ -152,10 +157,7 @@ struct ClonePublicInterface : Substitution
 
     bool ignoreChildrenVisit(TypeId ty) override
     {
-        if (ty->owningArena != module->internalTypes.get())
-            return true;
-
-        return false;
+        return ty->owningArena != module->internalTypes.get();
     }
 
     bool ignoreChildrenVisit(TypePackId tp) override

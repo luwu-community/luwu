@@ -441,6 +441,8 @@ struct Compiler
 
         argCount = localStack.size();
 
+        currentFunction = func;
+
         if (FFlag::LuauDefaultArguments)
             compileFunctionArgDefaults(func);
 
@@ -448,7 +450,6 @@ struct Compiler
 
         bool terminatesEarly = false;
         Location terminationLocation;
-        currentFunction = func;
 
         for (size_t i = 0; i < stat->body.size; ++i)
         {

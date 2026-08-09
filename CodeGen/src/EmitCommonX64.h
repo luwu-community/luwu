@@ -194,7 +194,8 @@ inline void jumpIfTagIsNot(AssemblyBuilderX64& build, int ri, lua_Type tag, Labe
 inline void jumpIfFalsy(AssemblyBuilderX64& build, int ri, Label& target, Label& fallthrough)
 {
     jumpIfTagIs(build, ri, LUA_TNIL, target);             // false if nil
-    jumpIfTagIsNot(build, ri, LUA_TBOOLEAN, fallthrough); // true if not nil or boolean
+    jumpIfTagIs(build, ri, LUA_TSYMNONE, target);         // false if none (see l_isfalse)
+    jumpIfTagIsNot(build, ri, LUA_TBOOLEAN, fallthrough); // true if not nil, none, or boolean
 
     build.cmp(luauRegValueInt(ri), 0);
     build.jcc(ConditionX64::Equal, target); // true if boolean value is 'true'
@@ -203,8 +204,9 @@ inline void jumpIfFalsy(AssemblyBuilderX64& build, int ri, Label& target, Label&
 // Note: fallthrough label should be placed after this condition
 inline void jumpIfTruthy(AssemblyBuilderX64& build, int ri, Label& target, Label& fallthrough)
 {
-    jumpIfTagIs(build, ri, LUA_TNIL, fallthrough);   // false if nil
-    jumpIfTagIsNot(build, ri, LUA_TBOOLEAN, target); // true if not nil or boolean
+    jumpIfTagIs(build, ri, LUA_TNIL, fallthrough);     // false if nil
+    jumpIfTagIs(build, ri, LUA_TSYMNONE, fallthrough); // false if none (see l_isfalse)
+    jumpIfTagIsNot(build, ri, LUA_TBOOLEAN, target);   // true if not nil, none, or boolean
 
     build.cmp(luauRegValueInt(ri), 0);
     build.jcc(ConditionX64::NotEqual, target); // true if boolean value is 'true'

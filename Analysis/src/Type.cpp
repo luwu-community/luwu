@@ -29,6 +29,7 @@ LUAU_FASTINTVARIABLE(LuauTypeMaximumStringifierLength, 500)
 LUAU_FASTINTVARIABLE(LuauTableTypeMaximumStringifierLength, 0)
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAG(LuauInstantiateInSubtyping)
+LUAU_FASTFLAG(LuauGenericNominals)
 
 namespace Luau
 {
@@ -1073,11 +1074,87 @@ const Property* lookupExternTypeProp(const ExternType* cls, const Name& name)
     return nullptr;
 }
 
+// Two independently-produced clones of the same generic nominal type instantiation (e.g. one
+// `List<string>` built while resolving a type annotation, another built for a function call's
+// return type) are not the same TypeId, but should still be treated as the same nominal type.
+// Compare by the declaration they both stem from plus their instantiation arguments instead.
+static bool isSameGenericNominalInstantiation(const ExternType* a, const ExternType* b);
+
+// A type argument to a generic nominal type can itself be a generic nominal type instantiated
+// at a different call site (e.g. `Result<string, Option<List<string>>>`'s `Option<List<string>>`
+// argument) -- those need the same nominal comparison recursively, not raw TypeId equality.
+static bool sameNominalTypeArg(TypeId a, TypeId b)
+{
+    a = follow(a);
+    b = follow(b);
+    if (a == b)
+        return true;
+
+    const ExternType* aEt = get<ExternType>(a);
+    const ExternType* bEt = get<ExternType>(b);
+    if (aEt && bEt)
+        return isSameGenericNominalInstantiation(aEt, bEt);
+
+    return false;
+}
+
+static bool isSameGenericNominalInstantiation(const ExternType* a, const ExternType* b)
+{
+    if (a->name != b->name || a->definitionModuleName != b->definitionModuleName || a->definitionLocation != b->definitionLocation)
+        return false;
+
+    if (a->instantiatedTypeParams.size() != b->instantiatedTypeParams.size())
+        return false;
+
+    if (a->instantiatedTypePackParams.size() != b->instantiatedTypePackParams.size())
+        return false;
+
+    for (size_t i = 0; i < a->instantiatedTypeParams.size(); ++i)
+    {
+        if (!sameNominalTypeArg(a->instantiatedTypeParams[i], b->instantiatedTypeParams[i]))
+            return false;
+    }
+
+    for (size_t i = 0; i < a->instantiatedTypePackParams.size(); ++i)
+    {
+        if (follow(a->instantiatedTypePackParams[i]) != follow(b->instantiatedTypePackParams[i]))
+            return false;
+    }
+
+    return true;
+}
+
+// `parent` is the bare, un-instantiated declaration of a generic nominal type (e.g. the
+// `Exception<Data>` used as the discriminant for `typeof(x) == "Exception"`, as opposed to any
+// specific instantiation like `Exception<{kind: "IoError"}>`) if every one of its "instantiated"
+// type arguments is actually just its own declared generic placeholder rather than a concrete
+// argument. See ConstraintGenerator.cpp's handling of AstStatDeclareExternType, which sets this
+// up on the canonical extern type object.
+static bool isBareGenericNominalRoot(const ExternType* cls, const ExternType* parent)
+{
+    if (cls->name != parent->name || cls->definitionModuleName != parent->definitionModuleName || cls->definitionLocation != parent->definitionLocation)
+        return false;
+
+    for (TypeId param : parent->instantiatedTypeParams)
+        if (!get<GenericType>(follow(param)))
+            return false;
+
+    for (TypePackId param : parent->instantiatedTypePackParams)
+        if (!get<GenericTypePack>(follow(param)))
+            return false;
+
+    return true;
+}
+
 bool isSubclass(const ExternType* cls, const ExternType* parent)
 {
     while (cls)
     {
         if (cls == parent)
+            return true;
+        else if (FFlag::LuauGenericNominals && isSameGenericNominalInstantiation(cls, parent))
+            return true;
+        else if (FFlag::LuauGenericNominals && isBareGenericNominalRoot(cls, parent))
             return true;
         else if (!cls->parent)
             return false;

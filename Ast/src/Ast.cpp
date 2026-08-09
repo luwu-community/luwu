@@ -1087,13 +1087,17 @@ AstStatDeclareExternType::AstStatDeclareExternType(
     const AstName& name,
     std::optional<AstName> superName,
     const AstArray<AstDeclaredExternTypeProperty>& props,
-    AstTableIndexer* indexer
+    AstTableIndexer* indexer,
+    const AstArray<AstGenericType*>& generics,
+    const AstArray<AstGenericTypePack*>& genericPacks
 )
     : AstStat(ClassIndex(), location)
     , name(name)
     , superName(superName)
     , props(props)
     , indexer(indexer)
+    , generics(generics)
+    , genericPacks(genericPacks)
 {
 }
 

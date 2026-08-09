@@ -76,6 +76,9 @@ void luaT_init(lua_State* L)
     {
         L->global->ttname[i] = luaS_new(L, i == LUA_TSYMNONE ? "none" : luaT_typenames[i]);
         luaS_fix(L->global->ttname[i]); // never collect these names
+
+        L->global->ttypename[i] = luaS_new(L, luaT_typenames[i]);
+        luaS_fix(L->global->ttypename[i]); // never collect these names
     }
     for (i = 0; i < TM_N; i++)
     {

@@ -419,7 +419,10 @@ UnifyResult Unifier2::unify_(TypeId subTy, const FunctionType* superFn)
             generic = follow(generic);
             const GenericType* gen = get<GenericType>(generic);
             if (gen)
-                genericSubstitutions[generic] = freshType(scope, gen->polarity);
+            {
+                TypeId fresh = freshType(scope, gen->polarity);
+                genericSubstitutions[generic] = fresh;
+            }
         }
 
         for (TypePackId genericPack : subFn->genericPacks)

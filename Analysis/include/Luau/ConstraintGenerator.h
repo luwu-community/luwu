@@ -116,6 +116,10 @@ struct ConstraintGenerator
     // The private scope of type aliases for which the type parameters belong to.
     DenseHashMap<const AstStatTypeAlias*, ScopePtr> astTypeAliasDefiningScopes{nullptr};
 
+    // The private scope of an extern type declaration, used to resolve type references
+    // (e.g. a generic method's own type parameters) within its body. See LuauExternTypeUseDefinitionScope.
+    DenseHashMap<const AstStatDeclareExternType*, ScopePtr> astExternTypeDefiningScopes{nullptr};
+
     NotNull<const DataFlowGraph> dfg;
     RefinementArena refinementArena;
 
@@ -319,13 +323,14 @@ private:
         bool generalize = true
     );
 
-    InferencePack checkPack(const ScopePtr& scope, AstExprCall* call);
+    InferencePack checkPack(const ScopePtr& scope, AstExprCall* call, std::optional<TypeId> expectedType = std::nullopt);
     InferencePack checkExprCall(
         const ScopePtr& scope,
         AstExprCall* call,
         TypeId fnType,
         Checkpoint funcBeginCheckpoint,
-        Checkpoint funcEndCheckpoint
+        Checkpoint funcEndCheckpoint,
+        std::optional<TypeId> expectedType = std::nullopt
     );
 
     /**
