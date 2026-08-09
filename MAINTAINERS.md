@@ -4,7 +4,7 @@
 
 - LuauExternallyManagedBuffers and LuauBufferIsFrozen: @cheesycod
 - LuauDefaultArguments: @Bottersnike
-- LuauExternTypeGenericMethods and LuauExternTypeUseDefinitionScope: @deviaze
+- LuauGenericNominals, LuauExternTypeGenericMethods, and LuauExternTypeUseDefinitionScope: @deviaze
 - LuauNonePrimitive: @cheesycod
 - LuauExternalString (and DebugLuauAllowNonNullTerminatedStrings for tests): @cheesycod
 
