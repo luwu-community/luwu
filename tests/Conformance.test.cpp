@@ -4795,4 +4795,75 @@ TEST_CASE("lua_findlightuserdatatag")
     CHECK_EQ(available, 1);
 }
 
+struct StateChangeTestState
+{
+    bool called = false;
+    int status = -1;
+    std::string topString;
+};
+
+static void test_statechange(lua_State* L, int status)
+{
+    auto state = (StateChangeTestState*)lua_callbacks(L)->userdata;
+    state->called = true;
+    state->status = status;
+    if (lua_isstring(L, -1))
+        state->topString = lua_tostring(L, -1);
+    else
+        state->topString = "";
+}
+
+TEST_CASE("UserThreadStateChange")
+{
+    StateRef globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+
+    StateChangeTestState cbState;
+    lua_callbacks(L)->userdata = &cbState;
+    lua_callbacks(L)->userthreadstatechange = test_statechange;
+
+    const char* source = R"(
+        coroutine.yield("yielded")
+        error("errored")
+    )";
+
+    luaL_openlibs(L);
+    lua_State* T = lua_newthread(L);
+
+    size_t bytecodeSize = 0;
+    char* bytecode = luau_compile(source, strlen(source), nullptr, &bytecodeSize);
+    REQUIRE(luau_load(T, "=test", bytecode, bytecodeSize, 0) == 0);
+    free(bytecode);
+
+    cbState.called = false;
+    int resumeStatus = lua_resume(T, L, 0);
+    REQUIRE(resumeStatus == LUA_YIELD);
+    CHECK(cbState.called);
+    CHECK(cbState.status == LUA_YIELD);
+    CHECK(cbState.topString == "yielded");
+
+    cbState.called = false;
+    resumeStatus = lua_resume(T, L, 0);
+    REQUIRE(resumeStatus == LUA_ERRRUN);
+    CHECK(cbState.called);
+    CHECK(cbState.status == LUA_ERRRUN);
+    CHECK(cbState.topString.find("errored") != std::string::npos);
+
+    // Test a normal return
+    const char* source2 = R"(
+        return "success"
+    )";
+    lua_State* T2 = lua_newthread(L);
+    char* bytecode2 = luau_compile(source2, strlen(source2), nullptr, &bytecodeSize);
+    REQUIRE(luau_load(T2, "=test2", bytecode2, bytecodeSize, 0) == 0);
+    free(bytecode2);
+
+    cbState.called = false;
+    resumeStatus = lua_resume(T2, L, 0);
+    REQUIRE(resumeStatus == LUA_OK);
+    CHECK(cbState.called);
+    CHECK(cbState.status == LUA_OK);
+    CHECK(cbState.topString == "success");
+}
+
 TEST_SUITE_END();
