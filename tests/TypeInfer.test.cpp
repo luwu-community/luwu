@@ -33,6 +33,7 @@ LUAU_FASTFLAG(LuauSubtypingMissingPropertiesAsNil)
 LUAU_FASTFLAG(LuauImproveUniqueTableWidthSubtyping)
 LUAU_FASTFLAG(LuauDontBindOptionalGenericToNil)
 LUAU_FASTFLAG(LuauBidirectionalInferenceSimplifyTables)
+LUAU_FASTFLAG(LuauBetterMissingPropertiesTypeError)
 
 using namespace Luau;
 
@@ -1141,6 +1142,7 @@ end
 TEST_CASE_FIXTURE(Fixture, "cli_50041_committing_txnlog_in_apollo_client_error")
 {
     DOES_NOT_PASS_NEW_SOLVER_GUARD();
+    ScopedFastFlag sff{FFlag::LuauBetterMissingPropertiesTypeError, true};
 
     CheckResult result = check(R"(
         --!strict
@@ -1194,7 +1196,7 @@ TEST_CASE_FIXTURE(Fixture, "cli_50041_committing_txnlog_in_apollo_client_error")
             "'FieldSpecifier'"
             "\ncaused by:\n"
             "  Not all intersection parts are compatible.\n"
-            "Table type 'FieldSpecifier' not compatible with type '{ from: number? }' because the former has extra field 'fieldName'";
+            "extra field 'fieldName' found in type 'FieldSpecifier' from expected type '{ from: number? }'";
         CHECK_EQ(expected, toString(result.errors[0]));
     }
     else
