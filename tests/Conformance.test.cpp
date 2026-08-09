@@ -4893,7 +4893,6 @@ TEST_CASE("UserThreadStateChange")
     CHECK(cbState.called);
     CHECK(cbState.status == LUA_OK);
     CHECK(cbState.topString == "success");
->>>>>>> 8df88abd (add test for this and mention schedulers in rfc)
 }
 
 TEST_SUITE_END();
