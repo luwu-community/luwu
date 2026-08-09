@@ -5504,8 +5504,7 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "BufferSanityPositive")
 {
-    CHECK_EQ(
-        "\n" + getCodegenAssembly(R"(
+    const char* source = R"(
 local function foo(zero: number, b1: buffer, b2: buffer)
     buffer.writei8(b1, zero + 0, buffer.readi8(b1, zero + 0))
     buffer.writeu8(b1, zero + 0, buffer.readu8(b1, zero + 0))
@@ -5517,8 +5516,76 @@ local function foo(zero: number, b1: buffer, b2: buffer)
     buffer.writei16(b2, zero + 0, buffer.readi16(b2, zero + 0))
     buffer.writeu16(b2, zero + 0, buffer.readu16(b2, zero + 0))
 end
-)"),
-        R"(
+)";
+
+    // With LuauCodegenVmExitSyncMultiUse, the dead store optimizer recognizes that the
+    // redundant `zero + 0` (%11) can be dropped in favor of reusing %10 directly at every
+    // exit sync site, instead of keeping the extra ADD_NUM alive.
+    if (FFlag::LuauCodegenVmExitSyncMultiUse)
+    {
+        CHECK_EQ(
+            "\n" + getCodegenAssembly(source),
+            R"(
+; function foo($arg0, $arg1, $arg2) line 2
+bb_0:
+  CHECK_TAG R0, tnumber, exit(entry)
+  CHECK_TAG R1, tbuffer, exit(entry)
+  CHECK_TAG R2, tbuffer, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  implicit CHECK_SAFE_ENV exit(0)
+  %10 = LOAD_DOUBLE R0
+  %25 = LOAD_POINTER R1
+  %27 = NUM_TO_INT %10
+  CHECK_BUFFER_LEN %25, %27, 0i, 1i, undef, bb_exit_19
+   ; exit sync: R8, R5, {%10}
+  %29 = BUFFER_READI8 %25, %27, tbuffer
+  CHECK_BUFFER_MUTABLE %25, bb_exit_20
+   ; exit sync: R6, R5, {%29, %10}
+  BUFFER_WRITEI8 %25, %27, %29, tbuffer
+  %71 = BUFFER_READU8 %25, %27, tbuffer
+  CHECK_BUFFER_MUTABLE %25, bb_exit_21
+   ; exit sync: R6, {%71}
+  BUFFER_WRITEI8 %25, %27, %71, tbuffer
+  %109 = LOAD_POINTER R2
+  CHECK_BUFFER_LEN %109, %27, 0i, 2i, %10, exit(32)
+  %113 = BUFFER_READI8 %109, %27, tbuffer
+  CHECK_BUFFER_MUTABLE %109, bb_exit_22
+   ; exit sync: R6, {%113}
+  BUFFER_WRITEI8 %109, %27, %113, tbuffer
+  %155 = BUFFER_READU8 %109, %27, tbuffer
+  CHECK_BUFFER_MUTABLE %109, bb_exit_23
+   ; exit sync: R6, {%155}
+  BUFFER_WRITEI8 %109, %27, %155, tbuffer
+  %195 = ADD_INT %27, 1i
+  %197 = BUFFER_READI8 %109, %195, tbuffer
+  CHECK_BUFFER_MUTABLE %109, bb_exit_24
+   ; exit sync: R6, R5, {%197, %10}
+  BUFFER_WRITEI8 %109, %195, %197, tbuffer
+  %239 = BUFFER_READU8 %109, %195, tbuffer
+  CHECK_BUFFER_MUTABLE %109, bb_exit_25
+   ; exit sync: R6, {%239}
+  BUFFER_WRITEI8 %109, %195, %239, tbuffer
+  %281 = BUFFER_READI16 %109, %27, tbuffer
+  CHECK_BUFFER_MUTABLE %109, bb_exit_26
+   ; exit sync: R6, R5, {%281, %10}
+  BUFFER_WRITEI16 %109, %27, %281, tbuffer
+  %323 = BUFFER_READU16 %109, %27, tbuffer
+  CHECK_BUFFER_MUTABLE %109, bb_exit_27
+   ; exit sync: R6, {%323}
+  BUFFER_WRITEI16 %109, %27, %323, tbuffer
+  INTERRUPT 112u
+  RETURN R0, 0i
+)"
+        );
+    }
+    else
+    {
+        CHECK_EQ(
+            "\n" + getCodegenAssembly(source),
+            R"(
 ; function foo($arg0, $arg1, $arg2) line 2
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
@@ -5573,7 +5640,8 @@ bb_bytecode_1:
   INTERRUPT 112u
   RETURN R0, 0i
 )"
-    );
+        );
+    }
 }
 
 TEST_CASE_FIXTURE(LoweringFixture, "BufferSanityNegative")

@@ -1153,7 +1153,9 @@ public:
         const AstName& name,
         std::optional<AstName> superName,
         const AstArray<AstDeclaredExternTypeProperty>& props,
-        AstTableIndexer* indexer = nullptr
+        AstTableIndexer* indexer = nullptr,
+        const AstArray<AstGenericType*>& generics = {},
+        const AstArray<AstGenericTypePack*>& genericPacks = {}
     );
 
     void visit(AstVisitor* visitor) override;
@@ -1163,6 +1165,9 @@ public:
 
     AstArray<AstDeclaredExternTypeProperty> props;
     AstTableIndexer* indexer;
+
+    AstArray<AstGenericType*> generics;
+    AstArray<AstGenericTypePack*> genericPacks;
 };
 
 class AstType : public AstNode

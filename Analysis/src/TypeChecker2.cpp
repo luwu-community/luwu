@@ -4040,11 +4040,13 @@ void TypeChecker2::checkTypeInstantiation(
     {
         if (typeOrPack.type)
         {
+            visit(typeOrPack.type);
             ++typeCount;
         }
         else
         {
             LUAU_ASSERT(typeOrPack.typePack);
+            visit(typeOrPack.typePack);
             ++typePackCount;
         }
     }

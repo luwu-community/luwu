@@ -10,6 +10,7 @@
 
 LUAU_FASTINTVARIABLE(LuauTarjanChildLimit, 10000)
 LUAU_FASTFLAG(LuauSolverV2)
+LUAU_FASTFLAG(LuauGenericNominals)
 LUAU_FASTINTVARIABLE(LuauTarjanPreallocationSize, 256)
 
 namespace Luau
@@ -132,6 +133,12 @@ static TypeId shallowClone(TypeId ty, TypeArena& dest, const TxnLog* log)
             ExternType clone{a.name, a.props, a.parent, a.metatable, a.tags, a.userData, a.definitionModuleName, a.definitionLocation, a.indexer};
             if (FFlag::DebugLuauUserDefinedClasses)
                 clone.relation = a.relation;
+            if (FFlag::LuauGenericNominals)
+            {
+                clone.hasUnresolvedGenerics = a.hasUnresolvedGenerics;
+                clone.instantiatedTypeParams = a.instantiatedTypeParams;
+                clone.instantiatedTypePackParams = a.instantiatedTypePackParams;
+            }
             return dest.addType(std::move(clone));
         }
         else if constexpr (std::is_same_v<T, NegationType>)
@@ -277,6 +284,15 @@ void Tarjan::visitChildren(TypeId ty, int index)
                 },
                 *etv->relation
             );
+        }
+
+        if (FFlag::LuauGenericNominals)
+        {
+            for (TypeId itp : etv->instantiatedTypeParams)
+                visitChild(itp);
+
+            for (TypePackId itp : etv->instantiatedTypePackParams)
+                visitChild(itp);
         }
     }
     else if (const NegationType* ntv = get<NegationType>(ty))
@@ -861,6 +877,14 @@ void Substitution::replaceChildren(TypeId ty)
         {
             etv->indexer->indexType = replace(etv->indexer->indexType);
             etv->indexer->indexResultType = replace(etv->indexer->indexResultType);
+        }
+
+        if (FFlag::LuauGenericNominals)
+        {
+            for (TypeId& itp : etv->instantiatedTypeParams)
+                itp = replace(itp);
+            for (TypePackId& itp : etv->instantiatedTypePackParams)
+                itp = replace(itp);
         }
     }
     else if (NegationType* ntv = getMutable<NegationType>(ty))

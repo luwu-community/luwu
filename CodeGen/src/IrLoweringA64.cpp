@@ -1106,8 +1106,11 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
         // Check tag first
         build.umov_4s(temp, regOp(OP_A(inst)), 3);
-        build.cmp(temp, uint16_t(LUA_TBOOLEAN));
 
+        build.cmp(temp, uint16_t(LUA_TSYMNONE));
+        build.b(ConditionA64::Equal, saveRhs); // rhs if 'A' is none (see l_isfalse)
+
+        build.cmp(temp, uint16_t(LUA_TBOOLEAN));
         build.b(ConditionA64::UnsignedLess, saveRhs); // rhs if 'A' is nil
         build.b(ConditionA64::UnsignedGreater, exit); // Keep lhs if 'A' is not a boolean
 
@@ -1300,8 +1303,6 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         {
             Label notBool, exit;
 
-            // use the fact that NIL is the only value less than BOOLEAN to do two tag comparisons at once
-            CODEGEN_ASSERT(LUA_TNIL == 0 && LUA_TBOOLEAN == 1);
             build.cmp(regOp(OP_A(inst)), uint16_t(LUA_TBOOLEAN));
             build.b(ConditionA64::NotEqual, notBool);
 
@@ -1312,9 +1313,15 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
             build.b(exit);
 
-            // not boolean => result is true iff tag was nil
+            // not boolean => result is true iff tag was nil or symnone (the other falsy tags; see l_isfalse)
             build.setLabel(notBool);
-            build.cset(inst.regA64, ConditionA64::Less);
+            RegisterA64 tag = regOp(OP_A(inst));
+            RegisterA64 temp = regs.allocTemp(KindA64::w);
+            build.cmp(tag, uint16_t(LUA_TNIL));
+            build.cset(temp, ConditionA64::Equal);
+            build.cmp(tag, uint16_t(LUA_TSYMNONE));
+            build.cset(inst.regA64, ConditionA64::Equal);
+            build.orr(inst.regA64, inst.regA64, temp);
 
             build.setLabel(exit);
         }
@@ -1598,6 +1605,9 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         // nil => falsy
         CODEGEN_ASSERT(LUA_TNIL == 0);
         build.cbz(temp, labelOp(OP_C(inst)));
+        // none => falsy (see l_isfalse)
+        build.cmp(temp, uint16_t(LUA_TSYMNONE));
+        build.b(ConditionA64::Equal, labelOp(OP_C(inst)));
         // not boolean => truthy
         build.cmp(temp, uint16_t(LUA_TBOOLEAN));
         build.b(ConditionA64::NotEqual, labelOp(OP_B(inst)));
@@ -1614,6 +1624,9 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         // nil => falsy
         CODEGEN_ASSERT(LUA_TNIL == 0);
         build.cbz(temp, labelOp(OP_B(inst)));
+        // none => falsy (see l_isfalse)
+        build.cmp(temp, uint16_t(LUA_TSYMNONE));
+        build.b(ConditionA64::Equal, labelOp(OP_B(inst)));
         // not boolean => truthy
         build.cmp(temp, uint16_t(LUA_TBOOLEAN));
         build.b(ConditionA64::NotEqual, labelOp(OP_C(inst)));
@@ -3536,7 +3549,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         else
             CODEGEN_ASSERT(!"Unsupported instruction form");
 
-        build.ldr(inst.regA64, mem(inst.regA64, offsetof(global_State, ttname)));
+        build.ldr(inst.regA64, mem(inst.regA64, offsetof(global_State, ttypename)));
         break;
     }
     case IrCmd::GET_TYPEOF:

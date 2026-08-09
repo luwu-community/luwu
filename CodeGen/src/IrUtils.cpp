@@ -1017,7 +1017,7 @@ void foldConstants(IrBuilder& build, IrFunction& function, IrBlock& block, uint3
         {
             uint8_t a = function.tagOp(OP_A(inst));
 
-            if (a == LUA_TNIL)
+            if (a == LUA_TNIL || a == LUA_TSYMNONE)
                 substitute(function, inst, build.constInt(1));
             else if (a != LUA_TBOOLEAN)
                 substitute(function, inst, build.constInt(0));

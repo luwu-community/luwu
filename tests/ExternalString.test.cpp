@@ -18,6 +18,11 @@ static void test_string_free_cb(lua_State* L, const char* data, size_t sz, void*
     s_externalStringFreeCount++;
 }
 
+static void test_string_free_delete_cb(lua_State* L, const char* data, size_t sz, void* userdata)
+{
+    delete[] data;
+}
+
 static int dostring(lua_State* L, const char* code)
 {
     size_t bytecodeSize = 0;
@@ -172,7 +177,7 @@ TEST_CASE("ExternalStringBuffinishOverread")
     char* my_string = new char[content.size()];
     memcpy(my_string, content.data(), content.size());
 
-    lua_pushexternalstring(L, my_string, content.size(), nullptr, test_string_free_cb);
+    lua_pushexternalstring(L, my_string, content.size(), nullptr, test_string_free_delete_cb);
     lua_setglobal(L, "ext_str");
 
     // build an equal-content, equal-length string via runtime concatenation so it

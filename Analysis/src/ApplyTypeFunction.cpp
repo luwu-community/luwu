@@ -2,6 +2,10 @@
 
 #include "Luau/ApplyTypeFunction.h"
 
+#include "Luau/Common.h"
+
+LUAU_FASTFLAG(LuauGenericNominals)
+
 namespace Luau
 {
 
@@ -32,7 +36,19 @@ bool ApplyTypeFunction::ignoreChildren(TypeId ty)
     if (get<GenericType>(ty))
         return true;
     else if (get<ExternType>(ty))
+    {
+        if (FFlag::LuauGenericNominals)
+        {
+            // replaceChildren() re-checks ignoreChildren on the freshly cloned type, so the
+            // root check must also match the clone produced for genericNominalRoot, not just
+            // the template itself.
+            TypeId* clonedRoot = genericNominalRoot ? newTypes.find(genericNominalRoot) : nullptr;
+            if (ty == genericNominalRoot || (clonedRoot && ty == *clonedRoot) || get<ExternType>(ty)->hasUnresolvedGenerics)
+                return false;
+        }
+
         return true;
+    }
     else
         return false;
 }

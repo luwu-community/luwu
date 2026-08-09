@@ -139,9 +139,17 @@ struct GenericTypeFinder : TypeOnceVisitor
         return false;
     }
 
+    // Set by the caller (see LuauGenericNominals) to allow traversing into one specific
+    // ExternType -- the one this GenericTypeFinder is being run on -- while every other
+    // ExternType reached during that traversal remains opaque, same as before.
+    TypeId root = nullptr;
+
     bool visit(TypeId ty, const Luau::ExternType&) override
     {
         // During function instantiation, extern types are not traversed even if they have generics
+        if (ty == root)
+            return true;
+
         return false;
     }
 };
