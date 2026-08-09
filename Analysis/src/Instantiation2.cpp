@@ -5,6 +5,7 @@
 #include "Luau/Instantiation2.h"
 
 LUAU_FASTFLAGVARIABLE(LuauHigherOrderGenericInference)
+LUAU_FASTFLAG(LuauGenericNominals)
 
 namespace Luau
 {
@@ -49,8 +50,13 @@ TypePackId Replacer::clean(TypePackId tp)
 
 bool Replacer::ignoreChildren(TypeId ty)
 {
-    if (get<ExternType>(ty))
+    if (const ExternType* etv = get<ExternType>(ty))
+    {
+        if (FFlag::LuauGenericNominals && etv->hasUnresolvedGenerics)
+            return false;
+
         return true;
+    }
 
     if (auto ftv = get<FunctionType>(ty))
     {
@@ -91,8 +97,13 @@ bool Replacer::checkReplacementKeys() const
 
 bool Instantiation2_DEPRECATED::ignoreChildren(TypeId ty)
 {
-    if (get<ExternType>(ty))
+    if (const ExternType* etv = get<ExternType>(ty))
+    {
+        if (FFlag::LuauGenericNominals && etv->hasUnresolvedGenerics)
+            return false;
+
         return true;
+    }
 
     if (auto ftv = get<FunctionType>(ty))
     {

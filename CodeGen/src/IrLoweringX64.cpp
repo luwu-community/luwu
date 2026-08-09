@@ -1264,8 +1264,11 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
         // Check tag first
         build.vpextrd(tmp.reg, regOp(OP_A(inst)), 3);
-        build.cmp(tmp.reg, LUA_TBOOLEAN);
 
+        build.cmp(tmp.reg, LUA_TSYMNONE);
+        build.jcc(ConditionX64::Equal, saveRhs); // rhs if 'A' is none (see l_isfalse)
+
+        build.cmp(tmp.reg, LUA_TBOOLEAN);
         build.jcc(ConditionX64::Below, saveRhs); // rhs if 'A' is nil
         build.jcc(ConditionX64::Above, exit);    // Keep lhs if 'A' is not a boolean
 
@@ -1470,6 +1473,9 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         else
         {
             build.cmp(regOp(OP_A(inst)), LUA_TNIL);
+            build.jcc(ConditionX64::Equal, saveOne);
+
+            build.cmp(regOp(OP_A(inst)), LUA_TSYMNONE);
             build.jcc(ConditionX64::Equal, saveOne);
 
             build.cmp(regOp(OP_A(inst)), LUA_TBOOLEAN);
@@ -3087,9 +3093,9 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.mov(inst.regX64, qword[rState + offsetof(lua_State, global)]);
 
         if (OP_A(inst).kind == IrOpKind::Inst)
-            build.mov(inst.regX64, qword[inst.regX64 + qwordReg(regOp(OP_A(inst))) * sizeof(TString*) + offsetof(global_State, ttname)]);
+            build.mov(inst.regX64, qword[inst.regX64 + qwordReg(regOp(OP_A(inst))) * sizeof(TString*) + offsetof(global_State, ttypename)]);
         else if (OP_A(inst).kind == IrOpKind::Constant)
-            build.mov(inst.regX64, qword[inst.regX64 + tagOp(OP_A(inst)) * sizeof(TString*) + offsetof(global_State, ttname)]);
+            build.mov(inst.regX64, qword[inst.regX64 + tagOp(OP_A(inst)) * sizeof(TString*) + offsetof(global_State, ttypename)]);
         else
             CODEGEN_ASSERT(!"Unsupported instruction form");
         break;

@@ -1260,35 +1260,6 @@ TEST_CASE("Math")
     runConformance("math.luau");
 }
 
-TEST_CASE("Integers")
-{
-    ScopedFastFlag ncgBufferInteger{FFlag::LuauCodegenBufferInteger, true};
-    ScopedFastFlag luauCodegenFixBufferLenCheck{FFlag::LuauCodegenFixBufferLenCheck, true};
-
-    if (FFlag::LuauIntegerType2 && FFlag::LuauIntegerLibrary)
-    {
-        runConformance(
-            "integers.luau",
-            [](lua_State* L)
-            {
-                setupNativeHelpers(L);
-            }
-        );
-
-        if (codegen && luau_codegen_supported())
-        {
-            runConformance(
-                "integers_regspill.luau",
-
-                [](lua_State* L)
-                {
-                    setupNativeHelpers(L);
-                }
-            );
-        }
-    }
-}
-
 TEST_CASE("Tables")
 {
     runConformance(

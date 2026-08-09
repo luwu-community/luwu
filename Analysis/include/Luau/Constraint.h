@@ -106,6 +106,11 @@ struct FunctionCallConstraint
     // When we dispatch this constraint, we update the key at this map to record
     // the overload that we selected.
     DenseHashMap<const AstNode*, TypeId>* astOverloadResolvedTypes = nullptr;
+
+    // The type this call is expected to produce, if any (e.g. from a `local x: T = f(...)`
+    // annotation or a `return` in a function with a declared return type). Used to resolve
+    // generics that argument matching alone leaves unconstrained.
+    std::optional<TypeId> expectedType;
 };
 
 // function_check fn argsPack

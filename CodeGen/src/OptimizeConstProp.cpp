@@ -2058,7 +2058,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::JUMP_IF_TRUTHY:
         if (uint8_t tag = state.tryGetTag(OP_A(inst)); tag != 0xff)
         {
-            if (tag == LUA_TNIL)
+            if (tag == LUA_TNIL || tag == LUA_TSYMNONE)
                 replace(function, block, index, {IrCmd::JUMP, {OP_C(inst)}});
             else if (tag != LUA_TBOOLEAN)
                 replace(function, block, index, {IrCmd::JUMP, {OP_B(inst)}});
@@ -2067,7 +2067,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::JUMP_IF_FALSY:
         if (uint8_t tag = state.tryGetTag(OP_A(inst)); tag != 0xff)
         {
-            if (tag == LUA_TNIL)
+            if (tag == LUA_TNIL || tag == LUA_TSYMNONE)
                 replace(function, block, index, {IrCmd::JUMP, {OP_B(inst)}});
             else if (tag != LUA_TBOOLEAN)
                 replace(function, block, index, {IrCmd::JUMP, {OP_C(inst)}});
@@ -2783,7 +2783,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::SELECT_IF_TRUTHY:
         if (uint8_t tag = state.tryGetTag(OP_A(inst)); tag != 0xff)
         {
-            if (tag == LUA_TNIL)
+            if (tag == LUA_TNIL || tag == LUA_TSYMNONE)
                 substitute(function, inst, OP_C(inst));
             else if (tag != LUA_TBOOLEAN)
                 substitute(function, inst, OP_B(inst));

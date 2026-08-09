@@ -35,6 +35,8 @@ LUAU_FASTFLAGVARIABLE(LuauStoreConstKeywordBegin)
 LUAU_FASTFLAGVARIABLE(LuauNoDuplicateBinaryPrefix)
 LUAU_FASTFLAGVARIABLE(LuauTrackPrefixLocal)
 LUAU_FASTFLAGVARIABLE(LuauDefaultArguments)
+LUAU_FASTFLAGVARIABLE(LuauExternTypeGenericMethods)
+LUAU_FASTFLAGVARIABLE(LuauGenericNominals)
 
 // Clip with DebugLuauReportReturnTypeVariadicWithTypeSuffix
 bool luau_telemetry_parsed_return_type_variadic_with_type_suffix = false;
@@ -1770,13 +1772,20 @@ AstDeclaredExternTypeProperty Parser::parseDeclaredExternTypeMethod(const AstArr
 
     Name fnName = parseName("function name");
 
-    // TODO: generic method declarations CLI-39909
     AstArray<AstGenericType*> generics;
     AstArray<AstGenericTypePack*> genericPacks;
-    generics.size = 0;
-    generics.data = nullptr;
-    genericPacks.size = 0;
-    genericPacks.data = nullptr;
+
+    if (FFlag::LuauExternTypeGenericMethods)
+    {
+        std::tie(generics, genericPacks) = parseGenericTypeList(/* withDefaultValues= */ false);
+    }
+    else
+    {
+        generics.size = 0;
+        generics.data = nullptr;
+        genericPacks.size = 0;
+        genericPacks.data = nullptr;
+    }
 
     MatchLexeme matchParen = lexer.current();
     expectAndConsume('(', "function parameter list start");
@@ -1923,6 +1932,22 @@ AstStat* Parser::parseDeclaration(const Location& start, const AstArray<AstAttr*
 
         Location classStart = lexer.current().location;
         Name className = parseName("type name");
+
+        AstArray<AstGenericType*> classGenerics;
+        AstArray<AstGenericTypePack*> classGenericPacks;
+
+        if (FFlag::LuauGenericNominals)
+        {
+            std::tie(classGenerics, classGenericPacks) = parseGenericTypeList(/* withDefaultValues= */ false);
+        }
+        else
+        {
+            classGenerics.size = 0;
+            classGenerics.data = nullptr;
+            classGenericPacks.size = 0;
+            classGenericPacks.data = nullptr;
+        }
+
         std::optional<AstName> superName = std::nullopt;
 
         if (AstName(lexer.current().name) == "extends")
@@ -2057,7 +2082,9 @@ AstStat* Parser::parseDeclaration(const Location& start, const AstArray<AstAttr*
         Location classEnd = lexer.current().location;
         nextLexeme(); // skip past `end`
 
-        return allocator.alloc<AstStatDeclareExternType>(Location(classStart, classEnd), className.name, superName, copy(props), indexer);
+        return allocator.alloc<AstStatDeclareExternType>(
+            Location(classStart, classEnd), className.name, superName, copy(props), indexer, classGenerics, classGenericPacks
+        );
     }
     else if (std::optional<Name> globalName = parseNameOpt("global variable name"))
     {

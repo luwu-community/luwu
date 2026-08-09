@@ -24,6 +24,8 @@ LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAG(LuauTrackPrefixLocal)
 LUAU_FASTFLAG(LuauDefaultArguments)
+LUAU_FASTFLAG(LuauExternTypeGenericMethods)
+LUAU_FASTFLAG(LuauGenericNominals)
 
 LUAU_FASTFLAG(LuauNoDuplicateBinaryPrefix)
 
@@ -2155,7 +2157,10 @@ TEST_CASE_FIXTURE(Fixture, "parse_declarations")
 
 TEST_CASE_FIXTURE(Fixture, "default_arguments_are_gated")
 {
-    matchParseError("local function foo(x = 1) end", "Expected ')' (to close '(' at column 19), got '='");
+    {
+        ScopedFastFlag sff{FFlag::LuauDefaultArguments, false};
+        matchParseError("local function foo(x = 1) end", "Expected ')' (to close '(' at column 19), got '='");
+    }
 
     ScopedFastFlag sff{FFlag::LuauDefaultArguments, true};
 
@@ -2624,6 +2629,220 @@ TEST_CASE_FIXTURE(Fixture, "variadic_definition_parsing")
 
     matchParseError("declare function foo(...)", "All declaration parameters must be annotated");
     matchParseError("declare extern type Foo with function a(self, ...) end", "All declaration parameters aside from 'self' must be annotated");
+}
+
+TEST_CASE_FIXTURE(Fixture, "extern_type_generic_methods_are_gated")
+{
+    ScopedFastFlag sff{FFlag::LuauExternTypeGenericMethods, false};
+
+    matchParseError(
+        R"(
+        declare extern type Cat with
+            function meow<T>(self): T
+        end
+        )",
+        "Expected '(' when parsing function parameter list start, got '<'"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "extern_type_generic_methods")
+{
+    ScopedFastFlag sff{FFlag::LuauExternTypeGenericMethods, true};
+
+    AstStatBlock* stat = parseEx(R"(
+        declare extern type Cat with
+            function meow<T>(self): T
+            function purr(self): number
+        end
+    )")
+                             .root;
+
+    REQUIRE(stat != nullptr);
+    REQUIRE_EQ(1, stat->body.size);
+
+    AstStatDeclareExternType* cat = stat->body.data[0]->as<AstStatDeclareExternType>();
+    REQUIRE(cat != nullptr);
+    REQUIRE_EQ(2, cat->props.size);
+
+    AstTypeFunction* meow = cat->props.data[0].ty->as<AstTypeFunction>();
+    REQUIRE(meow != nullptr);
+    REQUIRE_EQ(1, meow->generics.size);
+    CHECK_EQ(meow->generics.data[0]->name, "T");
+    CHECK_EQ(0, meow->genericPacks.size);
+
+    // Non-generic methods are unaffected by the flag.
+    AstTypeFunction* purr = cat->props.data[1].ty->as<AstTypeFunction>();
+    REQUIRE(purr != nullptr);
+    CHECK_EQ(0, purr->generics.size);
+}
+
+TEST_CASE_FIXTURE(Fixture, "extern_type_generic_method_packs")
+{
+    ScopedFastFlag sff{FFlag::LuauExternTypeGenericMethods, true};
+
+    AstStatBlock* stat = parseEx(R"(
+        declare extern type Cat with
+            function meow<T...>(self, ...: T...): (T...)
+        end
+    )")
+                             .root;
+
+    REQUIRE(stat != nullptr);
+    REQUIRE_EQ(1, stat->body.size);
+
+    AstStatDeclareExternType* cat = stat->body.data[0]->as<AstStatDeclareExternType>();
+    REQUIRE(cat != nullptr);
+    REQUIRE_EQ(1, cat->props.size);
+
+    AstTypeFunction* meow = cat->props.data[0].ty->as<AstTypeFunction>();
+    REQUIRE(meow != nullptr);
+    CHECK_EQ(0, meow->generics.size);
+    REQUIRE_EQ(1, meow->genericPacks.size);
+    CHECK_EQ(meow->genericPacks.data[0]->name, "T");
+}
+
+TEST_CASE_FIXTURE(Fixture, "extern_type_generic_methods_support_multiple_params")
+{
+    ScopedFastFlag sff{FFlag::LuauExternTypeGenericMethods, true};
+
+    AstStatBlock* stat = parseEx(R"(
+        declare extern type Cat with
+            function meow<T, U>(self, whatever: U): T
+        end
+    )")
+                             .root;
+
+    REQUIRE(stat != nullptr);
+    REQUIRE_EQ(1, stat->body.size);
+
+    AstStatDeclareExternType* cat = stat->body.data[0]->as<AstStatDeclareExternType>();
+    REQUIRE(cat != nullptr);
+    REQUIRE_EQ(1, cat->props.size);
+
+    AstTypeFunction* meow = cat->props.data[0].ty->as<AstTypeFunction>();
+    REQUIRE(meow != nullptr);
+    REQUIRE_EQ(2, meow->generics.size);
+    CHECK_EQ(meow->generics.data[0]->name, "T");
+    CHECK_EQ(meow->generics.data[1]->name, "U");
+}
+
+TEST_CASE_FIXTURE(Fixture, "extern_type_generic_property_syntax_workaround_is_unaffected_by_the_flag")
+{
+    // Properties declared with `name: <T>(...) -> ...` syntax (rather than the `function name<T>(...)` sugar)
+    // go through the general-purpose parseType() -> parseFunctionType() path, which has always supported
+    // its own generics. This is the workaround referenced in issue #8 for getting generic methods on extern
+    // types prior to LuauExternTypeGenericMethods; it works today regardless of the flag, and continues to
+    // work once class-level generics land, since it's parsed independently of `function`-sugared methods.
+    AstStatBlock* stat = parseEx(R"(
+        declare extern type Cat with
+            meow: <T>(self: Cat, whatever: T) -> T
+        end
+    )")
+                             .root;
+
+    REQUIRE(stat != nullptr);
+    REQUIRE_EQ(1, stat->body.size);
+
+    AstStatDeclareExternType* cat = stat->body.data[0]->as<AstStatDeclareExternType>();
+    REQUIRE(cat != nullptr);
+    REQUIRE_EQ(1, cat->props.size);
+
+    // Property-syntax members are not implicitly treated as methods: no 'self' is injected,
+    // so the annotation must (and does, above) spell it out explicitly.
+    CHECK(!cat->props.data[0].isMethod);
+
+    AstTypeFunction* meow = cat->props.data[0].ty->as<AstTypeFunction>();
+    REQUIRE(meow != nullptr);
+    REQUIRE_EQ(1, meow->generics.size);
+    CHECK_EQ(meow->generics.data[0]->name, "T");
+}
+
+TEST_CASE_FIXTURE(Fixture, "extern_type_generics_are_gated")
+{
+    ScopedFastFlag sff{FFlag::LuauGenericNominals, false};
+
+    matchParseError(
+        R"(
+        declare extern type Box<T> with
+            value: T
+        end
+        )",
+        "Expected `with` keyword before listing properties of the external type, but got (null) instead"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "extern_type_generics")
+{
+    ScopedFastFlag sff{FFlag::LuauGenericNominals, true};
+
+    AstStatBlock* stat = parseEx(R"(
+        declare extern type Box<T> with
+            value: T
+        end
+    )")
+                             .root;
+
+    REQUIRE(stat != nullptr);
+    REQUIRE_EQ(1, stat->body.size);
+
+    AstStatDeclareExternType* box = stat->body.data[0]->as<AstStatDeclareExternType>();
+    REQUIRE(box != nullptr);
+    REQUIRE_EQ(1, box->generics.size);
+    CHECK_EQ(box->generics.data[0]->name, "T");
+    CHECK_EQ(0, box->genericPacks.size);
+}
+
+TEST_CASE_FIXTURE(Fixture, "extern_type_generics_support_multiple_params_and_packs")
+{
+    ScopedFastFlag sff{FFlag::LuauGenericNominals, true};
+
+    AstStatBlock* stat = parseEx(R"(
+        declare extern type Result<T, E, Rest...> with
+            value: T
+        end
+    )")
+                             .root;
+
+    REQUIRE(stat != nullptr);
+    REQUIRE_EQ(1, stat->body.size);
+
+    AstStatDeclareExternType* result = stat->body.data[0]->as<AstStatDeclareExternType>();
+    REQUIRE(result != nullptr);
+    REQUIRE_EQ(2, result->generics.size);
+    CHECK_EQ(result->generics.data[0]->name, "T");
+    CHECK_EQ(result->generics.data[1]->name, "E");
+    REQUIRE_EQ(1, result->genericPacks.size);
+    CHECK_EQ(result->genericPacks.data[0]->name, "Rest");
+}
+
+TEST_CASE_FIXTURE(Fixture, "extern_type_and_method_generics_together")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauGenericNominals, true},
+        {FFlag::LuauExternTypeGenericMethods, true},
+    };
+
+    AstStatBlock* stat = parseEx(R"(
+        declare extern type Box<T> with
+            value: T
+            function map<U>(self, f: (T) -> U): Box<U>
+        end
+    )")
+                             .root;
+
+    REQUIRE(stat != nullptr);
+    REQUIRE_EQ(1, stat->body.size);
+
+    AstStatDeclareExternType* box = stat->body.data[0]->as<AstStatDeclareExternType>();
+    REQUIRE(box != nullptr);
+    REQUIRE_EQ(1, box->generics.size);
+    CHECK_EQ(box->generics.data[0]->name, "T");
+    REQUIRE_EQ(2, box->props.size);
+
+    AstTypeFunction* map = box->props.data[1].ty->as<AstTypeFunction>();
+    REQUIRE(map != nullptr);
+    REQUIRE_EQ(1, map->generics.size);
+    CHECK_EQ(map->generics.data[0]->name, "U");
 }
 
 TEST_CASE_FIXTURE(Fixture, "missing_declaration_prop")

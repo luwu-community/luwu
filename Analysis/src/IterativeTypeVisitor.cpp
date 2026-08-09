@@ -3,6 +3,7 @@
 
 LUAU_FASTINT(LuauVisitRecursionLimit)
 LUAU_FASTFLAG(LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier)
+LUAU_FASTFLAG(LuauGenericNominals)
 
 namespace Luau
 {
@@ -382,6 +383,15 @@ void IterativeTypeVisitor::process(TypeId ty)
             {
                 traverse(etv->indexer->indexType);
                 traverse(etv->indexer->indexResultType);
+            }
+
+            if (FFlag::LuauGenericNominals)
+            {
+                for (TypeId itp : etv->instantiatedTypeParams)
+                    traverse(itp);
+
+                for (TypePackId itp : etv->instantiatedTypePackParams)
+                    traverse(itp);
             }
         }
     }
