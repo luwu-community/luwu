@@ -722,7 +722,7 @@ TEST_CASE_FIXTURE(NormalizeFixture, "negated_function_is_anything_except_a_funct
 {
     if (FFlag::LuauIntegerType2)
     {
-        CHECK("(boolean | buffer | integer | number | string | table | thread | userdata)?" == toString(normal(R"(
+        CHECK("(boolean | buffer | integer | none | number | string | table | thread | userdata)?" == toString(normal(R"(
         Not<fun>
     )")));
     }
@@ -756,7 +756,7 @@ TEST_CASE_FIXTURE(NormalizeFixture, "bare_negated_boolean")
 {
     if (FFlag::LuauIntegerType2)
     {
-        CHECK("(buffer | function | integer | number | string | table | thread | userdata)?" == toString(normal(R"(
+        CHECK("(buffer | function | integer | none | number | string | table | thread | userdata)?" == toString(normal(R"(
             Not<boolean>
         )")));
     }
@@ -929,15 +929,18 @@ TEST_CASE_FIXTURE(NormalizeFixture, "negations_of_extern_types")
 
     if (FFlag::LuauIntegerType2)
     {
-        CHECK("((userdata & ~Child) | boolean | buffer | function | integer | number | string | table | thread)?" == toString(normal("Not<Child>")));
+        CHECK(
+            "((userdata & ~Child) | boolean | buffer | function | integer | none | number | string | table | thread)?" ==
+            toString(normal("Not<Child>"))
+        );
         CHECK("never" == toString(normal("Not<Parent> & Child")));
         CHECK(
-            "((userdata & ~Parent) | Child | boolean | buffer | function | integer | number | string | table | thread)?" ==
+            "((userdata & ~Parent) | Child | boolean | buffer | function | integer | none | number | string | table | thread)?" ==
             toString(normal("Not<Parent> | Child"))
         );
-        CHECK("(boolean | buffer | function | integer | number | string | table | thread)?" == toString(normal("Not<cls>")));
+        CHECK("(boolean | buffer | function | integer | none | number | string | table | thread)?" == toString(normal("Not<cls>")));
         CHECK(
-            "(Parent | Unrelated | boolean | buffer | function | integer | number | string | table | thread)?" ==
+            "(Parent | Unrelated | boolean | buffer | function | integer | none | number | string | table | thread)?" ==
             toString(normal("Not<cls & Not<Parent> & Not<Child> & Not<Unrelated>>"))
         );
     }
@@ -981,7 +984,7 @@ TEST_CASE_FIXTURE(NormalizeFixture, "negations_of_tables")
 {
     CHECK(nullptr == toNormalizedType("Not<{}>", !FFlag::DebugLuauForceOldSolver ? 1 : 0));
     if (FFlag::LuauIntegerType2)
-        CHECK("(boolean | buffer | function | integer | number | string | thread | userdata)?" == toString(normal("Not<tbl>")));
+        CHECK("(boolean | buffer | function | integer | none | number | string | thread | userdata)?" == toString(normal("Not<tbl>")));
     else
         CHECK("(boolean | buffer | function | none | number | string | thread | userdata)?" == toString(normal("Not<tbl>")));
     CHECK("table" == toString(normal("Not<Not<tbl>>")));

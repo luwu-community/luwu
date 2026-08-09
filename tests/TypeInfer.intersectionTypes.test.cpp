@@ -13,6 +13,7 @@ LUAU_FASTFLAG(LuauCheckFunctionStatementTypes)
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(LuauPropagateFreeTypesIntoUnionAndIntersectionBounds)
 LUAU_FASTFLAG(LuauDropUnionSubtypeReasoning)
+LUAU_FASTFLAG(LuauTruthyFalsy)
 
 TEST_SUITE_BEGIN("IntersectionTypes");
 
@@ -1513,7 +1514,10 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "narrow_intersection_nevers")
         end
     )"));
 
-    CHECK_EQ("Player & { read Character: ~((false | none)?) }", toString(requireTypeAtPosition({3, 23})));
+    if (FFlag::LuauTruthyFalsy)
+        CHECK_EQ("Player & { read Character: truthy }", toString(requireTypeAtPosition({3, 23})));
+    else
+        CHECK_EQ("Player & { read Character: ~((false | none)?) }", toString(requireTypeAtPosition({3, 23})));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "bounds_propagate_into_free_intersection_bounds")
