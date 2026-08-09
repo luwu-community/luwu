@@ -10,11 +10,9 @@ Luau is commonly paired custom task schedulers (like `mluau/scheduler`, other as
 
 This approach has several flaws:
 
-1. Every scheduler needs to manually patch `coroutine` library by hand to correctly track coroutine.resume thread states .
-
-2. Threads resumed directly via the C API (`lua_resume`) will not trigger the scheduler's `coroutine.resume` patch, making the scheduler entirely blind to these manual thread resumes.
-
-3. **Overhead**: Crossing the C/Rust to Luau boundary to intercept and unpack arguments/results via `coroutine.resume` incurs extra FFI overhead that the native std functions do not have.
+- Every scheduler needs to manually patch `coroutine` library by hand to correctly track coroutine.resume thread states
+- Threads resumed directly via the C API (`lua_resume`) will not trigger the scheduler's patched `coroutine.resume` func making the scheduler entirely blind to these manual thread resumes.
+- Crossing the C/Rust to Luau boundary to intercept and unpack arguments/results via `coroutine.resume` incurs extra FFI overhead that the native std functions do not have.
 
 By providing a native VM hook, schedulers can deterministically track thread state transitions with negligible performance penalty in the false case.
 
