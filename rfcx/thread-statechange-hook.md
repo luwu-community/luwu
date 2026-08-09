@@ -8,11 +8,11 @@ Add a new C-level callback to `lua_Callbacks` called `userthreadstatechange` to 
 
 Luau is commonly paired custom task schedulers (like `mluau/scheduler`, other async impls). To track when a thread yields, finishes or errors, schedulers currently patch the global `coroutine.resume` function with a wrapper that intercepts the call, records the result in their scheduler, and forwards the return values.
 
-This approach has significant flaws:
+This approach has several flaws:
 
-1. **Bypass Risk**: If a user script captures the original `coroutine.resume` before it is patched, or uses an alternative mechanism to resume threads, the scheduler fails to track the state change.
+1. Every scheduler needs to manually patch `coroutine` library by hand to correctly track coroutine.resume thread states .
 
-2. **C-API Blindspot**: Threads resumed directly via the C API (`lua_resume`) will not trigger the scheduler's `coroutine.resume` patch, making the scheduler entirely blind to them w/o embedders handling every `lua_resume` manually.
+2. Threads resumed directly via the C API (`lua_resume`) will not trigger the scheduler's `coroutine.resume` patch, making the scheduler entirely blind to these manual thread resumes.
 
 3. **Overhead**: Crossing the C/Rust to Luau boundary to intercept and unpack arguments/results via `coroutine.resume` incurs extra FFI overhead that the native std functions do not have.
 
@@ -28,7 +28,7 @@ void (*userthreadstatechange)(lua_State* L, int status);
 
 The callback receives:
 - `L`: The thread that just suspended or finished.
-- `status`: The integer status code of the thread (`LUA_YIELD`, `LUA_OK`, `LUA_ERRRUN`, etc.).
+- `status`: The status code of the thread (`LUA_YIELD`, `LUA_OK`, `LUA_ERRRUN`, etc.).
 
 *Note:* When this callback fires, the yielded values, returned results, or the thrown error (if `status` is a `LUA_ERR*`) will be available on the top of the thread's stack `L`, and can be inspected or extracted directly from there.
 
@@ -38,5 +38,5 @@ There are no notable drawbacks. It adds a single pointer to `lua_Callbacks` and 
 
 ## Alternatives
 
-- **Continue patching `coroutine.resume`**: Developers continue paying the FFI boundary cost and risking bypasses or C-API blindspots.
-- **Polling / `lua_status` checks**: Schedulers could manually iterate over all known threads every frame to check `lua_status()`. This is wildly inefficient and scales poorly with the number of suspended threads.
+- Do nothing and force every scheduler to manually modify coroutine lib
+- Schedulers could manually iterate over all known threads every frame to check `lua_status()` using thread creation/deletion events to track threads. This is wildly inefficient and scales poorly with the number of threads.
