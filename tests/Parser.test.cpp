@@ -2157,7 +2157,10 @@ TEST_CASE_FIXTURE(Fixture, "parse_declarations")
 
 TEST_CASE_FIXTURE(Fixture, "default_arguments_are_gated")
 {
-    matchParseError("local function foo(x = 1) end", "Expected ')' (to close '(' at column 19), got '='");
+    {
+        ScopedFastFlag sff{FFlag::LuauDefaultArguments, false};
+        matchParseError("local function foo(x = 1) end", "Expected ')' (to close '(' at column 19), got '='");
+    }
 
     ScopedFastFlag sff{FFlag::LuauDefaultArguments, true};
 
@@ -2630,6 +2633,8 @@ TEST_CASE_FIXTURE(Fixture, "variadic_definition_parsing")
 
 TEST_CASE_FIXTURE(Fixture, "extern_type_generic_methods_are_gated")
 {
+    ScopedFastFlag sff{FFlag::LuauExternTypeGenericMethods, false};
+
     matchParseError(
         R"(
         declare extern type Cat with
@@ -2754,6 +2759,8 @@ TEST_CASE_FIXTURE(Fixture, "extern_type_generic_property_syntax_workaround_is_un
 
 TEST_CASE_FIXTURE(Fixture, "extern_type_generics_are_gated")
 {
+    ScopedFastFlag sff{FFlag::LuauGenericNominals, false};
+
     matchParseError(
         R"(
         declare extern type Box<T> with

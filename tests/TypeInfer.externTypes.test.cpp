@@ -1278,7 +1278,11 @@ TEST_CASE_FIXTURE(Fixture, "extern_type_generic_method_property_syntax_still_bro
 {
     // Without the fix, `T` fails to resolve while checking the definition file itself
     // (not the code that uses Cat), so loading the definition file is where this fails.
-    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuauExternTypeUseDefinitionScope, false},
+        {FFlag::LuauGenericNominals, false},
+    };
 
     unfreeze(getFrontend().globals.globalTypes);
     LoadDefinitionFileResult loadResult = getFrontend().loadDefinitionFile(
