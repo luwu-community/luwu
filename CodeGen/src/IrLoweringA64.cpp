@@ -3549,7 +3549,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         else
             CODEGEN_ASSERT(!"Unsupported instruction form");
 
-        build.ldr(inst.regA64, mem(inst.regA64, offsetof(global_State, ttypename)));
+            build.ldr(inst.regA64, mem(inst.regA64, offsetof(global_State, ttypename)));
         break;
     }
     case IrCmd::GET_TYPEOF:

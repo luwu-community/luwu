@@ -3027,7 +3027,7 @@ Inference ConstraintGenerator::check(const ScopePtr& scope, AstExpr* expr, std::
     else if (expr->is<AstExprVarargs>())
         result = flattenPack(scope, expr->location, checkPack(scope, expr));
     else if (auto call = expr->as<AstExprCall>())
-        result = flattenPack(scope, expr->location, checkPack(scope, call, expectedType)); // TODO: needs predicates too
+        result = flattenPack(scope, expr->location, checkPack(scope, call, expectedType));
     else if (auto a = expr->as<AstExprFunction>())
         result = check(scope, a, expectedType, generalize);
     else if (auto indexName = expr->as<AstExprIndexName>())
