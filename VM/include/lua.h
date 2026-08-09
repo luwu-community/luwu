@@ -551,6 +551,8 @@ struct lua_Callbacks
     void (*debugprotectederror)(lua_State* L);           // gets called when protected call results in an error
 
     void (*onallocate)(lua_State* L, size_t osize, size_t nsize); // gets called when memory is allocated
+    
+    void (*userthreadstatechange)(lua_State* L, int status); // gets called when L returns from lua_resume
 };
 typedef struct lua_Callbacks lua_Callbacks;
 

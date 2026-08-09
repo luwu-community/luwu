@@ -11,7 +11,7 @@ Luau is commonly paired custom task schedulers (like `mluau/scheduler`, other as
 This approach has significant flaws:
 
 1. **Bypass Risk**: If a user script captures the original `coroutine.resume` before it is patched, or uses an alternative mechanism to resume threads, the scheduler fails to track the state change.
-2. **C-API Blindspot**: Threads resumed directly via the C API (`lua_resume`) will not trigger the Lua-level `coroutine.resume` patch, making the scheduler entirely blind to them w/o embedders handling every `lua_resume` manually.
+2. **C-API Blindspot**: Threads resumed directly via the C API (`lua_resume`) will not trigger the scheduler's `coroutine.resume` patch, making the scheduler entirely blind to them w/o embedders handling every `lua_resume` manually.
 3. **Overhead**: Crossing the C/Rust to Luau boundary to intercept and unpack arguments/results via `coroutine.resume` incurs unnecessary serialization overhead.
 
 By providing a native VM hook, schedulers can deterministically track thread state transitions with negligible performance penalty in the false case.
