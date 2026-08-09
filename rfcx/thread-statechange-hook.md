@@ -8,6 +8,8 @@ Add a new C-level callback to `lua_Callbacks` called `userthreadstatechange` to 
 
 Luau is commonly paired with custom async task schedulers (like `mluau/scheduler`, other async impls). To track when a thread yields, finishes or errors, schedulers currently patch the global `coroutine.resume` function with a wrapper that intercepts the call, records the result in their scheduler, and forwards the return values.
 
+Ideally, scheduling would be a first class part of Luau but this is a future goal and is orthogonal to this RFC.
+
 This approach has several flaws:
 
 - Every scheduler needs to manually patch `coroutine` library by hand to correctly track coroutine.resume thread states
