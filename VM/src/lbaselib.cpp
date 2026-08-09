@@ -447,7 +447,7 @@ static int luaB_tostring(lua_State* L)
 static int luaB_newproxy(lua_State* L)
 {
     int t = lua_type(L, 1);
-    luaL_argexpected(L, t == LUA_TNOVAL || t == LUA_TNIL || t == LUA_TBOOLEAN, 1, "nil or boolean");
+    luaL_argexpected(L, t == LUA_TNONE || t == LUA_TNIL || t == LUA_TBOOLEAN, 1, "nil or boolean");
 
     bool needsmt = lua_toboolean(L, 1);
 
@@ -505,7 +505,7 @@ int luaopen_base(lua_State* L)
 
     if (FFlag::LuauNonePrimitive)
     {
-        lua_pushnone(L);
+        lua_pushsymnone(L);
         lua_setglobal(L, "none");
     }
 

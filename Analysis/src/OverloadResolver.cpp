@@ -4,6 +4,7 @@
 #include "Luau/Common.h"
 #include "Luau/Instantiation2.h"
 #include "Luau/Subtyping.h"
+#include "Luau/ToString.h"
 #include "Luau/TxnLog.h"
 #include "Luau/Type.h"
 #include "Luau/TypeFunction.h"
@@ -681,6 +682,20 @@ void OverloadResolver::maybeEmplaceError(
             // intentionally fallthrough here since we couldn't prove this was error-suppressing
             [[fallthrough]];
         case ErrorSuppression::DoNotSuppress:
+            // A `none` branch of an optional argument/self type reaching here means the caller never
+            // narrowed/checked it before using it somewhere that expects a concrete value.
+            if (Luau::isNone(*givenType) && !Luau::isNone(follow(*wantedType)))
+            {
+                errors->emplace_back(
+                    argLocation,
+                    moduleName,
+                    GenericError{
+                        "this '" + Luau::toString(*wantedType) + "' value is optional and may be 'none', use an if condition to check"
+                    }
+                );
+                break;
+            }
+
             // TODO extract location from the SubtypingResult path and argExprs
             switch (reason->variance)
             {

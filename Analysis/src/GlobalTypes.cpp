@@ -4,6 +4,7 @@
 
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
+LUAU_FASTFLAG(LuauTruthyFalsy)
 
 namespace Luau
 {
@@ -27,6 +28,11 @@ GlobalTypes::GlobalTypes(NotNull<BuiltinTypes> builtinTypes, SolverMode mode)
     globalScope->addBuiltinTypeBinding("none", TypeFun{{}, builtinTypes->noneType});
     globalScope->addBuiltinTypeBinding("unknown", TypeFun{{}, builtinTypes->unknownType});
     globalScope->addBuiltinTypeBinding("never", TypeFun{{}, builtinTypes->neverType});
+    if (FFlag::LuauTruthyFalsy)
+    {
+        globalScope->addBuiltinTypeBinding("truthy", TypeFun{{}, builtinTypes->truthyType});
+        globalScope->addBuiltinTypeBinding("falsy", TypeFun{{}, builtinTypes->falsyType});
+    }
     if (FFlag::DebugLuauUserDefinedClasses)
     {
         globalScope->addBuiltinTypeBinding("object", TypeFun{{}, builtinTypes->objectType});

@@ -1859,15 +1859,29 @@ SubtypingResult Subtyping::isCovariantWith(SubtypingEnvironment& env, const Type
         std::vector<SubtypingResult> subtypings;
         result = {true};
 
+        size_t index = 0;
         for (TypeId ty : u)
         {
+            SubtypingResult part;
             if (auto negatedPart = get<NegationType>(follow(ty)))
-                result.andAlso(isCovariantWith(env, subTy, negatedPart->ty, scope));
+                part = isCovariantWith(env, subTy, negatedPart->ty, scope);
             else
             {
                 NegationType negatedTmp{ty};
-                result.andAlso(isCovariantWith(env, subTy, &negatedTmp, scope));
+                part = isCovariantWith(env, subTy, &negatedTmp, scope);
+
+                // negatedTmp isn't part of the real supertype tree, so its own return already
+                // prefixed superPath with a `Negated` component pointing into itself. Swap that
+                // for an `Index` into this union so the path resolves against the real supertype.
+                for (SubtypingReasoning& reasoning : part.reasoning)
+                {
+                    if (!reasoning.superPath.components.empty() &&
+                        get_if<TypePath::TypeField>(&reasoning.superPath.components.front()))
+                        reasoning.superPath.components.front() = TypePath::Index{index, TypePath::Index::Variant::Union};
+                }
             }
+            result.andAlso(part);
+            ++index;
         }
     }
     else if (auto i = get<IntersectionType>(negatedTy))
@@ -2605,6 +2619,7 @@ SubtypingResult Subtyping::isCovariantWith(
                        .orElse(isCovariantWith(env, subNorm->externTypes, superNorm->tables, scope)));
     result.andAlso(isCovariantWith(env, subNorm->errors, superNorm->errors, scope));
     result.andAlso(isCovariantWith(env, subNorm->nils, superNorm->nils, scope));
+    result.andAlso(isCovariantWith(env, subNorm->nones, superNorm->nones, scope));
     result.andAlso(isCovariantWith(env, subNorm->numbers, superNorm->numbers, scope));
     result.andAlso(isCovariantWith(env, subNorm->strings, superNorm->strings, scope));
     result.andAlso(isCovariantWith(env, subNorm->strings, superNorm->tables, scope));

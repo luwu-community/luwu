@@ -23,7 +23,7 @@ const char* const luaT_typenames[] = {
     "number",
     "integer",
     "vector",
-    "none",
+    "symbol",
 
     "string",
 
@@ -74,7 +74,7 @@ void luaT_init(lua_State* L)
     int i;
     for (i = 0; i < LUA_T_COUNT; i++)
     {
-        L->global->ttname[i] = luaS_new(L, luaT_typenames[i]);
+        L->global->ttname[i] = luaS_new(L, i == LUA_TSYMNONE ? "none" : luaT_typenames[i]);
         luaS_fix(L->global->ttname[i]); // never collect these names
     }
     for (i = 0; i < TM_N; i++)

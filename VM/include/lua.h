@@ -66,7 +66,7 @@ typedef void (*lua_Destructor)(lua_State* L, void* userdata);
 /*
 ** basic types
 */
-#define LUA_TNOVAL (-1)
+#define LUA_TNONE (-1)
 
 /*
  * WARNING: if you change the order of this enumeration,
@@ -82,7 +82,7 @@ enum lua_Type
     LUA_TNUMBER,
     LUA_TINTEGER,
     LUA_TVECTOR,
-    LUA_TNONE,
+    LUA_TSYMNONE,
 
     LUA_TSTRING, // all types above this must be value types, all types below this must be GC types - see iscollectable
 
@@ -187,7 +187,7 @@ LUA_API const void* lua_topointer(lua_State* L, int idx);
 ** push functions (C -> stack)
 */
 LUA_API void lua_pushnil(lua_State* L);
-LUA_API void lua_pushnone(lua_State* L);
+LUA_API void lua_pushsymnone(lua_State* L);
 LUA_API void lua_pushnumber(lua_State* L, double n);
 LUA_API void lua_pushinteger(lua_State* L, int n);
 LUA_API void lua_pushinteger64(lua_State* L, int64_t n);
@@ -199,6 +199,8 @@ LUA_API void lua_pushvector(lua_State* L, float x, float y, float z);
 #endif
 LUA_API void lua_pushlstring(lua_State* L, const char* s, size_t l);
 LUA_API void lua_pushstring(lua_State* L, const char* s);
+typedef void (*lua_StringFree)(lua_State* L, const char* data, size_t sz, void* userdata);
+LUA_API const char* lua_pushexternalstring(lua_State* L, const char* data, size_t len, void* userdata, lua_StringFree free_cb);
 LUA_API const char* lua_pushvfstring(lua_State* L, const char* fmt, va_list argp);
 LUA_API LUA_PRINTF_ATTR(2, 3) const char* lua_pushfstringL(lua_State* L, const char* fmt, ...);
 LUA_API void lua_pushcclosurek(lua_State* L, lua_CFunction fn, const char* debugname, int nup, lua_Continuation cont);
@@ -447,12 +449,16 @@ LUA_API void lua_unref(lua_State* L, int ref);
 #define lua_isthread(L, n) (lua_type(L, (n)) == LUA_TTHREAD)
 #define lua_isbuffer(L, n) (lua_type(L, (n)) == LUA_TBUFFER)
 #define lua_isnone(L, n) (lua_type(L, (n)) == LUA_TNONE)
+#define lua_issymnone(L, n) (lua_type(L, (n)) == LUA_TSYMNONE)
 #define lua_isnoneornil(L, n) (lua_type(L, (n)) <= LUA_TNIL)
 #define lua_isclass(L, n) (lua_type(L, (n)) == LUA_TCLASS)
 #define lua_isobject(L, n) (lua_type(L, (n)) == LUA_TOBJECT)
 
 LUA_API int lua_getbuffermode(lua_State* L, int idx);
 LUA_API void* lua_getbufferuserdata(lua_State* L, int idx);
+
+LUA_API int lua_isstringexternal(lua_State* L, int idx);
+LUA_API void* lua_getstringexternaluserdata(lua_State* L, int idx);
 
 #define lua_pushliteral(L, s) lua_pushlstring(L, "" s, (sizeof(s) / sizeof(char)) - 1)
 #define lua_pushcfunction(L, fn, debugname) lua_pushcclosurek(L, fn, debugname, 0, NULL)

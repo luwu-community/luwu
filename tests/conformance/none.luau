@@ -15,7 +15,7 @@ assert(none ~= false)
 assert(none ~= 0)
 
 -- type and tostring
-assert(type(none) == "none")
+assert(type(none) == "symbol")
 assert(tostring(none) == "none")
 
 -- tables: values should not leave holes like nil does

@@ -7,7 +7,11 @@
 
 #include "doctest.h"
 
+#include "ScopedFlags.h"
+
 using namespace Luau;
+
+LUAU_FASTFLAG(LuauTruthyFalsy)
 
 TEST_SUITE_BEGIN("TypeInferPrimitives");
 
@@ -17,6 +21,37 @@ TEST_CASE_FIXTURE(Fixture, "cannot_call_primitives")
     LUAU_REQUIRE_ERROR_COUNT(1, result);
 
     REQUIRE(get<CannotCallNonFunction>(result.errors[0]) != nullptr);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "truthy_and_falsy_are_builtin_type_aliases")
+{
+    ScopedFastFlag sff{FFlag::LuauTruthyFalsy, true};
+
+    CheckResult result = check(R"(
+        local a: truthy = "hi"
+        local b: falsy = nil
+        local c: falsy = false
+        local d: falsy = none
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("truthy", toString(*requireType("a")));
+    CHECK_EQ("falsy", toString(*requireType("b")));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "truthy_type_alias_rejects_falsy_values")
+{
+    ScopedFastFlag sff{FFlag::LuauTruthyFalsy, true};
+
+    CheckResult result = check(R"(
+        local a: truthy = false
+        local b: truthy = nil
+        local c: truthy = none
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
+    for (const TypeError& e : result.errors)
+        CHECK(get<GenericError>(e));
 }
 
 TEST_CASE_FIXTURE(Fixture, "string_length")

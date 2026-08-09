@@ -1356,7 +1356,7 @@ reentry:
                     switch (ttype(ra))
                     {
                     case LUA_TNIL:
-                    case LUA_TNONE:
+                    case LUA_TSYMNONE:
                         pc += LUAU_INSN_D(insn);
                         VM_ASSERT_PC(pc);
                         VM_NEXT();
@@ -1490,7 +1490,7 @@ reentry:
                     switch (ttype(ra))
                     {
                     case LUA_TNIL:
-                    case LUA_TNONE:
+                    case LUA_TSYMNONE:
                         pc += 1;
                         VM_ASSERT_PC(pc);
                         VM_NEXT();

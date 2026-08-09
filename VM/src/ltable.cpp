@@ -170,7 +170,7 @@ static LuaNode* mainposition(const LuaTable* t, const TValue* key)
         return hashstr(t, tsvalue(key));
     case LUA_TBOOLEAN:
         return hashboolean(t, bvalue(key));
-    case LUA_TNONE:
+    case LUA_TSYMNONE:
         return hashnone(t);
     case LUA_TLIGHTUSERDATA:
         return hashpointer(t, pvalue(key));

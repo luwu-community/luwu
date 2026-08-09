@@ -208,7 +208,7 @@ end
     LUAU_REQUIRE_NO_ERRORS(result);
     CHECK_EQ("Point", toString(requireTypeAtPosition({7, 18})));
     CHECK_EQ(
-        "((userdata & ~Point) | boolean | buffer | function | integer | number | string | table | thread)?", toString(requireTypeAtPosition({9, 18}))
+        "((userdata & ~Point) | boolean | buffer | function | integer | none | number | string | table | thread)?", toString(requireTypeAtPosition({9, 18}))
     );
 }
 

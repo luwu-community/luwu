@@ -192,12 +192,12 @@ bool NormalizedType::isUnknown() const
     if (FFlag::LuauIntegerType2)
     {
         hasAllPrimitives = isPrim(booleans, PrimitiveType::Boolean) && isPrim(nils, PrimitiveType::NilType) && isNumber(numbers) &&
-                           strings.isString() && isThread(threads) && isBuffer(buffers) && isNone(nones) && isInteger(integers);
+                           strings.isString() && isThread(threads) && isBuffer(buffers) && Luau::isNone(nones) && isInteger(integers);
     }
     else
     {
         hasAllPrimitives = isPrim(booleans, PrimitiveType::Boolean) && isPrim(nils, PrimitiveType::NilType) && isNumber(numbers) &&
-                           strings.isString() && isThread(threads) && isBuffer(buffers) && isNone(nones);
+                           strings.isString() && isThread(threads) && isBuffer(buffers) && Luau::isNone(nones);
     }
 
     // Check is extern type
@@ -382,6 +382,19 @@ bool NormalizedType::isNil() const
                !hasTables() && !hasFunctions() && !hasTyvars() && !hasIntegers();
     else
         return !hasTops() && !hasBooleans() && !hasExternTypes() && !hasNumbers() && !hasStrings() && !hasThreads() && !hasBuffers() && !hasNones() &&
+               !hasTables() && !hasFunctions() && !hasTyvars();
+}
+
+bool NormalizedType::isNone() const
+{
+    if (!hasNones())
+        return false;
+
+    if (FFlag::LuauIntegerType2)
+        return !hasTops() && !hasBooleans() && !hasExternTypes() && !hasNumbers() && !hasStrings() && !hasThreads() && !hasBuffers() && !hasNils() &&
+               !hasTables() && !hasFunctions() && !hasTyvars() && !hasIntegers();
+    else
+        return !hasTops() && !hasBooleans() && !hasExternTypes() && !hasNumbers() && !hasStrings() && !hasThreads() && !hasBuffers() && !hasNils() &&
                !hasTables() && !hasFunctions() && !hasTyvars();
 }
 

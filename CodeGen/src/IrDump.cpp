@@ -65,8 +65,8 @@ static const char* getTagName(uint8_t tag)
         return "tnumber";
     case LUA_TVECTOR:
         return "tvector";
-    case LUA_TNONE:
-        return "tnone";
+    case LUA_TSYMNONE:
+        return "tsymnone";
     case LUA_TSTRING:
         return "tstring";
     case LUA_TTABLE:
@@ -812,7 +812,7 @@ const char* getBytecodeTypeName(uint8_t type, const char* const* userdataTypes)
         return "vector";
     case LBC_TYPE_BUFFER:
         return "buffer";
-    case LBC_TYPE_NONE:
+    case LBC_TYPE_SYMNONE:
         return "none";
     case LBC_TYPE_ANY:
         return "any";

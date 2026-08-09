@@ -790,6 +790,8 @@ static int luauF_type(lua_State* L, StkId res, TValue* arg0, int nresults, StkId
     if (nparams >= 1 && nresults <= 1)
     {
         int tt = ttype(arg0);
+        if (tt == LUA_TSYMNONE)
+            return -1;
         TString* ttname = L->global->ttname[tt];
 
         setsvalue(L, res, ttname);
@@ -1302,9 +1304,9 @@ static int luauF_tostring(lua_State* L, StkId res, TValue* arg0, int nresults, S
             setsvalue(L, res, s);
             return 1;
         }
-        case LUA_TNONE:
+        case LUA_TSYMNONE:
         {
-            TString* s = L->global->ttname[LUA_TNONE];
+            TString* s = L->global->ttname[LUA_TSYMNONE];
             setsvalue(L, res, s);
             return 1;
         }

@@ -2278,7 +2278,7 @@ static bool isOkToCompare(
         return true;
 
     // We allow anything to be compared to nil or none.
-    if (normLeft->isNil() || normRight->isNil() || normLeft->hasNones() || normRight->hasNones())
+    if (normLeft->isNil() || normRight->isNil() || normLeft->isNone() || normRight->isNone())
         return true;
 
     // Comparison with never is always ok.
@@ -3148,6 +3148,59 @@ Reasonings TypeChecker2::explainReasonings(TypePackId subTp, TypePackId superTp,
     return explainReasonings_(subTp, superTp, location, r);
 }
 
+// True when the *only* reason `subTy` fails to be a subtype of `superTy` is that `subTy` is (or contains, as a
+// union member) `none` and `superTy` doesn't account for it. This happens when an optional value (`T | none`)
+// is used somewhere that expects a plain `T` without first being narrowed/checked.
+static bool isUncheckedNoneMismatch(TypeId subTy, TypeId superTy, const SubtypingResult& result, NotNull<BuiltinTypes> builtinTypes, NotNull<TypeArena> arena)
+{
+    const SubtypingReasoning* onlyReasoning = nullptr;
+    for (const SubtypingReasoning& reasoning : result.reasoning)
+    {
+        if (onlyReasoning)
+            return false;
+        onlyReasoning = &reasoning;
+    }
+
+    if (!onlyReasoning || !onlyReasoning->superPath.empty())
+        return false;
+
+    std::optional<TypeOrPack> subLeaf = traverse(subTy, onlyReasoning->subPath, builtinTypes, arena);
+    if (!subLeaf)
+        return false;
+
+    auto subLeafTy = get<TypeId>(*subLeaf);
+    return subLeafTy && Luau::isNone(*subLeafTy);
+}
+
+// True when `subTy` failed to be a subtype of `superTy` because `superTy` is a negated union
+// (e.g. `~(number | string)`) and `subTy` itself overlaps with one of that union's members.
+// The generic reasoning text for this case reads as "`number` is not a subtype of `number`",
+// which is confusing since disjointness, not subtyping, is what actually failed.
+static bool isSimpleNegatedUnionMismatch(TypeId subTy, TypeId superTy, const SubtypingResult& result)
+{
+    const NegationType* negation = get<NegationType>(follow(superTy));
+    if (!negation || !get<UnionType>(follow(negation->ty)))
+        return false;
+
+    const SubtypingReasoning* onlyReasoning = nullptr;
+    for (const SubtypingReasoning& reasoning : result.reasoning)
+    {
+        if (onlyReasoning)
+            return false;
+        onlyReasoning = &reasoning;
+    }
+
+    if (!onlyReasoning || !onlyReasoning->subPath.empty())
+        return false;
+
+    const std::vector<TypePath::Component>& components = onlyReasoning->superPath.components;
+    if (components.size() != 2)
+        return false;
+
+    const TypePath::TypeField* negated = get_if<TypePath::TypeField>(&components[0]);
+    return negated && *negated == TypePath::TypeField::Negated && get_if<TypePath::Index>(&components[1]);
+}
+
 void TypeChecker2::explainError(TypeId subTy, TypeId superTy, Location location, const SubtypingResult& result)
 {
     if (result.isErrorSuppressing)
@@ -3162,6 +3215,25 @@ void TypeChecker2::explainError(TypeId subTy, TypeId superTy, Location location,
         break;
     case ErrorSuppression::DoNotSuppress:
         break;
+    }
+
+    if (isUncheckedNoneMismatch(subTy, superTy, result, builtinTypes, subtyping->arena))
+    {
+        reportError(
+            GenericError{"this '" + toString(superTy) + "' value is optional and may be 'none', use an if condition to check"},
+            location
+        );
+        return;
+    }
+
+    if (isSimpleNegatedUnionMismatch(subTy, superTy, result))
+    {
+        const NegationType* negation = get<NegationType>(follow(superTy));
+        reportError(
+            GenericError{"Expected this to be anything but '" + toString(negation->ty) + "', got '" + toString(subTy) + "'"},
+            location
+        );
+        return;
     }
 
     Reasonings reasonings = explainReasonings(subTy, superTy, location, result);

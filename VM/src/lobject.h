@@ -52,7 +52,7 @@ typedef struct lua_TValue
 
 // Macros to test type
 #define ttisnil(o) (ttype(o) == LUA_TNIL)
-#define ttisnone(o) (ttype(o) == LUA_TNONE)
+#define ttissymnone(o) (ttype(o) == LUA_TSYMNONE)
 #define ttisnumber(o) (ttype(o) == LUA_TNUMBER)
 #define ttisinteger(o) (ttype(o) == LUA_TINTEGER)
 #define ttisstring(o) (ttype(o) == LUA_TSTRING)
@@ -86,7 +86,7 @@ typedef struct lua_TValue
 #define classvalue(o) check_exp(ttisclass(o), &(o)->value.gc->lclass)
 #define objectvalue(o) check_exp(ttisobject(o), &(o)->value.gc->lobject)
 
-#define l_isfalse(o) (ttisnil(o) || (ttisboolean(o) && bvalue(o) == 0) || ttisnone(o))
+#define l_isfalse(o) (ttisnil(o) || (ttisboolean(o) && bvalue(o) == 0) || ttissymnone(o))
 
 #define lightuserdatatag(o) check_exp(ttislightuserdata(o), (o)->extra[0])
 
@@ -102,7 +102,7 @@ typedef struct lua_TValue
 
 // Macros to set values
 #define setnilvalue(obj) ((obj)->tt = LUA_TNIL)
-#define setnonevalue(obj) ((obj)->tt = LUA_TNONE)
+#define setsymnonevalue(obj) ((obj)->tt = LUA_TSYMNONE)
 
 #define setnvalue(obj, x) \
     { \
@@ -275,19 +275,31 @@ typedef struct TString
     // 1 byte padding
 
     int16_t atom;
+    uint8_t is_external;
 
-    // 2 byte padding
+    // 1 byte padding
 
     TString* next; // next string in the hash table bucket
 
     unsigned int hash;
     unsigned int len;
 
-    char data[1]; // string data is allocated right after the header
+    union
+    {
+        char data[1]; // string data is allocated right after the header
+        struct
+        {
+            char* dataptr; // points to external memory
+            lua_StringFree free_cb;
+            void* userdata;
+        } ext;
+    };
 } TString;
 
+#define getstr(ts) ((ts)->is_external ? (ts)->ext.dataptr : (ts)->data)
+#define tsisinline(ts) (!((ts)->is_external))
+#define getexternalmeta(ts) (&(ts)->ext)
 
-#define getstr(ts) (ts)->data
 #define svalue(o) getstr(tsvalue(o))
 
 typedef struct Udata

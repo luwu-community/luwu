@@ -537,7 +537,7 @@ enum LuauBytecodeType
     LBC_TYPE_VECTOR,
     LBC_TYPE_BUFFER,
     LBC_TYPE_INTEGER,
-    LBC_TYPE_NONE,
+    LBC_TYPE_SYMNONE,
 
     LBC_TYPE_ANY = 15,
 

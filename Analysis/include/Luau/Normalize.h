@@ -281,6 +281,9 @@ struct NormalizedType
     /// Returns true if this type is `nil` or `nil | *error-type*`
     bool isNil() const;
 
+    /// Returns true if this type is `none` or `none | *error-type*`
+    bool isNone() const;
+
     // Helpers that improve readability of the above (they just say if the component is present)
     bool hasTops() const;
     bool hasBooleans() const;

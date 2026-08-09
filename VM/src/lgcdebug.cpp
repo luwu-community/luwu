@@ -343,8 +343,9 @@ static void dumpstringdata(FILE* f, const char* data, size_t len)
 
 static void dumpstring(FILE* f, TString* ts)
 {
-    fprintf(f, "{\"type\":\"string\",\"cat\":%d,\"size\":%d,\"data\":\"", ts->memcat, int(sizestring(ts->len)));
-    dumpstringdata(f, ts->data, ts->len);
+    int size = tsisinline(ts) ? int(sizestring(ts->len)) : int(sizeof(TString) + ts->len);
+    fprintf(f, "{\"type\":\"string\",\"cat\":%d,\"size\":%d,\"data\":\"", ts->memcat, size);
+    dumpstringdata(f, getstr(ts), ts->len);
     fprintf(f, "\"}");
 }
 
@@ -754,7 +755,7 @@ static void enumedges(EnumContext* ctx, GCObject* from, TValue* data, size_t siz
 
 static void enumstring(EnumContext* ctx, TString* ts)
 {
-    enumnode(ctx, obj2gco(ts), sizestring(ts->len), NULL);
+    enumnode(ctx, obj2gco(ts), tsisinline(ts) ? sizestring(ts->len) : (sizeof(TString) + ts->len), NULL);
 }
 
 static void enumtable(EnumContext* ctx, LuaTable* h)
@@ -935,7 +936,7 @@ static void enumproto(EnumContext* ctx, Proto* p)
     {
         size_t nativesize = ctx->L->global->ecb.getmemorysize(ctx->L, p);
 
-        ctx->node(ctx->context, p->execdata, uint8_t(LUA_TNONE), p->memcat, nativesize, NULL);
+        ctx->node(ctx->context, p->execdata, uint8_t(LUA_TSYMNONE), p->memcat, nativesize, NULL);
         ctx->edge(ctx->context, enumtopointer(obj2gco(p)), p->execdata, "[native]");
     }
 

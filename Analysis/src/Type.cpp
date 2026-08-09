@@ -241,7 +241,7 @@ bool isNone(TypeId ty)
 
 bool isOptional(TypeId ty)
 {
-    if (isNil(ty))
+    if (isNil(ty) || isNone(ty))
         return true;
 
     ty = follow(ty);
