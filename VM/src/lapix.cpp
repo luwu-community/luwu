@@ -65,3 +65,29 @@ LUA_API int luau_getfflag(const char* name)
     }
     return -1;
 }
+
+int lua_findunuseduserdatatag(lua_State *L)
+{
+    global_State* global = L->global;
+
+    for (int tag = 0; tag < LUA_UTAG_LIMIT; tag++)
+    {
+        if (!global->udatamt[tag] && !global->udatagc[tag] && !global->udatadirectfields[tag])
+            return tag;
+    }
+
+    return -1;
+}
+
+int lua_findunusedlightuserdatatag(lua_State *L)
+{
+    global_State* global = L->global;
+
+    for (int tag = 0; tag < LUA_LUTAG_LIMIT; tag++)
+    {
+        if (!global->lightuserdataname[tag])
+            return tag;
+    }
+
+    return -1;
+}

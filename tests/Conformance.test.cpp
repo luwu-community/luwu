@@ -2,6 +2,7 @@
 #include "Luau/Common.h"
 #include "Luau/Type.h"
 #include "lua.h"
+#include "lapix.h"
 #include "lualib.h"
 #include "luacode.h"
 #include "luacodegen.h"
@@ -75,6 +76,7 @@ LUAU_FASTFLAG(LuauCodegenFixTwoResA64Builtin)
 LUAU_FASTFLAG(LuauMathRoundNegZero)
 LUAU_FASTFLAG(LuauDefaultArguments)
 LUAU_FASTFLAG(LuauNonePrimitive)
+LUAU_FASTFLAG(LuauDirectFieldGet)
 
 #ifndef LUAU_CONFORMANCE_SOURCE_DIR
 // Walks up from the current directory looking for the Client folder,
@@ -4793,6 +4795,33 @@ TEST_CASE("None")
     ScopedFastFlag sff{FFlag::LuauNonePrimitive, true};
 
     runConformance("none.luau");
+}
+
+TEST_CASE("lua_findunuseduserdatatag")
+{
+    ScopedFastFlag directFieldGet{FFlag::LuauDirectFieldGet, true};
+
+    StateRef globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+
+    lua_createtable(L, 0, 0);
+    lua_setuserdatametatable(L, 0);
+    lua_setuserdatadtor(L, 1, [](lua_State*, void*){});
+    lua_registeruserdatadirectfieldget(L, 2, "hina", [](void*, void*){});
+
+    int available = lua_findunuseduserdatatag(L);
+    CHECK_EQ(available, 3);
+}
+
+TEST_CASE("lua_findlightuserdatatag")
+{
+    StateRef globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+
+    lua_setlightuserdataname(L, 0, "ferris");
+
+    int available = lua_findunusedlightuserdatatag(L);
+    CHECK_EQ(available, 1);
 }
 
 TEST_SUITE_END();
