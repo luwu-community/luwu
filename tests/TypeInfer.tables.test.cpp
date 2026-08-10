@@ -31,7 +31,6 @@ LUAU_FASTFLAG(LuauReadOnlyIndexers)
 LUAU_FASTFLAG(LuauRemoveConstraintSolverEmplace)
 LUAU_FASTFLAG(LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier)
 LUAU_FASTFLAG(LuauBetterMissingPropertiesTypeError)
-LUAU_FASTFLAG(LuauAlwaysIntersectTablesWithTables)
 LUAU_FASTFLAG(LuauIndexerModifierMismatchErrors)
 
 TEST_SUITE_BEGIN("TableTests");
@@ -7358,35 +7357,16 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "table_insert_strings_and_then_concat")
     )"));
 }
 
-TEST_CASE_FIXTURE(BuiltinsFixture, "normalization_always_intersects_table")
-{
-    ScopedFastFlag _{FFlag::LuauAlwaysIntersectTablesWithTables, true};
-
-    LUAU_REQUIRE_NO_ERRORS(check(R"(
-        local tbl = {}
-
-        function tbl:hmm(occlusionMode)
-            if self.activeOcclusionModule and self.activeOcclusionModule:GetOcclusionMode() == occlusionMode then
-            end
-
-            if self.activeOcclusionModule then
-                local newModuleOcclusionMode = self.activeOcclusionModule:GetOcclusionMode()
-                error("CameraScript ActivateOcclusionModule mismatch: ",self.activeOcclusionModule:GetOcclusionMode())
-            end
-        end
-    )"));
-}
-
 TEST_CASE_FIXTURE(Fixture, "readonly_indexer_access_mismatch_error")
 {
     DOES_NOT_PASS_OLD_SOLVER_GUARD();
     ScopedFastFlag _[] = {
+        {FFlag::LuauReadOnlyIndexers, true},
         {FFlag::LuauPropertyModifierMismatchErrors, true},
         {FFlag::LuauIndexerModifierMismatchErrors, true},
     };
 
     CheckResult result = check(R"(
-<<<<<<< HEAD
         local function needBoth(_t: { number })
         end
 
@@ -7403,13 +7383,12 @@ TEST_CASE_FIXTURE(Fixture, "readonly_indexer_access_and_type_mismatch_error")
 {
     DOES_NOT_PASS_OLD_SOLVER_GUARD();
     ScopedFastFlag _[] = {
+        {FFlag::LuauReadOnlyIndexers, true},
         {FFlag::LuauPropertyModifierMismatchErrors, true},
         {FFlag::LuauIndexerModifierMismatchErrors, true},
     };
 
     CheckResult result = check(R"(
-=======
->>>>>>> b33b0145 (the implement, do)
         local function needBoth(_t: { string })
         end
 
@@ -7418,20 +7397,10 @@ TEST_CASE_FIXTURE(Fixture, "readonly_indexer_access_and_type_mismatch_error")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-<<<<<<< HEAD
     CHECK_EQ(toString(result.errors[0]), "Expected this to be '{string}', but got '{read number}'; "
         "\nthis is because "
         "\n\t * the indexer is read-only in the latter type, but the former type requires it to be read-write"
         "\n\t * the result of indexing is `number` in the latter type and `string` in the former type, and `number` is not exactly `string`");
-=======
-    CHECK_EQ(toString(result.errors[0]), "Expected this to be"
-        "\n\t'{ x: string }'"
-        "\nbut got"
-        "\n\t'{ read x: number }'; "
-        "\nthis is because "
-        "\n\t* `x` is read-only in the latter type, but the former type requires it to be read-write"
-        "\n\t* accessing `x` results in `number` in the latter type and `string` in the former type, and `number` is not a subtype of `string`");
->>>>>>> b33b0145 (the implement, do)
 }
 
 TEST_SUITE_END();
