@@ -11,4 +11,4 @@ doesn't come with any security guarantees; make sure to sign and/or encrypt the 
 
 # Reporting a Vulnerability
 
-You can report security bugs via [HackerOne](https://hackerone.com/roblox). Please refer to the linked page for rules of the bounty program.
+Please DM a language maintainer on [our Discord](https://discord.gg/3MJ37CFNWh) or email deviaze at `dev@deviaze.com` to report a security vulnerability in `mluau/luau`.
