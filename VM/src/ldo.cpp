@@ -718,6 +718,9 @@ static int resume_finish(lua_State* L, int status, int oldnCcalls)
         expandstacklimit(L, L->top);
     }
 
+    if (L->global->cb.userthreadstatechange)
+        L->global->cb.userthreadstatechange(L, L->status);
+
     return L->status;
 }
 
