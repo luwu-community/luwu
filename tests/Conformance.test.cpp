@@ -2397,7 +2397,7 @@ TEST_CASE("NewUserdataOverflow")
     );
 
     CHECK(lua_pcall(L, 0, 0, 0) == LUA_ERRRUN);
-    CHECK(strcmp(lua_tostring(L, -1), "memory allocation error: block too big") == 0);
+    CHECK(strcmp(lua_tostring(L, -1), "memory allocation error: userdata too big (exceeds maximum of 2.00 GiB)") == 0);
 }
 
 TEST_CASE("SandboxWithoutLibs")

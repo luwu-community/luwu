@@ -11,7 +11,7 @@
 Buffer* luaB_newbuffer(lua_State* L, size_t s)
 {
     if (s > MAX_BUFFER_SIZE)
-        luaM_toobig(L);
+        luaM_toobig(L, "buffer too big", MAX_BUFFER_SIZE);
 
     Buffer* b = luaM_newgco(L, Buffer, sizebuffer(s), L->activememcat);
     luaC_init(L, b, LUA_TBUFFER);
@@ -30,7 +30,7 @@ Buffer* luaB_newexternalbuffer(lua_State* L, size_t s, void* data, void* userdat
     {
         if (free_cb)
             free_cb(L, data, s, userdata);
-        luaM_toobig(L);
+        luaM_toobig(L, "ext. buffer too big", MAX_BUFFER_SIZE);
     }
 
     struct AllocContext
