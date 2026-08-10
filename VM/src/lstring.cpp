@@ -172,7 +172,7 @@ TString* luaS_newexternallstr(lua_State* L, const char* str, size_t l, void* use
     {
         if (free_cb)
             free_cb(L, str, l, userdata);
-        luaM_toobig(L);
+        luaM_toobig(L, "external string too big", MAXSSIZE);
     }
 
     unsigned int h = luaS_hash(str, l);
