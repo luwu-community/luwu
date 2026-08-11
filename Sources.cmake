@@ -515,7 +515,6 @@ if(TARGET Luau.UnitTest)
         tests/DataFlowGraph.test.cpp
         tests/DenseHash.test.cpp
         tests/Error.test.cpp
-        tests/FatCClosure.test.cpp
         tests/Fixture.cpp
         tests/Fixture.h
         tests/FragmentAutocomplete.test.cpp
@@ -600,6 +599,7 @@ if(TARGET Luau.Conformance)
     target_sources(Luau.Conformance PRIVATE
         tests/ExternalBuffer.test.cpp
         tests/ExternalString.test.cpp
+        tests/FatCClosure.test.cpp
         tests/RegisterCallbacks.h
         tests/RegisterCallbacks.cpp
         tests/ConformanceIrHooks.h
