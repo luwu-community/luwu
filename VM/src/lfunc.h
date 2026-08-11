@@ -6,7 +6,7 @@
 
 #define sizeCclosure(n) (offsetof(Closure, c.upvals) + sizeof(TValue) * (n))
 #define sizeLclosure(n) (offsetof(Closure, l.uprefs) + sizeof(TValue) * (n))
-#define sizeFatCclosure(sz) (sizeof(Closure) + (sz))
+#define sizeFatCclosure(sz) (offsetof(Closure, fatc.data) + (sz))
 #define getproto(cl) ((cl)->isC ? nullptr : (FFlag::LuauPromoteProto && cl->l.p->optimized ? luaF_promoteproto(cl) : (cl)->l.p))
 
 LUAI_FUNC Proto* luaF_newproto(lua_State* L);

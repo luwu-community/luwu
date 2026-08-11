@@ -480,6 +480,7 @@ typedef struct Closure
             const char* debugname;
             void (*dtor)(struct lua_State* L, void* data, size_t sz);
             size_t size;
+            alignas(8) char data[1];
         } fatc;
 
         struct

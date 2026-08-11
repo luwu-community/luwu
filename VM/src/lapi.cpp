@@ -816,7 +816,7 @@ void* lua_pushcclosurewithdatak(lua_State* L, lua_CFunction fn, const char* debu
     setclvalue(L, L->top, cl);
     LUAU_ASSERT(iswhite(obj2gco(cl)));
     api_incr_top(L);
-    return (void*)(cl + 1);
+    return (void*)cl->fatc.data;
 }
 
 void* lua_getcclosuredata(lua_State* L)
@@ -825,7 +825,7 @@ void* lua_getcclosuredata(lua_State* L)
         
     Closure* cl = curr_func(L);
     if (cl && cl->isC == 2)
-        return (void*)(cl + 1);
+        return (void*)cl->fatc.data;
     return nullptr;
 }
 
