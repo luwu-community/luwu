@@ -81,4 +81,18 @@ TEST_CASE("FatCClosureDtorOnClose")
     CHECK(test_dtor_calls == 1);
 }
 
+TEST_CASE("FatCClosureDebugInfo")
+{
+    std::unique_ptr<lua_State, void (*)(lua_State*)> state(luaL_newstate(), lua_close);
+    lua_State* L = state.get();
+    
+    lua_pushcclosurewithdatak(L, my_closure, "my_super_fat_closure", nullptr, sizeof(int), nullptr);
+    
+    lua_Debug ar;
+    int res = lua_getinfo(L, -1, "sn", &ar);
+    CHECK(res != 0);
+    CHECK(strcmp(ar.what, "C") == 0);
+    CHECK(strcmp(ar.name, "my_super_fat_closure") == 0);
+}
+
 TEST_SUITE_END();
