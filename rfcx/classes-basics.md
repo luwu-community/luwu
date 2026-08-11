@@ -255,6 +255,25 @@ class User -- TypeError: this class can never be instantiated; did you mean to d
 end
 ```
 
+## C API
+
+### `int lua_isclass(lua_State* L, int idx);`
+
+Returns 1 if the value at the index is a class.
+
+### `int lua_isobject(lua_State* L, int idx);`
+
+Returns 1 if the value at the index is an object.
+
+### `void* lua_newobject(lua_State* L, int idx);`
+
+Places a new `object` from the `class` at the index and calls its constructor with all the field values on the stack between top and the index.
+Then places the new `object` on top of the stack.
+
+### `void* lua_newclass(lua_State* L, size_t sz);`
+
+Places a new `class` object with the data size `sz` on top of the stack. 
+
 ## Drawbacks
 
 Implementing classes in a different way from upstream Roblox's Luau may lead to inconsistencies
@@ -269,20 +288,6 @@ of our version of classes (not forcing `.new`, more explicit semantics) is a bet
 - Omit `__init`, and just increase performance of POD methods without reserving `new`
 - Implement classes exactly as upstream Luau does to maintain compatibility, at the price of reserving `.new`
   and choosing a more confusing feature design for no real benefit.
-
-## C API
-
-### `int lua_isclass(lua_State* L, int idx);`
-
-Returns 1 if the value at the index is a class.
-
-### `int lua_isobject(lua_State* L, int idx);`
-
-Returns 1 if the value at the index is an object.
-
-### `int lua_pushobject(lua_State* L, int idx);`
-
-Creates an `object` from the class at the index and calls its constructor with all the field values on the stack between top and the index.
 
 ### `const char* lua_getclassname(lua_State* L, int idx)`
 
