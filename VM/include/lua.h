@@ -204,6 +204,10 @@ LUA_API const char* lua_pushexternalstring(lua_State* L, const char* data, size_
 LUA_API const char* lua_pushvfstring(lua_State* L, const char* fmt, va_list argp);
 LUA_API LUA_PRINTF_ATTR(2, 3) const char* lua_pushfstringL(lua_State* L, const char* fmt, ...);
 LUA_API void lua_pushcclosurek(lua_State* L, lua_CFunction fn, const char* debugname, int nup, lua_Continuation cont);
+
+typedef void (*lua_ClosureWithDataFree)(lua_State* L, void* data, size_t sz);
+LUA_API void* lua_pushcclosurewithdatak(lua_State *L, lua_CFunction fn, const char *debugname, lua_Continuation cont, size_t size, lua_ClosureWithDataFree dtor);
+LUA_API void* lua_getcclosuredata(lua_State *L);
 LUA_API void lua_pushboolean(lua_State* L, int b);
 LUA_API int lua_pushthread(lua_State* L);
 
@@ -463,6 +467,7 @@ LUA_API void* lua_getstringexternaluserdata(lua_State* L, int idx);
 #define lua_pushliteral(L, s) lua_pushlstring(L, "" s, (sizeof(s) / sizeof(char)) - 1)
 #define lua_pushcfunction(L, fn, debugname) lua_pushcclosurek(L, fn, debugname, 0, NULL)
 #define lua_pushcclosure(L, fn, debugname, nup) lua_pushcclosurek(L, fn, debugname, nup, NULL)
+#define lua_pushcclosurewithdata(L, fn, debugname, size, dtor) lua_pushcclosurewithdatak(L, fn, debugname, NULL, size, dtor)
 #define lua_pushlightuserdata(L, p) lua_pushlightuserdatatagged(L, p, 0)
 
 #define lua_rawgetp(L, idx, p) lua_rawgetptagged(L, idx, p, 0)

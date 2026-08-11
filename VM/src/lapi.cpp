@@ -798,6 +798,32 @@ void lua_pushcclosurek(lua_State* L, lua_CFunction fn, const char* debugname, in
     api_incr_top(L);
 }
 
+void* lua_pushcclosurewithdatak(lua_State* L, lua_CFunction fn, const char* debugname, lua_Continuation cont, size_t size, lua_ClosureWithDataFree dtor)
+{
+    api_check(L, fn != nullptr);
+    luaC_checkGC(L);
+    luaC_threadbarrier(L);
+    ensure_stack(L, 1);
+    Closure* cl = luaF_newFatCclosure(L, size, getcurrenv(L));
+    cl->fatc.f = fn;
+    cl->fatc.cont = cont;
+    cl->fatc.debugname = debugname;
+    cl->fatc.dtor = dtor;
+    cl->fatc.size = size;
+    setclvalue(L, L->top, cl);
+    LUAU_ASSERT(iswhite(obj2gco(cl)));
+    api_incr_top(L);
+    return (void*)(cl + 1);
+}
+
+void* lua_getcclosuredata(lua_State* L)
+{
+    Closure* cl = curr_func(L);
+    if (cl && cl->isC == 2)
+        return (void*)(cl + 1);
+    return nullptr;
+}
+
 void lua_pushboolean(lua_State* L, int b)
 {
     ensure_stack(L, 1);

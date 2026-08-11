@@ -95,6 +95,23 @@ Closure* luaF_newCclosure(lua_State* L, int nelems, LuaTable* e)
     return c;
 }
 
+Closure* luaF_newFatCclosure(lua_State* L, size_t sz, LuaTable* e)
+{
+    Closure* c = luaM_newgco(L, Closure, sizeFatCclosure(sz), L->activememcat);
+    luaC_init(L, c, LUA_TFUNCTION);
+    c->isC = 2;
+    c->env = e;
+    c->nupvalues = 0;
+    c->stacksize = LUA_MINSTACK;
+    c->preload = 0;
+    c->fatc.f = NULL;
+    c->fatc.cont = NULL;
+    c->fatc.debugname = NULL;
+    c->fatc.dtor = NULL;
+    c->fatc.size = sz;
+    return c;
+}
+
 UpVal* luaF_findupval(lua_State* L, StkId level)
 {
     global_State* g = L->global;
@@ -195,7 +212,11 @@ void luaF_freeproto(lua_State* L, Proto* f, lua_Page* page)
 
 void luaF_freeclosure(lua_State* L, Closure* c, lua_Page* page)
 {
-    int size = c->isC ? sizeCclosure(c->nupvalues) : sizeLclosure(c->nupvalues);
+    int size = c->isC == 2 ? sizeFatCclosure(c->fatc.size) : (c->isC == 1 ? sizeCclosure(c->nupvalues) : sizeLclosure(c->nupvalues));
+    if (c->isC == 2 && c->fatc.dtor)
+    {
+        c->fatc.dtor(L, (void*)(c + 1), c->fatc.size);
+    }
     luaM_freegco(L, c, size, c->memcat, page);
 }
 

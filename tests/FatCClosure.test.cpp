@@ -1,0 +1,84 @@
+#include "lua.h"
+#include "lualib.h"
+
+#include "doctest.h"
+#include "ScopedFlags.h"
+
+#include <memory>
+#include <string.h>
+
+TEST_SUITE_BEGIN("FatCClosure");
+
+static int test_dtor_calls = 0;
+
+static void my_dtor(lua_State* L, void* data, size_t sz)
+{
+    test_dtor_calls++;
+    CHECK(sz == sizeof(int));
+    int* val = (int*)data;
+    CHECK(*val == 1234);
+    *val = 0;
+}
+
+static int my_closure(lua_State* L)
+{
+    void* data = lua_getcclosuredata(L);
+    CHECK(data != nullptr);
+    int* val = (int*)data;
+    
+    lua_pushinteger(L, *val);
+    return 1;
+}
+
+TEST_CASE("FatCClosureCreationAndCall")
+{
+    std::unique_ptr<lua_State, void (*)(lua_State*)> state(luaL_newstate(), lua_close);
+    lua_State* L = state.get();
+    
+    test_dtor_calls = 0;
+    
+    void* data = lua_pushcclosurewithdatak(L, my_closure, "my_closure", nullptr, sizeof(int), my_dtor);
+    CHECK(data != nullptr);
+    
+    int* val = (int*)data;
+    *val = 1234;
+    
+    lua_setglobal(L, "f");
+    
+    lua_getglobal(L, "f");
+    lua_call(L, 0, 1);
+    
+    CHECK(lua_tointeger(L, -1) == 1234);
+    lua_pop(L, 1);
+    
+    // Trigger GC to run the dtor
+    lua_pushnil(L);
+    lua_setglobal(L, "f");
+    lua_gc(L, LUA_GCCOLLECT, 0);
+    
+    CHECK(test_dtor_calls == 1);
+}
+
+TEST_CASE("FatCClosureDtorOnClose")
+{
+    test_dtor_calls = 0;
+    
+    {
+        std::unique_ptr<lua_State, void (*)(lua_State*)> state(luaL_newstate(), lua_close);
+        lua_State* L = state.get();
+        
+        void* data = lua_pushcclosurewithdatak(L, my_closure, "my_closure", nullptr, sizeof(int), my_dtor);
+        CHECK(data != nullptr);
+        
+        int* val = (int*)data;
+        *val = 1234;
+        
+        lua_setglobal(L, "f");
+        
+        // Let the state be closed without manually triggering GC
+    }
+    
+    CHECK(test_dtor_calls == 1);
+}
+
+TEST_SUITE_END();

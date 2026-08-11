@@ -475,6 +475,15 @@ typedef struct Closure
 
         struct
         {
+            lua_CFunction f;
+            lua_Continuation cont;
+            const char* debugname;
+            void (*dtor)(struct lua_State* L, void* data, size_t sz);
+            size_t size;
+        } fatc;
+
+        struct
+        {
             struct Proto* p;
             TValue uprefs[1];
         } l;
