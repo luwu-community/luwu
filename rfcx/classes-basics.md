@@ -107,7 +107,9 @@ Class instances are a new type of value in the VM. They are similar but not quit
 
 Reading or writing a nonexistent class property raises an error. This makes it easy to disambiguate between a nonexistent property and a property whose value is nil.
 
-We introduce a new top type for class instances: `object`.  The builtin `type()` and `typeof()` functions return `"object"` for any class instance.  We chose this over having them return the class name because class names do not have to be globally unique (they must only unique within a single module) and because we do not want to make it possible for classes to impersonate other types.
+We introduce a new top type for class instances: `object`.  The builtin `type()` and `typeof()` functions return `"object"` for any class instance.  
+
+We chose this over having them return the class name because class names do not have to be globally unique (they must only unique within a single module) and because we do not want to make it possible for classes to impersonate other types.
 
 ```luau
 class Cls end
@@ -124,7 +126,7 @@ Comparisons between object instances are the same as with tables: If `__eq` is n
 
 ### The `class` library
 
-We introduce a new global library `class`.  Its contents are
+We introduce a new global library `class`.  Its contents are:
 
 ```luau
 local class: {
@@ -294,11 +296,9 @@ end
 const user = User("Taz", "Parekh", "126-222-1123")
 ```
 
-Defining a `private` constructor restricts the user to use a `public` method in order to create an instance from this class.
+Attempting to initialize an instance of a class with a `private` constructor outside of its class will raise a runtime error.
 
-Attempting to initialize an instance of a class with a `private` constructor will raise a runtime error.
-
-This can be useful in achieving full encapsulation.
+Defining a `private` constructor restricts the user to use a `public` method in order to create an instance from this class. This can be useful in achieving full encapsulation.
 
 ```luau
 class User
