@@ -14,7 +14,7 @@ class Point
     end
 
     function __add(self, other: Point)
-        return Point.new({ x = self.x + other.x, y = self.y + other.y })
+        return Point { x = self.x + other.x, y = self.y + other.y }
     end
 
     function __tostring(self)
@@ -22,10 +22,10 @@ class Point
     end
 
     function fromAxisLength(theta, length)
-        return Point.new({
+        return Point {
             x = length * math.cos(theta),
             y = length * math.sin(theta),
-        })
+        }
     end
 end
 
@@ -150,7 +150,7 @@ end
 
 #### `public` and `private` constructors
 
-Users can define a constructor as `public` or `private`, which `private` allowing them to create classes with better encapsulation,
+Users can define a constructor as `public` or `private`, with `private` allowing them to create classes with better encapsulation,
 allowing the initialization to happen through public factory functions instead. The default constructor however is always public.
 
 ```luau
@@ -180,7 +180,7 @@ end
 const user = User("Taz", "Parekh", "126-222-1123")
 ```
 
-When a constructor is defined with `private` access specifier, they can now never be accessed directly from outside of the class, 
+When a constructor is defined with the `private` access specifier, they can now never be accessed directly from outside of the class, 
 and thus you must define a `public` function for accessing and initializing an object from a `private` constructor: 
 
 ```luau
