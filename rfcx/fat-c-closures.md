@@ -16,24 +16,27 @@ This RFC as such proposes the addition of 'fat' C closures (or C Closures with D
 A new C API will be added to Luau for pushing c closures with data and getting out the data from the running closure:
 
 ```c
-    typedef void (*lua_ClosureWithDataFree)(lua_State* L, void* data, size_t sz);
+typedef void (*lua_ClosureWithDataFree)(lua_State* L, void* data, size_t sz);
 
-    // Push a new c closure with data returning a void* data pointer in which the raw function state can be 
-    // directly saved to.
-    LUA_API void* lua_pushcclosurewithdatak(
-        lua_State *L, 
-        lua_CFunction fn, 
-        const char *debugname, 
-        lua_Continuation cont, 
-        size_t size, 
-        lua_ClosureWithDataFree dtor
-    );
+// Push a new c closure with data returning a void* data pointer in which the raw function state can be 
+// directly saved to.
+LUA_API void* lua_pushcclosurewithdatak(
+    lua_State *L, 
+    lua_CFunction fn, 
+    const char *debugname, 
+    lua_Continuation cont, 
+    size_t size, 
+    lua_ClosureWithDataFree dtor
+);
 
-    // Returns the void* data pointer of the currently executing c closure
-    LUA_API void* lua_getcclosuredata(lua_State *L);
+// Returns the void* data pointer of the currently executing c closure
+// or nullptr if not in a c closure
+LUA_API void* lua_getcclosuredata(lua_State *L);
 ```
 
-Like userdata, the data stored in a closure with data (herein called 'fat' C closures) are fully opaque and will not be scanned or traced by GC (embedders will need to make sure any references are stored in either the registry or a thread stack etc). Additionally, the data will be inline to the closure hence enabling for better memory layout(ing?)/caching.
+Like userdata, the data stored in a closure with data (herein called 'fat' C closures) are fully opaque and will not be scanned or traced by GC (embedders will need to make sure any references are stored in either the registry or a thread stack etc). Additionally, the data will be inline to the closure hence enabling for better memory layout/caching.
+
+Also like userdata, when the Luau state is closed, all fat c closure dtors will be called. Note that the order of GC is undefined and should not be relied upon.
 
 ## Drawbacks
 
