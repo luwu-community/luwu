@@ -110,6 +110,14 @@ We introduce the `public` keyword to define fields as public, and accessible fro
 All fields on a class are `public` by default. This means, if all fields on a class are public, the user can emit the `public` keyword in front of the field definitions.
 However, to remove ambiguity, if a field is defined with an access specifier other than `public`, then the user must explicitly define all fields with an access specifier.
 
+```luau
+class Vector3
+   x: number -- public keyword can be emitted here, all fields are public.
+   y: number
+   z: number
+end
+```
+
 To achieve full encapsulation, we also introduce the `private` access specifier. Any fields defined with this specifier
 will now be private, and now locked to the outside world. Only functions of the same class can access these fields.
 Any attempts at accessing these fields outside of the class functions will cause a runtime error to be raised.
