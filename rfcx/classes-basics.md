@@ -392,8 +392,6 @@ Class definitions are Luau statements just like function definitions.
 
 The action of a class definition statement is to allocate the class object, define its functions and properties, and freeze it.  Consequently, a class cannot be instantiated before this statement is executed.
 
-We do, however, hoist the class identifier's binding to the top of the script so that it can be referred to within functions or classes that lexically appear before the class definition.  This makes it easy and straightforward for developers to write classes or functions that mutually refer to one another.
-
 Static analysis also considers the class's type to be global to the whole module so that it can appear in any type annotation anywhere in the script.
 
 An example:
