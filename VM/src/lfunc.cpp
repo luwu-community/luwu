@@ -212,7 +212,7 @@ void luaF_freeproto(lua_State* L, Proto* f, lua_Page* page)
 
 void luaF_freeclosure(lua_State* L, Closure* c, lua_Page* page)
 {
-    int size = c->isC == 2 ? sizeFatCclosure(c->fatc.size) : (c->isC == 1 ? sizeCclosure(c->nupvalues) : sizeLclosure(c->nupvalues));
+    size_t size = c->isC == 2 ? sizeFatCclosure(c->fatc.size) : (c->isC == 1 ? sizeCclosure(c->nupvalues) : sizeLclosure(c->nupvalues));
     if (c->isC == 2 && c->fatc.dtor)
     {
         c->fatc.dtor(L, (void*)(c + 1), c->fatc.size);
