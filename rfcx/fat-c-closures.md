@@ -1,4 +1,5 @@
 # RFC: 'Fat' C Closures (C Closures with Data)
+FFlag: LuauFatCClosure
 
 ## Summary
 

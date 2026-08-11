@@ -7,6 +7,8 @@
 #include <memory>
 #include <string.h>
 
+LUAU_FASTFLAG(LuauFatCClosure)
+
 TEST_SUITE_BEGIN("FatCClosure");
 
 static int test_dtor_calls = 0;
@@ -32,6 +34,7 @@ static int my_closure(lua_State* L)
 
 TEST_CASE("FatCClosureCreationAndCall")
 {
+    ScopedFastFlag sff{FFlag::LuauFatCClosure, true};
     std::unique_ptr<lua_State, void (*)(lua_State*)> state(luaL_newstate(), lua_close);
     lua_State* L = state.get();
     
@@ -61,6 +64,7 @@ TEST_CASE("FatCClosureCreationAndCall")
 
 TEST_CASE("FatCClosureDtorOnClose")
 {
+    ScopedFastFlag sff{FFlag::LuauFatCClosure, true};
     test_dtor_calls = 0;
     
     {
@@ -83,6 +87,7 @@ TEST_CASE("FatCClosureDtorOnClose")
 
 TEST_CASE("FatCClosureDebugInfo")
 {
+    ScopedFastFlag sff{FFlag::LuauFatCClosure, true};
     std::unique_ptr<lua_State, void (*)(lua_State*)> state(luaL_newstate(), lua_close);
     lua_State* L = state.get();
     
@@ -93,6 +98,23 @@ TEST_CASE("FatCClosureDebugInfo")
     CHECK(res != 0);
     CHECK(strcmp(ar.what, "C") == 0);
     CHECK(strcmp(ar.name, "my_super_fat_closure") == 0);
+}
+
+static int my_plain_closure(lua_State* L)
+{
+    void* data = lua_getcclosuredata(L);
+    CHECK(data == nullptr);
+    return 0;
+}
+
+TEST_CASE("FatCClosureDataNullForPlain")
+{
+    ScopedFastFlag sff{FFlag::LuauFatCClosure, true};
+    std::unique_ptr<lua_State, void (*)(lua_State*)> state(luaL_newstate(), lua_close);
+    lua_State* L = state.get();
+    
+    lua_pushcclosure(L, my_plain_closure, "my_plain_closure", 0);
+    lua_call(L, 0, 0);
 }
 
 TEST_SUITE_END();
