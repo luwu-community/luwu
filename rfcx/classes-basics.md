@@ -50,77 +50,122 @@ For this RFC, we will be focusing on a base design that allows us to potentially
 
 ## Design
 
-The current implementation made by upstream Luau is as follows:
+Class definitions are a block construct. `export class X` is allowed.
+
+Defining two classes with the same name in the same module is forbidden.
+
+Within a class block, two declarations are allowed: Fields and methods.
+
+Fields are introduced with the new access specifier keywords. For now, we plan to only implement `public` and `private`. We may look into implementing other specifiers such as `protected` in the future.
+
+Methods are introduced with the familiar `function` keyword.  `public function f()` is also permitted.
+
+Classes can define the following Luau metamethods. They all work just like they do on a metatable:
+
+* `__init` *
+* `__call`
+* `__concat`
+* `__unm`
+* `__add`
+* `__sub`
+* `__mul`
+* `__div`
+* `__mod`
+* `__pow`
+* `__tostring`
+* `__eq`
+* `__lt`
+* `__le`
+* `__iter`
+* `__len`
+* `__idiv`
+  
+\* `__init` is not a metamethod per se but we call it out here as a valid method to define on a class.
+
+For now, `__index` and `__newindex` are forbidden in classes. We will most likely re-visit this later.
+For forward-compatibility, it is a syntax error to define any other method whose name starts with two underscores.
+
+### Class Objects
+
+The action of evaluating a class definition statement introduces a *class object* in the module scope. A class object is a value that serves as a factory for instances of the class and as a namespace for any functions that are defined on the class.
+
+Class objects behave like class instances in most ways, but are always `const` and frozen.
+
+Taking references to class methods via `ClassName.method` syntax is allowed so that classes can easily compose with existing popular APIs:
 
 ```luau
-class Cat
-    public name: string
-    public age: number
-    function meow(self, content: string): string
-        return `{self.name} says {content}`
-    end
-end
+local n = pcall(SomeClass.getName, someClassInstance)
 ```
 
-However, we have no way to initialize this outside of the default POD syntax.
-POD-like constructors `Class { x = x, y = y }` syntax provides a nice default, "named-table" like functionality
-that feels great with existing code for POD-like data types. On the other hand, POD-like constructors are not the correct choice
-for all flavors of classes. The POD syntax not only allocates a table (fixable in compiler), but there's also no way to customize
-our default constructor behavior. This is a problem if we want to add inheritance in the future.
+The top type of all class objects is named `class`.  `type()` and `typeof()` return `"class"` when passed a class object.
 
-To fix this issue, we propose a constructor function named `__init`, which is always called by the "magic box" self allocator when
-constructing a new instance of a class via `Class()` syntax. Among other influences, this is inspired
-by the similarly-named `__init__` from Python.
+### Class Instances
 
-To facilitate current POD-like behavior, we want to preserve the existing default constructor, only overriding it
-when the user defines `__init` explicitly.
+Class instances are a new type of value in the VM. They are similar but not quite the same as tables. They have no array part, for instance.
 
-### `__init` constructor
+`pairs`, `ipairs` , `getmetatable`, and `setmetatable` all raise a runtime error when invoked on a class instance. They also cannot be iterated over with the generic `for` loop. (unless the class implements `__iter`)
+
+Reading or writing a nonexistent class property raises an error. This makes it easy to disambiguate between a nonexistent property and a property whose value is nil.
+
+We introduce a new top type for class instances: `object`.  The builtin `type()` and `typeof()` functions return `"object"` for any class instance.  We chose this over having them return the class name because class names do not have to be globally unique (they must only unique within a single module) and because we do not want to make it possible for classes to impersonate other types.
 
 ```luau
-class Cat
-    public name: string
-    public age: number
-    function __init(self, name: string, age: number)
-        self.name = name
-        self.age = age
-    end
-    function meow(self, content: string): string
-        return `{self.name} says {content}`
-    end
-end
+class Cls end
+local inst = Cls()
 
-const cat = Cat("Taz", 12)
+type(Cls) == "class"
+typeof(Cls) == "class"
+
+type(inst) == "object"
+typeof(inst) == "object"
 ```
 
-Internally, this works because the `"magic self allocation box"` implied by `Cat.__call` creates a new
-uninitialized instance of `Cat` and passes it to the `__init` constructor. Users can still define their
-own factory functions named `new`, `create` , etc.
+Comparisons between object instances are the same as with tables: If `__eq` is not defined, object comparisons use physical (pointer) equality.  `__eq` is only invoked if both operands are the same type.
 
-Keep in mind that unlike in Python users do *not* need to define their own `__init` just to create an instance
-of their class; all classes have a default constructor, which can be called with the `POD` initializer syntax.
+### The `class` library
 
-If the user does not assign a value to a field within the constructor, a type error such as `"Forgot to initialize property <name>"` is raised.
-At runtime, any uninitialized fields are `nil`.
+We introduce a new global library `class`.  Its contents are
 
-### `public` and `private` access specifiers
+```luau
+local class: {
+    isinstance: (o: unknown, C: class) -> boolean,
+    classof: (o: unknown) -> class?,
+}
+```
+
+This library also serves as an obvious extension point for future features like reflection. In the future, we may allow classes to opt-out of reflection using this library.
+
+The function `class.isinstance(o, Class)` returns `true` if the object `o` is an instance of `Class`. At runtime, it raises an error if the second argument is not a class object. If the first argument is not a class instance, `class.isinstance` returns false. (eg `class.isinstance(5, MyClass)`)
+
+The `classof` function returns the class object corresponding to the first argument. If the first argument is not a class instance, the result is `nil`.
+
+### Access Specifiers
+
+Access specifiers allows the user to control access to a specific field within a class. For the scope of this RFC, we will only be introducing the `public` and `private` access specifiers.
+
+#### `public` access specifier
 
 We introduce the `public` keyword to define fields as public, and accessible from everywhere.
 
 All fields on a class are `public` by default. This means, if all fields on a class are public, the user can emit the `public` keyword in front of the field definitions.
+
 However, to remove ambiguity, if a field is defined with an access specifier other than `public`, then the user must explicitly define all fields with an access specifier.
 
 ```luau
 class Vector3
-   x: number -- public keyword can be emitted here, all fields are public.
+   x: number -- public keyword can be omitted here, all fields are public.
    y: number
    z: number
 end
 ```
 
-To achieve full encapsulation, we also introduce the `private` access specifier. Any fields defined with this specifier
-will now be private, and now locked to the outside world. Only functions of the same class can access these fields.
-Any attempts at accessing these fields outside of the class functions will cause a runtime error to be raised.
+#### `private` access specifier
+
+To achieve full encapsulation, we also introduce the `private` access specifier. 
+
+Any fields defined with this specifier will now be private, and now locked to the outside world. 
+
+Only functions of the same class can access these fields. Any attempts at accessing these fields outside of the class functions will cause a runtime error to be raised.
 
 ```luau
 class User
@@ -140,7 +185,7 @@ class User
     end
 end
 
-const user = User {
+const user = User { -- The default constructor can initialize private fields.
     first_name = "Taz",
     last_name = "Parekh",
     ssn = "126-222-1123",
@@ -156,10 +201,71 @@ class UseMe -- TypeError: this class cannot be used because it only has private 
 end
 ```
 
+### Constructors
+
+To construct an instance of a class, invoke the class object as `MyClass(props)`. The constructor accepts a single optional argument: a table-like value that contains initial values for all the fields. While it will typically be most useful to pass a table literal to this function, that isn't the only use. For example, any class can be shallowly cloned by passing it to its class constructor: `local clone = MyClass(original)`
+
+Let `T` be a class object.  When `T(...args)` is invoked with any arguments, the following happens:
+
+1. A fresh, uninitialized instance of `T` is allocated.  We'll call it `t` here.  All of its fields are initially `nil` irrespective of any type annotations.
+2. `T.__init(t, ...args)` is invoked.  Any values returned by `__init` are ignored.
+3. `t` is produced as the result of the expression
+
+A class can invoke its parent constructor directly:
+
+```luau
+class A extends B
+    public x: number
+
+    function __init(self, x, y)
+        B.__init(self, x)
+        self.x = x * y
+    end
+end
+```
+
+#### The Default Constructor
+
+If a class does not explicitly define a constructor, it is given a default constructor. The default constructor takes an optional mapping from property name to value and initializes the newly-created class instance with those properties. If no argument or `nil` are passed, the default constructor simply initializes all class properties to `nil`.
+
+In strict mode, it is a warning to leave fields uninitialized.
+
+The default constructor is always `public`.
+
+A class must define an explicit constructor if its base class defines one. Attempting to construct such a class will result in a runtime exception. Type inference will also warn in this case.
+
+If a class defines no constructor and inherits from another that also defines no constructor, the default constructor will initialize all fields of the class. For example:
+
+```luau
+open class BasePoint
+    public x: number
+    public y: number
+end
+
+class Point3D extends BasePoint
+    public z: number
+end
+
+local p2 = Point { x=3, y=4 }
+local p3 = Point3D { x=1, y=2, z=3 }
+```
+
+The default constructor is a real function just like any other and so it can be explicitly invoked if desired.
+
+```luau
+class Point
+    public x: number
+    public y: number
+
+    function reset(self)
+        self:__init {x=0, y=0}
+    end
+end
+```
+
 #### `public` and `private` constructors
 
-Users can define a constructor as `public` or `private`, with `private` allowing them to create classes with better encapsulation,
-allowing the initialization to happen through public factory functions instead. The default constructor however is always public.
+Users can define a constructor as `public` or `private`, with `private` preventing the user from directly accessing the constructor.
 
 ```luau
 class User
@@ -188,8 +294,11 @@ end
 const user = User("Taz", "Parekh", "126-222-1123")
 ```
 
-When a constructor is defined with the `private` access specifier, they can now never be accessed directly from outside of the class, 
-and thus you must define a `public` function for accessing and initializing an object from a `private` constructor: 
+Defining a `private` constructor restricts the user to use a `public` method in order to create an instance from this class.
+
+Attempting to initialize an instance of a class with a `private` constructor will raise a runtime error.
+
+This can be useful in achieving full encapsulation.
 
 ```luau
 class User
@@ -198,7 +307,7 @@ class User
     public last_name: string
     private ssn: string?
 
-    private function __init(self, first: string, last: string, ssn: string?)
+    private function __init(self, first: string, last: string, ssn: string?) -- Cannot be directly accessed using User() outside of a class function
         self.first_name = first
         self.last_name = last
         self.ssn = ssn
@@ -255,6 +364,79 @@ class User -- TypeError: this class can never be instantiated; did you mean to d
 end
 ```
 
+### Type System
+
+Class definitions also introduce a new type to the type environment.
+
+Unlike tables, which are structurally typed, class types are nominal.  Two different classes with identical fields are treated as distinct types.
+
+Inferring the types of class fields is fraught with difficulty, so un-annotated fields are given the type `any`.
+
+The type introduced by a class definition is available anywhere in the source file.
+
+The `class.isinstance` function participates in refinement:
+
+```luau
+function foo(p: unknown)
+    if class.isinstance(p, Point) then
+        return {p.x, p.y} -- no error here
+    end
+end
+```
+
+Each class object is a singleton instance of an unnamed type.  If needed, it is easy to access via `typeof(TheClass)`.  Class object types are all subtypes of the top `class` type.
+
+### Semantics
+
+Class definitions are Luau statements just like function definitions.
+
+The action of a class definition statement is to allocate the class object, define its functions and properties, and freeze it.  Consequently, a class cannot be instantiated before this statement is executed.
+
+We do, however, hoist the class identifier's binding to the top of the script so that it can be referred to within functions or classes that lexically appear before the class definition.  This makes it easy and straightforward for developers to write classes or functions that mutually refer to one another.
+
+Static analysis also considers the class's type to be global to the whole module so that it can appear in any type annotation anywhere in the script.
+
+An example:
+
+```luau
+-- illegal: MyClass is not yet defined
+local a = MyClass()
+
+-- OK: MyClass can appear in any type annotation anywhere
+function use(c: MyClass)
+end
+
+function create()
+    -- OK as long as this function is invoked after the class definition statement
+    return MyClass()
+end
+
+-- We can't statically catch this in the general case, but this will fail at runtime!
+create()
+
+class MyClass
+end
+
+local b = MyClass() -- OK
+local c = create() -- OK
+```
+
+Because class definition is a statement, class methods can capture upvalues just like ordinary functions do.
+
+```luau
+local globalCount = 0
+
+class Counter
+    public count: number
+
+    function create()
+        local count = globalCount
+        globalCount += 1
+        return Counter { count = count }
+    end
+end
+```
+
 ## C API
 
 ### `int lua_isclass(lua_State* L, int idx);`
@@ -272,7 +454,11 @@ Then places the new `object` on top of the stack.
 
 ### `void* lua_newclass(lua_State* L, size_t sz);`
 
-Places a new `class` object with the data size `sz` on top of the stack. 
+Places a new `class` object with the data size `sz` on top of the stack.
+
+### `const char* lua_getclassname(lua_State* L, int idx)`
+
+Returns the class name at index.
 
 ## Drawbacks
 
@@ -288,7 +474,3 @@ of our version of classes (not forcing `.new`, more explicit semantics) is a bet
 - Omit `__init`, and just increase performance of POD methods without reserving `new`
 - Implement classes exactly as upstream Luau does to maintain compatibility, at the price of reserving `.new`
   and choosing a more confusing feature design for no real benefit.
-
-### `const char* lua_getclassname(lua_State* L, int idx)`
-
-Returns the class name at index.
