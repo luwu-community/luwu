@@ -7,6 +7,7 @@
 - LuauGenericNominals, LuauExternTypeGenericMethods, and LuauExternTypeUseDefinitionScope: @deviaze
 - LuauNonePrimitive: @cheesycod
 - LuauExternalString (and DebugLuauAllowNonNullTerminatedStrings for tests): @cheesycod
+- LuauFatCClosure: @cheesycod
 - LuauFunctionUnusedRecursiveLinting, LuauBetterPackAndVariadicMismatchErrors, LuauIndexerModifierMismatchErrors, LuauPropertyModifierMismatchErrors: @PhoenixWhitefire (merged from upstream)
 - LuauBetterMissingPropertiesTypeError, LuauFunctionUnusedRecursiveLinting: @nnullcolumn (merged from upstream)
 
