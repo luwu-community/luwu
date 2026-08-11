@@ -1,28 +1,56 @@
-# Feature name
+# Classes
 
 FFlag: LuauBetterUserDefinedClasses
 
 ## Summary
 
-We need to support `__init`, `private` fields, and release the restriction on requiring `public` in front of
-class fields. We also need a stable C API for classes, including a way to access class names and fields from the C side.
+```luau
+class Point
+    public x: number
+    public y
+
+    function length(self)
+        return math.sqrt(self.x * self.x + self.y * self.y)
+    end
+
+    function __add(self, other: Point)
+        return Point.new({ x = self.x + other.x, y = self.y + other.y })
+    end
+
+    function __tostring(self)
+        return `Point \{ x = {self.x}, y = {self.y} \}`
+    end
+
+    function fromAxisLength(theta, length)
+        return Point.new({
+            x = length * math.cos(theta),
+            y = length * math.sin(theta),
+        })
+    end
+end
+
+local p = Point.fromAxisLength(math.pi / 4, 4)
+print(`Check out my cool point: {p}  length = {p:length()}`)
+```
 
 ## Motivation
 
-As of Luau 0.730, upstream Luau has partially implemented the classes feature, however it doesn't support private fields,
-has multiple bugs in type inference and analysis, and needs to be completed. We do not want to pursue upstream Luau's
-implementation of the feature due to differing views on design.
+* People write object-oriented code.  We should afford it in a polished way.
+* Accurate type inference of `setmetatable` has proven to be very difficult to get right.  Because of this, the quality of our autocomplete isn't what it could be.
+* A construct with a fixed shape and a completely locked-down metatable will open up optimization opportunities that could improve performance:
+    * If a value is known to be an instance of a particular class, the bytecode compiler should be able optimize method calls to skip the whole `__index` metamethod process and instead generate code to directly call the correct method.
+    * By the same token, method calls can be inlined more aggressively.  Particularly self-method calls eg `self:SomeOtherMethod()`
+    * Field accesses can compile to a simple integral table offset so that the VM doesn't need to do a hashtable lookup as the program runs.
+    * Since every instance of a class has the same set of properties, we can split the hash table: The set of fields can be associated with the class and instances only need to carry the values of those fields.  We think this can improve performance by improving cache locality.
+* Encapsulation at its current state cannot be truly achieved, tables cannot truly be locked-down, and most workarounds for it are too complex for what it's trying to achieve. 
 
-We need this initial support to following paradigms in the future, in order:
+The previous implementation which was done by Luau team has multiple bugs in its type inference and analysis, and is yet to be completed. Completeness aside, the decisions that have been made by the Luau team has mostly considered Roblox as a primary customer, thus preventing a more capable implementation of classes that would be more beneficial to the community.
 
-- Nominally typed interfaces
-- Inheritance without multi-inheritance.
+For this RFC, we will be focusing on a base design that allows us to potentially implement features such as interfaces and inheritance in the future easier.
 
 ## Design
 
-For this basic implementation, we are focusing on extending the current in-progress classes.
-
-Right now this is valid syntax (with the classes feature enabled)
+The current implementation made by upstream Luau is as follows:
 
 ```luau
 class Cat
@@ -34,7 +62,7 @@ class Cat
 end
 ```
 
-However, we have no way to initialize this outside the default POD syntax.
+However, we have no way to initialize this outside of the default POD syntax.
 POD-like constructors `Class { x = x, y = y }` syntax provides a nice default, "named-table" like functionality
 that feels great with existing code for POD-like data types. On the other hand, POD-like constructors are not the correct choice
 for all flavors of classes. The POD syntax not only allocates a table (fixable in compiler), but there's also no way to customize
@@ -70,23 +98,21 @@ uninitialized instance of `Cat` and passes it to the `__init` constructor. Users
 own factory functions named `new`, `create` , etc.
 
 Keep in mind that unlike in Python users do *not* need to define their own `__init` just to create an instance
-of their class; all classes get `POD` constructors by default.
+of their class; all classes have a default constructor, which can be called with the `POD` initializer syntax.
 
-If a user forgets to assign to a field in `__init`, a type error `"Forgot to initialize property <name>"` is raised.
+If the user does not assign a value to a field within the constructor, a type error such as `"Forgot to initialize property <name>"` is raised.
 At runtime, any uninitialized fields are `nil`.
 
-### `public` and `private` access modifiers
+### `public` and `private` access specifiers
 
-We introduce `private` modifiers for fields and functions. Private fields and functions may only be accessed
-within other methods of the same class. If a private function or field is accessed outside the class, a runtime error
-is raised. The private field or function's name will not be mentioned in the runtime error message.
+We introduce the `public` keyword to define fields as public, and accessible from everywhere.
 
-Users can initialize private fields by passing values to public constructors. The default POD constructor is public,
-so if the user wants to prevent users from using it to initialize private fields they should explicitly define a
-`private function __init(self)` constructor instead.
+All fields on a class are `public` by default. This means, if all fields on a class are public, the user can emit the `public` keyword in front of the field definitions.
+However, to remove ambiguity, if a field is defined with an access specifier other than `public`, then the user must explicitly define all fields with an access specifier.
 
-If a class has any private fields, functions, or constructors, then explicit `private` and `public` access specifiers
-are required on every field (implicit public is no longer allowed).
+To achieve full encapsulation, we also introduce the `private` access specifier. Any fields defined with this specifier
+will now be private, and now locked to the outside world. Only functions of the same class can access these fields.
+Any attempts at accessing these fields outside of the class functions will cause a runtime error to be raised.
 
 ```luau
 class User
@@ -113,20 +139,27 @@ const user = User {
 }
 ```
 
-#### Private constructors
-
-If a class has a private constructor defined, then it is now impossible for users directly instantiate the class using the private
-constructor.
-
-You cannot have more than one constructor `__init` at the same time.
+If a class only has `private` fields, then we raise a type error because such a class will not be usable.
 
 ```luau
-class User -- TypeError: this class can never be instantiated; did you mean to define a public function that returns an instance of this class?
+class UseMe -- TypeError: this class cannot be used because it only has private members
+    private please: string
+    private uses: number
+end
+```
+
+#### `public` and `private` constructors
+
+Users can define a constructor as `public` or `private`, which `private` allowing them to create classes with better encapsulation,
+allowing the initialization to happen through public factory functions instead. The default constructor however is always public.
+
+```luau
+class User
     public first_name: string
     public last_name: string
     private ssn: string?
 
-    private function __init(self, first, last, ssn)
+    public function __init(self, first: string, last: string, ssn: string?) -- A public constructor which initializes the public and private fields.
         self.first_name = first
         self.last_name = last
         self.ssn = ssn
@@ -143,9 +176,12 @@ class User -- TypeError: this class can never be instantiated; did you mean to d
         return get_ssn_from_files(self)
     end
 end
+
+const user = User("Taz", "Parekh", "126-222-1123")
 ```
 
-Instead, the class must define a factory function to create instances of the class, calling the private constructor.
+When a constructor is defined with `private` access specifier, they can now never be accessed directly from outside of the class, 
+and thus you must define a `public` function for accessing and initializing an object from a `private` constructor: 
 
 ```luau
 class User
@@ -154,7 +190,7 @@ class User
     public last_name: string
     private ssn: string?
 
-    private function __init(self, first, last, ssn)
+    private function __init(self, first: string, last: string, ssn: string?)
         self.first_name = first
         self.last_name = last
         self.ssn = ssn
@@ -184,13 +220,30 @@ end
 const user = User.new("12311")
 ```
 
-If a class only has private members (fields and functions) and has no public functions or fields, then
-we raise a type error because such a class will not be usable.
+If a class has a `private` constructor, but no `public` function(s) for initializing an object from that `private` constructor, a type error is raised:
 
 ```luau
-class UseMe -- TypeError: this class cannot be used because it only has private members
-    private please: string
-    private uses: number
+class User -- TypeError: this class can never be instantiated; did you mean to define a public function that returns an instance of this class?
+    public first_name: string
+    public last_name: string
+    private ssn: string?
+
+    private function __init(self, first, last, ssn)
+        self.first_name = first
+        self.last_name = last
+        self.ssn = ssn
+    end
+
+    public function name(self): string
+        return self.first_name .. " " .. self.last_name
+    end
+
+    private function get_ssn(self): string
+        if self.ssn then
+            return self.ssn
+        end
+        return get_ssn_from_files(self)
+    end
 end
 ```
 
@@ -200,12 +253,10 @@ Implementing classes in a different way from upstream Roblox's Luau may lead to 
 between future code written for upstream Luau vs our Luau. We feel the less complex semantics and implementation
 of our version of classes (not forcing `.new`, more explicit semantics) is a better long-term goal for the language.
 
-Allowing users to define classes with private fields but not require a custom constructor may be a footgun.
-
 ## Alternatives (optional)
 
 - We could remove the half-implemented classes from Luau
-- We could opt for the old records proposal instead
+- We could opt for the old [records proposal by Arseny](https://github.com/luau-lang/luau/pull/205/changes) instead
 - We could name the feature "structs" and "implementations" instead of classes.
 - Omit `__init`, and just increase performance of POD methods without reserving `new`
 - Implement classes exactly as upstream Luau does to maintain compatibility, at the price of reserving `.new`
@@ -213,10 +264,18 @@ Allowing users to define classes with private fields but not require a custom co
 
 ## C API
 
--- TODO: make this less rusty
+### `int lua_isclass(lua_State* L, int idx);`
 
-### `lua_pushclassobject(lua_State*, idx: i32)`
+Returns 1 if the value at the index is a class.
 
-- pushes the class index at idx (usually a negative number) calling its constructor with all thingies on stack between top and idx
+### `int lua_isobject(lua_State* L, int idx);`
 
-### `lua_getclassname(lua_State*) -> *const cstr`
+Returns 1 if the value at the index is an object.
+
+### `int lua_pushobject(lua_State* L, int idx);`
+
+Creates an `object` from the class at the index and calls its constructor with all the field values on the stack between top and the index.
+
+### `const char* lua_getclassname(lua_State* L, int idx)`
+
+Returns the class name at index.
