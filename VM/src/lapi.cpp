@@ -26,6 +26,7 @@ LUAU_FASTFLAGVARIABLE(LuauExternallyManagedBuffers)
 LUAU_FASTFLAGVARIABLE(LuauExternalString)
 LUAU_FASTFLAGVARIABLE(DebugLuauAllowNonNullTerminatedStrings)
 LUAU_FASTFLAGVARIABLE(LuauFatCClosure)
+LUAU_FASTFLAGVARIABLE(LuauManagedReferences2)
 
 /*
  * This file contains most implementations of core Lua APIs from lua.h.
@@ -1695,6 +1696,7 @@ uintptr_t lua_encodepointer(lua_State* L, uintptr_t p)
 
 int lua_refpool(lua_State* L, int idx)
 {
+    LUAU_ASSERT(FFlag::LuauManagedReferences2);
     api_check(L, idx != LUA_REGISTRYINDEX); // idx is a stack index for value
     int ref = LUA_REFNIL;
     global_State* g = L->global;
@@ -1731,6 +1733,7 @@ int lua_refpool(lua_State* L, int idx)
 
 int lua_getrefpool(lua_State* L, int ref)
 {
+    LUAU_ASSERT(FFlag::LuauManagedReferences2);
     luaC_threadbarrier(L);
     ensure_stack(L, 1);
     global_State* g = L->global;
@@ -1748,6 +1751,7 @@ int lua_getrefpool(lua_State* L, int ref)
 
 void lua_unrefpool(lua_State* L, int ref)
 {
+    LUAU_ASSERT(FFlag::LuauManagedReferences2);
     if (ref <= LUA_REFNIL)
         return;
 
