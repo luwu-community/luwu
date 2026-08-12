@@ -32,7 +32,9 @@ export class User
         return self
     end
 
-    public function 
+    public function is_builders_club(self): boolean
+        -- ...
+    end
 end
 ```
 
@@ -82,7 +84,7 @@ end
 class List<T>
     private inner: { T }
     private function __init(self, initial: { T }, capacity: number)
-        ...
+        -- ...
     end
     public function with_capacity<T>(cap: number): List<T> -- class has private members, 'public' keyword required
         return List()
@@ -593,9 +595,9 @@ Attempting to access a private member raises a TypeError:
 ```luau
 class User
     private do_not_use_this_or_i_get_fired: unknown
-    ...
+    -- ...
     private function terminate(self)
-    ...
+    -- ...
     end
 end
 
