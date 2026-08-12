@@ -28,7 +28,7 @@ export class User
     end
 
     public function new(name: string, dob: DateTime): User
-        const self = User(name, age)
+        const self = User(name, dob)
         return self
     end
 
@@ -49,7 +49,7 @@ Nonetheless, we should mention some of their original "Classes!" RFC's motivatio
 ```md
 - People write object-oriented code. We should afford it in a polished way.
 - Accurate type inference of `setmetatable` has proven to be very difficult to get right. Because of this, the quality of our autocomplete isn't what it could be.
-  - A construct with a fixed shape and a completely locked-down metatable will open up optimization opportunities that could improve performance:
+- A construct with a fixed shape and a completely locked-down metatable will open up optimization opportunities that could improve performance:
   - If a value is known to be an instance of a particular class, the bytecode compiler should be able optimize method calls to skip the whole `__index` metamethod process and instead generate code to directly call the correct method.
   - By the same token, method calls can be inlined more aggressively.  Particularly self-method calls eg `self:SomeOtherMethod()`
   - Field accesses can compile to a simple integral table offset so that the VM doesn't need to do a hashtable lookup as the program runs.
@@ -86,8 +86,8 @@ class List<T>
     private function __init(self, initial: { T }, capacity: number)
         -- ...
     end
-    public function with_capacity<T>(cap: number): List<T> -- class has private members, 'public' keyword required
-        return List()
+    public function with_capacity(cap: number): List<T> -- class has private members, 'public' keyword required
+        return List({}, cap)
     end
 end
 ```
@@ -115,7 +115,7 @@ Access specifiers: `public`, `private`
 Storage modifiers: `static`, `const`
 
 - Fields are introduced with the new access specifier keywords (or a bare identifier if all fields are public).
-- Fields are mutable by default.For now, we plan to only implement `public` and `private`.
+- Fields are mutable by default. For now, we plan to only implement `public` and `private`.
 - We may look into implementing other access specifiers such as `protected` in the future.
 - Fields may include the `static` and `const` storage modifiers.
 
@@ -265,7 +265,7 @@ They all work just like they do on a metatable:
 - `__iter`
 - `__len`
 - `__idiv`
-  
+
 \* `__init` is not a metamethod per se but we call it out here as a valid method to define on a class.
 
 For now, `__index` and `__newindex` are forbidden in classes. We will most likely re-visit this later.
@@ -301,7 +301,7 @@ Objects, often referred to as "class instances", are a new type of value in the 
 
 Reading or writing a nonexistent class property raises an error. This makes it easy to disambiguate between a nonexistent property and a property whose value is nil.
 
-We introduce a new top type for instances of a class: `object`. The builtin `type()` and `typeof()` functions return `"object"` for any class instance.  
+We introduce a new top type for instances of a class: `object`. The builtin `type()` and `typeof()` functions return `"object"` for any class instance.
 
 We chose this over having them return the class name because class names do not have to be globally unique (they must only unique within a single module) and because we do not want to make it possible for classes to impersonate embedder-provided types.
 
