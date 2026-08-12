@@ -65,64 +65,13 @@ Unlike upstream Luau, we distinguish between `class` and `object`, and never ref
 
 Our vision of classes aims to equally support lightweight classes called PODs (plain old data), which behave like "named tables" as well as heavy classes with encapsulation (private fields), static and const members, inheritence, interfaces, etc.
 
+### Class definition syntax
+
 Classes are created with a new class definition syntax:
 
 ```luau
 class ClassName end
-```
 
-Specifically:
-
-- A class definition starts with the contextual keyword `class`,
-- is followed by the class's name and an optional generics parameter list (`<A, B, ...>`),
-- contains zero or more class member (fields and methods) declarations (see below)
-- ends with the `end` keyword.
-
-Class definitions are a block construct like `for` loops, and do not evaluate to a value.
-
-Instead, evaluating a class definition scopes the class to the entire module, similarly to a global.
-Due to this, defining two classes with the same name in the same module is currently forbidden.
-
-Classes must be defined in the top level of a module; attempting to define a class anywhere else raises a syntax error.
-This is a limitation imposed by upstream Luau, and we hope to loosen this restriction later.
-
-We introduce two specific flavors of keywords to help introduce class members: access specifiers and storage modifiers.
-
-Access specifiers: `public`, `private`
-Storage modifiers: `static`, `const`
-
-Fields are introduced with the new access specifier keywords (or a bare identifier if all fields are public).
-Fields are mutable by default.
-
-For now, we plan to only implement `public` and `private`.
-We may look into implementing other access specifiers such as `protected` in the future.
-
-Fields may include the `static` and `const` storage modifiers.
-
-Like in C# flavored languages, `static` means "this field lives on the class itself, not on instances of the class, and is shared by all instances of this class".
-
-We reuse the `const` keyword to mean "this field is set at class definition evaluation time and may not be modified".
-
-Methods are introduced with the familiar `function` keyword and follow existing `function` definition syntax.
-All functions on a class via familiar `function` syntax are `const` and may not be mutated.
-
-- A function that doesn't take `self` as its first parameter is a static function.
-- A function that takes `self` as its first parameter is a method. The `self` parameter name is hardcoded, like in Rust.
-
-Since a static function that takes `self` is nonsensical, `static function some_method(self, arg1)` should raise a syntax error. We may later loosen this restriction if we want to allow classmethods that take in a class as `self`.
-
-Since all functions on classes are inherently const, explicitly defining a `const function` inside a class should raise a syntax error. We raise a syntax error for this because `const function` syntax would otherwise be valid both inside and outside a class, and such a function could easily be unintentionally moved or copy/pasted inside a class block instead of the module's top level scope.
-
-Specifically:
-
-- If a class only has public members, the `public` keyword may be omitted,
-- If a class has members with any other access specifier other than `public`, then the access specifier is required,
-- A modifier `static` and/or `const` may optionally follow the access specifier.
-- If the member is a field, a valid identifier with an optional type annotation should follow,
-- If the member is a `static` field, an assignment is allowed after the identifier/type annotation.
-- If the member is a function, use the familiar `function` definition syntax.
-
-```luau
 class Cat
     name: string
     age: number
@@ -141,99 +90,55 @@ class List<T>
 end
 ```
 
-Classes may define only one `__init` constructor, that may be `public` or `private`.
+Specifically:
 
-- `__init`
+- A class definition starts with the contextual keyword `class`,
+- is followed by the class's name and an optional generics parameter list (`<A, B, ...>`),
+- contains zero or more class member (fields and methods) declarations (see below)
+- ends with the `end` keyword.
 
-The following metamethods apply to instances of the class (`object`s), not the class itself.
+Class definitions are a block construct like `for` loops, and do not evaluate to a value.
 
-They all work just like they do on a metatable:
+Instead, evaluating a class definition scopes the class to the entire module, similarly to a global.
+Due to this, defining two classes with the same name in the same module is currently forbidden.
 
-- `__call`
-- `__concat`
-- `__unm`
-- `__add`
-- `__sub`
-- `__mul`
-- `__div`
-- `__mod`
-- `__pow`
-- `__tostring`
-- `__eq`
-- `__lt`
-- `__le`
-- `__iter`
-- `__len`
-- `__idiv`
-  
-\* `__init` is not a metamethod per se but we call it out here as a valid method to define on a class.
+Classes must be defined in the top level of a module; attempting to define a class anywhere else raises a syntax error.
+This is a limitation imposed by upstream Luau, and we hope to loosen this restriction later.
 
-For now, `__index` and `__newindex` are forbidden in classes. We will most likely re-visit this later.
-For forward-compatibility, it is a syntax error to define any other method whose name starts with two underscores.
+### Class member syntax
 
-Keep in mind that only `__init` applies to the class; defining any of the other metamethods
-defines them for **`objects`** (instances) of the class instead of the class itself.
-It is impossible to define custom operators for a `class`, only `object`s of a class.
+We introduce two specific flavors of keywords to help introduce class members: access specifiers and storage modifiers.
 
-You cannot call `__init` on an `object` of a class, only the `class` itself.
+Access specifiers: `public`, `private`
+Storage modifiers: `static`, `const`
 
-### The `class` primitive
+- Fields are introduced with the new access specifier keywords (or a bare identifier if all fields are public).
+- Fields are mutable by default.For now, we plan to only implement `public` and `private`.
+- We may look into implementing other access specifiers such as `protected` in the future.
+- Fields may include the `static` and `const` storage modifiers.
 
-The action of evaluating a class definition statement introduces a *class* value in the module scope.
+Like in C# flavored languages, `static` means "this field lives on the class itself, not on instances of the class, and is shared by all instances of this class".
 
-A `class` is a value that serves as a factory for instances of the class and as a namespace for any functions that are defined on the class.
+We reuse the `const` keyword to mean "this field is set at class definition evaluation time and may not be modified".
 
-Classes are always `const` and frozen.
+Methods are introduced with the familiar `function` keyword and follow existing `function` definition syntax.
 
-Taking references to class methods via `ClassName.method` syntax is allowed so that classes can easily compose with existing APIs:
+- All functions on a class via familiar `function` syntax are `const` and may not be mutated.
+- A function that doesn't take `self` as its first parameter is a static function.
+- A function that takes `self` as its first parameter is a method. The `self` parameter name is hardcoded, like in Rust.
 
-```luau
-local n = pcall(SomeClass.getName, someClassObject)
-```
+Specifically:
 
-The top type of all classes is named `class`.  `type()` and `typeof()` return `"class"` when passed a class.
+- If a class only has public members, the `public` keyword may be omitted,
+- If a class has members with any other access specifier other than `public`, then the access specifier is required,
+- A modifier `static` and/or `const` may optionally follow the access specifier.
+- If the member is a field, a valid identifier with an optional type annotation should follow,
+- If the member is a `static` field, an assignment is allowed after the identifier/type annotation.
+- If the member is a function, use the familiar `function` definition syntax.
 
-### The `object` primitive
+Since a static function that takes `self` is nonsensical, `static function some_method(self, arg1)` should raise a syntax error. We may later loosen this restriction if we want to allow classmethods that take in a class as `self`.
 
-Objects, often referred to as "class instances", are a new type of value in the VM. They are similar but not quite the same as tables. They have no array part, for instance.
-
-`pairs`, `ipairs` , `getmetatable`, and `setmetatable` all raise a runtime error when invoked on an object. Similarly, an object may not be iterated over unless its class implements `__iter`.
-
-Reading or writing a nonexistent class property raises an error. This makes it easy to disambiguate between a nonexistent property and a property whose value is nil.
-
-We introduce a new top type for instances of a class: `object`. The builtin `type()` and `typeof()` functions return `"object"` for any class instance.  
-
-We chose this over having them return the class name because class names do not have to be globally unique (they must only unique within a single module) and because we do not want to make it possible for classes to impersonate embedder-provided types.
-
-```luau
-class Cls end
-local inst = Cls()
-
-type(Cls) == "class"
-typeof(Cls) == "class"
-
-type(inst) == "object"
-typeof(inst) == "object"
-```
-
-Comparisons between object instances are the same as with tables: If `__eq` is not defined, object comparisons use physical (pointer) equality.  `__eq` is only invoked if both operands are the same type.
-
-### The `class` library
-
-We introduce a new global library `class`. Its contents are:
-
-```luau
-local class: {
-    isinstance: (o: unknown, C: class) -> boolean,
-    classof: (o: unknown) -> class?,
-}
-```
-
-This library also serves as an obvious extension point for future features like reflection. In the future, we may allow classes to opt-out of reflection using this library.
-
-The function `class.isinstance(o, Class)` returns `true` if the object `o` is an instance of `Class`. At runtime, it raises an error if the second argument is not a class. If the first argument is not an `object`, `class.isinstance` returns false. (eg `class.isinstance(5, MyClass)`)
-
-The `class.classof` function returns the class corresponding to the first argument. If the first argument is not an `object`, the result is `nil`.
+Similarly, since all functions on classes are inherently const, explicitly defining a `const function` inside a class should also raise a syntax error. We raise a syntax error for this because `const function` syntax would otherwise be valid both inside and outside a class, and such a function could easily be unintentionally moved or copy/pasted inside a class block instead of the module's top level scope.
 
 ### Access Specifiers
 
@@ -331,6 +236,102 @@ end
 The `const` modifier may only be applied to fields (all functions/methods are always `const`), and should be placed after an access specifier. If the `static` modifier is present, then `const` must follow `static`.
 
 A `const` field must be initialized with a value. For `static const` fields (`const` fields on classes themselves), a value must be specified inside the class definition block. For regular `public` or `private` `const` fields, the field is initialized by the class's constructor.
+
+### Metamethods
+
+Classes may define only one `__init` constructor, that may be `public` or `private`.
+
+- `__init`
+
+The following metamethods apply to instances of the class (`object`s), not the class itself.
+
+They all work just like they do on a metatable:
+
+- `__call`
+- `__concat`
+- `__unm`
+- `__add`
+- `__sub`
+- `__mul`
+- `__div`
+- `__mod`
+- `__pow`
+- `__tostring`
+- `__eq`
+- `__lt`
+- `__le`
+- `__iter`
+- `__len`
+- `__idiv`
+  
+\* `__init` is not a metamethod per se but we call it out here as a valid method to define on a class.
+
+For now, `__index` and `__newindex` are forbidden in classes. We will most likely re-visit this later.
+For forward-compatibility, it is a syntax error to define any other method whose name starts with two underscores.
+
+Keep in mind that only `__init` applies to the class; defining any of the other metamethods
+defines them for **`objects`** (instances) of the class instead of the class itself.
+It is impossible to define custom operators for a `class`, only `object`s of a class.
+
+You cannot call `__init` on an `object` of a class, only the `class` itself.
+
+### The `class` primitive
+
+The action of evaluating a class definition statement introduces a *class* value in the module scope.
+
+A `class` is a value that serves as a factory for instances of the class and as a namespace for any functions that are defined on the class.
+
+Classes are always `const` and frozen.
+
+Taking references to class methods via `ClassName.method` syntax is allowed so that classes can easily compose with existing APIs:
+
+```luau
+local n = pcall(SomeClass.getName, someClassObject)
+```
+
+The top type of all classes is named `class`.  `type()` and `typeof()` return `"class"` when passed a class.
+
+### The `object` primitive
+
+Objects, often referred to as "class instances", are a new type of value in the VM. They are similar but not quite the same as tables. They have no array part, for instance.
+
+`pairs`, `ipairs` , `getmetatable`, and `setmetatable` all raise a runtime error when invoked on an object. Similarly, an object may not be iterated over unless its class implements `__iter`.
+
+Reading or writing a nonexistent class property raises an error. This makes it easy to disambiguate between a nonexistent property and a property whose value is nil.
+
+We introduce a new top type for instances of a class: `object`. The builtin `type()` and `typeof()` functions return `"object"` for any class instance.  
+
+We chose this over having them return the class name because class names do not have to be globally unique (they must only unique within a single module) and because we do not want to make it possible for classes to impersonate embedder-provided types.
+
+```luau
+class Cls end
+local inst = Cls()
+
+type(Cls) == "class"
+typeof(Cls) == "class"
+
+type(inst) == "object"
+typeof(inst) == "object"
+```
+
+Comparisons between object instances are the same as with tables: If `__eq` is not defined, object comparisons use physical (pointer) equality.  `__eq` is only invoked if both operands are the same type.
+
+### The `class` library
+
+We introduce a new global library `class`. Its contents are:
+
+```luau
+local class: {
+    isinstance: (o: unknown, C: class) -> boolean,
+    classof: (o: unknown) -> class?,
+}
+```
+
+This library also serves as an obvious extension point for future features like reflection. In the future, we may allow classes to opt-out of reflection using this library.
+
+The function `class.isinstance(o, Class)` returns `true` if the object `o` is an instance of `Class`. At runtime, it raises an error if the second argument is not a class. If the first argument is not an `object`, `class.isinstance` returns false. (eg `class.isinstance(5, MyClass)`)
+
+The `class.classof` function returns the class corresponding to the first argument. If the first argument is not an `object`, the result is `nil`.
 
 ---
 
@@ -439,7 +440,7 @@ const user = User("Taz", "Parekh", "126-222-1123")
 If a class has a `private` constructor, but no `public` function(s) for initializing an object from that `private` constructor, a type error is raised:
 
 ```luau
-class User -- TypeError: this class can never be instantiated; did you mean to define a public function that returns an instance of this class?
+class User -- TypeError: this class can never be instantiated; did you mean to return an instance of it from a `public function` instead? Use the class constructor in a public function to silence.
     public first_name: string
     public last_name: string
     private ssn: string?
