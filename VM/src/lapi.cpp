@@ -1714,7 +1714,7 @@ int lua_ref(lua_State* L, int idx)
                 return LUA_REFNIL;
             if (g->ref_size >= g->ref_capacity)
             {
-                int new_cap = g->ref_capacity == 0 ? 64 : g->ref_capacity * 2;
+                int new_cap = g->ref_capacity == 0 ? 64 : (g->ref_capacity < INT_MAX / 2 ? g->ref_capacity * 2 : INT_MAX);
                 g->ref_array = luaM_reallocarray(L, g->ref_array, g->ref_capacity, new_cap, TValue, 0);
                 g->ref_capacity = new_cap;
             }
