@@ -46,16 +46,14 @@ As of 0.730, the upstream Luau team has partly implemented classes, but its impl
 
 Nonetheless, we should mention some of their original "Classes!" RFC's motivations, since they hold equally true today:
 
-```md
-- People write object-oriented code. We should afford it in a polished way.
-- Accurate type inference of `setmetatable` has proven to be very difficult to get right. Because of this, the quality of our autocomplete isn't what it could be.
-- A construct with a fixed shape and a completely locked-down metatable will open up optimization opportunities that could improve performance:
-  - If a value is known to be an instance of a particular class, the bytecode compiler should be able optimize method calls to skip the whole `__index` metamethod process and instead generate code to directly call the correct method.
-  - By the same token, method calls can be inlined more aggressively.  Particularly self-method calls eg `self:SomeOtherMethod()`
-  - Field accesses can compile to a simple integral table offset so that the VM doesn't need to do a hashtable lookup as the program runs.
-  - Since every instance of a class has the same set of properties, we can split the hash table: The set of fields can be associated with the class and instances only need to carry the values of those fields.  We think this can improve performance by improving cache locality.
-- Encapsulation at its current state cannot be truly achieved, tables cannot truly be locked-down, and most workarounds for it are too complex for what it's trying to achieve.
-```
+> - People write object-oriented code. We should afford it in a polished way.
+> - Accurate type inference of `setmetatable` has proven to be very difficult to get right. Because of this, the quality of our autocomplete isn't what it could be.
+> - A construct with a fixed shape and a completely locked-down metatable will open up optimization opportunities that could improve performance:
+>   - If a value is known to be an instance of a particular class, the bytecode compiler should be able optimize method calls to skip the whole `__index` metamethod process and instead generate code to directly call the correct method.
+>   - By the same token, method calls can be inlined more aggressively.  Particularly self-method calls eg `self:SomeOtherMethod()`
+>   - Field accesses can compile to a simple integral table offset so that the VM doesn't need to do a hashtable lookup as the program runs.
+>   - Since every instance of a class has the same set of properties, we can split the hash table: The set of fields can be associated with the class and instances only need to carry the values of those fields.  We think this can improve performance by improving cache locality.
+> - Encapsulation at its current state cannot be truly achieved, tables cannot truly be locked-down, and most workarounds for it are too complex for what it's trying to achieve.
 
 In this RFC, we'll be focusing on a base design for classes that allows us to later implement two concepts we are extremely interested in supporting: interfaces and inheritance.
 
