@@ -6,7 +6,7 @@ Switch the existing `lua_ref`, `lua_unref` and `lua_getref` APIs to use a intern
 
 ## Motivation
 
-Luau already has `lua_ref`, `lua_unref` and `lua_getref` as existing C APIs that merely work with the Luau registry (honestly should be `luaL_*` at that point?). Unfortunately, this isn't super performant (going through tables, needing to handle all of the quirks of tables like array+hash etc.) leading to embedders like mluau choosing to instead hijack threads (or in some cases, handle multiple thread stacks) for the purpose of preventing GC.
+Luau already has `lua_ref`, `lua_unref` and `lua_getref` as existing C APIs that merely work with the Luau registry (honestly should be `luaL_*` at that point?). Unfortunately, this may have performance drawbacks in certain degenerate table cases (table holes, interactions w/ the length operator for tables actually being boundary operator in Luau, performance etc.) leading to embedders like mluau choosing to instead hijack threads (or in some cases, handle multiple thread stacks) for the purpose of preventing GC.
 
 This RFC proposes changing the existing Luau-specific `lua_ref`, `lua_unref` and `lua_getref` to instead make use of a separate internal pool of references with all management of free lists etc. handled directly by the VM in a way that is as fast if not faster than hacks like abusing thread stacks. As this is merely a optimization of the existing Luau reference API, existing users should be unaffected (as long as they were using `lua_getref` for getting references instead of reading the Luau registry). Embedders like `mluau` can then drop their internal hacks like auxiliary thread stacks etc. and just use `lua_ref`, `lua_unref` and `lua_getref` directly without any fears of performance loss.
 
@@ -16,7 +16,7 @@ This RFC proposes changing the existing Luau-specific `lua_ref`, `lua_unref` and
 
 ## Drawbacks
 
-Minor breaking C API change for the benefit of making references in Luau super fast without needing to hijack threads for that purpose.
+Minor breaking C API change for the benefit of making references in Luau more performant without needing to hijack threads for that purpose. References made with the Luau reference API will no longer be on the Luau registry table (which may be either a good or a bad thing for embedders)
 
 ## Alternatives
 
