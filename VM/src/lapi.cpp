@@ -389,11 +389,13 @@ int lua_isuserdata(lua_State* L, int idx)
     return (ttisuserdata(o) || ttislightuserdata(o));
 }
 
+#define api_rawequal(o1, o2) ((o1 == luaO_nilobject || o2 == luaO_nilobject) ? 0 : luaO_rawequalObj(o1, o2))
+
 int lua_rawequal(lua_State* L, int index1, int index2)
 {
     StkId o1 = index2addr(L, index1);
     StkId o2 = index2addr(L, index2);
-    return (o1 == luaO_nilobject || o2 == luaO_nilobject) ? 0 : luaO_rawequalObj(o1, o2);
+    return api_rawequal(o1, o2);
 }
 
 int lua_equal(lua_State* L, int index1, int index2)
@@ -577,9 +579,8 @@ const float* lua_tovector(lua_State* L, int idx)
     return vvalue(o);
 }
 
-int lua_objlen(lua_State* L, int idx)
+static inline int api_objlen(StkId o)
 {
-    StkId o = index2addr(L, idx);
     switch (ttype(o))
     {
     case LUA_TSTRING:
@@ -593,6 +594,12 @@ int lua_objlen(lua_State* L, int idx)
     default:
         return 0;
     }
+}
+
+int lua_objlen(lua_State* L, int idx)
+{
+    StkId o = index2addr(L, idx);
+    return api_objlen(o);
 }
 
 lua_CFunction lua_tocfunction(lua_State* L, int idx)
@@ -667,9 +674,8 @@ void* lua_tobuffer(lua_State* L, int idx, size_t* len)
     return b->data;
 }
 
-const void* lua_topointer(lua_State* L, int idx)
+static inline const void* api_topointer(StkId o)
 {
-    StkId o = index2addr(L, idx);
     switch (ttype(o))
     {
     case LUA_TUSERDATA:
@@ -679,6 +685,12 @@ const void* lua_topointer(lua_State* L, int idx)
     default:
         return iscollectable(o) ? gcvalue(o) : NULL;
     }
+}
+
+const void* lua_topointer(lua_State* L, int idx)
+{
+    StkId o = index2addr(L, idx);
+    return api_topointer(o);
 }
 
 /*
@@ -1747,6 +1759,44 @@ int lua_getrefpool(lua_State* L, int ref)
     }
     api_incr_top(L);
     return lua_type(L, -1);
+}
+
+const void* lua_refpool_topointer(lua_State* L, int ref)
+{
+    LUAU_ASSERT(FFlag::LuauManagedReferences2);
+    if (ref == LUA_REFNIL) return NULL;
+    global_State* g = L->global;
+    api_check(L, ref >= 0 && ref < g->ref_size);
+    TValue* o = &g->ref_array[ref];
+    api_check(L, o->tt != LUA_TNONE);
+    return api_topointer(o);
+}
+
+int lua_refpool_objlen(lua_State* L, int ref)
+{
+    LUAU_ASSERT(FFlag::LuauManagedReferences2);
+    if (ref == LUA_REFNIL) return 0;
+    global_State* g = L->global;
+    api_check(L, ref >= 0 && ref < g->ref_size);
+    TValue* o = &g->ref_array[ref];
+    api_check(L, o->tt != LUA_TNONE);
+    return api_objlen(o);
+}
+
+int lua_refpool_rawequal(lua_State* L, int ref1, int ref2)
+{
+    LUAU_ASSERT(FFlag::LuauManagedReferences2);
+    if (ref1 == ref2) return 1;
+    if (ref1 == LUA_REFNIL || ref2 == LUA_REFNIL) return 0;
+    
+    global_State* g = L->global;
+    api_check(L, ref1 >= 0 && ref1 < g->ref_size);
+    api_check(L, ref2 >= 0 && ref2 < g->ref_size);
+    
+    TValue* o1 = &g->ref_array[ref1];
+    TValue* o2 = &g->ref_array[ref2];
+    api_check(L, o1->tt != LUA_TNONE && o2->tt != LUA_TNONE);
+    return api_rawequal(o1, o2);
 }
 
 void lua_unrefpool(lua_State* L, int ref)
