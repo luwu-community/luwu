@@ -222,6 +222,7 @@ typedef struct global_State
     TValue pseudotemp; // storage for temporary values used in pseudo2addr
 
     TValue registry; // registry table, used by lua_ref and LUA_REGISTRYINDEX
+    int registryfree; // next free slot in registry
     TValue* ref_array; // dynamic array of references
     int ref_capacity;
     int ref_size;

@@ -1693,7 +1693,7 @@ uintptr_t lua_encodepointer(lua_State* L, uintptr_t p)
     return uintptr_t((g->ptrenckey[0] * p + g->ptrenckey[2]) ^ (g->ptrenckey[1] * p + g->ptrenckey[3]));
 }
 
-int lua_ref(lua_State* L, int idx)
+int lua_refpool(lua_State* L, int idx)
 {
     api_check(L, idx != LUA_REGISTRYINDEX); // idx is a stack index for value
     int ref = LUA_REFNIL;
@@ -1729,7 +1729,7 @@ int lua_ref(lua_State* L, int idx)
     return ref;
 }
 
-int lua_getref(lua_State* L, int ref)
+int lua_getrefpool(lua_State* L, int ref)
 {
     luaC_threadbarrier(L);
     ensure_stack(L, 1);
@@ -1746,7 +1746,7 @@ int lua_getref(lua_State* L, int ref)
     return lua_type(L, -1);
 }
 
-void lua_unref(lua_State* L, int ref)
+void lua_unrefpool(lua_State* L, int ref)
 {
     if (ref <= LUA_REFNIL)
         return;
@@ -1759,6 +1759,55 @@ void lua_unref(lua_State* L, int ref)
     slot->value.p = g->ref_free != -1 ? (void*)(uintptr_t)(g->ref_free + 1) : NULL;
     slot->tt = LUA_TNONE;
     g->ref_free = ref;
+}
+
+int lua_ref(lua_State* L, int idx)
+{
+    api_check(L, idx != LUA_REGISTRYINDEX); // idx is a stack index for value
+    int ref = LUA_REFNIL;
+    global_State* g = L->global;
+    StkId p = index2addr(L, idx);
+    if (!ttisnil(p))
+    {
+        LuaTable* reg = hvalue(registry(L));
+
+        if (g->registryfree != 0)
+        { // reuse existing slot
+            ref = g->registryfree;
+        }
+        else
+        { // no free elements
+            ref = luaH_getn(reg);
+            ref++; // create new reference
+        }
+
+        TValue* slot = luaH_setnum(L, reg, ref);
+        if (g->registryfree != 0)
+            g->registryfree = int(nvalue(slot));
+        setobj2t(L, slot, p);
+        luaC_barriert(L, reg, p);
+    }
+    return ref;
+}
+
+void lua_unref(lua_State* L, int ref)
+{
+    if (ref <= LUA_REFNIL)
+        return;
+
+    global_State* g = L->global;
+    LuaTable* reg = hvalue(registry(L));
+
+    const TValue* slot = luaH_getnum(reg, ref);
+    api_check(L, slot != luaO_nilobject);
+
+    // similar to how 'luaH_setnum' makes non-nil slot value mutable
+    TValue* mutableSlot = (TValue*)slot;
+
+    // NB: no barrier needed because value isn't collectable
+    setnvalue(mutableSlot, g->registryfree);
+
+    g->registryfree = ref;
 }
 
 void lua_setuserdatatag(lua_State* L, int idx, int tag)

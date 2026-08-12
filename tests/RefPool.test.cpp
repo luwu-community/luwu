@@ -11,20 +11,20 @@ TEST_CASE("RefPoolCreationAndGet")
     lua_State* L = luaL_newstate();
     
     lua_pushnumber(L, 42.0);
-    int ref = lua_ref(L, -1);
+    int ref = lua_refpool(L, -1);
     lua_pop(L, 1);
     
     CHECK_NE(ref, LUA_REFNIL);
     
-    lua_getref(L, ref);
+    lua_getrefpool(L, ref);
     CHECK(lua_isnumber(L, -1));
     CHECK_EQ(lua_tonumber(L, -1), 42.0);
     lua_pop(L, 1);
     
-    lua_unref(L, ref);
+    lua_unrefpool(L, ref);
     
     // Check that dereferencing LUA_REFNIL yields nil
-    lua_getref(L, LUA_REFNIL);
+    lua_getrefpool(L, LUA_REFNIL);
     CHECK(lua_isnil(L, -1));
     lua_pop(L, 1);
 
@@ -41,21 +41,21 @@ TEST_CASE("RefPoolGC")
     lua_pushnumber(L, 123.0);
     lua_setfield(L, -2, "x");
     
-    int ref = lua_ref(L, -1);
+    int ref = lua_refpool(L, -1);
     lua_pop(L, 1);
     
     // Trigger full garbage collection
     lua_gc(L, LUA_GCCOLLECT, 0);
     
     // The reference should have protected the table from GC
-    lua_getref(L, ref);
+    lua_getrefpool(L, ref);
     CHECK(lua_istable(L, -1));
     lua_getfield(L, -1, "x");
     CHECK_EQ(lua_tonumber(L, -1), 123.0);
     lua_pop(L, 2);
     
     // Unref and trigger GC again
-    lua_unref(L, ref);
+    lua_unrefpool(L, ref);
     lua_gc(L, LUA_GCCOLLECT, 0);
     
     lua_close(L);
@@ -77,14 +77,14 @@ TEST_CASE("RefPoolMultipleRefs")
             multiple_refs_dtor_hits++;
         });
         *(int*)ud = i;
-        refs.push_back(lua_ref(L, -1));
+        refs.push_back(lua_refpool(L, -1));
         lua_pop(L, 1);
     }
     
     // Verify they all have the correct values
     for (int i = 0; i < 100; ++i)
     {
-        lua_getref(L, refs[i]);
+        lua_getrefpool(L, refs[i]);
         CHECK(lua_isuserdata(L, -1));
         CHECK_EQ(*(int*)lua_touserdata(L, -1), i);
         lua_pop(L, 1);
@@ -97,7 +97,7 @@ TEST_CASE("RefPoolMultipleRefs")
     // Unref first 50
     for (int i = 0; i < 50; ++i)
     {
-        lua_unref(L, refs[i]);
+        lua_unrefpool(L, refs[i]);
     }
     
     // Trigger GC, 50 should be collected
@@ -112,24 +112,24 @@ TEST_CASE("RefPoolMultipleRefs")
             multiple_refs_dtor_hits++;
         });
         *(int*)ud = i + 100;
-        refs2.push_back(lua_ref(L, -1));
+        refs2.push_back(lua_refpool(L, -1));
         lua_pop(L, 1);
     }
     
     for (int i = 0; i < 50; ++i)
     {
-        lua_getref(L, refs2[i]);
+        lua_getrefpool(L, refs2[i]);
         CHECK_EQ(*(int*)lua_touserdata(L, -1), i + 100);
         lua_pop(L, 1);
     }
     
     for (int i = 0; i < 50; ++i)
     {
-        lua_unref(L, refs2[i]);
+        lua_unrefpool(L, refs2[i]);
     }
     for (int i = 50; i < 100; ++i)
     {
-        lua_unref(L, refs[i]);
+        lua_unrefpool(L, refs[i]);
     }
 
     lua_gc(L, LUA_GCCOLLECT, 0);
@@ -150,7 +150,7 @@ TEST_CASE("RefPoolCloseState")
     });
     
     // Pin it with a ref
-    lua_ref(L, -1);
+    lua_refpool(L, -1);
     lua_pop(L, 1);
 
     // Garbage collection shouldn't collect it since it's ref'd
@@ -175,7 +175,7 @@ TEST_CASE("RefPoolTableRefGC")
     });
     
     // Make a ref
-    int ref = lua_ref(L, -1);
+    int ref = lua_refpool(L, -1);
     
     //  Make a table containing the val of the ref
     lua_newtable(L);
@@ -190,7 +190,7 @@ TEST_CASE("RefPoolTableRefGC")
     CHECK_EQ(table_ref_gc_dtor_hits, 0);
     
     // Drop ref
-    lua_unref(L, ref);
+    lua_unrefpool(L, ref);
     
     // Do GC
     lua_gc(L, LUA_GCCOLLECT, 0);

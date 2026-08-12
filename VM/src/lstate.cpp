@@ -192,6 +192,7 @@ lua_State* lua_newstate(lua_Alloc f, void* ud)
     g->uvhead.u.open.prev = &g->uvhead;
     g->uvhead.u.open.next = &g->uvhead;
     g->GCthreshold = 0; // mark it as unfinished state
+    g->registryfree = 0;
     g->ref_array = NULL;
     g->ref_capacity = 0;
     g->ref_size = 0;

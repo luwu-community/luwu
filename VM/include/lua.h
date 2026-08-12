@@ -424,8 +424,11 @@ LUA_API lua_Alloc lua_getallocf(lua_State* L, void** ud);
 
 LUA_API int lua_ref(lua_State* L, int idx);
 LUA_API void lua_unref(lua_State* L, int ref);
+#define lua_getref(L, ref) lua_rawgeti(L, LUA_REGISTRYINDEX, (ref))
 
-LUA_API int lua_getref(lua_State* L, int ref);
+LUA_API int lua_refpool(lua_State* L, int idx);
+LUA_API void lua_unrefpool(lua_State* L, int ref);
+LUA_API int lua_getrefpool(lua_State* L, int ref);
 
 /*
 ** ===============================================================
