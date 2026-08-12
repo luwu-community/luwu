@@ -197,7 +197,9 @@ lua_State* lua_newstate(lua_Alloc f, void* ud)
     g->ref_size = 0;
     g->ref_free = -1;
     g->gc_ref_gray = 0;
+#if LUA_USE_LONGJMP
     g->errorjmp = NULL;
+#endif
     g->rngstate = 0;
     g->ptrenckey[0] = 1;
     g->ptrenckey[1] = 0;
