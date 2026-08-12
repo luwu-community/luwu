@@ -517,6 +517,10 @@ end
 const user = User.new("12311")
 ```
 
+### Hoisting
+
+A previous version of this RFC allowed hoisting at runtime, where a `class` binding could be visible to code and classes above it, as long as the class was initialized before the code calling it ran. We have decided to not support this behavior, because it would be harder to implement. Instead, we're investigating ways to allow for explicit forward declaration of a class so that it can be used in classes defined above it, but said syntax is not yet specified for this RFC.
+
 ### Type System
 
 Class declarations blocks introduce the class's type into the type environment.
