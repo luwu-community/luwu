@@ -6,6 +6,7 @@
 #include "lstate.h"
 #include "lstring.h"
 #include "ltable.h"
+#include "lmem.h"
 #include "lfunc.h"
 #include "lgc.h"
 #include "ldo.h"
@@ -25,6 +26,7 @@ LUAU_FASTFLAGVARIABLE(LuauExternallyManagedBuffers)
 LUAU_FASTFLAGVARIABLE(LuauExternalString)
 LUAU_FASTFLAGVARIABLE(DebugLuauAllowNonNullTerminatedStrings)
 LUAU_FASTFLAGVARIABLE(LuauFatCClosure)
+LUAU_FASTFLAGVARIABLE(LuauManagedReferences2)
 
 /*
  * This file contains most implementations of core Lua APIs from lua.h.
@@ -1690,6 +1692,77 @@ uintptr_t lua_encodepointer(lua_State* L, uintptr_t p)
 {
     global_State* g = L->global;
     return uintptr_t((g->ptrenckey[0] * p + g->ptrenckey[2]) ^ (g->ptrenckey[1] * p + g->ptrenckey[3]));
+}
+
+int lua_refpool(lua_State* L, int idx)
+{
+    LUAU_ASSERT(FFlag::LuauManagedReferences2);
+    api_check(L, idx != LUA_REGISTRYINDEX); // idx is a stack index for value
+    int ref = LUA_REFNIL;
+    global_State* g = L->global;
+    StkId p = index2addr(L, idx);
+    if (!ttisnil(p))
+    {
+        if (g->ref_free != -1)
+        {
+            ref = g->ref_free;
+            TValue* slot = &g->ref_array[ref];
+            g->ref_free = slot->value.p ? (int)(uintptr_t)slot->value.p - 1 : -1;
+            setobj2n(L, slot, p);
+        }
+        else
+        {
+            if (g->ref_size == INT_MAX)
+                return LUA_REFNIL;
+            if (g->ref_size >= g->ref_capacity)
+            {
+                int new_cap = g->ref_capacity == 0 ? 64 : (g->ref_capacity < INT_MAX / 2 ? g->ref_capacity * 2 : INT_MAX);
+                luaM_reallocarray(L, g->ref_array, g->ref_capacity, new_cap, TValue, 0);
+                g->ref_capacity = new_cap;
+            }
+            ref = g->ref_size++;
+            setobj2n(L, &g->ref_array[ref], p);
+        }
+        
+        if (iscollectable(p))
+            g->gc_ref_gray = 1;
+    }
+    
+    return ref;
+}
+
+int lua_getrefpool(lua_State* L, int ref)
+{
+    LUAU_ASSERT(FFlag::LuauManagedReferences2);
+    luaC_threadbarrier(L);
+    ensure_stack(L, 1);
+    global_State* g = L->global;
+    if (ref == LUA_REFNIL) {
+        setnilvalue(L->top);
+    } else {
+        api_check(L, ref >= 0 && ref < g->ref_size);
+        TValue* slot = &g->ref_array[ref];
+        api_check(L, slot->tt != LUA_TNONE);
+        setobj2s(L, L->top, slot);
+    }
+    api_incr_top(L);
+    return lua_type(L, -1);
+}
+
+void lua_unrefpool(lua_State* L, int ref)
+{
+    LUAU_ASSERT(FFlag::LuauManagedReferences2);
+    if (ref <= LUA_REFNIL)
+        return;
+
+    global_State* g = L->global;
+    api_check(L, ref >= 0 && ref < g->ref_size);
+    TValue* slot = &g->ref_array[ref];
+    api_check(L, slot->tt != LUA_TNONE);
+
+    slot->value.p = g->ref_free != -1 ? (void*)(uintptr_t)(g->ref_free + 1) : NULL;
+    slot->tt = LUA_TNONE;
+    g->ref_free = ref;
 }
 
 int lua_ref(lua_State* L, int idx)

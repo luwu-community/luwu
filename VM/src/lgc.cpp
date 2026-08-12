@@ -858,6 +858,11 @@ static void markroot(lua_State* L)
     // make global table be traversed before main stack
     markobject(g, g->mainthread->gt);
     markvalue(g, registry(L));
+    g->gc_ref_gray = 0;
+    for (int i = 0; i < g->ref_size; i++) {
+        if (g->ref_array[i].tt != LUA_TNONE)
+            markvalue(g, &g->ref_array[i]);
+    }
 
     if (FFlag::LuauUdataDirectAccess6)
     {
@@ -989,6 +994,16 @@ static size_t atomic(lua_State* L)
     g->gray = g->grayagain;
     g->grayagain = NULL;
     work += propagateall(g);
+
+    if (g->gc_ref_gray)
+    {
+        g->gc_ref_gray = 0;
+        for (int i = 0; i < g->ref_size; i++) {
+            if (g->ref_array[i].tt != LUA_TNONE)
+                markvalue(g, &g->ref_array[i]);
+        }
+        work += propagateall(g);
+    }
 
 #ifdef LUAI_GCMETRICS
     g->gcmetrics.currcycle.atomictimegray += recordGcDeltaTime(currts);

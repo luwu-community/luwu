@@ -223,8 +223,15 @@ typedef struct global_State
 
     TValue registry; // registry table, used by lua_ref and LUA_REGISTRYINDEX
     int registryfree; // next free slot in registry
+    TValue* ref_array; // dynamic array of references
+    int ref_capacity;
+    int ref_size;
+    int ref_free; // next free slot in ref_array
+    uint8_t gc_ref_gray; // true if ref_array was modified in a meaningful way (GC object add) during incremental marking (call to lua_ref), this lets us avoid the overhead of remarking the same values if the gc goes to the atomic phase when the ref pool has not changed
 
+#if LUA_USE_LONGJMP
     struct lua_jmpbuf* errorjmp; // jump buffer data for longjmp-style error handling
+#endif
 
     uint64_t rngstate; // PCG random number generator state
     uint64_t ptrenckey[4]; // pointer encoding key for display
