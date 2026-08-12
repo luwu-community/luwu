@@ -404,7 +404,7 @@ static void dumptable(FILE* f, LuaTable* h)
 static void dumpclosure(FILE* f, Closure* cl)
 {
     fprintf(
-        f, "{\"type\":\"function\",\"cat\":%d,\"size\":%d", cl->memcat, cl->isC ? int(sizeCclosure(cl->nupvalues)) : int(sizeLclosure(cl->nupvalues))
+        f, "{\"type\":\"function\",\"cat\":%d,\"size\":%d", cl->memcat, cl->isC == 2 ? int(sizeFatCclosure(cl->fatc.size)) : (cl->isC == 1 ? int(sizeCclosure(cl->nupvalues)) : int(sizeLclosure(cl->nupvalues)))
     );
 
     fprintf(f, ",\"env\":");
@@ -820,7 +820,11 @@ static void enumtable(EnumContext* ctx, LuaTable* h)
 
 static void enumclosure(EnumContext* ctx, Closure* cl)
 {
-    if (cl->isC)
+    if (cl->isC == 2)
+    {
+        enumnode(ctx, obj2gco(cl), sizeFatCclosure(cl->fatc.size), cl->fatc.debugname);
+    }
+    else if (cl->isC == 1)
     {
         enumnode(ctx, obj2gco(cl), sizeCclosure(cl->nupvalues), cl->c.debugname);
     }

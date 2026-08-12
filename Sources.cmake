@@ -599,6 +599,7 @@ if(TARGET Luau.Conformance)
     target_sources(Luau.Conformance PRIVATE
         tests/ExternalBuffer.test.cpp
         tests/ExternalString.test.cpp
+        tests/FatCClosure.test.cpp
         tests/RegisterCallbacks.h
         tests/RegisterCallbacks.cpp
         tests/ConformanceIrHooks.h

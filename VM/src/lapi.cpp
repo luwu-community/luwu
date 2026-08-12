@@ -24,6 +24,7 @@ LUAU_FASTFLAGVARIABLE(LuauCloneTableFix)
 LUAU_FASTFLAGVARIABLE(LuauExternallyManagedBuffers)
 LUAU_FASTFLAGVARIABLE(LuauExternalString)
 LUAU_FASTFLAGVARIABLE(DebugLuauAllowNonNullTerminatedStrings)
+LUAU_FASTFLAGVARIABLE(LuauFatCClosure)
 
 /*
  * This file contains most implementations of core Lua APIs from lua.h.
@@ -796,6 +797,36 @@ void lua_pushcclosurek(lua_State* L, lua_CFunction fn, const char* debugname, in
     setclvalue(L, L->top, cl);
     LUAU_ASSERT(iswhite(obj2gco(cl)));
     api_incr_top(L);
+}
+
+void* lua_pushcclosurewithdatak(lua_State* L, lua_CFunction fn, const char* debugname, lua_Continuation cont, size_t size, lua_ClosureWithDataFree dtor)
+{
+    LUAU_ASSERT(FFlag::LuauFatCClosure);
+    
+    api_check(L, fn != nullptr);
+    luaC_checkGC(L);
+    luaC_threadbarrier(L);
+    ensure_stack(L, 1);
+    Closure* cl = luaF_newFatCclosure(L, size, getcurrenv(L));
+    cl->fatc.f = fn;
+    cl->fatc.cont = cont;
+    cl->fatc.debugname = debugname;
+    cl->fatc.dtor = dtor;
+    cl->fatc.size = size;
+    setclvalue(L, L->top, cl);
+    LUAU_ASSERT(iswhite(obj2gco(cl)));
+    api_incr_top(L);
+    return (void*)cl->fatc.data;
+}
+
+void* lua_getcclosuredata(lua_State* L)
+{
+    LUAU_ASSERT(FFlag::LuauFatCClosure);
+        
+    Closure* cl = curr_func(L);
+    if (cl && cl->isC == 2)
+        return (void*)cl->fatc.data;
+    return nullptr;
 }
 
 void lua_pushboolean(lua_State* L, int b)

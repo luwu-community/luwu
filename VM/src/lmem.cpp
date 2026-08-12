@@ -148,6 +148,8 @@ const size_t kLargePageSize = 32 * 1024 - kExternalAllocatorMetaDataReduction;
 const size_t kBlockHeader = sizeof(double) > sizeof(void*) ? sizeof(double) : sizeof(void*); // suitable for aligning double & void* on all platforms
 const size_t kGCOLinkOffset = (sizeof(GCheader) + sizeof(void*) - 1) & ~(sizeof(void*) - 1); // GCO pages contain freelist links after the GC header
 
+const size_t kGibSize = 1073741824;
+
 struct SizeClassConfig
 {
     int sizeOfClass[kSizeClasses];
@@ -232,9 +234,10 @@ struct lua_Page
 
 static_assert(offsetof(lua_Page, data) % 16 == 0, "data must be 16 byte aligned to provide properly aligned allocation of userdata objects");
 
-l_noret luaM_toobig(lua_State* L)
+l_noret luaM_toobig(lua_State* L, const char* msg, size_t max)
 {
-    luaG_runerror(L, "memory allocation error: block too big");
+    double sizeGib = static_cast<double>(max) / static_cast<double>(kGibSize);
+    luaG_runerror(L, "memory allocation error: %s (exceeds maximum of %.02f GiB)", msg, sizeGib);
 }
 
 static lua_Page* newpage(lua_State* L, lua_Page** pageset, int pageSize, int blockSize, int blockCount)

@@ -533,7 +533,7 @@ static size_t propagatemark(global_State* g)
         Closure* cl = gco2cl(o);
         g->gray = cl->gclist;
         traverseclosure(g, cl);
-        return cl->isC ? sizeCclosure(cl->nupvalues) : sizeLclosure(cl->nupvalues);
+        return cl->isC == 2 ? sizeFatCclosure(cl->fatc.size) : (cl->isC == 1 ? sizeCclosure(cl->nupvalues) : sizeLclosure(cl->nupvalues));
     }
     case LUA_TTHREAD:
     {
