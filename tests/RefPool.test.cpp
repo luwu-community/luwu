@@ -145,12 +145,12 @@ TEST_CASE("RefPoolCloseState")
     lua_State* L = luaL_newstate();
     close_state_dtor_hits = 0;
 
-    void* ud = lua_newuserdatadtor(L, sizeof(int), [](lua_State*, void* data) {
+    lua_newuserdatadtor(L, sizeof(int), [](lua_State*, void* data) {
         close_state_dtor_hits++;
     });
     
     // Pin it with a ref
-    int ref = lua_ref(L, -1);
+    lua_ref(L, -1);
     lua_pop(L, 1);
 
     // Garbage collection shouldn't collect it since it's ref'd
