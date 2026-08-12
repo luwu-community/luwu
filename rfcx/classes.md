@@ -1,6 +1,10 @@
 # Classes
 
-FFlag: LuauBetterUserDefinedClasses
+FFlags:
+
+- LuauBetterUserDefinedClasses
+- DebugLuauUserDefinedClasses
+- DebugLuauUserDefinedClassesRuntime
 
 ## Summary
 
@@ -60,8 +64,6 @@ In this RFC, we'll be focusing on a base design for classes that allows us to la
 ## Design
 
 We introduce the new `class` and `object` primitives.
-
-Unlike upstream Luau, we distinguish between `class` and `object`, and never refer to anything as a `"class object"` because such terminology is confusing.
 
 Our vision of classes aims to equally support lightweight classes called PODs (plain old data), which behave like "named tables" as well as heavy classes with encapsulation (private fields), static and const members, inheritence, interfaces, etc.
 
@@ -172,6 +174,17 @@ class Vector4
 end
 ```
 
+We acknowledge that omitting type annotations here can look pretty bad, but we feel that the ability to use classes without worrying about access specifiers outweighs the minority of people who would use this brand new feature with zero type annotations.
+
+An example of a badly formatted (and unannotated) but valid class definition:
+
+```luau
+class Employee id
+    name
+    age location
+end
+```
+
 #### `private` access specifier
 
 To achieve full encapsulation, we introduce the `private` access specifier.
@@ -235,7 +248,7 @@ end
 
 The `const` modifier may only be applied to fields (all functions/methods are always `const`), and should be placed after an access specifier. If the `static` modifier is present, then `const` must follow `static`.
 
-A `const` field must be initialized with a value. For `static const` fields (`const` fields on classes themselves), a value must be specified inside the class definition block. For regular `public` or `private` `const` fields, the field is initialized by the class's constructor.
+A `const` field must be initialized with a value. For `static const` fields (`const` fields on classes themselves), a value must be specified inside the class definition block. For regular `public` or `private` `const` fields, the field is initialized by the class's constructor. As noted below, non-static `const` fields are not enforced as being const during class construction, to allow the class constructor to modify the fields explictly, pass them to functions that do, etc.
 
 ### Metamethods
 
@@ -269,11 +282,9 @@ They all work just like they do on a metatable:
 For now, `__index` and `__newindex` are forbidden in classes. We will most likely re-visit this later.
 For forward-compatibility, it is a syntax error to define any other method whose name starts with two underscores.
 
-Keep in mind that only `__init` applies to the class; defining any of the other metamethods
+Keep in mind that only `__init` applies to the class and the object; defining any of the other metamethods
 defines them for **`objects`** (instances) of the class instead of the class itself.
-It is impossible to define custom operators for a `class`, only `object`s of a class.
-
-You cannot call `__init` on an `object` of a class, only the `class` itself.
+It is impossible to define custom metamethods for a `class`, only `object`s of a class.
 
 ### The `class` primitive
 
@@ -333,60 +344,62 @@ The function `class.isinstance(o, Class)` returns `true` if the object `o` is an
 
 The `class.classof` function returns the class corresponding to the first argument. If the first argument is not an `object`, the result is `nil`.
 
----
-
-TODO: REWRITE CONSTRUCTORS TO REMOVE INHERITANCE AND REFS TO "class objects"
-
 ### Constructors
 
-To construct an instance of a class, invoke the class object as `MyClass(props)`. The constructor accepts a single optional argument: a table-like value that contains initial values for all the fields. While it will typically be most useful to pass a table literal to this function, that isn't the only use. For example, any class can be shallowly cloned by passing it to its class constructor: `local clone = MyClass(original)`
+#### Rationale
 
-Let `T` be a class object.  When `T(...args)` is invoked with any arguments, the following happens:
-
-1. A fresh, uninitialized instance of `T` is allocated.  We'll call it `t` here.  All of its fields are initially `nil` irrespective of any type annotations.
-2. `T.__init(t, ...args)` is invoked.  Any values returned by `__init` are ignored.
-3. `t` is produced as the result of the expression
-
-A class can invoke its parent constructor directly:
+Right now in Luau 0.730 this is valid syntax (with the classes feature enabled)
 
 ```luau
-class A extends B
-    public x: number
-
-    function __init(self, x, y)
-        B.__init(self, x)
-        self.x = x * y
+class Cat
+    public name: string
+    public age: number
+    function meow(self, content: string): string
+        return `{self.name} says {content}`
     end
 end
 ```
 
+However, we have no way to initialize `Cat` without using the default POD syntax.
+POD-like constructors `Class { x = x, y = y }` syntax provides a nice default, "named-table" like functionality
+that feels great with existing code for POD-like data types. On the other hand, POD-like constructors are not the correct choice
+for all flavors of classes. The POD syntax not only allocates a table (fixable in compiler), but there's also no way to customize
+our default constructor behavior.
+
+This is a problem if we want to add inheritance in the future: a base class's `__init` needs to be an ordinary function that a subclass's `__init` can call into (eg `Base.__init(self, ...)`) to run shared initialization logic before doing its own. The POD-only constructor has no equivalent to call into, since it isn't a function at all.
+
+#### Solution
+
+To fix this issue, we propose a constructor function named `__init`. Among other influences, this is inspired
+by the similarly-named `__init__` from Python.
+
+When `Class(...args)` syntax is used to invoke the class constructor, the "magic box self allocator" in C allocates an uninitialized object of the class and passes it to `Class.__init(self, ...args)` as `self`. All of `self`'s fields are initially `nil` at runtime irrespective of type annotations.
+The `__init` function should then assign to all needed fields in `self` (not checked at runtime), and should not return any values. Field `const`ness is not enforced between initial allocation and when the `Class()` expression finishes evaluation.
+Any values returned by `__init` will be ignored. The `Class()` expression then returns `self` to the caller.
+
+If a user forgets to assign to a field in `__init`, a type error `"TypeError: constructor does not initialize property <name>"` is raised, but at runtime the field will be `nil`.
+
 #### The Default Constructor
 
-If a class does not explicitly define a constructor, it is given a default constructor. The default constructor takes an optional mapping from property name to value and initializes the newly-created class instance with those properties. If no argument or `nil` are passed, the default constructor simply initializes all class properties to `nil`.
+To facilitate POD-like behavior, the default `__init` implementation will accept a POD-like table of fields.
 
-In strict mode, it is a warning to leave fields uninitialized.
+If a class does not explicitly define a constructor, it is given a default constructor. The default constructor takes a mapping from property name to value and initializes the newly-created object with those fields.
 
-The default constructor is always `public`.
+There is no runtime check on fields passed to the default constructor: if no argument or `nil` are passed, the default constructor simply initializes all class fields to `nil`. If the table does not specify all fields, the fields left unspecified will be initialized to `nil`. In either case, we will raise a type error in static analysis specifying the incorrect argument or missing fields.
 
-A class must define an explicit constructor if its base class defines one. Attempting to construct such a class will result in a runtime exception. Type inference will also warn in this case.
-
-If a class defines no constructor and inherits from another that also defines no constructor, the default constructor will initialize all fields of the class. For example:
+The default constructor is always `public`, and there is no way to mark it as private without explicitly
+redefining its semantics.
 
 ```luau
-open class BasePoint
-    public x: number
-    public y: number
+class Point
+    x: number
+    y: number
 end
 
-class Point3D extends BasePoint
-    public z: number
-end
-
-local p2 = Point { x=3, y=4 }
-local p3 = Point3D { x=1, y=2, z=3 }
+local p = Point { x = 3, y = 4 }
 ```
 
-The default constructor is a real function just like any other and so it can be explicitly invoked if desired.
+The default constructor is a real function just like any other and so it can be explicitly invoked if desired. This will be useful in a future RFC adding inheritance.
 
 ```luau
 class Point
@@ -394,14 +407,11 @@ class Point
     public y: number
 
     function reset(self)
+        -- note this modifies `self` in place, it doesn't allocate a new self
         self:__init {x=0, y=0}
     end
 end
 ```
-
-END TODO: REWRITE CONSTRUCTORS TO REMOVE INHERITANCE AND REFS TO "class objects"
-
----
 
 #### `public` and `private` constructors
 
@@ -467,7 +477,7 @@ end
 Attempting to initialize an object of a class with a `private` constructor outside of its class will raise a runtime error.
 
 By restricting the constructor, a class can require its users to construct it with factory functions that respect the class's
-specific invariants, thereby achieving proper encapsulation of its invariants.
+specific invariants, thereby achieving proper encapsulation.
 
 ```luau
 class User
@@ -505,55 +515,6 @@ class User
 end
 
 const user = User.new("12311")
-```
-
-### Additional semantics
-
-Class definitions are Luau statements just like function definitions.
-
-The action of a class definition statement is to allocate the class object, define its functions and properties, and freeze it.  Consequently, a class cannot be instantiated before this statement is executed.
-
-Static analysis also considers the class's type to be global to the whole module so that it can appear in any type annotation anywhere in the script.
-
-An example:
-
-```luau
--- illegal: MyClass is not yet defined
-local a = MyClass()
-
--- OK: MyClass can appear in any type annotation anywhere
-function use(c: MyClass)
-end
-
-function create()
-    -- OK as long as this function is invoked after the class definition statement
-    return MyClass()
-end
-
--- We can't statically catch this in the general case, but this will fail at runtime!
-create()
-
-class MyClass
-end
-
-local b = MyClass() -- OK
-local c = create() -- OK
-```
-
-Because class definition is a statement, class methods can capture upvalues just like ordinary functions do.
-
-```luau
-local globalCount = 0
-
-class Counter
-    public count: number
-
-    function create()
-        local count = globalCount
-        globalCount += 1
-        return Counter { count = count }
-    end
-end
 ```
 
 ### Type System
@@ -637,15 +598,17 @@ Returns the class name at index.
 
 ## Drawbacks
 
-Implementing classes in a different way from upstream Roblox's Luau may lead to inconsistencies
-between future code written for upstream Luau vs our Luau. We feel the less complex semantics and implementation
-of our version of classes (not forcing `.new`, more explicit semantics) is a better long-term goal for the language.
+- Implementing classes in a different way from upstream Roblox's Luau may lead to inconsistencies between future code written for upstream Luau vs our Luau. We feel the less complex semantics and implementation of our version of classes (not forcing `.new`, more explicit semantics) is a better long-term goal for the language.
+- Extreme complexity of this feature when simpler implementations (only POD), sugar around metatable OOP, etc. could exist
+- Private fields throwing a runtime error on access violation imposes performance drawbacks that will need to be worked around in the compiler and VM.
 
-## Alternatives (optional)
+## Alternatives
 
 - We could remove the half-implemented classes from Luau
+- Remove `public` keyword and have everything public (no access specifiers, no `static`, no `const`)
+- We could remove the half-implemented classes feature and instead add syntactical sugar for the canonical metatable OOP pattern
 - We could opt for the old [records proposal by Arseny](https://github.com/luau-lang/luau/pull/205/changes) instead
-- We could name the feature "structs" and "implementations" instead of classes.
-- Omit `__init`, and just increase performance of POD methods without reserving `new`
-- Implement classes exactly as upstream Luau does to maintain compatibility, at the price of reserving `.new`
-  and choosing a more confusing feature design for no real benefit.
+- Private fields can be enforced only in typechecking and not raise runtime errors
+- We could instead have "structs" and "implementations" instead of classes and keep things simpler.
+- Omit `__init`, and just increase performance of POD table constructor without reserving `new`
+- Implement classes exactly as upstream Luau does to maintain compatibility, at the price of choosing a more confusing feature design for no real benefit.
