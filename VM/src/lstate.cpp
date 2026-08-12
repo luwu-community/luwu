@@ -95,6 +95,7 @@ static void close_state(lua_State* L)
     luaC_freeall(L);         // collect all objects
     LUAU_ASSERT(g->strt.nuse == 0);
     luaM_freearray(L, L->global->strt.hash, L->global->strt.size, TString*, 0);
+    luaM_freearray(L, g->ref_array, g->ref_capacity, TValue, 0);
     freestack(L, L);
     for (int i = 0; i < LUA_SIZECLASSES; i++)
     {
@@ -191,7 +192,11 @@ lua_State* lua_newstate(lua_Alloc f, void* ud)
     g->uvhead.u.open.prev = &g->uvhead;
     g->uvhead.u.open.next = &g->uvhead;
     g->GCthreshold = 0; // mark it as unfinished state
-    g->registryfree = 0;
+    g->ref_array = NULL;
+    g->ref_capacity = 0;
+    g->ref_size = 0;
+    g->ref_free = -1;
+    g->gc_ref_gray = 0;
     g->errorjmp = NULL;
     g->rngstate = 0;
     g->ptrenckey[0] = 1;
