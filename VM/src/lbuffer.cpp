@@ -19,6 +19,7 @@ Buffer* luaB_newbuffer(lua_State* L, size_t s)
     b->mode = 0;
     b->free_cb = NULL;
     b->data = b->inline_data;
+    b->userdata = NULL;
     memset(b->data, 0, b->len);
     return b;
 }
