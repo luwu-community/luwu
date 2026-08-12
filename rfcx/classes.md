@@ -115,8 +115,8 @@ Access specifiers: `public`, `private`
 Storage modifiers: `static`, `const`
 
 - Fields are introduced with the new access specifier keywords (or a bare identifier if all fields are public).
-- Fields are mutable by default. For now, we plan to only implement `public` and `private`.
-- We may look into implementing other access specifiers such as `protected` in the future.
+- Fields are mutable by default.
+- For now, we plan to only implement `public` and `private`. We may look into implementing other access specifiers such as `protected` in the future.
 - Fields may include the `static` and `const` storage modifiers.
 
 Like in C# flavored languages, `static` means "this field lives on the class itself, not on instances of the class, and is shared by all instances of this class".
