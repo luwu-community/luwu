@@ -40,8 +40,8 @@ void emitInstCall(IrRegAllocX64& regs, AssemblyBuilderX64& build, ModuleHelpers&
 
     Label cFuncCall;
 
-    build.test(byte[ccl + offsetof(Closure, isC)], 1);
-    build.jcc(ConditionX64::NotZero, cFuncCall);
+    build.cmp(byte[ccl + offsetof(Closure, isC)], 0);
+    build.jcc(ConditionX64::NotEqual, cFuncCall);
 
     {
         RegisterX64 proto = rcx; // Sync with emitContinueCallInVm
