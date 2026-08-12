@@ -4,112 +4,206 @@ FFlag: LuauBetterUserDefinedClasses
 
 ## Summary
 
+Add user-defined classes with new primitives `class` (the class definition) and `object` (instances of a class).
+
 ```luau
-class Point
-    public x: number
-    public y
-
-    function length(self)
-        return math.sqrt(self.x * self.x + self.y * self.y)
-    end
-
-    function __add(self, other: Point)
-        return Point { x = self.x + other.x, y = self.y + other.y }
-    end
-
-    function __tostring(self)
-        return `Point \{ x = {self.x}, y = {self.y} \}`
-    end
-
-    function fromAxisLength(theta, length)
-        return Point {
-            x = length * math.cos(theta),
-            y = length * math.sin(theta),
-        }
-    end
+class Cat
+    name: string
+    age: number
 end
+const taz = Cat { name = "Taz", age = 14 }
 
-local p = Point.fromAxisLength(math.pi / 4, 4)
-print(`Check out my cool point: {p}  length = {p:length()}`)
+export class User
+    private static last_id: number = 0
+
+    public id: string
+    public name: string
+    public dob: DateTime
+
+    private function __init(self, name, dob)
+        User.last_id += 1
+        self.id = "ID " .. tostring(User.last_id)
+        self.name = name
+        self.dob = dob
+    end
+
+    public function new(name: string, dob: DateTime): User
+        const self = User(name, age)
+        return self
+    end
+
+    public function 
+end
 ```
 
 ## Motivation
 
-* People write object-oriented code.  We should afford it in a polished way.
-* Accurate type inference of `setmetatable` has proven to be very difficult to get right.  Because of this, the quality of our autocomplete isn't what it could be.
-* A construct with a fixed shape and a completely locked-down metatable will open up optimization opportunities that could improve performance:
-    * If a value is known to be an instance of a particular class, the bytecode compiler should be able optimize method calls to skip the whole `__index` metamethod process and instead generate code to directly call the correct method.
-    * By the same token, method calls can be inlined more aggressively.  Particularly self-method calls eg `self:SomeOtherMethod()`
-    * Field accesses can compile to a simple integral table offset so that the VM doesn't need to do a hashtable lookup as the program runs.
-    * Since every instance of a class has the same set of properties, we can split the hash table: The set of fields can be associated with the class and instances only need to carry the values of those fields.  We think this can improve performance by improving cache locality.
-* Encapsulation at its current state cannot be truly achieved, tables cannot truly be locked-down, and most workarounds for it are too complex for what it's trying to achieve. 
+Classes are an incredibly common way to encapsulate data structures and behavior in many programming languages, but our language doesn't support it officially and requires users to spend more time (and space) writing boilerplate (`__index`, `setmetatable`, `export type Class = typeof(constructor(...)))`) to emulate the concept. We should make it easier and more performant.
 
-The previous implementation which was done by Luau team has multiple bugs in its type inference and analysis, and is yet to be completed. Completeness aside, the decisions that have been made by the Luau team has mostly considered Roblox as a primary customer, thus preventing a more capable implementation of classes that would be more beneficial to the community.
+As of 0.730, the upstream Luau team has partly implemented classes, but its implementation is not finished. Completeness aside, the Luau team's decisions have mostly considered Roblox as a primary customer, and have made some strange decisions, thus preventing a more capable implementation of classes that would be more beneficial to the community.
 
-For this RFC, we will be focusing on a base design that allows us to potentially implement features such as interfaces and inheritance in the future easier.
+Nonetheless, we should mention some of their original "Classes!" RFC's motivations, since they hold equally true today:
+
+```md
+- People write object-oriented code. We should afford it in a polished way.
+- Accurate type inference of `setmetatable` has proven to be very difficult to get right. Because of this, the quality of our autocomplete isn't what it could be.
+  - A construct with a fixed shape and a completely locked-down metatable will open up optimization opportunities that could improve performance:
+  - If a value is known to be an instance of a particular class, the bytecode compiler should be able optimize method calls to skip the whole `__index` metamethod process and instead generate code to directly call the correct method.
+  - By the same token, method calls can be inlined more aggressively.  Particularly self-method calls eg `self:SomeOtherMethod()`
+  - Field accesses can compile to a simple integral table offset so that the VM doesn't need to do a hashtable lookup as the program runs.
+  - Since every instance of a class has the same set of properties, we can split the hash table: The set of fields can be associated with the class and instances only need to carry the values of those fields.  We think this can improve performance by improving cache locality.
+- Encapsulation at its current state cannot be truly achieved, tables cannot truly be locked-down, and most workarounds for it are too complex for what it's trying to achieve.
+```
+
+In this RFC, we'll be focusing on a base design for classes that allows us to later implement two concepts we are extremely interested in supporting: interfaces and inheritance.
 
 ## Design
 
-Class definitions are a block construct. `export class X` is allowed.
+We introduce the new `class` and `object` primitives.
 
-Defining two classes with the same name in the same module is forbidden.
+Unlike upstream Luau, we distinguish between `class` and `object`, and never refer to anything as a `"class object"` because such terminology is confusing.
 
-Within a class block, two declarations are allowed: Fields and methods.
+Our vision of classes aims to equally support lightweight classes called PODs (plain old data), which behave like "named tables" as well as heavy classes with encapsulation (private fields), static and const members, inheritence, interfaces, etc.
 
-Fields are introduced with the new access specifier keywords. For now, we plan to only implement `public` and `private`. We may look into implementing other specifiers such as `protected` in the future.
+Classes are created with a new class definition syntax:
 
-Methods are introduced with the familiar `function` keyword.  `public function f()` is also permitted.
+```luau
+class ClassName end
+```
 
-Classes can define the following Luau metamethods. They all work just like they do on a metatable:
+Specifically:
 
-* `__init` *
-* `__call`
-* `__concat`
-* `__unm`
-* `__add`
-* `__sub`
-* `__mul`
-* `__div`
-* `__mod`
-* `__pow`
-* `__tostring`
-* `__eq`
-* `__lt`
-* `__le`
-* `__iter`
-* `__len`
-* `__idiv`
+- A class definition starts with the contextual keyword `class`,
+- is followed by the class's name and an optional generics parameter list (`<A, B, ...>`),
+- contains zero or more class member (fields and methods) declarations (see below)
+- ends with the `end` keyword.
+
+Class definitions are a block construct like `for` loops, and do not evaluate to a value.
+
+Instead, evaluating a class definition scopes the class to the entire module, similarly to a global.
+Due to this, defining two classes with the same name in the same module is currently forbidden.
+
+Classes must be defined in the top level of a module; attempting to define a class anywhere else raises a syntax error.
+This is a limitation imposed by upstream Luau, and we hope to loosen this restriction later.
+
+We introduce two specific flavors of keywords to help introduce class members: access specifiers and storage modifiers.
+
+Access specifiers: `public`, `private`
+Storage modifiers: `static`, `const`
+
+Fields are introduced with the new access specifier keywords (or a bare identifier if all fields are public).
+Fields are mutable by default.
+
+For now, we plan to only implement `public` and `private`.
+We may look into implementing other access specifiers such as `protected` in the future.
+
+Fields may include the `static` and `const` storage modifiers.
+
+Like in C# flavored languages, `static` means "this field lives on the class itself, not on instances of the class, and is shared by all instances of this class".
+
+We reuse the `const` keyword to mean "this field is set at class definition evaluation time and may not be modified".
+
+Methods are introduced with the familiar `function` keyword and follow existing `function` definition syntax.
+All functions on a class via familiar `function` syntax are `const` and may not be mutated.
+
+- A function that doesn't take `self` as its first parameter is a static function.
+- A function that takes `self` as its first parameter is a method. The `self` parameter name is hardcoded, like in Rust.
+
+Since a static function that takes `self` is nonsensical, `static function some_method(self, arg1)` should raise a syntax error. We may later loosen this restriction if we want to allow classmethods that take in a class as `self`.
+
+Since all functions on classes are inherently const, explicitly defining a `const function` inside a class should raise a syntax error. We raise a syntax error for this because `const function` syntax would otherwise be valid both inside and outside a class, and such a function could easily be unintentionally moved or copy/pasted inside a class block instead of the module's top level scope.
+
+Specifically:
+
+- If a class only has public members, the `public` keyword may be omitted,
+- If a class has members with any other access specifier other than `public`, then the access specifier is required,
+- A modifier `static` and/or `const` may optionally follow the access specifier.
+- If the member is a field, a valid identifier with an optional type annotation should follow,
+- If the member is a `static` field, an assignment is allowed after the identifier/type annotation.
+- If the member is a function, use the familiar `function` definition syntax.
+
+```luau
+class Cat
+    name: string
+    age: number
+    function meow(self) -- all fields are public, 'public' keyword not required
+    end
+end
+
+class List<T>
+    private inner: { T }
+    private function __init(self, initial: { T }, capacity: number)
+        ...
+    end
+    public function with_capacity<T>(cap: number): List<T> -- class has private members, 'public' keyword required
+        return List()
+    end
+end
+```
+
+Classes may define only one `__init` constructor, that may be `public` or `private`.
+
+- `__init`
+
+The following metamethods apply to instances of the class (`object`s), not the class itself.
+
+They all work just like they do on a metatable:
+
+- `__call`
+- `__concat`
+- `__unm`
+- `__add`
+- `__sub`
+- `__mul`
+- `__div`
+- `__mod`
+- `__pow`
+- `__tostring`
+- `__eq`
+- `__lt`
+- `__le`
+- `__iter`
+- `__len`
+- `__idiv`
   
 \* `__init` is not a metamethod per se but we call it out here as a valid method to define on a class.
 
 For now, `__index` and `__newindex` are forbidden in classes. We will most likely re-visit this later.
 For forward-compatibility, it is a syntax error to define any other method whose name starts with two underscores.
 
-### Class Objects
+Keep in mind that only `__init` applies to the class; defining any of the other metamethods
+defines them for **`objects`** (instances) of the class instead of the class itself.
+It is impossible to define custom operators for a `class`, only `object`s of a class.
 
-The action of evaluating a class definition statement introduces a *class object* in the module scope. A class object is a value that serves as a factory for instances of the class and as a namespace for any functions that are defined on the class.
+You cannot call `__init` on an `object` of a class, only the `class` itself.
 
-Class objects behave like class instances in most ways, but are always `const` and frozen.
+### The `class` primitive
 
-Taking references to class methods via `ClassName.method` syntax is allowed so that classes can easily compose with existing popular APIs:
+The action of evaluating a class definition statement introduces a *class* value in the module scope.
+
+A `class` is a value that serves as a factory for instances of the class and as a namespace for any functions that are defined on the class.
+
+Classes are always `const` and frozen.
+
+Taking references to class methods via `ClassName.method` syntax is allowed so that classes can easily compose with existing APIs:
 
 ```luau
-local n = pcall(SomeClass.getName, someClassInstance)
+local n = pcall(SomeClass.getName, someClassObject)
 ```
 
-The top type of all class objects is named `class`.  `type()` and `typeof()` return `"class"` when passed a class object.
+The top type of all classes is named `class`.  `type()` and `typeof()` return `"class"` when passed a class.
 
-### Class Instances
+### The `object` primitive
 
-Class instances are a new type of value in the VM. They are similar but not quite the same as tables. They have no array part, for instance.
+Objects, often referred to as "class instances", are a new type of value in the VM. They are similar but not quite the same as tables. They have no array part, for instance.
 
-`pairs`, `ipairs` , `getmetatable`, and `setmetatable` all raise a runtime error when invoked on a class instance. They also cannot be iterated over with the generic `for` loop. (unless the class implements `__iter`)
+`pairs`, `ipairs` , `getmetatable`, and `setmetatable` all raise a runtime error when invoked on an object. Similarly, an object may not be iterated over unless its class implements `__iter`.
 
 Reading or writing a nonexistent class property raises an error. This makes it easy to disambiguate between a nonexistent property and a property whose value is nil.
 
-We introduce a new top type for class instances: `object`.  The builtin `type()` and `typeof()` functions return `"object"` for any class instance.  
+We introduce a new top type for instances of a class: `object`. The builtin `type()` and `typeof()` functions return `"object"` for any class instance.  
 
-We chose this over having them return the class name because class names do not have to be globally unique (they must only unique within a single module) and because we do not want to make it possible for classes to impersonate other types.
+We chose this over having them return the class name because class names do not have to be globally unique (they must only unique within a single module) and because we do not want to make it possible for classes to impersonate embedder-provided types.
 
 ```luau
 class Cls end
@@ -126,7 +220,7 @@ Comparisons between object instances are the same as with tables: If `__eq` is n
 
 ### The `class` library
 
-We introduce a new global library `class`.  Its contents are:
+We introduce a new global library `class`. Its contents are:
 
 ```luau
 local class: {
@@ -137,9 +231,9 @@ local class: {
 
 This library also serves as an obvious extension point for future features like reflection. In the future, we may allow classes to opt-out of reflection using this library.
 
-The function `class.isinstance(o, Class)` returns `true` if the object `o` is an instance of `Class`. At runtime, it raises an error if the second argument is not a class object. If the first argument is not a class instance, `class.isinstance` returns false. (eg `class.isinstance(5, MyClass)`)
+The function `class.isinstance(o, Class)` returns `true` if the object `o` is an instance of `Class`. At runtime, it raises an error if the second argument is not a class. If the first argument is not an `object`, `class.isinstance` returns false. (eg `class.isinstance(5, MyClass)`)
 
-The `classof` function returns the class object corresponding to the first argument. If the first argument is not a class instance, the result is `nil`.
+The `class.classof` function returns the class corresponding to the first argument. If the first argument is not an `object`, the result is `nil`.
 
 ### Access Specifiers
 
@@ -148,10 +242,11 @@ Access specifiers allows the user to control access to a specific field within a
 #### `public` access specifier
 
 We introduce the `public` keyword to define fields as public, and accessible from everywhere.
+This is a contextual keyword that only applies within class member declarations.
 
-All fields on a class are `public` by default. This means, if all fields on a class are public, the user can omit the `public` keyword in front of the field definitions.
+Due to existing prior art in Luau of everything being public (tables), and to facilitate POD (plain old data) forms of classes, we felt it makes most sense to treat all fields on a class as `public` by default.
 
-However, to remove ambiguity, if a field is defined with an access specifier other than `public`, then the user must explicitly define all fields with an access specifier.
+This means, if all fields on a class are public, the user can omit the `public` keyword in front of the field definitions:
 
 ```luau
 class Vector3
@@ -161,13 +256,27 @@ class Vector3
 end
 ```
 
+To reduce ambiguity, if a class defines a field with any access specifier other than `public`, then the class must specify access specifiers for **all** members:
+
+```luau
+class Vector4
+    x: number -- Syntax error: class contains non-public members; add `public` keyword to all public fields to prevent ambiguity
+    y: number
+    z: number
+    private w: number
+end
+```
+
 #### `private` access specifier
 
-To achieve full encapsulation, we also introduce the `private` access specifier. 
+To achieve full encapsulation, we introduce the `private` access specifier.
+This is a contextual keyword that only applies within class member declarations.
 
-Any fields defined with this specifier will now be private, and now locked to the outside world. 
+If a member is marked as private, it is only accessible from within its enclosing class definition block,
+and is therefore locked to the outside world.
 
-Only functions of the same class can access these fields. Any attempts at accessing these fields outside of the class functions will cause a runtime error to be raised.
+Attempting to access a `private` member from outside its class definition block results in a runtime error.
+This includes functions outside the class that were called from a function within its class definition block.
 
 ```luau
 class User
@@ -194,7 +303,7 @@ const user = User { -- The default constructor can initialize private fields.
 }
 ```
 
-If a class only has `private` fields, then we raise a type error because such a class will not be usable.
+If a class only has `private` fields, we raise a type error because such a class will not be usable.
 
 ```luau
 class UseMe -- TypeError: this class cannot be used because it only has private members
@@ -202,6 +311,30 @@ class UseMe -- TypeError: this class cannot be used because it only has private 
     private uses: number
 end
 ```
+
+### Storage modifiers
+
+#### `static` modifier
+
+The `static` modifier may only be applied to fields, and should be placed after the `public` or `private` access specifier.
+
+Unlike regular fields, `static` fields allow a default initializer. This is important if you have a `static const` field may only be initialized only once, at class definition time.
+
+```luau
+class ApiInterface
+    private static const API_KEY: string = assert(env.vars.get("API_KEY"))
+end
+```
+
+#### `const` modifier
+
+The `const` modifier may only be applied to fields (all functions/methods are always `const`), and should be placed after an access specifier. If the `static` modifier is present, then `const` must follow `static`.
+
+A `const` field must be initialized with a value. For `static const` fields (`const` fields on classes themselves), a value must be specified inside the class definition block. For regular `public` or `private` `const` fields, the field is initialized by the class's constructor.
+
+---
+
+TODO: REWRITE CONSTRUCTORS TO REMOVE INHERITANCE AND REFS TO "class objects"
 
 ### Constructors
 
@@ -265,9 +398,16 @@ class Point
 end
 ```
 
+END TODO: REWRITE CONSTRUCTORS TO REMOVE INHERITANCE AND REFS TO "class objects"
+
+---
+
 #### `public` and `private` constructors
 
-Users can define a constructor as `public` or `private`, with `private` preventing the user from directly accessing the constructor.
+Users can define the `__init` constructor as `public` or `private`.
+
+If the `__init` constructor is `private`, then the class must be created via a special factory function and cannot
+be instantiated otherwise.
 
 ```luau
 class User
@@ -294,47 +434,6 @@ class User
 end
 
 const user = User("Taz", "Parekh", "126-222-1123")
-```
-
-Attempting to initialize an instance of a class with a `private` constructor outside of its class will raise a runtime error.
-
-Defining a `private` constructor restricts the user to use a `public` method in order to create an instance from this class. This can be useful in achieving full encapsulation.
-
-```luau
-class User
-    public id: string
-    public first_name: string
-    public last_name: string
-    private ssn: string?
-
-    private function __init(self, first: string, last: string, ssn: string?) -- Cannot be directly accessed using User() outside of a class function
-        self.first_name = first
-        self.last_name = last
-        self.ssn = ssn
-    end
-
-    public function new(id: string): User | Error<string>
-        const ssn_for_user = ssns.get(id)
-        if typeof(ssn_for_user) == "error" then
-            return Error.new<<string>>(tostring(ssn_for_user))
-        end
-        const username = usernames.from_id(id)
-        return User(username.first, username.last, ssn_for_user)
-    end
-
-    public function name(self): string
-        return self.first_name .. " " .. self.last_name
-    end
-
-    private function get_ssn(self): string
-        if self.ssn then
-            return self.ssn
-        end
-        return get_ssn_from_files(self)
-    end
-end
-
-const user = User.new("12311")
 ```
 
 If a class has a `private` constructor, but no `public` function(s) for initializing an object from that `private` constructor, a type error is raised:
@@ -364,29 +463,50 @@ class User -- TypeError: this class can never be instantiated; did you mean to d
 end
 ```
 
-### Type System
+Attempting to initialize an object of a class with a `private` constructor outside of its class will raise a runtime error.
 
-Class definitions also introduce a new type to the type environment.
-
-Unlike tables, which are structurally typed, class types are nominal.  Two different classes with identical fields are treated as distinct types.
-
-Inferring the types of class fields is fraught with difficulty, so un-annotated fields are given the type `any`.
-
-The type introduced by a class definition is available anywhere in the source file.
-
-The `class.isinstance` function participates in refinement:
+By restricting the constructor, a class can require its users to construct it with factory functions that respect the class's
+specific invariants, thereby achieving proper encapsulation of its invariants.
 
 ```luau
-function foo(p: unknown)
-    if class.isinstance(p, Point) then
-        return {p.x, p.y} -- no error here
+class User
+    public id: string
+    public first_name: string
+    public last_name: string
+    private ssn: string?
+
+    -- Cannot be directly accessed using User() outside this class scope
+    private function __init(self, first: string, last: string, ssn: string?) 
+        self.first_name = first
+        self.last_name = last
+        self.ssn = ssn
+    end
+
+    public function new(id: string): User | Error<string>
+        const ssn_for_user = ssns.get(id)
+        if typeof(ssn_for_user) == "error" then
+            return Error.new<<string>>(tostring(ssn_for_user))
+        end
+        const username = usernames.from_id(id)
+        return User(username.first, username.last, ssn_for_user)
+    end
+
+    public function name(self): string
+        return self.first_name .. " " .. self.last_name
+    end
+
+    private function get_ssn(self): string
+        if self.ssn then
+            return self.ssn
+        end
+        return get_ssn_from_files(self)
     end
 end
+
+const user = User.new("12311")
 ```
 
-Each class object is a singleton instance of an unnamed type.  If needed, it is easy to access via `typeof(TheClass)`.  Class object types are all subtypes of the top `class` type.
-
-### Semantics
+### Additional semantics
 
 Class definitions are Luau statements just like function definitions.
 
@@ -434,6 +554,62 @@ class Counter
     end
 end
 ```
+
+### Type System
+
+Class declarations blocks introduce the class's type into the type environment.
+
+Unlike table types, class/object types are nominally typed; this means two different
+classes with identical members are treated as distinct types and unrelated to one another.
+
+Due to the difficulty of doing so, we choose not to try and infer the type of unannotated class fields.
+Any such unannotated fields are typed as `any`.
+This is fine because users will likely provide type annotations in this position or not care about static analysis at all.
+
+When a user uses the class's identifier name to annotate a variable, we annotate it as an `object` of the class, not the class
+itself.
+
+```luau
+class Cat end
+-- cats is an array-like table of Cat objects, not an array-like table of multiple copies of the Cat class
+const cats: { Cat } = {}
+```
+
+Each class is a singleton instance of an unnamed type. If you want to use the class's type instead of the object type, use `typeof(Class)` instead.
+
+The `class.isinstance` function participates in refinement:
+
+```luau
+function foo(p: unknown)
+    if class.isinstance(p, Point) then
+        return {p.x, p.y} -- no error here
+    end
+end
+```
+
+Attempting to access a private member raises a TypeError:
+
+```luau
+class User
+    private do_not_use_this_or_i_get_fired: unknown
+    ...
+    private function terminate(self)
+    ...
+    end
+end
+
+const user = User.new("deviaze")
+-- TypeError: Field 'do_not_use_this_or_i_get_fired' of class 'User' is private; accessing it here will raise a runtime error
+print(user.do_not_use_this_or_i_get_fired)
+
+-- TypeError: Method 'terminate' of class 'User' is private; calling it from here will always raise a runtime error
+user:terminate()
+```
+
+Classes with generic type parameters should be handled like extern types with generic type parameters. An initial implementation
+of this RFC without full type system support may be merged before handling this perfectly.
+
+Attempting to modify a `const` field should raise a type error.
 
 ## C API
 
