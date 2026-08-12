@@ -83,11 +83,11 @@ end
 
 class List<T>
     private inner: { T }
-    private function __init(self, initial: { T }, capacity: number)
+    private function __init(self, initial: { T }?, capacity: number)
         -- ...
     end
     public function with_capacity(cap: number): List<T> -- class has private members, 'public' keyword required
-        return List({}, cap)
+        return List(nil, cap)
     end
 end
 ```
