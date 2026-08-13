@@ -1232,6 +1232,55 @@ int lua_pcall(lua_State* L, int nargs, int nresults, int errfunc)
     return status;
 }
 
+LUA_API int lua_refpool_pcall(lua_State* L, int func_ref, int err_ref, int nargs, int nresults)
+{
+    api_check(L, nargs >= 0);
+    api_check(L, nresults >= LUA_MULTRET);
+    api_checknelems(L, nargs);
+    api_check(L, L->status == 0);
+    global_State* g = L->global;
+    api_check(L, func_ref != LUA_REFNIL && func_ref >= 0 && func_ref < g->ref_size);
+    api_check(L, g->ref_array[func_ref].tt != LUA_TNONE);
+    api_check(L, err_ref != LUA_REFNIL && err_ref >= 0 && err_ref < g->ref_size);
+    api_check(L, g->ref_array[err_ref].tt != LUA_TNONE);
+
+    int extra = 2;
+    
+    int needed = extra;
+    if (nresults != LUA_MULTRET && nresults - nargs > needed)
+        needed = nresults - nargs;
+    ensure_stack(L, needed);
+
+    StkId args_start = L->top - nargs;
+    
+    // Shift arguments up by 'extra'
+    for (StkId q = L->top + extra - 1; q >= args_start + extra; q--)
+        setobj2s(L, q, q - extra);
+    
+    L->top += extra;
+
+    setobj2s(L, args_start, &g->ref_array[err_ref]);
+    ptrdiff_t errfunc_ptr = savestack(L, args_start);
+    StkId func_pos = args_start + 1;
+
+    setobj2s(L, func_pos, &g->ref_array[func_ref]);
+
+    struct CallS c;
+    c.func = func_pos;
+    c.nresults = nresults;
+
+    int status = luaD_pcall(L, f_call, &c, savestack(L, c.func), errfunc_ptr);
+
+    // actual results pushed starts at func_pos
+    int actual_results = cast_int(L->top - func_pos);
+    for (int i = 0; i < actual_results; i++)
+        setobj2s(L, args_start + i, func_pos + i);
+    L->top--;
+
+    adjustresults(L, nresults);
+    return status;
+}
+
 /*
 ** Execute a protected C call.
 */

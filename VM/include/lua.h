@@ -432,6 +432,7 @@ LUA_API int lua_getrefpool(lua_State* L, int ref);
 LUA_API const void* lua_refpool_topointer(lua_State* L, int ref);
 LUA_API int lua_refpool_objlen(lua_State* L, int ref);
 LUA_API int lua_refpool_rawequal(lua_State* L, int ref1, int ref2);
+LUA_API int lua_refpool_pcall(lua_State* L, int func_ref, int err_ref, int nargs, int nresults);
 
 /*
 ** ===============================================================
