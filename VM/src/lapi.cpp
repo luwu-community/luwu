@@ -1821,6 +1821,17 @@ const void* lua_refpool_topointer(lua_State* L, int ref)
     return api_topointer(o);
 }
 
+void* lua_refpool_touserdatatagged(lua_State* L, int ref, int tag)
+{
+    LUAU_ASSERT(FFlag::LuauManagedReferences2);
+    if (ref == LUA_REFNIL) return NULL;
+    global_State* g = L->global;
+    api_check(L, ref >= 0 && ref < g->ref_size);
+    TValue* o = &g->ref_array[ref];
+    api_check(L, o->tt != LUA_TNONE);
+    return (ttisuserdata(o) && uvalue(o)->tag == tag) ? uvalue(o)->data : NULL;
+}
+
 int lua_refpool_objlen(lua_State* L, int ref)
 {
     LUAU_ASSERT(FFlag::LuauManagedReferences2);
