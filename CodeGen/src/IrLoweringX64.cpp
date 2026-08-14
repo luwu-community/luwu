@@ -3671,8 +3671,8 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
     case IrCmd::JUMP_CMP_PROTOID:
     {
         LUAU_ASSERT(OP_A(inst).kind == IrOpKind::Inst);
-        build.cmp(byte[regOp(OP_A(inst)) + offsetof(Closure, isC)], 1);
-        build.jcc(ConditionX64::Equal, labelOp(OP_D(inst)));
+        build.cmp(byte[regOp(OP_A(inst)) + offsetof(Closure, isC)], 0);
+        build.jcc(ConditionX64::NotEqual, labelOp(OP_D(inst)));
         {
             ScopedRegX64 tmp{regs, SizeX64::qword};
             build.mov(tmp.reg, qword[regOp(OP_A(inst)) + offsetof(Closure, l.p)]);

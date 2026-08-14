@@ -269,6 +269,9 @@ void luaC_validate(lua_State* L)
     LUAU_ASSERT(!isdead(g, obj2gco(g->mainthread)));
     checkliveness(g, &g->registry);
 
+    for (int i = 0; i < g->ref_size; i++)
+        checkliveness(g, &g->ref_array[i]);
+
     for (int i = 0; i < LUA_T_COUNT; ++i)
     {
         if (g->mt[i])
@@ -699,6 +702,10 @@ void luaC_dump(lua_State* L, void* file, const char* (*categoryName)(lua_State* 
     dumpref(f, obj2gco(g->mainthread));
     fprintf(f, ",\"registry\":");
     dumpref(f, gcvalue(&g->registry));
+    fprintf(f, ",\"refpool\":[");
+    if (g->ref_array)
+        dumprefs(f, g->ref_array, g->ref_size);
+    fprintf(f, "]");
 
     fprintf(f, "},\"stats\":{\n");
 
@@ -764,6 +771,20 @@ static void enumtable(EnumContext* ctx, LuaTable* h)
 
     // Provide a name for a special registry table
     enumnode(ctx, obj2gco(h), size, h == hvalue(registry(ctx->L)) ? "registry" : NULL);
+
+    // Hook the refpool to the registry for compatibility purposes
+    if (h == hvalue(registry(ctx->L)))
+    {
+        global_State* g = ctx->L->global;
+        if (g->ref_array)
+        {
+            for (int i = 0; i < g->ref_size; i++)
+            {
+                if (iscollectable(&g->ref_array[i]))
+                    enumedge(ctx, obj2gco(h), gcvalue(&g->ref_array[i]), "[reference]");
+            }
+        }
+    }
 
     if (h->node != &luaH_dummynode)
     {

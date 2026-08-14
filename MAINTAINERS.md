@@ -8,6 +8,7 @@
 - LuauNonePrimitive: @cheesycod
 - LuauExternalString (and DebugLuauAllowNonNullTerminatedStrings for tests): @cheesycod
 - LuauFatCClosure: @cheesycod
+- LuauManagedReferences2: @cheesycod
 - LuauFunctionUnusedRecursiveLinting, LuauBetterPackAndVariadicMismatchErrors, LuauIndexerModifierMismatchErrors, LuauPropertyModifierMismatchErrors: @PhoenixWhitefire (merged from upstream)
 - LuauBetterMissingPropertiesTypeError, LuauFunctionUnusedRecursiveLinting: @nnullcolumn (merged from upstream)
 
