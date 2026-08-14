@@ -14,7 +14,7 @@ mod progress;
 
 use progress::{stream_and_report, Progress};
 use std::env;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 fn manifest_dir() -> String {
