@@ -502,4 +502,49 @@ expectpass("stack reallocation in creation", function()
     assert(f.z == 300)
 end)
 
+class UserWithInit
+    public first_name: string
+    public last_name: string
+    private ssn: string?
+
+    public function __init(self, first, last, ssn)
+        self.first_name = first
+        self.last_name = last
+        self.ssn = ssn
+    end
+
+    public function name(self): string
+        return self.first_name .. " " .. self.last_name
+    end
+
+    private function get_ssn(self): string
+        return self.ssn
+    end
+end
+
+expectpass("custom __init is used as the constructor", function()
+    local user = UserWithInit("Taz", "Parekh", "126-222-1123")
+    assert(user:name() == "Taz Parekh")
+    assert(user:get_ssn() == "126-222-1123")
+end)
+
+expectpass("custom __init can be called directly like a normal method", function()
+    local user = UserWithInit("a", "b", "c")
+    user:__init("Re", "Init", "999-99-9999")
+    assert(user:name() == "Re Init")
+    assert(user:get_ssn() == "999-99-9999")
+end)
+
+class PointNoInit
+    x: number
+    y: number
+end
+
+expectpass("classes without __init still use the default POD constructor", function()
+    local p = PointNoInit({ x = 3, y = 4 })
+    assert(p.x == 3 and p.y == 4)
+    local p2 = PointNoInit()
+    assert(not p2.x and not p2.y)
+end)
+
 return 'OK'

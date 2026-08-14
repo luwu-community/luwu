@@ -1163,8 +1163,29 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
                 }
             );
 
+            bool hasCustomInit = false;
+            for (const auto& member : classDecl->members)
+            {
+                if (const auto* method = member.get_if<AstClassMethod>(); method && method->functionName == "__init")
+                {
+                    hasCustomInit = true;
+                    break;
+                }
+            }
+
+            // If the class defines a custom `__init`, the constructor's real
+            // signature isn't known until `__init`'s own signature has been
+            // checked (see the `AstClassMethod` visitor below), so we leave
+            // this blocked for now.
             TypeId ctorTy =
-                arena->addType(FunctionType{arena->addTypePack({builtinTypes->unknownType, ctorArgTy}), arena->addTypePack({classInstanceTy})});
+                hasCustomInit
+                    ? arena->addType(BlockedType{})
+                    : arena->addType(FunctionType{
+                          arena->addTypePack({builtinTypes->unknownType, ctorArgTy}),
+                          arena->addTypePack({classInstanceTy}),
+                          /* defn */ std::nullopt,
+                          /* hasSelf */ true
+                      });
 
             TypeId metatableTy = arena->addType(
                 TableType{TableType::Props{{"__call", Property::readonly(ctorTy)}}, std::nullopt, TypeLevel{}, scope.get(), TableState::Sealed}
@@ -1190,7 +1211,7 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
             else
                 scope->privateTypeBindings[classDecl->name->name.value] = TypeFun{{}, {}, classInstanceTy, classDecl->location};
 
-            classDeclRecords[classDecl->name] = std::make_unique<ClassDeclRecord>(ClassDeclRecord{classInstanceTy, std::move(memberTypes)});
+            classDeclRecords[classDecl->name] = std::make_unique<ClassDeclRecord>(ClassDeclRecord{classInstanceTy, std::move(memberTypes), ctorTy});
         }
     }
 
@@ -2600,6 +2621,27 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatClass* stat
                     Checkpoint start = checkpoint(this);
                     checkFunctionBody(sig.bodyScope, method.function);
                     Checkpoint end = checkpoint(this);
+
+                    if (method.functionName == "__init")
+                    {
+                        if (const FunctionType* initSig = get<FunctionType>(follow(sig.signature)); initSig && is<BlockedType>(follow(classDeclRecord->ctorTy)))
+                        {
+                            auto [argHead, argTail] = flatten(initSig->argTypes);
+
+                            std::vector<TypeId> ctorArgs;
+                            ctorArgs.push_back(builtinTypes->unknownType);
+                            if (argHead.size() > 1)
+                                ctorArgs.insert(ctorArgs.end(), argHead.begin() + 1, argHead.end());
+
+                            TypePackId ctorArgsPack =
+                                argTail ? arena->addTypePack(std::move(ctorArgs), *argTail) : arena->addTypePack(std::move(ctorArgs));
+                            TypeId newCtorTy = arena->addType(FunctionType{
+                                ctorArgsPack, arena->addTypePack({classDeclRecord->ty}), /* defn */ std::nullopt, /* hasSelf */ true
+                            });
+
+                            emplaceType<BoundType>(asMutable(follow(classDeclRecord->ctorTy)), newCtorTy);
+                        }
+                    }
 
                     NotNull<Scope> constraintScope{sig.signatureScope ? sig.signatureScope.get() : sig.bodyScope.get()};
                     std::unique_ptr<Constraint> c = std::make_unique<Constraint>(

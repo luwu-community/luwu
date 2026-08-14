@@ -1397,8 +1397,11 @@ struct Printer
                     overloaded{
                         [&](const AstClassProperty& prop)
                         {
-                            writer.advance(prop.qualifierLocation.begin);
-                            writer.keyword("public");
+                            if (prop.qualifierLocation)
+                            {
+                                writer.advance(prop.qualifierLocation->begin);
+                                writer.keyword(prop.visibility == AstClassMemberVisibility::Private ? "private" : "public");
+                            }
                             writer.advance(prop.nameLocation.begin);
                             writer.identifier(prop.name.value);
                             if (writeTypes && prop.ty)
@@ -1414,7 +1417,7 @@ struct Printer
                             if (method.qualifierLocation)
                             {
                                 writer.advance(method.qualifierLocation->begin);
-                                writer.keyword("public");
+                                writer.keyword(method.visibility == AstClassMemberVisibility::Private ? "private" : "public");
                             }
                             writer.advance(method.keywordLocation.begin);
                             writer.keyword("function");

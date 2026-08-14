@@ -10,6 +10,7 @@
 using namespace Luau;
 
 LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
+LUAU_FASTFLAG(LuauBetterUserDefinedClasses)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass);
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuauExportValueSyntax)
@@ -188,6 +189,63 @@ local p = Point
     CHECK(cobjMetaProps.find("__call") != cobjmeta->props.end());
 }
 
+TEST_CASE_FIXTURE(ClassesFixture, "class_custom_init_constructor_signature")
+{
+    ScopedFastFlag sff_LuauBetterUserDefinedClasses{FFlag::LuauBetterUserDefinedClasses, true};
+
+    auto result = check(R"(
+class Thingy
+    public name: string
+    public age: number
+
+    function __init(self, name: string, age: number)
+        self.name = name
+        self.age = age
+    end
+end
+
+local p = Thingy
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+
+    auto t = requireType("p");
+    auto et = get<ExternType>(t);
+    REQUIRE(et);
+    REQUIRE(et->metatable);
+
+    auto cobjmeta = get<TableType>(*et->metatable);
+    REQUIRE(cobjmeta);
+    auto callProp = cobjmeta->props.find("__call");
+    REQUIRE(callProp != cobjmeta->props.end());
+    REQUIRE(callProp->second.readTy);
+    CHECK_EQ("(unknown, string, number) -> Thingy", toString(*callProp->second.readTy));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_custom_init_constructor_call_is_checked")
+{
+    ScopedFastFlag sff_LuauBetterUserDefinedClasses{FFlag::LuauBetterUserDefinedClasses, true};
+
+    auto result = check(R"(
+class Thingy
+    public name: string
+    public age: number
+
+    function __init(self, name: string, age: number)
+        self.name = name
+        self.age = age
+    end
+end
+
+local good = Thingy("hi", 5)
+local missingArgs = Thingy()
+local wrongTypes = Thingy(5, "hi")
+local wrongShape = Thingy({ name = "hi", age = 5 })
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(5, result);
+}
+
 TEST_CASE_FIXTURE(ClassesFixture, "isinstance_refines_unknown_value")
 {
     ScopedFastFlag sff{FFlag::LuauIntegerType2, true};
@@ -323,7 +381,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "isinstance_refines_imported_class")
     fileResolver.source["game/B"] = R"(
         local A = require(game.A)
 
-        local x : unknown = (A.Point {} ) :: any
+        local x : unknown = A.Point({} :: any)
         if class.isinstance(x, A.Point) then
             local y = x
         end
@@ -348,7 +406,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "isinstance_refines_imported_class_but_not_a_c
     fileResolver.source["game/B"] = R"(
         local A = require(game.A)
 
-        local x : unknown = (A.Point {} ) :: any
+        local x : unknown = A.Point({} :: any)
         if class.isinstance(x, A.notAPoint) then
             local y = x
         end

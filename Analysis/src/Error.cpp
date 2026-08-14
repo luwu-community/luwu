@@ -556,7 +556,7 @@ struct ErrorConverter
             s += "'" + e.properties[i] + "'";
         }
 
-        s += afterFieldList + " found in type '" + toString(e.subType) + "' from expected type '" + toString(e.superType) + "'";
+        s += afterFieldList + " found in type\n  '" + toString(e.subType) + "'\nexpected type:\n  '" + toString(e.superType) + "'";
 
         return s;
     }

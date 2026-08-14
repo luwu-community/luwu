@@ -27,6 +27,7 @@ LUAU_FLAGVERSION(LuauExportValueSyntax, 3)
 
 LUAU_FASTFLAGVARIABLE(DebugLuauNoInline)
 LUAU_FASTFLAGVARIABLE(DebugLuauUserDefinedClasses)
+LUAU_FASTFLAGVARIABLE(LuauBetterUserDefinedClasses)
 LUAU_FASTFLAGVARIABLE(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAGVARIABLE(LuauDisallowExternClassInTypeDefinitions)
 LUAU_FASTFLAGVARIABLE(LuauTableEntriesDontNeedToMatchIndent)
@@ -1589,22 +1590,49 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
     // slightly more performant here (e.g.: a "scratch" set).
     DenseHashSet<AstName> classMemberNamespace{{}};
 
+    // Under LuauBetterUserDefinedClasses, if any member is explicitly marked
+    // `private`, then every member must carry an explicit `public` or
+    // `private` qualifier to avoid ambiguity. We collect the locations of
+    // members that didn't have an explicit qualifier as we go, and only
+    // report them once we know whether the class ended up with a `private`
+    // member.
+    bool sawPrivateMember = false;
+    std::vector<std::pair<Location, bool>> unqualifiedMemberLocations; // (location, isFunction)
+
     while (lexer.current().type != Lexeme::ReservedEnd && lexer.current().type != Lexeme::Eof)
     {
         std::optional<Location> qualifierLocation;
+        AstClassMemberVisibility visibility = AstClassMemberVisibility::Public;
+
         if (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "public")
         {
             qualifierLocation = lexer.current().location;
             nextLexeme();
         }
+        else if (FFlag::LuauBetterUserDefinedClasses && lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "private")
+        {
+            qualifierLocation = lexer.current().location;
+            visibility = AstClassMemberVisibility::Private;
+            sawPrivateMember = true;
+            nextLexeme();
+        }
 
         // If we saw a qualifier _and_ the current token is not `function`,
-        // assume this is a property.
-        if (qualifierLocation && lexer.current().type != Lexeme::ReservedFunction)
+        // assume this is a property. Under LuauBetterUserDefinedClasses, a
+        // property with no qualifier at all is also allowed (it's implicitly
+        // public).
+        if ((qualifierLocation || FFlag::LuauBetterUserDefinedClasses) && lexer.current().type != Lexeme::ReservedFunction)
         {
             std::optional<Name> propName = parseNameOpt("class property name");
             if (!propName)
+            {
+                if (FFlag::LuauBetterUserDefinedClasses)
+                    nextLexeme(); // skip the unexpected token to avoid an infinite loop
                 continue;
+            }
+
+            if (FFlag::LuauBetterUserDefinedClasses && !qualifierLocation)
+                unqualifiedMemberLocations.push_back({propName->location, /* isFunction */ false});
 
             AstType* propType = nullptr;
             std::optional<Location> typeColonLocation;
@@ -1619,6 +1647,13 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
             if (strncmp(propName->name.value, "__", 2) == 0)
                 report(propName->location, "Class properties cannot start with '__'");
 
+            bool hasSemicolon = false;
+            if (FFlag::LuauBetterUserDefinedClasses && lexer.current().type == ';')
+            {
+                nextLexeme();
+                hasSemicolon = true;
+            }
+
             if (classMemberNamespace.contains(propName->name))
             {
                 report(propName->location, "Duplicate class member '%s'", propName->name.value);
@@ -1631,11 +1666,13 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
                 LUAU_ASSERT((bool)propType == (bool)typeColonLocation);
                 declarations.push_back(
                     AstClassProperty{
-                        *qualifierLocation,
+                        qualifierLocation,
+                        visibility,
                         propName->name,
                         propName->location,
                         typeColonLocation,
                         propType,
+                        hasSemicolon,
                     }
                 );
             }
@@ -1669,10 +1706,25 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
 
             if (strncmp(name.name.value, "__", 2) == 0)
             {
-                if (EXPLICITLY_DISALLOWED_METAMETHODS.count(name.name.value) > 0)
+                if (FFlag::LuauBetterUserDefinedClasses && name.name == "__init")
+                {
+                    // `__init` is not a metamethod (it applies to the class itself, not its
+                    // instances), but it's a valid special method to define: it overrides the
+                    // class's constructor. It must take `self` as its first parameter.
+                    if (body->args.size == 0 || body->args.data[0]->name != "self")
+                        report(name.location, "'__init' must take 'self' as its first parameter");
+                }
+                else if (EXPLICITLY_DISALLOWED_METAMETHODS.count(name.name.value) > 0)
                     report(name.location, "Classes cannot define '%s' as a metamethod", name.name.value);
                 else if (ALLOWED_METAMETHODS.count(name.name.value) == 0)
                     report(name.location, "Cannot use '%s' as a method name: names starting with '__' are reserved", name.name.value);
+            }
+
+            bool hasSemicolon = false;
+            if (FFlag::LuauBetterUserDefinedClasses && lexer.current().type == ';')
+            {
+                nextLexeme();
+                hasSemicolon = true;
             }
 
             // TODO CLI-200853: We should support attributes, we do not need
@@ -1685,13 +1737,18 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
             {
                 classMemberNamespace.insert(name.name);
 
+                if (FFlag::LuauBetterUserDefinedClasses && !qualifierLocation)
+                    unqualifiedMemberLocations.push_back({name.location, /* isFunction */ true});
+
                 declarations.push_back(
                     AstClassMethod{
                         qualifierLocation,
+                        visibility,
                         matchFunction.location,
                         name.name,
                         name.location,
                         body,
+                        hasSemicolon,
                     }
                 );
             }
@@ -1700,6 +1757,18 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
         {
             report(lexer.current().location, "Only class properties and functions can be declared within a class");
             nextLexeme(); // skip the unexpected token to avoid an infinite loop
+        }
+    }
+
+    if (FFlag::LuauBetterUserDefinedClasses && sawPrivateMember)
+    {
+        for (const auto& [loc, isFunction] : unqualifiedMemberLocations)
+        {
+            report(
+                loc,
+                "Class contains a 'private' member; put the 'public' or 'private' keyword in front of this %s to prevent ambiguity",
+                isFunction ? "function" : "field"
+            );
         }
     }
 

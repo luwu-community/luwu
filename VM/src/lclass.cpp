@@ -41,9 +41,16 @@ LuauClass* luaR_newclass(
     classobject->metatable = luaH_new(L, 0, 1);
     // We should probably pass an empty table here rather than the global
     // environment.
+    static const char kCtorSuffix[] = "() constructor";
+    size_t namelen = strlen(getstr(name));
+    size_t ctordebugnamelen = namelen + sizeof(kCtorSuffix); // includes the null terminator
+    classobject->ctordebugname = luaM_newarray(L, ctordebugnamelen, char, classobject->memcat);
+    memcpy(classobject->ctordebugname, getstr(name), namelen);
+    memcpy(classobject->ctordebugname + namelen, kCtorSuffix, sizeof(kCtorSuffix));
+
     Closure* constructor = luaF_newCclosure(L, 0, L->gt);
     constructor->c.f = luaR_createobject;
-    constructor->c.debugname = "luaR_createobject";
+    constructor->c.debugname = classobject->ctordebugname;
     constructor->c.cont = NULL;
     TValue* dest = luaH_setstr(L, classobject->metatable, L->global->tmname[TM_CALL]);
     LUAU_ASSERT(ttisnil(dest));
@@ -53,6 +60,7 @@ LuauClass* luaR_newclass(
 
     classobject->numberofinstancemembers = numberofinstancemembers;
     classobject->numberofallmembers = numberofinstancemembers + numberofstaticmembers;
+    classobject->hascustominit = false;
 
     return classobject;
 }
@@ -66,6 +74,9 @@ void luaR_addclassmember(lua_State* L, LuauClass* classobject, TString* name, TV
     LUAU_ASSERT(ttisfunction(value) && value->value.gc->gch.tt == LUA_TFUNCTION);
     setobj2class(L, &classobject->staticmembers[offsetint - classobject->numberofinstancemembers], value);
     luaC_barrier(L, classobject, value);
+
+    if (name == luaS_newlstr(L, "__init", 6))
+        classobject->hascustominit = true;
 
     // Only metamethods in the parser's allowlist are supported (see ALLOWED_METAMETHODS in Parser.cpp)
     bool isMetamethod = (name == luaS_newlstr(L, "__tostring", 10));
@@ -105,6 +116,20 @@ int luaR_createobject(lua_State* L)
     // second argument (if present).
     setobjectvalue(L, L->top, classinst);
     L->top++;
+    int selfidx = lua_gettop(L);
+
+    if (classobject->hascustominit)
+    {
+        lua_getfield(L, 1, "__init");
+        lua_pushvalue(L, selfidx);
+        for (int i = 2; i <= numargs; i++)
+            lua_pushvalue(L, i);
+
+        lua_call(L, 1 + (numargs - 1), 0);
+
+        lua_pushvalue(L, selfidx);
+        return 1;
+    }
 
     // Stack location to hold the table lookup result
     setnilvalue(L->top);
@@ -144,6 +169,7 @@ void luaR_freeclass(lua_State* L, LuauClass* classobject, lua_Page* page)
         L, classobject->staticmembers, classobject->numberofallmembers - classobject->numberofinstancemembers, TValue, classobject->memcat
     );
     luaM_freearray(L, classobject->offsettomember, classobject->numberofallmembers, TString*, classobject->memcat);
+    luaM_freearray(L, classobject->ctordebugname, strlen(classobject->ctordebugname) + 1, char, classobject->memcat);
     luaM_freegco(L, classobject, sizeof(LuauClass), classobject->memcat, page);
 }
 

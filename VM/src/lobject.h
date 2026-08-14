@@ -598,6 +598,15 @@ typedef struct LuauClass
     // instance or static members, creating class instances).
     uint32_t numberofallmembers;
 
+    // Set when this class defines a user `__init` method. When true, the
+    // class's constructor (`ClassName(...)`) calls `__init(self, ...)`
+    // instead of the default POD table-copy constructor.
+    bool hascustominit;
+
+    // Debug name of the constructor closure (e.g. "Foo() constructor"), shown
+    // in stack traces. Owned by this class object; freed in luaR_freeclass.
+    char* ctordebugname;
+
 } LuauClass;
 
 typedef struct LuauObject

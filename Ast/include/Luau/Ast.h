@@ -1099,22 +1099,32 @@ struct AstDeclaredExternTypeProperty
     AstTableAccess access = AstTableAccess::ReadWrite;
 };
 
+enum class AstClassMemberVisibility
+{
+    Public,
+    Private,
+};
+
 struct AstClassProperty
 {
-    Location qualifierLocation;
+    std::optional<Location> qualifierLocation = std::nullopt;
+    AstClassMemberVisibility visibility = AstClassMemberVisibility::Public;
     AstName name;
     Location nameLocation;
     std::optional<Location> typeColonLocation = std::nullopt;
     AstType* ty = nullptr;
+    bool hasSemicolon = false;
 };
 
 struct AstClassMethod
 {
     std::optional<Location> qualifierLocation;
+    AstClassMemberVisibility visibility = AstClassMemberVisibility::Public;
     Location keywordLocation;
     AstName functionName;
     Location nameLocation;
     AstExprFunction* function;
+    bool hasSemicolon = false;
 };
 
 using AstClassMember = Variant<AstClassProperty, AstClassMethod>;

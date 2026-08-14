@@ -71,6 +71,11 @@ struct ClassDeclRecord
 {
     TypeId ty = nullptr;
     DenseHashMap<AstName, TypeId> memberTypes{AstName{""}};
+    // The type of the class's constructor (the `__call` metamethod on the
+    // class value). Blocked until `__init`'s signature has been checked, if
+    // the class defines a custom `__init`; otherwise resolved eagerly to the
+    // default POD constructor's type.
+    TypeId ctorTy = nullptr;
 };
 
 struct ConstraintGenerator
