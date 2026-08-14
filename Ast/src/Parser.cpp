@@ -1570,6 +1570,11 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
     if (!name)
         name = Name(nameError, lexer.current().location);
 
+    AstArray<AstGenericType*> generics{};
+    AstArray<AstGenericTypePack*> genericPacks{};
+    if (FFlag::LuauBetterUserDefinedClasses && FFlag::LuauGenericNominals)
+        std::tie(generics, genericPacks) = parseGenericTypeList(/* withDefaultValues= */ false);
+
     // We save the locals here as part of error recovery later.
     auto savedLocals = saveLocals();
 
@@ -1776,7 +1781,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
     // are treating "class" as a contextual keyword (and we must as we also)
     // plan to add a `class` library.
     Location end = lexer.current().location;
-    expectAndConsume(Lexeme::ReservedEnd, "class");
+    bool hasEnd = expectAndConsume(Lexeme::ReservedEnd, "class");
     Location location{start, end};
 
     // We only allow classes at the top level: we can make use of the
@@ -1784,7 +1789,8 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
     if (recursionCounter > 1)
         report(nameLocal->location, "Cannot declare class '%s' inside another statement or expression", nameLocal->name.value);
 
-    AstStat* cls = allocator.alloc<AstStatClass>(location, nameLocal, copy(declarations), exported);
+    AstStatClass* cls = allocator.alloc<AstStatClass>(location, nameLocal, copy(declarations), exported, generics, genericPacks);
+    cls->hasEnd = hasEnd;
     if (classesWithinModule.contains(nameLocal->name))
     {
         // We do not allow shadowing classes with the same name. However, we
@@ -1793,7 +1799,11 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
         // representing the class off the stack and return an error.
         restoreLocals(savedLocals);
         return reportStatError(
-            nameLocal->location, {}, copy({cls}), "A class named '%s' has already been declared in this module", nameLocal->name.value
+            nameLocal->location,
+            {},
+            copy({static_cast<AstStat*>(cls)}),
+            "A class named '%s' has already been declared in this module",
+            nameLocal->name.value
         );
     }
     classesWithinModule.insert(nameLocal->name);

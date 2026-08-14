@@ -44,6 +44,7 @@ LUAU_FASTFLAGVARIABLE(LuauDisallowRedefiningBuiltinTypes)
 LUAU_FASTFLAG(LuauTypeFunctionStructuredErrors)
 LUAU_FASTFLAGVARIABLE(LuauReadOnlyIndexers)
 LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
+LUAU_FASTFLAG(LuauBetterUserDefinedClasses)
 LUAU_FASTFLAGVARIABLE(LuauTidyTypePrototyping)
 LUAU_FASTFLAGVARIABLE(LuauDoNotEmplaceAnnotatedType)
 LUAU_FASTFLAGVARIABLE(LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier)
@@ -1094,6 +1095,17 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
             scope->bindings[classDecl->name] = Binding{theTy, classDecl->name->location};
             scope->lvalueTypes[theDef] = theTy;
 
+            // Under LuauGenericNominals, property and method type annotations are resolved
+            // against the class's own definition scope, so that references to the class's own
+            // generics (e.g. the `T` in `class Box<T> ... end`) resolve correctly. See the
+            // equivalent handling for `declare extern type` above.
+            ScopePtr defnScope = scope;
+            if (FFlag::LuauBetterUserDefinedClasses && FFlag::LuauGenericNominals)
+            {
+                defnScope = childScope(classDecl, scope);
+                astClassDefiningScopes[classDecl] = defnScope;
+            }
+
             // Objects are ExternTypes, where the metatable field represents the metamethods associated with the instance, ** not ** the class itself.
             // Class: ExternType { props, parent: top class type, metatable: {__call -- this lets it be called as a constructor } }
             // Object: ExternType { props, parent: top object type for now, metatable: instance metamethods }
@@ -1163,6 +1175,30 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
                 }
             );
 
+            std::vector<GenericTypeDefinition> classTypeParams;
+            std::vector<GenericTypePackDefinition> classTypePackParams;
+            if (FFlag::LuauBetterUserDefinedClasses && FFlag::LuauGenericNominals)
+            {
+                for (const auto& [name, gen] : createGenerics(defnScope, classDecl->generics, /* useCache */ true, /* addTypes */ false))
+                    classTypeParams.push_back(gen);
+                for (const auto& [name, genPack] : createGenericPacks(defnScope, classDecl->genericPacks, /* useCache */ true, /* addTypes */ false))
+                    classTypePackParams.push_back(genPack);
+
+                // Methods implicitly take `self`, typed as the bare class instance type
+                // (classInstanceTy). For a generic class, `self` needs to be `Box<T>` (applied to
+                // the class's own generics), not the bare, unparameterized `Box` -- otherwise
+                // calling a method on `Box<number>` fails to match against `self`, since neither
+                // side would look like the other nominally. See the equivalent handling for
+                // `declare extern type` above.
+                ExternType* classInstanceEtv = getMutable<ExternType>(classInstanceTy);
+                for (const GenericTypeDefinition& param : classTypeParams)
+                    classInstanceEtv->instantiatedTypeParams.push_back(param.ty);
+                for (const GenericTypePackDefinition& param : classTypePackParams)
+                    classInstanceEtv->instantiatedTypePackParams.push_back(param.tp);
+                classInstanceEtv->hasUnresolvedGenerics =
+                    !classInstanceEtv->instantiatedTypeParams.empty() || !classInstanceEtv->instantiatedTypePackParams.empty();
+            }
+
             bool hasCustomInit = false;
             for (const auto& member : classDecl->members)
             {
@@ -1177,15 +1213,29 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
             // signature isn't known until `__init`'s own signature has been
             // checked (see the `AstClassMethod` visitor below), so we leave
             // this blocked for now.
-            TypeId ctorTy =
-                hasCustomInit
-                    ? arena->addType(BlockedType{})
-                    : arena->addType(FunctionType{
-                          arena->addTypePack({builtinTypes->unknownType, ctorArgTy}),
-                          arena->addTypePack({classInstanceTy}),
-                          /* defn */ std::nullopt,
-                          /* hasSelf */ true
-                      });
+            TypeId ctorTy;
+            if (hasCustomInit)
+            {
+                ctorTy = arena->addType(BlockedType{});
+            }
+            else
+            {
+                std::vector<TypeId> podCtorGenerics;
+                std::vector<TypePackId> podCtorGenericPacks;
+                for (const GenericTypeDefinition& param : classTypeParams)
+                    podCtorGenerics.push_back(param.ty);
+                for (const GenericTypePackDefinition& param : classTypePackParams)
+                    podCtorGenericPacks.push_back(param.tp);
+
+                ctorTy = arena->addType(FunctionType{
+                    std::move(podCtorGenerics),
+                    std::move(podCtorGenericPacks),
+                    arena->addTypePack({builtinTypes->unknownType, ctorArgTy}),
+                    arena->addTypePack({classInstanceTy}),
+                    /* defn */ std::nullopt,
+                    /* hasSelf */ true
+                });
+            }
 
             TypeId metatableTy = arena->addType(
                 TableType{TableType::Props{{"__call", Property::readonly(ctorTy)}}, std::nullopt, TypeLevel{}, scope.get(), TableState::Sealed}
@@ -1207,11 +1257,15 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
             emplaceType<BoundType>(asMutable(theTy), externTy);
 
             if (classDecl->exported)
-                scope->exportedTypeBindings[classDecl->name->name.value] = TypeFun{{}, {}, classInstanceTy, classDecl->location};
+                scope->exportedTypeBindings[classDecl->name->name.value] =
+                    TypeFun{classTypeParams, classTypePackParams, classInstanceTy, classDecl->location};
             else
-                scope->privateTypeBindings[classDecl->name->name.value] = TypeFun{{}, {}, classInstanceTy, classDecl->location};
+                scope->privateTypeBindings[classDecl->name->name.value] =
+                    TypeFun{classTypeParams, classTypePackParams, classInstanceTy, classDecl->location};
 
-            classDeclRecords[classDecl->name] = std::make_unique<ClassDeclRecord>(ClassDeclRecord{classInstanceTy, std::move(memberTypes), ctorTy});
+            classDeclRecords[classDecl->name] = std::make_unique<ClassDeclRecord>(
+                ClassDeclRecord{classInstanceTy, std::move(memberTypes), ctorTy, std::move(classTypeParams), std::move(classTypePackParams)}
+            );
         }
     }
 
@@ -2579,6 +2633,32 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatClass* stat
 
     auto classDeclRecord = classDeclRecordPtr->get();
 
+    // Property and method type annotations are resolved against the class's own definition scope
+    // (rather than the enclosing scope), so that references to the class's own generics (e.g. the
+    // `T` in `class Box<T> ... end`) resolve to these type-level generics.
+    ScopePtr bodyScope = scope;
+    if (FFlag::LuauBetterUserDefinedClasses && FFlag::LuauGenericNominals)
+    {
+        if (ScopePtr* defnScopePtr = astClassDefiningScopes.find(statClass))
+            bodyScope = *defnScopePtr;
+
+        LUAU_ASSERT(statClass->generics.size == classDeclRecord->typeParams.size());
+        for (size_t i = 0; i < statClass->generics.size; ++i)
+        {
+            AstGenericType* astTy = statClass->generics.data[i];
+            const GenericTypeDefinition& param = classDeclRecord->typeParams[i];
+            bodyScope->privateTypeBindings[astTy->name.value] = TypeFun{param.ty};
+        }
+
+        LUAU_ASSERT(statClass->genericPacks.size == classDeclRecord->typePackParams.size());
+        for (size_t i = 0; i < statClass->genericPacks.size; ++i)
+        {
+            AstGenericTypePack* astPack = statClass->genericPacks.data[i];
+            const GenericTypePackDefinition& param = classDeclRecord->typePackParams[i];
+            bodyScope->privateTypePackBindings[astPack->name.value] = param.tp;
+        }
+    }
+
     for (const auto& member : statClass->members)
     {
         Luau::visit(
@@ -2596,7 +2676,7 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatClass* stat
                     if (!is<BlockedType>(blockedTy))
                         return;
 
-                    auto target = classProp.ty ? resolveType(scope, classProp.ty, false) : builtinTypes->anyType;
+                    auto target = classProp.ty ? resolveType(bodyScope, classProp.ty, false) : builtinTypes->anyType;
                     emplaceType<BoundType>(asMutable(blockedTy), target);
                 },
                 [&](const AstClassMethod& method)
@@ -2615,8 +2695,9 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatClass* stat
                     if (!is<BlockedType>(functionType))
                         return;
 
-                    FunctionSignature sig =
-                        checkFunctionSignature(scope, classDeclRecord, method.function, /* expectedType */ std::nullopt, method.function->location);
+                    FunctionSignature sig = checkFunctionSignature(
+                        bodyScope, classDeclRecord, method.function, /* expectedType */ std::nullopt, method.function->location
+                    );
 
                     Checkpoint start = checkpoint(this);
                     checkFunctionBody(sig.bodyScope, method.function);
@@ -2635,8 +2716,21 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatClass* stat
 
                             TypePackId ctorArgsPack =
                                 argTail ? arena->addTypePack(std::move(ctorArgs), *argTail) : arena->addTypePack(std::move(ctorArgs));
+
+                            std::vector<TypeId> ctorGenerics;
+                            std::vector<TypePackId> ctorGenericPacks;
+                            for (const GenericTypeDefinition& param : classDeclRecord->typeParams)
+                                ctorGenerics.push_back(param.ty);
+                            for (const GenericTypePackDefinition& param : classDeclRecord->typePackParams)
+                                ctorGenericPacks.push_back(param.tp);
+
                             TypeId newCtorTy = arena->addType(FunctionType{
-                                ctorArgsPack, arena->addTypePack({classDeclRecord->ty}), /* defn */ std::nullopt, /* hasSelf */ true
+                                std::move(ctorGenerics),
+                                std::move(ctorGenericPacks),
+                                ctorArgsPack,
+                                arena->addTypePack({classDeclRecord->ty}),
+                                /* defn */ std::nullopt,
+                                /* hasSelf */ true
                             });
 
                             emplaceType<BoundType>(asMutable(follow(classDeclRecord->ctorTy)), newCtorTy);

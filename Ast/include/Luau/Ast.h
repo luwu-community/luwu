@@ -1137,8 +1137,20 @@ public:
     AstLocal* name;
     AstArray<AstClassMember> members;
     bool exported;
+    AstArray<AstGenericType*> generics;
+    AstArray<AstGenericTypePack*> genericPacks;
+    // Set once the class's closing `end` has actually been matched, as opposed to being
+    // synthesized by error recovery. Mirrors AstStatBlock::hasEnd.
+    bool hasEnd = false;
 
-    AstStatClass(const Location& location, AstLocal* name, AstArray<AstClassMember> members, bool exported);
+    AstStatClass(
+        const Location& location,
+        AstLocal* name,
+        AstArray<AstClassMember> members,
+        bool exported,
+        const AstArray<AstGenericType*>& generics = {},
+        const AstArray<AstGenericTypePack*>& genericPacks = {}
+    );
 
     void visit(AstVisitor* visitor) override;
 };

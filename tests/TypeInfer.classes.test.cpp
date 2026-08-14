@@ -11,6 +11,7 @@ using namespace Luau;
 
 LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
 LUAU_FASTFLAG(LuauBetterUserDefinedClasses)
+LUAU_FASTFLAG(LuauGenericNominals)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass);
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuauExportValueSyntax)
@@ -244,6 +245,43 @@ local wrongShape = Thingy({ name = "hi", age = 5 })
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(5, result);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_generic_parameter_is_inferred_from_constructor")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuauGenericNominals, true},
+    };
+
+    auto result = check(R"(
+class Box<T>
+    value: T
+
+    function __init(self, value: T)
+        self.value = value
+    end
+
+    function get(self): T
+        return self.value
+    end
+end
+
+local a = Box(5)
+local b: number = a:get()
+
+local c = Box("hi")
+local d: string = c:get()
+
+local e = Box(5)
+local f: string = e:get()
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    auto tm = get<TypeMismatch>(result.errors[0]);
+    REQUIRE(tm);
+    CHECK_EQ("string", toString(tm->wantedType));
+    CHECK_EQ("number", toString(tm->givenType));
 }
 
 TEST_CASE_FIXTURE(ClassesFixture, "isinstance_refines_unknown_value")

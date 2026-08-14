@@ -76,6 +76,11 @@ struct ClassDeclRecord
     // the class defines a custom `__init`; otherwise resolved eagerly to the
     // default POD constructor's type.
     TypeId ctorTy = nullptr;
+
+    // The class's own generics (e.g. the `T` in `class Box<T> ... end`), under
+    // LuauGenericNominals. Empty for non-generic classes.
+    std::vector<GenericTypeDefinition> typeParams;
+    std::vector<GenericTypePackDefinition> typePackParams;
 };
 
 struct ConstraintGenerator
@@ -124,6 +129,7 @@ struct ConstraintGenerator
     // The private scope of an extern type declaration, used to resolve type references
     // (e.g. a generic method's own type parameters) within its body. See LuauExternTypeUseDefinitionScope.
     DenseHashMap<const AstStatDeclareExternType*, ScopePtr> astExternTypeDefiningScopes{nullptr};
+    DenseHashMap<const AstStatClass*, ScopePtr> astClassDefiningScopes{nullptr};
 
     NotNull<const DataFlowGraph> dfg;
     RefinementArena refinementArena;

@@ -25,6 +25,7 @@
 
 LUAU_FASTINT(LuauTypeInferIterationLimit)
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
+LUAU_FASTFLAG(LuauBetterUserDefinedClasses)
 LUAU_FASTFLAGVARIABLE(DebugLuauMagicVariableNames)
 LUAU_FASTFLAGVARIABLE(LuauAutocompleteConst)
 LUAU_FASTFLAGVARIABLE(LuauAutocompleteExport)
@@ -1452,6 +1453,8 @@ static AutocompleteEntryMap autocompleteStatement(
             result.emplace("end", AutocompleteEntry{AutocompleteEntryKind::Keyword});
         else if (AstExprFunction* exprFunction = (*it)->as<AstExprFunction>(); exprFunction && !exprFunction->body->hasEnd)
             result.emplace("end", AutocompleteEntry{AutocompleteEntryKind::Keyword});
+        else if (AstStatClass* statClass = (*it)->as<AstStatClass>(); statClass && !statClass->hasEnd)
+            result.emplace("end", AutocompleteEntry{AutocompleteEntryKind::Keyword});
         if (AstStatBlock* exprBlock = (*it)->as<AstStatBlock>(); exprBlock && !exprBlock->hasEnd)
             result.emplace("end", AutocompleteEntry{AutocompleteEntryKind::Keyword});
     }
@@ -2343,6 +2346,20 @@ AutocompleteResult autocomplete_(
 
     if (node->is<AstExprConstantNumber>())
         return {};
+
+    // We're at the start of a new class member (not inside any existing member's own
+    // sub-locations, which would have matched a more specific branch above): offer the
+    // qualifiers and the `function` keyword, rather than the generic statement keyword list
+    // (most of which -- if/local/for/etc -- aren't valid class members).
+    if (AstStatClass* statClass = node->as<AstStatClass>())
+    {
+        AutocompleteEntryMap ret;
+        ret["public"] = {AutocompleteEntryKind::Keyword};
+        if (FFlag::LuauBetterUserDefinedClasses)
+            ret["private"] = {AutocompleteEntryKind::Keyword};
+        ret["function"] = {AutocompleteEntryKind::Keyword};
+        return {std::move(ret), ancestry, AutocompleteContext::Keyword};
+    }
 
     if (node->asExpr())
     {
