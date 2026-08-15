@@ -9,7 +9,7 @@
 // there on why: it's what makes `cargo clean` actually clean the C++ side
 // too). Test binaries don't get OUT_DIR as a runtime env var the way build
 // scripts do, so it's read here via the `env!` compile-time macro instead.
-#[path = "../build-stub/progress.rs"]
+#[path = "../rust-build-stub/progress.rs"]
 mod progress;
 
 use progress::{stream_and_report, Progress};
