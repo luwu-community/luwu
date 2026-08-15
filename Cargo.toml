@@ -7,7 +7,7 @@ build = "build.rs"
 
 [lib]
 name = "luau_build"
-path = "build-stub/lib.rs"
+path = "rust-build-stub/lib.rs"
 
 [profile.dev]
 opt-level = 0
