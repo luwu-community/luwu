@@ -1769,6 +1769,12 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
     {
         for (const auto& [loc, isFunction] : unqualifiedMemberLocations)
         {
+            // Do not inline this ternary as the vararg of report() below (i.e. don't write
+            // report(loc, "...%s...", isFunction ? "function" : "field")). Under MSVC Debug
+            // (/RTC1), passing a conditional-expression temporary directly as a variadic %s
+            // argument gets miscompiled: report() reads back the raw bytes of the chosen string
+            // literal instead of a pointer to it, and vsnprintf segfaults dereferencing that
+            // bogus "pointer". Only reproduces on Windows Debug CI; assign to a named local first.
             const char* memberKind = isFunction ? "function" : "field";
             report(
                 loc,
