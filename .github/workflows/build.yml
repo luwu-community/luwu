@@ -72,13 +72,25 @@ jobs:
     # class_private_member_requires_qualifiers_on_all_members (Parser.test.cpp); remove once fixed.
     - name: install debugging tools for windows
       shell: pwsh
-      run: choco install windbg -y
+      continue-on-error: true
+      run: |
+        $arch = if ("${{ matrix.arch }}" -eq "Win32") { "x86" } else { "x64" }
+        $cdb = "C:\Program Files (x86)\Windows Kits\10\Debuggers\$arch\cdb.exe"
+        if (Test-Path $cdb) {
+          Write-Host "cdb.exe already present at $cdb"
+        } else {
+          choco install windbg -y --no-progress
+        }
     - name: capture crash trace for class_private_member_requires_qualifiers_on_all_members
       shell: pwsh
       continue-on-error: true
       run: |
         $arch = if ("${{ matrix.arch }}" -eq "Win32") { "x86" } else { "x64" }
         $cdb = "C:\Program Files (x86)\Windows Kits\10\Debuggers\$arch\cdb.exe"
+        if (-not (Test-Path $cdb)) {
+          Write-Host "cdb.exe not found at $cdb, skipping crash trace capture"
+          exit 0
+        }
         & $cdb -o -g -G -c "g;.exr -1;kb;q" -- Debug\Luau.UnitTest.exe --test-case=class_private_member_requires_qualifiers_on_all_members
     - name: run tests
       shell: bash # necessary for fail-fast
