@@ -1062,7 +1062,10 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_class_member_position_offers_qualifie
 
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_class_member_position_hides_private_without_flag")
 {
-    ScopedFastFlag sff{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, false},
+    };
 
     check(R"(
         class Foo

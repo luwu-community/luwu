@@ -3753,7 +3753,10 @@ TEST_CASE_FIXTURE(Fixture, "class_public_function")
 
 TEST_CASE_FIXTURE(Fixture, "class_recovery_invalid_body_token")
 {
-    ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, false},
+    };
 
     ParseResult result = tryParse(R"(
 class Foo
@@ -3779,7 +3782,10 @@ end
 
 TEST_CASE_FIXTURE(Fixture, "class_recovery_public_no_name_and_invalid_body_token")
 {
-    ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, false},
+    };
 
     ParseResult result = tryParse(R"(
 class Foo
@@ -3898,7 +3904,10 @@ TEST_CASE_FIXTURE(Fixture, "class_method_missing_end_error")
 
 TEST_CASE_FIXTURE(Fixture, "classes_can_only_have_functions_and_properties")
 {
-    ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, false},
+    };
 
     matchParseError(
         R"(
