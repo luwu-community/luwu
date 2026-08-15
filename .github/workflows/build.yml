@@ -71,27 +71,28 @@ jobs:
     # TODO: temporary diagnostic step to capture a stack trace for the SIGSEGV in
     # class_private_member_requires_qualifiers_on_all_members (Parser.test.cpp); remove once fixed.
     - name: install debugging tools for windows
+      if: matrix.arch == 'x64'
       shell: pwsh
       continue-on-error: true
       run: |
-        $arch = if ("${{ matrix.arch }}" -eq "Win32") { "x86" } else { "x64" }
-        $cdb = "C:\Program Files (x86)\Windows Kits\10\Debuggers\$arch\cdb.exe"
+        $cdb = "C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe"
         if (Test-Path $cdb) {
           Write-Host "cdb.exe already present at $cdb"
         } else {
           choco install windbg -y --no-progress
         }
     - name: capture crash trace for class_private_member_requires_qualifiers_on_all_members
+      if: matrix.arch == 'x64'
       shell: pwsh
       continue-on-error: true
       run: |
-        $arch = if ("${{ matrix.arch }}" -eq "Win32") { "x86" } else { "x64" }
-        $cdb = "C:\Program Files (x86)\Windows Kits\10\Debuggers\$arch\cdb.exe"
+        $cdb = "C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe"
         if (-not (Test-Path $cdb)) {
           Write-Host "cdb.exe not found at $cdb, skipping crash trace capture"
           exit 0
         }
-        & $cdb -o -g -G -c "g;.exr -1;kb;q" -- Debug\Luau.UnitTest.exe --test-case=class_private_member_requires_qualifiers_on_all_members
+        & $cdb -o -g -G -lines -c "g;.exr -1;kb;q" Debug\Luau.UnitTest.exe --test-case=class_private_member_requires_qualifiers_on_all_members
+        Write-Host "cdb exit code: $LASTEXITCODE"
     - name: run tests
       shell: bash # necessary for fail-fast
       run: |
