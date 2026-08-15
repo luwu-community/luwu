@@ -91,7 +91,7 @@ jobs:
           Write-Host "cdb.exe not found at $cdb, skipping crash trace capture"
           exit 0
         }
-        & $cdb -o -g -G -lines -c "g;.exr -1;kb;q" Debug\Luau.UnitTest.exe --test-case=class_private_member_requires_qualifiers_on_all_members
+        & $cdb -o -g -G -lines -c "g;.exr -1;kb;lm vm ucrtbased;!peb;q" Debug\Luau.UnitTest.exe --test-case=class_private_member_requires_qualifiers_on_all_members
         Write-Host "cdb exit code: $LASTEXITCODE"
     - name: run tests
       shell: bash # necessary for fail-fast

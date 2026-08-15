@@ -1769,10 +1769,11 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
     {
         for (const auto& [loc, isFunction] : unqualifiedMemberLocations)
         {
+            const char* memberKind = isFunction ? "function" : "field";
             report(
                 loc,
                 "Class contains a 'private' member; put the 'public' or 'private' keyword in front of this %s to prevent ambiguity",
-                isFunction ? "function" : "field"
+                memberKind
             );
         }
     }
