@@ -1,4 +1,6 @@
-# RFC: Thread State Change Hook (`userthreadstatechange`)
+# Superseded RFC: Thread State Change Hook (`userthreadstatechange`)
+
+This RFC has been superseded by per-thread thread state change hooks RFC instead. The global hook has a very high overhead for scripts that make heavy use of resumes
 
 ## Summary
 

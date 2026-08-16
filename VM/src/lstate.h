@@ -303,6 +303,7 @@ struct lua_State
     TString* namecall; // when invoked from Luau using NAMECALL, what method do we need to invoke?
 
     void* userdata;
+    lua_ThreadStateChangeCb statechangecb; // when lua_resume finishes, this cb will be called if defined
 };
 // clang-format on
 
