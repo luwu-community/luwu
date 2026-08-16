@@ -1223,6 +1223,7 @@ int lua_pcall(lua_State* L, int nargs, int nresults, int errfunc)
 
 int lua_pcallmulti(lua_State* L, int nargs, int nresults, int errfunc)
 {
+    LUAU_ASSERT(FFlag::LuauPcallMulti);
     api_check(L, nargs >= 0);
     api_check(L, nresults >= LUA_MULTRET);
     api_checknelems(L, nargs + 1);
@@ -1242,11 +1243,7 @@ int lua_pcallmulti(lua_State* L, int nargs, int nresults, int errfunc)
     c.func = L->top - (nargs + 1); // function to be called
     c.nresults = nresults;
 
-    int status;
-    if (FFlag::LuauPcallMulti)
-        status = luaD_pcall_multi(L, f_call, &c, savestack(L, c.func), func);
-    else
-        status = luaD_pcall(L, f_call, &c, savestack(L, c.func), func);
+    int status = luaD_pcall_multi(L, f_call, &c, savestack(L, c.func), func);
 
     adjustresults(L, nresults);
     return status;
