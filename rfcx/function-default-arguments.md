@@ -8,7 +8,7 @@ Add default values to arguments in function definitions, used when a parameter i
 
 ## Motivation
 
-Frequently when writing code, having a default value for an unspecified argument is desired. This can be found in a range of languages, such as C++ and Python. Luau has no first-party support for this, instead filling omitted arguments as `nil` allowing programmers to begin their functions with a series of statements such as:
+Frequently when writing code, having a default value for an unspecified argument is desired. This can be found in a range of languages, such as C++ and Python. Upstream Luau has no first-party support for this, instead filling omitted arguments as `nil` and requiring programmers to begin their functions with a series of statements such as:
 
 ```lua
 arg = arg or default
@@ -24,7 +24,7 @@ arg = if arg == nil then default else arg
 
 While effective this produces a degree of noise at the start of functions. Notably also the `or` short-circuit approach will coalesce all falsey values to the default value, rather than just `nil` values.
 
-The luau type system also does not currently narrow these types correctly. For example,
+The Luwu type system also does not currently narrow these types correctly. For example,
 ```lua
 function demo_type(arg: number?)
     if arg == nil then arg = 0 end
@@ -34,26 +34,25 @@ end
 ```
 will result in `x` having an inferred type of `number?` and the function having a return type of `number?`. Resolving this involves creating a new variable name for the parameter post-defaulting rather than shadowing the name. This RFC explicitly hides the optional nature of arguments from the function body.
 
-Further, this defaulting behavior is hidden from tooling that may want to inspect function signatures, such as tooltips in IDEs. A handful of examples from the Roblox standard library that could benefit have been included here:
+Further, this defaulting behavior is hidden from tooling that may want to inspect function signatures, such as tooltips in IDEs. A handful of API examples that could benefit are included here:
 
 ```lua
-function color3.new(x = 0, y = 0, z = 0)
+function Color.new(red = 0, green = 0, blue = 0)
 function Vector3.new(x = 0, y = 0, z = 0)
-function CFrame.fromEulerAngles(rx: number, ry: number, rz: number, order = Enum.RotationOrder.XYZ)
-function DataStoreService:GetDataStore(name: string, scope = "global", options: DataStoreOptions?)
-function DataStoreService:ListDataStoresAsync(prefix = "", pageSize = 0, cursor = "")
+function Matrix.fromEulerAngles(rx: number, ry: number, rz: number, order = RotationOrder.XYZ)
+function Store:Get(name: string, scope = "global", options: StoreOptions?)
+function Store:List(prefix = "", pageSize = 100, cursor = "")
 ```
 
-A slightly more complicated Roblox example could call API functions in the default value, for example:
+A slightly more complicated example could call API functions in the default value:
 
 ```lua
-local Players = game:GetService("Players")
-function give_players_item(item, players = Players:GetPlayers())
+function notify_users(message, users = UserService:GetUsers())
 ```
 
 ## Design
 
-This proposal at its core suggests the following modification to the luau grammar:
+This proposal at its core suggests the following modification to the Luwu grammar:
 
 ```diff
 - parlist = bindinglist [',' '...' [':' GenericTypePack | Type]]
@@ -194,7 +193,7 @@ end
 ### Language implementation
 Within the AST, it would likely be simpler to add a new `AstArray<AstExpr*> argsDefaults` to `AstExprFunction` alongside `args`, rather than modify `args` to be an `std::pair` due to the existing widespread usage of `args`.
 
-Rather than implement this as a feature of the `CALL` instruction within Luau's VM it is instead suggested by this RFC to implement this as part of the compiler. This both increases compatibility (as the VM remains unchanged) and makes it easier to allow *any* expression to be used.
+Rather than implement this as a feature of the `CALL` instruction within Luwu's VM, this RFC proposes implementing it as part of the compiler. This both increases compatibility (as the VM remains unchanged) and makes it easier to allow *any* expression to be used.
 
 Each defaulted argument can be implemented using a single inverted `JUMPXEQKNIL` instruction followed by a `compileExpr` call. This costs no additional registers beyond what would be already necessary for evaluation of the expression.
 

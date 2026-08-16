@@ -3,17 +3,17 @@ FFlag: LuauFatCClosure
 
 ## Summary
 
-Add a new fat c closure feature to Luau to reduce the overhead of C->Luau boundary in mluau
+Add a new fat C closure feature to Luwu to reduce the overhead of the C-to-Luwu boundary in mluau.
 
 ## Motivation
 
-Embedders like `mluau` currently need to use userdata (w/ a metatable etc.) and upvalues for every stateful closures. This has the downside of making C functions in luau a fair bit slower, increases GC pressure as the GC has to both handle the closure itself and the userdata allocation and less ergonomic for developers (involving needing upvalues etc.). `mluau` has a ton of infrastructure here regarding internal userdata with dtors which could be dropped while also increasing overall performance in general.
+Embedders like `mluau` currently need to use userdata (w/ a metatable etc.) and upvalues for every stateful closure. This has the downside of making C functions in Luwu a fair bit slower, increasing GC pressure because the GC has to handle both the closure and the userdata allocation, and making the API less ergonomic for developers. `mluau` has a significant amount of infrastructure for internal userdata with destructors that could be dropped while improving overall performance.
 
 This RFC as such proposes the addition of 'fat' C closures (or C Closures with Data). A stateful closure that would otherwise require a full userdata + 1 upvalue + closure can now be directly done as a single closure reducing GC pressure (1 gc object vs 2) and improving memory layout + cacheability.
 
 ## Design
 
-A new C API will be added to Luau for pushing c closures with data and getting out the data from the running closure:
+A new C API will be added to Luwu for pushing C closures with data and retrieving the data from the running closure:
 
 ```c
 typedef void (*lua_ClosureWithDataFree)(lua_State* L, void* data, size_t sz);
@@ -36,7 +36,7 @@ LUA_API void* lua_getcclosuredata(lua_State *L);
 
 Like userdata, the data stored in a closure with data (herein called 'fat' C closures) are fully opaque and will not be scanned or traced by GC (embedders will need to make sure any references are stored in either the registry or a thread stack etc). Additionally, the data will be inline to the closure hence enabling for better memory layout/caching.
 
-Also like userdata, when the Luau state is closed, all fat c closure dtors will be called. Note that the order of GC is undefined and should not be relied upon.
+As with userdata, when the Luwu state is closed, all fat C closure destructors will be called. Note that the order of GC is undefined and should not be relied upon.
 
 ## Drawbacks
 

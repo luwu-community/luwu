@@ -4,14 +4,14 @@ Status: Implemented
 
 ## Summary
 
-Add support for external buffers to the Luau VM, allowing buffers to wrap existing host-managed memory allocations. Introduce a new C API for creating these buffers and a `buffer.isfrozen` standard library function to query their mutability.
+Add support for external buffers to the Luwu VM, allowing buffers to wrap existing host-managed memory allocations. Introduce a new C API for creating these buffers and a `buffer.isfrozen` standard library function to query their mutability.
 
 ## Motivation
 
-Luau's `buffer` type provides a way to represent fixed-size, mutable byte arrays. However, memory for standard buffers is always allocated and managed by the Luau VM itself. In many embedding scenarios (such as custom Luau runtimes), it is necessary to expose pre-existing chunks of memory (e.g., database files, images, file contents) to Luau scripts without the overhead of copying the data into a new Luau-allocated buffer. 
+Luwu's `buffer` type provides a way to represent fixed-size, mutable byte arrays. However, memory for standard buffers is always allocated and managed by the Luwu VM itself. In many embedding scenarios (such as custom Luwu runtimes), it is necessary to expose pre-existing chunks of memory (e.g., database files, images, file contents) to Luwu scripts without the overhead of copying the data into a new Luwu-allocated buffer.
 
 
-By introducing external buffers, we allow embeddings to wrap existing memory allocations without copying, restrict mutation from scripts if necessary, and allow the Luau garbage collector to accurately track the memory footprint of externally allocated data.
+By introducing external buffers, we allow embeddings to wrap existing memory allocations without copying, restrict mutation from scripts if necessary, and allow the Luwu garbage collector to accurately track the memory footprint of externally allocated data.
 
 ### Immutability
 
@@ -21,7 +21,7 @@ Host applications often require strict immutability guarantees for shared memory
 
 ### C API Additions
 
-The Luau C API is expanded with the following functions and types:
+The Luwu C API is expanded with the following functions and types:
 
     #define LUA_BLUAU 0
     #define LUA_BHOST_IMMUTABLE 1
@@ -45,7 +45,7 @@ The Luau C API is expanded with the following functions and types:
 * `mode` **must** be `LUA_BHOST_MUTABLE` or `LUA_BHOST_IMMUTABLE`. 
 * Standard buffers allocated via `lua_newbuffer` implicitly use `LUA_BLUAU` as their mode. `LUA_BLUAU` cannot be passed to `lua_newexternalbuffer`.
 * `lua_getbuffermode` returns the mode of the buffer at the given index.
-* `lua_getbufferuserdata` returns the opaque `userdata` pointer associated with the buffer, or `NULL` if the buffer is a standard Luau buffer. This allows host applications to retrieve their underlying resource structures from buffer objects passed back into C/C++ from Lua, enabling operations like downcasting a buffer back to the original host resource for native manipulation.
+* `lua_getbufferuserdata` returns the opaque `userdata` pointer associated with the buffer, or `NULL` if the buffer is a standard Luwu buffer. This allows host applications to retrieve their underlying resource structures from buffer objects passed back into C/C++ from Lua, enabling operations like downcasting a buffer back to the original host resource for native manipulation.
 
 ### Lua Standard Library Additions
 
@@ -60,5 +60,5 @@ This function returns `true` if the buffer is an external buffer created with th
 
 ## Alternatives
 
-* **Copying:** Continue to require all host data to be copied into standard Luau buffers. This is safe but incurs unacceptable performance and memory overhead for large or frequently accessed datasets.
+* **Copying:** Continue to require all host data to be copied into standard Luwu buffers. This is safe but incurs unacceptable performance and memory overhead for large or frequently accessed datasets.
 * **Userdata:** Expose host data through a `userdata`. This lacks integration with the standard `buffer` library (e.g. `buffer.read*32` fast-paths) and `bit32` operations, and suffers from poor performance as well as a lack of proper GC memory footprint tracking.
