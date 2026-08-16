@@ -27,6 +27,7 @@ LUAU_FASTFLAGVARIABLE(LuauExternalString)
 LUAU_FASTFLAGVARIABLE(DebugLuauAllowNonNullTerminatedStrings)
 LUAU_FASTFLAGVARIABLE(LuauFatCClosure)
 LUAU_FASTFLAGVARIABLE(LuauManagedReferences2)
+LUAU_FASTFLAGVARIABLE(LuauPcallMulti)
 
 /*
  * This file contains most implementations of core Lua APIs from lua.h.
@@ -1215,6 +1216,37 @@ int lua_pcall(lua_State* L, int nargs, int nresults, int errfunc)
     c.nresults = nresults;
 
     int status = luaD_pcall(L, f_call, &c, savestack(L, c.func), func);
+
+    adjustresults(L, nresults);
+    return status;
+}
+
+int lua_pcallmulti(lua_State* L, int nargs, int nresults, int errfunc)
+{
+    api_check(L, nargs >= 0);
+    api_check(L, nresults >= LUA_MULTRET);
+    api_checknelems(L, nargs + 1);
+    api_check(L, L->status == 0);
+
+    if (nresults > nargs + 1)
+        ensure_stack(L, nresults - (nargs + 1));
+
+    ptrdiff_t func = 0;
+    if (errfunc != 0)
+    {
+        StkId o = index2addr(L, errfunc);
+        api_checkvalidindex(L, o);
+        func = savestack(L, o);
+    }
+    struct CallS c;
+    c.func = L->top - (nargs + 1); // function to be called
+    c.nresults = nresults;
+
+    int status;
+    if (FFlag::LuauPcallMulti)
+        status = luaD_pcall_multi(L, f_call, &c, savestack(L, c.func), func);
+    else
+        status = luaD_pcall(L, f_call, &c, savestack(L, c.func), func);
 
     adjustresults(L, nresults);
     return status;
