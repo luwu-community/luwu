@@ -167,11 +167,12 @@ void lua_resetthread(lua_State* L)
     for (int i = 0; i < L->stacksize; i++)
         setnilvalue(L->stack + i);
     
-    // drop per-thread state change hook
-    // calling it with LUA_OK to allow for cleanup
+    // call per-thread state change hook
+    // with LUA_OK to allow for cleanup
+    //
+    // it is up to embedder to call lua_setthreadstatechangecb if they want to drop the state change callback
     if (L->statechangecb)
         L->statechangecb(L, LUA_OK);
-    L->statechangecb = NULL;
 }
 
 int lua_isthreadreset(lua_State* L)
