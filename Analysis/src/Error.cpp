@@ -849,6 +849,12 @@ struct ErrorConverter
         return "<Invalid PropertyAccessViolation>";
     }
 
+    std::string operator()(const PrivatePropertyAccess& e) const
+    {
+        const std::string stringKey = isIdentifier(e.key) ? e.key : "\"" + e.key + "\"";
+        return "Property " + stringKey + " is private; accessing it will result in a runtime error";
+    }
+
     std::string operator()(const CheckedFunctionIncorrectArgs& e) const
     {
 
@@ -1138,6 +1144,11 @@ bool UnknownProperty::operator==(const UnknownProperty& rhs) const
 bool PropertyAccessViolation::operator==(const PropertyAccessViolation& rhs) const
 {
     return *table == *rhs.table && key == rhs.key && context == rhs.context;
+}
+
+bool PrivatePropertyAccess::operator==(const PrivatePropertyAccess& rhs) const
+{
+    return *table == *rhs.table && key == rhs.key;
 }
 
 bool NotATable::operator==(const NotATable& rhs) const
@@ -1682,6 +1693,8 @@ void copyError(T& e, TypeArena& destArena, CloneState& cloneState)
         e.argumentType = clone(e.argumentType);
     }
     else if constexpr (std::is_same_v<T, PropertyAccessViolation>)
+        e.table = clone(e.table);
+    else if constexpr (std::is_same_v<T, PrivatePropertyAccess>)
         e.table = clone(e.table);
     else if constexpr (std::is_same_v<T, CheckedFunctionIncorrectArgs>)
     {

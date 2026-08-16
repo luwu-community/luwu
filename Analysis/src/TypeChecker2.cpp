@@ -1951,11 +1951,32 @@ TypeId TypeChecker2::stripFromNilAndReport(TypeId ty, const Location& location)
     return ty;
 }
 
+void TypeChecker2::checkPrivatePropertyAccess(TypeId tableTy, const std::string& prop, const Location& location)
+{
+    if (!FFlag::DebugLuauUserDefinedClasses)
+        return;
+
+    const ExternType* cls = get<ExternType>(follow(tableTy));
+    while (cls)
+    {
+        auto it = cls->props.find(prop);
+        if (it != cls->props.end())
+        {
+            if (it->second.isPrivate && !(cls->definitionLocation && cls->definitionLocation->encloses(location)))
+                reportError(PrivatePropertyAccess{tableTy, prop}, location);
+            return;
+        }
+
+        cls = cls->parent ? get<ExternType>(follow(*cls->parent)) : nullptr;
+    }
+}
+
 void TypeChecker2::visitExprName(AstExpr* expr, Location location, const std::string& propName, ValueContext context, TypeId astIndexExprTy)
 {
     visit(expr, ValueContext::RValue);
     TypeId leftType = stripFromNilAndReport(lookupType(expr), location);
     checkIndexTypeFromType(leftType, propName, context, location, astIndexExprTy);
+    checkPrivatePropertyAccess(leftType, propName, location);
 }
 
 void TypeChecker2::visit(AstExprIndexName* indexName, ValueContext context)

@@ -216,6 +216,9 @@ private:
     );
     // If the provided type does not have the named property, report an error.
     void checkIndexTypeFromType(TypeId tableTy, const std::string& prop, ValueContext context, const Location& location, TypeId astIndexExprType);
+    // If the named property is `private` on some user-defined class in tableTy's hierarchy, and
+    // `location` falls outside of that class's own definition block, report an error.
+    void checkPrivatePropertyAccess(TypeId tableTy, const std::string& prop, const Location& location);
     PropertyType hasIndexTypeFromType(
         TypeId ty,
         const std::string& prop,

@@ -449,6 +449,11 @@ struct Property
     bool deprecated = false;
     std::string deprecatedSuggestion;
 
+    // True if this property was declared `private` on a user-defined class (see
+    // FFlag::DebugLuauUserDefinedClasses). Private members may only be accessed from
+    // within the class's own definition block.
+    bool isPrivate = false;
+
     // If this property was inferred from an expression, this field will be
     // populated with the source location of the corresponding table property.
     std::optional<Location> location = std::nullopt;

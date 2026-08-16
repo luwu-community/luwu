@@ -403,6 +403,16 @@ struct NonStrictFunctionDefinitionError
     bool operator==(const NonStrictFunctionDefinitionError& rhs) const;
 };
 
+// Accessing a `private` member of a user-defined class from outside of that class's own
+// definition block (see FFlag::DebugLuauUserDefinedClasses, FFlag::LuauBetterUserDefinedClasses).
+struct PrivatePropertyAccess
+{
+    TypeId table;
+    Name key;
+
+    bool operator==(const PrivatePropertyAccess& rhs) const;
+};
+
 struct PropertyAccessViolation
 {
     TypeId table;
@@ -637,6 +647,7 @@ using TypeErrorData = Variant<
     SwappedGenericTypeParameter,
     OptionalValueAccess,
     MissingUnionProperty,
+    PrivatePropertyAccess,
     TypesAreUnrelated,
     NormalizationTooComplex,
     TypePackMismatch,

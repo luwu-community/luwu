@@ -1137,6 +1137,8 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
                             // we'll ICE or misbehave.
                             p = Property::rw(propertyType);
                             p.location = classProp.nameLocation;
+                            if (FFlag::DebugLuauUserDefinedClasses && FFlag::LuauBetterUserDefinedClasses)
+                                p.isPrivate = classProp.visibility == AstClassMemberVisibility::Private;
 
                             // We make the constructor take read-only args.
                             // This is true, in that we do not write to the
@@ -1152,6 +1154,8 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
 
                             auto prop = Property::readonly(propertyType);
                             prop.location = method.nameLocation;
+                            if (FFlag::DebugLuauUserDefinedClasses && FFlag::LuauBetterUserDefinedClasses)
+                                prop.isPrivate = method.visibility == AstClassMemberVisibility::Private;
                             if (method.function->args.size < 1 || method.function->args.data[0]->name != "self")
                                 staticProps[method.functionName.value] = prop;
                             // The parser will report an error for classes that define disallowed metamethods.
@@ -2838,6 +2842,51 @@ InferencePack ConstraintGenerator::checkPack(
     return result;
 }
 
+// If `declaredParamTy` is exactly `genericTy`, the concrete argument type at that position
+// resolves the generic directly. If `declaredParamTy` is `{genericTy}` (an array of the
+// generic), the concrete argument's own array element type resolves the generic. This covers
+// the common `f<V>(container: {V}, value: V)` shape (e.g. `table.insert`) so that a later
+// argument's expected type can be refined using an earlier, already-checked sibling argument.
+static std::optional<TypeId> tryResolveGenericFromArrayArg(TypeId genericTy, TypeId declaredParamTy, TypeId concreteArgTy)
+{
+    declaredParamTy = follow(declaredParamTy);
+    concreteArgTy = follow(concreteArgTy);
+
+    if (declaredParamTy == genericTy)
+        return concreteArgTy;
+
+    if (const TableType* declaredTable = get<TableType>(declaredParamTy))
+    {
+        if (declaredTable->indexer && follow(declaredTable->indexer->indexResultType) == genericTy)
+        {
+            if (const TableType* concreteTable = get<TableType>(concreteArgTy))
+            {
+                if (concreteTable->indexer)
+                    return concreteTable->indexer->indexResultType;
+            }
+        }
+    }
+
+    return std::nullopt;
+}
+
+// True if `ty` is itself a bare generic, or a union containing one. Used to detect when the
+// coarse, syntax-directed expected type for a call argument (computed without knowledge of
+// sibling arguments) is uninformative because it still mentions an unresolved generic.
+static bool isOrContainsBareGeneric(TypeId ty)
+{
+    ty = follow(ty);
+    if (get<GenericType>(ty))
+        return true;
+    if (auto utv = get<UnionType>(ty))
+    {
+        for (TypeId opt : utv)
+            if (get<GenericType>(follow(opt)))
+                return true;
+    }
+    return false;
+}
+
 InferencePack ConstraintGenerator::checkPack(const ScopePtr& scope, AstExprCall* call, std::optional<TypeId> expectedType)
 {
     Checkpoint funcBeginCheckpoint = checkpoint(this);
@@ -2932,6 +2981,74 @@ InferencePack ConstraintGenerator::checkExprCall(
             {
                 expectedType = expectedTypesForCall[i];
             }
+
+            // Example: `table.insert<V>(t: {V}, value: V)`. `expectedType` for `value` is just
+            // the bare generic `V` here, since it was computed before any argument was checked.
+            // `t` (arg 0) has already been checked by this point though, so if it's a `{Foo}`,
+            // we can plug `Foo` in for `V` and get a real expected type for `value`.
+            if (i > 0 && expectedType && isOrContainsBareGeneric(*expectedType))
+            {
+                std::vector<TypeId> candidateOverloads;
+                TypeId followedFn = follow(fnType);
+                if (auto itv = get<IntersectionType>(followedFn))
+                {
+                    for (TypeId part : itv)
+                        candidateOverloads.push_back(part);
+                }
+                else
+                    candidateOverloads.push_back(followedFn);
+
+                std::vector<TypeId> resolvedOptions;
+                for (TypeId overload : candidateOverloads)
+                {
+                    const FunctionType* ov = get<FunctionType>(follow(overload));
+                    if (!ov || ov->generics.empty())
+                        continue;
+
+                    auto [ovArgsHead, ovArgsTail] = flatten(ov->argTypes);
+                    size_t ovStart = ov->hasSelf ? 1 : 0;
+                    size_t myPos = ovStart + i;
+                    if (myPos >= ovArgsHead.size())
+                        continue;
+
+                    TypeId declaredParamTy = follow(ovArgsHead[myPos]);
+
+                    bool isBareGenericParam = false;
+                    for (TypeId g : ov->generics)
+                    {
+                        if (follow(g) == declaredParamTy)
+                        {
+                            isBareGenericParam = true;
+                            break;
+                        }
+                    }
+                    if (!isBareGenericParam)
+                        continue;
+
+                    for (size_t j = ovStart; j < myPos; ++j)
+                    {
+                        size_t exprIndex = j - ovStart;
+                        if (exprIndex >= args.size())
+                            continue;
+
+                        if (auto resolvedTy = tryResolveGenericFromArrayArg(declaredParamTy, follow(ovArgsHead[j]), follow(args[exprIndex])))
+                        {
+                            resolvedOptions.push_back(*resolvedTy);
+                            break;
+                        }
+                    }
+                }
+
+                if (!resolvedOptions.empty())
+                {
+                    std::vector<TypeId> reduced = reduceUnion(resolvedOptions);
+                    if (reduced.size() == 1)
+                        expectedType = reduced[0];
+                    else if (!reduced.empty())
+                        expectedType = makeUnion(std::move(reduced));
+                }
+            }
+
             if (i == 0 && matchAssert(*call))
             {
                 InConditionalContext flipper{&typeContext};
