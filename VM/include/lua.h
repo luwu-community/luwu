@@ -47,6 +47,7 @@ typedef struct lua_State lua_State;
 
 typedef int (*lua_CFunction)(lua_State* L);
 typedef int (*lua_Continuation)(lua_State* L, int status);
+typedef void (*lua_ThreadStateChangeCb)(lua_State* L, int status);
 
 /*
 ** prototype for memory-allocation functions
@@ -274,6 +275,8 @@ LUA_API int lua_status(lua_State* L);
 LUA_API int lua_isyieldable(lua_State* L);
 LUA_API void* lua_getthreaddata(lua_State* L);
 LUA_API void lua_setthreaddata(lua_State* L, void* data);
+LUA_API lua_ThreadStateChangeCb lua_getthreadstatechangecb(lua_State* L); // gets called when L returns from lua_resume)
+LUA_API void lua_setthreadstatechangecb(lua_State* L, lua_ThreadStateChangeCb cb); // gets called when L returns from lua_resume)
 LUA_API int lua_costatus(lua_State* L, lua_State* co);
 
 /*
@@ -559,8 +562,6 @@ struct lua_Callbacks
     void (*debugprotectederror)(lua_State* L);           // gets called when protected call results in an error
 
     void (*onallocate)(lua_State* L, size_t osize, size_t nsize); // gets called when memory is allocated
-    
-    void (*userthreadstatechange)(lua_State* L, int status); // gets called when L returns from lua_resume
 };
 typedef struct lua_Callbacks lua_Callbacks;
 

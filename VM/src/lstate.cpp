@@ -86,6 +86,7 @@ static void preinit_state(lua_State* L, global_State* g)
     L->isactive = false;
     L->activememcat = 0;
     L->userdata = NULL;
+    L->statechangecb = NULL;
 }
 
 static void close_state(lua_State* L)
@@ -165,6 +166,12 @@ void lua_resetthread(lua_State* L)
         luaD_reallocstack(L, BASIC_STACK_SIZE, 0);
     for (int i = 0; i < L->stacksize; i++)
         setnilvalue(L->stack + i);
+    
+    // drop per-thread state change hook
+    // calling it with LUA_OK to allow for cleanup
+    if (L->statechangecb)
+        L->statechangecb(L, LUA_OK);
+    L->statechangecb = NULL;
 }
 
 int lua_isthreadreset(lua_State* L)

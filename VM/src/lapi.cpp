@@ -1289,6 +1289,16 @@ void lua_setthreaddata(lua_State* L, void* data)
     L->userdata = data;
 }
 
+lua_ThreadStateChangeCb lua_getthreadstatechangecb(lua_State* L)
+{
+    return L->statechangecb;
+}
+
+void lua_setthreadstatechangecb(lua_State* L, lua_ThreadStateChangeCb cb)
+{
+    L->statechangecb = cb;
+} 
+
 /*
 ** Garbage-collection function
 */
