@@ -591,6 +591,7 @@ static int loadsafe(
                 uint32_t numMethods = readVarInt(data, size, offset);
                 uint32_t numMembers = numMethods + numProperties;
                 TString** offsetToMember = luaM_newarray(L, numMembers, TString*, L->activememcat);
+                uint8_t* memberFlags = luaM_newarray(L, numMembers, uint8_t, L->activememcat);
                 LuaTable* membersToOffset = luaH_new(L, 0, numMembers);
 
                 for (uint32_t idx = 0; idx < numMembers; idx++)
@@ -599,13 +600,14 @@ static int loadsafe(
                     TValue* memberName = &p->k[mid];
                     LUAU_ASSERT(ttisstring(memberName));
                     offsetToMember[idx] = tsvalue(memberName);
+                    memberFlags[idx] = uint8_t(readVarInt(data, size, offset));
                     TValue* val = luaH_setstr(L, membersToOffset, tsvalue(memberName));
                     setnvalue(val, idx);
                 }
 
                 membersToOffset->readonly = true;
 
-                LuauClass* lco = luaR_newclass(L, tsvalue(classname), membersToOffset, offsetToMember, numProperties, numMethods);
+                LuauClass* lco = luaR_newclass(L, tsvalue(classname), membersToOffset, offsetToMember, memberFlags, numProperties, numMethods);
                 setclassvalue(L, &p->k[j], lco);
                 break;
             }

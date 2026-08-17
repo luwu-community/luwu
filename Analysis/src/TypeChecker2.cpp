@@ -44,6 +44,7 @@ LUAU_FASTFLAG(LuauBidirectionalInferenceSimplifyTables)
 LUAU_FASTFLAGVARIABLE(LuauBetterPackAndVariadicMismatchErrors)
 
 LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
+LUAU_FASTFLAG(LuauBetterUserDefinedClasses)
 LUAU_FASTFLAG(LuauDefaultArguments)
 
 namespace Luau
@@ -1668,7 +1669,10 @@ void TypeChecker2::visitCall(AstExprCall* call)
         {
             fty = get<FunctionType>(follow(*callMm));
             if (fty)
+            {
                 selfOffset = 1;
+                checkPrivateConstructorAccess(fnTy, call->func->location);
+            }
         }
     }
 
@@ -1971,12 +1975,61 @@ void TypeChecker2::checkPrivatePropertyAccess(TypeId tableTy, const std::string&
     }
 }
 
+void TypeChecker2::checkConstPropertyAssignment(TypeId tableTy, const std::string& prop, ValueContext context, const Location& location)
+{
+    if (!FFlag::DebugLuauUserDefinedClasses || !FFlag::LuauBetterUserDefinedClasses)
+        return;
+
+    if (context != ValueContext::LValue)
+        return;
+
+    const ExternType* cls = get<ExternType>(follow(tableTy));
+    while (cls)
+    {
+        auto it = cls->props.find(prop);
+        if (it != cls->props.end())
+        {
+            if (it->second.isConst && !(cls->initLocation && cls->initLocation->encloses(location)))
+                reportError(ConstPropertyAssignment{tableTy, prop}, location);
+            return;
+        }
+
+        cls = cls->parent ? get<ExternType>(follow(*cls->parent)) : nullptr;
+    }
+}
+
+void TypeChecker2::checkPrivateConstructorAccess(TypeId classTy, const Location& location)
+{
+    if (!FFlag::DebugLuauUserDefinedClasses || !FFlag::LuauBetterUserDefinedClasses)
+        return;
+
+    const ExternType* cls = get<ExternType>(follow(classTy));
+    if (!cls || !cls->relation)
+        return;
+
+    const Obj* obj = get_if<Obj>(&*cls->relation);
+    if (!obj)
+        return;
+
+    const ExternType* instanceCls = get<ExternType>(follow(obj->ty));
+    if (!instanceCls)
+        return;
+
+    auto it = instanceCls->props.find("__init");
+    if (it == instanceCls->props.end())
+        return;
+
+    if (it->second.isPrivate && !(instanceCls->definitionLocation && instanceCls->definitionLocation->encloses(location)))
+        reportError(PrivateConstructorAccess{classTy}, location);
+}
+
 void TypeChecker2::visitExprName(AstExpr* expr, Location location, const std::string& propName, ValueContext context, TypeId astIndexExprTy)
 {
     visit(expr, ValueContext::RValue);
     TypeId leftType = stripFromNilAndReport(lookupType(expr), location);
     checkIndexTypeFromType(leftType, propName, context, location, astIndexExprTy);
     checkPrivatePropertyAccess(leftType, propName, location);
+    checkConstPropertyAssignment(leftType, propName, context, location);
 }
 
 void TypeChecker2::visit(AstExprIndexName* indexName, ValueContext context)

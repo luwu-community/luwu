@@ -3689,6 +3689,194 @@ TEST_CASE_FIXTURE(Fixture, "class_private_member_with_all_qualifiers_present_par
     CHECK(getSsn->visibility == AstClassMemberVisibility::Private);
 }
 
+TEST_CASE_FIXTURE(Fixture, "class_const_property_after_qualifier")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    ParseResult result = tryParse(R"(
+        class Point2
+            public const x: number
+            private const y: number
+        end
+    )");
+
+    REQUIRE(result.errors.empty());
+
+    const AstStatClass* cls = result.root->body.data[0]->as<AstStatClass>();
+    REQUIRE(cls);
+    REQUIRE(cls->members.size == 2);
+
+    auto x = cls->members.data[0].get_if<AstClassProperty>();
+    REQUIRE(x);
+    CHECK(x->name == "x");
+    CHECK(x->visibility == AstClassMemberVisibility::Public);
+    CHECK(x->isConst);
+    REQUIRE(x->constLocation.has_value());
+
+    auto y = cls->members.data[1].get_if<AstClassProperty>();
+    REQUIRE(y);
+    CHECK(y->name == "y");
+    CHECK(y->visibility == AstClassMemberVisibility::Private);
+    CHECK(y->isConst);
+    REQUIRE(y->constLocation.has_value());
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_const_property_implicit_public")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    ParseResult result = tryParse(R"(
+        class Vector3
+            const x: number
+        end
+    )");
+
+    REQUIRE(result.errors.empty());
+
+    const AstStatClass* cls = result.root->body.data[0]->as<AstStatClass>();
+    REQUIRE(cls);
+    REQUIRE(cls->members.size == 1);
+
+    auto x = cls->members.data[0].get_if<AstClassProperty>();
+    REQUIRE(x);
+    CHECK(x->name == "x");
+    CHECK(!x->qualifierLocation.has_value());
+    CHECK(x->visibility == AstClassMemberVisibility::Public);
+    CHECK(x->isConst);
+    REQUIRE(x->constLocation.has_value());
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_const_property_without_qualifier_or_type")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    ParseResult result = tryParse(R"(
+        class Vector3
+            const x
+        end
+    )");
+
+    REQUIRE(result.errors.empty());
+
+    const AstStatClass* cls = result.root->body.data[0]->as<AstStatClass>();
+    REQUIRE(cls);
+    REQUIRE(cls->members.size == 1);
+
+    auto x = cls->members.data[0].get_if<AstClassProperty>();
+    REQUIRE(x);
+    CHECK(x->name == "x");
+    CHECK(x->isConst);
+    CHECK(x->ty == nullptr);
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_const_property_without_LuauBetterUserDefinedClasses_is_rejected")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, false},
+    };
+
+    ParseResult result = tryParse(R"(
+        class Vector3
+            public const x: number
+        end
+    )");
+
+    CHECK(!result.errors.empty());
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_const_before_qualifier_is_a_syntax_error")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    // `const` is only recognized after the `public`/`private` qualifier (or in front of a bare,
+    // implicitly-public name). Writing it the other way around is a dedicated syntax error rather
+    // than silently reinterpreting `public`/`private` as an ordinary property name.
+    ParseResult result = tryParse(R"(
+        class Vector3
+            const public x: number
+        end
+    )");
+
+    REQUIRE(result.errors.size() == 1);
+    CHECK(result.errors[0].getMessage() == "The 'const' modifier must come after the access specifier, e.g. 'public const'");
+
+    const AstStatClass* cls = result.root->body.data[0]->as<AstStatClass>();
+    REQUIRE(cls);
+    REQUIRE(cls->members.size == 1);
+
+    // Recovery: the misplaced `const` is skipped, so `public` is parsed normally as the
+    // qualifier for a single (non-const) `x` property.
+    auto x = cls->members.data[0].get_if<AstClassProperty>();
+    REQUIRE(x);
+    CHECK(x->name == "x");
+    CHECK(!x->isConst);
+    CHECK(x->qualifierLocation.has_value());
+    CHECK(x->visibility == AstClassMemberVisibility::Public);
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_const_before_private_qualifier_is_a_syntax_error")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    ParseResult result = tryParse(R"(
+        class Vector3
+            const private x: number
+        end
+    )");
+
+    REQUIRE(result.errors.size() == 1);
+    CHECK(result.errors[0].getMessage() == "The 'const' modifier must come after the access specifier, e.g. 'private const'");
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_const_does_not_apply_to_methods")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    ParseResult result = tryParse(R"(
+        class Vector3
+            const function foo(self) end
+        end
+    )");
+
+    CHECK(!result.errors.empty());
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_const_and_private_member_qualifier_ambiguity_check_still_applies")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    ParseResult result = tryParse(R"(
+        class Vector4
+            const x: number
+            private const y: number
+        end
+    )");
+
+    CHECK(!result.errors.empty());
+}
+
 TEST_CASE_FIXTURE(Fixture, "class_parse_errors")
 {
     tryParse(R"( class Hello )");

@@ -1138,7 +1138,10 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
                             p = Property::rw(propertyType);
                             p.location = classProp.nameLocation;
                             if (FFlag::DebugLuauUserDefinedClasses && FFlag::LuauBetterUserDefinedClasses)
+                            {
                                 p.isPrivate = classProp.visibility == AstClassMemberVisibility::Private;
+                                p.isConst = classProp.isConst;
+                            }
 
                             // We make the constructor take read-only args.
                             // This is true, in that we do not write to the
@@ -2709,6 +2712,12 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatClass* stat
 
                     if (method.functionName == "__init")
                     {
+                        if (FFlag::DebugLuauUserDefinedClasses && FFlag::LuauBetterUserDefinedClasses)
+                        {
+                            if (ExternType* classInstanceEtv = getMutable<ExternType>(follow(classDeclRecord->ty)))
+                                classInstanceEtv->initLocation = method.function->location;
+                        }
+
                         if (const FunctionType* initSig = get<FunctionType>(follow(sig.signature)); initSig && is<BlockedType>(follow(classDeclRecord->ctorTy)))
                         {
                             auto [argHead, argTail] = flatten(initSig->argTypes);
@@ -2736,6 +2745,13 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatClass* stat
                                 /* defn */ std::nullopt,
                                 /* hasSelf */ true
                             });
+
+                            // Preserve `__init`'s parameter names (e.g. `name`, `age`) on the
+                            // synthesized constructor type, so tooling that prints the
+                            // constructor's signature (e.g. hover) shows `Cat(name: string, age:
+                            // number)` rather than unnamed parameters.
+                            if (FunctionType* newCtorFtv = getMutable<FunctionType>(newCtorTy))
+                                newCtorFtv->argNames = initSig->argNames;
 
                             emplaceType<BoundType>(asMutable(follow(classDeclRecord->ctorTy)), newCtorTy);
                         }

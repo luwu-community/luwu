@@ -151,7 +151,7 @@ Specifically:
 
 - If a class only has public members, the `public` keyword may be omitted,
 - If a class has members with any other access specifier other than `public`, then the access specifier is required,
-- A modifier `const` may optionally follow the access specifier.
+- A modifier `const` may optionally follow the access specifier. `const` must follow the access specifier.
 - If the member is a field, a valid identifier with an optional type annotation should follow,
 - If the member is a function, use the familiar `function` definition syntax.
 
@@ -207,6 +207,8 @@ This is a contextual keyword that only applies within class member declarations.
 
 If a member is marked as private, it is only accessible from within its enclosing class definition block,
 and is therefore locked to the outside world.
+
+Functions within classes may only access `private` fields on their own class, and never any private field on any other class.
 
 Attempting to access a `private` member from outside its class definition block results in a runtime error.
 This includes functions outside the class that were called from a function within its class definition block.

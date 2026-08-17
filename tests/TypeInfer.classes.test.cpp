@@ -247,6 +247,161 @@ local wrongShape = Thingy({ name = "hi", age = 5 })
     LUAU_REQUIRE_ERROR_COUNT(5, result);
 }
 
+TEST_CASE_FIXTURE(ClassesFixture, "class_private_init_can_be_called_from_a_factory_function")
+{
+    ScopedFastFlag sff_LuauBetterUserDefinedClasses{FFlag::LuauBetterUserDefinedClasses, true};
+
+    auto result = check(R"(
+class Thingy
+    public const cat: string
+
+    private function __init(self, cat: string)
+        self.cat = cat
+    end
+
+    public function new(cat: string): Thingy
+        return Thingy(cat)
+    end
+end
+
+local thing = Thingy.new("meow")
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_private_init_cannot_be_called_directly_from_outside")
+{
+    ScopedFastFlag sff_LuauBetterUserDefinedClasses{FFlag::LuauBetterUserDefinedClasses, true};
+
+    auto result = check(R"(
+class Thingy
+    public const cat: string
+
+    private function __init(self, cat: string)
+        self.cat = cat
+    end
+
+    public function new(cat: string): Thingy
+        return Thingy(cat)
+    end
+end
+
+local thing = Thingy("meow")
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    auto err = get<PrivateConstructorAccess>(result.errors[0]);
+    REQUIRE(err);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_public_init_can_be_called_from_outside")
+{
+    ScopedFastFlag sff_LuauBetterUserDefinedClasses{FFlag::LuauBetterUserDefinedClasses, true};
+
+    auto result = check(R"(
+class Thingy
+    public cat: string
+
+    public function __init(self, cat: string)
+        self.cat = cat
+    end
+end
+
+local thing = Thingy("meow")
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_const_property_can_be_assigned_from_init")
+{
+    ScopedFastFlag sff_LuauBetterUserDefinedClasses{FFlag::LuauBetterUserDefinedClasses, true};
+
+    auto result = check(R"(
+class Thingy
+    public const name: string
+
+    function __init(self, name: string)
+        self.name = name
+    end
+end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_const_property_cannot_be_assigned_from_other_methods")
+{
+    ScopedFastFlag sff_LuauBetterUserDefinedClasses{FFlag::LuauBetterUserDefinedClasses, true};
+
+    auto result = check(R"(
+class Thingy
+    public const name: string
+
+    function __init(self, name: string)
+        self.name = name
+    end
+
+    function rename(self, name: string)
+        self.name = name
+    end
+end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    auto err = get<ConstPropertyAssignment>(result.errors[0]);
+    REQUIRE(err);
+    CHECK_EQ("name", err->key);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_const_property_cannot_be_assigned_from_outside_the_class")
+{
+    ScopedFastFlag sff_LuauBetterUserDefinedClasses{FFlag::LuauBetterUserDefinedClasses, true};
+
+    auto result = check(R"(
+class Thingy
+    public const name: string
+
+    function __init(self, name: string)
+        self.name = name
+    end
+end
+
+local t = Thingy("hi")
+t.name = "bye"
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    auto err = get<ConstPropertyAssignment>(result.errors[0]);
+    REQUIRE(err);
+    CHECK_EQ("name", err->key);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_non_const_property_can_be_assigned_anywhere")
+{
+    ScopedFastFlag sff_LuauBetterUserDefinedClasses{FFlag::LuauBetterUserDefinedClasses, true};
+
+    auto result = check(R"(
+class Thingy
+    public name: string
+
+    function __init(self, name: string)
+        self.name = name
+    end
+
+    function rename(self, name: string)
+        self.name = name
+    end
+end
+
+local t = Thingy("hi")
+t.name = "bye"
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
 TEST_CASE_FIXTURE(ClassesFixture, "class_generic_parameter_is_inferred_from_constructor")
 {
     ScopedFastFlag sffs[] = {

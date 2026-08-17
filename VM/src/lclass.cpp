@@ -3,6 +3,7 @@
 
 #include "lclass.h"
 
+#include "ldebug.h"
 #include "lfunc.h"
 #include "lgc.h"
 #include "lmem.h"
@@ -19,6 +20,7 @@ LuauClass* luaR_newclass(
     TString* name,
     LuaTable* memberstooffset,
     TString** offsettomember,
+    uint8_t* memberflags,
     uint32_t numberofinstancemembers,
     uint32_t numberofstaticmembers
 )
@@ -61,8 +63,73 @@ LuauClass* luaR_newclass(
     classobject->numberofinstancemembers = numberofinstancemembers;
     classobject->numberofallmembers = numberofinstancemembers + numberofstaticmembers;
     classobject->hascustominit = false;
+    classobject->initoffset = 0;
+
+    classobject->memberflags = memberflags;
+    classobject->hasprivatemembers = false;
+    classobject->hasconstmembers = false;
+    for (uint32_t i = 0; i < classobject->numberofallmembers; i++)
+    {
+        classobject->hasprivatemembers |= (memberflags[i] & LBC_CLASSMEMBER_PRIVATE) != 0;
+        classobject->hasconstmembers |= (memberflags[i] & LBC_CLASSMEMBER_CONST) != 0;
+    }
 
     return classobject;
+}
+
+bool luaR_closureownsprivateaccess(const LuauClass* classobject, const Closure* cl)
+{
+    if (cl->isC)
+        return false;
+
+    uint32_t numstaticmembers = classobject->numberofallmembers - classobject->numberofinstancemembers;
+    for (uint32_t i = 0; i < numstaticmembers; i++)
+    {
+        const TValue* v = &classobject->staticmembers[i];
+        if (ttisfunction(v) && clvalue(v) == cl)
+            return true;
+    }
+
+    return false;
+}
+
+bool luaR_closureisinit(const LuauClass* classobject, const Closure* cl)
+{
+    if (cl->isC || !classobject->hascustominit)
+        return false;
+
+    const TValue* v = &classobject->staticmembers[classobject->initoffset - classobject->numberofinstancemembers];
+    return ttisfunction(v) && clvalue(v) == cl;
+}
+
+void luaR_checkprivateaccess(lua_State* L, const TValue* key, const LuauClass* classobject, const Closure* cl, uint32_t offset)
+{
+    // C API / native callers (cl == NULL, ie no Lua closure is currently executing at all, or
+    // cl->isC) are trusted and bypass private/const enforcement entirely -- it's a Luau-script-
+    // level access control, not something that should get in the way of embedder code.
+    if (!cl || cl->isC)
+        return;
+
+    if ((classobject->memberflags[offset] & LBC_CLASSMEMBER_PRIVATE) == 0)
+        return;
+    if (luaR_closureownsprivateaccess(classobject, cl))
+        return;
+
+    luaG_privateaccesserror(L, key, classobject->name);
+}
+
+void luaR_checkconstassign(lua_State* L, const TValue* key, const LuauClass* classobject, const Closure* cl, uint32_t offset)
+{
+    // See luaR_checkprivateaccess: C API / native callers are trusted and bypass this entirely.
+    if (!cl || cl->isC)
+        return;
+
+    if ((classobject->memberflags[offset] & LBC_CLASSMEMBER_CONST) == 0)
+        return;
+    if (luaR_closureisinit(classobject, cl))
+        return;
+
+    luaG_constassignerror(L, key, classobject->name);
 }
 
 void luaR_addclassmember(lua_State* L, LuauClass* classobject, TString* name, TValue* value)
@@ -76,7 +143,10 @@ void luaR_addclassmember(lua_State* L, LuauClass* classobject, TString* name, TV
     luaC_barrier(L, classobject, value);
 
     if (name == luaS_newlstr(L, "__init", 6))
+    {
         classobject->hascustominit = true;
+        classobject->initoffset = offsetint;
+    }
 
     // Only metamethods in the parser's allowlist are supported (see ALLOWED_METAMETHODS in Parser.cpp)
     bool isMetamethod = (name == luaS_newlstr(L, "__tostring", 10));
@@ -100,6 +170,21 @@ int luaR_createobject(lua_State* L)
 {
     luaL_checktype(L, 1, LUA_TCLASS);
     LuauClass* classobject = classvalue(L->base);
+
+    // Ensure a private constructor is only callable from within its own class.
+    if (classobject->hascustominit && classobject->hasprivatemembers &&
+        (classobject->memberflags[classobject->initoffset] & LBC_CLASSMEMBER_PRIVATE))
+    {
+        CallInfo* callerci = L->ci - 1;
+        Closure* callercl = nullptr;
+        if (isLua(callerci))
+            callercl = clvalue(callerci->func);
+
+        TValue initname;
+        setsvalue(L, &initname, classobject->offsettomember[classobject->initoffset]);
+        luaR_checkprivateaccess(L, &initname, classobject, callercl, classobject->initoffset);
+    }
+
     LuauObject* classinst = luaM_newgco(L, LuauObject, sizeof(LuauObject), L->activememcat);
     luaC_init(L, classinst, LUA_TOBJECT);
     classinst->lclass = classobject;
@@ -169,6 +254,7 @@ void luaR_freeclass(lua_State* L, LuauClass* classobject, lua_Page* page)
         L, classobject->staticmembers, classobject->numberofallmembers - classobject->numberofinstancemembers, TValue, classobject->memcat
     );
     luaM_freearray(L, classobject->offsettomember, classobject->numberofallmembers, TString*, classobject->memcat);
+    luaM_freearray(L, classobject->memberflags, classobject->numberofallmembers, uint8_t, classobject->memcat);
     luaM_freearray(L, classobject->ctordebugname, strlen(classobject->ctordebugname) + 1, char, classobject->memcat);
     luaM_freegco(L, classobject, sizeof(LuauClass), classobject->memcat, page);
 }

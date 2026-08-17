@@ -219,6 +219,12 @@ private:
     // If the named property is `private` on some user-defined class in tableTy's hierarchy, and
     // `location` falls outside of that class's own definition block, report an error.
     void checkPrivatePropertyAccess(TypeId tableTy, const std::string& prop, const Location& location);
+    // If the named property is `const` on some user-defined class in tableTy's hierarchy, and
+    // `location` falls outside of that class's own `__init` constructor, report an error.
+    void checkConstPropertyAssignment(TypeId tableTy, const std::string& prop, ValueContext context, const Location& location);
+    // If classTy's `__init` is `private`, and `location` falls outside of that class's own
+    // definition block, report an error.
+    void checkPrivateConstructorAccess(TypeId classTy, const Location& location);
     PropertyType hasIndexTypeFromType(
         TypeId ty,
         const std::string& prop,

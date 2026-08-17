@@ -1609,6 +1609,16 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
         std::optional<Location> qualifierLocation;
         AstClassMemberVisibility visibility = AstClassMemberVisibility::Public;
 
+        if (FFlag::LuauBetterUserDefinedClasses && lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "const")
+        {
+            const Lexeme& next = lexer.lookahead();
+            if (next.type == Lexeme::Name && (AstName(next.name) == "public" || AstName(next.name) == "private"))
+            {
+                report(lexer.current().location, "The 'const' modifier must come after the access specifier, e.g. '%s const'", next.name);
+                nextLexeme(); // skip the misplaced 'const' and let the access specifier parse normally
+            }
+        }
+
         if (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "public")
         {
             qualifierLocation = lexer.current().location;
@@ -1628,6 +1638,15 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
         // public).
         if ((qualifierLocation || FFlag::LuauBetterUserDefinedClasses) && lexer.current().type != Lexeme::ReservedFunction)
         {
+            std::optional<Location> constLocation;
+            bool isConst = false;
+            if (FFlag::LuauBetterUserDefinedClasses && lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "const")
+            {
+                constLocation = lexer.current().location;
+                isConst = true;
+                nextLexeme();
+            }
+
             std::optional<Name> propName = parseNameOpt("class property name");
             if (!propName)
             {
@@ -1678,6 +1697,8 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
                         typeColonLocation,
                         propType,
                         hasSemicolon,
+                        isConst,
+                        constLocation,
                     }
                 );
             }

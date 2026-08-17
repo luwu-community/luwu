@@ -1402,6 +1402,11 @@ struct Printer
                                 writer.advance(prop.qualifierLocation->begin);
                                 writer.keyword(prop.visibility == AstClassMemberVisibility::Private ? "private" : "public");
                             }
+                            if (prop.constLocation)
+                            {
+                                writer.advance(prop.constLocation->begin);
+                                writer.keyword("const");
+                            }
                             writer.advance(prop.nameLocation.begin);
                             writer.identifier(prop.name.value);
                             if (writeTypes && prop.ty)

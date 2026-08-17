@@ -1114,6 +1114,9 @@ struct AstClassProperty
     std::optional<Location> typeColonLocation = std::nullopt;
     AstType* ty = nullptr;
     bool hasSemicolon = false;
+    bool isConst = false;
+    // Location of the `const` keyword; nullopt when isConst is false.
+    std::optional<Location> constLocation = std::nullopt;
 };
 
 struct AstClassMethod

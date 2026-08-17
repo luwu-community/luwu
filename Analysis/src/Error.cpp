@@ -852,7 +852,18 @@ struct ErrorConverter
     std::string operator()(const PrivatePropertyAccess& e) const
     {
         const std::string stringKey = isIdentifier(e.key) ? e.key : "\"" + e.key + "\"";
-        return "Property " + stringKey + " is private; accessing it will result in a runtime error";
+        return "Property " + stringKey + " is private; accessing it here will result in a runtime error";
+    }
+
+    std::string operator()(const ConstPropertyAssignment& e) const
+    {
+        const std::string stringKey = isIdentifier(e.key) ? e.key : "\"" + e.key + "\"";
+        return "Property " + stringKey + " is constant and may only be assigned to from within the class's '__init' constructor";
+    }
+
+    std::string operator()(const PrivateConstructorAccess& e) const
+    {
+        return "This class's constructor is private; call a factory function instead of calling the constructor directly";
     }
 
     std::string operator()(const CheckedFunctionIncorrectArgs& e) const
@@ -1149,6 +1160,16 @@ bool PropertyAccessViolation::operator==(const PropertyAccessViolation& rhs) con
 bool PrivatePropertyAccess::operator==(const PrivatePropertyAccess& rhs) const
 {
     return *table == *rhs.table && key == rhs.key;
+}
+
+bool ConstPropertyAssignment::operator==(const ConstPropertyAssignment& rhs) const
+{
+    return *table == *rhs.table && key == rhs.key;
+}
+
+bool PrivateConstructorAccess::operator==(const PrivateConstructorAccess& rhs) const
+{
+    return *classTy == *rhs.classTy;
 }
 
 bool NotATable::operator==(const NotATable& rhs) const
@@ -1696,6 +1717,10 @@ void copyError(T& e, TypeArena& destArena, CloneState& cloneState)
         e.table = clone(e.table);
     else if constexpr (std::is_same_v<T, PrivatePropertyAccess>)
         e.table = clone(e.table);
+    else if constexpr (std::is_same_v<T, ConstPropertyAssignment>)
+        e.table = clone(e.table);
+    else if constexpr (std::is_same_v<T, PrivateConstructorAccess>)
+        e.classTy = clone(e.classTy);
     else if constexpr (std::is_same_v<T, CheckedFunctionIncorrectArgs>)
     {
     }
