@@ -751,7 +751,7 @@ static void freeobj(lua_State* L, GCObject* o, lua_Page* page)
         luaR_freeobject(L, gco2object(o), page);
         break;
     case LUA_THEAPINTEGER:
-        lua_freeinteger(L, gco2integer(o), page);
+        luaZB_freeheapinteger(L, gco2integer(o), page);
         break;
     default:
         LUAU_ASSERT(0);

@@ -9,23 +9,22 @@
 
 #define kBitsPerLimb 64
 
-HeapInteger* luau_newheapinteger(lua_State* L, uint32_t capacity)
+HeapInteger* luaZB_newheapinteger(lua_State* L, uint32_t capacity)
 {
     HeapInteger* h = luaM_newgco(L, HeapInteger, sizeof(HeapInteger), L->activememcat);
     luaC_init(L, h, LUA_THEAPINTEGER);
     h->capacity = capacity;
     h->size = 0;
     h->isNegative = false;
+    h->digits = nullptr;
     if (capacity > 0)
         h->digits = luaM_newarray(L, capacity, uint64_t, L->activememcat);
-    else
-        h->digits = nullptr;
     return h;
 }
 
-void lua_freeinteger(lua_State* L, HeapInteger* h, struct lua_Page* page)
+void luaZB_freeheapinteger(lua_State* L, HeapInteger* h, struct lua_Page* page)
 {
-    if (h->capacity > 0)
+    if (h->digits && h->capacity > 0)
         luaM_freearray(L, h->digits, h->capacity, uint64_t, h->memcat);
     luaM_freegco(L, h, sizeof(HeapInteger), h->memcat, page);
 }
@@ -39,7 +38,7 @@ static void normalize(HeapInteger* h) {
     }
 }
 
-int luau_heapint_cmp(const HeapInteger* a, const HeapInteger* b) {
+int luaZB_heapinteger_cmp(const HeapInteger* a, const HeapInteger* b) {
     if (a->size != b->size) {
         return a->size < b->size ? -1 : 1;
     }
@@ -143,23 +142,65 @@ static void mul_abs(HeapInteger* res, const HeapInteger* a, const HeapInteger* b
         res->digits[i + b->size] = carry;
     }
     res->size = a->size + b->size;
+    normalize(res);
 }
+
+#define BIGINT_TMP_MAX_STACK_LIMBS 64
+
+// temp_heapint allocates a temporary BigInt struct.
+// For small numbers (<= 64 limbs, which is 4096 bits), we can just use the C-stack.
+// completely avoiding GC overhead
+//
+// For extremely large numbers, we fall back to allocating a full GC object.
+#define temp_heapint(name, L, req_cap) \
+    uint64_t name##_buf[BIGINT_TMP_MAX_STACK_LIMBS]; \
+    HeapInteger name##_stack; \
+    HeapInteger* name = nullptr; \
+    if ((req_cap) <= BIGINT_TMP_MAX_STACK_LIMBS) { \
+        name##_stack.capacity = (req_cap); \
+        name##_stack.size = 0; \
+        name##_stack.isNegative = false; \
+        name##_stack.digits = name##_buf; \
+        name = &name##_stack; \
+    } else { \
+        name = luaZB_newheapinteger((L), (req_cap)); \
+    }
+
+#define copy_heapint(dst, src) do { \
+    (dst)->size = 0; \
+    for (uint32_t _i = 0; _i < (src)->size; ++_i) { \
+        (dst)->digits[(dst)->size++] = (src)->digits[_i]; \
+    } \
+} while(0)
+
+#define temp_heapint_copy(name, L, src) \
+    temp_heapint(name, L, (src)->size); \
+    copy_heapint(name, src)
+
+#define clear_heapint_digits(h) do { \
+    for (uint32_t _i = 0; _i < (h)->capacity; ++_i) { \
+        (h)->digits[_i] = 0; \
+    } \
+} while(0)
 
 // Performs division and modulo operations simultaneously on absolute values (n / d).
 // Stores quotient in `q` (if not null) and remainder in `r` (if not null).
 // This uses a shift-and-subtract approach (long division in base-2).
+//
+// NOTE: `q` will be automatically cleared to zero and normalized internally, so callers
+// do not need to pre-clear the quotient buffer before calling this function.
 static void div_mod_abs(lua_State* L, const HeapInteger* n, const HeapInteger* d, HeapInteger* q, HeapInteger* r) {
     if (d->size == 0) {
         luaG_runerror(L, "attempt to divide by zero");
     }
     
-    int cmp = luau_heapint_cmp(n, d);
+    int cmp = luaZB_heapinteger_cmp(n, d);
     
     // Fast path: if numerator is smaller than denominator (1/2 etc.), quotient is 0 and remainder is n.
     if (cmp < 0) {
         if (q) q->size = 0;
         if (r) {
-            for (uint32_t i = 0; i < n->size; ++i) r->digits[r->size++] = n->digits[i];
+            copy_heapint(r, n);
         }
         return;
     }
@@ -171,15 +212,15 @@ static void div_mod_abs(lua_State* L, const HeapInteger* n, const HeapInteger* d
         return;
     }
     
-    // Create a working copy of the numerator that will eventually become the remainder.
-    HeapInteger* rem = luau_newheapinteger(L, n->size);
-    rem->size = n->size;
-    for(uint32_t i = 0; i < n->size; i++) rem->digits[i] = n->digits[i];
-
+    // Allocate working scratchpads
+    temp_heapint_copy(rem, L, n);
     // shift_d will hold the denominator shifted left by 'i' bits
-    HeapInteger* shift_d = luau_newheapinteger(L, n->size + 1);
+    temp_heapint(shift_d, L, n->size + 1);
     
-    if (q) q->size = n->size;
+    if (q) {
+        clear_heapint_digits(q);
+        q->size = n->size;
+    }
 
     // We align the highest bit of `d` with the highest bit of `n` and process downwards bit-by-bit.
     int bit_diff = (n->size - d->size) * kBitsPerLimb;
@@ -211,7 +252,7 @@ static void div_mod_abs(lua_State* L, const HeapInteger* n, const HeapInteger* d
         
         // If our shifted denominator is less than or equal to the current remainder,
         // we can subtract it out and set the corresponding bit in the quotient to 1.
-        if (luau_heapint_cmp(rem, shift_d) >= 0) {
+        if (luaZB_heapinteger_cmp(rem, shift_d) >= 0) {
             HeapInteger temp_rem;
             temp_rem.size = rem->size;
             temp_rem.digits = rem->digits;
@@ -227,20 +268,20 @@ static void div_mod_abs(lua_State* L, const HeapInteger* n, const HeapInteger* d
     }
     
     if (r) {
-        r->size = 0;
-        for (uint32_t i = 0; i < rem->size; ++i) {
-            r->digits[r->size++] = rem->digits[i];
-        }
+        copy_heapint(r, rem);
+    }
+    if (q) {
+        normalize(q);
     }
 }
 
-HeapInteger* luau_heapint_add(lua_State* L, const HeapInteger* a, const HeapInteger* b) {
-    HeapInteger* res = luau_newheapinteger(L, (a->size > b->size ? a->size : b->size) + 1);
+HeapInteger* luaZB_heapinteger_add(lua_State* L, const HeapInteger* a, const HeapInteger* b) {
+    HeapInteger* res = luaZB_newheapinteger(L, (a->size > b->size ? a->size : b->size) + 1);
     if (a->isNegative == b->isNegative) {
         res->isNegative = a->isNegative;
         add_abs(res, a, b);
     } else {
-        int cmp = luau_heapint_cmp(a, b);
+        int cmp = luaZB_heapinteger_cmp(a, b);
         if (cmp >= 0) {
             res->isNegative = a->isNegative;
             sub_abs(res, a, b);
@@ -253,13 +294,13 @@ HeapInteger* luau_heapint_add(lua_State* L, const HeapInteger* a, const HeapInte
     return res;
 }
 
-HeapInteger* luau_heapint_sub(lua_State* L, const HeapInteger* a, const HeapInteger* b) {
-    HeapInteger* res = luau_newheapinteger(L, (a->size > b->size ? a->size : b->size) + 1);
+HeapInteger* luaZB_heapinteger_sub(lua_State* L, const HeapInteger* a, const HeapInteger* b) {
+    HeapInteger* res = luaZB_newheapinteger(L, (a->size > b->size ? a->size : b->size) + 1);
     if (a->isNegative != b->isNegative) {
         res->isNegative = a->isNegative;
         add_abs(res, a, b);
     } else {
-        int cmp = luau_heapint_cmp(a, b);
+        int cmp = luaZB_heapinteger_cmp(a, b);
         if (cmp >= 0) {
             res->isNegative = a->isNegative;
             sub_abs(res, a, b);
@@ -272,33 +313,31 @@ HeapInteger* luau_heapint_sub(lua_State* L, const HeapInteger* a, const HeapInte
     return res;
 }
 
-HeapInteger* luau_heapint_mul(lua_State* L, const HeapInteger* a, const HeapInteger* b) {
-    HeapInteger* res = luau_newheapinteger(L, a->size + b->size);
-    for(uint32_t i=0; i < res->capacity; i++) res->digits[i] = 0;
-    res->isNegative = a->isNegative != b->isNegative;
+HeapInteger* luaZB_heapinteger_mul(lua_State* L, const HeapInteger* a, const HeapInteger* b) {
+    HeapInteger* res = luaZB_newheapinteger(L, a->size + b->size);
+    clear_heapint_digits(res);
     mul_abs(res, a, b);
-    normalize(res);
+    res->isNegative = a->isNegative != b->isNegative;
+    if (res->size == 0) res->isNegative = false;
     return res;
 }
 
-HeapInteger* luau_heapint_div(lua_State* L, const HeapInteger* a, const HeapInteger* b) {
-    HeapInteger* q = luau_newheapinteger(L, a->size);
-    for(uint32_t i=0; i < q->capacity; i++) q->digits[i] = 0;
+HeapInteger* luaZB_heapinteger_div(lua_State* L, const HeapInteger* a, const HeapInteger* b) {
+    HeapInteger* q = luaZB_newheapinteger(L, a->size);
     q->isNegative = a->isNegative != b->isNegative;
     div_mod_abs(L, a, b, q, nullptr);
-    normalize(q);
     return q;
 }
 
-HeapInteger* luau_heapint_mod(lua_State* L, const HeapInteger* a, const HeapInteger* b) {
-    HeapInteger* r = luau_newheapinteger(L, b->size);
-    for(uint32_t i=0; i < r->capacity; i++) r->digits[i] = 0;
+HeapInteger* luaZB_heapinteger_mod(lua_State* L, const HeapInteger* a, const HeapInteger* b) {
+    HeapInteger* r = luaZB_newheapinteger(L, b->size);
+    clear_heapint_digits(r);
     r->isNegative = a->isNegative;
     div_mod_abs(L, a, b, nullptr, r);
     normalize(r);
     
     if (r->size > 0 && a->isNegative != b->isNegative) {
-        HeapInteger* res = luau_newheapinteger(L, (r->size > b->size ? r->size : b->size) + 1);
+        HeapInteger* res = luaZB_newheapinteger(L, (r->size > b->size ? r->size : b->size) + 1);
         res->isNegative = b->isNegative;
         sub_abs(res, b, r);
         normalize(res);
@@ -307,22 +346,154 @@ HeapInteger* luau_heapint_mod(lua_State* L, const HeapInteger* a, const HeapInte
     return r;
 }
 
-HeapInteger* luau_heapint_rem(lua_State* L, const HeapInteger* a, const HeapInteger* b) {
-    HeapInteger* r = luau_newheapinteger(L, b->size);
-    for(uint32_t i=0; i < r->capacity; i++) r->digits[i] = 0;
+HeapInteger* luaZB_heapinteger_rem(lua_State* L, const HeapInteger* a, const HeapInteger* b) {
+    HeapInteger* r = luaZB_newheapinteger(L, b->size);
+    clear_heapint_digits(r);
     r->isNegative = a->isNegative;
     div_mod_abs(L, a, b, nullptr, r);
     normalize(r);
     return r;
 }
 
-HeapInteger* luau_heapint_neg(lua_State* L, const HeapInteger* a) {
-    HeapInteger* res = luau_newheapinteger(L, a->size);
+HeapInteger* luaZB_heapinteger_neg(lua_State* L, const HeapInteger* a) {
+    HeapInteger* res = luaZB_newheapinteger(L, a->size);
     res->size = a->size;
     res->isNegative = !a->isNegative;
     for (uint32_t i = 0; i < a->size; ++i) {
         res->digits[i] = a->digits[i];
     }
     normalize(res);
+    return res;
+}
+
+void luaZB_heapinteger_pushstring(lua_State* L, const HeapInteger* h) {
+    if (h->size == 0) {
+        lua_pushstring(L, "0");
+        return;
+    }
+
+    size_t max_digits = h->size * 20 + 2;
+    uint32_t buf_limbs = (uint32_t)((max_digits + 7) / 8);
+    temp_heapint(buf_int, L, buf_limbs);
+    char* buf = (char*)buf_int->digits;
+    int pos = 0;
+    
+    temp_heapint_copy(current, L, h);
+    
+    uint64_t chunk_val = 10000000000000000000ULL;
+    temp_heapint(chunk, L, 1);
+    chunk->size = 1;
+    chunk->digits[0] = chunk_val;
+    
+    temp_heapint(quotient, L, h->size);
+    temp_heapint(remainder, L, 1);
+    
+    while (current->size > 0) {
+        div_mod_abs(L, current, chunk, quotient, remainder);
+        uint64_t rem_val = remainder->size > 0 ? remainder->digits[0] : 0;
+        
+        copy_heapint(current, quotient);
+        bool is_last = (current->size == 0);
+        
+        if (is_last) {
+            while (rem_val > 0) {
+                buf[pos++] = '0' + (rem_val % 10);
+                rem_val /= 10;
+            }
+        } else {
+            for (int i = 0; i < 19; i++) {
+                buf[pos++] = '0' + (rem_val % 10);
+                rem_val /= 10;
+            }
+        }
+    }
+    
+    if (pos == 0) {
+        buf[pos++] = '0';
+    } else if (h->isNegative) {
+        buf[pos++] = '-';
+    }
+    
+    // Reverse string
+    for (int i = 0; i < pos / 2; i++) {
+        char tmp = buf[i];
+        buf[i] = buf[pos - 1 - i];
+        buf[pos - 1 - i] = tmp;
+    }
+    
+    lua_pushlstring(L, buf, pos);
+}
+
+HeapInteger* luaZB_heapinteger_fromstring(lua_State* L, const char* str, const char** endptr) {
+    bool isNegative = false;
+    if (*str == '-') {
+        isNegative = true;
+        str++;
+    } else if (*str == '+') {
+        str++;
+    }
+    
+    // Calculate length of digits
+    size_t len = 0;
+    while (str[len] >= '0' && str[len] <= '9') {
+        len++;
+    }
+    
+    if (endptr) *endptr = str + len;
+    
+    if (len == 0) {
+        return nullptr; // Not a valid number
+    }
+    
+    // Allocate a scratchpad for the accumulator.
+    // Max digits per limb is roughly 19.
+    uint32_t max_limbs = (uint32_t)((len * 4) / 10 + 2); // safe upper bound
+    temp_heapint(accum, L, max_limbs);
+    
+    temp_heapint(chunk, L, 1);
+    chunk->size = 1;
+    
+    temp_heapint(multiplier, L, 1);
+    multiplier->size = 1;
+    
+    temp_heapint(temp_res, L, max_limbs);
+    
+    size_t pos = 0;
+    while (pos < len) {
+        size_t chunk_len = len - pos;
+        if (chunk_len > 19) chunk_len = 19;
+        
+        uint64_t chunk_val = 0;
+        uint64_t mult_val = 1;
+        for (size_t i = 0; i < chunk_len; ++i) {
+            chunk_val = chunk_val * 10 + (str[pos + i] - '0');
+            mult_val *= 10;
+        }
+        
+        // accum = accum * mult_val + chunk_val
+        if (accum->size > 0) {
+            multiplier->digits[0] = mult_val;
+            clear_heapint_digits(temp_res);
+            mul_abs(temp_res, accum, multiplier);
+            
+            chunk->digits[0] = chunk_val;
+            chunk->size = (chunk_val > 0) ? 1 : 0;
+            
+            accum->size = 0;
+            add_abs(accum, temp_res, chunk);
+            normalize(accum);
+        } else {
+            if (chunk_val > 0) {
+                accum->digits[0] = chunk_val;
+                accum->size = 1;
+            }
+        }
+        
+        pos += chunk_len;
+    }
+    
+    HeapInteger* res = luaZB_newheapinteger(L, accum->size);
+    res->isNegative = isNegative && accum->size > 0;
+    copy_heapint(res, accum);
     return res;
 }

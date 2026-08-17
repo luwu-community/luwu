@@ -359,9 +359,9 @@ uint32_t luaZ_integer_hash(const TValue* b);
 LUAI_FUNC uint64_t luaZ_integer_get_bottom_64(const TValue* b);
 
 void luaZ_integer_fromstring(lua_State* L, const char* str, TValue* res);
-void lua_pushinteger_string(lua_State* L, const TValue* b);
+void luaZ_pushinteger_string(lua_State* L, const TValue* b);
 
-void lua_freeinteger(lua_State* L, HeapInteger* h, struct lua_Page* page);
+void luaZB_freeheapinteger(lua_State* L, HeapInteger* h, struct lua_Page* page);
 
 static const uint8_t luau_int_shifts[9] = { 0, 56, 56, 48, 48, 32, 32, 0, 0 };
 static const bool luau_int_signed[9] = { false, true, false, true, false, true, false, true, false };

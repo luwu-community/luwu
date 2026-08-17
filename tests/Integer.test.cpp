@@ -3,10 +3,11 @@
 #include "lualib.h"
 #include "lobject.h"
 #include <vector>
+#include <string>
 
 TEST_SUITE_BEGIN("IntegerTests");
 
-TEST_CASE("Integer_SMI_Arithmetic") {
+TEST_CASE("IntegerSMIArithmetic") {
     lua_State* L = luaL_newstate();
     
     TValue a, b, sum, diff, prod, div, mod;
@@ -39,7 +40,7 @@ TEST_CASE("Integer_SMI_Arithmetic") {
     lua_close(L);
 }
 
-TEST_CASE("Integer_Heap_Multiplication_And_Addition") {
+TEST_CASE("IntegerHeapArithmetic") {
     lua_State* L = luaL_newstate();
     
     // 2^60
@@ -92,15 +93,6 @@ TEST_CASE("Integer_Heap_Multiplication_And_Addition") {
     CHECK(heap_neg_diff->isNegative == true);
     REQUIRE(heap_neg_diff->size == 2);
     CHECK(heap_neg_diff->digits[1] == (1ULL << 56));
-
-    lua_close(L);
-}
-
-TEST_CASE("Integer_Heap_Division_And_Modulo") {
-    lua_State* L = luaL_newstate();
-    
-    int64_t large_val = 1LL << 60;
-    TValue a;
     setintegersmi(&a, large_val, IntegerMode_Dynamic);
     
     TValue num;
@@ -124,6 +116,104 @@ TEST_CASE("Integer_Heap_Division_And_Modulo") {
     CHECK(ttisinteger(&rem)); // Should pack down to SMI!
     CHECK(rem.value.l == 1);
     
+    // Fibonacci tests
+    const char* str_fib499 = "86168291600238450732788312165664788095941068326060883324529903470149056115823592713458328176574447204501";
+    const char* str_fib500 = "139423224561697880139724382870407283950070256587697307264108962948325571622863290691557658876222521294125";
+    const char* str_add = "225591516161936330872512695036072072046011324913758190588638866418474627738686883405015987052796968498626";
+    const char* str_sub = "53254932961459429406936070704742495854129188261636423939579059478176515507039697978099330699648074089624";
+    const char* str_mul = "12013861069877910697046065629587665527502542343151321692968056436291025827130044418293878005135030754880003465999840382647488541120853879264061494575123040289146444940739753915331989848684667302228051044856625";
+    
+    TValue t_fib499, t_fib500;
+    luaZ_integer_fromstring(L, str_fib499, &t_fib499);
+    luaZ_integer_fromstring(L, str_fib500, &t_fib500);
+    
+    TValue t_add, t_sub, t_mul, t_div, t_mod;
+    
+    luaZ_integer_add(L, &t_fib499, &t_fib500, &t_add);
+    luaZ_pushinteger_string(L, &t_add);
+    CHECK(std::string(lua_tostring(L, -1)) == std::string(str_add));
+    lua_pop(L, 1);
+    
+    luaZ_integer_sub(L, &t_fib500, &t_fib499, &t_sub);
+    luaZ_pushinteger_string(L, &t_sub);
+    CHECK(std::string(lua_tostring(L, -1)) == std::string(str_sub));
+    lua_pop(L, 1);
+    
+    luaZ_integer_mul(L, &t_fib500, &t_fib499, &t_mul);
+    luaZ_pushinteger_string(L, &t_mul);
+    CHECK(std::string(lua_tostring(L, -1)) == std::string(str_mul));
+    lua_pop(L, 1);
+    
+    luaZ_integer_div(L, &t_fib500, &t_fib499, &t_div);
+    luaZ_pushinteger_string(L, &t_div);
+    CHECK(std::string(lua_tostring(L, -1)) == "1");
+    lua_pop(L, 1);
+    
+    luaZ_integer_mod(L, &t_fib500, &t_fib499, &t_mod);
+    luaZ_pushinteger_string(L, &t_mod);
+    CHECK(std::string(lua_tostring(L, -1)) == std::string(str_sub)); // 500 % 499 = 500 - 499
+    lua_pop(L, 1);
+    
+    lua_close(L);
+}
+
+TEST_CASE("IntegerFromToString") {
+    lua_State* L = luaL_newstate();
+    
+    auto check_tostring = [&](const char* str) {
+        TValue val;
+        luaZ_integer_fromstring(L, str, &val);
+        luaZ_pushinteger_string(L, &val);
+        const char* res = lua_tostring(L, -1);
+        CHECK(std::string(res) == std::string(str));
+        lua_pop(L, 1);
+        
+        // Also test negative
+        std::string neg_str = "-" + std::string(str);
+        if (str[0] == '0' && str[1] == '\0') return; // Don't test -0
+        
+        TValue neg_val;
+        luaZ_integer_fromstring(L, neg_str.c_str(), &neg_val);
+        luaZ_pushinteger_string(L, &neg_val);
+        const char* neg_res = lua_tostring(L, -1);
+        CHECK(std::string(neg_res) == neg_str);
+        lua_pop(L, 1);
+    };
+
+    // Very small (3-4 digits, fits in SMI)
+    check_tostring("0");
+    check_tostring("9");
+    check_tostring("123");
+    check_tostring("9999");
+    
+    // Small (10-15 digits, fits in SMI or single limb)
+    check_tostring("1234567890");
+    check_tostring("987654321012345");
+    
+    // Medium (20-30 digits, spans 2 limbs)
+    check_tostring("123456789012345678901234567890");
+    check_tostring("999999999999999999999999999999");
+    
+    // Large (50-100 digits)
+    check_tostring("12345678901234567890123456789012345678901234567890");
+    check_tostring("9876543210987654321098765432109876543210987654321098765432109876543210987654321098765432109876543210");
+    check_tostring("1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    
+    // Exact edge case for chunking (10^19 - 1)
+    check_tostring("9999999999999999999");
+    // Exact edge case for chunking (10^19)
+    check_tostring("10000000000000000000");
+
+    // Huge (200-300 digits)
+    check_tostring("1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890"
+                   "1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890");
+    check_tostring("9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999"
+                   "9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999"
+                   "9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999");
+                   
+    // 500th Fibonacci number
+    check_tostring("139423224561697880139724382870407283950070256587697307264108962948325571622863290691557658876222521294125");
+
     lua_close(L);
 }
 

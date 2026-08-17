@@ -158,17 +158,28 @@ static HeapInteger* get_heap_view(const Integer& b, HeapInteger* temp, uint64_t*
     return temp;
 }
 
+struct HeapView {
+    HeapInteger temp;
+    uint64_t storage;
+    HeapInteger* ptr;
+    
+    HeapView(const Integer& b) {
+        ptr = get_heap_view(b, &temp, &storage);
+    }
+    
+    operator HeapInteger*() const { return ptr; }
+    HeapInteger* operator->() const { return ptr; }
+};
+
 bool luaZ_integer_eq(const TValue* a_val, const TValue* b_val)
 {
     if (a_val->extra[0] != b_val->extra[0]) return false;
     Integer a = unpack_integer(a_val);
     Integer b = unpack_integer(b_val);
-    HeapInteger ta, tb;
-    uint64_t da, db;
-    HeapInteger* ha = get_heap_view(a, &ta, &da);
-    HeapInteger* hb = get_heap_view(b, &tb, &db);
+    HeapView ha(a);
+    HeapView hb(b);
     if (ha->isNegative != hb->isNegative) return false;
-    return luau_heapint_cmp(ha, hb) == 0;
+    return luaZB_heapinteger_cmp(ha, hb) == 0;
 }
 
 bool luaZ_integer_eq_key(const TKey* a_key, const TValue* b_val)
@@ -188,20 +199,16 @@ bool luaZ_integer_eq_key(const TKey* a_key, const TValue* b_val)
     a.mode = (IntegerMode)a_key->extra[0];
 
     Integer b = unpack_integer(b_val);
-    HeapInteger ta, tb;
-    uint64_t da, db;
-    HeapInteger* ha = get_heap_view(a, &ta, &da);
-    HeapInteger* hb = get_heap_view(b, &tb, &db);
+    HeapView ha(a);
+    HeapView hb(b);
     if (ha->isNegative != hb->isNegative) return false;
-    return luau_heapint_cmp(ha, hb) == 0;
+    return luaZB_heapinteger_cmp(ha, hb) == 0;
 }
 
 uint32_t luaZ_integer_hash(const TValue* b_val)
 {
     Integer b = unpack_integer(b_val);
-    HeapInteger tb;
-    uint64_t db;
-    HeapInteger* hb = get_heap_view(b, &tb, &db);
+    HeapView hb(b);
     
     uint32_t mode = b_val->extra[0];
     uint32_t h = hb->size ^ (hb->isNegative ? kHashNegativeFlag : 0) ^ (mode << 16);
@@ -243,11 +250,9 @@ static Integer integer_add_impl(lua_State* L, Integer a, Integer b)
         if (!__builtin_add_overflow(a.smi, b.smi, &sum))
             return new_integer(sum);
     }
-    HeapInteger ta, tb;
-    uint64_t da, db;
-    HeapInteger* ha = get_heap_view(a, &ta, &da);
-    HeapInteger* hb = get_heap_view(b, &tb, &db);
-    HeapInteger* res = luau_heapint_add(L, ha, hb);
+    HeapView ha(a);
+    HeapView hb(b);
+    HeapInteger* res = luaZB_heapinteger_add(L, ha, hb);
     return pack_integer_impl(L, res);
 }
 
@@ -259,11 +264,9 @@ static Integer integer_sub_impl(lua_State* L, Integer a, Integer b)
         if (!__builtin_sub_overflow(a.smi, b.smi, &diff))
             return new_integer(diff);
     }
-    HeapInteger ta, tb;
-    uint64_t da, db;
-    HeapInteger* ha = get_heap_view(a, &ta, &da);
-    HeapInteger* hb = get_heap_view(b, &tb, &db);
-    HeapInteger* res = luau_heapint_sub(L, ha, hb);
+    HeapView ha(a);
+    HeapView hb(b);
+    HeapInteger* res = luaZB_heapinteger_sub(L, ha, hb);
     return pack_integer_impl(L, res);
 }
 
@@ -275,11 +278,9 @@ static Integer integer_mul_impl(lua_State* L, Integer a, Integer b)
         if (!__builtin_mul_overflow(a.smi, b.smi, &prod))
             return new_integer(prod);
     }
-    HeapInteger ta, tb;
-    uint64_t da, db;
-    HeapInteger* ha = get_heap_view(a, &ta, &da);
-    HeapInteger* hb = get_heap_view(b, &tb, &db);
-    HeapInteger* res = luau_heapint_mul(L, ha, hb);
+    HeapView ha(a);
+    HeapView hb(b);
+    HeapInteger* res = luaZB_heapinteger_mul(L, ha, hb);
     return pack_integer_impl(L, res);
 }
 
@@ -296,11 +297,9 @@ static Integer integer_div_impl(lua_State* L, Integer a, Integer b)
             luaG_runerror(L, "attempt to divide by zero");
         }
     }
-    HeapInteger ta, tb;
-    uint64_t da, db;
-    HeapInteger* ha = get_heap_view(a, &ta, &da);
-    HeapInteger* hb = get_heap_view(b, &tb, &db);
-    HeapInteger* res = luau_heapint_div(L, ha, hb);
+    HeapView ha(a);
+    HeapView hb(b);
+    HeapInteger* res = luaZB_heapinteger_div(L, ha, hb);
     return pack_integer_impl(L, res);
 }
 
@@ -317,11 +316,9 @@ static Integer integer_mod_impl(lua_State* L, Integer a, Integer b)
             luaG_runerror(L, "attempt to perform 'n%%0'");
         }
     }
-    HeapInteger ta, tb;
-    uint64_t da, db;
-    HeapInteger* ha = get_heap_view(a, &ta, &da);
-    HeapInteger* hb = get_heap_view(b, &tb, &db);
-    HeapInteger* res = luau_heapint_mod(L, ha, hb);
+    HeapView ha(a);
+    HeapView hb(b);
+    HeapInteger* res = luaZB_heapinteger_mod(L, ha, hb);
     return pack_integer_impl(L, res);
 }
 
@@ -336,11 +333,9 @@ static Integer integer_rem_impl(lua_State* L, Integer a, Integer b)
             luaG_runerror(L, "attempt to perform 'n%%0'");
         }
     }
-    HeapInteger ta, tb;
-    uint64_t da, db;
-    HeapInteger* ha = get_heap_view(a, &ta, &da);
-    HeapInteger* hb = get_heap_view(b, &tb, &db);
-    HeapInteger* res = luau_heapint_rem(L, ha, hb);
+    HeapView ha(a);
+    HeapView hb(b);
+    HeapInteger* res = luaZB_heapinteger_rem(L, ha, hb);
     return pack_integer_impl(L, res);
 }
 
@@ -365,7 +360,7 @@ static Integer integer_neg_impl(lua_State* L, Integer a)
         }
         
         if (a.smi == INT64_MIN) {
-            HeapInteger* res = luau_newheapinteger(L, 1);
+            HeapInteger* res = luaZB_newheapinteger(L, 1);
             res->isNegative = false;
             res->size = 1;
             res->digits[0] = (uint64_t)INT64_MAX + 1;
@@ -374,43 +369,55 @@ static Integer integer_neg_impl(lua_State* L, Integer a)
         return new_integer(-a.smi);
     }
     
-    HeapInteger* res = luau_heapint_neg(L, a.heap);
+    HeapInteger* res = luaZB_heapinteger_neg(L, a.heap);
     return pack_integer_impl(L, res);
 }
 
 static Integer integer_fromstring_impl(lua_State* L, const char* str)
 {
-    Integer res = new_integer(0);
+    const char* p = str;
     bool isNegative = false;
-    if (*str == '-')
-    {
+    if (*p == '-') {
         isNegative = true;
-        str++;
+        p++;
+    } else if (*p == '+') {
+        p++;
     }
-    else if (*str == '+')
-    {
-        str++;
+    
+    while (*p == '0') {
+        p++;
     }
-
-    while (*str)
-    {
-        if (*str >= '0' && *str <= '9')
-        {
-            Integer ten = new_integer(10);
-            Integer digit = new_integer(*str - '0');
-            res = integer_add_impl(L, integer_mul_impl(L, res, ten), digit);
+    
+    size_t len = 0;
+    while (p[len] >= '0' && p[len] <= '9') {
+        len++;
+    }
+    
+    if (len == 0) {
+        return new_integer(0);
+    }
+    
+    if (len > 0 && len <= 19) {
+        uint64_t val = 0;
+        for (size_t i = 0; i < len; ++i) {
+            val = val * 10 + (p[i] - '0');
         }
-        else
-        {
-            break; // Malformed or ending
+        
+        if (!isNegative && val <= (uint64_t)INT64_MAX) {
+            return new_integer((int64_t)val);
+        } else if (isNegative && val <= (uint64_t)INT64_MAX + 1) {
+            return new_integer(-(int64_t)val);
         }
-        str++;
     }
-
-    if (isNegative)
-    {
-        res = integer_neg_impl(L, res);
+    
+    HeapInteger* h = luaZB_heapinteger_fromstring(L, str, nullptr);
+    if (!h) {
+        return new_integer(0);
     }
+    
+    Integer res;
+    res.mode = IntegerMode_Dynamic;
+    res.heap = h;
     return res;
 }
 
@@ -428,52 +435,7 @@ static void integer_push_string_impl(lua_State* L, Integer b)
         return;
     }
 
-    char buf[400];
-    int pos = 0;
-    
-    Integer ten = new_integer(10);
-    Integer current = b;
-    bool isNegative = current.heap->isNegative;
-    
-    Integer absCurrent;
-    if (isNegative) {
-        absCurrent = integer_neg_impl(L, current);
-    } else {
-        absCurrent = current;
-    }
-    
-    while (true)
-    {
-        HeapInteger temp;
-        uint64_t view;
-        HeapInteger* v = get_heap_view(absCurrent, &temp, &view);
-        bool isZero = true;
-        for (uint32_t i = 0; i < v->size; i++) {
-            if (v->digits[i] != 0) { isZero = false; break; }
-        }
-        if (isZero) break;
-        
-        Integer rem = integer_rem_impl(L, absCurrent, ten);
-        Integer div = integer_div_impl(L, absCurrent, ten);
-        
-        buf[pos++] = '0' + (char)(rem.heap ? 0 : rem.smi);
-        absCurrent = div;
-    }
-    
-    if (pos == 0) {
-        buf[pos++] = '0';
-    } else if (isNegative) {
-        buf[pos++] = '-';
-    }
-    
-    // Reverse the string
-    for (int i = 0; i < pos / 2; i++) {
-        char tmp = buf[i];
-        buf[i] = buf[pos - 1 - i];
-        buf[pos - 1 - i] = tmp;
-    }
-    
-    lua_pushlstring(L, buf, pos);
+    luaZB_heapinteger_pushstring(L, b.heap);
 }
 
 void luaZ_integer_add(lua_State* L, const TValue* a_val, const TValue* b_val, TValue* res_out) {
@@ -521,7 +483,7 @@ void luaZ_integer_fromstring(lua_State* L, const char* str, TValue* res_out) {
     pack_integer(res_out, integer_fromstring_impl(L, str));
 }
 
-void lua_pushinteger_string(lua_State* L, const TValue* b_val) {
+void luaZ_pushinteger_string(lua_State* L, const TValue* b_val) {
     Integer b = unpack_integer(b_val);
     integer_push_string_impl(L, b);
 }
@@ -533,16 +495,14 @@ bool luaZ_integer_lt(lua_State* L, const TValue* a_val, const TValue* b_val)
     if (a.mode != b.mode)
         luaG_runerror(L, "attempt to compare mixed typed integers");
         
-    HeapInteger ta, tb;
-    uint64_t da, db;
-    HeapInteger* ha = get_heap_view(a, &ta, &da);
-    HeapInteger* hb = get_heap_view(b, &tb, &db);
+    HeapView ha(a);
+    HeapView hb(b);
     
     if (ha->size == 0 && hb->size == 0) return false;
     if (ha->isNegative && !hb->isNegative) return true;
     if (!ha->isNegative && hb->isNegative) return false;
     
-    int cmp = luau_heapint_cmp(ha, hb);
+    int cmp = luaZB_heapinteger_cmp(ha, hb);
     if (ha->isNegative)
         return cmp > 0;
     else
@@ -556,16 +516,14 @@ bool luaZ_integer_le(lua_State* L, const TValue* a_val, const TValue* b_val)
     if (a.mode != b.mode)
         luaG_runerror(L, "attempt to compare mixed typed integers");
         
-    HeapInteger ta, tb;
-    uint64_t da, db;
-    HeapInteger* ha = get_heap_view(a, &ta, &da);
-    HeapInteger* hb = get_heap_view(b, &tb, &db);
+    HeapView ha(a);
+    HeapView hb(b);
     
     if (ha->size == 0 && hb->size == 0) return true;
     if (ha->isNegative && !hb->isNegative) return true;
     if (!ha->isNegative && hb->isNegative) return false;
     
-    int cmp = luau_heapint_cmp(ha, hb);
+    int cmp = luaZB_heapinteger_cmp(ha, hb);
     if (ha->isNegative)
         return cmp >= 0;
     else

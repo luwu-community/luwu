@@ -508,7 +508,7 @@ void lua_pushinteger_string(lua_State* L, int idx)
 {
     const TValue* o = index2addr(L, idx);
     if (ttisinteger(o)) {
-        lua_pushinteger_string(L, o);
+        luaZ_pushinteger_string(L, o);
     } else {
         lua_pushliteral(L, "0");
     }
