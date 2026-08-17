@@ -70,11 +70,13 @@ LUAI_FUNC void luaD_callint(lua_State* L, StkId func, int nresults, bool forreen
 LUAI_FUNC void luaD_call(lua_State* L, StkId func, int nresults);
 LUAI_FUNC void luaD_callny(lua_State* L, StkId func, int nresults);
 LUAI_FUNC int luaD_pcall(lua_State* L, Pfunc func, void* u, ptrdiff_t oldtop, ptrdiff_t ef);
+LUAI_FUNC int luaD_pcall_multi(lua_State* L, Pfunc func, void* u, ptrdiff_t oldtop, ptrdiff_t ef);
 LUAI_FUNC void luaD_reallocCI(lua_State* L, int newsize);
 LUAI_FUNC void luaD_reallocstack(lua_State* L, int newsize, int fornewci);
 LUAI_FUNC void luaD_growstack(lua_State* L, int n);
 LUAI_FUNC void luaD_checkCstack(lua_State* L);
 LUAI_FUNC void luaD_seterrorobj(lua_State* L, int errcode, StkId oldtop);
+LUAI_FUNC void luaD_seterrorobj_multi(lua_State* L, int errcode, StkId oldtop, int num_err_results);
 
 LUAI_FUNC l_noret luaD_throw(lua_State* L, int errcode);
 LUAI_FUNC int luaD_rawrunprotected(lua_State* L, Pfunc f, void* ud);
