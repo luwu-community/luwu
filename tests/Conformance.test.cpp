@@ -2910,7 +2910,28 @@ TEST_CASE("ApiPcallMulti")
     // Should push a generic error string for LUA_ERRERR
     CHECK_EQ(lua_gettop(L), 3); // err handler1 + err handler 2 + error
     CHECK_EQ(std::string(lua_tostring(L, -1)), "error in error handling");
-    lua_pop(L, 3); // clean up everything
+    lua_pop(L, 1); // pop the error string
+
+    // Test error handler triggering stack realloc then erroring
+    lua_pushcfunction(L, [](lua_State* L) -> int {
+        luaL_checkstack(L, 20000, "too many stack elements");
+        for (int i = 0; i < 20000; i++)
+        {
+            lua_pushstring(L, "stack padding");
+        }
+        lua_error(L);
+        return 0;
+    }, "stack_realloc_err_handler");
+    lua_setglobal(L, "stack_realloc_err_handler");
+
+    lua_getglobal(L, "stack_realloc_err_handler");
+    int stack_realloc_handler_idx = lua_gettop(L);
+    lua_getglobal(L, "errorfunc");
+    status = lua_pcallmulti(L, 0, 0, stack_realloc_handler_idx);
+    CHECK_EQ(status, LUA_ERRERR);
+    CHECK_EQ(lua_gettop(L), 4); // err handler1 + err handler 2 + err handler 3 + error
+    CHECK_EQ(std::string(lua_tostring(L, -1)), "error in error handling");
+    lua_pop(L, 4); // clean up everything
 }
 
 TEST_CASE("ApiAtoms")
