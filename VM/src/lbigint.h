@@ -17,3 +17,4 @@ void luaZB_heapinteger_pushstring(lua_State* L, const HeapInteger* h);
 HeapInteger* luaZB_heapinteger_fromstring(lua_State* L, const char* str, const char** endptr);
 HeapInteger* luaZB_heapinteger_neg(lua_State* L, const HeapInteger* a);
 int luaZB_heapinteger_cmp(const HeapInteger* a, const HeapInteger* b);
+int luaZB_heapinteger_cmp_abs(const HeapInteger* a, const HeapInteger* b);

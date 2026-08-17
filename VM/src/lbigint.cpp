@@ -9,6 +9,12 @@
 
 #define kBitsPerLimb 64
 
+// FIXMELATER:
+//
+// Luau's GC currently operates purely via explicit safe points (`luaC_checkGC`) which are triggered at VM loop 
+// boundaries or public API calls.
+//
+// If this guarantee ever changes, then this entire file needs to change to root all objects
 HeapInteger* luaZB_newheapinteger(lua_State* L, uint32_t capacity)
 {
     HeapInteger* h = luaM_newgco(L, HeapInteger, sizeof(HeapInteger), L->activememcat);
@@ -38,7 +44,7 @@ static void normalize(HeapInteger* h) {
     }
 }
 
-int luaZB_heapinteger_cmp(const HeapInteger* a, const HeapInteger* b) {
+int luaZB_heapinteger_cmp_abs(const HeapInteger* a, const HeapInteger* b) {
     if (a->size != b->size) {
         return a->size < b->size ? -1 : 1;
     }
@@ -48,6 +54,15 @@ int luaZB_heapinteger_cmp(const HeapInteger* a, const HeapInteger* b) {
         }
     }
     return 0;
+}
+
+int luaZB_heapinteger_cmp(const HeapInteger* a, const HeapInteger* b) {
+    if (a->size == 0 && b->size == 0) return 0;
+    if (a->isNegative && !b->isNegative) return -1;
+    if (!a->isNegative && b->isNegative) return 1;
+    
+    int cmp = luaZB_heapinteger_cmp_abs(a, b);
+    return a->isNegative ? -cmp : cmp;
 }
 
 // Adds the absolute values of two BigInts (a + b) and stores the result in `res`.
@@ -194,7 +209,7 @@ static void div_mod_abs(lua_State* L, const HeapInteger* n, const HeapInteger* d
         luaG_runerror(L, "attempt to divide by zero");
     }
     
-    int cmp = luaZB_heapinteger_cmp(n, d);
+    int cmp = luaZB_heapinteger_cmp_abs(n, d);
     
     // Fast path: if numerator is smaller than denominator (1/2 etc.), quotient is 0 and remainder is n.
     if (cmp < 0) {
@@ -215,6 +230,8 @@ static void div_mod_abs(lua_State* L, const HeapInteger* n, const HeapInteger* d
     // Allocate working scratchpads
     temp_heapint_copy(rem, L, n);
     // shift_d will hold the denominator shifted left by 'i' bits
+    // n->size + 1 is exactly sufficient because the maximum word-shift 
+    // and the maximum carry-flush iteration are mutually exclusive.
     temp_heapint(shift_d, L, n->size + 1);
     
     if (q) {
@@ -231,7 +248,10 @@ static void div_mod_abs(lua_State* L, const HeapInteger* n, const HeapInteger* d
         uint64_t carry = 0;
         
         // Apply the word-level shift (pad with empty zero limbs)
-        for(uint32_t j = 0; j < word_shift; j++) shift_d->digits[shift_d->size++] = 0;
+        for(uint32_t j = 0; j < word_shift; j++) {
+            shift_d->digits[shift_d->size++] = 0;
+            LUAU_ASSERT(shift_d->size <= shift_d->capacity);
+        }
         
         // Apply the bit-level shift across the remaining limbs
         for(uint32_t j = 0; j < d->size || carry; j++) {
@@ -241,6 +261,7 @@ static void div_mod_abs(lua_State* L, const HeapInteger* n, const HeapInteger* d
                 else val += d->digits[j];
             }
             shift_d->digits[shift_d->size++] = val;
+            LUAU_ASSERT(shift_d->size <= shift_d->capacity);
             
             if (j < d->size && bit_shift > 0) {
                 carry = d->digits[j] >> (kBitsPerLimb - bit_shift);
@@ -249,20 +270,25 @@ static void div_mod_abs(lua_State* L, const HeapInteger* n, const HeapInteger* d
             }
         }
         normalize(shift_d);
+        if (shift_d->size == 0) continue;
         
         // If our shifted denominator is less than or equal to the current remainder,
         // we can subtract it out and set the corresponding bit in the quotient to 1.
-        if (luaZB_heapinteger_cmp(rem, shift_d) >= 0) {
+        if (luaZB_heapinteger_cmp_abs(rem, shift_d) >= 0) {
             HeapInteger temp_rem;
             temp_rem.size = rem->size;
             temp_rem.digits = rem->digits;
             rem->size = 0;
-            
             sub_abs(rem, &temp_rem, shift_d);
             normalize(rem);
             
             if (q) {
-                q->digits[i / kBitsPerLimb] |= (1ull << (i % kBitsPerLimb));
+                uint32_t q_idx = i / kBitsPerLimb;
+                uint32_t q_bit = i % kBitsPerLimb;
+                LUAU_ASSERT(q_idx < q->capacity);
+                if (q_idx < q->capacity) {
+                    q->digits[q_idx] |= (1ULL << q_bit);
+                }
             }
         }
     }
@@ -281,7 +307,7 @@ HeapInteger* luaZB_heapinteger_add(lua_State* L, const HeapInteger* a, const Hea
         res->isNegative = a->isNegative;
         add_abs(res, a, b);
     } else {
-        int cmp = luaZB_heapinteger_cmp(a, b);
+        int cmp = luaZB_heapinteger_cmp_abs(a, b);
         if (cmp >= 0) {
             res->isNegative = a->isNegative;
             sub_abs(res, a, b);
@@ -300,7 +326,7 @@ HeapInteger* luaZB_heapinteger_sub(lua_State* L, const HeapInteger* a, const Hea
         res->isNegative = a->isNegative;
         add_abs(res, a, b);
     } else {
-        int cmp = luaZB_heapinteger_cmp(a, b);
+        int cmp = luaZB_heapinteger_cmp_abs(a, b);
         if (cmp >= 0) {
             res->isNegative = a->isNegative;
             sub_abs(res, a, b);

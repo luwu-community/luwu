@@ -178,7 +178,6 @@ bool luaZ_integer_eq(const TValue* a_val, const TValue* b_val)
     Integer b = unpack_integer(b_val);
     HeapView ha(a);
     HeapView hb(b);
-    if (ha->isNegative != hb->isNegative) return false;
     return luaZB_heapinteger_cmp(ha, hb) == 0;
 }
 
@@ -201,7 +200,6 @@ bool luaZ_integer_eq_key(const TKey* a_key, const TValue* b_val)
     Integer b = unpack_integer(b_val);
     HeapView ha(a);
     HeapView hb(b);
-    if (ha->isNegative != hb->isNegative) return false;
     return luaZB_heapinteger_cmp(ha, hb) == 0;
 }
 
@@ -498,15 +496,7 @@ bool luaZ_integer_lt(lua_State* L, const TValue* a_val, const TValue* b_val)
     HeapView ha(a);
     HeapView hb(b);
     
-    if (ha->size == 0 && hb->size == 0) return false;
-    if (ha->isNegative && !hb->isNegative) return true;
-    if (!ha->isNegative && hb->isNegative) return false;
-    
-    int cmp = luaZB_heapinteger_cmp(ha, hb);
-    if (ha->isNegative)
-        return cmp > 0;
-    else
-        return cmp < 0;
+    return luaZB_heapinteger_cmp(ha, hb) < 0;
 }
 
 bool luaZ_integer_le(lua_State* L, const TValue* a_val, const TValue* b_val)
@@ -519,13 +509,5 @@ bool luaZ_integer_le(lua_State* L, const TValue* a_val, const TValue* b_val)
     HeapView ha(a);
     HeapView hb(b);
     
-    if (ha->size == 0 && hb->size == 0) return true;
-    if (ha->isNegative && !hb->isNegative) return true;
-    if (!ha->isNegative && hb->isNegative) return false;
-    
-    int cmp = luaZB_heapinteger_cmp(ha, hb);
-    if (ha->isNegative)
-        return cmp >= 0;
-    else
-        return cmp <= 0;
+    return luaZB_heapinteger_cmp(ha, hb) <= 0;
 }
