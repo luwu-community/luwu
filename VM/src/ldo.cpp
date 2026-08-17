@@ -906,12 +906,15 @@ int luaD_pcall_multi(lua_State* L, Pfunc func, void* u, ptrdiff_t old_top, ptrdi
             if (status != LUA_ERRRUN)
                 luaD_seterrorobj(L, status, L->top);
 
-            StkId err_func_start = L->top - 1;
+            ptrdiff_t err_func_start = savestack(L, L->top - 1);
 
             // if errfunc fails, we fail with "error in error handling" or "not enough memory"
             int err = luaD_rawrunprotected(L, callerrfunc_multi, restorestack(L, ef));
 
-            num_err_results = cast_int(L->top - err_func_start);
+            if (err == 0)
+                num_err_results = cast_int(L->top - restorestack(L, err_func_start));
+            else
+                num_err_results = 1;
 
             // in general we preserve the status, except for cases when the error handler fails
             // out of memory is treated specially because it's common for it to be cascading, in which case we preserve the code
