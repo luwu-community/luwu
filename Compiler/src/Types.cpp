@@ -743,6 +743,7 @@ struct TypeMapVisitor : AstVisitor
             case LBF_BUFFER_WRITEU32:
             case LBF_BUFFER_WRITEF32:
             case LBF_BUFFER_WRITEF64:
+            case LBF_BUFFER_WRITEINTEGER:
                 break;
             case LBF_MATH_ABS:
             case LBF_MATH_ACOS:
@@ -805,6 +806,10 @@ struct TypeMapVisitor : AstVisitor
             case LBF_VECTOR_DOT:
             case LBF_MATH_LERP:
                 recordResolvedType(node, &builtinTypes.numberType);
+                break;
+
+            case LBF_BUFFER_READINTEGER:
+                recordResolvedType(node, &builtinTypes.integerType);
                 break;
 
             case LBF_TYPE:

@@ -385,6 +385,7 @@ target_sources(Luau.VM PRIVATE
     VM/src/lapix.cpp
     VM/src/laux.cpp
     VM/src/lbaselib.cpp
+    VM/src/lbigint.cpp
     VM/src/lintegerimpl.cpp
     VM/src/lintegerlib.cpp
     VM/src/lbitlib.cpp
@@ -423,6 +424,7 @@ target_sources(Luau.VM PRIVATE
 
     VM/src/lapi.h
     VM/src/lbuffer.h
+    VM/src/lbigint.h
     VM/src/lbuiltins.h
     VM/src/lbytecode.h
     VM/src/lclass.h

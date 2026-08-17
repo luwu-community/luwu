@@ -2474,6 +2474,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
 
         // These instructions don't have an effect on register/memory state we are tracking
     case IrCmd::NOP:
+    case IrCmd::LOAD_EXTRA:
         break;
     case IrCmd::LOAD_ENV:
         if (state.loadEnvIdx != kInvalidInstIdx)

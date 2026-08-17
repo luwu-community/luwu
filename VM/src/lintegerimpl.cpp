@@ -8,6 +8,12 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include "lbigint.h"
+
+constexpr uint64_t kInt64MinAbs = 0x8000000000000000ull;
+constexpr uint32_t kHashNegativeFlag = 0x80000000;
+constexpr uint32_t kMurmurHashMixConstant = 0x5bd1e995;
+constexpr int kMurmurHashMixShift = 24;
 
 struct Integer {
     int64_t smi;
@@ -111,47 +117,45 @@ uint64_t luaZ_integer_get_bottom_64(const TValue* o) {
     }
 
 
-static HeapInteger* lua_newheapinteger(lua_State* L, uint32_t capacity)
-{
-    HeapInteger* h = luaM_newgco(L, HeapInteger, sizeof(HeapInteger), L->activememcat);
-    luaC_init(L, h, LUA_THEAPINTEGER);
-    h->capacity = capacity;
-    h->size = 0;
-    h->isNegative = false;
-    if (capacity > 0)
-        h->digits = luaM_newarray(L, capacity, uint32_t, L->activememcat);
-    else
-        h->digits = nullptr;
-    return h;
-}
-
-void lua_freeinteger(lua_State* L, HeapInteger* h, struct lua_Page* page)
-{
-    if (h->capacity > 0)
-        luaM_freearray(L, h->digits, h->capacity, uint32_t, h->memcat);
-    luaM_freegco(L, h, sizeof(HeapInteger), h->memcat, page);
-}
-
-struct IntegerView {
-    const uint32_t* digits;
-    uint32_t size;
-    bool isNegative;
-};
-
-static IntegerView get_view(const Integer& b, uint32_t temp[2]) {
-    if (b.heap) {
-        return {b.heap->digits, b.heap->size, b.heap->isNegative};
-    } else {
-        if (b.smi == 0) {
-            return {nullptr, 0, false};
-        }
-        bool isNeg = b.smi < 0;
-        uint64_t abs_val = isNeg ? (uint64_t)(-(b.smi + 1)) + 1 : (uint64_t)b.smi;
-        temp[0] = (uint32_t)(abs_val & 0xFFFFFFFF);
-        temp[1] = (uint32_t)(abs_val >> 32);
-        uint32_t sz = temp[1] != 0 ? 2 : 1;
-        return {temp, sz, isNeg};
+// get_heap_view constructs a temporary HeapInteger on the C stack (or reuses an existing one).
+// For SMIs (Small Integers), this entirely avoids GC allocations by pointing the dummy's
+// digits pointer directly to the stack-allocated `digit_storage` variable
+static HeapInteger* get_heap_view(const Integer& b, HeapInteger* temp, uint64_t* digit_storage) {
+    // If it's already a heap integer, just return it directly
+    if (b.heap) return b.heap;
+    
+    // Handle 0 explicitly (empty size)
+    if (b.smi == 0) {
+        temp->digits = digit_storage;
+        temp->size = 0;
+        temp->isNegative = false;
+        return temp;
     }
+    
+    bool isNeg = false;
+    uint64_t abs_val = (uint64_t)b.smi;
+    
+    // Convert signed SMI to absolute value
+    if (b.mode == IntegerMode_Dynamic) {
+        if (b.smi < 0) {
+            isNeg = true;
+            abs_val = (b.smi == INT64_MIN) ? (uint64_t)INT64_MAX + 1 : (uint64_t)-b.smi;
+        }
+    } else if (luau_int_signed[b.mode] && b.smi < 0) {
+        isNeg = true;
+        uint64_t bot = internal_get_bottom_64(b);
+        abs_val = (bot == kInt64MinAbs) ? kInt64MinAbs : -bot;
+    } else {
+        abs_val = internal_get_bottom_64(b);
+    }
+    
+    // As our digits/limbs are 64-bit in size, an SMI perfectly fits in a single limb.
+    // We just write to the caller's stack variable and point to it.
+    *digit_storage = abs_val;
+    temp->size = 1;
+    temp->isNegative = isNeg;
+    temp->digits = digit_storage;
+    return temp;
 }
 
 bool luaZ_integer_eq(const TValue* a_val, const TValue* b_val)
@@ -159,14 +163,12 @@ bool luaZ_integer_eq(const TValue* a_val, const TValue* b_val)
     if (a_val->extra[0] != b_val->extra[0]) return false;
     Integer a = unpack_integer(a_val);
     Integer b = unpack_integer(b_val);
-    uint32_t ta[2], tb[2];
-    IntegerView va = get_view(a, ta);
-    IntegerView vb = get_view(b, tb);
-
-    if (va.size != vb.size) return false;
-    if (va.size == 0) return true;
-    if (va.isNegative != vb.isNegative) return false;
-    return memcmp(va.digits, vb.digits, va.size * sizeof(uint32_t)) == 0;
+    HeapInteger ta, tb;
+    uint64_t da, db;
+    HeapInteger* ha = get_heap_view(a, &ta, &da);
+    HeapInteger* hb = get_heap_view(b, &tb, &db);
+    if (ha->isNegative != hb->isNegative) return false;
+    return luau_heapint_cmp(ha, hb) == 0;
 }
 
 bool luaZ_integer_eq_key(const TKey* a_key, const TValue* b_val)
@@ -186,59 +188,44 @@ bool luaZ_integer_eq_key(const TKey* a_key, const TValue* b_val)
     a.mode = (IntegerMode)a_key->extra[0];
 
     Integer b = unpack_integer(b_val);
-    uint32_t ta[2], tb[2];
-    IntegerView va = get_view(a, ta);
-    IntegerView vb = get_view(b, tb);
-
-    if (va.size != vb.size) return false;
-    if (va.size == 0) return true;
-    if (va.isNegative != vb.isNegative) return false;
-    return memcmp(va.digits, vb.digits, va.size * sizeof(uint32_t)) == 0;
+    HeapInteger ta, tb;
+    uint64_t da, db;
+    HeapInteger* ha = get_heap_view(a, &ta, &da);
+    HeapInteger* hb = get_heap_view(b, &tb, &db);
+    if (ha->isNegative != hb->isNegative) return false;
+    return luau_heapint_cmp(ha, hb) == 0;
 }
 
 uint32_t luaZ_integer_hash(const TValue* b_val)
 {
     Integer b = unpack_integer(b_val);
-    uint32_t t[2];
-    IntegerView v = get_view(b, t);
+    HeapInteger tb;
+    uint64_t db;
+    HeapInteger* hb = get_heap_view(b, &tb, &db);
     
     uint32_t mode = b_val->extra[0];
-    uint32_t h = v.size ^ (v.isNegative ? 0x80000000 : 0) ^ (mode << 16);
-    const uint32_t m = 0x5bd1e995;
-    const int r = 24;
+    uint32_t h = hb->size ^ (hb->isNegative ? kHashNegativeFlag : 0) ^ (mode << 16);
     
-    for (uint32_t i = 0; i < v.size; i++) {
-        uint32_t k = v.digits[i];
-        k *= m;
-        k ^= k >> r;
-        k *= m;
-        h *= m;
+    // Hash each 64-bit limb by folding it into 32-bits via XOR
+    for (uint32_t i = 0; i < hb->size; i++) {
+        uint64_t k64 = hb->digits[i];
+        uint32_t k = (uint32_t)(k64 ^ (k64 >> 32));
+        k *= kMurmurHashMixConstant;
+        k ^= k >> kMurmurHashMixShift;
+        k *= kMurmurHashMixConstant;
+        h *= kMurmurHashMixConstant;
         h ^= k;
     }
     
     return h;
 }
 
-
-static void normalize(HeapInteger* h) {
-    while (h->size > 0 && h->digits[h->size - 1] == 0) {
-        h->size--;
-    }
-    if (h->size == 0) {
-        h->isNegative = false;
-    }
-}
-
 static Integer pack_integer_impl(lua_State* L, HeapInteger* h) {
-    normalize(h);
     if (h->size == 0) {
         return new_integer(0);
     }
-    if (h->size <= 2) {
+    if (h->size == 1) {
         uint64_t val = h->digits[0];
-        if (h->size == 2) {
-            val |= ((uint64_t)h->digits[1] << 32);
-        }
         if (!h->isNegative && val <= (uint64_t)INT64_MAX) {
             return new_integer((int64_t)val);
         } else if (h->isNegative && val <= (uint64_t)INT64_MAX + 1) {
@@ -246,116 +233,6 @@ static Integer pack_integer_impl(lua_State* L, HeapInteger* h) {
         }
     }
     return new_integer_from_heap(h);
-}
-
-
-
-static int cmp_abs(const IntegerView& a, const IntegerView& b) {
-    if (a.size != b.size) {
-        return a.size < b.size ? -1 : 1;
-    }
-    for (int i = (int)a.size - 1; i >= 0; --i) {
-        if (a.digits[i] != b.digits[i]) {
-            return a.digits[i] < b.digits[i] ? -1 : 1;
-        }
-    }
-    return 0;
-}
-
-static void add_abs(HeapInteger* res, const IntegerView& a, const IntegerView& b) {
-    uint32_t max_size = a.size > b.size ? a.size : b.size;
-    uint64_t carry = 0;
-    for (uint32_t i = 0; i < max_size || carry; ++i) {
-        uint64_t sum = carry;
-        if (i < a.size) sum += a.digits[i];
-        if (i < b.size) sum += b.digits[i];
-        res->digits[res->size++] = (uint32_t)(sum & 0xFFFFFFFF);
-        carry = sum >> 32;
-    }
-}
-
-static void sub_abs(HeapInteger* res, const IntegerView& a, const IntegerView& b) {
-    // Requires a >= b
-    uint64_t borrow = 0;
-    for (uint32_t i = 0; i < a.size; ++i) {
-        uint64_t diff = a.digits[i] - borrow;
-        if (i < b.size) diff -= b.digits[i];
-        res->digits[res->size++] = (uint32_t)(diff & 0xFFFFFFFF);
-        borrow = (diff >> 32) ? 1 : 0;
-    }
-}
-
-static void mul_abs(HeapInteger* res, const IntegerView& a, const IntegerView& b) {
-    if (a.size == 0 || b.size == 0) return;
-    for (uint32_t i = 0; i < a.size; ++i) {
-        uint64_t carry = 0;
-        for (uint32_t j = 0; j < b.size || carry; ++j) {
-            uint64_t prod = res->digits[i + j] + carry;
-            if (j < b.size) prod += (uint64_t)a.digits[i] * b.digits[j];
-            res->digits[i + j] = (uint32_t)(prod & 0xFFFFFFFF);
-            carry = prod >> 32;
-        }
-    }
-    res->size = a.size + b.size;
-}
-
-static void div_mod_abs(lua_State* L, const IntegerView& n, const IntegerView& d, HeapInteger* q, HeapInteger* r) {
-    if (d.size == 0) {
-        luaG_runerror(L, "attempt to divide by zero");
-    }
-    int cmp = cmp_abs(n, d);
-    if (cmp < 0) {
-        if (q) q->size = 0;
-        if (r) {
-            for (uint32_t i = 0; i < n.size; ++i) r->digits[r->size++] = n.digits[i];
-        }
-        return;
-    }
-    if (cmp == 0) {
-        if (q) q->digits[q->size++] = 1;
-        if (r) r->size = 0;
-        return;
-    }
-    HeapInteger* rem = lua_newheapinteger(L, n.size);
-    rem->size = n.size;
-    for(uint32_t i = 0; i < n.size; i++) rem->digits[i] = n.digits[i];
-
-    HeapInteger* shift_d = lua_newheapinteger(L, n.size + 1);
-    
-    if (q) q->size = n.size;
-
-    int bit_diff = (n.size - d.size) * 32;
-    for (int i = bit_diff + 32; i >= 0; --i) {
-        shift_d->size = 0;
-        uint32_t word_shift = i / 32;
-        uint32_t bit_shift = i % 32;
-        uint64_t carry = 0;
-        for(uint32_t j = 0; j < word_shift; j++) shift_d->digits[shift_d->size++] = 0;
-        for(uint32_t j = 0; j < d.size || carry; j++) {
-            uint64_t val = carry;
-            if (j < d.size) {
-                val += ((uint64_t)d.digits[j] << bit_shift);
-            }
-            shift_d->digits[shift_d->size++] = (uint32_t)(val & 0xFFFFFFFF);
-            carry = val >> 32;
-        }
-        normalize(shift_d);
-
-        IntegerView r_view = {rem->digits, rem->size, false};
-        IntegerView sd_view = {shift_d->digits, shift_d->size, false};
-        
-        if (cmp_abs(r_view, sd_view) >= 0) {
-            rem->size = 0;
-            sub_abs(rem, r_view, sd_view);
-            normalize(rem);
-            if (q) {
-                q->digits[word_shift] |= (1u << bit_shift);
-            }
-        }
-    }
-    if (r) {
-        for(uint32_t i = 0; i < rem->size; i++) r->digits[r->size++] = rem->digits[i];
-    }
 }
 
 static Integer integer_add_impl(lua_State* L, Integer a, Integer b)
@@ -366,26 +243,11 @@ static Integer integer_add_impl(lua_State* L, Integer a, Integer b)
         if (!__builtin_add_overflow(a.smi, b.smi, &sum))
             return new_integer(sum);
     }
-    
-    uint32_t ta[2], tb[2];
-    IntegerView va = get_view(a, ta);
-    IntegerView vb = get_view(b, tb);
-    
-    HeapInteger* res = lua_newheapinteger(L, (va.size > vb.size ? va.size : vb.size) + 1);
-    
-    if (va.isNegative == vb.isNegative) {
-        res->isNegative = va.isNegative;
-        add_abs(res, va, vb);
-    } else {
-        int cmp = cmp_abs(va, vb);
-        if (cmp >= 0) {
-            res->isNegative = va.isNegative;
-            sub_abs(res, va, vb);
-        } else {
-            res->isNegative = vb.isNegative;
-            sub_abs(res, vb, va);
-        }
-    }
+    HeapInteger ta, tb;
+    uint64_t da, db;
+    HeapInteger* ha = get_heap_view(a, &ta, &da);
+    HeapInteger* hb = get_heap_view(b, &tb, &db);
+    HeapInteger* res = luau_heapint_add(L, ha, hb);
     return pack_integer_impl(L, res);
 }
 
@@ -397,26 +259,11 @@ static Integer integer_sub_impl(lua_State* L, Integer a, Integer b)
         if (!__builtin_sub_overflow(a.smi, b.smi, &diff))
             return new_integer(diff);
     }
-    
-    uint32_t ta[2], tb[2];
-    IntegerView va = get_view(a, ta);
-    IntegerView vb = get_view(b, tb);
-    
-    HeapInteger* res = lua_newheapinteger(L, (va.size > vb.size ? va.size : vb.size) + 1);
-    
-    if (va.isNegative != vb.isNegative) {
-        res->isNegative = va.isNegative;
-        add_abs(res, va, vb);
-    } else {
-        int cmp = cmp_abs(va, vb);
-        if (cmp >= 0) {
-            res->isNegative = va.isNegative;
-            sub_abs(res, va, vb);
-        } else {
-            res->isNegative = !va.isNegative;
-            sub_abs(res, vb, va);
-        }
-    }
+    HeapInteger ta, tb;
+    uint64_t da, db;
+    HeapInteger* ha = get_heap_view(a, &ta, &da);
+    HeapInteger* hb = get_heap_view(b, &tb, &db);
+    HeapInteger* res = luau_heapint_sub(L, ha, hb);
     return pack_integer_impl(L, res);
 }
 
@@ -428,17 +275,11 @@ static Integer integer_mul_impl(lua_State* L, Integer a, Integer b)
         if (!__builtin_mul_overflow(a.smi, b.smi, &prod))
             return new_integer(prod);
     }
-    
-    uint32_t ta[2], tb[2];
-    IntegerView va = get_view(a, ta);
-    IntegerView vb = get_view(b, tb);
-    
-    HeapInteger* res = lua_newheapinteger(L, va.size + vb.size);
-    for(uint32_t i=0; i < res->capacity; i++) res->digits[i] = 0; // initialize zero
-    
-    res->isNegative = va.isNegative != vb.isNegative;
-    mul_abs(res, va, vb);
-    
+    HeapInteger ta, tb;
+    uint64_t da, db;
+    HeapInteger* ha = get_heap_view(a, &ta, &da);
+    HeapInteger* hb = get_heap_view(b, &tb, &db);
+    HeapInteger* res = luau_heapint_mul(L, ha, hb);
     return pack_integer_impl(L, res);
 }
 
@@ -447,9 +288,7 @@ static Integer integer_div_impl(lua_State* L, Integer a, Integer b)
     HANDLE_TYPED_DIV(L, a, b, /, false)
     if (!a.heap && !b.heap) {
         if (b.smi != 0) {
-            // Check for INT64_MIN / -1
             if (a.smi == INT64_MIN && b.smi == -1) {
-                // Will overflow int64, fallback to heap
             } else {
                 return new_integer(a.smi / b.smi);
             }
@@ -457,19 +296,12 @@ static Integer integer_div_impl(lua_State* L, Integer a, Integer b)
             luaG_runerror(L, "attempt to divide by zero");
         }
     }
-    
-    uint32_t ta[2], tb[2];
-    IntegerView va = get_view(a, ta);
-    IntegerView vb = get_view(b, tb);
-    
-    HeapInteger* q = lua_newheapinteger(L, va.size);
-    for(uint32_t i=0; i < q->capacity; i++) q->digits[i] = 0; // initialize zero
-    
-    q->isNegative = va.isNegative != vb.isNegative;
-    
-    div_mod_abs(L, va, vb, q, nullptr);
-    
-    return pack_integer_impl(L, q);
+    HeapInteger ta, tb;
+    uint64_t da, db;
+    HeapInteger* ha = get_heap_view(a, &ta, &da);
+    HeapInteger* hb = get_heap_view(b, &tb, &db);
+    HeapInteger* res = luau_heapint_div(L, ha, hb);
+    return pack_integer_impl(L, res);
 }
 
 static Integer integer_mod_impl(lua_State* L, Integer a, Integer b)
@@ -477,40 +309,20 @@ static Integer integer_mod_impl(lua_State* L, Integer a, Integer b)
     HANDLE_TYPED_DIV(L, a, b, %, true)
     if (!a.heap && !b.heap) {
         if (b.smi != 0) {
-            if (a.smi == INT64_MIN && b.smi == -1) {
-                return new_integer(0);
-            }
+            if (a.smi == INT64_MIN && b.smi == -1) return new_integer(0);
             int64_t r = a.smi % b.smi;
-            if (r != 0 && (a.smi ^ b.smi) < 0) {
-                r += b.smi;
-            }
+            if (r != 0 && (a.smi ^ b.smi) < 0) r += b.smi;
             return new_integer(r);
         } else {
             luaG_runerror(L, "attempt to perform 'n%%0'");
         }
     }
-    
-    uint32_t ta[2], tb[2];
-    IntegerView va = get_view(a, ta);
-    IntegerView vb = get_view(b, tb);
-    
-    HeapInteger* r = lua_newheapinteger(L, vb.size);
-    for(uint32_t i=0; i < r->capacity; i++) r->digits[i] = 0; // initialize zero
-    
-    r->isNegative = va.isNegative;
-    div_mod_abs(L, va, vb, nullptr, r);
-    normalize(r);
-
-    if (r->size > 0 && va.isNegative != vb.isNegative) {
-        // Lua modulo: r = r + b when signs differ and r != 0
-        HeapInteger* res = lua_newheapinteger(L, (r->size > vb.size ? r->size : vb.size) + 1);
-        res->isNegative = vb.isNegative;
-        IntegerView rv = {r->digits, r->size, false};
-        sub_abs(res, vb, rv);
-        return pack_integer_impl(L, res);
-    }
-    
-    return pack_integer_impl(L, r);
+    HeapInteger ta, tb;
+    uint64_t da, db;
+    HeapInteger* ha = get_heap_view(a, &ta, &da);
+    HeapInteger* hb = get_heap_view(b, &tb, &db);
+    HeapInteger* res = luau_heapint_mod(L, ha, hb);
+    return pack_integer_impl(L, res);
 }
 
 static Integer integer_rem_impl(lua_State* L, Integer a, Integer b)
@@ -518,26 +330,18 @@ static Integer integer_rem_impl(lua_State* L, Integer a, Integer b)
     HANDLE_TYPED_DIV(L, a, b, %, true)
     if (!a.heap && !b.heap) {
         if (b.smi != 0) {
-            if (a.smi == INT64_MIN && b.smi == -1) {
-                return new_integer(0);
-            }
+            if (a.smi == INT64_MIN && b.smi == -1) return new_integer(0);
             return new_integer(a.smi % b.smi);
         } else {
             luaG_runerror(L, "attempt to perform 'n%%0'");
         }
     }
-    
-    uint32_t ta[2], tb[2];
-    IntegerView va = get_view(a, ta);
-    IntegerView vb = get_view(b, tb);
-    
-    HeapInteger* r = lua_newheapinteger(L, vb.size);
-    for(uint32_t i=0; i < r->capacity; i++) r->digits[i] = 0; // initialize zero
-    
-    r->isNegative = va.isNegative; // C-style remainder follows dividend
-    div_mod_abs(L, va, vb, nullptr, r);
-    
-    return pack_integer_impl(L, r);
+    HeapInteger ta, tb;
+    uint64_t da, db;
+    HeapInteger* ha = get_heap_view(a, &ta, &da);
+    HeapInteger* hb = get_heap_view(b, &tb, &db);
+    HeapInteger* res = luau_heapint_rem(L, ha, hb);
+    return pack_integer_impl(L, res);
 }
 
 static Integer integer_neg_impl(lua_State* L, Integer a)
@@ -561,24 +365,16 @@ static Integer integer_neg_impl(lua_State* L, Integer a)
         }
         
         if (a.smi == INT64_MIN) {
-            // Overflows SMI, fallback to HeapInteger
-            HeapInteger* res = lua_newheapinteger(L, 3);
+            HeapInteger* res = luau_newheapinteger(L, 1);
             res->isNegative = false;
-            res->size = 3;
-            res->digits[0] = 0;
-            res->digits[1] = 0;
-            res->digits[2] = 0x80000000;
+            res->size = 1;
+            res->digits[0] = (uint64_t)INT64_MAX + 1;
             return pack_integer_impl(L, res);
         }
         return new_integer(-a.smi);
     }
     
-    HeapInteger* res = lua_newheapinteger(L, a.heap->size);
-    res->size = a.heap->size;
-    res->isNegative = !a.heap->isNegative;
-    for (uint32_t i = 0; i < a.heap->size; ++i) {
-        res->digits[i] = a.heap->digits[i];
-    }
+    HeapInteger* res = luau_heapint_neg(L, a.heap);
     return pack_integer_impl(L, res);
 }
 
@@ -648,11 +444,12 @@ static void integer_push_string_impl(lua_State* L, Integer b)
     
     while (true)
     {
-        uint32_t view[2];
-        IntegerView v = get_view(absCurrent, view);
+        HeapInteger temp;
+        uint64_t view;
+        HeapInteger* v = get_heap_view(absCurrent, &temp, &view);
         bool isZero = true;
-        for (uint32_t i = 0; i < v.size; i++) {
-            if (v.digits[i] != 0) { isZero = false; break; }
+        for (uint32_t i = 0; i < v->size; i++) {
+            if (v->digits[i] != 0) { isZero = false; break; }
         }
         if (isZero) break;
         
@@ -678,6 +475,7 @@ static void integer_push_string_impl(lua_State* L, Integer b)
     
     lua_pushlstring(L, buf, pos);
 }
+
 void luaZ_integer_add(lua_State* L, const TValue* a_val, const TValue* b_val, TValue* res_out) {
     Integer a = unpack_integer(a_val);
     Integer b = unpack_integer(b_val);
@@ -735,16 +533,17 @@ bool luaZ_integer_lt(lua_State* L, const TValue* a_val, const TValue* b_val)
     if (a.mode != b.mode)
         luaG_runerror(L, "attempt to compare mixed typed integers");
         
-    uint32_t ta[2], tb[2];
-    IntegerView va = get_view(a, ta);
-    IntegerView vb = get_view(b, tb);
+    HeapInteger ta, tb;
+    uint64_t da, db;
+    HeapInteger* ha = get_heap_view(a, &ta, &da);
+    HeapInteger* hb = get_heap_view(b, &tb, &db);
     
-    if (va.size == 0 && vb.size == 0) return false;
-    if (va.isNegative && !vb.isNegative) return true;
-    if (!va.isNegative && vb.isNegative) return false;
+    if (ha->size == 0 && hb->size == 0) return false;
+    if (ha->isNegative && !hb->isNegative) return true;
+    if (!ha->isNegative && hb->isNegative) return false;
     
-    int cmp = cmp_abs(va, vb);
-    if (va.isNegative)
+    int cmp = luau_heapint_cmp(ha, hb);
+    if (ha->isNegative)
         return cmp > 0;
     else
         return cmp < 0;
@@ -757,16 +556,17 @@ bool luaZ_integer_le(lua_State* L, const TValue* a_val, const TValue* b_val)
     if (a.mode != b.mode)
         luaG_runerror(L, "attempt to compare mixed typed integers");
         
-    uint32_t ta[2], tb[2];
-    IntegerView va = get_view(a, ta);
-    IntegerView vb = get_view(b, tb);
+    HeapInteger ta, tb;
+    uint64_t da, db;
+    HeapInteger* ha = get_heap_view(a, &ta, &da);
+    HeapInteger* hb = get_heap_view(b, &tb, &db);
     
-    if (va.size == 0 && vb.size == 0) return true;
-    if (va.isNegative && !vb.isNegative) return true;
-    if (!va.isNegative && vb.isNegative) return false;
+    if (ha->size == 0 && hb->size == 0) return true;
+    if (ha->isNegative && !hb->isNegative) return true;
+    if (!ha->isNegative && hb->isNegative) return false;
     
-    int cmp = cmp_abs(va, vb);
-    if (va.isNegative)
+    int cmp = luau_heapint_cmp(ha, hb);
+    if (ha->isNegative)
         return cmp >= 0;
     else
         return cmp <= 0;

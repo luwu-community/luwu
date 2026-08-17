@@ -56,15 +56,13 @@ TEST_CASE("Integer_Heap_Multiplication_And_Addition") {
     HeapInteger* heap_prod = (HeapInteger*)prod.value.gc;
     CHECK(heap_prod->isNegative == false);
     
-    // 2^120 in base 2^32 has digits. 
-    // 120 / 32 = 3.75, so 4 digits.
-    // 2^120 = (2^24) * (2^32)^3
-    // Digits: [0, 0, 0, 2^24]
-    REQUIRE(heap_prod->size == 4);
+    // 2^120 in base 2^64 has digits. 
+    // 120 / 64 = 1.875, so 2 digits.
+    // 2^120 = (2^56) * (2^64)^1
+    // Digits: [0, 2^56]
+    REQUIRE(heap_prod->size == 2);
     CHECK(heap_prod->digits[0] == 0);
-    CHECK(heap_prod->digits[1] == 0);
-    CHECK(heap_prod->digits[2] == 0);
-    CHECK(heap_prod->digits[3] == (1U << 24));
+    CHECK(heap_prod->digits[1] == (1ULL << 56));
     
     // Now test addition on heap integers
     // (2^120) + (2^120) = 2^121
@@ -72,11 +70,9 @@ TEST_CASE("Integer_Heap_Multiplication_And_Addition") {
     luaZ_integer_add(L, &prod, &prod, &sum);
     REQUIRE(ttype(&sum) == LUA_THEAPINTEGER);
     HeapInteger* heap_sum = (HeapInteger*)sum.value.gc;
-    REQUIRE(heap_sum->size == 4);
+    REQUIRE(heap_sum->size == 2);
     CHECK(heap_sum->digits[0] == 0);
-    CHECK(heap_sum->digits[1] == 0);
-    CHECK(heap_sum->digits[2] == 0);
-    CHECK(heap_sum->digits[3] == (1U << 25)); // 2^25 * 2^96 = 2^121
+    CHECK(heap_sum->digits[1] == (1ULL << 57)); // 2^121
     
     // Test subtraction
     // (2^121) - (2^120) = 2^120
@@ -84,8 +80,8 @@ TEST_CASE("Integer_Heap_Multiplication_And_Addition") {
     luaZ_integer_sub(L, &sum, &prod, &diff);
     REQUIRE(ttype(&diff) == LUA_THEAPINTEGER);
     HeapInteger* heap_diff = (HeapInteger*)diff.value.gc;
-    REQUIRE(heap_diff->size == 4);
-    CHECK(heap_diff->digits[3] == (1U << 24));
+    REQUIRE(heap_diff->size == 2);
+    CHECK(heap_diff->digits[1] == (1ULL << 56));
     
     // Subtraction that yields negative
     // (2^120) - (2^121) = -2^120
@@ -94,8 +90,8 @@ TEST_CASE("Integer_Heap_Multiplication_And_Addition") {
     REQUIRE(ttype(&neg_diff) == LUA_THEAPINTEGER);
     HeapInteger* heap_neg_diff = (HeapInteger*)neg_diff.value.gc;
     CHECK(heap_neg_diff->isNegative == true);
-    REQUIRE(heap_neg_diff->size == 4);
-    CHECK(heap_neg_diff->digits[3] == (1U << 24));
+    REQUIRE(heap_neg_diff->size == 2);
+    CHECK(heap_neg_diff->digits[1] == (1ULL << 56));
 
     lua_close(L);
 }

@@ -5,6 +5,33 @@
 #include <math.h>
 #include <cstdint>
 
+#ifdef _MSC_VER
+#include <intrin.h>
+#endif
+
+// x*y => 128-bit product (lo+hi)
+inline uint64_t mul128(uint64_t x, uint64_t y, uint64_t* hi)
+{
+#if defined(_MSC_VER) && defined(_M_X64)
+    return _umul128(x, y, hi);
+#elif defined(__SIZEOF_INT128__)
+    unsigned __int128 r = x;
+    r *= y;
+    *hi = uint64_t(r >> 64);
+    return uint64_t(r);
+#else
+    uint32_t x0 = uint32_t(x), x1 = uint32_t(x >> 32);
+    uint32_t y0 = uint32_t(y), y1 = uint32_t(y >> 32);
+    uint64_t p11 = uint64_t(x1) * y1, p01 = uint64_t(x0) * y1;
+    uint64_t p10 = uint64_t(x1) * y0, p00 = uint64_t(x0) * y0;
+    uint64_t mid = p10 + (p00 >> 32) + uint32_t(p01);
+    uint64_t r0 = (mid << 32) | uint32_t(p00);
+    uint64_t r1 = p11 + (mid >> 32) + (p01 >> 32);
+    *hi = r1;
+    return r0;
+#endif
+}
+
 #define luai_numadd(a, b) ((a) + (b))
 #define luai_numsub(a, b) ((a) - (b))
 #define luai_nummul(a, b) ((a) * (b))

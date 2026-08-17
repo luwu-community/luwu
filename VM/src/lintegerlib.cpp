@@ -6,6 +6,8 @@
 
 #include <stdint.h>
 
+LUAU_FASTFLAGVARIABLE(LuauIntegerLibrary)
+
 static const TValue* check_integer(lua_State* L, int idx)
 {
     luaL_checktype(L, idx, LUA_TINTEGER);
