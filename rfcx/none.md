@@ -6,11 +6,11 @@ FFlag: `LuauNonePrimitive`
 
 ## Summary
 
-Introduce `none` as a new first-class primitive value and built-in global in Luau, representing an intentional "no value" sentinel distinct from `nil`. Unlike `nil`, which denotes the absence of a value or an unassigned state, `none` is an explicit primitive of type `"none"`. It is falsy in boolean evaluation contexts, compares equal only to itself (`none == none` is `true` while `nil ~= none`), and does not delete table entries or create array holes when stored as a table value (`t[k] = none`).
+Introduce `none` as a new first-class primitive value and built-in global in Luwu, representing an intentional "no value" sentinel distinct from `nil`. Unlike `nil`, which denotes the absence of a value or an unassigned state, `none` is an explicit primitive of type `"none"`. It is falsy in boolean evaluation contexts, compares equal only to itself (`none == none` is `true` while `nil ~= none`), and does not delete table entries or create array holes when stored as a table value (`t[k] = none`).
 
 ## Motivation
 
-In Luau and Lua, `nil` serves two conflicting roles: indicating the absence of a value (such as an uninitialized variable, omitted function argument, or non-existent table key) and acting as an intentional empty sentinel in data structures and APIs. Because assigning `t[k] = nil` removes key `k` from table `t`, developers cannot store an explicit empty sentinel in a table without resorting to workaround objects (such as `local NONE = {}` or unique userdata sentinels).
+In Luwu and Lua, `nil` serves two conflicting roles: indicating the absence of a value (such as an uninitialized variable, omitted function argument, or non-existent table key) and acting as an intentional empty sentinel in data structures and APIs. Because assigning `t[k] = nil` removes key `k` from table `t`, developers cannot store an explicit empty sentinel in a table without resorting to workaround objects (such as `local NONE = {}` or unique userdata sentinels).
 
 In standard Luau, assigning `nil` to an index within a sequential array creates a "hole" (e.g., `{ 1, nil, 3 }`). The `#` length operator on sparse tables is defined to return an arbitrary array boundary, making `#t` and sequential iteration via `ipairs` unpredictable when representing lists with missing or nullable entries. With the `none` primitive, array elements can be explicitly set to `none` (`local list = { 1, none, 3 }`). Because `none` is a stored value and does not leave holes, `#list` reliably evaluates to `3`, and sequential iteration visits every index without breaking sequence invariants.
 
@@ -32,7 +32,7 @@ When `LuauNonePrimitive` is enabled, `none` is exposed as a built-in global valu
 ### Runtime Semantics and Comparison
 
 1. **Falsiness:**
-   In all boolean evaluation contexts (`if`, `elseif`, `while`, `until`, and logical operators `and`, `or`, `not`), `none` evaluates as **falsy**. The set of falsy values in Luau is exactly `false`, `nil`, and `none`. All other values are truthy.
+   In all boolean evaluation contexts (`if`, `elseif`, `while`, `until`, and logical operators `and`, `or`, `not`), `none` evaluates as **falsy**. The set of falsy values in Luwu is exactly `false`, `nil`, and `none`. All other values are truthy.
    ```lua
    assert(not none == true)
    assert((none or "fallback") == "fallback")
