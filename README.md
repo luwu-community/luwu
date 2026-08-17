@@ -1,17 +1,19 @@
-Luau ![CI](https://github.com/mluau/luau/actions/workflows/build.yml/badge.svg) [![codecov](https://codecov.io/gh/mluau/luau/branch/master/graph/badge.svg)](https://codecov.io/gh/mluau/luau)
+Luwu ![CI](https://github.com/mluau/luwu/actions/workflows/build.yml/badge.svg) [![codecov](https://codecov.io/gh/mluau/luwu/branch/master/graph/badge.svg)](https://codecov.io/gh/mluau/luwu)
 ====
 
-Luau (lowercase u, /ˈlu.aʊ/) is a fast, small, safe, gradually typed embeddable scripting language derived from [Lua](https://lua.org).
+Luwu is a fast, small, safe, gradually typed embeddable scripting language based on [Luau](https://luau.org).
 
-This is a community fork of Luau intended to provide a more featureful, helpful, and community-driven experience for general purpose, open source development of the language.
+Luwu is a community-led fork intended to provide a more featureful and helpful experience for general-purpose, open-source language development. It will evolve with features, syntax, and semantics that may not align with upstream Luau.
 
-For more information about this fork, how to contribute, and help us name our new language based off of Luau (but different!), please join our discord server [hina & ferris](https://discord.gg/3MJ37CFNWh).
+Luwu is backwards compatible with Luau up to and including version 0.730, with possible exceptions for `export local` and Luau's unreleased integer feature as those areas are improved in Luwu.
+
+For more information about Luwu and how to contribute, please join our Discord server [hina & ferris](https://discord.gg/3MJ37CFNWh). Credit for the name goes to @Crazyblox!
 
 For RFCs and changes to the language, please see the [RFCs folder](/rfcx/). To propose new features, discuss them in our `#features` channel on Discord.
 
 # Usage
 
-Luau is an embeddable programming language, but it also comes with two command-line tools by default, `luau` and `luau-analyze`.
+Luwu is an embeddable programming language, but it also comes with two command-line tools by default, `luau` and `luau-analyze`.
 
 `luau` is a command-line REPL and can also run input files. Note that REPL runs in a sandboxed environment and as such doesn't have access to the underlying file system except for ability to `require` modules.
 
@@ -19,9 +21,9 @@ Luau is an embeddable programming language, but it also comes with two command-l
 
 # Installation
 
-You can install and run Luau by downloading the compiled binaries from [a recent release](https://github.com/luau-lang/luau/releases); note that `luau` and `luau-analyze` binaries from the archives will need to be added to PATH or copied to a directory like `/usr/local/bin` on Linux/macOS.
+You can install and run Luwu by downloading the compiled binaries from [a recent release](https://github.com/mluau/luwu/releases); note that `luau` and `luau-analyze` binaries from the archives will need to be added to PATH or copied to a directory like `/usr/local/bin` on Linux/macOS.
 
-Alternatively, you can use one of the packaged distributions (note that these are not maintained by Luau development team):
+Alternatively, upstream Luau is available from the packaged distributions below. These packages are not maintained by the Luwu development team and may not match Luwu's Luau 0.730 compatibility baseline:
 
 - macOS: [Install Homebrew](https://docs.brew.sh/Installation) and run `brew install luau`
 - Arch Linux: Luau has been added to the official Arch Linux packages repository under the extras repository (see [``luau``](https://archlinux.org/packages/extra/x86_64/luau/)), simply install using ``pacman``: ``pacman -Syu luau``
@@ -32,7 +34,7 @@ After installing, you will want to validate the installation was successful by r
 
 ## Building
 
-On all platforms, you can use CMake to run the following commands to build Luau binaries from source:
+On all platforms, you can use CMake to run the following commands to build Luwu binaries from source:
 
 ```sh
 mkdir cmake && cd cmake
@@ -47,7 +49,7 @@ Alternatively, on Linux and macOS, you can also use `make`:
 make config=release luau luau-analyze
 ```
 
-To integrate Luau into your CMake application projects as a library, at the minimum, you'll need to depend on `Luau.Compiler` and `Luau.VM` projects. From there you need to create a new Luau state (using Lua 5.x API such as `lua_newstate`), compile source to bytecode and load it into the VM like this:
+To integrate Luwu into your CMake application projects as a library, at the minimum, you'll need to depend on the `Luau.Compiler` and `Luau.VM` projects. From there you need to create a new state (using a Lua 5.x API such as `lua_newstate`), compile source to bytecode, and load it into the VM like this:
 
 ```cpp
 // needs lua.h and luacode.h
@@ -60,24 +62,24 @@ if (result == 0)
     return 1; /* return chunk main function */
 ```
 
-For more details about the use of the host API, you currently need to consult [Lua 5.x API](https://www.lua.org/manual/5.1/manual.html#3). Luau closely tracks that API but has a few deviations, such as the need to compile source separately (which is important to be able to deploy VM without a compiler), and the lack of `__gc` support (use `lua_newuserdatadtor` instead).
+For more details about the use of the host API, you currently need to consult the [Lua 5.x API](https://www.lua.org/manual/5.1/manual.html#3). Luwu inherits Luau's close alignment with that API, including a few deviations such as the need to compile source separately (which is important for deploying the VM without a compiler) and the lack of `__gc` support (use `lua_newuserdatadtor` instead).
 
 To gain advantage of many performance improvements, it's highly recommended to use the `safeenv` feature, which sandboxes individual scripts' global tables from each other, and protects builtin libraries from monkey-patching. For this to work, you must call `luaL_sandbox` on the global state and `luaL_sandboxthread` for each new script's execution thread.
 
 # Testing
 
-Luau has an internal test suite; in CMake builds, it is split into two targets, `Luau.UnitTest` (for the bytecode compiler and type checker/linter tests) and `Luau.Conformance` (for the VM tests). The unit tests are written in C++, whereas the conformance tests are largely written in Luau (see `tests/conformance`).
+Luwu has an internal test suite; in CMake builds, it is split into two targets, `Luau.UnitTest` (for the bytecode compiler and type checker/linter tests) and `Luau.Conformance` (for the VM tests). The unit tests are written in C++, whereas the conformance tests are largely written in Luwu (see `tests/conformance`).
 
 Makefile builds combine both into a single target that can be run via `make test`.
 
 # Dependencies
 
-Luau uses C++ as its implementation language. The runtime requires C++11, while the compiler and analysis components require C++17. It should build without issues using Microsoft Visual Studio 2017 or later, or gcc-7 or clang-7 or later.
+Luwu uses C++ as its implementation language. The runtime requires C++11, while the compiler and analysis components require C++17. It should build without issues using Microsoft Visual Studio 2017 or later, or gcc-7 or clang-7 or later.
 
-Other than the STL/CRT, Luau library components don't have external dependencies. The test suite depends on the [doctest](https://github.com/onqtam/doctest) testing framework, and the REPL command-line depends on [isocline](https://github.com/daanx/isocline).
+Other than the STL/CRT, Luwu library components don't have external dependencies. The test suite depends on the [doctest](https://github.com/onqtam/doctest) testing framework, and the REPL command-line depends on [isocline](https://github.com/daanx/isocline).
 
 # License
 
-Luau implementation is distributed under the terms of [MIT License](https://github.com/luau-lang/luau/blob/master/LICENSE.txt). It is based on the Lua 5.x implementation, also under the MIT License.
+The Luwu implementation is distributed under the terms of the [MIT License](LICENSE.txt). It is based on [Luau](https://github.com/luau-lang/luau), which is based on the Lua 5.x implementation; both are also distributed under the MIT License.
 
-When Luau is integrated into external projects, we ask that you honor the license agreement and include Luau attribution into the user-facing product documentation. Attribution making use of the [Luau logo](https://github.com/luau-lang/site/blob/master/logo.svg) is also encouraged when reasonable.
+When Luwu is integrated into external projects, please honor the included license notices and preserve attribution to Luwu, Luau, and Lua.

@@ -11,7 +11,7 @@
 - LuauManagedReferences2: @cheesycod
 - LuauPcallMulti: @cheesycod
 - LuauFunctionUnusedRecursiveLinting, LuauBetterPackAndVariadicMismatchErrors, LuauIndexerModifierMismatchErrors, LuauPropertyModifierMismatchErrors: @MabMabMabMabMab (undercols) authored by @PhoenixWhitefire (merged from upstream)
-- LuauBetterMissingPropertiesTypeError, LuauFunctionUnusedRecursiveLinting: @MabMabMabMabMab and @deviaze (authored by nnullcolumn, who is not an mluau/luau maintainer; merged from upstream)
+- LuauBetterMissingPropertiesTypeError, LuauFunctionUnusedRecursiveLinting: @MabMabMabMabMab and @deviaze (authored by nnullcolumn, who is not an mluau/luwu maintainer; merged from upstream)
 
 ## Other
 
