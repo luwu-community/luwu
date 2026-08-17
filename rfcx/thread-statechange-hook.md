@@ -1,4 +1,6 @@
-# RFC: Thread State Change Hook (`userthreadstatechange`)
+# Superseded RFC: Thread State Change Hook (`userthreadstatechange`)
+
+This RFC has been superseded by per-thread thread state change hooks RFC instead. The global hook has a very high overhead for scripts that make heavy use of resumes
 
 ## Summary
 
@@ -6,15 +8,15 @@ Add a new C-level callback to `lua_Callbacks` called `userthreadstatechange` to 
 
 ## Motivation
 
-Luau is commonly paired with custom async task schedulers (like `mluau/scheduler`, other async impls). To track when a thread yields, finishes or errors, schedulers currently patch the global `coroutine.resume` function with a wrapper that intercepts the call, records the result in their scheduler, and forwards the return values.
+Luwu is commonly paired with custom async task schedulers (like `mluau/scheduler`, other async impls). To track when a thread yields, finishes or errors, schedulers currently patch the global `coroutine.resume` function with a wrapper that intercepts the call, records the result in their scheduler, and forwards the return values.
 
-Ideally, scheduling would be a first class part of Luau but this is a future goal and is orthogonal to this RFC.
+Ideally, scheduling would be a first class part of Luwu but this is a future goal and is orthogonal to this RFC.
 
 This approach has several flaws:
 
 - Every scheduler needs to manually patch `coroutine` library by hand to correctly track coroutine.resume thread states
 - Threads resumed directly via the C API (`lua_resume`) will not trigger the scheduler's patched `coroutine.resume` func making the scheduler entirely blind to these manual thread resumes.
-- Crossing the Luau-C/Rust boundary to intercept `coroutine.resume` calls incurs extra FFI overhead.
+- Crossing the Luwu-C/Rust boundary to intercept `coroutine.resume` calls incurs extra FFI overhead.
 
 By providing a native VM hook, schedulers can deterministically track thread state transitions with negligible performance penalty when unused.
 

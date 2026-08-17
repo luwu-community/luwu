@@ -4809,7 +4809,8 @@ static void test_statechange(lua_State* L, int status)
     auto state = (StateChangeTestState*)lua_callbacks(L)->userdata;
     state->called = true;
     state->status = status;
-    if (lua_isstring(L, -1))
+    int top = lua_gettop(L);
+    if (top > 0 && lua_isstring(L, -1))
         state->topString = lua_tostring(L, -1);
     else
         state->topString = "";
@@ -4822,7 +4823,6 @@ TEST_CASE("UserThreadStateChange")
 
     StateChangeTestState cbState;
     lua_callbacks(L)->userdata = &cbState;
-    lua_callbacks(L)->userthreadstatechange = test_statechange;
 
     const char* source = R"(
         coroutine.yield("yielded")
@@ -4831,6 +4831,7 @@ TEST_CASE("UserThreadStateChange")
 
     luaL_openlibs(L);
     lua_State* T = lua_newthread(L);
+    lua_setthreadstatechangecb(T, test_statechange);
 
     size_t bytecodeSize = 0;
     char* bytecode = luau_compile(source, strlen(source), nullptr, &bytecodeSize);
@@ -4856,6 +4857,7 @@ TEST_CASE("UserThreadStateChange")
         return "success"
     )";
     lua_State* T2 = lua_newthread(L);
+    lua_setthreadstatechangecb(T2, test_statechange);
     char* bytecode2 = luau_compile(source2, strlen(source2), nullptr, &bytecodeSize);
     REQUIRE(luau_load(T2, "=test2", bytecode2, bytecodeSize, 0) == 0);
     free(bytecode2);
@@ -4866,6 +4868,12 @@ TEST_CASE("UserThreadStateChange")
     CHECK(cbState.called);
     CHECK(cbState.status == LUA_OK);
     CHECK(cbState.topString == "success");
+
+    cbState.called = false;
+    lua_resetthread(T2);
+    CHECK(cbState.called);
+    CHECK(cbState.status == LUA_OK);
+    CHECK(cbState.topString == "");
 }
 
 TEST_SUITE_END();

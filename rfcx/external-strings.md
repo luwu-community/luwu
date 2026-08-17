@@ -2,13 +2,13 @@
 
 ## Summary
 
-Add support for externally managed/allocated strings to the Luau VM, allowing embedders to create zero-copy Luau strings that fully participate in all existing Luau features (like interning etc.) and behave identically to normal strings to the user.
+Add support for externally managed/allocated strings to the Luwu VM, allowing embedders to create zero-copy Luwu strings that fully participate in all existing Luwu features (like interning etc.) and behave identically to normal strings to the user.
 
 ## Motivation
 
-Luau's `string` type represents immutable byte sequences. Currently, creating a string in Luau requires copying the bytes from the host application into a VM-managed allocation. In embedding scenarios, it is common for the host to already possess large strings (such as errors w/ stack traces, data from a JSON file etc.). 
+Luwu's `string` type represents immutable byte sequences. Currently, creating a string in Luwu requires copying the bytes from the host application into a VM-managed allocation. In embedding scenarios, it is common for the host to already possess large strings (such as errors w/ stack traces, data from a JSON file etc.).
 
-While external buffers do exist in Luau now, buffers cannot be manipulated by the `string` library (and other string-related operations/infrastructure) nor can they easily be used as table keys etc. Furthermore, it is expected/idiomatic for certain things in Luau to be a `string` and not a `buffer` (error tracebacks, strings in a json etc.). 
+While external buffers do exist in Luwu now, buffers cannot be manipulated by the `string` library (and other string-related operations/infrastructure) nor can they easily be used as table keys etc. Furthermore, it is expected/idiomatic for certain things in Luwu to be a `string` and not a `buffer` (error tracebacks, strings in a json etc.).
 
 External strings (which also have existing precedence in Lua 5.5) allows embedders to wrap these existing string allocations without copying while maintaining full access to existing string infrastructure (`string` library, tables w/ string keys etc.)
 
@@ -16,7 +16,7 @@ External strings (which also have existing precedence in Lua 5.5) allows embedde
 
 ### C API Additions
 
-The Luau C API is expanded with the following functions and types (similar to external buffers except w/o the mode flag as Luau strings are *always* immutable):
+The Luwu C API is expanded with the following functions and types (similar to external buffers except w/o the mode flag as Luwu strings are *always* immutable):
 
     typedef void (*lua_StringFree)(lua_State* L, const char* data, size_t sz, void* userdata);
 
@@ -39,13 +39,13 @@ The Luau C API is expanded with the following functions and types (similar to ex
 
 ### Interning & Deduplication Semantics
 
-Unlike buffers, Luau strings are always interned (deduplicated) in a global string table so that equality comparisons can be performed via fast pointer equality. Additionally, short strings may be assigned "atoms" for fast property lookups. External strings fully participate in this interning and atom process. 
+Unlike buffers, Luwu strings are always interned (deduplicated) in a global string table so that equality comparisons can be performed via fast pointer equality. Additionally, short strings may be assigned "atoms" for fast property lookups. External strings fully participate in this interning and atom process.
 
 Because of interning and atoms, garbage collection (and `free_cb`) may not happen when you expect it:
 
 - If a matching string is already in the string table when you create an external string, your new allocation is deduplicated and the `free_cb` will be called prior to returning from `lua_pushexternalstring`.
 
-- Also, even if your Luau code loses all references to the external string, the string might be kept alive by the VM internals (as an atom etc.) for longer than anticipated, delaying the `free_cb`.
+- Also, even if your Luwu code loses all references to the external string, the string might be kept alive by the VM internals (as an atom etc.) for longer than anticipated, delaying the `free_cb`.
 
 When `lua_pushexternalstring` is called:
 
@@ -55,11 +55,11 @@ When `lua_pushexternalstring` is called:
 
 3. **Crucially**, if a duplicate is found, the provided `free_cb` is invoked (before `lua_pushexternalstring` returns) on the new external data, as the new allocation is not needed and the previous string is used instead (whether that be external or not).
 
-From the perspective of Luau code, external strings are completely indistinguishable from normal strings. They can be concatenated, used as table keys, and queried with `string.sub` identically.
+From the perspective of Luwu code, external strings are completely indistinguishable from normal strings. They can be concatenated, used as table keys, and queried with `string.sub` identically.
 
 ### Immutability and Undefined Behavior
 
-Luau strings are strictly immutable. When an external string wraps host memory, the host **must** guarantee that the underlying bytes are never modified for the lifetime of the string object. 
+Luwu strings are strictly immutable. When an external string wraps host memory, the host **must** guarantee that the underlying bytes are never modified for the lifetime of the string object.
 
 Because strings are interned and hashed, modifying the underlying bytes of an active external string violates VM invariants. Doing so will result in **Undefined Behavior (UB)**. If you need mutable shared memory, use External Buffers instead.
 

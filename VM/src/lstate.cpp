@@ -86,6 +86,7 @@ static void preinit_state(lua_State* L, global_State* g)
     L->isactive = false;
     L->activememcat = 0;
     L->userdata = NULL;
+    L->statechangecb = NULL;
 }
 
 static void close_state(lua_State* L)
@@ -165,6 +166,13 @@ void lua_resetthread(lua_State* L)
         luaD_reallocstack(L, BASIC_STACK_SIZE, 0);
     for (int i = 0; i < L->stacksize; i++)
         setnilvalue(L->stack + i);
+    
+    // call per-thread state change hook
+    // with LUA_OK to allow for cleanup
+    //
+    // it is up to embedder to call lua_setthreadstatechangecb if they want to drop the state change callback
+    if (L->statechangecb)
+        L->statechangecb(L, LUA_OK);
 }
 
 int lua_isthreadreset(lua_State* L)
