@@ -1,6 +1,8 @@
 // This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Sub.h"
 #include "../lnumutils.h"
+#include "Add.h"
+#include "Cmp.h"
 
 namespace Luau {
 namespace BigInt {
@@ -25,6 +27,22 @@ void SubAbs(RWDigits& res, Digits a, Digits b) {
         res[res.len++] = diff;
     }
     normalize(res);
+}
+
+bool Sub(RWDigits& res, SignedDigits a, SignedDigits b) {
+    if (a.isNegative != b.isNegative) {
+        AddAbs(res, a.digits, b.digits);
+        return a.isNegative;
+    } else {
+        int cmp = CmpAbs(a.digits, b.digits);
+        if (cmp >= 0) {
+            SubAbs(res, a.digits, b.digits);
+            return a.isNegative;
+        } else {
+            SubAbs(res, b.digits, a.digits);
+            return !a.isNegative;
+        }
+    }
 }
 
 } // namespace BigInt

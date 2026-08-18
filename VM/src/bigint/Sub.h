@@ -6,6 +6,7 @@ namespace Luau {
 namespace BigInt {
 
 void SubAbs(RWDigits& res, Digits a, Digits b);
+bool Sub(RWDigits& res, SignedDigits a, SignedDigits b);
 
 } // namespace BigInt
 } // namespace Luau

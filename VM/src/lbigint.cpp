@@ -112,19 +112,7 @@ HeapInteger* luaZB_heapinteger_add(lua_State* L, const HeapInteger* a, const Hea
     HeapInteger* res = luaZB_newheapinteger(L, (a->size > b->size ? a->size : b->size) + 1);
     RWDigits res_d = toRWDigits(res);
     
-    if (a->isNegative == b->isNegative) {
-        res->isNegative = a->isNegative;
-        AddAbs(res_d, toDigits(a), toDigits(b));
-    } else {
-        int cmp = luaZB_heapinteger_cmp_abs(a, b);
-        if (cmp >= 0) {
-            res->isNegative = a->isNegative;
-            SubAbs(res_d, toDigits(a), toDigits(b));
-        } else {
-            res->isNegative = b->isNegative;
-            SubAbs(res_d, toDigits(b), toDigits(a));
-        }
-    }
+    res->isNegative = Add(res_d, toSignedDigits(a), toSignedDigits(b));
     res->size = res_d.len;
     fixSignIfZero(res);
     return res;
@@ -134,19 +122,7 @@ HeapInteger* luaZB_heapinteger_sub(lua_State* L, const HeapInteger* a, const Hea
     HeapInteger* res = luaZB_newheapinteger(L, (a->size > b->size ? a->size : b->size) + 1);
     RWDigits res_d = toRWDigits(res);
     
-    if (a->isNegative != b->isNegative) {
-        res->isNegative = a->isNegative;
-        AddAbs(res_d, toDigits(a), toDigits(b));
-    } else {
-        int cmp = luaZB_heapinteger_cmp_abs(a, b);
-        if (cmp >= 0) {
-            res->isNegative = a->isNegative;
-            SubAbs(res_d, toDigits(a), toDigits(b));
-        } else {
-            res->isNegative = !a->isNegative;
-            SubAbs(res_d, toDigits(b), toDigits(a));
-        }
-    }
+    res->isNegative = Sub(res_d, toSignedDigits(a), toSignedDigits(b));
     res->size = res_d.len;
     fixSignIfZero(res);
     return res;
