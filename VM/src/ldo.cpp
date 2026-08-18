@@ -19,6 +19,7 @@
 
 LUAU_FASTFLAG(LuauYieldIter2)
 LUAU_FASTFLAG(LuauCustomYieldablePcalls)
+LUAU_FASTFLAG(LuauPcallMulti)
 
 // keep max stack allocation request under 1GB
 #define MAX_STACK_SIZE (int(1024 / sizeof(TValue)) * 1024 * 1024)
@@ -401,6 +402,39 @@ void luaD_seterrorobj(lua_State* L, int errcode, StkId oldtop)
     L->top = oldtop + 1;
 }
 
+void luaD_seterrorobj_multi(lua_State* L, int errcode, StkId oldtop, int num_err_results)
+{
+    LUAU_ASSERT(FFlag::LuauPcallMulti);
+    switch (errcode)
+    {
+    case LUA_ERRMEM:
+    {
+        setsvalue(L, oldtop, luaS_newliteral(L, LUA_MEMERRMSG)); // can not fail because string is pinned in luaopen
+        L->top = oldtop + 1;
+        break;
+    }
+    case LUA_ERRERR:
+    {
+        setsvalue(L, oldtop, luaS_newliteral(L, LUA_ERRERRMSG)); // can not fail because string is pinned in luaopen
+        L->top = oldtop + 1;
+        break;
+    }
+    case LUA_ERRSYNTAX:
+    case LUA_ERRRUN:
+    {
+        if (num_err_results < 0)
+            num_err_results = 0;
+        StkId err_start = L->top - num_err_results;
+        for (int i = 0; i < num_err_results; i++)
+        {
+            setobj2s(L, oldtop + i, err_start + i);
+        }
+        L->top = oldtop + num_err_results;
+        break;
+    }
+    }
+}
+
 static void resume_continue(lua_State* L)
 {
     // unroll Luau/C combined stack, processing continuations
@@ -546,6 +580,18 @@ static void callerrfunc(lua_State* L, void* ud)
     incr_top(L);
 
     luaD_callny(L, L->top - 2, 1);
+}
+
+static void callerrfunc_multi(lua_State* L, void* ud)
+{
+    LUAU_ASSERT(FFlag::LuauPcallMulti);
+    StkId errfunc = cast_to(StkId, ud);
+
+    setobj2s(L, L->top, L->top - 1);
+    setobj2s(L, L->top - 1, errfunc);
+    incr_top(L);
+
+    luaD_callny(L, L->top - 2, LUA_MULTRET);
 }
 
 static void resume_handle(lua_State* L, void* ud)
@@ -833,6 +879,76 @@ int luaD_pcall(lua_State* L, Pfunc func, void* u, ptrdiff_t old_top, ptrdiff_t e
         StkId oldtop = restorestack(L, old_top);
         luaF_close(L, oldtop); // close eventual pending closures
         luaD_seterrorobj(L, errstatus, oldtop);
+        L->ci = restoreci(L, old_ci);
+        L->base = L->ci->base;
+        restore_stack_limit(L);
+    }
+    return status;
+}
+
+int luaD_pcall_multi(lua_State* L, Pfunc func, void* u, ptrdiff_t old_top, ptrdiff_t ef)
+{
+    LUAU_ASSERT(FFlag::LuauPcallMulti);
+    unsigned short oldnCcalls = L->nCcalls;
+    unsigned short oldbaseCcalls = L->baseCcalls;
+    ptrdiff_t old_ci = saveci(L, L->ci);
+    bool oldactive = L->isactive;
+    int status = luaD_rawrunprotected(L, func, u);
+    if (status != 0)
+    {
+        int errstatus = status;
+        int num_err_results = 1;
+
+        // call user-defined error function (used in xpcall)
+        if (ef)
+        {
+            // push error object to stack top if it's not already there
+            if (status != LUA_ERRRUN)
+                luaD_seterrorobj(L, status, L->top);
+
+            ptrdiff_t err_func_start = savestack(L, L->top - 1);
+
+            // if errfunc fails, we fail with "error in error handling" or "not enough memory"
+            int err = luaD_rawrunprotected(L, callerrfunc_multi, restorestack(L, ef));
+
+            if (err == 0)
+                num_err_results = cast_int(L->top - restorestack(L, err_func_start));
+            else
+                num_err_results = 1;
+
+            // in general we preserve the status, except for cases when the error handler fails
+            // out of memory is treated specially because it's common for it to be cascading, in which case we preserve the code
+            if (err == 0)
+                errstatus = LUA_ERRRUN;
+            else if (status == LUA_ERRMEM && err == LUA_ERRMEM)
+                errstatus = LUA_ERRMEM;
+            else
+                errstatus = status = LUA_ERRERR;
+        }
+
+        // since the call failed with an error, we might have to reset the 'active' thread state
+        if (!oldactive)
+            L->isactive = false;
+
+        bool yieldable = L->nCcalls <= L->baseCcalls; // Inlined logic from 'lua_isyieldable' to avoid potential for an out of line call.
+
+        // restore nCcalls and baseCcalls before calling the debugprotectederror callback which may rely on the proper value to have been restored.
+        L->nCcalls = oldnCcalls;
+        L->baseCcalls = oldbaseCcalls;
+
+        // an error occurred, check if we have a protected error callback
+        if (yieldable && L->global->cb.debugprotectederror)
+        {
+            L->global->cb.debugprotectederror(L);
+
+            // debug hook is only allowed to break
+            if (L->status == LUA_BREAK)
+                return 0;
+        }
+
+        StkId oldtop = restorestack(L, old_top);
+        luaF_close(L, oldtop); // close eventual pending closures
+        luaD_seterrorobj_multi(L, errstatus, oldtop, num_err_results);
         L->ci = restoreci(L, old_ci);
         L->base = L->ci->base;
         restore_stack_limit(L);

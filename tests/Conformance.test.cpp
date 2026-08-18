@@ -78,6 +78,7 @@ LUAU_FASTFLAG(LuauMathRoundNegZero)
 LUAU_FASTFLAG(LuauDefaultArguments)
 LUAU_FASTFLAG(LuauNonePrimitive)
 LUAU_FASTFLAG(LuauDirectFieldGet)
+LUAU_FASTFLAG(LuauPcallMulti)
 
 #ifndef LUAU_CONFORMANCE_SOURCE_DIR
 // Walks up from the current directory looking for the Client folder,
@@ -2846,6 +2847,92 @@ TEST_CASE("ApiCalls")
     }
 
     CHECK(lua_gettop(L) == 0);
+}
+
+TEST_CASE("ApiPcallMulti")
+{
+    ScopedFastFlag luauPcallMulti{FFlag::LuauPcallMulti, true};
+    StateRef globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    // A simple function that errors
+    lua_pushcfunction(L, [](lua_State* L) -> int {
+        lua_pushstring(L, "test error");
+        lua_error(L);
+        return 0;
+    }, "errorfunc");
+    lua_setglobal(L, "errorfunc");
+
+    // An error handler that returns 3 values
+    lua_pushcfunction(L, [](lua_State* L) -> int {
+        lua_pushstring(L, "traceback1");
+        lua_pushstring(L, "traceback2");
+        lua_pushvalue(L, 1); // original error
+        return 3;
+    }, "multi_err_handler");
+    lua_setglobal(L, "multi_err_handler");
+
+    // An error handler that errors itself
+    lua_pushcfunction(L, [](lua_State* L) -> int {
+        lua_pushstring(L, "error in error handling");
+        lua_error(L);
+        return 0;
+    }, "bad_err_handler");
+    lua_setglobal(L, "bad_err_handler");
+
+    // Test multiple returns
+    lua_getglobal(L, "multi_err_handler");
+    int handler_idx = lua_gettop(L);
+
+    lua_getglobal(L, "errorfunc");
+    int status = lua_pcallmulti(L, 0, 3, handler_idx);
+    CHECK_EQ(status, LUA_ERRRUN);
+    CHECK_EQ(lua_gettop(L), 4); // err handler + 3 results
+    CHECK_EQ(std::string(lua_tostring(L, -3)), "traceback1");
+    CHECK_EQ(std::string(lua_tostring(L, -2)), "traceback2");
+    CHECK_EQ(std::string(lua_tostring(L, -1)), "test error");
+    lua_pop(L, 3); // pop results
+    
+    // Test multiple returns where we pass nresults = LUA_MULTRET
+    lua_getglobal(L, "errorfunc");
+    status = lua_pcallmulti(L, 0, LUA_MULTRET, handler_idx);
+    CHECK_EQ(status, LUA_ERRRUN);
+    CHECK_EQ(lua_gettop(L), 4); // err handler + 3 results
+    CHECK_EQ(std::string(lua_tostring(L, -3)), "traceback1");
+    CHECK_EQ(std::string(lua_tostring(L, -2)), "traceback2");
+    CHECK_EQ(std::string(lua_tostring(L, -1)), "test error");
+    lua_pop(L, 3); // pop results
+
+    // Test error inside error handler
+    lua_getglobal(L, "bad_err_handler");
+    int bad_handler_idx = lua_gettop(L);
+    lua_getglobal(L, "errorfunc");
+    status = lua_pcallmulti(L, 0, 0, bad_handler_idx);
+    CHECK_EQ(status, LUA_ERRERR);
+    // Should push a generic error string for LUA_ERRERR
+    CHECK_EQ(lua_gettop(L), 3); // err handler1 + err handler 2 + error
+    CHECK_EQ(std::string(lua_tostring(L, -1)), "error in error handling");
+    lua_pop(L, 1); // pop the error string
+
+    // Test error handler triggering stack realloc then erroring
+    lua_pushcfunction(L, [](lua_State* L) -> int {
+        luaL_checkstack(L, 20000, "too many stack elements");
+        for (int i = 0; i < 20000; i++)
+        {
+            lua_pushstring(L, "stack padding");
+        }
+        lua_error(L);
+        return 0;
+    }, "stack_realloc_err_handler");
+    lua_setglobal(L, "stack_realloc_err_handler");
+
+    lua_getglobal(L, "stack_realloc_err_handler");
+    int stack_realloc_handler_idx = lua_gettop(L);
+    lua_getglobal(L, "errorfunc");
+    status = lua_pcallmulti(L, 0, 0, stack_realloc_handler_idx);
+    CHECK_EQ(status, LUA_ERRERR);
+    CHECK_EQ(lua_gettop(L), 4); // err handler1 + err handler 2 + err handler 3 + error
+    CHECK_EQ(std::string(lua_tostring(L, -1)), "error in error handling");
+    lua_pop(L, 4); // clean up everything
 }
 
 TEST_CASE("ApiAtoms")

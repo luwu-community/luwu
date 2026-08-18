@@ -4381,7 +4381,11 @@ ConstraintGenerator::FunctionSignature ConstraintGenerator::checkFunctionSignatu
             AstExpr* argDefault = fn->argsDefaults.data[i];
             if (argDefault)
             {
-                Inference found = check(signatureScope, argDefault, argTy);
+                std::optional<TypeId> expectedArgTy;
+                if (hasSpecifiedArgTy)
+                    expectedArgTy = argTy;
+
+                Inference found = check(signatureScope, argDefault, expectedArgTy);
 
                 if (hasSpecifiedArgTy)
                     addConstraint(signatureScope, argDefault->location, SubtypeConstraint{found.ty, argTy});
