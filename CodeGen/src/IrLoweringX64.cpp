@@ -3135,29 +3135,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             CODEGEN_ASSERT(!"Unsupported instruction form");
         }
         break;
-    case IrCmd::BUFFER_READI64:
-        inst.regX64 = regs.allocReg(SizeX64::qword, index);
 
-        build.mov(inst.regX64, qword[bufferAddrOp(OP_A(inst), OP_B(inst), tagOp(OP_C(inst)))]);
-        break;
-
-    case IrCmd::BUFFER_WRITEI64:
-        if (OP_C(inst).kind == IrOpKind::Constant)
-        {
-            ScopedRegX64 tmp{regs, SizeX64::qword};
-            build.mov(tmp.reg, build.i64(int64Op(OP_C(inst))));
-
-            build.mov(qword[bufferAddrOp(OP_A(inst), OP_B(inst), tagOp(OP_D(inst)))], tmp.reg);
-        }
-        else if (OP_C(inst).kind == IrOpKind::Inst)
-        {
-            build.mov(qword[bufferAddrOp(OP_A(inst), OP_B(inst), tagOp(OP_D(inst)))], regOp(OP_C(inst)));
-        }
-        else
-        {
-            CODEGEN_ASSERT(!"Unsupported instruction form");
-        }
-        break;
 
     case IrCmd::CHECK_DIV_INT64:
     {

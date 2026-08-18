@@ -254,10 +254,7 @@ static int getBuiltinFunctionId(const Builtin& builtin, const CompileOptions& op
             return LBF_BUFFER_READF64;
         if (builtin.method == "writef64")
             return LBF_BUFFER_WRITEF64;
-        if (FFlag::LuauIntegerBufferFastcalls && builtin.method == "readinteger")
-            return LBF_BUFFER_READINTEGER;
-        if (FFlag::LuauIntegerBufferFastcalls && builtin.method == "writeinteger")
-            return LBF_BUFFER_WRITEINTEGER;
+
         if (FFlag::LuauBufferIsFrozen && builtin.method == "isfrozen")
             return LBF_BUFFER_ISFROZEN;
     }
@@ -574,11 +571,8 @@ BuiltinInfo getBuiltinInfo(int bfid)
     case LBF_BUFFER_WRITEU32:
     case LBF_BUFFER_WRITEF32:
     case LBF_BUFFER_WRITEF64:
-    case LBF_BUFFER_WRITEINTEGER:
         return {3, 0, BuiltinInfo::Flag_NoneSafe};
 
-    case LBF_BUFFER_READINTEGER:
-	return {2, 1, BuiltinInfo::Flag_NoneSafe};
     case LBF_BUFFER_ISFROZEN:
         return {1, 1, BuiltinInfo::Flag_NoneSafe};
 

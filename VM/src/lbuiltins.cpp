@@ -2751,8 +2751,6 @@ const luau_FastFunction luauF_table[256] = {
     luauF_integerugt,
     luauF_integeruge,
 
-    luauF_readinteger<int64_t>,
-    luauF_writeinteger<int64_t>,
 
     luauF_bufferisfrozen,
 

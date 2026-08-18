@@ -990,13 +990,7 @@ struct ConstPropState
                             return;
                         }
                         break;
-                    case IrCmd::BUFFER_READI64:
-                        if (info.loadCmd == IrCmd::BUFFER_READI64)
-                        {
-                            substitute(function, loadInst, info.value);
-                            return;
-                        }
-                        break;
+
                     default:
                         CODEGEN_ASSERT(!"unknown load instruction");
                     }
@@ -1468,14 +1462,14 @@ static void handleBuiltinEffects(ConstPropState& state, LuauBuiltinFunction bfid
     case LBF_MATH_ISNAN:
     case LBF_MATH_ISINF:
     case LBF_MATH_ISFINITE:
-    case LBF_BUFFER_READINTEGER:
+
         break;
     case LBF_BUFFER_WRITEU8:
     case LBF_BUFFER_WRITEU16:
     case LBF_BUFFER_WRITEU32:
     case LBF_BUFFER_WRITEF32:
     case LBF_BUFFER_WRITEF64:
-    case LBF_BUFFER_WRITEINTEGER:
+
         state.invalidateHeapBufferData();
         break;
     case LBF_TABLE_INSERT:
@@ -2410,12 +2404,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::BUFFER_WRITEF64:
         state.forwardBufferStoreToLoad(inst, IrCmd::BUFFER_READF64, 8);
         break;
-    case IrCmd::BUFFER_READI64:
-        state.substituteOrRecordBufferLoad(block, index, inst, 8);
-        break;
-    case IrCmd::BUFFER_WRITEI64:
-        state.forwardBufferStoreToLoad(inst, IrCmd::BUFFER_READI64, 8);
-        break;
+
     case IrCmd::CHECK_GC:
         // It is enough to perform a GC check once in a block
         if (state.checkedGc)

@@ -503,10 +503,7 @@ const char* getCmdName(IrCmd cmd)
         return "BUFFER_READF64";
     case IrCmd::BUFFER_WRITEF64:
         return "BUFFER_WRITEF64";
-    case IrCmd::BUFFER_READI64:
-        return "BUFFER_READI64";
-    case IrCmd::BUFFER_WRITEI64:
-        return "BUFFER_WRITEI64";
+
     case IrCmd::JUMP_CMP_PROTOID:
         return "JUMP_CMP_PROTOID";
     }

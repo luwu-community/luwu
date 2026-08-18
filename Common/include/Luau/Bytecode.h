@@ -695,9 +695,7 @@ enum LuauBuiltinFunction
     LBF_MATH_ISINF,
     LBF_MATH_ISFINITE,
 
-    // buffer.readinteger / buffer.writeinteger (int64_t)
-    LBF_BUFFER_READINTEGER,
-    LBF_BUFFER_WRITEINTEGER,
+
 
     LBF_BUFFER_ISFROZEN,
 };

@@ -3489,23 +3489,6 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
 
-    case IrCmd::BUFFER_READI64:
-    {
-        inst.regA64 = regs.allocReg(KindA64::x, index);
-        AddressA64 addr = tempAddrBuffer(OP_A(inst), OP_B(inst), tagOp(OP_C(inst)));
-
-        build.ldr(inst.regA64, addr);
-        break;
-    }
-
-    case IrCmd::BUFFER_WRITEI64:
-    {
-        RegisterA64 temp = tempInt64(OP_C(inst));
-        AddressA64 addr = tempAddrBuffer(OP_A(inst), OP_B(inst), tagOp(OP_D(inst)));
-
-        build.str(temp, addr);
-        break;
-    }
 
     case IrCmd::JUMP_CMP_PROTOID:
     {

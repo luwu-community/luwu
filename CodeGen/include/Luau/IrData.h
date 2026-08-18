@@ -182,7 +182,7 @@ enum class IrCmd : uint8_t
     // Signed floored division
     // A, B: int64
     IDIV_INT64,
-    // Unsigned division
+
     // Signed truncating remainder
     // Unsigned remainder
     // Signed floored modulus
@@ -294,10 +294,6 @@ enum class IrCmd : uint8_t
     // A, B: double (endpoints)
     // C, D: double (condition arguments)
     SELECT_NUM,
-
-    // Select B if C cond D, otherwise select A
-    // A, B: int64 (endpoints)
-    // C, D: int64 (condition arguments)
 
     // For each lane in the vector, select B if C == D, otherwise select A
     // A, B: TValue (endpoints)
@@ -886,14 +882,6 @@ enum class IrCmd : uint8_t
     // B: int (count, -1 to mark all registers after start)
     MARK_DEAD,
 
-    // Performs bitwise not on an int64
-
-    // Performs bitwise rotate on an int64
-
-    // Returns the number of consecutive zero bits in A
-
-    // Swap byte order in A
-
     // Performs bitwise and/xor/or on two unsigned integers
     // A, B: int
     BITAND_UINT,
@@ -1004,17 +992,6 @@ enum class IrCmd : uint8_t
     // B: int (offset)
     // C: double (value)
     BUFFER_WRITEF64,
-
-    // Read int64 value from buffer storage at specified offset
-    // A: pointer (buffer)
-    // B: int (offset)
-    BUFFER_READI64,
-
-    // Write i64/u64 value to buffer storage at specified offset
-    // A: pointer (buffer)
-    // B: int (offset)
-    // C: int64 (value)
-    BUFFER_WRITEI64,
 
     // Perform a conditional jump based on the result of Proto ID comparison
     // A: closure pointer

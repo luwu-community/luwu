@@ -274,10 +274,7 @@ declare buffer: {
     writebits: @checked (b: buffer, bitOffset: number, bitCount: number, value: number) -> (),
 )BUILTIN_SRC";
 
-static constexpr const char* kBuiltinDefinitionBufferSrcInteger = R"BUILTIN_SRC(
-    readinteger: @checked (b: buffer, offset: number) -> integer,
-    writeinteger: @checked (b: buffer, offset: number, value: integer) -> (),
-)BUILTIN_SRC";
+
 
 static constexpr const char* kBuiltinDefinitionBufferSrcIsFrozen = R"BUILTIN_SRC(
     isfrozen: @checked (b: buffer) -> boolean,
@@ -386,8 +383,6 @@ std::string getBuiltinDefinitionSource()
     result += kBuiltinDefinitionDebugSrc;
     result += kBuiltinDefinitionUtf8Src;
     result += kBuiltinDefinitionBufferSrcCore;
-    if (FFlag::LuauIntegerType2 && FFlag::LuauIntegerLibrary)
-        result += kBuiltinDefinitionBufferSrcInteger;
     if (FFlag::LuauBufferIsFrozen)
         result += kBuiltinDefinitionBufferSrcIsFrozen;
     result += kBuiltinDefinitionBufferSrcClose;
