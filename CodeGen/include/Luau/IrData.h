@@ -53,6 +53,9 @@ enum class IrCmd : uint8_t
     // Load a tag from TValue
     // A: Rn or Kn
     LOAD_TAG,
+
+    // Load extra from TValue
+    // A: Rn or Kn
     LOAD_EXTRA,
 
     // Load a pointer (*) from TValue

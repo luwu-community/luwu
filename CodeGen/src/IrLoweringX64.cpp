@@ -75,6 +75,12 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         inst.regX64 = regs.allocReg(SizeX64::dword, index);
         if (OP_A(inst).kind == IrOpKind::VmReg)
             build.mov(inst.regX64, luauRegExtra(vmRegOp(OP_A(inst))));
+        else if (OP_A(inst).kind == IrOpKind::VmConst)
+            build.mov(inst.regX64, luauConstantExtra(vmConstOp(OP_A(inst))));
+        // If we have a register, we assume it's a pointer to TValue
+        // We might introduce explicit operand types in the future to make this more robust
+        else if (OP_A(inst).kind == IrOpKind::Inst)
+            build.mov(inst.regX64, dword[regOp(OP_A(inst)) + offsetof(TValue, extra)]);
         else
             CODEGEN_ASSERT(!"Unsupported instruction form");
         break;
