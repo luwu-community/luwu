@@ -165,12 +165,6 @@ const char* getCmdName(IrCmd cmd)
         return "IDIV_INT64";
     case IrCmd::CHECK_DIV_INT64:
         return "CHECK_DIV_INT64";
-    case IrCmd::UDIV_INT64:
-        return "UDIV_INT64";
-    case IrCmd::REM_INT64:
-        return "REM_INT64";
-    case IrCmd::UREM_INT64:
-        return "UREM_INT64";
     case IrCmd::MOD_INT64:
         return "MOD_INT64";
     case IrCmd::SEXTI8_INT:
@@ -233,8 +227,6 @@ const char* getCmdName(IrCmd cmd)
         return "SIGN_FLOAT";
     case IrCmd::SELECT_NUM:
         return "SELECT_NUM";
-    case IrCmd::SELECT_INT64:
-        return "SELECT_INT64";
     case IrCmd::MULADD_NUM:
         return "MULADD_NUM";
     case IrCmd::SELECT_VEC:
@@ -455,30 +447,6 @@ const char* getCmdName(IrCmd cmd)
         return "MARK_USED";
     case IrCmd::MARK_DEAD:
         return "MARK_DEAD";
-    case IrCmd::BITAND_INT64:
-        return "BITAND_INT64";
-    case IrCmd::BITXOR_INT64:
-        return "BITXOR_INT64";
-    case IrCmd::BITOR_INT64:
-        return "BITOR_INT64";
-    case IrCmd::BITNOT_INT64:
-        return "BITNOT_INT64";
-    case IrCmd::BITLSHIFT_INT64:
-        return "BITLSHIFT_INT64";
-    case IrCmd::BITRSHIFT_INT64:
-        return "BITRSHIFT_INT64";
-    case IrCmd::BITARSHIFT_INT64:
-        return "BITARSHIFT_INT64";
-    case IrCmd::BITLROTATE_INT64:
-        return "BITLROTATE_INT64";
-    case IrCmd::BITRROTATE_INT64:
-        return "BITRROTATE_INT64";
-    case IrCmd::BITCOUNTLZ_INT64:
-        return "BITCOUNTLZ_INT64";
-    case IrCmd::BITCOUNTRZ_INT64:
-        return "BITCOUNTRZ_INT64";
-    case IrCmd::BYTESWAP_INT64:
-        return "BYTESWAP_INT64";
     case IrCmd::BITAND_UINT:
         return "BITAND_UINT";
     case IrCmd::BITXOR_UINT:

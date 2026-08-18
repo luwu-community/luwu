@@ -164,7 +164,6 @@ void IrValueLocationTracking::beforeInstLowering(IrInst& inst)
     case IrCmd::JUMP_IF_TRUTHY:
     case IrCmd::JUMP_IF_FALSY:
     case IrCmd::JUMP_EQ_TAG:
-    case IrCmd::SELECT_INT64:
     case IrCmd::SET_TABLE:
     case IrCmd::SET_UPVALUE:
     case IrCmd::INTERRUPT:

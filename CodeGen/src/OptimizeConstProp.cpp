@@ -2532,9 +2532,6 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::DIV_INT64:
     case IrCmd::IDIV_INT64:
     case IrCmd::CHECK_DIV_INT64:
-    case IrCmd::UDIV_INT64:
-    case IrCmd::REM_INT64:
-    case IrCmd::UREM_INT64:
     case IrCmd::MOD_INT64:
     case IrCmd::ADD_INT:
     case IrCmd::SUB_INT:
@@ -2641,7 +2638,6 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::ABS_NUM:
     case IrCmd::SIGN_NUM:
     case IrCmd::SELECT_NUM:
-    case IrCmd::SELECT_INT64:
     case IrCmd::SELECT_VEC:
     case IrCmd::MULADD_VEC:
     case IrCmd::EXTRACT_VEC:
@@ -3246,18 +3242,6 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::ADJUST_STACK_TO_REG: // Changes stack top, but not the values
     case IrCmd::ADJUST_STACK_TO_TOP: // Changes stack top, but not the values
     case IrCmd::CHECK_FASTCALL_RES:  // Changes stack top, but not the values
-    case IrCmd::BITAND_INT64:
-    case IrCmd::BITXOR_INT64:
-    case IrCmd::BITOR_INT64:
-    case IrCmd::BITNOT_INT64:
-    case IrCmd::BITLSHIFT_INT64:
-    case IrCmd::BITRSHIFT_INT64:
-    case IrCmd::BITARSHIFT_INT64:
-    case IrCmd::BITLROTATE_INT64:
-    case IrCmd::BITRROTATE_INT64:
-    case IrCmd::BITCOUNTLZ_INT64:
-    case IrCmd::BITCOUNTRZ_INT64:
-    case IrCmd::BYTESWAP_INT64:
     case IrCmd::BITAND_UINT:
     case IrCmd::BITXOR_UINT:
     case IrCmd::BITOR_UINT:

@@ -183,14 +183,8 @@ enum class IrCmd : uint8_t
     // A, B: int64
     IDIV_INT64,
     // Unsigned division
-    // A, B: int64
-    UDIV_INT64,
     // Signed truncating remainder
-    // A, B: int64
-    REM_INT64,
     // Unsigned remainder
-    // A, B: int64
-    UREM_INT64,
     // Signed floored modulus
     // A, B: int64
     MOD_INT64,
@@ -304,8 +298,6 @@ enum class IrCmd : uint8_t
     // Select B if C cond D, otherwise select A
     // A, B: int64 (endpoints)
     // C, D: int64 (condition arguments)
-    // E: condition
-    SELECT_INT64,
 
     // For each lane in the vector, select B if C == D, otherwise select A
     // A, B: TValue (endpoints)
@@ -894,38 +886,13 @@ enum class IrCmd : uint8_t
     // B: int (count, -1 to mark all registers after start)
     MARK_DEAD,
 
-    // Performs bitwise and/xor/or on two int64
-    // A, B: int64
-    BITAND_INT64,
-    BITXOR_INT64,
-    BITOR_INT64,
-
     // Performs bitwise not on an int64
-    // A: int64
-    BITNOT_INT64,
-
-    // Performs bitwise shift on an int64
-    // A: int64 (source)
-    // B: int64 (shift amount; negative reverses direction, |amount| >= 64 returns 0 or sign-fill)
-    BITLSHIFT_INT64,
-    BITRSHIFT_INT64,
-    BITARSHIFT_INT64,
 
     // Performs bitwise rotate on an int64
-    // A: int64 (source)
-    // B: int64 (rotate amount, mod 64)
-    BITLROTATE_INT64,
-    BITRROTATE_INT64,
 
     // Returns the number of consecutive zero bits in A
-    // Result is Int64 (not Int) for consistency with other int64 operations, even though value is in [0, 64]
-    // A: int64
-    BITCOUNTLZ_INT64,
-    BITCOUNTRZ_INT64,
 
     // Swap byte order in A
-    // A: int64
-    BYTESWAP_INT64,
 
     // Performs bitwise and/xor/or on two unsigned integers
     // A, B: int

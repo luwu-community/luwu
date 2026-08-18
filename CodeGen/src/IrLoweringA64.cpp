@@ -745,23 +745,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         finalizeTargetLabel(OP_C(inst), index, fresh);
         break;
     }
-    case IrCmd::UDIV_INT64:
-        inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst), OP_B(inst)});
-        {
-            RegisterA64 temp1 = tempInt64(OP_A(inst));
-            RegisterA64 temp2 = tempInt64(OP_B(inst));
-            build.udiv(inst.regA64, temp1, temp2);
-        }
-        break;
-    case IrCmd::REM_INT64:
-        inst.regA64 = regs.allocReg(KindA64::x, index);
-        {
-            RegisterA64 temp1 = tempInt64(OP_A(inst));
-            RegisterA64 temp2 = tempInt64(OP_B(inst));
-            build.sdiv(inst.regA64, temp1, temp2);
-            build.rem(inst.regA64, temp1, temp2);
-        }
-        break;
+
     case IrCmd::MOD_INT64:
         // floored modulo: rem = a % b (C truncated); if (rem != 0 && sign(rem) != sign(b)) rem += b
         inst.regA64 = regs.allocReg(KindA64::x, index); // can't reuse: dividend (temp1) needed after sdiv
@@ -785,15 +769,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             build.csel(inst.regA64, tempAdj, tempRem, ConditionA64::NotEqual); // if rem != 0 then adjusted else 0
         }
         break;
-    case IrCmd::UREM_INT64:
-        inst.regA64 = regs.allocReg(KindA64::x, index);
-        {
-            RegisterA64 temp1 = tempInt64(OP_A(inst));
-            RegisterA64 temp2 = tempInt64(OP_B(inst));
-            build.udiv(inst.regA64, temp1, temp2);
-            build.rem(inst.regA64, temp1, temp2);
-        }
-        break;
+
     case IrCmd::SEXTI8_INT:
         inst.regA64 = regs.allocReuse(KindA64::w, index, {OP_A(inst)});
 
@@ -1067,7 +1043,6 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.fcsel(inst.regA64, temp2, temp1, getConditionFP(IrCondition::Equal));
         break;
     }
-    case IrCmd::SELECT_INT64:
     {
         IrCondition cond = conditionOp(OP_E(inst));
 
@@ -3183,189 +3158,8 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         CODEGEN_ASSERT(!"Pseudo instructions should not be lowered");
         break;
 
-    case IrCmd::BITAND_INT64:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst), OP_B(inst)});
-        RegisterA64 temp1 = tempInt64(OP_A(inst));
-        RegisterA64 temp2 = tempInt64(OP_B(inst));
-        build.and_(inst.regA64, temp1, temp2);
-        break;
-    }
-    case IrCmd::BITXOR_INT64:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst), OP_B(inst)});
-        RegisterA64 temp1 = tempInt64(OP_A(inst));
-        RegisterA64 temp2 = tempInt64(OP_B(inst));
-        build.eor(inst.regA64, temp1, temp2);
-        break;
-    }
-    case IrCmd::BITOR_INT64:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst), OP_B(inst)});
-        RegisterA64 temp1 = tempInt64(OP_A(inst));
-        RegisterA64 temp2 = tempInt64(OP_B(inst));
-        build.orr(inst.regA64, temp1, temp2);
-        break;
-    }
-    case IrCmd::BITNOT_INT64:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst)});
-        RegisterA64 temp = tempInt64(OP_A(inst));
-        build.mvn_(inst.regA64, temp);
-        break;
-    }
-    case IrCmd::BITLSHIFT_INT64:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst), OP_B(inst)});
-        RegisterA64 source = tempInt64(OP_A(inst));
-        RegisterA64 amount = tempInt64(OP_B(inst));
-        RegisterA64 temp = regs.allocTemp(KindA64::x);
 
-        Label done, negative, outOfRange;
 
-        // (amount + 63) > 126 = |amount| > 63
-        build.add(temp, amount, uint16_t(63));
-        build.cmp(temp, uint16_t(126));
-        build.b(ConditionA64::UnsignedGreater, outOfRange);
-
-        // check sign of amount
-        build.cmp(amount, uint16_t(0));
-        build.b(ConditionA64::Less, negative);
-
-        // left shift
-        build.lsl(inst.regA64, source, amount);
-        build.b(done);
-
-        // right shift by -amount
-        build.setLabel(negative);
-        build.neg(temp, amount);
-        build.lsr(inst.regA64, source, temp);
-        build.b(done);
-
-        build.setLabel(outOfRange);
-        build.mov(inst.regA64, 0);
-
-        build.setLabel(done);
-        break;
-    }
-    case IrCmd::BITRSHIFT_INT64:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst), OP_B(inst)});
-        RegisterA64 source = tempInt64(OP_A(inst));
-        RegisterA64 amount = tempInt64(OP_B(inst));
-        RegisterA64 temp = regs.allocTemp(KindA64::x);
-
-        Label done, negative, outOfRange;
-
-        // (amount + 63) > 126 = |amount| > 63
-        build.add(temp, amount, uint16_t(63));
-        build.cmp(temp, uint16_t(126));
-        build.b(ConditionA64::UnsignedGreater, outOfRange);
-
-        // check sign of amount
-        build.cmp(amount, uint16_t(0));
-        build.b(ConditionA64::Less, negative);
-
-        // unsigned right shift
-        build.lsr(inst.regA64, source, amount);
-        build.b(done);
-
-        // left shift by -amount
-        build.setLabel(negative);
-        build.neg(temp, amount);
-        build.lsl(inst.regA64, source, temp);
-        build.b(done);
-
-        build.setLabel(outOfRange);
-        build.mov(inst.regA64, 0);
-
-        build.setLabel(done);
-        break;
-    }
-    case IrCmd::BITARSHIFT_INT64:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst), OP_B(inst)});
-        RegisterA64 source = tempInt64(OP_A(inst));
-        RegisterA64 amount = tempInt64(OP_B(inst));
-        RegisterA64 temp = regs.allocTemp(KindA64::x);
-
-        Label done, negative, outOfRangePositive, outOfRangeNegative;
-
-        // amount > 63 (arithmetic right shift fills with sign)
-        build.cmp(amount, uint16_t(63));
-        build.b(ConditionA64::Greater, outOfRangePositive);
-
-        // add 63, if < 0 then amount < -63
-        build.add(temp, amount, uint16_t(63));
-        build.cmp(temp, uint16_t(0));
-        build.b(ConditionA64::Less, outOfRangeNegative);
-
-        // check sign of amount
-        build.cmp(amount, uint16_t(0));
-        build.b(ConditionA64::Less, negative);
-
-        // arithmetic right shift that sign extends
-        build.asr(inst.regA64, source, amount);
-        build.b(done);
-
-        // left shift by -amount (unsigned)
-        build.setLabel(negative);
-        build.neg(temp, amount);
-        build.lsl(inst.regA64, source, temp);
-        build.b(done);
-
-        // amount > 63 = sign-fill (n < 0 ? -1 : 0)
-        build.setLabel(outOfRangePositive);
-        build.asr(inst.regA64, source, uint8_t(63));
-        build.b(done);
-
-        // amount < -63 = result is 0
-        build.setLabel(outOfRangeNegative);
-        build.mov(inst.regA64, 0);
-
-        build.setLabel(done);
-        break;
-    }
-    case IrCmd::BITLROTATE_INT64:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_B(inst)}); // can't reuse A because it would be clobbered by neg
-        RegisterA64 source = tempInt64(OP_A(inst));
-        RegisterA64 amount = tempInt64(OP_B(inst));
-        // left rotate = rotate by negative
-        build.neg(inst.regA64, amount);
-        build.ror(inst.regA64, source, inst.regA64);
-        break;
-    }
-    case IrCmd::BITRROTATE_INT64:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst), OP_B(inst)});
-        RegisterA64 source = tempInt64(OP_A(inst));
-        RegisterA64 amount = tempInt64(OP_B(inst));
-        build.ror(inst.regA64, source, amount);
-        break;
-    }
-    case IrCmd::BITCOUNTLZ_INT64:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst)});
-        RegisterA64 temp = tempInt64(OP_A(inst));
-        build.clz(inst.regA64, temp);
-        break;
-    }
-    case IrCmd::BITCOUNTRZ_INT64:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst)});
-        RegisterA64 temp = tempInt64(OP_A(inst));
-        build.rbit(inst.regA64, temp);
-        build.clz(inst.regA64, inst.regA64);
-        break;
-    }
-    case IrCmd::BYTESWAP_INT64:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst)});
-        RegisterA64 temp = tempInt64(OP_A(inst));
-        build.rev(inst.regA64, temp);
-        break;
-    }
     case IrCmd::BITAND_UINT:
     {
         inst.regA64 = regs.allocReuse(KindA64::w, index, {OP_A(inst), OP_B(inst)});
