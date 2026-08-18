@@ -622,4 +622,18 @@ expectpass("classes without __init still use the default POD constructor", funct
     assert(not p2.x and not p2.y)
 end)
 
+expectpass("default __init can be called directly like a normal method", function()
+    local p = PointNoInit({ x = 3, y = 4 })
+    p:__init({ x = 5, y = 6 })
+    assert(p.x == 5 and p.y == 6)
+    p:__init()
+    assert(not p.x and not p.y)
+end)
+
+expectpass("default __init can be called directly on the class object", function()
+    local p = PointNoInit({ x = 3, y = 4 })
+    PointNoInit.__init(p, { x = 7, y = 8 })
+    assert(p.x == 7 and p.y == 8)
+end)
+
 return 'OK'

@@ -190,6 +190,40 @@ local p = Point
     CHECK(cobjMetaProps.find("__call") != cobjmeta->props.end());
 }
 
+TEST_CASE_FIXTURE(ClassesFixture, "class_with_no_fields_can_be_constructed_with_no_arguments")
+{
+    auto result = check(R"(
+class Empty
+    function greet(self)
+        return "hi"
+    end
+end
+
+local e = Empty()
+)");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_with_fields_still_requires_argument_table")
+{
+    auto result = check(R"(
+class Person
+    public name
+    public age
+
+    function greet(self)
+        return self.name
+    end
+end
+
+local p = Person()
+)");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<CountMismatch>(result.errors[0]));
+}
+
 TEST_CASE_FIXTURE(ClassesFixture, "class_custom_init_constructor_signature")
 {
     ScopedFastFlag sff_LuauBetterUserDefinedClasses{FFlag::LuauBetterUserDefinedClasses, true};

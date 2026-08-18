@@ -1159,7 +1159,8 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
                             prop.location = method.nameLocation;
                             if (FFlag::DebugLuauUserDefinedClasses && FFlag::LuauBetterUserDefinedClasses)
                                 prop.isPrivate = method.visibility == AstClassMemberVisibility::Private;
-                            if (method.function->args.size < 1 || method.function->args.data[0]->name != "self")
+                            if (method.function->args.size < 1 || method.function->args.data[0]->name != "self" ||
+                                method.functionName == "__init")
                                 staticProps[method.functionName.value] = prop;
                             // The parser will report an error for classes that define disallowed metamethods.
                             // The RFC also requires that it is a syntax error for methods to have __ in their name whos name is not in the
@@ -1234,14 +1235,37 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
                 for (const GenericTypePackDefinition& param : classTypePackParams)
                     podCtorGenericPacks.push_back(param.tp);
 
+                // Classes with no members can be constructed either with no arguments (`Empty()`)
+                // or with an empty argument table (`Empty {}`); make the argument optional so
+                // both call shapes typecheck.
+                TypeId ctorArgTyForCall = ctorArgTable->props.empty() ? makeOption(builtinTypes, *arena, ctorArgTy) : ctorArgTy;
+                TypePackId ctorArgsPack = arena->addTypePack({builtinTypes->unknownType, ctorArgTyForCall});
+
                 ctorTy = arena->addType(FunctionType{
-                    std::move(podCtorGenerics),
-                    std::move(podCtorGenericPacks),
-                    arena->addTypePack({builtinTypes->unknownType, ctorArgTy}),
+                    podCtorGenerics,
+                    podCtorGenericPacks,
+                    ctorArgsPack,
                     arena->addTypePack({classInstanceTy}),
                     /* defn */ std::nullopt,
                     /* hasSelf */ true
                 });
+
+                // The default POD constructor is a real function like any other, so it should be
+                // directly callable as `object:__init(...)`/`Class.__init(...)`, just like a
+                // user-defined `__init` is.
+                TypeId initTy = arena->addType(FunctionType{
+                    std::move(podCtorGenerics),
+                    std::move(podCtorGenericPacks),
+                    arena->addTypePack({classInstanceTy, ctorArgTyForCall}),
+                    arena->addTypePack({}),
+                    /* defn */ std::nullopt,
+                    /* hasSelf */ true
+                });
+                Property initProp = Property::readonly(initTy);
+                initProp.location = classDecl->location;
+                if (ExternType* classInstanceEtv = getMutable<ExternType>(classInstanceTy))
+                    classInstanceEtv->props["__init"] = initProp;
+                staticProps["__init"] = initProp;
             }
 
             TypeId metatableTy = arena->addType(
