@@ -4406,4 +4406,22 @@ TEST_CASE_FIXTURE(Fixture, "default_argument_is_checked_against_parameter_annota
     CHECK(!result.errors.empty());
 }
 
+TEST_CASE_FIXTURE(Fixture, "default_argument_infers_parameter_type_string")
+{
+    // Regression test; lsp used to crash in some cases when type annotations w/ default arg weren't provided
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuauDefaultArguments, true},
+    };
+
+    CheckResult result = check(R"(
+        local function meow(message = "meow")
+            return message
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("(string?) -> string", toString(requireType("meow")));
+}
+
 TEST_SUITE_END();
