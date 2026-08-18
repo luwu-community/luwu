@@ -1801,7 +1801,7 @@ reentry:
                 }
                 else if (LUAU_LIKELY(ttype(rb) == LUA_TINTEGER && ttype(rc) == LUA_TINTEGER && rb->extra[0] == rc->extra[0]))
                 {
-                    LUAU_FAST_TYPED_MATH(+, __builtin_add_overflow, luaZ_integer_add);
+                    LUAU_FAST_TYPED_MATH(+, luau_add_overflow, luaZ_integer_add);
                 }
                 else if (ttisinteger(rb) && ttisinteger(rc))
                 {
@@ -1856,7 +1856,7 @@ reentry:
                 }
                 else if (LUAU_LIKELY(ttype(rb) == LUA_TINTEGER && ttype(rc) == LUA_TINTEGER && rb->extra[0] == rc->extra[0]))
                 {
-                    LUAU_FAST_TYPED_MATH(-, __builtin_sub_overflow, luaZ_integer_sub);
+                    LUAU_FAST_TYPED_MATH(-, luau_sub_overflow, luaZ_integer_sub);
                 }
                 else if (ttisinteger(rb) && ttisinteger(rc))
                 {
@@ -1911,7 +1911,7 @@ reentry:
                 }
                 else if (LUAU_LIKELY(ttype(rb) == LUA_TINTEGER && ttype(rc) == LUA_TINTEGER && rb->extra[0] == rc->extra[0]))
                 {
-                    LUAU_FAST_TYPED_MATH(*, __builtin_mul_overflow, luaZ_integer_mul);
+                    LUAU_FAST_TYPED_MATH(*, luau_mul_overflow, luaZ_integer_mul);
                 }
                 else if (ttisinteger(rb) && ttisinteger(rc))
                 {

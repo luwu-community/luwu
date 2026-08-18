@@ -117,3 +117,63 @@ LUAI_FUNC char* luai_int2str(char* buf, int64_t n);
 
 #define luai_str2num(s, p) strtod((s), (p))
 #define luai_str2long(s, p, base) strtoll((s), (p), base)
+
+// Signed 64-bit operations
+inline bool luau_add_overflow(int64_t a, int64_t b, int64_t* res) {
+#if defined(__GNUC__) || defined(__clang__)
+    return __builtin_add_overflow(a, b, res);
+#elif defined(_MSC_VER) && _MSC_VER >= 1937
+    return _add_overflow_i64(0, a, b, res);
+#else
+    *res = a + b;
+    return (b > 0 && a > INT64_MAX - b) || (b < 0 && a < INT64_MIN - b);
+#endif
+}
+
+inline bool luau_sub_overflow(int64_t a, int64_t b, int64_t* res) {
+#if defined(__GNUC__) || defined(__clang__)
+    return __builtin_sub_overflow(a, b, res);
+#elif defined(_MSC_VER) && _MSC_VER >= 1937
+    return _sub_overflow_i64(0, a, b, res);
+#else
+    *res = a - b;
+    return (b < 0 && a > INT64_MAX + b) || (b > 0 && a < INT64_MIN + b);
+#endif
+}
+
+inline bool luau_mul_overflow(int64_t a, int64_t b, int64_t* res) {
+#if defined(__GNUC__) || defined(__clang__)
+    return __builtin_mul_overflow(a, b, res);
+#elif defined(_MSC_VER) && _MSC_VER >= 1937
+    return _mul_overflow_i64(a, b, res);
+#else
+    *res = a * b;
+    if (a == 0 || b == 0) return false;
+    if (a == -1 && b == INT64_MIN) return true;
+    if (b == -1 && a == INT64_MIN) return true;
+    return *res / b != a;
+#endif
+}
+
+// Unsigned 64-bit operations (used by bigint)
+inline bool luau_add_overflow(uint64_t a, uint64_t b, uint64_t* res) {
+#if defined(__GNUC__) || defined(__clang__)
+    return __builtin_add_overflow(a, b, res);
+#elif defined(_MSC_VER) && defined(_M_X64)
+    return _addcarry_u64(0, a, b, res) != 0;
+#else
+    *res = a + b;
+    return *res < a;
+#endif
+}
+
+inline bool luau_sub_overflow(uint64_t a, uint64_t b, uint64_t* res) {
+#if defined(__GNUC__) || defined(__clang__)
+    return __builtin_sub_overflow(a, b, res);
+#elif defined(_MSC_VER) && defined(_M_X64)
+    return _subborrow_u64(0, a, b, res) != 0;
+#else
+    *res = a - b;
+    return a < b;
+#endif
+}

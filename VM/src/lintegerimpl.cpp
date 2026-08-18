@@ -1,5 +1,6 @@
 // This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "lobject.h"
+#include "lnumutils.h"
 #include "lstate.h"
 #include "lgc.h"
 #include "lmem.h"
@@ -245,7 +246,7 @@ static Integer integer_add_impl(lua_State* L, Integer a, Integer b)
     HANDLE_TYPED_MATH(L, a, b, +)
     if (!a.heap && !b.heap) {
         int64_t sum;
-        if (!__builtin_add_overflow(a.smi, b.smi, &sum))
+        if (!luau_add_overflow(a.smi, b.smi, &sum))
             return new_integer(sum);
     }
     HeapView ha(a);
@@ -259,7 +260,7 @@ static Integer integer_sub_impl(lua_State* L, Integer a, Integer b)
     HANDLE_TYPED_MATH(L, a, b, -)
     if (!a.heap && !b.heap) {
         int64_t diff;
-        if (!__builtin_sub_overflow(a.smi, b.smi, &diff))
+        if (!luau_sub_overflow(a.smi, b.smi, &diff))
             return new_integer(diff);
     }
     HeapView ha(a);
@@ -273,7 +274,7 @@ static Integer integer_mul_impl(lua_State* L, Integer a, Integer b)
     HANDLE_TYPED_MATH(L, a, b, *)
     if (!a.heap && !b.heap) {
         int64_t prod;
-        if (!__builtin_mul_overflow(a.smi, b.smi, &prod))
+        if (!luau_mul_overflow(a.smi, b.smi, &prod))
             return new_integer(prod);
     }
     HeapView ha(a);

@@ -386,6 +386,14 @@ target_sources(Luau.VM PRIVATE
     VM/src/laux.cpp
     VM/src/lbaselib.cpp
     VM/src/lbigint.cpp
+    VM/src/bigint/Add.cpp
+    VM/src/bigint/Sub.cpp
+    VM/src/bigint/Mul.cpp
+    VM/src/bigint/DivMod.cpp
+    VM/src/bigint/Cmp.cpp
+    VM/src/bigint/ToString.cpp
+    VM/src/bigint/ToString16.cpp
+    VM/src/bigint/FromString.cpp
     VM/src/lintegerimpl.cpp
     VM/src/lintegerlib.cpp
     VM/src/lbitlib.cpp
@@ -425,6 +433,14 @@ target_sources(Luau.VM PRIVATE
     VM/src/lapi.h
     VM/src/lbuffer.h
     VM/src/lbigint.h
+    VM/src/bigint/Add.h
+    VM/src/bigint/Sub.h
+    VM/src/bigint/Mul.h
+    VM/src/bigint/DivMod.h
+    VM/src/bigint/Cmp.h
+    VM/src/bigint/ToString.h
+    VM/src/bigint/FromString.h
+    VM/src/bigint/Digits.h
     VM/src/lbuiltins.h
     VM/src/lbytecode.h
     VM/src/lclass.h

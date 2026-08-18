@@ -42,7 +42,7 @@ CODEGEN_SOURCES=$(wildcard CodeGen/src/*.cpp)
 CODEGEN_OBJECTS=$(CODEGEN_SOURCES:%=$(BUILD)/%.o)
 CODEGEN_TARGET=$(BUILD)/libluaucodegen.a
 
-VM_SOURCES=$(wildcard VM/src/*.cpp)
+VM_SOURCES=$(wildcard VM/src/*.cpp) $(wildcard VM/src/bigint/*.cpp)
 VM_OBJECTS=$(VM_SOURCES:%=$(BUILD)/%.o)
 VM_TARGET=$(BUILD)/libluauvm.a
 
