@@ -1,6 +1,7 @@
 // This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "IrLoweringA64.h"
 
+#include "Luau/Common.h"
 #include "Luau/DenseHash.h"
 #include "Luau/IrData.h"
 #include "Luau/IrUtils.h"
@@ -296,6 +297,62 @@ static uint32_t getFloatBits(float value)
     static_assert(sizeof(result) == sizeof(value), "Expecting float to be 32-bit");
     memcpy(&result, &value, sizeof(value));
     return result;
+}
+
+// See IrLoweringX64 for an explanation on what this is for
+static const uint64_t kSubtypeMasks[18] = {
+    // Width Masks (Offsets 0 to 64)
+    0, 
+    0xFFull, 0xFFull,
+    0xFFFFull, 0xFFFFull,
+    0xFFFFFFFFull, 0xFFFFFFFFull,
+    0xFFFFFFFFFFFFFFFFull, 0xFFFFFFFFFFFFFFFFull,
+    
+    // Sign Masks (Offsets 72 to 136)
+    0,
+    0x80ull, 0,
+    0x8000ull, 0,
+    0x80000000ull, 0,
+    0x8000000000000000ull, 0
+};
+
+void IrLoweringA64::handleIntegerSubtypeWrapping(RegisterA64 reg, const IrOp& modeOp)
+{
+    if (modeOp.kind == IrOpKind::Constant)
+    {
+        IntegerMode mode = (IntegerMode)intOp(modeOp);
+        switch (mode)
+        {
+        case IntegerMode_I8: build.sbfx(reg, reg, 0, 8); break;
+        case IntegerMode_U8: build.ubfx(reg, reg, 0, 8); break;
+        case IntegerMode_I16: build.sbfx(reg, reg, 0, 16); break;
+        case IntegerMode_U16: build.ubfx(reg, reg, 0, 16); break;
+        case IntegerMode_I32: build.sbfx(reg, reg, 0, 32); break;
+        case IntegerMode_U32: build.ubfx(reg, reg, 0, 32); break;
+        default: break; // 64-bit source doesnt need truncation
+        }
+    }
+    else if (modeOp.kind == IrOpKind::Inst)
+    {
+        RegisterA64 modeReg = regOp(modeOp);
+
+        RegisterA64 tableReg = regs.allocTemp(KindA64::x);
+        RegisterA64 tempM = regs.allocTemp(KindA64::x);
+
+        build.mov64(tableReg, (uint64_t)kSubtypeMasks);
+
+        build.add(tempM, tableReg, modeReg, 3); // tempM = tableReg + modeReg << 3
+        
+        // Wrap
+        RegisterA64 tempW = regs.allocTemp(KindA64::x);
+        build.ldr(tempW, mem(tempM));
+        build.and_(reg, reg, tempW);
+
+        // Sign-extend (reg ^ M) - M
+        build.ldr(tempW, mem(tempM, 72));
+        build.eor(reg, reg, tempW);
+        build.sub(reg, reg, tempW);
+    }
 }
 
 IrLoweringA64::IrLoweringA64(LogBuilder* logger, AssemblyBuilderA64& build, ModuleHelpers& helpers, IrFunction& function, LoweringStats* stats)
@@ -669,6 +726,8 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             RegisterA64 temp2 = tempInt64(OP_B(inst));
             build.add(inst.regA64, temp1, temp2);
         }
+        if (OP_C(inst).kind != IrOpKind::None)
+            handleIntegerSubtypeWrapping(inst.regA64, OP_C(inst));
         break;
     case IrCmd::SUB_INT64:
         inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst), OP_B(inst)});
@@ -680,6 +739,8 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             RegisterA64 temp2 = tempInt64(OP_B(inst));
             build.sub(inst.regA64, temp1, temp2);
         }
+        if (OP_C(inst).kind != IrOpKind::None)
+            handleIntegerSubtypeWrapping(inst.regA64, OP_C(inst));
         break;
     case IrCmd::MUL_INT64:
         inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst), OP_B(inst)});
@@ -688,6 +749,8 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             RegisterA64 temp2 = tempInt64(OP_B(inst));
             build.mul(inst.regA64, temp1, temp2);
         }
+        if (OP_C(inst).kind != IrOpKind::None)
+            handleIntegerSubtypeWrapping(inst.regA64, OP_C(inst));
         break;
     case IrCmd::DIV_INT64:
         inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst), OP_B(inst)});
@@ -696,6 +759,8 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             RegisterA64 temp2 = tempInt64(OP_B(inst));
             build.sdiv(inst.regA64, temp1, temp2);
         }
+        if (OP_C(inst).kind != IrOpKind::None)
+            handleIntegerSubtypeWrapping(inst.regA64, OP_C(inst));
         break;
     case IrCmd::IDIV_INT64:
         // floored division: q = a / b, then if (q < 0 && a % b != 0) q -= 1
@@ -718,6 +783,8 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             build.cmp(inst.regA64, uint16_t(0));
             build.csel(inst.regA64, tempAdj, inst.regA64, ConditionA64::Less); // (result < 0) ? tempAdj : result
         }
+        if (OP_C(inst).kind != IrOpKind::None)
+            handleIntegerSubtypeWrapping(inst.regA64, OP_C(inst));
         break;
     case IrCmd::CHECK_DIV_INT64:
     {
@@ -3869,73 +3936,13 @@ RegisterA64 IrLoweringA64::tempInt(IrOp op)
 RegisterA64 IrLoweringA64::tempInt64(IrOp op)
 {
     if (op.kind == IrOpKind::Inst)
+    {
         return regOp(op);
+    }
     else if (op.kind == IrOpKind::Constant)
     {
         RegisterA64 temp = regs.allocTemp(KindA64::x);
-        uint64_t u = uint64_t(int64Op(op));
-
-        // Count non-zero halfwords (movz path) vs non-0xFFFF halfwords (movn path)
-        int movzCount = 0;
-        int movnCount = 0;
-        for (int shift = 0; shift < 64; shift += 16)
-        {
-            uint16_t hw = uint16_t(u >> shift);
-            if (hw != 0)
-                movzCount++;
-            if (hw != 0xFFFF)
-                movnCount++;
-        }
-
-        if (movzCount <= movnCount)
-        {
-            // movz path: emit movz for first non-zero halfword, movk for rest
-            bool first = true;
-            for (int shift = 0; shift < 64; shift += 16)
-            {
-                uint16_t hw = uint16_t(u >> shift);
-                if (hw != 0)
-                {
-                    if (first)
-                    {
-                        build.movz(temp, hw, shift);
-                        first = false;
-                    }
-                    else
-                    {
-                        build.movk(temp, hw, shift);
-                    }
-                }
-            }
-
-            if (first)
-                build.movz(temp, 0);
-        }
-        else
-        {
-            // movn path: use movn for first non-0xFFFF halfword, movk for rest
-            bool first = true;
-            for (int shift = 0; shift < 64; shift += 16)
-            {
-                uint16_t hw = uint16_t(u >> shift);
-                if (hw != 0xFFFF)
-                {
-                    if (first)
-                    {
-                        build.movn(temp, uint16_t(~hw), shift);
-                        first = false;
-                    }
-                    else
-                    {
-                        build.movk(temp, hw, shift);
-                    }
-                }
-            }
-
-            if (first)
-                build.movn(temp, 0);
-        }
-
+        build.mov64(temp, uint64_t(int64Op(op)));
         return temp;
     }
     else

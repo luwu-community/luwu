@@ -5066,9 +5066,9 @@ AstExpr* Parser::parseNumber()
     
     struct SuffixMap { const char* s; uint8_t m; };
     const SuffixMap intSuffixes[] = {
-        {"i8", 1}, {"u8", 2}, {"i16", 3}, {"u16", 4}, 
-        {"i32", 5}, {"u32", 6}, {"i64", 7}, {"u64", 8}, 
-        {"i", 7}, {"n", 0}
+        {"i8", IntegerMode_I8}, {"u8", IntegerMode_U8}, {"i16", IntegerMode_I16}, {"u16", IntegerMode_U16}, 
+        {"i32", IntegerMode_I32}, {"u32", IntegerMode_U32}, {"i64", IntegerMode_I64}, {"u64", IntegerMode_U64}, 
+        {"i", IntegerMode_I64}, {"n", IntegerMode_Dynamic}
     };
 
     for (const auto& suffix : intSuffixes)
@@ -5118,7 +5118,7 @@ AstExpr* Parser::parseNumber()
                 case IntegerMode_I32: value = (int64_t)(int32_t)uval; break;
                 case IntegerMode_U32: value = (uint64_t)(uint32_t)uval; break;
                 case IntegerMode_I64: value = (int64_t)(int64_t)uval; break;
-                case IntegerMode_U64: value = (uint64_t)(uint64_t)uval; break;
+                case IntegerMode_U64: value = uval; break;
                 default: break;
             }
             node = allocator.alloc<AstExprConstantInteger>(start, value, result);

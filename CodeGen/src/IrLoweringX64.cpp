@@ -1,6 +1,7 @@
 // This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "IrLoweringX64.h"
 
+#include "Luau/Common.h"
 #include "Luau/CodeGenOptions.h"
 #include "Luau/DenseHash.h"
 #include "Luau/IrCallWrapperX64.h"
@@ -27,6 +28,62 @@ namespace CodeGen
 {
 namespace X64
 {
+
+// Yes, this is cursed but after like a couple of hours of looking for 
+// a better one, the wrap (reg & W) +sign-extend approach (reg ^ M) & M
+// using a table is the best approach ive found
+//
+// Unfortunately, bc we store all integers as subtypes on top of int64_t,
+// our JIT side can be dealing with a dynamic mode
+static const uint64_t kSubtypeMasks[18] = {
+    // Width Masks (Offsets 0 to 64)
+    0, 
+    0xFFull, 0xFFull,
+    0xFFFFull, 0xFFFFull,
+    0xFFFFFFFFull, 0xFFFFFFFFull,
+    0xFFFFFFFFFFFFFFFFull, 0xFFFFFFFFFFFFFFFFull,
+    
+    // Sign Masks (Offsets 72 to 136)
+    0,
+    0x80ull, 0,
+    0x8000ull, 0,
+    0x80000000ull, 0,
+    0x8000000000000000ull, 0
+};
+
+void IrLoweringX64::handleIntegerSubtypeWrapping(RegisterX64 reg, const IrOp& modeOp)
+{
+    if (modeOp.kind == IrOpKind::Constant)
+    {
+        IntegerMode mode = (IntegerMode)intOp(modeOp);
+        switch (mode)
+        {
+        case IntegerMode_I8: build.movsx(reg, byteReg(reg)); break;
+        case IntegerMode_U8: build.movzx(reg, byteReg(reg)); break;
+        case IntegerMode_I16: build.movsx(reg, wordReg(reg)); break;
+        case IntegerMode_U16: build.movzx(reg, wordReg(reg)); break;
+        case IntegerMode_I32: build.movsxd(reg, dwordReg(reg)); break;
+        case IntegerMode_U32: build.mov(dwordReg(reg), dwordReg(reg)); break; 
+        default: break; // 64-bit source doesnt need truncation
+        }
+    }
+    else if (modeOp.kind == IrOpKind::Inst)
+    {
+        RegisterX64 modeReg = regOp(modeOp);
+
+        ScopedRegX64 tableReg{regs, SizeX64::qword};
+        ScopedRegX64 tempM{regs, SizeX64::qword};
+
+        // Wrap
+        build.mov64(tableReg.reg, (uint64_t)kSubtypeMasks);
+        build.and_(reg, qword[tableReg.reg + qwordReg(modeReg) * 8]);
+
+        // Sign-extend (reg ^ M) - M
+        build.mov(tempM.reg, qword[tableReg.reg + qwordReg(modeReg) * 8 + 72]);
+        build.xor_(reg, tempM.reg);
+        build.sub(reg, tempM.reg);
+    }
+}
 
 IrLoweringX64::IrLoweringX64(LogBuilder* logger, AssemblyBuilderX64& build, ModuleHelpers& helpers, IrFunction& function, LoweringStats* stats)
     : logger(logger)
@@ -522,6 +579,8 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         {
             CODEGEN_ASSERT(!"Unsupported instruction form");
         }
+        if (OP_C(inst).kind != IrOpKind::None)
+            handleIntegerSubtypeWrapping(inst.regX64, OP_C(inst));
 
         break;
     }
@@ -601,6 +660,8 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         {
             CODEGEN_ASSERT(!"Unsupported instruction form");
         }
+        if (OP_C(inst).kind != IrOpKind::None)
+            handleIntegerSubtypeWrapping(inst.regX64, OP_C(inst));
         break;
     case IrCmd::SEXTI8_INT:
         inst.regX64 = regs.allocRegOrReuse(SizeX64::dword, index, {OP_A(inst)});
@@ -662,6 +723,8 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
         build.mov(inst.regX64, memRegInt64Op(OP_A(inst)));
         build.imul(inst.regX64, memRegInt64Op(OP_B(inst)));
+        if (OP_C(inst).kind != IrOpKind::None)
+            handleIntegerSubtypeWrapping(inst.regX64, OP_C(inst));
         break;
     case IrCmd::DIV_NUM:
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
@@ -692,6 +755,8 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
         inst.regX64 = regs.allocRegOrReuse(SizeX64::qword, index, {OP_A(inst), OP_B(inst)});
         build.mov(inst.regX64, rax);
+        if (OP_C(inst).kind != IrOpKind::None)
+            handleIntegerSubtypeWrapping(inst.regX64, OP_C(inst));
         break;
     }
     case IrCmd::IDIV_NUM:
@@ -739,6 +804,8 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.sub(inst.regX64, 1); // floor adjustment
         build.setLabel(done);
 
+        if (OP_C(inst).kind != IrOpKind::None)
+            handleIntegerSubtypeWrapping(inst.regX64, OP_C(inst));
         break;
     }
     case IrCmd::MULADD_NUM:

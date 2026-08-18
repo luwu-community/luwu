@@ -31,6 +31,8 @@ struct IrLoweringA64
     void lowerInst(IrInst& inst, uint32_t index, const IrBlock& next);
     void startBlock(const IrBlock& curr);
     void finishBlock(const IrBlock& curr, const IrBlock& next);
+    void handleIntegerSubtypeWrapping(RegisterA64 reg, const IrOp& modeOp);
+
     void finishFunction();
 
     bool hasError() const;

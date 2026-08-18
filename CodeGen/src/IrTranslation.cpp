@@ -642,6 +642,7 @@ static void translateBinaryNumericFallbackIfRequired(IrBuilder& build, IrOp fall
                 IrOp extraB = (rb != -1) ? build.inst(IrCmd::LOAD_EXTRA, build.vmReg(rb)) : build.constInt(build.function.proto->k[vmConstOp(opb)].extra[0]);
                 IrOp extraC = (rc != -1) ? build.inst(IrCmd::LOAD_EXTRA, build.vmReg(rc)) : build.constInt(build.function.proto->k[vmConstOp(opc)].extra[0]);
                 build.inst(IrCmd::CHECK_CMP_INT, extraB, extraC, build.cond(IrCondition::Equal), vmFallback);
+                build.inst(IrCmd::CHECK_CMP_INT, extraB, build.constInt(IntegerMode_Dynamic), build.cond(IrCondition::NotEqual), vmFallback);
                     
                 IrOp vb = (rb != -1) ? build.inst(IrCmd::LOAD_INT64, opb) : loadInt64OrConstant(build, opb);
                 IrOp vc = (rc != -1) ? build.inst(IrCmd::LOAD_INT64, opc) : loadInt64OrConstant(build, opc);
@@ -650,21 +651,21 @@ static void translateBinaryNumericFallbackIfRequired(IrBuilder& build, IrOp fall
                 switch (tm)
                 {
                 case TM_ADD:
-                    binOp = build.inst(IrCmd::ADD_INT64, vb, vc);
+                    binOp = build.inst(IrCmd::ADD_INT64, vb, vc, extraB);
                     break;
                 case TM_SUB:
-                    binOp = build.inst(IrCmd::SUB_INT64, vb, vc);
+                    binOp = build.inst(IrCmd::SUB_INT64, vb, vc, extraB);
                     break;
                 case TM_MUL:
-                    binOp = build.inst(IrCmd::MUL_INT64, vb, vc);
+                    binOp = build.inst(IrCmd::MUL_INT64, vb, vc, extraB);
                     break;
                 case TM_DIV:
                     build.inst(IrCmd::CHECK_DIV_INT64, vb, vc, vmFallback);
-                    binOp = build.inst(IrCmd::DIV_INT64, vb, vc);
+                    binOp = build.inst(IrCmd::DIV_INT64, vb, vc, extraB);
                     break;
                 case TM_IDIV:
                     build.inst(IrCmd::CHECK_DIV_INT64, vb, vc, vmFallback);
-                    binOp = build.inst(IrCmd::IDIV_INT64, vb, vc);
+                    binOp = build.inst(IrCmd::IDIV_INT64, vb, vc, extraB);
                     break;
                 case TM_MOD:
                     build.inst(IrCmd::CHECK_CMP_INT64, vc, build.constInt64(0), build.cond(IrCondition::NotEqual), vmFallback);
