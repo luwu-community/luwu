@@ -3184,6 +3184,7 @@ private:
         {
         case ConstantNumberParseResult::Ok:
         case ConstantNumberParseResult::Malformed:
+        case ConstantNumberParseResult::HeapInteger:
             break;
         case ConstantNumberParseResult::Imprecise:
             emitWarning(

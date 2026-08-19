@@ -909,9 +909,6 @@ TEST_CASE_FIXTURE(Fixture, "parse_numbers_error")
         matchParseError("return 123ii", "Malformed integer");
         matchParseError("return 0xABii", "Malformed integer");
 
-        matchParseError("return 99999999999999999999i", "Integer overflow");
-        matchParseError("return 0xFFFFFFFFFFFFFFFFFFi", "Integer overflow");
-        matchParseError("return 0b10000000000000000000000000000000000000000000000000000000000000000i", "Integer overflow");
         matchParseError("return 123ii", "Malformed integer");
         matchParseError("return 0xABii", "Malformed integer");
     }

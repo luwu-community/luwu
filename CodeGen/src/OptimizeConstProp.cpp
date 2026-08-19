@@ -990,13 +990,7 @@ struct ConstPropState
                             return;
                         }
                         break;
-                    case IrCmd::BUFFER_READI64:
-                        if (info.loadCmd == IrCmd::BUFFER_READI64)
-                        {
-                            substitute(function, loadInst, info.value);
-                            return;
-                        }
-                        break;
+
                     default:
                         CODEGEN_ASSERT(!"unknown load instruction");
                     }
@@ -1452,7 +1446,6 @@ static void handleBuiltinEffects(ConstPropState& state, LuauBuiltinFunction bfid
     case LBF_BUFFER_READU32:
     case LBF_BUFFER_READF32:
     case LBF_BUFFER_READF64:
-    case LBF_BUFFER_READINTEGER:
     case LBF_VECTOR_MAGNITUDE:
     case LBF_VECTOR_NORMALIZE:
     case LBF_VECTOR_CROSS:
@@ -1469,50 +1462,14 @@ static void handleBuiltinEffects(ConstPropState& state, LuauBuiltinFunction bfid
     case LBF_MATH_ISNAN:
     case LBF_MATH_ISINF:
     case LBF_MATH_ISFINITE:
-    case LBF_INTEGER_ADD:
-    case LBF_INTEGER_MUL:
-    case LBF_INTEGER_IDIV:
-    case LBF_INTEGER_LT:
-    case LBF_INTEGER_CREATE:
-    case LBF_INTEGER_MOD:
-    case LBF_INTEGER_SUB:
-    case LBF_INTEGER_LE:
-    case LBF_INTEGER_GT:
-    case LBF_INTEGER_GE:
-    case LBF_INTEGER_ULT:
-    case LBF_INTEGER_ULE:
-    case LBF_INTEGER_UGT:
-    case LBF_INTEGER_UGE:
-    case LBF_INTEGER_DIV:
-    case LBF_INTEGER_NEG:
-    case LBF_INTEGER_BSWAP:
-    case LBF_INTEGER_MIN:
-    case LBF_INTEGER_MAX:
-    case LBF_INTEGER_REM:
-    case LBF_INTEGER_UDIV:
-    case LBF_INTEGER_UREM:
-    case LBF_INTEGER_BAND:
-    case LBF_INTEGER_BOR:
-    case LBF_INTEGER_BNOT:
-    case LBF_INTEGER_BXOR:
-    case LBF_INTEGER_BTEST:
-    case LBF_INTEGER_COUNTRZ:
-    case LBF_INTEGER_COUNTLZ:
-    case LBF_INTEGER_LSHIFT:
-    case LBF_INTEGER_RSHIFT:
-    case LBF_INTEGER_ARSHIFT:
-    case LBF_INTEGER_LROTATE:
-    case LBF_INTEGER_RROTATE:
-    case LBF_INTEGER_CLAMP:
-    case LBF_INTEGER_EXTRACT:
-    case LBF_INTEGER_TONUMBER:
+
         break;
     case LBF_BUFFER_WRITEU8:
     case LBF_BUFFER_WRITEU16:
     case LBF_BUFFER_WRITEU32:
     case LBF_BUFFER_WRITEF32:
     case LBF_BUFFER_WRITEF64:
-    case LBF_BUFFER_WRITEINTEGER:
+
         state.invalidateHeapBufferData();
         break;
     case LBF_TABLE_INSERT:
@@ -2447,12 +2404,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::BUFFER_WRITEF64:
         state.forwardBufferStoreToLoad(inst, IrCmd::BUFFER_READF64, 8);
         break;
-    case IrCmd::BUFFER_READI64:
-        state.substituteOrRecordBufferLoad(block, index, inst, 8);
-        break;
-    case IrCmd::BUFFER_WRITEI64:
-        state.forwardBufferStoreToLoad(inst, IrCmd::BUFFER_READI64, 8);
-        break;
+
     case IrCmd::CHECK_GC:
         // It is enough to perform a GC check once in a block
         if (state.checkedGc)
@@ -2511,6 +2463,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
 
         // These instructions don't have an effect on register/memory state we are tracking
     case IrCmd::NOP:
+    case IrCmd::LOAD_EXTRA:
         break;
     case IrCmd::LOAD_ENV:
         if (state.loadEnvIdx != kInvalidInstIdx)
@@ -2568,9 +2521,6 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::DIV_INT64:
     case IrCmd::IDIV_INT64:
     case IrCmd::CHECK_DIV_INT64:
-    case IrCmd::UDIV_INT64:
-    case IrCmd::REM_INT64:
-    case IrCmd::UREM_INT64:
     case IrCmd::MOD_INT64:
     case IrCmd::ADD_INT:
     case IrCmd::SUB_INT:
@@ -2677,7 +2627,6 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::ABS_NUM:
     case IrCmd::SIGN_NUM:
     case IrCmd::SELECT_NUM:
-    case IrCmd::SELECT_INT64:
     case IrCmd::SELECT_VEC:
     case IrCmd::MULADD_VEC:
     case IrCmd::EXTRACT_VEC:
@@ -3282,18 +3231,6 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::ADJUST_STACK_TO_REG: // Changes stack top, but not the values
     case IrCmd::ADJUST_STACK_TO_TOP: // Changes stack top, but not the values
     case IrCmd::CHECK_FASTCALL_RES:  // Changes stack top, but not the values
-    case IrCmd::BITAND_INT64:
-    case IrCmd::BITXOR_INT64:
-    case IrCmd::BITOR_INT64:
-    case IrCmd::BITNOT_INT64:
-    case IrCmd::BITLSHIFT_INT64:
-    case IrCmd::BITRSHIFT_INT64:
-    case IrCmd::BITARSHIFT_INT64:
-    case IrCmd::BITLROTATE_INT64:
-    case IrCmd::BITRROTATE_INT64:
-    case IrCmd::BITCOUNTLZ_INT64:
-    case IrCmd::BITCOUNTRZ_INT64:
-    case IrCmd::BYTESWAP_INT64:
     case IrCmd::BITAND_UINT:
     case IrCmd::BITXOR_UINT:
     case IrCmd::BITOR_UINT:

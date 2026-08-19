@@ -12,6 +12,7 @@ local ignore =
 	"_G.require", -- need to move to Roblox type defs
 	"_G.none", -- falsy global value, declared as any
 	"_G.integer", -- WIP integer library is being replaced, type info and VM registration are out of sync
+	"_G.bigint",
 }
 
 function verify(real, rtti, path)

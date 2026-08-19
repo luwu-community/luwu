@@ -280,6 +280,20 @@ void AssemblyBuilderX64::movsx(RegisterX64 lhs, OperandX64 rhs)
     commit();
 }
 
+void AssemblyBuilderX64::movsxd(RegisterX64 lhs, OperandX64 rhs)
+{
+    if (logText)
+        log("movsxd", lhs, rhs);
+
+    SizeX64 size = rhs.cat == CategoryX64::reg ? rhs.base.size : rhs.memSize;
+    CODEGEN_ASSERT(size == SizeX64::dword);
+
+    placeRex(lhs, rhs);
+    place(0x63);
+    placeRegAndModRegMem(lhs, rhs);
+    commit();
+}
+
 void AssemblyBuilderX64::movzx(RegisterX64 lhs, OperandX64 rhs)
 {
     if (logText)

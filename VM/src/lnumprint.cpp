@@ -7,9 +7,6 @@
 
 #include <string.h>
 
-#ifdef _MSC_VER
-#include <intrin.h>
-#endif
 
 // This work is based on:
 // Raffaello Giulietti. The Schubfach way to render doubles. 2021
@@ -56,28 +53,6 @@ static const uint64_t kPow10Table[(kPow10TableMax - kPow10TableMin + 1 + 15) / 1
 static const char kDigitTable[] = "0001020304050607080910111213141516171819202122232425262728293031323334353637383940414243444546474849"
                                   "5051525354555657585960616263646566676869707172737475767778798081828384858687888990919293949596979899";
 
-// x*y => 128-bit product (lo+hi)
-inline uint64_t mul128(uint64_t x, uint64_t y, uint64_t* hi)
-{
-#if defined(_MSC_VER) && defined(_M_X64)
-    return _umul128(x, y, hi);
-#elif defined(__SIZEOF_INT128__)
-    unsigned __int128 r = x;
-    r *= y;
-    *hi = uint64_t(r >> 64);
-    return uint64_t(r);
-#else
-    uint32_t x0 = uint32_t(x), x1 = uint32_t(x >> 32);
-    uint32_t y0 = uint32_t(y), y1 = uint32_t(y >> 32);
-    uint64_t p11 = uint64_t(x1) * y1, p01 = uint64_t(x0) * y1;
-    uint64_t p10 = uint64_t(x1) * y0, p00 = uint64_t(x0) * y0;
-    uint64_t mid = p10 + (p00 >> 32) + uint32_t(p01);
-    uint64_t r0 = (mid << 32) | uint32_t(p00);
-    uint64_t r1 = p11 + (mid >> 32) + (p01 >> 32);
-    *hi = r1;
-    return r0;
-#endif
-}
 
 // (x*y)>>64 => 128-bit product (lo+hi)
 inline uint64_t mul192hi(uint64_t xhi, uint64_t xlo, uint64_t y, uint64_t* hi)

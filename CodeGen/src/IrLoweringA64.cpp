@@ -1,6 +1,7 @@
 // This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "IrLoweringA64.h"
 
+#include "Luau/Common.h"
 #include "Luau/DenseHash.h"
 #include "Luau/IrData.h"
 #include "Luau/IrUtils.h"
@@ -298,6 +299,62 @@ static uint32_t getFloatBits(float value)
     return result;
 }
 
+// See IrLoweringX64 for an explanation on what this is for
+static const uint64_t kSubtypeMasks[18] = {
+    // Width Masks (Offsets 0 to 64)
+    0, 
+    0xFFull, 0xFFull,
+    0xFFFFull, 0xFFFFull,
+    0xFFFFFFFFull, 0xFFFFFFFFull,
+    0xFFFFFFFFFFFFFFFFull, 0xFFFFFFFFFFFFFFFFull,
+    
+    // Sign Masks (Offsets 72 to 136)
+    0,
+    0x80ull, 0,
+    0x8000ull, 0,
+    0x80000000ull, 0,
+    0x8000000000000000ull, 0
+};
+
+void IrLoweringA64::handleIntegerSubtypeWrapping(RegisterA64 reg, const IrOp& modeOp)
+{
+    if (modeOp.kind == IrOpKind::Constant)
+    {
+        IntegerMode mode = (IntegerMode)intOp(modeOp);
+        switch (mode)
+        {
+        case IntegerMode_I8: build.sbfx(reg, reg, 0, 8); break;
+        case IntegerMode_U8: build.ubfx(reg, reg, 0, 8); break;
+        case IntegerMode_I16: build.sbfx(reg, reg, 0, 16); break;
+        case IntegerMode_U16: build.ubfx(reg, reg, 0, 16); break;
+        case IntegerMode_I32: build.sbfx(reg, reg, 0, 32); break;
+        case IntegerMode_U32: build.ubfx(reg, reg, 0, 32); break;
+        default: break; // 64-bit source doesnt need truncation
+        }
+    }
+    else if (modeOp.kind == IrOpKind::Inst)
+    {
+        RegisterA64 modeReg = regOp(modeOp);
+
+        RegisterA64 tableReg = regs.allocTemp(KindA64::x);
+        RegisterA64 tempM = regs.allocTemp(KindA64::x);
+
+        build.mov64(tableReg, (uint64_t)kSubtypeMasks);
+
+        build.add(tempM, tableReg, modeReg, 3); // tempM = tableReg + modeReg << 3
+        
+        // Wrap
+        RegisterA64 tempW = regs.allocTemp(KindA64::x);
+        build.ldr(tempW, mem(tempM));
+        build.and_(reg, reg, tempW);
+
+        // Sign-extend (reg ^ M) - M
+        build.ldr(tempW, mem(tempM, 72));
+        build.eor(reg, reg, tempW);
+        build.sub(reg, reg, tempW);
+    }
+}
+
 IrLoweringA64::IrLoweringA64(LogBuilder* logger, AssemblyBuilderA64& build, ModuleHelpers& helpers, IrFunction& function, LoweringStats* stats)
     : logger(logger)
     , build(build)
@@ -330,6 +387,13 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
     {
         inst.regA64 = regs.allocReg(KindA64::w, index);
         AddressA64 addr = tempAddr(OP_A(inst), offsetof(TValue, tt));
+        build.ldr(inst.regA64, addr);
+        break;
+    }
+    case IrCmd::LOAD_EXTRA:
+    {
+        inst.regA64 = regs.allocReg(KindA64::w, index);
+        AddressA64 addr = tempAddr(OP_A(inst), offsetof(TValue, extra));
         build.ldr(inst.regA64, addr);
         break;
     }
@@ -498,15 +562,19 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
     case IrCmd::STORE_EXTRA:
     {
         AddressA64 addr = tempAddr(OP_A(inst), offsetof(TValue, extra));
-        if (intOp(OP_B(inst)) == 0)
+        if (OP_B(inst).kind == IrOpKind::Constant && intOp(OP_B(inst)) == 0)
         {
             build.str(wzr, addr);
         }
-        else
+        else if (OP_B(inst).kind == IrOpKind::Constant)
         {
             RegisterA64 temp = regs.allocTemp(KindA64::w);
             build.mov(temp, intOp(OP_B(inst)));
             build.str(temp, addr);
+        }
+        else if (OP_B(inst).kind == IrOpKind::Inst)
+        {
+            build.str(regOp(OP_B(inst)), addr);
         }
         break;
     }
@@ -658,6 +726,8 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             RegisterA64 temp2 = tempInt64(OP_B(inst));
             build.add(inst.regA64, temp1, temp2);
         }
+        if (OP_C(inst).kind != IrOpKind::None)
+            handleIntegerSubtypeWrapping(inst.regA64, OP_C(inst));
         break;
     case IrCmd::SUB_INT64:
         inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst), OP_B(inst)});
@@ -669,6 +739,8 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             RegisterA64 temp2 = tempInt64(OP_B(inst));
             build.sub(inst.regA64, temp1, temp2);
         }
+        if (OP_C(inst).kind != IrOpKind::None)
+            handleIntegerSubtypeWrapping(inst.regA64, OP_C(inst));
         break;
     case IrCmd::MUL_INT64:
         inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst), OP_B(inst)});
@@ -677,6 +749,8 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             RegisterA64 temp2 = tempInt64(OP_B(inst));
             build.mul(inst.regA64, temp1, temp2);
         }
+        if (OP_C(inst).kind != IrOpKind::None)
+            handleIntegerSubtypeWrapping(inst.regA64, OP_C(inst));
         break;
     case IrCmd::DIV_INT64:
         inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst), OP_B(inst)});
@@ -685,6 +759,8 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             RegisterA64 temp2 = tempInt64(OP_B(inst));
             build.sdiv(inst.regA64, temp1, temp2);
         }
+        if (OP_C(inst).kind != IrOpKind::None)
+            handleIntegerSubtypeWrapping(inst.regA64, OP_C(inst));
         break;
     case IrCmd::IDIV_INT64:
         // floored division: q = a / b, then if (q < 0 && a % b != 0) q -= 1
@@ -707,6 +783,8 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             build.cmp(inst.regA64, uint16_t(0));
             build.csel(inst.regA64, tempAdj, inst.regA64, ConditionA64::Less); // (result < 0) ? tempAdj : result
         }
+        if (OP_C(inst).kind != IrOpKind::None)
+            handleIntegerSubtypeWrapping(inst.regA64, OP_C(inst));
         break;
     case IrCmd::CHECK_DIV_INT64:
     {
@@ -734,23 +812,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         finalizeTargetLabel(OP_C(inst), index, fresh);
         break;
     }
-    case IrCmd::UDIV_INT64:
-        inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst), OP_B(inst)});
-        {
-            RegisterA64 temp1 = tempInt64(OP_A(inst));
-            RegisterA64 temp2 = tempInt64(OP_B(inst));
-            build.udiv(inst.regA64, temp1, temp2);
-        }
-        break;
-    case IrCmd::REM_INT64:
-        inst.regA64 = regs.allocReg(KindA64::x, index);
-        {
-            RegisterA64 temp1 = tempInt64(OP_A(inst));
-            RegisterA64 temp2 = tempInt64(OP_B(inst));
-            build.sdiv(inst.regA64, temp1, temp2);
-            build.rem(inst.regA64, temp1, temp2);
-        }
-        break;
+
     case IrCmd::MOD_INT64:
         // floored modulo: rem = a % b (C truncated); if (rem != 0 && sign(rem) != sign(b)) rem += b
         inst.regA64 = regs.allocReg(KindA64::x, index); // can't reuse: dividend (temp1) needed after sdiv
@@ -774,15 +836,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             build.csel(inst.regA64, tempAdj, tempRem, ConditionA64::NotEqual); // if rem != 0 then adjusted else 0
         }
         break;
-    case IrCmd::UREM_INT64:
-        inst.regA64 = regs.allocReg(KindA64::x, index);
-        {
-            RegisterA64 temp1 = tempInt64(OP_A(inst));
-            RegisterA64 temp2 = tempInt64(OP_B(inst));
-            build.udiv(inst.regA64, temp1, temp2);
-            build.rem(inst.regA64, temp1, temp2);
-        }
-        break;
+
     case IrCmd::SEXTI8_INT:
         inst.regA64 = regs.allocReuse(KindA64::w, index, {OP_A(inst)});
 
@@ -1056,7 +1110,6 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.fcsel(inst.regA64, temp2, temp1, getConditionFP(IrCondition::Equal));
         break;
     }
-    case IrCmd::SELECT_INT64:
     {
         IrCondition cond = conditionOp(OP_E(inst));
 
@@ -2677,11 +2730,11 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         Label fresh; // used when guard aborts execution or jumps to a VM exit
         Label& fail = getTargetLabel(OP_D(inst), index, fresh);
 
-        if (cond == IrCondition::Equal && intOp(OP_B(inst)) == 0)
+        if (cond == IrCondition::Equal && OP_B(inst).kind == IrOpKind::Constant && intOp(OP_B(inst)) == 0)
         {
             build.cbnz(regOp(OP_A(inst)), fail);
         }
-        else if (cond == IrCondition::NotEqual && intOp(OP_B(inst)) == 0)
+        else if (cond == IrCondition::NotEqual && OP_B(inst).kind == IrOpKind::Constant && intOp(OP_B(inst)) == 0)
         {
             build.cbz(regOp(OP_A(inst)), fail);
         }
@@ -3172,189 +3225,8 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         CODEGEN_ASSERT(!"Pseudo instructions should not be lowered");
         break;
 
-    case IrCmd::BITAND_INT64:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst), OP_B(inst)});
-        RegisterA64 temp1 = tempInt64(OP_A(inst));
-        RegisterA64 temp2 = tempInt64(OP_B(inst));
-        build.and_(inst.regA64, temp1, temp2);
-        break;
-    }
-    case IrCmd::BITXOR_INT64:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst), OP_B(inst)});
-        RegisterA64 temp1 = tempInt64(OP_A(inst));
-        RegisterA64 temp2 = tempInt64(OP_B(inst));
-        build.eor(inst.regA64, temp1, temp2);
-        break;
-    }
-    case IrCmd::BITOR_INT64:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst), OP_B(inst)});
-        RegisterA64 temp1 = tempInt64(OP_A(inst));
-        RegisterA64 temp2 = tempInt64(OP_B(inst));
-        build.orr(inst.regA64, temp1, temp2);
-        break;
-    }
-    case IrCmd::BITNOT_INT64:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst)});
-        RegisterA64 temp = tempInt64(OP_A(inst));
-        build.mvn_(inst.regA64, temp);
-        break;
-    }
-    case IrCmd::BITLSHIFT_INT64:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst), OP_B(inst)});
-        RegisterA64 source = tempInt64(OP_A(inst));
-        RegisterA64 amount = tempInt64(OP_B(inst));
-        RegisterA64 temp = regs.allocTemp(KindA64::x);
 
-        Label done, negative, outOfRange;
 
-        // (amount + 63) > 126 = |amount| > 63
-        build.add(temp, amount, uint16_t(63));
-        build.cmp(temp, uint16_t(126));
-        build.b(ConditionA64::UnsignedGreater, outOfRange);
-
-        // check sign of amount
-        build.cmp(amount, uint16_t(0));
-        build.b(ConditionA64::Less, negative);
-
-        // left shift
-        build.lsl(inst.regA64, source, amount);
-        build.b(done);
-
-        // right shift by -amount
-        build.setLabel(negative);
-        build.neg(temp, amount);
-        build.lsr(inst.regA64, source, temp);
-        build.b(done);
-
-        build.setLabel(outOfRange);
-        build.mov(inst.regA64, 0);
-
-        build.setLabel(done);
-        break;
-    }
-    case IrCmd::BITRSHIFT_INT64:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst), OP_B(inst)});
-        RegisterA64 source = tempInt64(OP_A(inst));
-        RegisterA64 amount = tempInt64(OP_B(inst));
-        RegisterA64 temp = regs.allocTemp(KindA64::x);
-
-        Label done, negative, outOfRange;
-
-        // (amount + 63) > 126 = |amount| > 63
-        build.add(temp, amount, uint16_t(63));
-        build.cmp(temp, uint16_t(126));
-        build.b(ConditionA64::UnsignedGreater, outOfRange);
-
-        // check sign of amount
-        build.cmp(amount, uint16_t(0));
-        build.b(ConditionA64::Less, negative);
-
-        // unsigned right shift
-        build.lsr(inst.regA64, source, amount);
-        build.b(done);
-
-        // left shift by -amount
-        build.setLabel(negative);
-        build.neg(temp, amount);
-        build.lsl(inst.regA64, source, temp);
-        build.b(done);
-
-        build.setLabel(outOfRange);
-        build.mov(inst.regA64, 0);
-
-        build.setLabel(done);
-        break;
-    }
-    case IrCmd::BITARSHIFT_INT64:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst), OP_B(inst)});
-        RegisterA64 source = tempInt64(OP_A(inst));
-        RegisterA64 amount = tempInt64(OP_B(inst));
-        RegisterA64 temp = regs.allocTemp(KindA64::x);
-
-        Label done, negative, outOfRangePositive, outOfRangeNegative;
-
-        // amount > 63 (arithmetic right shift fills with sign)
-        build.cmp(amount, uint16_t(63));
-        build.b(ConditionA64::Greater, outOfRangePositive);
-
-        // add 63, if < 0 then amount < -63
-        build.add(temp, amount, uint16_t(63));
-        build.cmp(temp, uint16_t(0));
-        build.b(ConditionA64::Less, outOfRangeNegative);
-
-        // check sign of amount
-        build.cmp(amount, uint16_t(0));
-        build.b(ConditionA64::Less, negative);
-
-        // arithmetic right shift that sign extends
-        build.asr(inst.regA64, source, amount);
-        build.b(done);
-
-        // left shift by -amount (unsigned)
-        build.setLabel(negative);
-        build.neg(temp, amount);
-        build.lsl(inst.regA64, source, temp);
-        build.b(done);
-
-        // amount > 63 = sign-fill (n < 0 ? -1 : 0)
-        build.setLabel(outOfRangePositive);
-        build.asr(inst.regA64, source, uint8_t(63));
-        build.b(done);
-
-        // amount < -63 = result is 0
-        build.setLabel(outOfRangeNegative);
-        build.mov(inst.regA64, 0);
-
-        build.setLabel(done);
-        break;
-    }
-    case IrCmd::BITLROTATE_INT64:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_B(inst)}); // can't reuse A because it would be clobbered by neg
-        RegisterA64 source = tempInt64(OP_A(inst));
-        RegisterA64 amount = tempInt64(OP_B(inst));
-        // left rotate = rotate by negative
-        build.neg(inst.regA64, amount);
-        build.ror(inst.regA64, source, inst.regA64);
-        break;
-    }
-    case IrCmd::BITRROTATE_INT64:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst), OP_B(inst)});
-        RegisterA64 source = tempInt64(OP_A(inst));
-        RegisterA64 amount = tempInt64(OP_B(inst));
-        build.ror(inst.regA64, source, amount);
-        break;
-    }
-    case IrCmd::BITCOUNTLZ_INT64:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst)});
-        RegisterA64 temp = tempInt64(OP_A(inst));
-        build.clz(inst.regA64, temp);
-        break;
-    }
-    case IrCmd::BITCOUNTRZ_INT64:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst)});
-        RegisterA64 temp = tempInt64(OP_A(inst));
-        build.rbit(inst.regA64, temp);
-        build.clz(inst.regA64, inst.regA64);
-        break;
-    }
-    case IrCmd::BYTESWAP_INT64:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst)});
-        RegisterA64 temp = tempInt64(OP_A(inst));
-        build.rev(inst.regA64, temp);
-        break;
-    }
     case IrCmd::BITAND_UINT:
     {
         inst.regA64 = regs.allocReuse(KindA64::w, index, {OP_A(inst), OP_B(inst)});
@@ -3684,23 +3556,6 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
 
-    case IrCmd::BUFFER_READI64:
-    {
-        inst.regA64 = regs.allocReg(KindA64::x, index);
-        AddressA64 addr = tempAddrBuffer(OP_A(inst), OP_B(inst), tagOp(OP_C(inst)));
-
-        build.ldr(inst.regA64, addr);
-        break;
-    }
-
-    case IrCmd::BUFFER_WRITEI64:
-    {
-        RegisterA64 temp = tempInt64(OP_C(inst));
-        AddressA64 addr = tempAddrBuffer(OP_A(inst), OP_B(inst), tagOp(OP_D(inst)));
-
-        build.str(temp, addr);
-        break;
-    }
 
     case IrCmd::JUMP_CMP_PROTOID:
     {
@@ -4081,73 +3936,13 @@ RegisterA64 IrLoweringA64::tempInt(IrOp op)
 RegisterA64 IrLoweringA64::tempInt64(IrOp op)
 {
     if (op.kind == IrOpKind::Inst)
+    {
         return regOp(op);
+    }
     else if (op.kind == IrOpKind::Constant)
     {
         RegisterA64 temp = regs.allocTemp(KindA64::x);
-        uint64_t u = uint64_t(int64Op(op));
-
-        // Count non-zero halfwords (movz path) vs non-0xFFFF halfwords (movn path)
-        int movzCount = 0;
-        int movnCount = 0;
-        for (int shift = 0; shift < 64; shift += 16)
-        {
-            uint16_t hw = uint16_t(u >> shift);
-            if (hw != 0)
-                movzCount++;
-            if (hw != 0xFFFF)
-                movnCount++;
-        }
-
-        if (movzCount <= movnCount)
-        {
-            // movz path: emit movz for first non-zero halfword, movk for rest
-            bool first = true;
-            for (int shift = 0; shift < 64; shift += 16)
-            {
-                uint16_t hw = uint16_t(u >> shift);
-                if (hw != 0)
-                {
-                    if (first)
-                    {
-                        build.movz(temp, hw, shift);
-                        first = false;
-                    }
-                    else
-                    {
-                        build.movk(temp, hw, shift);
-                    }
-                }
-            }
-
-            if (first)
-                build.movz(temp, 0);
-        }
-        else
-        {
-            // movn path: use movn for first non-0xFFFF halfword, movk for rest
-            bool first = true;
-            for (int shift = 0; shift < 64; shift += 16)
-            {
-                uint16_t hw = uint16_t(u >> shift);
-                if (hw != 0xFFFF)
-                {
-                    if (first)
-                    {
-                        build.movn(temp, uint16_t(~hw), shift);
-                        first = false;
-                    }
-                    else
-                    {
-                        build.movk(temp, hw, shift);
-                    }
-                }
-            }
-
-            if (first)
-                build.movn(temp, 0);
-        }
-
+        build.mov64(temp, uint64_t(int64Op(op)));
         return temp;
     }
     else

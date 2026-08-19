@@ -54,7 +54,7 @@ typedef struct lua_TValue
 #define ttisnil(o) (ttype(o) == LUA_TNIL)
 #define ttissymnone(o) (ttype(o) == LUA_TSYMNONE)
 #define ttisnumber(o) (ttype(o) == LUA_TNUMBER)
-#define ttisinteger(o) (ttype(o) == LUA_TINTEGER)
+#define ttisinteger(o) (ttype(o) == LUA_TINTEGER || ttype(o) == LUA_THEAPINTEGER)
 #define ttisstring(o) (ttype(o) == LUA_TSTRING)
 #define ttistable(o) (ttype(o) == LUA_TTABLE)
 #define ttisfunction(o) (ttype(o) == LUA_TFUNCTION)
@@ -116,6 +116,7 @@ typedef struct lua_TValue
         TValue* i_o = (obj); \
         i_o->value.l = (x); \
         i_o->tt = LUA_TINTEGER; \
+        i_o->extra[0] = 0; \
     }
 
 #if LUA_VECTOR_SIZE == 4
@@ -333,6 +334,50 @@ typedef struct LuauBuffer
     alignas(8) char inline_data[1];
 } Buffer;
 
+typedef struct HeapInteger
+{
+    CommonHeader;
+    bool isNegative;
+    uint32_t size;
+    uint32_t capacity;
+    uint64_t* digits;
+} HeapInteger;
+
+
+void luaZ_integer_add(lua_State* L, const TValue* a, const TValue* b, TValue* res);
+void luaZ_integer_sub(lua_State* L, const TValue* a, const TValue* b, TValue* res);
+void luaZ_integer_mul(lua_State* L, const TValue* a, const TValue* b, TValue* res);
+void luaZ_integer_div(lua_State* L, const TValue* a, const TValue* b, TValue* res);
+void luaZ_integer_mod(lua_State* L, const TValue* a, const TValue* b, TValue* res);
+void luaZ_integer_rem(lua_State* L, const TValue* a, const TValue* b, TValue* res);
+void luaZ_integer_neg(lua_State* L, const TValue* a, TValue* res);
+
+bool luaZ_integer_lt(lua_State* L, const TValue* a, const TValue* b);
+bool luaZ_integer_le(lua_State* L, const TValue* a, const TValue* b);
+bool luaZ_integer_eq(const TValue* a, const TValue* b);
+uint32_t luaZ_integer_hash(const TValue* b);
+LUAI_FUNC uint64_t luaZ_integer_get_bottom_64(const TValue* b);
+
+void luaZ_integer_fromstring(lua_State* L, const char* str, TValue* res);
+void luaZ_pushinteger_string(lua_State* L, const TValue* b);
+
+void luaZB_freeheapinteger(lua_State* L, HeapInteger* h, struct lua_Page* page);
+
+static const uint8_t luau_int_shifts[9] = { 0, 56, 56, 48, 48, 32, 32, 0, 0 };
+static const bool luau_int_signed[9] = { false, true, false, true, false, true, false, true, false };
+
+inline void setintegersmi(TValue* obj, int64_t smi, IntegerMode mode) {
+    obj->value.l = smi;
+    obj->tt = LUA_TINTEGER;
+    obj->extra[0] = mode;
+}
+
+inline void setintegerheap(TValue* obj, HeapInteger* heap, IntegerMode mode) {
+    obj->value.gc = (GCObject*)heap;
+    obj->tt = LUA_THEAPINTEGER;
+    obj->extra[0] = mode;
+}
+
 enum FeedbackVectorSlotKind
 {
     CALL_TARGET
@@ -502,15 +547,19 @@ typedef struct TKey
 {
     ::Value value;
     int extra[LUA_EXTRA_SIZE];
-    unsigned tt : 4;
-    int next : 28; // for chaining
+    unsigned tt : 5;
+    int next : 27; // for chaining
 } TKey;
+
+bool luaZ_integer_eq_key(const TKey* a, const TValue* b);
 
 typedef struct LuaNode
 {
     TValue val;
     TKey key;
 } LuaNode;
+
+
 
 // copy a value into a key
 #define setnodekey(L, node, obj) \

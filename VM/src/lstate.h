@@ -323,6 +323,7 @@ union GCObject
     struct LuauBuffer buf;
     struct LuauClass lclass;
     struct LuauObject lobject;
+    struct HeapInteger integer;
 };
 
 // macros to convert a GCObject into a specific value
@@ -336,6 +337,7 @@ union GCObject
 #define gco2buf(o) check_exp((o)->gch.tt == LUA_TBUFFER, &((o)->buf))
 #define gco2class(o) check_exp((o)->gch.tt == LUA_TCLASS, &((o)->lclass))
 #define gco2object(o) check_exp((o)->gch.tt == LUA_TOBJECT, &((o)->lobject))
+#define gco2integer(o) check_exp((o)->gch.tt == LUA_THEAPINTEGER, &((o)->integer))
 
 // macro to convert any Lua object into a GCObject
 #define obj2gco(v) check_exp(iscollectable(v), cast_to(GCObject*, (v) + 0))

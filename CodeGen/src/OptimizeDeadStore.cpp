@@ -28,6 +28,7 @@ static bool isUnsafeToSink(IrCmd cmd)
     {
     // VM register reads: STORE_TAG/STORE_DOUBLE/STORE_TVALUE/etc. to the same VM register
     case IrCmd::LOAD_TAG:
+        case IrCmd::LOAD_EXTRA:
     case IrCmd::LOAD_POINTER:
     case IrCmd::LOAD_DOUBLE:
     case IrCmd::LOAD_INT:
@@ -41,7 +42,7 @@ static bool isUnsafeToSink(IrCmd cmd)
     case IrCmd::BUFFER_READI16:
     case IrCmd::BUFFER_READU16:
     case IrCmd::BUFFER_READI32:
-    case IrCmd::BUFFER_READI64:
+
     case IrCmd::BUFFER_READF32:
     case IrCmd::BUFFER_READF64:
 
@@ -1431,7 +1432,7 @@ static void markDeadStoresInBlockChain(
                 case IrCmd::BUFFER_WRITEI8:
                 case IrCmd::BUFFER_WRITEI16:
                 case IrCmd::BUFFER_WRITEI32:
-                case IrCmd::BUFFER_WRITEI64:
+
                 case IrCmd::BUFFER_WRITEF32:
                 case IrCmd::BUFFER_WRITEF64:
                     state.remainingUses[OP_A(inst).index]--;
@@ -1461,7 +1462,7 @@ static void markDeadStoresInBlockChain(
                     case IrCmd::BUFFER_WRITEI8:
                     case IrCmd::BUFFER_WRITEI16:
                     case IrCmd::BUFFER_WRITEI32:
-                    case IrCmd::BUFFER_WRITEI64:
+    
                     case IrCmd::BUFFER_WRITEF32:
                     case IrCmd::BUFFER_WRITEF64:
                         if (state.remainingUses[OP_A(inst).index] == 0)
