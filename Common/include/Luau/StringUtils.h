@@ -11,6 +11,15 @@
 namespace Luau
 {
 
+enum class ParseIntResult
+{
+    Ok,
+    Malformed,
+    Overflow
+};
+
+ParseIntResult parseInt(std::string_view str, int base, int64_t& outResult);
+
 std::string format(const char* fmt, ...) LUAU_PRINTF_ATTR(1, 2);
 std::string vformat(const char* fmt, va_list args);
 

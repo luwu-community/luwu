@@ -10,7 +10,7 @@ LUAU_FASTFLAGVARIABLE(LuauIntegerLibrary)
 
 static const TValue* check_integer(lua_State* L, int idx)
 {
-    luaL_checktype(L, idx, LUA_TINTEGER);
+    luaL_checkanyinteger(L, idx);
     return luaA_toobject(L, idx);
 }
 
@@ -34,25 +34,24 @@ static int integer_dynamic(lua_State* L)
     return 1;
 }
 
-#define INTEGER_MODE_WRAP(name, mode_enum, c_type, is_unsigned) \
+#define INTEGER_MODE_WRAP(name, mode_enum, c_type) \
 static int integer_##name(lua_State* L) \
 { \
     const TValue* b = check_integer(L, 1); \
-    c_type casted = (c_type)luaZ_integer_get_bottom_64(b); \
-    int64_t res_smi = is_unsigned ? (int64_t)(uint64_t)casted : (int64_t)casted; \
+    int64_t res_smi = (int64_t)(c_type)luaZ_integer_get_bottom_64(b); \
     setintegersmi(L->top, res_smi, mode_enum); \
     L->top++; \
     return 1; \
 }
 
-INTEGER_MODE_WRAP(i8, IntegerMode_I8, int8_t, false)
-INTEGER_MODE_WRAP(u8, IntegerMode_U8, uint8_t, true)
-INTEGER_MODE_WRAP(i16, IntegerMode_I16, int16_t, false)
-INTEGER_MODE_WRAP(u16, IntegerMode_U16, uint16_t, true)
-INTEGER_MODE_WRAP(i32, IntegerMode_I32, int32_t, false)
-INTEGER_MODE_WRAP(u32, IntegerMode_U32, uint32_t, true)
-INTEGER_MODE_WRAP(i64, IntegerMode_I64, int64_t, false)
-INTEGER_MODE_WRAP(u64, IntegerMode_U64, uint64_t, true)
+INTEGER_MODE_WRAP(i8, IntegerMode_I8, int8_t)
+INTEGER_MODE_WRAP(u8, IntegerMode_U8, uint8_t)
+INTEGER_MODE_WRAP(i16, IntegerMode_I16, int16_t)
+INTEGER_MODE_WRAP(u16, IntegerMode_U16, uint16_t)
+INTEGER_MODE_WRAP(i32, IntegerMode_I32, int32_t)
+INTEGER_MODE_WRAP(u32, IntegerMode_U32, uint32_t)
+INTEGER_MODE_WRAP(i64, IntegerMode_I64, int64_t)
+INTEGER_MODE_WRAP(u64, IntegerMode_U64, uint64_t)
 
 /*
 // Arithmetic operations exposed to Lua

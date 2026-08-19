@@ -5,12 +5,19 @@ namespace Luau {
 namespace BigInt {
 
 int CmpAbs(Digits a, Digits b) {
+    // If lens mismatch, then the one with smaller length is smaller
     if (a.len != b.len) {
-        return a.len < b.len ? -1 : 1;
+        int res = (a.len < b.len) ? -1 : 1; // avoid msvc miscompiles
+        return res;
     }
-    for (uint32_t i = a.len; i > 0; --i) {
-        if (a[i - 1] != b[i - 1]) {
-            return a[i - 1] < b[i - 1] ? -1 : 1;
+    // Otherwise, go from left to right (numerically speaking):
+    // If `a[i]` == `b[i]`, then we're good
+    // If any `a[i]` < `b[i]`, then `a` is smaller
+    // If any `a[i]` > `b[i]`, then `b` is smaller
+    for (uint32_t i = a.len; i-- > 0; ) {
+        if (a[i] != b[i]) {
+            int res = (a[i] < b[i]) ? -1 : 1; // avoid msvc miscompiles
+            return res;
         }
     }
     return 0;

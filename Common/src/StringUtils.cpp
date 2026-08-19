@@ -8,6 +8,7 @@
 #include <string>
 #include <string.h>
 #include <stdint.h>
+#include <climits>
 
 namespace Luau
 {
@@ -310,6 +311,99 @@ std::string_view strip(std::string_view s)
         s.remove_suffix(1);
 
     return s;
+}
+
+ParseIntResult parseInt(std::string_view str, int base, int64_t& outResult)
+{
+    // A bare "-" or "+" or empty string is malformed.
+    if (str.empty())
+        return ParseIntResult::Malformed;
+
+    if (str.size() == 1 && (str[0] == '-' || str[0] == '+'))
+        return ParseIntResult::Malformed;
+
+    if (base == 2 && str.size() >= 2 && str[0] == '0' && (str[1] == 'b' || str[1] == 'B'))
+        return ParseIntResult::Malformed;
+
+    std::string s(str);
+    const char* data = s.c_str();
+    char* end = nullptr;
+
+    if (base == 10)
+    {
+        bool isNegative = false;
+        const char* p = data;
+        if (*p == '-')
+        {
+            isNegative = true;
+            p++;
+        }
+        else if (*p == '+')
+        {
+            p++;
+        }
+
+        while (*p == '0')
+            p++;
+
+        // "-0" and "+0" properly collapse to positive zero here
+        if (*p == '\0')
+        {
+            outResult = 0;
+            return ParseIntResult::Ok;
+        }
+
+        unsigned long long u = strtoull(p, &end, 10);
+
+        if (end == p || *end != '\0')
+            return ParseIntResult::Malformed;
+
+        if ((u == ULLONG_MAX) && (errno == ERANGE))
+        {
+            // 'errno' might have been set before we called 'strtoull', but we don't want the overhead of resetting a TLS variable on each call
+            // so we only reset it when we get a result that might be an out-of-range error and parse again to make sure
+            errno = 0;
+            u = strtoull(p, &end, 10);
+
+            if (errno == ERANGE)
+                return ParseIntResult::Overflow;
+        }
+
+        if (!isNegative && u <= (uint64_t)INT64_MAX)
+        {
+            outResult = (int64_t)u;
+            return ParseIntResult::Ok;
+        }
+        else if (isNegative && u <= (uint64_t)INT64_MAX + 1)
+        {
+            outResult = (int64_t)(0ULL - u);
+            return ParseIntResult::Ok;
+        }
+        else
+        {
+            return ParseIntResult::Overflow;
+        }
+    }
+    else
+    {
+        // hex and binary literals represent bit patterns covering the full uint64 range
+        unsigned long long u = strtoull(data, &end, base);
+
+        if (end == data || *end != '\0')
+            return ParseIntResult::Malformed;
+
+        if ((u == ULLONG_MAX) && (errno == ERANGE))
+        {
+            errno = 0;
+            u = strtoull(data, &end, base);
+
+            if (errno == ERANGE)
+                return ParseIntResult::Overflow;
+        }
+
+        outResult = (int64_t)u;
+        return ParseIntResult::Ok;
+    }
 }
 
 } // namespace Luau

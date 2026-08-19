@@ -153,6 +153,7 @@ LUA_API void lua_xpush(lua_State* from, lua_State* to, int idx);
 LUA_API int lua_isnumber(lua_State* L, int idx);
 LUA_API int lua_isstring(lua_State* L, int idx);
 LUA_API int lua_isinteger64(lua_State* L, int idx);
+LUA_API int lua_isheapinteger(lua_State* L, int idx);
 LUA_API int lua_iscfunction(lua_State* L, int idx);
 LUA_API int lua_isLfunction(lua_State* L, int idx);
 LUA_API int lua_isuserdata(lua_State* L, int idx);
@@ -458,6 +459,7 @@ LUA_API int lua_getrefpool(lua_State* L, int ref);
 #define lua_isnil(L, n) (lua_type(L, (n)) == LUA_TNIL)
 #define lua_isboolean(L, n) (lua_type(L, (n)) == LUA_TBOOLEAN)
 #define lua_isinteger64(L, n) (lua_type(L, (n)) == LUA_TINTEGER)
+#define lua_isheapinteger(L, n) (lua_type(L, (n)) == LUA_THEAPINTEGER)
 #define lua_isvector(L, n) (lua_type(L, (n)) == LUA_TVECTOR)
 #define lua_isthread(L, n) (lua_type(L, (n)) == LUA_TTHREAD)
 #define lua_isbuffer(L, n) (lua_type(L, (n)) == LUA_TBUFFER)

@@ -4001,54 +4001,22 @@ static ConstantNumberParseResult parseInteger64(int64_t& result, const char* dat
 {
     LUAU_ASSERT(base == 2 || base == 10 || base == 16);
 
-    char* end = nullptr;
-
-    if (base == 10)
+    if (FFlag::LuauNoDuplicateBinaryPrefix)
     {
-        unsigned long long u = strtoull(data, &end, 10);
-
-        if (end == data || *end != '\0')
+        if (base == 2 && data[0] == '0' && (data[1] == 'b' || data[1] == 'B'))
             return ConstantNumberParseResult::Malformed;
-
-        if ((u == ULLONG_MAX) && (errno == ERANGE))
-        {
-            // 'errno' might have been set before we called 'strtoull', but we don't want the overhead of resetting a TLS variable on each call
-            // so we only reset it when we get a result that might be an out-of-range error and parse again to make sure
-            errno = 0;
-            u = strtoull(data, &end, 10);
-
-            if (errno == ERANGE)
-                return ConstantNumberParseResult::IntOverflow;
-        }
-
-        result = (int64_t)u;
     }
-    else
+
+    ParseIntResult res = parseInt(data, base, result);
+
+    if (res == ParseIntResult::Malformed)
+        return ConstantNumberParseResult::Malformed;
+
+    if (res == ParseIntResult::Overflow)
     {
-        if (FFlag::LuauNoDuplicateBinaryPrefix)
-        {
-            if (base == 2 && data[0] == '0' && (data[1] == 'b' || data[1] == 'B'))
-                return ConstantNumberParseResult::Malformed;
-        }
-
-        // hex and binary literals represent bit patterns covering the full uint64 range
-        unsigned long long u = strtoull(data, &end, base);
-
-        if (end == data || *end != '\0')
-            return ConstantNumberParseResult::Malformed;
-
-        if ((u == ULLONG_MAX) && (errno == ERANGE))
-        {
-            // 'errno' might have been set before we called 'strtoull', but we don't want the overhead of resetting a TLS variable on each call
-            // so we only reset it when we get a result that might be an out-of-range error and parse again to make sure
-            errno = 0;
-            u = strtoull(data, &end, base);
-
-            if (errno == ERANGE)
-                return base == 2 ? ConstantNumberParseResult::BinOverflow : ConstantNumberParseResult::HexOverflow;
-        }
-
-        result = (int64_t)u;
+        if (base == 2) return ConstantNumberParseResult::BinOverflow;
+        if (base == 16) return ConstantNumberParseResult::HexOverflow;
+        return ConstantNumberParseResult::IntOverflow;
     }
 
     return ConstantNumberParseResult::Ok;

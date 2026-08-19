@@ -12,7 +12,7 @@ The Digit abstraction enables for the actual algorithms to be separate from the 
 
 ## Add
 
-Same long addition algorithm (add then carry to next and keep going), but on int64 'limbs'. After figurng out the max size between the two numbers, we can just do the same right to left column wise addition but with limbs, using the overflow to determine carries. Fairly straightforward (enough) algorithm
+Same long addition algorithm everyone is taught in school (add column-by-column, carry overflows to next and keep going), but on int64 'limbs'. After figurng out the max size between the two numbers, we can just do the same right to left column wise addition but with limbs, using the overflow to determine carries. Fairly straightforward (enough) algorithm
 
 ## ToString
 

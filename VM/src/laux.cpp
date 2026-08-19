@@ -246,11 +246,19 @@ int luaL_checkinteger(lua_State* L, int narg)
 int64_t luaL_checkinteger64(lua_State* L, int narg)
 {
     if (!lua_isinteger64(L, narg)) {
-        if (lua_type(L, narg) == LUA_TINTEGER)
-            luaL_error(L, "number has no 64-bit integer representation");
+        if (lua_type(L, narg) == LUA_THEAPINTEGER)
+            luaL_error(L, "integer has no 64-bit integer representation");
         tag_error(L, narg, LUA_TINTEGER);
     }
     return lua_tointeger64(L, narg, nullptr);
+}
+
+void luaL_checkanyinteger(lua_State* L, int narg)
+{
+    int type = lua_type(L, narg);
+    if (type != LUA_TINTEGER && type != LUA_THEAPINTEGER) {
+        luaL_typeerrorL(L, narg, "integer");
+    }
 }
 
 int luaL_optinteger(lua_State* L, int narg, int def)

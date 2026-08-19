@@ -30,6 +30,7 @@ LUALIB_API int luaL_optboolean(lua_State* L, int narg, int def);
 
 LUALIB_API int luaL_checkinteger(lua_State* L, int numArg);
 LUALIB_API int64_t luaL_checkinteger64(lua_State* L, int numArg);
+LUALIB_API void luaL_checkanyinteger(lua_State* L, int numArg);
 LUALIB_API int luaL_optinteger(lua_State* L, int nArg, int def);
 LUALIB_API int64_t luaL_optinteger64(lua_State* L, int nArg, int64_t def);
 LUALIB_API unsigned luaL_checkunsigned(lua_State* L, int numArg);

@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "lbigint.h"
+#include "Luau/StringUtils.h"
 
 constexpr uint64_t kInt64MinAbs = 0x8000000000000000ull;
 constexpr uint32_t kHashNegativeFlag = 0x80000000;
@@ -374,50 +375,23 @@ static Integer integer_neg_impl(lua_State* L, Integer a)
 
 static Integer integer_fromstring_impl(lua_State* L, const char* str)
 {
-    const char* p = str;
-    bool isNegative = false;
-    if (*p == '-') {
-        isNegative = true;
-        p++;
-    } else if (*p == '+') {
-        p++;
-    }
+    int64_t val;
+    Luau::ParseIntResult res = Luau::parseInt(str, 10, val);
     
-    while (*p == '0') {
-        p++;
-    }
-    
-    size_t len = 0;
-    while (p[len] >= '0' && p[len] <= '9') {
-        len++;
-    }
-    
-    if (len == 0) {
+    if (res == Luau::ParseIntResult::Ok) {
+        return new_integer(val);
+    } else if (res == Luau::ParseIntResult::Overflow) {
+        HeapInteger* h = luaZB_heapinteger_fromstring(L, str, nullptr);
+        if (!h) {
+            return new_integer(0);
+        }
+        Integer r;
+        r.mode = IntegerMode_Dynamic;
+        r.heap = h;
+        return r;
+    } else {
         return new_integer(0);
     }
-    
-    if (len > 0 && len <= 19) {
-        uint64_t val = 0;
-        for (size_t i = 0; i < len; ++i) {
-            val = val * 10 + (p[i] - '0');
-        }
-        
-        if (!isNegative && val <= (uint64_t)INT64_MAX) {
-            return new_integer((int64_t)val);
-        } else if (isNegative && val <= (uint64_t)INT64_MAX + 1) {
-            return new_integer(-(int64_t)val);
-        }
-    }
-    
-    HeapInteger* h = luaZB_heapinteger_fromstring(L, str, nullptr);
-    if (!h) {
-        return new_integer(0);
-    }
-    
-    Integer res;
-    res.mode = IntegerMode_Dynamic;
-    res.heap = h;
-    return res;
 }
 
 static void integer_push_string_impl(lua_State* L, Integer b)

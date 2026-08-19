@@ -349,7 +349,7 @@ int lua_type(lua_State* L, int idx)
 {
     StkId o = index2addr(L, idx);
     int tt = (o == luaO_nilobject) ? LUA_TNONE : ttype(o);
-    return tt == LUA_THEAPINTEGER ? LUA_TINTEGER : tt;
+    return tt;
 }
 
 const char* lua_typename(lua_State* L, int t)
