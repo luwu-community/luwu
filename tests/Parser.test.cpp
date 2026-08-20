@@ -3577,10 +3577,11 @@ TEST_CASE_FIXTURE(Fixture, "class_declaration")
     REQUIRE(call);
 
     REQUIRE(call->args.size == 1);
-    const AstExprLocal* local = call->args.data[0]->as<AstExprLocal>();
-    REQUIRE(local);
 
-    CHECK(local->local == first->name);
+    const AstExprGlobal* global = call->args.data[0]->as<AstExprGlobal>();
+    REQUIRE(global);
+
+    CHECK(global->name == first->name->name);
 }
 
 TEST_CASE_FIXTURE(Fixture, "class_parse_errors")
@@ -3772,7 +3773,7 @@ TEST_CASE_FIXTURE(Fixture, "reassigned_class")
 class Animal end
 Animal = nil
         )",
-        "Variable 'Animal' is constant and may not be reassigned" // const reassignment msg
+        "'Animal' refers to a class and cannot be used as a variable name (defined on line 2)" // const reassignment msg
     );
 }
 

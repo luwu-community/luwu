@@ -20,14 +20,13 @@
 LUAU_FASTFLAG(LuauYieldIter2)
 LUAU_FASTFLAG(LuauCustomYieldablePcalls)
 LUAU_FASTFLAG(LuauPcallMulti)
+LUAU_FASTFLAGVARIABLE(LuauXpcallFixMessageYieldPath)
 
 // keep max stack allocation request under 1GB
 #define MAX_STACK_SIZE (int(1024 / sizeof(TValue)) * 1024 * 1024)
 
 /*
-** {======================================================
 ** Error-recovery functions
-** =======================================================
 */
 
 #if LUA_USE_LONGJMP
@@ -165,7 +164,6 @@ l_noret luaD_throw(lua_State* L, int errcode)
 }
 #endif
 
-// }======================================================
 
 static void correctstack(lua_State* L, TValue* oldstack)
 {
@@ -624,8 +622,11 @@ static void resume_handle(lua_State* L, void* ud)
         // if errfunc fails, we fail with "error in error handling" or "not enough memory"
         int err = luaD_rawrunprotected(L, callerrfunc, ci->base + (ci->errfunc - 1));
 
-        // restore nCcalls to base if errfunc itself errored
-        L->nCcalls = L->baseCcalls;
+        if (!FFlag::LuauXpcallFixMessageYieldPath)
+        {
+            // restore nCcalls to base if errfunc itself errored
+            L->nCcalls = L->baseCcalls;
+        }
 
         // in general we preserve the status, except for cases when the error handler fails
         // out of memory is treated specially because it's common for it to be cascading, in which case we preserve the code
@@ -644,6 +645,12 @@ static void resume_handle(lua_State* L, void* ud)
 
     if (FFlag::LuauCustomYieldablePcalls)
     {
+        if (FFlag::LuauXpcallFixMessageYieldPath)
+        {
+            // restore nCcalls to base for the continuation
+            L->nCcalls = L->baseCcalls;
+        }
+
         // restore the stack frame to the frame with continuation
         L->ci = ci;
 
@@ -737,9 +744,17 @@ static int resume_finish(lua_State* L, int status, int oldnCcalls)
             }
         }
 
-        // restore the baseline we established in resume_start
-        L->nCcalls = oldnCcalls;
-        L->baseCcalls = L->nCcalls;
+        if (FFlag::LuauCustomYieldablePcalls && FFlag::LuauXpcallFixMessageYieldPath)
+        {
+            // restore the baseline we established in resume_start
+            L->baseCcalls = oldnCcalls;
+        }
+        else
+        {
+            // restore the baseline we established in resume_start
+            L->nCcalls = oldnCcalls;
+            L->baseCcalls = L->nCcalls;
+        }
 
         L->status = cast_byte(status);
         status = luaD_rawrunprotected(L, resume_handle, ch);
