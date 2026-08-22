@@ -4119,21 +4119,44 @@ RegisterX64 IrLoweringX64::regOp(IrOp op)
 OperandX64 IrLoweringX64::bufferAddrOp(IrOp bufferOp, IrOp indexOp, uint8_t tag)
 {
     CODEGEN_ASSERT(tag == LUA_TUSERDATA || tag == LUA_TBUFFER || tag == LUA_TVECTOR);
-    int dataOffset = tag == LUA_TBUFFER ? offsetof(Buffer, inline_data) : tag == LUA_TVECTOR ? offsetof(LuauVector, v) : offsetof(Udata, data);
-
-    if (indexOp.kind == IrOpKind::Inst)
+    if (tag == LUA_TBUFFER)
     {
-        CODEGEN_ASSERT(!producesDirtyHighRegisterBits(function.instOp(indexOp).cmd)); // Ensure that high register bits are cleared
+        // data may be inline_data (mode 0) or an non-inline (externally owned) pointer (mode 1/2)
+        //
+        // As such, we have to load the data with a extra mov instruction
+        ScopedRegX64 dataPtr{regs, SizeX64::qword};
+        build.mov(dataPtr.reg, qword[regOp(bufferOp) + offsetof(Buffer, data)]);
 
-        return regOp(bufferOp) + qwordReg(regOp(indexOp)) + dataOffset;
-    }
-    else if (indexOp.kind == IrOpKind::Constant)
-    {
-        return regOp(bufferOp) + intOp(indexOp) + dataOffset;
-    }
+        if (indexOp.kind == IrOpKind::Inst)
+        {
+            CODEGEN_ASSERT(!producesDirtyHighRegisterBits(function.instOp(indexOp).cmd));
+            return dataPtr.reg + qwordReg(regOp(indexOp));
+        }
+        else if (indexOp.kind == IrOpKind::Constant)
+        {
+            return dataPtr.reg + intOp(indexOp);
+        }
 
-    CODEGEN_ASSERT(!"Unsupported instruction form");
-    return noreg;
+        CODEGEN_ASSERT(!"Unsupported instruction form");
+        return noreg;
+    } 
+    else 
+    { 
+        // LUA_TUSERDATA or LUA_TVECTOR
+        int dataOffset = tag == LUA_TVECTOR ? offsetof(LuauVector, v) : offsetof(Udata, data);
+        if (indexOp.kind == IrOpKind::Inst)
+        {
+            CODEGEN_ASSERT(!producesDirtyHighRegisterBits(function.instOp(indexOp).cmd)); // Ensure that high register bits are cleared
+            return regOp(bufferOp) + qwordReg(regOp(indexOp)) + dataOffset;
+        }
+        else if (indexOp.kind == IrOpKind::Constant)
+        {
+            return regOp(bufferOp) + intOp(indexOp) + dataOffset;
+        }
+
+        CODEGEN_ASSERT(!"Unsupported instruction form");
+        return noreg;
+    } 
 }
 
 RegisterX64 IrLoweringX64::vecOp(IrOp op, ScopedRegX64& tmp)
