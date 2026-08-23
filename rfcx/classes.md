@@ -110,6 +110,47 @@ Due to this, defining two classes with the same name in the same module is curre
 Classes must be defined in the top level of a module; attempting to define a class anywhere else raises a syntax error.
 This is a limitation imposed by upstream Luau, and we hope to loosen this restriction later.
 
+### The `class` primitive
+
+The action of evaluating a class definition statement introduces a *class* value in the module scope.
+
+A `class` is a value that serves as a factory for instances of the class and as a namespace for any functions that are defined on the class.
+
+Classes are always `const` and frozen.
+
+Taking references to class methods via `ClassName.method` syntax is allowed so that classes can easily compose with existing APIs:
+
+```luau
+local n = pcall(SomeClass.getName, someClassObject)
+```
+
+The top type of all classes is named `class`.  `type()` and `typeof()` return `"class"` when passed a class.
+
+### The `object` primitive
+
+Objects, often referred to as "class instances", are a new type of value in the VM. They are similar but not quite the same as tables. They have no array part, for instance.
+
+`pairs`, `ipairs` , `getmetatable`, and `setmetatable` all raise a runtime error when invoked on an object. Similarly, an object may not be iterated over unless its class implements `__iter`.
+
+Reading or writing a nonexistent class property raises an error. This makes it easy to disambiguate between a nonexistent property and a property whose value is nil.
+
+We introduce a new top type for instances of a class: `object`. The builtin `type()` and `typeof()` functions return `"object"` for any class instance.
+
+We chose this over having them return the class name because class names do not have to be globally unique (they must only unique within a single module) and because we do not want to make it possible for classes to impersonate embedder-provided types.
+
+```luau
+class Cls end
+local inst = Cls()
+
+type(Cls) == "class"
+typeof(Cls) == "class"
+
+type(inst) == "object"
+typeof(inst) == "object"
+```
+
+Comparisons between object instances are the same as with tables: If `__eq` is not defined, object comparisons use physical (pointer) equality.  `__eq` is only invoked if both operands are the same type.
+
 ### Class member syntax
 
 We introduce two specific flavors of keywords to help introduce class members: access specifiers and modifiers.
@@ -320,47 +361,6 @@ For forward-compatibility, it is a syntax error to define any other method whose
 Keep in mind that only `__init` applies to the class and the object; defining any of the other metamethods
 defines them for **`objects`** (instances) of the class instead of the class itself.
 It is impossible to define custom metamethods for a `class`, only `object`s of a class.
-
-### The `class` primitive
-
-The action of evaluating a class definition statement introduces a *class* value in the module scope.
-
-A `class` is a value that serves as a factory for instances of the class and as a namespace for any functions that are defined on the class.
-
-Classes are always `const` and frozen.
-
-Taking references to class methods via `ClassName.method` syntax is allowed so that classes can easily compose with existing APIs:
-
-```luau
-local n = pcall(SomeClass.getName, someClassObject)
-```
-
-The top type of all classes is named `class`.  `type()` and `typeof()` return `"class"` when passed a class.
-
-### The `object` primitive
-
-Objects, often referred to as "class instances", are a new type of value in the VM. They are similar but not quite the same as tables. They have no array part, for instance.
-
-`pairs`, `ipairs` , `getmetatable`, and `setmetatable` all raise a runtime error when invoked on an object. Similarly, an object may not be iterated over unless its class implements `__iter`.
-
-Reading or writing a nonexistent class property raises an error. This makes it easy to disambiguate between a nonexistent property and a property whose value is nil.
-
-We introduce a new top type for instances of a class: `object`. The builtin `type()` and `typeof()` functions return `"object"` for any class instance.
-
-We chose this over having them return the class name because class names do not have to be globally unique (they must only unique within a single module) and because we do not want to make it possible for classes to impersonate embedder-provided types.
-
-```luau
-class Cls end
-local inst = Cls()
-
-type(Cls) == "class"
-typeof(Cls) == "class"
-
-type(inst) == "object"
-typeof(inst) == "object"
-```
-
-Comparisons between object instances are the same as with tables: If `__eq` is not defined, object comparisons use physical (pointer) equality.  `__eq` is only invoked if both operands are the same type.
 
 ### The `class` library
 
