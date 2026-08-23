@@ -125,9 +125,15 @@ end)
 expectpass("basic printing", function ()
     assert(typeof(Point) == "class")
     assert(typeof(Point.zero) == "function")
-    -- For now we can pass tables to instance methods that expect objects
-    assert(Point.magnitude({x = 4, y = 3}) == 5)
 end)
+
+expectfail(
+    "instance methods reject a self that isn't an instance of the class",
+    "attempt to call method 'magnitude' with 'self' not being an instance of 'Point'",
+    function ()
+        Point.magnitude({x = 4, y = 3})
+    end
+)
 
 expectfail("classobject missing key", "this class does not have a key named 'doesnotexist'", function ()
     return Point.doesnotexist
@@ -730,5 +736,46 @@ expectpass("POD class field defaults are re-evaluated on every construction", fu
     local b = PodWithUpvalueDefault()
     assert(a.id ~= b.id, `expected different ids per construction, got {a.id} and {b.id}`)
 end)
+
+class SelfCheckCat
+    public name: string
+
+    public function __init(self, name: string)
+        self.name = name
+    end
+
+    public function meow(self): string
+        return `{self.name} says meow!`
+    end
+end
+
+class SelfCheckDog
+    public name: string
+
+    public function __init(self, name: string)
+        self.name = name
+    end
+end
+
+expectpass("calling a method via dot-syntax with the correct self works", function()
+    local cat = SelfCheckCat("Taz")
+    -- both `Class.method(instance)` (dot-syntax) and `instance:method()` (colon-syntax) should work
+    -- when `self` genuinely is an instance of the method's own class.
+    assert(SelfCheckCat.meow(cat) == "Taz says meow!")
+    assert(cat:meow() == "Taz says meow!")
+end)
+
+expectfail(
+    "calling a method via dot-syntax with a self from a different class errors",
+    "attempt to call method 'meow' with 'self' not being an instance of 'SelfCheckCat'",
+    function()
+        local dog = SelfCheckDog("Rex")
+        -- SelfCheckDog has no `meow` of its own, but SelfCheckCat's `meow` only reads `self.name`,
+        -- which SelfCheckDog also happens to have -- without a runtime check this would silently
+        -- "work" by accident and print "Rex says meow!", which is exactly the correctness footgun
+        -- this check exists to catch.
+        SelfCheckCat.meow(dog)
+    end
+)
 
 return 'OK'

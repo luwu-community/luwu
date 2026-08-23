@@ -326,6 +326,14 @@ const counter2 = Counter()
 -- both counters have likely have different `counter.current` values.
 ```
 
+### Runtime checking of `self` for methods
+
+To ensure more correct code, we prevent passing a different class of `self` to a method via `object.method(object)` syntax.
+This frees users from needing to assert `class.isinstance(self, TheClass)` if they want to ensure correct calling conventions. 
+This also allows for further optimizations.
+
+This restriction may be loosened in a future RFC for classes that opt into inheritance.
+
 ### Metamethods
 
 Classes may define only one `__init` constructor, that may be `public` or `private`.

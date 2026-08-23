@@ -19,6 +19,9 @@
 
 #include <algorithm>
 #include <bitset>
+#include <cstring>
+#include <optional>
+#include <string>
 
 #include <math.h>
 
@@ -125,6 +128,7 @@ struct Compiler
         , functions(nullptr)
         , classInitFieldDefaults(nullptr)
         , classPodDefaultsFn(nullptr)
+        , classMethodSelfChecks(nullptr)
         , locals(nullptr)
         , globals(AstName())
         , variables(nullptr)
@@ -444,6 +448,15 @@ struct Compiler
         argCount = localStack.size();
 
         currentFunction = func;
+
+        // Runtime checking of `self` for methods (see rfcx/classes.md): verify `self` is actually
+        // an instance of this method's own class before running anything else in the body,
+        // including field defaults below -- an invalid `self` shouldn't get that far.
+        if (FFlag::DebugLuauUserDefinedClasses)
+        {
+            if (AstStat* const* selfCheck = classMethodSelfChecks.find(func))
+                compileStat(*selfCheck);
+        }
 
         // Inline this class's field defaults ("self.field = defaultExpr") as the very first
         // statements of a user-defined `__init`, ahead of the user's own body. This makes
@@ -4858,21 +4871,82 @@ struct Compiler
     struct ClassInitDefaultsVisitor : AstVisitor
     {
         Allocator& allocator;
+        AstNameTable& names;
         DenseHashMap<AstExprFunction*, std::vector<ClassFieldDefault>>& initDefaults;
         DenseHashMap<AstStatClass*, AstExprFunction*>& podDefaultsFn;
+        DenseHashMap<AstExprFunction*, AstStat*>& methodSelfChecks;
         std::vector<AstExprFunction*>& functionsToCompile;
 
         ClassInitDefaultsVisitor(
             Allocator& allocator,
+            AstNameTable& names,
             DenseHashMap<AstExprFunction*, std::vector<ClassFieldDefault>>& initDefaults,
             DenseHashMap<AstStatClass*, AstExprFunction*>& podDefaultsFn,
+            DenseHashMap<AstExprFunction*, AstStat*>& methodSelfChecks,
             std::vector<AstExprFunction*>& functionsToCompile
         )
             : allocator(allocator)
+            , names(names)
             , initDefaults(initDefaults)
             , podDefaultsFn(podDefaultsFn)
+            , methodSelfChecks(methodSelfChecks)
             , functionsToCompile(functionsToCompile)
         {
+        }
+
+        AstArray<char> copyString(const std::string& s)
+        {
+            char* data = static_cast<char*>(allocator.allocate(s.size()));
+            memcpy(data, s.data(), s.size());
+            return AstArray<char>{data, s.size()};
+        }
+
+        template<typename... Args>
+        AstArray<AstExpr*> exprArray(Args... args)
+        {
+            AstExpr** data = static_cast<AstExpr**>(allocator.allocate(sizeof(AstExpr*) * sizeof...(Args)));
+            AstExpr* init[] = {args...};
+            for (size_t i = 0; i < sizeof...(Args); ++i)
+                data[i] = init[i];
+            return AstArray<AstExpr*>{data, sizeof...(Args)};
+        }
+
+        // Builds `if not class.isinstance(self, ClassName) then error("...") end`, spliced in as
+        // the very first statement of a method's body by compileFunction. Runtime checking of
+        // `self` for methods (see rfcx/classes.md) has to live here -- as ordinary statements in
+        // the method's own AST -- rather than as a check at the call boundary, because a call-
+        // boundary check is trivially skipped when the compiler inlines the call (dot-call sites
+        // like `SomeClass.method(notAnInstance)` are exactly the ones eligible for inlining).
+        // Splicing it into the body means inlining copies the check along with everything else.
+        AstStat* buildSelfCheckStat(AstStatClass* node, const AstClassMethod& method)
+        {
+            Location loc = node->location;
+            AstLocal* selfLocal = method.function->args.data[0];
+
+            AstExpr* selfExpr = allocator.alloc<AstExprLocal>(loc, selfLocal, /* upvalue= */ false);
+            AstExpr* classExpr = allocator.alloc<AstExprLocal>(loc, node->name, /* upvalue= */ true);
+
+            AstExpr* classGlobal = allocator.alloc<AstExprGlobal>(loc, names.getOrAdd("class"));
+            AstExpr* isinstanceFn =
+                allocator.alloc<AstExprIndexName>(loc, classGlobal, names.getOrAdd("isinstance"), loc, loc.begin, '.');
+            AstExpr* isinstanceCall =
+                allocator.alloc<AstExprCall>(loc, isinstanceFn, exprArray(selfExpr, classExpr), /* self= */ false, AstArray<AstTypeOrPack>(), loc);
+
+            AstExpr* notInstance = allocator.alloc<AstExprUnary>(loc, AstExprUnary::Op::Not, isinstanceCall);
+
+            std::string message = "attempt to call method '" + std::string(method.functionName.value) +
+                                   "' with 'self' not being an instance of '" + std::string(node->name->name.value) + "'";
+            AstExpr* messageExpr = allocator.alloc<AstExprConstantString>(loc, copyString(message), AstExprConstantString::QuoteStyle::QuotedSimple);
+
+            AstExpr* errorGlobal = allocator.alloc<AstExprGlobal>(loc, names.getOrAdd("error"));
+            AstExpr* errorCall =
+                allocator.alloc<AstExprCall>(loc, errorGlobal, exprArray(messageExpr), /* self= */ false, AstArray<AstTypeOrPack>(), loc);
+
+            AstStat** thenStats = static_cast<AstStat**>(allocator.allocate(sizeof(AstStat*)));
+            thenStats[0] = allocator.alloc<AstStatExpr>(loc, errorCall);
+            AstStatBlock* thenBody = allocator.alloc<AstStatBlock>(loc, AstArray<AstStat*>{thenStats, 1}, /* hasEnd= */ true);
+
+            return allocator.alloc<AstStatIf>(loc, notInstance, thenBody, /* elsebody= */ nullptr, std::nullopt, std::nullopt);
         }
 
         bool visit(AstStatClass* node) override
@@ -4903,6 +4977,9 @@ struct Compiler
                         {
                             if (method.functionName == "__init")
                                 init = method.function;
+
+                            if (method.function->args.size > 0 && method.function->args.data[0]->name == "self")
+                                methodSelfChecks[method.function] = buildSelfCheckStat(node, method);
                         }
                     },
                     member
@@ -5150,6 +5227,12 @@ struct Compiler
     // Populated by ClassInitDefaultsVisitor; maps a POD class (no custom `__init`) with field
     // defaults to its synthesized `__defaults` function. See ClassInitDefaultsVisitor's comment.
     DenseHashMap<AstStatClass*, AstExprFunction*> classPodDefaultsFn;
+    // Populated by ClassInitDefaultsVisitor with a `if not class.isinstance(self, ClassName) then
+    // error(...) end` statement for every class method that takes `self` as its first parameter
+    // (i.e. not a static function). compileFunction splices this in as the very first statement
+    // of the method's body (see rfcx/classes.md "Runtime checking of `self` for methods"). Must be
+    // known before compileFunction runs for that function, same as classInitFieldDefaults above.
+    DenseHashMap<AstExprFunction*, AstStat*> classMethodSelfChecks;
     DenseHashMap<AstLocal*, Local> locals;
     DenseHashMap<AstName, Global> globals;
     DenseHashMap<AstLocal*, Variable> variables;
@@ -5248,7 +5331,12 @@ void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, A
     if (FFlag::DebugLuauUserDefinedClasses)
     {
         Compiler::ClassInitDefaultsVisitor classInitDefaultsVisitor(
-            classSynthesisAllocator, compiler.classInitFieldDefaults, compiler.classPodDefaultsFn, functions
+            classSynthesisAllocator,
+            names,
+            compiler.classInitFieldDefaults,
+            compiler.classPodDefaultsFn,
+            compiler.classMethodSelfChecks,
+            functions
         );
         root->visit(&classInitDefaultsVisitor);
     }
