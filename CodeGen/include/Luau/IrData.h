@@ -58,6 +58,10 @@ enum class IrCmd : uint8_t
     // A: Rn or Kn
     LOAD_POINTER,
 
+    // Load buffer data (buffer->data) from a Buffer TValue
+    // A: pointer (Buffer from LOAD_POINTER)
+    LOAD_BUFFER_DATA,
+
     // Load a double number from TValue
     // A: Rn or Kn
     LOAD_DOUBLE,

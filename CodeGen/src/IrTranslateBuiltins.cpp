@@ -992,7 +992,8 @@ static BuiltinImplResult translateBuiltinBufferRead(
     IrOp buf, intIndex;
     translateBufferArgsAndCheckBounds(build, nparams, arg, args, arg3, size, pcpos, buf, intIndex, false);
 
-    IrOp result = build.inst(readCmd, buf, intIndex, build.constTag(LUA_TBUFFER));
+    IrOp bufData = build.inst(IrCmd::LOAD_BUFFER_DATA, buf);
+    IrOp result = build.inst(readCmd, bufData, intIndex, build.constTag(LUA_TBUFFER));
 
     build.inst(storeCmd, build.vmReg(ra), convCmd == IrCmd::NOP ? result : build.inst(convCmd, result));
     build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(storeTag));
@@ -1022,10 +1023,11 @@ static BuiltinImplResult translateBuiltinBufferWrite(
     translateBufferArgsAndCheckBounds(build, nparams, arg, args, arg3, size, pcpos, buf, intIndex, loadInt64);
 
     build.inst(IrCmd::CHECK_BUFFER_MUTABLE, buf, build.vmExit(pcpos));
-
+    
+    IrOp bufData = build.inst(IrCmd::LOAD_BUFFER_DATA, buf);
     IrOp numValue = loadInt64 ? builtinLoadInt64(build, arg3) : builtinLoadDouble(build, arg3);
 
-    build.inst(writeCmd, buf, intIndex, convCmd == IrCmd::NOP ? numValue : build.inst(convCmd, numValue), build.constTag(LUA_TBUFFER));
+    build.inst(writeCmd, bufData, intIndex, convCmd == IrCmd::NOP ? numValue : build.inst(convCmd, numValue), build.constTag(LUA_TBUFFER));
 
     return {BuiltinImplType::Full, 0};
 }

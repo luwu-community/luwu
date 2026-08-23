@@ -340,6 +340,13 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.ldr(inst.regA64, addr);
         break;
     }
+    case IrCmd::LOAD_BUFFER_DATA:
+    {
+        CODEGEN_ASSERT(OP_A(inst).kind == IrOpKind::Inst);
+        inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst)});
+        build.ldr(inst.regA64, mem(regOp(OP_A(inst)), offsetof(Buffer, data)));
+        break;
+    }
     case IrCmd::LOAD_DOUBLE:
     {
         inst.regA64 = regs.allocReg(KindA64::d, index);
@@ -4236,71 +4243,33 @@ AddressA64 IrLoweringA64::tempAddr(IrOp op, int offset, RegisterA64 tempStorage)
 AddressA64 IrLoweringA64::tempAddrBuffer(IrOp bufferOp, IrOp indexOp, uint8_t tag)
 {
     CODEGEN_ASSERT(tag == LUA_TUSERDATA || tag == LUA_TBUFFER || tag == LUA_TVECTOR);
-    if (tag == LUA_TBUFFER)
+    int dataOffset = tag == LUA_TBUFFER ? 0 : tag == LUA_TVECTOR ? offsetof(LuauVector, v) : offsetof(Udata, data);
+    if (indexOp.kind == IrOpKind::Inst)
     {
-        // data may be inline_data (mode 0) or an non-inline (externally owned) pointer (mode 1/2)
-        //
-        // As such, we have to load the data with a extra ldr instruction
-        RegisterA64 dataPtr = regs.allocTemp(KindA64::x);
-        build.ldr(dataPtr, mem(regOp(bufferOp), offsetof(Buffer, data)));
+        CODEGEN_ASSERT(!producesDirtyHighRegisterBits(function.instOp(indexOp).cmd));
 
-        if (indexOp.kind == IrOpKind::Inst)
-        {
-            CODEGEN_ASSERT(!producesDirtyHighRegisterBits(function.instOp(indexOp).cmd));
-
-            RegisterA64 temp = regs.allocTemp(KindA64::x);
-            build.add(temp, dataPtr, regOp(indexOp)); // implicit uxtw
-            return mem(temp, 0);
-        }
-        else if (indexOp.kind == IrOpKind::Constant)
-        {
-            // Since the resulting address may be used to load any size, including 1 byte, from an unaligned offset, we are limited by unscaled
-            // encoding
-            if (unsigned(intOp(indexOp)) <= 255)
-                return mem(dataPtr, int(intOp(indexOp)));
-
-            // indexOp can only be negative in dead code (since offsets are checked); this avoids assertion in emitAddOffset
-            if (intOp(indexOp) < 0)
-                return mem(dataPtr, 0);
-
-            RegisterA64 temp = regs.allocTemp(KindA64::x);
-            emitAddOffset(build, temp, dataPtr, size_t(intOp(indexOp)));
-            return mem(temp, 0);
-        }
-
-        CODEGEN_ASSERT(!"Unsupported instruction form");
-        return noreg;
+        RegisterA64 temp = regs.allocTemp(KindA64::x);
+        build.add(temp, regOp(bufferOp), regOp(indexOp)); // implicit uxtw
+        return mem(temp, dataOffset);
     }
-    else // LUA_TUSERDATA or LUA_TVECTOR
+    else if (indexOp.kind == IrOpKind::Constant)
     {
-        int dataOffset = tag == LUA_TVECTOR ? offsetof(LuauVector, v) : offsetof(Udata, data);
-        if (indexOp.kind == IrOpKind::Inst)
-        {
-            CODEGEN_ASSERT(!producesDirtyHighRegisterBits(function.instOp(indexOp).cmd));
+        // Since the resulting address may be used to load any size, including 1 byte, from an unaligned offset, we are limited by unscaled
+        // encoding
+        if (unsigned(intOp(indexOp)) + dataOffset <= 255)
+            return mem(regOp(bufferOp), int(intOp(indexOp) + dataOffset));
 
-            RegisterA64 temp = regs.allocTemp(KindA64::x);
-            build.add(temp, regOp(bufferOp), regOp(indexOp)); // implicit uxtw
-            return mem(temp, dataOffset);
-        }
-        else if (indexOp.kind == IrOpKind::Constant)
-        {
-            // Since the resulting address may be used to load any size, including 1 byte, from an unaligned offset, we are limited by unscaled
-            // encoding
-            if (unsigned(intOp(indexOp)) + dataOffset <= 255)
-                return mem(regOp(bufferOp), int(intOp(indexOp) + dataOffset));
+        // indexOp can only be negative in dead code (since offsets are checked); this avoids assertion in emitAddOffset
+        if (intOp(indexOp) < 0)
+            return mem(regOp(bufferOp), dataOffset);
 
-            // indexOp can only be negative in dead code (since offsets are checked); this avoids assertion in emitAddOffset
-            if (intOp(indexOp) < 0)
-                return mem(regOp(bufferOp), dataOffset);
-
-            RegisterA64 temp = regs.allocTemp(KindA64::x);
-            emitAddOffset(build, temp, regOp(bufferOp), size_t(intOp(indexOp)));
-            return mem(temp, dataOffset);
-        }
-
-        CODEGEN_ASSERT(!"Unsupported instruction form");
-        return noreg;
+        RegisterA64 temp = regs.allocTemp(KindA64::x);
+        emitAddOffset(build, temp, regOp(bufferOp), size_t(intOp(indexOp)));
+        return mem(temp, dataOffset);
     }
+
+    CODEGEN_ASSERT(!"Unsupported instruction form");
+    return noreg;
 }
 
 RegisterA64 IrLoweringA64::regOp(IrOp op)
