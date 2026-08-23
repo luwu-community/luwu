@@ -466,7 +466,7 @@ LUA_API int lua_registeruserdatadirectaccess(
 ** field: field name string (will be interned and pinned)
 ** fn:    handler — receives raw userdata data pointer and result TValue slot
 */
-typedef void (*lua_UserdataDirectFieldGet)(void* ud, void* result);
+typedef void (*lua_UserdataDirectFieldGet)(lua_State* L, void* ud, void* result);
 LUA_API void lua_registeruserdatadirectfieldget(lua_State* L, int tag, const char* field, lua_UserdataDirectFieldGet fn);
 
 // Helpers for writing result values from a direct field handler.

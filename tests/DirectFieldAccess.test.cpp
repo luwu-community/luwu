@@ -71,7 +71,7 @@ TEST_CASE("handler_setnumber_result")
         L,
         kTagVec2,
         "X",
-        [](void* ud, void* res)
+        [](lua_State* L, void* ud, void* res)
         {
             lua_userdatadirectfield_setnumber(res, static_cast<Vec2*>(ud)->x);
         }
@@ -101,7 +101,7 @@ TEST_CASE("handler_setboolean_result")
         L,
         kTagVec2,
         "NonZero",
-        [](void* ud, void* r)
+        [](lua_State* L, void* ud, void* r)
         {
             lua_userdatadirectfield_setboolean(r, static_cast<int>(static_cast<Vec2*>(ud)->x != 0 || static_cast<Vec2*>(ud)->y != 0));
         }
@@ -142,7 +142,7 @@ TEST_CASE("repeated_access_handler_called_every_iteration")
         L,
         kTagVec2,
         "X",
-        [](void* ud, void* r)
+        [](lua_State* L, void* ud, void* r)
         {
             handlerHitCount++;
             lua_userdatadirectfield_setnumber(r, static_cast<Vec2*>(ud)->x);
@@ -180,7 +180,7 @@ TEST_CASE("unregistered_tag_falls_through_to_index_metamethod")
         L,
         kTagVec2,
         "X",
-        [](void* ud, void* r)
+        [](lua_State* L, void* ud, void* r)
         {
             handlerHitCount++;
             lua_userdatadirectfield_setnumber(r, static_cast<Vec2*>(ud)->x);
@@ -234,7 +234,7 @@ TEST_CASE("multiple_fields_same_type_dispatch_independently")
         L,
         kTagVec2,
         "X",
-        [](void* ud, void* r)
+        [](lua_State* L, void* ud, void* r)
         {
             lua_userdatadirectfield_setnumber(r, static_cast<Vec2*>(ud)->x);
         }
@@ -243,7 +243,7 @@ TEST_CASE("multiple_fields_same_type_dispatch_independently")
         L,
         kTagVec2,
         "Y",
-        [](void* ud, void* r)
+        [](lua_State* L, void* ud, void* r)
         {
             lua_userdatadirectfield_setnumber(r, static_cast<Vec2*>(ud)->y);
         }
@@ -276,7 +276,7 @@ TEST_CASE("same_field_name_different_tags_dispatch_independently")
         L,
         kTagVec2,
         "X",
-        [](void* ud, void* r)
+        [](lua_State* L, void* ud, void* r)
         {
             lua_userdatadirectfield_setnumber(r, static_cast<Vec2*>(ud)->x);
             handlerHitCount++;
@@ -286,7 +286,7 @@ TEST_CASE("same_field_name_different_tags_dispatch_independently")
         L,
         kTagOther,
         "X",
-        [](void* ud, void* r)
+        [](lua_State* L, void* ud, void* r)
         {
             lua_userdatadirectfield_setnumber(r, 999);
             handlerHitCount++;

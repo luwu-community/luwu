@@ -495,7 +495,7 @@ const Instruction* executeGETTABLEKS(lua_State* L, const Instruction* pc, StkId 
                 if (LUAU_LIKELY(ttisstring(gkey(n)) && tsvalue(gkey(n)) == tsvalue(kv) && !ttisnil(gval(n))))
                 {
                     lua_UserdataDirectFieldGet fn = reinterpret_cast<lua_UserdataDirectFieldGet>(pvalue(gval(n)));
-                    fn(uvalue(rb)->data, resultarg);
+                    fn(L, uvalue(rb)->data, resultarg);
                     return pc;
                 }
 
@@ -505,7 +505,7 @@ const Instruction* executeGETTABLEKS(lua_State* L, const Instruction* pc, StkId 
                     // cache slot for future lookups
                     VM_PATCH_C(pc - 2, gval2slot(dispatch, fptr));
                     lua_UserdataDirectFieldGet fn = reinterpret_cast<lua_UserdataDirectFieldGet>(pvalue(fptr));
-                    fn(uvalue(rb)->data, resultarg);
+                    fn(L, uvalue(rb)->data, resultarg);
                     return pc;
                 }
             }
