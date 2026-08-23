@@ -5630,36 +5630,24 @@ bb_bytecode_1:
    ; exit sync: R6, R5, {%30, %10}
   BUFFER_WRITEI8 %29, %27, %30, tbuffer
   %74 = BUFFER_READU8 %29, %27, tbuffer
-  CHECK_BUFFER_MUTABLE %25, bb_exit_21
-   ; exit sync: R6, {%74}
   BUFFER_WRITEI8 %29, %27, %74, tbuffer
   %113 = LOAD_POINTER R2
   CHECK_BUFFER_LEN %113, %27, 0i, 2i, %10, exit(32)
   %117 = LOAD_BUFFER_DATA %113
   %118 = BUFFER_READI8 %117, %27, tbuffer
-  CHECK_BUFFER_MUTABLE %113, bb_exit_22
+  CHECK_BUFFER_MUTABLE %113, bb_exit_21
    ; exit sync: R6, {%118}
   BUFFER_WRITEI8 %117, %27, %118, tbuffer
   %162 = BUFFER_READU8 %117, %27, tbuffer
-  CHECK_BUFFER_MUTABLE %113, bb_exit_23
-   ; exit sync: R6, {%162}
   BUFFER_WRITEI8 %117, %27, %162, tbuffer
   %203 = ADD_INT %27, 1i
   %206 = BUFFER_READI8 %117, %203, tbuffer
-  CHECK_BUFFER_MUTABLE %113, bb_exit_24
-   ; exit sync: R6, R5, {%206, %10}
   BUFFER_WRITEI8 %117, %203, %206, tbuffer
   %250 = BUFFER_READU8 %117, %203, tbuffer
-  CHECK_BUFFER_MUTABLE %113, bb_exit_25
-   ; exit sync: R6, {%250}
   BUFFER_WRITEI8 %117, %203, %250, tbuffer
   %294 = BUFFER_READI16 %117, %27, tbuffer
-  CHECK_BUFFER_MUTABLE %113, bb_exit_26
-   ; exit sync: R6, R5, {%294, %10}
   BUFFER_WRITEI16 %117, %27, %294, tbuffer
   %338 = BUFFER_READU16 %117, %27, tbuffer
-  CHECK_BUFFER_MUTABLE %113, bb_exit_27
-   ; exit sync: R6, {%338}
   BUFFER_WRITEI16 %117, %27, %338, tbuffer
   INTERRUPT 112u
   RETURN R0, 0i
