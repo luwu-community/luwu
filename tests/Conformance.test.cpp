@@ -5058,7 +5058,7 @@ TEST_CASE("lua_findunuseduserdatatag")
     lua_createtable(L, 0, 0);
     lua_setuserdatametatable(L, 0);
     lua_setuserdatadtor(L, 1, [](lua_State*, void*){});
-    lua_registeruserdatadirectfieldget(L, 2, "hina", [](void*, void*){});
+    lua_registeruserdatadirectfieldget(L, 2, "hina", [](lua_State*, void*, void*){});
 
     int available = lua_findunuseduserdatatag(L);
     CHECK_EQ(available, 3);

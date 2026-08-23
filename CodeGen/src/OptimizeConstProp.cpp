@@ -1608,6 +1608,11 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
             state.substituteOrRecordVmRegLoad(inst);
         }
         break;
+    case IrCmd::LOAD_BUFFER_DATA: 
+    {
+        state.substituteOrRecord(inst, index);
+        break;
+    }
     case IrCmd::LOAD_DOUBLE:
     {
         IrOp value = state.tryGetValue(OP_A(inst));

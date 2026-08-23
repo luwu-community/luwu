@@ -107,6 +107,8 @@ const char* getCmdName(IrCmd cmd)
         return "LOAD_TAG";
     case IrCmd::LOAD_POINTER:
         return "LOAD_POINTER";
+    case IrCmd::LOAD_BUFFER_DATA:
+        return "LOAD_BUFFER_DATA";
     case IrCmd::LOAD_DOUBLE:
         return "LOAD_DOUBLE";
     case IrCmd::LOAD_INT:
