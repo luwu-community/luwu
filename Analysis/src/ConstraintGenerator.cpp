@@ -1119,6 +1119,10 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
             TableType* ctorArgTable = getMutable<TableType>(ctorArgTy);
             LUAU_ASSERT(ctorArgTable);
 
+            // Whether the whole constructor argument table can be omitted (`Class()`), i.e. every
+            // property either has a default value or there are no properties at all.
+            bool anyRequiredCtorArg = false;
+
             for (const auto& member : classDecl->members)
             {
                 Luau::visit(
@@ -1146,7 +1150,18 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
                             // We make the constructor take read-only args.
                             // This is true, in that we do not write to the
                             // table you pass for constructing an object.
-                            ctorArgTable->props[classProp.name.value] = Property::readonly(propertyType);
+                            //
+                            // A property with a default value doesn't need to be provided by the
+                            // caller (the default fills it in), so its key in the constructor's
+                            // argument table is optional.
+                            if (classProp.defaultValue)
+                                ctorArgTable->props[classProp.name.value] =
+                                    Property::readonly(makeOption(builtinTypes, *arena, propertyType));
+                            else
+                            {
+                                anyRequiredCtorArg = true;
+                                ctorArgTable->props[classProp.name.value] = Property::readonly(propertyType);
+                            }
                         },
                         [&](const AstClassMethod& method)
                         {
@@ -1235,10 +1250,10 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
                 for (const GenericTypePackDefinition& param : classTypePackParams)
                     podCtorGenericPacks.push_back(param.tp);
 
-                // Classes with no members can be constructed either with no arguments (`Empty()`)
-                // or with an empty argument table (`Empty {}`); make the argument optional so
-                // both call shapes typecheck.
-                TypeId ctorArgTyForCall = ctorArgTable->props.empty() ? makeOption(builtinTypes, *arena, ctorArgTy) : ctorArgTy;
+                // Classes with no members, or where every property has a default value, can be
+                // constructed either with no arguments (`Empty()`) or with an argument table
+                // (`Empty {}`); make the argument optional so both call shapes typecheck.
+                TypeId ctorArgTyForCall = !anyRequiredCtorArg ? makeOption(builtinTypes, *arena, ctorArgTy) : ctorArgTy;
                 TypePackId ctorArgsPack = arena->addTypePack({builtinTypes->unknownType, ctorArgTyForCall});
 
                 ctorTy = arena->addType(FunctionType{
@@ -2707,7 +2722,25 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatClass* stat
                     if (!is<BlockedType>(blockedTy))
                         return;
 
-                    auto target = classProp.ty ? resolveType(bodyScope, classProp.ty, false) : builtinTypes->anyType;
+                    // With no explicit type annotation, infer the property's type from its default
+                    // value expression (if any) rather than falling back to `any`. When there IS
+                    // an annotation, the property keeps that type, but the default value must
+                    // still be checked against it (mirrors default function argument checking
+                    // above in checkFunctionSignature).
+                    TypeId target;
+                    if (classProp.ty)
+                    {
+                        target = resolveType(bodyScope, classProp.ty, false);
+                        if (classProp.defaultValue)
+                        {
+                            Inference found = check(bodyScope, classProp.defaultValue, target);
+                            addConstraint(bodyScope, classProp.defaultValue->location, SubtypeConstraint{found.ty, target});
+                        }
+                    }
+                    else if (classProp.defaultValue)
+                        target = check(bodyScope, classProp.defaultValue).ty;
+                    else
+                        target = builtinTypes->anyType;
                     emplaceType<BoundType>(asMutable(blockedTy), target);
                 },
                 [&](const AstClassMethod& method)

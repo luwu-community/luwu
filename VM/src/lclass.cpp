@@ -64,14 +64,18 @@ LuauClass* luaR_newclass(
     classdef->numberofallmembers = numberofinstancemembers + numberofstaticmembers;
     classdef->hascustominit = false;
     classdef->initoffset = 0;
+    classdef->haspoddefaultsfn = false;
+    classdef->poddefaultsoffset = 0;
 
     classdef->memberflags = memberflags;
     classdef->hasprivatemembers = false;
     classdef->hasconstmembers = false;
+    classdef->hasdefaultmembers = false;
     for (uint32_t i = 0; i < classdef->numberofallmembers; i++)
     {
         classdef->hasprivatemembers |= (memberflags[i] & LBC_CLASSMEMBER_PRIVATE) != 0;
         classdef->hasconstmembers |= (memberflags[i] & LBC_CLASSMEMBER_CONST) != 0;
+        classdef->hasdefaultmembers |= (memberflags[i] & LBC_CLASSMEMBER_HASDEFAULT) != 0;
     }
 
     return classdef;
@@ -147,6 +151,11 @@ void luaR_addclassmember(lua_State* L, LuauClass* classdef, TString* name, TValu
         classdef->hascustominit = true;
         classdef->initoffset = offsetint;
     }
+    else if (name == luaS_newlstr(L, "__defaults", 10))
+    {
+        classdef->haspoddefaultsfn = true;
+        classdef->poddefaultsoffset = offsetint;
+    }
 
     // Only metamethods in the parser's allowlist are supported (see ALLOWED_METAMETHODS in Parser.cpp)
     bool isMetamethod = (name == luaS_newlstr(L, "__tostring", 10));
@@ -169,8 +178,25 @@ void luaR_addclassmember(lua_State* L, LuauClass* classdef, TString* name, TValu
 // Initializes the class instance (object) with POD constructor, with L->base + 1 being the stack location we expect
 // the user-provided table matching expected fields to values to be. Since classes can have 0 fields that need to be
 // initialized we also allow Class() here as well (if class actually had fields they will be nill)
+//
+// TODO: when classdef->haspoddefaultsfn is set, this pays for one extra `lua_call` per construction
+// to fetch the field defaults. Investigate compiling that call away (e.g. inlining `__defaults`
+// into a synthesized POD `__init` instead of calling it as a separate closure).
 static void luaR_defaultinitinstancefields(lua_State* L, LuauClass* classdef, LuauObject* object, int numargs)
 {
+    if (classdef->haspoddefaultsfn)
+    {
+        setobj2s(L, L->top, &classdef->staticmembers[classdef->poddefaultsoffset - classdef->numberofinstancemembers]);
+        L->top++;
+        lua_call(L, 0, classdef->numberofinstancemembers);
+
+        StkId results = L->top - classdef->numberofinstancemembers;
+        for (uint32_t idx = 0; idx < classdef->numberofinstancemembers; idx++)
+            setobj(L, &object->members[idx], &results[idx]);
+
+        L->top -= classdef->numberofinstancemembers;
+    }
+
     // Stack location to hold the table lookup result
     setnilvalue(L->top);
     L->top++;
@@ -178,7 +204,7 @@ static void luaR_defaultinitinstancefields(lua_State* L, LuauClass* classdef, Lu
     switch (numargs)
     {
     case 1:
-        // assume class has 0 fields to initialize or user wants all fields to be nil
+        // assume class has 0 fields to initialize or user wants all fields to be nil (or their default)
         break;
     case 2:
         // by going over the expected instance members instead of the passed table we ensure
@@ -188,7 +214,11 @@ static void luaR_defaultinitinstancefields(lua_State* L, LuauClass* classdef, Lu
             TValue key;
             setsvalue(L, &key, classdef->offsettomember[idx]);
             luaV_gettable(L, L->base + 1, &key, L->top - 1);
-            setobj(L, &object->members[idx], L->top - 1);
+
+            // A field absent from the table (or explicitly nil) keeps whatever's already in
+            // object->members[idx] -- nil, or that field's default set above.
+            if (!ttisnil(L->top - 1))
+                setobj(L, &object->members[idx], L->top - 1);
         }
         break;
     default:

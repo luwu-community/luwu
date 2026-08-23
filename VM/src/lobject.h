@@ -621,6 +621,21 @@ typedef struct LuauClass
     // `hasprivatemembers`, but for skipping the const-write check on SETTABLEKS.
     bool hasconstmembers;
 
+    // True if any instance member has a default value expression (LBC_CLASSMEMBER_HASDEFAULT).
+    // Classes with a user-defined `__init` have their defaults inlined directly into `__init`'s
+    // bytecode by the compiler, so this flag goes unused on that path -- it's meaningful together
+    // with haspoddefaultsfn below, for the POD (no custom `__init`) constructor path.
+    bool hasdefaultmembers;
+
+    // True if this class has a synthesized `__defaults` static member: a niladic function,
+    // compiled alongside POD classes with at least one field default, that returns every field's
+    // default value (nil where unset) in declaration order. Only ever set when hasdefaultmembers
+    // is set and there's no custom `__init` (see hascustominit).
+    bool haspoddefaultsfn;
+
+    // The offset of `__defaults` in `staticmembers`, only meaningful when haspoddefaultsfn is set.
+    uint32_t poddefaultsoffset;
+
     // Debug name of the constructor closure (e.g. "Foo() constructor"), shown
     // in stack traces. Owned by this class object; freed in luaR_freeclass.
     char* ctordebugname;

@@ -224,6 +224,111 @@ local p = Person()
     CHECK(get<CountMismatch>(result.errors[0]));
 }
 
+TEST_CASE_FIXTURE(ClassesFixture, "class_property_default_value_infers_type_from_default")
+{
+    ScopedFastFlag sff_LuauBetterUserDefinedClasses{FFlag::LuauBetterUserDefinedClasses, true};
+
+    auto result = check(R"(
+class Cat
+    name: string
+    age = 0
+
+    function __init(self, t: { name: string, age: number? })
+        self.name = t.name
+        self.age = t.age or self.age
+    end
+end
+
+local cat = Cat { name = "Taz", age = 32 }
+local a = cat.age
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("number", toString(requireType("a")));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_property_with_type_annotation_takes_priority_over_default_value_type")
+{
+    ScopedFastFlag sff_LuauBetterUserDefinedClasses{FFlag::LuauBetterUserDefinedClasses, true};
+
+    // If the annotation were ignored in favor of inferring from the default value, `label`'s type
+    // would be the narrower `string` (from `"unnamed"`) instead of the annotated `string?`.
+    auto result = check(R"(
+class Widget
+    label: string? = "unnamed"
+
+    function __init(self) end
+end
+
+local w = Widget()
+local l = w.label
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("string?", toString(requireType("l")));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_property_default_value_incompatible_with_annotation_is_an_error")
+{
+    ScopedFastFlag sff_LuauBetterUserDefinedClasses{FFlag::LuauBetterUserDefinedClasses, true};
+
+    auto result = check(R"(
+class Cat
+    age: string = 4
+
+    function __init(self) end
+end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<TypeMismatch>(result.errors[0]));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_pod_constructor_argument_optional_when_all_properties_have_defaults")
+{
+    ScopedFastFlag sff_LuauBetterUserDefinedClasses{FFlag::LuauBetterUserDefinedClasses, true};
+
+    auto result = check(R"(
+local last_id = 0
+class Id
+    const current = (function()
+        local old = last_id
+        last_id += 1
+        return old
+    end)()
+
+    function __tostring(self)
+        return `ID<{self.current}>`
+    end
+end
+
+local a = Id()
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_pod_constructor_argument_still_required_when_any_property_lacks_a_default")
+{
+    ScopedFastFlag sff_LuauBetterUserDefinedClasses{FFlag::LuauBetterUserDefinedClasses, true};
+
+    auto result = check(R"(
+class Mixed
+    a = 0
+    public b: string
+
+    function greet(self)
+        return self.b
+    end
+end
+
+local m = Mixed()
+)");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<CountMismatch>(result.errors[0]));
+}
+
 TEST_CASE_FIXTURE(ClassesFixture, "class_custom_init_constructor_signature")
 {
     ScopedFastFlag sff_LuauBetterUserDefinedClasses{FFlag::LuauBetterUserDefinedClasses, true};

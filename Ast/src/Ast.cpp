@@ -1022,6 +1022,8 @@ void AstStatClass::visit(AstVisitor* visitor)
                     {
                         if (prop.ty)
                             prop.ty->visit(visitor);
+                        if (prop.defaultValue)
+                            prop.defaultValue->visit(visitor);
                     },
                     [&](const AstClassMethod& method)
                     {

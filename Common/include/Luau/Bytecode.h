@@ -528,6 +528,8 @@ enum LuauBytecodeTag
 // (Compiler/src/Compiler.cpp) and the VM (VM/src/lclass.h/.cpp) use these directly.
 #define LBC_CLASSMEMBER_PRIVATE (1 << 0)
 #define LBC_CLASSMEMBER_CONST (1 << 1)
+// Set on properties that have a default value expression (see AstClassProperty::defaultValue).
+#define LBC_CLASSMEMBER_HASDEFAULT (1 << 2)
 
 // Type table tags
 enum LuauBytecodeType

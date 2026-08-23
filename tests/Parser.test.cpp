@@ -3794,6 +3794,92 @@ TEST_CASE_FIXTURE(Fixture, "class_const_property_without_LuauBetterUserDefinedCl
     CHECK(!result.errors.empty());
 }
 
+TEST_CASE_FIXTURE(Fixture, "class_property_default_value")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    ParseResult result = tryParse(R"(
+        class Cat
+            public const cat: string = "idk"
+            age = 3
+        end
+    )");
+
+    REQUIRE(result.errors.empty());
+
+    const AstStatClass* cls = result.root->body.data[0]->as<AstStatClass>();
+    REQUIRE(cls);
+    REQUIRE(cls->members.size == 2);
+
+    auto cat = cls->members.data[0].get_if<AstClassProperty>();
+    REQUIRE(cat);
+    CHECK(cat->name == "cat");
+    CHECK(cat->visibility == AstClassMemberVisibility::Public);
+    CHECK(cat->isConst);
+    REQUIRE(cat->equalsLocation.has_value());
+    REQUIRE(cat->defaultValue);
+    auto catValue = cat->defaultValue->as<AstExprConstantString>();
+    REQUIRE(catValue);
+    CHECK(std::string(catValue->value.data, catValue->value.size) == "idk");
+
+    auto age = cls->members.data[1].get_if<AstClassProperty>();
+    REQUIRE(age);
+    CHECK(age->name == "age");
+    CHECK(!age->qualifierLocation.has_value());
+    CHECK(age->ty == nullptr);
+    REQUIRE(age->equalsLocation.has_value());
+    REQUIRE(age->defaultValue);
+    auto ageValue = age->defaultValue->as<AstExprConstantNumber>();
+    REQUIRE(ageValue);
+    CHECK(ageValue->value == 3.0);
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_property_default_value_without_type_annotation")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    ParseResult result = tryParse(R"(
+        class Point
+            x = 0
+            y = 0
+        end
+    )");
+
+    REQUIRE(result.errors.empty());
+
+    const AstStatClass* cls = result.root->body.data[0]->as<AstStatClass>();
+    REQUIRE(cls);
+    REQUIRE(cls->members.size == 2);
+
+    auto x = cls->members.data[0].get_if<AstClassProperty>();
+    REQUIRE(x);
+    CHECK(x->ty == nullptr);
+    REQUIRE(x->defaultValue);
+    CHECK(x->defaultValue->as<AstExprConstantNumber>());
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_property_default_value_without_LuauBetterUserDefinedClasses_is_rejected")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, false},
+    };
+
+    ParseResult result = tryParse(R"(
+        class Vector3
+            public x: number = 0
+        end
+    )");
+
+    CHECK(!result.errors.empty());
+}
+
 TEST_CASE_FIXTURE(Fixture, "class_const_before_qualifier_is_a_syntax_error")
 {
     ScopedFastFlag sffs[] = {

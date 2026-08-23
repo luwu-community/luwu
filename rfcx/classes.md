@@ -13,7 +13,7 @@ Add user-defined classes with new primitives `class` (the class definition) and 
 ```luau
 class Cat
     name: string
-    age: number
+    age: number = 0
 end
 const taz = Cat { name = "Taz", age = 14 }
 
@@ -151,8 +151,9 @@ Specifically:
 
 - If a class only has public members, the `public` keyword may be omitted,
 - If a class has members with any other access specifier other than `public`, then the access specifier is required,
-- A modifier `const` may optionally follow the access specifier. `const` must follow the access specifier.
+- A modifier `const` may optionally follow the access specifier. If `const` is specified, it must follow the access specifier.
 - If the member is a field, a valid identifier with an optional type annotation should follow,
+- If the member is a field, an optional default value expression may be provided after the identifier or type annotation,
 - If the member is a function, use the familiar `function` definition syntax.
 
 Since all functions on classes are inherently const, explicitly defining a `const function` inside a class should also raise a syntax error. We raise a syntax error for this because `const function` syntax would otherwise be valid both inside and outside a class, and such a function could easily be unintentionally moved or copy/pasted inside a class block instead of the module's top level scope.
@@ -252,6 +253,37 @@ end
 The `const` modifier may only be applied to fields (all functions/methods are always `const`), and should be placed after an access specifier.
 
 A `const` field must be initialized with a value, by the class's constructor. As noted below, `const` fields are not enforced as being const during class construction, to allow the class constructor to modify the fields explictly, pass them to functions that do, etc.
+
+### Default field values
+
+A class may define fields with default value expressions. The RHS of the default value expression is evaluated with access to upvalues in the class'
+enclosing scope, but may not refer to previous fields or any functions defined within class. `const` fields assigned to by a default value expression *may*
+be mutated within the class' `__init` constructor because allowing such reduces implementation complexity.
+
+Like default function arguments, default class field expressions are re-evaluated every time before a constructor is invoked to make a new object of the class.
+
+We chose this behavior to prevent stale default arguments and lead to similar footguns like in Python with its default function argument problem surrounding
+pass by reference data structures.
+
+This means:
+
+```luau
+
+const function somecounter()
+    return math.random(1, 1000)
+end
+
+class Counter
+    const current = somecounter()
+    function __init(self)
+        -- pass, i want () syntax but nothing needed to assign
+    end
+end
+
+const counter1 = Counter()
+const counter2 = Counter()
+-- both counters have likely have different `counter.current` values.
+```
 
 ### Metamethods
 
@@ -376,7 +408,9 @@ Additionally, a lack of a customizable constructor is a problem if we want to ad
 To fix this issue, we propose a constructor function named `__init`. Among other influences, this is inspired
 by the similarly-named `__init__` from Python. This constructor's name is also chosen to match the `__init` proposed in upstream Luau.
 
-When `Class(...args)` syntax is used to invoke the class constructor, the "magic box self allocator" in C allocates an uninitialized object of the class and passes it to `Class.__init(self, ...args)` as `self`. All of `self`'s fields are initially `nil` at runtime irrespective of type annotations.
+When `Class(...args)` syntax is used to invoke the class constructor, the "magic box self allocator" in C allocates an uninitialized object of the class and passes it to `Class.__init(self, ...args)` as `self`.
+
+At runtime, all of `self`'s fields will be initialized to the field's default value if one is present, or `nil` if a default value is not specified, irrespective of type annotations.
 
 Once called, the `__init` function *should* then assign to all needed fields in `self` (not checked at runtime), and should not return any values. Field `const`ness is not enforced between initial allocation and when the `Class()` expression finishes evaluation.
 Any values returned by `__init` will be ignored. The `Class()` expression then returns `self` to the caller.
@@ -398,7 +432,21 @@ end
 local p = Point { x = 3, y = 4 }
 ```
 
-There is no runtime check on fields passed to the default constructor: if no argument or `nil` are passed, the default constructor simply initializes all class fields to `nil`. If the table does not specify all fields, the fields left unspecified will be initialized to `nil`. In either case, we will raise a type error in static analysis specifying the incorrect argument or missing fields.
+With default values:
+
+```luau
+class Point
+    x = 0
+    y = 0
+end
+
+const pointy = Point() -- Point(x = 0, y = 0); no arguments need to be specified 
+const pointy2 = = Point { x = 4 } -- Point(x = 4, y = 0)
+```
+
+There is no runtime check on fields passed to the default constructor: if no argument or `nil` is passed, the default constructor initializes all class fields to each field's default value or `nil` if a default value is unspecified.
+If the table does not specify all fields, the fields left unspecified will be initialized in the same way. In either case, we will raise a type error in static analysis specifying the incorrect argument or missing fields for any fields
+not explicitly provided or implicitly specified via default value.
 
 The default constructor is always `public`, and there is no way to mark it as private without explicitly
 redefining its semantics.
@@ -648,4 +696,23 @@ const cat = Cat("Taz", 12)
 ## Future work
 
 - Add composition, interfaces, inheritance if we want to.
-- Syntax sugar for `__init` constructors
+- Syntax sugar for parameter-based `__init` constructors, such as:
+
+```luau
+class Cat(name: string, age: number)
+    name = name
+    age = age
+end
+
+-- equivalent to
+
+class Cat
+    name: string
+    age: number
+
+    function __init(self, name, age)
+        self.name = name
+        self.age = age
+    end
+end
+```

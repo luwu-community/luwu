@@ -636,4 +636,99 @@ expectpass("default __init can be called directly on the class object", function
     assert(p.x == 7 and p.y == 8)
 end)
 
+local widgetIdCounter = 0
+local function nextWidgetId()
+    widgetIdCounter += 1
+    return widgetIdCounter
+end
+
+class Widget
+    public const id = nextWidgetId()
+    public label: string
+
+    function __init(self, label)
+        self.label = label
+    end
+end
+
+expectpass("default field values are set before a custom __init runs", function()
+    local w = Widget("hello")
+    assert(w.label == "hello")
+    assert(type(w.id) == "number")
+end)
+
+expectpass("default field values are re-evaluated on every construction", function()
+    local w1 = Widget("a")
+    local w2 = Widget("b")
+    assert(w1.id ~= w2.id, `expected different ids per construction, got {w1.id} and {w2.id}`)
+end)
+
+local bareUpvalueBase = 42
+
+class BareUpvalueDefault
+    public x = bareUpvalueBase
+
+    function __init(self) end
+end
+
+expectpass("default field value referencing a bare outer local (no call) works", function()
+    local b = BareUpvalueDefault()
+    assert(b.x == 42)
+end)
+
+local mutableUpvalue = 1
+local function bumpMutableUpvalue()
+    mutableUpvalue = mutableUpvalue + 1
+end
+bumpMutableUpvalue()
+
+class MutableBareUpvalueDefault
+    public x = mutableUpvalue
+
+    function __init(self) end
+end
+
+expectpass("default field value referencing a mutable bare outer local works", function()
+    local m = MutableBareUpvalueDefault()
+    assert(m.x == 2, `expected 2, got {m.x}`)
+    bumpMutableUpvalue()
+    local m2 = MutableBareUpvalueDefault()
+    assert(m2.x == 3, `expected 3, got {m2.x}`)
+end)
+
+class PodPoint
+    x = 0
+    y = 0
+    public label: string
+end
+
+expectpass("POD classes (no custom __init) apply field defaults", function()
+    local p = PodPoint()
+    assert(p.x == 0 and p.y == 0)
+    assert(p.label == nil)
+end)
+
+expectpass("POD classes fill explicitly provided fields over their defaults", function()
+    local p = PodPoint({ x = 5, label = "hi" })
+    assert(p.x == 5)
+    assert(p.y == 0)
+    assert(p.label == "hi")
+end)
+
+local podCounter = 0
+local function nextPodId()
+    podCounter += 1
+    return podCounter
+end
+
+class PodWithUpvalueDefault
+    public id = nextPodId()
+end
+
+expectpass("POD class field defaults are re-evaluated on every construction", function()
+    local a = PodWithUpvalueDefault()
+    local b = PodWithUpvalueDefault()
+    assert(a.id ~= b.id, `expected different ids per construction, got {a.id} and {b.id}`)
+end)
+
 return 'OK'

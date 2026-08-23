@@ -123,6 +123,8 @@ struct Compiler
         : bytecode(bytecode)
         , options(options)
         , functions(nullptr)
+        , classInitFieldDefaults(nullptr)
+        , classPodDefaultsFn(nullptr)
         , locals(nullptr)
         , globals(AstName())
         , variables(nullptr)
@@ -442,6 +444,34 @@ struct Compiler
         argCount = localStack.size();
 
         currentFunction = func;
+
+        // Inline this class's field defaults ("self.field = defaultExpr") as the very first
+        // statements of a user-defined `__init`, ahead of the user's own body. This makes
+        // defaults re-evaluate on every construction (each is ordinary bytecode running inside
+        // `__init` itself) with no extra closure or call, and lets `const` fields set here still
+        // be reassigned later in the same `__init` body per the class RFC.
+        if (FFlag::DebugLuauUserDefinedClasses)
+        {
+            if (const std::vector<ClassFieldDefault>* defaults = classInitFieldDefaults.find(func))
+            {
+                LUAU_ASSERT(func->args.size > 0);
+                uint8_t selfReg = args;
+
+                for (const ClassFieldDefault& fd : *defaults)
+                {
+                    RegScope rsDefault(this);
+                    setDebugLine(fd.value);
+                    uint8_t valueReg = compileExprAuto(fd.value, rsDefault);
+
+                    LValue lv{LValue::Kind_IndexName};
+                    lv.reg = selfReg;
+                    lv.name = sref(fd.name);
+                    lv.location = fd.value->location;
+
+                    compileAssign(lv, valueReg, nullptr);
+                }
+            }
+        }
 
         if (FFlag::LuauDefaultArguments)
             compileFunctionArgDefaults(func);
@@ -1599,6 +1629,8 @@ struct Compiler
                             flags |= LBC_CLASSMEMBER_PRIVATE;
                         if (prop.isConst)
                             flags |= LBC_CLASSMEMBER_CONST;
+                        if (prop.defaultValue)
+                            flags |= LBC_CLASSMEMBER_HASDEFAULT;
                         shape.propertyFlags.emplace_back(flags);
                     },
                     [&](const AstClassMethod& method)
@@ -1628,6 +1660,20 @@ struct Compiler
                 },
                 member
             );
+        }
+
+        if (AstExprFunction* const* podDefaultsFn = classPodDefaultsFn.find(decl))
+        {
+            compileExprFunction(*podDefaultsFn, temp);
+
+            AstName defaultsName = names.getOrAdd("__defaults");
+            int defaultsNameCid = bytecode.addConstantString(sref(defaultsName));
+            checkConstant(defaultsNameCid, decl->location);
+            shape.methodNames.emplace_back(defaultsNameCid);
+            shape.methodFlags.emplace_back(LBC_CLASSMEMBER_PRIVATE);
+
+            bytecode.emitABC(LOP_NEWCLASSMEMBER, dest, 0, temp);
+            bytecode.emitAux(defaultsNameCid);
         }
 
         // Finally, we create the class constant and patch the AUX slot
@@ -4793,6 +4839,117 @@ struct Compiler
         }
     };
 
+    // A single `field = defaultExpr` to inline into a class's `__init` prologue.
+    struct ClassFieldDefault
+    {
+        AstName name;
+        AstExpr* value;
+    };
+
+    // Finds each class's user-defined `__init` (if any) together with the default value
+    // expressions of its fields, so that compileFunction can inline `self.field = defaultExpr`
+    // assignments at the top of `__init`'s body -- before the user's own statements -- with no
+    // extra runtime call. For classes with no custom `__init` but at least one field default, it
+    // instead synthesizes a niladic `__defaults` function (returning each field's default, nil
+    // where unset, in declaration order) and appends it to `functionsToCompile` so it gets a Proto
+    // like any other function; compileClassDeclaration wires it in as a private static member for
+    // the POD constructor to call. Must run before functions are compiled (see the `functions`
+    // loop in compileOrThrow), since by that point `__init`'s Proto is already being emitted.
+    struct ClassInitDefaultsVisitor : AstVisitor
+    {
+        Allocator& allocator;
+        DenseHashMap<AstExprFunction*, std::vector<ClassFieldDefault>>& initDefaults;
+        DenseHashMap<AstStatClass*, AstExprFunction*>& podDefaultsFn;
+        std::vector<AstExprFunction*>& functionsToCompile;
+
+        ClassInitDefaultsVisitor(
+            Allocator& allocator,
+            DenseHashMap<AstExprFunction*, std::vector<ClassFieldDefault>>& initDefaults,
+            DenseHashMap<AstStatClass*, AstExprFunction*>& podDefaultsFn,
+            std::vector<AstExprFunction*>& functionsToCompile
+        )
+            : allocator(allocator)
+            , initDefaults(initDefaults)
+            , podDefaultsFn(podDefaultsFn)
+            , functionsToCompile(functionsToCompile)
+        {
+        }
+
+        bool visit(AstStatClass* node) override
+        {
+            std::vector<ClassFieldDefault> defaults;
+            std::vector<AstExpr*> propertyDefaultsInOrder; // parallel to property declaration order
+            AstExprFunction* init = nullptr;
+            bool anyPropertyDefault = false;
+
+            for (const auto& member : node->members)
+            {
+                Luau::visit(
+                    overloaded{
+                        [&](const AstClassProperty& prop)
+                        {
+                            if (prop.defaultValue)
+                            {
+                                defaults.push_back({prop.name, prop.defaultValue});
+                                propertyDefaultsInOrder.push_back(prop.defaultValue);
+                                anyPropertyDefault = true;
+                            }
+                            else
+                            {
+                                propertyDefaultsInOrder.push_back(allocator.alloc<AstExprConstantNil>(node->location));
+                            }
+                        },
+                        [&](const AstClassMethod& method)
+                        {
+                            if (method.functionName == "__init")
+                                init = method.function;
+                        }
+                    },
+                    member
+                );
+            }
+
+            if (init)
+            {
+                if (!defaults.empty())
+                    initDefaults[init] = std::move(defaults);
+            }
+            else if (anyPropertyDefault)
+            {
+                AstExpr** returnValues = static_cast<AstExpr**>(allocator.allocate(sizeof(AstExpr*) * propertyDefaultsInOrder.size()));
+                for (size_t i = 0; i < propertyDefaultsInOrder.size(); ++i)
+                    returnValues[i] = propertyDefaultsInOrder[i];
+
+                AstStat** bodyStats = static_cast<AstStat**>(allocator.allocate(sizeof(AstStat*)));
+                bodyStats[0] =
+                    allocator.alloc<AstStatReturn>(node->location, AstArray<AstExpr*>{returnValues, propertyDefaultsInOrder.size()});
+
+                AstStatBlock* body = allocator.alloc<AstStatBlock>(node->location, AstArray<AstStat*>{bodyStats, 1}, /* hasEnd= */ true);
+
+                AstExprFunction* fn = allocator.alloc<AstExprFunction>(
+                    node->location,
+                    AstArray<AstAttr*>(),
+                    AstArray<AstGenericType*>(),
+                    AstArray<AstGenericTypePack*>(),
+                    /* self= */ nullptr,
+                    AstArray<AstLocal*>(),
+                    AstArray<AstExpr*>(),
+                    /* vararg= */ false,
+                    Location(),
+                    body,
+                    node->name->functionDepth + 1,
+                    AstName(),
+                    /* returnAnnotation= */ nullptr
+                );
+
+                podDefaultsFn[node] = fn;
+                functionsToCompile.push_back(fn);
+            }
+
+            return true;
+        }
+    };
+
     struct UndefinedLocalVisitor : AstVisitor
     {
         UndefinedLocalVisitor(Compiler* self)
@@ -4988,6 +5145,11 @@ struct Compiler
     CompileOptions options;
 
     DenseHashMap<AstExprFunction*, Function> functions;
+    // Populated by ClassInitDefaultsVisitor before functions are compiled. See its comment.
+    DenseHashMap<AstExprFunction*, std::vector<ClassFieldDefault>> classInitFieldDefaults;
+    // Populated by ClassInitDefaultsVisitor; maps a POD class (no custom `__init`) with field
+    // defaults to its synthesized `__defaults` function. See ClassInitDefaultsVisitor's comment.
+    DenseHashMap<AstStatClass*, AstExprFunction*> classPodDefaultsFn;
     DenseHashMap<AstLocal*, Local> locals;
     DenseHashMap<AstName, Global> globals;
     DenseHashMap<AstLocal*, Variable> variables;
@@ -5077,6 +5239,19 @@ void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, A
         setCompileOptionsForNativeCompilation(options);
 
     Compiler compiler(bytecode, options, names);
+
+    // Backing storage for AstExprFunction/AstStatBlock/AstStatReturn nodes synthesized by
+    // ClassInitDefaultsVisitor (POD classes' `__defaults` functions); must outlive the `functions`
+    // compile loop below.
+    Allocator classSynthesisAllocator;
+
+    if (FFlag::DebugLuauUserDefinedClasses)
+    {
+        Compiler::ClassInitDefaultsVisitor classInitDefaultsVisitor(
+            classSynthesisAllocator, compiler.classInitFieldDefaults, compiler.classPodDefaultsFn, functions
+        );
+        root->visit(&classInitDefaultsVisitor);
+    }
 
     // since access to some global objects may result in values that change over time, we block imports from non-readonly tables
     assignMutable(compiler.globals, names, options.mutableGlobals);

@@ -1364,6 +1364,11 @@ void TypeChecker2::visit(AstStatClass* stat)
         {
             if (prop->ty)
                 visit(prop->ty);
+
+            // If there's no annotation, the property's type was already inferred from the default
+            // value itself (see ConstraintGenerator), so there's nothing to compare against here.
+            if (prop->ty && prop->defaultValue)
+                testIsSubtype(lookupType(prop->defaultValue), lookupAnnotation(prop->ty), prop->defaultValue->location);
         }
         else if (const auto* method = member.get_if<AstClassMethod>())
         {

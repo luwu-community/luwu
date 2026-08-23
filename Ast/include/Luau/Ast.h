@@ -1117,6 +1117,9 @@ struct AstClassProperty
     bool isConst = false;
     // Location of the `const` keyword; nullopt when isConst is false.
     std::optional<Location> constLocation = std::nullopt;
+    // Location of the `=` token; nullopt when defaultValue is nullptr.
+    std::optional<Location> equalsLocation = std::nullopt;
+    AstExpr* defaultValue = nullptr;
 };
 
 struct AstClassMethod

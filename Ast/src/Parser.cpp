@@ -1634,8 +1634,9 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
 
         // If we saw a qualifier _and_ the current token is not `function`,
         // assume this is a property. Under LuauBetterUserDefinedClasses, a
-        // property with no qualifier at all is also allowed (it's implicitly
-        // public).
+        // property with no qualifier at all is also allowed as long as the
+        // class doesn't have any private fields (implicit members are
+        // implicitly public)
         if ((qualifierLocation || FFlag::LuauBetterUserDefinedClasses) && lexer.current().type != Lexeme::ReservedFunction)
         {
             std::optional<Location> constLocation;
@@ -1666,6 +1667,26 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
                 typeColonLocation = lexer.current().location;
                 nextLexeme();
                 propType = parseType();
+            }
+
+            std::optional<Location> equalsLocation;
+            AstExpr* defaultValue = nullptr;
+            if (FFlag::LuauBetterUserDefinedClasses && lexer.current().type == '=')
+            {
+                equalsLocation = lexer.current().location;
+                nextLexeme();
+
+                // Default value expressions are compiled into the class's constructor (either the
+                // user's `__init` or a synthesized one), which is one function scope deeper than
+                // the class declaration itself. Parse it at that depth so that references to
+                // outer locals are correctly marked as upvalues (see the identical dummyFunction
+                // push for default argument expressions elsewhere in this file).
+                static Function dummyFunction;
+                functionStack.emplace_back(dummyFunction);
+
+                defaultValue = parseExpr();
+
+                functionStack.pop_back();
             }
 
             if (strncmp(propName->name.value, "__", 2) == 0)
@@ -1699,6 +1720,8 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
                         hasSemicolon,
                         isConst,
                         constLocation,
+                        equalsLocation,
+                        defaultValue,
                     }
                 );
             }
@@ -1749,6 +1772,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
             bool hasSemicolon = false;
             if (FFlag::LuauBetterUserDefinedClasses && lexer.current().type == ';')
             {
+                // used by linter to explicitly ignore SameLineStatement with class prop decls
                 nextLexeme();
                 hasSemicolon = true;
             }
@@ -1790,12 +1814,8 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
     {
         for (const auto& [loc, isFunction] : unqualifiedMemberLocations)
         {
-            // Do not inline this ternary as the vararg of report() below (i.e. don't write
-            // report(loc, "...%s...", isFunction ? "function" : "field")). Under MSVC Debug
-            // (/RTC1), passing a conditional-expression temporary directly as a variadic %s
-            // argument gets miscompiled: report() reads back the raw bytes of the chosen string
-            // literal instead of a pointer to it, and vsnprintf segfaults dereferencing that
-            // bogus "pointer". Only reproduces on Windows Debug CI; assign to a named local first.
+            // Do not inline this ternary because doing so causes MSVC to miscompile in Windows Debug CI.
+            // It is some weird issue with format string %s specifically in MSVC RTC1 that will cause a segfault.
             const char* memberKind = isFunction ? "function" : "field";
             report(
                 loc,
