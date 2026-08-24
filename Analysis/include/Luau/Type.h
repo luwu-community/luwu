@@ -559,6 +559,17 @@ struct ClassUserData
     virtual ~ClassUserData() {}
 };
 
+// Attached to a user-defined class's instance ExternType (see FFlag::DebugLuauUserDefinedClasses)
+// so consumers can tell which of its `props` are actual fields, as opposed to methods -- both
+// fields and non-metamethod instance methods live in the same `props` map, and Property alone
+// can't distinguish them: a method's `readTy` doesn't resolve to a FunctionType until constraint
+// solving finishes, which may be after a consumer (e.g. the `class.fields` magic function in
+// BuiltinDefinitions.cpp) needs to know. Populated by ConstraintGenerator's class handling.
+struct ClassFieldUserData final : ClassUserData
+{
+    std::set<Name> fieldNames;
+};
+
 struct Obj
 {
     TypeId ty;

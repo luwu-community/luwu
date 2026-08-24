@@ -555,6 +555,69 @@ expectfail(
     end
 )
 
+expectpass("class.fields returns all public fields and values for an instance with no private members", function()
+    local p = Point { x = 1, y = 2 }
+    local fields, complete = class.fields(p)
+    assert(complete == true)
+    assert(fields.x == 1)
+    assert(fields.y == 2)
+    local count = 0
+    for _ in pairs(fields) do
+        count += 1
+    end
+    assert(count == 2)
+end)
+
+expectpass("class.fields omits private fields and reports complete = false", function()
+    local user = UserWithInit("Taz", "Parekh", "126-222-1123")
+    local fields, complete = class.fields(user)
+    assert(complete == false)
+    assert(fields.first_name == "Taz")
+    assert(fields.last_name == "Parekh")
+    -- The private 'ssn' field must never be exposed via class.fields.
+    assert(fields.ssn == nil)
+    local count = 0
+    for k in pairs(fields) do
+        assert(k ~= "ssn", "class.fields leaked a private field")
+        count += 1
+    end
+    assert(count == 2)
+end)
+
+expectpass("class.fields never leaks private methods either", function()
+    local user = UserWithInit("Taz", "Parekh", "126-222-1123")
+    local fields = class.fields(user)
+    assert(fields.get_ssn == nil)
+end)
+
+expectpass("class.fields works on a class object, not just an instance", function()
+    local fields, complete = class.fields(UserWithInit)
+    assert(complete == false)
+    -- No instance was passed, so public fields are present but unset (none, not nil,
+    -- so the keys are still visible via pairs).
+    assert(fields.first_name == none)
+    assert(fields.last_name == none)
+    assert(fields.ssn == nil)
+end)
+
+expectpass("class.fields uses 'none' rather than 'nil' so unset fields stay visible via pairs", function()
+    local fields = class.fields(Point)
+    local count = 0
+    for k, v in pairs(fields) do
+        assert(v == none)
+        count += 1
+    end
+    assert(count == 2)
+end)
+
+expectfail("class.fields raises on a non-class/object argument", "invalid argument #1 to 'fields' (class or object expected)", function()
+    class.fields("not a class or object")
+end)
+
+expectfail("class.fields raises on a missing argument", "missing argument #1", function()
+    class.fields()
+end)
+
 class Token
     public const value: string
 

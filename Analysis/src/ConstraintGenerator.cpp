@@ -1114,6 +1114,9 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
             ExternType::Props props;
             TableType::Props instanceMetatableProps;
             DenseHashMap<AstName, TypeId> memberTypes{AstName{""}};
+            // Names of `props` entries that are actual fields (AstClassProperty), not methods.
+            // See ClassFieldUserData's doc comment for why this needs tracking separately.
+            std::set<Name> instanceFieldNames;
 
             TypeId ctorArgTy = arena->addType(TableType{TableType::Props{}, std::nullopt, TypeLevel{}, scope.get(), TableState::Sealed});
             TableType* ctorArgTable = getMutable<TableType>(ctorArgTy);
@@ -1134,6 +1137,7 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
 
                             auto [propertyType, _] = memberTypes.try_insert(classProp.name, arena->addType(BlockedType{}));
                             auto& p = props[classProp.name.value];
+                            instanceFieldNames.insert(classProp.name.value);
 
                             // This needs to be blocked initially: if this
                             // type refers to a type that contains a typeof
@@ -1192,9 +1196,19 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
 
             TypeId instanceMetatable = arena->addType(TableType{instanceMetatableProps, std::nullopt, TypeLevel{}, scope.get(), TableState::Sealed});
 
+            auto classFieldUserData = std::make_shared<ClassFieldUserData>();
+            classFieldUserData->fieldNames = std::move(instanceFieldNames);
+
             TypeId classInstanceTy = arena->addType(
                 ExternType{
-                    declName, std::move(props), builtinTypes->objectType, instanceMetatable, Tags{}, nullptr, module->name, classDecl->location
+                    declName,
+                    std::move(props),
+                    builtinTypes->objectType,
+                    instanceMetatable,
+                    Tags{},
+                    std::move(classFieldUserData),
+                    module->name,
+                    classDecl->location
                 }
             );
 

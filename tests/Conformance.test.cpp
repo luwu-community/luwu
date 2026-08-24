@@ -4301,6 +4301,7 @@ TEST_CASE("Classes")
         {FFlag::DebugLuauUserDefinedClasses, true},
         {FFlag::DebugLuauUserDefinedClassesRuntime, true},
         {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuauNonePrimitive, true},
     };
 
     runConformance("classes.luau");

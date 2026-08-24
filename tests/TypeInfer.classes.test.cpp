@@ -29,7 +29,8 @@ declare function tostring<T>(value: T): string
 
 declare class: {
     isinstance: @checked (o: unknown, c: class) -> boolean,
-    classof: @checked (o: unknown) -> class?
+    classof: @checked (o: unknown) -> class?,
+    fields: @checked (o: class | object) -> ({ [string]: unknown }, boolean)
 }
 )LUAU_SRC";
     Frontend& getFrontend() override
@@ -46,6 +47,17 @@ declare class: {
         LUAU_ASSERT(it != f.globals.globalScope->bindings.end());
         attachTag(it->second.typeId, kRequireTagName);
         attachMagicFunction(it->second.typeId, std::make_shared<MagicRequire>());
+
+        AstName classLibName = f.globals.globalNames.names->getOrAdd("class");
+        auto classLibIt = f.globals.globalScope->bindings.find(classLibName);
+        LUAU_ASSERT(classLibIt != f.globals.globalScope->bindings.end());
+        if (TableType* ctv = getMutable<TableType>(classLibIt->second.typeId))
+        {
+            auto fieldsIt = ctv->props.find("fields");
+            LUAU_ASSERT(fieldsIt != ctv->props.end() && fieldsIt->second.readTy);
+            attachMagicFunction(*fieldsIt->second.readTy, std::make_shared<MagicClassFields>());
+        }
+
         registerTestTypes();
         Luau::freeze(f.globals.globalTypes);
 
@@ -751,6 +763,87 @@ TEST_CASE_FIXTURE(ClassesFixture, "isinstance_refines_imported_class_but_not_a_c
     auto err = get<TypeMismatch>(modB.errors[0]);
     CHECK_EQ("class", toString(err->wantedType));
     CHECK_EQ("nil", toString(err->givenType));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_fields_on_instance_reports_precise_field_types_and_complete_true")
+{
+    CheckResult result = check(R"(
+class Point
+    public x: number
+    public y: number
+
+    function magnitude(self)
+        return sqrt(self.x * self.x + self.y * self.y)
+    end
+end
+
+local p = Point { x = 1, y = 2 }
+local fields, complete = class.fields(p)
+)");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("{ read x: number, read y: number }", toString(requireType("fields")));
+    CHECK_EQ("true", toString(requireType("complete")));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_fields_omits_private_fields_from_the_type_and_reports_complete_false")
+{
+    ScopedFastFlag sff_LuauBetterUserDefinedClasses{FFlag::LuauBetterUserDefinedClasses, true};
+
+    CheckResult result = check(R"(
+class User
+    public first_name: string
+    private ssn: string?
+
+    public function __init(self, first_name, ssn)
+        self.first_name = first_name
+        self.ssn = ssn
+    end
+end
+
+local u = User("Taz", "126-222-1123")
+local fields, complete = class.fields(u)
+)");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("{ read first_name: string }", toString(requireType("fields")));
+    CHECK_EQ("false", toString(requireType("complete")));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_fields_omits_methods_from_the_type")
+{
+    CheckResult result = check(R"(
+class Point
+    public x: number
+    public y: number
+
+    function magnitude(self)
+        return sqrt(self.x * self.x + self.y * self.y)
+    end
+end
+
+local p = Point { x = 1, y = 2 }
+local fields = class.fields(p)
+)");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("{ read x: number, read y: number }", toString(requireType("fields")));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_fields_also_works_on_the_class_itself_not_just_an_instance")
+{
+    CheckResult result = check(R"(
+class Point
+    public x: number
+    public y: number
+end
+
+local fields, complete = class.fields(Point)
+)");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("{ read x: number, read y: number }", toString(requireType("fields")));
+    CHECK_EQ("true", toString(requireType("complete")));
 }
 
 TEST_CASE_FIXTURE(ClassesFixture, "typed_self_parameter_after_class_declaration")

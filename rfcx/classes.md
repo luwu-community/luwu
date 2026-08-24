@@ -329,7 +329,7 @@ const counter2 = Counter()
 ### Runtime checking of `self` for methods
 
 To ensure more correct code, we prevent passing a different class of `self` to a method via `object.method(object)` syntax.
-This frees users from needing to assert `class.isinstance(self, TheClass)` if they want to ensure correct calling conventions. 
+This frees users from needing to assert `class.isinstance(self, TheClass)` if they want to ensure correct calling conventions.
 This also allows for further optimizations.
 
 This restriction may be loosened in a future RFC for classes that opt into inheritance.
@@ -378,12 +378,15 @@ We introduce a new global library `class`. Its contents are:
 local class: {
     isinstance: (o: unknown, C: class) -> boolean,
     classof: (o: unknown) -> class?,
+    fields: (o: class | object) -> ({ [string]: unknown }, boolean)
 }
 ```
 
 This library also serves as an obvious extension point for future features like reflection. In the future, we may allow classes to opt-out of reflection using this library.
 
 The function `class.isinstance(o, Class)` returns `true` if the object `o` is an instance of `Class`. At runtime, it raises an error if the second argument is not a class. If the first argument is not an `object`, `class.isinstance` returns false. (eg `class.isinstance(5, MyClass)`)
+
+The function `class.fields` returns a map of all public fields (not methods) of the class or object, with their values, as well as a boolean `complete`, representing whether the returned map is a complete representation of the fields on that object (the class does not have any private fields).
 
 The `class.classof` function returns the class corresponding to the first argument. If the first argument is not an `object`, the result is `nil`.
 
@@ -636,6 +639,8 @@ user:terminate()
 
 Classes with generic type parameters should be handled like extern types with generic type parameters. An initial implementation
 of this RFC without full type system support may be merged before handling this perfectly.
+
+The type function for `class.fields` will be implemented as a magic function overriding what the type system actually says returns `({ [string]: unknown }, boolean)`
 
 Attempting to modify a `const` field should raise a type error.
 
