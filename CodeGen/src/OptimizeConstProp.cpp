@@ -1357,6 +1357,7 @@ struct ConstPropState
         instNotReadonly.clear();
         instNoMetatable.clear();
         instArraySize.clear();
+        instBufferMutable.clear();
 
         invalidateValuePropagation();
         invalidateHeapTableData();
@@ -1417,6 +1418,9 @@ struct ConstPropState
     DenseHashSet<uint32_t> instNotReadonly{kInvalidInstIdx};
     DenseHashSet<uint32_t> instNoMetatable{kInvalidInstIdx};
     DenseHashMap<uint32_t, int> instArraySize{kInvalidInstIdx};
+
+    // Mutable buffer tracking
+    DenseHashSet<uint32_t> instBufferMutable{kInvalidInstIdx};
 
     std::vector<uint32_t> rangeEndTemp;
 };
@@ -2334,6 +2338,20 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         }
         break;
     case IrCmd::CHECK_BUFFER_MUTABLE:
+        if (OP_A(inst).kind == IrOpKind::Inst)
+        {
+            if (state.instBufferMutable.contains(OP_A(inst).index))
+            {
+                if (FFlag::DebugLuauAbortingChecks)
+                    replace(function, OP_B(inst), build.undef());
+                else
+                    kill(function, inst);
+            }
+            else
+            {
+                state.instBufferMutable.insert(OP_A(inst).index);
+            }
+        }
         break;
     case IrCmd::CHECK_BUFFER_LEN:
     {
