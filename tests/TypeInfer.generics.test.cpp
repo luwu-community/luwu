@@ -17,6 +17,25 @@ using namespace Luau;
 
 TEST_SUITE_BEGIN("GenericsTests");
 
+TEST_CASE_FIXTURE(Fixture, "repro_scratch_union_dedup_plain")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    CheckResult result = check(R"(
+        local function combine<T, U>(t: { T }, e: { U }): { T | U }
+            return nil :: any
+        end
+
+        local cats2: { number } = { 1, 2 }
+        local cats3: { number } = { 3, 4 }
+        local ret = combine(cats2, cats3)
+    )");
+
+    for (auto& e : result.errors)
+        printf("ERROR: %s\n", toString(e).c_str());
+    printf("ret type: %s\n", toString(requireType("ret")).c_str());
+}
+
 TEST_CASE_FIXTURE(Fixture, "check_generic_function")
 {
     CheckResult result = check(R"(

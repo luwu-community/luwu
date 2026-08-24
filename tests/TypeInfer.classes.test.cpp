@@ -154,6 +154,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "class_mm")
     auto result = check(R"(
 class Point
     function __add(self, other)
+        return self
     end
 end
 
@@ -588,6 +589,66 @@ local f: string = e:get()
     REQUIRE(tm);
     CHECK_EQ("string", toString(tm->wantedType));
     CHECK_EQ("number", toString(tm->givenType));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "repro_scratch_union_dedup")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    auto result = check(R"(
+class Cat
+    public name: string
+    public age: number
+
+    function __init(self, name, age)
+        self.name = name
+        self.age = age
+    end
+end
+
+local function combine<T, U>(t: { T }, e: { U }): { T | U }
+    return nil :: any
+end
+
+local justcats = { Cat("Taz", 12), Cat("Meow", 2) }
+
+local cats2 = { Cat("Taz", 12), Cat("Meow", 2) }
+local cats3 = { Cat("Kiiyoko", 17), Cat("Mr. Purrsalot", 20) }
+local ret = combine(cats2, cats3)
+    )");
+
+    ToStringOptions opts;
+    opts.ignoreSyntheticName = true;
+
+    for (auto& e : result.errors)
+        printf("ERROR: %s\n", toString(e).c_str());
+    printf("justcats type: %s\n", toString(requireType("justcats"), opts).c_str());
+    printf("cats2 type: %s\n", toString(requireType("cats2"), opts).c_str());
+    printf("cats3 type: %s\n", toString(requireType("cats3"), opts).c_str());
+    printf("ret type: %s\n", toString(requireType("ret"), opts).c_str());
+
+    TypeId cats2Ty = follow(requireType("cats2"));
+    TypeId cats3Ty = follow(requireType("cats3"));
+    const TableType* cats2Table = get<TableType>(cats2Ty);
+    const TableType* cats3Table = get<TableType>(cats3Ty);
+    REQUIRE(cats2Table);
+    REQUIRE(cats3Table);
+    REQUIRE(cats2Table->indexer);
+    REQUIRE(cats3Table->indexer);
+    TypeId cat2ElemTy = follow(cats2Table->indexer->indexResultType);
+    TypeId cat3ElemTy = follow(cats3Table->indexer->indexResultType);
+    printf("cat2ElemTy ptr=%p  cat3ElemTy ptr=%p  equal=%d\n", (void*)cat2ElemTy, (void*)cat3ElemTy, cat2ElemTy == cat3ElemTy);
+
+    const TableType* retTable = get<TableType>(follow(requireType("ret")));
+    const UnionType* retUnion = retTable && retTable->indexer ? get<UnionType>(follow(retTable->indexer->indexResultType)) : nullptr;
+    if (retUnion)
+    {
+        printf("retUnion options.size()=%zu\n", retUnion->options.size());
+        for (TypeId opt : retUnion->options)
+            printf("  option ptr=%p followed=%p\n", (void*)opt, (void*)follow(opt));
+    }
 }
 
 TEST_CASE_FIXTURE(ClassesFixture, "isinstance_refines_unknown_value")

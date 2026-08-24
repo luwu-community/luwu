@@ -1395,6 +1395,51 @@ void TypeChecker2::visit(AstStatClass* stat)
                         );
                 }
             }
+            else if (method->functionName == "__eq" || method->functionName == "__lt" || method->functionName == "__le")
+            {
+                if (const FunctionType* ftv = get<FunctionType>(lookupType(method->function)))
+                {
+                    NotNull<Scope> scope{findInnermostScope(method->function->location)};
+                    std::optional<TypeId> ret = first(ftv->retTypes);
+                    if (!ret || !subtyping->isSubtype(follow(*ret), builtinTypes->booleanType, scope).isSubtype)
+                        reportError(
+                            GenericError{format("Metamethod '%s' must return a boolean", method->functionName.value)},
+                            method->function->location
+                        );
+                }
+            }
+            else if (method->functionName == "__len")
+            {
+                if (const FunctionType* ftv = get<FunctionType>(lookupType(method->function)))
+                {
+                    NotNull<Scope> scope{findInnermostScope(method->function->location)};
+                    std::optional<TypeId> ret = first(ftv->retTypes);
+                    if (!ret || !subtyping->isSubtype(follow(*ret), builtinTypes->numberType, scope).isSubtype)
+                        reportError(GenericError{"Metamethod '__len' must return a number"}, method->function->location);
+                }
+            }
+            else if (
+                method->functionName == "__add" || method->functionName == "__sub" || method->functionName == "__mul" ||
+                method->functionName == "__div" || method->functionName == "__mod" || method->functionName == "__pow" ||
+                method->functionName == "__idiv" || method->functionName == "__unm" || method->functionName == "__concat"
+            )
+            {
+                if (const FunctionType* ftv = get<FunctionType>(lookupType(method->function)))
+                {
+                    if (!first(ftv->retTypes))
+                        reportError(
+                            GenericError{format("Metamethod '%s' must return a value", method->functionName.value)}, method->function->location
+                        );
+                }
+            }
+            else if (method->functionName == "__iter")
+            {
+                if (const FunctionType* ftv = get<FunctionType>(lookupType(method->function)))
+                {
+                    if (!first(ftv->retTypes))
+                        reportError(GenericError{"Metamethod '__iter' must return a value"}, method->function->location);
+                }
+            }
         }
         else
             LUAU_ASSERT(!"Unknown class member!");
