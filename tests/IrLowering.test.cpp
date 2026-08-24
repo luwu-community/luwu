@@ -19,14 +19,18 @@
 LUAU_FASTFLAG(LuauIntegerFastcalls)
 LUAU_FASTFLAG(LuauCodegenInteger3)
 LUAU_FASTFLAG(LuauIntegerType2)
-LUAU_FASTFLAG(LuauCodegenLoadPropagateOrigin)
 LUAU_FASTFLAG(LuauCodegenVmExitSyncMultiUse)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 LUAU_FASTFLAG(LuauCallFeedback)
 LUAU_FASTFLAG(LuauCodegenA64ExitUseCheck)
+LUAU_FASTFLAG(LuauBackedgeHeapCheck)
+LUAU_FASTFLAG(LuauCodegenConstVectorBufferRead)
 
 #define ensureVectorSize3() \
-    if (LUA_VECTOR_SIZE != 3) \
+    if constexpr (LUA_VECTOR_SIZE != 3) \
+    return
+#define ensureVectorFloat() \
+    if constexpr (LUA_VECTOR_DOUBLE == 1) \
     return
 
 static void luauLibraryConstantLookup(const char* library, const char* member, Luau::CompileConstant* constant)
@@ -96,6 +100,7 @@ public:
         compilationOptions.typeInfoLevel = 1;
         compilationOptions.vectorCtor = "vector";
         compilationOptions.vectorType = "vector";
+        compilationOptions.vectorPrecision = 0;
         compilationOptions.userdataTypes = kUserdataCompileTypes;
         compilationOptions.librariesWithKnownMembers = kLibrariesWithConstants;
         compilationOptions.libraryMemberTypeCb = luauLibraryTypeLookup;
@@ -106,6 +111,7 @@ public:
         compilationOptionsC.typeInfoLevel = 1;
         compilationOptionsC.vectorCtor = "vector";
         compilationOptionsC.vectorType = "vector";
+        compilationOptionsC.vectorPrecision = 0;
         compilationOptionsC.userdataTypes = kUserdataCompileTypes;
         compilationOptionsC.librariesWithKnownMembers = kLibrariesWithConstants;
         compilationOptionsC.libraryMemberTypeCb = luauLibraryTypeLookup;
@@ -290,6 +296,8 @@ TEST_SUITE_BEGIN("IrLowering");
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorReciprocal")
 {
+    ensureVectorFloat();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function vecrcp(a: vector)
@@ -317,6 +325,7 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorComponentRead")
 {
+    ensureVectorFloat();
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function compsum(a: vector)
@@ -349,6 +358,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorAdd")
 {
+    ensureVectorFloat();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function vec3add(a: vector, b: vector)
@@ -377,6 +388,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorMinus")
 {
+    ensureVectorFloat();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function vec3minus(a: vector)
@@ -403,6 +416,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorSubMulDiv")
 {
+    ensureVectorFloat();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function vec3combo(a: vector, b: vector, c: vector, d: vector)
@@ -437,6 +452,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorSubMulDiv2")
 {
+    ensureVectorFloat();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function vec3combo(a: vector)
@@ -467,6 +484,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorMulDivMixed")
 {
+    ensureVectorFloat();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function vec3combo(a: vector, b: vector, c: vector, d: vector)
@@ -509,6 +528,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorLerp")
 {
+    ensureVectorFloat();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function vec3lerp(a: vector, b: vector, t: number)
@@ -545,6 +566,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorMinMax")
 {
+    ensureVectorFloat();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function vecops(a: vector, b: vector)
@@ -576,6 +599,8 @@ bb_bytecode_1:
 }
 TEST_CASE_FIXTURE(LoweringFixture, "VectorFloorCeilAbs")
 {
+    ensureVectorFloat();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function vecops(a: vector)
@@ -1161,6 +1186,8 @@ bb_7:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorConstantTag")
 {
+    ensureVectorFloat();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function vecrcp(a: vector)
@@ -1258,6 +1285,8 @@ bb_6:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorCustomAccess")
 {
+    ensureVectorFloat();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function vec3magn(a: vector)
@@ -1293,6 +1322,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorCustomNamecall")
 {
+    ensureVectorFloat();
+
     ScopedFastFlag callFb{FFlag::LuauCallFeedback, true};
     ScopedFastFlag emitCallFb{FFlag::LuauEmitCallFeedback, true};
 
@@ -1334,6 +1365,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorCustomNamecall2")
 {
+    ensureVectorFloat();
+
     ScopedFastFlag callFb{FFlag::LuauCallFeedback, true};
     ScopedFastFlag emitCallFb{FFlag::LuauEmitCallFeedback, true};
 
@@ -1369,6 +1402,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorCustomAccessChain")
 {
+    ensureVectorFloat();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function foo(a: vector, b: vector)
@@ -1421,6 +1456,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorCustomNamecallChain")
 {
+    ensureVectorFloat();
+
     ScopedFastFlag callFb{FFlag::LuauCallFeedback, true};
     ScopedFastFlag emitCallFb{FFlag::LuauEmitCallFeedback, true};
 
@@ -1482,6 +1519,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorCustomNamecallChain2")
 {
+    ensureVectorFloat();
+
     ScopedFastFlag callFb{FFlag::LuauCallFeedback, true};
     ScopedFastFlag emitCallFb{FFlag::LuauEmitCallFeedback, true};
 
@@ -1560,6 +1599,7 @@ bb_6:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorLoadFloatPropagation")
 {
+    ensureVectorFloat();
     ensureVectorSize3();
 
     CHECK_EQ(
@@ -1593,6 +1633,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorLibraryChain")
 {
+    ensureVectorFloat();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function foo(a: vector, b: vector)
@@ -1635,6 +1677,7 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorIdiv")
 {
+    ensureVectorFloat();
     ensureVectorSize3();
 
     CHECK_EQ(
@@ -1674,6 +1717,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorNumberMixed1")
 {
+    ensureVectorFloat();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -1726,6 +1771,8 @@ bb_linear_11:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorNumberMixed2")
 {
+    ensureVectorFloat();
+
     assemblyOptions.includeOutlinedCode = true;
 
     CHECK_EQ(
@@ -1777,6 +1824,8 @@ bb_fallback_5:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorReverseOps")
 {
+    ensureVectorFloat();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function vecrcp(a: vector)
@@ -2094,6 +2143,8 @@ bb_bytecode_2:
 
 TEST_CASE_FIXTURE(LoweringFixture, "ExplicitUpvalueAndLocalTypes")
 {
+    ensureVectorFloat();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -2764,6 +2815,7 @@ bb_linear_11:
 // This test is based on an example of texture bilinear interpolation, t.w/t.h only have to be loaded once
 TEST_CASE_FIXTURE(LoweringFixture, "TableNodeLoadStoreProp5")
 {
+    ensureVectorFloat();
     ensureVectorSize3();
 
     CHECK_EQ(
@@ -3254,6 +3306,7 @@ bb_linear_9:
 
 TEST_CASE_FIXTURE(LoweringFixture, "FastcallTypeInferThroughLocal")
 {
+    ensureVectorFloat();
     ensureVectorSize3();
 
     CHECK_EQ(
@@ -3305,6 +3358,7 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "FastcallTypeInferThroughUpvalue")
 {
+    ensureVectorFloat();
     ensureVectorSize3();
 
     // TODO: opportunity - bb_3 and bb_bytecode_1 have only one predecessor, so they should know that the upvalue u0 is already in r2
@@ -3368,7 +3422,7 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "LoadAndMoveTypePropagation")
 {
-    ScopedFastFlag luauCodegenLoadPropagateOrigin{FFlag::LuauCodegenLoadPropagateOrigin, true};
+    ScopedFastFlag luauBackedgeHeapCheck{FFlag::LuauBackedgeHeapCheck, true};
 
     CHECK_EQ(
         "\n" + getCodegenAssembly(
@@ -3425,11 +3479,12 @@ bb_bytecode_2:
   STORE_DOUBLE R1, %43
   JUMP bb_bytecode_3
 bb_bytecode_3:
-  %46 = LOAD_DOUBLE R2
-  %47 = LOAD_DOUBLE R4
-  %48 = ADD_NUM %47, 1
-  STORE_DOUBLE R4, %48
-  JUMP_CMP_NUM %48, %46, le, bb_bytecode_1, bb_bytecode_4
+  CHECK_GC
+  %47 = LOAD_DOUBLE R2
+  %48 = LOAD_DOUBLE R4
+  %49 = ADD_NUM %48, 1
+  STORE_DOUBLE R4, %49
+  JUMP_CMP_NUM %49, %47, le, bb_bytecode_1, bb_bytecode_4
 bb_bytecode_4:
   INTERRUPT 12u
   RETURN R1, 1i
@@ -3439,6 +3494,7 @@ bb_bytecode_4:
 
 TEST_CASE_FIXTURE(LoweringFixture, "ArgumentTypeRefinement")
 {
+    ensureVectorFloat();
     ensureVectorSize3();
 
     CHECK_EQ(
@@ -3474,6 +3530,8 @@ bb_bytecode_0:
 
 TEST_CASE_FIXTURE(LoweringFixture, "InlineFunctionType")
 {
+    ensureVectorFloat();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -3525,6 +3583,8 @@ bb_bytecode_0:
 
 TEST_CASE_FIXTURE(LoweringFixture, "ResolveTablePathTypes")
 {
+    ensureVectorFloat();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -3688,6 +3748,8 @@ end
 
 TEST_CASE_FIXTURE(LoweringFixture, "ResolveVectorNamecalls")
 {
+    ensureVectorFloat();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -3752,6 +3814,8 @@ bb_6:
 
 TEST_CASE_FIXTURE(LoweringFixture, "ImmediateTypeAnnotationHelp")
 {
+    ensureVectorFloat();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -3816,8 +3880,11 @@ end
 
 TEST_CASE_FIXTURE(LoweringFixture, "ForInManualAnnotation")
 {
+    ensureVectorFloat();
+
     ScopedFastFlag callFb{FFlag::LuauCallFeedback, true};
     ScopedFastFlag emitCallFb{FFlag::LuauEmitCallFeedback, true};
+    ScopedFastFlag luauBackedgeHeapCheck{FFlag::LuauBackedgeHeapCheck, true};
 
     CHECK_EQ(
         "\n" + getCodegenAssembly(
@@ -3888,21 +3955,22 @@ bb_8:
   JUMP bb_bytecode_3
 bb_bytecode_3:
   INTERRUPT 12u
+  CHECK_GC
   CHECK_TAG R2, tnil, bb_fallback_10
-  %54 = LOAD_POINTER R3
-  %55 = LOAD_INT R4
-  %56 = GET_ARR_ADDR %54, %55
-  CHECK_ARRAY_SIZE %54, %55, bb_9
-  %58 = LOAD_TAG %56
-  JUMP_EQ_TAG %58, tnil, bb_9, bb_11
+  %55 = LOAD_POINTER R3
+  %56 = LOAD_INT R4
+  %57 = GET_ARR_ADDR %55, %56
+  CHECK_ARRAY_SIZE %55, %56, bb_9
+  %59 = LOAD_TAG %57
+  JUMP_EQ_TAG %59, tnil, bb_9, bb_11
 bb_11:
-  %60 = ADD_INT %55, 1i
-  STORE_INT R4, %60
-  %62 = INT_TO_NUM %60
-  STORE_DOUBLE R5, %62
+  %61 = ADD_INT %56, 1i
+  STORE_INT R4, %61
+  %63 = INT_TO_NUM %61
+  STORE_DOUBLE R5, %63
   STORE_TAG R5, tnumber
-  %65 = LOAD_TVALUE %56
-  STORE_TVALUE R6, %65
+  %66 = LOAD_TVALUE %57
+  STORE_TVALUE R6, %66
   JUMP bb_bytecode_2
 bb_9:
   INTERRUPT 14u
@@ -4059,6 +4127,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "CustomUserdataPropertyAccess2")
 {
+    ensureVectorFloat();
+
     // This test requires runtime component to be present
     if (!Luau::CodeGen::isSupported())
         return;
@@ -4098,8 +4168,6 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "CustomUserdataNamecall1")
 {
-    ScopedFastFlag luauCodegenLoadPropagateOrigin{FFlag::LuauCodegenLoadPropagateOrigin, true};
-
     // This test requires runtime component to be present
     if (!Luau::CodeGen::isSupported())
         return;
@@ -4152,8 +4220,6 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "CustomUserdataNamecall2")
 {
-    ScopedFastFlag luauCodegenLoadPropagateOrigin{FFlag::LuauCodegenLoadPropagateOrigin, true};
-
     // This test requires runtime component to be present
     if (!Luau::CodeGen::isSupported())
         return;
@@ -4196,11 +4262,10 @@ bb_bytecode_1:
   %25 = MIN_NUM %23, %24
   %26 = NUM_TO_FLOAT %20
   %27 = NUM_TO_FLOAT %25
-  CHECK_GC
-  %29 = NEW_USERDATA 8i, 12i
-  BUFFER_WRITEF32 %29, 0i, %26, tuserdata
-  BUFFER_WRITEF32 %29, 4i, %27, tuserdata
-  STORE_POINTER R2, %29
+  %28 = NEW_USERDATA 8i, 12i
+  BUFFER_WRITEF32 %28, 0i, %26, tuserdata
+  BUFFER_WRITEF32 %28, 4i, %27, tuserdata
+  STORE_POINTER R2, %28
   STORE_TAG R2, tuserdata
   ADJUST_STACK_TO_REG R2, 1i
   INTERRUPT 4u
@@ -4341,28 +4406,27 @@ bb_bytecode_1:
   %13 = BUFFER_READF32 %10, 4i, tuserdata
   %14 = UNM_FLOAT %12
   %15 = UNM_FLOAT %13
-  CHECK_GC
-  %17 = NEW_USERDATA 8i, 12i
-  BUFFER_WRITEF32 %17, 0i, %14, tuserdata
-  BUFFER_WRITEF32 %17, 4i, %15, tuserdata
-  %26 = LOAD_POINTER R0
-  CHECK_USERDATA_TAG %26, 12i, bb_exit_3
-   ; exit sync: R4, {%17}
-  %28 = LOAD_POINTER R1
-  CHECK_USERDATA_TAG %28, 12i, bb_exit_4
-   ; exit sync: R4, {%17}
-  %30 = BUFFER_READF32 %26, 0i, tuserdata
-  %31 = BUFFER_READF32 %28, 0i, tuserdata
-  %32 = MUL_FLOAT %30, %31
-  %33 = BUFFER_READF32 %26, 4i, tuserdata
-  %34 = BUFFER_READF32 %28, 4i, tuserdata
-  %35 = MUL_FLOAT %33, %34
-  %52 = ADD_FLOAT %14, %32
-  %55 = ADD_FLOAT %15, %35
-  %57 = NEW_USERDATA 8i, 12i
-  BUFFER_WRITEF32 %57, 0i, %52, tuserdata
-  BUFFER_WRITEF32 %57, 4i, %55, tuserdata
-  STORE_POINTER R3, %57
+  %16 = NEW_USERDATA 8i, 12i
+  BUFFER_WRITEF32 %16, 0i, %14, tuserdata
+  BUFFER_WRITEF32 %16, 4i, %15, tuserdata
+  %25 = LOAD_POINTER R0
+  CHECK_USERDATA_TAG %25, 12i, bb_exit_3
+   ; exit sync: R4, {%16}
+  %27 = LOAD_POINTER R1
+  CHECK_USERDATA_TAG %27, 12i, bb_exit_4
+   ; exit sync: R4, {%16}
+  %29 = BUFFER_READF32 %25, 0i, tuserdata
+  %30 = BUFFER_READF32 %27, 0i, tuserdata
+  %31 = MUL_FLOAT %29, %30
+  %32 = BUFFER_READF32 %25, 4i, tuserdata
+  %33 = BUFFER_READF32 %27, 4i, tuserdata
+  %34 = MUL_FLOAT %32, %33
+  %50 = ADD_FLOAT %14, %31
+  %53 = ADD_FLOAT %15, %34
+  %54 = NEW_USERDATA 8i, 12i
+  BUFFER_WRITEF32 %54, 0i, %50, tuserdata
+  BUFFER_WRITEF32 %54, 4i, %53, tuserdata
+  STORE_POINTER R3, %54
   STORE_TAG R3, tuserdata
   INTERRUPT 3u
   RETURN R3, 1i
@@ -4420,6 +4484,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "LibraryFieldTypesAndConstants")
 {
+    ensureVectorFloat();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -4456,6 +4522,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "LibraryFieldTypesAndConstants")
 {
+    ensureVectorFloat();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -4577,6 +4645,7 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "Bit32ReplaceDirect")
 {
+    ensureVectorFloat();
     ensureVectorSize3();
 
     CHECK_EQ(
@@ -4734,6 +4803,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorLoadReuse")
 {
+    ensureVectorFloat();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function shuffle(v: vector)
@@ -4765,6 +4836,7 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorShuffle1")
 {
+    ensureVectorFloat();
     ensureVectorSize3();
 
     // TODO: opportunity - if we introduce a separate vector shuffle instruction, this can be done in a single shuffle (+/- load and store)
@@ -4796,6 +4868,7 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorShuffle2")
 {
+    ensureVectorFloat();
     ensureVectorSize3();
 
     CHECK_EQ(
@@ -4828,6 +4901,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorShuffleFromComposite1")
 {
+    ensureVectorFloat();
+
     // This test requires runtime component to be present
     if (!Luau::CodeGen::isSupported())
         return;
@@ -4887,11 +4962,10 @@ bb_bytecode_1:
   CHECK_USERDATA_TAG %6, 13i, exit(0)
   %8 = BUFFER_READF32 %6, 24i, tuserdata
   %9 = BUFFER_READF32 %6, 28i, tuserdata
-  CHECK_GC
-  %21 = FLOAT_TO_NUM %8
-  %41 = FLOAT_TO_NUM %9
-  %50 = MUL_NUM %21, %41
-  STORE_DOUBLE R1, %50
+  %20 = FLOAT_TO_NUM %8
+  %39 = FLOAT_TO_NUM %9
+  %48 = MUL_NUM %20, %39
+  STORE_DOUBLE R1, %48
   STORE_TAG R1, tnumber
   INTERRUPT 9u
   RETURN R1, 1i
@@ -4901,6 +4975,7 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorCreateXY")
 {
+    ensureVectorFloat();
     ensureVectorSize3();
 
     CHECK_EQ(
@@ -5034,6 +5109,7 @@ bb_bytecode_2:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorLoadStoreOnlySamePrecision")
 {
+    ensureVectorFloat();
     ensureVectorSize3();
 
     CHECK_EQ(
@@ -5171,17 +5247,18 @@ bb_bytecode_1:
   %12 = LOAD_DOUBLE R1
   %13 = NUM_TO_INT %12
   CHECK_BUFFER_LEN %11, %13, 0i, 12i, %12, exit(2)
-  %15 = BUFFER_READI32 %11, %13, tbuffer
-  %16 = INT_TO_NUM %15
-  %33 = ADD_INT %13, 4i
-  %35 = BUFFER_READI32 %11, %33, tbuffer
-  %36 = INT_TO_NUM %35
-  %46 = ADD_NUM %16, %36
-  %62 = ADD_INT %13, 8i
-  %64 = BUFFER_READI32 %11, %62, tbuffer
-  %65 = INT_TO_NUM %64
-  %75 = ADD_NUM %46, %65
-  STORE_DOUBLE R2, %75
+  %15 = LOAD_BUFFER_DATA %11
+  %16 = BUFFER_READI32 %15, %13, tbuffer
+  %17 = INT_TO_NUM %16
+  %34 = ADD_INT %13, 4i
+  %37 = BUFFER_READI32 %15, %34, tbuffer
+  %38 = INT_TO_NUM %37
+  %48 = ADD_NUM %17, %38
+  %64 = ADD_INT %13, 8i
+  %67 = BUFFER_READI32 %15, %64, tbuffer
+  %68 = INT_TO_NUM %67
+  %78 = ADD_NUM %48, %68
+  STORE_DOUBLE R2, %78
   STORE_TAG R2, tnumber
   INTERRUPT 23u
   RETURN R2, 1i
@@ -5213,23 +5290,25 @@ bb_bytecode_1:
   %19 = NUM_TO_INT %9
   CHECK_BUFFER_LEN %17, %19, -8i, 4i, %9, bb_exit_6
    ; exit sync: R6, {%9}
-  %21 = BUFFER_READI32 %17, %19, tbuffer
-  %22 = INT_TO_NUM %21
-  %39 = ADD_INT %19, -4i
-  %41 = BUFFER_READI32 %17, %39, tbuffer
-  %42 = INT_TO_NUM %41
-  %52 = ADD_NUM %22, %42
-  %68 = ADD_INT %19, -8i
-  %70 = BUFFER_READI32 %17, %68, tbuffer
-  %71 = INT_TO_NUM %70
-  %81 = ADD_NUM %52, %71
-  STORE_DOUBLE R2, %81
+  %21 = LOAD_BUFFER_DATA %17
+  %22 = BUFFER_READI32 %21, %19, tbuffer
+  %23 = INT_TO_NUM %22
+  %40 = ADD_INT %19, -4i
+  %43 = BUFFER_READI32 %21, %40, tbuffer
+  %44 = INT_TO_NUM %43
+  %54 = ADD_NUM %23, %44
+  %70 = ADD_INT %19, -8i
+  %73 = BUFFER_READI32 %21, %70, tbuffer
+  %74 = INT_TO_NUM %73
+  %84 = ADD_NUM %54, %74
+  STORE_DOUBLE R2, %84
   STORE_TAG R2, tnumber
   INTERRUPT 23u
   RETURN R2, 1i
 )"
     );
 }
+
 TEST_CASE_FIXTURE(LoweringFixture, "BufferRelatedIndicesPositiveDynamicBase")
 {
     CHECK_EQ(
@@ -5254,23 +5333,25 @@ bb_bytecode_1:
   %14 = LOAD_DOUBLE R2
   %15 = NUM_TO_INT %14
   CHECK_BUFFER_LEN %13, %15, 0i, 4i, undef, exit(2)
-  %17 = BUFFER_READI32 %13, %15, tbuffer
-  %18 = INT_TO_NUM %17
-  %33 = LOAD_POINTER R1
-  %35 = NUM_TO_INT %18
-  CHECK_BUFFER_LEN %33, %35, 0i, 12i, %18, bb_exit_7
-   ; exit sync: R8, R3, {%18}
-  %37 = BUFFER_READF32 %33, %35, tbuffer
-  %38 = FLOAT_TO_NUM %37
-  %55 = ADD_INT %35, 4i
-  %57 = BUFFER_READF32 %33, %55, tbuffer
-  %58 = FLOAT_TO_NUM %57
-  %68 = MUL_NUM %38, %58
-  %84 = ADD_INT %35, 8i
-  %86 = BUFFER_READF32 %33, %84, tbuffer
-  %87 = FLOAT_TO_NUM %86
-  %97 = MUL_NUM %68, %87
-  STORE_DOUBLE R4, %97
+  %17 = LOAD_BUFFER_DATA %13
+  %18 = BUFFER_READI32 %17, %15, tbuffer
+  %19 = INT_TO_NUM %18
+  %34 = LOAD_POINTER R1
+  %36 = NUM_TO_INT %19
+  CHECK_BUFFER_LEN %34, %36, 0i, 12i, %19, bb_exit_7
+   ; exit sync: R8, R3, {%19}
+  %38 = LOAD_BUFFER_DATA %34
+  %39 = BUFFER_READF32 %38, %36, tbuffer
+  %40 = FLOAT_TO_NUM %39
+  %57 = ADD_INT %36, 4i
+  %60 = BUFFER_READF32 %38, %57, tbuffer
+  %61 = FLOAT_TO_NUM %60
+  %71 = MUL_NUM %40, %61
+  %87 = ADD_INT %36, 8i
+  %90 = BUFFER_READF32 %38, %87, tbuffer
+  %91 = FLOAT_TO_NUM %90
+  %101 = MUL_NUM %71, %91
+  STORE_DOUBLE R4, %101
   STORE_TAG R4, tnumber
   INTERRUPT 30u
   RETURN R4, 1i
@@ -5282,6 +5363,7 @@ TEST_CASE_FIXTURE(LoweringFixture, "BufferRelatedIndicesPositiveLoopRangeBase")
 {
     ScopedFastFlag callFb{FFlag::LuauCallFeedback, true};
     ScopedFastFlag emitCallFb{FFlag::LuauEmitCallFeedback, true};
+    ScopedFastFlag luauBackedgeHeapCheck{FFlag::LuauBackedgeHeapCheck, true};
 
     // TODO: opportunity 1 - buffer.len is not a fastcall, but under safe env we can treat it like one and read buffer len field
     // TODO: opportunity 2 - range of 'i' is known, we can check it in loop header
@@ -5336,25 +5418,27 @@ bb_bytecode_2:
   %43 = LOAD_DOUBLE R5
   %44 = NUM_TO_INT %43
   CHECK_BUFFER_LEN %42, %44, 0i, 12i, %43, exit(12)
-  %46 = BUFFER_READF32 %42, %44, tbuffer
-  %47 = FLOAT_TO_NUM %46
-  %64 = ADD_INT %44, 4i
-  %66 = BUFFER_READF32 %42, %64, tbuffer
-  %67 = FLOAT_TO_NUM %66
-  %77 = MUL_NUM %47, %67
-  %93 = ADD_INT %44, 8i
-  %95 = BUFFER_READF32 %42, %93, tbuffer
-  %96 = FLOAT_TO_NUM %95
-  %106 = MUL_NUM %77, %96
+  %46 = LOAD_BUFFER_DATA %42
+  %47 = BUFFER_READF32 %46, %44, tbuffer
+  %48 = FLOAT_TO_NUM %47
+  %65 = ADD_INT %44, 4i
+  %68 = BUFFER_READF32 %46, %65, tbuffer
+  %69 = FLOAT_TO_NUM %68
+  %79 = MUL_NUM %48, %69
+  %95 = ADD_INT %44, 8i
+  %98 = BUFFER_READF32 %46, %95, tbuffer
+  %99 = FLOAT_TO_NUM %98
+  %109 = MUL_NUM %79, %99
   CHECK_TAG R2, tnumber, bb_exit_10
-   ; exit sync: R8, R7, R6, {%96, %77, %106}
-  %113 = LOAD_DOUBLE R2
-  %115 = ADD_NUM %113, %106
-  STORE_DOUBLE R2, %115
-  %117 = LOAD_DOUBLE R3
-  %119 = ADD_NUM %43, 12
-  STORE_DOUBLE R5, %119
-  JUMP_CMP_NUM %119, %117, le, bb_bytecode_2, bb_bytecode_3
+   ; exit sync: R8, R7, R6, {%99, %79, %109}
+  %116 = LOAD_DOUBLE R2
+  %118 = ADD_NUM %116, %109
+  STORE_DOUBLE R2, %118
+  CHECK_GC
+  %121 = LOAD_DOUBLE R3
+  %123 = ADD_NUM %43, 12
+  STORE_DOUBLE R5, %123
+  JUMP_CMP_NUM %123, %121, le, bb_bytecode_2, bb_bytecode_3
 bb_bytecode_3:
   INTERRUPT 35u
   RETURN R2, 1i
@@ -5395,25 +5479,22 @@ bb_bytecode_1:
   %21 = NUM_TO_INT %20
   CHECK_BUFFER_LEN %19, %21, 0i, 12i, %20, exit(2)
   CHECK_BUFFER_MUTABLE %19, exit(2)
-  %24 = LOAD_DOUBLE R2
-  %25 = NUM_TO_UINT %24
-  BUFFER_WRITEI32 %19, %21, %25, tbuffer
-  %31 = ADD_NUM %20, 4
-  %42 = ADD_INT %21, 4i
-  CHECK_BUFFER_MUTABLE %19, bb_exit_6
-   ; exit sync: R1, {%31}
-  %45 = LOAD_DOUBLE R3
-  %46 = NUM_TO_UINT %45
-  BUFFER_WRITEI32 %19, %42, %46, tbuffer
-  %52 = ADD_NUM %31, 4
-  %63 = ADD_INT %21, 8i
-  CHECK_BUFFER_MUTABLE %19, bb_exit_7
-   ; exit sync: R1, {%52}
-  %66 = LOAD_DOUBLE R4
-  %67 = NUM_TO_UINT %66
-  BUFFER_WRITEI32 %19, %63, %67, tbuffer
-  %73 = ADD_NUM %52, 4
-  STORE_DOUBLE R1, %73
+  %24 = LOAD_BUFFER_DATA %19
+  %25 = LOAD_DOUBLE R2
+  %26 = NUM_TO_UINT %25
+  BUFFER_WRITEI32 %24, %21, %26, tbuffer
+  %32 = ADD_NUM %20, 4
+  %43 = ADD_INT %21, 4i
+  %47 = LOAD_DOUBLE R3
+  %48 = NUM_TO_UINT %47
+  BUFFER_WRITEI32 %24, %43, %48, tbuffer
+  %54 = ADD_NUM %32, 4
+  %65 = ADD_INT %21, 8i
+  %69 = LOAD_DOUBLE R4
+  %70 = NUM_TO_UINT %69
+  BUFFER_WRITEI32 %24, %65, %70, tbuffer
+  %76 = ADD_NUM %54, 4
+  STORE_DOUBLE R1, %76
   INTERRUPT 27u
   RETURN R1, 1i
 )"
@@ -5444,17 +5525,18 @@ bb_bytecode_1:
   %19 = NUM_TO_INT %9
   CHECK_BUFFER_LEN %17, %19, 0i, 12i, %9, bb_exit_6
    ; exit sync: R6, {%9}
-  %21 = BUFFER_READI32 %17, %19, tbuffer
-  %22 = INT_TO_NUM %21
-  %39 = ADD_INT %19, 4i
-  %41 = BUFFER_READI32 %17, %39, tbuffer
-  %42 = INT_TO_NUM %41
-  %52 = ADD_NUM %22, %42
-  %68 = ADD_INT %19, 8i
-  %70 = BUFFER_READI32 %17, %68, tbuffer
-  %71 = INT_TO_NUM %70
-  %81 = ADD_NUM %52, %71
-  STORE_DOUBLE R2, %81
+  %21 = LOAD_BUFFER_DATA %17
+  %22 = BUFFER_READI32 %21, %19, tbuffer
+  %23 = INT_TO_NUM %22
+  %40 = ADD_INT %19, 4i
+  %43 = BUFFER_READI32 %21, %40, tbuffer
+  %44 = INT_TO_NUM %43
+  %54 = ADD_NUM %23, %44
+  %70 = ADD_INT %19, 8i
+  %73 = BUFFER_READI32 %21, %70, tbuffer
+  %74 = INT_TO_NUM %73
+  %84 = ADD_NUM %54, %74
+  STORE_DOUBLE R2, %84
   STORE_TAG R2, tnumber
   INTERRUPT 23u
   RETURN R2, 1i
@@ -5484,17 +5566,18 @@ bb_bytecode_1:
   %12 = LOAD_DOUBLE R1
   %13 = NUM_TO_INT %12
   CHECK_BUFFER_LEN %11, %13, -4i, 8i, %12, exit(2)
-  %15 = BUFFER_READI32 %11, %13, tbuffer
-  %16 = INT_TO_NUM %15
-  %33 = ADD_INT %13, -4i
-  %35 = BUFFER_READI32 %11, %33, tbuffer
-  %36 = INT_TO_NUM %35
-  %46 = ADD_NUM %16, %36
-  %62 = ADD_INT %13, 4i
-  %64 = BUFFER_READI32 %11, %62, tbuffer
-  %65 = INT_TO_NUM %64
-  %75 = ADD_NUM %46, %65
-  STORE_DOUBLE R2, %75
+  %15 = LOAD_BUFFER_DATA %11
+  %16 = BUFFER_READI32 %15, %13, tbuffer
+  %17 = INT_TO_NUM %16
+  %34 = ADD_INT %13, -4i
+  %37 = BUFFER_READI32 %15, %34, tbuffer
+  %38 = INT_TO_NUM %37
+  %48 = ADD_NUM %17, %38
+  %64 = ADD_INT %13, 4i
+  %67 = BUFFER_READI32 %15, %64, tbuffer
+  %68 = INT_TO_NUM %67
+  %78 = ADD_NUM %48, %68
+  STORE_DOUBLE R2, %78
   STORE_TAG R2, tnumber
   INTERRUPT 23u
   RETURN R2, 1i
@@ -5541,41 +5624,31 @@ bb_bytecode_1:
   %27 = NUM_TO_INT %10
   CHECK_BUFFER_LEN %25, %27, 0i, 1i, undef, bb_exit_19
    ; exit sync: R8, R5, {%10}
-  %29 = BUFFER_READI8 %25, %27, tbuffer
+  %29 = LOAD_BUFFER_DATA %25
+  %30 = BUFFER_READI8 %29, %27, tbuffer
   CHECK_BUFFER_MUTABLE %25, bb_exit_20
-   ; exit sync: R6, R5, {%29, %10}
-  BUFFER_WRITEI8 %25, %27, %29, tbuffer
-  %71 = BUFFER_READU8 %25, %27, tbuffer
-  CHECK_BUFFER_MUTABLE %25, bb_exit_21
-   ; exit sync: R6, {%71}
-  BUFFER_WRITEI8 %25, %27, %71, tbuffer
-  %109 = LOAD_POINTER R2
-  CHECK_BUFFER_LEN %109, %27, 0i, 2i, %10, exit(32)
-  %113 = BUFFER_READI8 %109, %27, tbuffer
-  CHECK_BUFFER_MUTABLE %109, bb_exit_22
-   ; exit sync: R6, {%113}
-  BUFFER_WRITEI8 %109, %27, %113, tbuffer
-  %155 = BUFFER_READU8 %109, %27, tbuffer
-  CHECK_BUFFER_MUTABLE %109, bb_exit_23
-   ; exit sync: R6, {%155}
-  BUFFER_WRITEI8 %109, %27, %155, tbuffer
-  %195 = ADD_INT %27, 1i
-  %197 = BUFFER_READI8 %109, %195, tbuffer
-  CHECK_BUFFER_MUTABLE %109, bb_exit_24
-   ; exit sync: R6, R5, {%197, %10}
-  BUFFER_WRITEI8 %109, %195, %197, tbuffer
-  %239 = BUFFER_READU8 %109, %195, tbuffer
-  CHECK_BUFFER_MUTABLE %109, bb_exit_25
-   ; exit sync: R6, {%239}
-  BUFFER_WRITEI8 %109, %195, %239, tbuffer
-  %281 = BUFFER_READI16 %109, %27, tbuffer
-  CHECK_BUFFER_MUTABLE %109, bb_exit_26
-   ; exit sync: R6, R5, {%281, %10}
-  BUFFER_WRITEI16 %109, %27, %281, tbuffer
-  %323 = BUFFER_READU16 %109, %27, tbuffer
-  CHECK_BUFFER_MUTABLE %109, bb_exit_27
-   ; exit sync: R6, {%323}
-  BUFFER_WRITEI16 %109, %27, %323, tbuffer
+   ; exit sync: R6, R5, {%30, %10}
+  BUFFER_WRITEI8 %29, %27, %30, tbuffer
+  %74 = BUFFER_READU8 %29, %27, tbuffer
+  BUFFER_WRITEI8 %29, %27, %74, tbuffer
+  %113 = LOAD_POINTER R2
+  CHECK_BUFFER_LEN %113, %27, 0i, 2i, %10, exit(32)
+  %117 = LOAD_BUFFER_DATA %113
+  %118 = BUFFER_READI8 %117, %27, tbuffer
+  CHECK_BUFFER_MUTABLE %113, bb_exit_21
+   ; exit sync: R6, {%118}
+  BUFFER_WRITEI8 %117, %27, %118, tbuffer
+  %162 = BUFFER_READU8 %117, %27, tbuffer
+  BUFFER_WRITEI8 %117, %27, %162, tbuffer
+  %203 = ADD_INT %27, 1i
+  %206 = BUFFER_READI8 %117, %203, tbuffer
+  BUFFER_WRITEI8 %117, %203, %206, tbuffer
+  %250 = BUFFER_READU8 %117, %203, tbuffer
+  BUFFER_WRITEI8 %117, %203, %250, tbuffer
+  %294 = BUFFER_READI16 %117, %27, tbuffer
+  BUFFER_WRITEI16 %117, %27, %294, tbuffer
+  %338 = BUFFER_READU16 %117, %27, tbuffer
+  BUFFER_WRITEI16 %117, %27, %338, tbuffer
   INTERRUPT 112u
   RETURN R0, 0i
 )"
@@ -5602,41 +5675,31 @@ bb_bytecode_1:
   %27 = NUM_TO_INT %10
   CHECK_BUFFER_LEN %25, %27, 0i, 1i, undef, bb_exit_19
    ; exit sync: R8, R5, {%11}
-  %29 = BUFFER_READI8 %25, %27, tbuffer
+  %29 = LOAD_BUFFER_DATA %25
+  %30 = BUFFER_READI8 %29, %27, tbuffer
   CHECK_BUFFER_MUTABLE %25, bb_exit_20
-   ; exit sync: R6, R5, {%11, %29}
-  BUFFER_WRITEI8 %25, %27, %29, tbuffer
-  %71 = BUFFER_READU8 %25, %27, tbuffer
-  CHECK_BUFFER_MUTABLE %25, bb_exit_21
-   ; exit sync: R6, {%71}
-  BUFFER_WRITEI8 %25, %27, %71, tbuffer
-  %109 = LOAD_POINTER R2
-  CHECK_BUFFER_LEN %109, %27, 0i, 2i, %10, exit(32)
-  %113 = BUFFER_READI8 %109, %27, tbuffer
-  CHECK_BUFFER_MUTABLE %109, bb_exit_22
-   ; exit sync: R6, {%113}
-  BUFFER_WRITEI8 %109, %27, %113, tbuffer
-  %155 = BUFFER_READU8 %109, %27, tbuffer
-  CHECK_BUFFER_MUTABLE %109, bb_exit_23
-   ; exit sync: R6, {%155}
-  BUFFER_WRITEI8 %109, %27, %155, tbuffer
-  %195 = ADD_INT %27, 1i
-  %197 = BUFFER_READI8 %109, %195, tbuffer
-  CHECK_BUFFER_MUTABLE %109, bb_exit_24
-   ; exit sync: R6, R5, {%197, %10}
-  BUFFER_WRITEI8 %109, %195, %197, tbuffer
-  %239 = BUFFER_READU8 %109, %195, tbuffer
-  CHECK_BUFFER_MUTABLE %109, bb_exit_25
-   ; exit sync: R6, {%239}
-  BUFFER_WRITEI8 %109, %195, %239, tbuffer
-  %281 = BUFFER_READI16 %109, %27, tbuffer
-  CHECK_BUFFER_MUTABLE %109, bb_exit_26
-   ; exit sync: R6, R5, {%11, %281}
-  BUFFER_WRITEI16 %109, %27, %281, tbuffer
-  %323 = BUFFER_READU16 %109, %27, tbuffer
-  CHECK_BUFFER_MUTABLE %109, bb_exit_27
-   ; exit sync: R6, {%323}
-  BUFFER_WRITEI16 %109, %27, %323, tbuffer
+   ; exit sync: R6, R5, {%11, %30}
+  BUFFER_WRITEI8 %29, %27, %30, tbuffer
+  %74 = BUFFER_READU8 %29, %27, tbuffer
+  BUFFER_WRITEI8 %29, %27, %74, tbuffer
+  %113 = LOAD_POINTER R2
+  CHECK_BUFFER_LEN %113, %27, 0i, 2i, %10, exit(32)
+  %117 = LOAD_BUFFER_DATA %113
+  %118 = BUFFER_READI8 %117, %27, tbuffer
+  CHECK_BUFFER_MUTABLE %113, bb_exit_21
+   ; exit sync: R6, {%118}
+  BUFFER_WRITEI8 %117, %27, %118, tbuffer
+  %162 = BUFFER_READU8 %117, %27, tbuffer
+  BUFFER_WRITEI8 %117, %27, %162, tbuffer
+  %203 = ADD_INT %27, 1i
+  %206 = BUFFER_READI8 %117, %203, tbuffer
+  BUFFER_WRITEI8 %117, %203, %206, tbuffer
+  %250 = BUFFER_READU8 %117, %203, tbuffer
+  BUFFER_WRITEI8 %117, %203, %250, tbuffer
+  %294 = BUFFER_READI16 %117, %27, tbuffer
+  BUFFER_WRITEI16 %117, %27, %294, tbuffer
+  %338 = BUFFER_READU16 %117, %27, tbuffer
+  BUFFER_WRITEI16 %117, %27, %338, tbuffer
   INTERRUPT 112u
   RETURN R0, 0i
 )"
@@ -5677,41 +5740,31 @@ bb_bytecode_1:
   %27 = NUM_TO_INT %11
   CHECK_BUFFER_LEN %25, %27, 0i, 1i, undef, bb_exit_19
    ; exit sync: R8, R5, {%11}
-  %29 = BUFFER_READI8 %25, %27, tbuffer
+  %29 = LOAD_BUFFER_DATA %25
+  %30 = BUFFER_READI8 %29, %27, tbuffer
   CHECK_BUFFER_MUTABLE %25, bb_exit_20
-   ; exit sync: R6, R5, {%11, %29}
-  BUFFER_WRITEI8 %25, %27, %29, tbuffer
-  %71 = BUFFER_READU8 %25, %27, tbuffer
-  CHECK_BUFFER_MUTABLE %25, bb_exit_21
-   ; exit sync: R6, {%71}
-  BUFFER_WRITEI8 %25, %27, %71, tbuffer
-  %109 = LOAD_POINTER R2
-  CHECK_BUFFER_LEN %109, %27, 0i, 2i, %11, exit(32)
-  %113 = BUFFER_READI8 %109, %27, tbuffer
-  CHECK_BUFFER_MUTABLE %109, bb_exit_22
-   ; exit sync: R6, {%113}
-  BUFFER_WRITEI8 %109, %27, %113, tbuffer
-  %155 = BUFFER_READU8 %109, %27, tbuffer
-  CHECK_BUFFER_MUTABLE %109, bb_exit_23
-   ; exit sync: R6, {%155}
-  BUFFER_WRITEI8 %109, %27, %155, tbuffer
-  %195 = ADD_INT %27, 1i
-  %197 = BUFFER_READI8 %109, %195, tbuffer
-  CHECK_BUFFER_MUTABLE %109, bb_exit_24
-   ; exit sync: R6, R5, {%10, %197}
-  BUFFER_WRITEI8 %109, %195, %197, tbuffer
-  %239 = BUFFER_READU8 %109, %195, tbuffer
-  CHECK_BUFFER_MUTABLE %109, bb_exit_25
-   ; exit sync: R6, {%239}
-  BUFFER_WRITEI8 %109, %195, %239, tbuffer
-  %281 = BUFFER_READI16 %109, %27, tbuffer
-  CHECK_BUFFER_MUTABLE %109, bb_exit_26
-   ; exit sync: R6, R5, {%11, %281}
-  BUFFER_WRITEI16 %109, %27, %281, tbuffer
-  %323 = BUFFER_READU16 %109, %27, tbuffer
-  CHECK_BUFFER_MUTABLE %109, bb_exit_27
-   ; exit sync: R6, {%323}
-  BUFFER_WRITEI16 %109, %27, %323, tbuffer
+   ; exit sync: R6, R5, {%11, %30}
+  BUFFER_WRITEI8 %29, %27, %30, tbuffer
+  %74 = BUFFER_READU8 %29, %27, tbuffer
+  BUFFER_WRITEI8 %29, %27, %74, tbuffer
+  %113 = LOAD_POINTER R2
+  CHECK_BUFFER_LEN %113, %27, 0i, 2i, %11, exit(32)
+  %117 = LOAD_BUFFER_DATA %113
+  %118 = BUFFER_READI8 %117, %27, tbuffer
+  CHECK_BUFFER_MUTABLE %113, bb_exit_21
+   ; exit sync: R6, {%118}
+  BUFFER_WRITEI8 %117, %27, %118, tbuffer
+  %162 = BUFFER_READU8 %117, %27, tbuffer
+  BUFFER_WRITEI8 %117, %27, %162, tbuffer
+  %203 = ADD_INT %27, 1i
+  %206 = BUFFER_READI8 %117, %203, tbuffer
+  BUFFER_WRITEI8 %117, %203, %206, tbuffer
+  %250 = BUFFER_READU8 %117, %203, tbuffer
+  BUFFER_WRITEI8 %117, %203, %250, tbuffer
+  %294 = BUFFER_READI16 %117, %27, tbuffer
+  BUFFER_WRITEI16 %117, %27, %294, tbuffer
+  %338 = BUFFER_READU16 %117, %27, tbuffer
+  BUFFER_WRITEI16 %117, %27, %338, tbuffer
   INTERRUPT 112u
   RETURN R0, 0i
 )"
@@ -5744,13 +5797,14 @@ bb_bytecode_1:
   %23 = LOAD_POINTER R0
   CHECK_BUFFER_LEN %23, %13, 0i, 8i, %11, bb_exit_6
    ; exit sync: R2, {%11, %13}
-  %27 = BUFFER_READI32 %23, %13, tbuffer
-  %28 = INT_TO_NUM %27
-  %45 = ADD_INT %13, 4i
-  %47 = BUFFER_READI32 %23, %45, tbuffer
-  %48 = INT_TO_NUM %47
-  %58 = ADD_NUM %28, %48
-  STORE_SPLIT_TVALUE R2, tnumber, %58
+  %27 = LOAD_BUFFER_DATA %23
+  %28 = BUFFER_READI32 %27, %13, tbuffer
+  %29 = INT_TO_NUM %28
+  %46 = ADD_INT %13, 4i
+  %49 = BUFFER_READI32 %27, %46, tbuffer
+  %50 = INT_TO_NUM %49
+  %60 = ADD_NUM %29, %50
+  STORE_SPLIT_TVALUE R2, tnumber, %60
   INTERRUPT 22u
   RETURN R2, 1i
 )"
@@ -5781,17 +5835,18 @@ bb_bytecode_1:
   %19 = NUM_TO_INT %9
   CHECK_BUFFER_LEN %17, %19, 0i, 12i, %9, bb_exit_6
    ; exit sync: R6, {%9}
-  %21 = BUFFER_READI32 %17, %19, tbuffer
-  %22 = INT_TO_NUM %21
-  %45 = ADD_INT %19, 4i
-  %47 = BUFFER_READI32 %17, %45, tbuffer
-  %48 = INT_TO_NUM %47
-  %58 = ADD_NUM %22, %48
-  %80 = ADD_INT %19, 8i
-  %82 = BUFFER_READI32 %17, %80, tbuffer
-  %83 = INT_TO_NUM %82
-  %93 = ADD_NUM %58, %83
-  STORE_DOUBLE R2, %93
+  %21 = LOAD_BUFFER_DATA %17
+  %22 = BUFFER_READI32 %21, %19, tbuffer
+  %23 = INT_TO_NUM %22
+  %46 = ADD_INT %19, 4i
+  %49 = BUFFER_READI32 %21, %46, tbuffer
+  %50 = INT_TO_NUM %49
+  %60 = ADD_NUM %23, %50
+  %82 = ADD_INT %19, 8i
+  %85 = BUFFER_READI32 %21, %82, tbuffer
+  %86 = INT_TO_NUM %85
+  %96 = ADD_NUM %60, %86
+  STORE_DOUBLE R2, %96
   STORE_TAG R2, tnumber
   INTERRUPT 25u
   RETURN R2, 1i
@@ -5824,17 +5879,18 @@ bb_bytecode_1:
   %19 = NUM_TO_INT %9
   CHECK_BUFFER_LEN %17, %19, 0i, 4i, undef, bb_exit_5
    ; exit sync: R5, {%9}
-  %21 = BUFFER_READI32 %17, %19, tbuffer
-  %22 = INT_TO_NUM %21
-  %29 = ADD_NUM %8, 1
-  %35 = MUL_NUM %29, 8
-  %45 = NUM_TO_INT %35
-  CHECK_BUFFER_LEN %17, %45, 0i, 4i, undef, bb_exit_6
-   ; exit sync: R7, R6, R3, {%29, %35, %22}
-  %47 = BUFFER_READI32 %17, %45, tbuffer
-  %48 = INT_TO_NUM %47
-  %58 = ADD_NUM %22, %48
-  STORE_DOUBLE R2, %58
+  %21 = LOAD_BUFFER_DATA %17
+  %22 = BUFFER_READI32 %21, %19, tbuffer
+  %23 = INT_TO_NUM %22
+  %30 = ADD_NUM %8, 1
+  %36 = MUL_NUM %30, 8
+  %46 = NUM_TO_INT %36
+  CHECK_BUFFER_LEN %17, %46, 0i, 4i, undef, bb_exit_6
+   ; exit sync: R7, R6, R3, {%30, %36, %23}
+  %49 = BUFFER_READI32 %21, %46, tbuffer
+  %50 = INT_TO_NUM %49
+  %60 = ADD_NUM %23, %50
+  STORE_DOUBLE R2, %60
   STORE_TAG R2, tnumber
   INTERRUPT 16u
   RETURN R2, 1i
@@ -5872,12 +5928,13 @@ bb_bytecode_1:
   %58 = TRUNCATE_UINT %10
   CHECK_BUFFER_LEN %56, %58, 0i, 24i, undef, bb_exit_9
    ; exit sync: R4, R3, R2, {%44, %27, %10}
-  %60 = BUFFER_READF64 %56, %58, tbuffer
-  %73 = BUFFER_READF64 %56, %27, tbuffer
-  %83 = ADD_NUM %60, %73
-  %95 = BUFFER_READF64 %56, %44, tbuffer
-  %105 = ADD_NUM %83, %95
-  STORE_SPLIT_TVALUE R5, tnumber, %105
+  %60 = LOAD_BUFFER_DATA %56
+  %61 = BUFFER_READF64 %60, %58, tbuffer
+  %75 = BUFFER_READF64 %60, %27, tbuffer
+  %85 = ADD_NUM %61, %75
+  %98 = BUFFER_READF64 %60, %44, tbuffer
+  %108 = ADD_NUM %85, %98
+  STORE_SPLIT_TVALUE R5, tnumber, %108
   INTERRUPT 44u
   RETURN R5, 1i
 )"
@@ -5906,16 +5963,17 @@ bb_bytecode_1:
   %12 = LOAD_DOUBLE R1
   %13 = NUM_TO_INT %12
   CHECK_BUFFER_LEN %11, %13, -1i, 7i, %12, exit(2)
-  %15 = BUFFER_READI8 %11, %13, tbuffer
-  %16 = INT_TO_NUM %15
-  %33 = ADD_INT %13, 4i
-  %35 = BUFFER_READI8 %11, %33, tbuffer
-  %36 = INT_TO_NUM %35
-  %46 = ADD_NUM %16, %36
-  %62 = ADD_INT %13, -1i
-  %64 = BUFFER_READF64 %11, %62, tbuffer
-  %74 = ADD_NUM %46, %64
-  STORE_DOUBLE R2, %74
+  %15 = LOAD_BUFFER_DATA %11
+  %16 = BUFFER_READI8 %15, %13, tbuffer
+  %17 = INT_TO_NUM %16
+  %34 = ADD_INT %13, 4i
+  %37 = BUFFER_READI8 %15, %34, tbuffer
+  %38 = INT_TO_NUM %37
+  %48 = ADD_NUM %17, %38
+  %64 = ADD_INT %13, -1i
+  %67 = BUFFER_READF64 %15, %64, tbuffer
+  %77 = ADD_NUM %48, %67
+  STORE_DOUBLE R2, %77
   STORE_TAG R2, tnumber
   INTERRUPT 23u
   RETURN R2, 1i
@@ -5951,17 +6009,18 @@ bb_bytecode_1:
   %26 = NUM_TO_INT %16
   CHECK_BUFFER_LEN %24, %26, 0i, 1i, undef, bb_exit_5
    ; exit sync: R6, {%16}
-  %28 = BUFFER_READU8 %24, %26, tbuffer
-  %29 = INT_TO_NUM %28
-  STORE_DOUBLE R4, %29
+  %28 = LOAD_BUFFER_DATA %24
+  %29 = BUFFER_READU8 %28, %26, tbuffer
+  %30 = INT_TO_NUM %29
+  STORE_DOUBLE R4, %30
   STORE_TAG R4, tnumber
-  %48 = ADD_NUM %16, R3
-  %58 = NUM_TO_INT %48
-  CHECK_BUFFER_LEN %24, %58, 0i, 1i, undef, bb_exit_6
-   ; exit sync: R8, R7, {%16, %48}
-  %60 = BUFFER_READU8 %24, %58, tbuffer
-  %61 = INT_TO_NUM %60
-  STORE_DOUBLE R5, %61
+  %49 = ADD_NUM %16, R3
+  %59 = NUM_TO_INT %49
+  CHECK_BUFFER_LEN %24, %59, 0i, 1i, undef, bb_exit_6
+   ; exit sync: R8, R7, {%16, %49}
+  %62 = BUFFER_READU8 %28, %59, tbuffer
+  %63 = INT_TO_NUM %62
+  STORE_DOUBLE R5, %63
   STORE_TAG R5, tnumber
   INTERRUPT 15u
   RETURN R4, 2i
@@ -6005,16 +6064,17 @@ bb_bytecode_1:
   %28 = NUM_TO_INT %27
   CHECK_BUFFER_LEN %26, %28, 0i, 4i, undef, bb_exit_5
    ; exit sync: R5, {%16, %17}
-  %30 = BUFFER_READI32 %26, %28, tbuffer
-  %31 = INT_TO_NUM %30
-  %41 = LOAD_DOUBLE R4
-  %42 = NUM_TO_INT %41
-  CHECK_BUFFER_LEN %26, %42, 0i, 4i, undef, bb_exit_6
-   ; exit sync: R6, R5, {%31, %16, %17}
-  %44 = BUFFER_READI32 %26, %42, tbuffer
-  %45 = INT_TO_NUM %44
-  %55 = ADD_NUM %31, %45
-  STORE_SPLIT_TVALUE R5, tnumber, %55
+  %30 = LOAD_BUFFER_DATA %26
+  %31 = BUFFER_READI32 %30, %28, tbuffer
+  %32 = INT_TO_NUM %31
+  %42 = LOAD_DOUBLE R4
+  %43 = NUM_TO_INT %42
+  CHECK_BUFFER_LEN %26, %43, 0i, 4i, undef, bb_exit_6
+   ; exit sync: R6, R5, {%32, %16, %17}
+  %46 = BUFFER_READI32 %30, %43, tbuffer
+  %47 = INT_TO_NUM %46
+  %57 = ADD_NUM %32, %47
+  STORE_SPLIT_TVALUE R5, tnumber, %57
   INTERRUPT 16u
   RETURN R5, 1i
 )"
@@ -6053,12 +6113,13 @@ bb_bytecode_1:
    ; exit sync: R4, R3, {}
   CHECK_BUFFER_MUTABLE %15, bb_exit_13
    ; exit sync: R4, R3, {}
-  BUFFER_WRITEF64 %15, 0i, 3.1400000000000001, tbuffer
+  %20 = LOAD_BUFFER_DATA %15
+  BUFFER_WRITEF64 %20, 0i, 3.1400000000000001, tbuffer
   STORE_SPLIT_TVALUE R3, tnumber, 4
   STORE_SPLIT_TVALUE R4, tnumber, 170
   SET_SAVEDPC 12u
-  %29 = INVOKE_FASTCALL 67u, R1, R0, R3, R4, 3i, 1i
-  CHECK_FASTCALL_RES %29, bb_fallback_4
+  %30 = INVOKE_FASTCALL 67u, R1, R0, R3, R4, 3i, 1i
+  CHECK_FASTCALL_RES %30, bb_fallback_4
   JUMP bb_linear_11
 bb_linear_11:
   STORE_DOUBLE R4, 5
@@ -6066,25 +6127,25 @@ bb_linear_11:
   STORE_DOUBLE R5, 187
   STORE_TAG R5, tnumber
   SET_SAVEDPC 20u
-  %98 = INVOKE_FASTCALL 67u, R2, R0, R4, R5, 3i, 1i
-  CHECK_FASTCALL_RES %98, bb_fallback_6
+  %100 = INVOKE_FASTCALL 67u, R2, R0, R4, R5, 3i, 1i
+  CHECK_FASTCALL_RES %100, bb_fallback_6
   STORE_DOUBLE R5, 0
   STORE_TAG R5, tnumber
   STORE_DOUBLE R6, 255
   STORE_TAG R6, tnumber
   SET_SAVEDPC 28u
-  %107 = INVOKE_FASTCALL 67u, R3, R0, R5, R6, 3i, 1i
-  CHECK_FASTCALL_RES %107, bb_fallback_8
+  %109 = INVOKE_FASTCALL 67u, R3, R0, R5, R6, 3i, 1i
+  CHECK_FASTCALL_RES %109, bb_fallback_8
   CHECK_BUFFER_LEN %15, 0i, 0i, 8i, undef, exit(34)
-  %113 = BUFFER_READF64 %15, 0i, tbuffer
-  STORE_DOUBLE R4, %113
+  %116 = BUFFER_READF64 %20, 0i, tbuffer
+  STORE_DOUBLE R4, %116
   STORE_TAG R4, tnumber
-  %116 = LOAD_TVALUE R1
-  STORE_TVALUE R5, %116
-  %118 = LOAD_TVALUE R2
-  STORE_TVALUE R6, %118
-  %120 = LOAD_TVALUE R3
-  STORE_TVALUE R7, %120
+  %119 = LOAD_TVALUE R1
+  STORE_TVALUE R5, %119
+  %121 = LOAD_TVALUE R2
+  STORE_TVALUE R6, %121
+  %123 = LOAD_TVALUE R3
+  STORE_TVALUE R7, %123
   INTERRUPT 42u
   RETURN R4, 4i
 )"
@@ -7172,6 +7233,8 @@ bb_bytecode_0:
 
 TEST_CASE_FIXTURE(LoweringFixture, "UpvalueAccessLoadStore4")
 {
+    ScopedFastFlag luauBackedgeHeapCheck{FFlag::LuauBackedgeHeapCheck, true};
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local arr: {number}
@@ -7231,17 +7294,18 @@ bb_bytecode_2:
 bb_linear_17:
   STORE_TVALUE R8, %45
   CHECK_TAG R8, tnumber, bb_fallback_11
-  %141 = LOAD_DOUBLE R8
-  %143 = MUL_NUM %141, R0
-  %153 = ADD_NUM %141, %143
-  STORE_DOUBLE R5, %153
+  %142 = LOAD_DOUBLE R8
+  %144 = MUL_NUM %142, R0
+  %154 = ADD_NUM %142, %144
+  STORE_DOUBLE R5, %154
   STORE_TAG R5, tnumber
   CHECK_READONLY %38, bb_fallback_15
-  STORE_SPLIT_TVALUE %44, tnumber, %153
-  %173 = LOAD_DOUBLE R1
-  %175 = ADD_NUM %39, 1
-  STORE_DOUBLE R3, %175
-  JUMP_CMP_NUM %175, %173, le, bb_bytecode_2, bb_bytecode_3
+  STORE_SPLIT_TVALUE %44, tnumber, %154
+  CHECK_GC
+  %175 = LOAD_DOUBLE R1
+  %177 = ADD_NUM %39, 1
+  STORE_DOUBLE R3, %177
+  JUMP_CMP_NUM %177, %175, le, bb_bytecode_2, bb_bytecode_3
 bb_8:
   %51 = GET_UPVALUE U0
   STORE_TVALUE R9, %51
@@ -7288,11 +7352,12 @@ bb_14:
   BARRIER_TABLE_FORWARD %100, R5, undef
   JUMP bb_16
 bb_16:
-  %115 = LOAD_DOUBLE R1
-  %116 = LOAD_DOUBLE R3
-  %117 = ADD_NUM %116, 1
-  STORE_DOUBLE R3, %117
-  JUMP_CMP_NUM %117, %115, le, bb_bytecode_2, bb_bytecode_3
+  CHECK_GC
+  %116 = LOAD_DOUBLE R1
+  %117 = LOAD_DOUBLE R3
+  %118 = ADD_NUM %117, 1
+  STORE_DOUBLE R3, %118
+  JUMP_CMP_NUM %118, %116, le, bb_bytecode_2, bb_bytecode_3
 bb_bytecode_3:
   INTERRUPT 14u
   RETURN R0, 0i
@@ -7319,14 +7384,15 @@ bb_bytecode_1:
   implicit CHECK_SAFE_ENV exit(0)
   %7 = LOAD_POINTER R0
   CHECK_BUFFER_LEN %7, 0i, 0i, 8i, undef, exit(2)
-  %10 = BUFFER_READF32 %7, 0i, tbuffer
-  %11 = FLOAT_TO_NUM %10
-  %32 = MUL_NUM %11, %11
-  %41 = BUFFER_READF32 %7, 4i, tbuffer
-  %42 = FLOAT_TO_NUM %41
-  %63 = MUL_NUM %42, %42
-  %72 = ADD_NUM %32, %63
-  STORE_DOUBLE R1, %72
+  %10 = LOAD_BUFFER_DATA %7
+  %11 = BUFFER_READF32 %10, 0i, tbuffer
+  %12 = FLOAT_TO_NUM %11
+  %34 = MUL_NUM %12, %12
+  %44 = BUFFER_READF32 %10, 4i, tbuffer
+  %45 = FLOAT_TO_NUM %44
+  %67 = MUL_NUM %45, %45
+  %76 = ADD_NUM %34, %67
+  STORE_DOUBLE R1, %76
   STORE_TAG R1, tnumber
   INTERRUPT 31u
   RETURN R1, 1i
@@ -7364,23 +7430,16 @@ bb_bytecode_1:
    ; exit sync: R4, R3, {}
   CHECK_BUFFER_MUTABLE %15, bb_exit_18
    ; exit sync: R4, R3, {}
-  BUFFER_WRITEI8 %15, 10i, 32i, tbuffer
+  %20 = LOAD_BUFFER_DATA %15
+  BUFFER_WRITEI8 %20, 10i, 32i, tbuffer
   JUMP bb_bytecode_3
 bb_bytecode_3:
   JUMP bb_8
 bb_8:
-  CHECK_BUFFER_MUTABLE %15, bb_exit_19
-   ; exit sync: R4, R3, {}
-  BUFFER_WRITEI8 %15, 14i, 4i, tbuffer
-  CHECK_BUFFER_MUTABLE %15, bb_exit_20
-   ; exit sync: R4, R3, {}
-  BUFFER_WRITEI8 %15, 13i, 3i, tbuffer
-  CHECK_BUFFER_MUTABLE %15, bb_exit_21
-   ; exit sync: R4, R3, {}
-  BUFFER_WRITEI8 %15, 12i, 2i, tbuffer
-  CHECK_BUFFER_MUTABLE %15, bb_exit_22
-   ; exit sync: R4, R3, {}
-  BUFFER_WRITEI8 %15, 11i, 1i, tbuffer
+  BUFFER_WRITEI8 %20, 14i, 4i, tbuffer
+  BUFFER_WRITEI8 %20, 13i, 3i, tbuffer
+  BUFFER_WRITEI8 %20, 12i, 2i, tbuffer
+  BUFFER_WRITEI8 %20, 11i, 1i, tbuffer
   STORE_DOUBLE R1, 10
   STORE_TAG R1, tnumber
   INTERRUPT 86u
@@ -7434,7 +7493,8 @@ bb_bytecode_1:
    ; exit sync: R4, R3, {}
   CHECK_BUFFER_MUTABLE %15, bb_exit_70
    ; exit sync: R4, R3, {}
-  BUFFER_WRITEI32 %15, 0i, -1i, tbuffer
+  %20 = LOAD_BUFFER_DATA %15
+  BUFFER_WRITEI32 %20, 0i, -1i, tbuffer
   JUMP bb_bytecode_3
 bb_bytecode_3:
   JUMP bb_30
@@ -7443,9 +7503,7 @@ bb_30:
 bb_bytecode_5:
   JUMP bb_33
 bb_33:
-  CHECK_BUFFER_MUTABLE %15, bb_exit_71
-   ; exit sync: R4, R3, {}
-  BUFFER_WRITEI32 %15, 0i, -1i, tbuffer
+  BUFFER_WRITEI32 %20, 0i, -1i, tbuffer
   JUMP bb_bytecode_7
 bb_bytecode_7:
   JUMP bb_37
@@ -7454,9 +7512,7 @@ bb_37:
 bb_bytecode_9:
   JUMP bb_40
 bb_40:
-  CHECK_BUFFER_MUTABLE %15, bb_exit_72
-   ; exit sync: R4, R3, {}
-  BUFFER_WRITEI16 %15, 0i, 65535i, tbuffer
+  BUFFER_WRITEI16 %20, 0i, 65535i, tbuffer
   JUMP bb_bytecode_11
 bb_bytecode_11:
   JUMP bb_44
@@ -7465,9 +7521,7 @@ bb_44:
 bb_bytecode_13:
   JUMP bb_47
 bb_47:
-  CHECK_BUFFER_MUTABLE %15, bb_exit_73
-   ; exit sync: R3, {}
-  BUFFER_WRITEI16 %15, 0i, 65535i, tbuffer
+  BUFFER_WRITEI16 %20, 0i, 65535i, tbuffer
   JUMP bb_bytecode_15
 bb_bytecode_15:
   JUMP bb_51
@@ -7476,9 +7530,7 @@ bb_51:
 bb_bytecode_17:
   JUMP bb_54
 bb_54:
-  CHECK_BUFFER_MUTABLE %15, bb_exit_74
-   ; exit sync: R4, R3, {}
-  BUFFER_WRITEI8 %15, 0i, -1i, tbuffer
+  BUFFER_WRITEI8 %20, 0i, -1i, tbuffer
   JUMP bb_bytecode_19
 bb_bytecode_19:
   JUMP bb_58
@@ -7487,9 +7539,7 @@ bb_58:
 bb_bytecode_21:
   JUMP bb_61
 bb_61:
-  CHECK_BUFFER_MUTABLE %15, bb_exit_75
-   ; exit sync: R3, {}
-  BUFFER_WRITEI16 %15, 0i, -1i, tbuffer
+  BUFFER_WRITEI16 %20, 0i, -1i, tbuffer
   JUMP bb_bytecode_23
 bb_bytecode_23:
   JUMP bb_65
@@ -7565,108 +7615,53 @@ bb_bytecode_1:
    ; exit sync: R5, {}
   CHECK_BUFFER_MUTABLE %17, bb_exit_56
    ; exit sync: R5, {}
-  %22 = LOAD_DOUBLE R1
-  %23 = NUM_TO_UINT %22
-  BUFFER_WRITEI8 %17, 0i, %23, tbuffer
-  %34 = SEXTI8_INT %23
-  %35 = INT_TO_NUM %34
-  CHECK_BUFFER_MUTABLE %17, bb_exit_57
-   ; exit sync: R6, R5, {%35}
-  BUFFER_WRITEF64 %17, 100i, %35, tbuffer
-  CHECK_BUFFER_MUTABLE %17, bb_exit_58
-   ; exit sync: R5, {}
-  BUFFER_WRITEI8 %17, 108i, %23, tbuffer
-  CHECK_BUFFER_MUTABLE %17, bb_exit_59
-   ; exit sync: R5, {}
-  BUFFER_WRITEI8 %17, 109i, %23, tbuffer
-  CHECK_BUFFER_MUTABLE %17, bb_exit_60
-   ; exit sync: R5, {}
-  BUFFER_WRITEI8 %17, 2i, %23, tbuffer
-  %138 = BITAND_UINT %23, 255i
-  %139 = INT_TO_NUM %138
-  CHECK_BUFFER_MUTABLE %17, bb_exit_61
-   ; exit sync: R6, R5, {%139}
-  BUFFER_WRITEF64 %17, 116i, %139, tbuffer
-  CHECK_BUFFER_MUTABLE %17, bb_exit_62
-   ; exit sync: R5, {}
-  BUFFER_WRITEI8 %17, 124i, %23, tbuffer
-  CHECK_BUFFER_MUTABLE %17, bb_exit_63
-   ; exit sync: R5, {}
-  BUFFER_WRITEI8 %17, 125i, %23, tbuffer
-  CHECK_BUFFER_MUTABLE %17, bb_exit_64
-   ; exit sync: R5, {}
-  BUFFER_WRITEI16 %17, 4i, %23, tbuffer
-  %242 = SEXTI16_INT %23
-  %243 = INT_TO_NUM %242
-  CHECK_BUFFER_MUTABLE %17, bb_exit_65
-   ; exit sync: R6, R5, {%243}
-  BUFFER_WRITEF64 %17, 132i, %243, tbuffer
-  CHECK_BUFFER_MUTABLE %17, bb_exit_66
-   ; exit sync: R5, {}
-  BUFFER_WRITEI16 %17, 140i, %23, tbuffer
-  CHECK_BUFFER_MUTABLE %17, bb_exit_67
-   ; exit sync: R5, {}
-  BUFFER_WRITEI16 %17, 142i, %23, tbuffer
-  CHECK_BUFFER_MUTABLE %17, bb_exit_68
-   ; exit sync: R5, {}
-  BUFFER_WRITEI16 %17, 8i, %23, tbuffer
-  %346 = BITAND_UINT %23, 65535i
-  %347 = INT_TO_NUM %346
-  CHECK_BUFFER_MUTABLE %17, bb_exit_69
-   ; exit sync: R6, R5, {%347}
-  BUFFER_WRITEF64 %17, 148i, %347, tbuffer
-  CHECK_BUFFER_MUTABLE %17, bb_exit_70
-   ; exit sync: R5, {}
-  BUFFER_WRITEI16 %17, 156i, %23, tbuffer
-  CHECK_BUFFER_MUTABLE %17, bb_exit_71
-   ; exit sync: R5, {}
-  BUFFER_WRITEI16 %17, 158i, %23, tbuffer
-  CHECK_BUFFER_MUTABLE %17, bb_exit_72
-   ; exit sync: R5, {}
-  BUFFER_WRITEI32 %17, 12i, %23, tbuffer
-  %450 = TRUNCATE_UINT %23
-  %451 = INT_TO_NUM %450
-  CHECK_BUFFER_MUTABLE %17, bb_exit_73
-   ; exit sync: R6, R5, {%451}
-  BUFFER_WRITEF64 %17, 164i, %451, tbuffer
-  CHECK_BUFFER_MUTABLE %17, bb_exit_74
-   ; exit sync: R5, {}
-  BUFFER_WRITEI32 %17, 172i, %23, tbuffer
-  CHECK_BUFFER_MUTABLE %17, bb_exit_75
-   ; exit sync: R5, {}
-  BUFFER_WRITEI32 %17, 176i, %23, tbuffer
-  CHECK_BUFFER_MUTABLE %17, bb_exit_76
-   ; exit sync: R5, {}
-  BUFFER_WRITEI32 %17, 20i, %23, tbuffer
-  %555 = UINT_TO_NUM %23
-  CHECK_BUFFER_MUTABLE %17, bb_exit_77
-   ; exit sync: R6, R5, {%555}
-  BUFFER_WRITEF64 %17, 180i, %555, tbuffer
-  CHECK_BUFFER_MUTABLE %17, bb_exit_78
-   ; exit sync: R5, {}
-  BUFFER_WRITEI32 %17, 188i, %23, tbuffer
-  CHECK_BUFFER_MUTABLE %17, bb_exit_79
-   ; exit sync: R5, {}
-  BUFFER_WRITEI32 %17, 192i, %23, tbuffer
-  CHECK_BUFFER_MUTABLE %17, bb_exit_80
-   ; exit sync: R5, {}
-  %646 = LOAD_DOUBLE R2
-  %647 = NUM_TO_FLOAT %646
-  BUFFER_WRITEF32 %17, 28i, %647, tbuffer
-  %659 = FLOAT_TO_NUM %647
-  CHECK_BUFFER_MUTABLE %17, bb_exit_81
-   ; exit sync: R6, R5, {%659}
-  BUFFER_WRITEF64 %17, 196i, %659, tbuffer
-  CHECK_BUFFER_MUTABLE %17, exit(332)
-  BUFFER_WRITEF32 %17, 196i, %647, tbuffer
-  CHECK_BUFFER_MUTABLE %17, bb_exit_82
-   ; exit sync: R5, {}
-  BUFFER_WRITEF64 %17, 32i, %646, tbuffer
-  CHECK_BUFFER_MUTABLE %17, bb_exit_83
-   ; exit sync: R6, R5, {%646}
-  BUFFER_WRITEF64 %17, 204i, %646, tbuffer
-  CHECK_BUFFER_MUTABLE %17, exit(368)
-  BUFFER_WRITEF32 %17, 204i, %647, tbuffer
+  %22 = LOAD_BUFFER_DATA %17
+  %23 = LOAD_DOUBLE R1
+  %24 = NUM_TO_UINT %23
+  BUFFER_WRITEI8 %22, 0i, %24, tbuffer
+  %36 = SEXTI8_INT %24
+  %37 = INT_TO_NUM %36
+  BUFFER_WRITEF64 %22, 100i, %37, tbuffer
+  BUFFER_WRITEI8 %22, 108i, %24, tbuffer
+  BUFFER_WRITEI8 %22, 109i, %24, tbuffer
+  BUFFER_WRITEI8 %22, 2i, %24, tbuffer
+  %147 = BITAND_UINT %24, 255i
+  %148 = INT_TO_NUM %147
+  BUFFER_WRITEF64 %22, 116i, %148, tbuffer
+  BUFFER_WRITEI8 %22, 124i, %24, tbuffer
+  BUFFER_WRITEI8 %22, 125i, %24, tbuffer
+  BUFFER_WRITEI16 %22, 4i, %24, tbuffer
+  %258 = SEXTI16_INT %24
+  %259 = INT_TO_NUM %258
+  BUFFER_WRITEF64 %22, 132i, %259, tbuffer
+  BUFFER_WRITEI16 %22, 140i, %24, tbuffer
+  BUFFER_WRITEI16 %22, 142i, %24, tbuffer
+  BUFFER_WRITEI16 %22, 8i, %24, tbuffer
+  %369 = BITAND_UINT %24, 65535i
+  %370 = INT_TO_NUM %369
+  BUFFER_WRITEF64 %22, 148i, %370, tbuffer
+  BUFFER_WRITEI16 %22, 156i, %24, tbuffer
+  BUFFER_WRITEI16 %22, 158i, %24, tbuffer
+  BUFFER_WRITEI32 %22, 12i, %24, tbuffer
+  %480 = TRUNCATE_UINT %24
+  %481 = INT_TO_NUM %480
+  BUFFER_WRITEF64 %22, 164i, %481, tbuffer
+  BUFFER_WRITEI32 %22, 172i, %24, tbuffer
+  BUFFER_WRITEI32 %22, 176i, %24, tbuffer
+  BUFFER_WRITEI32 %22, 20i, %24, tbuffer
+  %592 = UINT_TO_NUM %24
+  BUFFER_WRITEF64 %22, 180i, %592, tbuffer
+  BUFFER_WRITEI32 %22, 188i, %24, tbuffer
+  BUFFER_WRITEI32 %22, 192i, %24, tbuffer
+  %689 = LOAD_DOUBLE R2
+  %690 = NUM_TO_FLOAT %689
+  BUFFER_WRITEF32 %22, 28i, %690, tbuffer
+  %703 = FLOAT_TO_NUM %690
+  BUFFER_WRITEF64 %22, 196i, %703, tbuffer
+  BUFFER_WRITEF32 %22, 196i, %690, tbuffer
+  BUFFER_WRITEF64 %22, 32i, %689, tbuffer
+  BUFFER_WRITEF64 %22, 204i, %689, tbuffer
+  BUFFER_WRITEF32 %22, 204i, %690, tbuffer
   INTERRUPT 372u
   RETURN R0, 0i
 )"
@@ -7675,7 +7670,7 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "LoopStepDetection1")
 {
-    ScopedFastFlag luauCodegenLoadPropagateOrigin{FFlag::LuauCodegenLoadPropagateOrigin, true};
+    ScopedFastFlag luauBackedgeHeapCheck{FFlag::LuauBackedgeHeapCheck, true};
 
     assemblyOptions.includeRegFlowInfo = Luau::CodeGen::IncludeRegFlowInfo::Yes;
 
@@ -7725,10 +7720,11 @@ bb_bytecode_2:
   %25 = LOAD_DOUBLE R4
   %26 = ADD_NUM %24, %25
   STORE_DOUBLE R1, %26
-  %28 = LOAD_DOUBLE R2
-  %30 = ADD_NUM %25, 1
-  STORE_DOUBLE R4, %30
-  JUMP_CMP_NUM %30, %28, le, bb_bytecode_2, bb_bytecode_3
+  CHECK_GC
+  %29 = LOAD_DOUBLE R2
+  %31 = ADD_NUM %25, 1
+  STORE_DOUBLE R4, %31
+  JUMP_CMP_NUM %31, %29, le, bb_bytecode_2, bb_bytecode_3
 bb_bytecode_3:
 ; in regs: R1
   INTERRUPT 7u
@@ -7739,6 +7735,8 @@ bb_bytecode_3:
 
 TEST_CASE_FIXTURE(LoweringFixture, "LoopStepDetection2")
 {
+    ScopedFastFlag luauBackedgeHeapCheck{FFlag::LuauBackedgeHeapCheck, true};
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -7799,11 +7797,12 @@ bb_8:
   STORE_DOUBLE R2, %55
   JUMP bb_10
 bb_10:
-  %61 = LOAD_DOUBLE R3
-  %62 = LOAD_DOUBLE R5
-  %63 = ADD_NUM %62, 1
-  STORE_DOUBLE R5, %63
-  JUMP_CMP_NUM %63, %61, le, bb_bytecode_2, bb_bytecode_3
+  CHECK_GC
+  %62 = LOAD_DOUBLE R3
+  %63 = LOAD_DOUBLE R5
+  %64 = ADD_NUM %63, 1
+  STORE_DOUBLE R5, %64
+  JUMP_CMP_NUM %64, %62, le, bb_bytecode_2, bb_bytecode_3
 bb_bytecode_3:
   INTERRUPT 8u
   RETURN R2, 1i
@@ -7843,26 +7842,27 @@ bb_bytecode_1:
   %26 = TRUNCATE_UINT %12
   CHECK_BUFFER_LEN %24, %26, 0i, 4i, undef, bb_exit_9
    ; exit sync: R5, {%12}
-  %28 = BUFFER_READI32 %24, %26, tbuffer
-  %29 = INT_TO_NUM %28
-  STORE_DOUBLE R3, %29
+  %28 = LOAD_BUFFER_DATA %24
+  %29 = BUFFER_READI32 %28, %26, tbuffer
+  %30 = INT_TO_NUM %29
+  STORE_DOUBLE R3, %30
   STORE_TAG R3, tnumber
-  CHECK_BUFFER_LEN %24, %28, 0i, 4i, undef, exit(15)
-  %42 = BUFFER_READI32 %24, %28, tbuffer
-  %43 = UINT_TO_NUM %42
-  STORE_DOUBLE R4, %43
+  CHECK_BUFFER_LEN %24, %29, 0i, 4i, undef, exit(15)
+  %44 = BUFFER_READI32 %28, %29, tbuffer
+  %45 = UINT_TO_NUM %44
+  STORE_DOUBLE R4, %45
   STORE_TAG R4, tnumber
-  CHECK_BUFFER_LEN %24, %42, 0i, 4i, undef, exit(22)
-  %56 = BUFFER_READI32 %24, %42, tbuffer
-  %57 = INT_TO_NUM %56
-  STORE_SPLIT_TVALUE R5, tnumber, %57
-  %64 = LOAD_POINTER R2
-  %65 = STRING_LEN %64
-  CHECK_BUFFER_LEN %24, %65, 0i, 4i, undef, bb_exit_10
-   ; exit sync: R8, {%65}
-  %79 = BUFFER_READI32 %24, %65, tbuffer
-  %80 = UINT_TO_NUM %79
-  STORE_DOUBLE R6, %80
+  CHECK_BUFFER_LEN %24, %44, 0i, 4i, undef, exit(22)
+  %59 = BUFFER_READI32 %28, %44, tbuffer
+  %60 = INT_TO_NUM %59
+  STORE_SPLIT_TVALUE R5, tnumber, %60
+  %67 = LOAD_POINTER R2
+  %68 = STRING_LEN %67
+  CHECK_BUFFER_LEN %24, %68, 0i, 4i, undef, bb_exit_10
+   ; exit sync: R8, {%68}
+  %83 = BUFFER_READI32 %28, %68, tbuffer
+  %84 = UINT_TO_NUM %83
+  STORE_DOUBLE R6, %84
   STORE_TAG R6, tnumber
   INTERRUPT 38u
   RETURN R3, 4i
@@ -7872,6 +7872,7 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "LibmIsPure")
 {
+    ensureVectorFloat();
     ensureVectorSize3();
 
     CHECK_EQ(
@@ -7923,6 +7924,7 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VecOpReuse")
 {
+    ensureVectorFloat();
     ensureVectorSize3();
 
     CHECK_EQ(
@@ -7970,6 +7972,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VecOpReuse2")
 {
+    ensureVectorFloat();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(

@@ -58,6 +58,10 @@ enum class IrCmd : uint8_t
     // A: Rn or Kn
     LOAD_POINTER,
 
+    // Load buffer data (buffer->data) from a Buffer TValue
+    // A: pointer (Buffer from LOAD_POINTER)
+    LOAD_BUFFER_DATA,
+
     // Load a double number from TValue
     // A: Rn or Kn
     LOAD_DOUBLE,
@@ -493,6 +497,12 @@ enum class IrCmd : uint8_t
     // A: int (size)
     // B: int (tag)
     NEW_USERDATA,
+
+    // Create new heap-allocated vector
+    // A: double (x)
+    // B: double (y)
+    // C: double (z)
+    NEW_VECTOR,
 
     // Convert integer into a double number
     // A: int

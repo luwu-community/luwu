@@ -32,6 +32,12 @@ LUAI_FUNC LuauClass* luaR_newclass(
 );
 
 /**
+ * Returns true if `cl` is `classdef`'s own `__init` closure specifically (stricter than
+ * luaR_closureownsprivateaccess, which accepts any method of the class).
+ */
+LUAI_FUNC bool luaR_closureisinit(const LuauClass* classdef, const Closure* cl);
+
+/**
  * Returns true if `cl` is one of `classdef`'s own method closures (including `__init`), ie
  * code that is lexically part of the class's own definition block. Used to allow private-member
  * access, and (via luaR_closureisinit) const-member writes.
@@ -43,12 +49,6 @@ LUAI_FUNC LuauClass* luaR_newclass(
  * closure regardless of what `self` was passed in.
  */
 LUAI_FUNC bool luaR_closureownsprivateaccess(const LuauClass* classdef, const Closure* cl);
-
-/**
- * Returns true if `cl` is `classdef`'s own `__init` closure specifically (stricter than
- * luaR_closureownsprivateaccess, which accepts any method of the class).
- */
-LUAI_FUNC bool luaR_closureisinit(const LuauClass* classdef, const Closure* cl);
 
 /**
  * Errors (via luaG_privateaccesserror) if the member at `offset` is private and `cl` is not one

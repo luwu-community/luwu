@@ -81,6 +81,15 @@ LuauClass* luaR_newclass(
     return classdef;
 }
 
+bool luaR_closureisinit(const LuauClass* classdef, const Closure* cl)
+{
+    if (cl->isC || !classdef->hascustominit)
+        return false;
+
+    const TValue* v = &classdef->staticmembers[classdef->initoffset - classdef->numberofinstancemembers];
+    return ttisfunction(v) && clvalue(v) == cl;
+}
+
 bool luaR_closureownsprivateaccess(const LuauClass* classdef, const Closure* cl)
 {
     if (cl->isC)
@@ -97,20 +106,9 @@ bool luaR_closureownsprivateaccess(const LuauClass* classdef, const Closure* cl)
     return false;
 }
 
-bool luaR_closureisinit(const LuauClass* classdef, const Closure* cl)
-{
-    if (cl->isC || !classdef->hascustominit)
-        return false;
-
-    const TValue* v = &classdef->staticmembers[classdef->initoffset - classdef->numberofinstancemembers];
-    return ttisfunction(v) && clvalue(v) == cl;
-}
-
 void luaR_checkprivateaccess(lua_State* L, const TValue* key, const LuauClass* classdef, const Closure* cl, uint32_t offset)
 {
-    // C API / native callers (cl == NULL, ie no Lua closure is currently executing at all, or
-    // cl->isC) are trusted and bypass private/const enforcement entirely -- it's a Luau-script-
-    // level access control, not something that should get in the way of embedder code.
+    // embedders using C api should be allowed to bypass private field restrictions
     if (!cl || cl->isC)
         return;
 

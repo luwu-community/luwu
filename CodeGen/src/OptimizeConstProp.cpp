@@ -23,8 +23,8 @@ LUAU_FASTINTVARIABLE(LuauCodeGenReuseSlotLimit, 64)
 LUAU_FASTINTVARIABLE(LuauCodeGenReuseUdataTagLimit, 64)
 LUAU_FASTINTVARIABLE(LuauCodeGenLiveSlotReuseLimit, 8)
 LUAU_FASTFLAGVARIABLE(DebugLuauAbortingChecks)
-LUAU_FASTFLAGVARIABLE(LuauCodegenLoadPropagateOrigin)
 LUAU_FASTFLAGVARIABLE(LuauCodegenSubstituteReplacements)
+LUAU_FASTFLAGVARIABLE(LuauCodegenConstVectorBufferRead)
 
 namespace Luau
 {
@@ -450,7 +450,7 @@ struct ConstPropState
                 if (uint32_t* prevIdx = getPreviousVersionedLoadIndex(IrCmd::LOAD_INT64, vmReg))
                     return std::make_pair(IrCmd::LOAD_INT64, *prevIdx);
             }
-            else if (tag == LUA_TVECTOR)
+            else if (LUA_VECTOR_DOUBLE == 0 && tag == LUA_TVECTOR)
             {
                 if (uint32_t* prevIdx = getPreviousVersionedLoadIndex(IrCmd::LOAD_FLOAT, vmReg))
                     return std::make_pair(IrCmd::LOAD_FLOAT, *prevIdx);
@@ -889,6 +889,50 @@ struct ConstPropState
         int offset = function.intOp(OP_B(loadInst));
         uint8_t tag = function.tagOp(OP_C(loadInst));
 
+        if (loadInst.cmd == IrCmd::BUFFER_READF64 && OP_A(loadInst).kind == IrOpKind::Inst)
+        {
+            IrInst& addrInst = function.instructions[OP_A(loadInst).index];
+
+            // Forward component reads from NEW_VECTOR directly
+            if (addrInst.cmd == IrCmd::NEW_VECTOR)
+            {
+                IrOp component;
+
+                if (offset == 0)
+                    component = OP_A(addrInst);
+                else if (offset == 8)
+                    component = OP_B(addrInst);
+                else if (offset == 16)
+                    component = OP_C(addrInst);
+
+                if (component.kind != IrOpKind::None)
+                {
+                    substitute(function, loadInst, component);
+                    return;
+                }
+            }
+
+            // Forward component reads from a constant vector pointer
+            if (FFlag::LuauCodegenConstVectorBufferRead && addrInst.cmd == IrCmd::LOAD_POINTER && OP_A(addrInst).kind == IrOpKind::VmReg &&
+                function.proto)
+            {
+                if (uint32_t* prevIdx = getPreviousVersionedLoadIndex(IrCmd::LOAD_TVALUE, OP_A(addrInst)))
+                {
+                    IrInst& tvalueLoad = function.instructions[*prevIdx];
+
+                    if (tvalueLoad.cmd == IrCmd::LOAD_TVALUE && OP_A(tvalueLoad).kind == IrOpKind::VmConst)
+                    {
+                        TValue* tv = &function.proto->k[vmConstOp(OP_A(tvalueLoad))];
+
+                        if (ttisvector(tv) && offset % 8 == 0 && unsigned(offset) / 8 < LUA_VECTOR_SIZE)
+                        {
+                            substitute(function, loadInst, build.constDouble(vvalue(tv)[offset / 8]));
+                            return;
+                        }
+                    }
+                }
+            }
+        }
         // Find if we have data for this kind of load
         for (BufferLoadStoreInfo& info : bufferLoadStoreInfo)
         {
@@ -1066,7 +1110,8 @@ struct ConstPropState
                 const IrInst& infoPtr = function.instOp(info.address);
 
                 // Pointers from separate allocations cannot be the same
-                if (currPtr.cmd == IrCmd::NEW_USERDATA && infoPtr.cmd == IrCmd::NEW_USERDATA && OP_A(storeInst) != info.address)
+                if ((currPtr.cmd == IrCmd::NEW_USERDATA || currPtr.cmd == IrCmd::NEW_VECTOR) &&
+                    (infoPtr.cmd == IrCmd::NEW_USERDATA || infoPtr.cmd == IrCmd::NEW_VECTOR) && OP_A(storeInst) != info.address)
                 {
                     i++;
                     continue;
@@ -1312,6 +1357,7 @@ struct ConstPropState
         instNotReadonly.clear();
         instNoMetatable.clear();
         instArraySize.clear();
+        instBufferMutable.clear();
 
         invalidateValuePropagation();
         invalidateHeapTableData();
@@ -1372,6 +1418,9 @@ struct ConstPropState
     DenseHashSet<uint32_t> instNotReadonly{kInvalidInstIdx};
     DenseHashSet<uint32_t> instNoMetatable{kInvalidInstIdx};
     DenseHashMap<uint32_t, int> instArraySize{kInvalidInstIdx};
+
+    // Mutable buffer tracking
+    DenseHashSet<uint32_t> instBufferMutable{kInvalidInstIdx};
 
     std::vector<uint32_t> rangeEndTemp;
 };
@@ -1547,8 +1596,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
             if (state.substituteTagLoadWithTValueData(build, inst))
                 break;
 
-            if (FFlag::LuauCodegenLoadPropagateOrigin)
-                state.tryRedirectVmRegLoadToTValueOrigin(inst);
+            state.tryRedirectVmRegLoadToTValueOrigin(inst);
 
             state.substituteOrRecordVmRegLoad(inst);
         }
@@ -1559,12 +1607,16 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
             if (state.substituteOrRecordValueLoadWithTValueData(build, inst))
                 break;
 
-            if (FFlag::LuauCodegenLoadPropagateOrigin)
-                state.tryRedirectVmRegLoadToTValueOrigin(inst);
+            state.tryRedirectVmRegLoadToTValueOrigin(inst);
 
             state.substituteOrRecordVmRegLoad(inst);
         }
         break;
+    case IrCmd::LOAD_BUFFER_DATA: 
+    {
+        state.substituteOrRecord(inst, index);
+        break;
+    }
     case IrCmd::LOAD_DOUBLE:
     {
         IrOp value = state.tryGetValue(OP_A(inst));
@@ -1578,8 +1630,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
             if (state.substituteOrRecordValueLoadWithTValueData(build, inst))
                 break;
 
-            if (FFlag::LuauCodegenLoadPropagateOrigin)
-                state.tryRedirectVmRegLoadToTValueOrigin(inst);
+            state.tryRedirectVmRegLoadToTValueOrigin(inst);
 
             state.substituteOrRecordVmRegLoad(inst);
         }
@@ -1598,8 +1649,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
             if (state.substituteOrRecordValueLoadWithTValueData(build, inst))
                 break;
 
-            if (FFlag::LuauCodegenLoadPropagateOrigin)
-                state.tryRedirectVmRegLoadToTValueOrigin(inst);
+            state.tryRedirectVmRegLoadToTValueOrigin(inst);
 
             state.substituteOrRecordVmRegLoad(inst);
         }
@@ -1618,8 +1668,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
             if (state.substituteOrRecordValueLoadWithTValueData(build, inst))
                 break;
 
-            if (FFlag::LuauCodegenLoadPropagateOrigin)
-                state.tryRedirectVmRegLoadToTValueOrigin(inst);
+            state.tryRedirectVmRegLoadToTValueOrigin(inst);
 
             state.substituteOrRecordVmRegLoad(inst);
         }
@@ -1662,7 +1711,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
 
                     if (ttisvector(tv))
                     {
-                        const float* v = vvalue(tv);
+                        const LUA_VECTOR_TYPE* v = vvalue(tv);
                         substitute(function, inst, build.constDouble(v[component]));
                         break;
                     }
@@ -2289,6 +2338,20 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         }
         break;
     case IrCmd::CHECK_BUFFER_MUTABLE:
+        if (OP_A(inst).kind == IrOpKind::Inst)
+        {
+            if (state.instBufferMutable.contains(OP_A(inst).index))
+            {
+                if (FFlag::DebugLuauAbortingChecks)
+                    replace(function, OP_B(inst), build.undef());
+                else
+                    kill(function, inst);
+            }
+            else
+            {
+                state.instBufferMutable.insert(OP_A(inst).index);
+            }
+        }
         break;
     case IrCmd::CHECK_BUFFER_LEN:
     {
@@ -2902,6 +2965,8 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::NEW_USERDATA:
         if (int(state.useradataTagCache.size()) < FInt::LuauCodeGenReuseUdataTagLimit)
             state.useradataTagCache.push_back(index);
+        break;
+    case IrCmd::NEW_VECTOR:
         break;
     case IrCmd::INT64_TO_NUM:
     case IrCmd::INT_TO_NUM:

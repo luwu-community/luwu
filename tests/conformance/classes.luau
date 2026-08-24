@@ -841,4 +841,154 @@ expectfail(
     end
 )
 
+expectpass("hoisting: read before declaration is nil", function()
+    assert(typeof(Hoisted) == "nil")
+end)
+
+class Hoisted
+    public x
+end
+
+expectpass("hoisting: read after declaration is class", function()
+    assert(typeof(Hoisted) == "class")
+    local h = Hoisted({ x = 1 })
+    assert(h.x == 1)
+end)
+
+class Parent
+    public children: {Child}
+
+    function createChild(self)
+        local child = Child({parent = self}) -- forward reference to Child
+        table.insert(self.children, child)
+        return child
+    end
+end
+
+class Child
+    public parent: Parent
+
+    function createParent(self)
+        local p = Parent({children = {self}})
+        return p
+    end
+end
+
+expectpass("hoisting: mutually referential classes work via capture by ref", function()
+    local p = Parent({children = {}})
+    local c = p:createChild()
+    assert(class.isinstance(c, Child))
+    assert(c.parent == p)
+    assert(#p.children == 1)
+    assert(p.children[1] == c)
+
+    local p2 = c:createParent()
+    assert(class.isinstance(p2, Parent))
+end)
+
+local function makeLateWidget(id)
+    return LateWidget({ id = id }) -- forward reference to LateWidget
+end
+
+class LateWidget
+    public id
+end
+
+expectpass("hoisting: function defined before class works via capture by ref", function()
+    local w = makeLateWidget(42)
+    assert(class.isinstance(w, LateWidget))
+    assert(w.id == 42)
+end)
+
+export class ReproCat
+    name: string
+    age: number
+    public function __init(self, name, age)
+        self.name = name
+        self.age = age
+    end
+    function meow(self, message)
+        message = message or "says meow"
+        return `{self.name} {message}`
+    end
+end
+
+class ReproList<T>
+    private const inner: { T }
+
+    public function __init(self, ...: T)
+        self.inner = { ... }
+    end
+
+    private function into_option(item: T?)
+        return item
+    end
+
+    public function pop_front(self)
+        local res = table.remove(self.inner, 1)
+        return ReproList.into_option(res)
+    end
+
+    public function push_back(self, item: T)
+        table.insert(self.inner, item)
+    end
+
+    public function front(self)
+        return ReproList.into_option(self.inner[1])
+    end
+
+    public function push_front(self, item: T)
+        table.insert(self.inner, 1, item)
+    end
+
+    public function __len(self)
+        return #self.inner
+    end
+end
+
+expectpass("repro: self-check works when constructed as an argument to a later generic class's constructor", function()
+    local cats = ReproList(
+        ReproCat("Taz", 12),
+        ReproCat("Nanuk", 2)
+    )
+    local crazy = ReproCat("Crazy", 20)
+    cats:push_front(crazy)
+end)
+
+class ReproFoo
+    public cats: { string }
+end
+
+class ReproPerson end
+
+class ReproClass
+    public id: string
+    public lecturer: ReproPerson
+    public tagline: string
+    public requirements
+    public students: { ReproPerson }
+    private password: string
+
+    public function __tostring(self)
+        return table.concat({
+            self.id,
+            tostring(self.lecturer),
+            self.tagline,
+        }, "\n")
+    end
+end
+
+expectpass("repro: full sequence like the reported failure", function()
+    local comp_4081 = ReproClass {
+        id = "4081",
+        lecturer = ReproPerson(),
+        requirements = "3081",
+        tagline = "COMP 4081",
+        password = "some password",
+        students = {}
+    }
+    local cat = ReproCat("Taz", 12)
+    assert(cat:meow("hehe") == "Taz hehe")
+end)
+
 return 'OK'

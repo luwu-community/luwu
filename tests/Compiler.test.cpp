@@ -25,6 +25,7 @@ LUAU_FASTINT(LuauCompileLoopUnrollThresholdMaxBoost)
 LUAU_FASTINT(LuauRecursionLimit)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuauIntegerFastcalls)
+LUAU_FASTFLAG(LuauCompileIifeInline)
 LUAU_FASTFLAG(LuauIntegerBufferFastcalls)
 LUAU_FASTFLAG(LuauCompileStringInterpTargetTop)
 LUAU_FASTFLAG(LuauExportValueSyntax)
@@ -32,6 +33,8 @@ LUAU_FASTFLAG(LuauExportedClassIsNilWorkaround)
 LUAU_FASTFLAG(DebugLuauNoInline)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 LUAU_FASTFLAG(LuauDefaultArguments)
+LUAU_FASTFLAG(LuauBetterUserDefinedClasses)
+LUAU_FASTFLAG(LuauGenericNominals)
 
 using namespace Luau;
 
@@ -7722,6 +7725,52 @@ L0: MOVE R3 R2
 RETURN R3 1
 )"
     );
+
+    ScopedFastFlag luauCompileIifeInline{FFlag::LuauCompileIifeInline, true};
+
+    // IIFE with a function exceeding regular inline complexity
+    CHECK_EQ(
+        "\n" + compileFunction(
+                   R"(
+function test(x)
+    local a, b, c = x + 1, x + 2, x + 3
+    local r = (function()
+        for i in 0, a do
+            for j in 0, b do
+                if i + j >= c then return 42 end
+            end
+        end
+        return 67
+    end)()
+    return r + 5
+end
+)",
+                   1,
+                   2
+               ),
+        R"(
+ADDK R1 R0 K0 [1]
+ADDK R2 R0 K1 [2]
+ADDK R3 R0 K2 [3]
+LOADN R5 0
+MOVE R6 R1
+LOADNIL R7
+FORGPREP R5 L3
+L0: LOADN R10 0
+MOVE R11 R2
+LOADNIL R12
+FORGPREP R10 L2
+L1: ADD R15 R8 R13
+JUMPIFNOTLE R3 R15 L2
+LOADN R4 42
+JUMP L4
+L2: FORGLOOP R10 L1 1
+L3: FORGLOOP R5 L0 1
+LOADN R4 67
+L4: ADDK R5 R4 K3 [5]
+RETURN R5 1
+)"
+    );
 }
 
 TEST_CASE("InlineRecurseArguments")
@@ -11057,6 +11106,7 @@ TEST_CASE("ClassDeclBasic")
     )";
     auto res0 = "\n" + compileFunction(source.c_str(), 0, 0, 0);
     CHECK(R"(
+LOADNIL R0
 LOADKX R0 K3 [class Point (props: 2, methods: 0)]
 GETGLOBAL R1 K4 ['print']
 MOVE R2 R0
@@ -11101,13 +11151,15 @@ RETURN R1 1
 )" == res0);
     auto res1 = "\n" + compileFunction(source.c_str(), 1, 0, 0);
     CHECK(R"(
+LOADNIL R0
 LOADKX R0 K4 [class Point (props: 2, methods: 1)]
 NEWCLOSURE R1 P0
-CAPTURE VAL R0
+CAPTURE REF R0
 NEWCLASSMEMBER R0 R1 ['magnitude']
 GETGLOBAL R1 K5 ['print']
 MOVE R2 R0
 CALL R1 1 0
+CLOSEUPVALS R0
 RETURN R0 0
 )" == res1);
 }
@@ -11152,15 +11204,121 @@ RETURN R0 0
 )" == res0);
     auto res1 = "\n" + compileFunction(source.c_str(), 1, 0, 0);
     CHECK(R"(
+LOADNIL R0
 LOADKX R0 K4 [class Point (props: 2, methods: 1)]
 NEWCLOSURE R1 P0
-CAPTURE VAL R0
+CAPTURE REF R0
 NEWCLASSMEMBER R0 R1 ['print']
 DUPTABLE R1 5
 LOADK R2 K0 ['Point']
 SETTABLE R0 R1 R2
+CLOSEUPVALS R0
 RETURN R1 1
 )" == res1);
+}
+
+TEST_CASE("ClassDeclExportedSelfCheckDump")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuauGenericNominals, true},
+        {FFlag::LuauExportValueSyntax, true},
+        {FFlag::LuauDefaultArguments, true},
+    };
+
+    std::string source = R"(
+        export class ReproCat
+            name: string
+            public function __init(self, name)
+                self.name = name
+            end
+        end
+
+        class ReproList
+            public function __init(self, ...)
+            end
+        end
+
+        local cats = ReproList(ReproCat("Taz"))
+    )";
+
+    auto res = "\n" + compileFunction(source.c_str(), 0, 1, 0);
+    MESSAGE(res);
+    auto res1 = "\n" + compileFunction(source.c_str(), 1, 1, 0);
+    MESSAGE(res1);
+}
+
+TEST_CASE("ClassDeclHoistingForwardReference")
+{
+    ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+
+    std::string source = R"(
+        local ref = Point
+        class Point
+            public x
+        end
+    )";
+
+    auto res = "\n" + compileFunction(source.c_str(), 0, 0, 0);
+    CHECK(R"(
+LOADNIL R0
+MOVE R1 R0
+LOADKX R0 K2 [class Point (props: 1, methods: 0)]
+RETURN R0 0
+)" == res);
+}
+
+TEST_CASE("ClassDeclHoistingNestedFunctionUpvalCapture")
+{
+    ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+
+    std::string source = R"(
+        class Point
+            public x
+        end
+        local function usePoint()
+            return Point
+        end
+    )";
+
+    auto inner = "\n" + compileFunction(source.c_str(), 0, 0, 0);
+    CHECK(R"(
+GETUPVAL R0 0
+RETURN R0 1
+)" == inner);
+    auto outer = "\n" + compileFunction(source.c_str(), 1, 0, 0);
+    CHECK(R"(
+LOADNIL R0
+LOADKX R0 K2 [class Point (props: 1, methods: 0)]
+NEWCLOSURE R1 P0
+CAPTURE REF R0
+CLOSEUPVALS R0
+RETURN R0 0
+)" == outer);
+}
+
+TEST_CASE("ClassDeclHoistingForwardWriteProducesError")
+{
+    ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+
+    std::string source = R"(
+        Point = nil
+        class Point
+        public x
+        end
+    )";
+
+    try
+    {
+        compileFunction(source.c_str(), 0, 0, 0);
+        FAIL("Expected compile error");
+    }
+    catch (const std::exception& e)
+    {
+        std::string msg = e.what();
+        CHECK(msg == "'Point' refers to a class and cannot be used as a variable name (defined on line 3)");
+    }
 }
 
 TEST_CASE("IntegerType")
@@ -11970,8 +12128,9 @@ TEST_CASE("LBCConstantRegressionTest")
     CHECK_EQ(LBC_CONSTANT_TABLE_WITH_CONSTANTS, 8);
     CHECK_EQ(LBC_CONSTANT_INTEGER, 9);
     CHECK_EQ(LBC_CONSTANT_CLASS_SHAPE, 10);
+    CHECK_EQ(LBC_CONSTANT_VECTORD, 11);
 
-    CHECK_EQ(LBC_CONSTANT__COUNT, 11);
+    CHECK_EQ(LBC_CONSTANT__COUNT, 12);
 }
 
 TEST_CASE("ExportClass")
@@ -11990,6 +12149,7 @@ export class Point
 end
 )"),
         R"(
+LOADNIL R0
 NEWTABLE R1 0 0
 LOADKX R0 K3 [class Point (props: 2, methods: 0)]
 SETTABLEKS R0 R1 K0 ['Point']
@@ -12019,6 +12179,7 @@ end
                    2
                ),
         R"(
+LOADNIL R0
 NEWTABLE R1 0 0
 LOADKX R0 K5 [class Point (props: 2, methods: 2)]
 NEWCLOSURE R2 P0
@@ -12049,6 +12210,7 @@ local p = Point {x = 1, y = 2}
                    2
                ),
         R"(
+LOADNIL R0
 NEWTABLE R1 0 0
 LOADKX R0 K3 [class Point (props: 2, methods: 0)]
 MOVE R2 R0

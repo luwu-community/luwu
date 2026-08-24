@@ -151,6 +151,8 @@ IrValueKind getCmdValueKind(IrCmd cmd)
         return IrValueKind::Tag;
     case IrCmd::LOAD_POINTER:
         return IrValueKind::Pointer;
+    case IrCmd::LOAD_BUFFER_DATA:
+        return IrValueKind::Pointer;
     case IrCmd::LOAD_DOUBLE:
         return IrValueKind::Double;
     case IrCmd::LOAD_INT:
@@ -286,6 +288,7 @@ IrValueKind getCmdValueKind(IrCmd cmd)
         return IrValueKind::Int;
     case IrCmd::TRY_CALL_FASTGETTM:
     case IrCmd::NEW_USERDATA:
+    case IrCmd::NEW_VECTOR:
         return IrValueKind::Pointer;
     case IrCmd::INT64_TO_NUM:
     case IrCmd::INT_TO_NUM:
