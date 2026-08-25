@@ -176,6 +176,55 @@ TEST_CASE_FIXTURE(Fixture, "local_with_annotation")
     REQUIRE_EQ(stringAtLocation(code, l->location), "foo");
 }
 
+TEST_CASE_FIXTURE(Fixture, "local_keyword_location_is_populated_without_export")
+{
+    std::string code = "local x = 1";
+
+    AstStatBlock* block = parse(code);
+    AstStatLocal* local = block->body.data[0]->as<AstStatLocal>();
+    REQUIRE(local != nullptr);
+
+    REQUIRE(local->keywordLocation.has_value());
+    CHECK_EQ(stringAtLocation(code, *local->keywordLocation), "local");
+}
+
+TEST_CASE_FIXTURE(Fixture, "local_function_keyword_locations_on_same_line")
+{
+    // Regression test: matchFunction.location is patched in-place for diagnostics when 'local'
+    // and 'function' share a line, so functionLocation must be captured before that patch runs.
+    std::string code = "local function foo() end";
+
+    AstStatBlock* block = parse(code);
+    AstStatLocalFunction* fn = block->body.data[0]->as<AstStatLocalFunction>();
+    REQUIRE(fn != nullptr);
+
+    CHECK_EQ(stringAtLocation(code, fn->keywordLocation), "local");
+    CHECK_EQ(stringAtLocation(code, fn->functionLocation), "function");
+}
+
+TEST_CASE_FIXTURE(Fixture, "if_elseif_else_keyword_locations_cover_only_the_keyword")
+{
+    std::string code = R"(
+if a then
+    b()
+elseif c then
+    d()
+else
+    e()
+end
+    )";
+
+    AstStatBlock* block = parse(code);
+    AstStatIf* topIf = block->body.data[0]->as<AstStatIf>();
+    REQUIRE(topIf != nullptr);
+
+    CHECK_EQ(stringAtLocation(code, topIf->ifLocation), "if");
+
+    AstStatIf* elseifStat = topIf->elsebody->as<AstStatIf>();
+    REQUIRE(elseifStat != nullptr);
+    CHECK_EQ(stringAtLocation(code, elseifStat->ifLocation), "elseif");
+}
+
 TEST_CASE_FIXTURE(Fixture, "type_names_can_contain_dots")
 {
     AstStatBlock* block = parse(R"(

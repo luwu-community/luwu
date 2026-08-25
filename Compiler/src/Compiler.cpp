@@ -5044,7 +5044,7 @@ struct Compiler
             thenStats[0] = allocator.alloc<AstStatExpr>(loc, errorCall);
             AstStatBlock* thenBody = allocator.alloc<AstStatBlock>(loc, AstArray<AstStat*>{thenStats, 1}, /* hasEnd= */ true);
 
-            return allocator.alloc<AstStatIf>(loc, notInstance, thenBody, /* elsebody= */ nullptr, std::nullopt, std::nullopt);
+            return allocator.alloc<AstStatIf>(loc, notInstance, thenBody, /* elsebody= */ nullptr, std::nullopt, std::nullopt, loc);
         }
 
         bool visit(AstStatClass* node) override
@@ -5096,8 +5096,9 @@ struct Compiler
                     returnValues[i] = propertyDefaultsInOrder[i];
 
                 AstStat** bodyStats = static_cast<AstStat**>(allocator.allocate(sizeof(AstStat*)));
-                bodyStats[0] =
-                    allocator.alloc<AstStatReturn>(node->location, AstArray<AstExpr*>{returnValues, propertyDefaultsInOrder.size()});
+                bodyStats[0] = allocator.alloc<AstStatReturn>(
+                    node->location, AstArray<AstExpr*>{returnValues, propertyDefaultsInOrder.size()}, node->location
+                );
 
                 AstStatBlock* body = allocator.alloc<AstStatBlock>(node->location, AstArray<AstStat*>{bodyStats, 1}, /* hasEnd= */ true);
 

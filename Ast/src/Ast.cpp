@@ -613,7 +613,8 @@ AstStatIf::AstStatIf(
     AstStatBlock* thenbody,
     AstStat* elsebody,
     const std::optional<Location>& thenLocation,
-    const std::optional<Location>& elseLocation
+    const std::optional<Location>& elseLocation,
+    const Location& ifLocation
 )
     : AstStat(ClassIndex(), location)
     , condition(condition)
@@ -621,6 +622,7 @@ AstStatIf::AstStatIf(
     , elsebody(elsebody)
     , thenLocation(thenLocation)
     , elseLocation(elseLocation)
+    , ifLocation(ifLocation)
 {
 }
 
@@ -636,12 +638,20 @@ void AstStatIf::visit(AstVisitor* visitor)
     }
 }
 
-AstStatWhile::AstStatWhile(const Location& location, AstExpr* condition, AstStatBlock* body, bool hasDo, const Location& doLocation)
+AstStatWhile::AstStatWhile(
+    const Location& location,
+    AstExpr* condition,
+    AstStatBlock* body,
+    bool hasDo,
+    const Location& doLocation,
+    const Location& whileLocation
+)
     : AstStat(ClassIndex(), location)
     , condition(condition)
     , body(body)
     , hasDo(hasDo)
     , doLocation(doLocation)
+    , whileLocation(whileLocation)
 {
 }
 
@@ -654,11 +664,20 @@ void AstStatWhile::visit(AstVisitor* visitor)
     }
 }
 
-AstStatRepeat::AstStatRepeat(const Location& location, AstExpr* condition, AstStatBlock* body, bool DEPRECATED_hasUntil)
+AstStatRepeat::AstStatRepeat(
+    const Location& location,
+    AstExpr* condition,
+    AstStatBlock* body,
+    bool DEPRECATED_hasUntil,
+    const Location& repeatLocation,
+    const Location& untilLocation
+)
     : AstStat(ClassIndex(), location)
     , condition(condition)
     , body(body)
     , DEPRECATED_hasUntil(DEPRECATED_hasUntil)
+    , repeatLocation(repeatLocation)
+    , untilLocation(untilLocation)
 {
 }
 
@@ -691,9 +710,10 @@ void AstStatContinue::visit(AstVisitor* visitor)
     visitor->visit(this);
 }
 
-AstStatReturn::AstStatReturn(const Location& location, const AstArray<AstExpr*>& list)
+AstStatReturn::AstStatReturn(const Location& location, const AstArray<AstExpr*>& list, const Location& returnLocation)
     : AstStat(ClassIndex(), location)
     , list(list)
+    , returnLocation(returnLocation)
 {
 }
 
@@ -756,7 +776,8 @@ AstStatFor::AstStatFor(
     AstExpr* step,
     AstStatBlock* body,
     bool hasDo,
-    const Location& doLocation
+    const Location& doLocation,
+    const Location& forLocation
 )
     : AstStat(ClassIndex(), location)
     , var(var)
@@ -766,6 +787,7 @@ AstStatFor::AstStatFor(
     , body(body)
     , hasDo(hasDo)
     , doLocation(doLocation)
+    , forLocation(forLocation)
 {
 }
 
@@ -794,7 +816,8 @@ AstStatForIn::AstStatForIn(
     bool hasIn,
     const Location& inLocation,
     bool hasDo,
-    const Location& doLocation
+    const Location& doLocation,
+    const Location& forLocation
 )
     : AstStat(ClassIndex(), location)
     , vars(vars)
@@ -804,6 +827,7 @@ AstStatForIn::AstStatForIn(
     , inLocation(inLocation)
     , hasDo(hasDo)
     , doLocation(doLocation)
+    , forLocation(forLocation)
 {
 }
 
@@ -860,10 +884,11 @@ void AstStatCompoundAssign::visit(AstVisitor* visitor)
     }
 }
 
-AstStatFunction::AstStatFunction(const Location& location, AstExpr* name, AstExprFunction* func)
+AstStatFunction::AstStatFunction(const Location& location, AstExpr* name, AstExprFunction* func, const Location& functionLocation)
     : AstStat(ClassIndex(), location)
     , name(name)
     , func(func)
+    , functionLocation(functionLocation)
 {
 }
 
@@ -876,12 +901,22 @@ void AstStatFunction::visit(AstVisitor* visitor)
     }
 }
 
-AstStatLocalFunction::AstStatLocalFunction(const Location& location, AstLocal* name, AstExprFunction* func, bool isConst, Position constKeywordBegin)
+AstStatLocalFunction::AstStatLocalFunction(
+    const Location& location,
+    AstLocal* name,
+    AstExprFunction* func,
+    bool isConst,
+    Position constKeywordBegin,
+    const Location& keywordLocation,
+    const Location& functionLocation
+)
     : AstStat(ClassIndex(), location)
     , name(name)
     , func(func)
     , isConst(isConst)
     , constKeywordBegin(constKeywordBegin)
+    , keywordLocation(keywordLocation)
+    , functionLocation(functionLocation)
 {
 }
 
@@ -898,7 +933,8 @@ AstStatTypeAlias::AstStatTypeAlias(
     const AstArray<AstGenericType*>& generics,
     const AstArray<AstGenericTypePack*>& genericPacks,
     AstType* type,
-    bool exported
+    bool exported,
+    const Location& typeLocation
 )
     : AstStat(ClassIndex(), location)
     , name(name)
@@ -907,6 +943,7 @@ AstStatTypeAlias::AstStatTypeAlias(
     , genericPacks(genericPacks)
     , type(type)
     , exported(exported)
+    , typeLocation(typeLocation)
 {
 }
 
@@ -951,11 +988,18 @@ void AstStatTypeFunction::visit(AstVisitor* visitor)
         body->visit(visitor);
 }
 
-AstStatDeclareGlobal::AstStatDeclareGlobal(const Location& location, const AstName& name, const Location& nameLocation, AstType* type)
+AstStatDeclareGlobal::AstStatDeclareGlobal(
+    const Location& location,
+    const AstName& name,
+    const Location& nameLocation,
+    AstType* type,
+    const Location& declareLocation
+)
     : AstStat(ClassIndex(), location)
     , name(name)
     , nameLocation(nameLocation)
     , type(type)
+    , declareLocation(declareLocation)
 {
 }
 
@@ -975,7 +1019,9 @@ AstStatDeclareFunction::AstStatDeclareFunction(
     const AstArray<AstArgumentName>& paramNames,
     bool vararg,
     const Location& varargLocation,
-    AstTypePack* retTypes
+    AstTypePack* retTypes,
+    const Location& declareLocation,
+    const Location& functionLocation
 )
     : AstStat(ClassIndex(), location)
     , attributes()
@@ -988,6 +1034,8 @@ AstStatDeclareFunction::AstStatDeclareFunction(
     , vararg(vararg)
     , varargLocation(varargLocation)
     , retTypes(retTypes)
+    , declareLocation(declareLocation)
+    , functionLocation(functionLocation)
 {
 }
 
@@ -996,6 +1044,7 @@ AstStatClass::AstStatClass(
     AstLocal* name,
     AstArray<AstClassMember> members,
     bool exported,
+    const Location& keywordLocation,
     const AstArray<AstGenericType*>& generics,
     const AstArray<AstGenericTypePack*>& genericPacks
 )
@@ -1005,6 +1054,7 @@ AstStatClass::AstStatClass(
     , exported(exported)
     , generics(generics)
     , genericPacks(genericPacks)
+    , keywordLocation(keywordLocation)
 {
     LUAU_ASSERT(FFlag::DebugLuauUserDefinedClasses);
 }
@@ -1047,7 +1097,9 @@ AstStatDeclareFunction::AstStatDeclareFunction(
     const AstArray<AstArgumentName>& paramNames,
     bool vararg,
     const Location& varargLocation,
-    AstTypePack* retTypes
+    AstTypePack* retTypes,
+    const Location& declareLocation,
+    const Location& functionLocation
 )
     : AstStat(ClassIndex(), location)
     , attributes(attributes)
@@ -1060,6 +1112,8 @@ AstStatDeclareFunction::AstStatDeclareFunction(
     , vararg(vararg)
     , varargLocation(varargLocation)
     , retTypes(retTypes)
+    , declareLocation(declareLocation)
+    , functionLocation(functionLocation)
 {
 }
 
@@ -1098,6 +1152,9 @@ AstStatDeclareExternType::AstStatDeclareExternType(
     const AstName& name,
     std::optional<AstName> superName,
     const AstArray<AstDeclaredExternTypeProperty>& props,
+    const Location& declareLocation,
+    const Location& classLocation,
+    const std::optional<Location>& extendsLocation,
     AstTableIndexer* indexer,
     const AstArray<AstGenericType*>& generics,
     const AstArray<AstGenericTypePack*>& genericPacks
@@ -1109,6 +1166,9 @@ AstStatDeclareExternType::AstStatDeclareExternType(
     , indexer(indexer)
     , generics(generics)
     , genericPacks(genericPacks)
+    , declareLocation(declareLocation)
+    , classLocation(classLocation)
+    , extendsLocation(extendsLocation)
 {
 }
 

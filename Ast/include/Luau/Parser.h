@@ -190,9 +190,9 @@ private:
     AstStat* parseReturn();
 
     // type Name `=' Type
-    AstStat* parseTypeAlias(const Location& start, bool exported, Position typeKeywordPosition);
+    AstStat* parseTypeAlias(const Location& start, bool exported, Position typeKeywordPosition, const Location& typeKeywordLocation);
 
-    AstStat* parseClassStat(const Location& start, bool exported);
+    AstStat* parseClassStat(const Location& start, bool exported, const Location& classKeywordLocation);
 
     // type function Name ... end
     AstStat* parseTypeFunction(const Location& start, bool exported, Position typeKeywordPosition);
@@ -229,7 +229,14 @@ private:
         const Name* localName,
         const AstArray<AstAttr*>& attributes,
         const bool isConst = false,
-        TempVector<CstAttrList*>* cstAttrLists = nullptr
+        TempVector<CstAttrList*>* cstAttrLists = nullptr,
+        // Used only for the closing 'end' indentation-mismatch diagnostic; defaults to
+        // `matchFunction` itself. Callers that need that diagnostic to report a different column
+        // than the true 'function' keyword (e.g. 'local function'/'const function' aligning it to
+        // 'local'/'const' instead) pass a separate lexeme here rather than mutating `matchFunction`,
+        // since `matchFunction.location` is also used as the real, unadjusted 'function' keyword
+        // location for the resulting AstExprFunction and its CST node.
+        const Lexeme* endMatchLexeme = nullptr
     );
 
     // explist ::= {exp `,'} exp
