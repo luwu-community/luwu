@@ -5,7 +5,7 @@
 export type AstPosition = {
     read line: number,
     read column: number,
-    read offset: number,
+    read computedOffset: number,
 }
 
 -- Luau::Location (1-indexed begin and end lines/columns)
@@ -41,10 +41,7 @@ export type AstLocal = {
 -- parser errored
 export type ParseError = {
     read message: string,
-    read beginLine: number,
-    read beginColumn: number,
-    read endLine: number,
-    read endColumn: number,
+    read location: AstLocation,
 }
 
 --[=[ table item in table literals 
@@ -1289,6 +1286,7 @@ export type AstDocument = {
     read source: string,
     read errors: {ParseError},
     read comments: {AstComment},
+    read lineOffsets: {number},
     read walk: (self: AstDocument, visitor: (node: AstNode) -> boolean?) -> (),
     read find: (self: AstDocument, kind: string) -> {AstNode},
 }

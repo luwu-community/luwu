@@ -10,7 +10,7 @@ enum AstPositionAtom : uint8_t
     Atom_Unknown = 0,
     Atom_Line,
     Atom_Column,
-    Atom_Offset,
+    Atom_ComputedOffset,
 };
 
 static AstPositionAtom getAstPositionAtom(std::string_view key)
@@ -18,7 +18,7 @@ static AstPositionAtom getAstPositionAtom(std::string_view key)
     static const std::unordered_map<std::string_view, AstPositionAtom> s_atomMap = {
         {"line", Atom_Line},
         {"column", Atom_Column},
-        {"offset", Atom_Offset},
+        {"computedOffset", Atom_ComputedOffset},
     };
 
     if (auto it = s_atomMap.find(key); it != s_atomMap.end())
@@ -73,7 +73,7 @@ static int astPositionIndex(lua_State* L)
     {
     case Atom_Line:   { lua_pushinteger(L, pos.line + 1); return 1; }
     case Atom_Column: { lua_pushinteger(L, pos.column + 1); return 1; }
-    case Atom_Offset:
+    case Atom_ComputedOffset:
     {
         size_t off = 0;
         if (doc && pos.line < doc->lineOffsets.size())

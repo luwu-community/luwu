@@ -14,6 +14,7 @@ enum AstDocumentAtom : uint8_t
     Atom_Find,
     Atom_Errors,
     Atom_Comments,
+    Atom_LineOffsets,
 };
 
 static AstDocumentAtom getAstDocumentAtom(std::string_view key)
@@ -25,6 +26,7 @@ static AstDocumentAtom getAstDocumentAtom(std::string_view key)
         {"find", Atom_Find},
         {"errors", Atom_Errors},
         {"comments", Atom_Comments},
+        {"lineOffsets", Atom_LineOffsets},
     };
 
     if (auto it = s_atomMap.find(key); it != s_atomMap.end())
@@ -129,18 +131,22 @@ static int astDocIndex(lua_State* L)
         for (size_t i = 0; i < doc->parseResult.errors.size(); i++)
         {
             const auto& err = doc->parseResult.errors[i];
-            lua_createtable(L, 0, 5);
+            lua_createtable(L, 0, 2);
             lua_pushstring(L, err.getMessage().c_str());
             lua_setfield(L, -2, "message");
-            lua_pushinteger(L, err.getLocation().begin.line + 1);
-            lua_setfield(L, -2, "beginLine");
-            lua_pushinteger(L, err.getLocation().begin.column + 1);
-            lua_setfield(L, -2, "beginColumn");
-            lua_pushinteger(L, err.getLocation().end.line + 1);
-            lua_setfield(L, -2, "endLine");
-            lua_pushinteger(L, err.getLocation().end.column + 1);
-            lua_setfield(L, -2, "endColumn");
+            pushLocation(L, doc, err.getLocation());
+            lua_setfield(L, -2, "location");
 
+            lua_rawseti(L, -2, int(i + 1));
+        }
+        return 1;
+    }
+    case Atom_LineOffsets:
+    {
+        lua_createtable(L, int(doc->lineOffsets.size()), 0);
+        for (size_t i = 0; i < doc->lineOffsets.size(); i++)
+        {
+            lua_pushinteger(L, int(doc->lineOffsets[i]));
             lua_rawseti(L, -2, int(i + 1));
         }
         return 1;

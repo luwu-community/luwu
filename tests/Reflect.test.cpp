@@ -212,7 +212,8 @@ TEST_CASE("LazyAstErrors")
         local doc = reflect.parse("local x = ")
         assert(#doc.errors > 0)
         assert(doc.errors[1].message ~= nil)
-        assert(doc.errors[1].beginLine == 1)
+        assert(doc.errors[1].location ~= nil)
+        assert(doc.errors[1].location.beginLine == 1)
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);
@@ -252,8 +253,9 @@ TEST_CASE("LazyCstData")
         assert(callExpr.cst.kind == "CstExprCall")
         assert(typeof(callExpr.cst.openParens) == "AstPosition")
         assert(callExpr.cst.openParens.line == 2)
-        assert(callExpr.cst.openParens.column == 4)
-        assert(callExpr.cst.openParens.offset > 0)
+        assert(callExpr.cst.openParens.computedOffset > 0)
+        assert(#doc.lineOffsets >= 2)
+        assert(doc.lineOffsets[1] == 0)
         assert(#callExpr.cst.commaPositions == 1)
         assert(typeof(callExpr.cst.commaPositions[1]) == "AstPosition")
 
