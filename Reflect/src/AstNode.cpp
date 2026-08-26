@@ -672,7 +672,7 @@ static bool handleExprConstantInteger(lua_State* L, AstNodeData& handle, AstNode
     auto* n = static_cast<Luau::AstExprConstantInteger*>(handle.node);
     switch (atom)
     {
-    case Atom_Value: { lua_pushinteger(L, n->value); return true; }
+    case Atom_Value: { lua_pushinteger64(L, n->value); return true; }
     default: return false;
     }
 }
