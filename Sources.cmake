@@ -697,5 +697,6 @@ if(TARGET Luau.Reflect)
         Reflect/src/CstNode.cpp
         Reflect/src/AstPosition.cpp
         Reflect/src/AstComment.cpp
+        Reflect/src/AstAux.cpp
     )
 endif()

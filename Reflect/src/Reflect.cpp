@@ -56,6 +56,7 @@ int luaopen_reflect(lua_State* L)
     registerCstNode(L);
     registerAstPosition(L);
     registerAstComment(L);
+    registerAstAux(L);
 
     // Module table
     lua_createtable(L, 0, 2);

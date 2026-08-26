@@ -305,4 +305,116 @@ TEST_CASE("LazyAstComments")
     CHECK_EQ(dostring(L, script), 0);
 }
 
+TEST_CASE("LazyAstTableItems")
+{
+    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    Luau::luaopen_reflect(L);
+    lua_setglobal(L, "reflect");
+
+    const char* script = R"LUA(
+        local doc = reflect.parse([[
+            local tbl = {
+                "hello",             
+                foo = 123,           
+                ["key" .. 2] = true 
+            }
+        ]])
+
+        local stat = doc.root.body[1]
+        assert(stat.kind == "AstStatLocal")
+
+        local tableExpr = stat.values[1]
+        assert(tableExpr.kind == "AstExprTable")
+
+        local items = tableExpr.items
+        assert(#items == 3)
+
+        -- List item
+        local item1 = items[1]
+        assert(item1.kind == "list")
+        assert(item1.key == nil)
+        assert(item1.value.kind == "AstExprConstantString")
+        assert(item1.value.value == "hello")
+
+        -- Record item
+        local item2 = items[2]
+        assert(item2.kind == "record")
+        assert(item2.key ~= nil)
+        assert(item2.key.kind == "AstExprConstantString")
+        assert(item2.key.value == "foo")
+        assert(item2.value.kind == "AstExprConstantInteger" or item2.value.kind == "AstExprConstantNumber")
+        assert(item2.value.value == 123)
+
+        -- General item
+        local item3 = items[3]
+        assert(item3.kind == "general")
+        assert(item3.key ~= nil)
+        assert(item3.key.kind == "AstExprBinary")
+        assert(item3.key.op == "..")
+        assert(item3.value.kind == "AstExprConstantBool")
+        assert(item3.value.value == true)
+    )LUA";
+
+    CHECK_EQ(dostring(L, script), 0);
+}
+
+TEST_CASE("AstTypeTableAndAstAux")
+{
+    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    Luau::luaopen_reflect(L);
+    lua_setglobal(L, "reflect");
+
+    const char* script = R"LUA(
+        local doc = reflect.parse([[
+            type MyTable = {
+                read foo: string,
+                bar: number,
+                [string]: boolean,
+            }
+        ]])
+
+        local stat = doc.root.body[1]
+        assert(stat.kind == "AstStatTypeAlias")
+        assert(stat.name == "MyTable")
+
+        local ty = stat.type
+        assert(ty.kind == "AstTypeTable")
+        assert(ty.category == "type")
+
+        local props = ty.props
+        assert(#props == 2)
+
+        local prop1 = props[1]
+        assert(prop1.kind == "AstTableProp")
+        assert(prop1.name == "foo")
+        assert(prop1.access == "read")
+        assert(prop1.type.kind == "AstTypeReference")
+        assert(prop1.type.name == "string")
+
+        local prop2 = props[2]
+        assert(prop2.kind == "AstTableProp")
+        assert(prop2.name == "bar")
+        assert(prop2.access == "readwrite")
+        assert(prop2.type.kind == "AstTypeReference")
+        assert(prop2.type.name == "number")
+
+        local indexer = ty.indexer
+        assert(indexer ~= nil)
+        assert(indexer.kind == "AstTableIndexer")
+        assert(indexer.access == "readwrite")
+        assert(indexer.indexType.kind == "AstTypeReference")
+        assert(indexer.indexType.name == "string")
+        assert(indexer.resultType.kind == "AstTypeReference")
+        assert(indexer.resultType.name == "boolean")
+    )LUA";
+
+    CHECK_EQ(dostring(L, script), 0);
+}
+
 TEST_SUITE_END();

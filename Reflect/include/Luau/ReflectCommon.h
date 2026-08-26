@@ -21,7 +21,16 @@
 namespace Luau
 {
 
-// Reserved userdata tags for AST/CST reflection objects
+/**
+ * Reserved userdata tags for AST/CST reflection objects.
+ *
+ * SAFETY: The use of reserved tags in this range (10-17) is safe: embedders are expected
+ * to either dynamically query for available tags using `lua_findunuseduserdatatag` or
+ * hardcode all reserved tags on their own. Raising the userdata tag limit is also an option.
+ *
+ * `TagAux` acts as a catch-all tag for auxillary structures to avoid
+ * bloating the tags needed by Reflect 
+ */
 enum AstUserdataTag : int
 {
     TagDocument = 10,
@@ -31,6 +40,7 @@ enum AstUserdataTag : int
     TagCstNode = 14,
     TagPosition = 15,
     TagComment = 16,
+    TagAux = 17,
 };
 
 struct AstDocumentState
@@ -89,6 +99,66 @@ struct AstCommentData
     Luau::Comment comment;
 };
 
+enum AstAuxKind : uint8_t
+{
+    Aux_TableProp,
+    Aux_TableIndexer,
+    Aux_DeclaredExternTypeProperty,
+    Aux_ClassProperty,
+    Aux_ClassMethod,
+};
+
+struct AstAuxData
+{
+    std::shared_ptr<AstDocumentState> doc;
+    AstAuxKind kind;
+    union
+    {
+        Luau::AstTableProp tableProp;
+        Luau::AstTableIndexer tableIndexer;
+        Luau::AstDeclaredExternTypeProperty declaredExternProp;
+        Luau::AstClassProperty classProp;
+        Luau::AstClassMethod classMethod;
+    };
+
+    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstTableProp& p)
+        : doc(doc)
+        , kind(Aux_TableProp)
+        , tableProp(p)
+    {
+    }
+
+    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstTableIndexer& idx)
+        : doc(doc)
+        , kind(Aux_TableIndexer)
+        , tableIndexer(idx)
+    {
+    }
+
+    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstDeclaredExternTypeProperty& p)
+        : doc(doc)
+        , kind(Aux_DeclaredExternTypeProperty)
+        , declaredExternProp(p)
+    {
+    }
+
+    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstClassProperty& p)
+        : doc(doc)
+        , kind(Aux_ClassProperty)
+        , classProp(p)
+    {
+    }
+
+    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstClassMethod& m)
+        : doc(doc)
+        , kind(Aux_ClassMethod)
+        , classMethod(m)
+    {
+    }
+
+    ~AstAuxData() {}
+};
+
 // Line and location offset utilities (adapted from lute)
 std::vector<size_t> computeLineOffsets(std::string_view content);
 std::pair<size_t, size_t> locationToOffsets(const std::vector<size_t>& lineOffsets, size_t sourceLen, const Luau::Location& loc);
@@ -102,6 +172,11 @@ void pushCstNode(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, con
 void pushPosition(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::Position& pos);
 void pushPositionArray(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstArray<Luau::Position>& array);
 void pushAstComment(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::Comment& comment);
+void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstTableProp& prop);
+void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstTableIndexer& indexer);
+void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstDeclaredExternTypeProperty& prop);
+void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstClassProperty& prop);
+void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstClassMethod& method);
 
 // Check helpers
 std::shared_ptr<AstDocumentState>& checkAstDocument(lua_State* L, int idx);
@@ -111,6 +186,7 @@ AstLocationData& checkAstLocation(lua_State* L, int idx);
 CstNodeData& checkCstNode(lua_State* L, int idx);
 AstPositionData& checkAstPosition(lua_State* L, int idx);
 AstCommentData& checkAstComment(lua_State* L, int idx);
+AstAuxData& checkAstAux(lua_State* L, int idx);
 
 // Array push helpers
 template<typename T>
@@ -131,6 +207,41 @@ inline void pushLocalArray(lua_State* L, const std::shared_ptr<AstDocumentState>
     {
         pushAstLocal(L, doc, array.data[i]);
         lua_rawseti(L, -2, int(i + 1));
+    }
+}
+
+inline void pushTypeOrPack(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstTypeOrPack& tp)
+{
+    if (tp.type)
+        pushAstNode(L, doc, tp.type);
+    else if (tp.typePack)
+        pushAstNode(L, doc, tp.typePack);
+    else
+        lua_pushnil(L);
+}
+
+inline void pushTypeOrPackArray(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstArray<Luau::AstTypeOrPack>& array)
+{
+    lua_createtable(L, int(array.size), 0);
+    for (size_t i = 0; i < array.size; i++)
+    {
+        pushTypeOrPack(L, doc, array.data[i]);
+        lua_rawseti(L, -2, int(i + 1));
+    }
+}
+
+inline const char* tableAccessToString(Luau::AstTableAccess access)
+{
+    switch (access)
+    {
+    case Luau::AstTableAccess::Read:
+        return "read";
+    case Luau::AstTableAccess::Write:
+        return "write";
+    case Luau::AstTableAccess::ReadWrite:
+        return "readwrite";
+    default:
+        return "unknown";
     }
 }
 
@@ -177,6 +288,17 @@ struct CallbackVisitor : public Luau::AstVisitor
         lua_pop(L, 1);
         return true;
     }
+
+    // By default visiting type annotations is disabled; we override this so visitor inspects these nodes
+    bool visit(Luau::AstType* node) override
+    {
+        return visit(static_cast<Luau::AstNode*>(node));
+    }
+
+    bool visit(Luau::AstTypePack* node) override
+    {
+        return visit(static_cast<Luau::AstNode*>(node));
+    }
 };
 
 struct FindKindVisitor : public Luau::AstVisitor
@@ -194,6 +316,17 @@ struct FindKindVisitor : public Luau::AstVisitor
         if (node && getNodeKind(node) == targetKind)
             matches.push_back(node);
         return true;
+    }
+
+    // By default visiting type annotations is disabled; we override this so visitor inspects these nodes
+    bool visit(Luau::AstType* node) override
+    {
+        return visit(static_cast<Luau::AstNode*>(node));
+    }
+
+    bool visit(Luau::AstTypePack* node) override
+    {
+        return visit(static_cast<Luau::AstNode*>(node));
     }
 };
 
@@ -250,5 +383,6 @@ void registerAstLocation(lua_State* L);
 void registerCstNode(lua_State* L);
 void registerAstPosition(lua_State* L);
 void registerAstComment(lua_State* L);
+void registerAstAux(lua_State* L);
 
 } // namespace Luau

@@ -48,6 +48,35 @@ enum AstNodeAtom : uint8_t
     Atom_Generics,
     Atom_GenericPacks,
     Atom_ReturnAnnotation,
+    Atom_Exported,
+    Atom_HasErrors,
+    Atom_SuperName,
+    Atom_Props,
+    Atom_Indexer,
+    Atom_Members,
+    Atom_Statements,
+    Atom_Expressions,
+    Atom_Strings,
+    Atom_MessageIndex,
+    Atom_TypeArguments,
+    Atom_Parameters,
+    Atom_HasParameterList,
+    Atom_ArgTypes,
+    Atom_ReturnTypes,
+    Atom_Attributes,
+    Atom_DebugName,
+    Atom_Upvalue,
+    Atom_HasDo,
+    Atom_HasIn,
+    Atom_HasEnd,
+    Atom_HasElse,
+    Atom_QuoteStyle,
+    Atom_IsMissing,
+    Atom_Types,
+    Atom_TailType,
+    Atom_VariadicType,
+    Atom_Params,
+    Atom_IsConst,
 };
 
 static AstNodeAtom getAstNodeAtom(std::string_view key)
@@ -93,6 +122,35 @@ static AstNodeAtom getAstNodeAtom(std::string_view key)
         {"generics", Atom_Generics},
         {"genericPacks", Atom_GenericPacks},
         {"returnAnnotation", Atom_ReturnAnnotation},
+        {"exported", Atom_Exported},
+        {"hasErrors", Atom_HasErrors},
+        {"superName", Atom_SuperName},
+        {"props", Atom_Props},
+        {"indexer", Atom_Indexer},
+        {"members", Atom_Members},
+        {"statements", Atom_Statements},
+        {"expressions", Atom_Expressions},
+        {"strings", Atom_Strings},
+        {"messageIndex", Atom_MessageIndex},
+        {"typeArguments", Atom_TypeArguments},
+        {"parameters", Atom_Parameters},
+        {"hasParameterList", Atom_HasParameterList},
+        {"argTypes", Atom_ArgTypes},
+        {"returnTypes", Atom_ReturnTypes},
+        {"attributes", Atom_Attributes},
+        {"debugname", Atom_DebugName},
+        {"upvalue", Atom_Upvalue},
+        {"hasDo", Atom_HasDo},
+        {"hasIn", Atom_HasIn},
+        {"hasEnd", Atom_HasEnd},
+        {"hasElse", Atom_HasElse},
+        {"quoteStyle", Atom_QuoteStyle},
+        {"isMissing", Atom_IsMissing},
+        {"types", Atom_Types},
+        {"tailType", Atom_TailType},
+        {"variadicType", Atom_VariadicType},
+        {"params", Atom_Params},
+        {"isConst", Atom_IsConst},
     };
 
     if (auto it = s_atomMap.find(key); it != s_atomMap.end())
@@ -178,15 +236,26 @@ struct DirectChildCollector : public Luau::AstVisitor
         children.push_back(node);
         return false;
     }
+
+    // By default visiting type annotations is disabled; we override this so visitor inspects these nodes
+    bool visit(Luau::AstType* node) override
+    {
+        return visit(static_cast<Luau::AstNode*>(node));
+    }
+
+    bool visit(Luau::AstTypePack* node) override
+    {
+        return visit(static_cast<Luau::AstNode*>(node));
+    }
 };
 
-// Node-specific property dispatch handlers using AstNodeAtom switch
 static bool handleStatBlock(lua_State* L, AstNodeData& handle, AstNodeAtom atom)
 {
     auto* n = static_cast<Luau::AstStatBlock*>(handle.node);
     switch (atom)
     {
-    case Atom_Body: { pushNodeArray(L, handle.doc, n->body); return true; }
+    case Atom_Body:   { pushNodeArray(L, handle.doc, n->body); return true; }
+    case Atom_HasEnd: { lua_pushboolean(L, n->hasEnd); return true; }
     default: return false;
     }
 }
@@ -210,6 +279,7 @@ static bool handleStatWhile(lua_State* L, AstNodeData& handle, AstNodeAtom atom)
     {
     case Atom_Condition: { pushAstNode(L, handle.doc, n->condition); return true; }
     case Atom_Body:      { pushAstNode(L, handle.doc, n->body); return true; }
+    case Atom_HasDo:     { lua_pushboolean(L, n->hasDo); return true; }
     default: return false;
     }
 }
@@ -250,8 +320,10 @@ static bool handleStatLocal(lua_State* L, AstNodeData& handle, AstNodeAtom atom)
     auto* n = static_cast<Luau::AstStatLocal*>(handle.node);
     switch (atom)
     {
-    case Atom_Vars:   { pushLocalArray(L, handle.doc, n->vars); return true; }
-    case Atom_Values: { pushNodeArray(L, handle.doc, n->values); return true; }
+    case Atom_Vars:     { pushLocalArray(L, handle.doc, n->vars); return true; }
+    case Atom_Values:   { pushNodeArray(L, handle.doc, n->values); return true; }
+    case Atom_IsConst:  { lua_pushboolean(L, n->isConst); return true; }
+    case Atom_Exported: { lua_pushboolean(L, n->isExported); return true; }
     default: return false;
     }
 }
@@ -261,11 +333,12 @@ static bool handleStatFor(lua_State* L, AstNodeData& handle, AstNodeAtom atom)
     auto* n = static_cast<Luau::AstStatFor*>(handle.node);
     switch (atom)
     {
-    case Atom_Var:  { pushAstLocal(L, handle.doc, n->var); return true; }
-    case Atom_From: { pushAstNode(L, handle.doc, n->from); return true; }
-    case Atom_To:   { pushAstNode(L, handle.doc, n->to); return true; }
-    case Atom_Step: { pushAstNode(L, handle.doc, n->step); return true; }
-    case Atom_Body: { pushAstNode(L, handle.doc, n->body); return true; }
+    case Atom_Var:   { pushAstLocal(L, handle.doc, n->var); return true; }
+    case Atom_From:  { pushAstNode(L, handle.doc, n->from); return true; }
+    case Atom_To:    { pushAstNode(L, handle.doc, n->to); return true; }
+    case Atom_Step:  { pushAstNode(L, handle.doc, n->step); return true; }
+    case Atom_Body:  { pushAstNode(L, handle.doc, n->body); return true; }
+    case Atom_HasDo: { lua_pushboolean(L, n->hasDo); return true; }
     default: return false;
     }
 }
@@ -278,6 +351,8 @@ static bool handleStatForIn(lua_State* L, AstNodeData& handle, AstNodeAtom atom)
     case Atom_Vars:   { pushLocalArray(L, handle.doc, n->vars); return true; }
     case Atom_Values: { pushNodeArray(L, handle.doc, n->values); return true; }
     case Atom_Body:   { pushAstNode(L, handle.doc, n->body); return true; }
+    case Atom_HasIn:  { lua_pushboolean(L, n->hasIn); return true; }
+    case Atom_HasDo:  { lua_pushboolean(L, n->hasDo); return true; }
     default: return false;
     }
 }
@@ -321,8 +396,9 @@ static bool handleStatLocalFunction(lua_State* L, AstNodeData& handle, AstNodeAt
     auto* n = static_cast<Luau::AstStatLocalFunction*>(handle.node);
     switch (atom)
     {
-    case Atom_Name: { pushAstLocal(L, handle.doc, n->name); return true; }
-    case Atom_Func: { pushAstNode(L, handle.doc, n->func); return true; }
+    case Atom_Name:    { pushAstLocal(L, handle.doc, n->name); return true; }
+    case Atom_Func:    { pushAstNode(L, handle.doc, n->func); return true; }
+    case Atom_IsConst: { lua_pushboolean(L, n->isConst); return true; }
     default: return false;
     }
 }
@@ -336,6 +412,124 @@ static bool handleStatTypeAlias(lua_State* L, AstNodeData& handle, AstNodeAtom a
     case Atom_Type:         { pushAstNode(L, handle.doc, n->type); return true; }
     case Atom_Generics:     { pushNodeArray(L, handle.doc, n->generics); return true; }
     case Atom_GenericPacks: { pushNodeArray(L, handle.doc, n->genericPacks); return true; }
+    case Atom_Exported:     { lua_pushboolean(L, n->exported); return true; }
+    default: return false;
+    }
+}
+
+static bool handleStatTypeFunction(lua_State* L, AstNodeData& handle, AstNodeAtom atom)
+{
+    auto* n = static_cast<Luau::AstStatTypeFunction*>(handle.node);
+    switch (atom)
+    {
+    case Atom_Name:      { lua_pushstring(L, n->name.value); return true; }
+    case Atom_Body:      { pushAstNode(L, handle.doc, n->body); return true; }
+    case Atom_Exported:  { lua_pushboolean(L, n->exported); return true; }
+    case Atom_HasErrors: { lua_pushboolean(L, n->hasErrors); return true; }
+    default: return false;
+    }
+}
+
+static bool handleStatDeclareGlobal(lua_State* L, AstNodeData& handle, AstNodeAtom atom)
+{
+    auto* n = static_cast<Luau::AstStatDeclareGlobal*>(handle.node);
+    switch (atom)
+    {
+    case Atom_Name: { lua_pushstring(L, n->name.value); return true; }
+    case Atom_Type: { pushAstNode(L, handle.doc, n->type); return true; }
+    default: return false;
+    }
+}
+
+static bool handleStatDeclareFunction(lua_State* L, AstNodeData& handle, AstNodeAtom atom)
+{
+    auto* n = static_cast<Luau::AstStatDeclareFunction*>(handle.node);
+    switch (atom)
+    {
+    case Atom_Name:         { lua_pushstring(L, n->name.value); return true; }
+    case Atom_Generics:     { pushNodeArray(L, handle.doc, n->generics); return true; }
+    case Atom_GenericPacks: { pushNodeArray(L, handle.doc, n->genericPacks); return true; }
+    case Atom_Params:       { pushNodeArray(L, handle.doc, n->params.types); return true; }
+    case Atom_Vararg:       { lua_pushboolean(L, n->vararg); return true; }
+    case Atom_ReturnTypes:  { pushAstNode(L, handle.doc, n->retTypes); return true; }
+    case Atom_Attributes:   { pushNodeArray(L, handle.doc, n->attributes); return true; }
+    default: return false;
+    }
+}
+
+static bool handleStatDeclareExternType(lua_State* L, AstNodeData& handle, AstNodeAtom atom)
+{
+    auto* n = static_cast<Luau::AstStatDeclareExternType*>(handle.node);
+    switch (atom)
+    {
+    case Atom_Name:      { lua_pushstring(L, n->name.value); return true; }
+    case Atom_SuperName:
+    {
+        if (n->superName)
+            lua_pushstring(L, n->superName->value);
+        else
+            lua_pushnil(L);
+        return true;
+    }
+    case Atom_Props:
+    {
+        lua_createtable(L, int(n->props.size), 0);
+        for (size_t i = 0; i < n->props.size; i++)
+        {
+            pushAstAux(L, handle.doc, n->props.data[i]);
+            lua_rawseti(L, -2, int(i + 1));
+        }
+        return true;
+    }
+    case Atom_Indexer:
+    {
+        if (n->indexer)
+            pushAstAux(L, handle.doc, *n->indexer);
+        else
+            lua_pushnil(L);
+        return true;
+    }
+    case Atom_Generics:     { pushNodeArray(L, handle.doc, n->generics); return true; }
+    case Atom_GenericPacks: { pushNodeArray(L, handle.doc, n->genericPacks); return true; }
+    default: return false;
+    }
+}
+
+static bool handleStatClass(lua_State* L, AstNodeData& handle, AstNodeAtom atom)
+{
+    auto* n = static_cast<Luau::AstStatClass*>(handle.node);
+    switch (atom)
+    {
+    case Atom_Name:     { pushAstLocal(L, handle.doc, n->name); return true; }
+    case Atom_Exported: { lua_pushboolean(L, n->exported); return true; }
+    case Atom_Members:
+    {
+        lua_createtable(L, int(n->members.size), 0);
+        for (size_t i = 0; i < n->members.size; i++)
+        {
+            const auto& member = n->members.data[i];
+            if (const auto* p = Luau::get_if<Luau::AstClassProperty>(&member))
+                pushAstAux(L, handle.doc, *p);
+            else if (const auto* m = Luau::get_if<Luau::AstClassMethod>(&member))
+                pushAstAux(L, handle.doc, *m);
+            else
+                lua_pushnil(L);
+            lua_rawseti(L, -2, int(i + 1));
+        }
+        return true;
+    }
+    default: return false;
+    }
+}
+
+static bool handleStatError(lua_State* L, AstNodeData& handle, AstNodeAtom atom)
+{
+    auto* n = static_cast<Luau::AstStatError*>(handle.node);
+    switch (atom)
+    {
+    case Atom_Expressions:  { pushNodeArray(L, handle.doc, n->expressions); return true; }
+    case Atom_Statements:   { pushNodeArray(L, handle.doc, n->statements); return true; }
+    case Atom_MessageIndex: { lua_pushinteger(L, n->messageIndex); return true; }
     default: return false;
     }
 }
@@ -345,9 +539,10 @@ static bool handleExprCall(lua_State* L, AstNodeData& handle, AstNodeAtom atom)
     auto* n = static_cast<Luau::AstExprCall*>(handle.node);
     switch (atom)
     {
-    case Atom_Func: { pushAstNode(L, handle.doc, n->func); return true; }
-    case Atom_Args: { pushNodeArray(L, handle.doc, n->args); return true; }
-    case Atom_Self: { lua_pushboolean(L, n->self); return true; }
+    case Atom_Func:          { pushAstNode(L, handle.doc, n->func); return true; }
+    case Atom_Args:          { pushNodeArray(L, handle.doc, n->args); return true; }
+    case Atom_Self:          { lua_pushboolean(L, n->self); return true; }
+    case Atom_TypeArguments: { pushTypeOrPackArray(L, handle.doc, n->typeArguments); return true; }
     default: return false;
     }
 }
@@ -359,6 +554,7 @@ static bool handleExprIndexName(lua_State* L, AstNodeData& handle, AstNodeAtom a
     {
     case Atom_Expr:  { pushAstNode(L, handle.doc, n->expr); return true; }
     case Atom_Index: { lua_pushstring(L, n->index.value); return true; }
+    case Atom_Op:    { char s[2] = {n->op, '\0'}; lua_pushstring(L, s); return true; }
     default: return false;
     }
 }
@@ -385,6 +581,8 @@ static bool handleExprFunction(lua_State* L, AstNodeData& handle, AstNodeAtom at
     case Atom_Generics:         { pushNodeArray(L, handle.doc, n->generics); return true; }
     case Atom_GenericPacks:     { pushNodeArray(L, handle.doc, n->genericPacks); return true; }
     case Atom_ReturnAnnotation: { pushAstNode(L, handle.doc, n->returnAnnotation); return true; }
+    case Atom_DebugName:        { lua_pushstring(L, n->debugname.value); return true; }
+    case Atom_Attributes:       { pushNodeArray(L, handle.doc, n->attributes); return true; }
     default: return false;
     }
 }
@@ -485,6 +683,18 @@ static bool handleExprConstantString(lua_State* L, AstNodeData& handle, AstNodeA
     switch (atom)
     {
     case Atom_Value: { lua_pushlstring(L, n->value.data, n->value.size); return true; }
+    case Atom_QuoteStyle:
+    {
+        switch (n->quoteStyle)
+        {
+        case Luau::AstExprConstantString::QuoteStyle::QuotedSingle: lua_pushstring(L, "single"); break;
+        case Luau::AstExprConstantString::QuoteStyle::QuotedSimple: lua_pushstring(L, "double"); break;
+        case Luau::AstExprConstantString::QuoteStyle::QuotedRaw:    lua_pushstring(L, "raw"); break;
+        case Luau::AstExprConstantString::QuoteStyle::Unquoted:     lua_pushstring(L, "unquoted"); break;
+        default: lua_pushstring(L, "simple"); break;
+        }
+        return true;
+    }
     default: return false;
     }
 }
@@ -494,7 +704,8 @@ static bool handleExprLocal(lua_State* L, AstNodeData& handle, AstNodeAtom atom)
     auto* n = static_cast<Luau::AstExprLocal*>(handle.node);
     switch (atom)
     {
-    case Atom_Local: { pushAstLocal(L, handle.doc, n->local); return true; }
+    case Atom_Local:   { pushAstLocal(L, handle.doc, n->local); return true; }
+    case Atom_Upvalue: { lua_pushboolean(L, n->upvalue); return true; }
     default: return false;
     }
 }
@@ -538,10 +749,54 @@ static bool handleExprIfElse(lua_State* L, AstNodeData& handle, AstNodeAtom atom
     case Atom_Condition: { pushAstNode(L, handle.doc, n->condition); return true; }
     case Atom_TrueExpr:  { pushAstNode(L, handle.doc, n->trueExpr); return true; }
     case Atom_FalseExpr: { pushAstNode(L, handle.doc, n->falseExpr); return true; }
+    case Atom_HasElse:   { lua_pushboolean(L, n->hasElse); return true; }
     default: return false;
     }
 }
 
+static bool handleExprInterpString(lua_State* L, AstNodeData& handle, AstNodeAtom atom)
+{
+    auto* n = static_cast<Luau::AstExprInterpString*>(handle.node);
+    switch (atom)
+    {
+    case Atom_Strings:
+    {
+        lua_createtable(L, int(n->strings.size), 0);
+        for (size_t i = 0; i < n->strings.size; i++)
+        {
+            lua_pushlstring(L, n->strings.data[i].data, n->strings.data[i].size);
+            lua_rawseti(L, -2, int(i + 1));
+        }
+        return true;
+    }
+    case Atom_Expressions: { pushNodeArray(L, handle.doc, n->expressions); return true; }
+    default: return false;
+    }
+}
+
+static bool handleExprInstantiate(lua_State* L, AstNodeData& handle, AstNodeAtom atom)
+{
+    auto* n = static_cast<Luau::AstExprInstantiate*>(handle.node);
+    switch (atom)
+    {
+    case Atom_Expr:          { pushAstNode(L, handle.doc, n->expr); return true; }
+    case Atom_TypeArguments: { pushTypeOrPackArray(L, handle.doc, n->typeArguments); return true; }
+    default: return false;
+    }
+}
+
+static bool handleExprError(lua_State* L, AstNodeData& handle, AstNodeAtom atom)
+{
+    auto* n = static_cast<Luau::AstExprError*>(handle.node);
+    switch (atom)
+    {
+    case Atom_Expressions:  { pushNodeArray(L, handle.doc, n->expressions); return true; }
+    case Atom_MessageIndex: { lua_pushinteger(L, n->messageIndex); return true; }
+    default: return false;
+    }
+}
+
+// Types Handlers
 static bool handleTypeReference(lua_State* L, AstNodeData& handle, AstNodeAtom atom)
 {
     auto* n = static_cast<Luau::AstTypeReference*>(handle.node);
@@ -556,10 +811,158 @@ static bool handleTypeReference(lua_State* L, AstNodeData& handle, AstNodeAtom a
             lua_pushnil(L);
         return true;
     }
+    case Atom_HasParameterList: { lua_pushboolean(L, n->hasParameterList); return true; }
+    case Atom_Parameters:       { pushTypeOrPackArray(L, handle.doc, n->parameters); return true; }
     default: return false;
     }
 }
 
+static bool handleTypeTable(lua_State* L, AstNodeData& handle, AstNodeAtom atom)
+{
+    auto* n = static_cast<Luau::AstTypeTable*>(handle.node);
+    switch (atom)
+    {
+    case Atom_Props:
+    {
+        lua_createtable(L, int(n->props.size), 0);
+        for (size_t i = 0; i < n->props.size; i++)
+        {
+            pushAstAux(L, handle.doc, n->props.data[i]);
+            lua_rawseti(L, -2, int(i + 1));
+        }
+        return true;
+    }
+    case Atom_Indexer:
+    {
+        if (n->indexer)
+            pushAstAux(L, handle.doc, *n->indexer);
+        else
+            lua_pushnil(L);
+        return true;
+    }
+    default: return false;
+    }
+}
+
+static bool handleTypeFunction(lua_State* L, AstNodeData& handle, AstNodeAtom atom)
+{
+    auto* n = static_cast<Luau::AstTypeFunction*>(handle.node);
+    switch (atom)
+    {
+    case Atom_Generics:     { pushNodeArray(L, handle.doc, n->generics); return true; }
+    case Atom_GenericPacks: { pushNodeArray(L, handle.doc, n->genericPacks); return true; }
+    case Atom_ArgTypes:     { pushNodeArray(L, handle.doc, n->argTypes.types); return true; }
+    case Atom_ReturnTypes:  { pushAstNode(L, handle.doc, n->returnTypes); return true; }
+    case Atom_Attributes:   { pushNodeArray(L, handle.doc, n->attributes); return true; }
+    default: return false;
+    }
+}
+
+static bool handleTypeTypeof(lua_State* L, AstNodeData& handle, AstNodeAtom atom)
+{
+    auto* n = static_cast<Luau::AstTypeTypeof*>(handle.node);
+    switch (atom)
+    {
+    case Atom_Expr: { pushAstNode(L, handle.doc, n->expr); return true; }
+    default: return false;
+    }
+}
+
+static bool handleTypeUnion(lua_State* L, AstNodeData& handle, AstNodeAtom atom)
+{
+    auto* n = static_cast<Luau::AstTypeUnion*>(handle.node);
+    switch (atom)
+    {
+    case Atom_Types: { pushNodeArray(L, handle.doc, n->types); return true; }
+    default: return false;
+    }
+}
+
+static bool handleTypeIntersection(lua_State* L, AstNodeData& handle, AstNodeAtom atom)
+{
+    auto* n = static_cast<Luau::AstTypeIntersection*>(handle.node);
+    switch (atom)
+    {
+    case Atom_Types: { pushNodeArray(L, handle.doc, n->types); return true; }
+    default: return false;
+    }
+}
+
+static bool handleTypeSingletonBool(lua_State* L, AstNodeData& handle, AstNodeAtom atom)
+{
+    auto* n = static_cast<Luau::AstTypeSingletonBool*>(handle.node);
+    switch (atom)
+    {
+    case Atom_Value: { lua_pushboolean(L, n->value); return true; }
+    default: return false;
+    }
+}
+
+static bool handleTypeSingletonString(lua_State* L, AstNodeData& handle, AstNodeAtom atom)
+{
+    auto* n = static_cast<Luau::AstTypeSingletonString*>(handle.node);
+    switch (atom)
+    {
+    case Atom_Value: { lua_pushlstring(L, n->value.data, n->value.size); return true; }
+    default: return false;
+    }
+}
+
+static bool handleTypeGroup(lua_State* L, AstNodeData& handle, AstNodeAtom atom)
+{
+    auto* n = static_cast<Luau::AstTypeGroup*>(handle.node);
+    switch (atom)
+    {
+    case Atom_Type: { pushAstNode(L, handle.doc, n->type); return true; }
+    default: return false;
+    }
+}
+
+static bool handleTypeError(lua_State* L, AstNodeData& handle, AstNodeAtom atom)
+{
+    auto* n = static_cast<Luau::AstTypeError*>(handle.node);
+    switch (atom)
+    {
+    case Atom_Types:        { pushNodeArray(L, handle.doc, n->types); return true; }
+    case Atom_IsMissing:    { lua_pushboolean(L, n->isMissing); return true; }
+    case Atom_MessageIndex: { lua_pushinteger(L, n->messageIndex); return true; }
+    default: return false;
+    }
+}
+
+// Type Packs Handlers
+static bool handleTypePackExplicit(lua_State* L, AstNodeData& handle, AstNodeAtom atom)
+{
+    auto* n = static_cast<Luau::AstTypePackExplicit*>(handle.node);
+    switch (atom)
+    {
+    case Atom_Types:    { pushNodeArray(L, handle.doc, n->typeList.types); return true; }
+    case Atom_TailType: { pushAstNode(L, handle.doc, n->typeList.tailType); return true; }
+    default: return false;
+    }
+}
+
+static bool handleTypePackVariadic(lua_State* L, AstNodeData& handle, AstNodeAtom atom)
+{
+    auto* n = static_cast<Luau::AstTypePackVariadic*>(handle.node);
+    switch (atom)
+    {
+    case Atom_VariadicType: { pushAstNode(L, handle.doc, n->variadicType); return true; }
+    default: return false;
+    }
+}
+
+static bool handleTypePackGeneric(lua_State* L, AstNodeData& handle, AstNodeAtom atom)
+{
+    auto* n = static_cast<Luau::AstTypePackGeneric*>(handle.node);
+    switch (atom)
+    {
+    case Atom_Name: { lua_pushstring(L, n->genericName.value); return true; }
+    default: return false;
+    }
+}
+
+// Generics & Attributes Handlers
 static bool handleGenericType(lua_State* L, AstNodeData& handle, AstNodeAtom atom)
 {
     auto* n = static_cast<Luau::AstGenericType*>(handle.node);
@@ -578,6 +981,29 @@ static bool handleGenericTypePack(lua_State* L, AstNodeData& handle, AstNodeAtom
     {
     case Atom_Name: { lua_pushstring(L, n->name.value); return true; }
     case Atom_Type: { pushAstNode(L, handle.doc, n->defaultValue); return true; }
+    default: return false;
+    }
+}
+
+static bool handleAttr(lua_State* L, AstNodeData& handle, AstNodeAtom atom)
+{
+    auto* n = static_cast<Luau::AstAttr*>(handle.node);
+    switch (atom)
+    {
+    case Atom_Type:
+    {
+        switch (n->type)
+        {
+        case Luau::AstAttr::Type::Checked:       lua_pushstring(L, "checked"); break;
+        case Luau::AstAttr::Type::Native:        lua_pushstring(L, "native"); break;
+        case Luau::AstAttr::Type::Deprecated:    lua_pushstring(L, "deprecated"); break;
+        case Luau::AstAttr::Type::DebugNoinline: lua_pushstring(L, "debugNoinline"); break;
+        default: lua_pushstring(L, "unknown"); break;
+        }
+        return true;
+    }
+    case Atom_Name: { lua_pushstring(L, n->name.value); return true; }
+    case Atom_Args: { pushNodeArray(L, handle.doc, n->args); return true; }
     default: return false;
     }
 }
@@ -610,12 +1036,12 @@ static void initializeDispatchTables()
     registerNodeClass<Luau::AstStatFunction>("AstStatFunction", Category_Stat, handleStatFunction);
     registerNodeClass<Luau::AstStatLocalFunction>("AstStatLocalFunction", Category_Stat, handleStatLocalFunction);
     registerNodeClass<Luau::AstStatTypeAlias>("AstStatTypeAlias", Category_Stat, handleStatTypeAlias);
-    registerNodeClass<Luau::AstStatTypeFunction>("AstStatTypeFunction", Category_Stat);
-    registerNodeClass<Luau::AstStatDeclareGlobal>("AstStatDeclareGlobal", Category_Stat);
-    registerNodeClass<Luau::AstStatDeclareFunction>("AstStatDeclareFunction", Category_Stat);
-    registerNodeClass<Luau::AstStatClass>("AstStatClass", Category_Stat);
-    registerNodeClass<Luau::AstStatDeclareExternType>("AstStatDeclareExternType", Category_Stat);
-    registerNodeClass<Luau::AstStatError>("AstStatError", Category_Stat);
+    registerNodeClass<Luau::AstStatTypeFunction>("AstStatTypeFunction", Category_Stat, handleStatTypeFunction);
+    registerNodeClass<Luau::AstStatDeclareGlobal>("AstStatDeclareGlobal", Category_Stat, handleStatDeclareGlobal);
+    registerNodeClass<Luau::AstStatDeclareFunction>("AstStatDeclareFunction", Category_Stat, handleStatDeclareFunction);
+    registerNodeClass<Luau::AstStatClass>("AstStatClass", Category_Stat, handleStatClass);
+    registerNodeClass<Luau::AstStatDeclareExternType>("AstStatDeclareExternType", Category_Stat, handleStatDeclareExternType);
+    registerNodeClass<Luau::AstStatError>("AstStatError", Category_Stat, handleStatError);
 
     // Expressions
     registerNodeClass<Luau::AstExprGroup>("AstExprGroup", Category_Expr, handleExprGroup);
@@ -636,32 +1062,32 @@ static void initializeDispatchTables()
     registerNodeClass<Luau::AstExprBinary>("AstExprBinary", Category_Expr, handleExprBinary);
     registerNodeClass<Luau::AstExprTypeAssertion>("AstExprTypeAssertion", Category_Expr, handleExprTypeAssertion);
     registerNodeClass<Luau::AstExprIfElse>("AstExprIfElse", Category_Expr, handleExprIfElse);
-    registerNodeClass<Luau::AstExprInterpString>("AstExprInterpString", Category_Expr);
-    registerNodeClass<Luau::AstExprInstantiate>("AstExprInstantiate", Category_Expr);
-    registerNodeClass<Luau::AstExprError>("AstExprError", Category_Expr);
+    registerNodeClass<Luau::AstExprInterpString>("AstExprInterpString", Category_Expr, handleExprInterpString);
+    registerNodeClass<Luau::AstExprInstantiate>("AstExprInstantiate", Category_Expr, handleExprInstantiate);
+    registerNodeClass<Luau::AstExprError>("AstExprError", Category_Expr, handleExprError);
 
     // Types
     registerNodeClass<Luau::AstTypeReference>("AstTypeReference", Category_Type, handleTypeReference);
-    registerNodeClass<Luau::AstTypeTable>("AstTypeTable", Category_Type);
-    registerNodeClass<Luau::AstTypeFunction>("AstTypeFunction", Category_Type);
-    registerNodeClass<Luau::AstTypeTypeof>("AstTypeTypeof", Category_Type);
+    registerNodeClass<Luau::AstTypeTable>("AstTypeTable", Category_Type, handleTypeTable);
+    registerNodeClass<Luau::AstTypeFunction>("AstTypeFunction", Category_Type, handleTypeFunction);
+    registerNodeClass<Luau::AstTypeTypeof>("AstTypeTypeof", Category_Type, handleTypeTypeof);
     registerNodeClass<Luau::AstTypeOptional>("AstTypeOptional", Category_Type);
-    registerNodeClass<Luau::AstTypeUnion>("AstTypeUnion", Category_Type);
-    registerNodeClass<Luau::AstTypeIntersection>("AstTypeIntersection", Category_Type);
-    registerNodeClass<Luau::AstTypeSingletonBool>("AstTypeSingletonBool", Category_Type);
-    registerNodeClass<Luau::AstTypeSingletonString>("AstTypeSingletonString", Category_Type);
-    registerNodeClass<Luau::AstTypeGroup>("AstTypeGroup", Category_Type);
-    registerNodeClass<Luau::AstTypeError>("AstTypeError", Category_Type);
+    registerNodeClass<Luau::AstTypeUnion>("AstTypeUnion", Category_Type, handleTypeUnion);
+    registerNodeClass<Luau::AstTypeIntersection>("AstTypeIntersection", Category_Type, handleTypeIntersection);
+    registerNodeClass<Luau::AstTypeSingletonBool>("AstTypeSingletonBool", Category_Type, handleTypeSingletonBool);
+    registerNodeClass<Luau::AstTypeSingletonString>("AstTypeSingletonString", Category_Type, handleTypeSingletonString);
+    registerNodeClass<Luau::AstTypeGroup>("AstTypeGroup", Category_Type, handleTypeGroup);
+    registerNodeClass<Luau::AstTypeError>("AstTypeError", Category_Type, handleTypeError);
 
     // Type Packs
-    registerNodeClass<Luau::AstTypePackExplicit>("AstTypePackExplicit", Category_TypePack);
-    registerNodeClass<Luau::AstTypePackVariadic>("AstTypePackVariadic", Category_TypePack);
-    registerNodeClass<Luau::AstTypePackGeneric>("AstTypePackGeneric", Category_TypePack);
+    registerNodeClass<Luau::AstTypePackExplicit>("AstTypePackExplicit", Category_TypePack, handleTypePackExplicit);
+    registerNodeClass<Luau::AstTypePackVariadic>("AstTypePackVariadic", Category_TypePack, handleTypePackVariadic);
+    registerNodeClass<Luau::AstTypePackGeneric>("AstTypePackGeneric", Category_TypePack, handleTypePackGeneric);
 
     // Generics & Attributes
     registerNodeClass<Luau::AstGenericType>("AstGenericType", Category_Generic, handleGenericType);
     registerNodeClass<Luau::AstGenericTypePack>("AstGenericTypePack", Category_Generic, handleGenericTypePack);
-    registerNodeClass<Luau::AstAttr>("AstAttr", Category_Attr);
+    registerNodeClass<Luau::AstAttr>("AstAttr", Category_Attr, handleAttr);
 }
 
 static int astNodeChildren(lua_State* L)
