@@ -553,4 +553,92 @@ TEST_CASE("ParseReflectTypesFile")
     CHECK_EQ(dostring(L, script), 0);
 }
 
+TEST_CASE("ReflectUseAtoms")
+{
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
+    ScopedFastFlag sff3{FFlag::OptLuwuReflectUseAtoms, true};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    Luau::luaopen_reflect(L);
+    lua_setglobal(L, "reflect");
+
+    const char* script = R"LUA(
+        local src = "-- hello\nlocal x: number = 42\nprint(x)\n"
+        local doc = reflect.parse(src)
+        assert(doc.root ~= nil)
+        assert(doc.source == src)
+
+        -- Test non-string and invalid key indexing returns nil
+        assert(doc[123] == nil)
+        assert(doc[true] == nil)
+        assert(doc["nonexistentProp"] == nil)
+        assert(doc.root[123] == nil)
+        assert(doc.root[false] == nil)
+        assert(doc.root["nonexistentProp"] == nil)
+
+        -- Test comments & lineOffsets
+        assert(#doc.comments == 1)
+        local c = doc.comments[1]
+        assert(c.type == "single")
+        assert(c.text == "-- hello")
+        assert(c.location.beginLine == 1)
+        assert(c[123] == nil)
+
+        -- Test root & statements
+        local root = doc.root
+        assert(root.kind == "AstStatBlock")
+        assert(root.category == "stat")
+        local stats = root:body()
+        assert(#stats == 2)
+
+        local stat1 = stats[1]
+        assert(stat1.kind == "AstStatLocal")
+        local vars = stat1:vars()
+        assert(#vars == 1)
+        local var = vars[1]
+        assert(var.name == "x")
+        assert(var.isConst == false)
+        assert(var[99] == nil)
+
+        local vals = stat1:values()
+        assert(#vals == 1)
+        local val = vals[1]
+        assert(val.kind == "AstExprConstantNumber")
+        assert(val.value == 42)
+
+        -- Test walk & find methods via namecall
+        local foundCount = 0
+        doc:walk(function(node)
+            foundCount = foundCount + 1
+        end)
+        assert(foundCount > 0)
+
+        local found = doc:find("AstStatLocal")
+        assert(#found == 1)
+
+        -- Test CST access via atoms
+        local cst = stat1:cst()
+        assert(cst.kind == "CstStatLocal")
+        assert(cst[123] == nil)
+        local colons = cst:varsAnnotationColonPositions()
+        assert(#colons == 1)
+        assert(colons[1].line == 2)
+        assert(colons[1].column == 8)
+        assert(colons[1][123] == nil)
+
+        -- Test location atoms
+        local loc = stat1:location()
+        assert(loc.beginLine == 2)
+        assert(loc.beginColumn == 1)
+        assert(loc.endLine == 2)
+        assert(loc[123] == nil)
+    )LUA";
+
+    CHECK_EQ(dostring(L, script), 0);
+}
+
 TEST_SUITE_END();

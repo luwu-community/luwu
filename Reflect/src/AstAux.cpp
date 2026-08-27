@@ -4,40 +4,6 @@
 namespace Luau
 {
 
-enum AstAuxAtom : uint8_t
-{
-    Atom_Unknown = 0,
-    Atom_Kind,
-    Atom_Name,
-    Atom_Location,
-    Atom_Type,
-    Atom_Access,
-    Atom_IndexType,
-    Atom_ResultType,
-    Atom_IsMethod,
-    Atom_Func,
-};
-
-static AstAuxAtom getAstAuxAtom(std::string_view key)
-{
-    static const std::unordered_map<std::string_view, AstAuxAtom> s_atomMap = {
-        {"kind", Atom_Kind},
-        {"name", Atom_Name},
-        {"location", Atom_Location},
-        {"type", Atom_Type},
-        {"access", Atom_Access},
-        {"indexType", Atom_IndexType},
-        {"resultType", Atom_ResultType},
-        {"isMethod", Atom_IsMethod},
-        {"func", Atom_Func},
-    };
-
-    if (auto it = s_atomMap.find(key); it != s_atomMap.end())
-        return it->second;
-
-    return Atom_Unknown;
-}
-
 void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstTableProp& prop)
 {
     AstAuxData* data = static_cast<AstAuxData*>(lua_newuserdatataggedwithmetatable(L, sizeof(AstAuxData), TagAux));
@@ -83,9 +49,15 @@ static void astAuxDtor(lua_State* L, void* userdata)
 static int astAuxIndex(lua_State* L)
 {
     auto& handle = checkAstAux(L, 1);
+    int atomId = -1;
     size_t keyLen = 0;
-    const char* keyStr = luaL_checklstring(L, 2, &keyLen);
-    AstAuxAtom atom = getAstAuxAtom(std::string_view(keyStr, keyLen));
+    const char* keyStr = lua_tolstringatom(L, 2, &keyLen, FFlag::OptLuwuReflectUseAtoms ? &atomId : nullptr);
+    if (!keyStr)
+    {
+        lua_pushnil(L);
+        return 1;
+    }
+    ReflectAtom atom = resolveReflectAtom(atomId, keyStr, keyLen);
     const auto& doc = handle.doc;
 
     switch (handle.kind)
@@ -95,19 +67,19 @@ static int astAuxIndex(lua_State* L)
         const auto& prop = handle.tableProp;
         switch (atom)
         {
-        case Atom_Kind:
+        case ReflectAtom::Kind:
             lua_pushstring(L, "AstTableProp");
             return 1;
-        case Atom_Name:
+        case ReflectAtom::Name:
             lua_pushstring(L, prop.name.value);
             return 1;
-        case Atom_Location:
+        case ReflectAtom::Location:
             pushLocation(L, doc, prop.location);
             return 1;
-        case Atom_Type:
+        case ReflectAtom::Type:
             pushAstNode(L, doc, prop.type);
             return 1;
-        case Atom_Access:
+        case ReflectAtom::Access:
             lua_pushstring(L, tableAccessToString(prop.access));
             return 1;
         default:
@@ -120,19 +92,19 @@ static int astAuxIndex(lua_State* L)
         const auto& indexer = handle.tableIndexer;
         switch (atom)
         {
-        case Atom_Kind:
+        case ReflectAtom::Kind:
             lua_pushstring(L, "AstTableIndexer");
             return 1;
-        case Atom_IndexType:
+        case ReflectAtom::IndexType:
             pushAstNode(L, doc, indexer.indexType);
             return 1;
-        case Atom_ResultType:
+        case ReflectAtom::ResultType:
             pushAstNode(L, doc, indexer.resultType);
             return 1;
-        case Atom_Location:
+        case ReflectAtom::Location:
             pushLocation(L, doc, indexer.location);
             return 1;
-        case Atom_Access:
+        case ReflectAtom::Access:
             lua_pushstring(L, tableAccessToString(indexer.access));
             return 1;
         default:
@@ -145,22 +117,22 @@ static int astAuxIndex(lua_State* L)
         const auto& prop = handle.declaredExternProp;
         switch (atom)
         {
-        case Atom_Kind:
+        case ReflectAtom::Kind:
             lua_pushstring(L, "AstDeclaredExternTypeProperty");
             return 1;
-        case Atom_Name:
+        case ReflectAtom::Name:
             lua_pushstring(L, prop.name.value);
             return 1;
-        case Atom_Location:
+        case ReflectAtom::Location:
             pushLocation(L, doc, prop.location);
             return 1;
-        case Atom_Type:
+        case ReflectAtom::Type:
             pushAstNode(L, doc, prop.ty);
             return 1;
-        case Atom_IsMethod:
+        case ReflectAtom::IsMethod:
             lua_pushboolean(L, prop.isMethod);
             return 1;
-        case Atom_Access:
+        case ReflectAtom::Access:
             lua_pushstring(L, tableAccessToString(prop.access));
             return 1;
         default:
@@ -173,13 +145,13 @@ static int astAuxIndex(lua_State* L)
         const auto& prop = handle.classProp;
         switch (atom)
         {
-        case Atom_Kind:
+        case ReflectAtom::Kind:
             lua_pushstring(L, "AstClassProperty");
             return 1;
-        case Atom_Name:
+        case ReflectAtom::Name:
             lua_pushstring(L, prop.name.value);
             return 1;
-        case Atom_Type:
+        case ReflectAtom::Type:
             pushAstNode(L, doc, prop.ty);
             return 1;
         default:
@@ -192,13 +164,13 @@ static int astAuxIndex(lua_State* L)
         const auto& method = handle.classMethod;
         switch (atom)
         {
-        case Atom_Kind:
+        case ReflectAtom::Kind:
             lua_pushstring(L, "AstClassMethod");
             return 1;
-        case Atom_Name:
+        case ReflectAtom::Name:
             lua_pushstring(L, method.functionName.value);
             return 1;
-        case Atom_Func:
+        case ReflectAtom::Func:
             pushAstNode(L, doc, method.function);
             return 1;
         default:

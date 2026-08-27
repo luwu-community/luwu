@@ -3,6 +3,7 @@
 #include "lgc.h"
 #include "lobject.h"
 #include "lstate.h"
+#include "lstring.h"
 #include "Luau/Common.h"
 
 #include <stdexcept>
@@ -92,11 +93,16 @@ int lua_findunusedlightuserdatatag(lua_State *L)
     return -1;
 }
 
-LUA_API const char* lua_namecallwithlen(lua_State* L, int* len)
+LUA_API const char* lua_namecallwithlen(lua_State* L, int* atom, size_t* len)
 {
     TString* s = L->namecall;
     if (!s)
         return NULL;
+    if (atom)
+    {
+        luaS_updateatom(L, s);
+        *atom = s->atom;
+    }
     if (len)
         *len = s->len;
     return getstr(s);

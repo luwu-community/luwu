@@ -2,6 +2,8 @@
 #include "Luau/Reflect.h"
 #include "Luau/ReflectCommon.h"
 
+LUAU_FASTFLAGVARIABLE(OptLuwuReflectUseAtoms)
+
 namespace Luau
 {
 
@@ -49,6 +51,17 @@ static int reflectParseExpr(lua_State* L)
 
 int luaopen_reflect(lua_State* L)
 {
+    if (FFlag::OptLuwuReflectUseAtoms)
+    {
+        lua_Callbacks* cb = lua_callbacks(L);
+        if (!cb->useratom)
+        {
+            cb->useratom = [](lua_State* L, const char* s, size_t l) -> int16_t {
+                return int16_t(resolveGlobalReflectAtom(std::string_view(s, l)));
+            };
+        }
+    }
+
     registerAstDocument(L);
     registerAstNode(L);
     registerAstLocal(L);

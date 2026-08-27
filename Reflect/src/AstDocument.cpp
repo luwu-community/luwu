@@ -4,39 +4,6 @@
 namespace Luau
 {
 
-// Because the embedder may have themselves set useratom, we cannot use Luau's builtin atom system here, instead define the atoms separately using a hashmap + enum
-enum AstDocumentAtom : uint8_t
-{
-    Atom_Unknown = 0,
-    Atom_Root,
-    Atom_Source,
-    Atom_Walk,
-    Atom_Find,
-    Atom_Errors,
-    Atom_Comments,
-    Atom_LineOffsets,
-};
-
-static AstDocumentAtom getAstDocumentAtom(std::string_view key)
-{
-    static const DenseHashMap2<std::string_view, AstDocumentAtom> s_atomMap = []() {
-        DenseHashMap2<std::string_view, AstDocumentAtom> map;
-        map["root"] = Atom_Root;
-        map["source"] = Atom_Source;
-        map["walk"] = Atom_Walk;
-        map["find"] = Atom_Find;
-        map["errors"] = Atom_Errors;
-        map["comments"] = Atom_Comments;
-        map["lineOffsets"] = Atom_LineOffsets;
-        return map;
-    }();
-
-    if (const AstDocumentAtom* atom = s_atomMap.find(key))
-        return *atom;
-
-    return Atom_Unknown;
-}
-
 void pushAstDocument(lua_State* L, std::shared_ptr<AstDocumentState> doc)
 {
     AstDocumentData* data = static_cast<AstDocumentData*>(lua_newuserdatataggedwithmetatable(L, sizeof(AstDocumentData), TagDocument));
@@ -98,31 +65,37 @@ static int astDocIndex(lua_State* L)
 {
     auto& handle = checkAstDocument(L, 1);
     auto& doc = handle.doc;
+    int atomId = -1;
     size_t keyLen = 0;
-    const char* keyStr = luaL_checklstring(L, 2, &keyLen);
-    AstDocumentAtom atom = getAstDocumentAtom(std::string_view(keyStr, keyLen));
+    const char* keyStr = lua_tolstringatom(L, 2, &keyLen, FFlag::OptLuwuReflectUseAtoms ? &atomId : nullptr);
+    if (!keyStr)
+    {
+        lua_pushnil(L);
+        return 1;
+    }
+    ReflectAtom atom = resolveReflectAtom(atomId, keyStr, keyLen);
 
     switch (atom)
     {
-    case Atom_Root:
+    case ReflectAtom::Root:
     {
         pushAstNode(L, doc, doc->parseResult.root);
         return 1;
     }
-    case Atom_Source:
+    case ReflectAtom::Source:
     {
         lua_pushlstring(L, doc->source.data(), doc->source.size());
         return 1;
     }
-    case Atom_Walk:
+    case ReflectAtom::Walk:
     {
         return pushUserdataMethod(L, TagDocument, "walk");
     }
-    case Atom_Find:
+    case ReflectAtom::Find:
     {
         return pushUserdataMethod(L, TagDocument, "find");
     }
-    case Atom_Comments:
+    case ReflectAtom::Comments:
     {
         pushCachedValue(L, handle.cacheRef, "comments", [&](lua_State* L) {
             lua_createtable(L, int(doc->parseResult.commentLocations.size()), 0);
@@ -134,7 +107,7 @@ static int astDocIndex(lua_State* L)
         });
         return 1;
     }
-    case Atom_Errors:
+    case ReflectAtom::Errors:
     {
         pushCachedValue(L, handle.cacheRef, "errors", [&](lua_State* L) {
             lua_createtable(L, int(doc->parseResult.errors.size()), 0);
@@ -152,7 +125,7 @@ static int astDocIndex(lua_State* L)
         });
         return 1;
     }
-    case Atom_LineOffsets:
+    case ReflectAtom::LineOffsets:
     {
         pushCachedValue(L, handle.cacheRef, "lineOffsets", [&](lua_State* L) {
             lua_createtable(L, int(doc->lineOffsets.size()), 0);
@@ -191,20 +164,21 @@ static int astDocEq(lua_State* L)
 
 static int astDocNamecall(lua_State* L)
 {
-    int len = 0;
-    if (const char* str = lua_namecallwithlen(L, &len))
+    int atomId = -1;
+    size_t len = 0;
+    if (const char* str = lua_namecallwithlen(L, FFlag::OptLuwuReflectUseAtoms ? &atomId : nullptr, &len))
     {
-        AstDocumentAtom atom = getAstDocumentAtom(std::string_view(str, size_t(len)));
+        ReflectAtom atom = resolveReflectAtom(atomId, str, len);
         switch (atom)
         {
-        case Atom_Walk:
+        case ReflectAtom::Walk:
             return astDocWalk(L);
-        case Atom_Find:
+        case ReflectAtom::Find:
             return astDocFind(L);
         default:
             break;
         }
-        luaL_error(L, "%.*s is not a valid method of AstDocument", len, str);
+        luaL_error(L, "%.*s is not a valid method of AstDocument", int(len), str);
     }
     luaL_error(L, "missing method name in namecall");
 }

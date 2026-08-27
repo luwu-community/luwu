@@ -4,37 +4,6 @@
 namespace Luau
 {
 
-// Because the embedder may have themselves set useratom, we cannot use Luau's builtin atom system here, instead define the atoms separately using a hashmap + enum
-enum AstLocationAtom : uint8_t
-{
-    Atom_Unknown = 0,
-    Atom_BeginLine,
-    Atom_BeginColumn,
-    Atom_EndLine,
-    Atom_EndColumn,
-    Atom_StartOffset,
-    Atom_EndOffset,
-    Atom_Text,
-};
-
-static AstLocationAtom getAstLocationAtom(std::string_view key)
-{
-    static const std::unordered_map<std::string_view, AstLocationAtom> s_atomMap = {
-        {"beginLine", Atom_BeginLine},
-        {"beginColumn", Atom_BeginColumn},
-        {"endLine", Atom_EndLine},
-        {"endColumn", Atom_EndColumn},
-        {"startOffset", Atom_StartOffset},
-        {"endOffset", Atom_EndOffset},
-        {"text", Atom_Text},
-    };
-
-    if (auto it = s_atomMap.find(key); it != s_atomMap.end())
-        return it->second;
-
-    return Atom_Unknown;
-}
-
 // Note: computeLineOffsets and locationToOffsets are adapted from lute (https://github.com/luau-lang/lute)
 std::vector<size_t> computeLineOffsets(std::string_view content)
 {
@@ -77,33 +46,39 @@ static void astLocationDtor(lua_State* L, void* userdata)
 static int astLocationIndex(lua_State* L)
 {
     auto& handle = checkAstLocation(L, 1);
+    int atomId = -1;
     size_t keyLen = 0;
-    const char* keyStr = luaL_checklstring(L, 2, &keyLen);
-    AstLocationAtom atom = getAstLocationAtom(std::string_view(keyStr, keyLen));
+    const char* keyStr = lua_tolstringatom(L, 2, &keyLen, FFlag::OptLuwuReflectUseAtoms ? &atomId : nullptr);
+    if (!keyStr)
+    {
+        lua_pushnil(L);
+        return 1;
+    }
+    ReflectAtom atom = resolveReflectAtom(atomId, keyStr, keyLen);
     const auto& loc = handle.location;
     const auto& doc = handle.doc;
 
     switch (atom)
     {
-    case Atom_BeginLine:   { lua_pushinteger(L, loc.begin.line + 1); return 1; }
-    case Atom_BeginColumn: { lua_pushinteger(L, loc.begin.column + 1); return 1; }
-    case Atom_EndLine:     { lua_pushinteger(L, loc.end.line + 1); return 1; }
-    case Atom_EndColumn:   { lua_pushinteger(L, loc.end.column + 1); return 1; }
-    case Atom_StartOffset:
+    case ReflectAtom::BeginLine:   { lua_pushinteger(L, loc.begin.line + 1); return 1; }
+    case ReflectAtom::BeginColumn: { lua_pushinteger(L, loc.begin.column + 1); return 1; }
+    case ReflectAtom::EndLine:     { lua_pushinteger(L, loc.end.line + 1); return 1; }
+    case ReflectAtom::EndColumn:   { lua_pushinteger(L, loc.end.column + 1); return 1; }
+    case ReflectAtom::StartOffset:
     {
         LUAU_ASSERT(doc);
         auto [startOff, endOff] = locationToOffsets(doc->lineOffsets, doc->source.size(), loc);
         lua_pushinteger(L, int(startOff));
         return 1;
     }
-    case Atom_EndOffset:
+    case ReflectAtom::EndOffset:
     {
         LUAU_ASSERT(doc);
         auto [startOff, endOff] = locationToOffsets(doc->lineOffsets, doc->source.size(), loc);
         lua_pushinteger(L, int(endOff));
         return 1;
     }
-    case Atom_Text:
+    case ReflectAtom::Text:
     {
         LUAU_ASSERT(doc);
         auto [startOff, endOff] = locationToOffsets(doc->lineOffsets, doc->source.size(), loc);

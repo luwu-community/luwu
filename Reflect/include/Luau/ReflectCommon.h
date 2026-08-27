@@ -20,8 +20,367 @@
 #include <cstring>
 #include <new>
 
+LUAU_FASTFLAG(OptLuwuReflectUseAtoms)
+
 namespace Luau
 {
+
+enum class ReflectAtom : int16_t
+{
+    Unknown = -1,
+
+    // Common / shared
+    Kind = 0,
+    Location,
+    Text,
+    Name,
+    Type,
+    Value,
+    Func,
+    Items,
+    IsConst,
+    Annotation,
+
+    // AstDocument
+    Root,
+    Source,
+    Walk,
+    Find,
+    Errors,
+    Comments,
+    LineOffsets,
+
+    // AstNode
+    Category,
+    Children,
+    Cst,
+    Body,
+    Condition,
+    ThenBody,
+    ElseBody,
+    List,
+    Expr,
+    Vars,
+    Values,
+    Var,
+    From,
+    To,
+    Step,
+    Op,
+    Args,
+    Self,
+    Index,
+    Left,
+    Right,
+    Local,
+    TrueExpr,
+    FalseExpr,
+    Prefix,
+    Vararg,
+    HasSemicolon,
+    Generics,
+    GenericPacks,
+    ReturnAnnotation,
+    Exported,
+    HasErrors,
+    SuperName,
+    Props,
+    Indexer,
+    Members,
+    Statements,
+    Expressions,
+    Strings,
+    MessageIndex,
+    TypeArguments,
+    Parameters,
+    HasParameterList,
+    ArgTypes,
+    ReturnTypes,
+    Attributes,
+    DebugName,
+    Upvalue,
+    HasDo,
+    HasIn,
+    HasEnd,
+    HasElse,
+    QuoteStyle,
+    IsMissing,
+    Types,
+    TailType,
+    VariadicType,
+    Params,
+
+    // CstNode
+    HasAt,
+    OpenParenPosition,
+    CloseParenPosition,
+    ArgsCommaPositions,
+    ClosePosition,
+    SourceString,
+    BlockDepth,
+    OpenParens,
+    CloseParens,
+    CommaPositions,
+    OpenBracketPosition,
+    CloseBracketPosition,
+    FunctionKeywordPosition,
+    OpenGenericsPosition,
+    GenericsCommaPositions,
+    CloseGenericsPosition,
+    ArgsAnnotationColonPositions,
+    VarargAnnotationColonPosition,
+    ReturnSpecifierPosition,
+    OpPosition,
+    ThenPosition,
+    ElsePosition,
+    IsElseIf,
+    StatsStartPosition,
+    EndPosition,
+    UntilPosition,
+    VarsAnnotationColonPositions,
+    VarsCommaPositions,
+    ValuesCommaPositions,
+    AnnotationColonPosition,
+    EqualsPosition,
+    EndCommaPosition,
+    StepCommaPosition,
+    LocalKeywordPosition,
+    DefaultEqualsPosition,
+    EllipsisPosition,
+    TypeKeywordPosition,
+    GenericsOpenPosition,
+    GenericsClosePosition,
+    PrefixPointPosition,
+    OpenParametersPosition,
+    ParametersCommaPositions,
+    CloseParametersPosition,
+    IsArray,
+    OpenArgsPosition,
+    ArgumentNameColonPositions,
+    ArgumentsCommaPositions,
+    CloseArgsPosition,
+    ReturnArrowPosition,
+    OpenPosition,
+    LeadingPosition,
+    SeparatorPositions,
+    OpenParenthesesPosition,
+    CloseParenthesesPosition,
+
+    // AstLocation
+    BeginLine,
+    BeginColumn,
+    EndLine,
+    EndColumn,
+    StartOffset,
+    EndOffset,
+
+    // AstPosition
+    Line,
+    Column,
+    ComputedOffset,
+
+    // AstLocal
+    Shadow,
+    Depth,
+
+    // AstAux
+    Access,
+    IndexType,
+    ResultType,
+    IsMethod,
+
+    Count
+};
+
+inline ReflectAtom resolveGlobalReflectAtom(std::string_view key)
+{
+    static const DenseHashMap2<std::string_view, ReflectAtom> s_atomMap = []() {
+        static const std::pair<std::string_view, ReflectAtom> entries[] = {
+            {"kind", ReflectAtom::Kind},
+            {"location", ReflectAtom::Location},
+            {"text", ReflectAtom::Text},
+            {"name", ReflectAtom::Name},
+            {"type", ReflectAtom::Type},
+            {"value", ReflectAtom::Value},
+            {"func", ReflectAtom::Func},
+            {"items", ReflectAtom::Items},
+            {"isConst", ReflectAtom::IsConst},
+            {"annotation", ReflectAtom::Annotation},
+
+            {"root", ReflectAtom::Root},
+            {"source", ReflectAtom::Source},
+            {"walk", ReflectAtom::Walk},
+            {"find", ReflectAtom::Find},
+            {"errors", ReflectAtom::Errors},
+            {"comments", ReflectAtom::Comments},
+            {"lineOffsets", ReflectAtom::LineOffsets},
+
+            {"category", ReflectAtom::Category},
+            {"children", ReflectAtom::Children},
+            {"cst", ReflectAtom::Cst},
+            {"body", ReflectAtom::Body},
+            {"condition", ReflectAtom::Condition},
+            {"thenbody", ReflectAtom::ThenBody},
+            {"elsebody", ReflectAtom::ElseBody},
+            {"list", ReflectAtom::List},
+            {"expr", ReflectAtom::Expr},
+            {"vars", ReflectAtom::Vars},
+            {"values", ReflectAtom::Values},
+            {"var", ReflectAtom::Var},
+            {"from", ReflectAtom::From},
+            {"to", ReflectAtom::To},
+            {"step", ReflectAtom::Step},
+            {"op", ReflectAtom::Op},
+            {"args", ReflectAtom::Args},
+            {"self", ReflectAtom::Self},
+            {"index", ReflectAtom::Index},
+            {"left", ReflectAtom::Left},
+            {"right", ReflectAtom::Right},
+            {"local", ReflectAtom::Local},
+            {"trueExpr", ReflectAtom::TrueExpr},
+            {"falseExpr", ReflectAtom::FalseExpr},
+            {"prefix", ReflectAtom::Prefix},
+            {"vararg", ReflectAtom::Vararg},
+            {"hasSemicolon", ReflectAtom::HasSemicolon},
+            {"generics", ReflectAtom::Generics},
+            {"genericPacks", ReflectAtom::GenericPacks},
+            {"returnAnnotation", ReflectAtom::ReturnAnnotation},
+            {"exported", ReflectAtom::Exported},
+            {"hasErrors", ReflectAtom::HasErrors},
+            {"superName", ReflectAtom::SuperName},
+            {"props", ReflectAtom::Props},
+            {"indexer", ReflectAtom::Indexer},
+            {"members", ReflectAtom::Members},
+            {"statements", ReflectAtom::Statements},
+            {"expressions", ReflectAtom::Expressions},
+            {"strings", ReflectAtom::Strings},
+            {"messageIndex", ReflectAtom::MessageIndex},
+            {"typeArguments", ReflectAtom::TypeArguments},
+            {"parameters", ReflectAtom::Parameters},
+            {"hasParameterList", ReflectAtom::HasParameterList},
+            {"argTypes", ReflectAtom::ArgTypes},
+            {"returnTypes", ReflectAtom::ReturnTypes},
+            {"attributes", ReflectAtom::Attributes},
+            {"debugname", ReflectAtom::DebugName},
+            {"upvalue", ReflectAtom::Upvalue},
+            {"hasDo", ReflectAtom::HasDo},
+            {"hasIn", ReflectAtom::HasIn},
+            {"hasEnd", ReflectAtom::HasEnd},
+            {"hasElse", ReflectAtom::HasElse},
+            {"quoteStyle", ReflectAtom::QuoteStyle},
+            {"isMissing", ReflectAtom::IsMissing},
+            {"types", ReflectAtom::Types},
+            {"tailType", ReflectAtom::TailType},
+            {"variadicType", ReflectAtom::VariadicType},
+            {"params", ReflectAtom::Params},
+
+            {"hasAt", ReflectAtom::HasAt},
+            {"openParenPosition", ReflectAtom::OpenParenPosition},
+            {"closeParenPosition", ReflectAtom::CloseParenPosition},
+            {"argsCommaPositions", ReflectAtom::ArgsCommaPositions},
+            {"closePosition", ReflectAtom::ClosePosition},
+            {"sourceString", ReflectAtom::SourceString},
+            {"blockDepth", ReflectAtom::BlockDepth},
+            {"openParens", ReflectAtom::OpenParens},
+            {"closeParens", ReflectAtom::CloseParens},
+            {"commaPositions", ReflectAtom::CommaPositions},
+            {"openBracketPosition", ReflectAtom::OpenBracketPosition},
+            {"closeBracketPosition", ReflectAtom::CloseBracketPosition},
+            {"functionKeywordPosition", ReflectAtom::FunctionKeywordPosition},
+            {"openGenericsPosition", ReflectAtom::OpenGenericsPosition},
+            {"genericsCommaPositions", ReflectAtom::GenericsCommaPositions},
+            {"closeGenericsPosition", ReflectAtom::CloseGenericsPosition},
+            {"argsAnnotationColonPositions", ReflectAtom::ArgsAnnotationColonPositions},
+            {"varargAnnotationColonPosition", ReflectAtom::VarargAnnotationColonPosition},
+            {"returnSpecifierPosition", ReflectAtom::ReturnSpecifierPosition},
+            {"opPosition", ReflectAtom::OpPosition},
+            {"thenPosition", ReflectAtom::ThenPosition},
+            {"elsePosition", ReflectAtom::ElsePosition},
+            {"isElseIf", ReflectAtom::IsElseIf},
+            {"statsStartPosition", ReflectAtom::StatsStartPosition},
+            {"endPosition", ReflectAtom::EndPosition},
+            {"untilPosition", ReflectAtom::UntilPosition},
+            {"varsAnnotationColonPositions", ReflectAtom::VarsAnnotationColonPositions},
+            {"varsCommaPositions", ReflectAtom::VarsCommaPositions},
+            {"valuesCommaPositions", ReflectAtom::ValuesCommaPositions},
+            {"annotationColonPosition", ReflectAtom::AnnotationColonPosition},
+            {"equalsPosition", ReflectAtom::EqualsPosition},
+            {"endCommaPosition", ReflectAtom::EndCommaPosition},
+            {"stepCommaPosition", ReflectAtom::StepCommaPosition},
+            {"localKeywordPosition", ReflectAtom::LocalKeywordPosition},
+            {"defaultEqualsPosition", ReflectAtom::DefaultEqualsPosition},
+            {"ellipsisPosition", ReflectAtom::EllipsisPosition},
+            {"typeKeywordPosition", ReflectAtom::TypeKeywordPosition},
+            {"genericsOpenPosition", ReflectAtom::GenericsOpenPosition},
+            {"genericsClosePosition", ReflectAtom::GenericsClosePosition},
+            {"prefixPointPosition", ReflectAtom::PrefixPointPosition},
+            {"openParametersPosition", ReflectAtom::OpenParametersPosition},
+            {"parametersCommaPositions", ReflectAtom::ParametersCommaPositions},
+            {"closeParametersPosition", ReflectAtom::CloseParametersPosition},
+            {"isArray", ReflectAtom::IsArray},
+            {"openArgsPosition", ReflectAtom::OpenArgsPosition},
+            {"argumentNameColonPositions", ReflectAtom::ArgumentNameColonPositions},
+            {"argumentsCommaPositions", ReflectAtom::ArgumentsCommaPositions},
+            {"closeArgsPosition", ReflectAtom::CloseArgsPosition},
+            {"returnArrowPosition", ReflectAtom::ReturnArrowPosition},
+            {"openPosition", ReflectAtom::OpenPosition},
+            {"leadingPosition", ReflectAtom::LeadingPosition},
+            {"separatorPositions", ReflectAtom::SeparatorPositions},
+            {"openParenthesesPosition", ReflectAtom::OpenParenthesesPosition},
+            {"closeParenthesesPosition", ReflectAtom::CloseParenthesesPosition},
+
+            {"beginLine", ReflectAtom::BeginLine},
+            {"beginColumn", ReflectAtom::BeginColumn},
+            {"endLine", ReflectAtom::EndLine},
+            {"endColumn", ReflectAtom::EndColumn},
+            {"startOffset", ReflectAtom::StartOffset},
+            {"endOffset", ReflectAtom::EndOffset},
+
+            {"line", ReflectAtom::Line},
+            {"column", ReflectAtom::Column},
+            {"computedOffset", ReflectAtom::ComputedOffset},
+
+            {"shadow", ReflectAtom::Shadow},
+            {"depth", ReflectAtom::Depth},
+
+            {"access", ReflectAtom::Access},
+            {"indexType", ReflectAtom::IndexType},
+            {"resultType", ReflectAtom::ResultType},
+            {"isMethod", ReflectAtom::IsMethod},
+        };
+        DenseHashMap2<std::string_view, ReflectAtom> map;
+        for (const auto& [k, v] : entries)
+            map[k] = v;
+        return map;
+    }();
+
+    if (const ReflectAtom* atom = s_atomMap.find(key))
+        return *atom;
+
+    return ReflectAtom::Unknown;
+}
+
+inline ReflectAtom resolveReflectAtom(int atomId, std::string_view key)
+{
+    if (atomId >= 0)
+    {
+        if (atomId < int(ReflectAtom::Count))
+            return ReflectAtom(atomId);
+        return ReflectAtom::Unknown;
+    }
+    return resolveGlobalReflectAtom(key);
+}
+
+inline ReflectAtom resolveReflectAtom(int atomId, const char* str, size_t len)
+{
+    if (atomId >= 0)
+    {
+        if (atomId < int(ReflectAtom::Count))
+            return ReflectAtom(atomId);
+        return ReflectAtom::Unknown;
+    }
+    return resolveGlobalReflectAtom(std::string_view(str, len));
+}
 
 /**
  * Reserved userdata tags for AST/CST reflection objects.

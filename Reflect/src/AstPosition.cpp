@@ -4,29 +4,6 @@
 namespace Luau
 {
 
-// Because the embedder may have themselves set useratom, we cannot use Luau's builtin atom system here, instead define the atoms separately using a hashmap + enum
-enum AstPositionAtom : uint8_t
-{
-    Atom_Unknown = 0,
-    Atom_Line,
-    Atom_Column,
-    Atom_ComputedOffset,
-};
-
-static AstPositionAtom getAstPositionAtom(std::string_view key)
-{
-    static const std::unordered_map<std::string_view, AstPositionAtom> s_atomMap = {
-        {"line", Atom_Line},
-        {"column", Atom_Column},
-        {"computedOffset", Atom_ComputedOffset},
-    };
-
-    if (auto it = s_atomMap.find(key); it != s_atomMap.end())
-        return it->second;
-
-    return Atom_Unknown;
-}
-
 void pushPosition(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::Position& pos)
 {
     if (pos == Luau::Position::missing())
@@ -63,17 +40,23 @@ static void astPositionDtor(lua_State* L, void* userdata)
 static int astPositionIndex(lua_State* L)
 {
     auto& handle = checkAstPosition(L, 1);
+    int atomId = -1;
     size_t keyLen = 0;
-    const char* keyStr = luaL_checklstring(L, 2, &keyLen);
-    AstPositionAtom atom = getAstPositionAtom(std::string_view(keyStr, keyLen));
+    const char* keyStr = lua_tolstringatom(L, 2, &keyLen, FFlag::OptLuwuReflectUseAtoms ? &atomId : nullptr);
+    if (!keyStr)
+    {
+        lua_pushnil(L);
+        return 1;
+    }
+    ReflectAtom atom = resolveReflectAtom(atomId, keyStr, keyLen);
     const auto& pos = handle.position;
     const auto& doc = handle.doc;
 
     switch (atom)
     {
-    case Atom_Line:   { lua_pushinteger(L, pos.line + 1); return 1; }
-    case Atom_Column: { lua_pushinteger(L, pos.column + 1); return 1; }
-    case Atom_ComputedOffset:
+    case ReflectAtom::Line:   { lua_pushinteger(L, pos.line + 1); return 1; }
+    case ReflectAtom::Column: { lua_pushinteger(L, pos.column + 1); return 1; }
+    case ReflectAtom::ComputedOffset:
     {
         LUAU_ASSERT(doc);
         size_t off = positionToOffset(doc->lineOffsets, doc->source.size(), pos);

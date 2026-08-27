@@ -4,35 +4,6 @@
 namespace Luau
 {
 
-// Because the embedder may have themselves set useratom, we cannot use Luau's builtin atom system here, instead define the atoms separately using a hashmap + enum
-enum AstLocalAtom : uint8_t
-{
-    Atom_Unknown = 0,
-    Atom_Name,
-    Atom_Location,
-    Atom_Shadow,
-    Atom_IsConst,
-    Atom_Depth,
-    Atom_Annotation,
-};
-
-static AstLocalAtom getAstLocalAtom(std::string_view key)
-{
-    static const std::unordered_map<std::string_view, AstLocalAtom> s_atomMap = {
-        {"name", Atom_Name},
-        {"location", Atom_Location},
-        {"shadow", Atom_Shadow},
-        {"isConst", Atom_IsConst},
-        {"depth", Atom_Depth},
-        {"annotation", Atom_Annotation},
-    };
-
-    if (auto it = s_atomMap.find(key); it != s_atomMap.end())
-        return it->second;
-
-    return Atom_Unknown;
-}
-
 void pushAstLocal(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, Luau::AstLocal* local)
 {
     if (!local)
@@ -59,19 +30,25 @@ static void astLocalDtor(lua_State* L, void* userdata)
 static int astLocalIndex(lua_State* L)
 {
     auto& handle = checkAstLocal(L, 1);
+    int atomId = -1;
     size_t keyLen = 0;
-    const char* keyStr = luaL_checklstring(L, 2, &keyLen);
-    AstLocalAtom atom = getAstLocalAtom(std::string_view(keyStr, keyLen));
+    const char* keyStr = lua_tolstringatom(L, 2, &keyLen, FFlag::OptLuwuReflectUseAtoms ? &atomId : nullptr);
+    if (!keyStr)
+    {
+        lua_pushnil(L);
+        return 1;
+    }
+    ReflectAtom atom = resolveReflectAtom(atomId, keyStr, keyLen);
     Luau::AstLocal* local = handle.local;
 
     switch (atom)
     {
-    case Atom_Name:       { lua_pushstring(L, local->name.value); return 1; }
-    case Atom_Location:   { pushLocation(L, handle.doc, local->location); return 1; }
-    case Atom_Shadow:     { pushAstLocal(L, handle.doc, local->shadow); return 1; }
-    case Atom_IsConst:    { lua_pushboolean(L, local->isConst); return 1; }
-    case Atom_Depth:      { lua_pushinteger(L, int(local->functionDepth)); return 1; }
-    case Atom_Annotation: { pushAstNode(L, handle.doc, local->annotation); return 1; }
+    case ReflectAtom::Name:       { lua_pushstring(L, local->name.value); return 1; }
+    case ReflectAtom::Location:   { pushLocation(L, handle.doc, local->location); return 1; }
+    case ReflectAtom::Shadow:     { pushAstLocal(L, handle.doc, local->shadow); return 1; }
+    case ReflectAtom::IsConst:    { lua_pushboolean(L, local->isConst); return 1; }
+    case ReflectAtom::Depth:      { lua_pushinteger(L, int(local->functionDepth)); return 1; }
+    case ReflectAtom::Annotation: { pushAstNode(L, handle.doc, local->annotation); return 1; }
     default:
         lua_pushnil(L);
         return 1;
