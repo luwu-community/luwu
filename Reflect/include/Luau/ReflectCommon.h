@@ -25,332 +25,183 @@ LUAU_FASTFLAG(OptLuwuReflectUseAtoms)
 namespace Luau
 {
 
+#define LUAU_REFLECT_ATOMS \
+    /* Common / shared */ \
+    ATOM(Kind, "kind") \
+    ATOM(Location, "location") \
+    ATOM(Text, "text") \
+    ATOM(Name, "name") \
+    ATOM(Type, "type") \
+    ATOM(Value, "value") \
+    ATOM(Func, "func") \
+    ATOM(Items, "items") \
+    ATOM(IsConst, "isConst") \
+    ATOM(Annotation, "annotation") \
+    \
+    /* AstDocument */ \
+    ATOM(Root, "root") \
+    ATOM(Source, "source") \
+    ATOM(Walk, "walk") \
+    ATOM(Find, "find") \
+    ATOM(Errors, "errors") \
+    ATOM(Comments, "comments") \
+    ATOM(LineOffsets, "lineOffsets") \
+    \
+    /* AstNode */ \
+    ATOM(Category, "category") \
+    ATOM(Children, "children") \
+    ATOM(Cst, "cst") \
+    ATOM(Body, "body") \
+    ATOM(Condition, "condition") \
+    ATOM(ThenBody, "thenbody") \
+    ATOM(ElseBody, "elsebody") \
+    ATOM(List, "list") \
+    ATOM(Expr, "expr") \
+    ATOM(Vars, "vars") \
+    ATOM(Values, "values") \
+    ATOM(Var, "var") \
+    ATOM(From, "from") \
+    ATOM(To, "to") \
+    ATOM(Step, "step") \
+    ATOM(Op, "op") \
+    ATOM(Args, "args") \
+    ATOM(Self, "self") \
+    ATOM(Index, "index") \
+    ATOM(Left, "left") \
+    ATOM(Right, "right") \
+    ATOM(Local, "local") \
+    ATOM(TrueExpr, "trueExpr") \
+    ATOM(FalseExpr, "falseExpr") \
+    ATOM(Prefix, "prefix") \
+    ATOM(Vararg, "vararg") \
+    ATOM(HasSemicolon, "hasSemicolon") \
+    ATOM(Generics, "generics") \
+    ATOM(GenericPacks, "genericPacks") \
+    ATOM(ReturnAnnotation, "returnAnnotation") \
+    ATOM(Exported, "exported") \
+    ATOM(HasErrors, "hasErrors") \
+    ATOM(SuperName, "superName") \
+    ATOM(Props, "props") \
+    ATOM(Indexer, "indexer") \
+    ATOM(Members, "members") \
+    ATOM(Statements, "statements") \
+    ATOM(Expressions, "expressions") \
+    ATOM(Strings, "strings") \
+    ATOM(MessageIndex, "messageIndex") \
+    ATOM(TypeArguments, "typeArguments") \
+    ATOM(Parameters, "parameters") \
+    ATOM(HasParameterList, "hasParameterList") \
+    ATOM(ArgTypes, "argTypes") \
+    ATOM(ReturnTypes, "returnTypes") \
+    ATOM(Attributes, "attributes") \
+    ATOM(DebugName, "debugname") \
+    ATOM(Upvalue, "upvalue") \
+    ATOM(HasDo, "hasDo") \
+    ATOM(HasIn, "hasIn") \
+    ATOM(HasEnd, "hasEnd") \
+    ATOM(HasElse, "hasElse") \
+    ATOM(QuoteStyle, "quoteStyle") \
+    ATOM(IsMissing, "isMissing") \
+    ATOM(Types, "types") \
+    ATOM(TailType, "tailType") \
+    ATOM(VariadicType, "variadicType") \
+    ATOM(Params, "params") \
+    \
+    /* CstNode */ \
+    ATOM(HasAt, "hasAt") \
+    ATOM(OpenParenPosition, "openParenPosition") \
+    ATOM(CloseParenPosition, "closeParenPosition") \
+    ATOM(ArgsCommaPositions, "argsCommaPositions") \
+    ATOM(ClosePosition, "closePosition") \
+    ATOM(SourceString, "sourceString") \
+    ATOM(BlockDepth, "blockDepth") \
+    ATOM(OpenParens, "openParens") \
+    ATOM(CloseParens, "closeParens") \
+    ATOM(CommaPositions, "commaPositions") \
+    ATOM(OpenBracketPosition, "openBracketPosition") \
+    ATOM(CloseBracketPosition, "closeBracketPosition") \
+    ATOM(FunctionKeywordPosition, "functionKeywordPosition") \
+    ATOM(OpenGenericsPosition, "openGenericsPosition") \
+    ATOM(GenericsCommaPositions, "genericsCommaPositions") \
+    ATOM(CloseGenericsPosition, "closeGenericsPosition") \
+    ATOM(ArgsAnnotationColonPositions, "argsAnnotationColonPositions") \
+    ATOM(VarargAnnotationColonPosition, "varargAnnotationColonPosition") \
+    ATOM(ReturnSpecifierPosition, "returnSpecifierPosition") \
+    ATOM(OpPosition, "opPosition") \
+    ATOM(ThenPosition, "thenPosition") \
+    ATOM(ElsePosition, "elsePosition") \
+    ATOM(IsElseIf, "isElseIf") \
+    ATOM(StatsStartPosition, "statsStartPosition") \
+    ATOM(EndPosition, "endPosition") \
+    ATOM(UntilPosition, "untilPosition") \
+    ATOM(VarsAnnotationColonPositions, "varsAnnotationColonPositions") \
+    ATOM(VarsCommaPositions, "varsCommaPositions") \
+    ATOM(ValuesCommaPositions, "valuesCommaPositions") \
+    ATOM(AnnotationColonPosition, "annotationColonPosition") \
+    ATOM(EqualsPosition, "equalsPosition") \
+    ATOM(EndCommaPosition, "endCommaPosition") \
+    ATOM(StepCommaPosition, "stepCommaPosition") \
+    ATOM(LocalKeywordPosition, "localKeywordPosition") \
+    ATOM(DefaultEqualsPosition, "defaultEqualsPosition") \
+    ATOM(EllipsisPosition, "ellipsisPosition") \
+    ATOM(TypeKeywordPosition, "typeKeywordPosition") \
+    ATOM(GenericsOpenPosition, "genericsOpenPosition") \
+    ATOM(GenericsClosePosition, "genericsClosePosition") \
+    ATOM(PrefixPointPosition, "prefixPointPosition") \
+    ATOM(OpenParametersPosition, "openParametersPosition") \
+    ATOM(ParametersCommaPositions, "parametersCommaPositions") \
+    ATOM(CloseParametersPosition, "closeParametersPosition") \
+    ATOM(IsArray, "isArray") \
+    ATOM(OpenArgsPosition, "openArgsPosition") \
+    ATOM(ArgumentNameColonPositions, "argumentNameColonPositions") \
+    ATOM(ArgumentsCommaPositions, "argumentsCommaPositions") \
+    ATOM(CloseArgsPosition, "closeArgsPosition") \
+    ATOM(ReturnArrowPosition, "returnArrowPosition") \
+    ATOM(OpenPosition, "openPosition") \
+    ATOM(LeadingPosition, "leadingPosition") \
+    ATOM(SeparatorPositions, "separatorPositions") \
+    ATOM(OpenParenthesesPosition, "openParenthesesPosition") \
+    ATOM(CloseParenthesesPosition, "closeParenthesesPosition") \
+    \
+    /* AstLocation */ \
+    ATOM(BeginLine, "beginLine") \
+    ATOM(BeginColumn, "beginColumn") \
+    ATOM(EndLine, "endLine") \
+    ATOM(EndColumn, "endColumn") \
+    ATOM(StartOffset, "startOffset") \
+    ATOM(EndOffset, "endOffset") \
+    \
+    /* AstPosition */ \
+    ATOM(Line, "line") \
+    ATOM(Column, "column") \
+    ATOM(ComputedOffset, "computedOffset") \
+    \
+    /* AstLocal */ \
+    ATOM(Shadow, "shadow") \
+    ATOM(Depth, "depth") \
+    \
+    /* AstAux */ \
+    ATOM(Access, "access") \
+    ATOM(IndexType, "indexType") \
+    ATOM(ResultType, "resultType") \
+    ATOM(IsMethod, "isMethod")
+
 enum class ReflectAtom : int16_t
 {
     Unknown = -1,
-
-    // Common / shared
-    Kind = 0,
-    Location,
-    Text,
-    Name,
-    Type,
-    Value,
-    Func,
-    Items,
-    IsConst,
-    Annotation,
-
-    // AstDocument
-    Root,
-    Source,
-    Walk,
-    Find,
-    Errors,
-    Comments,
-    LineOffsets,
-
-    // AstNode
-    Category,
-    Children,
-    Cst,
-    Body,
-    Condition,
-    ThenBody,
-    ElseBody,
-    List,
-    Expr,
-    Vars,
-    Values,
-    Var,
-    From,
-    To,
-    Step,
-    Op,
-    Args,
-    Self,
-    Index,
-    Left,
-    Right,
-    Local,
-    TrueExpr,
-    FalseExpr,
-    Prefix,
-    Vararg,
-    HasSemicolon,
-    Generics,
-    GenericPacks,
-    ReturnAnnotation,
-    Exported,
-    HasErrors,
-    SuperName,
-    Props,
-    Indexer,
-    Members,
-    Statements,
-    Expressions,
-    Strings,
-    MessageIndex,
-    TypeArguments,
-    Parameters,
-    HasParameterList,
-    ArgTypes,
-    ReturnTypes,
-    Attributes,
-    DebugName,
-    Upvalue,
-    HasDo,
-    HasIn,
-    HasEnd,
-    HasElse,
-    QuoteStyle,
-    IsMissing,
-    Types,
-    TailType,
-    VariadicType,
-    Params,
-
-    // CstNode
-    HasAt,
-    OpenParenPosition,
-    CloseParenPosition,
-    ArgsCommaPositions,
-    ClosePosition,
-    SourceString,
-    BlockDepth,
-    OpenParens,
-    CloseParens,
-    CommaPositions,
-    OpenBracketPosition,
-    CloseBracketPosition,
-    FunctionKeywordPosition,
-    OpenGenericsPosition,
-    GenericsCommaPositions,
-    CloseGenericsPosition,
-    ArgsAnnotationColonPositions,
-    VarargAnnotationColonPosition,
-    ReturnSpecifierPosition,
-    OpPosition,
-    ThenPosition,
-    ElsePosition,
-    IsElseIf,
-    StatsStartPosition,
-    EndPosition,
-    UntilPosition,
-    VarsAnnotationColonPositions,
-    VarsCommaPositions,
-    ValuesCommaPositions,
-    AnnotationColonPosition,
-    EqualsPosition,
-    EndCommaPosition,
-    StepCommaPosition,
-    LocalKeywordPosition,
-    DefaultEqualsPosition,
-    EllipsisPosition,
-    TypeKeywordPosition,
-    GenericsOpenPosition,
-    GenericsClosePosition,
-    PrefixPointPosition,
-    OpenParametersPosition,
-    ParametersCommaPositions,
-    CloseParametersPosition,
-    IsArray,
-    OpenArgsPosition,
-    ArgumentNameColonPositions,
-    ArgumentsCommaPositions,
-    CloseArgsPosition,
-    ReturnArrowPosition,
-    OpenPosition,
-    LeadingPosition,
-    SeparatorPositions,
-    OpenParenthesesPosition,
-    CloseParenthesesPosition,
-
-    // AstLocation
-    BeginLine,
-    BeginColumn,
-    EndLine,
-    EndColumn,
-    StartOffset,
-    EndOffset,
-
-    // AstPosition
-    Line,
-    Column,
-    ComputedOffset,
-
-    // AstLocal
-    Shadow,
-    Depth,
-
-    // AstAux
-    Access,
-    IndexType,
-    ResultType,
-    IsMethod,
-
+#define ATOM(variant, str) variant,
+    LUAU_REFLECT_ATOMS
+#undef ATOM
     Count
 };
 
 inline ReflectAtom resolveGlobalReflectAtom(std::string_view key)
 {
     static const DenseHashMap2<std::string_view, ReflectAtom> s_atomMap = []() {
-        static const std::pair<std::string_view, ReflectAtom> entries[] = {
-            {"kind", ReflectAtom::Kind},
-            {"location", ReflectAtom::Location},
-            {"text", ReflectAtom::Text},
-            {"name", ReflectAtom::Name},
-            {"type", ReflectAtom::Type},
-            {"value", ReflectAtom::Value},
-            {"func", ReflectAtom::Func},
-            {"items", ReflectAtom::Items},
-            {"isConst", ReflectAtom::IsConst},
-            {"annotation", ReflectAtom::Annotation},
-
-            {"root", ReflectAtom::Root},
-            {"source", ReflectAtom::Source},
-            {"walk", ReflectAtom::Walk},
-            {"find", ReflectAtom::Find},
-            {"errors", ReflectAtom::Errors},
-            {"comments", ReflectAtom::Comments},
-            {"lineOffsets", ReflectAtom::LineOffsets},
-
-            {"category", ReflectAtom::Category},
-            {"children", ReflectAtom::Children},
-            {"cst", ReflectAtom::Cst},
-            {"body", ReflectAtom::Body},
-            {"condition", ReflectAtom::Condition},
-            {"thenbody", ReflectAtom::ThenBody},
-            {"elsebody", ReflectAtom::ElseBody},
-            {"list", ReflectAtom::List},
-            {"expr", ReflectAtom::Expr},
-            {"vars", ReflectAtom::Vars},
-            {"values", ReflectAtom::Values},
-            {"var", ReflectAtom::Var},
-            {"from", ReflectAtom::From},
-            {"to", ReflectAtom::To},
-            {"step", ReflectAtom::Step},
-            {"op", ReflectAtom::Op},
-            {"args", ReflectAtom::Args},
-            {"self", ReflectAtom::Self},
-            {"index", ReflectAtom::Index},
-            {"left", ReflectAtom::Left},
-            {"right", ReflectAtom::Right},
-            {"local", ReflectAtom::Local},
-            {"trueExpr", ReflectAtom::TrueExpr},
-            {"falseExpr", ReflectAtom::FalseExpr},
-            {"prefix", ReflectAtom::Prefix},
-            {"vararg", ReflectAtom::Vararg},
-            {"hasSemicolon", ReflectAtom::HasSemicolon},
-            {"generics", ReflectAtom::Generics},
-            {"genericPacks", ReflectAtom::GenericPacks},
-            {"returnAnnotation", ReflectAtom::ReturnAnnotation},
-            {"exported", ReflectAtom::Exported},
-            {"hasErrors", ReflectAtom::HasErrors},
-            {"superName", ReflectAtom::SuperName},
-            {"props", ReflectAtom::Props},
-            {"indexer", ReflectAtom::Indexer},
-            {"members", ReflectAtom::Members},
-            {"statements", ReflectAtom::Statements},
-            {"expressions", ReflectAtom::Expressions},
-            {"strings", ReflectAtom::Strings},
-            {"messageIndex", ReflectAtom::MessageIndex},
-            {"typeArguments", ReflectAtom::TypeArguments},
-            {"parameters", ReflectAtom::Parameters},
-            {"hasParameterList", ReflectAtom::HasParameterList},
-            {"argTypes", ReflectAtom::ArgTypes},
-            {"returnTypes", ReflectAtom::ReturnTypes},
-            {"attributes", ReflectAtom::Attributes},
-            {"debugname", ReflectAtom::DebugName},
-            {"upvalue", ReflectAtom::Upvalue},
-            {"hasDo", ReflectAtom::HasDo},
-            {"hasIn", ReflectAtom::HasIn},
-            {"hasEnd", ReflectAtom::HasEnd},
-            {"hasElse", ReflectAtom::HasElse},
-            {"quoteStyle", ReflectAtom::QuoteStyle},
-            {"isMissing", ReflectAtom::IsMissing},
-            {"types", ReflectAtom::Types},
-            {"tailType", ReflectAtom::TailType},
-            {"variadicType", ReflectAtom::VariadicType},
-            {"params", ReflectAtom::Params},
-
-            {"hasAt", ReflectAtom::HasAt},
-            {"openParenPosition", ReflectAtom::OpenParenPosition},
-            {"closeParenPosition", ReflectAtom::CloseParenPosition},
-            {"argsCommaPositions", ReflectAtom::ArgsCommaPositions},
-            {"closePosition", ReflectAtom::ClosePosition},
-            {"sourceString", ReflectAtom::SourceString},
-            {"blockDepth", ReflectAtom::BlockDepth},
-            {"openParens", ReflectAtom::OpenParens},
-            {"closeParens", ReflectAtom::CloseParens},
-            {"commaPositions", ReflectAtom::CommaPositions},
-            {"openBracketPosition", ReflectAtom::OpenBracketPosition},
-            {"closeBracketPosition", ReflectAtom::CloseBracketPosition},
-            {"functionKeywordPosition", ReflectAtom::FunctionKeywordPosition},
-            {"openGenericsPosition", ReflectAtom::OpenGenericsPosition},
-            {"genericsCommaPositions", ReflectAtom::GenericsCommaPositions},
-            {"closeGenericsPosition", ReflectAtom::CloseGenericsPosition},
-            {"argsAnnotationColonPositions", ReflectAtom::ArgsAnnotationColonPositions},
-            {"varargAnnotationColonPosition", ReflectAtom::VarargAnnotationColonPosition},
-            {"returnSpecifierPosition", ReflectAtom::ReturnSpecifierPosition},
-            {"opPosition", ReflectAtom::OpPosition},
-            {"thenPosition", ReflectAtom::ThenPosition},
-            {"elsePosition", ReflectAtom::ElsePosition},
-            {"isElseIf", ReflectAtom::IsElseIf},
-            {"statsStartPosition", ReflectAtom::StatsStartPosition},
-            {"endPosition", ReflectAtom::EndPosition},
-            {"untilPosition", ReflectAtom::UntilPosition},
-            {"varsAnnotationColonPositions", ReflectAtom::VarsAnnotationColonPositions},
-            {"varsCommaPositions", ReflectAtom::VarsCommaPositions},
-            {"valuesCommaPositions", ReflectAtom::ValuesCommaPositions},
-            {"annotationColonPosition", ReflectAtom::AnnotationColonPosition},
-            {"equalsPosition", ReflectAtom::EqualsPosition},
-            {"endCommaPosition", ReflectAtom::EndCommaPosition},
-            {"stepCommaPosition", ReflectAtom::StepCommaPosition},
-            {"localKeywordPosition", ReflectAtom::LocalKeywordPosition},
-            {"defaultEqualsPosition", ReflectAtom::DefaultEqualsPosition},
-            {"ellipsisPosition", ReflectAtom::EllipsisPosition},
-            {"typeKeywordPosition", ReflectAtom::TypeKeywordPosition},
-            {"genericsOpenPosition", ReflectAtom::GenericsOpenPosition},
-            {"genericsClosePosition", ReflectAtom::GenericsClosePosition},
-            {"prefixPointPosition", ReflectAtom::PrefixPointPosition},
-            {"openParametersPosition", ReflectAtom::OpenParametersPosition},
-            {"parametersCommaPositions", ReflectAtom::ParametersCommaPositions},
-            {"closeParametersPosition", ReflectAtom::CloseParametersPosition},
-            {"isArray", ReflectAtom::IsArray},
-            {"openArgsPosition", ReflectAtom::OpenArgsPosition},
-            {"argumentNameColonPositions", ReflectAtom::ArgumentNameColonPositions},
-            {"argumentsCommaPositions", ReflectAtom::ArgumentsCommaPositions},
-            {"closeArgsPosition", ReflectAtom::CloseArgsPosition},
-            {"returnArrowPosition", ReflectAtom::ReturnArrowPosition},
-            {"openPosition", ReflectAtom::OpenPosition},
-            {"leadingPosition", ReflectAtom::LeadingPosition},
-            {"separatorPositions", ReflectAtom::SeparatorPositions},
-            {"openParenthesesPosition", ReflectAtom::OpenParenthesesPosition},
-            {"closeParenthesesPosition", ReflectAtom::CloseParenthesesPosition},
-
-            {"beginLine", ReflectAtom::BeginLine},
-            {"beginColumn", ReflectAtom::BeginColumn},
-            {"endLine", ReflectAtom::EndLine},
-            {"endColumn", ReflectAtom::EndColumn},
-            {"startOffset", ReflectAtom::StartOffset},
-            {"endOffset", ReflectAtom::EndOffset},
-
-            {"line", ReflectAtom::Line},
-            {"column", ReflectAtom::Column},
-            {"computedOffset", ReflectAtom::ComputedOffset},
-
-            {"shadow", ReflectAtom::Shadow},
-            {"depth", ReflectAtom::Depth},
-
-            {"access", ReflectAtom::Access},
-            {"indexType", ReflectAtom::IndexType},
-            {"resultType", ReflectAtom::ResultType},
-            {"isMethod", ReflectAtom::IsMethod},
-        };
         DenseHashMap2<std::string_view, ReflectAtom> map;
-        for (const auto& [k, v] : entries)
-            map[k] = v;
+#define ATOM(variant, str) map[str] = ReflectAtom::variant;
+        LUAU_REFLECT_ATOMS
+#undef ATOM
         return map;
     }();
 
@@ -779,6 +630,7 @@ inline int pushCachedUserdataMethod(lua_State* L, int tag, const char* name, lua
 #define LUAU_REFLECT_PREPARE_INDEX(checkFunc) \
     auto& handle = checkFunc(L, 1); \
     const auto& doc = handle.doc; \
+    (void)doc; \
     int atomId = -1; \
     size_t keyLen = 0; \
     const char* keyStr = lua_tolstringatom(L, 2, &keyLen, FFlag::OptLuwuReflectUseAtoms ? &atomId : nullptr); \
