@@ -991,4 +991,54 @@ expectpass("repro: full sequence like the reported failure", function()
     assert(cat:meow("hehe") == "Taz hehe")
 end)
 
+-- OptimizeConstProp: object member access CSE / store-to-load forwarding / invalidation
+-- (see OBJECT_CONSTPROP.CLAUDE.md). These must stay correct with native codegen's field caching.
+class ConstPropBox
+    public v: number
+    const c: number = 42
+
+    function bump(self)
+        self.v += 100
+    end
+end
+
+expectpass("constprop: redundant reads of the same field fold but stay correct", function()
+    local b = ConstPropBox { v = 3 }
+    -- v.v read four times in one expression; must all observe 3
+    assert(b.v + b.v + b.v + b.v == 12)
+end)
+
+expectpass("constprop: a call between two reads must not reuse a stale cached field", function()
+    local function readtwice(b: ConstPropBox)
+        local a = b.v
+        b:bump() -- mutates b.v, must invalidate the cached read
+        local c = b.v
+        return a, c
+    end
+    local a, c = readtwice(ConstPropBox { v = 1 })
+    assert(a == 1 and c == 101)
+end)
+
+expectpass("constprop: write then read of the same field forwards the stored value", function()
+    local function f(b: ConstPropBox, n: number)
+        local acc = 0
+        for _ = 1, n do
+            b.v = b.v + 1
+            acc += b.v
+        end
+        return acc
+    end
+    assert(f(ConstPropBox { v = 0 }, 5) == 15)
+end)
+
+expectfail(
+    "constprop: an outside write must not reuse a prior read's weaker (non-const) guard",
+    "cannot be assigned outside",
+    function()
+        local b = ConstPropBox { v = 0 }
+        local _ = b.c -- read const (allowed), populates the read-address cache
+        b.c = 5       -- illegal outside-__init write: must still enforce const, not reuse the read addr
+    end
+)
+
 return 'OK'

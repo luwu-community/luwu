@@ -26,6 +26,9 @@ struct BuiltinAstTypes
     AstTypeReference integerType{{}, std::nullopt, AstName{"integer"}, std::nullopt, {}};
     AstTypeReference stringType{{}, std::nullopt, AstName{"string"}, std::nullopt, {}};
     AstTypeReference vectorType{{}, std::nullopt, AstName{"vector"}, std::nullopt, {}};
+    // Luau Classes (rfcx/classes.md): used to type constructor-call results (`Account(...)`) as
+    // objects without needing a real AstType node for the specific class.
+    AstTypeReference objectType{{}, std::nullopt, AstName{"object"}, std::nullopt, {}};
 
     AstTypeReference hostVectorType;
 };

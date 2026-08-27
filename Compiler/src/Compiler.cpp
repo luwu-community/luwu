@@ -130,6 +130,7 @@ struct Compiler
         , classInitFieldDefaults(nullptr)
         , classPodDefaultsFn(nullptr)
         , classMethodSelfChecks(nullptr)
+        , classLocalFinalized(nullptr)
         , locals(nullptr)
         , globals(AstName())
         , variables(nullptr)
@@ -175,6 +176,10 @@ struct Compiler
             );
 
         // mark local as captured so that closeLocals emits LOP_CLOSEUPVALS accordingly
+        // note: this can't account for classLocalFinalized (see its declaration) -- nested function
+        // bodies are all compiled up front, before any class has been compiled/finalized, so that
+        // ordering information doesn't exist yet here. The REF-capture case for hoisted class
+        // locals is instead marked explicitly where it's actually decided, in compileExprFunction.
         Variable* v = variables.find(local);
 
         if (v && v->written)
@@ -452,11 +457,24 @@ struct Compiler
 
         // Runtime checking of `self` for methods (see rfcx/classes.md): verify `self` is actually
         // an instance of this method's own class before running anything else in the body,
-        // including field defaults below -- an invalid `self` shouldn't get that far.
+        // including field defaults below -- an invalid `self` shouldn't get that far. Emitted as a
+        // single CHECKSELFCLASS opcode that falls through on success, with the `error(...)` fallback
+        // inlined right after it (reached only via the check's cold-path jump).
         if (FFlag::DebugLuauUserDefinedClasses)
         {
-            if (AstStat* const* selfCheck = classMethodSelfChecks.find(func))
-                compileStat(*selfCheck);
+            if (const SelfClassCheck* selfCheck = classMethodSelfChecks.find(func))
+            {
+                RegScope rsCheck(this);
+                uint8_t classReg = compileExprAuto(selfCheck->classExpr, rsCheck);
+
+                size_t checkLabel = bytecode.emitLabel();
+                bytecode.emitABC(LOP_CHECKSELFCLASS, args, classReg, 0);
+
+                compileStat(selfCheck->errorStat);
+
+                if (!bytecode.patchSkipC(checkLabel, bytecode.emitLabel()))
+                    CompileError::raise(func->location, "Exceeded jump distance limit; simplify the code to compile");
+            }
         }
 
         // Inline this class's field defaults ("self.field = defaultExpr") as the very first
@@ -1487,6 +1505,22 @@ struct Compiler
         }
     }
 
+    // Narrows an already-computed immutable/mutable verdict for `uv` to account for hoisted class
+    // locals: such a local is only safe to treat as immutable once its own class's real write has
+    // already been compiled (see classLocalFinalized's declaration) -- otherwise an earlier class's
+    // forward reference to it would capture the LOADNIL hoisting placeholder instead of the real
+    // class value. Non-class locals (absent from the map) are unaffected.
+    bool applyClassFinalizationGate(AstLocal* uv, bool immutable)
+    {
+        if (!immutable)
+            return false;
+
+        if (const bool* finalized = classLocalFinalized.find(uv))
+            return *finalized;
+
+        return true;
+    }
+
     bool shouldShareClosure(AstExprFunction* func)
     {
         const Function* f = functions.find(func);
@@ -1500,7 +1534,7 @@ struct Compiler
             if (!ul)
                 return false;
 
-            if (ul->written)
+            if (!applyClassFinalizationGate(uv, !ul->written))
                 return false;
 
             // it's technically safe to share closures whenever all upvalues are immutable
@@ -1548,7 +1582,13 @@ struct Compiler
             {
                 // note: we can't check if uv is an upvalue in the current frame because inlining can migrate from upvalues to locals
                 Variable* ul = variables.find(uv);
-                bool immutable = !ul || !ul->written;
+                bool immutable = applyClassFinalizationGate(uv, !ul || !ul->written);
+
+                // getUpval can't see classLocalFinalized (nested bodies compile before any class is
+                // finalized -- see its own comment), so a REF capture of an as-yet-unfinalized class
+                // local is only ever recognized here; make sure closeLocals still emits CLOSEUPVALS
+                if (!immutable)
+                    locals[uv].captured = true;
 
                 captures.push_back({immutable ? LCT_VAL : LCT_REF, uint8_t(reg)});
             }
@@ -1628,6 +1668,11 @@ struct Compiler
         RegScope _(this);
 
         bytecode.emitAD(LOP_LOADKX, dest, 0);
+
+        // The class's real write has now been emitted (in program order); any closure compiled
+        // from here on (this class's own methods, or a later class's) can safely capture this
+        // local immutably. See classLocalFinalized's declaration.
+        classLocalFinalized[*classLocal] = true;
 
         // We want to load the class constant up front, but in order to load
         // the class constant we need to build it first. To avoid a second
@@ -4694,6 +4739,7 @@ struct Compiler
                 uint8_t reg = allocReg(decl, 1u);
                 pushLocal(decl->name, reg, kDefaultAllocPc);
                 bytecode.emitABC(LOP_LOADNIL, reg, 0, 0);
+                classLocalFinalized[decl->name] = false;
             }
         }
     }
@@ -4957,6 +5003,15 @@ struct Compiler
         AstExpr* value;
     };
 
+    // Data compileFunction needs to emit a CHECKSELFCLASS self-validation for a method: an
+    // expression that evaluates to the owning class (for the check's class register), and the
+    // `error(...)` statement to run when the check fails.
+    struct SelfClassCheck
+    {
+        AstExpr* classExpr;
+        AstStat* errorStat;
+    };
+
     // Finds each class's user-defined `__init` (if any) together with the default value
     // expressions of its fields, so that compileFunction can inline `self.field = defaultExpr`
     // assignments at the top of `__init`'s body -- before the user's own statements -- with no
@@ -4972,7 +5027,7 @@ struct Compiler
         AstNameTable& names;
         DenseHashMap<AstExprFunction*, std::vector<ClassFieldDefault>>& initDefaults;
         DenseHashMap<AstStatClass*, AstExprFunction*>& podDefaultsFn;
-        DenseHashMap<AstExprFunction*, AstStat*>& methodSelfChecks;
+        DenseHashMap<AstExprFunction*, SelfClassCheck>& methodSelfChecks;
         std::vector<AstExprFunction*>& functionsToCompile;
 
         ClassInitDefaultsVisitor(
@@ -4980,7 +5035,7 @@ struct Compiler
             AstNameTable& names,
             DenseHashMap<AstExprFunction*, std::vector<ClassFieldDefault>>& initDefaults,
             DenseHashMap<AstStatClass*, AstExprFunction*>& podDefaultsFn,
-            DenseHashMap<AstExprFunction*, AstStat*>& methodSelfChecks,
+            DenseHashMap<AstExprFunction*, SelfClassCheck>& methodSelfChecks,
             std::vector<AstExprFunction*>& functionsToCompile
         )
             : allocator(allocator)
@@ -5009,28 +5064,18 @@ struct Compiler
             return AstArray<AstExpr*>{data, sizeof...(Args)};
         }
 
-        // Builds `if not class.isinstance(self, ClassName) then error("...") end`, spliced in as
-        // the very first statement of a method's body by compileFunction. Runtime checking of
-        // `self` for methods (see rfcx/classes.md) has to live here -- as ordinary statements in
-        // the method's own AST -- rather than as a check at the call boundary, because a call-
-        // boundary check is trivially skipped when the compiler inlines the call (dot-call sites
-        // like `SomeClass.method(notAnInstance)` are exactly the ones eligible for inlining).
-        // Splicing it into the body means inlining copies the check along with everything else.
-        AstStat* buildSelfCheckStat(AstStatClass* node, const AstClassMethod& method)
+        // Builds the CHECKSELFCLASS data for a method, spliced in as the very first statement of a
+        // method's body by compileFunction. Runtime checking of `self` for methods (see
+        // rfcx/classes.md) has to live here -- inlined into the method's own bytecode -- rather than
+        // as a check at the call boundary, because a call-boundary check is trivially skipped when
+        // the compiler inlines the call (dot-call sites like `SomeClass.method(notAnInstance)` are
+        // exactly the ones eligible for inlining). Splicing it into the body means inlining copies
+        // the check along with everything else.
+        SelfClassCheck buildSelfCheckStat(AstStatClass* node, const AstClassMethod& method)
         {
             Location loc = node->location;
-            AstLocal* selfLocal = method.function->args.data[0];
 
-            AstExpr* selfExpr = allocator.alloc<AstExprLocal>(loc, selfLocal, /* upvalue= */ false);
             AstExpr* classExpr = allocator.alloc<AstExprLocal>(loc, node->name, /* upvalue= */ true);
-
-            AstExpr* classGlobal = allocator.alloc<AstExprGlobal>(loc, names.getOrAdd("class"));
-            AstExpr* isinstanceFn =
-                allocator.alloc<AstExprIndexName>(loc, classGlobal, names.getOrAdd("isinstance"), loc, loc.begin, '.');
-            AstExpr* isinstanceCall =
-                allocator.alloc<AstExprCall>(loc, isinstanceFn, exprArray(selfExpr, classExpr), /* self= */ false, AstArray<AstTypeOrPack>(), loc);
-
-            AstExpr* notInstance = allocator.alloc<AstExprUnary>(loc, AstExprUnary::Op::Not, isinstanceCall);
 
             std::string message = "attempt to call method '" + std::string(method.functionName.value) +
                                    "' with 'self' not being an instance of '" + std::string(node->name->name.value) + "'";
@@ -5040,11 +5085,9 @@ struct Compiler
             AstExpr* errorCall =
                 allocator.alloc<AstExprCall>(loc, errorGlobal, exprArray(messageExpr), /* self= */ false, AstArray<AstTypeOrPack>(), loc);
 
-            AstStat** thenStats = static_cast<AstStat**>(allocator.allocate(sizeof(AstStat*)));
-            thenStats[0] = allocator.alloc<AstStatExpr>(loc, errorCall);
-            AstStatBlock* thenBody = allocator.alloc<AstStatBlock>(loc, AstArray<AstStat*>{thenStats, 1}, /* hasEnd= */ true);
+            AstStat* errorStat = allocator.alloc<AstStatExpr>(loc, errorCall);
 
-            return allocator.alloc<AstStatIf>(loc, notInstance, thenBody, /* elsebody= */ nullptr, std::nullopt, std::nullopt, loc);
+            return SelfClassCheck{classExpr, errorStat};
         }
 
         bool visit(AstStatClass* node) override
@@ -5326,12 +5369,19 @@ struct Compiler
     // Populated by ClassInitDefaultsVisitor; maps a POD class (no custom `__init`) with field
     // defaults to its synthesized `__defaults` function. See ClassInitDefaultsVisitor's comment.
     DenseHashMap<AstStatClass*, AstExprFunction*> classPodDefaultsFn;
-    // Populated by ClassInitDefaultsVisitor with a `if not class.isinstance(self, ClassName) then
-    // error(...) end` statement for every class method that takes `self` as its first parameter
-    // (i.e. not a static function). compileFunction splices this in as the very first statement
-    // of the method's body (see rfcx/classes.md "Runtime checking of `self` for methods"). Must be
+    // Populated by ClassInitDefaultsVisitor with a CHECKSELFCLASS check (class local + fallback
+    // `error(...)` statement) for every class method that takes `self` as its first parameter
+    // (i.e. not a static function). compileFunction emits this as the very first thing in the
+    // method's body (see rfcx/classes.md "Runtime checking of `self` for methods"). Must be
     // known before compileFunction runs for that function, same as classInitFieldDefaults above.
-    DenseHashMap<AstExprFunction*, AstStat*> classMethodSelfChecks;
+    DenseHashMap<AstExprFunction*, SelfClassCheck> classMethodSelfChecks;
+    // Seeded false for every hoisted (top-level) class by preallocateHoistedClasses, flipped to
+    // true by compileClassDeclaration right after that class's real LOADKX write is emitted, ahead
+    // of compiling its methods. A class local is only safe to capture immutably once this is true:
+    // methods compiled before it (an earlier class forward-referencing this one) would otherwise
+    // capture the LOADNIL hoisting placeholder instead of the real class value. Classes never
+    // entered here (nested, non-hoisted classes) impose no such ordering hazard.
+    DenseHashMap<AstLocal*, bool> classLocalFinalized;
     DenseHashMap<AstLocal*, Local> locals;
     DenseHashMap<AstName, Global> globals;
     DenseHashMap<AstLocal*, Variable> variables;

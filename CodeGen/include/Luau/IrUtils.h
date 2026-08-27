@@ -67,6 +67,10 @@ inline bool isNonTerminatingJump(IrCmd cmd)
     case IrCmd::CHECK_SLOT_MATCH:
     case IrCmd::CHECK_NODE_NO_NEXT:
     case IrCmd::CHECK_NODE_VALUE:
+    case IrCmd::CHECK_OBJECT_CLASS:
+    case IrCmd::TRY_OBJECT_MEMBER_ADDR:
+    case IrCmd::TRY_CLASS_MEMBER_ADDR:
+    case IrCmd::TRY_OBJECT_NAMECALL_ADDR:
     case IrCmd::CHECK_BUFFER_LEN:
     case IrCmd::CHECK_USERDATA_TAG:
     case IrCmd::CHECK_CMP_NUM:

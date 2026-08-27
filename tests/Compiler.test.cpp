@@ -11131,20 +11131,16 @@ TEST_CASE("ClassDeclWithMethod")
     )";
     auto res0 = "\n" + compileFunction(source.c_str(), 0, 0, 0);
     CHECK(R"(
-GETGLOBAL R1 K0 ['class']
-GETTABLEKS R1 R1 K1 ['isinstance']
-MOVE R2 R0
-GETUPVAL R3 0
-CALL R1 2 1
-JUMPIF R1 L0
-GETGLOBAL R1 K2 ['error']
-LOADK R2 K3 ['attempt to call method 'magnitud'...]
-CALL R1 1 0
-L0: GETTABLEKS R3 R0 K4 ['x']
-GETTABLEKS R4 R0 K4 ['x']
+GETUPVAL R1 0
+CHECKSELFCLASS R0 R1 L0
+GETGLOBAL R2 K0 ['error']
+LOADK R3 K1 ['attempt to call method 'magnitud'...]
+CALL R2 1 0
+L0: GETTABLEKS R3 R0 K2 ['x']
+GETTABLEKS R4 R0 K2 ['x']
 MUL R2 R3 R4
-GETTABLEKS R4 R0 K5 ['y']
-GETTABLEKS R5 R0 K5 ['y']
+GETTABLEKS R4 R0 K3 ['y']
+GETTABLEKS R5 R0 K3 ['y']
 MUL R3 R4 R5
 ADD R1 R2 R3
 RETURN R1 1
@@ -11154,12 +11150,11 @@ RETURN R1 1
 LOADNIL R0
 LOADKX R0 K4 [class Point (props: 2, methods: 1)]
 NEWCLOSURE R1 P0
-CAPTURE REF R0
+CAPTURE VAL R0
 NEWCLASSMEMBER R0 R1 ['magnitude']
 GETGLOBAL R1 K5 ['print']
 MOVE R2 R0
 CALL R1 1 0
-CLOSEUPVALS R0
 RETURN R0 0
 )" == res1);
 }
@@ -11184,22 +11179,18 @@ TEST_CASE("ClassDeclWithAmbiguousGlobal")
     )";
     auto res0 = "\n" + compileFunction(source.c_str(), 0, 0, 0);
     CHECK(R"(
-GETGLOBAL R1 K0 ['class']
-GETTABLEKS R1 R1 K1 ['isinstance']
-MOVE R2 R0
-GETUPVAL R3 0
-CALLFB R1 2 1 [0]
-JUMPIF R1 L0
-GETGLOBAL R1 K2 ['error']
-LOADK R2 K3 ['attempt to call method 'print' w'...]
-CALLFB R1 1 0 [1]
-L0: GETGLOBAL R1 K4 ['print']
-LOADK R2 K5 ['Point(x = %*, y = %*)']
-GETTABLEKS R4 R0 K6 ['x']
-GETTABLEKS R5 R0 K7 ['y']
-NAMECALL R2 R2 K8 ['format']
+GETUPVAL R1 0
+CHECKSELFCLASS R0 R1 L0
+GETGLOBAL R2 K0 ['error']
+LOADK R3 K1 ['attempt to call method 'print' w'...]
+CALLFB R2 1 0 [0]
+L0: GETGLOBAL R1 K2 ['print']
+LOADK R2 K3 ['Point(x = %*, y = %*)']
+GETTABLEKS R4 R0 K4 ['x']
+GETTABLEKS R5 R0 K5 ['y']
+NAMECALL R2 R2 K6 ['format']
 CALL R2 3 1
-CALLFB R1 1 0 [2]
+CALLFB R1 1 0 [1]
 RETURN R0 0
 )" == res0);
     auto res1 = "\n" + compileFunction(source.c_str(), 1, 0, 0);
@@ -11207,12 +11198,11 @@ RETURN R0 0
 LOADNIL R0
 LOADKX R0 K4 [class Point (props: 2, methods: 1)]
 NEWCLOSURE R1 P0
-CAPTURE REF R0
+CAPTURE VAL R0
 NEWCLASSMEMBER R0 R1 ['print']
 DUPTABLE R1 5
 LOADK R2 K0 ['Point']
 SETTABLE R0 R1 R2
-CLOSEUPVALS R0
 RETURN R1 1
 )" == res1);
 }
@@ -11292,8 +11282,7 @@ RETURN R0 1
 LOADNIL R0
 LOADKX R0 K2 [class Point (props: 1, methods: 0)]
 NEWCLOSURE R1 P0
-CAPTURE REF R0
-CLOSEUPVALS R0
+CAPTURE VAL R0
 RETURN R0 0
 )" == outer);
 }

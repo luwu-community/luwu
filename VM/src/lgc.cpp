@@ -420,6 +420,12 @@ static void traverseproto(global_State* g, Proto* f)
 
     if (f->deoptimized)
         markobject(g, f->deoptimized);
+
+    // Luau Classes (rfcx/classes.md): keep the owning class alive while its method proto is alive.
+    // Native codegen only compares this pointer (never dereferences it), but marking prevents a
+    // stale/reused-address false positive in the private/const authorization guard.
+    if (f->ownerclass)
+        markobject(g, f->ownerclass);
 }
 
 static void traverseclosure(global_State* g, Closure* cl)

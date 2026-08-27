@@ -144,6 +144,13 @@ void luaR_addclassmember(lua_State* L, LuauClass* classdef, TString* name, TValu
     setobj2class(L, &classdef->staticmembers[offsetint - classdef->numberofinstancemembers], value);
     luaC_barrier(L, classdef, value);
 
+    // Stamp the method's proto with its owning class so native codegen can authorize private/const
+    // access from inside the class's own methods (see Proto::ownerclass). Only Lua closures carry a
+    // proto; C closures (e.g. the default __init) never take the private/const fast path anyway.
+    Closure* mcl = clvalue(value);
+    if (!mcl->isC)
+        mcl->l.p->ownerclass = classdef;
+
     if (name == luaS_newlstr(L, "__init", 6))
     {
         classdef->hascustominit = true;

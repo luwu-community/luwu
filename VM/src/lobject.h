@@ -414,6 +414,15 @@ typedef struct Proto
 
     void* userdata;
 
+    // Luau Classes (rfcx/classes.md): for a proto that is one of a class's own methods (including
+    // __init / __defaults), the class it belongs to; NULL otherwise. Set when the method closure is
+    // registered (luaR_addclassmember) and GC-marked (traverseproto). Native codegen uses it to
+    // authorize private/const member access from inside the owning class's methods without bailing
+    // to the interpreter: `object->lclass == currentClosure->l.p->ownerclass` is exactly the
+    // "closure owns private access" test (method closures are unique per class), and const writes
+    // additionally require the closure to be the class's __init.
+    struct LuauClass* ownerclass;
+
     GCObject* gclist;
 
     int sizecode;

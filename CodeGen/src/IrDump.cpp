@@ -387,6 +387,14 @@ const char* getCmdName(IrCmd cmd)
         return "CHECK_NODE_NO_NEXT";
     case IrCmd::CHECK_NODE_VALUE:
         return "CHECK_NODE_VALUE";
+    case IrCmd::CHECK_OBJECT_CLASS:
+        return "CHECK_OBJECT_CLASS";
+    case IrCmd::TRY_OBJECT_MEMBER_ADDR:
+        return "TRY_OBJECT_MEMBER_ADDR";
+    case IrCmd::TRY_OBJECT_NAMECALL_ADDR:
+        return "TRY_OBJECT_NAMECALL_ADDR";
+    case IrCmd::TRY_CLASS_MEMBER_ADDR:
+        return "TRY_CLASS_MEMBER_ADDR";
     case IrCmd::CHECK_BUFFER_LEN:
         return "CHECK_BUFFER_LEN";
     case IrCmd::CHECK_BUFFER_MUTABLE:
@@ -875,6 +883,10 @@ const char* getBytecodeTypeName(uint8_t type, const char* const* userdataTypes)
         return "buffer";
     case LBC_TYPE_SYMNONE:
         return "none";
+    case LBC_TYPE_CLASS:
+        return "class";
+    case LBC_TYPE_OBJECT:
+        return "object";
     case LBC_TYPE_ANY:
         return "any";
     }

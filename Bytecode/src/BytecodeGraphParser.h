@@ -1000,6 +1000,12 @@ struct BytecodeGraphParser
                 addJumpInput(node, getJumpTarget(insn, i));
                 break;
 
+            case LOP_CHECKSELFCLASS:
+                addVmRegInput(node, LUAU_INSN_A(insn));
+                addVmRegInput(node, LUAU_INSN_B(insn));
+                addImmInput(node, static_cast<int32_t>(LUAU_INSN_C(insn)));
+                break;
+
             case LOP_NEWCLASSMEMBER:
                 LUAU_ASSERT(FFlag::DebugLuauUserDefinedClasses);
                 addVmRegInput(node, LUAU_INSN_A(insn));

@@ -53,6 +53,7 @@
 // Version 10: Adds LBC_CONSTANT_CLASS_SHAPE and NEWCLASSMEMBER for use with Luau Classes. Experimental.
 // Version 11: Adds CALLFB, CMPPROTO and feedback vector description. Experimental.
 // Version 12: Adds cost function serialized for proto and prepend each proto with size in bytes. Experimental.
+// Version 13: Adds CHECKSELFCLASS for Luau Classes 'self' validation fast path. Experimental.
 
 // # Bytecode type information history
 // Version 1: (from bytecode version 4) Type information for function signature. Currently supported.
@@ -452,6 +453,13 @@ enum LuauOpcode
     // AUX: proto id
     LOP_CMPPROTO,
 
+    // CHECKSELFCLASS: check that a register holds an object instance of a specific class, falling
+    // through when it does; used for Luau Classes 'self' validation in place of a class.isinstance() call
+    // A: self register
+    // B: class register
+    // C: jump offset to skip past the fallback error-raising code when the check passes
+    LOP_CHECKSELFCLASS,
+
     // Enum entry for number of opcodes, not a valid opcode by itself!
     LOP__COUNT
 };
@@ -500,7 +508,7 @@ enum LuauBytecodeTag
 {
     // Bytecode version; runtime supports [MIN, MAX], compiler emits TARGET by default but may emit a higher version when flags are enabled
     LBC_VERSION_MIN = 3,
-    LBC_VERSION_MAX = 12,
+    LBC_VERSION_MAX = 13,
     LBC_VERSION_TARGET = 9,
     // Type encoding version
     LBC_TYPE_VERSION_MIN = 1,
@@ -547,6 +555,10 @@ enum LuauBytecodeType
     LBC_TYPE_BUFFER,
     LBC_TYPE_INTEGER,
     LBC_TYPE_SYMNONE,
+    // Luau Classes (experimental): a class value (the factory/namespace) and an object (instance).
+    // See rfcx/classes.md. Kept in the 12..14 gap below LBC_TYPE_ANY so existing values don't shift.
+    LBC_TYPE_CLASS = 12,
+    LBC_TYPE_OBJECT = 13,
 
     LBC_TYPE_ANY = 15,
 

@@ -109,6 +109,12 @@ static void buildArgumentTypeChecks(IrBuilder& build, IrOp entry)
         case LBC_TYPE_SYMNONE:
             build.inst(IrCmd::CHECK_TAG, load, build.constTag(LUA_TSYMNONE), build.vmExit(kVmExitEntryGuardPc));
             break;
+        case LBC_TYPE_CLASS:
+            build.inst(IrCmd::CHECK_TAG, load, build.constTag(LUA_TCLASS), build.vmExit(kVmExitEntryGuardPc));
+            break;
+        case LBC_TYPE_OBJECT:
+            build.inst(IrCmd::CHECK_TAG, load, build.constTag(LUA_TOBJECT), build.vmExit(kVmExitEntryGuardPc));
+            break;
         default:
             if (tag >= LBC_TYPE_TAGGED_USERDATA_BASE && tag < LBC_TYPE_TAGGED_USERDATA_END)
             {
@@ -676,9 +682,15 @@ void IrBuilder::translateInst(LuauOpcode op, const Instruction* pc, int i)
         break;
     }
     // We do not support classes in NCG at the moment, so if we see a class
-    // operation then unconditionally exit to the VM.
+    // operation then unconditionally exit to the VM. CHECKSELFCLASS is the exception: it's the
+    // first instruction of every self-taking method, so leaving it as an unconditional exit would
+    // force every class method to interpret in full; see translateInstCheckSelfClass.
     case LOP_NEWCLASSMEMBER:
         inst(IrCmd::JUMP, vmExit(i));
+        break;
+
+    case LOP_CHECKSELFCLASS:
+        translateInstCheckSelfClass(*this, pc, i);
         break;
 
     case LOP_CMPPROTO:

@@ -1960,6 +1960,12 @@ void BytecodeBuilder::validateInstructions() const
             VJUMP(LUAU_INSN_D(insn));
             break;
 
+        case LOP_CHECKSELFCLASS:
+            VREG(LUAU_INSN_A(insn));
+            VREG(LUAU_INSN_B(insn));
+            VJUMP(LUAU_INSN_C(insn));
+            break;
+
         default:
             LUAU_ASSERT(!"Unsupported opcode");
         }
@@ -2730,6 +2736,10 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
         formatAppend(result, "CMPPROTO R%d #%d L%d\n", LUAU_INSN_A(insn), *code++, targetLabel);
         break;
 
+    case LOP_CHECKSELFCLASS:
+        formatAppend(result, "CHECKSELFCLASS R%d R%d L%d\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn), targetLabel);
+        break;
+
     default:
         LUAU_ASSERT(!"Unsupported opcode");
     }
@@ -2764,6 +2774,10 @@ static const char* getBaseTypeString(uint8_t type)
         return "buffer";
     case LBC_TYPE_SYMNONE:
         return "none";
+    case LBC_TYPE_CLASS:
+        return "class";
+    case LBC_TYPE_OBJECT:
+        return "object";
     case LBC_TYPE_ANY:
         return "any";
     }
