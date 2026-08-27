@@ -241,16 +241,15 @@ TEST_CASE("LazyAstErrors")
 
     const char* script = R"LUA(
         local doc = reflect.parse("local x = \n-- a comment")
-        assert(#doc.errors > 0)
-        assert(doc.errors[1].message ~= nil)
-        assert(doc.errors[1].location ~= nil)
-        assert(doc.errors[1].location.beginLine == 2)
-        assert(#doc.comments > 0)
-
-        -- Check cached table reference identity
-        assert(doc.errors == doc.errors)
-        assert(doc.comments == doc.comments)
-        assert(doc.lineOffsets == doc.lineOffsets)
+        local errors = doc:errors()
+        assert(#errors > 0)
+        assert(errors[1].message ~= nil)
+        assert(errors[1].location ~= nil)
+        assert(errors[1].location.beginLine == 2)
+        local comments = doc:comments()
+        assert(#comments > 0)
+        local lineOffsets = doc:lineOffsets()
+        assert(#lineOffsets > 0)
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);
@@ -297,8 +296,8 @@ TEST_CASE("LazyCstData")
         assert(typeof(callExprCst:openParens()) == "AstPosition")
         assert(callExprCst:openParens().line == 2)
         assert(callExprCst:openParens().computedOffset > 0)
-        assert(#doc.lineOffsets >= 2)
-        assert(doc.lineOffsets[1] == 0)
+        assert(#doc:lineOffsets() >= 2)
+        assert(doc:lineOffsets()[1] == 0)
         assert(#callExprCst:commaPositions() == 1)
         assert(typeof(callExprCst:commaPositions()[1]) == "AstPosition")
 
@@ -338,16 +337,17 @@ TEST_CASE("LazyAstComments")
 
     const char* script = R"LUA(
         local doc = reflect.parse("-- single comment\nlocal x = 1\n--[[\nblock comment\n]]\n")
-        assert(#doc.comments == 2)
+        local comments = doc:comments()
+        assert(#comments == 2)
 
-        local c1 = doc.comments[1]
+        local c1 = comments[1]
         assert(typeof(c1) == "AstAux")
         assert(c1.kind == "AstComment")
         assert(c1.type == "single")
         assert(c1.location.beginLine == 1)
         assert(c1.text == "-- single comment")
 
-        local c2 = doc.comments[2]
+        local c2 = comments[2]
         assert(typeof(c2) == "AstAux")
         assert(c2.kind == "AstComment")
         assert(c2.type == "block")
@@ -548,7 +548,8 @@ TEST_CASE("ParseReflectTypesFile")
 
     const char* script = R"LUA(
         local doc = reflect.parse(sourceCode)
-        assert(#doc.errors == 0, "Parse errors in Reflect/types.luau: " .. (#doc.errors > 0 and doc.errors[1].message or ""))
+        local errors = doc:errors()
+        assert(#errors == 0, "Parse errors in Reflect/types.luau: " .. (#errors > 0 and errors[1].message or ""))
         assert(doc.root ~= nil)
         assert(#doc.root:body() > 0)
     )LUA";
@@ -583,9 +584,10 @@ TEST_CASE("ReflectUseAtoms")
         assert(doc.root[false] == nil)
         assert(doc.root["nonexistentProp"] == nil)
 
-        -- Test comments & lineOffsets
-        assert(#doc.comments == 1)
-        local c = doc.comments[1]
+        -- Test comments & lineOffsets methods
+        local comments = doc:comments()
+        assert(#comments == 1)
+        local c = comments[1]
         assert(c.type == "single")
         assert(c.text == "-- hello")
         assert(c.location.beginLine == 1)

@@ -931,9 +931,9 @@ export type AstNode =
 export type AstDocument = {
     read root: AstStatBlock?,
     read source: string,
-    read errors: {ParseError},
-    read comments: {AstComment},
-    read lineOffsets: {number},
+    read errors: (self: AstDocument) -> {ParseError},
+    read comments: (self: AstDocument) -> {AstComment},
+    read lineOffsets: (self: AstDocument) -> {number},
     read walk: (self: AstDocument, visitor: (node: AstNode) -> boolean?) -> (),
     read find: (self: AstDocument, kind: string) -> {AstNode},
 }
