@@ -70,69 +70,75 @@ enum CstNodeAtom : uint8_t
 
 static CstNodeAtom getCstNodeAtom(std::string_view key)
 {
-    static const std::unordered_map<std::string_view, CstNodeAtom> s_atomMap = {
-        {"kind", Atom_Kind},
-        {"hasAt", Atom_HasAt},
-        {"openParenPosition", Atom_OpenParenPosition},
-        {"closeParenPosition", Atom_CloseParenPosition},
-        {"argsCommaPositions", Atom_ArgsCommaPositions},
-        {"closePosition", Atom_ClosePosition},
-        {"value", Atom_Value},
-        {"quoteStyle", Atom_QuoteStyle},
-        {"sourceString", Atom_SourceString},
-        {"blockDepth", Atom_BlockDepth},
-        {"openParens", Atom_OpenParens},
-        {"closeParens", Atom_CloseParens},
-        {"commaPositions", Atom_CommaPositions},
-        {"openBracketPosition", Atom_OpenBracketPosition},
-        {"closeBracketPosition", Atom_CloseBracketPosition},
-        {"functionKeywordPosition", Atom_FunctionKeywordPosition},
-        {"openGenericsPosition", Atom_OpenGenericsPosition},
-        {"genericsCommaPositions", Atom_GenericsCommaPositions},
-        {"closeGenericsPosition", Atom_CloseGenericsPosition},
-        {"argsAnnotationColonPositions", Atom_ArgsAnnotationColonPositions},
-        {"varargAnnotationColonPosition", Atom_VarargAnnotationColonPosition},
-        {"returnSpecifierPosition", Atom_ReturnSpecifierPosition},
-        {"items", Atom_Items},
-        {"opPosition", Atom_OpPosition},
-        {"thenPosition", Atom_ThenPosition},
-        {"elsePosition", Atom_ElsePosition},
-        {"isElseIf", Atom_IsElseIf},
-        {"statsStartPosition", Atom_StatsStartPosition},
-        {"endPosition", Atom_EndPosition},
-        {"untilPosition", Atom_UntilPosition},
-        {"varsAnnotationColonPositions", Atom_VarsAnnotationColonPositions},
-        {"varsCommaPositions", Atom_VarsCommaPositions},
-        {"valuesCommaPositions", Atom_ValuesCommaPositions},
-        {"annotationColonPosition", Atom_AnnotationColonPosition},
-        {"equalsPosition", Atom_EqualsPosition},
-        {"endCommaPosition", Atom_EndCommaPosition},
-        {"stepCommaPosition", Atom_StepCommaPosition},
-        {"localKeywordPosition", Atom_LocalKeywordPosition},
-        {"defaultEqualsPosition", Atom_DefaultEqualsPosition},
-        {"ellipsisPosition", Atom_EllipsisPosition},
-        {"typeKeywordPosition", Atom_TypeKeywordPosition},
-        {"genericsOpenPosition", Atom_GenericsOpenPosition},
-        {"genericsClosePosition", Atom_GenericsClosePosition},
-        {"prefixPointPosition", Atom_PrefixPointPosition},
-        {"openParametersPosition", Atom_OpenParametersPosition},
-        {"parametersCommaPositions", Atom_ParametersCommaPositions},
-        {"closeParametersPosition", Atom_CloseParametersPosition},
-        {"isArray", Atom_IsArray},
-        {"openArgsPosition", Atom_OpenArgsPosition},
-        {"argumentNameColonPositions", Atom_ArgumentNameColonPositions},
-        {"argumentsCommaPositions", Atom_ArgumentsCommaPositions},
-        {"closeArgsPosition", Atom_CloseArgsPosition},
-        {"returnArrowPosition", Atom_ReturnArrowPosition},
-        {"openPosition", Atom_OpenPosition},
-        {"leadingPosition", Atom_LeadingPosition},
-        {"separatorPositions", Atom_SeparatorPositions},
-        {"openParenthesesPosition", Atom_OpenParenthesesPosition},
-        {"closeParenthesesPosition", Atom_CloseParenthesesPosition},
-    };
+    static const DenseHashMap2<std::string_view, CstNodeAtom> s_atomMap = []() {
+        static const std::pair<std::string_view, CstNodeAtom> entries[] = {
+            {"kind", Atom_Kind},
+            {"hasAt", Atom_HasAt},
+            {"openParenPosition", Atom_OpenParenPosition},
+            {"closeParenPosition", Atom_CloseParenPosition},
+            {"argsCommaPositions", Atom_ArgsCommaPositions},
+            {"closePosition", Atom_ClosePosition},
+            {"value", Atom_Value},
+            {"quoteStyle", Atom_QuoteStyle},
+            {"sourceString", Atom_SourceString},
+            {"blockDepth", Atom_BlockDepth},
+            {"openParens", Atom_OpenParens},
+            {"closeParens", Atom_CloseParens},
+            {"commaPositions", Atom_CommaPositions},
+            {"openBracketPosition", Atom_OpenBracketPosition},
+            {"closeBracketPosition", Atom_CloseBracketPosition},
+            {"functionKeywordPosition", Atom_FunctionKeywordPosition},
+            {"openGenericsPosition", Atom_OpenGenericsPosition},
+            {"genericsCommaPositions", Atom_GenericsCommaPositions},
+            {"closeGenericsPosition", Atom_CloseGenericsPosition},
+            {"argsAnnotationColonPositions", Atom_ArgsAnnotationColonPositions},
+            {"varargAnnotationColonPosition", Atom_VarargAnnotationColonPosition},
+            {"returnSpecifierPosition", Atom_ReturnSpecifierPosition},
+            {"items", Atom_Items},
+            {"opPosition", Atom_OpPosition},
+            {"thenPosition", Atom_ThenPosition},
+            {"elsePosition", Atom_ElsePosition},
+            {"isElseIf", Atom_IsElseIf},
+            {"statsStartPosition", Atom_StatsStartPosition},
+            {"endPosition", Atom_EndPosition},
+            {"untilPosition", Atom_UntilPosition},
+            {"varsAnnotationColonPositions", Atom_VarsAnnotationColonPositions},
+            {"varsCommaPositions", Atom_VarsCommaPositions},
+            {"valuesCommaPositions", Atom_ValuesCommaPositions},
+            {"annotationColonPosition", Atom_AnnotationColonPosition},
+            {"equalsPosition", Atom_EqualsPosition},
+            {"endCommaPosition", Atom_EndCommaPosition},
+            {"stepCommaPosition", Atom_StepCommaPosition},
+            {"localKeywordPosition", Atom_LocalKeywordPosition},
+            {"defaultEqualsPosition", Atom_DefaultEqualsPosition},
+            {"ellipsisPosition", Atom_EllipsisPosition},
+            {"typeKeywordPosition", Atom_TypeKeywordPosition},
+            {"genericsOpenPosition", Atom_GenericsOpenPosition},
+            {"genericsClosePosition", Atom_GenericsClosePosition},
+            {"prefixPointPosition", Atom_PrefixPointPosition},
+            {"openParametersPosition", Atom_OpenParametersPosition},
+            {"parametersCommaPositions", Atom_ParametersCommaPositions},
+            {"closeParametersPosition", Atom_CloseParametersPosition},
+            {"isArray", Atom_IsArray},
+            {"openArgsPosition", Atom_OpenArgsPosition},
+            {"argumentNameColonPositions", Atom_ArgumentNameColonPositions},
+            {"argumentsCommaPositions", Atom_ArgumentsCommaPositions},
+            {"closeArgsPosition", Atom_CloseArgsPosition},
+            {"returnArrowPosition", Atom_ReturnArrowPosition},
+            {"openPosition", Atom_OpenPosition},
+            {"leadingPosition", Atom_LeadingPosition},
+            {"separatorPositions", Atom_SeparatorPositions},
+            {"openParenthesesPosition", Atom_OpenParenthesesPosition},
+            {"closeParenthesesPosition", Atom_CloseParenthesesPosition},
+        };
+        DenseHashMap2<std::string_view, CstNodeAtom> map;
+        for (const auto& [k, v] : entries)
+            map[k] = v;
+        return map;
+    }();
 
-    if (auto it = s_atomMap.find(key); it != s_atomMap.end())
-        return it->second;
+    if (const CstNodeAtom* atom = s_atomMap.find(key))
+        return *atom;
 
     return Atom_Unknown;
 }
@@ -161,16 +167,28 @@ static void cstNodeDtor(lua_State* L, void* userdata)
 }
 
 typedef bool (*CstNodePropertyHandler)(lua_State* L, CstNodeData& handle, CstNodeAtom atom);
+typedef bool (*CstNodeMethodHandler)(lua_State* L, CstNodeData& handle, CstNodeAtom atom);
 
-static std::vector<const char*> s_cstKindTable;
-static std::vector<CstNodePropertyHandler> s_cstPropertyTable;
+struct CstNodeClassInfo
+{
+    const char* kind = nullptr;
+    CstNodePropertyHandler propHandler = nullptr;
+    CstNodeMethodHandler methodHandler = nullptr;
+};
+
+static std::vector<CstNodeClassInfo> s_cstClassTable;
 
 template<typename T>
-static void registerCstNodeClass(const char* kind, CstNodePropertyHandler handler = nullptr)
+static void registerCstNodeClass(
+    const char* kind,
+    CstNodePropertyHandler propHandler = nullptr,
+    CstNodeMethodHandler methodHandler = nullptr
+)
 {
     int idx = T::CstClassIndex();
-    s_cstKindTable[idx] = kind;
-    s_cstPropertyTable[idx] = handler;
+    if (size_t(idx) >= s_cstClassTable.size())
+        s_cstClassTable.resize(idx + 1, CstNodeClassInfo{"CstNode", nullptr, nullptr});
+    s_cstClassTable[idx] = CstNodeClassInfo{kind, propHandler, methodHandler};
 }
 
 const char* getCstNodeKind(const Luau::CstNode* node)
@@ -178,12 +196,12 @@ const char* getCstNodeKind(const Luau::CstNode* node)
     if (!node)
         return "nil";
     int idx = node->classIndex;
-    if (idx >= 0 && idx < int(s_cstKindTable.size()) && s_cstKindTable[idx])
-        return s_cstKindTable[idx];
+    if (idx >= 0 && idx < int(s_cstClassTable.size()) && s_cstClassTable[idx].kind)
+        return s_cstClassTable[idx].kind;
     return "CstNode";
 }
 
-static bool handleCstAttr(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstAttrProps(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstAttr*>(handle.node);
     switch (atom)
@@ -193,7 +211,7 @@ static bool handleCstAttr(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
     }
 }
 
-static bool handleCstParametrizedAttr(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstParametrizedAttrMethods(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstParametrizedAttr*>(handle.node);
     switch (atom)
@@ -205,7 +223,7 @@ static bool handleCstParametrizedAttr(lua_State* L, CstNodeData& handle, CstNode
     }
 }
 
-static bool handleCstExprGroup(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstExprGroupMethods(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstExprGroup*>(handle.node);
     switch (atom)
@@ -215,7 +233,7 @@ static bool handleCstExprGroup(lua_State* L, CstNodeData& handle, CstNodeAtom at
     }
 }
 
-static bool handleCstExprConstantNumber(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstExprConstantNumberMethods(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstExprConstantNumber*>(handle.node);
     switch (atom)
@@ -225,7 +243,7 @@ static bool handleCstExprConstantNumber(lua_State* L, CstNodeData& handle, CstNo
     }
 }
 
-static bool handleCstExprConstantInteger(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstExprConstantIntegerMethods(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstExprConstantInteger*>(handle.node);
     switch (atom)
@@ -235,7 +253,7 @@ static bool handleCstExprConstantInteger(lua_State* L, CstNodeData& handle, CstN
     }
 }
 
-static bool handleCstExprConstantString(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstExprConstantStringProps(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstExprConstantString*>(handle.node);
     switch (atom)
@@ -259,13 +277,22 @@ static bool handleCstExprConstantString(lua_State* L, CstNodeData& handle, CstNo
         }
         return true;
     }
-    case Atom_SourceString: { lua_pushlstring(L, n->sourceString.data, n->sourceString.size); return true; }
     case Atom_BlockDepth:   { lua_pushinteger(L, int(n->blockDepth)); return true; }
     default: return false;
     }
 }
 
-static bool handleCstExprCall(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstExprConstantStringMethods(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+{
+    auto* n = static_cast<const Luau::CstExprConstantString*>(handle.node);
+    switch (atom)
+    {
+    case Atom_SourceString: { lua_pushlstring(L, n->sourceString.data, n->sourceString.size); return true; }
+    default: return false;
+    }
+}
+
+static bool handleCstExprCallMethods(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstExprCall*>(handle.node);
     switch (atom)
@@ -277,7 +304,7 @@ static bool handleCstExprCall(lua_State* L, CstNodeData& handle, CstNodeAtom ato
     }
 }
 
-static bool handleCstExprIndexExpr(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstExprIndexExprMethods(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstExprIndexExpr*>(handle.node);
     switch (atom)
@@ -288,7 +315,7 @@ static bool handleCstExprIndexExpr(lua_State* L, CstNodeData& handle, CstNodeAto
     }
 }
 
-static bool handleCstExprFunction(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstExprFunctionMethods(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstExprFunction*>(handle.node);
     switch (atom)
@@ -305,7 +332,7 @@ static bool handleCstExprFunction(lua_State* L, CstNodeData& handle, CstNodeAtom
     }
 }
 
-static bool handleCstExprTable(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstExprTableMethods(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstExprTable*>(handle.node);
     switch (atom)
@@ -341,7 +368,7 @@ static bool handleCstExprTable(lua_State* L, CstNodeData& handle, CstNodeAtom at
     }
 }
 
-static bool handleCstExprOp(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstExprOpMethods(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstExprOp*>(handle.node);
     switch (atom)
@@ -351,7 +378,7 @@ static bool handleCstExprOp(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
     }
 }
 
-static bool handleCstExprTypeAssertion(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstExprTypeAssertionMethods(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstExprTypeAssertion*>(handle.node);
     switch (atom)
@@ -361,19 +388,28 @@ static bool handleCstExprTypeAssertion(lua_State* L, CstNodeData& handle, CstNod
     }
 }
 
-static bool handleCstExprIfElse(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstExprIfElseProps(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+{
+    auto* n = static_cast<const Luau::CstExprIfElse*>(handle.node);
+    switch (atom)
+    {
+    case Atom_IsElseIf: { lua_pushboolean(L, n->isElseIf); return true; }
+    default: return false;
+    }
+}
+
+static bool handleCstExprIfElseMethods(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstExprIfElse*>(handle.node);
     switch (atom)
     {
     case Atom_ThenPosition: { pushPosition(L, handle.doc, n->thenPosition); return true; }
     case Atom_ElsePosition: { pushPosition(L, handle.doc, n->elsePosition); return true; }
-    case Atom_IsElseIf:     { lua_pushboolean(L, n->isElseIf); return true; }
     default: return false;
     }
 }
 
-static bool handleCstExprInterpString(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstExprInterpStringMethods(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstExprInterpString*>(handle.node);
     switch (atom)
@@ -383,7 +419,7 @@ static bool handleCstExprInterpString(lua_State* L, CstNodeData& handle, CstNode
     }
 }
 
-static bool handleCstStatDo(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstStatDoMethods(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstStatDo*>(handle.node);
     switch (atom)
@@ -394,7 +430,7 @@ static bool handleCstStatDo(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
     }
 }
 
-static bool handleCstStatRepeat(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstStatRepeatMethods(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstStatRepeat*>(handle.node);
     switch (atom)
@@ -404,7 +440,7 @@ static bool handleCstStatRepeat(lua_State* L, CstNodeData& handle, CstNodeAtom a
     }
 }
 
-static bool handleCstStatReturn(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstStatReturnMethods(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstStatReturn*>(handle.node);
     switch (atom)
@@ -414,7 +450,7 @@ static bool handleCstStatReturn(lua_State* L, CstNodeData& handle, CstNodeAtom a
     }
 }
 
-static bool handleCstStatLocal(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstStatLocalMethods(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstStatLocal*>(handle.node);
     switch (atom)
@@ -426,7 +462,7 @@ static bool handleCstStatLocal(lua_State* L, CstNodeData& handle, CstNodeAtom at
     }
 }
 
-static bool handleCstStatFor(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstStatForMethods(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstStatFor*>(handle.node);
     switch (atom)
@@ -439,7 +475,7 @@ static bool handleCstStatFor(lua_State* L, CstNodeData& handle, CstNodeAtom atom
     }
 }
 
-static bool handleCstStatForIn(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstStatForInMethods(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstStatForIn*>(handle.node);
     switch (atom)
@@ -451,7 +487,7 @@ static bool handleCstStatForIn(lua_State* L, CstNodeData& handle, CstNodeAtom at
     }
 }
 
-static bool handleCstStatAssign(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstStatAssignMethods(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstStatAssign*>(handle.node);
     switch (atom)
@@ -463,7 +499,7 @@ static bool handleCstStatAssign(lua_State* L, CstNodeData& handle, CstNodeAtom a
     }
 }
 
-static bool handleCstStatCompoundAssign(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstStatCompoundAssignMethods(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstStatCompoundAssign*>(handle.node);
     switch (atom)
@@ -473,7 +509,7 @@ static bool handleCstStatCompoundAssign(lua_State* L, CstNodeData& handle, CstNo
     }
 }
 
-static bool handleCstStatFunction(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstStatFunctionMethods(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstStatFunction*>(handle.node);
     switch (atom)
@@ -483,7 +519,7 @@ static bool handleCstStatFunction(lua_State* L, CstNodeData& handle, CstNodeAtom
     }
 }
 
-static bool handleCstStatLocalFunction(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstStatLocalFunctionMethods(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstStatLocalFunction*>(handle.node);
     switch (atom)
@@ -494,7 +530,7 @@ static bool handleCstStatLocalFunction(lua_State* L, CstNodeData& handle, CstNod
     }
 }
 
-static bool handleCstGenericType(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstGenericTypeMethods(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstGenericType*>(handle.node);
     switch (atom)
@@ -504,7 +540,7 @@ static bool handleCstGenericType(lua_State* L, CstNodeData& handle, CstNodeAtom 
     }
 }
 
-static bool handleCstGenericTypePack(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstGenericTypePackMethods(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstGenericTypePack*>(handle.node);
     switch (atom)
@@ -515,7 +551,7 @@ static bool handleCstGenericTypePack(lua_State* L, CstNodeData& handle, CstNodeA
     }
 }
 
-static bool handleCstStatTypeAlias(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstStatTypeAliasMethods(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstStatTypeAlias*>(handle.node);
     switch (atom)
@@ -529,7 +565,7 @@ static bool handleCstStatTypeAlias(lua_State* L, CstNodeData& handle, CstNodeAto
     }
 }
 
-static bool handleCstStatTypeFunction(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstStatTypeFunctionMethods(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstStatTypeFunction*>(handle.node);
     switch (atom)
@@ -540,7 +576,7 @@ static bool handleCstStatTypeFunction(lua_State* L, CstNodeData& handle, CstNode
     }
 }
 
-static bool handleCstTypeReference(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstTypeReferenceMethods(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstTypeReference*>(handle.node);
     switch (atom)
@@ -553,7 +589,7 @@ static bool handleCstTypeReference(lua_State* L, CstNodeData& handle, CstNodeAto
     }
 }
 
-static bool handleCstTypeTable(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstTypeTableProps(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstTypeTable*>(handle.node);
     switch (atom)
@@ -563,7 +599,7 @@ static bool handleCstTypeTable(lua_State* L, CstNodeData& handle, CstNodeAtom at
     }
 }
 
-static bool handleCstTypeFunction(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstTypeFunctionMethods(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstTypeFunction*>(handle.node);
     switch (atom)
@@ -580,7 +616,7 @@ static bool handleCstTypeFunction(lua_State* L, CstNodeData& handle, CstNodeAtom
     }
 }
 
-static bool handleCstTypeTypeof(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstTypeTypeofMethods(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstTypeTypeof*>(handle.node);
     switch (atom)
@@ -591,7 +627,7 @@ static bool handleCstTypeTypeof(lua_State* L, CstNodeData& handle, CstNodeAtom a
     }
 }
 
-static bool handleCstTypeUnion(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstTypeUnionMethods(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstTypeUnion*>(handle.node);
     switch (atom)
@@ -602,7 +638,7 @@ static bool handleCstTypeUnion(lua_State* L, CstNodeData& handle, CstNodeAtom at
     }
 }
 
-static bool handleCstTypeIntersection(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstTypeIntersectionMethods(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstTypeIntersection*>(handle.node);
     switch (atom)
@@ -613,18 +649,27 @@ static bool handleCstTypeIntersection(lua_State* L, CstNodeData& handle, CstNode
     }
 }
 
-static bool handleCstTypeSingletonString(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstTypeSingletonStringProps(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+{
+    auto* n = static_cast<const Luau::CstTypeSingletonString*>(handle.node);
+    switch (atom)
+    {
+    case Atom_BlockDepth: { lua_pushinteger(L, int(n->blockDepth)); return true; }
+    default: return false;
+    }
+}
+
+static bool handleCstTypeSingletonStringMethods(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstTypeSingletonString*>(handle.node);
     switch (atom)
     {
     case Atom_SourceString: { lua_pushlstring(L, n->sourceString.data, n->sourceString.size); return true; }
-    case Atom_BlockDepth:   { lua_pushinteger(L, int(n->blockDepth)); return true; }
     default: return false;
     }
 }
 
-static bool handleCstTypeGroup(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstTypeGroupMethods(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstTypeGroup*>(handle.node);
     switch (atom)
@@ -634,7 +679,7 @@ static bool handleCstTypeGroup(lua_State* L, CstNodeData& handle, CstNodeAtom at
     }
 }
 
-static bool handleCstTypePackExplicit(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstTypePackExplicitMethods(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstTypePackExplicit*>(handle.node);
     switch (atom)
@@ -646,7 +691,7 @@ static bool handleCstTypePackExplicit(lua_State* L, CstNodeData& handle, CstNode
     }
 }
 
-static bool handleCstTypePackGeneric(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
+static bool handleCstTypePackGenericMethods(lua_State* L, CstNodeData& handle, CstNodeAtom atom)
 {
     auto* n = static_cast<const Luau::CstTypePackGeneric*>(handle.node);
     switch (atom)
@@ -658,53 +703,65 @@ static bool handleCstTypePackGeneric(lua_State* L, CstNodeData& handle, CstNodeA
 
 static void initializeCstDispatchTables()
 {
-    static bool initialized = false;
-    if (initialized)
-        return;
-    initialized = true;
+    // SAFETY: c++ guarantees thread safety in static inits like this (see https://iamroman.org/blog/2017/04/cpp11-static-init/) from c++11
+    static const bool initialized = []() {
+        registerCstNodeClass<Luau::CstAttr>("CstAttr", handleCstAttrProps);
+        registerCstNodeClass<Luau::CstParametrizedAttr>("CstParametrizedAttr", nullptr, handleCstParametrizedAttrMethods);
+        registerCstNodeClass<Luau::CstExprGroup>("CstExprGroup", nullptr, handleCstExprGroupMethods);
+        registerCstNodeClass<Luau::CstExprConstantNumber>("CstExprConstantNumber", nullptr, handleCstExprConstantNumberMethods);
+        registerCstNodeClass<Luau::CstExprConstantInteger>("CstExprConstantInteger", nullptr, handleCstExprConstantIntegerMethods);
+        registerCstNodeClass<Luau::CstExprConstantString>("CstExprConstantString", handleCstExprConstantStringProps, handleCstExprConstantStringMethods);
+        registerCstNodeClass<Luau::CstExprCall>("CstExprCall", nullptr, handleCstExprCallMethods);
+        registerCstNodeClass<Luau::CstExprIndexExpr>("CstExprIndexExpr", nullptr, handleCstExprIndexExprMethods);
+        registerCstNodeClass<Luau::CstExprFunction>("CstExprFunction", nullptr, handleCstExprFunctionMethods);
+        registerCstNodeClass<Luau::CstExprTable>("CstExprTable", nullptr, handleCstExprTableMethods);
+        registerCstNodeClass<Luau::CstExprOp>("CstExprOp", nullptr, handleCstExprOpMethods);
+        registerCstNodeClass<Luau::CstExprTypeAssertion>("CstExprTypeAssertion", nullptr, handleCstExprTypeAssertionMethods);
+        registerCstNodeClass<Luau::CstExprIfElse>("CstExprIfElse", handleCstExprIfElseProps, handleCstExprIfElseMethods);
+        registerCstNodeClass<Luau::CstExprInterpString>("CstExprInterpString", nullptr, handleCstExprInterpStringMethods);
+        registerCstNodeClass<Luau::CstExprExplicitTypeInstantiation>("CstExprExplicitTypeInstantiation");
+        registerCstNodeClass<Luau::CstStatDo>("CstStatDo", nullptr, handleCstStatDoMethods);
+        registerCstNodeClass<Luau::CstStatRepeat>("CstStatRepeat", nullptr, handleCstStatRepeatMethods);
+        registerCstNodeClass<Luau::CstStatReturn>("CstStatReturn", nullptr, handleCstStatReturnMethods);
+        registerCstNodeClass<Luau::CstStatLocal>("CstStatLocal", nullptr, handleCstStatLocalMethods);
+        registerCstNodeClass<Luau::CstStatFor>("CstStatFor", nullptr, handleCstStatForMethods);
+        registerCstNodeClass<Luau::CstStatForIn>("CstStatForIn", nullptr, handleCstStatForInMethods);
+        registerCstNodeClass<Luau::CstStatAssign>("CstStatAssign", nullptr, handleCstStatAssignMethods);
+        registerCstNodeClass<Luau::CstStatCompoundAssign>("CstStatCompoundAssign", nullptr, handleCstStatCompoundAssignMethods);
+        registerCstNodeClass<Luau::CstStatFunction>("CstStatFunction", nullptr, handleCstStatFunctionMethods);
+        registerCstNodeClass<Luau::CstStatLocalFunction>("CstStatLocalFunction", nullptr, handleCstStatLocalFunctionMethods);
+        registerCstNodeClass<Luau::CstGenericType>("CstGenericType", nullptr, handleCstGenericTypeMethods);
+        registerCstNodeClass<Luau::CstGenericTypePack>("CstGenericTypePack", nullptr, handleCstGenericTypePackMethods);
+        registerCstNodeClass<Luau::CstStatTypeAlias>("CstStatTypeAlias", nullptr, handleCstStatTypeAliasMethods);
+        registerCstNodeClass<Luau::CstStatTypeFunction>("CstStatTypeFunction", nullptr, handleCstStatTypeFunctionMethods);
+        registerCstNodeClass<Luau::CstTypeReference>("CstTypeReference", nullptr, handleCstTypeReferenceMethods);
+        registerCstNodeClass<Luau::CstTypeTable>("CstTypeTable", handleCstTypeTableProps);
+        registerCstNodeClass<Luau::CstTypeFunction>("CstTypeFunction", nullptr, handleCstTypeFunctionMethods);
+        registerCstNodeClass<Luau::CstTypeTypeof>("CstTypeTypeof", nullptr, handleCstTypeTypeofMethods);
+        registerCstNodeClass<Luau::CstTypeUnion>("CstTypeUnion", nullptr, handleCstTypeUnionMethods);
+        registerCstNodeClass<Luau::CstTypeIntersection>("CstTypeIntersection", nullptr, handleCstTypeIntersectionMethods);
+        registerCstNodeClass<Luau::CstTypeSingletonString>("CstTypeSingletonString", handleCstTypeSingletonStringProps, handleCstTypeSingletonStringMethods);
+        registerCstNodeClass<Luau::CstTypeGroup>("CstTypeGroup", nullptr, handleCstTypeGroupMethods);
+        registerCstNodeClass<Luau::CstTypePackExplicit>("CstTypePackExplicit", nullptr, handleCstTypePackExplicitMethods);
+        registerCstNodeClass<Luau::CstTypePackGeneric>("CstTypePackGeneric", nullptr, handleCstTypePackGenericMethods);
+        return true;
+    }();
+    (void)initialized;
+}
 
-    s_cstKindTable.assign(gCstRttiIndex + 1, "CstNode");
-    s_cstPropertyTable.assign(gCstRttiIndex + 1, nullptr);
-
-    registerCstNodeClass<Luau::CstAttr>("CstAttr", handleCstAttr);
-    registerCstNodeClass<Luau::CstParametrizedAttr>("CstParametrizedAttr", handleCstParametrizedAttr);
-    registerCstNodeClass<Luau::CstExprGroup>("CstExprGroup", handleCstExprGroup);
-    registerCstNodeClass<Luau::CstExprConstantNumber>("CstExprConstantNumber", handleCstExprConstantNumber);
-    registerCstNodeClass<Luau::CstExprConstantInteger>("CstExprConstantInteger", handleCstExprConstantInteger);
-    registerCstNodeClass<Luau::CstExprConstantString>("CstExprConstantString", handleCstExprConstantString);
-    registerCstNodeClass<Luau::CstExprCall>("CstExprCall", handleCstExprCall);
-    registerCstNodeClass<Luau::CstExprIndexExpr>("CstExprIndexExpr", handleCstExprIndexExpr);
-    registerCstNodeClass<Luau::CstExprFunction>("CstExprFunction", handleCstExprFunction);
-    registerCstNodeClass<Luau::CstExprTable>("CstExprTable", handleCstExprTable);
-    registerCstNodeClass<Luau::CstExprOp>("CstExprOp", handleCstExprOp);
-    registerCstNodeClass<Luau::CstExprTypeAssertion>("CstExprTypeAssertion", handleCstExprTypeAssertion);
-    registerCstNodeClass<Luau::CstExprIfElse>("CstExprIfElse", handleCstExprIfElse);
-    registerCstNodeClass<Luau::CstExprInterpString>("CstExprInterpString", handleCstExprInterpString);
-    registerCstNodeClass<Luau::CstExprExplicitTypeInstantiation>("CstExprExplicitTypeInstantiation");
-    registerCstNodeClass<Luau::CstStatDo>("CstStatDo", handleCstStatDo);
-    registerCstNodeClass<Luau::CstStatRepeat>("CstStatRepeat", handleCstStatRepeat);
-    registerCstNodeClass<Luau::CstStatReturn>("CstStatReturn", handleCstStatReturn);
-    registerCstNodeClass<Luau::CstStatLocal>("CstStatLocal", handleCstStatLocal);
-    registerCstNodeClass<Luau::CstStatFor>("CstStatFor", handleCstStatFor);
-    registerCstNodeClass<Luau::CstStatForIn>("CstStatForIn", handleCstStatForIn);
-    registerCstNodeClass<Luau::CstStatAssign>("CstStatAssign", handleCstStatAssign);
-    registerCstNodeClass<Luau::CstStatCompoundAssign>("CstStatCompoundAssign", handleCstStatCompoundAssign);
-    registerCstNodeClass<Luau::CstStatFunction>("CstStatFunction", handleCstStatFunction);
-    registerCstNodeClass<Luau::CstStatLocalFunction>("CstStatLocalFunction", handleCstStatLocalFunction);
-    registerCstNodeClass<Luau::CstGenericType>("CstGenericType", handleCstGenericType);
-    registerCstNodeClass<Luau::CstGenericTypePack>("CstGenericTypePack", handleCstGenericTypePack);
-    registerCstNodeClass<Luau::CstStatTypeAlias>("CstStatTypeAlias", handleCstStatTypeAlias);
-    registerCstNodeClass<Luau::CstStatTypeFunction>("CstStatTypeFunction", handleCstStatTypeFunction);
-    registerCstNodeClass<Luau::CstTypeReference>("CstTypeReference", handleCstTypeReference);
-    registerCstNodeClass<Luau::CstTypeTable>("CstTypeTable", handleCstTypeTable);
-    registerCstNodeClass<Luau::CstTypeFunction>("CstTypeFunction", handleCstTypeFunction);
-    registerCstNodeClass<Luau::CstTypeTypeof>("CstTypeTypeof", handleCstTypeTypeof);
-    registerCstNodeClass<Luau::CstTypeUnion>("CstTypeUnion", handleCstTypeUnion);
-    registerCstNodeClass<Luau::CstTypeIntersection>("CstTypeIntersection", handleCstTypeIntersection);
-    registerCstNodeClass<Luau::CstTypeSingletonString>("CstTypeSingletonString", handleCstTypeSingletonString);
-    registerCstNodeClass<Luau::CstTypeGroup>("CstTypeGroup", handleCstTypeGroup);
-    registerCstNodeClass<Luau::CstTypePackExplicit>("CstTypePackExplicit", handleCstTypePackExplicit);
-    registerCstNodeClass<Luau::CstTypePackGeneric>("CstTypePackGeneric", handleCstTypePackGeneric);
+static int cstNodeMethodTrampoline(lua_State* L)
+{
+    auto& handle = checkCstNode(L, 1);
+    size_t len = 0;
+    const char* str = lua_tolstring(L, lua_upvalueindex(1), &len);
+    CstNodeAtom atom = getCstNodeAtom(std::string_view(str, len));
+    int idx = handle.node ? handle.node->classIndex : -1;
+    if (idx >= 0 && idx < int(s_cstClassTable.size()) && s_cstClassTable[idx].methodHandler)
+    {
+        if (s_cstClassTable[idx].methodHandler(L, handle, atom))
+            return 1;
+    }
+    luaL_error(L, "%.*s is not a valid method of CstNode", int(len), str);
 }
 
 static int cstNodeIndex(lua_State* L)
@@ -722,10 +779,14 @@ static int cstNodeIndex(lua_State* L)
     }
 
     int idx = node->classIndex;
-    if (idx >= 0 && idx < int(s_cstPropertyTable.size()) && s_cstPropertyTable[idx])
+    if (idx >= 0 && idx < int(s_cstClassTable.size()))
     {
-        if (s_cstPropertyTable[idx](L, handle, atom))
+        const CstNodeClassInfo& info = s_cstClassTable[idx];
+        if (info.propHandler && info.propHandler(L, handle, atom))
             return 1;
+
+        if (info.methodHandler)
+            return pushCachedUserdataMethod(L, TagCstNode, keyStr, cstNodeMethodTrampoline);
     }
 
     lua_pushnil(L);
@@ -752,10 +813,29 @@ static int cstNodeEq(lua_State* L)
     return 1;
 }
 
+static int cstNodeNamecall(lua_State* L)
+{
+    auto& handle = checkCstNode(L, 1);
+    int len = 0;
+    const char* str = lua_namecallwithlen(L, &len);
+    if (!str)
+        luaL_error(L, "missing method name in namecall");
+
+    CstNodeAtom atom = getCstNodeAtom(std::string_view(str, size_t(len)));
+    int idx = handle.node ? handle.node->classIndex : -1;
+    if (idx >= 0 && idx < int(s_cstClassTable.size()) && s_cstClassTable[idx].methodHandler)
+    {
+        if (s_cstClassTable[idx].methodHandler(L, handle, atom))
+            return 1;
+    }
+
+    luaL_error(L, "%.*s is not a valid method of CstNode", len, str);
+}
+
 void registerCstNode(lua_State* L)
 {
     initializeCstDispatchTables();
-    registerUserdataType(L, TagCstNode, "CstNode", cstNodeDtor, cstNodeIndex, cstNodeToString, cstNodeEq);
+    registerUserdataType(L, TagCstNode, "CstNode", cstNodeDtor, cstNodeIndex, cstNodeToString, cstNodeEq, nullptr, cstNodeNamecall);
 }
 
 } // namespace Luau

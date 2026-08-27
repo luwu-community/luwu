@@ -19,18 +19,20 @@ enum AstDocumentAtom : uint8_t
 
 static AstDocumentAtom getAstDocumentAtom(std::string_view key)
 {
-    static const std::unordered_map<std::string_view, AstDocumentAtom> s_atomMap = {
-        {"root", Atom_Root},
-        {"source", Atom_Source},
-        {"walk", Atom_Walk},
-        {"find", Atom_Find},
-        {"errors", Atom_Errors},
-        {"comments", Atom_Comments},
-        {"lineOffsets", Atom_LineOffsets},
-    };
+    static const DenseHashMap2<std::string_view, AstDocumentAtom> s_atomMap = []() {
+        DenseHashMap2<std::string_view, AstDocumentAtom> map;
+        map["root"] = Atom_Root;
+        map["source"] = Atom_Source;
+        map["walk"] = Atom_Walk;
+        map["find"] = Atom_Find;
+        map["errors"] = Atom_Errors;
+        map["comments"] = Atom_Comments;
+        map["lineOffsets"] = Atom_LineOffsets;
+        return map;
+    }();
 
-    if (auto it = s_atomMap.find(key); it != s_atomMap.end())
-        return it->second;
+    if (const AstDocumentAtom* atom = s_atomMap.find(key))
+        return *atom;
 
     return Atom_Unknown;
 }
@@ -189,9 +191,10 @@ static int astDocEq(lua_State* L)
 
 static int astDocNamecall(lua_State* L)
 {
-    if (const char* str = lua_namecallatom(L, nullptr))
+    int len = 0;
+    if (const char* str = lua_namecallwithlen(L, &len))
     {
-        AstDocumentAtom atom = getAstDocumentAtom(str);
+        AstDocumentAtom atom = getAstDocumentAtom(std::string_view(str, size_t(len)));
         switch (atom)
         {
         case Atom_Walk:
@@ -201,7 +204,7 @@ static int astDocNamecall(lua_State* L)
         default:
             break;
         }
-        luaL_error(L, "%s is not a valid method of AstDocument", str);
+        luaL_error(L, "%.*s is not a valid method of AstDocument", len, str);
     }
     luaL_error(L, "missing method name in namecall");
 }

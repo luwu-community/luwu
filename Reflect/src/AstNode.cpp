@@ -82,81 +82,87 @@ enum AstNodeAtom : uint8_t
 
 static AstNodeAtom getAstNodeAtom(std::string_view key)
 {
-    static const std::unordered_map<std::string_view, AstNodeAtom> s_atomMap = {
-        {"kind", Atom_Kind},
-        {"category", Atom_Category},
-        {"location", Atom_Location},
-        {"text", Atom_Text},
-        {"children", Atom_Children},
-        {"walk", Atom_Walk},
-        {"find", Atom_Find},
-        {"cst", Atom_Cst},
-        {"name", Atom_Name},
-        {"body", Atom_Body},
-        {"condition", Atom_Condition},
-        {"thenbody", Atom_ThenBody},
-        {"elsebody", Atom_ElseBody},
-        {"list", Atom_List},
-        {"expr", Atom_Expr},
-        {"vars", Atom_Vars},
-        {"values", Atom_Values},
-        {"var", Atom_Var},
-        {"from", Atom_From},
-        {"to", Atom_To},
-        {"step", Atom_Step},
-        {"op", Atom_Op},
-        {"func", Atom_Func},
-        {"args", Atom_Args},
-        {"self", Atom_Self},
-        {"index", Atom_Index},
-        {"items", Atom_Items},
-        {"left", Atom_Left},
-        {"right", Atom_Right},
-        {"value", Atom_Value},
-        {"local", Atom_Local},
-        {"trueExpr", Atom_TrueExpr},
-        {"falseExpr", Atom_FalseExpr},
-        {"prefix", Atom_Prefix},
-        {"type", Atom_Type},
-        {"vararg", Atom_Vararg},
-        {"annotation", Atom_Annotation},
-        {"hasSemicolon", Atom_HasSemicolon},
-        {"generics", Atom_Generics},
-        {"genericPacks", Atom_GenericPacks},
-        {"returnAnnotation", Atom_ReturnAnnotation},
-        {"exported", Atom_Exported},
-        {"hasErrors", Atom_HasErrors},
-        {"superName", Atom_SuperName},
-        {"props", Atom_Props},
-        {"indexer", Atom_Indexer},
-        {"members", Atom_Members},
-        {"statements", Atom_Statements},
-        {"expressions", Atom_Expressions},
-        {"strings", Atom_Strings},
-        {"messageIndex", Atom_MessageIndex},
-        {"typeArguments", Atom_TypeArguments},
-        {"parameters", Atom_Parameters},
-        {"hasParameterList", Atom_HasParameterList},
-        {"argTypes", Atom_ArgTypes},
-        {"returnTypes", Atom_ReturnTypes},
-        {"attributes", Atom_Attributes},
-        {"debugname", Atom_DebugName},
-        {"upvalue", Atom_Upvalue},
-        {"hasDo", Atom_HasDo},
-        {"hasIn", Atom_HasIn},
-        {"hasEnd", Atom_HasEnd},
-        {"hasElse", Atom_HasElse},
-        {"quoteStyle", Atom_QuoteStyle},
-        {"isMissing", Atom_IsMissing},
-        {"types", Atom_Types},
-        {"tailType", Atom_TailType},
-        {"variadicType", Atom_VariadicType},
-        {"params", Atom_Params},
-        {"isConst", Atom_IsConst},
-    };
+    static const DenseHashMap2<std::string_view, AstNodeAtom> s_atomMap = []() {
+        static const std::pair<std::string_view, AstNodeAtom> entries[] = {
+            {"kind", Atom_Kind},
+            {"category", Atom_Category},
+            {"location", Atom_Location},
+            {"text", Atom_Text},
+            {"children", Atom_Children},
+            {"walk", Atom_Walk},
+            {"find", Atom_Find},
+            {"cst", Atom_Cst},
+            {"name", Atom_Name},
+            {"body", Atom_Body},
+            {"condition", Atom_Condition},
+            {"thenbody", Atom_ThenBody},
+            {"elsebody", Atom_ElseBody},
+            {"list", Atom_List},
+            {"expr", Atom_Expr},
+            {"vars", Atom_Vars},
+            {"values", Atom_Values},
+            {"var", Atom_Var},
+            {"from", Atom_From},
+            {"to", Atom_To},
+            {"step", Atom_Step},
+            {"op", Atom_Op},
+            {"func", Atom_Func},
+            {"args", Atom_Args},
+            {"self", Atom_Self},
+            {"index", Atom_Index},
+            {"items", Atom_Items},
+            {"left", Atom_Left},
+            {"right", Atom_Right},
+            {"value", Atom_Value},
+            {"local", Atom_Local},
+            {"trueExpr", Atom_TrueExpr},
+            {"falseExpr", Atom_FalseExpr},
+            {"prefix", Atom_Prefix},
+            {"type", Atom_Type},
+            {"vararg", Atom_Vararg},
+            {"annotation", Atom_Annotation},
+            {"hasSemicolon", Atom_HasSemicolon},
+            {"generics", Atom_Generics},
+            {"genericPacks", Atom_GenericPacks},
+            {"returnAnnotation", Atom_ReturnAnnotation},
+            {"exported", Atom_Exported},
+            {"hasErrors", Atom_HasErrors},
+            {"superName", Atom_SuperName},
+            {"props", Atom_Props},
+            {"indexer", Atom_Indexer},
+            {"members", Atom_Members},
+            {"statements", Atom_Statements},
+            {"expressions", Atom_Expressions},
+            {"strings", Atom_Strings},
+            {"messageIndex", Atom_MessageIndex},
+            {"typeArguments", Atom_TypeArguments},
+            {"parameters", Atom_Parameters},
+            {"hasParameterList", Atom_HasParameterList},
+            {"argTypes", Atom_ArgTypes},
+            {"returnTypes", Atom_ReturnTypes},
+            {"attributes", Atom_Attributes},
+            {"debugname", Atom_DebugName},
+            {"upvalue", Atom_Upvalue},
+            {"hasDo", Atom_HasDo},
+            {"hasIn", Atom_HasIn},
+            {"hasEnd", Atom_HasEnd},
+            {"hasElse", Atom_HasElse},
+            {"quoteStyle", Atom_QuoteStyle},
+            {"isMissing", Atom_IsMissing},
+            {"types", Atom_Types},
+            {"tailType", Atom_TailType},
+            {"variadicType", Atom_VariadicType},
+            {"params", Atom_Params},
+            {"isConst", Atom_IsConst},
+        };
+        DenseHashMap2<std::string_view, AstNodeAtom> map;
+        for (const auto& [k, v] : entries)
+            map[k] = v;
+        return map;
+    }();
 
-    if (auto it = s_atomMap.find(key); it != s_atomMap.end())
-        return it->second;
+    if (const AstNodeAtom* atom = s_atomMap.find(key))
+        return *atom;
 
     return Atom_Unknown;
 }
@@ -198,10 +204,15 @@ static void astNodeDtor(lua_State* L, void* userdata)
 typedef bool (*NodePropertyHandler)(lua_State* L, AstNodeData& handle, AstNodeAtom atom);
 typedef bool (*NodeMethodHandler)(lua_State* L, AstNodeData& handle, AstNodeAtom atom);
 
-static std::vector<const char*> s_nodeKindTable;
-static std::vector<NodeCategory> s_nodeCategoryTable;
-static std::vector<NodePropertyHandler> s_nodePropertyTable;
-static std::vector<NodeMethodHandler> s_nodeMethodTable;
+struct AstNodeClassInfo
+{
+    const char* kind = nullptr;
+    NodeCategory category = Category_Unknown;
+    NodePropertyHandler propHandler = nullptr;
+    NodeMethodHandler methodHandler = nullptr;
+};
+
+static std::vector<AstNodeClassInfo> s_nodeClassTable;
 
 // Register every node statically to allow for all AST node operations to be direct jumps and not if-else hell.
 //
@@ -215,10 +226,9 @@ static void registerNodeClass(
 )
 {
     int idx = T::ClassIndex();
-    s_nodeKindTable[idx] = kind;
-    s_nodeCategoryTable[idx] = category;
-    s_nodePropertyTable[idx] = propHandler;
-    s_nodeMethodTable[idx] = methodHandler;
+    if (size_t(idx) >= s_nodeClassTable.size())
+        s_nodeClassTable.resize(idx + 1, AstNodeClassInfo{"AstNode", Category_Unknown, nullptr, nullptr});
+    s_nodeClassTable[idx] = AstNodeClassInfo{kind, category, propHandler, methodHandler};
 }
 
 const char* getNodeKind(Luau::AstNode* node)
@@ -226,8 +236,8 @@ const char* getNodeKind(Luau::AstNode* node)
     if (!node)
         return "nil";
     int idx = node->classIndex;
-    if (idx >= 0 && idx < int(s_nodeKindTable.size()) && s_nodeKindTable[idx])
-        return s_nodeKindTable[idx];
+    if (idx >= 0 && idx < int(s_nodeClassTable.size()) && s_nodeClassTable[idx].kind)
+        return s_nodeClassTable[idx].kind;
     return "AstNode";
 }
 
@@ -1269,85 +1279,80 @@ static bool handleAttrMethods(lua_State* L, AstNodeData& handle, AstNodeAtom ato
 
 static void initializeDispatchTables()
 {
-    static bool initialized = false;
-    if (initialized)
-        return;
-    initialized = true;
+    // SAFETY: c++ guarantees thread safety in static inits like this (see https://iamroman.org/blog/2017/04/cpp11-static-init/) from c++11
+    static const bool initialized = []() {
+        // Statements
+        registerNodeClass<Luau::AstStatBlock>("AstStatBlock", Category_Stat, handleStatBlockProps, handleStatBlockMethods);
+        registerNodeClass<Luau::AstStatIf>("AstStatIf", Category_Stat, nullptr, handleStatIfMethods);
+        registerNodeClass<Luau::AstStatWhile>("AstStatWhile", Category_Stat, handleStatWhileProps, handleStatWhileMethods);
+        registerNodeClass<Luau::AstStatRepeat>("AstStatRepeat", Category_Stat, nullptr, handleStatRepeatMethods);
+        registerNodeClass<Luau::AstStatBreak>("AstStatBreak", Category_Stat);
+        registerNodeClass<Luau::AstStatContinue>("AstStatContinue", Category_Stat);
+        registerNodeClass<Luau::AstStatReturn>("AstStatReturn", Category_Stat, nullptr, handleStatReturnMethods);
+        registerNodeClass<Luau::AstStatExpr>("AstStatExpr", Category_Stat, nullptr, handleStatExprMethods);
+        registerNodeClass<Luau::AstStatLocal>("AstStatLocal", Category_Stat, handleStatLocalProps, handleStatLocalMethods);
+        registerNodeClass<Luau::AstStatFor>("AstStatFor", Category_Stat, handleStatForProps, handleStatForMethods);
+        registerNodeClass<Luau::AstStatForIn>("AstStatForIn", Category_Stat, handleStatForInProps, handleStatForInMethods);
+        registerNodeClass<Luau::AstStatAssign>("AstStatAssign", Category_Stat, nullptr, handleStatAssignMethods);
+        registerNodeClass<Luau::AstStatCompoundAssign>("AstStatCompoundAssign", Category_Stat, handleStatCompoundAssignProps, handleStatCompoundAssignMethods);
+        registerNodeClass<Luau::AstStatFunction>("AstStatFunction", Category_Stat, nullptr, handleStatFunctionMethods);
+        registerNodeClass<Luau::AstStatLocalFunction>("AstStatLocalFunction", Category_Stat, handleStatLocalFunctionProps, handleStatLocalFunctionMethods);
+        registerNodeClass<Luau::AstStatTypeAlias>("AstStatTypeAlias", Category_Stat, handleStatTypeAliasProps, handleStatTypeAliasMethods);
+        registerNodeClass<Luau::AstStatTypeFunction>("AstStatTypeFunction", Category_Stat, handleStatTypeFunctionProps, handleStatTypeFunctionMethods);
+        registerNodeClass<Luau::AstStatDeclareGlobal>("AstStatDeclareGlobal", Category_Stat, handleStatDeclareGlobalProps, handleStatDeclareGlobalMethods);
+        registerNodeClass<Luau::AstStatDeclareFunction>("AstStatDeclareFunction", Category_Stat, handleStatDeclareFunctionProps, handleStatDeclareFunctionMethods);
+        registerNodeClass<Luau::AstStatClass>("AstStatClass", Category_Stat, handleStatClassProps, handleStatClassMethods);
+        registerNodeClass<Luau::AstStatDeclareExternType>("AstStatDeclareExternType", Category_Stat, handleStatDeclareExternTypeProps, handleStatDeclareExternTypeMethods);
+        registerNodeClass<Luau::AstStatError>("AstStatError", Category_Stat, handleStatErrorProps, handleStatErrorMethods);
 
-    s_nodeKindTable.assign(gAstRttiIndex + 1, "AstNode");
-    s_nodeCategoryTable.assign(gAstRttiIndex + 1, Category_Unknown);
-    s_nodePropertyTable.assign(gAstRttiIndex + 1, nullptr);
-    s_nodeMethodTable.assign(gAstRttiIndex + 1, nullptr);
+        // Expressions
+        registerNodeClass<Luau::AstExprGroup>("AstExprGroup", Category_Expr, nullptr, handleExprGroupMethods);
+        registerNodeClass<Luau::AstExprConstantNil>("AstExprConstantNil", Category_Expr);
+        registerNodeClass<Luau::AstExprConstantBool>("AstExprConstantBool", Category_Expr, handleExprConstantBoolProps);
+        registerNodeClass<Luau::AstExprConstantNumber>("AstExprConstantNumber", Category_Expr, handleExprConstantNumberProps);
+        registerNodeClass<Luau::AstExprConstantInteger>("AstExprConstantInteger", Category_Expr, handleExprConstantIntegerProps);
+        registerNodeClass<Luau::AstExprConstantString>("AstExprConstantString", Category_Expr, handleExprConstantStringProps);
+        registerNodeClass<Luau::AstExprLocal>("AstExprLocal", Category_Expr, handleExprLocalProps, handleExprLocalMethods);
+        registerNodeClass<Luau::AstExprGlobal>("AstExprGlobal", Category_Expr, handleExprGlobalProps);
+        registerNodeClass<Luau::AstExprVarargs>("AstExprVarargs", Category_Expr);
+        registerNodeClass<Luau::AstExprCall>("AstExprCall", Category_Expr, handleExprCallProps, handleExprCallMethods);
+        registerNodeClass<Luau::AstExprIndexName>("AstExprIndexName", Category_Expr, handleExprIndexNameProps, handleExprIndexNameMethods);
+        registerNodeClass<Luau::AstExprIndexExpr>("AstExprIndexExpr", Category_Expr, nullptr, handleExprIndexExprMethods);
+        registerNodeClass<Luau::AstExprFunction>("AstExprFunction", Category_Expr, handleExprFunctionProps, handleExprFunctionMethods);
+        registerNodeClass<Luau::AstExprTable>("AstExprTable", Category_Expr, nullptr, handleExprTableMethods);
+        registerNodeClass<Luau::AstExprUnary>("AstExprUnary", Category_Expr, handleExprUnaryProps, handleExprUnaryMethods);
+        registerNodeClass<Luau::AstExprBinary>("AstExprBinary", Category_Expr, handleExprBinaryProps, handleExprBinaryMethods);
+        registerNodeClass<Luau::AstExprTypeAssertion>("AstExprTypeAssertion", Category_Expr, nullptr, handleExprTypeAssertionMethods);
+        registerNodeClass<Luau::AstExprIfElse>("AstExprIfElse", Category_Expr, handleExprIfElseProps, handleExprIfElseMethods);
+        registerNodeClass<Luau::AstExprInterpString>("AstExprInterpString", Category_Expr, handleExprInterpStringProps, handleExprInterpStringMethods);
+        registerNodeClass<Luau::AstExprInstantiate>("AstExprInstantiate", Category_Expr, nullptr, handleExprInstantiateMethods);
+        registerNodeClass<Luau::AstExprError>("AstExprError", Category_Expr, handleExprErrorProps, handleExprErrorMethods);
 
-    // Statements
-    registerNodeClass<Luau::AstStatBlock>("AstStatBlock", Category_Stat, handleStatBlockProps, handleStatBlockMethods);
-    registerNodeClass<Luau::AstStatIf>("AstStatIf", Category_Stat, nullptr, handleStatIfMethods);
-    registerNodeClass<Luau::AstStatWhile>("AstStatWhile", Category_Stat, handleStatWhileProps, handleStatWhileMethods);
-    registerNodeClass<Luau::AstStatRepeat>("AstStatRepeat", Category_Stat, nullptr, handleStatRepeatMethods);
-    registerNodeClass<Luau::AstStatBreak>("AstStatBreak", Category_Stat);
-    registerNodeClass<Luau::AstStatContinue>("AstStatContinue", Category_Stat);
-    registerNodeClass<Luau::AstStatReturn>("AstStatReturn", Category_Stat, nullptr, handleStatReturnMethods);
-    registerNodeClass<Luau::AstStatExpr>("AstStatExpr", Category_Stat, nullptr, handleStatExprMethods);
-    registerNodeClass<Luau::AstStatLocal>("AstStatLocal", Category_Stat, handleStatLocalProps, handleStatLocalMethods);
-    registerNodeClass<Luau::AstStatFor>("AstStatFor", Category_Stat, handleStatForProps, handleStatForMethods);
-    registerNodeClass<Luau::AstStatForIn>("AstStatForIn", Category_Stat, handleStatForInProps, handleStatForInMethods);
-    registerNodeClass<Luau::AstStatAssign>("AstStatAssign", Category_Stat, nullptr, handleStatAssignMethods);
-    registerNodeClass<Luau::AstStatCompoundAssign>("AstStatCompoundAssign", Category_Stat, handleStatCompoundAssignProps, handleStatCompoundAssignMethods);
-    registerNodeClass<Luau::AstStatFunction>("AstStatFunction", Category_Stat, nullptr, handleStatFunctionMethods);
-    registerNodeClass<Luau::AstStatLocalFunction>("AstStatLocalFunction", Category_Stat, handleStatLocalFunctionProps, handleStatLocalFunctionMethods);
-    registerNodeClass<Luau::AstStatTypeAlias>("AstStatTypeAlias", Category_Stat, handleStatTypeAliasProps, handleStatTypeAliasMethods);
-    registerNodeClass<Luau::AstStatTypeFunction>("AstStatTypeFunction", Category_Stat, handleStatTypeFunctionProps, handleStatTypeFunctionMethods);
-    registerNodeClass<Luau::AstStatDeclareGlobal>("AstStatDeclareGlobal", Category_Stat, handleStatDeclareGlobalProps, handleStatDeclareGlobalMethods);
-    registerNodeClass<Luau::AstStatDeclareFunction>("AstStatDeclareFunction", Category_Stat, handleStatDeclareFunctionProps, handleStatDeclareFunctionMethods);
-    registerNodeClass<Luau::AstStatClass>("AstStatClass", Category_Stat, handleStatClassProps, handleStatClassMethods);
-    registerNodeClass<Luau::AstStatDeclareExternType>("AstStatDeclareExternType", Category_Stat, handleStatDeclareExternTypeProps, handleStatDeclareExternTypeMethods);
-    registerNodeClass<Luau::AstStatError>("AstStatError", Category_Stat, handleStatErrorProps, handleStatErrorMethods);
+        // Types
+        registerNodeClass<Luau::AstTypeReference>("AstTypeReference", Category_Type, handleTypeReferenceProps, handleTypeReferenceMethods);
+        registerNodeClass<Luau::AstTypeTable>("AstTypeTable", Category_Type, nullptr, handleTypeTableMethods);
+        registerNodeClass<Luau::AstTypeFunction>("AstTypeFunction", Category_Type, nullptr, handleTypeFunctionMethods);
+        registerNodeClass<Luau::AstTypeTypeof>("AstTypeTypeof", Category_Type, nullptr, handleTypeTypeofMethods);
+        registerNodeClass<Luau::AstTypeOptional>("AstTypeOptional", Category_Type);
+        registerNodeClass<Luau::AstTypeUnion>("AstTypeUnion", Category_Type, nullptr, handleTypeUnionMethods);
+        registerNodeClass<Luau::AstTypeIntersection>("AstTypeIntersection", Category_Type, nullptr, handleTypeIntersectionMethods);
+        registerNodeClass<Luau::AstTypeSingletonBool>("AstTypeSingletonBool", Category_Type, handleTypeSingletonBoolProps);
+        registerNodeClass<Luau::AstTypeSingletonString>("AstTypeSingletonString", Category_Type, handleTypeSingletonStringProps);
+        registerNodeClass<Luau::AstTypeGroup>("AstTypeGroup", Category_Type, nullptr, handleTypeGroupMethods);
+        registerNodeClass<Luau::AstTypeError>("AstTypeError", Category_Type, handleTypeErrorProps, handleTypeErrorMethods);
 
-    // Expressions
-    registerNodeClass<Luau::AstExprGroup>("AstExprGroup", Category_Expr, nullptr, handleExprGroupMethods);
-    registerNodeClass<Luau::AstExprConstantNil>("AstExprConstantNil", Category_Expr);
-    registerNodeClass<Luau::AstExprConstantBool>("AstExprConstantBool", Category_Expr, handleExprConstantBoolProps);
-    registerNodeClass<Luau::AstExprConstantNumber>("AstExprConstantNumber", Category_Expr, handleExprConstantNumberProps);
-    registerNodeClass<Luau::AstExprConstantInteger>("AstExprConstantInteger", Category_Expr, handleExprConstantIntegerProps);
-    registerNodeClass<Luau::AstExprConstantString>("AstExprConstantString", Category_Expr, handleExprConstantStringProps);
-    registerNodeClass<Luau::AstExprLocal>("AstExprLocal", Category_Expr, handleExprLocalProps, handleExprLocalMethods);
-    registerNodeClass<Luau::AstExprGlobal>("AstExprGlobal", Category_Expr, handleExprGlobalProps);
-    registerNodeClass<Luau::AstExprVarargs>("AstExprVarargs", Category_Expr);
-    registerNodeClass<Luau::AstExprCall>("AstExprCall", Category_Expr, handleExprCallProps, handleExprCallMethods);
-    registerNodeClass<Luau::AstExprIndexName>("AstExprIndexName", Category_Expr, handleExprIndexNameProps, handleExprIndexNameMethods);
-    registerNodeClass<Luau::AstExprIndexExpr>("AstExprIndexExpr", Category_Expr, nullptr, handleExprIndexExprMethods);
-    registerNodeClass<Luau::AstExprFunction>("AstExprFunction", Category_Expr, handleExprFunctionProps, handleExprFunctionMethods);
-    registerNodeClass<Luau::AstExprTable>("AstExprTable", Category_Expr, nullptr, handleExprTableMethods);
-    registerNodeClass<Luau::AstExprUnary>("AstExprUnary", Category_Expr, handleExprUnaryProps, handleExprUnaryMethods);
-    registerNodeClass<Luau::AstExprBinary>("AstExprBinary", Category_Expr, handleExprBinaryProps, handleExprBinaryMethods);
-    registerNodeClass<Luau::AstExprTypeAssertion>("AstExprTypeAssertion", Category_Expr, nullptr, handleExprTypeAssertionMethods);
-    registerNodeClass<Luau::AstExprIfElse>("AstExprIfElse", Category_Expr, handleExprIfElseProps, handleExprIfElseMethods);
-    registerNodeClass<Luau::AstExprInterpString>("AstExprInterpString", Category_Expr, handleExprInterpStringProps, handleExprInterpStringMethods);
-    registerNodeClass<Luau::AstExprInstantiate>("AstExprInstantiate", Category_Expr, nullptr, handleExprInstantiateMethods);
-    registerNodeClass<Luau::AstExprError>("AstExprError", Category_Expr, handleExprErrorProps, handleExprErrorMethods);
+        // Type Packs
+        registerNodeClass<Luau::AstTypePackExplicit>("AstTypePackExplicit", Category_TypePack, nullptr, handleTypePackExplicitMethods);
+        registerNodeClass<Luau::AstTypePackVariadic>("AstTypePackVariadic", Category_TypePack, nullptr, handleTypePackVariadicMethods);
+        registerNodeClass<Luau::AstTypePackGeneric>("AstTypePackGeneric", Category_TypePack, handleTypePackGenericProps);
 
-    // Types
-    registerNodeClass<Luau::AstTypeReference>("AstTypeReference", Category_Type, handleTypeReferenceProps, handleTypeReferenceMethods);
-    registerNodeClass<Luau::AstTypeTable>("AstTypeTable", Category_Type, nullptr, handleTypeTableMethods);
-    registerNodeClass<Luau::AstTypeFunction>("AstTypeFunction", Category_Type, nullptr, handleTypeFunctionMethods);
-    registerNodeClass<Luau::AstTypeTypeof>("AstTypeTypeof", Category_Type, nullptr, handleTypeTypeofMethods);
-    registerNodeClass<Luau::AstTypeOptional>("AstTypeOptional", Category_Type);
-    registerNodeClass<Luau::AstTypeUnion>("AstTypeUnion", Category_Type, nullptr, handleTypeUnionMethods);
-    registerNodeClass<Luau::AstTypeIntersection>("AstTypeIntersection", Category_Type, nullptr, handleTypeIntersectionMethods);
-    registerNodeClass<Luau::AstTypeSingletonBool>("AstTypeSingletonBool", Category_Type, handleTypeSingletonBoolProps);
-    registerNodeClass<Luau::AstTypeSingletonString>("AstTypeSingletonString", Category_Type, handleTypeSingletonStringProps);
-    registerNodeClass<Luau::AstTypeGroup>("AstTypeGroup", Category_Type, nullptr, handleTypeGroupMethods);
-    registerNodeClass<Luau::AstTypeError>("AstTypeError", Category_Type, handleTypeErrorProps, handleTypeErrorMethods);
-
-    // Type Packs
-    registerNodeClass<Luau::AstTypePackExplicit>("AstTypePackExplicit", Category_TypePack, nullptr, handleTypePackExplicitMethods);
-    registerNodeClass<Luau::AstTypePackVariadic>("AstTypePackVariadic", Category_TypePack, nullptr, handleTypePackVariadicMethods);
-    registerNodeClass<Luau::AstTypePackGeneric>("AstTypePackGeneric", Category_TypePack, handleTypePackGenericProps);
-
-    // Generics & Attributes
-    registerNodeClass<Luau::AstGenericType>("AstGenericType", Category_Generic, handleGenericTypeProps, handleGenericTypeMethods);
-    registerNodeClass<Luau::AstGenericTypePack>("AstGenericTypePack", Category_Generic, handleGenericTypePackProps, handleGenericTypePackMethods);
-    registerNodeClass<Luau::AstAttr>("AstAttr", Category_Attr, handleAttrProps, handleAttrMethods);
+        // Generics & Attributes
+        registerNodeClass<Luau::AstGenericType>("AstGenericType", Category_Generic, handleGenericTypeProps, handleGenericTypeMethods);
+        registerNodeClass<Luau::AstGenericTypePack>("AstGenericTypePack", Category_Generic, handleGenericTypePackProps, handleGenericTypePackMethods);
+        registerNodeClass<Luau::AstAttr>("AstAttr", Category_Attr, handleAttrProps, handleAttrMethods);
+        return true;
+    }();
+    (void)initialized;
 }
 
 static int astNodeChildren(lua_State* L)
@@ -1416,18 +1421,19 @@ static int astNodeFind(lua_State* L)
     return 1;
 }
 
-static int astNodeGenericMethodThunk(lua_State* L)
+static int astNodeMethodTrampoline(lua_State* L)
 {
     auto& handle = checkAstNode(L, 1);
-    const char* str = lua_tostring(L, lua_upvalueindex(1));
-    AstNodeAtom atom = getAstNodeAtom(str);
+    size_t len = 0;
+    const char* str = lua_tolstring(L, lua_upvalueindex(1), &len);
+    AstNodeAtom atom = getAstNodeAtom(std::string_view(str, len));
     int idx = handle.node ? handle.node->classIndex : -1;
-    if (idx >= 0 && idx < int(s_nodeMethodTable.size()) && s_nodeMethodTable[idx])
+    if (idx >= 0 && idx < int(s_nodeClassTable.size()) && s_nodeClassTable[idx].methodHandler)
     {
-        if (s_nodeMethodTable[idx](L, handle, atom))
+        if (s_nodeClassTable[idx].methodHandler(L, handle, atom))
             return 1;
     }
-    luaL_error(L, "%s is not a valid method of AstNode", str);
+    luaL_error(L, "%.*s is not a valid method of AstNode", int(len), str);
 }
 
 static int astNodeIndex(lua_State* L)
@@ -1475,7 +1481,7 @@ static int astNodeIndex(lua_State* L)
     }
     case Atom_Category:
     {
-        NodeCategory cat = (idx >= 0 && idx < int(s_nodeCategoryTable.size())) ? s_nodeCategoryTable[idx] : Category_Unknown;
+        NodeCategory cat = (idx >= 0 && idx < int(s_nodeClassTable.size())) ? s_nodeClassTable[idx].category : Category_Unknown;
         switch (cat)
         {
         case Category_Stat:     lua_pushstring(L, "stat"); break;
@@ -1500,14 +1506,15 @@ static int astNodeIndex(lua_State* L)
         break;
     }
 
-    if (idx >= 0 && idx < int(s_nodePropertyTable.size()) && s_nodePropertyTable[idx])
+    if (idx >= 0 && idx < int(s_nodeClassTable.size()))
     {
-        if (s_nodePropertyTable[idx](L, handle, atom))
+        const AstNodeClassInfo& info = s_nodeClassTable[idx];
+        if (info.propHandler && info.propHandler(L, handle, atom))
             return 1;
-    }
 
-    if (idx >= 0 && idx < int(s_nodeMethodTable.size()) && s_nodeMethodTable[idx])
-        return pushCachedUserdataMethod(L, TagNode, keyStr, astNodeGenericMethodThunk);
+        if (info.methodHandler)
+            return pushCachedUserdataMethod(L, TagNode, keyStr, astNodeMethodTrampoline);
+    }
 
     lua_pushnil(L);
     return 1;
@@ -1536,11 +1543,12 @@ static int astNodeEq(lua_State* L)
 static int astNodeNamecall(lua_State* L)
 {
     auto& handle = checkAstNode(L, 1);
-    const char* str = lua_namecallatom(L, nullptr);
+    int len = 0;
+    const char* str = lua_namecallwithlen(L, &len);
     if (!str)
         luaL_error(L, "missing method name in namecall");
 
-    AstNodeAtom atom = getAstNodeAtom(str);
+    AstNodeAtom atom = getAstNodeAtom(std::string_view(str, size_t(len)));
 
     switch (atom)
     {
@@ -1553,13 +1561,13 @@ static int astNodeNamecall(lua_State* L)
     }
 
     int idx = handle.node ? handle.node->classIndex : -1;
-    if (idx >= 0 && idx < int(s_nodeMethodTable.size()) && s_nodeMethodTable[idx])
+    if (idx >= 0 && idx < int(s_nodeClassTable.size()) && s_nodeClassTable[idx].methodHandler)
     {
-        if (s_nodeMethodTable[idx](L, handle, atom))
+        if (s_nodeClassTable[idx].methodHandler(L, handle, atom))
             return 1;
     }
 
-    luaL_error(L, "%s is not a valid method of AstNode", str);
+    luaL_error(L, "%.*s is not a valid method of AstNode", len, str);
 }
 
 void registerAstNode(lua_State* L)

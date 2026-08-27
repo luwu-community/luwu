@@ -3,11 +3,13 @@
 
 #include "Luau/Reflect.h"
 
+#include "lapix.h"
 #include "Luau/Ast.h"
 #include "Luau/Cst.h"
 #include "Luau/Parser.h"
 #include "Luau/Location.h"
 #include "Luau/Common.h"
+#include "Luau/DenseHash2.h"
 
 #include <memory>
 #include <string>

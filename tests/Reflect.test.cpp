@@ -285,7 +285,7 @@ TEST_CASE("LazyCstData")
         assert(typeof(strExprCst) == "CstNode")
         assert(strExprCst.kind == "CstExprConstantString")
         assert(strExprCst.quoteStyle == "single")
-        assert(strExprCst.sourceString == "hello world")
+        assert(strExprCst:sourceString() == "hello world")
 
         -- Check call CST parens and comma positions
         local callStat = stats[2]
@@ -293,13 +293,13 @@ TEST_CASE("LazyCstData")
         local callExprCst = callExpr:cst()
         assert(callExprCst ~= nil)
         assert(callExprCst.kind == "CstExprCall")
-        assert(typeof(callExprCst.openParens) == "AstPosition")
-        assert(callExprCst.openParens.line == 2)
-        assert(callExprCst.openParens.computedOffset > 0)
+        assert(typeof(callExprCst:openParens()) == "AstPosition")
+        assert(callExprCst:openParens().line == 2)
+        assert(callExprCst:openParens().computedOffset > 0)
         assert(#doc.lineOffsets >= 2)
         assert(doc.lineOffsets[1] == 0)
-        assert(#callExprCst.commaPositions == 1)
-        assert(typeof(callExprCst.commaPositions[1]) == "AstPosition")
+        assert(#callExprCst:commaPositions() == 1)
+        assert(typeof(callExprCst:commaPositions()[1]) == "AstPosition")
 
         -- Check type function CST and AST category
         local typeDoc = reflect.parse("type Callback = (a: number, b: string) -> boolean")
@@ -308,16 +308,16 @@ TEST_CASE("LazyCstData")
         local aliasStatCst = aliasStat:cst()
         assert(aliasStatCst ~= nil)
         assert(aliasStatCst.kind == "CstStatTypeAlias")
-        assert(aliasStatCst.typeKeywordPosition.line == 1)
+        assert(aliasStatCst:typeKeywordPosition().line == 1)
 
         local typeFunc = aliasStat:type()
         assert(typeFunc.category == "type")
         local typeFuncCst = typeFunc:cst()
         assert(typeFuncCst ~= nil)
         assert(typeFuncCst.kind == "CstTypeFunction")
-        assert(typeFuncCst.returnArrowPosition.line == 1)
-        assert(#typeFuncCst.argumentsCommaPositions == 1)
-        assert(#typeFuncCst.argumentNameColonPositions == 2)
+        assert(typeFuncCst:returnArrowPosition().line == 1)
+        assert(#typeFuncCst:argumentsCommaPositions() == 1)
+        assert(#typeFuncCst:argumentNameColonPositions() == 2)
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);
@@ -500,16 +500,22 @@ TEST_CASE("TestFields")
 
         -- Test direct field access on AstPosition
         local call = doc.root:body()[2]:expr()
-        local pos = call:cst().openParens
+        local pos = call:cst():openParens()
         assert(pos.line == 2)
         assert(pos.column == 4)
         assert(pos.computedOffset == 15)
 
-        -- Test dot indexing a method (stat1.body(stat1))
+        -- Test dot indexing a method (stat1.location(stat1))
         local bodyFn = stat1.location
         assert(typeof(bodyFn) == "function")
         local loc2 = bodyFn(stat1)
         assert(loc2.beginLine == 1)
+
+        -- Test dot indexing a CST method
+        local cstFn = call:cst().openParens
+        assert(typeof(cstFn) == "function")
+        local pos2 = cstFn(call:cst())
+        assert(pos2.line == 2)
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);

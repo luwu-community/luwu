@@ -137,179 +137,179 @@ export type CstAttr = {
 export type CstParametrizedAttr = {
     read kind: "CstParametrizedAttr",
     -- for `@x(args)` form
-    read openParenPosition: AstPosition?,
-    read closeParenPosition: AstPosition?,
+    read openParenPosition: (self: CstParametrizedAttr) -> AstPosition?,
+    read closeParenPosition: (self: CstParametrizedAttr) -> AstPosition?,
     -- Commas inside the `(a, b, c)` arg list
-    read argsCommaPositions: {AstPosition},
+    read argsCommaPositions: (self: CstParametrizedAttr) -> {AstPosition},
 }
 
 export type CstExprGroup = {
     read kind: "CstExprGroup",
-    read closePosition: AstPosition?,
+    read closePosition: (self: CstExprGroup) -> AstPosition?,
 }
 
 export type CstExprConstantNumber = {
     read kind: "CstExprConstantNumber",
-    read value: string,
+    read value: (self: CstExprConstantNumber) -> string,
 }
 
 export type CstExprConstantInteger = {
     read kind: "CstExprConstantInteger",
-    read value: string,
+    read value: (self: CstExprConstantInteger) -> string,
 }
 
 export type CstExprConstantString = {
     read kind: "CstExprConstantString",
     read quoteStyle: "single" | "double" | "raw" | "interp",
-    read sourceString: string,
+    read sourceString: (self: CstExprConstantString) -> string,
     read blockDepth: number,
 }
 
 export type CstExprCall = {
     read kind: "CstExprCall",
-    read openParens: AstPosition?,
-    read closeParens: AstPosition?,
-    read commaPositions: {AstPosition},
+    read openParens: (self: CstExprCall) -> AstPosition?,
+    read closeParens: (self: CstExprCall) -> AstPosition?,
+    read commaPositions: (self: CstExprCall) -> {AstPosition},
 }
 
 export type CstExprIndexExpr = {
     read kind: "CstExprIndexExpr",
-    read openBracketPosition: AstPosition?,
-    read closeBracketPosition: AstPosition?,
+    read openBracketPosition: (self: CstExprIndexExpr) -> AstPosition?,
+    read closeBracketPosition: (self: CstExprIndexExpr) -> AstPosition?,
 }
 
 export type CstExprFunction = {
     read kind: "CstExprFunction",
-    read functionKeywordPosition: AstPosition?,
-    read openGenericsPosition: AstPosition?,
-    read genericsCommaPositions: {AstPosition},
-    read closeGenericsPosition: AstPosition?,
-    read argsAnnotationColonPositions: {AstPosition},
-    read argsCommaPositions: {AstPosition},
-    read varargAnnotationColonPosition: AstPosition?,
-    read returnSpecifierPosition: AstPosition?,
+    read functionKeywordPosition: (self: CstExprFunction) -> AstPosition?,
+    read openGenericsPosition: (self: CstExprFunction) -> AstPosition?,
+    read genericsCommaPositions: (self: CstExprFunction) -> {AstPosition},
+    read closeGenericsPosition: (self: CstExprFunction) -> AstPosition?,
+    read argsAnnotationColonPositions: (self: CstExprFunction) -> {AstPosition},
+    read argsCommaPositions: (self: CstExprFunction) -> {AstPosition},
+    read varargAnnotationColonPosition: (self: CstExprFunction) -> AstPosition?,
+    read returnSpecifierPosition: (self: CstExprFunction) -> AstPosition?,
 }
 
 export type CstExprTable = {
     read kind: "CstExprTable",
-    read items: {CstTableItem},
+    read items: (self: CstExprTable) -> {CstTableItem},
 }
 
 export type CstExprOp = {
     read kind: "CstExprOp",
-    read opPosition: AstPosition?,
+    read opPosition: (self: CstExprOp) -> AstPosition?,
 }
 
 export type CstExprTypeAssertion = {
     read kind: "CstExprTypeAssertion",
-    read opPosition: AstPosition?,
+    read opPosition: (self: CstExprTypeAssertion) -> AstPosition?,
 }
 
 export type CstExprIfElse = {
     read kind: "CstExprIfElse",
-    read thenPosition: AstPosition?,
-    read elsePosition: AstPosition?,
+    read thenPosition: (self: CstExprIfElse) -> AstPosition?,
+    read elsePosition: (self: CstExprIfElse) -> AstPosition?,
     read isElseIf: boolean,
 }
 
 export type CstExprInterpString = {
     read kind: "CstExprInterpString",
-    read commaPositions: {AstPosition},
+    read commaPositions: (self: CstExprInterpString) -> {AstPosition},
 }
 
 export type CstStatDo = {
     read kind: "CstStatDo",
-    read statsStartPosition: AstPosition?,
-    read endPosition: AstPosition?,
+    read statsStartPosition: (self: CstStatDo) -> AstPosition?,
+    read endPosition: (self: CstStatDo) -> AstPosition?,
 }
 
 export type CstStatRepeat = {
     read kind: "CstStatRepeat",
-    read untilPosition: AstPosition?,
+    read untilPosition: (self: CstStatRepeat) -> AstPosition?,
 }
 
 export type CstStatReturn = {
     read kind: "CstStatReturn",
-    read commaPositions: {AstPosition},
+    read commaPositions: (self: CstStatReturn) -> {AstPosition},
 }
 
 export type CstStatLocal = {
     read kind: "CstStatLocal",
-    read varsAnnotationColonPositions: {AstPosition},
-    read varsCommaPositions: {AstPosition},
-    read valuesCommaPositions: {AstPosition},
+    read varsAnnotationColonPositions: (self: CstStatLocal) -> {AstPosition},
+    read varsCommaPositions: (self: CstStatLocal) -> {AstPosition},
+    read valuesCommaPositions: (self: CstStatLocal) -> {AstPosition},
 }
 
 export type CstStatFor = {
     read kind: "CstStatFor",
-    read annotationColonPosition: AstPosition?,
-    read equalsPosition: AstPosition?,
-    read endCommaPosition: AstPosition?,
-    read stepCommaPosition: AstPosition?,
+    read annotationColonPosition: (self: CstStatFor) -> AstPosition?,
+    read equalsPosition: (self: CstStatFor) -> AstPosition?,
+    read endCommaPosition: (self: CstStatFor) -> AstPosition?,
+    read stepCommaPosition: (self: CstStatFor) -> AstPosition?,
 }
 
 export type CstStatForIn = {
     read kind: "CstStatForIn",
-    read varsAnnotationColonPositions: {AstPosition},
-    read varsCommaPositions: {AstPosition},
-    read valuesCommaPositions: {AstPosition},
+    read varsAnnotationColonPositions: (self: CstStatForIn) -> {AstPosition},
+    read varsCommaPositions: (self: CstStatForIn) -> {AstPosition},
+    read valuesCommaPositions: (self: CstStatForIn) -> {AstPosition},
 }
 
 export type CstStatAssign = {
     read kind: "CstStatAssign",
-    read varsCommaPositions: {AstPosition},
-    read equalsPosition: AstPosition?,
-    read valuesCommaPositions: {AstPosition},
+    read varsCommaPositions: (self: CstStatAssign) -> {AstPosition},
+    read equalsPosition: (self: CstStatAssign) -> AstPosition?,
+    read valuesCommaPositions: (self: CstStatAssign) -> {AstPosition},
 }
 
 export type CstStatCompoundAssign = {
     read kind: "CstStatCompoundAssign",
-    read opPosition: AstPosition?,
+    read opPosition: (self: CstStatCompoundAssign) -> AstPosition?,
 }
 
 export type CstStatFunction = {
     read kind: "CstStatFunction",
-    read functionKeywordPosition: AstPosition?,
+    read functionKeywordPosition: (self: CstStatFunction) -> AstPosition?,
 }
 
 export type CstStatLocalFunction = {
     read kind: "CstStatLocalFunction",
-    read localKeywordPosition: AstPosition?,
-    read functionKeywordPosition: AstPosition?,
+    read localKeywordPosition: (self: CstStatLocalFunction) -> AstPosition?,
+    read functionKeywordPosition: (self: CstStatLocalFunction) -> AstPosition?,
 }
 
 export type CstGenericType = {
     read kind: "CstGenericType",
-    read defaultEqualsPosition: AstPosition?,
+    read defaultEqualsPosition: (self: CstGenericType) -> AstPosition?,
 }
 
 export type CstGenericTypePack = {
     read kind: "CstGenericTypePack",
-    read ellipsisPosition: AstPosition?,
-    read defaultEqualsPosition: AstPosition?,
+    read ellipsisPosition: (self: CstGenericTypePack) -> AstPosition?,
+    read defaultEqualsPosition: (self: CstGenericTypePack) -> AstPosition?,
 }
 
 export type CstStatTypeAlias = {
     read kind: "CstStatTypeAlias",
-    read typeKeywordPosition: AstPosition?,
-    read genericsOpenPosition: AstPosition?,
-    read genericsCommaPositions: {AstPosition},
-    read genericsClosePosition: AstPosition?,
-    read equalsPosition: AstPosition?,
+    read typeKeywordPosition: (self: CstStatTypeAlias) -> AstPosition?,
+    read genericsOpenPosition: (self: CstStatTypeAlias) -> AstPosition?,
+    read genericsCommaPositions: (self: CstStatTypeAlias) -> {AstPosition},
+    read genericsClosePosition: (self: CstStatTypeAlias) -> AstPosition?,
+    read equalsPosition: (self: CstStatTypeAlias) -> AstPosition?,
 }
 
 export type CstStatTypeFunction = {
     read kind: "CstStatTypeFunction",
-    read typeKeywordPosition: AstPosition?,
-    read functionKeywordPosition: AstPosition?,
+    read typeKeywordPosition: (self: CstStatTypeFunction) -> AstPosition?,
+    read functionKeywordPosition: (self: CstStatTypeFunction) -> AstPosition?,
 }
 
 export type CstTypeReference = {
     read kind: "CstTypeReference",
-    read prefixPointPosition: AstPosition?,
-    read openParametersPosition: AstPosition?,
-    read parametersCommaPositions: {AstPosition},
-    read closeParametersPosition: AstPosition?,
+    read prefixPointPosition: (self: CstTypeReference) -> AstPosition?,
+    read openParametersPosition: (self: CstTypeReference) -> AstPosition?,
+    read parametersCommaPositions: (self: CstTypeReference) -> {AstPosition},
+    read closeParametersPosition: (self: CstTypeReference) -> AstPosition?,
 }
 
 export type CstTypeTable = {
@@ -319,55 +319,55 @@ export type CstTypeTable = {
 
 export type CstTypeFunction = {
     read kind: "CstTypeFunction",
-    read openGenericsPosition: AstPosition?,
-    read genericsCommaPositions: {AstPosition},
-    read closeGenericsPosition: AstPosition?,
-    read openArgsPosition: AstPosition?,
-    read argumentNameColonPositions: {AstPosition},
-    read argumentsCommaPositions: {AstPosition},
-    read closeArgsPosition: AstPosition?,
-    read returnArrowPosition: AstPosition?,
+    read openGenericsPosition: (self: CstTypeFunction) -> AstPosition?,
+    read genericsCommaPositions: (self: CstTypeFunction) -> {AstPosition},
+    read closeGenericsPosition: (self: CstTypeFunction) -> AstPosition?,
+    read openArgsPosition: (self: CstTypeFunction) -> AstPosition?,
+    read argumentNameColonPositions: (self: CstTypeFunction) -> {AstPosition},
+    read argumentsCommaPositions: (self: CstTypeFunction) -> {AstPosition},
+    read closeArgsPosition: (self: CstTypeFunction) -> AstPosition?,
+    read returnArrowPosition: (self: CstTypeFunction) -> AstPosition?,
 }
 
 export type CstTypeTypeof = {
     read kind: "CstTypeTypeof",
-    read openPosition: AstPosition?,
-    read closePosition: AstPosition?,
+    read openPosition: (self: CstTypeTypeof) -> AstPosition?,
+    read closePosition: (self: CstTypeTypeof) -> AstPosition?,
 }
 
 export type CstTypeUnion = {
     read kind: "CstTypeUnion",
-    read leadingPosition: AstPosition?,
-    read separatorPositions: {AstPosition},
+    read leadingPosition: (self: CstTypeUnion) -> AstPosition?,
+    read separatorPositions: (self: CstTypeUnion) -> {AstPosition},
 }
 
 export type CstTypeIntersection = {
     read kind: "CstTypeIntersection",
-    read leadingPosition: AstPosition?,
-    read separatorPositions: {AstPosition},
+    read leadingPosition: (self: CstTypeIntersection) -> AstPosition?,
+    read separatorPositions: (self: CstTypeIntersection) -> {AstPosition},
 }
 
 export type CstTypeSingletonString = {
     read kind: "CstTypeSingletonString",
-    read sourceString: string,
+    read sourceString: (self: CstTypeSingletonString) -> string,
     read blockDepth: number,
 }
 
 export type CstTypeGroup = {
     read kind: "CstTypeGroup",
-    read closePosition: AstPosition?,
+    read closePosition: (self: CstTypeGroup) -> AstPosition?,
 }
 
 export type CstTypePackExplicit = {
     read kind: "CstTypePackExplicit",
-    read openParenthesesPosition: AstPosition?,
-    read closeParenthesesPosition: AstPosition?,
-    read commaPositions: {AstPosition},
+    read openParenthesesPosition: (self: CstTypePackExplicit) -> AstPosition?,
+    read closeParenthesesPosition: (self: CstTypePackExplicit) -> AstPosition?,
+    read commaPositions: (self: CstTypePackExplicit) -> {AstPosition},
 }
 
 export type CstTypePackGeneric = {
     read kind: "CstTypePackGeneric",
-    read ellipsisPosition: AstPosition?,
+    read ellipsisPosition: (self: CstTypePackGeneric) -> AstPosition?,
 }
 
 export type CstNode =

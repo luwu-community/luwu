@@ -91,3 +91,14 @@ int lua_findunusedlightuserdatatag(lua_State *L)
 
     return -1;
 }
+
+LUA_API const char* lua_namecallwithlen(lua_State* L, int* len)
+{
+    TString* s = L->namecall;
+    if (!s)
+        return NULL;
+    if (len)
+        *len = s->len;
+    return getstr(s);
+}
+
