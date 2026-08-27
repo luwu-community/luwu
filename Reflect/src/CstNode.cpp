@@ -399,14 +399,7 @@ static int cstNodeEq(lua_State* L)
 
 static int cstNodeNamecall(lua_State* L)
 {
-    auto& handle = checkCstNode(L, 1);
-    int atomId = -1;
-    size_t len = 0;
-    const char* str = lua_namecallwithlen(L, FFlag::OptLuwuReflectUseAtoms ? &atomId : nullptr, &len);
-    if (!str)
-        luaL_error(L, "missing method name in namecall");
-
-    ReflectAtom atom = resolveReflectAtom(atomId, str, len);
+    LUAU_REFLECT_PREPARE_NAMECALL(checkCstNode);
     int idx = handle.node ? handle.node->classIndex : -1;
     if (idx >= 0 && idx < int(s_cstClassTable.size()) && s_cstClassTable[idx].methodHandler)
     {

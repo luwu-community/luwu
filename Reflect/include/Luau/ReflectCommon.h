@@ -641,6 +641,17 @@ inline int pushCachedUserdataMethod(lua_State* L, int tag, const char* name, lua
     } \
     ReflectAtom atom = resolveReflectAtom(atomId, keyStr, keyLen)
 
+#define LUAU_REFLECT_PREPARE_NAMECALL(checkFunc) \
+    auto& handle = checkFunc(L, 1); \
+    const auto& doc = handle.doc; \
+    (void)doc; \
+    int atomId = -1; \
+    size_t len = 0; \
+    const char* str = lua_namecallwithlen(L, FFlag::OptLuwuReflectUseAtoms ? &atomId : nullptr, &len); \
+    if (!str) \
+        luaL_error(L, "missing method name in namecall"); \
+    ReflectAtom atom = resolveReflectAtom(atomId, str, len)
+
 #define LUAU_REFLECT_METHOD_TRAMPOLINE(funcName, checkFunc, classTable, typeName) \
     static int funcName(lua_State* L) \
     { \

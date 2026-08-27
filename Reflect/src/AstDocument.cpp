@@ -157,29 +157,19 @@ static int astDocEq(lua_State* L)
 
 static int astDocNamecall(lua_State* L)
 {
-    int atomId = -1;
-    size_t len = 0;
-    if (const char* str = lua_namecallwithlen(L, FFlag::OptLuwuReflectUseAtoms ? &atomId : nullptr, &len))
+    LUAU_REFLECT_PREPARE_NAMECALL(checkAstDocument);
+
+    switch (atom)
     {
-        ReflectAtom atom = resolveReflectAtom(atomId, str, len);
-        switch (atom)
-        {
-        case ReflectAtom::Walk:
-            return astDocWalk(L);
-        case ReflectAtom::Find:
-            return astDocFind(L);
-        case ReflectAtom::Comments:
-            return astDocComments(L);
-        case ReflectAtom::Errors:
-            return astDocErrors(L);
-        case ReflectAtom::LineOffsets:
-            return astDocLineOffsets(L);
-        default:
-            break;
-        }
-        luaL_error(L, "%.*s is not a valid method of AstDocument", int(len), str);
+    case ReflectAtom::Walk:        return astDocWalk(L);
+    case ReflectAtom::Find:        return astDocFind(L);
+    case ReflectAtom::Comments:    return astDocComments(L);
+    case ReflectAtom::Errors:      return astDocErrors(L);
+    case ReflectAtom::LineOffsets: return astDocLineOffsets(L);
+    default: break;
     }
-    luaL_error(L, "missing method name in namecall");
+
+    luaL_error(L, "%.*s is not a valid method of AstDocument", int(len), str);
 }
 
 void registerAstDocument(lua_State* L)

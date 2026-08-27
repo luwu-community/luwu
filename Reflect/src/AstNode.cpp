@@ -849,14 +849,7 @@ static int astNodeEq(lua_State* L)
 
 static int astNodeNamecall(lua_State* L)
 {
-    auto& handle = checkAstNode(L, 1);
-    int atomId = -1;
-    size_t len = 0;
-    const char* str = lua_namecallwithlen(L, FFlag::OptLuwuReflectUseAtoms ? &atomId : nullptr, &len);
-    if (!str)
-        luaL_error(L, "missing method name in namecall");
-
-    ReflectAtom atom = resolveReflectAtom(atomId, str, len);
+    LUAU_REFLECT_PREPARE_NAMECALL(checkAstNode);
 
     switch (atom)
     {
