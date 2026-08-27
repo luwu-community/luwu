@@ -341,28 +341,13 @@ LUAU_AST_HANDLER_END()
 LUAU_AST_HANDLER_START(handleExprTableMethods, AstExprTable)
     case ReflectAtom::Items:
     {
-    lua_createtable(L, int(n->items.size), 0);
-    for (size_t i = 0; i < n->items.size; i++)
-    {
-    const auto& item = n->items.data[i];
-    lua_createtable(L, 0, 3);
-    if (item.kind == Luau::AstExprTable::Item::Kind::List)
-    lua_pushstring(L, "list");
-    else if (item.kind == Luau::AstExprTable::Item::Kind::Record)
-    lua_pushstring(L, "record");
-    else
-    lua_pushstring(L, "general");
-    lua_setfield(L, -2, "kind");
-    if (item.key)
-    pushAstNode(L, handle.doc, item.key);
-    else
-    lua_pushnil(L);
-    lua_setfield(L, -2, "key");
-    pushAstNode(L, handle.doc, item.value);
-    lua_setfield(L, -2, "value");
-    lua_rawseti(L, -2, int(i + 1));
-    }
-    return true;
+        lua_createtable(L, int(n->items.size), 0);
+        for (size_t i = 0; i < n->items.size; i++)
+        {
+            pushAstAux(L, handle.doc, n->items.data[i]);
+            lua_rawseti(L, -2, int(i + 1));
+        }
+        return true;
     }
 LUAU_AST_HANDLER_END()
 

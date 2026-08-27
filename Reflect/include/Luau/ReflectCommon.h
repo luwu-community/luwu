@@ -184,7 +184,12 @@ namespace Luau
     ATOM(Access, "access") \
     ATOM(IndexType, "indexType") \
     ATOM(ResultType, "resultType") \
-    ATOM(IsMethod, "isMethod")
+    ATOM(IsMethod, "isMethod") \
+    ATOM(Key, "key") \
+    ATOM(IndexerOpenPosition, "indexerOpenPosition") \
+    ATOM(IndexerClosePosition, "indexerClosePosition") \
+    ATOM(SeparatorPosition, "separatorPosition") \
+    ATOM(Separator, "separator")
 
 enum class ReflectAtom : int16_t
 {
@@ -306,6 +311,8 @@ enum AstAuxKind : uint8_t
     Aux_ClassMethod,
     Aux_Local,
     Aux_Comment,
+    Aux_TableItem,
+    Aux_CstTableItem,
 };
 
 struct AstAuxData
@@ -321,6 +328,8 @@ struct AstAuxData
         Luau::AstClassMethod classMethod;
         Luau::AstLocal* local;
         Luau::Comment comment;
+        Luau::AstExprTable::Item tableItem;
+        Luau::CstExprTable::Item cstTableItem;
     };
 
     AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstTableProp& p)
@@ -372,6 +381,20 @@ struct AstAuxData
     {
     }
 
+    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstExprTable::Item& item)
+        : doc(doc)
+        , kind(Aux_TableItem)
+        , tableItem(item)
+    {
+    }
+
+    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::CstExprTable::Item& item)
+        : doc(doc)
+        , kind(Aux_CstTableItem)
+        , cstTableItem(item)
+    {
+    }
+
     ~AstAuxData() {}
 };
 
@@ -408,6 +431,8 @@ void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, cons
 void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstClassMethod& method);
 void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, Luau::AstLocal* local);
 void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::Comment& comment);
+void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstExprTable::Item& item);
+void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::CstExprTable::Item& item);
 
 // Check helpers
 AstDocumentData& checkAstDocument(lua_State* L, int idx);

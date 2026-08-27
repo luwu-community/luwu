@@ -117,6 +117,8 @@ export type AstAux =
     | AstClassMethod
     | AstLocal
     | AstComment
+    | AstTableItem
+    | CstTableItem
     | { read kind: string }
 
 -- CST for tableitem

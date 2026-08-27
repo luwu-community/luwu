@@ -391,6 +391,7 @@ TEST_CASE("LazyAstTableItems")
 
         -- List item
         local item1 = items[1]
+        assert(typeof(item1) == "AstAux")
         assert(item1.kind == "list")
         assert(item1.key == nil)
         assert(item1.value.kind == "AstExprConstantString")
@@ -398,6 +399,7 @@ TEST_CASE("LazyAstTableItems")
 
         -- Record item
         local item2 = items[2]
+        assert(typeof(item2) == "AstAux")
         assert(item2.kind == "record")
         assert(item2.key ~= nil)
         assert(item2.key.kind == "AstExprConstantString")
@@ -407,12 +409,24 @@ TEST_CASE("LazyAstTableItems")
 
         -- General item
         local item3 = items[3]
+        assert(typeof(item3) == "AstAux")
         assert(item3.kind == "general")
         assert(item3.key ~= nil)
         assert(item3.key.kind == "AstExprBinary")
         assert(item3.key:op() == "..")
         assert(item3.value.kind == "AstExprConstantBool")
         assert(item3.value:value() == true)
+
+        -- CST table items
+        local tableCst = tableExpr:cst()
+        assert(tableCst ~= nil)
+        local cstItems = tableCst:items()
+        assert(#cstItems == 3)
+        assert(typeof(cstItems[1]) == "AstAux")
+        assert(typeof(cstItems[2]) == "AstAux")
+        assert(typeof(cstItems[3]) == "AstAux")
+        assert(cstItems[2].equalsPosition ~= nil)
+        assert(cstItems[3].indexerOpenPosition ~= nil)
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);

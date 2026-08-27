@@ -51,6 +51,18 @@ void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, cons
     new (data) AstAuxData{doc, comment};
 }
 
+void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstExprTable::Item& item)
+{
+    AstAuxData* data = static_cast<AstAuxData*>(lua_newuserdatataggedwithmetatable(L, sizeof(AstAuxData), TagAux));
+    new (data) AstAuxData{doc, item};
+}
+
+void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::CstExprTable::Item& item)
+{
+    AstAuxData* data = static_cast<AstAuxData*>(lua_newuserdatataggedwithmetatable(L, sizeof(AstAuxData), TagAux));
+    new (data) AstAuxData{doc, item};
+}
+
 LUAU_REFLECT_DEFINE_USERDATA_BASIC(checkAstAux, astAuxDtor, AstAuxData, TagAux, "AstAux")
 
 static int astAuxIndex(lua_State* L)
@@ -248,6 +260,63 @@ static int astAuxIndex(lua_State* L)
             return 1;
         }
     }
+    case Aux_TableItem:
+    {
+        const auto& item = handle.tableItem;
+        switch (atom)
+        {
+        case ReflectAtom::Kind:
+            if (item.kind == Luau::AstExprTable::Item::Kind::List)
+                lua_pushstring(L, "list");
+            else if (item.kind == Luau::AstExprTable::Item::Kind::Record)
+                lua_pushstring(L, "record");
+            else
+                lua_pushstring(L, "general");
+            return 1;
+        case ReflectAtom::Key:
+            if (item.key)
+                pushAstNode(L, doc, item.key);
+            else
+                lua_pushnil(L);
+            return 1;
+        case ReflectAtom::Value:
+            pushAstNode(L, doc, item.value);
+            return 1;
+        default:
+            lua_pushnil(L);
+            return 1;
+        }
+    }
+    case Aux_CstTableItem:
+    {
+        const auto& item = handle.cstTableItem;
+        switch (atom)
+        {
+        case ReflectAtom::IndexerOpenPosition:
+            pushPosition(L, doc, item.indexerOpenPosition);
+            return 1;
+        case ReflectAtom::IndexerClosePosition:
+            pushPosition(L, doc, item.indexerClosePosition);
+            return 1;
+        case ReflectAtom::EqualsPosition:
+            pushPosition(L, doc, item.equalsPosition);
+            return 1;
+        case ReflectAtom::SeparatorPosition:
+            pushPosition(L, doc, item.separatorPosition);
+            return 1;
+        case ReflectAtom::Separator:
+            if (item.separator == Luau::CstExprTable::Separator::Comma)
+                lua_pushstring(L, "comma");
+            else if (item.separator == Luau::CstExprTable::Separator::Semicolon)
+                lua_pushstring(L, "semicolon");
+            else
+                lua_pushstring(L, "missing");
+            return 1;
+        default:
+            lua_pushnil(L);
+            return 1;
+        }
+    }
     }
 
     lua_pushnil(L);
@@ -283,59 +352,22 @@ static int astAuxToString(lua_State* L)
         lua_pushfstring(L, "AstAux(AstComment: %d:%d - %d:%d)", loc.begin.line + 1, loc.begin.column + 1, loc.end.line + 1, loc.end.column + 1);
         return 1;
     }
+    case Aux_TableItem:
+        lua_pushstring(L, "AstAux(AstTableItem)");
+        return 1;
+    case Aux_CstTableItem:
+        lua_pushstring(L, "AstAux(CstTableItem)");
+        return 1;
     default:
         lua_pushstring(L, "AstAux(Unknown)");
         return 1;
     }
 }
 
-static int astAuxEq(lua_State* L)
-{
-    if (lua_userdatatag(L, 1) != TagAux || lua_userdatatag(L, 2) != TagAux)
-    {
-        lua_pushboolean(L, false);
-        return 1;
-    }
-    auto& a = checkAstAux(L, 1);
-    auto& b = checkAstAux(L, 2);
-    if (a.kind != b.kind || a.doc != b.doc)
-    {
-        lua_pushboolean(L, false);
-        return 1;
-    }
-
-    switch (a.kind)
-    {
-    case Aux_Local:
-        lua_pushboolean(L, a.local == b.local);
-        return 1;
-    case Aux_Comment:
-        lua_pushboolean(L, a.comment.location == b.comment.location && a.comment.type == b.comment.type);
-        return 1;
-    case Aux_TableProp:
-        lua_pushboolean(L, a.tableProp.location == b.tableProp.location && a.tableProp.name == b.tableProp.name);
-        return 1;
-    case Aux_TableIndexer:
-        lua_pushboolean(L, a.tableIndexer.location == b.tableIndexer.location);
-        return 1;
-    case Aux_DeclaredExternTypeProperty:
-        lua_pushboolean(L, a.declaredExternProp.location == b.declaredExternProp.location && a.declaredExternProp.name == b.declaredExternProp.name);
-        return 1;
-    case Aux_ClassProperty:
-        lua_pushboolean(L, a.classProp.name == b.classProp.name && a.classProp.ty == b.classProp.ty);
-        return 1;
-    case Aux_ClassMethod:
-        lua_pushboolean(L, a.classMethod.functionName == b.classMethod.functionName && a.classMethod.function == b.classMethod.function);
-        return 1;
-    default:
-        lua_pushboolean(L, false);
-        return 1;
-    }
-}
-
 void registerAstAux(lua_State* L)
 {
-    registerUserdataType(L, TagAux, "AstAux", astAuxDtor, astAuxIndex, astAuxToString, astAuxEq);
+    // eq for astaux are not actually implemented in parser so reflect also does not attempt to provide any support for it
+    registerUserdataType(L, TagAux, "AstAux", astAuxDtor, astAuxIndex, astAuxToString, nullptr);
 }
 
 } // namespace Luau

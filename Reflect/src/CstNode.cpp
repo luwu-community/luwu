@@ -120,24 +120,7 @@ LUAU_CST_HANDLER_START(handleCstExprTableMethods, CstExprTable)
         lua_createtable(L, int(n->items.size), 0);
         for (size_t i = 0; i < n->items.size; i++)
         {
-            const auto& item = n->items.data[i];
-            lua_createtable(L, 0, 5);
-            pushPosition(L, handle.doc, item.indexerOpenPosition);
-            lua_setfield(L, -2, "indexerOpenPosition");
-            pushPosition(L, handle.doc, item.indexerClosePosition);
-            lua_setfield(L, -2, "indexerClosePosition");
-            pushPosition(L, handle.doc, item.equalsPosition);
-            lua_setfield(L, -2, "equalsPosition");
-            pushPosition(L, handle.doc, item.separatorPosition);
-            lua_setfield(L, -2, "separatorPosition");
-            if (item.separator == Luau::CstExprTable::Separator::Comma)
-                lua_pushstring(L, "comma");
-            else if (item.separator == Luau::CstExprTable::Separator::Semicolon)
-                lua_pushstring(L, "semicolon");
-            else
-                lua_pushstring(L, "missing");
-            lua_setfield(L, -2, "separator");
-
+            pushAstAux(L, handle.doc, n->items.data[i]);
             lua_rawseti(L, -2, int(i + 1));
         }
         return true;
