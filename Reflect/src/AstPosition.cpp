@@ -25,32 +25,12 @@ void pushPositionArray(lua_State* L, const std::shared_ptr<AstDocumentState>& do
     }
 }
 
-AstPositionData& checkAstPosition(lua_State* L, int idx)
-{
-    if (lua_userdatatag(L, idx) != TagPosition)
-        luaL_typeerrorL(L, idx, "AstPosition");
-    return *static_cast<AstPositionData*>(lua_touserdata(L, idx));
-}
-
-static void astPositionDtor(lua_State* L, void* userdata)
-{
-    static_cast<AstPositionData*>(userdata)->~AstPositionData();
-}
+LUAU_REFLECT_DEFINE_USERDATA_BASIC(checkAstPosition, astPositionDtor, AstPositionData, TagPosition, "AstPosition")
 
 static int astPositionIndex(lua_State* L)
 {
-    auto& handle = checkAstPosition(L, 1);
-    int atomId = -1;
-    size_t keyLen = 0;
-    const char* keyStr = lua_tolstringatom(L, 2, &keyLen, FFlag::OptLuwuReflectUseAtoms ? &atomId : nullptr);
-    if (!keyStr)
-    {
-        lua_pushnil(L);
-        return 1;
-    }
-    ReflectAtom atom = resolveReflectAtom(atomId, keyStr, keyLen);
+    LUAU_REFLECT_PREPARE_INDEX(checkAstPosition);
     const auto& pos = handle.position;
-    const auto& doc = handle.doc;
 
     switch (atom)
     {

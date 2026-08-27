@@ -776,6 +776,78 @@ inline int pushCachedUserdataMethod(lua_State* L, int tag, const char* name, lua
     return 1;
 }
 
+#define LUAU_REFLECT_PREPARE_INDEX(checkFunc) \
+    auto& handle = checkFunc(L, 1); \
+    const auto& doc = handle.doc; \
+    int atomId = -1; \
+    size_t keyLen = 0; \
+    const char* keyStr = lua_tolstringatom(L, 2, &keyLen, FFlag::OptLuwuReflectUseAtoms ? &atomId : nullptr); \
+    if (!keyStr) \
+    { \
+        lua_pushnil(L); \
+        return 1; \
+    } \
+    ReflectAtom atom = resolveReflectAtom(atomId, keyStr, keyLen)
+
+#define LUAU_REFLECT_METHOD_TRAMPOLINE(funcName, checkFunc, classTable, typeName) \
+    static int funcName(lua_State* L) \
+    { \
+        auto& handle = checkFunc(L, 1); \
+        size_t len = 0; \
+        const char* str = lua_tolstring(L, lua_upvalueindex(1), &len); \
+        ReflectAtom atom = resolveGlobalReflectAtom(std::string_view(str, len)); \
+        int idx = handle.node ? handle.node->classIndex : -1; \
+        if (idx >= 0 && idx < int(classTable.size()) && classTable[idx].methodHandler) \
+        { \
+            if (classTable[idx].methodHandler(L, handle, atom)) \
+                return 1; \
+        } \
+        luaL_error(L, "%.*s is not a valid method of " typeName, int(len), str); \
+    }
+
+#define LUAU_REFLECT_GET_NODE_KIND(funcName, NodeType, classTable, defaultName) \
+    const char* funcName(NodeType node) \
+    { \
+        if (!node) \
+            return "nil"; \
+        int idx = node->classIndex; \
+        if (idx >= 0 && idx < int(classTable.size()) && classTable[idx].kind) \
+            return classTable[idx].kind; \
+        return defaultName; \
+    }
+
+#define LUAU_REFLECT_DEFINE_USERDATA_BASIC(checkName, dtorName, DataType, TagValue, TypeNameStr) \
+    DataType& checkName(lua_State* L, int idx) \
+    { \
+        if (lua_userdatatag(L, idx) != TagValue) \
+            luaL_typeerrorL(L, idx, TypeNameStr); \
+        return *static_cast<DataType*>(lua_touserdata(L, idx)); \
+    } \
+    static void dtorName(lua_State* L, void* userdata) \
+    { \
+        static_cast<DataType*>(userdata)->~DataType(); \
+    }
+
+#define LUAU_REFLECT_DEFINE_POINTER_USERDATA(pushName, checkName, dtorName, DataType, NodeType, TagValue, TypeNameStr) \
+    void pushName(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, NodeType node) \
+    { \
+        if (!node) \
+        { \
+            lua_pushnil(L); \
+            return; \
+        } \
+        DataType* data = static_cast<DataType*>(lua_newuserdatataggedwithmetatable(L, sizeof(DataType), TagValue)); \
+        new (data) DataType{doc, node}; \
+    } \
+    LUAU_REFLECT_DEFINE_USERDATA_BASIC(checkName, dtorName, DataType, TagValue, TypeNameStr)
+
+#define LUAU_REFLECT_DEFINE_VALUE_USERDATA(pushName, checkName, dtorName, DataType, ValueType, TagValue, TypeNameStr) \
+    void pushName(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, ValueType value) \
+    { \
+        DataType* data = static_cast<DataType*>(lua_newuserdatataggedwithmetatable(L, sizeof(DataType), TagValue)); \
+        new (data) DataType{doc, value}; \
+    } \
+    LUAU_REFLECT_DEFINE_USERDATA_BASIC(checkName, dtorName, DataType, TagValue, TypeNameStr)
 
 // Module registration functions
 void registerAstDocument(lua_State* L);

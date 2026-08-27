@@ -10,17 +10,7 @@ void pushAstDocument(lua_State* L, std::shared_ptr<AstDocumentState> doc)
     new (data) AstDocumentData{std::move(doc)};
 }
 
-AstDocumentData& checkAstDocument(lua_State* L, int idx)
-{
-    if (lua_userdatatag(L, idx) != TagDocument)
-        luaL_typeerrorL(L, idx, "AstDocument");
-    return *static_cast<AstDocumentData*>(lua_touserdata(L, idx));
-}
-
-static void astDocumentDtor(lua_State* L, void* userdata)
-{
-    static_cast<AstDocumentData*>(userdata)->~AstDocumentData();
-}
+LUAU_REFLECT_DEFINE_USERDATA_BASIC(checkAstDocument, astDocumentDtor, AstDocumentData, TagDocument, "AstDocument")
 
 static int astDocWalk(lua_State* L)
 {
@@ -106,17 +96,7 @@ static int astDocLineOffsets(lua_State* L)
 
 static int astDocIndex(lua_State* L)
 {
-    auto& handle = checkAstDocument(L, 1);
-    auto& doc = handle.doc;
-    int atomId = -1;
-    size_t keyLen = 0;
-    const char* keyStr = lua_tolstringatom(L, 2, &keyLen, FFlag::OptLuwuReflectUseAtoms ? &atomId : nullptr);
-    if (!keyStr)
-    {
-        lua_pushnil(L);
-        return 1;
-    }
-    ReflectAtom atom = resolveReflectAtom(atomId, keyStr, keyLen);
+    LUAU_REFLECT_PREPARE_INDEX(checkAstDocument);
 
     switch (atom)
     {

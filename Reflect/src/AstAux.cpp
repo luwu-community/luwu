@@ -51,31 +51,11 @@ void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, cons
     new (data) AstAuxData{doc, comment};
 }
 
-AstAuxData& checkAstAux(lua_State* L, int idx)
-{
-    if (lua_userdatatag(L, idx) != TagAux)
-        luaL_typeerrorL(L, idx, "AstAux");
-    return *static_cast<AstAuxData*>(lua_touserdata(L, idx));
-}
-
-static void astAuxDtor(lua_State* L, void* userdata)
-{
-    static_cast<AstAuxData*>(userdata)->~AstAuxData();
-}
+LUAU_REFLECT_DEFINE_USERDATA_BASIC(checkAstAux, astAuxDtor, AstAuxData, TagAux, "AstAux")
 
 static int astAuxIndex(lua_State* L)
 {
-    auto& handle = checkAstAux(L, 1);
-    int atomId = -1;
-    size_t keyLen = 0;
-    const char* keyStr = lua_tolstringatom(L, 2, &keyLen, FFlag::OptLuwuReflectUseAtoms ? &atomId : nullptr);
-    if (!keyStr)
-    {
-        lua_pushnil(L);
-        return 1;
-    }
-    ReflectAtom atom = resolveReflectAtom(atomId, keyStr, keyLen);
-    const auto& doc = handle.doc;
+    LUAU_REFLECT_PREPARE_INDEX(checkAstAux);
 
     switch (handle.kind)
     {

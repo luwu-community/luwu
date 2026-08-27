@@ -25,38 +25,12 @@ std::vector<size_t> computeLineOffsets(std::string_view content)
     return result;
 }
 
-void pushLocation(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::Location& loc)
-{
-    AstLocationData* data = static_cast<AstLocationData*>(lua_newuserdatataggedwithmetatable(L, sizeof(AstLocationData), TagLocation));
-    new (data) AstLocationData{doc, loc};
-}
-
-AstLocationData& checkAstLocation(lua_State* L, int idx)
-{
-    if (lua_userdatatag(L, idx) != TagLocation)
-        luaL_typeerrorL(L, idx, "AstLocation");
-    return *static_cast<AstLocationData*>(lua_touserdata(L, idx));
-}
-
-static void astLocationDtor(lua_State* L, void* userdata)
-{
-    static_cast<AstLocationData*>(userdata)->~AstLocationData();
-}
+LUAU_REFLECT_DEFINE_VALUE_USERDATA(pushLocation, checkAstLocation, astLocationDtor, AstLocationData, const Luau::Location&, TagLocation, "AstLocation")
 
 static int astLocationIndex(lua_State* L)
 {
-    auto& handle = checkAstLocation(L, 1);
-    int atomId = -1;
-    size_t keyLen = 0;
-    const char* keyStr = lua_tolstringatom(L, 2, &keyLen, FFlag::OptLuwuReflectUseAtoms ? &atomId : nullptr);
-    if (!keyStr)
-    {
-        lua_pushnil(L);
-        return 1;
-    }
-    ReflectAtom atom = resolveReflectAtom(atomId, keyStr, keyLen);
+    LUAU_REFLECT_PREPARE_INDEX(checkAstLocation);
     const auto& loc = handle.location;
-    const auto& doc = handle.doc;
 
     switch (atom)
     {
