@@ -10,8 +10,11 @@
 
 #include <memory>
 #include <cstring>
+#include <fstream>
+#include <string>
 
 LUAU_FASTFLAG(LuauDirectFieldGet)
+LUAU_FASTFLAG(LuauManagedReferences2)
 
 static int dostring(lua_State* L, const char* code)
 {
@@ -37,7 +40,8 @@ TEST_SUITE_BEGIN("Reflect");
 
 TEST_CASE("LazyAstTypeof")
 {
-    ScopedFastFlag sff{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
@@ -55,21 +59,21 @@ TEST_CASE("LazyAstTypeof")
         assert(root.kind == "AstStatBlock")
         assert(root.category == "stat")
 
-        local stat = root.body[1]
+        local stat = root:body()[1]
         assert(typeof(stat) == "AstNode")
         assert(stat.kind == "AstStatLocal")
         assert(stat.category == "stat")
 
-        local val = stat.values[1]
+        local val = stat:values()[1]
         assert(typeof(val) == "AstNode")
         assert(val.kind == "AstExprConstantNumber")
         assert(val.category == "expr")
 
-        local localItem = stat.vars[1]
+        local localItem = stat:vars()[1]
         assert(typeof(localItem) == "AstLocal")
         assert(localItem.name == "x")
 
-        local loc = stat.location
+        local loc = stat:location()
         assert(typeof(loc) == "AstLocation")
         assert(loc.beginLine == 1)
         assert(loc.beginColumn == 1)
@@ -81,7 +85,8 @@ TEST_CASE("LazyAstTypeof")
 
 TEST_CASE("LazyAstProperties")
 {
-    ScopedFastFlag sff{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
@@ -100,28 +105,28 @@ TEST_CASE("LazyAstProperties")
         ]])
 
         local root = doc.root
-        local ifStat = root.body[1]
+        local ifStat = root:body()[1]
         assert(ifStat.kind == "AstStatIf")
         assert(ifStat.category == "stat")
 
-        local cond = ifStat.condition
+        local cond = ifStat:condition()
         assert(cond.kind == "AstExprBinary")
         assert(cond.category == "expr")
         assert(cond.op == ">")
-        assert(cond.left.name == "x")
-        assert(cond.right.value == 0)
+        assert(cond:left().name == "x")
+        assert(cond:right().value == 0)
 
-        local thenBody = ifStat.thenbody
+        local thenBody = ifStat:thenbody()
         assert(thenBody.kind == "AstStatBlock")
         assert(thenBody.category == "stat")
-        assert(#thenBody.body == 1)
+        assert(#thenBody:body() == 1)
 
-        local callExpr = thenBody.body[1].expr
+        local callExpr = thenBody:body()[1]:expr()
         assert(callExpr.kind == "AstExprCall")
         assert(callExpr.category == "expr")
-        assert(callExpr.func.name == "print")
-        assert(#callExpr.args == 1)
-        assert(callExpr.args[1].value == "positive")
+        assert(callExpr:func().name == "print")
+        assert(#callExpr:args() == 1)
+        assert(callExpr:args()[1].value == "positive")
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);
@@ -129,7 +134,8 @@ TEST_CASE("LazyAstProperties")
 
 TEST_CASE("LazyAstChildrenAndWalk")
 {
-    ScopedFastFlag sff{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
@@ -160,8 +166,17 @@ TEST_CASE("LazyAstChildrenAndWalk")
         -- Test doc:find()
         local locals = doc:find("AstStatLocal")
         assert(#locals == 2)
-        assert(locals[1].vars[1].name == "a")
-        assert(locals[2].vars[1].name == "b")
+        assert(locals[1]:vars()[1].name == "a")
+        assert(locals[2]:vars()[1].name == "b")
+
+        -- Test node:find()
+        local nodeLocals = root:find("AstStatLocal")
+        assert(#nodeLocals == 2)
+        assert(nodeLocals[1]:vars()[1].name == "a")
+        assert(nodeLocals[2]:vars()[1].name == "b")
+
+        local returns = root:find("AstStatReturn")
+        assert(#returns == 1)
 
         -- Test walk pruning (return false)
         local topOnly = {}
@@ -178,7 +193,8 @@ TEST_CASE("LazyAstChildrenAndWalk")
 
 TEST_CASE("LazyAstParseExpr")
 {
-    ScopedFastFlag sff{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
@@ -194,16 +210,16 @@ TEST_CASE("LazyAstParseExpr")
         assert(expr.kind == "AstExprBinary")
         assert(expr.category == "expr")
         assert(expr.op == "+")
-        assert(expr.left.kind == "AstExprGlobal")
-        assert(expr.left.name == "a")
+        assert(expr:left().kind == "AstExprGlobal")
+        assert(expr:left().name == "a")
 
-        local right = expr.right
+        local right = expr:right()
         assert(typeof(right) == "AstNode")
         assert(right.kind == "AstExprBinary")
         assert(right.category == "expr")
         assert(right.op == "*")
-        assert(right.left.name == "b")
-        assert(right.right.value == 2)
+        assert(right:left().name == "b")
+        assert(right:right().value == 2)
         assert(expr.text == "a + b * 2")
     )LUA";
 
@@ -212,7 +228,8 @@ TEST_CASE("LazyAstParseExpr")
 
 TEST_CASE("LazyAstErrors")
 {
-    ScopedFastFlag sff{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
@@ -240,7 +257,8 @@ TEST_CASE("LazyAstErrors")
 
 TEST_CASE("LazyCstData")
 {
-    ScopedFastFlag sff{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
@@ -251,50 +269,55 @@ TEST_CASE("LazyCstData")
 
     const char* script = R"LUA(
         local doc = reflect.parse("local str = 'hello world'\nfoo(1, 2)")
-        local stats = doc.root.body
+        local stats = doc.root:body()
 
         -- Check local stat CST
         local locStat = stats[1]
-        assert(locStat.cst ~= nil)
-        assert(typeof(locStat.cst) == "CstNode")
-        assert(locStat.cst.kind == "CstStatLocal")
+        local locStatCst = locStat:cst()
+        assert(locStatCst ~= nil)
+        assert(typeof(locStatCst) == "CstNode")
+        assert(locStatCst.kind == "CstStatLocal")
 
         -- Check string CST quote style
-        local strExpr = locStat.values[1]
-        assert(strExpr.cst ~= nil)
-        assert(typeof(strExpr.cst) == "CstNode")
-        assert(strExpr.cst.kind == "CstExprConstantString")
-        assert(strExpr.cst.quoteStyle == "single")
-        assert(strExpr.cst.sourceString == "hello world")
+        local strExpr = locStat:values()[1]
+        local strExprCst = strExpr:cst()
+        assert(strExprCst ~= nil)
+        assert(typeof(strExprCst) == "CstNode")
+        assert(strExprCst.kind == "CstExprConstantString")
+        assert(strExprCst.quoteStyle == "single")
+        assert(strExprCst.sourceString == "hello world")
 
         -- Check call CST parens and comma positions
         local callStat = stats[2]
-        local callExpr = callStat.expr
-        assert(callExpr.cst ~= nil)
-        assert(callExpr.cst.kind == "CstExprCall")
-        assert(typeof(callExpr.cst.openParens) == "AstPosition")
-        assert(callExpr.cst.openParens.line == 2)
-        assert(callExpr.cst.openParens.computedOffset > 0)
+        local callExpr = callStat:expr()
+        local callExprCst = callExpr:cst()
+        assert(callExprCst ~= nil)
+        assert(callExprCst.kind == "CstExprCall")
+        assert(typeof(callExprCst.openParens) == "AstPosition")
+        assert(callExprCst.openParens.line == 2)
+        assert(callExprCst.openParens.computedOffset > 0)
         assert(#doc.lineOffsets >= 2)
         assert(doc.lineOffsets[1] == 0)
-        assert(#callExpr.cst.commaPositions == 1)
-        assert(typeof(callExpr.cst.commaPositions[1]) == "AstPosition")
+        assert(#callExprCst.commaPositions == 1)
+        assert(typeof(callExprCst.commaPositions[1]) == "AstPosition")
 
         -- Check type function CST and AST category
         local typeDoc = reflect.parse("type Callback = (a: number, b: string) -> boolean")
-        local aliasStat = typeDoc.root.body[1]
+        local aliasStat = typeDoc.root:body()[1]
         assert(aliasStat.category == "stat")
-        assert(aliasStat.cst ~= nil)
-        assert(aliasStat.cst.kind == "CstStatTypeAlias")
-        assert(aliasStat.cst.typeKeywordPosition.line == 1)
+        local aliasStatCst = aliasStat:cst()
+        assert(aliasStatCst ~= nil)
+        assert(aliasStatCst.kind == "CstStatTypeAlias")
+        assert(aliasStatCst.typeKeywordPosition.line == 1)
 
-        local typeFunc = aliasStat.type
+        local typeFunc = aliasStat:type()
         assert(typeFunc.category == "type")
-        assert(typeFunc.cst ~= nil)
-        assert(typeFunc.cst.kind == "CstTypeFunction")
-        assert(typeFunc.cst.returnArrowPosition.line == 1)
-        assert(#typeFunc.cst.argumentsCommaPositions == 1)
-        assert(#typeFunc.cst.argumentNameColonPositions == 2)
+        local typeFuncCst = typeFunc:cst()
+        assert(typeFuncCst ~= nil)
+        assert(typeFuncCst.kind == "CstTypeFunction")
+        assert(typeFuncCst.returnArrowPosition.line == 1)
+        assert(#typeFuncCst.argumentsCommaPositions == 1)
+        assert(#typeFuncCst.argumentNameColonPositions == 2)
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);
@@ -302,7 +325,8 @@ TEST_CASE("LazyCstData")
 
 TEST_CASE("LazyAstComments")
 {
-    ScopedFastFlag sff{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
@@ -332,7 +356,8 @@ TEST_CASE("LazyAstComments")
 
 TEST_CASE("LazyAstTableItems")
 {
-    ScopedFastFlag sff{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
@@ -350,13 +375,13 @@ TEST_CASE("LazyAstTableItems")
             }
         ]])
 
-        local stat = doc.root.body[1]
+        local stat = doc.root:body()[1]
         assert(stat.kind == "AstStatLocal")
 
-        local tableExpr = stat.values[1]
+        local tableExpr = stat:values()[1]
         assert(tableExpr.kind == "AstExprTable")
 
-        local items = tableExpr.items
+        local items = tableExpr:items()
         assert(#items == 3)
 
         -- List item
@@ -390,7 +415,8 @@ TEST_CASE("LazyAstTableItems")
 
 TEST_CASE("AstTypeTableAndAstAux")
 {
-    ScopedFastFlag sff{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
@@ -408,15 +434,15 @@ TEST_CASE("AstTypeTableAndAstAux")
             }
         ]])
 
-        local stat = doc.root.body[1]
+        local stat = doc.root:body()[1]
         assert(stat.kind == "AstStatTypeAlias")
         assert(stat.name == "MyTable")
 
-        local ty = stat.type
+        local ty = stat:type()
         assert(ty.kind == "AstTypeTable")
         assert(ty.category == "type")
 
-        local props = ty.props
+        local props = ty:props()
         assert(#props == 2)
 
         local prop1 = props[1]
@@ -433,7 +459,7 @@ TEST_CASE("AstTypeTableAndAstAux")
         assert(prop2.type.kind == "AstTypeReference")
         assert(prop2.type.name == "number")
 
-        local indexer = ty.indexer
+        local indexer = ty:indexer()
         assert(indexer ~= nil)
         assert(indexer.kind == "AstTableIndexer")
         assert(indexer.access == "readwrite")
@@ -448,7 +474,8 @@ TEST_CASE("AstTypeTableAndAstAux")
 
 TEST_CASE("TestFields")
 {
-    ScopedFastFlag sff{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
@@ -459,8 +486,8 @@ TEST_CASE("TestFields")
 
     const char* script = R"LUA(
         local doc = reflect.parse("local a = 1\nfoo(1, 2)")
-        local stat1 = doc.root.body[1]
-        local loc = stat1.location
+        local stat1 = doc.root:body()[1]
+        local loc = stat1:location()
 
         -- Test direct field access on AstLocation
         assert(loc.beginLine == 1)
@@ -472,11 +499,49 @@ TEST_CASE("TestFields")
         assert(loc.text == "local a = 1")
 
         -- Test direct field access on AstPosition
-        local call = doc.root.body[2].expr
-        local pos = call.cst.openParens
+        local call = doc.root:body()[2]:expr()
+        local pos = call:cst().openParens
         assert(pos.line == 2)
         assert(pos.column == 4)
         assert(pos.computedOffset == 15)
+
+        -- Test dot indexing a method (stat1.body(stat1))
+        local bodyFn = stat1.location
+        assert(typeof(bodyFn) == "function")
+        local loc2 = bodyFn(stat1)
+        assert(loc2.beginLine == 1)
+    )LUA";
+
+    CHECK_EQ(dostring(L, script), 0);
+}
+
+TEST_CASE("ParseReflectTypesFile")
+{
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
+
+    std::ifstream file("Reflect/types.luau");
+    if (!file.is_open())
+        file.open("../Reflect/types.luau");
+    REQUIRE(file.is_open());
+
+    std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    Luau::luaopen_reflect(L);
+    lua_setglobal(L, "reflect");
+
+    lua_pushlstring(L, content.data(), content.size());
+    lua_setglobal(L, "sourceCode");
+
+    const char* script = R"LUA(
+        local doc = reflect.parse(sourceCode)
+        assert(#doc.errors == 0, "Parse errors in Reflect/types.luau: " .. (#doc.errors > 0 and doc.errors[1].message or ""))
+        assert(doc.root ~= nil)
+        assert(#doc.root:body() > 0)
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);

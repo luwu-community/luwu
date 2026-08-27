@@ -57,9 +57,9 @@ local doc = reflect.parse([[
     }
 ]])
 
-local stat = doc.root.body[1]          -- AstStatLocal
-local tableExpr = stat.values[1]       -- AstExprTable
-local items = tableExpr.items          -- { AstTableItem }
+local stat = doc.root:body()[1]        -- AstStatLocal
+local tableExpr = stat:values()[1]     -- AstExprTable
+local items = tableExpr:items()        -- { AstTableItem }
 ```
 ]=]
 export type AstTableItem = {
@@ -411,15 +411,36 @@ export type CstNode =
     | CstTypePackGeneric
     | { read kind: string }
 
--- Statements
-export type AstStatBlock = {
-    read kind: "AstStatBlock",
-    read category: "stat",
-    read location: AstLocation,
+-- Common AST node methods and fields
+export type AstNodeCommon = {
     read text: string,
-    read cst: CstNode?,
+    read location: (self: AstNode) -> AstLocation,
+    read cst: (self: AstNode) -> CstNode?,
+    read children: (self: AstNode) -> {AstNode},
+    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read find: (self: AstNode, kind: string) -> {AstNode},
+}
+
+export type AstStatCommon = AstNodeCommon & {
+    read category: "stat",
     read hasSemicolon: boolean,
-    read body: {AstStat},
+}
+
+export type AstExprCommon = AstNodeCommon & {
+    read category: "expr",
+}
+
+export type AstTypeCommon = AstNodeCommon & {
+    read category: "type",
+}
+
+export type AstTypePackCommon = AstNodeCommon & {
+    read category: "typePack",
+}
+
+-- Statements
+export type AstStatBlock = AstStatCommon & {
+    read kind: "AstStatBlock",
     --[[ Indicates whether or not this block has been terminated in a
      * syntactically valid way.
      *
@@ -431,305 +452,157 @@ export type AstStatBlock = {
      * 'until' keyword.
      ]]
     read hasEnd: boolean,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read body: (self: AstNode) -> {AstStat},
 }
 
-export type AstStatIf = {
+export type AstStatIf = AstStatCommon & {
     read kind: "AstStatIf",
-    read category: "stat",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read hasSemicolon: boolean,
-    read condition: AstExpr,
-    read thenbody: AstStatBlock,
+    read condition: (self: AstNode) -> AstExpr,
+    read thenbody: (self: AstNode) -> AstStatBlock,
     -- Active for 'elseif' as well
-    read elsebody: AstStat?,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read elsebody: (self: AstNode) -> AstStat?,
 }
 
-export type AstStatWhile = {
+export type AstStatWhile = AstStatCommon & {
     read kind: "AstStatWhile",
-    read category: "stat",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read hasSemicolon: boolean,
-    read condition: AstExpr,
-    read body: AstStatBlock,
     read hasDo: boolean,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read condition: (self: AstNode) -> AstExpr,
+    read body: (self: AstNode) -> AstStatBlock,
 }
 
-export type AstStatRepeat = {
+export type AstStatRepeat = AstStatCommon & {
     read kind: "AstStatRepeat",
-    read category: "stat",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read hasSemicolon: boolean,
-    read condition: AstExpr,
-    read body: AstStatBlock,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read condition: (self: AstNode) -> AstExpr,
+    read body: (self: AstNode) -> AstStatBlock,
 }
 
-export type AstStatBreak = {
+export type AstStatBreak = AstStatCommon & {
     read kind: "AstStatBreak",
-    read category: "stat",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read hasSemicolon: boolean,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
 }
 
-export type AstStatContinue = {
+export type AstStatContinue = AstStatCommon & {
     read kind: "AstStatContinue",
-    read category: "stat",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read hasSemicolon: boolean,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
 }
 
-export type AstStatReturn = {
+export type AstStatReturn = AstStatCommon & {
     read kind: "AstStatReturn",
-    read category: "stat",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read hasSemicolon: boolean,
-    read list: {AstExpr},
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read list: (self: AstNode) -> {AstExpr},
 }
 
-export type AstStatExpr = {
+export type AstStatExpr = AstStatCommon & {
     read kind: "AstStatExpr",
-    read category: "stat",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read hasSemicolon: boolean,
-    read expr: AstExpr,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read expr: (self: AstNode) -> AstExpr,
 }
 
-export type AstStatLocal = {
+export type AstStatLocal = AstStatCommon & {
     read kind: "AstStatLocal",
-    read category: "stat",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read hasSemicolon: boolean,
-    read vars: {AstLocal},
-    read values: {AstExpr},
     read isConst: boolean,
     read exported: boolean,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read vars: (self: AstNode) -> {AstLocal},
+    read values: (self: AstNode) -> {AstExpr},
 }
 
-export type AstStatFor = {
+export type AstStatFor = AstStatCommon & {
     read kind: "AstStatFor",
-    read category: "stat",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read hasSemicolon: boolean,
-    read var: AstLocal,
-    read from: AstExpr,
-    read to: AstExpr,
-    read step: AstExpr?,
-    read body: AstStatBlock,
     read hasDo: boolean,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read var: (self: AstNode) -> AstLocal,
+    read from: (self: AstNode) -> AstExpr,
+    read to: (self: AstNode) -> AstExpr,
+    read step: (self: AstNode) -> AstExpr?,
+    read body: (self: AstNode) -> AstStatBlock,
 }
 
-export type AstStatForIn = {
+export type AstStatForIn = AstStatCommon & {
     read kind: "AstStatForIn",
-    read category: "stat",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read hasSemicolon: boolean,
-    read vars: {AstLocal},
-    read values: {AstExpr},
-    read body: AstStatBlock,
     read hasIn: boolean,
     read hasDo: boolean,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read vars: (self: AstNode) -> {AstLocal},
+    read values: (self: AstNode) -> {AstExpr},
+    read body: (self: AstNode) -> AstStatBlock,
 }
 
-export type AstStatAssign = {
+export type AstStatAssign = AstStatCommon & {
     read kind: "AstStatAssign",
-    read category: "stat",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read hasSemicolon: boolean,
-    read vars: {AstExpr},
-    read values: {AstExpr},
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read vars: (self: AstNode) -> {AstExpr},
+    read values: (self: AstNode) -> {AstExpr},
 }
 
-export type AstStatCompoundAssign = {
+export type AstStatCompoundAssign = AstStatCommon & {
     read kind: "AstStatCompoundAssign",
-    read category: "stat",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read hasSemicolon: boolean,
-    read var: AstExpr,
     read op: string,
-    read value: AstExpr,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read var: (self: AstNode) -> AstExpr,
+    read value: (self: AstNode) -> AstExpr,
 }
 
-export type AstStatFunction = {
+export type AstStatFunction = AstStatCommon & {
     read kind: "AstStatFunction",
-    read category: "stat",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read hasSemicolon: boolean,
-    read name: AstExpr,
-    read func: AstExprFunction,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read name: (self: AstNode) -> AstExpr,
+    read func: (self: AstNode) -> AstExprFunction,
 }
 
-export type AstStatLocalFunction = {
+export type AstStatLocalFunction = AstStatCommon & {
     read kind: "AstStatLocalFunction",
-    read category: "stat",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read hasSemicolon: boolean,
-    read name: AstLocal,
-    read func: AstExprFunction,
     read isConst: boolean,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read name: (self: AstNode) -> AstLocal,
+    read func: (self: AstNode) -> AstExprFunction,
 }
 
-export type AstStatTypeAlias = {
+export type AstStatTypeAlias = AstStatCommon & {
     read kind: "AstStatTypeAlias",
-    read category: "stat",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read hasSemicolon: boolean,
     read name: string,
-    read type: AstType,
-    read generics: {AstGenericType},
-    read genericPacks: {AstGenericTypePack},
     read exported: boolean,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read type: (self: AstNode) -> AstType,
+    read generics: (self: AstNode) -> {AstGenericType},
+    read genericPacks: (self: AstNode) -> {AstGenericTypePack},
 }
 
-export type AstStatTypeFunction = {
+export type AstStatTypeFunction = AstStatCommon & {
     read kind: "AstStatTypeFunction",
-    read category: "stat",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read hasSemicolon: boolean,
     read name: string,
-    read body: AstExprFunction,
     read exported: boolean,
     read hasErrors: boolean,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read body: (self: AstNode) -> AstExprFunction,
 }
 
-export type AstStatDeclareGlobal = {
+export type AstStatDeclareGlobal = AstStatCommon & {
     read kind: "AstStatDeclareGlobal",
-    read category: "stat",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read hasSemicolon: boolean,
     read name: string,
-    read type: AstType,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read type: (self: AstNode) -> AstType,
 }
 
-export type AstStatDeclareFunction = {
+export type AstStatDeclareFunction = AstStatCommon & {
     read kind: "AstStatDeclareFunction",
-    read category: "stat",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read hasSemicolon: boolean,
     read name: string,
-    read generics: {AstGenericType},
-    read genericPacks: {AstGenericTypePack},
-    read params: {AstType},
     read vararg: boolean,
-    read returnTypes: AstTypePack?,
-    read attributes: {AstAttr},
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read generics: (self: AstNode) -> {AstGenericType},
+    read genericPacks: (self: AstNode) -> {AstGenericTypePack},
+    read params: (self: AstNode) -> {AstType},
+    read returnTypes: (self: AstNode) -> AstTypePack?,
+    read attributes: (self: AstNode) -> {AstAttr},
 }
 
-export type AstStatDeclareExternType = {
+export type AstStatDeclareExternType = AstStatCommon & {
     read kind: "AstStatDeclareExternType",
-    read category: "stat",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read hasSemicolon: boolean,
     read name: string,
     read superName: string?,
-    read props: {AstDeclaredExternTypeProperty},
-    read indexer: AstTableIndexer?,
-    read generics: {AstGenericType},
-    read genericPacks: {AstGenericTypePack},
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read props: (self: AstNode) -> {AstDeclaredExternTypeProperty},
+    read indexer: (self: AstNode) -> AstTableIndexer?,
+    read generics: (self: AstNode) -> {AstGenericType},
+    read genericPacks: (self: AstNode) -> {AstGenericTypePack},
 }
 
-export type AstStatClass = {
+export type AstStatClass = AstStatCommon & {
     read kind: "AstStatClass",
-    read category: "stat",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read hasSemicolon: boolean,
-    read name: AstLocal,
-    read members: {AstClassProperty | AstClassMethod},
     read exported: boolean,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read name: (self: AstNode) -> AstLocal,
+    read members: (self: AstNode) -> {AstClassProperty | AstClassMethod},
 }
 
-export type AstStatError = {
+export type AstStatError = AstStatCommon & {
     read kind: "AstStatError",
-    read category: "stat",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read hasSemicolon: boolean,
-    read expressions: {AstExpr},
-    read statements: {AstStat},
     read messageIndex: number,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read expressions: (self: AstNode) -> {AstExpr},
+    read statements: (self: AstNode) -> {AstStat},
 }
 
 export type AstStat =
@@ -755,262 +628,136 @@ export type AstStat =
     | AstStatDeclareExternType
     | AstStatClass
     | AstStatError
-    | { read kind: string, read category: "stat", read location: AstLocation, read text: string, read cst: CstNode?, read hasSemicolon: boolean, read children: (self: AstNode) -> {AstNode}, read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> () }
+    | (AstStatCommon & { read kind: string })
 
 -- Expressions
-export type AstExprGroup = {
+export type AstExprGroup = AstExprCommon & {
     read kind: "AstExprGroup",
-    read category: "expr",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read expr: AstExpr,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read expr: (self: AstNode) -> AstExpr,
 }
 
-export type AstExprConstantNil = {
+export type AstExprConstantNil = AstExprCommon & {
     read kind: "AstExprConstantNil",
-    read category: "expr",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
 }
 
-export type AstExprConstantBool = {
+export type AstExprConstantBool = AstExprCommon & {
     read kind: "AstExprConstantBool",
-    read category: "expr",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
     read value: boolean,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
 }
 
-export type AstExprConstantNumber = {
+export type AstExprConstantNumber = AstExprCommon & {
     read kind: "AstExprConstantNumber",
-    read category: "expr",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
     read value: number,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
 }
 
-export type AstExprConstantInteger = {
+export type AstExprConstantInteger = AstExprCommon & {
     read kind: "AstExprConstantInteger",
-    read category: "expr",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
     read value: number,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
 }
 
-export type AstExprConstantString = {
+export type AstExprConstantString = AstExprCommon & {
     read kind: "AstExprConstantString",
-    read category: "expr",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
     read value: string,
     read quoteStyle: "single" | "double" | "raw" | "unquoted" | "simple",
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
 }
 
-export type AstExprLocal = {
+export type AstExprLocal = AstExprCommon & {
     read kind: "AstExprLocal",
-    read category: "expr",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read ["local"]: AstLocal,
     read upvalue: boolean,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read ["local"]: (self: AstNode) -> AstLocal,
 }
 
-export type AstExprGlobal = {
+export type AstExprGlobal = AstExprCommon & {
     read kind: "AstExprGlobal",
-    read category: "expr",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
     read name: string,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
 }
 
-export type AstExprVarargs = {
+export type AstExprVarargs = AstExprCommon & {
     read kind: "AstExprVarargs",
-    read category: "expr",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
 }
 
-export type AstExprCall = {
+export type AstExprCall = AstExprCommon & {
     read kind: "AstExprCall",
-    read category: "expr",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read func: AstExpr,
-    read args: {AstExpr},
     -- True for method call syntax t:m(...)
     read self: boolean,
-    read typeArguments: {AstNode},
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read func: (self: AstNode) -> AstExpr,
+    read args: (self: AstNode) -> {AstExpr},
+    read typeArguments: (self: AstNode) -> {AstNode},
 }
 
-export type AstExprIndexName = {
+export type AstExprIndexName = AstExprCommon & {
     read kind: "AstExprIndexName",
-    read category: "expr",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read expr: AstExpr,
     read index: string,
     read op: string,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read expr: (self: AstNode) -> AstExpr,
 }
 
-export type AstExprIndexExpr = {
+export type AstExprIndexExpr = AstExprCommon & {
     read kind: "AstExprIndexExpr",
-    read category: "expr",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read expr: AstExpr,
-    read index: AstExpr,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read expr: (self: AstNode) -> AstExpr,
+    read index: (self: AstNode) -> AstExpr,
 }
 
-export type AstExprFunction = {
+export type AstExprFunction = AstExprCommon & {
     read kind: "AstExprFunction",
-    read category: "expr",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read args: {AstLocal},
-    read body: AstStatBlock,
     read vararg: boolean,
-    read generics: {AstGenericType},
-    read genericPacks: {AstGenericTypePack},
-    read returnAnnotation: AstNode?,
     read debugname: string,
-    read attributes: {AstAttr},
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read args: (self: AstNode) -> {AstLocal},
+    read body: (self: AstNode) -> AstStatBlock,
+    read generics: (self: AstNode) -> {AstGenericType},
+    read genericPacks: (self: AstNode) -> {AstGenericTypePack},
+    read returnAnnotation: (self: AstNode) -> AstNode?,
+    read attributes: (self: AstNode) -> {AstAttr},
 }
 
-export type AstExprTable = {
+export type AstExprTable = AstExprCommon & {
     read kind: "AstExprTable",
-    read category: "expr",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read items: {AstTableItem},
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read items: (self: AstNode) -> {AstTableItem},
 }
 
-export type AstExprUnary = {
+export type AstExprUnary = AstExprCommon & {
     read kind: "AstExprUnary",
-    read category: "expr",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
     read op: string,
-    read expr: AstExpr,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read expr: (self: AstNode) -> AstExpr,
 }
 
-export type AstExprBinary = {
+export type AstExprBinary = AstExprCommon & {
     read kind: "AstExprBinary",
-    read category: "expr",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
     read op: string,
-    read left: AstExpr,
-    read right: AstExpr,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read left: (self: AstNode) -> AstExpr,
+    read right: (self: AstNode) -> AstExpr,
 }
 
-export type AstExprTypeAssertion = {
+export type AstExprTypeAssertion = AstExprCommon & {
     read kind: "AstExprTypeAssertion",
-    read category: "expr",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read expr: AstExpr,
-    read annotation: AstType,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read expr: (self: AstNode) -> AstExpr,
+    read annotation: (self: AstNode) -> AstType,
 }
 
-export type AstExprIfElse = {
+export type AstExprIfElse = AstExprCommon & {
     read kind: "AstExprIfElse",
-    read category: "expr",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read condition: AstExpr,
-    read trueExpr: AstExpr,
-    read falseExpr: AstExpr,
     read hasElse: boolean,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read condition: (self: AstNode) -> AstExpr,
+    read trueExpr: (self: AstNode) -> AstExpr,
+    read falseExpr: (self: AstNode) -> AstExpr,
 }
 
-export type AstExprInterpString = {
+export type AstExprInterpString = AstExprCommon & {
     read kind: "AstExprInterpString",
-    read category: "expr",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
     read strings: {string},
-    read expressions: {AstExpr},
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read expressions: (self: AstNode) -> {AstExpr},
 }
 
-export type AstExprInstantiate = {
+export type AstExprInstantiate = AstExprCommon & {
     read kind: "AstExprInstantiate",
-    read category: "expr",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read expr: AstExpr,
-    read typeArguments: {AstNode},
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read expr: (self: AstNode) -> AstExpr,
+    read typeArguments: (self: AstNode) -> {AstNode},
 }
 
-export type AstExprError = {
+export type AstExprError = AstExprCommon & {
     read kind: "AstExprError",
-    read category: "expr",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read expressions: {AstExpr},
     read messageIndex: number,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read expressions: (self: AstNode) -> {AstExpr},
 }
 
 export type AstExpr =
@@ -1035,137 +782,71 @@ export type AstExpr =
     | AstExprInterpString
     | AstExprInstantiate
     | AstExprError
-    | { read kind: string, read category: "expr", read location: AstLocation, read text: string, read cst: CstNode?, read children: (self: AstNode) -> {AstNode}, read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> () }
+    | (AstExprCommon & { read kind: string })
 
 -- Types
-export type AstTypeReference = {
+export type AstTypeReference = AstTypeCommon & {
     read kind: "AstTypeReference",
-    read category: "type",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
     read name: string,
     read prefix: string?,
     read hasParameterList: boolean,
-    read parameters: {AstNode},
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read parameters: (self: AstNode) -> {AstNode},
 }
 
-export type AstTypeTable = {
+export type AstTypeTable = AstTypeCommon & {
     read kind: "AstTypeTable",
-    read category: "type",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read props: {AstTableProp},
-    read indexer: AstTableIndexer?,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read props: (self: AstNode) -> {AstTableProp},
+    read indexer: (self: AstNode) -> AstTableIndexer?,
 }
 
-export type AstTypeFunction = {
+export type AstTypeFunction = AstTypeCommon & {
     read kind: "AstTypeFunction",
-    read category: "type",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read generics: {AstGenericType},
-    read genericPacks: {AstGenericTypePack},
-    read argTypes: {AstType},
-    read returnTypes: AstTypePack,
-    read attributes: {AstAttr},
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read generics: (self: AstNode) -> {AstGenericType},
+    read genericPacks: (self: AstNode) -> {AstGenericTypePack},
+    read argTypes: (self: AstNode) -> {AstType},
+    read returnTypes: (self: AstNode) -> AstTypePack,
+    read attributes: (self: AstNode) -> {AstAttr},
 }
 
-export type AstTypeTypeof = {
+export type AstTypeTypeof = AstTypeCommon & {
     read kind: "AstTypeTypeof",
-    read category: "type",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read expr: AstExpr,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read expr: (self: AstNode) -> AstExpr,
 }
 
-export type AstTypeOptional = {
+export type AstTypeOptional = AstTypeCommon & {
     read kind: "AstTypeOptional",
-    read category: "type",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
 }
 
-export type AstTypeUnion = {
+export type AstTypeUnion = AstTypeCommon & {
     read kind: "AstTypeUnion",
-    read category: "type",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read types: {AstType},
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read types: (self: AstNode) -> {AstType},
 }
 
-export type AstTypeIntersection = {
+export type AstTypeIntersection = AstTypeCommon & {
     read kind: "AstTypeIntersection",
-    read category: "type",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read types: {AstType},
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read types: (self: AstNode) -> {AstType},
 }
 
-export type AstTypeSingletonBool = {
+export type AstTypeSingletonBool = AstTypeCommon & {
     read kind: "AstTypeSingletonBool",
-    read category: "type",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
     read value: boolean,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
 }
 
-export type AstTypeSingletonString = {
+export type AstTypeSingletonString = AstTypeCommon & {
     read kind: "AstTypeSingletonString",
-    read category: "type",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
     read value: string,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
 }
 
-export type AstTypeGroup = {
+export type AstTypeGroup = AstTypeCommon & {
     read kind: "AstTypeGroup",
-    read category: "type",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read type: AstType,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read type: (self: AstNode) -> AstType,
 }
 
-export type AstTypeError = {
+export type AstTypeError = AstTypeCommon & {
     read kind: "AstTypeError",
-    read category: "type",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read types: {AstType},
     read isMissing: boolean,
     read messageIndex: number,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read types: (self: AstNode) -> {AstType},
 }
 
 export type AstType =
@@ -1180,85 +861,52 @@ export type AstType =
     | AstTypeSingletonString
     | AstTypeGroup
     | AstTypeError
-    | { read kind: string, read category: "type", read location: AstLocation, read text: string, read cst: CstNode?, read children: (self: AstNode) -> {AstNode}, read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> () }
+    | (AstTypeCommon & { read kind: string })
 
 -- Type Packs
-export type AstTypePackExplicit = {
+export type AstTypePackExplicit = AstTypePackCommon & {
     read kind: "AstTypePackExplicit",
-    read category: "typePack",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read types: {AstType},
-    read tailType: AstTypePack?,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read types: (self: AstNode) -> {AstType},
+    read tailType: (self: AstNode) -> AstTypePack?,
 }
 
-export type AstTypePackVariadic = {
+export type AstTypePackVariadic = AstTypePackCommon & {
     read kind: "AstTypePackVariadic",
-    read category: "typePack",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
-    read variadicType: AstType,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read variadicType: (self: AstNode) -> AstType,
 }
 
-export type AstTypePackGeneric = {
+export type AstTypePackGeneric = AstTypePackCommon & {
     read kind: "AstTypePackGeneric",
-    read category: "typePack",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
     read name: string,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
 }
 
 export type AstTypePack =
     | AstTypePackExplicit
     | AstTypePackVariadic
     | AstTypePackGeneric
-    | { read kind: string, read category: "typePack", read location: AstLocation, read text: string, read cst: CstNode?, read children: (self: AstNode) -> {AstNode}, read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> () }
+    | (AstTypePackCommon & { read kind: string })
 
 -- Generics & Attributes
-export type AstGenericType = {
+export type AstGenericType = AstNodeCommon & {
     read kind: "AstGenericType",
     read category: "generic",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
     read name: string,
-    read type: AstNode?,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read type: (self: AstNode) -> AstNode?,
 }
 
-export type AstGenericTypePack = {
+export type AstGenericTypePack = AstNodeCommon & {
     read kind: "AstGenericTypePack",
     read category: "generic",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
     read name: string,
-    read type: AstNode?,
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read type: (self: AstNode) -> AstNode?,
 }
 
-export type AstAttr = {
+export type AstAttr = AstNodeCommon & {
     read kind: "AstAttr",
     read category: "attr",
-    read location: AstLocation,
-    read text: string,
-    read cst: CstNode?,
     read type: "checked" | "native" | "deprecated" | "debugNoinline" | "unknown",
     read name: string,
-    read args: {AstExpr},
-    read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
+    read args: (self: AstNode) -> {AstExpr},
 }
 
 -- General AST Node Union
@@ -1270,15 +918,10 @@ export type AstNode =
     | AstGenericType
     | AstGenericTypePack
     | AstAttr
-    | {
+    | (AstNodeCommon & {
         read kind: string,
         read category: "stat" | "expr" | "type" | "typePack" | "generic" | "attr" | "unknown",
-        read location: AstLocation,
-        read text: string,
-        read cst: CstNode?,
-        read children: (self: AstNode) -> {AstNode},
-        read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
-    }
+    })
 
 -- Parsed Document Root State
 export type AstDocument = {
@@ -1291,10 +934,15 @@ export type AstDocument = {
     read find: (self: AstDocument, kind: string) -> {AstNode},
 }
 
--- Module Surface
-export type ReflectModule = {
-    parse: (source: string) -> AstDocument,
-    parseExpr: (source: string) -> AstNode,
-}
+local function parse(source: string): AstDocument
+    error("Not implemented")
+end
 
-return {} :: ReflectModule
+local function parseExpr(source: string): AstNode
+    error("Not implemented")
+end
+
+return {
+    parse = parse,
+    parseExpr = parseExpr,
+}

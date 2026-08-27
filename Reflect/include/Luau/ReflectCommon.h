@@ -385,11 +385,12 @@ inline void registerUserdataType(
     lua_CFunction index,
     lua_CFunction tostring,
     lua_CFunction eq = nullptr,
-    const luaL_Reg* methods = nullptr
+    const luaL_Reg* methods = nullptr,
+    lua_CFunction namecall = nullptr
 )
 {
     lua_setuserdatadtor(L, tag, dtor);
-    lua_createtable(L, 0, (eq ? 4 : 3) + (methods ? 4 : 0));
+    lua_createtable(L, 0, (eq ? 4 : 3) + (methods ? 4 : 0) + (namecall ? 1 : 0));
     lua_pushstring(L, typeName);
     lua_setfield(L, -2, "__type");
     lua_pushcfunction(L, index, "__index");
@@ -400,6 +401,11 @@ inline void registerUserdataType(
     {
         lua_pushcfunction(L, eq, "__eq");
         lua_setfield(L, -2, "__eq");
+    }
+    if (namecall)
+    {
+        lua_pushcfunction(L, namecall, "__namecall");
+        lua_setfield(L, -2, "__namecall");
     }
     if (methods)
     {
@@ -417,6 +423,23 @@ inline int pushUserdataMethod(lua_State* L, int tag, const char* name)
 {
     lua_getuserdatametatable(L, tag);
     lua_getfield(L, -1, name);
+    lua_replace(L, -2);
+    return 1;
+}
+
+// Push cached userdata method from metatable, or lazily allocate and cache it on first access
+inline int pushCachedUserdataMethod(lua_State* L, int tag, const char* name, lua_CFunction thunk)
+{
+    lua_getuserdatametatable(L, tag);
+    lua_getfield(L, -1, name);
+    if (lua_isnil(L, -1))
+    {
+        lua_pop(L, 1);
+        lua_pushstring(L, name);
+        lua_pushcclosure(L, thunk, name, 1);
+        lua_pushvalue(L, -1);
+        lua_setfield(L, -3, name);
+    }
     lua_replace(L, -2);
     return 1;
 }

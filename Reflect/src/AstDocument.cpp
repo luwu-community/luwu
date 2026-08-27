@@ -187,6 +187,25 @@ static int astDocEq(lua_State* L)
     return 1;
 }
 
+static int astDocNamecall(lua_State* L)
+{
+    if (const char* str = lua_namecallatom(L, nullptr))
+    {
+        AstDocumentAtom atom = getAstDocumentAtom(str);
+        switch (atom)
+        {
+        case Atom_Walk:
+            return astDocWalk(L);
+        case Atom_Find:
+            return astDocFind(L);
+        default:
+            break;
+        }
+        luaL_error(L, "%s is not a valid method of AstDocument", str);
+    }
+    luaL_error(L, "missing method name in namecall");
+}
+
 void registerAstDocument(lua_State* L)
 {
     static const luaL_Reg s_docMethods[] = {
@@ -194,7 +213,7 @@ void registerAstDocument(lua_State* L)
         {"find", astDocFind},
         {nullptr, nullptr},
     };
-    registerUserdataType(L, TagDocument, "AstDocument", astDocumentDtor, astDocIndex, astDocToString, astDocEq, s_docMethods);
+    registerUserdataType(L, TagDocument, "AstDocument", astDocumentDtor, astDocIndex, astDocToString, astDocEq, s_docMethods, astDocNamecall);
 }
 
 } // namespace Luau
