@@ -18,14 +18,26 @@ enum class NodeCategory : uint8_t
 
 LUAU_REFLECT_DEFINE_POINTER_USERDATA(pushAstNode, checkAstNode, astNodeDtor, AstNodeData, Luau::AstNode*, TagNode, "AstNode")
 
-typedef bool (*NodePropertyHandler)(lua_State* L, AstNodeData& handle, ReflectAtom atom);
+static const char* nodeCategoryToString(NodeCategory cat)
+{
+    switch (cat)
+    {
+    case NodeCategory::Stat:     return "stat";
+    case NodeCategory::Expr:     return "expr";
+    case NodeCategory::Type:     return "type";
+    case NodeCategory::TypePack: return "typePack";
+    case NodeCategory::Generic:  return "generic";
+    case NodeCategory::Attr:     return "attr";
+    default:                     return "unknown";
+    }
+}
+
 typedef bool (*NodeMethodHandler)(lua_State* L, AstNodeData& handle, ReflectAtom atom);
 
 struct AstNodeClassInfo
 {
     const char* kind = nullptr;
-    NodeCategory category = NodeCategory::Unknown;
-    NodePropertyHandler propHandler = nullptr;
+    const char* category = nullptr;
     NodeMethodHandler methodHandler = nullptr;
 };
 
@@ -38,17 +50,17 @@ template<typename T>
 static void registerNodeClass(
     const char* kind,
     NodeCategory category,
-    NodePropertyHandler propHandler = nullptr,
     NodeMethodHandler methodHandler = nullptr
 )
 {
     int idx = T::ClassIndex();
     if (size_t(idx) >= s_nodeClassTable.size())
-        s_nodeClassTable.resize(idx + 1, AstNodeClassInfo{"AstNode", NodeCategory::Unknown, nullptr, nullptr});
-    s_nodeClassTable[idx] = AstNodeClassInfo{kind, category, propHandler, methodHandler};
+        s_nodeClassTable.resize(idx + 1, AstNodeClassInfo{"AstNode", "unknown", nullptr});
+    s_nodeClassTable[idx] = AstNodeClassInfo{kind, nodeCategoryToString(category), methodHandler};
 }
 
 LUAU_REFLECT_GET_NODE_KIND(getNodeKind, Luau::AstNode*, s_nodeClassTable, "AstNode")
+LUAU_REFLECT_GET_NODE_CATEGORY(getAstNodeCategory, Luau::AstNode*, s_nodeClassTable, "unknown")
 
 struct DirectChildCollector : public Luau::AstVisitor
 {
@@ -91,11 +103,8 @@ struct DirectChildCollector : public Luau::AstVisitor
         } \
     }
 
-LUAU_AST_HANDLER_START(handleStatBlockProps, AstStatBlock)
-    case ReflectAtom::HasEnd: { lua_pushboolean(L, n->hasEnd); return true; }
-LUAU_AST_HANDLER_END()
-
 LUAU_AST_HANDLER_START(handleStatBlockMethods, AstStatBlock)
+    case ReflectAtom::HasEnd: { lua_pushboolean(L, n->hasEnd); return true; }
     case ReflectAtom::Body: { pushNodeArray(L, handle.doc, n->body); return true; }
 LUAU_AST_HANDLER_END()
 
@@ -105,11 +114,8 @@ LUAU_AST_HANDLER_START(handleStatIfMethods, AstStatIf)
     case ReflectAtom::ElseBody:  { pushAstNode(L, handle.doc, n->elsebody); return true; }
 LUAU_AST_HANDLER_END()
 
-LUAU_AST_HANDLER_START(handleStatWhileProps, AstStatWhile)
-    case ReflectAtom::HasDo: { lua_pushboolean(L, n->hasDo); return true; }
-LUAU_AST_HANDLER_END()
-
 LUAU_AST_HANDLER_START(handleStatWhileMethods, AstStatWhile)
+    case ReflectAtom::HasDo: { lua_pushboolean(L, n->hasDo); return true; }
     case ReflectAtom::Condition: { pushAstNode(L, handle.doc, n->condition); return true; }
     case ReflectAtom::Body:      { pushAstNode(L, handle.doc, n->body); return true; }
 LUAU_AST_HANDLER_END()
@@ -127,21 +133,15 @@ LUAU_AST_HANDLER_START(handleStatExprMethods, AstStatExpr)
     case ReflectAtom::Expr: { pushAstNode(L, handle.doc, n->expr); return true; }
 LUAU_AST_HANDLER_END()
 
-LUAU_AST_HANDLER_START(handleStatLocalProps, AstStatLocal)
+LUAU_AST_HANDLER_START(handleStatLocalMethods, AstStatLocal)
     case ReflectAtom::IsConst:  { lua_pushboolean(L, n->isConst); return true; }
     case ReflectAtom::Exported: { lua_pushboolean(L, n->isExported); return true; }
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleStatLocalMethods, AstStatLocal)
     case ReflectAtom::Vars:   { pushLocalArray(L, handle.doc, n->vars); return true; }
     case ReflectAtom::Values: { pushNodeArray(L, handle.doc, n->values); return true; }
 LUAU_AST_HANDLER_END()
 
-LUAU_AST_HANDLER_START(handleStatForProps, AstStatFor)
-    case ReflectAtom::HasDo: { lua_pushboolean(L, n->hasDo); return true; }
-LUAU_AST_HANDLER_END()
-
 LUAU_AST_HANDLER_START(handleStatForMethods, AstStatFor)
+    case ReflectAtom::HasDo: { lua_pushboolean(L, n->hasDo); return true; }
     case ReflectAtom::Var:  { pushAstAux(L, handle.doc, n->var); return true; }
     case ReflectAtom::From: { pushAstNode(L, handle.doc, n->from); return true; }
     case ReflectAtom::To:   { pushAstNode(L, handle.doc, n->to); return true; }
@@ -149,12 +149,9 @@ LUAU_AST_HANDLER_START(handleStatForMethods, AstStatFor)
     case ReflectAtom::Body: { pushAstNode(L, handle.doc, n->body); return true; }
 LUAU_AST_HANDLER_END()
 
-LUAU_AST_HANDLER_START(handleStatForInProps, AstStatForIn)
+LUAU_AST_HANDLER_START(handleStatForInMethods, AstStatForIn)
     case ReflectAtom::HasIn: { lua_pushboolean(L, n->hasIn); return true; }
     case ReflectAtom::HasDo: { lua_pushboolean(L, n->hasDo); return true; }
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleStatForInMethods, AstStatForIn)
     case ReflectAtom::Vars:   { pushLocalArray(L, handle.doc, n->vars); return true; }
     case ReflectAtom::Values: { pushNodeArray(L, handle.doc, n->values); return true; }
     case ReflectAtom::Body:   { pushAstNode(L, handle.doc, n->body); return true; }
@@ -165,11 +162,8 @@ LUAU_AST_HANDLER_START(handleStatAssignMethods, AstStatAssign)
     case ReflectAtom::Values: { pushNodeArray(L, handle.doc, n->values); return true; }
 LUAU_AST_HANDLER_END()
 
-LUAU_AST_HANDLER_START(handleStatCompoundAssignProps, AstStatCompoundAssign)
-    case ReflectAtom::Op: { lua_pushstring(L, toString(n->op).c_str()); return true; }
-LUAU_AST_HANDLER_END()
-
 LUAU_AST_HANDLER_START(handleStatCompoundAssignMethods, AstStatCompoundAssign)
+    case ReflectAtom::Op: { lua_pushstring(L, toString(n->op).c_str()); return true; }
     case ReflectAtom::Var:   { pushAstNode(L, handle.doc, n->var); return true; }
     case ReflectAtom::Value: { pushAstNode(L, handle.doc, n->value); return true; }
 LUAU_AST_HANDLER_END()
@@ -179,50 +173,35 @@ LUAU_AST_HANDLER_START(handleStatFunctionMethods, AstStatFunction)
     case ReflectAtom::Func: { pushAstNode(L, handle.doc, n->func); return true; }
 LUAU_AST_HANDLER_END()
 
-LUAU_AST_HANDLER_START(handleStatLocalFunctionProps, AstStatLocalFunction)
-    case ReflectAtom::IsConst: { lua_pushboolean(L, n->isConst); return true; }
-LUAU_AST_HANDLER_END()
-
 LUAU_AST_HANDLER_START(handleStatLocalFunctionMethods, AstStatLocalFunction)
+    case ReflectAtom::IsConst: { lua_pushboolean(L, n->isConst); return true; }
     case ReflectAtom::Name: { pushAstAux(L, handle.doc, n->name); return true; }
     case ReflectAtom::Func: { pushAstNode(L, handle.doc, n->func); return true; }
 LUAU_AST_HANDLER_END()
 
-LUAU_AST_HANDLER_START(handleStatTypeAliasProps, AstStatTypeAlias)
+LUAU_AST_HANDLER_START(handleStatTypeAliasMethods, AstStatTypeAlias)
     case ReflectAtom::Name:     { lua_pushstring(L, n->name.value); return true; }
     case ReflectAtom::Exported: { lua_pushboolean(L, n->exported); return true; }
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleStatTypeAliasMethods, AstStatTypeAlias)
     case ReflectAtom::Type:         { pushAstNode(L, handle.doc, n->type); return true; }
     case ReflectAtom::Generics:     { pushNodeArray(L, handle.doc, n->generics); return true; }
     case ReflectAtom::GenericPacks: { pushNodeArray(L, handle.doc, n->genericPacks); return true; }
 LUAU_AST_HANDLER_END()
 
-LUAU_AST_HANDLER_START(handleStatTypeFunctionProps, AstStatTypeFunction)
+LUAU_AST_HANDLER_START(handleStatTypeFunctionMethods, AstStatTypeFunction)
     case ReflectAtom::Name:      { lua_pushstring(L, n->name.value); return true; }
     case ReflectAtom::Exported:  { lua_pushboolean(L, n->exported); return true; }
     case ReflectAtom::HasErrors: { lua_pushboolean(L, n->hasErrors); return true; }
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleStatTypeFunctionMethods, AstStatTypeFunction)
     case ReflectAtom::Body: { pushAstNode(L, handle.doc, n->body); return true; }
 LUAU_AST_HANDLER_END()
 
-LUAU_AST_HANDLER_START(handleStatDeclareGlobalProps, AstStatDeclareGlobal)
-    case ReflectAtom::Name: { lua_pushstring(L, n->name.value); return true; }
-LUAU_AST_HANDLER_END()
-
 LUAU_AST_HANDLER_START(handleStatDeclareGlobalMethods, AstStatDeclareGlobal)
+    case ReflectAtom::Name: { lua_pushstring(L, n->name.value); return true; }
     case ReflectAtom::Type: { pushAstNode(L, handle.doc, n->type); return true; }
 LUAU_AST_HANDLER_END()
 
-LUAU_AST_HANDLER_START(handleStatDeclareFunctionProps, AstStatDeclareFunction)
+LUAU_AST_HANDLER_START(handleStatDeclareFunctionMethods, AstStatDeclareFunction)
     case ReflectAtom::Name:   { lua_pushstring(L, n->name.value); return true; }
     case ReflectAtom::Vararg: { lua_pushboolean(L, n->vararg); return true; }
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleStatDeclareFunctionMethods, AstStatDeclareFunction)
     case ReflectAtom::Generics:     { pushNodeArray(L, handle.doc, n->generics); return true; }
     case ReflectAtom::GenericPacks: { pushNodeArray(L, handle.doc, n->genericPacks); return true; }
     case ReflectAtom::Params:       { pushNodeArray(L, handle.doc, n->params.types); return true; }
@@ -230,70 +209,61 @@ LUAU_AST_HANDLER_START(handleStatDeclareFunctionMethods, AstStatDeclareFunction)
     case ReflectAtom::Attributes:   { pushNodeArray(L, handle.doc, n->attributes); return true; }
 LUAU_AST_HANDLER_END()
 
-LUAU_AST_HANDLER_START(handleStatClassProps, AstStatClass)
-    case ReflectAtom::Exported: { lua_pushboolean(L, n->exported); return true; }
-LUAU_AST_HANDLER_END()
-
 LUAU_AST_HANDLER_START(handleStatClassMethods, AstStatClass)
+    case ReflectAtom::Exported: { lua_pushboolean(L, n->exported); return true; }
     case ReflectAtom::Name: { pushAstAux(L, handle.doc, n->name); return true; }
     case ReflectAtom::Members:
     {
-        lua_createtable(L, int(n->members.size), 0);
-        for (size_t i = 0; i < n->members.size; i++)
-        {
-            const auto& member = n->members.data[i];
-            if (const auto* p = Luau::get_if<Luau::AstClassProperty>(&member))
-                pushAstAux(L, handle.doc, *p);
-            else if (const auto* m = Luau::get_if<Luau::AstClassMethod>(&member))
-                pushAstAux(L, handle.doc, *m);
-            else
-                lua_pushnil(L);
-            lua_rawseti(L, -2, int(i + 1));
-        }
-        return true;
-    }
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleStatDeclareExternTypeProps, AstStatDeclareExternType)
-    case ReflectAtom::Name: { lua_pushstring(L, n->name.value); return true; }
-    case ReflectAtom::SuperName:
+    lua_createtable(L, int(n->members.size), 0);
+    for (size_t i = 0; i < n->members.size; i++)
     {
-        if (n->superName)
-            lua_pushstring(L, n->superName->value);
-        else
-            lua_pushnil(L);
-        return true;
+    const auto& member = n->members.data[i];
+    if (const auto* p = Luau::get_if<Luau::AstClassProperty>(&member))
+    pushAstAux(L, handle.doc, *p);
+    else if (const auto* m = Luau::get_if<Luau::AstClassMethod>(&member))
+    pushAstAux(L, handle.doc, *m);
+    else
+    lua_pushnil(L);
+    lua_rawseti(L, -2, int(i + 1));
+    }
+    return true;
     }
 LUAU_AST_HANDLER_END()
 
 LUAU_AST_HANDLER_START(handleStatDeclareExternTypeMethods, AstStatDeclareExternType)
+    case ReflectAtom::Name: { lua_pushstring(L, n->name.value); return true; }
+    case ReflectAtom::SuperName:
+    {
+    if (n->superName)
+    lua_pushstring(L, n->superName->value);
+    else
+    lua_pushnil(L);
+    return true;
+    }
     case ReflectAtom::Props:
     {
-        lua_createtable(L, int(n->props.size), 0);
-        for (size_t i = 0; i < n->props.size; i++)
-        {
-            pushAstAux(L, handle.doc, n->props.data[i]);
-            lua_rawseti(L, -2, int(i + 1));
-        }
-        return true;
+    lua_createtable(L, int(n->props.size), 0);
+    for (size_t i = 0; i < n->props.size; i++)
+    {
+    pushAstAux(L, handle.doc, n->props.data[i]);
+    lua_rawseti(L, -2, int(i + 1));
+    }
+    return true;
     }
     case ReflectAtom::Indexer:
     {
-        if (n->indexer)
-            pushAstAux(L, handle.doc, *n->indexer);
-        else
-            lua_pushnil(L);
-        return true;
+    if (n->indexer)
+    pushAstAux(L, handle.doc, *n->indexer);
+    else
+    lua_pushnil(L);
+    return true;
     }
     case ReflectAtom::Generics:     { pushNodeArray(L, handle.doc, n->generics); return true; }
     case ReflectAtom::GenericPacks: { pushNodeArray(L, handle.doc, n->genericPacks); return true; }
 LUAU_AST_HANDLER_END()
 
-LUAU_AST_HANDLER_START(handleStatErrorProps, AstStatError)
-    case ReflectAtom::MessageIndex: { lua_pushinteger(L, n->messageIndex); return true; }
-LUAU_AST_HANDLER_END()
-
 LUAU_AST_HANDLER_START(handleStatErrorMethods, AstStatError)
+    case ReflectAtom::MessageIndex: { lua_pushinteger(L, n->messageIndex); return true; }
     case ReflectAtom::Expressions: { pushNodeArray(L, handle.doc, n->expressions); return true; }
     case ReflectAtom::Statements:  { pushNodeArray(L, handle.doc, n->statements); return true; }
 LUAU_AST_HANDLER_END()
@@ -302,62 +272,53 @@ LUAU_AST_HANDLER_START(handleExprGroupMethods, AstExprGroup)
     case ReflectAtom::Expr: { pushAstNode(L, handle.doc, n->expr); return true; }
 LUAU_AST_HANDLER_END()
 
-LUAU_AST_HANDLER_START(handleExprConstantBoolProps, AstExprConstantBool)
+LUAU_AST_HANDLER_START(handleExprConstantBoolMethods, AstExprConstantBool)
     case ReflectAtom::Value: { lua_pushboolean(L, n->value); return true; }
 LUAU_AST_HANDLER_END()
 
-LUAU_AST_HANDLER_START(handleExprConstantNumberProps, AstExprConstantNumber)
+LUAU_AST_HANDLER_START(handleExprConstantNumberMethods, AstExprConstantNumber)
     case ReflectAtom::Value: { lua_pushnumber(L, n->value); return true; }
 LUAU_AST_HANDLER_END()
 
-LUAU_AST_HANDLER_START(handleExprConstantIntegerProps, AstExprConstantInteger)
+LUAU_AST_HANDLER_START(handleExprConstantIntegerMethods, AstExprConstantInteger)
     case ReflectAtom::Value: { lua_pushinteger64(L, n->value); return true; }
 LUAU_AST_HANDLER_END()
 
-LUAU_AST_HANDLER_START(handleExprConstantStringProps, AstExprConstantString)
+LUAU_AST_HANDLER_START(handleExprConstantStringMethods, AstExprConstantString)
     case ReflectAtom::Value: { lua_pushlstring(L, n->value.data, n->value.size); return true; }
     case ReflectAtom::QuoteStyle:
     {
-        switch (n->quoteStyle)
-        {
-        case Luau::AstExprConstantString::QuoteStyle::QuotedSingle: lua_pushstring(L, "single"); break;
-        case Luau::AstExprConstantString::QuoteStyle::QuotedSimple: lua_pushstring(L, "double"); break;
-        case Luau::AstExprConstantString::QuoteStyle::QuotedRaw:    lua_pushstring(L, "raw"); break;
-        case Luau::AstExprConstantString::QuoteStyle::Unquoted:     lua_pushstring(L, "unquoted"); break;
-        default: lua_pushstring(L, "simple"); break;
-        }
-        return true;
+    switch (n->quoteStyle)
+    {
+    case Luau::AstExprConstantString::QuoteStyle::QuotedSingle: lua_pushstring(L, "single"); break;
+    case Luau::AstExprConstantString::QuoteStyle::QuotedSimple: lua_pushstring(L, "double"); break;
+    case Luau::AstExprConstantString::QuoteStyle::QuotedRaw:    lua_pushstring(L, "raw"); break;
+    case Luau::AstExprConstantString::QuoteStyle::Unquoted:     lua_pushstring(L, "unquoted"); break;
+    default: lua_pushstring(L, "simple"); break;
+    }
+    return true;
     }
 LUAU_AST_HANDLER_END()
 
-LUAU_AST_HANDLER_START(handleExprLocalProps, AstExprLocal)
-    case ReflectAtom::Upvalue: { lua_pushboolean(L, n->upvalue); return true; }
-LUAU_AST_HANDLER_END()
-
 LUAU_AST_HANDLER_START(handleExprLocalMethods, AstExprLocal)
+    case ReflectAtom::Upvalue: { lua_pushboolean(L, n->upvalue); return true; }
     case ReflectAtom::Local: { pushAstAux(L, handle.doc, n->local); return true; }
 LUAU_AST_HANDLER_END()
 
-LUAU_AST_HANDLER_START(handleExprGlobalProps, AstExprGlobal)
+LUAU_AST_HANDLER_START(handleExprGlobalMethods, AstExprGlobal)
     case ReflectAtom::Name: { lua_pushstring(L, n->name.value); return true; }
 LUAU_AST_HANDLER_END()
 
-LUAU_AST_HANDLER_START(handleExprCallProps, AstExprCall)
-    case ReflectAtom::Self: { lua_pushboolean(L, n->self); return true; }
-LUAU_AST_HANDLER_END()
-
 LUAU_AST_HANDLER_START(handleExprCallMethods, AstExprCall)
+    case ReflectAtom::Self: { lua_pushboolean(L, n->self); return true; }
     case ReflectAtom::Func:          { pushAstNode(L, handle.doc, n->func); return true; }
     case ReflectAtom::Args:          { pushNodeArray(L, handle.doc, n->args); return true; }
     case ReflectAtom::TypeArguments: { pushTypeOrPackArray(L, handle.doc, n->typeArguments); return true; }
 LUAU_AST_HANDLER_END()
 
-LUAU_AST_HANDLER_START(handleExprIndexNameProps, AstExprIndexName)
+LUAU_AST_HANDLER_START(handleExprIndexNameMethods, AstExprIndexName)
     case ReflectAtom::Index: { lua_pushstring(L, n->index.value); return true; }
     case ReflectAtom::Op:    { char s[2] = {n->op, '\0'}; lua_pushstring(L, s); return true; }
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleExprIndexNameMethods, AstExprIndexName)
     case ReflectAtom::Expr: { pushAstNode(L, handle.doc, n->expr); return true; }
 LUAU_AST_HANDLER_END()
 
@@ -366,12 +327,9 @@ LUAU_AST_HANDLER_START(handleExprIndexExprMethods, AstExprIndexExpr)
     case ReflectAtom::Index: { pushAstNode(L, handle.doc, n->index); return true; }
 LUAU_AST_HANDLER_END()
 
-LUAU_AST_HANDLER_START(handleExprFunctionProps, AstExprFunction)
+LUAU_AST_HANDLER_START(handleExprFunctionMethods, AstExprFunction)
     case ReflectAtom::Vararg:    { lua_pushboolean(L, n->vararg); return true; }
     case ReflectAtom::DebugName: { lua_pushstring(L, n->debugname.value); return true; }
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleExprFunctionMethods, AstExprFunction)
     case ReflectAtom::Args:             { pushLocalArray(L, handle.doc, n->args); return true; }
     case ReflectAtom::Body:             { pushAstNode(L, handle.doc, n->body); return true; }
     case ReflectAtom::Generics:         { pushNodeArray(L, handle.doc, n->generics); return true; }
@@ -383,47 +341,38 @@ LUAU_AST_HANDLER_END()
 LUAU_AST_HANDLER_START(handleExprTableMethods, AstExprTable)
     case ReflectAtom::Items:
     {
-        lua_createtable(L, int(n->items.size), 0);
-        for (size_t i = 0; i < n->items.size; i++)
-        {
-            const auto& item = n->items.data[i];
-            lua_createtable(L, 0, 3);
-            if (item.kind == Luau::AstExprTable::Item::Kind::List)
-                lua_pushstring(L, "list");
-            else if (item.kind == Luau::AstExprTable::Item::Kind::Record)
-                lua_pushstring(L, "record");
-            else
-                lua_pushstring(L, "general");
-            lua_setfield(L, -2, "kind");
-
-            if (item.key)
-                pushAstNode(L, handle.doc, item.key);
-            else
-                lua_pushnil(L);
-            lua_setfield(L, -2, "key");
-
-            pushAstNode(L, handle.doc, item.value);
-            lua_setfield(L, -2, "value");
-
-            lua_rawseti(L, -2, int(i + 1));
-        }
-        return true;
+    lua_createtable(L, int(n->items.size), 0);
+    for (size_t i = 0; i < n->items.size; i++)
+    {
+    const auto& item = n->items.data[i];
+    lua_createtable(L, 0, 3);
+    if (item.kind == Luau::AstExprTable::Item::Kind::List)
+    lua_pushstring(L, "list");
+    else if (item.kind == Luau::AstExprTable::Item::Kind::Record)
+    lua_pushstring(L, "record");
+    else
+    lua_pushstring(L, "general");
+    lua_setfield(L, -2, "kind");
+    if (item.key)
+    pushAstNode(L, handle.doc, item.key);
+    else
+    lua_pushnil(L);
+    lua_setfield(L, -2, "key");
+    pushAstNode(L, handle.doc, item.value);
+    lua_setfield(L, -2, "value");
+    lua_rawseti(L, -2, int(i + 1));
+    }
+    return true;
     }
 LUAU_AST_HANDLER_END()
 
-LUAU_AST_HANDLER_START(handleExprUnaryProps, AstExprUnary)
-    case ReflectAtom::Op: { lua_pushstring(L, toString(n->op).c_str()); return true; }
-LUAU_AST_HANDLER_END()
-
 LUAU_AST_HANDLER_START(handleExprUnaryMethods, AstExprUnary)
+    case ReflectAtom::Op: { lua_pushstring(L, toString(n->op).c_str()); return true; }
     case ReflectAtom::Expr: { pushAstNode(L, handle.doc, n->expr); return true; }
 LUAU_AST_HANDLER_END()
 
-LUAU_AST_HANDLER_START(handleExprBinaryProps, AstExprBinary)
-    case ReflectAtom::Op: { lua_pushstring(L, toString(n->op).c_str()); return true; }
-LUAU_AST_HANDLER_END()
-
 LUAU_AST_HANDLER_START(handleExprBinaryMethods, AstExprBinary)
+    case ReflectAtom::Op: { lua_pushstring(L, toString(n->op).c_str()); return true; }
     case ReflectAtom::Left:  { pushAstNode(L, handle.doc, n->left); return true; }
     case ReflectAtom::Right: { pushAstNode(L, handle.doc, n->right); return true; }
 LUAU_AST_HANDLER_END()
@@ -433,30 +382,24 @@ LUAU_AST_HANDLER_START(handleExprTypeAssertionMethods, AstExprTypeAssertion)
     case ReflectAtom::Annotation: { pushAstNode(L, handle.doc, n->annotation); return true; }
 LUAU_AST_HANDLER_END()
 
-LUAU_AST_HANDLER_START(handleExprIfElseProps, AstExprIfElse)
-    case ReflectAtom::HasElse: { lua_pushboolean(L, n->hasElse); return true; }
-LUAU_AST_HANDLER_END()
-
 LUAU_AST_HANDLER_START(handleExprIfElseMethods, AstExprIfElse)
+    case ReflectAtom::HasElse: { lua_pushboolean(L, n->hasElse); return true; }
     case ReflectAtom::Condition: { pushAstNode(L, handle.doc, n->condition); return true; }
     case ReflectAtom::TrueExpr:  { pushAstNode(L, handle.doc, n->trueExpr); return true; }
     case ReflectAtom::FalseExpr: { pushAstNode(L, handle.doc, n->falseExpr); return true; }
 LUAU_AST_HANDLER_END()
 
-LUAU_AST_HANDLER_START(handleExprInterpStringProps, AstExprInterpString)
+LUAU_AST_HANDLER_START(handleExprInterpStringMethods, AstExprInterpString)
     case ReflectAtom::Strings:
     {
-        lua_createtable(L, int(n->strings.size), 0);
-        for (size_t i = 0; i < n->strings.size; i++)
-        {
-            lua_pushlstring(L, n->strings.data[i].data, n->strings.data[i].size);
-            lua_rawseti(L, -2, int(i + 1));
-        }
-        return true;
+    lua_createtable(L, int(n->strings.size), 0);
+    for (size_t i = 0; i < n->strings.size; i++)
+    {
+    lua_pushlstring(L, n->strings.data[i].data, n->strings.data[i].size);
+    lua_rawseti(L, -2, int(i + 1));
     }
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleExprInterpStringMethods, AstExprInterpString)
+    return true;
+    }
     case ReflectAtom::Expressions: { pushNodeArray(L, handle.doc, n->expressions); return true; }
 LUAU_AST_HANDLER_END()
 
@@ -465,49 +408,43 @@ LUAU_AST_HANDLER_START(handleExprInstantiateMethods, AstExprInstantiate)
     case ReflectAtom::TypeArguments: { pushTypeOrPackArray(L, handle.doc, n->typeArguments); return true; }
 LUAU_AST_HANDLER_END()
 
-LUAU_AST_HANDLER_START(handleExprErrorProps, AstExprError)
-    case ReflectAtom::MessageIndex: { lua_pushinteger(L, n->messageIndex); return true; }
-LUAU_AST_HANDLER_END()
-
 LUAU_AST_HANDLER_START(handleExprErrorMethods, AstExprError)
+    case ReflectAtom::MessageIndex: { lua_pushinteger(L, n->messageIndex); return true; }
     case ReflectAtom::Expressions: { pushNodeArray(L, handle.doc, n->expressions); return true; }
 LUAU_AST_HANDLER_END()
 
-LUAU_AST_HANDLER_START(handleTypeReferenceProps, AstTypeReference)
+LUAU_AST_HANDLER_START(handleTypeReferenceMethods, AstTypeReference)
     case ReflectAtom::Name: { lua_pushstring(L, n->name.value); return true; }
     case ReflectAtom::Prefix:
     {
-        if (n->prefix)
-            lua_pushstring(L, n->prefix->value);
-        else
-            lua_pushnil(L);
-        return true;
+    if (n->prefix)
+    lua_pushstring(L, n->prefix->value);
+    else
+    lua_pushnil(L);
+    return true;
     }
     case ReflectAtom::HasParameterList: { lua_pushboolean(L, n->hasParameterList); return true; }
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleTypeReferenceMethods, AstTypeReference)
     case ReflectAtom::Parameters: { pushTypeOrPackArray(L, handle.doc, n->parameters); return true; }
 LUAU_AST_HANDLER_END()
 
 LUAU_AST_HANDLER_START(handleTypeTableMethods, AstTypeTable)
     case ReflectAtom::Props:
     {
-        lua_createtable(L, int(n->props.size), 0);
-        for (size_t i = 0; i < n->props.size; i++)
-        {
-            pushAstAux(L, handle.doc, n->props.data[i]);
-            lua_rawseti(L, -2, int(i + 1));
-        }
-        return true;
+    lua_createtable(L, int(n->props.size), 0);
+    for (size_t i = 0; i < n->props.size; i++)
+    {
+    pushAstAux(L, handle.doc, n->props.data[i]);
+    lua_rawseti(L, -2, int(i + 1));
+    }
+    return true;
     }
     case ReflectAtom::Indexer:
     {
-        if (n->indexer)
-            pushAstAux(L, handle.doc, *n->indexer);
-        else
-            lua_pushnil(L);
-        return true;
+    if (n->indexer)
+    pushAstAux(L, handle.doc, *n->indexer);
+    else
+    lua_pushnil(L);
+    return true;
     }
 LUAU_AST_HANDLER_END()
 
@@ -531,11 +468,11 @@ LUAU_AST_HANDLER_START(handleTypeIntersectionMethods, AstTypeIntersection)
     case ReflectAtom::Types: { pushNodeArray(L, handle.doc, n->types); return true; }
 LUAU_AST_HANDLER_END()
 
-LUAU_AST_HANDLER_START(handleTypeSingletonBoolProps, AstTypeSingletonBool)
+LUAU_AST_HANDLER_START(handleTypeSingletonBoolMethods, AstTypeSingletonBool)
     case ReflectAtom::Value: { lua_pushboolean(L, n->value); return true; }
 LUAU_AST_HANDLER_END()
 
-LUAU_AST_HANDLER_START(handleTypeSingletonStringProps, AstTypeSingletonString)
+LUAU_AST_HANDLER_START(handleTypeSingletonStringMethods, AstTypeSingletonString)
     case ReflectAtom::Value: { lua_pushlstring(L, n->value.data, n->value.size); return true; }
 LUAU_AST_HANDLER_END()
 
@@ -543,12 +480,9 @@ LUAU_AST_HANDLER_START(handleTypeGroupMethods, AstTypeGroup)
     case ReflectAtom::Type: { pushAstNode(L, handle.doc, n->type); return true; }
 LUAU_AST_HANDLER_END()
 
-LUAU_AST_HANDLER_START(handleTypeErrorProps, AstTypeError)
+LUAU_AST_HANDLER_START(handleTypeErrorMethods, AstTypeError)
     case ReflectAtom::IsMissing:    { lua_pushboolean(L, n->isMissing); return true; }
     case ReflectAtom::MessageIndex: { lua_pushinteger(L, n->messageIndex); return true; }
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleTypeErrorMethods, AstTypeError)
     case ReflectAtom::Types: { pushNodeArray(L, handle.doc, n->types); return true; }
 LUAU_AST_HANDLER_END()
 
@@ -561,119 +495,112 @@ LUAU_AST_HANDLER_START(handleTypePackVariadicMethods, AstTypePackVariadic)
     case ReflectAtom::VariadicType: { pushAstNode(L, handle.doc, n->variadicType); return true; }
 LUAU_AST_HANDLER_END()
 
-LUAU_AST_HANDLER_START(handleTypePackGenericProps, AstTypePackGeneric)
+LUAU_AST_HANDLER_START(handleTypePackGenericMethods, AstTypePackGeneric)
     case ReflectAtom::Name: { lua_pushstring(L, n->genericName.value); return true; }
 LUAU_AST_HANDLER_END()
 
-LUAU_AST_HANDLER_START(handleGenericTypeProps, AstGenericType)
-    case ReflectAtom::Name: { lua_pushstring(L, n->name.value); return true; }
-LUAU_AST_HANDLER_END()
-
 LUAU_AST_HANDLER_START(handleGenericTypeMethods, AstGenericType)
-    case ReflectAtom::Type: { pushAstNode(L, handle.doc, n->defaultValue); return true; }
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleGenericTypePackProps, AstGenericTypePack)
     case ReflectAtom::Name: { lua_pushstring(L, n->name.value); return true; }
+    case ReflectAtom::Type: { pushAstNode(L, handle.doc, n->defaultValue); return true; }
 LUAU_AST_HANDLER_END()
 
 LUAU_AST_HANDLER_START(handleGenericTypePackMethods, AstGenericTypePack)
+    case ReflectAtom::Name: { lua_pushstring(L, n->name.value); return true; }
     case ReflectAtom::Type: { pushAstNode(L, handle.doc, n->defaultValue); return true; }
 LUAU_AST_HANDLER_END()
 
-LUAU_AST_HANDLER_START(handleAttrProps, AstAttr)
+LUAU_AST_HANDLER_START(handleAttrMethods, AstAttr)
     case ReflectAtom::Type:
     {
-        switch (n->type)
-        {
-        case Luau::AstAttr::Type::Checked:       lua_pushstring(L, "checked"); break;
-        case Luau::AstAttr::Type::Native:        lua_pushstring(L, "native"); break;
-        case Luau::AstAttr::Type::Deprecated:    lua_pushstring(L, "deprecated"); break;
-        case Luau::AstAttr::Type::DebugNoinline: lua_pushstring(L, "debugNoinline"); break;
-        default: lua_pushstring(L, "unknown"); break;
-        }
-        return true;
+    switch (n->type)
+    {
+    case Luau::AstAttr::Type::Checked:       lua_pushstring(L, "checked"); break;
+    case Luau::AstAttr::Type::Native:        lua_pushstring(L, "native"); break;
+    case Luau::AstAttr::Type::Deprecated:    lua_pushstring(L, "deprecated"); break;
+    case Luau::AstAttr::Type::DebugNoinline: lua_pushstring(L, "debugNoinline"); break;
+    default: lua_pushstring(L, "unknown"); break;
+    }
+    return true;
     }
     case ReflectAtom::Name: { lua_pushstring(L, n->name.value); return true; }
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleAttrMethods, AstAttr)
     case ReflectAtom::Args: { pushNodeArray(L, handle.doc, n->args); return true; }
 LUAU_AST_HANDLER_END()
+
+
 
 static void initializeDispatchTables()
 {
     // SAFETY: c++ guarantees thread safety in static inits like this (see https://iamroman.org/blog/2017/04/cpp11-static-init/) from c++11
     static const bool initialized = []() {
         // Statements
-        registerNodeClass<Luau::AstStatBlock>("AstStatBlock", NodeCategory::Stat, handleStatBlockProps, handleStatBlockMethods);
-        registerNodeClass<Luau::AstStatIf>("AstStatIf", NodeCategory::Stat, nullptr, handleStatIfMethods);
-        registerNodeClass<Luau::AstStatWhile>("AstStatWhile", NodeCategory::Stat, handleStatWhileProps, handleStatWhileMethods);
-        registerNodeClass<Luau::AstStatRepeat>("AstStatRepeat", NodeCategory::Stat, nullptr, handleStatRepeatMethods);
+        registerNodeClass<Luau::AstStatBlock>("AstStatBlock", NodeCategory::Stat, handleStatBlockMethods);
+        registerNodeClass<Luau::AstStatIf>("AstStatIf", NodeCategory::Stat, handleStatIfMethods);
+        registerNodeClass<Luau::AstStatWhile>("AstStatWhile", NodeCategory::Stat, handleStatWhileMethods);
+        registerNodeClass<Luau::AstStatRepeat>("AstStatRepeat", NodeCategory::Stat, handleStatRepeatMethods);
         registerNodeClass<Luau::AstStatBreak>("AstStatBreak", NodeCategory::Stat);
         registerNodeClass<Luau::AstStatContinue>("AstStatContinue", NodeCategory::Stat);
-        registerNodeClass<Luau::AstStatReturn>("AstStatReturn", NodeCategory::Stat, nullptr, handleStatReturnMethods);
-        registerNodeClass<Luau::AstStatExpr>("AstStatExpr", NodeCategory::Stat, nullptr, handleStatExprMethods);
-        registerNodeClass<Luau::AstStatLocal>("AstStatLocal", NodeCategory::Stat, handleStatLocalProps, handleStatLocalMethods);
-        registerNodeClass<Luau::AstStatFor>("AstStatFor", NodeCategory::Stat, handleStatForProps, handleStatForMethods);
-        registerNodeClass<Luau::AstStatForIn>("AstStatForIn", NodeCategory::Stat, handleStatForInProps, handleStatForInMethods);
-        registerNodeClass<Luau::AstStatAssign>("AstStatAssign", NodeCategory::Stat, nullptr, handleStatAssignMethods);
-        registerNodeClass<Luau::AstStatCompoundAssign>("AstStatCompoundAssign", NodeCategory::Stat, handleStatCompoundAssignProps, handleStatCompoundAssignMethods);
-        registerNodeClass<Luau::AstStatFunction>("AstStatFunction", NodeCategory::Stat, nullptr, handleStatFunctionMethods);
-        registerNodeClass<Luau::AstStatLocalFunction>("AstStatLocalFunction", NodeCategory::Stat, handleStatLocalFunctionProps, handleStatLocalFunctionMethods);
-        registerNodeClass<Luau::AstStatTypeAlias>("AstStatTypeAlias", NodeCategory::Stat, handleStatTypeAliasProps, handleStatTypeAliasMethods);
-        registerNodeClass<Luau::AstStatTypeFunction>("AstStatTypeFunction", NodeCategory::Stat, handleStatTypeFunctionProps, handleStatTypeFunctionMethods);
-        registerNodeClass<Luau::AstStatDeclareGlobal>("AstStatDeclareGlobal", NodeCategory::Stat, handleStatDeclareGlobalProps, handleStatDeclareGlobalMethods);
-        registerNodeClass<Luau::AstStatDeclareFunction>("AstStatDeclareFunction", NodeCategory::Stat, handleStatDeclareFunctionProps, handleStatDeclareFunctionMethods);
-        registerNodeClass<Luau::AstStatClass>("AstStatClass", NodeCategory::Stat, handleStatClassProps, handleStatClassMethods);
-        registerNodeClass<Luau::AstStatDeclareExternType>("AstStatDeclareExternType", NodeCategory::Stat, handleStatDeclareExternTypeProps, handleStatDeclareExternTypeMethods);
-        registerNodeClass<Luau::AstStatError>("AstStatError", NodeCategory::Stat, handleStatErrorProps, handleStatErrorMethods);
+        registerNodeClass<Luau::AstStatReturn>("AstStatReturn", NodeCategory::Stat, handleStatReturnMethods);
+        registerNodeClass<Luau::AstStatExpr>("AstStatExpr", NodeCategory::Stat, handleStatExprMethods);
+        registerNodeClass<Luau::AstStatLocal>("AstStatLocal", NodeCategory::Stat, handleStatLocalMethods);
+        registerNodeClass<Luau::AstStatFor>("AstStatFor", NodeCategory::Stat, handleStatForMethods);
+        registerNodeClass<Luau::AstStatForIn>("AstStatForIn", NodeCategory::Stat, handleStatForInMethods);
+        registerNodeClass<Luau::AstStatAssign>("AstStatAssign", NodeCategory::Stat, handleStatAssignMethods);
+        registerNodeClass<Luau::AstStatCompoundAssign>("AstStatCompoundAssign", NodeCategory::Stat, handleStatCompoundAssignMethods);
+        registerNodeClass<Luau::AstStatFunction>("AstStatFunction", NodeCategory::Stat, handleStatFunctionMethods);
+        registerNodeClass<Luau::AstStatLocalFunction>("AstStatLocalFunction", NodeCategory::Stat, handleStatLocalFunctionMethods);
+        registerNodeClass<Luau::AstStatTypeAlias>("AstStatTypeAlias", NodeCategory::Stat, handleStatTypeAliasMethods);
+        registerNodeClass<Luau::AstStatTypeFunction>("AstStatTypeFunction", NodeCategory::Stat, handleStatTypeFunctionMethods);
+        registerNodeClass<Luau::AstStatDeclareGlobal>("AstStatDeclareGlobal", NodeCategory::Stat, handleStatDeclareGlobalMethods);
+        registerNodeClass<Luau::AstStatDeclareFunction>("AstStatDeclareFunction", NodeCategory::Stat, handleStatDeclareFunctionMethods);
+        registerNodeClass<Luau::AstStatClass>("AstStatClass", NodeCategory::Stat, handleStatClassMethods);
+        registerNodeClass<Luau::AstStatDeclareExternType>("AstStatDeclareExternType", NodeCategory::Stat, handleStatDeclareExternTypeMethods);
+        registerNodeClass<Luau::AstStatError>("AstStatError", NodeCategory::Stat, handleStatErrorMethods);
 
         // Expressions
-        registerNodeClass<Luau::AstExprGroup>("AstExprGroup", NodeCategory::Expr, nullptr, handleExprGroupMethods);
+        registerNodeClass<Luau::AstExprGroup>("AstExprGroup", NodeCategory::Expr, handleExprGroupMethods);
         registerNodeClass<Luau::AstExprConstantNil>("AstExprConstantNil", NodeCategory::Expr);
-        registerNodeClass<Luau::AstExprConstantBool>("AstExprConstantBool", NodeCategory::Expr, handleExprConstantBoolProps);
-        registerNodeClass<Luau::AstExprConstantNumber>("AstExprConstantNumber", NodeCategory::Expr, handleExprConstantNumberProps);
-        registerNodeClass<Luau::AstExprConstantInteger>("AstExprConstantInteger", NodeCategory::Expr, handleExprConstantIntegerProps);
-        registerNodeClass<Luau::AstExprConstantString>("AstExprConstantString", NodeCategory::Expr, handleExprConstantStringProps);
-        registerNodeClass<Luau::AstExprLocal>("AstExprLocal", NodeCategory::Expr, handleExprLocalProps, handleExprLocalMethods);
-        registerNodeClass<Luau::AstExprGlobal>("AstExprGlobal", NodeCategory::Expr, handleExprGlobalProps);
+        registerNodeClass<Luau::AstExprConstantBool>("AstExprConstantBool", NodeCategory::Expr, handleExprConstantBoolMethods);
+        registerNodeClass<Luau::AstExprConstantNumber>("AstExprConstantNumber", NodeCategory::Expr, handleExprConstantNumberMethods);
+        registerNodeClass<Luau::AstExprConstantInteger>("AstExprConstantInteger", NodeCategory::Expr, handleExprConstantIntegerMethods);
+        registerNodeClass<Luau::AstExprConstantString>("AstExprConstantString", NodeCategory::Expr, handleExprConstantStringMethods);
+        registerNodeClass<Luau::AstExprLocal>("AstExprLocal", NodeCategory::Expr, handleExprLocalMethods);
+        registerNodeClass<Luau::AstExprGlobal>("AstExprGlobal", NodeCategory::Expr, handleExprGlobalMethods);
         registerNodeClass<Luau::AstExprVarargs>("AstExprVarargs", NodeCategory::Expr);
-        registerNodeClass<Luau::AstExprCall>("AstExprCall", NodeCategory::Expr, handleExprCallProps, handleExprCallMethods);
-        registerNodeClass<Luau::AstExprIndexName>("AstExprIndexName", NodeCategory::Expr, handleExprIndexNameProps, handleExprIndexNameMethods);
-        registerNodeClass<Luau::AstExprIndexExpr>("AstExprIndexExpr", NodeCategory::Expr, nullptr, handleExprIndexExprMethods);
-        registerNodeClass<Luau::AstExprFunction>("AstExprFunction", NodeCategory::Expr, handleExprFunctionProps, handleExprFunctionMethods);
-        registerNodeClass<Luau::AstExprTable>("AstExprTable", NodeCategory::Expr, nullptr, handleExprTableMethods);
-        registerNodeClass<Luau::AstExprUnary>("AstExprUnary", NodeCategory::Expr, handleExprUnaryProps, handleExprUnaryMethods);
-        registerNodeClass<Luau::AstExprBinary>("AstExprBinary", NodeCategory::Expr, handleExprBinaryProps, handleExprBinaryMethods);
-        registerNodeClass<Luau::AstExprTypeAssertion>("AstExprTypeAssertion", NodeCategory::Expr, nullptr, handleExprTypeAssertionMethods);
-        registerNodeClass<Luau::AstExprIfElse>("AstExprIfElse", NodeCategory::Expr, handleExprIfElseProps, handleExprIfElseMethods);
-        registerNodeClass<Luau::AstExprInterpString>("AstExprInterpString", NodeCategory::Expr, handleExprInterpStringProps, handleExprInterpStringMethods);
-        registerNodeClass<Luau::AstExprInstantiate>("AstExprInstantiate", NodeCategory::Expr, nullptr, handleExprInstantiateMethods);
-        registerNodeClass<Luau::AstExprError>("AstExprError", NodeCategory::Expr, handleExprErrorProps, handleExprErrorMethods);
+        registerNodeClass<Luau::AstExprCall>("AstExprCall", NodeCategory::Expr, handleExprCallMethods);
+        registerNodeClass<Luau::AstExprIndexName>("AstExprIndexName", NodeCategory::Expr, handleExprIndexNameMethods);
+        registerNodeClass<Luau::AstExprIndexExpr>("AstExprIndexExpr", NodeCategory::Expr, handleExprIndexExprMethods);
+        registerNodeClass<Luau::AstExprFunction>("AstExprFunction", NodeCategory::Expr, handleExprFunctionMethods);
+        registerNodeClass<Luau::AstExprTable>("AstExprTable", NodeCategory::Expr, handleExprTableMethods);
+        registerNodeClass<Luau::AstExprUnary>("AstExprUnary", NodeCategory::Expr, handleExprUnaryMethods);
+        registerNodeClass<Luau::AstExprBinary>("AstExprBinary", NodeCategory::Expr, handleExprBinaryMethods);
+        registerNodeClass<Luau::AstExprTypeAssertion>("AstExprTypeAssertion", NodeCategory::Expr, handleExprTypeAssertionMethods);
+        registerNodeClass<Luau::AstExprIfElse>("AstExprIfElse", NodeCategory::Expr, handleExprIfElseMethods);
+        registerNodeClass<Luau::AstExprInterpString>("AstExprInterpString", NodeCategory::Expr, handleExprInterpStringMethods);
+        registerNodeClass<Luau::AstExprInstantiate>("AstExprInstantiate", NodeCategory::Expr, handleExprInstantiateMethods);
+        registerNodeClass<Luau::AstExprError>("AstExprError", NodeCategory::Expr, handleExprErrorMethods);
 
         // Types
-        registerNodeClass<Luau::AstTypeReference>("AstTypeReference", NodeCategory::Type, handleTypeReferenceProps, handleTypeReferenceMethods);
-        registerNodeClass<Luau::AstTypeTable>("AstTypeTable", NodeCategory::Type, nullptr, handleTypeTableMethods);
-        registerNodeClass<Luau::AstTypeFunction>("AstTypeFunction", NodeCategory::Type, nullptr, handleTypeFunctionMethods);
-        registerNodeClass<Luau::AstTypeTypeof>("AstTypeTypeof", NodeCategory::Type, nullptr, handleTypeTypeofMethods);
+        registerNodeClass<Luau::AstTypeReference>("AstTypeReference", NodeCategory::Type, handleTypeReferenceMethods);
+        registerNodeClass<Luau::AstTypeTable>("AstTypeTable", NodeCategory::Type, handleTypeTableMethods);
+        registerNodeClass<Luau::AstTypeFunction>("AstTypeFunction", NodeCategory::Type, handleTypeFunctionMethods);
+        registerNodeClass<Luau::AstTypeTypeof>("AstTypeTypeof", NodeCategory::Type, handleTypeTypeofMethods);
         registerNodeClass<Luau::AstTypeOptional>("AstTypeOptional", NodeCategory::Type);
-        registerNodeClass<Luau::AstTypeUnion>("AstTypeUnion", NodeCategory::Type, nullptr, handleTypeUnionMethods);
-        registerNodeClass<Luau::AstTypeIntersection>("AstTypeIntersection", NodeCategory::Type, nullptr, handleTypeIntersectionMethods);
-        registerNodeClass<Luau::AstTypeSingletonBool>("AstTypeSingletonBool", NodeCategory::Type, handleTypeSingletonBoolProps);
-        registerNodeClass<Luau::AstTypeSingletonString>("AstTypeSingletonString", NodeCategory::Type, handleTypeSingletonStringProps);
-        registerNodeClass<Luau::AstTypeGroup>("AstTypeGroup", NodeCategory::Type, nullptr, handleTypeGroupMethods);
-        registerNodeClass<Luau::AstTypeError>("AstTypeError", NodeCategory::Type, handleTypeErrorProps, handleTypeErrorMethods);
+        registerNodeClass<Luau::AstTypeUnion>("AstTypeUnion", NodeCategory::Type, handleTypeUnionMethods);
+        registerNodeClass<Luau::AstTypeIntersection>("AstTypeIntersection", NodeCategory::Type, handleTypeIntersectionMethods);
+        registerNodeClass<Luau::AstTypeSingletonBool>("AstTypeSingletonBool", NodeCategory::Type, handleTypeSingletonBoolMethods);
+        registerNodeClass<Luau::AstTypeSingletonString>("AstTypeSingletonString", NodeCategory::Type, handleTypeSingletonStringMethods);
+        registerNodeClass<Luau::AstTypeGroup>("AstTypeGroup", NodeCategory::Type, handleTypeGroupMethods);
+        registerNodeClass<Luau::AstTypeError>("AstTypeError", NodeCategory::Type, handleTypeErrorMethods);
 
         // Type Packs
-        registerNodeClass<Luau::AstTypePackExplicit>("AstTypePackExplicit", NodeCategory::TypePack, nullptr, handleTypePackExplicitMethods);
-        registerNodeClass<Luau::AstTypePackVariadic>("AstTypePackVariadic", NodeCategory::TypePack, nullptr, handleTypePackVariadicMethods);
-        registerNodeClass<Luau::AstTypePackGeneric>("AstTypePackGeneric", NodeCategory::TypePack, handleTypePackGenericProps);
+        registerNodeClass<Luau::AstTypePackExplicit>("AstTypePackExplicit", NodeCategory::TypePack, handleTypePackExplicitMethods);
+        registerNodeClass<Luau::AstTypePackVariadic>("AstTypePackVariadic", NodeCategory::TypePack, handleTypePackVariadicMethods);
+        registerNodeClass<Luau::AstTypePackGeneric>("AstTypePackGeneric", NodeCategory::TypePack, handleTypePackGenericMethods);
 
         // Generics & Attributes
-        registerNodeClass<Luau::AstGenericType>("AstGenericType", NodeCategory::Generic, handleGenericTypeProps, handleGenericTypeMethods);
-        registerNodeClass<Luau::AstGenericTypePack>("AstGenericTypePack", NodeCategory::Generic, handleGenericTypePackProps, handleGenericTypePackMethods);
-        registerNodeClass<Luau::AstAttr>("AstAttr", NodeCategory::Attr, handleAttrProps, handleAttrMethods);
+        registerNodeClass<Luau::AstGenericType>("AstGenericType", NodeCategory::Generic, handleGenericTypeMethods);
+        registerNodeClass<Luau::AstGenericTypePack>("AstGenericTypePack", NodeCategory::Generic, handleGenericTypePackMethods);
+        registerNodeClass<Luau::AstAttr>("AstAttr", NodeCategory::Attr, handleAttrMethods);
         return true;
     }();
     (void)initialized;
@@ -711,6 +638,24 @@ static int astNodeCst(lua_State* L)
     return 1;
 }
 
+static int astNodeText(lua_State* L)
+{
+    auto& handle = checkAstNode(L, 1);
+    auto [startOff, endOff] = locationToOffsets(handle.doc->lineOffsets, handle.doc->source.size(), handle.node->location);
+    lua_pushlstring(L, handle.doc->source.data() + startOff, endOff - startOff);
+    return 1;
+}
+
+static int astNodeHasSemicolon(lua_State* L)
+{
+    auto& handle = checkAstNode(L, 1);
+    if (auto* stat = handle.node->asStat())
+        lua_pushboolean(L, stat->hasSemicolon);
+    else
+        lua_pushboolean(L, false);
+    return 1;
+}
+
 static int astNodeWalk(lua_State* L)
 {
     auto& handle = checkAstNode(L, 1);
@@ -745,87 +690,32 @@ static int astNodeFind(lua_State* L)
     return 1;
 }
 
-LUAU_REFLECT_METHOD_TRAMPOLINE(astNodeMethodTrampoline, checkAstNode, s_nodeClassTable, "AstNode");
-
-static int astNodeIndex(lua_State* L)
+static int dispatchAstNodeMethod(lua_State* L, AstNodeData& handle, ReflectAtom atom, const char* str, size_t len)
 {
-    LUAU_REFLECT_PREPARE_INDEX(checkAstNode);
-    Luau::AstNode* node = handle.node;
-    int idx = node->classIndex;
-
     switch (atom)
     {
-    case ReflectAtom::Children:
-    {
-        return pushUserdataMethod(L, TagNode, "children");
-    }
-    case ReflectAtom::Walk:
-    {
-        return pushUserdataMethod(L, TagNode, "walk");
-    }
-    case ReflectAtom::Find:
-    {
-        return pushUserdataMethod(L, TagNode, "find");
-    }
-    case ReflectAtom::Location:
-    {
-        return pushUserdataMethod(L, TagNode, "location");
-    }
-    case ReflectAtom::Cst:
-    {
-        return pushUserdataMethod(L, TagNode, "cst");
-    }
-    case ReflectAtom::Text:
-    {
-        auto [startOff, endOff] = locationToOffsets(doc->lineOffsets, doc->source.size(), node->location);
-        lua_pushlstring(L, doc->source.data() + startOff, endOff - startOff);
-        return 1;
-    }
-    case ReflectAtom::Kind:
-    {
-        lua_pushstring(L, getNodeKind(node));
-        return 1;
-    }
-    case ReflectAtom::Category:
-    {
-        NodeCategory cat = (idx >= 0 && idx < int(s_nodeClassTable.size())) ? s_nodeClassTable[idx].category : NodeCategory::Unknown;
-        switch (cat)
-        {
-        case NodeCategory::Stat:     lua_pushstring(L, "stat"); break;
-        case NodeCategory::Expr:     lua_pushstring(L, "expr"); break;
-        case NodeCategory::Type:     lua_pushstring(L, "type"); break;
-        case NodeCategory::TypePack: lua_pushstring(L, "typePack"); break;
-        case NodeCategory::Generic:  lua_pushstring(L, "generic"); break;
-        case NodeCategory::Attr:     lua_pushstring(L, "attr"); break;
-        default:                lua_pushstring(L, "unknown"); break;
-        }
-        return 1;
-    }
-    case ReflectAtom::HasSemicolon:
-    {
-        if (auto* stat = node->asStat())
-            lua_pushboolean(L, stat->hasSemicolon);
-        else
-            lua_pushboolean(L, false);
-        return 1;
-    }
-    default:
-        break;
+    case ReflectAtom::Children:     return astNodeChildren(L);
+    case ReflectAtom::Walk:         return astNodeWalk(L);
+    case ReflectAtom::Find:         return astNodeFind(L);
+    case ReflectAtom::Location:     return astNodeLocation(L);
+    case ReflectAtom::Cst:          return astNodeCst(L);
+    case ReflectAtom::Text:         return astNodeText(L);
+    case ReflectAtom::HasSemicolon: return astNodeHasSemicolon(L);
+    default: break;
     }
 
-    if (atom != ReflectAtom::Unknown && idx >= 0 && idx < int(s_nodeClassTable.size()))
+    int idx = handle.node ? handle.node->classIndex : -1;
+    if (idx >= 0 && idx < int(s_nodeClassTable.size()) && s_nodeClassTable[idx].methodHandler)
     {
-        const AstNodeClassInfo& info = s_nodeClassTable[idx];
-        if (info.propHandler && info.propHandler(L, handle, atom))
+        if (s_nodeClassTable[idx].methodHandler(L, handle, atom))
             return 1;
-
-        if (info.methodHandler)
-            return pushCachedUserdataMethod(L, TagNode, keyStr, astNodeMethodTrampoline);
     }
-
-    lua_pushnil(L);
-    return 1;
+    luaL_error(L, "%.*s is not a valid method of AstNode", int(len), str);
 }
+
+LUAU_REFLECT_METHOD_TRAMPOLINE(astNodeMethodTrampoline, checkAstNode, dispatchAstNodeMethod)
+LUAU_REFLECT_NAMECALL(astNodeNamecall, checkAstNode, dispatchAstNodeMethod)
+LUAU_REFLECT_INDEX(astNodeIndex, checkAstNode, getNodeKind, getAstNodeCategory, TagNode, astNodeMethodTrampoline)
 
 static int astNodeToString(lua_State* L)
 {
@@ -847,30 +737,6 @@ static int astNodeEq(lua_State* L)
     return 1;
 }
 
-static int astNodeNamecall(lua_State* L)
-{
-    LUAU_REFLECT_PREPARE_NAMECALL(checkAstNode);
-
-    switch (atom)
-    {
-    case ReflectAtom::Children: return astNodeChildren(L);
-    case ReflectAtom::Walk:     return astNodeWalk(L);
-    case ReflectAtom::Find:     return astNodeFind(L);
-    case ReflectAtom::Location: return astNodeLocation(L);
-    case ReflectAtom::Cst:      return astNodeCst(L);
-    default: break;
-    }
-
-    int idx = handle.node ? handle.node->classIndex : -1;
-    if (idx >= 0 && idx < int(s_nodeClassTable.size()) && s_nodeClassTable[idx].methodHandler)
-    {
-        if (s_nodeClassTable[idx].methodHandler(L, handle, atom))
-            return 1;
-    }
-
-    luaL_error(L, "%.*s is not a valid method of AstNode", int(len), str);
-}
-
 void registerAstNode(lua_State* L)
 {
     initializeDispatchTables();
@@ -880,6 +746,8 @@ void registerAstNode(lua_State* L)
         {"find", astNodeFind},
         {"location", astNodeLocation},
         {"cst", astNodeCst},
+        {"text", astNodeText},
+        {"hasSemicolon", astNodeHasSemicolon},
         {nullptr, nullptr},
     };
     registerUserdataType(L, TagNode, "AstNode", astNodeDtor, astNodeIndex, astNodeToString, astNodeEq, s_nodeMethods, astNodeNamecall);

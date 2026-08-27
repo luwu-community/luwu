@@ -652,20 +652,42 @@ inline int pushCachedUserdataMethod(lua_State* L, int tag, const char* name, lua
         luaL_error(L, "missing method name in namecall"); \
     ReflectAtom atom = resolveReflectAtom(atomId, str, len)
 
-#define LUAU_REFLECT_METHOD_TRAMPOLINE(funcName, checkFunc, classTable, typeName) \
+#define LUAU_REFLECT_METHOD_TRAMPOLINE(funcName, checkFunc, dispatchFunc) \
     static int funcName(lua_State* L) \
     { \
         auto& handle = checkFunc(L, 1); \
         size_t len = 0; \
         const char* str = lua_tolstring(L, lua_upvalueindex(1), &len); \
         ReflectAtom atom = resolveGlobalReflectAtom(std::string_view(str, len)); \
-        int idx = handle.node ? handle.node->classIndex : -1; \
-        if (idx >= 0 && idx < int(classTable.size()) && classTable[idx].methodHandler) \
+        return dispatchFunc(L, handle, atom, str, len); \
+    }
+
+#define LUAU_REFLECT_NAMECALL(funcName, checkFunc, dispatchFunc) \
+    static int funcName(lua_State* L) \
+    { \
+        LUAU_REFLECT_PREPARE_NAMECALL(checkFunc); \
+        return dispatchFunc(L, handle, atom, str, len); \
+    }
+
+#define LUAU_REFLECT_INDEX(funcName, checkFunc, getKindFunc, getCategoryFunc, TagValue, trampolineFunc) \
+    static int funcName(lua_State* L) \
+    { \
+        LUAU_REFLECT_PREPARE_INDEX(checkFunc); \
+        switch (atom) \
         { \
-            if (classTable[idx].methodHandler(L, handle, atom)) \
-                return 1; \
+        case ReflectAtom::Kind: \
+            lua_pushstring(L, getKindFunc(handle.node)); \
+            return 1; \
+        case ReflectAtom::Category: \
+            lua_pushstring(L, getCategoryFunc(handle.node)); \
+            return 1; \
+        default: \
+            break; \
         } \
-        luaL_error(L, "%.*s is not a valid method of " typeName, int(len), str); \
+        if (atom != ReflectAtom::Unknown) \
+            return pushCachedUserdataMethod(L, TagValue, keyStr, trampolineFunc); \
+        lua_pushnil(L); \
+        return 1; \
     }
 
 #define LUAU_REFLECT_GET_NODE_KIND(funcName, NodeType, classTable, defaultName) \
@@ -676,6 +698,17 @@ inline int pushCachedUserdataMethod(lua_State* L, int tag, const char* name, lua
         int idx = node->classIndex; \
         if (idx >= 0 && idx < int(classTable.size()) && classTable[idx].kind) \
             return classTable[idx].kind; \
+        return defaultName; \
+    }
+
+#define LUAU_REFLECT_GET_NODE_CATEGORY(funcName, NodeType, classTable, defaultName) \
+    const char* funcName(NodeType node) \
+    { \
+        if (!node) \
+            return "nil"; \
+        int idx = node->classIndex; \
+        if (idx >= 0 && idx < int(classTable.size()) && classTable[idx].category) \
+            return classTable[idx].category; \
         return defaultName; \
     }
 

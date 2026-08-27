@@ -12,6 +12,20 @@ void pushAstDocument(lua_State* L, std::shared_ptr<AstDocumentState> doc)
 
 LUAU_REFLECT_DEFINE_USERDATA_BASIC(checkAstDocument, astDocumentDtor, AstDocumentData, TagDocument, "AstDocument")
 
+static int astDocRoot(lua_State* L)
+{
+    auto& handle = checkAstDocument(L, 1);
+    pushAstNode(L, handle.doc, handle.doc->parseResult.root);
+    return 1;
+}
+
+static int astDocSource(lua_State* L)
+{
+    auto& handle = checkAstDocument(L, 1);
+    lua_pushlstring(L, handle.doc->source.data(), handle.doc->source.size());
+    return 1;
+}
+
 static int astDocWalk(lua_State* L)
 {
     auto& handle = checkAstDocument(L, 1);
@@ -100,36 +114,13 @@ static int astDocIndex(lua_State* L)
 
     switch (atom)
     {
-    case ReflectAtom::Root:
-    {
-        pushAstNode(L, doc, doc->parseResult.root);
-        return 1;
-    }
-    case ReflectAtom::Source:
-    {
-        lua_pushlstring(L, doc->source.data(), doc->source.size());
-        return 1;
-    }
-    case ReflectAtom::Walk:
-    {
-        return pushUserdataMethod(L, TagDocument, "walk");
-    }
-    case ReflectAtom::Find:
-    {
-        return pushUserdataMethod(L, TagDocument, "find");
-    }
-    case ReflectAtom::Comments:
-    {
-        return pushUserdataMethod(L, TagDocument, "comments");
-    }
-    case ReflectAtom::Errors:
-    {
-        return pushUserdataMethod(L, TagDocument, "errors");
-    }
-    case ReflectAtom::LineOffsets:
-    {
-        return pushUserdataMethod(L, TagDocument, "lineOffsets");
-    }
+    case ReflectAtom::Root:        return pushUserdataMethod(L, TagDocument, "root");
+    case ReflectAtom::Source:      return pushUserdataMethod(L, TagDocument, "source");
+    case ReflectAtom::Walk:        return pushUserdataMethod(L, TagDocument, "walk");
+    case ReflectAtom::Find:        return pushUserdataMethod(L, TagDocument, "find");
+    case ReflectAtom::Comments:    return pushUserdataMethod(L, TagDocument, "comments");
+    case ReflectAtom::Errors:      return pushUserdataMethod(L, TagDocument, "errors");
+    case ReflectAtom::LineOffsets: return pushUserdataMethod(L, TagDocument, "lineOffsets");
     default:
         lua_pushnil(L);
         return 1;
@@ -161,6 +152,8 @@ static int astDocNamecall(lua_State* L)
 
     switch (atom)
     {
+    case ReflectAtom::Root:        return astDocRoot(L);
+    case ReflectAtom::Source:      return astDocSource(L);
     case ReflectAtom::Walk:        return astDocWalk(L);
     case ReflectAtom::Find:        return astDocFind(L);
     case ReflectAtom::Comments:    return astDocComments(L);
@@ -175,6 +168,8 @@ static int astDocNamecall(lua_State* L)
 void registerAstDocument(lua_State* L)
 {
     static const luaL_Reg s_docMethods[] = {
+        {"root", astDocRoot},
+        {"source", astDocSource},
         {"walk", astDocWalk},
         {"find", astDocFind},
         {"comments", astDocComments},

@@ -54,7 +54,7 @@ TEST_CASE("LazyAstTypeof")
         local doc = reflect.parse("local x = 1")
         assert(typeof(doc) == "AstDocument")
 
-        local root = doc.root
+        local root = doc:root()
         assert(typeof(root) == "AstNode")
         assert(root.kind == "AstStatBlock")
         assert(root.category == "stat")
@@ -105,7 +105,7 @@ TEST_CASE("LazyAstProperties")
             end
         ]])
 
-        local root = doc.root
+        local root = doc:root()
         local ifStat = root:body()[1]
         assert(ifStat.kind == "AstStatIf")
         assert(ifStat.category == "stat")
@@ -113,9 +113,9 @@ TEST_CASE("LazyAstProperties")
         local cond = ifStat:condition()
         assert(cond.kind == "AstExprBinary")
         assert(cond.category == "expr")
-        assert(cond.op == ">")
-        assert(cond:left().name == "x")
-        assert(cond:right().value == 0)
+        assert(cond:op() == ">")
+        assert(cond:left():name() == "x")
+        assert(cond:right():value() == 0)
 
         local thenBody = ifStat:thenbody()
         assert(thenBody.kind == "AstStatBlock")
@@ -125,9 +125,9 @@ TEST_CASE("LazyAstProperties")
         local callExpr = thenBody:body()[1]:expr()
         assert(callExpr.kind == "AstExprCall")
         assert(callExpr.category == "expr")
-        assert(callExpr:func().name == "print")
+        assert(callExpr:func():name() == "print")
         assert(#callExpr:args() == 1)
-        assert(callExpr:args()[1].value == "positive")
+        assert(callExpr:args()[1]:value() == "positive")
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);
@@ -149,7 +149,7 @@ TEST_CASE("LazyAstChildrenAndWalk")
         local doc = reflect.parse("local a = 1; local b = 2; return a + b")
         
         -- Test children() on block
-        local root = doc.root
+        local root = doc:root()
         local children = root:children()
         assert(#children == 3)
         assert(children[1].kind == "AstStatLocal")
@@ -181,7 +181,7 @@ TEST_CASE("LazyAstChildrenAndWalk")
 
         -- Test walk pruning (return false)
         local topOnly = {}
-        doc.root:walk(function(node)
+        doc:root():walk(function(node)
             table.insert(topOnly, node.kind)
             return false -- do not descend
         end)
@@ -210,18 +210,18 @@ TEST_CASE("LazyAstParseExpr")
         assert(typeof(expr) == "AstNode")
         assert(expr.kind == "AstExprBinary")
         assert(expr.category == "expr")
-        assert(expr.op == "+")
+        assert(expr:op() == "+")
         assert(expr:left().kind == "AstExprGlobal")
-        assert(expr:left().name == "a")
+        assert(expr:left():name() == "a")
 
         local right = expr:right()
         assert(typeof(right) == "AstNode")
         assert(right.kind == "AstExprBinary")
         assert(right.category == "expr")
-        assert(right.op == "*")
-        assert(right:left().name == "b")
-        assert(right:right().value == 2)
-        assert(expr.text == "a + b * 2")
+        assert(right:op() == "*")
+        assert(right:left():name() == "b")
+        assert(right:right():value() == 2)
+        assert(expr:text() == "a + b * 2")
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);
@@ -269,7 +269,7 @@ TEST_CASE("LazyCstData")
 
     const char* script = R"LUA(
         local doc = reflect.parse("local str = 'hello world'\nfoo(1, 2)")
-        local stats = doc.root:body()
+        local stats = doc:root():body()
 
         -- Check local stat CST
         local locStat = stats[1]
@@ -277,6 +277,7 @@ TEST_CASE("LazyCstData")
         assert(locStatCst ~= nil)
         assert(typeof(locStatCst) == "CstNode")
         assert(locStatCst.kind == "CstStatLocal")
+        assert(locStatCst.category == "generic")
 
         -- Check string CST quote style
         local strExpr = locStat:values()[1]
@@ -284,7 +285,8 @@ TEST_CASE("LazyCstData")
         assert(strExprCst ~= nil)
         assert(typeof(strExprCst) == "CstNode")
         assert(strExprCst.kind == "CstExprConstantString")
-        assert(strExprCst.quoteStyle == "single")
+        assert(strExprCst.category == "generic")
+        assert(strExprCst:quoteStyle() == "single")
         assert(strExprCst:sourceString() == "hello world")
 
         -- Check call CST parens and comma positions
@@ -303,7 +305,7 @@ TEST_CASE("LazyCstData")
 
         -- Check type function CST and AST category
         local typeDoc = reflect.parse("type Callback = (a: number, b: string) -> boolean")
-        local aliasStat = typeDoc.root:body()[1]
+        local aliasStat = typeDoc:root():body()[1]
         assert(aliasStat.category == "stat")
         local aliasStatCst = aliasStat:cst()
         assert(aliasStatCst ~= nil)
@@ -378,7 +380,7 @@ TEST_CASE("LazyAstTableItems")
             }
         ]])
 
-        local stat = doc.root:body()[1]
+        local stat = doc:root():body()[1]
         assert(stat.kind == "AstStatLocal")
 
         local tableExpr = stat:values()[1]
@@ -392,25 +394,25 @@ TEST_CASE("LazyAstTableItems")
         assert(item1.kind == "list")
         assert(item1.key == nil)
         assert(item1.value.kind == "AstExprConstantString")
-        assert(item1.value.value == "hello")
+        assert(item1.value:value() == "hello")
 
         -- Record item
         local item2 = items[2]
         assert(item2.kind == "record")
         assert(item2.key ~= nil)
         assert(item2.key.kind == "AstExprConstantString")
-        assert(item2.key.value == "foo")
+        assert(item2.key:value() == "foo")
         assert(item2.value.kind == "AstExprConstantInteger" or item2.value.kind == "AstExprConstantNumber")
-        assert(item2.value.value == 123)
+        assert(item2.value:value() == 123)
 
         -- General item
         local item3 = items[3]
         assert(item3.kind == "general")
         assert(item3.key ~= nil)
         assert(item3.key.kind == "AstExprBinary")
-        assert(item3.key.op == "..")
+        assert(item3.key:op() == "..")
         assert(item3.value.kind == "AstExprConstantBool")
-        assert(item3.value.value == true)
+        assert(item3.value:value() == true)
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);
@@ -437,9 +439,9 @@ TEST_CASE("AstTypeTableAndAstAux")
             }
         ]])
 
-        local stat = doc.root:body()[1]
+        local stat = doc:root():body()[1]
         assert(stat.kind == "AstStatTypeAlias")
-        assert(stat.name == "MyTable")
+        assert(stat:name() == "MyTable")
 
         local ty = stat:type()
         assert(ty.kind == "AstTypeTable")
@@ -453,23 +455,23 @@ TEST_CASE("AstTypeTableAndAstAux")
         assert(prop1.name == "foo")
         assert(prop1.access == "read")
         assert(prop1.type.kind == "AstTypeReference")
-        assert(prop1.type.name == "string")
+        assert(prop1.type:name() == "string")
 
         local prop2 = props[2]
         assert(prop2.kind == "AstTableProp")
         assert(prop2.name == "bar")
         assert(prop2.access == "readwrite")
         assert(prop2.type.kind == "AstTypeReference")
-        assert(prop2.type.name == "number")
+        assert(prop2.type:name() == "number")
 
         local indexer = ty:indexer()
         assert(indexer ~= nil)
         assert(indexer.kind == "AstTableIndexer")
         assert(indexer.access == "readwrite")
         assert(indexer.indexType.kind == "AstTypeReference")
-        assert(indexer.indexType.name == "string")
+        assert(indexer.indexType:name() == "string")
         assert(indexer.resultType.kind == "AstTypeReference")
-        assert(indexer.resultType.name == "boolean")
+        assert(indexer.resultType:name() == "boolean")
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);
@@ -489,7 +491,7 @@ TEST_CASE("TestFields")
 
     const char* script = R"LUA(
         local doc = reflect.parse("local a = 1\nfoo(1, 2)")
-        local stat1 = doc.root:body()[1]
+        local stat1 = doc:root():body()[1]
         local loc = stat1:location()
 
         -- Test direct field access on AstLocation
@@ -502,7 +504,7 @@ TEST_CASE("TestFields")
         assert(loc.text == "local a = 1")
 
         -- Test direct field access on AstPosition
-        local call = doc.root:body()[2]:expr()
+        local call = doc:root():body()[2]:expr()
         local pos = call:cst():openParens()
         assert(pos.line == 2)
         assert(pos.column == 4)
@@ -550,8 +552,8 @@ TEST_CASE("ParseReflectTypesFile")
         local doc = reflect.parse(sourceCode)
         local errors = doc:errors()
         assert(#errors == 0, "Parse errors in Reflect/types.luau: " .. (#errors > 0 and errors[1].message or ""))
-        assert(doc.root ~= nil)
-        assert(#doc.root:body() > 0)
+        assert(doc:root() ~= nil)
+        assert(#doc:root():body() > 0)
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);
@@ -573,16 +575,16 @@ TEST_CASE("ReflectUseAtoms")
     const char* script = R"LUA(
         local src = "-- hello\nlocal x: number = 42\nprint(x)\n"
         local doc = reflect.parse(src)
-        assert(doc.root ~= nil)
-        assert(doc.source == src)
+        assert(doc:root() ~= nil)
+        assert(doc:source() == src)
 
         -- Test non-string and invalid key indexing returns nil
         assert(doc[123] == nil)
         assert(doc[true] == nil)
         assert(doc["nonexistentProp"] == nil)
-        assert(doc.root[123] == nil)
-        assert(doc.root[false] == nil)
-        assert(doc.root["nonexistentProp"] == nil)
+        assert(doc:root()[123] == nil)
+        assert(doc:root()[false] == nil)
+        assert(doc:root()["nonexistentProp"] == nil)
 
         -- Test comments & lineOffsets methods
         local comments = doc:comments()
@@ -594,7 +596,7 @@ TEST_CASE("ReflectUseAtoms")
         assert(c[123] == nil)
 
         -- Test root & statements
-        local root = doc.root
+        local root = doc:root()
         assert(root.kind == "AstStatBlock")
         assert(root.category == "stat")
         local stats = root:body()
@@ -613,7 +615,7 @@ TEST_CASE("ReflectUseAtoms")
         assert(#vals == 1)
         local val = vals[1]
         assert(val.kind == "AstExprConstantNumber")
-        assert(val.value == 42)
+        assert(val:value() == 42)
 
         -- Test walk & find methods via namecall
         local foundCount = 0
