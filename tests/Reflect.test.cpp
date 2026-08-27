@@ -268,7 +268,7 @@ TEST_CASE("LazyCstData")
     lua_setglobal(L, "reflect");
 
     const char* script = R"LUA(
-        local doc = reflect.parse("local str = 'hello world'\nfoo(1, 2)")
+        local doc = reflect.parse("local str = 'hello world'\nfoo(1, 2)", true)
         local stats = doc:root():body()
 
         -- Check local stat CST
@@ -304,7 +304,7 @@ TEST_CASE("LazyCstData")
         assert(typeof(callExprCst:commaPositions()[1]) == "AstPosition")
 
         -- Check type function CST and AST category
-        local typeDoc = reflect.parse("type Callback = (a: number, b: string) -> boolean")
+        local typeDoc = reflect.parse("type Callback = (a: number, b: string) -> boolean", true)
         local aliasStat = typeDoc:root():body()[1]
         assert(aliasStat.category == "stat")
         local aliasStatCst = aliasStat:cst()
@@ -320,6 +320,15 @@ TEST_CASE("LazyCstData")
         assert(typeFuncCst:returnArrowPosition().line == 1)
         assert(#typeFuncCst:argumentsCommaPositions() == 1)
         assert(#typeFuncCst:argumentNameColonPositions() == 2)
+
+        -- Check that includeCst defaults to false / omitted results in nil cst()
+        local noCstDoc = reflect.parse("local x = 1")
+        assert(noCstDoc:root():body()[1]:cst() == nil)
+        local noCstExpr = reflect.parseExpr("1 + 2")
+        assert(noCstExpr:cst() == nil)
+        local cstExpr = reflect.parseExpr("1 + 2", true)
+        assert(cstExpr:cst() ~= nil)
+        assert(cstExpr:cst().kind == "CstExprOp")
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);
@@ -378,7 +387,7 @@ TEST_CASE("LazyAstTableItems")
                 foo = 123,           
                 ["key" .. 2] = true 
             }
-        ]])
+        ]], true)
 
         local stat = doc:root():body()[1]
         assert(stat.kind == "AstStatLocal")
@@ -504,7 +513,7 @@ TEST_CASE("TestFields")
     lua_setglobal(L, "reflect");
 
     const char* script = R"LUA(
-        local doc = reflect.parse("local a = 1\nfoo(1, 2)")
+        local doc = reflect.parse("local a = 1\nfoo(1, 2)", true)
         local stat1 = doc:root():body()[1]
         local loc = stat1:location()
 
@@ -588,7 +597,7 @@ TEST_CASE("ReflectUseAtoms")
 
     const char* script = R"LUA(
         local src = "-- hello\nlocal x: number = 42\nprint(x)\n"
-        local doc = reflect.parse(src)
+        local doc = reflect.parse(src, true)
         assert(doc:root() ~= nil)
         assert(doc:source() == src)
 

@@ -11,6 +11,7 @@ static int reflectParse(lua_State* L)
 {
     size_t len = 0;
     const char* src = luaL_checklstring(L, 1, &len);
+    bool includeCst = lua_isboolean(L, 2) ? lua_toboolean(L, 2) : false;
 
     auto doc = std::make_shared<AstDocumentState>();
     doc->source.assign(src, len);
@@ -19,7 +20,7 @@ static int reflectParse(lua_State* L)
     Luau::ParseOptions options;
     options.captureComments = true;
     options.allowDeclarationSyntax = true;
-    options.storeCstData = true;
+    options.storeCstData = includeCst;
 
     doc->parseResult = Luau::Parser::parse(doc->source.data(), doc->source.size(), *doc->names, *doc->allocator, options);
 
@@ -31,6 +32,7 @@ static int reflectParseExpr(lua_State* L)
 {
     size_t len = 0;
     const char* src = luaL_checklstring(L, 1, &len);
+    bool includeCst = lua_isboolean(L, 2) ? lua_toboolean(L, 2) : false;
 
     auto doc = std::make_shared<AstDocumentState>();
     doc->source.assign(src, len);
@@ -39,11 +41,13 @@ static int reflectParseExpr(lua_State* L)
     Luau::ParseOptions options;
     options.captureComments = true;
     options.allowDeclarationSyntax = true;
-    options.storeCstData = true;
+    options.storeCstData = includeCst;
 
     auto result = Luau::Parser::parseExpr(doc->source.data(), doc->source.size(), *doc->names, *doc->allocator, options);
     doc->parseResult.root = nullptr;
     doc->parseResult.errors = std::move(result.errors);
+    if (includeCst)
+        doc->parseResult.cstNodeMap = std::move(result.cstNodeMap);
 
     pushAstNode(L, doc, result.root);
     return 1;

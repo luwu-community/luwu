@@ -949,11 +949,11 @@ export type AstDocument = {
     read find: (self: AstDocument, kind: string) -> {AstNode},
 }
 
-local function parse(source: string): AstDocument
+local function parse(source: string, includeCst: boolean?): AstDocument
     error("Not implemented")
 end
 
-local function parseExpr(source: string): AstNode
+local function parseExpr(source: string, includeCst: boolean?): AstNode
     error("Not implemented")
 end
 
