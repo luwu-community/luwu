@@ -1041,4 +1041,247 @@ expectfail(
     end
 )
 
+-- class.isinstance fast paths (rfcx/classes.md): the LBF_CLASS_ISINSTANCE builtin / CLASS_ISINSTANCE
+-- IR op (value position) and the fused JUMPXISA test-and-branch (condition position). All of these
+-- must agree with the plain library semantics for objects, non-objects and both branch polarities.
+class IsaFoo public x: number = 0 end
+class IsaBar public y: number = 0 end
+
+expectpass("isinstance: value position, objects and non-objects", function()
+    local foo = IsaFoo {}
+    assert(class.isinstance(foo, IsaFoo) == true)
+    assert(class.isinstance(foo, IsaBar) == false)
+    assert(class.isinstance(42, IsaFoo) == false)
+    assert(class.isinstance("s", IsaFoo) == false)
+    assert(class.isinstance(nil, IsaFoo) == false)
+    assert(class.isinstance({}, IsaFoo) == false)
+end)
+
+expectpass("isinstance: fused condition dispatch matches library semantics", function()
+    local function classify(v: any): string
+        if class.isinstance(v, IsaFoo) then
+            return "foo"
+        elseif class.isinstance(v, IsaBar) then
+            return "bar"
+        end
+        return "other"
+    end
+    assert(classify(IsaFoo {}) == "foo")
+    assert(classify(IsaBar {}) == "bar")
+    assert(classify(42) == "other")
+end)
+
+expectpass("isinstance: negated and short-circuit conditions", function()
+    local function notFoo(v: any): boolean
+        if not class.isinstance(v, IsaFoo) then
+            return true
+        end
+        return false
+    end
+    assert(notFoo(IsaBar {}) == true)
+    assert(notFoo(IsaFoo {}) == false)
+
+    -- `and` keeps class.isinstance in a value-producing spot rather than a bare condition
+    local foo = IsaFoo {}
+    assert((class.isinstance(foo, IsaFoo) and "yes" or "no") == "yes")
+    assert((class.isinstance(foo, IsaBar) and "yes" or "no") == "no")
+end)
+
+expectfail("isinstance: second argument must be a class", "class", function()
+    return class.isinstance(IsaFoo {}, 5)
+end)
+
+-- Method inlining must remain correct when the inlined method yields: the Luau bytecode inliner is
+-- yield-transparent (a yield suspends the whole coroutine; resume continues in the caller's inlined
+-- body), so a `self:method()` / typed `obj:method()` call that contains a coroutine.yield can inline
+-- without breaking suspend/resume. See rfcx/classes.md.
+class YieldGen
+    public base: number = 0
+
+    public function step(self, k: number): number
+        local fed = coroutine.yield(self.base + k)
+        return fed * 10
+    end
+
+    public function run(self): number
+        local a = self:step(1) -- self:method() inline target, yields mid-body
+        local b = self:step(2)
+        return a + b
+    end
+end
+
+expectpass("inlining: a self:method() that yields resumes correctly", function()
+    local co = coroutine.wrap(function()
+        return (YieldGen { base = 100 }):run()
+    end)
+    assert(co() == 101)         -- first yield: base + 1
+    assert(co(3) == 102)        -- feed 3 -> a = 30; second yield: base + 2
+    assert(co(4) == 70)         -- feed 4 -> b = 40; final return a + b = 70
+end)
+
+expectpass("inlining: a typed-receiver obj:method() that yields resumes correctly", function()
+    local function consume(y: YieldGen): number
+        local acc = 0
+        acc += y:step(1) -- cross-function inline of an all-public class method that yields
+        acc += y:step(2)
+        return acc
+    end
+    local co = coroutine.wrap(function()
+        return consume(YieldGen { base = 50 })
+    end)
+    assert(co() == 51)
+    assert(co(100) == 52)       -- step(1) resumes to 100*10 = 1000
+    assert(co(200) == 1000 + 2000) -- step(2) resumes to 200*10; acc = 1000 + 2000 = 3000
+end)
+
+-- coroutine.resume (not just wrap) must also drive a yielding inlined method correctly.
+class ResumeGen
+    public base: number = 0
+    public function tick(self, k: number): number
+        return coroutine.yield(self.base + k)
+    end
+    public function seq(self): number
+        local a = self:tick(1) -- inline target, yields
+        local b = self:tick(2)
+        return a + b
+    end
+end
+
+expectpass("inlining: coroutine.resume drives a yielding inlined method", function()
+    local co = coroutine.create(function()
+        return (ResumeGen { base = 20 }):seq()
+    end)
+    local ok1, y1 = coroutine.resume(co)     -- yields base + 1 = 21
+    assert(ok1 and y1 == 21)
+    local ok2, y2 = coroutine.resume(co, 5)  -- a = 5; yields base + 2 = 22
+    assert(ok2 and y2 == 22)
+    local ok3, r = coroutine.resume(co, 6)   -- b = 6; seq returns a + b = 11
+    assert(ok3 and r == 11)
+end)
+
+-- An inlined method may itself call coroutine.resume on a child coroutine.
+class ChildDriver
+    public function drive(self, child: thread): number
+        local ok, v = coroutine.resume(child, 7)
+        return ok and v or -1
+    end
+    public function run(self, child: thread): number
+        local r = self:drive(child) -- inline target, contains coroutine.resume
+        return r + 100
+    end
+end
+
+expectpass("inlining: a method calling coroutine.resume on a child works", function()
+    local child = coroutine.create(function()
+        local q = coroutine.yield()
+        return q * 2
+    end)
+    coroutine.resume(child) -- advance child to its yield
+    assert((ChildDriver {}):run(child) == 114) -- resumes child with 7 -> 14 -> +100
+end)
+
+-- A class method calling a *C* function that yields via the C API (lua_yield). singleYield() and
+-- multipleYields() are registered by the Classes conformance harness (Conformance.test.cpp).
+class CYielder
+    public base: number = 0
+
+    public function fetch(self): number
+        return singleYield() + self.base -- C function yields value 2, resumes (continuation) to 4
+    end
+
+    public function run(self): number
+        local x = self:fetch() -- inline target, carries the yielding C call into run's frame
+        return x + 1
+    end
+end
+
+expectpass("inlining: method calling a yielding C function (lua_yield) resumes correctly", function()
+    local co = coroutine.wrap(function()
+        return (CYielder { base = 100 }):run()
+    end)
+    assert(co() == 2)   -- value yielded by the C function
+    assert(co() == 105) -- continuation -> 4; fetch = 4 + 100 = 104; run = 105
+end)
+
+class MultiCYielder
+    public function pull(self, base: number): number
+        local m = multipleYields(base) -- C function yields base+1, base+2, base+3, returns base+4
+        return m
+    end
+    public function go(self): number
+        local v = self:pull(10) -- inline target
+        return v
+    end
+end
+
+expectpass("inlining: method with a multi-yielding C function resumes each time", function()
+    local co = coroutine.wrap(function()
+        return (MultiCYielder {}):go()
+    end)
+    assert(co() == 11) -- base + 1
+    assert(co() == 12) -- base + 2
+    assert(co() == 13) -- base + 3
+    assert(co() == 14) -- final return base + 4 -> go returns 14
+end)
+
+-- A custom __init is yieldable (constructor closure carries a continuation; luaR_createobject uses
+-- luaL_callyieldable, see lclass.cpp): __init may suspend the coroutine mid-construction and resume,
+-- yielding the fully-built object. A `const` field may still be assigned after the resume, because
+-- the write is still authorized inside __init's own closure.
+class YieldInit
+    public v: number = 0
+    public const id: number = 0
+    public function __init(self, seed: number)
+        local fed = coroutine.yield(seed) -- suspend inside the constructor
+        self.id = fed        -- const write AFTER resume, still inside __init -> authorized
+        self.v = fed * 2
+    end
+end
+
+expectpass("yielding __init: suspends and resumes into a complete object (via wrap)", function()
+    local co = coroutine.wrap(function()
+        local o = YieldInit(9)
+        return o.id, o.v
+    end)
+    assert(co() == 9)          -- value yielded from inside __init
+    local id, v = co(50)       -- resume: id = 50, v = 100
+    assert(id == 50 and v == 100)
+end)
+
+expectpass("yielding __init: driven by coroutine.resume", function()
+    local co = coroutine.create(function()
+        local o = YieldInit(7)
+        return o.v
+    end)
+    local ok1, y = coroutine.resume(co)
+    assert(ok1 and y == 7)
+    local ok2, v = coroutine.resume(co, 200)
+    assert(ok2 and v == 400)
+end)
+
+class CInit
+    public w: number = 0
+    public function __init(self)
+        self.w = singleYield() -- C function yields (2), resumes via continuation to 4
+    end
+end
+
+expectpass("yielding __init: a yielding C function inside the constructor", function()
+    local co = coroutine.wrap(function()
+        return CInit().w
+    end)
+    assert(co() == 2)   -- value yielded by the C function
+    assert(co() == 4)   -- continuation -> 4; self.w = 4
+end)
+
+expectpass("yielding __init: abandoning construction mid-yield does not corrupt state", function()
+    for _ = 1, 200 do
+        local co = coroutine.wrap(function()
+            return YieldInit(1).v
+        end)
+        co() -- suspend inside __init and never resume; the half-built object must GC cleanly
+    end
+    collectgarbage()
+end)
+
 return 'OK'

@@ -80,6 +80,7 @@ void translateInstOrX(IrBuilder& build, const Instruction* pc, int pcpos, IrOp c
 void translateInstNewClosure(IrBuilder& build, const Instruction* pc, int pcpos);
 void translateInstCmpProto(IrBuilder& build, const Instruction* pc, int pcpos);
 void translateInstCheckSelfClass(IrBuilder& build, const Instruction* pc, int pcpos);
+void translateInstJumpXIsa(IrBuilder& build, const Instruction* pc, int pcpos);
 
 void beforeInstForNPrep(IrBuilder& build, const Instruction* pc, int pcpos);
 void afterInstForNLoop(IrBuilder& build, const Instruction* pc);

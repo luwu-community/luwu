@@ -4514,7 +4514,20 @@ TEST_CASE("Classes")
         {FFlag::LuauGenericNominals, true},
     };
 
-    runConformance("classes.luau");
+    runConformance(
+        "classes.luau",
+        [](lua_State* L)
+        {
+            // yielding C functions (via lua_yield with continuations) so classes.luau can verify that
+            // a class method calling a yielding C function still suspends/resumes correctly, including
+            // when that method is inlined -- see rfcx/classes.md
+            lua_pushcclosurek(L, singleYield, "singleYield", 0, singleYieldContinuation);
+            lua_setglobal(L, "singleYield");
+
+            lua_pushcclosurek(L, multipleYields, "multipleYields", 0, multipleYieldsContinuation);
+            lua_setglobal(L, "multipleYields");
+        }
+    );
 }
 
 TEST_CASE("ExportedClasses")

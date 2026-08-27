@@ -15,6 +15,10 @@
 #include "lualib.h"
 #include "lvm.h"
 
+// Continuation for luaR_createobject: runs after a custom __init returns (possibly across a yield),
+// leaving the freshly-constructed object as the constructor's single result. See luaR_createobject.
+static int luaR_createobjectcont(lua_State* L, int status);
+
 LuauClass* luaR_newclass(
     lua_State* L,
     TString* name,
@@ -53,7 +57,9 @@ LuauClass* luaR_newclass(
     Closure* constructor = luaF_newCclosure(L, 0, L->gt);
     constructor->c.f = luaR_createobject;
     constructor->c.debugname = classdef->ctordebugname;
-    constructor->c.cont = NULL;
+    // a continuation makes construction yieldable: a custom __init may call coroutine.yield (or a
+    // yielding C function), suspending mid-construction and resuming into luaR_createobjectcont
+    constructor->c.cont = luaR_createobjectcont;
     TValue* dest = luaH_setstr(L, classdef->metatable, L->global->tmname[TM_CALL]);
     LUAU_ASSERT(ttisnil(dest));
     setclvalue(L, dest, constructor);
@@ -282,10 +288,10 @@ int luaR_createobject(lua_State* L)
         for (int i = 2; i <= numargs; i++)
             lua_pushvalue(L, i);
 
-        lua_call(L, 1 + (numargs - 1), 0);
-
-        lua_pushvalue(L, selfidx);
-        return 1;
+        // Yieldable call: __init may suspend the coroutine (via coroutine.yield or a yielding C
+        // function). On completion -- immediately or after a resume -- luaR_createobjectcont returns
+        // the object. __init takes no results, so 'self' (selfidx) is left on top of the stack.
+        return luaL_callyieldable(L, 1 + (numargs - 1), 0);
     }
 
     luaR_defaultinitinstancefields(L, classdef, object, numargs);
@@ -293,6 +299,13 @@ int luaR_createobject(lua_State* L)
     // Preserve the GC invariant, moving barrier back once after writing multiple objects (similar to SETLIST)
     luaC_barrierfast(L, object);
 
+    return 1;
+}
+
+static int luaR_createobjectcont(lua_State* L, int status)
+{
+    // __init was called with zero expected results, so the object we constructed is left on top of
+    // the stack (see luaR_createobject); return it as the constructor's single result.
     return 1;
 }
 

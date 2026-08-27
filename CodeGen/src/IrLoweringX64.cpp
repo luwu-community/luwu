@@ -1938,6 +1938,22 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.setcc(ConditionX64::Equal, byteReg(inst.regX64));
         break;
     }
+    case IrCmd::CLASS_ISINSTANCE:
+    {
+        // result = (tag == object) && (value->lclass == class); the deref is guarded by the tag check
+        inst.regX64 = regs.allocReg(SizeX64::dword, index);
+        build.xor_(inst.regX64, inst.regX64);
+
+        Label done;
+        build.cmp(regOp(OP_A(inst)), LUA_TOBJECT);
+        build.jcc(ConditionX64::NotEqual, done);
+
+        build.cmp(regOp(OP_C(inst)), qword[regOp(OP_B(inst)) + offsetof(LuauObject, lclass)]);
+        build.setcc(ConditionX64::Equal, byteReg(inst.regX64));
+
+        build.setLabel(done);
+        break;
+    }
     case IrCmd::NEW_TABLE:
     {
         IrCallWrapperX64 callWrap(regs, build, index);

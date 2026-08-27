@@ -898,11 +898,24 @@ struct Compiler
         bool multRet,
         int thresholdBase,
         int thresholdMaxBoost,
-        int depthLimit
+        int depthLimit,
+        AstExpr* selfExpr = nullptr
     )
     {
         Function* fi = functions.find(func);
         LUAU_ASSERT(fi);
+
+        // For an inlined `self:method()` call, the receiver (selfExpr) is a logical extra argument
+        // bound to the method's first parameter (`self`), ahead of the explicit call arguments.
+        size_t selfCount = selfExpr ? 1 : 0;
+        size_t providedArgs = expr->args.size + selfCount;
+        auto argAt = [&](size_t i) -> AstExpr*
+        {
+            if (selfExpr && i == 0)
+                return selfExpr;
+            size_t j = i - selfCount;
+            return j < expr->args.size ? expr->args.data[j] : nullptr;
+        };
 
         // make sure we have enough register space
         if (regTop > 128 || fi->stackSize > 32)
@@ -939,9 +952,9 @@ struct Compiler
         // compute constant bitvector for all arguments to feed the cost model
         bool varc[8] = {};
         bool hasConstant = false;
-        for (size_t i = 0; i < func->args.size && i < expr->args.size && i < 8; ++i)
+        for (size_t i = 0; i < func->args.size && i < providedArgs && i < 8; ++i)
         {
-            if (isConstant(expr->args.data[i]))
+            if (AstExpr* a = argAt(i); a && isConstant(a))
             {
                 varc[i] = true;
                 hasConstant = true;
@@ -949,9 +962,9 @@ struct Compiler
         }
 
         // if the last argument only returns a single value, all following arguments are nil
-        if (expr->args.size != 0 && !isExprMultRet(expr->args.data[expr->args.size - 1]))
+        if (providedArgs != 0 && !isExprMultRet(argAt(providedArgs - 1)))
         {
-            for (size_t i = expr->args.size; i < func->args.size && i < 8; ++i)
+            for (size_t i = providedArgs; i < func->args.size && i < 8; ++i)
             {
                 varc[i] = true;
                 hasConstant = true;
@@ -962,7 +975,7 @@ struct Compiler
         uint64_t callCostModel = fi->costModel;
 
         if (hasConstant)
-            callCostModel = costModelInlinedCall(expr, func);
+            callCostModel = costModelInlinedCall(expr, func, selfExpr);
 
         // we use a dynamic cost threshold that's based on the fixed limit boosted by the cost advantage we gain due to inlining
         int inlinedCost = computeCost(callCostModel, varc, std::min(int(func->args.size), 8));
@@ -994,19 +1007,29 @@ struct Compiler
             "inlining succeeded (cost %d, profit %.2fx, depth %d)", inlinedCost, double(inlineProfit) / 100, int(inlineFrames.size())
         );
 
-        compileInlinedCall(expr, func, target, targetCount);
+        compileInlinedCall(expr, func, target, targetCount, selfExpr);
         return true;
     }
 
-    uint64_t costModelInlinedCall(AstExprCall* expr, AstExprFunction* func)
+    uint64_t costModelInlinedCall(AstExprCall* expr, AstExprFunction* func, AstExpr* selfExpr = nullptr)
     {
+        size_t selfCount = selfExpr ? 1 : 0;
+        size_t providedArgs = expr->args.size + selfCount;
+        auto argAt = [&](size_t i) -> AstExpr*
+        {
+            if (selfExpr && i == 0)
+                return selfExpr;
+            size_t j = i - selfCount;
+            return j < expr->args.size ? expr->args.data[j] : nullptr;
+        };
+
         for (size_t i = 0; i < func->args.size; ++i)
         {
             AstLocal* var = func->args.data[i];
-            AstExpr* arg = i < expr->args.size ? expr->args.data[i] : nullptr;
+            AstExpr* arg = argAt(i);
 
             // last expression is a multret, there are no constant for it and it will fill all values
-            if (i + 1 == expr->args.size && func->args.size > expr->args.size && isExprMultRet(arg))
+            if (i + 1 == providedArgs && func->args.size > providedArgs && isExprMultRet(arg))
                 break;
 
             // variable gets mutated at some point, so we do not have a constant for it
@@ -1054,11 +1077,23 @@ struct Compiler
         return cost;
     }
 
-    void compileInlinedCall(AstExprCall* expr, AstExprFunction* func, uint8_t target, uint8_t targetCount)
+    void compileInlinedCall(AstExprCall* expr, AstExprFunction* func, uint8_t target, uint8_t targetCount, AstExpr* selfExpr = nullptr)
     {
         RegScope rs(this);
 
         size_t oldLocals = localStack.size();
+
+        // For a `self:method()` inline, the receiver is bound to the method's first parameter (`self`)
+        // ahead of the explicit arguments (see tryCompileInlinedCall).
+        size_t selfCount = selfExpr ? 1 : 0;
+        size_t providedArgs = expr->args.size + selfCount;
+        auto argAt = [&](size_t i) -> AstExpr*
+        {
+            if (selfExpr && i == 0)
+                return selfExpr;
+            size_t j = i - selfCount;
+            return j < expr->args.size ? expr->args.data[j] : nullptr;
+        };
 
         std::vector<InlineArg> args;
         args.reserve(func->args.size);
@@ -1081,12 +1116,12 @@ struct Compiler
         for (size_t i = 0; i < func->args.size; ++i)
         {
             AstLocal* var = func->args.data[i];
-            AstExpr* arg = i < expr->args.size ? expr->args.data[i] : nullptr;
+            AstExpr* arg = argAt(i);
 
-            if (i + 1 == expr->args.size && func->args.size > expr->args.size && isExprMultRet(arg))
+            if (i + 1 == providedArgs && func->args.size > providedArgs && isExprMultRet(arg))
             {
                 // if the last argument can return multiple values, we need to compute all of them into the remaining arguments
-                unsigned int tail = unsigned(func->args.size - expr->args.size) + 1;
+                unsigned int tail = unsigned(func->args.size - providedArgs) + 1;
                 uint8_t reg = allocReg(arg, tail);
                 uint32_t allocpc = bytecode.getDebugPC();
 
@@ -1156,8 +1191,8 @@ struct Compiler
         }
 
         // evaluate extra expressions for side effects
-        for (size_t i = func->args.size; i < expr->args.size; ++i)
-            compileExprSide(expr->args.data[i]);
+        for (size_t i = func->args.size; i < providedArgs; ++i)
+            compileExprSide(argAt(i));
 
         // apply all evaluated arguments to the compiler state
         // note: locals use current startpc for debug info, although some of them have been computed earlier; this is similar to compileStatLocal
@@ -1286,6 +1321,126 @@ struct Compiler
         Compile::undoChanges(locstants, localChanges);
     }
 
+    // Resolve a type annotation naming a declared class to its declaration (exact class name only:
+    // no generic parameters, no module prefix, so `Vector2` resolves but `M.Vector2` or `Foo<T>` don't).
+    AstStatClass* classFromType(AstType* ty)
+    {
+        if (!ty)
+            return nullptr;
+
+        if (AstTypeReference* ref = ty->as<AstTypeReference>())
+        {
+            if (!ref->hasParameterList && !ref->prefix && ref->parameters.size == 0)
+            {
+                if (AstStatClass** cls = classByName.find(ref->name))
+                    return *cls;
+            }
+        }
+
+        return nullptr;
+    }
+
+    const AstClassProperty* findClassProperty(AstStatClass* cls, AstName name)
+    {
+        for (const AstClassMember& member : cls->members)
+        {
+            if (const AstClassProperty* p = member.get_if<AstClassProperty>())
+            {
+                if (p->name == name)
+                    return p;
+            }
+        }
+        return nullptr;
+    }
+
+    // Find an instance method (one taking `self`) named `name` in a class, eligible as an inline
+    // target. `__init` is never eligible: it is the only context where writing a `const` member is
+    // authorized, and that authorization is gated on the executing closure being the class's own
+    // `__init` (luaR_closureisinit). Inlining its body into another closure would run those const
+    // writes under the wrong closure and wrongly reject them (see rfcx/classes.md).
+    AstExprFunction* findInstanceMethod(AstStatClass* cls, AstName name)
+    {
+        if (name == "__init")
+            return nullptr;
+
+        for (const AstClassMember& member : cls->members)
+        {
+            if (const AstClassMethod* m = member.get_if<AstClassMethod>())
+            {
+                if (m->functionName == name && classMethodOwner.contains(m->function))
+                    return m->function;
+            }
+        }
+        return nullptr;
+    }
+
+    // Determine the statically-known class of a method-call receiver, if any:
+    //  - the enclosing method's own `self` (its class is the method's owning class),
+    //  - a local/argument carrying a class type annotation (`p: Particle`),
+    //  - a typed field access `<recv>.field` whose declared field type names a class.
+    AstStatClass* resolveReceiverClass(AstExpr* recv)
+    {
+        for (;;)
+        {
+            if (AstExprGroup* g = recv->as<AstExprGroup>())
+                recv = g->expr;
+            else if (AstExprTypeAssertion* t = recv->as<AstExprTypeAssertion>())
+                recv = t->expr;
+            else
+                break;
+        }
+
+        if (AstExprLocal* local = recv->as<AstExprLocal>())
+        {
+            // the enclosing method's own `self` is an instance of the method's owning class
+            if (currentFunction && currentFunction->args.size > 0 && local->local == currentFunction->args.data[0])
+            {
+                if (AstStatClass** owner = classMethodOwner.find(currentFunction))
+                    return *owner;
+            }
+
+            return classFromType(local->local->annotation);
+        }
+        else if (AstExprIndexName* idx = recv->as<AstExprIndexName>())
+        {
+            if (AstStatClass* baseClass = resolveReceiverClass(idx->expr))
+            {
+                if (const AstClassProperty* prop = findClassProperty(baseClass, idx->index))
+                    return classFromType(prop->ty);
+            }
+        }
+
+        return nullptr;
+    }
+
+    // Luau Classes (rfcx/classes.md): resolve an `obj:method()` call to a class instance method so it
+    // can be inlined at O2. The receiver's class must be statically known (see resolveReceiverClass),
+    // and the privacy gate must pass: a method may only be inlined into a *different* class's body
+    // when its class has no private members. Same-class inlining is always allowed (the executing
+    // closure's ownerclass is preserved). Either way the callee carries its own spliced CHECKSELFCLASS,
+    // so a receiver whose runtime class disagrees with the annotation can never run the wrong body.
+    AstExprFunction* tryResolveMethodCall(AstExprCall* expr)
+    {
+        if (!expr->self)
+            return nullptr;
+
+        AstExprIndexName* idx = expr->func->as<AstExprIndexName>();
+        if (!idx)
+            return nullptr;
+
+        AstStatClass* recvClass = resolveReceiverClass(idx->expr);
+        if (!recvClass)
+            return nullptr;
+
+        AstStatClass** callerClass = currentFunction ? classMethodOwner.find(currentFunction) : nullptr;
+        bool sameClass = callerClass && *callerClass == recvClass;
+
+        if (!sameClass && classesWithPrivateMembers.contains(recvClass))
+            return nullptr;
+
+        return findInstanceMethod(recvClass, idx->index);
+    }
+
     void compileExprCall(AstExprCall* expr, uint8_t target, uint8_t targetCount, bool targetTop = false, bool multRet = false)
     {
         LUAU_ASSERT(targetCount < 255);
@@ -1321,6 +1476,31 @@ struct Compiler
                     bytecode.addDebugRemark("inlining failed: can't inline recursive calls");
                 else if (getfenvUsed || setfenvUsed)
                     bytecode.addDebugRemark("inlining failed: module uses getfenv/setfenv");
+            }
+        }
+
+        // Luau Classes (rfcx/classes.md): inline `obj:method()` calls whose receiver class is
+        // statically known and passes the privacy gate (see tryResolveMethodCall).
+        if (options.optimizationLevel >= 2 && expr->self && FFlag::DebugLuauUserDefinedClasses)
+        {
+            if (AstExprFunction* mfunc = tryResolveMethodCall(expr))
+            {
+                Function* fi = functions.find(mfunc);
+                AstExprIndexName* idx = expr->func->as<AstExprIndexName>();
+
+                if (fi && fi->canInline && idx &&
+                    tryCompileInlinedCall(
+                        expr,
+                        mfunc,
+                        target,
+                        targetCount,
+                        multRet,
+                        FInt::LuauCompileInlineThreshold,
+                        FInt::LuauCompileInlineThresholdMaxBoost,
+                        FInt::LuauCompileInlineDepth,
+                        /* selfExpr= */ idx->expr
+                    ))
+                    return;
             }
         }
 
@@ -1891,6 +2071,62 @@ struct Compiler
         return cv ? *cv : Constant{Constant::Type_Unknown};
     }
 
+    // Luau Classes (rfcx/classes.md): is `node` a reference to a statically-known class declaration
+    // (a const class local, possibly captured as an upvalue)? Only then is it safe to fuse
+    // class.isinstance into JUMPXISA, whose second operand is asserted to be a class.
+    bool isKnownClassExpr(AstExpr* node)
+    {
+        while (AstExprGroup* group = node->as<AstExprGroup>())
+            node = group->expr;
+
+        if (AstExprLocal* local = node->as<AstExprLocal>())
+        {
+            AstLocal** cl = classLocals.find(local->local->name);
+            return cl && *cl == local->local;
+        }
+
+        // A class name cannot be reassigned (enforced at compile time), so a global reference naming a
+        // declared class always denotes that class -- safe as JUMPXISA's asserted-class operand.
+        if (AstExprGlobal* global = node->as<AstExprGlobal>())
+            return classLocals.contains(global->name);
+
+        return false;
+    }
+
+    // Luau Classes (rfcx/classes.md): compile `class.isinstance(x, C)` used as a condition into a
+    // single fused JUMPXISA test-and-branch, when C is a statically-known class. Returns false (so the
+    // caller falls back to the ordinary builtin path) otherwise. `onlyTruth` selects the branch
+    // polarity, matching the generic JUMPIF/JUMPIFNOT emitted by compileConditionValue below.
+    bool tryCompileConditionIsinstance(AstExprCall* call, const uint8_t* target, std::vector<size_t>& skipJump, bool onlyTruth)
+    {
+        if (!FFlag::DebugLuauUserDefinedClasses)
+            return false;
+
+        const int* bfid = builtins.find(call);
+        if (!bfid || *bfid != LBF_CLASS_ISINSTANCE || call->args.size != 2)
+            return false;
+
+        if (!isKnownClassExpr(call->args.data[1]))
+            return false;
+
+        // when the boolean value is also needed, initialize target to the fallthrough result (same as
+        // the comparison path); the jump below fires when the result is the opposite of the fallthrough
+        if (target)
+            bytecode.emitABC(LOP_LOADB, *target, onlyTruth ? 1 : 0, 0);
+
+        RegScope rs(this);
+        uint8_t valueReg = compileExprAuto(call->args.data[0], rs);
+        uint8_t classReg = compileExprAuto(call->args.data[1], rs);
+
+        size_t jumpLabel = bytecode.emitLabel();
+        bytecode.emitAD(LOP_JUMPXISA, valueReg, 0);
+        // aux: class register in the low byte, bit 31 set means "jump if IS an instance"
+        bytecode.emitAux(uint32_t(classReg) | (onlyTruth ? 0x80000000u : 0u));
+
+        skipJump.push_back(jumpLabel);
+        return true;
+    }
+
     size_t compileCompareJump(AstExprBinary* expr, bool not_ = false)
     {
         RegScope rs(this);
@@ -2145,6 +2381,13 @@ struct Compiler
                 compileConditionValue(expr->expr, target, skipJump, !onlyTruth);
                 return;
             }
+        }
+
+        // Luau Classes (rfcx/classes.md): fuse `class.isinstance(x, C)` conditions into JUMPXISA
+        if (AstExprCall* call = node->as<AstExprCall>())
+        {
+            if (tryCompileConditionIsinstance(call, target, skipJump, onlyTruth))
+                return;
         }
 
         if (AstExprGroup* expr = node->as<AstExprGroup>())
@@ -5028,6 +5271,9 @@ struct Compiler
         DenseHashMap<AstExprFunction*, std::vector<ClassFieldDefault>>& initDefaults;
         DenseHashMap<AstStatClass*, AstExprFunction*>& podDefaultsFn;
         DenseHashMap<AstExprFunction*, SelfClassCheck>& methodSelfChecks;
+        DenseHashMap<AstExprFunction*, AstStatClass*>& methodOwner;
+        DenseHashMap<AstName, AstStatClass*>& classByName;
+        DenseHashSet<AstStatClass*>& classesWithPrivateMembers;
         std::vector<AstExprFunction*>& functionsToCompile;
 
         ClassInitDefaultsVisitor(
@@ -5036,6 +5282,9 @@ struct Compiler
             DenseHashMap<AstExprFunction*, std::vector<ClassFieldDefault>>& initDefaults,
             DenseHashMap<AstStatClass*, AstExprFunction*>& podDefaultsFn,
             DenseHashMap<AstExprFunction*, SelfClassCheck>& methodSelfChecks,
+            DenseHashMap<AstExprFunction*, AstStatClass*>& methodOwner,
+            DenseHashMap<AstName, AstStatClass*>& classByName,
+            DenseHashSet<AstStatClass*>& classesWithPrivateMembers,
             std::vector<AstExprFunction*>& functionsToCompile
         )
             : allocator(allocator)
@@ -5043,6 +5292,9 @@ struct Compiler
             , initDefaults(initDefaults)
             , podDefaultsFn(podDefaultsFn)
             , methodSelfChecks(methodSelfChecks)
+            , methodOwner(methodOwner)
+            , classByName(classByName)
+            , classesWithPrivateMembers(classesWithPrivateMembers)
             , functionsToCompile(functionsToCompile)
         {
         }
@@ -5097,12 +5349,17 @@ struct Compiler
             AstExprFunction* init = nullptr;
             bool anyPropertyDefault = false;
 
+            classByName[node->name->name] = node;
+
             for (const auto& member : node->members)
             {
                 Luau::visit(
                     overloaded{
                         [&](const AstClassProperty& prop)
                         {
+                            if (prop.visibility == AstClassMemberVisibility::Private)
+                                classesWithPrivateMembers.insert(node);
+
                             if (prop.defaultValue)
                             {
                                 defaults.push_back({prop.name, prop.defaultValue});
@@ -5120,7 +5377,11 @@ struct Compiler
                                 init = method.function;
 
                             if (method.function->args.size > 0 && method.function->args.data[0]->name == "self")
+                            {
                                 methodSelfChecks[method.function] = buildSelfCheckStat(node, method);
+                                // only self-taking (instance) methods are valid self:method() inline targets
+                                methodOwner[method.function] = node;
+                            }
                         }
                     },
                     member
@@ -5375,6 +5636,18 @@ struct Compiler
     // method's body (see rfcx/classes.md "Runtime checking of `self` for methods"). Must be
     // known before compileFunction runs for that function, same as classInitFieldDefaults above.
     DenseHashMap<AstExprFunction*, SelfClassCheck> classMethodSelfChecks;
+    // Populated by ClassInitDefaultsVisitor; maps each instance method's AstExprFunction to its
+    // owning class, so that a `self:method()` call inside a class method can be statically resolved
+    // to the enclosing class's method and inlined at O2 (see compileExprCall / tryResolveSelfMethodCall).
+    DenseHashMap<AstExprFunction*, AstStatClass*> classMethodOwner{nullptr};
+    // Populated by ClassInitDefaultsVisitor: class name -> declaration, so a type annotation naming a
+    // class (`p: Particle`, a field `velocity: Vector2`) can be resolved to its AstStatClass for
+    // typed-receiver method inlining (Stage 2, see tryResolveMethodCall).
+    DenseHashMap<AstName, AstStatClass*> classByName{AstName{}};
+    // Classes that declare at least one private member. A method may be inlined into a *different*
+    // class's body only if its owning class is absent here: private field access is authorized by the
+    // executing closure's ownerclass, which inlining rewrites to the caller's class (see rfcx/classes.md).
+    DenseHashSet<AstStatClass*> classesWithPrivateMembers{nullptr};
     // Seeded false for every hoisted (top-level) class by preallocateHoistedClasses, flipped to
     // true by compileClassDeclaration right after that class's real LOADKX write is emitted, ahead
     // of compiling its methods. A class local is only safe to capture immutably once this is true:
@@ -5486,6 +5759,9 @@ void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, A
             compiler.classInitFieldDefaults,
             compiler.classPodDefaultsFn,
             compiler.classMethodSelfChecks,
+            compiler.classMethodOwner,
+            compiler.classByName,
+            compiler.classesWithPrivateMembers,
             functions
         );
         root->visit(&classInitDefaultsVisitor);

@@ -1516,6 +1516,7 @@ static void handleBuiltinEffects(ConstPropState& state, LuauBuiltinFunction bfid
     case LBF_MATH_ROUND:
     case LBF_RAWGET:
     case LBF_RAWEQUAL:
+    case LBF_CLASS_ISINSTANCE:
     case LBF_TABLE_UNPACK:
     case LBF_VECTOR:
     case LBF_BIT32_COUNTLZ:
@@ -3033,6 +3034,10 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         break;
     case IrCmd::STRING_LEN:
     case IrCmd::BUFFER_ISFROZEN:
+        break;
+    case IrCmd::CLASS_ISINSTANCE:
+        // Pure function of (tag, value ptr, class ptr); two identical checks in a block can be CSE'd
+        state.substituteOrRecord(inst, index);
         break;
     case IrCmd::NEW_TABLE:
         state.instNotReadonly.insert(index);

@@ -58,6 +58,7 @@ int getOpLength(LuauOpcode op)
     case LOP_NEWCLASSMEMBER:
     case LOP_CALLFB:
     case LOP_CMPPROTO:
+    case LOP_JUMPXISA:
         return 2;
 
     default:
@@ -90,6 +91,7 @@ bool isJumpD(LuauOpcode op)
     case LOP_JUMPXEQKN:
     case LOP_JUMPXEQKS:
     case LOP_CMPPROTO:
+    case LOP_JUMPXISA:
         return true;
 
     default:
@@ -284,6 +286,7 @@ IrValueKind getCmdValueKind(IrCmd cmd)
         return IrValueKind::Pointer;
     case IrCmd::STRING_LEN:
     case IrCmd::BUFFER_ISFROZEN:
+    case IrCmd::CLASS_ISINSTANCE:
         return IrValueKind::Int;
     case IrCmd::NEW_TABLE:
     case IrCmd::DUP_TABLE:

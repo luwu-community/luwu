@@ -535,6 +535,13 @@ struct BytecodeGraphParser
                     addVmConstInput(node, aux & 0xFFFFFF);
                     break;
 
+                case LOP_JUMPXISA:
+                    addVmRegInput(node, LUAU_INSN_A(insn));
+                    addImmInput(node, static_cast<bool>(aux >> 31));
+                    addJumpInput(node, jumpTarget);
+                    addVmRegInput(node, aux & 0xff);
+                    break;
+
                 case LOP_JUMPIF:
                 case LOP_JUMPIFNOT:
                     addVmRegInput(node, LUAU_INSN_A(insn));
@@ -773,6 +780,7 @@ struct BytecodeGraphParser
             case LOP_JUMPXEQKB:
             case LOP_JUMPXEQKN:
             case LOP_JUMPXEQKS:
+            case LOP_JUMPXISA:
             case LOP_JUMPIF:
             case LOP_JUMPIFNOT:
             case LOP_JUMPIFEQ:

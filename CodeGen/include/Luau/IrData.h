@@ -468,6 +468,13 @@ enum class IrCmd : uint8_t
     // A: pointer (Buffer)
     BUFFER_ISFROZEN,
 
+    // Luau Classes (rfcx/classes.md): compute class.isinstance(value, class) as an int 0/1 --
+    // true iff the value is an object whose class is exactly the given class.
+    // A: tag (of the value)
+    // B: pointer (the value's gc pointer, LuauObject; only dereferenced when A == LUA_TOBJECT)
+    // C: pointer (the expected LuauClass)
+    CLASS_ISINSTANCE,
+
     // Allocate new table
     // A: unsigned int (array element count)
     // B: unsigned int (node element count)

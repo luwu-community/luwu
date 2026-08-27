@@ -2347,6 +2347,33 @@ void translateInstCmpProto(IrBuilder& build, const Instruction* pc, int pcpos)
         build.beginBlock(next);
 }
 
+void translateInstJumpXIsa(IrBuilder& build, const Instruction* pc, int pcpos)
+{
+    // Luau Classes (rfcx/classes.md): fused class.isinstance(value, class) test-and-branch. The class
+    // register is guaranteed by the compiler to hold a class, so no tag guard is needed here.
+    int ra = LUAU_INSN_A(*pc);
+    uint32_t aux = pc[1];
+    int classReg = aux & 0xff;
+    bool jumpIfInstance = (aux >> 31) != 0;
+
+    IrOp target = build.blockAtInst(pcpos + 1 + LUAU_INSN_D(*pc));
+    IrOp next = build.blockAtInst(pcpos + 2);
+
+    IrOp valueTag = build.inst(IrCmd::LOAD_TAG, build.vmReg(ra));
+    IrOp valuePtr = build.inst(IrCmd::LOAD_POINTER, build.vmReg(ra));
+    IrOp classPtr = build.inst(IrCmd::LOAD_POINTER, build.vmReg(classReg));
+
+    IrOp isInstance = build.inst(IrCmd::CLASS_ISINSTANCE, valueTag, valuePtr, classPtr);
+
+    build.inst(
+        IrCmd::JUMP_CMP_INT, isInstance, build.constInt(jumpIfInstance ? 1 : 0), build.cond(IrCondition::Equal), target, next
+    );
+
+    // Fallthrough in original bytecode is implicit, so we start next internal block here
+    if (build.isInternalBlock(next))
+        build.beginBlock(next);
+}
+
 void translateInstCheckSelfClass(IrBuilder& build, const Instruction* pc, int pcpos)
 {
     int selfReg = LUAU_INSN_A(*pc);

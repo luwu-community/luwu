@@ -693,6 +693,10 @@ void IrBuilder::translateInst(LuauOpcode op, const Instruction* pc, int i)
         translateInstCheckSelfClass(*this, pc, i);
         break;
 
+    case LOP_JUMPXISA:
+        translateInstJumpXIsa(*this, pc, i);
+        break;
+
     case LOP_CMPPROTO:
         translateInstCmpProto(*this, pc, i);
         break;

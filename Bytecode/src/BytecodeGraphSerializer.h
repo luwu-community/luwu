@@ -526,6 +526,12 @@ struct BytecodeGraphSerializer
             bcb.emitAux(static_cast<uint32_t>(getImmBool(insn, 1)) << 31 | getVmConstInputAux(insn, 3));
             break;
 
+        case LOP_JUMPXISA:
+            recordJump(insn, 2);
+            bcb.emitAD(insn.op, getRegInput(insn, 0), 0);
+            bcb.emitAux(static_cast<uint32_t>(getImmBool(insn, 1)) << 31 | getRegInput(insn, 3));
+            break;
+
         case LOP_IDIV:
             bcb.emitABC(LOP_IDIV, getRegister(insnOp), getRegInput(insn, 0), getRegInput(insn, 1));
             break;

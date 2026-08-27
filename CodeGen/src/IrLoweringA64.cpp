@@ -1898,6 +1898,24 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.cset(inst.regA64, ConditionA64::Equal);
         break;
     }
+    case IrCmd::CLASS_ISINSTANCE:
+    {
+        // result = (tag == object) && (value->lclass == class); the deref is guarded by the tag check
+        inst.regA64 = regs.allocReg(KindA64::w, index);
+        build.mov(inst.regA64, 0);
+
+        Label done;
+        build.cmp(regOp(OP_A(inst)), uint16_t(LUA_TOBJECT));
+        build.b(ConditionA64::NotEqual, done);
+
+        RegisterA64 temp = regs.allocTemp(KindA64::x);
+        build.ldr(temp, mem(regOp(OP_B(inst)), offsetof(LuauObject, lclass)));
+        build.cmp(temp, regOp(OP_C(inst)));
+        build.cset(inst.regA64, ConditionA64::Equal);
+
+        build.setLabel(done);
+        break;
+    }
     case IrCmd::TABLE_SETNUM:
     {
         // note: we need to call regOp before spill so that we don't do redundant reloads
