@@ -64,11 +64,9 @@ int luaopen_reflect(lua_State* L)
 
     registerAstDocument(L);
     registerAstNode(L);
-    registerAstLocal(L);
     registerAstLocation(L);
     registerCstNode(L);
     registerAstPosition(L);
-    registerAstComment(L);
     registerAstAux(L);
 
     // Module table

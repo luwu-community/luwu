@@ -34,6 +34,23 @@ void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, cons
     new (data) AstAuxData{doc, method};
 }
 
+void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, Luau::AstLocal* local)
+{
+    if (!local)
+    {
+        lua_pushnil(L);
+        return;
+    }
+    AstAuxData* data = static_cast<AstAuxData*>(lua_newuserdatataggedwithmetatable(L, sizeof(AstAuxData), TagAux));
+    new (data) AstAuxData{doc, local};
+}
+
+void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::Comment& comment)
+{
+    AstAuxData* data = static_cast<AstAuxData*>(lua_newuserdatataggedwithmetatable(L, sizeof(AstAuxData), TagAux));
+    new (data) AstAuxData{doc, comment};
+}
+
 AstAuxData& checkAstAux(lua_State* L, int idx)
 {
     if (lua_userdatatag(L, idx) != TagAux)
@@ -178,6 +195,79 @@ static int astAuxIndex(lua_State* L)
             return 1;
         }
     }
+    case Aux_Local:
+    {
+        Luau::AstLocal* local = handle.local;
+        switch (atom)
+        {
+        case ReflectAtom::Kind:
+            lua_pushstring(L, "AstLocal");
+            return 1;
+        case ReflectAtom::Name:
+            lua_pushstring(L, local->name.value);
+            return 1;
+        case ReflectAtom::Location:
+            pushLocation(L, doc, local->location);
+            return 1;
+        case ReflectAtom::Shadow:
+            pushAstAux(L, doc, local->shadow);
+            return 1;
+        case ReflectAtom::IsConst:
+            lua_pushboolean(L, local->isConst);
+            return 1;
+        case ReflectAtom::Depth:
+            lua_pushinteger(L, int(local->functionDepth));
+            return 1;
+        case ReflectAtom::Annotation:
+            pushAstNode(L, doc, local->annotation);
+            return 1;
+        default:
+            lua_pushnil(L);
+            return 1;
+        }
+    }
+    case Aux_Comment:
+    {
+        const auto& comment = handle.comment;
+        switch (atom)
+        {
+        case ReflectAtom::Kind:
+            lua_pushstring(L, "AstComment");
+            return 1;
+        case ReflectAtom::Type:
+        {
+            switch (comment.type)
+            {
+            case Luau::Lexeme::Comment:
+                lua_pushstring(L, "single");
+                break;
+            case Luau::Lexeme::BlockComment:
+                lua_pushstring(L, "block");
+                break;
+            case Luau::Lexeme::BrokenComment:
+                lua_pushstring(L, "broken");
+                break;
+            default:
+                lua_pushstring(L, "unknown");
+                break;
+            }
+            return 1;
+        }
+        case ReflectAtom::Location:
+            pushLocation(L, doc, comment.location);
+            return 1;
+        case ReflectAtom::Text:
+        {
+            LUAU_ASSERT(doc);
+            auto [startOff, endOff] = locationToOffsets(doc->lineOffsets, doc->source.size(), comment.location);
+            lua_pushlstring(L, doc->source.data() + startOff, endOff - startOff);
+            return 1;
+        }
+        default:
+            lua_pushnil(L);
+            return 1;
+        }
+    }
     }
 
     lua_pushnil(L);
@@ -204,15 +294,68 @@ static int astAuxToString(lua_State* L)
     case Aux_ClassMethod:
         lua_pushfstring(L, "AstAux(AstClassMethod: %s)", handle.classMethod.functionName.value);
         return 1;
+    case Aux_Local:
+        lua_pushfstring(L, "AstAux(AstLocal: %s)", handle.local->name.value ? handle.local->name.value : "");
+        return 1;
+    case Aux_Comment:
+    {
+        const auto& loc = handle.comment.location;
+        lua_pushfstring(L, "AstAux(AstComment: %d:%d - %d:%d)", loc.begin.line + 1, loc.begin.column + 1, loc.end.line + 1, loc.end.column + 1);
+        return 1;
+    }
     default:
         lua_pushstring(L, "AstAux(Unknown)");
         return 1;
     }
 }
 
+static int astAuxEq(lua_State* L)
+{
+    if (lua_userdatatag(L, 1) != TagAux || lua_userdatatag(L, 2) != TagAux)
+    {
+        lua_pushboolean(L, false);
+        return 1;
+    }
+    auto& a = checkAstAux(L, 1);
+    auto& b = checkAstAux(L, 2);
+    if (a.kind != b.kind || a.doc != b.doc)
+    {
+        lua_pushboolean(L, false);
+        return 1;
+    }
+
+    switch (a.kind)
+    {
+    case Aux_Local:
+        lua_pushboolean(L, a.local == b.local);
+        return 1;
+    case Aux_Comment:
+        lua_pushboolean(L, a.comment.location == b.comment.location && a.comment.type == b.comment.type);
+        return 1;
+    case Aux_TableProp:
+        lua_pushboolean(L, a.tableProp.location == b.tableProp.location && a.tableProp.name == b.tableProp.name);
+        return 1;
+    case Aux_TableIndexer:
+        lua_pushboolean(L, a.tableIndexer.location == b.tableIndexer.location);
+        return 1;
+    case Aux_DeclaredExternTypeProperty:
+        lua_pushboolean(L, a.declaredExternProp.location == b.declaredExternProp.location && a.declaredExternProp.name == b.declaredExternProp.name);
+        return 1;
+    case Aux_ClassProperty:
+        lua_pushboolean(L, a.classProp.name == b.classProp.name && a.classProp.ty == b.classProp.ty);
+        return 1;
+    case Aux_ClassMethod:
+        lua_pushboolean(L, a.classMethod.functionName == b.classMethod.functionName && a.classMethod.function == b.classMethod.function);
+        return 1;
+    default:
+        lua_pushboolean(L, false);
+        return 1;
+    }
+}
+
 void registerAstAux(lua_State* L)
 {
-    registerUserdataType(L, TagAux, "AstAux", astAuxDtor, astAuxIndex, astAuxToString);
+    registerUserdataType(L, TagAux, "AstAux", astAuxDtor, astAuxIndex, astAuxToString, astAuxEq);
 }
 
 } // namespace Luau

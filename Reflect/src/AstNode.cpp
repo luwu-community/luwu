@@ -228,7 +228,7 @@ static bool handleStatForMethods(lua_State* L, AstNodeData& handle, ReflectAtom 
     auto* n = static_cast<Luau::AstStatFor*>(handle.node);
     switch (atom)
     {
-    case ReflectAtom::Var:  { pushAstLocal(L, handle.doc, n->var); return true; }
+    case ReflectAtom::Var:  { pushAstAux(L, handle.doc, n->var); return true; }
     case ReflectAtom::From: { pushAstNode(L, handle.doc, n->from); return true; }
     case ReflectAtom::To:   { pushAstNode(L, handle.doc, n->to); return true; }
     case ReflectAtom::Step: { pushAstNode(L, handle.doc, n->step); return true; }
@@ -318,7 +318,7 @@ static bool handleStatLocalFunctionMethods(lua_State* L, AstNodeData& handle, Re
     auto* n = static_cast<Luau::AstStatLocalFunction*>(handle.node);
     switch (atom)
     {
-    case ReflectAtom::Name: { pushAstLocal(L, handle.doc, n->name); return true; }
+    case ReflectAtom::Name: { pushAstAux(L, handle.doc, n->name); return true; }
     case ReflectAtom::Func: { pushAstNode(L, handle.doc, n->func); return true; }
     default: return false;
     }
@@ -429,7 +429,7 @@ static bool handleStatClassMethods(lua_State* L, AstNodeData& handle, ReflectAto
     auto* n = static_cast<Luau::AstStatClass*>(handle.node);
     switch (atom)
     {
-    case ReflectAtom::Name: { pushAstLocal(L, handle.doc, n->name); return true; }
+    case ReflectAtom::Name: { pushAstAux(L, handle.doc, n->name); return true; }
     case ReflectAtom::Members:
     {
         lua_createtable(L, int(n->members.size), 0);
@@ -595,7 +595,7 @@ static bool handleExprLocalMethods(lua_State* L, AstNodeData& handle, ReflectAto
     auto* n = static_cast<Luau::AstExprLocal*>(handle.node);
     switch (atom)
     {
-    case ReflectAtom::Local: { pushAstLocal(L, handle.doc, n->local); return true; }
+    case ReflectAtom::Local: { pushAstAux(L, handle.doc, n->local); return true; }
     default: return false;
     }
 }

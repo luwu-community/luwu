@@ -21,6 +21,7 @@ export type AstLocation = {
 
 -- comment block
 export type AstComment = {
+    read kind: "AstComment",
     -- Comment, BlockComment, or BrokenComment
     read type: "single" | "block" | "broken" | "unknown",
     read location: AstLocation,
@@ -29,6 +30,7 @@ export type AstComment = {
 
 -- local variable definition/binding
 export type AstLocal = {
+    read kind: "AstLocal",
     read name: string,
     read location: AstLocation,
     -- Shadowed local variable if this declaration shadows a variable from an outer scope
@@ -113,6 +115,8 @@ export type AstAux =
     | AstDeclaredExternTypeProperty
     | AstClassProperty
     | AstClassMethod
+    | AstLocal
+    | AstComment
     | { read kind: string }
 
 -- CST for tableitem

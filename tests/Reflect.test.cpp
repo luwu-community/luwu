@@ -70,7 +70,8 @@ TEST_CASE("LazyAstTypeof")
         assert(val.category == "expr")
 
         local localItem = stat:vars()[1]
-        assert(typeof(localItem) == "AstLocal")
+        assert(typeof(localItem) == "AstAux")
+        assert(localItem.kind == "AstLocal")
         assert(localItem.name == "x")
 
         local loc = stat:location()
@@ -340,13 +341,15 @@ TEST_CASE("LazyAstComments")
         assert(#doc.comments == 2)
 
         local c1 = doc.comments[1]
-        assert(typeof(c1) == "AstComment")
+        assert(typeof(c1) == "AstAux")
+        assert(c1.kind == "AstComment")
         assert(c1.type == "single")
         assert(c1.location.beginLine == 1)
         assert(c1.text == "-- single comment")
 
         local c2 = doc.comments[2]
-        assert(typeof(c2) == "AstComment")
+        assert(typeof(c2) == "AstAux")
+        assert(c2.kind == "AstComment")
         assert(c2.type == "block")
         assert(c2.text == "--[[\nblock comment\n]]")
     )LUA";

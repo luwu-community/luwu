@@ -101,7 +101,7 @@ static int astDocIndex(lua_State* L)
             lua_createtable(L, int(doc->parseResult.commentLocations.size()), 0);
             for (size_t i = 0; i < doc->parseResult.commentLocations.size(); i++)
             {
-                pushAstComment(L, doc, doc->parseResult.commentLocations[i]);
+                pushAstAux(L, doc, doc->parseResult.commentLocations[i]);
                 lua_rawseti(L, -2, int(i + 1));
             }
         });

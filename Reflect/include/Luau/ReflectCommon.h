@@ -385,7 +385,7 @@ inline ReflectAtom resolveReflectAtom(int atomId, const char* str, size_t len)
 /**
  * Reserved userdata tags for AST/CST reflection objects.
  *
- * SAFETY: The use of reserved tags in this range (10-17) is safe: embedders are expected
+ * SAFETY: The use of reserved tags in this range (10-15) is safe: embedders are expected
  * to either dynamically query for available tags using `lua_findunuseduserdatatag` or
  * hardcode all reserved tags on their own. Raising the userdata tag limit is also an option.
  *
@@ -396,12 +396,10 @@ enum AstUserdataTag : int
 {
     TagDocument = 10,
     TagNode = 11,
-    TagLocal = 12,
-    TagLocation = 13,
-    TagCstNode = 14,
-    TagPosition = 15,
-    TagComment = 16,
-    TagAux = 17,
+    TagLocation = 12,
+    TagCstNode = 13,
+    TagPosition = 14,
+    TagAux = 15,
 };
 
 struct AstDocumentState
@@ -461,12 +459,6 @@ struct AstNodeData
     Luau::AstNode* node = nullptr;
 };
 
-struct AstLocalData
-{
-    std::shared_ptr<AstDocumentState> doc;
-    Luau::AstLocal* local = nullptr;
-};
-
 struct AstLocationData
 {
     std::shared_ptr<AstDocumentState> doc;
@@ -485,12 +477,6 @@ struct AstPositionData
     Luau::Position position;
 };
 
-struct AstCommentData
-{
-    std::shared_ptr<AstDocumentState> doc;
-    Luau::Comment comment;
-};
-
 enum AstAuxKind : uint8_t
 {
     Aux_TableProp,
@@ -498,6 +484,8 @@ enum AstAuxKind : uint8_t
     Aux_DeclaredExternTypeProperty,
     Aux_ClassProperty,
     Aux_ClassMethod,
+    Aux_Local,
+    Aux_Comment,
 };
 
 struct AstAuxData
@@ -511,6 +499,8 @@ struct AstAuxData
         Luau::AstDeclaredExternTypeProperty declaredExternProp;
         Luau::AstClassProperty classProp;
         Luau::AstClassMethod classMethod;
+        Luau::AstLocal* local;
+        Luau::Comment comment;
     };
 
     AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstTableProp& p)
@@ -548,6 +538,20 @@ struct AstAuxData
     {
     }
 
+    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, Luau::AstLocal* l)
+        : doc(doc)
+        , kind(Aux_Local)
+        , local(l)
+    {
+    }
+
+    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::Comment& c)
+        : doc(doc)
+        , kind(Aux_Comment)
+        , comment(c)
+    {
+    }
+
     ~AstAuxData() {}
 };
 
@@ -573,26 +577,24 @@ inline std::pair<size_t, size_t> locationToOffsets(const std::vector<size_t>& li
 // Push helpers
 void pushAstDocument(lua_State* L, std::shared_ptr<AstDocumentState> doc);
 void pushAstNode(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, Luau::AstNode* node);
-void pushAstLocal(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, Luau::AstLocal* local);
 void pushLocation(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::Location& loc);
 void pushCstNode(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::CstNode* node);
 void pushPosition(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::Position& pos);
 void pushPositionArray(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstArray<Luau::Position>& array);
-void pushAstComment(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::Comment& comment);
 void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstTableProp& prop);
 void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstTableIndexer& indexer);
 void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstDeclaredExternTypeProperty& prop);
 void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstClassProperty& prop);
 void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstClassMethod& method);
+void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, Luau::AstLocal* local);
+void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::Comment& comment);
 
 // Check helpers
 AstDocumentData& checkAstDocument(lua_State* L, int idx);
 AstNodeData& checkAstNode(lua_State* L, int idx);
-AstLocalData& checkAstLocal(lua_State* L, int idx);
 AstLocationData& checkAstLocation(lua_State* L, int idx);
 CstNodeData& checkCstNode(lua_State* L, int idx);
 AstPositionData& checkAstPosition(lua_State* L, int idx);
-AstCommentData& checkAstComment(lua_State* L, int idx);
 AstAuxData& checkAstAux(lua_State* L, int idx);
 
 // Array push helpers
@@ -612,7 +614,7 @@ inline void pushLocalArray(lua_State* L, const std::shared_ptr<AstDocumentState>
     lua_createtable(L, int(array.size), 0);
     for (size_t i = 0; i < array.size; i++)
     {
-        pushAstLocal(L, doc, array.data[i]);
+        pushAstAux(L, doc, array.data[i]);
         lua_rawseti(L, -2, int(i + 1));
     }
 }
@@ -837,11 +839,9 @@ inline void pushCachedValue(lua_State* L, Ref& cacheRef, const char* cacheKey, I
 // Module registration functions
 void registerAstDocument(lua_State* L);
 void registerAstNode(lua_State* L);
-void registerAstLocal(lua_State* L);
 void registerAstLocation(lua_State* L);
 void registerCstNode(lua_State* L);
 void registerAstPosition(lua_State* L);
-void registerAstComment(lua_State* L);
 void registerAstAux(lua_State* L);
 
 } // namespace Luau
