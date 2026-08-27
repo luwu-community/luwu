@@ -209,11 +209,17 @@ TEST_CASE("LazyAstErrors")
     lua_setglobal(L, "reflect");
 
     const char* script = R"LUA(
-        local doc = reflect.parse("local x = ")
+        local doc = reflect.parse("local x = \n-- a comment")
         assert(#doc.errors > 0)
         assert(doc.errors[1].message ~= nil)
         assert(doc.errors[1].location ~= nil)
-        assert(doc.errors[1].location.beginLine == 1)
+        assert(doc.errors[1].location.beginLine == 2)
+        assert(#doc.comments > 0)
+
+        -- Check cached table reference identity
+        assert(doc.errors == doc.errors)
+        assert(doc.comments == doc.comments)
+        assert(doc.lineOffsets == doc.lineOffsets)
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);

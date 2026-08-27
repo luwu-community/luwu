@@ -58,9 +58,40 @@ struct AstDocumentState
     }
 };
 
+struct Ref
+{
+    int ref = LUA_NOREF;
+
+    bool isValid() const
+    {
+        return ref != LUA_NOREF;
+    }
+
+    void create(lua_State* L, int idx)
+    {
+        release(L);
+        ref = lua_refpool(L, idx);
+    }
+
+    int get(lua_State* L) const
+    {
+        return lua_getrefpool(L, ref);
+    }
+
+    void release(lua_State* L)
+    {
+        if (ref != LUA_NOREF)
+        {
+            lua_unrefpool(L, ref);
+            ref = LUA_NOREF;
+        }
+    }
+};
+
 struct AstDocumentData
 {
     std::shared_ptr<AstDocumentState> doc;
+    Ref cacheRef;
 };
 
 struct AstNodeData
@@ -179,7 +210,7 @@ void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, cons
 void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstClassMethod& method);
 
 // Check helpers
-std::shared_ptr<AstDocumentState>& checkAstDocument(lua_State* L, int idx);
+AstDocumentData& checkAstDocument(lua_State* L, int idx);
 AstNodeData& checkAstNode(lua_State* L, int idx);
 AstLocalData& checkAstLocal(lua_State* L, int idx);
 AstLocationData& checkAstLocation(lua_State* L, int idx);
@@ -373,6 +404,35 @@ inline int pushUserdataMethod(lua_State* L, int tag, const char* name)
     lua_getfield(L, -1, name);
     lua_replace(L, -2);
     return 1;
+}
+
+// Push cached value using lua_refpool on demand
+template<typename InitFn>
+inline void pushCachedValue(lua_State* L, Ref& cacheRef, const char* cacheKey, InitFn&& init)
+{
+    if (!cacheRef.isValid())
+    {
+        lua_createtable(L, 0, 4);
+        cacheRef.create(L, -1);
+    }
+    else
+    {
+        cacheRef.get(L);
+    }
+
+    lua_getfield(L, -1, cacheKey);
+    if (!lua_isnil(L, -1))
+    {
+        lua_remove(L, -2);
+        return;
+    }
+
+    lua_pop(L, 1);
+    init(L);
+
+    lua_pushvalue(L, -1);
+    lua_setfield(L, -3, cacheKey);
+    lua_remove(L, -2);
 }
 
 // Module registration functions
