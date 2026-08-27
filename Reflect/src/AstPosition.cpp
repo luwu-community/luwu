@@ -75,9 +75,8 @@ static int astPositionIndex(lua_State* L)
     case Atom_Column: { lua_pushinteger(L, pos.column + 1); return 1; }
     case Atom_ComputedOffset:
     {
-        size_t off = 0;
-        if (doc && pos.line < doc->lineOffsets.size())
-            off = std::min(doc->lineOffsets[pos.line] + pos.column, doc->source.size());
+        LUAU_ASSERT(doc);
+        size_t off = positionToOffset(doc->lineOffsets, doc->source.size(), pos);
         lua_pushinteger(L, int(off));
         return 1;
     }
@@ -108,9 +107,32 @@ static int astPositionEq(lua_State* L)
     return 1;
 }
 
+static void dfgLine(lua_State* L, void* ud, void* res)
+{
+    auto* data = static_cast<AstPositionData*>(ud);
+    lua_userdatadirectfield_setnumber(res, double(data->position.line + 1));
+}
+
+static void dfgColumn(lua_State* L, void* ud, void* res)
+{
+    auto* data = static_cast<AstPositionData*>(ud);
+    lua_userdatadirectfield_setnumber(res, double(data->position.column + 1));
+}
+
+static void dfgComputedOffset(lua_State* L, void* ud, void* res)
+{
+    auto* data = static_cast<AstPositionData*>(ud);
+    LUAU_ASSERT(data->doc);
+    size_t off = positionToOffset(data->doc->lineOffsets, data->doc->source.size(), data->position);
+    lua_userdatadirectfield_setnumber(res, double(off));
+}
+
 void registerAstPosition(lua_State* L)
 {
     registerUserdataType(L, TagPosition, "AstPosition", astPositionDtor, astPositionIndex, astPositionToString, astPositionEq);
+    lua_registeruserdatadirectfieldget(L, TagPosition, "line", dfgLine);
+    lua_registeruserdatadirectfieldget(L, TagPosition, "column", dfgColumn);
+    lua_registeruserdatadirectfieldget(L, TagPosition, "computedOffset", dfgComputedOffset);
 }
 
 } // namespace Luau

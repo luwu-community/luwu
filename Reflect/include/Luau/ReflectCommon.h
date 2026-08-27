@@ -192,7 +192,22 @@ struct AstAuxData
 
 // Line and location offset utilities (adapted from lute)
 std::vector<size_t> computeLineOffsets(std::string_view content);
-std::pair<size_t, size_t> locationToOffsets(const std::vector<size_t>& lineOffsets, size_t sourceLen, const Luau::Location& loc);
+
+inline size_t positionToOffset(const std::vector<size_t>& lineOffsets, size_t sourceLen, const Luau::Position& pos)
+{
+    if (pos.line < lineOffsets.size())
+        return std::min(lineOffsets[pos.line] + pos.column, sourceLen);
+    return 0;
+}
+
+inline std::pair<size_t, size_t> locationToOffsets(const std::vector<size_t>& lineOffsets, size_t sourceLen, const Luau::Location& loc)
+{
+    size_t start = positionToOffset(lineOffsets, sourceLen, loc.begin);
+    size_t end = positionToOffset(lineOffsets, sourceLen, loc.end);
+    if (end < start)
+        end = start;
+    return {start, end};
+}
 
 // Push helpers
 void pushAstDocument(lua_State* L, std::shared_ptr<AstDocumentState> doc);

@@ -56,19 +56,6 @@ std::vector<size_t> computeLineOffsets(std::string_view content)
     return result;
 }
 
-std::pair<size_t, size_t> locationToOffsets(const std::vector<size_t>& lineOffsets, size_t sourceLen, const Luau::Location& loc)
-{
-    size_t start = 0;
-    if (loc.begin.line < lineOffsets.size())
-        start = std::min(lineOffsets[loc.begin.line] + loc.begin.column, sourceLen);
-    size_t end = start;
-    if (loc.end.line < lineOffsets.size())
-        end = std::min(lineOffsets[loc.end.line] + loc.end.column, sourceLen);
-    if (end < start)
-        end = start;
-    return {start, end};
-}
-
 void pushLocation(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::Location& loc)
 {
     AstLocationData* data = static_cast<AstLocationData*>(lua_newuserdatataggedwithmetatable(L, sizeof(AstLocationData), TagLocation));
@@ -104,18 +91,21 @@ static int astLocationIndex(lua_State* L)
     case Atom_EndColumn:   { lua_pushinteger(L, loc.end.column + 1); return 1; }
     case Atom_StartOffset:
     {
+        LUAU_ASSERT(doc);
         auto [startOff, endOff] = locationToOffsets(doc->lineOffsets, doc->source.size(), loc);
         lua_pushinteger(L, int(startOff));
         return 1;
     }
     case Atom_EndOffset:
     {
+        LUAU_ASSERT(doc);
         auto [startOff, endOff] = locationToOffsets(doc->lineOffsets, doc->source.size(), loc);
         lua_pushinteger(L, int(endOff));
         return 1;
     }
     case Atom_Text:
     {
+        LUAU_ASSERT(doc);
         auto [startOff, endOff] = locationToOffsets(doc->lineOffsets, doc->source.size(), loc);
         lua_pushlstring(L, doc->source.data() + startOff, endOff - startOff);
         return 1;
@@ -147,9 +137,55 @@ static int astLocationEq(lua_State* L)
     return 1;
 }
 
+static void dfgBeginLine(lua_State* L, void* ud, void* res)
+{
+    auto* data = static_cast<AstLocationData*>(ud);
+    lua_userdatadirectfield_setnumber(res, double(data->location.begin.line + 1));
+}
+
+static void dfgBeginColumn(lua_State* L, void* ud, void* res)
+{
+    auto* data = static_cast<AstLocationData*>(ud);
+    lua_userdatadirectfield_setnumber(res, double(data->location.begin.column + 1));
+}
+
+static void dfgEndLine(lua_State* L, void* ud, void* res)
+{
+    auto* data = static_cast<AstLocationData*>(ud);
+    lua_userdatadirectfield_setnumber(res, double(data->location.end.line + 1));
+}
+
+static void dfgEndColumn(lua_State* L, void* ud, void* res)
+{
+    auto* data = static_cast<AstLocationData*>(ud);
+    lua_userdatadirectfield_setnumber(res, double(data->location.end.column + 1));
+}
+
+static void dfgStartOffset(lua_State* L, void* ud, void* res)
+{
+    auto* data = static_cast<AstLocationData*>(ud);
+    LUAU_ASSERT(data->doc);
+    auto [startOff, endOff] = locationToOffsets(data->doc->lineOffsets, data->doc->source.size(), data->location);
+    lua_userdatadirectfield_setnumber(res, double(startOff));
+}
+
+static void dfgEndOffset(lua_State* L, void* ud, void* res)
+{
+    auto* data = static_cast<AstLocationData*>(ud);
+    LUAU_ASSERT(data->doc);
+    auto [startOff, endOff] = locationToOffsets(data->doc->lineOffsets, data->doc->source.size(), data->location);
+    lua_userdatadirectfield_setnumber(res, double(endOff));
+}
+
 void registerAstLocation(lua_State* L)
 {
     registerUserdataType(L, TagLocation, "AstLocation", astLocationDtor, astLocationIndex, astLocationToString, astLocationEq);
+    lua_registeruserdatadirectfieldget(L, TagLocation, "beginLine", dfgBeginLine);
+    lua_registeruserdatadirectfieldget(L, TagLocation, "beginColumn", dfgBeginColumn);
+    lua_registeruserdatadirectfieldget(L, TagLocation, "endLine", dfgEndLine);
+    lua_registeruserdatadirectfieldget(L, TagLocation, "endColumn", dfgEndColumn);
+    lua_registeruserdatadirectfieldget(L, TagLocation, "startOffset", dfgStartOffset);
+    lua_registeruserdatadirectfieldget(L, TagLocation, "endOffset", dfgEndOffset);
 }
 
 } // namespace Luau

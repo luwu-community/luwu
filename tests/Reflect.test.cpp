@@ -2,6 +2,7 @@
 #include "Luau/Reflect.h"
 #include "Luau/ReflectCommon.h"
 
+#include "ScopedFlags.h"
 #include "doctest.h"
 #include "lua.h"
 #include "lualib.h"
@@ -9,6 +10,8 @@
 
 #include <memory>
 #include <cstring>
+
+LUAU_FASTFLAG(LuauDirectFieldGet)
 
 static int dostring(lua_State* L, const char* code)
 {
@@ -34,6 +37,8 @@ TEST_SUITE_BEGIN("Reflect");
 
 TEST_CASE("LazyAstTypeof")
 {
+    ScopedFastFlag sff{FFlag::LuauDirectFieldGet, true};
+
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
     luaL_openlibs(L);
@@ -76,6 +81,8 @@ TEST_CASE("LazyAstTypeof")
 
 TEST_CASE("LazyAstProperties")
 {
+    ScopedFastFlag sff{FFlag::LuauDirectFieldGet, true};
+
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
     luaL_openlibs(L);
@@ -122,6 +129,8 @@ TEST_CASE("LazyAstProperties")
 
 TEST_CASE("LazyAstChildrenAndWalk")
 {
+    ScopedFastFlag sff{FFlag::LuauDirectFieldGet, true};
+
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
     luaL_openlibs(L);
@@ -169,6 +178,8 @@ TEST_CASE("LazyAstChildrenAndWalk")
 
 TEST_CASE("LazyAstParseExpr")
 {
+    ScopedFastFlag sff{FFlag::LuauDirectFieldGet, true};
+
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
     luaL_openlibs(L);
@@ -201,6 +212,8 @@ TEST_CASE("LazyAstParseExpr")
 
 TEST_CASE("LazyAstErrors")
 {
+    ScopedFastFlag sff{FFlag::LuauDirectFieldGet, true};
+
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
     luaL_openlibs(L);
@@ -227,6 +240,8 @@ TEST_CASE("LazyAstErrors")
 
 TEST_CASE("LazyCstData")
 {
+    ScopedFastFlag sff{FFlag::LuauDirectFieldGet, true};
+
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
     luaL_openlibs(L);
@@ -287,6 +302,8 @@ TEST_CASE("LazyCstData")
 
 TEST_CASE("LazyAstComments")
 {
+    ScopedFastFlag sff{FFlag::LuauDirectFieldGet, true};
+
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
     luaL_openlibs(L);
@@ -315,6 +332,8 @@ TEST_CASE("LazyAstComments")
 
 TEST_CASE("LazyAstTableItems")
 {
+    ScopedFastFlag sff{FFlag::LuauDirectFieldGet, true};
+
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
     luaL_openlibs(L);
@@ -371,6 +390,8 @@ TEST_CASE("LazyAstTableItems")
 
 TEST_CASE("AstTypeTableAndAstAux")
 {
+    ScopedFastFlag sff{FFlag::LuauDirectFieldGet, true};
+
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
     luaL_openlibs(L);
@@ -420,6 +441,42 @@ TEST_CASE("AstTypeTableAndAstAux")
         assert(indexer.indexType.name == "string")
         assert(indexer.resultType.kind == "AstTypeReference")
         assert(indexer.resultType.name == "boolean")
+    )LUA";
+
+    CHECK_EQ(dostring(L, script), 0);
+}
+
+TEST_CASE("TestFields")
+{
+    ScopedFastFlag sff{FFlag::LuauDirectFieldGet, true};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    Luau::luaopen_reflect(L);
+    lua_setglobal(L, "reflect");
+
+    const char* script = R"LUA(
+        local doc = reflect.parse("local a = 1\nfoo(1, 2)")
+        local stat1 = doc.root.body[1]
+        local loc = stat1.location
+
+        -- Test direct field access on AstLocation
+        assert(loc.beginLine == 1)
+        assert(loc.beginColumn == 1)
+        assert(loc.endLine == 1)
+        assert(loc.endColumn == 12)
+        assert(loc.startOffset == 0)
+        assert(loc.endOffset == 11)
+        assert(loc.text == "local a = 1")
+
+        -- Test direct field access on AstPosition
+        local call = doc.root.body[2].expr
+        local pos = call.cst.openParens
+        assert(pos.line == 2)
+        assert(pos.column == 4)
+        assert(pos.computedOffset == 15)
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);
