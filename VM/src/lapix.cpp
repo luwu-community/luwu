@@ -71,7 +71,7 @@ int lua_findunuseduserdatatag(lua_State *L)
 {
     global_State* global = L->global;
 
-    for (int tag = 0; tag < LUA_UTAG_LIMIT; tag++)
+    for (int tag = 0; tag < LUA_UTAG_RESERVED_START; tag++)
     {
         if (!global->udatamt[tag] && !global->udatagc[tag] && !global->udatadirectfields[tag])
             return tag;
@@ -84,7 +84,7 @@ int lua_findunusedlightuserdatatag(lua_State *L)
 {
     global_State* global = L->global;
 
-    for (int tag = 0; tag < LUA_LUTAG_LIMIT; tag++)
+    for (int tag = 0; tag < LUA_LUTAG_RESERVED_START; tag++)
     {
         if (!global->lightuserdataname[tag])
             return tag;

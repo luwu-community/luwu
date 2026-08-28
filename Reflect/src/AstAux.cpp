@@ -36,9 +36,9 @@ static int astAuxIndex(lua_State* L)
     {
     case ReflectAtom::Id:
         if (handle.kind == Aux_Local)
-            lua_pushlightuserdatatagged(L, (void*)handle.local, TagAux);
+            lua_pushlightuserdatatagged(L, (void*)handle.local, TagId);
         else
-            lua_pushlightuserdatatagged(L, (void*)&handle, TagAux);
+            lua_pushlightuserdatatagged(L, (void*)&handle, TagId);
         return 1;
 
     case ReflectAtom::Kind:

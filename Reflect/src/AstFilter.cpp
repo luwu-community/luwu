@@ -92,7 +92,7 @@ static int astFilterIndex(lua_State* L)
     switch (atom)
     {
     case ReflectAtom::Id:
-        lua_pushlightuserdatatagged(L, (void*)&handle, TagFilter);
+        lua_pushlightuserdatatagged(L, (void*)&handle, TagId);
         return 1;
 
     case ReflectAtom::Kind:

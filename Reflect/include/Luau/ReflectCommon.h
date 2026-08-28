@@ -242,22 +242,23 @@ inline ReflectAtom resolveReflectAtom(int atomId, const char* str, size_t len)
 /**
  * Reserved userdata tags for AST/CST reflection objects.
  *
- * SAFETY: The use of reserved tags in this range (10-15) is safe: embedders are expected
- * to either dynamically query for available tags using `lua_findunuseduserdatatag` or
- * hardcode all reserved tags on their own. Raising the userdata tag limit is also an option.
- *
- * `TagAux` acts as a catch-all tag for auxillary structures to avoid
- * bloating the tags needed by Reflect 
+ * SAFETY: Uses the Luwu internal reserved tag range [LUA_UTAG_RESERVED_START..LUA_UTAG_RESERVED_END],
+ * keeping public tags [0..LUA_UTAG_RESERVED_START-1] completely free for embedder use.
  */
 enum AstUserdataTag : int
 {
-    TagDocument = 10,
-    TagNode = 11,
-    TagLocation = 12,
-    TagCstNode = 13,
-    TagPosition = 14,
-    TagAux = 15,
-    TagFilter = 16,
+    TagDocument = LUA_INTERNAL_UTAG(0),
+    TagNode     = LUA_INTERNAL_UTAG(1),
+    TagLocation = LUA_INTERNAL_UTAG(2),
+    TagCstNode  = LUA_INTERNAL_UTAG(3),
+    TagPosition = LUA_INTERNAL_UTAG(4),
+    TagAux      = LUA_INTERNAL_UTAG(5),
+    TagFilter   = LUA_INTERNAL_UTAG(6),
+};
+
+enum AstLightUserdataTag : int
+{
+    TagId       = LUA_INTERNAL_LUTAG(0),
 };
 
 enum class NodeCategory : uint8_t
@@ -777,7 +778,7 @@ inline int pushCachedUserdataMethod(lua_State* L, int tag, const char* name, lua
             lua_pushstring(L, getCategoryFunc(handle.node)); \
             return 1; \
         case ReflectAtom::Id: \
-            lua_pushlightuserdatatagged(L, (void*)handle.node, TagValue); \
+            lua_pushlightuserdatatagged(L, (void*)handle.node, TagId); \
             return 1; \
         default: \
             break; \

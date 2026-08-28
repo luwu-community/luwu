@@ -5062,6 +5062,12 @@ TEST_CASE("lua_findunuseduserdatatag")
 
     int available = lua_findunuseduserdatatag(L);
     CHECK_EQ(available, 3);
+
+    // Consume all remaining public tags up to LUA_UTAG_RESERVED_START
+    for (int tag = 3; tag < LUA_UTAG_RESERVED_START; tag++)
+        lua_setuserdatadtor(L, tag, [](lua_State*, void*){});
+
+    CHECK_EQ(lua_findunuseduserdatatag(L), -1);
 }
 
 TEST_CASE("lua_findlightuserdatatag")
@@ -5073,6 +5079,12 @@ TEST_CASE("lua_findlightuserdatatag")
 
     int available = lua_findunusedlightuserdatatag(L);
     CHECK_EQ(available, 1);
+
+    // Consume all remaining public lightuserdata tags up to LUA_LUTAG_RESERVED_START
+    for (int tag = 1; tag < LUA_LUTAG_RESERVED_START; tag++)
+        lua_setlightuserdataname(L, tag, "reserved");
+
+    CHECK_EQ(lua_findunusedlightuserdatatag(L), -1);
 }
 
 struct StateChangeTestState

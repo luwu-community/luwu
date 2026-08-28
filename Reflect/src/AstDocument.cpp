@@ -87,7 +87,7 @@ static int astDocIndex(lua_State* L)
 
     switch (atom)
     {
-    case ReflectAtom::Id:          lua_pushlightuserdatatagged(L, (void*)handle.doc.get(), TagDocument); return 1;
+    case ReflectAtom::Id:          lua_pushlightuserdatatagged(L, (void*)handle.doc.get(), TagId); return 1;
     case ReflectAtom::Root:        return pushUserdataMethod(L, TagDocument, "root");
     case ReflectAtom::Source:      return pushUserdataMethod(L, TagDocument, "source");
     case ReflectAtom::Walk:        return pushUserdataMethod(L, TagDocument, "walk");

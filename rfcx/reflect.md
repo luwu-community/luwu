@@ -27,9 +27,33 @@ Root of document: `AstDocument` userdata
 AST nodes: `AstNode`
 Walkable type: `AstDocument | AstNode`
 
+## Misc changes
+
+As reflect is the first internal lib in Luwu making use of userdata, this RFC also implements a reserved userdata/lightuserdata tagging system for these internal libs to be freely loadable by embedders by raising the default userdata tag limit by 16 to 144 (from 128). These tags (from `LUA_UTAG_RESERVED_START` to `LUA_UTAG_RESERVED_END`) can freely be used internally by Luwu to implement things like reflect (as well as any potential stdlib we may want to expose in Luwu).
+
 ### Node Walking
 
-All walkable types will have a `T:walk(visitFn, filter?)` where `filter` is an optional `AstFilter` that allows for directly filtering out nodes in C++ side itself.
+All walkable types will have a `T:walk(visitFn, filter?)` where `filter` is an optional `AstFilter` that allows for directly filtering out nodes in C++ side itself. If `visitFn` returns `true`, then `walk` will descend into the nodes children. If `visitFn` returns `false`, then all children of the node will be skipped. Finally, if `visitFn` errors, then the walk function will finisj by going up the tree and error. The default behaviour of `walk` outside of these 3 cases is to fail-open and always descend into children (AKA, default behavior is `return true`)
+
+### Node Filtering
+
+`AstFilter` is provided as a builtin immutable filter. Once created (which may be of unspecified time complexity), all matches performed with the `AstFilter` is guaranteed to be `O(1)` time complexity. Filters are constructed with the `reflect.filter` function and may be of the following forms:
+
+```lua
+-- Single node kind
+local callFilter = reflect.filter("AstExprCall")
+
+-- Entire category ("stat" | "expr" | "type" | "typePack" | "generic" | "attr")
+local statFilter = reflect.filter("stat")
+
+-- Multi-kind filter via variadic arguments
+local declFilter = reflect.filter("AstStatLocal", "AstStatLocalFunction", "AstStatTypeAlias")
+
+-- Multi-kind filter via array tables
+local loopFilter = reflect.filter({ "AstStatWhile", "AstStatFor", "AstStatForIn", "AstStatRepeat" })
+```
+
+An `AstFilter` can then match against a node with the `AstFilter:match(node)` method which returns either `true` or `false` for a given node.
 
 ## Prior art
 
