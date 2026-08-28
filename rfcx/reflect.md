@@ -21,7 +21,9 @@ Before discussing the design of `reflect`, there are a few things that this RFC 
 
 ## Design
 
-TODO: Write this section once design is finalized, right now, these are just draft notes
+A new library called `Reflect` will be added to Luwu. This library is fully optional and must be explicitly opened by the embedder with `luaopen_reflect` to use it.
+
+TODO: Write this section once initial design is finalized, right now, these are just draft notes
 
 Root of document: `AstDocument` userdata
 AST nodes: `AstNode`

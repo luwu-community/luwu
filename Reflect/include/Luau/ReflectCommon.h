@@ -105,8 +105,81 @@ namespace Luau
     ATOM(IsMissing, "isMissing") \
     ATOM(Types, "types") \
     ATOM(TailType, "tailType") \
+    ATOM(TypeList, "typeList") \
     ATOM(VariadicType, "variadicType") \
     ATOM(Params, "params") \
+    \
+    /* AstNode Setters */ \
+    ATOM(SetBody, "setBody") \
+    ATOM(SetCondition, "setCondition") \
+    ATOM(SetThenBody, "setThenBody") \
+    ATOM(SetElseBody, "setElseBody") \
+    ATOM(SetList, "setList") \
+    ATOM(SetExpr, "setExpr") \
+    ATOM(SetVars, "setVars") \
+    ATOM(SetValues, "setValues") \
+    ATOM(SetVar, "setVar") \
+    ATOM(SetFrom, "setFrom") \
+    ATOM(SetTo, "setTo") \
+    ATOM(SetStep, "setStep") \
+    ATOM(SetValue, "setValue") \
+    ATOM(SetUpvalue, "setUpvalue") \
+    ATOM(SetLocal, "setLocal") \
+    ATOM(SetName, "setName") \
+    ATOM(SetSelf, "setSelf") \
+    ATOM(SetFunc, "setFunc") \
+    ATOM(SetArgs, "setArgs") \
+    ATOM(SetIndex, "setIndex") \
+    ATOM(SetLeft, "setLeft") \
+    ATOM(SetRight, "setRight") \
+    ATOM(SetAnnotation, "setAnnotation") \
+    ATOM(SetHasElse, "setHasElse") \
+    ATOM(SetHasDo, "setHasDo") \
+    ATOM(SetHasIn, "setHasIn") \
+    ATOM(SetHasEnd, "setHasEnd") \
+    ATOM(SetIsConst, "setIsConst") \
+    ATOM(SetExported, "setExported") \
+    ATOM(SetTrueExpr, "setTrueExpr") \
+    ATOM(SetFalseExpr, "setFalseExpr") \
+    ATOM(SetHasErrors, "setHasErrors") \
+    ATOM(SetGenerics, "setGenerics") \
+    ATOM(SetGenericPacks, "setGenericPacks") \
+    ATOM(SetParams, "setParams") \
+    ATOM(SetReturnTypes, "setReturnTypes") \
+    ATOM(SetAttributes, "setAttributes") \
+    ATOM(SetSuperName, "setSuperName") \
+    ATOM(SetProps, "setProps") \
+    ATOM(SetIndexer, "setIndexer") \
+    ATOM(SetMembers, "setMembers") \
+    ATOM(SetTypeArguments, "setTypeArguments") \
+    ATOM(SetDebugName, "setDebugName") \
+    ATOM(SetVararg, "setVararg") \
+    ATOM(SetReturnAnnotation, "setReturnAnnotation") \
+    ATOM(SetStrings, "setStrings") \
+    ATOM(SetExpressions, "setExpressions") \
+    ATOM(SetItems, "setItems") \
+    ATOM(SetPrefix, "setPrefix") \
+    ATOM(SetHasParameterList, "setHasParameterList") \
+    ATOM(SetParameters, "setParameters") \
+    ATOM(SetArgTypes, "setArgTypes") \
+    ATOM(SetType, "setType") \
+    ATOM(SetTypes, "setTypes") \
+    ATOM(SetTailType, "setTailType") \
+    ATOM(SetTypeList, "setTypeList") \
+    ATOM(SetVariadicType, "setVariadicType") \
+    ATOM(SetOp, "setOp") \
+    ATOM(SetQuoteStyle, "setQuoteStyle") \
+    ATOM(SetLocation, "setLocation") \
+    ATOM(SetHasSemicolon, "setHasSemicolon") \
+    ATOM(SetShadow, "setShadow") \
+    ATOM(SetDepth, "setDepth") \
+    ATOM(SetAccess, "setAccess") \
+    ATOM(SetIndexType, "setIndexType") \
+    ATOM(SetResultType, "setResultType") \
+    ATOM(SetIsMethod, "setIsMethod") \
+    ATOM(SetText, "setText") \
+    ATOM(SetKey, "setKey") \
+    ATOM(SetKind, "setKind") \
     \
     /* CstNode */ \
     ATOM(HasAt, "hasAt") \
@@ -372,6 +445,7 @@ enum AstAuxKind : uint8_t
     Aux_Comment,
     Aux_TableItem,
     Aux_CstTableItem,
+    Aux_TypeList,
 };
 
 struct AstAuxData
@@ -389,6 +463,7 @@ struct AstAuxData
         Luau::Comment comment;
         Luau::AstExprTable::Item tableItem;
         Luau::CstExprTable::Item cstTableItem;
+        Luau::AstTypeList typeList;
     };
 
     AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstTableProp& p)
@@ -451,6 +526,13 @@ struct AstAuxData
         : doc(doc)
         , kind(Aux_CstTableItem)
         , cstTableItem(item)
+    {
+    }
+
+    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstTypeList& tl)
+        : doc(doc)
+        , kind(Aux_TypeList)
+        , typeList(tl)
     {
     }
 
@@ -567,21 +649,6 @@ inline void pushTypeOrPackArray(lua_State* L, const std::shared_ptr<AstDocumentS
     pushArray(L, array.size, [&](size_t i) {
         pushTypeOrPack(L, doc, array.data[i]);
     });
-}
-
-inline const char* tableAccessToString(Luau::AstTableAccess access)
-{
-    switch (access)
-    {
-    case Luau::AstTableAccess::Read:
-        return "read";
-    case Luau::AstTableAccess::Write:
-        return "write";
-    case Luau::AstTableAccess::ReadWrite:
-        return "readwrite";
-    default:
-        return "unknown";
-    }
 }
 
 // Node Kind Lookup

@@ -689,6 +689,7 @@ if(TARGET Luau.Reflect)
     target_sources(Luau.Reflect PRIVATE
         Reflect/include/Luau/Reflect.h
         Reflect/include/Luau/ReflectCommon.h
+        Reflect/include/Luau/ReflectAstHandler.h
         Reflect/src/Reflect.cpp
         Reflect/src/AstDocument.cpp
         Reflect/src/AstNode.cpp

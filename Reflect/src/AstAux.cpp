@@ -1,5 +1,6 @@
 // This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/ReflectCommon.h"
+#include "Luau/ReflectAstHandler.h"
 
 namespace Luau
 {
@@ -24,9 +25,182 @@ const char* getAstAuxKind(const AstAuxData& handle)
             return "record";
         return "general";
     case Aux_CstTableItem:               return "CstTableItem";
+    case Aux_TypeList:                   return "AstTypeList";
     }
     return "unknown";
 }
+
+static bool handleAuxTableProp(lua_State* L, AstAuxData& handle, ReflectAtom atom)
+{
+    auto& n = handle.tableProp;
+    switch (atom)
+    {
+    LUAU_AUX_FIELD_RW(Name, SetName, n.name)
+    LUAU_AUX_FIELD_RW(Location, SetLocation, n.location)
+    LUAU_AUX_FIELD_RW(Type, SetType, n.type)
+    LUAU_AUX_FIELD_RW(Access, SetAccess, n.access)
+    default: return false;
+    }
+}
+
+static bool handleAuxTableIndexer(lua_State* L, AstAuxData& handle, ReflectAtom atom)
+{
+    auto& n = handle.tableIndexer;
+    switch (atom)
+    {
+    LUAU_AUX_FIELD_RW(Location, SetLocation, n.location)
+    LUAU_AUX_FIELD_RW(IndexType, SetIndexType, n.indexType)
+    LUAU_AUX_FIELD_RW(ResultType, SetResultType, n.resultType)
+    LUAU_AUX_FIELD_RW(Access, SetAccess, n.access)
+    default: return false;
+    }
+}
+
+static bool handleAuxDeclaredExternProp(lua_State* L, AstAuxData& handle, ReflectAtom atom)
+{
+    auto& n = handle.declaredExternProp;
+    switch (atom)
+    {
+    LUAU_AUX_FIELD_RW(Name, SetName, n.name)
+    LUAU_AUX_FIELD_RW(Location, SetLocation, n.location)
+    LUAU_AUX_FIELD_RW(Type, SetType, n.ty)
+    LUAU_AUX_FIELD_RW(IsMethod, SetIsMethod, n.isMethod)
+    LUAU_AUX_FIELD_RW(Access, SetAccess, n.access)
+    default: return false;
+    }
+}
+
+static bool handleAuxClassProperty(lua_State* L, AstAuxData& handle, ReflectAtom atom)
+{
+    auto& n = handle.classProp;
+    switch (atom)
+    {
+    LUAU_AUX_FIELD_RW(Name, SetName, n.name)
+    LUAU_AUX_FIELD_RW(Type, SetType, n.ty)
+    default: return false;
+    }
+}
+
+static bool handleAuxClassMethod(lua_State* L, AstAuxData& handle, ReflectAtom atom)
+{
+    auto& n = handle.classMethod;
+    switch (atom)
+    {
+    LUAU_AUX_FIELD_RW(Name, SetName, n.functionName)
+    LUAU_AUX_FIELD_RW(Func, SetFunc, n.function)
+    default: return false;
+    }
+}
+
+static bool handleAuxLocal(lua_State* L, AstAuxData& handle, ReflectAtom atom)
+{
+    auto* n = handle.local;
+    switch (atom)
+    {
+    LUAU_AUX_FIELD_RW(Name, SetName, n->name)
+    LUAU_AUX_FIELD_RW(Location, SetLocation, n->location)
+    LUAU_AUX_FIELD_RW(Shadow, SetShadow, n->shadow)
+    LUAU_AUX_FIELD_RW(IsConst, SetIsConst, n->isConst)
+    LUAU_AUX_FIELD_RW(Depth, SetDepth, n->functionDepth)
+    LUAU_AUX_FIELD_RW(Annotation, SetAnnotation, n->annotation)
+    default: return false;
+    }
+}
+
+static bool handleAuxComment(lua_State* L, AstAuxData& handle, ReflectAtom atom)
+{
+    auto& n = handle.comment;
+    switch (atom)
+    {
+    LUAU_AUX_FIELD_RW(Location, SetLocation, n.location)
+    case ReflectAtom::Type:
+        switch (n.type)
+        {
+        case Luau::Lexeme::Comment:       lua_pushstring(L, "single"); return true;
+        case Luau::Lexeme::BlockComment:  lua_pushstring(L, "block"); return true;
+        case Luau::Lexeme::BrokenComment: lua_pushstring(L, "broken"); return true;
+        default:                          lua_pushstring(L, "unknown"); return true;
+        }
+    case ReflectAtom::Text:
+    {
+        LUAU_ASSERT(handle.doc);
+        auto [startOff, endOff] = locationToOffsets(handle.doc->lineOffsets, handle.doc->source.size(), n.location);
+        lua_pushlstring(L, handle.doc->source.data() + startOff, endOff - startOff);
+        return true;
+    }
+    default: return false;
+    }
+}
+
+static bool handleAuxTableItem(lua_State* L, AstAuxData& handle, ReflectAtom atom)
+{
+    auto& n = handle.tableItem;
+    switch (atom)
+    {
+    LUAU_AUX_FIELD_RW(Key, SetKey, n.key)
+    LUAU_AUX_FIELD_RW(Value, SetValue, n.value)
+    LUAU_AUX_FIELD_RW(Kind, SetKind, n.kind)
+    default: return false;
+    }
+}
+
+static bool handleAuxTypeList(lua_State* L, AstAuxData& handle, ReflectAtom atom)
+{
+    auto& n = handle.typeList;
+    switch (atom)
+    {
+    LUAU_AUX_FIELD_RW(Types, SetTypes, n.types)
+    LUAU_AUX_FIELD_RW(TailType, SetTailType, n.tailType)
+    default: return false;
+    }
+}
+
+static bool handleAuxCstTableItem(lua_State* L, AstAuxData& handle, ReflectAtom atom)
+{
+    auto& n = handle.cstTableItem;
+    switch (atom)
+    {
+    LUAU_AUX_FIELD_RO(IndexerOpenPosition, n.indexerOpenPosition)
+    LUAU_AUX_FIELD_RO(IndexerClosePosition, n.indexerClosePosition)
+    LUAU_AUX_FIELD_RO(EqualsPosition, n.equalsPosition)
+    LUAU_AUX_FIELD_RO(SeparatorPosition, n.separatorPosition)
+    case ReflectAtom::Separator:
+        if (n.separator == Luau::CstExprTable::Separator::Comma)
+            lua_pushstring(L, "comma");
+        else if (n.separator == Luau::CstExprTable::Separator::Semicolon)
+            lua_pushstring(L, "semicolon");
+        else
+            lua_pushstring(L, "missing");
+        return true;
+    default: return false;
+    }
+}
+
+static int dispatchAstAuxMethod(lua_State* L, AstAuxData& handle, ReflectAtom atom, const char* str, size_t len)
+{
+    bool ok = false;
+    switch (handle.kind)
+    {
+    case Aux_TableProp:                  ok = handleAuxTableProp(L, handle, atom); break;
+    case Aux_TableIndexer:               ok = handleAuxTableIndexer(L, handle, atom); break;
+    case Aux_DeclaredExternTypeProperty: ok = handleAuxDeclaredExternProp(L, handle, atom); break;
+    case Aux_ClassProperty:              ok = handleAuxClassProperty(L, handle, atom); break;
+    case Aux_ClassMethod:                ok = handleAuxClassMethod(L, handle, atom); break;
+    case Aux_Local:                      ok = handleAuxLocal(L, handle, atom); break;
+    case Aux_Comment:                    ok = handleAuxComment(L, handle, atom); break;
+    case Aux_TableItem:                  ok = handleAuxTableItem(L, handle, atom); break;
+    case Aux_TypeList:                   ok = handleAuxTypeList(L, handle, atom); break;
+    case Aux_CstTableItem:               ok = handleAuxCstTableItem(L, handle, atom); break;
+    }
+
+    if (ok)
+        return 1;
+
+    luaL_error(L, "%.*s is not a valid method of %s", int(len), str, getAstAuxKind(handle));
+}
+
+LUAU_REFLECT_METHOD_TRAMPOLINE(astAuxMethodTrampoline, checkAstAux, dispatchAstAuxMethod)
+LUAU_REFLECT_NAMECALL(astAuxNamecall, checkAstAux, dispatchAstAuxMethod)
 
 static int astAuxIndex(lua_State* L)
 {
@@ -45,199 +219,12 @@ static int astAuxIndex(lua_State* L)
         lua_pushstring(L, getAstAuxKind(handle));
         return 1;
 
-    case ReflectAtom::Name:
-        switch (handle.kind)
-        {
-        case Aux_TableProp:                  lua_pushstring(L, handle.tableProp.name.value); return 1;
-        case Aux_DeclaredExternTypeProperty: lua_pushstring(L, handle.declaredExternProp.name.value); return 1;
-        case Aux_ClassProperty:              lua_pushstring(L, handle.classProp.name.value); return 1;
-        case Aux_ClassMethod:                lua_pushstring(L, handle.classMethod.functionName.value); return 1;
-        case Aux_Local:                      lua_pushstring(L, handle.local->name.value); return 1;
-        default: break;
-        }
-        break;
-
-    case ReflectAtom::Location:
-        switch (handle.kind)
-        {
-        case Aux_TableProp:                  pushLocation(L, doc, handle.tableProp.location); return 1;
-        case Aux_TableIndexer:               pushLocation(L, doc, handle.tableIndexer.location); return 1;
-        case Aux_DeclaredExternTypeProperty: pushLocation(L, doc, handle.declaredExternProp.location); return 1;
-        case Aux_Local:                      pushLocation(L, doc, handle.local->location); return 1;
-        case Aux_Comment:                    pushLocation(L, doc, handle.comment.location); return 1;
-        default: break;
-        }
-        break;
-
-    case ReflectAtom::Type:
-        switch (handle.kind)
-        {
-        case Aux_TableProp:                  pushAstNode(L, doc, handle.tableProp.type); return 1;
-        case Aux_DeclaredExternTypeProperty: pushAstNode(L, doc, handle.declaredExternProp.ty); return 1;
-        case Aux_ClassProperty:              pushAstNode(L, doc, handle.classProp.ty); return 1;
-        case Aux_Comment:
-            switch (handle.comment.type)
-            {
-            case Luau::Lexeme::Comment:       lua_pushstring(L, "single"); return 1;
-            case Luau::Lexeme::BlockComment:  lua_pushstring(L, "block"); return 1;
-            case Luau::Lexeme::BrokenComment: lua_pushstring(L, "broken"); return 1;
-            default:                          lua_pushstring(L, "unknown"); return 1;
-            }
-        default: break;
-        }
-        break;
-
-    case ReflectAtom::Access:
-        switch (handle.kind)
-        {
-        case Aux_TableProp:                  lua_pushstring(L, tableAccessToString(handle.tableProp.access)); return 1;
-        case Aux_TableIndexer:               lua_pushstring(L, tableAccessToString(handle.tableIndexer.access)); return 1;
-        case Aux_DeclaredExternTypeProperty: lua_pushstring(L, tableAccessToString(handle.declaredExternProp.access)); return 1;
-        default: break;
-        }
-        break;
-
-    case ReflectAtom::IndexType:
-        if (handle.kind == Aux_TableIndexer)
-        {
-            pushAstNode(L, doc, handle.tableIndexer.indexType);
-            return 1;
-        }
-        break;
-
-    case ReflectAtom::ResultType:
-        if (handle.kind == Aux_TableIndexer)
-        {
-            pushAstNode(L, doc, handle.tableIndexer.resultType);
-            return 1;
-        }
-        break;
-
-    case ReflectAtom::IsMethod:
-        if (handle.kind == Aux_DeclaredExternTypeProperty)
-        {
-            lua_pushboolean(L, handle.declaredExternProp.isMethod);
-            return 1;
-        }
-        break;
-
-    case ReflectAtom::Func:
-        if (handle.kind == Aux_ClassMethod)
-        {
-            pushAstNode(L, doc, handle.classMethod.function);
-            return 1;
-        }
-        break;
-
-    case ReflectAtom::Shadow:
-        if (handle.kind == Aux_Local)
-        {
-            pushAstAux(L, doc, handle.local->shadow);
-            return 1;
-        }
-        break;
-
-    case ReflectAtom::IsConst:
-        if (handle.kind == Aux_Local)
-        {
-            lua_pushboolean(L, handle.local->isConst);
-            return 1;
-        }
-        break;
-
-    case ReflectAtom::Depth:
-        if (handle.kind == Aux_Local)
-        {
-            lua_pushinteger(L, int(handle.local->functionDepth));
-            return 1;
-        }
-        break;
-
-    case ReflectAtom::Annotation:
-        if (handle.kind == Aux_Local)
-        {
-            pushAstNode(L, doc, handle.local->annotation);
-            return 1;
-        }
-        break;
-
-    case ReflectAtom::Text:
-        if (handle.kind == Aux_Comment)
-        {
-            LUAU_ASSERT(doc);
-            auto [startOff, endOff] = locationToOffsets(doc->lineOffsets, doc->source.size(), handle.comment.location);
-            lua_pushlstring(L, doc->source.data() + startOff, endOff - startOff);
-            return 1;
-        }
-        break;
-
-    case ReflectAtom::Key:
-        if (handle.kind == Aux_TableItem)
-        {
-            if (handle.tableItem.key)
-                pushAstNode(L, doc, handle.tableItem.key);
-            else
-                lua_pushnil(L);
-            return 1;
-        }
-        break;
-
-    case ReflectAtom::Value:
-        if (handle.kind == Aux_TableItem)
-        {
-            pushAstNode(L, doc, handle.tableItem.value);
-            return 1;
-        }
-        break;
-
-    case ReflectAtom::IndexerOpenPosition:
-        if (handle.kind == Aux_CstTableItem)
-        {
-            pushPosition(L, doc, handle.cstTableItem.indexerOpenPosition);
-            return 1;
-        }
-        break;
-
-    case ReflectAtom::IndexerClosePosition:
-        if (handle.kind == Aux_CstTableItem)
-        {
-            pushPosition(L, doc, handle.cstTableItem.indexerClosePosition);
-            return 1;
-        }
-        break;
-
-    case ReflectAtom::EqualsPosition:
-        if (handle.kind == Aux_CstTableItem)
-        {
-            pushPosition(L, doc, handle.cstTableItem.equalsPosition);
-            return 1;
-        }
-        break;
-
-    case ReflectAtom::SeparatorPosition:
-        if (handle.kind == Aux_CstTableItem)
-        {
-            pushPosition(L, doc, handle.cstTableItem.separatorPosition);
-            return 1;
-        }
-        break;
-
-    case ReflectAtom::Separator:
-        if (handle.kind == Aux_CstTableItem)
-        {
-            if (handle.cstTableItem.separator == Luau::CstExprTable::Separator::Comma)
-                lua_pushstring(L, "comma");
-            else if (handle.cstTableItem.separator == Luau::CstExprTable::Separator::Semicolon)
-                lua_pushstring(L, "semicolon");
-            else
-                lua_pushstring(L, "missing");
-            return 1;
-        }
-        break;
-
     default:
         break;
     }
+
+    if (atom != ReflectAtom::Unknown)
+        return pushCachedUserdataMethod(L, TagAux, keyStr, astAuxMethodTrampoline);
 
     lua_pushnil(L);
     return 1;
@@ -277,8 +264,7 @@ static int astAuxToString(lua_State* L)
 
 void registerAstAux(lua_State* L)
 {
-    // eq for astaux are not actually implemented in parser so reflect also does not attempt to provide any support for it
-    registerUserdataType(L, TagAux, "AstAux", astAuxDtor, astAuxIndex, astAuxToString, nullptr);
+    registerUserdataType(L, TagAux, "AstAux", astAuxDtor, astAuxIndex, astAuxToString, nullptr, nullptr, astAuxNamecall);
 }
 
 } // namespace Luau

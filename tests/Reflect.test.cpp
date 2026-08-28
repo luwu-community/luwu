@@ -72,7 +72,7 @@ TEST_CASE("LazyAstTypeof")
         local localItem = stat:vars()[1]
         assert(typeof(localItem) == "AstAux")
         assert(localItem.kind == "AstLocal")
-        assert(localItem.name == "x")
+        assert(localItem:name() == "x")
 
         local loc = stat:location()
         assert(typeof(loc) == "AstLocation")
@@ -170,8 +170,8 @@ TEST_CASE("LazyAstChildrenAndWalk")
             table.insert(locals, node)
         end, reflect.filter("AstStatLocal"))
         assert(#locals == 2)
-        assert(locals[1]:vars()[1].name == "a")
-        assert(locals[2]:vars()[1].name == "b")
+        assert(locals[1]:vars()[1]:name() == "a")
+        assert(locals[2]:vars()[1]:name() == "b")
 
         -- Test node:walk with filter
         local nodeLocals = {}
@@ -179,8 +179,8 @@ TEST_CASE("LazyAstChildrenAndWalk")
             table.insert(nodeLocals, node)
         end, reflect.filter("AstStatLocal"))
         assert(#nodeLocals == 2)
-        assert(nodeLocals[1]:vars()[1].name == "a")
-        assert(nodeLocals[2]:vars()[1].name == "b")
+        assert(nodeLocals[1]:vars()[1]:name() == "a")
+        assert(nodeLocals[2]:vars()[1]:name() == "b")
 
         local returns = {}
         root:walk(function(node)
@@ -363,15 +363,15 @@ TEST_CASE("LazyAstComments")
         local c1 = comments[1]
         assert(typeof(c1) == "AstAux")
         assert(c1.kind == "AstComment")
-        assert(c1.type == "single")
-        assert(c1.location.beginLine == 1)
-        assert(c1.text == "-- single comment")
+        assert(c1:type() == "single")
+        assert(c1:location().beginLine == 1)
+        assert(c1:text() == "-- single comment")
 
         local c2 = comments[2]
         assert(typeof(c2) == "AstAux")
         assert(c2.kind == "AstComment")
-        assert(c2.type == "block")
-        assert(c2.text == "--[[\nblock comment\n]]")
+        assert(c2:type() == "block")
+        assert(c2:text() == "--[[\nblock comment\n]]")
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);
@@ -411,29 +411,29 @@ TEST_CASE("LazyAstTableItems")
         local item1 = items[1]
         assert(typeof(item1) == "AstAux")
         assert(item1.kind == "list")
-        assert(item1.key == nil)
-        assert(item1.value.kind == "AstExprConstantString")
-        assert(item1.value:value() == "hello")
+        assert(item1:key() == nil)
+        assert(item1:value().kind == "AstExprConstantString")
+        assert(item1:value():value() == "hello")
 
         -- Record item
         local item2 = items[2]
         assert(typeof(item2) == "AstAux")
         assert(item2.kind == "record")
-        assert(item2.key ~= nil)
-        assert(item2.key.kind == "AstExprConstantString")
-        assert(item2.key:value() == "foo")
-        assert(item2.value.kind == "AstExprConstantInteger" or item2.value.kind == "AstExprConstantNumber")
-        assert(item2.value:value() == 123)
+        assert(item2:key() ~= nil)
+        assert(item2:key().kind == "AstExprConstantString")
+        assert(item2:key():value() == "foo")
+        assert(item2:value().kind == "AstExprConstantInteger" or item2:value().kind == "AstExprConstantNumber")
+        assert(item2:value():value() == 123)
 
         -- General item
         local item3 = items[3]
         assert(typeof(item3) == "AstAux")
         assert(item3.kind == "general")
-        assert(item3.key ~= nil)
-        assert(item3.key.kind == "AstExprBinary")
-        assert(item3.key:op() == "..")
-        assert(item3.value.kind == "AstExprConstantBool")
-        assert(item3.value:value() == true)
+        assert(item3:key() ~= nil)
+        assert(item3:key().kind == "AstExprBinary")
+        assert(item3:key():op() == "..")
+        assert(item3:value().kind == "AstExprConstantBool")
+        assert(item3:value():value() == true)
 
         -- CST table items
         local tableCst = tableExpr:cst()
@@ -443,8 +443,8 @@ TEST_CASE("LazyAstTableItems")
         assert(typeof(cstItems[1]) == "AstAux")
         assert(typeof(cstItems[2]) == "AstAux")
         assert(typeof(cstItems[3]) == "AstAux")
-        assert(cstItems[2].equalsPosition ~= nil)
-        assert(cstItems[3].indexerOpenPosition ~= nil)
+        assert(cstItems[2]:equalsPosition() ~= nil)
+        assert(cstItems[3]:indexerOpenPosition() ~= nil)
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);
@@ -484,26 +484,26 @@ TEST_CASE("AstTypeTableAndAstAux")
 
         local prop1 = props[1]
         assert(prop1.kind == "AstTableProp")
-        assert(prop1.name == "foo")
-        assert(prop1.access == "read")
-        assert(prop1.type.kind == "AstTypeReference")
-        assert(prop1.type:name() == "string")
+        assert(prop1:name() == "foo")
+        assert(prop1:access() == "read")
+        assert(prop1:type().kind == "AstTypeReference")
+        assert(prop1:type():name() == "string")
 
         local prop2 = props[2]
         assert(prop2.kind == "AstTableProp")
-        assert(prop2.name == "bar")
-        assert(prop2.access == "readwrite")
-        assert(prop2.type.kind == "AstTypeReference")
-        assert(prop2.type:name() == "number")
+        assert(prop2:name() == "bar")
+        assert(prop2:access() == "readwrite")
+        assert(prop2:type().kind == "AstTypeReference")
+        assert(prop2:type():name() == "number")
 
         local indexer = ty:indexer()
         assert(indexer ~= nil)
         assert(indexer.kind == "AstTableIndexer")
-        assert(indexer.access == "readwrite")
-        assert(indexer.indexType.kind == "AstTypeReference")
-        assert(indexer.indexType:name() == "string")
-        assert(indexer.resultType.kind == "AstTypeReference")
-        assert(indexer.resultType:name() == "boolean")
+        assert(indexer:access() == "readwrite")
+        assert(indexer:indexType().kind == "AstTypeReference")
+        assert(indexer:indexType():name() == "string")
+        assert(indexer:resultType().kind == "AstTypeReference")
+        assert(indexer:resultType():name() == "boolean")
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);
@@ -622,9 +622,9 @@ TEST_CASE("ReflectUseAtoms")
         local comments = doc:comments()
         assert(#comments == 1)
         local c = comments[1]
-        assert(c.type == "single")
-        assert(c.text == "-- hello")
-        assert(c.location.beginLine == 1)
+        assert(c:type() == "single")
+        assert(c:text() == "-- hello")
+        assert(c:location().beginLine == 1)
         assert(c[123] == nil)
 
         -- Test root & statements
@@ -639,8 +639,8 @@ TEST_CASE("ReflectUseAtoms")
         local vars = stat1:vars()
         assert(#vars == 1)
         local var = vars[1]
-        assert(var.name == "x")
-        assert(var.isConst == false)
+        assert(var:name() == "x")
+        assert(var:isConst() == false)
         assert(var[99] == nil)
 
         local vals = stat1:values()
@@ -859,6 +859,173 @@ TEST_CASE("ReflectAstFilter")
 
         local ok3, err3 = pcall(reflect.filter, 123)
         assert(not ok3)
+    )LUA";
+
+    CHECK_EQ(dostring(L, script), 0);
+}
+
+TEST_CASE("ReflectAstMutations")
+{
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
+    ScopedFastFlag sff3{FFlag::OptLuwuReflectUseAtoms, true};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    Luau::luaopen_reflect(L);
+    lua_setglobal(L, "reflect");
+
+    const char* script = R"LUA(
+        local src = "if x then a() else b() end\nlocal num = 10\nwhile cond do work() end\nlocal bin = 1 + 2\n"
+        local doc = reflect.parse(src)
+        local root = doc:root()
+        local stats = root:body()
+
+        -- Test AstStatIf mutations and chaining
+        local ifStat = stats[1]
+        assert(ifStat.kind == "AstStatIf")
+        local newCond = stats[2]:values()[1] -- number 10 expr
+        assert(ifStat:setCondition(newCond) == ifStat)
+        assert(ifStat:condition() == newCond)
+
+        -- Test AstStatWhile mutations and chaining
+        local whileStat = stats[3]
+        assert(whileStat.kind == "AstStatWhile")
+        assert(whileStat:hasDo() == true)
+        assert(whileStat:setHasDo(false):setCondition(newCond) == whileStat)
+        assert(whileStat:hasDo() == false)
+        assert(whileStat:condition() == newCond)
+
+        -- Test AstExprBinary mutations
+        local binStat = stats[4]
+        local binExpr = binStat:vars()[1] -- local bin
+        local binVal = binStat:values()[1] -- 1 + 2
+        assert(binVal.kind == "AstExprBinary")
+        local left = binVal:left()
+        local right = binVal:right()
+        assert(left.kind == "AstExprConstantNumber")
+        assert(left:value() == 1)
+        assert(left:setValue(99) == left)
+        assert(left:value() == 99)
+
+        -- Swap left and right on binary expr
+        assert(binVal:setLeft(right):setRight(left) == binVal)
+        assert(binVal:left() == right)
+        assert(binVal:right() == left)
+
+        -- Test AstStatLocal isConst and exported
+        local locStat = stats[2]
+        assert(locStat:isConst() == false)
+        assert(locStat:setIsConst(true):setExported(true) == locStat)
+        assert(locStat:isConst() == true)
+        assert(locStat:exported() == true)
+
+        -- Test subtype mismatch raises error
+        local okBad, errBad = pcall(function()
+            ifStat:setCondition(locStat) -- locStat is an AstStat, not an AstExpr!
+        end)
+        assert(not okBad)
+
+        local okBad2, errBad2 = pcall(function()
+            ifStat:setThenBody(binVal) -- binVal is an AstExpr, not an AstStatBlock!
+        end)
+        assert(not okBad2)
+
+        -- Test compound assign, function, type alias, string quote style, and attribute mutations
+        local src2 = [[
+            x += 1
+            function foo(a: number): string return "hello" end
+            type MyType = number
+            @native
+            local function bar() end
+            local tbl = { k = 1 }
+        ]]
+        local doc2 = reflect.parse(src2)
+        local stats2 = doc2:root():body()
+
+        -- AstStatCompoundAssign
+        local compStat = stats2[1]
+        assert(compStat.kind == "AstStatCompoundAssign")
+        assert(compStat:op() == "+")
+        assert(compStat:setOp("-") == compStat)
+        assert(compStat:op() == "-")
+
+        -- AstStatFunction
+        local fnStat = stats2[2]
+        assert(fnStat.kind == "AstStatFunction")
+        local fnExpr = fnStat:func()
+        assert(fnExpr.kind == "AstExprFunction")
+        assert(fnExpr:setVararg(true):setDebugName("newName") == fnExpr)
+        assert(fnExpr:vararg() == true)
+        assert(fnExpr:debugname() == "newName")
+
+        -- AstStatTypeAlias
+        local aliasStat = stats2[3]
+        assert(aliasStat.kind == "AstStatTypeAlias")
+        assert(aliasStat:name() == "MyType")
+        assert(aliasStat:setName("CustomType"):setExported(true) == aliasStat)
+        assert(aliasStat:name() == "CustomType")
+        assert(aliasStat:exported() == true)
+
+        -- AstStatLocalFunction & AstAttr
+        local locFnStat = stats2[4]
+        assert(locFnStat.kind == "AstStatLocalFunction")
+        assert(locFnStat:setIsConst(true) == locFnStat)
+        assert(locFnStat:isConst() == true)
+        local locFnExpr = locFnStat:func()
+        local attrs = locFnExpr:attributes()
+        assert(#attrs == 1)
+        local attr = attrs[1]
+        assert(attr.kind == "AstAttr")
+        assert(attr:type() == "native")
+        assert(attr:setType("checked"):setName("newAttr") == attr)
+        assert(attr:type() == "checked")
+        assert(attr:name() == "newAttr")
+
+        -- AstExprTable & AstTableItem mutations
+        local tblStat = stats2[5]
+        local tblExpr = tblStat:values()[1]
+        assert(tblExpr.kind == "AstExprTable")
+        local items = tblExpr:items()
+        assert(#items == 1)
+        local itm = items[1]
+        assert(itm.kind == "record")
+        assert(itm:setKind("list"):setValue(tblStat:values()[1]) == itm)
+        assert(itm:kind() == "list")
+        assert(tblExpr:setItems({}) == tblExpr)
+        assert(#tblExpr:items() == 0)
+        assert(tblExpr:setItems(items) == tblExpr)
+        assert(#tblExpr:items() == 1)
+
+        -- AstLocal mutations
+        local locVar = tblStat:vars()[1] -- local tbl
+        assert(locVar:name() == "tbl")
+        assert(locVar:setName("myTbl"):setIsConst(true):setDepth(4) == locVar)
+        assert(locVar:name() == "myTbl")
+        assert(locVar:isConst() == true)
+        assert(tostring(locVar:depth()) == "4")
+
+        -- AstNode base metadata (setLocation, setHasSemicolon)
+        local origLoc = tblStat:location()
+        assert(tblStat:setHasSemicolon(true) == tblStat)
+        assert(tblStat:hasSemicolon() == true)
+        assert(tblStat:setLocation(origLoc) == tblStat)
+
+        -- AstTableProp and AstTableIndexer mutations
+        local doc3 = reflect.parse("type T = { read foo: string, [number]: boolean }")
+        local tyTable = doc3:root():body()[1]:type()
+        local tprop = tyTable:props()[1]
+        assert(tprop:name() == "foo")
+        assert(tprop:setName("bar"):setAccess("write") == tprop)
+        assert(tprop:name() == "bar")
+        assert(tprop:access() == "write")
+
+        local tindexer = tyTable:indexer()
+        assert(tindexer:access() == "readwrite")
+        assert(tindexer:setAccess("read") == tindexer)
+        assert(tindexer:access() == "read")
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);
