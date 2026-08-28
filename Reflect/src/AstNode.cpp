@@ -340,15 +340,10 @@ LUAU_AST_HANDLER_END()
 
 LUAU_AST_HANDLER_START(handleExprTableMethods, AstExprTable)
     case ReflectAtom::Items:
-    {
-        lua_createtable(L, int(n->items.size), 0);
-        for (size_t i = 0; i < n->items.size; i++)
-        {
+        pushArray(L, n->items.size, [&](size_t i) {
             pushAstAux(L, handle.doc, n->items.data[i]);
-            lua_rawseti(L, -2, int(i + 1));
-        }
+        });
         return true;
-    }
 LUAU_AST_HANDLER_END()
 
 LUAU_AST_HANDLER_START(handleExprUnaryMethods, AstExprUnary)
@@ -596,13 +591,9 @@ static int astNodeChildren(lua_State* L)
     auto& handle = checkAstNode(L, 1);
     DirectChildCollector collector;
     handle.node->visit(&collector);
-
-    lua_createtable(L, int(collector.children.size()), 0);
-    for (size_t i = 0; i < collector.children.size(); i++)
-    {
+    pushArray(L, collector.children.size(), [&](size_t i) {
         pushAstNode(L, handle.doc, collector.children[i]);
-        lua_rawseti(L, -2, int(i + 1));
-    }
+    });
     return 1;
 }
 
@@ -660,18 +651,7 @@ static int astNodeFind(lua_State* L)
     auto& handle = checkAstNode(L, 1);
     size_t len = 0;
     const char* kindStr = luaL_checklstring(L, 2, &len);
-    std::string_view kind(kindStr, len);
-
-    FindKindVisitor visitor(kind);
-    if (handle.node)
-        handle.node->visit(&visitor);
-
-    lua_createtable(L, int(visitor.matches.size()), 0);
-    for (size_t i = 0; i < visitor.matches.size(); i++)
-    {
-        pushAstNode(L, handle.doc, visitor.matches[i]);
-        lua_rawseti(L, -2, int(i + 1));
-    }
+    findNodesByKind(L, handle.doc, handle.node, std::string_view(kindStr, len));
     return 1;
 }
 

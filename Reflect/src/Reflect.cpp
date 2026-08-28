@@ -73,6 +73,13 @@ int luaopen_reflect(lua_State* L)
     registerAstPosition(L);
     registerAstAux(L);
 
+    lua_setlightuserdataname(L, TagDocument, "Id");
+    lua_setlightuserdataname(L, TagNode, "Id");
+    lua_setlightuserdataname(L, TagLocation, "Id");
+    lua_setlightuserdataname(L, TagCstNode, "Id");
+    lua_setlightuserdataname(L, TagPosition, "Id");
+    lua_setlightuserdataname(L, TagAux, "Id");
+
     // Module table
     lua_createtable(L, 0, 2);
     lua_pushcfunction(L, reflectParse, "parse");

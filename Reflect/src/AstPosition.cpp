@@ -15,16 +15,6 @@ void pushPosition(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, co
     new (data) AstPositionData{doc, pos};
 }
 
-void pushPositionArray(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstArray<Luau::Position>& array)
-{
-    lua_createtable(L, int(array.size), 0);
-    for (size_t i = 0; i < array.size; i++)
-    {
-        pushPosition(L, doc, array.data[i]);
-        lua_rawseti(L, -2, int(i + 1));
-    }
-}
-
 LUAU_REFLECT_DEFINE_USERDATA_BASIC(checkAstPosition, astPositionDtor, AstPositionData, TagPosition, "AstPosition")
 
 static int astPositionIndex(lua_State* L)

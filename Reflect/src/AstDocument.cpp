@@ -45,21 +45,9 @@ static int astDocWalk(lua_State* L)
 static int astDocFind(lua_State* L)
 {
     auto& handle = checkAstDocument(L, 1);
-    auto& doc = handle.doc;
     size_t len = 0;
     const char* kindStr = luaL_checklstring(L, 2, &len);
-    std::string_view kind(kindStr, len);
-
-    FindKindVisitor visitor(kind);
-    if (doc->parseResult.root)
-        doc->parseResult.root->visit(&visitor);
-
-    lua_createtable(L, int(visitor.matches.size()), 0);
-    for (size_t i = 0; i < visitor.matches.size(); i++)
-    {
-        pushAstNode(L, doc, visitor.matches[i]);
-        lua_rawseti(L, -2, int(i + 1));
-    }
+    findNodesByKind(L, handle.doc, handle.doc->parseResult.root, std::string_view(kindStr, len));
     return 1;
 }
 
@@ -67,12 +55,10 @@ static int astDocComments(lua_State* L)
 {
     auto& handle = checkAstDocument(L, 1);
     auto& doc = handle.doc;
-    lua_createtable(L, int(doc->parseResult.commentLocations.size()), 0);
-    for (size_t i = 0; i < doc->parseResult.commentLocations.size(); i++)
-    {
-        pushAstAux(L, doc, doc->parseResult.commentLocations[i]);
-        lua_rawseti(L, -2, int(i + 1));
-    }
+    const auto& comments = doc->parseResult.commentLocations;
+    pushArray(L, comments.size(), [&](size_t i) {
+        pushAstAux(L, doc, comments[i]);
+    });
     return 1;
 }
 
@@ -80,18 +66,15 @@ static int astDocErrors(lua_State* L)
 {
     auto& handle = checkAstDocument(L, 1);
     auto& doc = handle.doc;
-    lua_createtable(L, int(doc->parseResult.errors.size()), 0);
-    for (size_t i = 0; i < doc->parseResult.errors.size(); i++)
-    {
-        const auto& err = doc->parseResult.errors[i];
+    const auto& errors = doc->parseResult.errors;
+    pushArray(L, errors.size(), [&](size_t i) {
+        const auto& err = errors[i];
         lua_createtable(L, 0, 2);
         lua_pushstring(L, err.getMessage().c_str());
         lua_setfield(L, -2, "message");
         pushLocation(L, doc, err.getLocation());
         lua_setfield(L, -2, "location");
-
-        lua_rawseti(L, -2, int(i + 1));
-    }
+    });
     return 1;
 }
 
@@ -99,12 +82,9 @@ static int astDocLineOffsets(lua_State* L)
 {
     auto& handle = checkAstDocument(L, 1);
     auto& doc = handle.doc;
-    lua_createtable(L, int(doc->lineOffsets.size()), 0);
-    for (size_t i = 0; i < doc->lineOffsets.size(); i++)
-    {
+    pushArray(L, doc->lineOffsets.size(), [&](size_t i) {
         lua_pushinteger(L, int(doc->lineOffsets[i]));
-        lua_rawseti(L, -2, int(i + 1));
-    }
+    });
     return 1;
 }
 
@@ -114,6 +94,7 @@ static int astDocIndex(lua_State* L)
 
     switch (atom)
     {
+    case ReflectAtom::Id:          lua_pushlightuserdatatagged(L, (void*)handle.doc.get(), TagDocument); return 1;
     case ReflectAtom::Root:        return pushUserdataMethod(L, TagDocument, "root");
     case ReflectAtom::Source:      return pushUserdataMethod(L, TagDocument, "source");
     case ReflectAtom::Walk:        return pushUserdataMethod(L, TagDocument, "walk");

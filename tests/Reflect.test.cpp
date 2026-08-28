@@ -671,4 +671,55 @@ TEST_CASE("ReflectUseAtoms")
     CHECK_EQ(dostring(L, script), 0);
 }
 
+TEST_CASE("ReflectUserdataId")
+{
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
+    ScopedFastFlag sff3{FFlag::OptLuwuReflectUseAtoms, true};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    Luau::luaopen_reflect(L);
+    lua_setglobal(L, "reflect");
+
+    const char* script = R"LUA(
+        local doc = reflect.parse("local a = 1; local b = 2", true)
+        assert(doc.id ~= nil)
+        assert(typeof(doc.id) == "Id")
+
+        local root = doc:root()
+        local stats1 = root:body()
+        local stats2 = root:body()
+
+        local statA1 = stats1[1]
+        local statA2 = stats2[1]
+        local statB1 = stats1[2]
+
+        -- Verify that different userdata materializations of the same node have identical .id
+        assert(statA1.id ~= nil)
+        assert(typeof(statA1.id) == "Id")
+        assert(statA1.id == statA2.id)
+
+        -- Distinct nodes have distinct IDs
+        assert(statA1.id ~= statB1.id)
+
+        -- Verify lightuserdata can be used as table key and hashes identically across materializations
+        local visited = {}
+        visited[statA1.id] = "first_statement"
+        visited[statB1.id] = "second_statement"
+        assert(visited[statA2.id] == "first_statement")
+
+        -- Verify CST node IDs
+        local cstA1 = statA1:cst()
+        local cstA2 = statA2:cst()
+        assert(cstA1.id ~= nil)
+        assert(typeof(cstA1.id) == "Id")
+        assert(cstA1.id == cstA2.id)
+    )LUA";
+
+    CHECK_EQ(dostring(L, script), 0);
+}
+
 TEST_SUITE_END();

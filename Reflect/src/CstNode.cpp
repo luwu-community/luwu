@@ -116,15 +116,10 @@ LUAU_CST_HANDLER_END()
 
 LUAU_CST_HANDLER_START(handleCstExprTableMethods, CstExprTable)
     case ReflectAtom::Items:
-    {
-        lua_createtable(L, int(n->items.size), 0);
-        for (size_t i = 0; i < n->items.size; i++)
-        {
+        pushArray(L, n->items.size, [&](size_t i) {
             pushAstAux(L, handle.doc, n->items.data[i]);
-            lua_rawseti(L, -2, int(i + 1));
-        }
+        });
         return true;
-    }
 LUAU_CST_HANDLER_END()
 
 LUAU_CST_HANDLER_START(handleCstExprOpMethods, CstExprOp)

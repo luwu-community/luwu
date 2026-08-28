@@ -27,6 +27,7 @@ namespace Luau
 
 #define LUAU_REFLECT_ATOMS \
     /* Common / shared */ \
+    ATOM(Id, "id") \
     ATOM(Kind, "kind") \
     ATOM(Location, "location") \
     ATOM(Text, "text") \
@@ -423,16 +424,24 @@ void pushAstNode(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, Lua
 void pushLocation(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::Location& loc);
 void pushCstNode(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::CstNode* node);
 void pushPosition(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::Position& pos);
-void pushPositionArray(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstArray<Luau::Position>& array);
-void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstTableProp& prop);
-void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstTableIndexer& indexer);
-void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstDeclaredExternTypeProperty& prop);
-void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstClassProperty& prop);
-void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstClassMethod& method);
-void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, Luau::AstLocal* local);
-void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::Comment& comment);
-void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstExprTable::Item& item);
-void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::CstExprTable::Item& item);
+
+template<typename T>
+inline void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const T& item)
+{
+    AstAuxData* data = static_cast<AstAuxData*>(lua_newuserdatataggedwithmetatable(L, sizeof(AstAuxData), TagAux));
+    new (data) AstAuxData{doc, item};
+}
+
+inline void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, Luau::AstLocal* local)
+{
+    if (!local)
+    {
+        lua_pushnil(L);
+        return;
+    }
+    AstAuxData* data = static_cast<AstAuxData*>(lua_newuserdatataggedwithmetatable(L, sizeof(AstAuxData), TagAux));
+    new (data) AstAuxData{doc, local};
+}
 
 // Check helpers
 AstDocumentData& checkAstDocument(lua_State* L, int idx);
@@ -442,26 +451,40 @@ CstNodeData& checkCstNode(lua_State* L, int idx);
 AstPositionData& checkAstPosition(lua_State* L, int idx);
 AstAuxData& checkAstAux(lua_State* L, int idx);
 
+const char* getAstAuxKind(const AstAuxData& handle);
+
 // Array push helpers
-template<typename T>
-inline void pushNodeArray(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstArray<T*>& array)
+template<typename F>
+inline void pushArray(lua_State* L, size_t size, F&& pushElem)
 {
-    lua_createtable(L, int(array.size), 0);
-    for (size_t i = 0; i < array.size; i++)
+    lua_createtable(L, int(size), 0);
+    for (size_t i = 0; i < size; i++)
     {
-        pushAstNode(L, doc, array.data[i]);
+        pushElem(i);
         lua_rawseti(L, -2, int(i + 1));
     }
 }
 
+inline void pushPositionArray(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstArray<Luau::Position>& array)
+{
+    pushArray(L, array.size, [&](size_t i) {
+        pushPosition(L, doc, array.data[i]);
+    });
+}
+
+template<typename T>
+inline void pushNodeArray(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstArray<T*>& array)
+{
+    pushArray(L, array.size, [&](size_t i) {
+        pushAstNode(L, doc, array.data[i]);
+    });
+}
+
 inline void pushLocalArray(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstArray<Luau::AstLocal*>& array)
 {
-    lua_createtable(L, int(array.size), 0);
-    for (size_t i = 0; i < array.size; i++)
-    {
+    pushArray(L, array.size, [&](size_t i) {
         pushAstAux(L, doc, array.data[i]);
-        lua_rawseti(L, -2, int(i + 1));
-    }
+    });
 }
 
 inline void pushTypeOrPack(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstTypeOrPack& tp)
@@ -476,12 +499,9 @@ inline void pushTypeOrPack(lua_State* L, const std::shared_ptr<AstDocumentState>
 
 inline void pushTypeOrPackArray(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstArray<Luau::AstTypeOrPack>& array)
 {
-    lua_createtable(L, int(array.size), 0);
-    for (size_t i = 0; i < array.size; i++)
-    {
+    pushArray(L, array.size, [&](size_t i) {
         pushTypeOrPack(L, doc, array.data[i]);
-        lua_rawseti(L, -2, int(i + 1));
-    }
+    });
 }
 
 inline const char* tableAccessToString(Luau::AstTableAccess access)
@@ -583,6 +603,17 @@ struct FindKindVisitor : public Luau::AstVisitor
         return visit(static_cast<Luau::AstNode*>(node));
     }
 };
+
+inline void findNodesByKind(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, Luau::AstNode* root, std::string_view kind)
+{
+    FindKindVisitor visitor(kind);
+    if (root)
+        root->visit(&visitor);
+
+    pushArray(L, visitor.matches.size(), [&](size_t i) {
+        pushAstNode(L, doc, visitor.matches[i]);
+    });
+}
 
 // Userdata registration helper
 inline void registerUserdataType(
@@ -705,6 +736,9 @@ inline int pushCachedUserdataMethod(lua_State* L, int tag, const char* name, lua
             return 1; \
         case ReflectAtom::Category: \
             lua_pushstring(L, getCategoryFunc(handle.node)); \
+            return 1; \
+        case ReflectAtom::Id: \
+            lua_pushlightuserdatatagged(L, (void*)handle.node, TagValue); \
             return 1; \
         default: \
             break; \

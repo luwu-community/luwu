@@ -39,24 +39,17 @@ static int astLocationIndex(lua_State* L)
     case ReflectAtom::EndLine:     { lua_pushinteger(L, loc.end.line + 1); return 1; }
     case ReflectAtom::EndColumn:   { lua_pushinteger(L, loc.end.column + 1); return 1; }
     case ReflectAtom::StartOffset:
-    {
-        LUAU_ASSERT(doc);
-        auto [startOff, endOff] = locationToOffsets(doc->lineOffsets, doc->source.size(), loc);
-        lua_pushinteger(L, int(startOff));
-        return 1;
-    }
     case ReflectAtom::EndOffset:
-    {
-        LUAU_ASSERT(doc);
-        auto [startOff, endOff] = locationToOffsets(doc->lineOffsets, doc->source.size(), loc);
-        lua_pushinteger(L, int(endOff));
-        return 1;
-    }
     case ReflectAtom::Text:
     {
         LUAU_ASSERT(doc);
         auto [startOff, endOff] = locationToOffsets(doc->lineOffsets, doc->source.size(), loc);
-        lua_pushlstring(L, doc->source.data() + startOff, endOff - startOff);
+        if (atom == ReflectAtom::StartOffset)
+            lua_pushinteger(L, int(startOff));
+        else if (atom == ReflectAtom::EndOffset)
+            lua_pushinteger(L, int(endOff));
+        else
+            lua_pushlstring(L, doc->source.data() + startOff, endOff - startOff);
         return 1;
     }
     default:

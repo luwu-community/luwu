@@ -1,6 +1,8 @@
 --!strict
 -- This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
 
+export type Id = any
+
 -- Source Position (1-indexed line and column)
 export type AstPosition = {
     read line: number,
@@ -119,7 +121,7 @@ export type AstAux =
     | AstComment
     | AstTableItem
     | CstTableItem
-    | { read kind: string }
+    | { read id: Id, read kind: string }
 
 -- CST for tableitem
 export type CstTableItem = {
@@ -135,6 +137,7 @@ export type CstTableItem = {
 }
 
 export type CstNodeCommon = {
+    read id: Id,
     read category: "generic",
 }
 
@@ -428,6 +431,7 @@ export type CstNode =
 
 -- Common AST node methods and fields
 export type AstNodeCommon = {
+    read id: Id,
     read text: (self: AstNode) -> string,
     read location: (self: AstNode) -> AstLocation,
     read cst: (self: AstNode) -> CstNode?,
@@ -940,6 +944,7 @@ export type AstNode =
 
 -- Parsed Document Root State
 export type AstDocument = {
+    read id: Id,
     read root: (self: AstDocument) -> AstStatBlock?,
     read source: (self: AstDocument) -> string,
     read errors: (self: AstDocument) -> {ParseError},
