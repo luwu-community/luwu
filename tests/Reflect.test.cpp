@@ -722,4 +722,38 @@ TEST_CASE("ReflectUserdataId")
     CHECK_EQ(dostring(L, script), 0);
 }
 
+TEST_CASE("ReflectUserdataProtectedMetatable")
+{
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
+    ScopedFastFlag sff3{FFlag::OptLuwuReflectUseAtoms, true};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    Luau::luaopen_reflect(L);
+    lua_setglobal(L, "reflect");
+
+    const char* script = R"LUA(
+        local doc = reflect.parse("-- comment\ndo end", true)
+        local root = doc:root()
+        local stat = root:body()[1]
+        local loc = stat:location()
+        local cst = stat:cst()
+        local pos = cst:endPosition()
+        local comment = doc:comments()[1]
+
+        assert(getmetatable(doc) == false)
+        assert(getmetatable(root) == false)
+        assert(getmetatable(stat) == false)
+        assert(getmetatable(loc) == false)
+        assert(getmetatable(cst) == false)
+        assert(getmetatable(pos) == false)
+        assert(getmetatable(comment) == false)
+    )LUA";
+
+    CHECK_EQ(dostring(L, script), 0);
+}
+
 TEST_SUITE_END();

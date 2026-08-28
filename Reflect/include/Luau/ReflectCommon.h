@@ -629,7 +629,9 @@ inline void registerUserdataType(
 )
 {
     lua_setuserdatadtor(L, tag, dtor);
-    lua_createtable(L, 0, (eq ? 4 : 3) + (methods ? 4 : 0) + (namecall ? 1 : 0));
+    lua_createtable(L, 0, (eq ? 5 : 4) + (methods ? 4 : 0) + (namecall ? 1 : 0));
+    lua_pushboolean(L, false);
+    lua_setfield(L, -2, "__metatable");
     lua_pushstring(L, typeName);
     lua_setfield(L, -2, "__type");
     lua_pushcfunction(L, index, "__index");
