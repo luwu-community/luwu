@@ -38,12 +38,12 @@ namespace Luau
     ATOM(Items, "items") \
     ATOM(IsConst, "isConst") \
     ATOM(Annotation, "annotation") \
+    ATOM(Matches, "matches") \
     \
     /* AstDocument */ \
     ATOM(Root, "root") \
     ATOM(Source, "source") \
     ATOM(Walk, "walk") \
-    ATOM(Find, "find") \
     ATOM(Errors, "errors") \
     ATOM(Comments, "comments") \
     ATOM(LineOffsets, "lineOffsets") \
@@ -257,6 +257,63 @@ enum AstUserdataTag : int
     TagCstNode = 13,
     TagPosition = 14,
     TagAux = 15,
+    TagFilter = 16,
+};
+
+enum class NodeCategory : uint8_t
+{
+    Unknown = 0,
+    Stat = 1 << 0,
+    Expr = 1 << 1,
+    Type = 1 << 2,
+    TypePack = 1 << 3,
+    Generic = 1 << 4,
+    Attr = 1 << 5,
+};
+
+inline const char* categoryToString(NodeCategory cat)
+{
+    switch (cat)
+    {
+    case NodeCategory::Stat:     return "stat";
+    case NodeCategory::Expr:     return "expr";
+    case NodeCategory::Type:     return "type";
+    case NodeCategory::TypePack: return "typePack";
+    case NodeCategory::Generic:  return "generic";
+    case NodeCategory::Attr:     return "attr";
+    default:                     return "unknown";
+    }
+}
+
+inline NodeCategory categoryFromString(std::string_view category)
+{
+    if (category == "stat")
+        return NodeCategory::Stat;
+    if (category == "expr")
+        return NodeCategory::Expr;
+    if (category == "type")
+        return NodeCategory::Type;
+    if (category == "typePack" || category == "typepack")
+        return NodeCategory::TypePack;
+    if (category == "generic")
+        return NodeCategory::Generic;
+    if (category == "attr")
+        return NodeCategory::Attr;
+    return NodeCategory::Unknown;
+}
+
+NodeCategory getNodeCategory(Luau::AstNode* node);
+int getNodeClassIndexByKind(std::string_view kind);
+
+struct AstFilterData
+{
+    uint64_t classMask[2] = {0, 0};
+    uint8_t categoryMask = 0;
+
+    bool matches(Luau::AstNode* node) const;
+    bool addKind(std::string_view kind);
+    bool addCategory(std::string_view category);
+    bool empty() const { return classMask[0] == 0 && classMask[1] == 0 && categoryMask == 0; }
 };
 
 struct AstDocumentState
@@ -443,6 +500,8 @@ inline void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& do
     new (data) AstAuxData{doc, local};
 }
 
+void pushAstFilter(lua_State* L, const AstFilterData& filter);
+
 // Check helpers
 AstDocumentData& checkAstDocument(lua_State* L, int idx);
 AstNodeData& checkAstNode(lua_State* L, int idx);
@@ -450,6 +509,11 @@ AstLocationData& checkAstLocation(lua_State* L, int idx);
 CstNodeData& checkCstNode(lua_State* L, int idx);
 AstPositionData& checkAstPosition(lua_State* L, int idx);
 AstAuxData& checkAstAux(lua_State* L, int idx);
+AstFilterData& checkAstFilter(lua_State* L, int idx);
+AstFilterData extractAstFilter(lua_State* L, int idx);
+
+void registerAstFilter(lua_State* L);
+int reflectFilter(lua_State* L);
 
 const char* getAstAuxKind(const AstAuxData& handle);
 
@@ -529,12 +593,16 @@ struct CallbackVisitor : public Luau::AstVisitor
     lua_State* L;
     std::shared_ptr<AstDocumentState> doc;
     int callbackIndex;
+    AstFilterData filter;
+    bool hasFilter = false;
     bool errorOccurred = false;
 
-    CallbackVisitor(lua_State* L, std::shared_ptr<AstDocumentState> doc, int callbackIndex)
+    CallbackVisitor(lua_State* L, std::shared_ptr<AstDocumentState> doc, int callbackIndex, const AstFilterData& filter = {})
         : L(L)
         , doc(doc)
         , callbackIndex(callbackIndex)
+        , filter(filter)
+        , hasFilter(!filter.empty())
     {
     }
 
@@ -542,6 +610,9 @@ struct CallbackVisitor : public Luau::AstVisitor
     {
         if (errorOccurred || !node)
             return false;
+
+        if (hasFilter && !filter.matches(node))
+            return true;
 
         lua_pushvalue(L, callbackIndex);
         pushAstNode(L, doc, node);
@@ -574,46 +645,6 @@ struct CallbackVisitor : public Luau::AstVisitor
         return visit(static_cast<Luau::AstNode*>(node));
     }
 };
-
-struct FindKindVisitor : public Luau::AstVisitor
-{
-    std::string_view targetKind;
-    std::vector<Luau::AstNode*> matches;
-
-    FindKindVisitor(std::string_view targetKind)
-        : targetKind(targetKind)
-    {
-    }
-
-    bool visit(Luau::AstNode* node) override
-    {
-        if (node && getNodeKind(node) == targetKind)
-            matches.push_back(node);
-        return true;
-    }
-
-    // By default visiting type annotations is disabled; we override this so visitor inspects these nodes
-    bool visit(Luau::AstType* node) override
-    {
-        return visit(static_cast<Luau::AstNode*>(node));
-    }
-
-    bool visit(Luau::AstTypePack* node) override
-    {
-        return visit(static_cast<Luau::AstNode*>(node));
-    }
-};
-
-inline void findNodesByKind(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, Luau::AstNode* root, std::string_view kind)
-{
-    FindKindVisitor visitor(kind);
-    if (root)
-        root->visit(&visitor);
-
-    pushArray(L, visitor.matches.size(), [&](size_t i) {
-        pushAstNode(L, doc, visitor.matches[i]);
-    });
-}
 
 // Userdata registration helper
 inline void registerUserdataType(
@@ -685,10 +716,7 @@ inline int pushCachedUserdataMethod(lua_State* L, int tag, const char* name, lua
     return 1;
 }
 
-#define LUAU_REFLECT_PREPARE_INDEX(checkFunc) \
-    auto& handle = checkFunc(L, 1); \
-    const auto& doc = handle.doc; \
-    (void)doc; \
+#define LUAU_REFLECT_RESOLVE_INDEX_ATOM() \
     int atomId = -1; \
     size_t keyLen = 0; \
     const char* keyStr = lua_tolstringatom(L, 2, &keyLen, FFlag::OptLuwuReflectUseAtoms ? &atomId : nullptr); \
@@ -699,16 +727,25 @@ inline int pushCachedUserdataMethod(lua_State* L, int tag, const char* name, lua
     } \
     ReflectAtom atom = resolveReflectAtom(atomId, keyStr, keyLen)
 
-#define LUAU_REFLECT_PREPARE_NAMECALL(checkFunc) \
-    auto& handle = checkFunc(L, 1); \
-    const auto& doc = handle.doc; \
-    (void)doc; \
+#define LUAU_REFLECT_RESOLVE_NAMECALL_ATOM() \
     int atomId = -1; \
     size_t len = 0; \
     const char* str = lua_namecallwithlen(L, FFlag::OptLuwuReflectUseAtoms ? &atomId : nullptr, &len); \
     if (!str) \
         luaL_error(L, "missing method name in namecall"); \
     ReflectAtom atom = resolveReflectAtom(atomId, str, len)
+
+#define LUAU_REFLECT_PREPARE_INDEX(checkFunc) \
+    auto& handle = checkFunc(L, 1); \
+    const auto& doc = handle.doc; \
+    (void)doc; \
+    LUAU_REFLECT_RESOLVE_INDEX_ATOM()
+
+#define LUAU_REFLECT_PREPARE_NAMECALL(checkFunc) \
+    auto& handle = checkFunc(L, 1); \
+    const auto& doc = handle.doc; \
+    (void)doc; \
+    LUAU_REFLECT_RESOLVE_NAMECALL_ATOM()
 
 #define LUAU_REFLECT_METHOD_TRAMPOLINE(funcName, checkFunc, dispatchFunc) \
     static int funcName(lua_State* L) \

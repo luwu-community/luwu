@@ -5,32 +5,7 @@ namespace Luau
 {
 
 
-enum class NodeCategory : uint8_t
-{
-    Unknown = 0,
-    Stat,
-    Expr,
-    Type,
-    TypePack,
-    Generic,
-    Attr,
-};
-
 LUAU_REFLECT_DEFINE_POINTER_USERDATA(pushAstNode, checkAstNode, astNodeDtor, AstNodeData, Luau::AstNode*, TagNode, "AstNode")
-
-static const char* nodeCategoryToString(NodeCategory cat)
-{
-    switch (cat)
-    {
-    case NodeCategory::Stat:     return "stat";
-    case NodeCategory::Expr:     return "expr";
-    case NodeCategory::Type:     return "type";
-    case NodeCategory::TypePack: return "typePack";
-    case NodeCategory::Generic:  return "generic";
-    case NodeCategory::Attr:     return "attr";
-    default:                     return "unknown";
-    }
-}
 
 typedef bool (*NodeMethodHandler)(lua_State* L, AstNodeData& handle, ReflectAtom atom);
 
@@ -38,10 +13,32 @@ struct AstNodeClassInfo
 {
     const char* kind = nullptr;
     const char* category = nullptr;
+    // derived field used for filtering
+    NodeCategory categoryEnum = NodeCategory::Unknown;
     NodeMethodHandler methodHandler = nullptr;
 };
 
 static std::vector<AstNodeClassInfo> s_nodeClassTable;
+
+NodeCategory getNodeCategory(Luau::AstNode* node)
+{
+    if (!node)
+        return NodeCategory::Unknown;
+    int idx = node->classIndex;
+    if (idx >= 0 && idx < int(s_nodeClassTable.size()))
+        return s_nodeClassTable[idx].categoryEnum;
+    return NodeCategory::Unknown;
+}
+
+int getNodeClassIndexByKind(std::string_view kind)
+{
+    for (size_t i = 0; i < s_nodeClassTable.size(); i++)
+    {
+        if (s_nodeClassTable[i].kind && kind == s_nodeClassTable[i].kind)
+            return int(i);
+    }
+    return -1;
+}
 
 // Register every node statically to allow for all AST node operations to be direct jumps and not if-else hell.
 //
@@ -55,8 +52,8 @@ static void registerNodeClass(
 {
     int idx = T::ClassIndex();
     if (size_t(idx) >= s_nodeClassTable.size())
-        s_nodeClassTable.resize(idx + 1, AstNodeClassInfo{"AstNode", "unknown", nullptr});
-    s_nodeClassTable[idx] = AstNodeClassInfo{kind, nodeCategoryToString(category), methodHandler};
+        s_nodeClassTable.resize(idx + 1, AstNodeClassInfo{"AstNode", "unknown", NodeCategory::Unknown, nullptr});
+    s_nodeClassTable[idx] = AstNodeClassInfo{kind, categoryToString(category), category, methodHandler};
 }
 
 LUAU_REFLECT_GET_NODE_KIND(getNodeKind, Luau::AstNode*, s_nodeClassTable, "AstNode")
@@ -637,7 +634,9 @@ static int astNodeWalk(lua_State* L)
     auto& handle = checkAstNode(L, 1);
     luaL_checktype(L, 2, LUA_TFUNCTION);
 
-    CallbackVisitor visitor(L, handle.doc, 2);
+    AstFilterData filter = extractAstFilter(L, 3);
+
+    CallbackVisitor visitor(L, handle.doc, 2, filter);
     handle.node->visit(&visitor);
 
     if (visitor.errorOccurred)
@@ -646,22 +645,12 @@ static int astNodeWalk(lua_State* L)
     return 0;
 }
 
-static int astNodeFind(lua_State* L)
-{
-    auto& handle = checkAstNode(L, 1);
-    size_t len = 0;
-    const char* kindStr = luaL_checklstring(L, 2, &len);
-    findNodesByKind(L, handle.doc, handle.node, std::string_view(kindStr, len));
-    return 1;
-}
-
 static int dispatchAstNodeMethod(lua_State* L, AstNodeData& handle, ReflectAtom atom, const char* str, size_t len)
 {
     switch (atom)
     {
     case ReflectAtom::Children:     return astNodeChildren(L);
     case ReflectAtom::Walk:         return astNodeWalk(L);
-    case ReflectAtom::Find:         return astNodeFind(L);
     case ReflectAtom::Location:     return astNodeLocation(L);
     case ReflectAtom::Cst:          return astNodeCst(L);
     case ReflectAtom::Text:         return astNodeText(L);
@@ -708,7 +697,6 @@ void registerAstNode(lua_State* L)
     static const luaL_Reg s_nodeMethods[] = {
         {"children", astNodeChildren},
         {"walk", astNodeWalk},
-        {"find", astNodeFind},
         {"location", astNodeLocation},
         {"cst", astNodeCst},
         {"text", astNodeText},

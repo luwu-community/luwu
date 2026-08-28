@@ -436,8 +436,7 @@ export type AstNodeCommon = {
     read location: (self: AstNode) -> AstLocation,
     read cst: (self: AstNode) -> CstNode?,
     read children: (self: AstNode) -> {AstNode},
-    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?) -> (),
-    read find: (self: AstNode, kind: string) -> {AstNode},
+    read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?, filter: AstFilter?) -> (),
 }
 
 export type AstStatCommon = AstNodeCommon & {
@@ -942,6 +941,13 @@ export type AstNode =
         read category: "stat" | "expr" | "type" | "typePack" | "generic" | "attr" | "unknown",
     })
 
+-- AST Traversal Filter
+export type AstFilter = {
+    read id: Id,
+    read kind: "AstFilter",
+    read matches: (self: AstFilter, node: AstNode) -> boolean,
+}
+
 -- Parsed Document Root State
 export type AstDocument = {
     read id: Id,
@@ -950,8 +956,7 @@ export type AstDocument = {
     read errors: (self: AstDocument) -> {ParseError},
     read comments: (self: AstDocument) -> {AstComment},
     read lineOffsets: (self: AstDocument) -> {number},
-    read walk: (self: AstDocument, visitor: (node: AstNode) -> boolean?) -> (),
-    read find: (self: AstDocument, kind: string) -> {AstNode},
+    read walk: (self: AstDocument, visitor: (node: AstNode) -> boolean?, filter: AstFilter?) -> (),
 }
 
 local function parse(source: string, includeCst: boolean?): AstDocument
@@ -962,7 +967,12 @@ local function parseExpr(source: string, includeCst: boolean?): AstNode
     error("Not implemented")
 end
 
+local function filter(...: string | { string } | AstFilter): AstFilter
+    error("Not implemented")
+end
+
 return {
     parse = parse,
     parseExpr = parseExpr,
+    filter = filter,
 }

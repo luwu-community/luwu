@@ -4,6 +4,10 @@
 #include "lua.h"
 #include "lualib.h"
 
+#if LUA_USE_LONGJMP
+#error "Reflect cannot be used in longjmp mode"
+#endif
+
 namespace Luau
 {
 

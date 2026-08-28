@@ -164,19 +164,28 @@ TEST_CASE("LazyAstChildrenAndWalk")
         end)
         assert(#nodeKinds > 5)
 
-        -- Test doc:find()
-        local locals = doc:find("AstStatLocal")
+        -- Test doc:walk with filter
+        local locals = {}
+        doc:walk(function(node)
+            table.insert(locals, node)
+        end, reflect.filter("AstStatLocal"))
         assert(#locals == 2)
         assert(locals[1]:vars()[1].name == "a")
         assert(locals[2]:vars()[1].name == "b")
 
-        -- Test node:find()
-        local nodeLocals = root:find("AstStatLocal")
+        -- Test node:walk with filter
+        local nodeLocals = {}
+        root:walk(function(node)
+            table.insert(nodeLocals, node)
+        end, reflect.filter("AstStatLocal"))
         assert(#nodeLocals == 2)
         assert(nodeLocals[1]:vars()[1].name == "a")
         assert(nodeLocals[2]:vars()[1].name == "b")
 
-        local returns = root:find("AstStatReturn")
+        local returns = {}
+        root:walk(function(node)
+            table.insert(returns, node)
+        end, reflect.filter("AstStatReturn"))
         assert(#returns == 1)
 
         -- Test walk pruning (return false)
@@ -640,14 +649,17 @@ TEST_CASE("ReflectUseAtoms")
         assert(val.kind == "AstExprConstantNumber")
         assert(val:value() == 42)
 
-        -- Test walk & find methods via namecall
+        -- Test walk method via namecall
         local foundCount = 0
         doc:walk(function(node)
             foundCount = foundCount + 1
         end)
         assert(foundCount > 0)
 
-        local found = doc:find("AstStatLocal")
+        local found = {}
+        doc:walk(function(node)
+            table.insert(found, node)
+        end, reflect.filter("AstStatLocal"))
         assert(#found == 1)
 
         -- Test CST access via atoms
@@ -743,6 +755,7 @@ TEST_CASE("ReflectUserdataProtectedMetatable")
         local cst = stat:cst()
         local pos = cst:endPosition()
         local comment = doc:comments()[1]
+        local flt = reflect.filter("AstStatLocal")
 
         assert(getmetatable(doc) == false)
         assert(getmetatable(root) == false)
@@ -751,6 +764,101 @@ TEST_CASE("ReflectUserdataProtectedMetatable")
         assert(getmetatable(cst) == false)
         assert(getmetatable(pos) == false)
         assert(getmetatable(comment) == false)
+        assert(getmetatable(flt) == false)
+    )LUA";
+
+    CHECK_EQ(dostring(L, script), 0);
+}
+
+TEST_CASE("ReflectAstFilter")
+{
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
+    ScopedFastFlag sff3{FFlag::OptLuwuReflectUseAtoms, true};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    Luau::luaopen_reflect(L);
+    lua_setglobal(L, "reflect");
+
+    const char* script = R"LUA(
+        local doc = reflect.parse([[
+            local x = 1
+            local function foo(a, b)
+                print(a + b)
+                return a * b
+            end
+            foo(x, 2)
+        ]])
+
+        -- Filter properties and types
+        local callFilter = reflect.filter("AstExprCall")
+        assert(callFilter.kind == "AstFilter")
+        assert(typeof(callFilter.id) == "Id")
+
+        -- Matches method
+        local root = doc:root()
+        assert(callFilter:matches(root) == false)
+
+        -- Walk with filter
+        local calls = {}
+        doc:walk(function(node)
+            table.insert(calls, node)
+        end, callFilter)
+
+        assert(#calls == 2) -- print(...) and foo(x, 2)
+        assert(calls[1].kind == "AstExprCall")
+        assert(calls[2].kind == "AstExprCall")
+        assert(callFilter:matches(calls[1]) == true)
+        assert(callFilter:matches(calls[2]) == true)
+
+        -- Category filter: stat
+        local statFilter = reflect.filter("stat")
+        local stats = {}
+        doc:walk(function(node)
+            table.insert(stats, node)
+        end, statFilter)
+
+        assert(#stats > 0)
+        for _, s in stats do
+            assert(s.category == "stat")
+            assert(statFilter:matches(s) == true)
+        end
+
+        -- Multi-kind filter
+        local multiFilter = reflect.filter("AstStatLocal", "AstStatLocalFunction")
+        local localsAndFuncs = {}
+        doc:walk(function(node)
+            table.insert(localsAndFuncs, node)
+        end, multiFilter)
+
+        assert(#localsAndFuncs == 2)
+        assert(localsAndFuncs[1].kind == "AstStatLocal")
+        assert(localsAndFuncs[2].kind == "AstStatLocalFunction")
+
+        -- Multi-kind from table
+        local tableFilter = reflect.filter({"AstStatLocal", "AstStatLocalFunction"})
+        assert(multiFilter == tableFilter)
+
+        -- Node:walk with filter
+        local funcStat = localsAndFuncs[2]
+        local innerCalls = {}
+        funcStat:walk(function(node)
+            table.insert(innerCalls, node)
+        end, callFilter)
+        assert(#innerCalls == 1) -- print(a + b)
+
+        -- Error on unrecognized kind or category
+        local ok, err = pcall(reflect.filter, "NonExistentKind")
+        assert(not ok)
+
+        local ok2, err2 = pcall(reflect.filter, {"AstStatLocal", "InvalidCategory"})
+        assert(not ok2)
+
+        local ok3, err3 = pcall(reflect.filter, 123)
+        assert(not ok3)
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);

@@ -21,7 +21,15 @@ Before discussing the design of `reflect`, there are a few things that this RFC 
 
 ## Design
 
-TODO: Write this section once design is finalized
+TODO: Write this section once design is finalized, right now, these are just draft notes
+
+Root of document: `AstDocument` userdata
+AST nodes: `AstNode`
+Walkable type: `AstDocument | AstNode`
+
+### Node Walking
+
+All walkable types will have a `T:walk(visitFn, filter?)` where `filter` is an optional `AstFilter` that allows for directly filtering out nodes in C++ side itself.
 
 ## Prior art
 

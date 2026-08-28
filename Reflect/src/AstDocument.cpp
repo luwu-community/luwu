@@ -32,23 +32,16 @@ static int astDocWalk(lua_State* L)
     auto& doc = handle.doc;
     luaL_checktype(L, 2, LUA_TFUNCTION);
 
+    AstFilterData filter = extractAstFilter(L, 3);
+
     if (doc->parseResult.root)
     {
-        CallbackVisitor visitor(L, doc, 2);
+        CallbackVisitor visitor(L, doc, 2, filter);
         doc->parseResult.root->visit(&visitor);
         if (visitor.errorOccurred)
             lua_error(L);
     }
     return 0;
-}
-
-static int astDocFind(lua_State* L)
-{
-    auto& handle = checkAstDocument(L, 1);
-    size_t len = 0;
-    const char* kindStr = luaL_checklstring(L, 2, &len);
-    findNodesByKind(L, handle.doc, handle.doc->parseResult.root, std::string_view(kindStr, len));
-    return 1;
 }
 
 static int astDocComments(lua_State* L)
@@ -98,7 +91,6 @@ static int astDocIndex(lua_State* L)
     case ReflectAtom::Root:        return pushUserdataMethod(L, TagDocument, "root");
     case ReflectAtom::Source:      return pushUserdataMethod(L, TagDocument, "source");
     case ReflectAtom::Walk:        return pushUserdataMethod(L, TagDocument, "walk");
-    case ReflectAtom::Find:        return pushUserdataMethod(L, TagDocument, "find");
     case ReflectAtom::Comments:    return pushUserdataMethod(L, TagDocument, "comments");
     case ReflectAtom::Errors:      return pushUserdataMethod(L, TagDocument, "errors");
     case ReflectAtom::LineOffsets: return pushUserdataMethod(L, TagDocument, "lineOffsets");
@@ -136,7 +128,6 @@ static int astDocNamecall(lua_State* L)
     case ReflectAtom::Root:        return astDocRoot(L);
     case ReflectAtom::Source:      return astDocSource(L);
     case ReflectAtom::Walk:        return astDocWalk(L);
-    case ReflectAtom::Find:        return astDocFind(L);
     case ReflectAtom::Comments:    return astDocComments(L);
     case ReflectAtom::Errors:      return astDocErrors(L);
     case ReflectAtom::LineOffsets: return astDocLineOffsets(L);
@@ -152,7 +143,6 @@ void registerAstDocument(lua_State* L)
         {"root", astDocRoot},
         {"source", astDocSource},
         {"walk", astDocWalk},
-        {"find", astDocFind},
         {"comments", astDocComments},
         {"errors", astDocErrors},
         {"lineOffsets", astDocLineOffsets},
