@@ -465,7 +465,7 @@ do
   assert(table.drop(t2, "x", 2) == 2)
   assert(table.concat(t2, ",") == "y,z,x")
 
-  assert(table.drop({1, 2, 1, 3}, 1, 0) == 0)
+  assert(pcall(table.drop, {1, 2, 1, 3}, 1, 0) == false)
   assert(table.drop({1, 2, 3}, 4) == 0)
   assert(table.drop({1, 2, 3}, 0) == 0)
 

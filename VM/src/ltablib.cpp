@@ -558,11 +558,8 @@ static int tdrop(lua_State* L)
 
     int n = lua_objlen(L, 1);
     int maxRemoved = luaL_optinteger(L, 3, INT_MAX);
-    if (maxRemoved <= 0)
-    {
-        lua_pushinteger(L, 0);
-        return 1;
-    }
+    if (!lua_isnoneornil(L, 3))
+        luaL_argcheck(L, maxRemoved > 0, 3, "count must be greater than 0");
 
     LuaTable* t = hvalue(L->base);
     if (t->readonly)
@@ -663,15 +660,31 @@ static const luaL_Reg tab_funcs[] = {
     {NULL, NULL},
 };
 
+static const luaL_Reg tab_funcs_with_drop[] = {
+    {"concat", tconcat},
+    {"foreach", foreach},
+    {"foreachi", foreachi},
+    {"getn", getn},
+    {"maxn", maxn},
+    {"insert", tinsert},
+    {"remove", tremove},
+    {"sort", tsort},
+    {"pack", tpack},
+    {"unpack", tunpack},
+    {"move", tmove},
+    {"create", tcreate},
+    {"find", tfind},
+    {"drop", tdrop},
+    {"clear", tclear},
+    {"freeze", tfreeze},
+    {"isfrozen", tisfrozen},
+    {"clone", tclone},
+    {NULL, NULL},
+};
+
 int luaopen_table(lua_State* L)
 {
-    luaL_register(L, LUA_TABLIBNAME, tab_funcs);
-
-    if (FFlag::LuwuTableDrop)
-    {
-        lua_pushcfunction(L, tdrop, "drop");
-        lua_setfield(L, -2, "drop");
-    }
+    luaL_register(L, LUA_TABLIBNAME, FFlag::LuwuTableDrop ? tab_funcs_with_drop : tab_funcs);
 
     // Lua 5.1 compat
     lua_pushcfunction(L, tunpack, "unpack");

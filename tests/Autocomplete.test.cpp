@@ -481,8 +481,8 @@ TEST_CASE_FIXTURE(ACBuiltinsFixture, "get_string_completions")
 
     auto ac = autocomplete('1');
 
-    CHECK_EQ(18, ac.entryMap.size());
-    CHECK(ac.entryMap.count("drop"));
+    CHECK_EQ(17, ac.entryMap.size());
+    LUAU_CHECK_HAS_NO_KEY(ac.entryMap, "drop");
     CHECK_EQ(ac.context, AutocompleteContext::Property);
 }
 

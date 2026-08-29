@@ -46,7 +46,7 @@ table.remove(t, table.find(t, "banana")) -- Warning: If this is nil, table.remov
 
 ### Implementation Details
 
-`table.drop` iterates through the indices `1..#t`. The equality check uses the same `__eq` semantics as `table.find`, respecting metamethod. The functions errors on readonly tables like `table.remove`. If `count` is <= 0, it is ignored (treated like `nil`).
+`table.drop` iterates through the indices `1..#t`. The equality check uses the same `__eq` semantics as `table.find`, respecting metamethod. The functions errors on readonly tables like `table.remove`. If `count` is <= 0, the function will error.
 
 The linter rule will warn the user when `table.remove(t, i)` is called and `i` has the `number?` type. Only `i` is underlined. This limits false positives while catching the common footgun `table.remove(t, table.find(t, v))`.
 

@@ -1967,6 +1967,7 @@ TEST_CASE("Types")
 {
     ScopedFastFlag integerType{FFlag::LuauIntegerType2, true};
     ScopedFastFlag nonePrimitive{FFlag::LuauNonePrimitive, true};
+    ScopedFastFlag tableDropFlag{FFlag::LuwuTableDrop, true};
 
     runConformance(
         "types.luau",
