@@ -7,6 +7,7 @@ LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
 LUAU_FASTFLAG(LuauUdtfTypeIsSubtypeOf)
 LUAU_FASTFLAG(LuauBufferIsFrozen)
+LUAU_FASTFLAG(LuwuTableDrop)
 
 namespace Luau
 {
@@ -205,6 +206,7 @@ declare table: {
     sort: <V>(t: {V}, comp: ((V, V) -> boolean)?) -> (),
     create: <V>(count: number, value: V?) -> {V},
     find: <V>(haystack: {V}, needle: V, init: number?) -> number?,
+    drop: <V>(t: {V}, value: V, count: number?) -> number,
 
     unpack: <V>(list: {V}, i: number?, j: number?) -> ...V,
     pack: <V>(...V) -> { n: number, [number]: V },
@@ -214,7 +216,6 @@ declare table: {
     foreachi: <V>({V}, (number, V) -> ()) -> (),
 
     move: <V>(src: {V}, a: number, b: number, t: number, dst: {V}?) -> {V},
-
     clear: (table: {}) -> (),
     isfrozen: (t: {}) -> boolean,
 }
@@ -382,7 +383,17 @@ std::string getBuiltinDefinitionSource()
     result += kBuiltinDefinitionMathSrc;
     result += kBuiltinDefinitionOsSrc;
     result += kBuiltinDefinitionCoroutineSrc;
-    result += kBuiltinDefinitionTableSrc;
+
+    std::string tableSrc = kBuiltinDefinitionTableSrc;
+    if (!FFlag::LuwuTableDrop)
+    {
+        std::string dropEntry = "    drop: <V>(t: {V}, value: V, count: number?) -> number,\n";
+        size_t dropPos = tableSrc.find(dropEntry);
+        if (dropPos != std::string::npos)
+            tableSrc.erase(dropPos, dropEntry.size());
+    }
+    result += tableSrc;
+
     result += kBuiltinDefinitionDebugSrc;
     result += kBuiltinDefinitionUtf8Src;
     result += kBuiltinDefinitionBufferSrcCore;
