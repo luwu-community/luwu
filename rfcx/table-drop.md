@@ -35,20 +35,20 @@ table.insert(t, "banana") -- t is now {"apple", "banana", "banana"}
 table.drop(t, "banana", 1) -- t is now {"apple", "banana"}
 ```
 
-Second, I'm also proposing the following linter rule for the `table.remove(t, foo)` footgun: if `foo` is an expression or function result with `number?` as it's type, the linter warns the user about the footgun by underlining the second argument.
+Second, I'm also proposing the following linter rule for the `table.remove(t, foo)` footgun: if `foo` is an expression or function result with `number?` as it's type, the linter warns the user about the footgun.
 
 ```luau
 local t = {"apple", "banana", "orange"}
 
 table.remove(t, nil) -- OK
-table.remove(t, table.find(t, "banana")) -- Warning: If this is nil, table.remove will remove the last element of the array. This is a common mistake--consider using table.drop instead, or if order is not important, use a key/value table with true values for better performance.
+table.remove(t, table.find(t, "banana")) -- Warning: If this is nil, table.remove will remove the last element of the array. This is a common mistake—consider using table.drop instead, or if order is not important, use a key/value table with true values for better performance.
 ```
 
 ### Implementation Details
 
-`table.drop` should be implemented using a single‑pass compaction over the array part: iterate indices `1..#t`, copy non‑matching elements forward, and nil out trailing slots. This yields O(n) time and O(1) extra space and minimizes repeated equality checks. Use VM equality (the same `__eq` semantics as `table.find`) so metamethods are respected. The implementation must error on readonly tables (same as `table.remove`). `count` is treated as optional; values <= 0 are ignored (treated like `nil`).
+`table.drop` iterates through the indices `1..#t`. The equality check uses the same `__eq` semantics as `table.find`, respecting metamethod. The functions errors on readonly tables like `table.remove`. If `count` is <= 0, it is ignored (treated like `nil`).
 
-Linter rule (scope): warn when `table.remove(t, X)` is called where `X` is a function call or expression whose *static* return type is an optional number (`number?`) and `X` is not the literal `nil`. This limits false positives while catching the common footgun `table.remove(t, table.find(t, v))`.
+The linter rule will warn the user when `table.remove(t, i)` is called and `i` has the `number?` type. Only `i` is underlined. This limits false positives while catching the common footgun `table.remove(t, table.find(t, v))`.
 
 ## Drawbacks
 

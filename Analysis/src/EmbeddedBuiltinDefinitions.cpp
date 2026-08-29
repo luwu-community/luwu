@@ -215,6 +215,7 @@ declare table: {
     foreachi: <V>({V}, (number, V) -> ()) -> (),
 
     move: <V>(src: {V}, a: number, b: number, t: number, dst: {V}?) -> {V},
+    drop: <V>(t: {V}, value: V, count: number?) -> number,
 
     clear: (table: {}) -> (),
     isfrozen: (t: {}) -> boolean,
@@ -223,7 +224,6 @@ declare table: {
 )BUILTIN_SRC";
 
 static constexpr const char* kBuiltinDefinitionTableDropSrc = R"BUILTIN_SRC(
-    drop: <V>(t: {V}, value: V, count: number?) -> number,
 )BUILTIN_SRC";
 
 static constexpr const char* kBuiltinDefinitionDebugSrc = R"BUILTIN_SRC(
@@ -388,8 +388,6 @@ std::string getBuiltinDefinitionSource()
     result += kBuiltinDefinitionOsSrc;
     result += kBuiltinDefinitionCoroutineSrc;
     result += kBuiltinDefinitionTableSrc;
-    if (FFlag::LuwuTableDrop)
-        result += kBuiltinDefinitionTableDropSrc;
     result += kBuiltinDefinitionDebugSrc;
     result += kBuiltinDefinitionUtf8Src;
     result += kBuiltinDefinitionBufferSrcCore;
