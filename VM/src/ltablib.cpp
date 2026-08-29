@@ -11,6 +11,8 @@
 #include "ldebug.h"
 #include "lvm.h"
 
+LUAU_FASTFLAGVARIABLE(LuwuTableDrop)
+
 static int foreachi(lua_State* L)
 {
     luaL_checktype(L, 1, LUA_TTABLE);
@@ -549,6 +551,51 @@ static int tfind(lua_State* L)
     return 1;
 }
 
+static int tdrop(lua_State* L)
+{
+    luaL_checktype(L, 1, LUA_TTABLE);
+    luaL_checkany(L, 2);
+
+    int n = lua_objlen(L, 1);
+    int maxRemoved = luaL_optinteger(L, 3, INT_MAX);
+    if (maxRemoved <= 0)
+    {
+        lua_pushinteger(L, 0);
+        return 1;
+    }
+
+    LuaTable* t = hvalue(L->base);
+    if (t->readonly)
+        luaG_readonlyerror(L);
+
+    int writeIndex = 1;
+    int removed = 0;
+
+    for (int i = 1; i <= n; ++i)
+    {
+        lua_rawgeti(L, 1, i);
+
+        if (removed < maxRemoved && equalobj(L, L->base + 1, L->top - 1))
+        {
+            lua_pop(L, 1);
+            ++removed;
+            continue;
+        }
+
+        lua_rawseti(L, 1, writeIndex);
+        ++writeIndex;
+    }
+
+    for (int i = writeIndex; i <= n; ++i)
+    {
+        lua_pushnil(L);
+        lua_rawseti(L, 1, i);
+    }
+
+    lua_pushinteger(L, removed);
+    return 1;
+}
+
 static int tclear(lua_State* L)
 {
     luaL_checktype(L, 1, LUA_TTABLE);
@@ -619,6 +666,12 @@ static const luaL_Reg tab_funcs[] = {
 int luaopen_table(lua_State* L)
 {
     luaL_register(L, LUA_TABLIBNAME, tab_funcs);
+
+    if (FFlag::LuwuTableDrop)
+    {
+        lua_pushcfunction(L, tdrop, "drop");
+        lua_setfield(L, -2, "drop");
+    }
 
     // Lua 5.1 compat
     lua_pushcfunction(L, tunpack, "unpack");

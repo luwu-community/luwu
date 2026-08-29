@@ -10,6 +10,8 @@
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(LuauDeprecatedAttributeOnAnonymousFunctions)
 LUAU_FASTFLAG(LuauFunctionUnusedRecursiveLinting)
+LUAU_FASTFLAG(LuwuTableRemoveFootgunLint)
+LUAU_FASTFLAG(LuwuTableDrop)
 
 using namespace Luau;
 
@@ -2307,6 +2309,55 @@ end
     CHECK_EQ(result.warnings[1].text, "Using '#' on a table with string keys is likely a bug");
     CHECK_EQ(result.warnings[2].location.begin.line + 1, 14);
     CHECK_EQ(result.warnings[2].text, "Using 'ipairs' on a table with string keys is likely a bug");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "TableRemoveFootgunLint")
+{
+    ScopedFastFlag featureFlag{FFlag::LuwuTableRemoveFootgunLint, true};
+
+    LintResult result = lint(R"(
+local t = {"apple", "banana"}
+
+table.remove(t, table.find(t, "banana"))
+table.remove(t, nil)
+
+local i: number? = table.find(t, "apple")
+table.remove(t, i)
+
+local j: number = 1
+table.remove(t, j)
+
+local k = table.find(t, "pear")
+table.remove(t, k)
+)");
+
+    REQUIRE(3 == result.warnings.size());
+    CHECK_EQ(
+        result.warnings[0].text,
+        "Using an optional result as the 2nd argument to `table.remove` may remove the last element when the index is nil; use `table.drop` or check the result instead."
+    );
+    CHECK_EQ(
+        result.warnings[1].text,
+        "Using an optional result as the 2nd argument to `table.remove` may remove the last element when the index is nil; use `table.drop` or check the result instead."
+    );
+    CHECK_EQ(
+        result.warnings[2].text,
+        "Using an optional result as the 2nd argument to `table.remove` may remove the last element when the index is nil; use `table.drop` or check the result instead."
+    );
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "TableRemoveFootgunLintFlagDisabled")
+{
+    ScopedFastFlag featureFlag{FFlag::LuwuTableRemoveFootgunLint, false};
+
+    LintResult result = lint(R"(
+local t = {"apple", "banana"}
+
+local i: number? = table.find(t, "apple")
+table.remove(t, i)
+)");
+
+    REQUIRE(0 == result.warnings.size());
 }
 
 TEST_CASE_FIXTURE(Fixture, "DuplicateConditions")

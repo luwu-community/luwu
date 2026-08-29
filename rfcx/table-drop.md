@@ -22,11 +22,9 @@ However, `table.find` returns `nil` when it cannot find the element specified in
 
 First, I am proposing a standard library function for tables to remove elements by value rather than index:
 
-```table.drop(t: {V}, value: V, count: number?)```
+```table.drop(t: {V}, value: V, count: number?): number```
 
-`t` refers to the table you're using, `value` is the value you want removed, and `count` is an optional argument specifying the limit of how many occurrences of `value` you want removed. If `count` is `nil`, every occurrence of `value` is removed from the table. This function does not return anything due to the existence of `table.remove`.
-
-This function traverses front-to-back (index 1 to `#t`) to find indices where the table element at that index is equal to `value` (using `__eq` semantics), breaking early if `count` is specified and `count` elements have already been found. The indices of elements to remove are pushed in a last-in first-out manner (adding later matches in the table closer to the front of the stack), so that we can directly iterate the stack to remove indices back-to-front so that elements are removed in the correct order. This ensures that we remove the correct indices without worrying about shifting during array removal.
+`t` refers to the table you're using, `value` is the value you want removed, and `count` is an optional argument specifying the limit of how many occurrences of `value` you want removed. If `count` is `nil`, every occurrence of `value` is removed from the table. The function returns the number of removed elements.
 
 For example:
 ```luau
@@ -37,14 +35,20 @@ table.insert(t, "banana") -- t is now {"apple", "banana", "banana"}
 table.drop(t, "banana", 1) -- t is now {"apple", "banana"}
 ```
 
-Next, I am proposing to add a linter rule warning the user about the `table.remove` footgun if their second argument is an optional variable and isn't explicitly `nil`.
+Second, I'm also proposing the following linter rule for the `table.remove(t, foo)` footgun: if `foo` is an expression or function result with `number?` as it's type, the linter warns the user about the footgun.
 
 ```luau
 local t = {"apple", "banana", "orange"}
 
 table.remove(t, nil) -- OK
-table.remove(t, table.find(t, "banana")) -- Warning: Using optional variables as the 2nd arg for table.remove is a footgun. Use table.drop instead.
+table.remove(t, table.find(t, "banana")) -- Warning: Using an optional result as the 2nd argument to `table.remove` may remove the last element by accident; use `table.drop` or check the result instead.
 ```
+
+### Implementation Details
+
+`table.drop` should be implemented using a single‑pass compaction over the array part: iterate indices `1..#t`, copy non‑matching elements forward, and nil out trailing slots. This yields O(n) time and O(1) extra space and minimizes repeated equality checks. Use VM equality (the same `__eq` semantics as `table.find`) so metamethods are respected. The implementation must error on readonly tables (same as `table.remove`). `count` is treated as optional; values <= 0 are ignored (treated like `nil`).
+
+Linter rule (scope): warn when `table.remove(t, X)` is called where `X` is a function call or expression whose *static* return type is an optional number (`number?`) and `X` is not the literal `nil`. This limits false positives while catching the common footgun `table.remove(t, table.find(t, v))`.
 
 ## Drawbacks
 
@@ -53,7 +57,5 @@ While there are no compatibility concerns, this does add a new standard library 
 ## Alternatives
 
 - Simply adding the linter rule would stop the footgun, but it would leave the verbose use of `if` statements as the only solution.
-- Make the linter rule only apply to uses of `table.remove` where function calls that return `number?` are used for the 2nd argument
-- Have `table.drop` return how many times it removed value
 - Renaming `table.drop` (`table.erase`, `table.remval`, etc)
 - Adding optional `start` and `finish` arguments to `table.drop` to specify search distance within the table.

@@ -15,6 +15,7 @@
 
 LUAU_FASTINTVARIABLE(LuauSuggestionDistance, 4)
 LUAU_FASTFLAGVARIABLE(LuauFunctionUnusedRecursiveLinting)
+LUAU_FASTFLAGVARIABLE(LuwuTableRemoveFootgunLint)
 
 namespace Luau
 {
@@ -2631,10 +2632,79 @@ public:
 
 private:
     LintContext* context;
+    DenseHashSet<AstLocal*> tableFindResultLocals;
 
     LintTableOperations(LintContext* context)
         : context(context)
     {
+    }
+
+    static bool isTableFindCall(AstExpr* expr)
+    {
+        if (!expr)
+            return false;
+
+        if (AstExprTypeAssertion* typeAssertion = expr->as<AstExprTypeAssertion>())
+            return isTableFindCall(typeAssertion->expr);
+
+        if (AstExprGroup* group = expr->as<AstExprGroup>())
+            return isTableFindCall(group->expr);
+
+        if (AstExprCall* call = expr->as<AstExprCall>())
+        {
+            if (AstExprIndexName* indexName = call->func->as<AstExprIndexName>())
+            {
+                if (indexName->index == "find")
+                {
+                    if (AstExprGlobal* global = indexName->expr->as<AstExprGlobal>())
+                        return global->name == "table";
+                }
+            }
+        }
+
+        return false;
+    }
+
+    bool isTableFindResult(AstExpr* expr)
+    {
+        if (!expr)
+            return false;
+
+        if (AstExprTypeAssertion* typeAssertion = expr->as<AstExprTypeAssertion>())
+            return isTableFindResult(typeAssertion->expr);
+
+        if (AstExprGroup* group = expr->as<AstExprGroup>())
+            return isTableFindResult(group->expr);
+
+        if (isTableFindCall(expr))
+            return true;
+
+        if (AstExprLocal* local = expr->as<AstExprLocal>())
+            return tableFindResultLocals.contains(local->local);
+
+        return false;
+    }
+
+    bool visit(AstStatLocal* node) override
+    {
+        for (size_t i = 0; i < node->vars.size && i < node->values.size; ++i)
+        {
+            if (isTableFindCall(node->values.data[i]))
+                tableFindResultLocals.insert(node->vars.data[i]);
+        }
+
+        return true;
+    }
+
+    bool visit(AstStatAssign* node) override
+    {
+        for (size_t i = 0; i < node->vars.size && i < node->values.size; ++i)
+        {
+            if (AstExprLocal* local = node->vars.data[i]->as<AstExprLocal>(); local && isTableFindCall(node->values.data[i]))
+                tableFindResultLocals.insert(local->local);
+        }
+
+        return true;
     }
 
     bool visit(AstExprUnary* node) override
@@ -2759,6 +2829,47 @@ private:
                     "table.remove will remove the value before the last element, which is likely a bug; consider removing the second argument or "
                     "wrap it in parentheses to silence"
                 );
+
+            // table.remove(t, <optional number expression>) -- common footgun when passing table.find
+            if (FFlag::LuwuTableRemoveFootgunLint && !args[1]->is<AstExprConstantNil>())
+            {
+                bool warnForOptionalNumber = isTableFindResult(args[1]);
+
+                if (!warnForOptionalNumber)
+                {
+                    if (std::optional<TypeId> ty = context->getType(args[1]))
+                    {
+                        TypeId t = follow(*ty);
+
+                        bool hasNumber = false;
+                        if (isNumber(t))
+                            hasNumber = true;
+                        else if (const UnionType* ut = get<UnionType>(t))
+                        {
+                            for (TypeId part : ut->options)
+                            {
+                                if (isNumber(part))
+                                {
+                                    hasNumber = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        warnForOptionalNumber = isOptional(t) && hasNumber;
+                    }
+                }
+
+                if (warnForOptionalNumber)
+                {
+                    emitWarning(
+                        *context,
+                        LintWarning::Code_TableOperations,
+                        args[1]->location,
+                        "Using an optional result as the 2nd argument to `table.remove` may remove the last element when the index is nil; use `table.drop` or check the result instead."
+                    );
+                }
+            }
         }
 
         if (func->index == "move" && node->args.size >= 4)

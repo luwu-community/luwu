@@ -7,6 +7,7 @@ LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
 LUAU_FASTFLAG(LuauUdtfTypeIsSubtypeOf)
 LUAU_FASTFLAG(LuauBufferIsFrozen)
+LUAU_FASTFLAG(LuwuTableDrop)
 
 namespace Luau
 {
@@ -221,6 +222,10 @@ declare table: {
 
 )BUILTIN_SRC";
 
+static constexpr const char* kBuiltinDefinitionTableDropSrc = R"BUILTIN_SRC(
+    drop: <V>(t: {V}, value: V, count: number?) -> number,
+)BUILTIN_SRC";
+
 static constexpr const char* kBuiltinDefinitionDebugSrc = R"BUILTIN_SRC(
 
 declare debug: {
@@ -383,6 +388,8 @@ std::string getBuiltinDefinitionSource()
     result += kBuiltinDefinitionOsSrc;
     result += kBuiltinDefinitionCoroutineSrc;
     result += kBuiltinDefinitionTableSrc;
+    if (FFlag::LuwuTableDrop)
+        result += kBuiltinDefinitionTableDropSrc;
     result += kBuiltinDefinitionDebugSrc;
     result += kBuiltinDefinitionUtf8Src;
     result += kBuiltinDefinitionBufferSrcCore;
