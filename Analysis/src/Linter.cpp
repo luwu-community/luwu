@@ -2866,7 +2866,7 @@ private:
                         *context,
                         LintWarning::Code_TableOperations,
                         args[1]->location,
-                        "Using an optional result as the 2nd argument to `table.remove` may remove the last element when the index is nil; use `table.drop` or check the result instead."
+                        "If this is `nil`, `table.remove` will remove the last element of the array. This is a common mistake--consider using `table.drop` instead, or if order is not important, use a key/value table with `true` values for better performance."
                     );
                 }
             }

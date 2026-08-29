@@ -35,13 +35,13 @@ table.insert(t, "banana") -- t is now {"apple", "banana", "banana"}
 table.drop(t, "banana", 1) -- t is now {"apple", "banana"}
 ```
 
-Second, I'm also proposing the following linter rule for the `table.remove(t, foo)` footgun: if `foo` is an expression or function result with `number?` as it's type, the linter warns the user about the footgun.
+Second, I'm also proposing the following linter rule for the `table.remove(t, foo)` footgun: if `foo` is an expression or function result with `number?` as it's type, the linter warns the user about the footgun by underlining the second argument.
 
 ```luau
 local t = {"apple", "banana", "orange"}
 
 table.remove(t, nil) -- OK
-table.remove(t, table.find(t, "banana")) -- Warning: Using an optional result as the 2nd argument to `table.remove` may remove the last element by accident; use `table.drop` or check the result instead.
+table.remove(t, table.find(t, "banana")) -- Warning: If this is nil, table.remove will remove the last element of the array. This is a common mistake--consider using table.drop instead, or if order is not important, use a key/value table with true values for better performance.
 ```
 
 ### Implementation Details

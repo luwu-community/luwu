@@ -2316,33 +2316,33 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "TableRemoveFootgunLint")
     ScopedFastFlag featureFlag{FFlag::LuwuTableRemoveFootgunLint, true};
 
     LintResult result = lint(R"(
-local t = {"apple", "banana"}
+        local t = {"apple", "banana"}
 
-table.remove(t, table.find(t, "banana"))
-table.remove(t, nil)
+        table.remove(t, table.find(t, "banana"))
+        table.remove(t, nil)
 
-local i: number? = table.find(t, "apple")
-table.remove(t, i)
+        local i: number? = table.find(t, "apple")
+        table.remove(t, i)
 
-local j: number = 1
-table.remove(t, j)
+        local j: number = 1
+        table.remove(t, j)
 
-local k = table.find(t, "pear")
-table.remove(t, k)
-)");
+        local k = table.find(t, "pear")
+        table.remove(t, k)
+    )");
 
     REQUIRE(3 == result.warnings.size());
     CHECK_EQ(
         result.warnings[0].text,
-        "Using an optional result as the 2nd argument to `table.remove` may remove the last element when the index is nil; use `table.drop` or check the result instead."
+        "If this is `nil`, `table.remove` will remove the last element of the array. This is a common mistake--consider using `table.drop` instead, or if order is not important, use a key/value table with `true` values for better performance."
     );
     CHECK_EQ(
         result.warnings[1].text,
-        "Using an optional result as the 2nd argument to `table.remove` may remove the last element when the index is nil; use `table.drop` or check the result instead."
+        "If this is `nil`, `table.remove` will remove the last element of the array. This is a common mistake--consider using `table.drop` instead, or if order is not important, use a key/value table with `true` values for better performance."
     );
     CHECK_EQ(
         result.warnings[2].text,
-        "Using an optional result as the 2nd argument to `table.remove` may remove the last element when the index is nil; use `table.drop` or check the result instead."
+        "If this is `nil`, `table.remove` will remove the last element of the array. This is a common mistake--consider using `table.drop` instead, or if order is not important, use a key/value table with `true` values for better performance."
     );
 }
 
