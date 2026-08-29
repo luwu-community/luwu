@@ -150,7 +150,7 @@ inline bool lowerImpl(
         {
             if (options.includeIrPrefix == IncludeIrPrefix::Yes)
             {
-                if (FFlag::LuauCodegenSharedLog)
+                if (FFlag::LuauCodegenSharedLog && logger)
                     logger->formatAppend("# ");
                 else
                     build.logAppend("# ");
@@ -183,7 +183,7 @@ inline bool lowerImpl(
         {
             if (options.includeIr)
             {
-                if (FFlag::LuauCodegenSharedLog)
+                if (FFlag::LuauCodegenSharedLog && logger)
                 {
                     if (options.includeIrPrefix == IncludeIrPrefix::Yes)
                         logger->formatAppend("# ");
@@ -221,7 +221,7 @@ inline bool lowerImpl(
                 {
                     toString(ctx.result, bcTypes, options.compilationOptions.userdataTypes);
 
-                    if (FFlag::LuauCodegenSharedLog)
+                    if (FFlag::LuauCodegenSharedLog && logger)
                         logger->formatAppend("\n");
                     else
                         build.logAppend("\n");
@@ -260,7 +260,7 @@ inline bool lowerImpl(
             {
                 if (options.includeIrPrefix == IncludeIrPrefix::Yes)
                 {
-                    if (FFlag::LuauCodegenSharedLog)
+                    if (FFlag::LuauCodegenSharedLog && logger)
                         logger->formatAppend("# ");
                     else
                         build.logAppend("# ");
@@ -316,7 +316,7 @@ inline bool lowerImpl(
 
         if (options.includeIr && options.includeIrPrefix == IncludeIrPrefix::Yes)
         {
-            if (FFlag::LuauCodegenSharedLog)
+            if (FFlag::LuauCodegenSharedLog && logger)
                 logger->formatAppend("#\n");
             else
                 build.logAppend("#\n");
@@ -340,7 +340,7 @@ inline bool lowerImpl(
 
         if (options.includeAssembly)
         {
-            if (FFlag::LuauCodegenSharedLog)
+            if (FFlag::LuauCodegenSharedLog && logger)
                 logger->formatAppend("; skipping %u bytes of outlined code\n", unsigned((build.getCodeSize() - codeSize) * sizeof(build.code[0])));
             else
                 build.logAppend("; skipping %u bytes of outlined code\n", unsigned((build.getCodeSize() - codeSize) * sizeof(build.code[0])));

@@ -2722,6 +2722,10 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::GET_HASH_NODE_ADDR:
     case IrCmd::GET_CLOSURE_UPVAL_ADDR:
         break;
+    case IrCmd::TRY_CLASS_MEMBER_ADDR:
+    case IrCmd::TRY_OBJECT_NAMECALL_ADDR:
+        // TODO(rfcx/classes.md): no reuse cache yet, unlike TRY_OBJECT_MEMBER_ADDR above
+        break;
     case IrCmd::ADD_INT64:
     case IrCmd::SUB_INT64:
     case IrCmd::MUL_INT64:
@@ -3396,6 +3400,10 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
 
         if (int(state.checkSlotMatchCache.size()) < FInt::LuauCodeGenReuseSlotLimit)
             state.checkSlotMatchCache.push_back({index, true});
+        break;
+
+    case IrCmd::CHECK_OBJECT_CLASS:
+        // TODO(rfcx/classes.md): no redundant-check elimination yet, unlike CHECK_SLOT_MATCH above
         break;
 
     case IrCmd::ADD_VEC:
