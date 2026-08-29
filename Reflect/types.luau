@@ -168,15 +168,16 @@ export type AstAux =
 
 -- CST for tableitem
 export type CstTableItem = {
+    read kind: "CstTableItem",
     -- '[', only if Kind == General
-    read indexerOpenPosition: AstPosition?,
+    read indexerOpenPosition: (self: CstTableItem) -> AstPosition?,
     -- ']', only if Kind == General
-    read indexerClosePosition: AstPosition?,
+    read indexerClosePosition: (self: CstTableItem) -> AstPosition?,
     -- only if Kind != List
-    read equalsPosition: AstPosition?,
-    read separatorPosition: AstPosition?,
+    read equalsPosition: (self: CstTableItem) -> AstPosition?,
+    read separatorPosition: (self: CstTableItem) -> AstPosition?,
     -- may be missing for last Item
-    read separator: "comma" | "semicolon" | "missing",
+    read separator: (self: CstTableItem) -> ("comma" | "semicolon" | "missing"),
 }
 
 export type CstNodeCommon = {

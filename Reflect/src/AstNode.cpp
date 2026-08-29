@@ -85,385 +85,247 @@ struct DirectChildCollector : public Luau::AstVisitor
     }
 };
 
-LUAU_AST_HANDLER_START(handleStatBlockMethods, AstStatBlock)
-    LUAU_AST_FIELD_RW(HasEnd, SetHasEnd, hasEnd)
-    LUAU_AST_FIELD_RW(Body, SetBody, body)
-LUAU_AST_HANDLER_END()
+#define LUAU_REFLECT_AST_NODES(NODE, NODE_EMPTY) \
+    /* Statements */ \
+    NODE(AstStatBlock, "AstStatBlock", Stat, \
+        LUAU_AST_FIELD_RW(HasEnd, SetHasEnd, hasEnd) \
+        LUAU_AST_FIELD_RW(Body, SetBody, body)) \
+    NODE(AstStatIf, "AstStatIf", Stat, \
+        LUAU_AST_FIELD_RW(Condition, SetCondition, condition) \
+        LUAU_AST_FIELD_RW(ThenBody, SetThenBody, thenbody) \
+        LUAU_AST_FIELD_RW(ElseBody, SetElseBody, elsebody)) \
+    NODE(AstStatWhile, "AstStatWhile", Stat, \
+        LUAU_AST_FIELD_RW(HasDo, SetHasDo, hasDo) \
+        LUAU_AST_FIELD_RW(Condition, SetCondition, condition) \
+        LUAU_AST_FIELD_RW(Body, SetBody, body)) \
+    NODE(AstStatRepeat, "AstStatRepeat", Stat, \
+        LUAU_AST_FIELD_RW(Condition, SetCondition, condition) \
+        LUAU_AST_FIELD_RW(Body, SetBody, body)) \
+    NODE_EMPTY(AstStatBreak, "AstStatBreak", Stat) \
+    NODE_EMPTY(AstStatContinue, "AstStatContinue", Stat) \
+    NODE(AstStatReturn, "AstStatReturn", Stat, \
+        LUAU_AST_FIELD_RW(List, SetList, list)) \
+    NODE(AstStatExpr, "AstStatExpr", Stat, \
+        LUAU_AST_FIELD_RW(Expr, SetExpr, expr)) \
+    NODE(AstStatLocal, "AstStatLocal", Stat, \
+        LUAU_AST_FIELD_RW(IsConst, SetIsConst, isConst) \
+        LUAU_AST_FIELD_RW(Exported, SetExported, isExported) \
+        LUAU_AST_FIELD_RW(Vars, SetVars, vars) \
+        LUAU_AST_FIELD_RW(Values, SetValues, values)) \
+    NODE(AstStatFor, "AstStatFor", Stat, \
+        LUAU_AST_FIELD_RW(HasDo, SetHasDo, hasDo) \
+        LUAU_AST_FIELD_RW(Var, SetVar, var) \
+        LUAU_AST_FIELD_RW(From, SetFrom, from) \
+        LUAU_AST_FIELD_RW(To, SetTo, to) \
+        LUAU_AST_FIELD_RW(Step, SetStep, step) \
+        LUAU_AST_FIELD_RW(Body, SetBody, body)) \
+    NODE(AstStatForIn, "AstStatForIn", Stat, \
+        LUAU_AST_FIELD_RW(HasIn, SetHasIn, hasIn) \
+        LUAU_AST_FIELD_RW(HasDo, SetHasDo, hasDo) \
+        LUAU_AST_FIELD_RW(Vars, SetVars, vars) \
+        LUAU_AST_FIELD_RW(Values, SetValues, values) \
+        LUAU_AST_FIELD_RW(Body, SetBody, body)) \
+    NODE(AstStatAssign, "AstStatAssign", Stat, \
+        LUAU_AST_FIELD_RW(Vars, SetVars, vars) \
+        LUAU_AST_FIELD_RW(Values, SetValues, values)) \
+    NODE(AstStatCompoundAssign, "AstStatCompoundAssign", Stat, \
+        LUAU_AST_FIELD_RW(Op, SetOp, op) \
+        LUAU_AST_FIELD_RW(Var, SetVar, var) \
+        LUAU_AST_FIELD_RW(Value, SetValue, value)) \
+    NODE(AstStatFunction, "AstStatFunction", Stat, \
+        LUAU_AST_FIELD_RW(Name, SetName, name) \
+        LUAU_AST_FIELD_RW(Func, SetFunc, func)) \
+    NODE(AstStatLocalFunction, "AstStatLocalFunction", Stat, \
+        LUAU_AST_FIELD_RW(IsConst, SetIsConst, isConst) \
+        LUAU_AST_FIELD_RW(Name, SetName, name) \
+        LUAU_AST_FIELD_RW(Func, SetFunc, func)) \
+    NODE(AstStatTypeAlias, "AstStatTypeAlias", Stat, \
+        LUAU_AST_FIELD_RW(Name, SetName, name) \
+        LUAU_AST_FIELD_RW(Exported, SetExported, exported) \
+        LUAU_AST_FIELD_RW(Type, SetType, type) \
+        LUAU_AST_FIELD_RW(Generics, SetGenerics, generics) \
+        LUAU_AST_FIELD_RW(GenericPacks, SetGenericPacks, genericPacks)) \
+    NODE(AstStatTypeFunction, "AstStatTypeFunction", Stat, \
+        LUAU_AST_FIELD_RW(Name, SetName, name) \
+        LUAU_AST_FIELD_RW(Exported, SetExported, exported) \
+        LUAU_AST_FIELD_RW(HasErrors, SetHasErrors, hasErrors) \
+        LUAU_AST_FIELD_RW(Body, SetBody, body)) \
+    NODE(AstStatDeclareGlobal, "AstStatDeclareGlobal", Stat, \
+        LUAU_AST_FIELD_RW(Name, SetName, name) \
+        LUAU_AST_FIELD_RW(Type, SetType, type)) \
+    NODE(AstStatDeclareFunction, "AstStatDeclareFunction", Stat, \
+        LUAU_AST_FIELD_RW(Name, SetName, name) \
+        LUAU_AST_FIELD_RW(Vararg, SetVararg, vararg) \
+        LUAU_AST_FIELD_RW(Generics, SetGenerics, generics) \
+        LUAU_AST_FIELD_RW(GenericPacks, SetGenericPacks, genericPacks) \
+        LUAU_AST_FIELD_RW(Params, SetParams, params) \
+        LUAU_AST_FIELD_RW(ReturnTypes, SetReturnTypes, retTypes) \
+        LUAU_AST_FIELD_RW(Attributes, SetAttributes, attributes)) \
+    NODE(AstStatClass, "AstStatClass", Stat, \
+        LUAU_AST_FIELD_RW(Exported, SetExported, exported) \
+        LUAU_AST_FIELD_RW(Name, SetName, name) \
+        LUAU_AST_FIELD_RW(Members, SetMembers, members)) \
+    NODE(AstStatDeclareExternType, "AstStatDeclareExternType", Stat, \
+        LUAU_AST_FIELD_RW(Name, SetName, name) \
+        LUAU_AST_FIELD_RW(SuperName, SetSuperName, superName) \
+        LUAU_AST_FIELD_RW(Props, SetProps, props) \
+        LUAU_AST_FIELD_RW(Indexer, SetIndexer, indexer) \
+        LUAU_AST_FIELD_RW(Generics, SetGenerics, generics) \
+        LUAU_AST_FIELD_RW(GenericPacks, SetGenericPacks, genericPacks)) \
+    NODE(AstStatError, "AstStatError", Stat, \
+        LUAU_AST_FIELD_RO(MessageIndex, messageIndex) \
+        LUAU_AST_FIELD_RO(Expressions, expressions) \
+        LUAU_AST_FIELD_RO(Statements, statements)) \
+    \
+    /* Expressions */ \
+    NODE(AstExprGroup, "AstExprGroup", Expr, \
+        LUAU_AST_FIELD_RW(Expr, SetExpr, expr)) \
+    NODE_EMPTY(AstExprConstantNil, "AstExprConstantNil", Expr) \
+    NODE(AstExprConstantBool, "AstExprConstantBool", Expr, \
+        LUAU_AST_FIELD_RW(Value, SetValue, value)) \
+    NODE(AstExprConstantNumber, "AstExprConstantNumber", Expr, \
+        LUAU_AST_FIELD_RW(Value, SetValue, value)) \
+    NODE(AstExprConstantInteger, "AstExprConstantInteger", Expr, \
+        LUAU_AST_FIELD_RW(Value, SetValue, value)) \
+    NODE(AstExprConstantString, "AstExprConstantString", Expr, \
+        LUAU_AST_FIELD_RW(Value, SetValue, value) \
+        LUAU_AST_FIELD_RW(QuoteStyle, SetQuoteStyle, quoteStyle)) \
+    NODE(AstExprLocal, "AstExprLocal", Expr, \
+        LUAU_AST_FIELD_RW(Upvalue, SetUpvalue, upvalue) \
+        LUAU_AST_FIELD_RW(Local, SetLocal, local)) \
+    NODE(AstExprGlobal, "AstExprGlobal", Expr, \
+        LUAU_AST_FIELD_RW(Name, SetName, name)) \
+    NODE_EMPTY(AstExprVarargs, "AstExprVarargs", Expr) \
+    NODE(AstExprCall, "AstExprCall", Expr, \
+        LUAU_AST_FIELD_RW(Self, SetSelf, self) \
+        LUAU_AST_FIELD_RW(Func, SetFunc, func) \
+        LUAU_AST_FIELD_RW(Args, SetArgs, args) \
+        LUAU_AST_FIELD_RW(TypeArguments, SetTypeArguments, typeArguments)) \
+    NODE(AstExprIndexName, "AstExprIndexName", Expr, \
+        LUAU_AST_FIELD_RW(Index, SetIndex, index) \
+        LUAU_AST_FIELD_RW(Op, SetOp, op) \
+        LUAU_AST_FIELD_RW(Expr, SetExpr, expr)) \
+    NODE(AstExprIndexExpr, "AstExprIndexExpr", Expr, \
+        LUAU_AST_FIELD_RW(Expr, SetExpr, expr) \
+        LUAU_AST_FIELD_RW(Index, SetIndex, index)) \
+    NODE(AstExprFunction, "AstExprFunction", Expr, \
+        LUAU_AST_FIELD_RW(Vararg, SetVararg, vararg) \
+        LUAU_AST_FIELD_RW(DebugName, SetDebugName, debugname) \
+        LUAU_AST_FIELD_RW(Args, SetArgs, args) \
+        LUAU_AST_FIELD_RW(Body, SetBody, body) \
+        LUAU_AST_FIELD_RW(Generics, SetGenerics, generics) \
+        LUAU_AST_FIELD_RW(GenericPacks, SetGenericPacks, genericPacks) \
+        LUAU_AST_FIELD_RW(ReturnAnnotation, SetReturnAnnotation, returnAnnotation) \
+        LUAU_AST_FIELD_RW(Attributes, SetAttributes, attributes)) \
+    NODE(AstExprTable, "AstExprTable", Expr, \
+        LUAU_AST_FIELD_RW(Items, SetItems, items)) \
+    NODE(AstExprUnary, "AstExprUnary", Expr, \
+        LUAU_AST_FIELD_RW(Op, SetOp, op) \
+        LUAU_AST_FIELD_RW(Expr, SetExpr, expr)) \
+    NODE(AstExprBinary, "AstExprBinary", Expr, \
+        LUAU_AST_FIELD_RW(Op, SetOp, op) \
+        LUAU_AST_FIELD_RW(Left, SetLeft, left) \
+        LUAU_AST_FIELD_RW(Right, SetRight, right)) \
+    NODE(AstExprTypeAssertion, "AstExprTypeAssertion", Expr, \
+        LUAU_AST_FIELD_RW(Expr, SetExpr, expr) \
+        LUAU_AST_FIELD_RW(Annotation, SetAnnotation, annotation)) \
+    NODE(AstExprIfElse, "AstExprIfElse", Expr, \
+        LUAU_AST_FIELD_RW(HasElse, SetHasElse, hasElse) \
+        LUAU_AST_FIELD_RW(Condition, SetCondition, condition) \
+        LUAU_AST_FIELD_RW(TrueExpr, SetTrueExpr, trueExpr) \
+        LUAU_AST_FIELD_RW(FalseExpr, SetFalseExpr, falseExpr)) \
+    NODE(AstExprInterpString, "AstExprInterpString", Expr, \
+        LUAU_AST_FIELD_RW(Strings, SetStrings, strings) \
+        LUAU_AST_FIELD_RW(Expressions, SetExpressions, expressions)) \
+    NODE(AstExprInstantiate, "AstExprInstantiate", Expr, \
+        LUAU_AST_FIELD_RW(Expr, SetExpr, expr) \
+        LUAU_AST_FIELD_RW(TypeArguments, SetTypeArguments, typeArguments)) \
+    NODE(AstExprError, "AstExprError", Expr, \
+        LUAU_AST_FIELD_RO(MessageIndex, messageIndex) \
+        LUAU_AST_FIELD_RO(Expressions, expressions)) \
+    \
+    /* Types */ \
+    NODE(AstTypeReference, "AstTypeReference", Type, \
+        LUAU_AST_FIELD_RW(Name, SetName, name) \
+        LUAU_AST_FIELD_RW(Prefix, SetPrefix, prefix) \
+        LUAU_AST_FIELD_RW(HasParameterList, SetHasParameterList, hasParameterList) \
+        LUAU_AST_FIELD_RW(Parameters, SetParameters, parameters)) \
+    NODE(AstTypeTable, "AstTypeTable", Type, \
+        LUAU_AST_FIELD_RW(Props, SetProps, props) \
+        LUAU_AST_FIELD_RW(Indexer, SetIndexer, indexer)) \
+    NODE(AstTypeFunction, "AstTypeFunction", Type, \
+        LUAU_AST_FIELD_RW(Generics, SetGenerics, generics) \
+        LUAU_AST_FIELD_RW(GenericPacks, SetGenericPacks, genericPacks) \
+        LUAU_AST_FIELD_RW(ArgTypes, SetArgTypes, argTypes) \
+        LUAU_AST_FIELD_RW(ReturnTypes, SetReturnTypes, returnTypes) \
+        LUAU_AST_FIELD_RW(Attributes, SetAttributes, attributes)) \
+    NODE(AstTypeTypeof, "AstTypeTypeof", Type, \
+        LUAU_AST_FIELD_RW(Expr, SetExpr, expr)) \
+    NODE_EMPTY(AstTypeOptional, "AstTypeOptional", Type) \
+    NODE(AstTypeUnion, "AstTypeUnion", Type, \
+        LUAU_AST_FIELD_RW(Types, SetTypes, types)) \
+    NODE(AstTypeIntersection, "AstTypeIntersection", Type, \
+        LUAU_AST_FIELD_RW(Types, SetTypes, types)) \
+    NODE(AstTypeSingletonBool, "AstTypeSingletonBool", Type, \
+        LUAU_AST_FIELD_RW(Value, SetValue, value)) \
+    NODE(AstTypeSingletonString, "AstTypeSingletonString", Type, \
+        LUAU_AST_FIELD_RW(Value, SetValue, value)) \
+    NODE(AstTypeGroup, "AstTypeGroup", Type, \
+        LUAU_AST_FIELD_RW(Type, SetType, type)) \
+    NODE(AstTypeError, "AstTypeError", Type, \
+        LUAU_AST_FIELD_RO(IsMissing, isMissing) \
+        LUAU_AST_FIELD_RO(MessageIndex, messageIndex) \
+        LUAU_AST_FIELD_RO(Types, types)) \
+    \
+    /* Type Packs */ \
+    NODE(AstTypePackExplicit, "AstTypePackExplicit", TypePack, \
+        LUAU_AST_FIELD_RW(TypeList, SetTypeList, typeList)) \
+    NODE(AstTypePackVariadic, "AstTypePackVariadic", TypePack, \
+        LUAU_AST_FIELD_RW(VariadicType, SetVariadicType, variadicType)) \
+    NODE(AstTypePackGeneric, "AstTypePackGeneric", TypePack, \
+        LUAU_AST_FIELD_RW(Name, SetName, genericName)) \
+    \
+    /* Generics & Attributes */ \
+    NODE(AstGenericType, "AstGenericType", Generic, \
+        LUAU_AST_FIELD_RW(Name, SetName, name) \
+        LUAU_AST_FIELD_RW(Type, SetType, defaultValue)) \
+    NODE(AstGenericTypePack, "AstGenericTypePack", Generic, \
+        LUAU_AST_FIELD_RW(Name, SetName, name) \
+        LUAU_AST_FIELD_RW(Type, SetType, defaultValue)) \
+    NODE(AstAttr, "AstAttr", Attr, \
+        LUAU_AST_FIELD_RW(Type, SetType, type) \
+        LUAU_AST_FIELD_RW(Name, SetName, name) \
+        LUAU_AST_FIELD_RW(Args, SetArgs, args))
 
-LUAU_AST_HANDLER_START(handleStatIfMethods, AstStatIf)
-    LUAU_AST_FIELD_RW(Condition, SetCondition, condition)
-    LUAU_AST_FIELD_RW(ThenBody, SetThenBody, thenbody)
-    LUAU_AST_FIELD_RW(ElseBody, SetElseBody, elsebody)
-LUAU_AST_HANDLER_END()
+#define LUAU_GENERATE_AST_HANDLER(Class, KindStr, Cat, Fields) \
+    static bool handle##Class##Methods(lua_State* L, AstNodeData& handle, ReflectAtom atom) \
+    { \
+        auto* n = static_cast<Luau::Class*>(handle.node); \
+        switch (atom) \
+        { \
+        Fields \
+        default: return false; \
+        } \
+    }
+#define LUAU_GENERATE_AST_HANDLER_EMPTY(Class, KindStr, Cat)
 
-LUAU_AST_HANDLER_START(handleStatWhileMethods, AstStatWhile)
-    LUAU_AST_FIELD_RW(HasDo, SetHasDo, hasDo)
-    LUAU_AST_FIELD_RW(Condition, SetCondition, condition)
-    LUAU_AST_FIELD_RW(Body, SetBody, body)
-LUAU_AST_HANDLER_END()
+LUAU_REFLECT_AST_NODES(LUAU_GENERATE_AST_HANDLER, LUAU_GENERATE_AST_HANDLER_EMPTY)
 
-LUAU_AST_HANDLER_START(handleStatRepeatMethods, AstStatRepeat)
-    LUAU_AST_FIELD_RW(Condition, SetCondition, condition)
-    LUAU_AST_FIELD_RW(Body, SetBody, body)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleStatReturnMethods, AstStatReturn)
-    LUAU_AST_FIELD_RW(List, SetList, list)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleStatExprMethods, AstStatExpr)
-    LUAU_AST_FIELD_RW(Expr, SetExpr, expr)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleStatLocalMethods, AstStatLocal)
-    LUAU_AST_FIELD_RW(IsConst, SetIsConst, isConst)
-    LUAU_AST_FIELD_RW(Exported, SetExported, isExported)
-    LUAU_AST_FIELD_RW(Vars, SetVars, vars)
-    LUAU_AST_FIELD_RW(Values, SetValues, values)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleStatForMethods, AstStatFor)
-    LUAU_AST_FIELD_RW(HasDo, SetHasDo, hasDo)
-    LUAU_AST_FIELD_RW(Var, SetVar, var)
-    LUAU_AST_FIELD_RW(From, SetFrom, from)
-    LUAU_AST_FIELD_RW(To, SetTo, to)
-    LUAU_AST_FIELD_RW(Step, SetStep, step)
-    LUAU_AST_FIELD_RW(Body, SetBody, body)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleStatForInMethods, AstStatForIn)
-    LUAU_AST_FIELD_RW(HasIn, SetHasIn, hasIn)
-    LUAU_AST_FIELD_RW(HasDo, SetHasDo, hasDo)
-    LUAU_AST_FIELD_RW(Vars, SetVars, vars)
-    LUAU_AST_FIELD_RW(Values, SetValues, values)
-    LUAU_AST_FIELD_RW(Body, SetBody, body)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleStatAssignMethods, AstStatAssign)
-    LUAU_AST_FIELD_RW(Vars, SetVars, vars)
-    LUAU_AST_FIELD_RW(Values, SetValues, values)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleStatCompoundAssignMethods, AstStatCompoundAssign)
-    LUAU_AST_FIELD_RW(Op, SetOp, op)
-    LUAU_AST_FIELD_RW(Var, SetVar, var)
-    LUAU_AST_FIELD_RW(Value, SetValue, value)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleStatFunctionMethods, AstStatFunction)
-    LUAU_AST_FIELD_RW(Name, SetName, name)
-    LUAU_AST_FIELD_RW(Func, SetFunc, func)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleStatLocalFunctionMethods, AstStatLocalFunction)
-    LUAU_AST_FIELD_RW(IsConst, SetIsConst, isConst)
-    LUAU_AST_FIELD_RW(Name, SetName, name)
-    LUAU_AST_FIELD_RW(Func, SetFunc, func)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleStatTypeAliasMethods, AstStatTypeAlias)
-    LUAU_AST_FIELD_RW(Name, SetName, name)
-    LUAU_AST_FIELD_RW(Exported, SetExported, exported)
-    LUAU_AST_FIELD_RW(Type, SetType, type)
-    LUAU_AST_FIELD_RW(Generics, SetGenerics, generics)
-    LUAU_AST_FIELD_RW(GenericPacks, SetGenericPacks, genericPacks)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleStatTypeFunctionMethods, AstStatTypeFunction)
-    LUAU_AST_FIELD_RW(Name, SetName, name)
-    LUAU_AST_FIELD_RW(Exported, SetExported, exported)
-    LUAU_AST_FIELD_RW(HasErrors, SetHasErrors, hasErrors)
-    LUAU_AST_FIELD_RW(Body, SetBody, body)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleStatDeclareGlobalMethods, AstStatDeclareGlobal)
-    LUAU_AST_FIELD_RW(Name, SetName, name)
-    LUAU_AST_FIELD_RW(Type, SetType, type)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleStatDeclareFunctionMethods, AstStatDeclareFunction)
-    LUAU_AST_FIELD_RW(Name, SetName, name)
-    LUAU_AST_FIELD_RW(Vararg, SetVararg, vararg)
-    LUAU_AST_FIELD_RW(Generics, SetGenerics, generics)
-    LUAU_AST_FIELD_RW(GenericPacks, SetGenericPacks, genericPacks)
-    LUAU_AST_FIELD_RW(Params, SetParams, params)
-    LUAU_AST_FIELD_RW(ReturnTypes, SetReturnTypes, retTypes)
-    LUAU_AST_FIELD_RW(Attributes, SetAttributes, attributes)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleStatClassMethods, AstStatClass)
-    LUAU_AST_FIELD_RW(Exported, SetExported, exported)
-    LUAU_AST_FIELD_RW(Name, SetName, name)
-    LUAU_AST_FIELD_RW(Members, SetMembers, members)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleStatDeclareExternTypeMethods, AstStatDeclareExternType)
-    LUAU_AST_FIELD_RW(Name, SetName, name)
-    LUAU_AST_FIELD_RW(SuperName, SetSuperName, superName)
-    LUAU_AST_FIELD_RW(Props, SetProps, props)
-    LUAU_AST_FIELD_RW(Indexer, SetIndexer, indexer)
-    LUAU_AST_FIELD_RW(Generics, SetGenerics, generics)
-    LUAU_AST_FIELD_RW(GenericPacks, SetGenericPacks, genericPacks)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleStatErrorMethods, AstStatError)
-    LUAU_AST_FIELD_RO(MessageIndex, messageIndex)
-    LUAU_AST_FIELD_RO(Expressions, expressions)
-    LUAU_AST_FIELD_RO(Statements, statements)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleExprGroupMethods, AstExprGroup)
-    LUAU_AST_FIELD_RW(Expr, SetExpr, expr)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleExprConstantBoolMethods, AstExprConstantBool)
-    LUAU_AST_FIELD_RW(Value, SetValue, value)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleExprConstantNumberMethods, AstExprConstantNumber)
-    LUAU_AST_FIELD_RW(Value, SetValue, value)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleExprConstantIntegerMethods, AstExprConstantInteger)
-    LUAU_AST_FIELD_RW(Value, SetValue, value)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleExprConstantStringMethods, AstExprConstantString)
-    LUAU_AST_FIELD_RW(Value, SetValue, value)
-    LUAU_AST_FIELD_RW(QuoteStyle, SetQuoteStyle, quoteStyle)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleExprLocalMethods, AstExprLocal)
-    LUAU_AST_FIELD_RW(Upvalue, SetUpvalue, upvalue)
-    LUAU_AST_FIELD_RW(Local, SetLocal, local)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleExprGlobalMethods, AstExprGlobal)
-    LUAU_AST_FIELD_RW(Name, SetName, name)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleExprCallMethods, AstExprCall)
-    LUAU_AST_FIELD_RW(Self, SetSelf, self)
-    LUAU_AST_FIELD_RW(Func, SetFunc, func)
-    LUAU_AST_FIELD_RW(Args, SetArgs, args)
-    LUAU_AST_FIELD_RW(TypeArguments, SetTypeArguments, typeArguments)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleExprIndexNameMethods, AstExprIndexName)
-    LUAU_AST_FIELD_RW(Index, SetIndex, index)
-    LUAU_AST_FIELD_RW(Op, SetOp, op)
-    LUAU_AST_FIELD_RW(Expr, SetExpr, expr)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleExprIndexExprMethods, AstExprIndexExpr)
-    LUAU_AST_FIELD_RW(Expr, SetExpr, expr)
-    LUAU_AST_FIELD_RW(Index, SetIndex, index)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleExprFunctionMethods, AstExprFunction)
-    LUAU_AST_FIELD_RW(Vararg, SetVararg, vararg)
-    LUAU_AST_FIELD_RW(DebugName, SetDebugName, debugname)
-    LUAU_AST_FIELD_RW(Args, SetArgs, args)
-    LUAU_AST_FIELD_RW(Body, SetBody, body)
-    LUAU_AST_FIELD_RW(Generics, SetGenerics, generics)
-    LUAU_AST_FIELD_RW(GenericPacks, SetGenericPacks, genericPacks)
-    LUAU_AST_FIELD_RW(ReturnAnnotation, SetReturnAnnotation, returnAnnotation)
-    LUAU_AST_FIELD_RW(Attributes, SetAttributes, attributes)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleExprTableMethods, AstExprTable)
-    LUAU_AST_FIELD_RW(Items, SetItems, items)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleExprUnaryMethods, AstExprUnary)
-    LUAU_AST_FIELD_RW(Op, SetOp, op)
-    LUAU_AST_FIELD_RW(Expr, SetExpr, expr)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleExprBinaryMethods, AstExprBinary)
-    LUAU_AST_FIELD_RW(Op, SetOp, op)
-    LUAU_AST_FIELD_RW(Left, SetLeft, left)
-    LUAU_AST_FIELD_RW(Right, SetRight, right)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleExprTypeAssertionMethods, AstExprTypeAssertion)
-    LUAU_AST_FIELD_RW(Expr, SetExpr, expr)
-    LUAU_AST_FIELD_RW(Annotation, SetAnnotation, annotation)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleExprIfElseMethods, AstExprIfElse)
-    LUAU_AST_FIELD_RW(HasElse, SetHasElse, hasElse)
-    LUAU_AST_FIELD_RW(Condition, SetCondition, condition)
-    LUAU_AST_FIELD_RW(TrueExpr, SetTrueExpr, trueExpr)
-    LUAU_AST_FIELD_RW(FalseExpr, SetFalseExpr, falseExpr)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleExprInterpStringMethods, AstExprInterpString)
-    LUAU_AST_FIELD_RW(Strings, SetStrings, strings)
-    LUAU_AST_FIELD_RW(Expressions, SetExpressions, expressions)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleExprInstantiateMethods, AstExprInstantiate)
-    LUAU_AST_FIELD_RW(Expr, SetExpr, expr)
-    LUAU_AST_FIELD_RW(TypeArguments, SetTypeArguments, typeArguments)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleExprErrorMethods, AstExprError)
-    LUAU_AST_FIELD_RO(MessageIndex, messageIndex)
-    LUAU_AST_FIELD_RO(Expressions, expressions)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleTypeReferenceMethods, AstTypeReference)
-    LUAU_AST_FIELD_RW(Name, SetName, name)
-    LUAU_AST_FIELD_RW(Prefix, SetPrefix, prefix)
-    LUAU_AST_FIELD_RW(HasParameterList, SetHasParameterList, hasParameterList)
-    LUAU_AST_FIELD_RW(Parameters, SetParameters, parameters)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleTypeTableMethods, AstTypeTable)
-    LUAU_AST_FIELD_RW(Props, SetProps, props)
-    LUAU_AST_FIELD_RW(Indexer, SetIndexer, indexer)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleTypeFunctionMethods, AstTypeFunction)
-    LUAU_AST_FIELD_RW(Generics, SetGenerics, generics)
-    LUAU_AST_FIELD_RW(GenericPacks, SetGenericPacks, genericPacks)
-    LUAU_AST_FIELD_RW(ArgTypes, SetArgTypes, argTypes)
-    LUAU_AST_FIELD_RW(ReturnTypes, SetReturnTypes, returnTypes)
-    LUAU_AST_FIELD_RW(Attributes, SetAttributes, attributes)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleTypeTypeofMethods, AstTypeTypeof)
-    LUAU_AST_FIELD_RW(Expr, SetExpr, expr)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleTypeUnionMethods, AstTypeUnion)
-    LUAU_AST_FIELD_RW(Types, SetTypes, types)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleTypeIntersectionMethods, AstTypeIntersection)
-    LUAU_AST_FIELD_RW(Types, SetTypes, types)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleTypeSingletonBoolMethods, AstTypeSingletonBool)
-    LUAU_AST_FIELD_RW(Value, SetValue, value)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleTypeSingletonStringMethods, AstTypeSingletonString)
-    LUAU_AST_FIELD_RW(Value, SetValue, value)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleTypeGroupMethods, AstTypeGroup)
-    LUAU_AST_FIELD_RW(Type, SetType, type)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleTypeErrorMethods, AstTypeError)
-    LUAU_AST_FIELD_RO(IsMissing, isMissing)
-    LUAU_AST_FIELD_RO(MessageIndex, messageIndex)
-    LUAU_AST_FIELD_RO(Types, types)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleTypePackExplicitMethods, AstTypePackExplicit)
-    LUAU_AST_FIELD_RW(TypeList, SetTypeList, typeList)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleTypePackVariadicMethods, AstTypePackVariadic)
-    LUAU_AST_FIELD_RW(VariadicType, SetVariadicType, variadicType)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleTypePackGenericMethods, AstTypePackGeneric)
-    LUAU_AST_FIELD_RW(Name, SetName, genericName)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleGenericTypeMethods, AstGenericType)
-    LUAU_AST_FIELD_RW(Name, SetName, name)
-    LUAU_AST_FIELD_RW(Type, SetType, defaultValue)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleGenericTypePackMethods, AstGenericTypePack)
-    LUAU_AST_FIELD_RW(Name, SetName, name)
-    LUAU_AST_FIELD_RW(Type, SetType, defaultValue)
-LUAU_AST_HANDLER_END()
-
-LUAU_AST_HANDLER_START(handleAttrMethods, AstAttr)
-    LUAU_AST_FIELD_RW(Type, SetType, type)
-    LUAU_AST_FIELD_RW(Name, SetName, name)
-    LUAU_AST_FIELD_RW(Args, SetArgs, args)
-LUAU_AST_HANDLER_END()
+#undef LUAU_GENERATE_AST_HANDLER
+#undef LUAU_GENERATE_AST_HANDLER_EMPTY
 
 static void initializeDispatchTables()
 {
-    // SAFETY: c++ guarantees thread safety in static inits like this (see https://iamroman.org/blog/2017/04/cpp11-static-init/) from c++11
     static const bool initialized = []() {
-        // Statements
-        registerNodeClass<Luau::AstStatBlock>("AstStatBlock", NodeCategory::Stat, handleStatBlockMethods);
-        registerNodeClass<Luau::AstStatIf>("AstStatIf", NodeCategory::Stat, handleStatIfMethods);
-        registerNodeClass<Luau::AstStatWhile>("AstStatWhile", NodeCategory::Stat, handleStatWhileMethods);
-        registerNodeClass<Luau::AstStatRepeat>("AstStatRepeat", NodeCategory::Stat, handleStatRepeatMethods);
-        registerNodeClass<Luau::AstStatBreak>("AstStatBreak", NodeCategory::Stat);
-        registerNodeClass<Luau::AstStatContinue>("AstStatContinue", NodeCategory::Stat);
-        registerNodeClass<Luau::AstStatReturn>("AstStatReturn", NodeCategory::Stat, handleStatReturnMethods);
-        registerNodeClass<Luau::AstStatExpr>("AstStatExpr", NodeCategory::Stat, handleStatExprMethods);
-        registerNodeClass<Luau::AstStatLocal>("AstStatLocal", NodeCategory::Stat, handleStatLocalMethods);
-        registerNodeClass<Luau::AstStatFor>("AstStatFor", NodeCategory::Stat, handleStatForMethods);
-        registerNodeClass<Luau::AstStatForIn>("AstStatForIn", NodeCategory::Stat, handleStatForInMethods);
-        registerNodeClass<Luau::AstStatAssign>("AstStatAssign", NodeCategory::Stat, handleStatAssignMethods);
-        registerNodeClass<Luau::AstStatCompoundAssign>("AstStatCompoundAssign", NodeCategory::Stat, handleStatCompoundAssignMethods);
-        registerNodeClass<Luau::AstStatFunction>("AstStatFunction", NodeCategory::Stat, handleStatFunctionMethods);
-        registerNodeClass<Luau::AstStatLocalFunction>("AstStatLocalFunction", NodeCategory::Stat, handleStatLocalFunctionMethods);
-        registerNodeClass<Luau::AstStatTypeAlias>("AstStatTypeAlias", NodeCategory::Stat, handleStatTypeAliasMethods);
-        registerNodeClass<Luau::AstStatTypeFunction>("AstStatTypeFunction", NodeCategory::Stat, handleStatTypeFunctionMethods);
-        registerNodeClass<Luau::AstStatDeclareGlobal>("AstStatDeclareGlobal", NodeCategory::Stat, handleStatDeclareGlobalMethods);
-        registerNodeClass<Luau::AstStatDeclareFunction>("AstStatDeclareFunction", NodeCategory::Stat, handleStatDeclareFunctionMethods);
-        registerNodeClass<Luau::AstStatClass>("AstStatClass", NodeCategory::Stat, handleStatClassMethods);
-        registerNodeClass<Luau::AstStatDeclareExternType>("AstStatDeclareExternType", NodeCategory::Stat, handleStatDeclareExternTypeMethods);
-        registerNodeClass<Luau::AstStatError>("AstStatError", NodeCategory::Stat, handleStatErrorMethods);
+#define LUAU_REGISTER_AST_NODE(Class, KindStr, Cat, Fields) \
+        registerNodeClass<Luau::Class>(KindStr, NodeCategory::Cat, handle##Class##Methods);
+#define LUAU_REGISTER_AST_NODE_EMPTY(Class, KindStr, Cat) \
+        registerNodeClass<Luau::Class>(KindStr, NodeCategory::Cat);
 
-        // Expressions
-        registerNodeClass<Luau::AstExprGroup>("AstExprGroup", NodeCategory::Expr, handleExprGroupMethods);
-        registerNodeClass<Luau::AstExprConstantNil>("AstExprConstantNil", NodeCategory::Expr);
-        registerNodeClass<Luau::AstExprConstantBool>("AstExprConstantBool", NodeCategory::Expr, handleExprConstantBoolMethods);
-        registerNodeClass<Luau::AstExprConstantNumber>("AstExprConstantNumber", NodeCategory::Expr, handleExprConstantNumberMethods);
-        registerNodeClass<Luau::AstExprConstantInteger>("AstExprConstantInteger", NodeCategory::Expr, handleExprConstantIntegerMethods);
-        registerNodeClass<Luau::AstExprConstantString>("AstExprConstantString", NodeCategory::Expr, handleExprConstantStringMethods);
-        registerNodeClass<Luau::AstExprLocal>("AstExprLocal", NodeCategory::Expr, handleExprLocalMethods);
-        registerNodeClass<Luau::AstExprGlobal>("AstExprGlobal", NodeCategory::Expr, handleExprGlobalMethods);
-        registerNodeClass<Luau::AstExprVarargs>("AstExprVarargs", NodeCategory::Expr);
-        registerNodeClass<Luau::AstExprCall>("AstExprCall", NodeCategory::Expr, handleExprCallMethods);
-        registerNodeClass<Luau::AstExprIndexName>("AstExprIndexName", NodeCategory::Expr, handleExprIndexNameMethods);
-        registerNodeClass<Luau::AstExprIndexExpr>("AstExprIndexExpr", NodeCategory::Expr, handleExprIndexExprMethods);
-        registerNodeClass<Luau::AstExprFunction>("AstExprFunction", NodeCategory::Expr, handleExprFunctionMethods);
-        registerNodeClass<Luau::AstExprTable>("AstExprTable", NodeCategory::Expr, handleExprTableMethods);
-        registerNodeClass<Luau::AstExprUnary>("AstExprUnary", NodeCategory::Expr, handleExprUnaryMethods);
-        registerNodeClass<Luau::AstExprBinary>("AstExprBinary", NodeCategory::Expr, handleExprBinaryMethods);
-        registerNodeClass<Luau::AstExprTypeAssertion>("AstExprTypeAssertion", NodeCategory::Expr, handleExprTypeAssertionMethods);
-        registerNodeClass<Luau::AstExprIfElse>("AstExprIfElse", NodeCategory::Expr, handleExprIfElseMethods);
-        registerNodeClass<Luau::AstExprInterpString>("AstExprInterpString", NodeCategory::Expr, handleExprInterpStringMethods);
-        registerNodeClass<Luau::AstExprInstantiate>("AstExprInstantiate", NodeCategory::Expr, handleExprInstantiateMethods);
-        registerNodeClass<Luau::AstExprError>("AstExprError", NodeCategory::Expr, handleExprErrorMethods);
+        LUAU_REFLECT_AST_NODES(LUAU_REGISTER_AST_NODE, LUAU_REGISTER_AST_NODE_EMPTY)
 
-        // Types
-        registerNodeClass<Luau::AstTypeReference>("AstTypeReference", NodeCategory::Type, handleTypeReferenceMethods);
-        registerNodeClass<Luau::AstTypeTable>("AstTypeTable", NodeCategory::Type, handleTypeTableMethods);
-        registerNodeClass<Luau::AstTypeFunction>("AstTypeFunction", NodeCategory::Type, handleTypeFunctionMethods);
-        registerNodeClass<Luau::AstTypeTypeof>("AstTypeTypeof", NodeCategory::Type, handleTypeTypeofMethods);
-        registerNodeClass<Luau::AstTypeOptional>("AstTypeOptional", NodeCategory::Type);
-        registerNodeClass<Luau::AstTypeUnion>("AstTypeUnion", NodeCategory::Type, handleTypeUnionMethods);
-        registerNodeClass<Luau::AstTypeIntersection>("AstTypeIntersection", NodeCategory::Type, handleTypeIntersectionMethods);
-        registerNodeClass<Luau::AstTypeSingletonBool>("AstTypeSingletonBool", NodeCategory::Type, handleTypeSingletonBoolMethods);
-        registerNodeClass<Luau::AstTypeSingletonString>("AstTypeSingletonString", NodeCategory::Type, handleTypeSingletonStringMethods);
-        registerNodeClass<Luau::AstTypeGroup>("AstTypeGroup", NodeCategory::Type, handleTypeGroupMethods);
-        registerNodeClass<Luau::AstTypeError>("AstTypeError", NodeCategory::Type, handleTypeErrorMethods);
-
-        // Type Packs
-        registerNodeClass<Luau::AstTypePackExplicit>("AstTypePackExplicit", NodeCategory::TypePack, handleTypePackExplicitMethods);
-        registerNodeClass<Luau::AstTypePackVariadic>("AstTypePackVariadic", NodeCategory::TypePack, handleTypePackVariadicMethods);
-        registerNodeClass<Luau::AstTypePackGeneric>("AstTypePackGeneric", NodeCategory::TypePack, handleTypePackGenericMethods);
-
-        // Generics & Attributes
-        registerNodeClass<Luau::AstGenericType>("AstGenericType", NodeCategory::Generic, handleGenericTypeMethods);
-        registerNodeClass<Luau::AstGenericTypePack>("AstGenericTypePack", NodeCategory::Generic, handleGenericTypePackMethods);
-        registerNodeClass<Luau::AstAttr>("AstAttr", NodeCategory::Attr, handleAttrMethods);
+#undef LUAU_REGISTER_AST_NODE
+#undef LUAU_REGISTER_AST_NODE_EMPTY
         return true;
     }();
     (void)initialized;

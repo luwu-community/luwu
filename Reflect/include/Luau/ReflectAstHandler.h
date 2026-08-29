@@ -13,25 +13,18 @@ inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentStat
     lua_pushboolean(L, val);
 }
 
-inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int64_t val)
-{
-    lua_pushinteger64(L, val);
-}
-
-inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, uint64_t val)
-{
-    lua_pushinteger64(L, int64_t(val));
-}
-
 inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, char val)
 {
     lua_pushlstring(L, &val, 1);
 }
 
-template<typename T, typename = std::enable_if_t<std::is_integral_v<T> && !std::is_same_v<T, bool> && !std::is_same_v<T, char> && (sizeof(T) < 8)>>
+template<typename T, typename = std::enable_if_t<std::is_integral_v<T> && !std::is_same_v<T, bool> && !std::is_same_v<T, char>>>
 inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, T val)
 {
-    lua_pushinteger(L, int(val));
+    if constexpr (sizeof(T) == 8)
+        lua_pushinteger64(L, static_cast<int64_t>(val));
+    else
+        lua_pushinteger(L, static_cast<int>(val));
 }
 
 inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, double val)
@@ -117,6 +110,11 @@ inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentStat
     pushAstAux(L, doc, val);
 }
 
+inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::CstExprTable::Item& val)
+{
+    pushAstAux(L, doc, val);
+}
+
 inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstTableProp& val)
 {
     pushAstAux(L, doc, val);
@@ -155,26 +153,20 @@ inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentStat
     out = (lua_toboolean(L, argIdx) != 0);
 }
 
-inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, int64_t& out)
-{
-    if (lua_isnumber(L, argIdx))
-        out = static_cast<int64_t>(lua_tointeger(L, argIdx));
-    else
-        out = luaL_checkinteger64(L, argIdx);
-}
-
-inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, uint64_t& out)
-{
-    if (lua_isnumber(L, argIdx))
-        out = static_cast<uint64_t>(lua_tointeger(L, argIdx));
-    else
-        out = static_cast<uint64_t>(luaL_checkinteger64(L, argIdx));
-}
-
-template<typename T, typename = std::enable_if_t<std::is_integral_v<T> && !std::is_same_v<T, bool> && !std::is_same_v<T, int64_t> && !std::is_same_v<T, uint64_t>>>
+template<typename T, typename = std::enable_if_t<std::is_integral_v<T> && !std::is_same_v<T, bool> && !std::is_same_v<T, char>>>
 inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, T& out)
 {
-    out = static_cast<T>(luaL_checkinteger(L, argIdx));
+    if constexpr (sizeof(T) == 8)
+    {
+        if (lua_isnumber(L, argIdx))
+            out = static_cast<T>(lua_tointeger(L, argIdx));
+        else
+            out = static_cast<T>(luaL_checkinteger64(L, argIdx));
+    }
+    else
+    {
+        out = static_cast<T>(luaL_checkinteger(L, argIdx));
+    }
 }
 
 inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, double& out)
@@ -470,6 +462,9 @@ inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentStat
 
 #define LUAU_AUX_FIELD_RO(atomGet, memberExpr) \
     case ReflectAtom::atomGet: pushReflectValue(L, handle.doc, memberExpr); return true;
+
+#define LUAU_CST_FIELD_RO(atomGet, memberName) \
+    case ReflectAtom::atomGet: pushReflectValue(L, handle.doc, n->memberName); return true;
 
 #define LUAU_AST_HANDLER_START(name, NodeClass) \
     static bool name(lua_State* L, AstNodeData& handle, ReflectAtom atom) \

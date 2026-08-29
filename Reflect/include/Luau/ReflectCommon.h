@@ -25,22 +25,10 @@ LUAU_FASTFLAG(OptLuwuReflectUseAtoms)
 namespace Luau
 {
 
-#define LUAU_REFLECT_ATOMS \
-    /* Common / shared */ \
+#define LUAU_REFLECT_ATOMS(ATOM, ATOM_RW) \
+    /* Special & Document */ \
     ATOM(Id, "id") \
-    ATOM(Kind, "kind") \
-    ATOM(Location, "location") \
-    ATOM(Text, "text") \
-    ATOM(Name, "name") \
-    ATOM(Type, "type") \
-    ATOM(Value, "value") \
-    ATOM(Func, "func") \
-    ATOM(Items, "items") \
-    ATOM(IsConst, "isConst") \
-    ATOM(Annotation, "annotation") \
     ATOM(Matches, "matches") \
-    \
-    /* AstDocument */ \
     ATOM(Root, "root") \
     ATOM(Source, "source") \
     ATOM(Walk, "walk") \
@@ -48,140 +36,87 @@ namespace Luau
     ATOM(Comments, "comments") \
     ATOM(LineOffsets, "lineOffsets") \
     \
-    /* AstNode */ \
+    /* Read-Write AST / CST / Aux Properties */ \
+    ATOM_RW(Body, "body", SetBody, "setBody") \
+    ATOM_RW(Condition, "condition", SetCondition, "setCondition") \
+    ATOM_RW(ThenBody, "thenbody", SetThenBody, "setThenBody") \
+    ATOM_RW(ElseBody, "elsebody", SetElseBody, "setElseBody") \
+    ATOM_RW(List, "list", SetList, "setList") \
+    ATOM_RW(Expr, "expr", SetExpr, "setExpr") \
+    ATOM_RW(Vars, "vars", SetVars, "setVars") \
+    ATOM_RW(Values, "values", SetValues, "setValues") \
+    ATOM_RW(Var, "var", SetVar, "setVar") \
+    ATOM_RW(From, "from", SetFrom, "setFrom") \
+    ATOM_RW(To, "to", SetTo, "setTo") \
+    ATOM_RW(Step, "step", SetStep, "setStep") \
+    ATOM_RW(Value, "value", SetValue, "setValue") \
+    ATOM_RW(Upvalue, "upvalue", SetUpvalue, "setUpvalue") \
+    ATOM_RW(Local, "local", SetLocal, "setLocal") \
+    ATOM_RW(Name, "name", SetName, "setName") \
+    ATOM_RW(Self, "self", SetSelf, "setSelf") \
+    ATOM_RW(Func, "func", SetFunc, "setFunc") \
+    ATOM_RW(Args, "args", SetArgs, "setArgs") \
+    ATOM_RW(Index, "index", SetIndex, "setIndex") \
+    ATOM_RW(Left, "left", SetLeft, "setLeft") \
+    ATOM_RW(Right, "right", SetRight, "setRight") \
+    ATOM_RW(Annotation, "annotation", SetAnnotation, "setAnnotation") \
+    ATOM_RW(HasElse, "hasElse", SetHasElse, "setHasElse") \
+    ATOM_RW(HasDo, "hasDo", SetHasDo, "setHasDo") \
+    ATOM_RW(HasIn, "hasIn", SetHasIn, "setHasIn") \
+    ATOM_RW(HasEnd, "hasEnd", SetHasEnd, "setHasEnd") \
+    ATOM_RW(IsConst, "isConst", SetIsConst, "setIsConst") \
+    ATOM_RW(Exported, "exported", SetExported, "setExported") \
+    ATOM_RW(TrueExpr, "trueExpr", SetTrueExpr, "setTrueExpr") \
+    ATOM_RW(FalseExpr, "falseExpr", SetFalseExpr, "setFalseExpr") \
+    ATOM_RW(HasErrors, "hasErrors", SetHasErrors, "setHasErrors") \
+    ATOM_RW(Generics, "generics", SetGenerics, "setGenerics") \
+    ATOM_RW(GenericPacks, "genericPacks", SetGenericPacks, "setGenericPacks") \
+    ATOM_RW(Params, "params", SetParams, "setParams") \
+    ATOM_RW(ReturnTypes, "returnTypes", SetReturnTypes, "setReturnTypes") \
+    ATOM_RW(Attributes, "attributes", SetAttributes, "setAttributes") \
+    ATOM_RW(SuperName, "superName", SetSuperName, "setSuperName") \
+    ATOM_RW(Props, "props", SetProps, "setProps") \
+    ATOM_RW(Indexer, "indexer", SetIndexer, "setIndexer") \
+    ATOM_RW(Members, "members", SetMembers, "setMembers") \
+    ATOM_RW(TypeArguments, "typeArguments", SetTypeArguments, "setTypeArguments") \
+    ATOM_RW(DebugName, "debugname", SetDebugName, "setDebugName") \
+    ATOM_RW(Vararg, "vararg", SetVararg, "setVararg") \
+    ATOM_RW(ReturnAnnotation, "returnAnnotation", SetReturnAnnotation, "setReturnAnnotation") \
+    ATOM_RW(Strings, "strings", SetStrings, "setStrings") \
+    ATOM_RW(Expressions, "expressions", SetExpressions, "setExpressions") \
+    ATOM_RW(Items, "items", SetItems, "setItems") \
+    ATOM_RW(Prefix, "prefix", SetPrefix, "setPrefix") \
+    ATOM_RW(HasParameterList, "hasParameterList", SetHasParameterList, "setHasParameterList") \
+    ATOM_RW(Parameters, "parameters", SetParameters, "setParameters") \
+    ATOM_RW(ArgTypes, "argTypes", SetArgTypes, "setArgTypes") \
+    ATOM_RW(Type, "type", SetType, "setType") \
+    ATOM_RW(Types, "types", SetTypes, "setTypes") \
+    ATOM_RW(TailType, "tailType", SetTailType, "setTailType") \
+    ATOM_RW(TypeList, "typeList", SetTypeList, "setTypeList") \
+    ATOM_RW(VariadicType, "variadicType", SetVariadicType, "setVariadicType") \
+    ATOM_RW(Op, "op", SetOp, "setOp") \
+    ATOM_RW(QuoteStyle, "quoteStyle", SetQuoteStyle, "setQuoteStyle") \
+    ATOM_RW(Location, "location", SetLocation, "setLocation") \
+    ATOM_RW(HasSemicolon, "hasSemicolon", SetHasSemicolon, "setHasSemicolon") \
+    ATOM_RW(Shadow, "shadow", SetShadow, "setShadow") \
+    ATOM_RW(Depth, "depth", SetDepth, "setDepth") \
+    ATOM_RW(Access, "access", SetAccess, "setAccess") \
+    ATOM_RW(IndexType, "indexType", SetIndexType, "setIndexType") \
+    ATOM_RW(ResultType, "resultType", SetResultType, "setResultType") \
+    ATOM_RW(IsMethod, "isMethod", SetIsMethod, "setIsMethod") \
+    ATOM_RW(Text, "text", SetText, "setText") \
+    ATOM_RW(Key, "key", SetKey, "setKey") \
+    ATOM_RW(Kind, "kind", SetKind, "setKind") \
+    \
+    /* Read-Only AST Properties */ \
     ATOM(Category, "category") \
     ATOM(Children, "children") \
     ATOM(Cst, "cst") \
-    ATOM(Body, "body") \
-    ATOM(Condition, "condition") \
-    ATOM(ThenBody, "thenbody") \
-    ATOM(ElseBody, "elsebody") \
-    ATOM(List, "list") \
-    ATOM(Expr, "expr") \
-    ATOM(Vars, "vars") \
-    ATOM(Values, "values") \
-    ATOM(Var, "var") \
-    ATOM(From, "from") \
-    ATOM(To, "to") \
-    ATOM(Step, "step") \
-    ATOM(Op, "op") \
-    ATOM(Args, "args") \
-    ATOM(Self, "self") \
-    ATOM(Index, "index") \
-    ATOM(Left, "left") \
-    ATOM(Right, "right") \
-    ATOM(Local, "local") \
-    ATOM(TrueExpr, "trueExpr") \
-    ATOM(FalseExpr, "falseExpr") \
-    ATOM(Prefix, "prefix") \
-    ATOM(Vararg, "vararg") \
-    ATOM(HasSemicolon, "hasSemicolon") \
-    ATOM(Generics, "generics") \
-    ATOM(GenericPacks, "genericPacks") \
-    ATOM(ReturnAnnotation, "returnAnnotation") \
-    ATOM(Exported, "exported") \
-    ATOM(HasErrors, "hasErrors") \
-    ATOM(SuperName, "superName") \
-    ATOM(Props, "props") \
-    ATOM(Indexer, "indexer") \
-    ATOM(Members, "members") \
     ATOM(Statements, "statements") \
-    ATOM(Expressions, "expressions") \
-    ATOM(Strings, "strings") \
     ATOM(MessageIndex, "messageIndex") \
-    ATOM(TypeArguments, "typeArguments") \
-    ATOM(Parameters, "parameters") \
-    ATOM(HasParameterList, "hasParameterList") \
-    ATOM(ArgTypes, "argTypes") \
-    ATOM(ReturnTypes, "returnTypes") \
-    ATOM(Attributes, "attributes") \
-    ATOM(DebugName, "debugname") \
-    ATOM(Upvalue, "upvalue") \
-    ATOM(HasDo, "hasDo") \
-    ATOM(HasIn, "hasIn") \
-    ATOM(HasEnd, "hasEnd") \
-    ATOM(HasElse, "hasElse") \
-    ATOM(QuoteStyle, "quoteStyle") \
     ATOM(IsMissing, "isMissing") \
-    ATOM(Types, "types") \
-    ATOM(TailType, "tailType") \
-    ATOM(TypeList, "typeList") \
-    ATOM(VariadicType, "variadicType") \
-    ATOM(Params, "params") \
     \
-    /* AstNode Setters */ \
-    ATOM(SetBody, "setBody") \
-    ATOM(SetCondition, "setCondition") \
-    ATOM(SetThenBody, "setThenBody") \
-    ATOM(SetElseBody, "setElseBody") \
-    ATOM(SetList, "setList") \
-    ATOM(SetExpr, "setExpr") \
-    ATOM(SetVars, "setVars") \
-    ATOM(SetValues, "setValues") \
-    ATOM(SetVar, "setVar") \
-    ATOM(SetFrom, "setFrom") \
-    ATOM(SetTo, "setTo") \
-    ATOM(SetStep, "setStep") \
-    ATOM(SetValue, "setValue") \
-    ATOM(SetUpvalue, "setUpvalue") \
-    ATOM(SetLocal, "setLocal") \
-    ATOM(SetName, "setName") \
-    ATOM(SetSelf, "setSelf") \
-    ATOM(SetFunc, "setFunc") \
-    ATOM(SetArgs, "setArgs") \
-    ATOM(SetIndex, "setIndex") \
-    ATOM(SetLeft, "setLeft") \
-    ATOM(SetRight, "setRight") \
-    ATOM(SetAnnotation, "setAnnotation") \
-    ATOM(SetHasElse, "setHasElse") \
-    ATOM(SetHasDo, "setHasDo") \
-    ATOM(SetHasIn, "setHasIn") \
-    ATOM(SetHasEnd, "setHasEnd") \
-    ATOM(SetIsConst, "setIsConst") \
-    ATOM(SetExported, "setExported") \
-    ATOM(SetTrueExpr, "setTrueExpr") \
-    ATOM(SetFalseExpr, "setFalseExpr") \
-    ATOM(SetHasErrors, "setHasErrors") \
-    ATOM(SetGenerics, "setGenerics") \
-    ATOM(SetGenericPacks, "setGenericPacks") \
-    ATOM(SetParams, "setParams") \
-    ATOM(SetReturnTypes, "setReturnTypes") \
-    ATOM(SetAttributes, "setAttributes") \
-    ATOM(SetSuperName, "setSuperName") \
-    ATOM(SetProps, "setProps") \
-    ATOM(SetIndexer, "setIndexer") \
-    ATOM(SetMembers, "setMembers") \
-    ATOM(SetTypeArguments, "setTypeArguments") \
-    ATOM(SetDebugName, "setDebugName") \
-    ATOM(SetVararg, "setVararg") \
-    ATOM(SetReturnAnnotation, "setReturnAnnotation") \
-    ATOM(SetStrings, "setStrings") \
-    ATOM(SetExpressions, "setExpressions") \
-    ATOM(SetItems, "setItems") \
-    ATOM(SetPrefix, "setPrefix") \
-    ATOM(SetHasParameterList, "setHasParameterList") \
-    ATOM(SetParameters, "setParameters") \
-    ATOM(SetArgTypes, "setArgTypes") \
-    ATOM(SetType, "setType") \
-    ATOM(SetTypes, "setTypes") \
-    ATOM(SetTailType, "setTailType") \
-    ATOM(SetTypeList, "setTypeList") \
-    ATOM(SetVariadicType, "setVariadicType") \
-    ATOM(SetOp, "setOp") \
-    ATOM(SetQuoteStyle, "setQuoteStyle") \
-    ATOM(SetLocation, "setLocation") \
-    ATOM(SetHasSemicolon, "setHasSemicolon") \
-    ATOM(SetShadow, "setShadow") \
-    ATOM(SetDepth, "setDepth") \
-    ATOM(SetAccess, "setAccess") \
-    ATOM(SetIndexType, "setIndexType") \
-    ATOM(SetResultType, "setResultType") \
-    ATOM(SetIsMethod, "setIsMethod") \
-    ATOM(SetText, "setText") \
-    ATOM(SetKey, "setKey") \
-    ATOM(SetKind, "setKind") \
-    \
-    /* CstNode */ \
+    /* Read-Only CST Properties */ \
     ATOM(HasAt, "hasAt") \
     ATOM(OpenParenPosition, "openParenPosition") \
     ATOM(CloseParenPosition, "closeParenPosition") \
@@ -237,29 +172,18 @@ namespace Luau
     ATOM(OpenParenthesesPosition, "openParenthesesPosition") \
     ATOM(CloseParenthesesPosition, "closeParenthesesPosition") \
     \
-    /* AstLocation */ \
+    /* Read-Only Location & Position */ \
     ATOM(BeginLine, "beginLine") \
     ATOM(BeginColumn, "beginColumn") \
     ATOM(EndLine, "endLine") \
     ATOM(EndColumn, "endColumn") \
     ATOM(StartOffset, "startOffset") \
     ATOM(EndOffset, "endOffset") \
-    \
-    /* AstPosition */ \
     ATOM(Line, "line") \
     ATOM(Column, "column") \
     ATOM(ComputedOffset, "computedOffset") \
     \
-    /* AstLocal */ \
-    ATOM(Shadow, "shadow") \
-    ATOM(Depth, "depth") \
-    \
-    /* AstAux */ \
-    ATOM(Access, "access") \
-    ATOM(IndexType, "indexType") \
-    ATOM(ResultType, "resultType") \
-    ATOM(IsMethod, "isMethod") \
-    ATOM(Key, "key") \
+    /* Read-Only Aux Fields */ \
     ATOM(IndexerOpenPosition, "indexerOpenPosition") \
     ATOM(IndexerClosePosition, "indexerClosePosition") \
     ATOM(SeparatorPosition, "separatorPosition") \
@@ -269,8 +193,10 @@ enum class ReflectAtom : int16_t
 {
     Unknown = -1,
 #define ATOM(variant, str) variant,
-    LUAU_REFLECT_ATOMS
+#define ATOM_RW(variant, str, setVariant, setStr) variant, setVariant,
+    LUAU_REFLECT_ATOMS(ATOM, ATOM_RW)
 #undef ATOM
+#undef ATOM_RW
     Count
 };
 
@@ -279,8 +205,10 @@ inline ReflectAtom resolveGlobalReflectAtom(std::string_view key)
     static const DenseHashMap2<std::string_view, ReflectAtom> s_atomMap = []() {
         DenseHashMap2<std::string_view, ReflectAtom> map;
 #define ATOM(variant, str) map[str] = ReflectAtom::variant;
-        LUAU_REFLECT_ATOMS
+#define ATOM_RW(variant, str, setVariant, setStr) map[str] = ReflectAtom::variant; map[setStr] = ReflectAtom::setVariant;
+        LUAU_REFLECT_ATOMS(ATOM, ATOM_RW)
 #undef ATOM
+#undef ATOM_RW
         return map;
     }();
 
@@ -466,76 +394,16 @@ struct AstAuxData
         Luau::AstTypeList typeList;
     };
 
-    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstTableProp& p)
-        : doc(doc)
-        , kind(Aux_TableProp)
-        , tableProp(p)
-    {
-    }
-
-    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstTableIndexer& idx)
-        : doc(doc)
-        , kind(Aux_TableIndexer)
-        , tableIndexer(idx)
-    {
-    }
-
-    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstDeclaredExternTypeProperty& p)
-        : doc(doc)
-        , kind(Aux_DeclaredExternTypeProperty)
-        , declaredExternProp(p)
-    {
-    }
-
-    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstClassProperty& p)
-        : doc(doc)
-        , kind(Aux_ClassProperty)
-        , classProp(p)
-    {
-    }
-
-    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstClassMethod& m)
-        : doc(doc)
-        , kind(Aux_ClassMethod)
-        , classMethod(m)
-    {
-    }
-
-    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, Luau::AstLocal* l)
-        : doc(doc)
-        , kind(Aux_Local)
-        , local(l)
-    {
-    }
-
-    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::Comment& c)
-        : doc(doc)
-        , kind(Aux_Comment)
-        , comment(c)
-    {
-    }
-
-    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstExprTable::Item& item)
-        : doc(doc)
-        , kind(Aux_TableItem)
-        , tableItem(item)
-    {
-    }
-
-    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::CstExprTable::Item& item)
-        : doc(doc)
-        , kind(Aux_CstTableItem)
-        , cstTableItem(item)
-    {
-    }
-
-    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstTypeList& tl)
-        : doc(doc)
-        , kind(Aux_TypeList)
-        , typeList(tl)
-    {
-    }
-
+    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstTableProp& p) : doc(doc), kind(Aux_TableProp), tableProp(p) {}
+    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstTableIndexer& idx) : doc(doc), kind(Aux_TableIndexer), tableIndexer(idx) {}
+    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstDeclaredExternTypeProperty& p) : doc(doc), kind(Aux_DeclaredExternTypeProperty), declaredExternProp(p) {}
+    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstClassProperty& p) : doc(doc), kind(Aux_ClassProperty), classProp(p) {}
+    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstClassMethod& m) : doc(doc), kind(Aux_ClassMethod), classMethod(m) {}
+    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, Luau::AstLocal* l) : doc(doc), kind(Aux_Local), local(l) {}
+    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::Comment& c) : doc(doc), kind(Aux_Comment), comment(c) {}
+    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstExprTable::Item& item) : doc(doc), kind(Aux_TableItem), tableItem(item) {}
+    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::CstExprTable::Item& item) : doc(doc), kind(Aux_CstTableItem), cstTableItem(item) {}
+    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstTypeList& tl) : doc(doc), kind(Aux_TypeList), typeList(tl) {}
     ~AstAuxData() {}
 };
 
