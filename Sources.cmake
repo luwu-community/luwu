@@ -691,6 +691,7 @@ if(TARGET Luau.Reflect)
         Reflect/include/Luau/ReflectCommon.h
         Reflect/include/Luau/ReflectAstHandler.h
         Reflect/src/Reflect.cpp
+        Reflect/src/AstAllocator.cpp
         Reflect/src/AstDocument.cpp
         Reflect/src/AstNode.cpp
         Reflect/src/CstNode.cpp

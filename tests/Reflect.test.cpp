@@ -51,8 +51,11 @@ TEST_CASE("LazyAstTypeof")
     lua_setglobal(L, "reflect");
 
     const char* script = R"LUA(
-        local doc = reflect.parse("local x = 1")
+        local arena = reflect.allocator()
+        local doc = arena:parse("local x = 1")
         assert(typeof(doc) == "AstDocument")
+        assert(typeof(doc:allocator()) == "AstAllocator")
+        assert(doc:allocator() == arena)
 
         local root = doc:root()
         assert(typeof(root) == "AstNode")
@@ -98,7 +101,8 @@ TEST_CASE("LazyAstProperties")
     lua_setglobal(L, "reflect");
 
     const char* script = R"LUA(
-        local doc = reflect.parse([[
+        local arena = reflect.allocator()
+        local doc = arena:parse([[
             if x > 0 then
                 print("positive")
             else
@@ -147,7 +151,8 @@ TEST_CASE("LazyAstChildrenAndWalk")
     lua_setglobal(L, "reflect");
 
     const char* script = R"LUA(
-        local doc = reflect.parse("local a = 1; local b = 2; return a + b")
+        local arena = reflect.allocator()
+        local doc = arena:parse("local a = 1; local b = 2; return a + b")
         
         -- Test children() on block
         local root = doc:root()
@@ -215,7 +220,8 @@ TEST_CASE("LazyAstParseExpr")
     lua_setglobal(L, "reflect");
 
     const char* script = R"LUA(
-        local expr = reflect.parseExpr("a + b * 2")
+        local arena = reflect.allocator()
+        local expr = arena:parseexpr("a + b * 2")
         assert(expr ~= nil)
         assert(typeof(expr) == "AstNode")
         assert(expr.kind == "AstExprBinary")
@@ -250,7 +256,8 @@ TEST_CASE("LazyAstErrors")
     lua_setglobal(L, "reflect");
 
     const char* script = R"LUA(
-        local doc = reflect.parse("local x = \n-- a comment")
+        local arena = reflect.allocator()
+        local doc = arena:parse("local x = \n-- a comment")
         local errors = doc:errors()
         assert(#errors > 0)
         assert(errors[1].message ~= nil)
@@ -278,7 +285,8 @@ TEST_CASE("LazyCstData")
     lua_setglobal(L, "reflect");
 
     const char* script = R"LUA(
-        local doc = reflect.parse("local str = 'hello world'\nfoo(1, 2)", true)
+        local arena = reflect.allocator()
+        local doc = arena:parse("local str = 'hello world'\nfoo(1, 2)", true)
         local stats = doc:root():body()
 
         -- Check local stat CST
@@ -314,7 +322,7 @@ TEST_CASE("LazyCstData")
         assert(typeof(callExprCst:commaPositions()[1]) == "vector")
 
         -- Check type function CST and AST category
-        local typeDoc = reflect.parse("type Callback = (a: number, b: string) -> boolean", true)
+        local typeDoc = arena:parse("type Callback = (a: number, b: string) -> boolean", true)
         local aliasStat = typeDoc:root():body()[1]
         assert(aliasStat.category == "stat")
         local aliasStatCst = aliasStat:cst()
@@ -332,11 +340,11 @@ TEST_CASE("LazyCstData")
         assert(#typeFuncCst:argumentNameColonPositions() == 2)
 
         -- Check that includeCst defaults to false / omitted results in nil cst()
-        local noCstDoc = reflect.parse("local x = 1")
+        local noCstDoc = arena:parse("local x = 1")
         assert(noCstDoc:root():body()[1]:cst() == nil)
-        local noCstExpr = reflect.parseExpr("1 + 2")
+        local noCstExpr = arena:parseexpr("1 + 2")
         assert(noCstExpr:cst() == nil)
-        local cstExpr = reflect.parseExpr("1 + 2", true)
+        local cstExpr = arena:parseexpr("1 + 2", true)
         assert(cstExpr:cst() ~= nil)
         assert(cstExpr:cst().kind == "CstExprOp")
     )LUA";
@@ -357,7 +365,8 @@ TEST_CASE("LazyAstComments")
     lua_setglobal(L, "reflect");
 
     const char* script = R"LUA(
-        local doc = reflect.parse("-- single comment\nlocal x = 1\n--[[\nblock comment\n]]\n")
+        local arena = reflect.allocator()
+        local doc = arena:parse("-- single comment\nlocal x = 1\n--[[\nblock comment\n]]\n")
         local comments = doc:comments()
         assert(#comments == 2)
 
@@ -391,7 +400,8 @@ TEST_CASE("LazyAstTableItems")
     lua_setglobal(L, "reflect");
 
     const char* script = R"LUA(
-        local doc = reflect.parse([[
+        local arena = reflect.allocator()
+        local doc = arena:parse([[
             local tbl = {
                 "hello",             
                 foo = 123,           
@@ -464,7 +474,8 @@ TEST_CASE("AstTypeTableAndAstAux")
     lua_setglobal(L, "reflect");
 
     const char* script = R"LUA(
-        local doc = reflect.parse([[
+        local arena = reflect.allocator()
+        local doc = arena:parse([[
             type MyTable = {
                 read foo: string,
                 bar: number,
@@ -523,7 +534,8 @@ TEST_CASE("TestFields")
     lua_setglobal(L, "reflect");
 
     const char* script = R"LUA(
-        local doc = reflect.parse("local a = 1\nfoo(1, 2)", true)
+        local arena = reflect.allocator()
+        local doc = arena:parse("local a = 1\nfoo(1, 2)", true)
         local stat1 = doc:root():body()[1]
         local loc = stat1:location()
 
@@ -594,7 +606,8 @@ TEST_CASE("ParseReflectTypesFile")
     lua_setglobal(L, "sourceCode");
 
     const char* script = R"LUA(
-        local doc = reflect.parse(sourceCode)
+        local arena = reflect.allocator()
+        local doc = arena:parse(sourceCode)
         local errors = doc:errors()
         assert(#errors == 0, "Parse errors in Reflect/types.luau: " .. (#errors > 0 and errors[1].message or ""))
         assert(doc:root() ~= nil)
@@ -619,7 +632,8 @@ TEST_CASE("ReflectUseAtoms")
 
     const char* script = R"LUA(
         local src = "-- hello\nlocal x: number = 42\nprint(x)\n"
-        local doc = reflect.parse(src, true)
+        local arena = reflect.allocator()
+        local doc = arena:parse(src, true)
         assert(doc:root() ~= nil)
         assert(doc:source() == src)
 
@@ -710,7 +724,8 @@ TEST_CASE("ReflectUserdataId")
     lua_setglobal(L, "reflect");
 
     const char* script = R"LUA(
-        local doc = reflect.parse("local a = 1; local b = 2", true)
+        local arena = reflect.allocator()
+        local doc = arena:parse("local a = 1; local b = 2", true)
         assert(doc.id ~= nil)
         assert(typeof(doc.id) == "Id")
 
@@ -761,7 +776,8 @@ TEST_CASE("ReflectUserdataProtectedMetatable")
     lua_setglobal(L, "reflect");
 
     const char* script = R"LUA(
-        local doc = reflect.parse("-- comment\ndo end", true)
+        local arena = reflect.allocator()
+        local doc = arena:parse("-- comment\ndo end", true)
         local root = doc:root()
         local stat = root:body()[1]
         local loc = stat:location()
@@ -797,7 +813,8 @@ TEST_CASE("ReflectAstFilter")
     lua_setglobal(L, "reflect");
 
     const char* script = R"LUA(
-        local doc = reflect.parse([[
+        local arena = reflect.allocator()
+        local doc = arena:parse([[
             local x = 1
             local function foo(a, b)
                 print(a + b)
@@ -891,8 +908,9 @@ TEST_CASE("ReflectAstMutations")
     lua_setglobal(L, "reflect");
 
     const char* script = R"LUA(
+        local arena = reflect.allocator()
         local src = "if x then a() else b() end\nlocal num = 10\nwhile cond do work() end\nlocal bin = 1 + 2\n"
-        local doc = reflect.parse(src)
+        local doc = arena:parse(src)
         local root = doc:root()
         local stats = root:body()
 
@@ -955,7 +973,7 @@ TEST_CASE("ReflectAstMutations")
             local function bar() end
             local tbl = { k = 1 }
         ]]
-        local doc2 = reflect.parse(src2)
+        local doc2 = arena:parse(src2)
         local stats2 = doc2:root():body()
 
         -- AstStatCompoundAssign
@@ -1027,7 +1045,7 @@ TEST_CASE("ReflectAstMutations")
         assert(tblStat:setLocation(origLoc) == tblStat)
 
         -- AstTableProp and AstTableIndexer mutations
-        local doc3 = reflect.parse("type T = { read foo: string, [number]: boolean }")
+        local doc3 = arena:parse("type T = { read foo: string, [number]: boolean }")
         local tyTable = doc3:root():body()[1]:type()
         local tprop = tyTable:props()[1]
         assert(tprop:name() == "foo")
@@ -1056,9 +1074,13 @@ TEST_CASE("ReflectProperties")
     lua_setglobal(L, "reflect");
 
     const char* script = R"LUA(
-        local doc = reflect.parse("-- comment\nlocal x = 1\nif x then print(x) else print(2) end", true)
+        local arena = reflect.allocator()
+        local doc = arena:parse("-- comment\nlocal x = 1\nif x then print(x) else print(2) end", true)
+        assert(doc:allocator() == arena)
         local docProps = doc:properties()
         assert(docProps.id ~= nil)
+        assert(docProps.allocator ~= nil)
+        assert(docProps.allocator == arena)
         assert(docProps.root ~= nil)
         assert(type(docProps.source) == "string")
         assert(#docProps.comments == 1)
@@ -1112,6 +1134,57 @@ TEST_CASE("ReflectProperties")
             assert(cstProps.id ~= nil)
             assert(cstProps.category == "generic")
         end
+    )LUA";
+
+    CHECK_EQ(dostring(L, script), 0);
+}
+
+TEST_CASE("AstAllocator")
+{
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
+    ScopedFastFlag sff3{FFlag::OptLuwuReflectUseAtoms, true};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+    Luau::luaopen_reflect(L);
+    lua_setglobal(L, "reflect");
+
+    const char* script = R"LUA(
+        local arena1 = reflect.allocator()
+        assert(typeof(arena1) == "AstAllocator")
+        assert(arena1:properties().id ~= nil)
+
+        local docA = arena1:parse("local a = 1")
+        local docB = arena1:parse("local b = 2")
+        assert(typeof(docA) == "AstDocument")
+        assert(typeof(docB) == "AstDocument")
+        assert(docA:allocator() == arena1)
+        assert(docB:allocator() == arena1)
+
+        -- This is safe
+        local valB = docB:root():body()[1]:values()[1]
+        docA:root():body()[1]:setValues({ valB })
+        assert(docA:root():body()[1]:values()[1]:value() == 2)
+
+        -- Cross-allocator mutation must throw an error
+        local arena2 = reflect.allocator()
+        local docC = arena2:parse("local c = 3")
+        local valC = docC:root():body()[1]:values()[1]
+        local ok, err = pcall(function()
+            docA:root():body()[1]:setValues({ valC })
+        end)
+        assert(not ok)
+        assert(string.find(err, "cross-allocator", 1, true) ~= nil)
+
+        -- Cross-allocator mutation must throw an error
+        local localC = docC:root():body()[1]:vars()[1]
+        local okLocal, errLocal = pcall(function()
+            docA:root():body()[1]:setVars({ localC })
+        end)
+        assert(not okLocal)
+        assert(string.find(errLocal, "cross-allocator", 1, true) ~= nil)
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);

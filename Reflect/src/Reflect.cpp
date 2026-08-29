@@ -7,49 +7,9 @@ LUAU_FASTFLAGVARIABLE(OptLuwuReflectUseAtoms)
 namespace Luau
 {
 
-static int reflectParse(lua_State* L)
+static int reflectAllocator(lua_State* L)
 {
-    size_t len = 0;
-    const char* src = luaL_checklstring(L, 1, &len);
-    bool includeCst = lua_isboolean(L, 2) ? lua_toboolean(L, 2) : false;
-
-    auto doc = std::make_shared<AstDocumentState>();
-    doc->source.assign(src, len);
-    doc->lineOffsets = computeLineOffsets(doc->source);
-
-    Luau::ParseOptions options;
-    options.captureComments = true;
-    options.allowDeclarationSyntax = true;
-    options.storeCstData = includeCst;
-
-    doc->parseResult = Luau::Parser::parse(doc->source.data(), doc->source.size(), *doc->names, *doc->allocator, options);
-
-    pushAstDocument(L, std::move(doc));
-    return 1;
-}
-
-static int reflectParseExpr(lua_State* L)
-{
-    size_t len = 0;
-    const char* src = luaL_checklstring(L, 1, &len);
-    bool includeCst = lua_isboolean(L, 2) ? lua_toboolean(L, 2) : false;
-
-    auto doc = std::make_shared<AstDocumentState>();
-    doc->source.assign(src, len);
-    doc->lineOffsets = computeLineOffsets(doc->source);
-
-    Luau::ParseOptions options;
-    options.captureComments = true;
-    options.allowDeclarationSyntax = true;
-    options.storeCstData = includeCst;
-
-    auto result = Luau::Parser::parseExpr(doc->source.data(), doc->source.size(), *doc->names, *doc->allocator, options);
-    doc->parseResult.root = nullptr;
-    doc->parseResult.errors = std::move(result.errors);
-    if (includeCst)
-        doc->parseResult.cstNodeMap = std::move(result.cstNodeMap);
-
-    pushAstNode(L, doc, result.root);
+    pushAstAllocator(L, std::make_shared<AstAllocatorState>());
     return 1;
 }
 
@@ -66,6 +26,7 @@ int luaopen_reflect(lua_State* L)
         }
     }
 
+    registerAstAllocator(L);
     registerAstDocument(L);
     registerAstNode(L);
     registerCstNode(L);
@@ -75,11 +36,9 @@ int luaopen_reflect(lua_State* L)
     lua_setlightuserdataname(L, TagId, "Id");
 
     // Module table
-    lua_createtable(L, 0, 3);
-    lua_pushcfunction(L, reflectParse, "parse");
-    lua_setfield(L, -2, "parse");
-    lua_pushcfunction(L, reflectParseExpr, "parseExpr");
-    lua_setfield(L, -2, "parseExpr");
+    lua_createtable(L, 0, 2);
+    lua_pushcfunction(L, reflectAllocator, "allocator");
+    lua_setfield(L, -2, "allocator");
     lua_pushcfunction(L, reflectFilter, "filter");
     lua_setfield(L, -2, "filter");
 
@@ -87,3 +46,4 @@ int luaopen_reflect(lua_State* L)
 }
 
 } // namespace Luau
+

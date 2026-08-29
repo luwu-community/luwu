@@ -63,14 +63,24 @@ static int astDocLineOffsets(lua_State* L)
     return 1;
 }
 
+static int astDocAllocator(lua_State* L)
+{
+    auto& handle = checkAstDocument(L, 1);
+    pushAstAllocator(L, handle.doc->arena);
+    return 1;
+}
+
 static int astDocProperties(lua_State* L)
 {
     auto& handle = checkAstDocument(L, 1);
     auto& doc = handle.doc;
-    lua_createtable(L, 0, 6);
+    lua_createtable(L, 0, 7);
 
     lua_pushlightuserdatatagged(L, (void*)doc.get(), TagId);
     lua_setfield(L, -2, "id");
+
+    pushAstAllocator(L, doc->arena);
+    lua_setfield(L, -2, "allocator");
 
     pushAstNode(L, doc, doc->parseResult.root);
     lua_setfield(L, -2, "root");
@@ -107,6 +117,7 @@ static int dispatchAstDocMethod(lua_State* L, AstDocumentData& handle, ReflectAt
 {
     switch (atom)
     {
+    case ReflectAtom::Allocator:   return astDocAllocator(L);
     case ReflectAtom::Root:        return astDocRoot(L);
     case ReflectAtom::Source:      return astDocSource(L);
     case ReflectAtom::Comments:    return astDocComments(L);

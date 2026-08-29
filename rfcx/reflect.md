@@ -25,6 +25,17 @@ A new library called `Reflect` will be added to Luwu. This library is fully opti
 
 TODO: Write this section once initial design is finalized, right now, these are just draft notes
 
+### Allocator
+
+My notes (to be made into a proper spec):
+
+1. all documents/parses must now happen within/inside a allocator (reflect.allocator has been added to create an allocator, may make a c api to allow embedders to push their own allocator ud w/ potential allocator memlimits as well)
+2. parse/parseexpr has been moved to be a method on allocator to better enforce the safety invariant that all ast nodes are owned by an allocator
+
+this solves the memory safety bug that trying to set with a node from a different parse/parseExpr can cause dangling pointers caused by allocator mismatch amongst other things (like allowing allocator reuse + memory limiting the allocator itself for sandboxing purposes)
+
+note: the allocator is explicit here instead of a shared global allocator to enable for sandboxing and for tooling like lsps etc avoid memory leaks etc. caused by using a single allocator across multiple documents
+
 Root of document: `AstDocument` userdata
 AST nodes: `AstNode`
 Walkable type: `AstDocument | AstNode`

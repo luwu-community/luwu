@@ -154,17 +154,9 @@ export type AstTypeList = {
 }
 
 export type AstAux =
-    | AstTableProp
-    | AstTableIndexer
-    | AstDeclaredExternTypeProperty
-    | AstClassProperty
-    | AstClassMethod
-    | AstLocal
-    | AstComment
-    | AstTableItem
-    | CstTableItem
-    | AstTypeList
-    | { read id: Id, read kind: string }
+    | AstTableProp | AstTableIndexer | AstDeclaredExternTypeProperty | AstClassProperty
+    | AstClassMethod | AstLocal | AstComment | AstTableItem
+    | CstTableItem | AstTypeList | { read id: Id, read kind: string }
 
 -- CST for tableitem
 export type CstTableItem = {
@@ -202,20 +194,9 @@ export type CstParametrizedAttr = CstNodeCommon & {
     read argsCommaPositions: (self: CstParametrizedAttr) -> {AstPosition},
 }
 
-export type CstExprGroup = CstNodeCommon & {
-    read kind: "CstExprGroup",
-    read closePosition: (self: CstExprGroup) -> AstPosition?,
-}
-
-export type CstExprConstantNumber = CstNodeCommon & {
-    read kind: "CstExprConstantNumber",
-    read value: (self: CstExprConstantNumber) -> string,
-}
-
-export type CstExprConstantInteger = CstNodeCommon & {
-    read kind: "CstExprConstantInteger",
-    read value: (self: CstExprConstantInteger) -> string,
-}
+export type CstExprGroup = CstNodeCommon & { read kind: "CstExprGroup", read closePosition: (self: CstExprGroup) -> AstPosition? }
+export type CstExprConstantNumber = CstNodeCommon & { read kind: "CstExprConstantNumber", read value: (self: CstExprConstantNumber) -> string }
+export type CstExprConstantInteger = CstNodeCommon & { read kind: "CstExprConstantInteger", read value: (self: CstExprConstantInteger) -> string }
 
 export type CstExprConstantString = CstNodeCommon & {
     read kind: "CstExprConstantString",
@@ -249,20 +230,9 @@ export type CstExprFunction = CstNodeCommon & {
     read returnSpecifierPosition: (self: CstExprFunction) -> AstPosition?,
 }
 
-export type CstExprTable = CstNodeCommon & {
-    read kind: "CstExprTable",
-    read items: (self: CstExprTable) -> {CstTableItem},
-}
-
-export type CstExprOp = CstNodeCommon & {
-    read kind: "CstExprOp",
-    read opPosition: (self: CstExprOp) -> AstPosition?,
-}
-
-export type CstExprTypeAssertion = CstNodeCommon & {
-    read kind: "CstExprTypeAssertion",
-    read opPosition: (self: CstExprTypeAssertion) -> AstPosition?,
-}
+export type CstExprTable = CstNodeCommon & { read kind: "CstExprTable", read items: (self: CstExprTable) -> {CstTableItem} }
+export type CstExprOp = CstNodeCommon & { read kind: "CstExprOp", read opPosition: (self: CstExprOp) -> AstPosition? }
+export type CstExprTypeAssertion = CstNodeCommon & { read kind: "CstExprTypeAssertion", read opPosition: (self: CstExprTypeAssertion) -> AstPosition? }
 
 export type CstExprIfElse = CstNodeCommon & {
     read kind: "CstExprIfElse",
@@ -271,14 +241,8 @@ export type CstExprIfElse = CstNodeCommon & {
     read isElseIf: (self: CstExprIfElse) -> boolean,
 }
 
-export type CstExprInterpString = CstNodeCommon & {
-    read kind: "CstExprInterpString",
-    read commaPositions: (self: CstExprInterpString) -> {AstPosition},
-}
-
-export type CstExprExplicitTypeInstantiation = CstNodeCommon & {
-    read kind: "CstExprExplicitTypeInstantiation",
-}
+export type CstExprInterpString = CstNodeCommon & { read kind: "CstExprInterpString", read commaPositions: (self: CstExprInterpString) -> {AstPosition} }
+export type CstExprExplicitTypeInstantiation = CstNodeCommon & { read kind: "CstExprExplicitTypeInstantiation" }
 
 export type CstStatDo = CstNodeCommon & {
     read kind: "CstStatDo",
@@ -286,15 +250,8 @@ export type CstStatDo = CstNodeCommon & {
     read endPosition: (self: CstStatDo) -> AstPosition?,
 }
 
-export type CstStatRepeat = CstNodeCommon & {
-    read kind: "CstStatRepeat",
-    read untilPosition: (self: CstStatRepeat) -> AstPosition?,
-}
-
-export type CstStatReturn = CstNodeCommon & {
-    read kind: "CstStatReturn",
-    read commaPositions: (self: CstStatReturn) -> {AstPosition},
-}
+export type CstStatRepeat = CstNodeCommon & { read kind: "CstStatRepeat", read untilPosition: (self: CstStatRepeat) -> AstPosition? }
+export type CstStatReturn = CstNodeCommon & { read kind: "CstStatReturn", read commaPositions: (self: CstStatReturn) -> {AstPosition} }
 
 export type CstStatLocal = CstNodeCommon & {
     read kind: "CstStatLocal",
@@ -325,15 +282,8 @@ export type CstStatAssign = CstNodeCommon & {
     read valuesCommaPositions: (self: CstStatAssign) -> {AstPosition},
 }
 
-export type CstStatCompoundAssign = CstNodeCommon & {
-    read kind: "CstStatCompoundAssign",
-    read opPosition: (self: CstStatCompoundAssign) -> AstPosition?,
-}
-
-export type CstStatFunction = CstNodeCommon & {
-    read kind: "CstStatFunction",
-    read functionKeywordPosition: (self: CstStatFunction) -> AstPosition?,
-}
+export type CstStatCompoundAssign = CstNodeCommon & { read kind: "CstStatCompoundAssign", read opPosition: (self: CstStatCompoundAssign) -> AstPosition? }
+export type CstStatFunction = CstNodeCommon & { read kind: "CstStatFunction", read functionKeywordPosition: (self: CstStatFunction) -> AstPosition? }
 
 export type CstStatLocalFunction = CstNodeCommon & {
     read kind: "CstStatLocalFunction",
@@ -341,10 +291,7 @@ export type CstStatLocalFunction = CstNodeCommon & {
     read functionKeywordPosition: (self: CstStatLocalFunction) -> AstPosition?,
 }
 
-export type CstGenericType = CstNodeCommon & {
-    read kind: "CstGenericType",
-    read defaultEqualsPosition: (self: CstGenericType) -> AstPosition?,
-}
+export type CstGenericType = CstNodeCommon & { read kind: "CstGenericType", read defaultEqualsPosition: (self: CstGenericType) -> AstPosition? }
 
 export type CstGenericTypePack = CstNodeCommon & {
     read kind: "CstGenericTypePack",
@@ -375,10 +322,7 @@ export type CstTypeReference = CstNodeCommon & {
     read closeParametersPosition: (self: CstTypeReference) -> AstPosition?,
 }
 
-export type CstTypeTable = CstNodeCommon & {
-    read kind: "CstTypeTable",
-    read isArray: (self: CstTypeTable) -> boolean,
-}
+export type CstTypeTable = CstNodeCommon & { read kind: "CstTypeTable", read isArray: (self: CstTypeTable) -> boolean }
 
 export type CstTypeFunction = CstNodeCommon & {
     read kind: "CstTypeFunction",
@@ -416,10 +360,7 @@ export type CstTypeSingletonString = CstNodeCommon & {
     read blockDepth: (self: CstTypeSingletonString) -> number,
 }
 
-export type CstTypeGroup = CstNodeCommon & {
-    read kind: "CstTypeGroup",
-    read closePosition: (self: CstTypeGroup) -> AstPosition?,
-}
+export type CstTypeGroup = CstNodeCommon & { read kind: "CstTypeGroup", read closePosition: (self: CstTypeGroup) -> AstPosition? }
 
 export type CstTypePackExplicit = CstNodeCommon & {
     read kind: "CstTypePackExplicit",
@@ -428,51 +369,17 @@ export type CstTypePackExplicit = CstNodeCommon & {
     read commaPositions: (self: CstTypePackExplicit) -> {AstPosition},
 }
 
-export type CstTypePackGeneric = CstNodeCommon & {
-    read kind: "CstTypePackGeneric",
-    read ellipsisPosition: (self: CstTypePackGeneric) -> AstPosition?,
-}
+export type CstTypePackGeneric = CstNodeCommon & { read kind: "CstTypePackGeneric", read ellipsisPosition: (self: CstTypePackGeneric) -> AstPosition? }
 
 export type CstNode =
-    | CstAttr
-    | CstParametrizedAttr
-    | CstExprGroup
-    | CstExprConstantNumber
-    | CstExprConstantInteger
-    | CstExprConstantString
-    | CstExprCall
-    | CstExprIndexExpr
-    | CstExprFunction
-    | CstExprTable
-    | CstExprOp
-    | CstExprTypeAssertion
-    | CstExprIfElse
-    | CstExprInterpString
-    | CstExprExplicitTypeInstantiation
-    | CstStatDo
-    | CstStatRepeat
-    | CstStatReturn
-    | CstStatLocal
-    | CstStatFor
-    | CstStatForIn
-    | CstStatAssign
-    | CstStatCompoundAssign
-    | CstStatFunction
-    | CstStatLocalFunction
-    | CstGenericType
-    | CstGenericTypePack
-    | CstStatTypeAlias
-    | CstStatTypeFunction
-    | CstTypeReference
-    | CstTypeTable
-    | CstTypeFunction
-    | CstTypeTypeof
-    | CstTypeUnion
-    | CstTypeIntersection
-    | CstTypeSingletonString
-    | CstTypeGroup
-    | CstTypePackExplicit
-    | CstTypePackGeneric
+    | CstAttr | CstParametrizedAttr | CstExprGroup | CstExprConstantNumber | CstExprConstantInteger
+    | CstExprConstantString | CstExprCall | CstExprIndexExpr | CstExprFunction | CstExprTable
+    | CstExprOp | CstExprTypeAssertion | CstExprIfElse | CstExprInterpString | CstExprExplicitTypeInstantiation
+    | CstStatDo | CstStatRepeat | CstStatReturn | CstStatLocal | CstStatFor
+    | CstStatForIn | CstStatAssign | CstStatCompoundAssign | CstStatFunction | CstStatLocalFunction
+    | CstGenericType | CstGenericTypePack | CstStatTypeAlias | CstStatTypeFunction | CstTypeReference
+    | CstTypeTable | CstTypeFunction | CstTypeTypeof | CstTypeUnion | CstTypeIntersection
+    | CstTypeSingletonString | CstTypeGroup | CstTypePackExplicit | CstTypePackGeneric
     | (CstNodeCommon & { read kind: string })
 
 -- Common AST node methods and fields
@@ -553,13 +460,8 @@ export type AstStatRepeat = AstStatCommon & {
     read setBody: (self: AstStatRepeat, body: AstStatBlock) -> AstStatRepeat,
 }
 
-export type AstStatBreak = AstStatCommon & {
-    read kind: "AstStatBreak",
-}
-
-export type AstStatContinue = AstStatCommon & {
-    read kind: "AstStatContinue",
-}
+export type AstStatBreak = AstStatCommon & { read kind: "AstStatBreak" }
+export type AstStatContinue = AstStatCommon & { read kind: "AstStatContinue" }
 
 export type AstStatReturn = AstStatCommon & {
     read kind: "AstStatReturn",
@@ -737,28 +639,11 @@ export type AstStatError = AstStatCommon & {
 }
 
 export type AstStat =
-    | AstStatBlock
-    | AstStatIf
-    | AstStatWhile
-    | AstStatRepeat
-    | AstStatBreak
-    | AstStatContinue
-    | AstStatReturn
-    | AstStatExpr
-    | AstStatLocal
-    | AstStatFor
-    | AstStatForIn
-    | AstStatAssign
-    | AstStatCompoundAssign
-    | AstStatFunction
-    | AstStatLocalFunction
-    | AstStatTypeAlias
-    | AstStatTypeFunction
-    | AstStatDeclareGlobal
-    | AstStatDeclareFunction
-    | AstStatDeclareExternType
-    | AstStatClass
-    | AstStatError
+    | AstStatBlock | AstStatIf | AstStatWhile | AstStatRepeat | AstStatBreak | AstStatContinue
+    | AstStatReturn | AstStatExpr | AstStatLocal | AstStatFor | AstStatForIn | AstStatAssign
+    | AstStatCompoundAssign | AstStatFunction | AstStatLocalFunction | AstStatTypeAlias
+    | AstStatTypeFunction | AstStatDeclareGlobal | AstStatDeclareFunction | AstStatDeclareExternType
+    | AstStatClass | AstStatError
     | (AstStatCommon & { read kind: string })
 
 -- Expressions
@@ -768,9 +653,7 @@ export type AstExprGroup = AstExprCommon & {
     read setExpr: (self: AstExprGroup, expr: AstExpr) -> AstExprGroup,
 }
 
-export type AstExprConstantNil = AstExprCommon & {
-    read kind: "AstExprConstantNil",
-}
+export type AstExprConstantNil = AstExprCommon & { read kind: "AstExprConstantNil" }
 
 export type AstExprConstantBool = AstExprCommon & {
     read kind: "AstExprConstantBool",
@@ -812,9 +695,7 @@ export type AstExprGlobal = AstExprCommon & {
     read setName: (self: AstExprGlobal, name: string) -> AstExprGlobal,
 }
 
-export type AstExprVarargs = AstExprCommon & {
-    read kind: "AstExprVarargs",
-}
+export type AstExprVarargs = AstExprCommon & { read kind: "AstExprVarargs" }
 
 export type AstExprCall = AstExprCommon & {
     read kind: "AstExprCall",
@@ -934,26 +815,10 @@ export type AstExprError = AstExprCommon & {
 }
 
 export type AstExpr =
-    | AstExprGroup
-    | AstExprConstantNil
-    | AstExprConstantBool
-    | AstExprConstantNumber
-    | AstExprConstantInteger
-    | AstExprConstantString
-    | AstExprLocal
-    | AstExprGlobal
-    | AstExprVarargs
-    | AstExprCall
-    | AstExprIndexName
-    | AstExprIndexExpr
-    | AstExprFunction
-    | AstExprTable
-    | AstExprUnary
-    | AstExprBinary
-    | AstExprTypeAssertion
-    | AstExprIfElse
-    | AstExprInterpString
-    | AstExprInstantiate
+    | AstExprGroup | AstExprConstantNil | AstExprConstantBool | AstExprConstantNumber | AstExprConstantInteger
+    | AstExprConstantString | AstExprLocal | AstExprGlobal | AstExprVarargs | AstExprCall
+    | AstExprIndexName | AstExprIndexExpr | AstExprFunction | AstExprTable | AstExprUnary
+    | AstExprBinary | AstExprTypeAssertion | AstExprIfElse | AstExprInterpString | AstExprInstantiate
     | AstExprError
     | (AstExprCommon & { read kind: string })
 
@@ -998,9 +863,7 @@ export type AstTypeTypeof = AstTypeCommon & {
     read setExpr: (self: AstTypeTypeof, expr: AstExpr) -> AstTypeTypeof,
 }
 
-export type AstTypeOptional = AstTypeCommon & {
-    read kind: "AstTypeOptional",
-}
+export type AstTypeOptional = AstTypeCommon & { read kind: "AstTypeOptional" }
 
 export type AstTypeUnion = AstTypeCommon & {
     read kind: "AstTypeUnion",
@@ -1040,17 +903,9 @@ export type AstTypeError = AstTypeCommon & {
 }
 
 export type AstType =
-    | AstTypeReference
-    | AstTypeTable
-    | AstTypeFunction
-    | AstTypeTypeof
-    | AstTypeOptional
-    | AstTypeUnion
-    | AstTypeIntersection
-    | AstTypeSingletonBool
-    | AstTypeSingletonString
-    | AstTypeGroup
-    | AstTypeError
+    | AstTypeReference | AstTypeTable | AstTypeFunction | AstTypeTypeof | AstTypeOptional
+    | AstTypeUnion | AstTypeIntersection | AstTypeSingletonBool | AstTypeSingletonString
+    | AstTypeGroup | AstTypeError
     | (AstTypeCommon & { read kind: string })
 
 -- Type Packs
@@ -1073,9 +928,7 @@ export type AstTypePackGeneric = AstTypePackCommon & {
 }
 
 export type AstTypePack =
-    | AstTypePackExplicit
-    | AstTypePackVariadic
-    | AstTypePackGeneric
+    | AstTypePackExplicit | AstTypePackVariadic | AstTypePackGeneric
     | (AstTypePackCommon & { read kind: string })
 
 -- Generics & Attributes
@@ -1110,13 +963,7 @@ export type AstAttr = AstNodeCommon & {
 
 -- General AST Node Union
 export type AstNode =
-    | AstStat
-    | AstExpr
-    | AstType
-    | AstTypePack
-    | AstGenericType
-    | AstGenericTypePack
-    | AstAttr
+    | AstStat | AstExpr | AstType | AstTypePack | AstGenericType | AstGenericTypePack | AstAttr
     | (AstNodeCommon & {
         read kind: string,
         read category: "stat" | "expr" | "type" | "typePack" | "generic" | "attr" | "unknown",
@@ -1129,9 +976,17 @@ export type AstFilter = {
     read matches: (self: AstFilter, node: AstNode) -> boolean,
 }
 
+export type AstAllocator = {
+    read id: Id,
+    read parse: (self: AstAllocator, source: string, includeCst: boolean?) -> AstDocument,
+    read parseexpr: (self: AstAllocator, source: string, includeCst: boolean?) -> AstNode,
+    read properties: (self: AstAllocator) -> { [string]: any },
+}
+
 -- Parsed Document Root State
 export type AstDocument = {
     read id: Id,
+    read allocator: (self: AstDocument) -> AstAllocator,
     read root: (self: AstDocument) -> AstStatBlock?,
     read source: (self: AstDocument) -> string,
     read errors: (self: AstDocument) -> {ParseError},
@@ -1140,11 +995,7 @@ export type AstDocument = {
     read properties: (self: AstDocument) -> { [string]: any },
 }
 
-local function parse(source: string, includeCst: boolean?): AstDocument
-    error("Not implemented")
-end
-
-local function parseExpr(source: string, includeCst: boolean?): AstNode
+local function allocator(): AstAllocator
     error("Not implemented")
 end
 
@@ -1153,7 +1004,6 @@ local function filter(...: string | { string } | AstFilter): AstFilter
 end
 
 return {
-    parse = parse,
-    parseExpr = parseExpr,
+    allocator = allocator,
     filter = filter,
 }

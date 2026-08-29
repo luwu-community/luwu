@@ -26,7 +26,7 @@ namespace Luau
 {
 
 #define LUAU_REFLECT_ATOMS(ATOM, ATOM_RW) \
-    /* Special & Document */ \
+    /* Special & Document & Allocator */ \
     ATOM(Id, "id") \
     ATOM(Matches, "matches") \
     ATOM(Root, "root") \
@@ -36,6 +36,9 @@ namespace Luau
     ATOM(Comments, "comments") \
     ATOM(LineOffsets, "lineOffsets") \
     ATOM(Properties, "properties") \
+    ATOM(Allocator, "allocator") \
+    ATOM(Parse, "parse") \
+    ATOM(Parseexpr, "parseexpr") \
     \
     /* Read-Write AST / CST / Aux Properties */ \
     ATOM_RW(Body, "body", SetBody, "setBody") \
@@ -253,11 +256,12 @@ inline ReflectAtom resolveReflectAtom(int atomId, const char* str, size_t len)
  */
 enum AstUserdataTag : int
 {
-    TagDocument = LUA_INTERNAL_UTAG(0),
-    TagNode     = LUA_INTERNAL_UTAG(1),
-    TagCstNode  = LUA_INTERNAL_UTAG(2),
-    TagAux      = LUA_INTERNAL_UTAG(3),
-    TagFilter   = LUA_INTERNAL_UTAG(4),
+    TagDocument  = LUA_INTERNAL_UTAG(0),
+    TagNode      = LUA_INTERNAL_UTAG(1),
+    TagCstNode   = LUA_INTERNAL_UTAG(2),
+    TagAux       = LUA_INTERNAL_UTAG(3),
+    TagFilter    = LUA_INTERNAL_UTAG(4),
+    TagAllocator = LUA_INTERNAL_UTAG(5),
 };
 
 enum AstLightUserdataTag : int
@@ -321,19 +325,42 @@ struct AstFilterData
     bool empty() const { return classMask[0] == 0 && classMask[1] == 0 && categoryMask == 0; }
 };
 
+struct AstAllocatorState
+{
+    Luau::Allocator allocator;
+    Luau::AstNameTable names;
+
+    AstAllocatorState()
+        : allocator()
+        , names(allocator)
+    {
+    }
+};
+
+struct AstAllocatorData
+{
+    std::shared_ptr<AstAllocatorState> state;
+};
+
 struct AstDocumentState
 {
     std::string source;
-    std::shared_ptr<Luau::Allocator> allocator;
-    std::shared_ptr<Luau::AstNameTable> names;
+    std::shared_ptr<AstAllocatorState> arena;
     Luau::ParseResult parseResult;
     std::vector<size_t> lineOffsets;
 
     AstDocumentState()
-        : allocator(std::make_shared<Luau::Allocator>())
-        , names(std::make_shared<Luau::AstNameTable>(*allocator))
+        : arena(std::make_shared<AstAllocatorState>())
     {
     }
+
+    explicit AstDocumentState(std::shared_ptr<AstAllocatorState> arena)
+        : arena(std::move(arena))
+    {
+    }
+
+    Luau::Allocator* allocator() const { return arena ? &arena->allocator : nullptr; }
+    Luau::AstNameTable* names() const { return arena ? &arena->names : nullptr; }
 };
 
 struct AstDocumentData
@@ -436,6 +463,7 @@ inline std::pair<size_t, size_t> locationToOffsets(const std::vector<size_t>& li
 }
 
 // Push helpers
+void pushAstAllocator(lua_State* L, std::shared_ptr<AstAllocatorState> state);
 void pushAstDocument(lua_State* L, std::shared_ptr<AstDocumentState> doc);
 void pushAstNode(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, Luau::AstNode* node);
 void pushCstNode(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::CstNode* node);
@@ -685,14 +713,10 @@ inline int pushCachedUserdataMethod(lua_State* L, int tag, const char* name, lua
 
 #define LUAU_REFLECT_PREPARE_INDEX(checkFunc) \
     auto& handle = checkFunc(L, 1); \
-    const auto& doc = handle.doc; \
-    (void)doc; \
     LUAU_REFLECT_RESOLVE_INDEX_ATOM()
 
 #define LUAU_REFLECT_PREPARE_NAMECALL(checkFunc) \
     auto& handle = checkFunc(L, 1); \
-    const auto& doc = handle.doc; \
-    (void)doc; \
     LUAU_REFLECT_RESOLVE_NAMECALL_ATOM()
 
 #define LUAU_REFLECT_METHOD_TRAMPOLINE(funcName, checkFunc, dispatchFunc) \
@@ -792,6 +816,7 @@ inline int pushCachedUserdataMethod(lua_State* L, int tag, const char* name, lua
     LUAU_REFLECT_DEFINE_USERDATA_BASIC(checkName, dtorName, DataType, TagValue, TypeNameStr)
 
 // Module registration functions
+void registerAstAllocator(lua_State* L);
 void registerAstDocument(lua_State* L);
 void registerAstNode(lua_State* L);
 void registerCstNode(lua_State* L);

@@ -221,7 +221,7 @@ inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentStat
     {
         size_t len = 0;
         const char* s = luaL_checklstring(L, argIdx, &len);
-        out = doc->names ? doc->names->getOrAdd(s, len) : Luau::AstName(s);
+        out = doc->names() ? doc->names()->getOrAdd(s, len) : Luau::AstName(s);
     }
 }
 
@@ -229,7 +229,7 @@ inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentStat
 {
     size_t len = 0;
     const char* s = luaL_checklstring(L, argIdx, &len);
-    char* copy = static_cast<char*>(doc->allocator->allocate(len));
+    char* copy = static_cast<char*>(doc->allocator()->allocate(len));
     std::memcpy(copy, s, len);
     out = Luau::AstArray<char>{copy, len};
 }
@@ -268,6 +268,8 @@ inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentStat
     auto& nodeData = checkAstNode(L, argIdx);
     if (!nodeData.node)
         luaL_typeerror(L, argIdx, "AstNode");
+    if (doc && nodeData.doc && nodeData.doc->allocator() != doc->allocator())
+        luaL_error(L, "cross-allocator AST node assignment is not permitted");
     T* casted = castAstNode<T>(nodeData.node);
     if (!casted)
         luaL_error(L, "invalid AstNode subtype at argument #%d", argIdx);
@@ -284,6 +286,8 @@ inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentStat
     auto& aux = checkAstAux(L, argIdx);
     if (aux.kind != Aux_Local || !aux.local)
         luaL_typeerror(L, argIdx, "AstLocal");
+    if (doc && aux.doc && aux.doc->allocator() != doc->allocator())
+        luaL_error(L, "cross-allocator AstLocal assignment is not permitted");
     out = aux.local;
 }
 
@@ -293,7 +297,7 @@ inline Luau::AstArray<T> readArray(lua_State* L, const std::shared_ptr<AstDocume
 {
     luaL_checktype(L, argIdx, LUA_TTABLE);
     int len = lua_objlen(L, argIdx);
-    T* buffer = static_cast<T*>(doc->allocator->allocate(sizeof(T) * len));
+    T* buffer = static_cast<T*>(doc->allocator()->allocate(sizeof(T) * len));
     for (int i = 1; i <= len; i++)
     {
         lua_rawgeti(L, argIdx, i);
@@ -308,6 +312,8 @@ inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentStat
 {
     out = readArray<T*>(L, doc, argIdx, [&](int i) {
         auto& nodeData = checkAstNode(L, -1);
+        if (doc && nodeData.doc && nodeData.doc->allocator() != doc->allocator())
+            luaL_error(L, "cross-allocator AST node assignment is not permitted at table index %d", i);
         T* casted = castAstNode<T>(nodeData.node);
         if (!casted)
             luaL_error(L, "invalid AstNode subtype at table index %d", i);
@@ -347,7 +353,7 @@ inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentStat
     auto& aux = checkAstAux(L, argIdx);
     if (aux.kind != Aux_TableIndexer)
         luaL_typeerror(L, argIdx, "AstTableIndexer");
-    auto* copy = static_cast<Luau::AstTableIndexer*>(doc->allocator->allocate(sizeof(Luau::AstTableIndexer)));
+    auto* copy = static_cast<Luau::AstTableIndexer*>(doc->allocator()->allocate(sizeof(Luau::AstTableIndexer)));
     *copy = aux.tableIndexer;
     out = copy;
 }
