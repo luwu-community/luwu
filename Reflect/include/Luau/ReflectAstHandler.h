@@ -148,6 +148,43 @@ inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentStat
     });
 }
 
+inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::Position& val)
+{
+    pushPosition(L, doc, val);
+}
+
+inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::Location& val)
+{
+    pushLocation(L, doc, val);
+}
+
+inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, Luau::Position& out)
+{
+    if (lua_isnil(L, argIdx))
+    {
+        out = Luau::Position::missing();
+        return;
+    }
+    if (!lua_isvector(L, argIdx))
+        luaL_typeerror(L, argIdx, "vector");
+    const LUA_VECTOR_TYPE* v = lua_tovector(L, argIdx);
+    unsigned line = v[0] >= 1.0f ? unsigned(v[0] - 1.0f) : 0;
+    unsigned col = v[1] >= 1.0f ? unsigned(v[1] - 1.0f) : 0;
+    out = Luau::Position{line, col};
+}
+
+inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, Luau::Location& out)
+{
+    if (!lua_istable(L, argIdx))
+        luaL_typeerror(L, argIdx, "table");
+    lua_getfield(L, argIdx, "begin");
+    readReflectValue(L, doc, -1, out.begin);
+    lua_pop(L, 1);
+    lua_getfield(L, argIdx, "end");
+    readReflectValue(L, doc, -1, out.end);
+    lua_pop(L, 1);
+}
+
 inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, bool& out)
 {
     out = (lua_toboolean(L, argIdx) != 0);
@@ -195,12 +232,6 @@ inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentStat
     char* copy = static_cast<char*>(doc->allocator->allocate(len));
     std::memcpy(copy, s, len);
     out = Luau::AstArray<char>{copy, len};
-}
-
-inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, const Luau::AstArray<char>& out)
-{
-    Luau::AstArray<char>& mutableOut = const_cast<Luau::AstArray<char>&>(out);
-    readReflectValue(L, doc, argIdx, mutableOut);
 }
 
 template<typename T>
@@ -284,16 +315,6 @@ inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentStat
     });
 }
 
-inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, Luau::AstArray<Luau::AstLocal*>& out)
-{
-    out = readArray<Luau::AstLocal*>(L, doc, argIdx, [&](int i) {
-        auto& aux = checkAstAux(L, -1);
-        if (aux.kind != Aux_Local || !aux.local)
-            luaL_error(L, "expected AstLocal at table index %d", i);
-        return aux.local;
-    });
-}
-
 inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, std::optional<Luau::AstName>& out)
 {
     if (lua_isnil(L, argIdx))
@@ -331,63 +352,39 @@ inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentStat
     out = copy;
 }
 
-inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, const Luau::AstTableIndexer*& out)
+inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, Luau::AstTableProp& out)
 {
-    Luau::AstTableIndexer* mutablePtr = nullptr;
-    readReflectValue(L, doc, argIdx, mutablePtr);
-    out = mutablePtr;
+    auto& aux = checkAstAux(L, argIdx);
+    if (aux.kind != Aux_TableProp)
+        luaL_typeerror(L, argIdx, "AstTableProp");
+    out = aux.tableProp;
 }
 
-inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, Luau::AstArray<Luau::AstArray<char>>& out)
+inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, Luau::AstDeclaredExternTypeProperty& out)
 {
-    out = readArray<Luau::AstArray<char>>(L, doc, argIdx, [&](int) {
-        Luau::AstArray<char> s;
-        readReflectValue(L, doc, -1, s);
-        return s;
-    });
+    auto& aux = checkAstAux(L, argIdx);
+    if (aux.kind != Aux_DeclaredExternTypeProperty)
+        luaL_typeerror(L, argIdx, "AstDeclaredExternTypeProperty");
+    out = aux.declaredExternProp;
 }
 
-inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, Luau::AstArray<Luau::AstTableProp>& out)
+inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, Luau::AstClassMember& out)
 {
-    out = readArray<Luau::AstTableProp>(L, doc, argIdx, [&](int i) {
-        auto& aux = checkAstAux(L, -1);
-        if (aux.kind != Aux_TableProp)
-            luaL_error(L, "expected AstTableProp at table index %d", i);
-        return aux.tableProp;
-    });
+    auto& aux = checkAstAux(L, argIdx);
+    if (aux.kind == Aux_ClassProperty)
+        out = Luau::AstClassMember(aux.classProp);
+    else if (aux.kind == Aux_ClassMethod)
+        out = Luau::AstClassMethod(aux.classMethod);
+    else
+        luaL_error(L, "expected AstClassProperty or AstClassMethod at argument #%d", argIdx);
 }
 
-inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, Luau::AstArray<Luau::AstDeclaredExternTypeProperty>& out)
+inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, Luau::AstExprTable::Item& out)
 {
-    out = readArray<Luau::AstDeclaredExternTypeProperty>(L, doc, argIdx, [&](int i) {
-        auto& aux = checkAstAux(L, -1);
-        if (aux.kind != Aux_DeclaredExternTypeProperty)
-            luaL_error(L, "expected AstDeclaredExternTypeProperty at table index %d", i);
-        return aux.declaredExternProp;
-    });
-}
-
-inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, Luau::AstArray<Luau::AstClassMember>& out)
-{
-    out = readArray<Luau::AstClassMember>(L, doc, argIdx, [&](int i) {
-        auto& aux = checkAstAux(L, -1);
-        if (aux.kind == Aux_ClassProperty)
-            return Luau::AstClassMember(aux.classProp);
-        if (aux.kind == Aux_ClassMethod)
-            return Luau::AstClassMember(aux.classMethod);
-        luaL_error(L, "expected AstClassProperty or AstClassMethod at table index %d", i);
-        return Luau::AstClassMember();
-    });
-}
-
-inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, Luau::AstArray<Luau::AstExprTable::Item>& out)
-{
-    out = readArray<Luau::AstExprTable::Item>(L, doc, argIdx, [&](int i) {
-        auto& aux = checkAstAux(L, -1);
-        if (aux.kind != Aux_TableItem)
-            luaL_error(L, "expected AstTableItem at table index %d", i);
-        return aux.tableItem;
-    });
+    auto& aux = checkAstAux(L, argIdx);
+    if (aux.kind != Aux_TableItem)
+        luaL_typeerror(L, argIdx, "AstTableItem");
+    out = aux.tableItem;
 }
 
 inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, Luau::AstTypeOrPack& out)
@@ -408,16 +405,13 @@ inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentStat
         luaL_error(L, "expected AstType or AstTypePack at argument #%d", argIdx);
 }
 
-inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, Luau::AstArray<Luau::AstTypeOrPack>& out)
+template<typename T>
+inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, Luau::AstArray<T>& out)
 {
-    out = readArray<Luau::AstTypeOrPack>(L, doc, argIdx, [&](int i) {
-        auto& nodeData = checkAstNode(L, -1);
-        if (auto* t = nodeData.node->asType())
-            return Luau::AstTypeOrPack{t, nullptr};
-        else if (auto* tp = castAstNode<Luau::AstTypePack>(nodeData.node))
-            return Luau::AstTypeOrPack{nullptr, tp};
-        luaL_error(L, "expected AstType or AstTypePack at table index %d", i);
-        return Luau::AstTypeOrPack{};
+    out = readArray<T>(L, doc, argIdx, [&](int) {
+        T item{};
+        readReflectValue(L, doc, -1, item);
+        return item;
     });
 }
 
@@ -441,19 +435,29 @@ inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentStat
     out = s[0];
 }
 
-inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::Location& loc)
+inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::CstNode* val)
 {
-    pushLocation(L, doc, loc);
+    if (val)
+        pushCstNode(L, doc, val);
+    else
+        lua_pushnil(L);
 }
 
-inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::Position& pos)
+inline AstArray<char> getNodeText(const AstNodeData& handle, const Luau::AstNode* n)
 {
-    pushPosition(L, doc, pos);
+    if (!handle.doc)
+        return {nullptr, 0};
+    auto [startOff, endOff] = locationToOffsets(handle.doc->lineOffsets, handle.doc->source.size(), n->location);
+    return {const_cast<char*>(handle.doc->source.data() + startOff), endOff - startOff};
 }
 
-inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, Luau::Location& out)
+inline const Luau::CstNode* getNodeCst(const AstNodeData& handle, const Luau::AstNode* n)
 {
-    out = checkAstLocation(L, argIdx).location;
+    if (!handle.doc)
+        return nullptr;
+    if (const Luau::CstNode* const* cst = handle.doc->parseResult.cstNodeMap.find(const_cast<Luau::AstNode*>(n)))
+        return *cst;
+    return nullptr;
 }
 
 #define LUAU_AUX_FIELD_RW(atomGet, atomSet, memberExpr) \
@@ -462,6 +466,9 @@ inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentStat
 
 #define LUAU_AUX_FIELD_RO(atomGet, memberExpr) \
     case ReflectAtom::atomGet: pushReflectValue(L, handle.doc, memberExpr); return true;
+
+#define LUAU_AUX_FIELD_FN_RO(atomGet, expr) \
+    case ReflectAtom::atomGet: pushReflectValue(L, handle.doc, expr); return true;
 
 #define LUAU_CST_FIELD_RO(atomGet, memberName) \
     case ReflectAtom::atomGet: pushReflectValue(L, handle.doc, n->memberName); return true;
@@ -480,6 +487,9 @@ inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentStat
 
 #define LUAU_AST_FIELD_RO(atomGet, memberName) \
     case ReflectAtom::atomGet: pushReflectValue(L, handle.doc, n->memberName); return true;
+
+#define LUAU_AST_FIELD_FN_RO(atomGet, expr) \
+    case ReflectAtom::atomGet: pushReflectValue(L, handle.doc, expr); return true;
 
 #define LUAU_AST_HANDLER_END() \
         default: \

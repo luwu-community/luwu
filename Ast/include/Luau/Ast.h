@@ -1402,7 +1402,7 @@ public:
 
     void visit(AstVisitor* visitor) override;
 
-    const AstArray<char> value;
+    AstArray<char> value;
 };
 
 class AstTypeGroup : public AstType

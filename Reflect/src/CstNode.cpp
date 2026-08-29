@@ -8,12 +8,14 @@ namespace Luau
 LUAU_REFLECT_DEFINE_POINTER_USERDATA(pushCstNode, checkCstNode, cstNodeDtor, CstNodeData, const Luau::CstNode*, TagCstNode, "CstNode")
 
 typedef bool (*CstNodeMethodHandler)(lua_State* L, CstNodeData& handle, ReflectAtom atom);
+typedef void (*CstNodePropCollector)(lua_State* L, CstNodeData& handle);
 
 struct CstNodeClassInfo
 {
     const char* kind = nullptr;
     const char* category = "generic";
     CstNodeMethodHandler methodHandler = nullptr;
+    CstNodePropCollector propCollector = nullptr;
 };
 
 static std::vector<CstNodeClassInfo> s_cstClassTable;
@@ -21,13 +23,14 @@ static std::vector<CstNodeClassInfo> s_cstClassTable;
 template<typename T>
 static void registerCstNodeClass(
     const char* kind,
-    CstNodeMethodHandler methodHandler = nullptr
+    CstNodeMethodHandler methodHandler = nullptr,
+    CstNodePropCollector propCollector = nullptr
 )
 {
     int idx = T::CstClassIndex();
     if (size_t(idx) >= s_cstClassTable.size())
-        s_cstClassTable.resize(idx + 1, CstNodeClassInfo{"CstNode", "generic", nullptr});
-    s_cstClassTable[idx] = CstNodeClassInfo{kind, "generic", methodHandler};
+        s_cstClassTable.resize(idx + 1, CstNodeClassInfo{"CstNode", "generic", nullptr, nullptr});
+    s_cstClassTable[idx] = CstNodeClassInfo{kind, "generic", methodHandler, propCollector};
 }
 
 LUAU_REFLECT_GET_NODE_KIND(getCstNodeKind, const Luau::CstNode*, s_cstClassTable, "CstNode")
@@ -177,12 +180,32 @@ LUAU_REFLECT_CST_NODES(LUAU_GENERATE_CST_HANDLER, LUAU_GENERATE_CST_HANDLER_EMPT
 
 #undef LUAU_GENERATE_CST_HANDLER
 #undef LUAU_GENERATE_CST_HANDLER_EMPTY
+#undef LUAU_CST_FIELD_RO
+
+#define LUAU_CST_FIELD_RO(atomGet, memberExpr) \
+    pushReflectValue(L, handle.doc, n->memberExpr); \
+    lua_setfield(L, -2, getAtomString(ReflectAtom::atomGet));
+
+#define LUAU_GENERATE_CST_PROP_COLLECTOR(Class, KindStr, Fields) \
+    static void collect##Class##CstProps(lua_State* L, CstNodeData& handle) \
+    { \
+        auto* n = static_cast<const Luau::Class*>(handle.node); \
+        (void)n; \
+        Fields \
+    }
+#define LUAU_GENERATE_CST_PROP_COLLECTOR_EMPTY(Class, KindStr)
+
+LUAU_REFLECT_CST_NODES(LUAU_GENERATE_CST_PROP_COLLECTOR, LUAU_GENERATE_CST_PROP_COLLECTOR_EMPTY)
+
+#undef LUAU_GENERATE_CST_PROP_COLLECTOR
+#undef LUAU_GENERATE_CST_PROP_COLLECTOR_EMPTY
+#undef LUAU_CST_FIELD_RO
 
 static void initializeCstDispatchTables()
 {
     static const bool initialized = []() {
 #define LUAU_REGISTER_CST_NODE(Class, KindStr, Fields) \
-        registerCstNodeClass<Luau::Class>(KindStr, handle##Class##Methods);
+        registerCstNodeClass<Luau::Class>(KindStr, handle##Class##Methods, collect##Class##CstProps);
 #define LUAU_REGISTER_CST_NODE_EMPTY(Class, KindStr) \
         registerCstNodeClass<Luau::Class>(KindStr);
 
@@ -195,8 +218,37 @@ static void initializeCstDispatchTables()
     (void)initialized;
 }
 
+static int cstNodeProperties(lua_State* L)
+{
+    auto& handle = checkCstNode(L, 1);
+    if (!handle.node)
+    {
+        lua_newtable(L);
+        return 1;
+    }
+
+    lua_createtable(L, 0, 6);
+
+    lua_pushlightuserdatatagged(L, (void*)handle.node, TagId);
+    lua_setfield(L, -2, "id");
+
+    lua_pushstring(L, getCstNodeCategory(handle.node));
+    lua_setfield(L, -2, "category");
+
+    int idx = handle.node->classIndex;
+    if (idx >= 0 && idx < int(s_cstClassTable.size()) && s_cstClassTable[idx].propCollector)
+    {
+        s_cstClassTable[idx].propCollector(L, handle);
+    }
+
+    return 1;
+}
+
 static int dispatchCstNodeMethod(lua_State* L, CstNodeData& handle, ReflectAtom atom, const char* str, size_t len)
 {
+    if (atom == ReflectAtom::Properties)
+        return cstNodeProperties(L);
+
     int idx = handle.node ? handle.node->classIndex : -1;
     if (idx >= 0 && idx < int(s_cstClassTable.size()) && s_cstClassTable[idx].methodHandler)
     {
@@ -233,7 +285,7 @@ static int cstNodeEq(lua_State* L)
 void registerCstNode(lua_State* L)
 {
     initializeCstDispatchTables();
-    registerUserdataType(L, TagCstNode, "CstNode", cstNodeDtor, cstNodeIndex, cstNodeToString, cstNodeEq, nullptr, cstNodeNamecall);
+    registerUserdataType(L, TagCstNode, "CstNode", cstNodeDtor, cstNodeIndex, cstNodeToString, cstNodeEq, cstNodeNamecall);
 }
 
 } // namespace Luau

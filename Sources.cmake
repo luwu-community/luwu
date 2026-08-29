@@ -693,9 +693,7 @@ if(TARGET Luau.Reflect)
         Reflect/src/Reflect.cpp
         Reflect/src/AstDocument.cpp
         Reflect/src/AstNode.cpp
-        Reflect/src/AstLocation.cpp
         Reflect/src/CstNode.cpp
-        Reflect/src/AstPosition.cpp
         Reflect/src/AstAux.cpp
         Reflect/src/AstFilter.cpp
     )

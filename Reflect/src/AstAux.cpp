@@ -30,138 +30,140 @@ const char* getAstAuxKind(const AstAuxData& handle)
     return "unknown";
 }
 
+inline AstArray<char> getCommentText(const AstAuxData& handle)
+{
+    if (!handle.doc)
+        return {nullptr, 0};
+    auto [startOff, endOff] = locationToOffsets(handle.doc->lineOffsets, handle.doc->source.size(), handle.comment.location);
+    return {const_cast<char*>(handle.doc->source.data() + startOff), endOff - startOff};
+}
+
+#define LUAU_REFLECT_AUX_TYPES(AUX) \
+    AUX(Aux_TableProp, tableProp, "AstTableProp", \
+        LUAU_AUX_FIELD_RW(Name, SetName, n.name) \
+        LUAU_AUX_FIELD_RW(Location, SetLocation, n.location) \
+        LUAU_AUX_FIELD_RW(Type, SetType, n.type) \
+        LUAU_AUX_FIELD_RW(Access, SetAccess, n.access)) \
+    AUX(Aux_TableIndexer, tableIndexer, "AstTableIndexer", \
+        LUAU_AUX_FIELD_RW(Location, SetLocation, n.location) \
+        LUAU_AUX_FIELD_RW(IndexType, SetIndexType, n.indexType) \
+        LUAU_AUX_FIELD_RW(ResultType, SetResultType, n.resultType) \
+        LUAU_AUX_FIELD_RW(Access, SetAccess, n.access)) \
+    AUX(Aux_DeclaredExternTypeProperty, declaredExternProp, "AstDeclaredExternTypeProperty", \
+        LUAU_AUX_FIELD_RW(Name, SetName, n.name) \
+        LUAU_AUX_FIELD_RW(Location, SetLocation, n.location) \
+        LUAU_AUX_FIELD_RW(Type, SetType, n.ty) \
+        LUAU_AUX_FIELD_RW(IsMethod, SetIsMethod, n.isMethod) \
+        LUAU_AUX_FIELD_RW(Access, SetAccess, n.access)) \
+    AUX(Aux_ClassProperty, classProp, "AstClassProperty", \
+        LUAU_AUX_FIELD_RW(Name, SetName, n.name) \
+        LUAU_AUX_FIELD_RW(Type, SetType, n.ty)) \
+    AUX(Aux_ClassMethod, classMethod, "AstClassMethod", \
+        LUAU_AUX_FIELD_RW(Name, SetName, n.functionName) \
+        LUAU_AUX_FIELD_RW(Func, SetFunc, n.function)) \
+    AUX(Aux_Local, local, "AstLocal", \
+        LUAU_AUX_FIELD_RW(Name, SetName, n->name) \
+        LUAU_AUX_FIELD_RW(Location, SetLocation, n->location) \
+        LUAU_AUX_FIELD_RW(Shadow, SetShadow, n->shadow) \
+        LUAU_AUX_FIELD_RW(IsConst, SetIsConst, n->isConst) \
+        LUAU_AUX_FIELD_RW(Depth, SetDepth, n->functionDepth) \
+        LUAU_AUX_FIELD_RW(Annotation, SetAnnotation, n->annotation)) \
+    AUX(Aux_Comment, comment, "AstComment", \
+        LUAU_AUX_FIELD_RW(Location, SetLocation, n.location) \
+        LUAU_AUX_FIELD_RO(Type, n.type) \
+        LUAU_AUX_FIELD_FN_RO(Text, getCommentText(handle))) \
+    AUX(Aux_TableItem, tableItem, "AstTableItem", \
+        LUAU_AUX_FIELD_RW(Key, SetKey, n.key) \
+        LUAU_AUX_FIELD_RW(Value, SetValue, n.value) \
+        LUAU_AUX_FIELD_RW(Kind, SetKind, n.kind)) \
+    AUX(Aux_TypeList, typeList, "AstTypeList", \
+        LUAU_AUX_FIELD_RW(Types, SetTypes, n.types) \
+        LUAU_AUX_FIELD_RW(TailType, SetTailType, n.tailType)) \
+    AUX(Aux_CstTableItem, cstTableItem, "CstTableItem", \
+        LUAU_AUX_FIELD_RO(IndexerOpenPosition, n.indexerOpenPosition) \
+        LUAU_AUX_FIELD_RO(IndexerClosePosition, n.indexerClosePosition) \
+        LUAU_AUX_FIELD_RO(EqualsPosition, n.equalsPosition) \
+        LUAU_AUX_FIELD_RO(SeparatorPosition, n.separatorPosition) \
+        LUAU_AUX_FIELD_RO(Separator, n.separator))
+
+#define LUAU_GENERATE_AUX_DISPATCH(KindEnum, Member, KindStr, Fields) \
+    case KindEnum: \
+    { \
+        auto& n = handle.Member; \
+        (void)n; \
+        switch (atom) \
+        { \
+        Fields \
+        default: return false; \
+        } \
+    }
+
 static bool dispatchAux(lua_State* L, AstAuxData& handle, ReflectAtom atom)
 {
     switch (handle.kind)
     {
-    case Aux_TableProp:
-    {
-        auto& n = handle.tableProp;
-        switch (atom)
-        {
-        LUAU_AUX_FIELD_RW(Name, SetName, n.name)
-        LUAU_AUX_FIELD_RW(Location, SetLocation, n.location)
-        LUAU_AUX_FIELD_RW(Type, SetType, n.type)
-        LUAU_AUX_FIELD_RW(Access, SetAccess, n.access)
-        default: return false;
-        }
-    }
-    case Aux_TableIndexer:
-    {
-        auto& n = handle.tableIndexer;
-        switch (atom)
-        {
-        LUAU_AUX_FIELD_RW(Location, SetLocation, n.location)
-        LUAU_AUX_FIELD_RW(IndexType, SetIndexType, n.indexType)
-        LUAU_AUX_FIELD_RW(ResultType, SetResultType, n.resultType)
-        LUAU_AUX_FIELD_RW(Access, SetAccess, n.access)
-        default: return false;
-        }
-    }
-    case Aux_DeclaredExternTypeProperty:
-    {
-        auto& n = handle.declaredExternProp;
-        switch (atom)
-        {
-        LUAU_AUX_FIELD_RW(Name, SetName, n.name)
-        LUAU_AUX_FIELD_RW(Location, SetLocation, n.location)
-        LUAU_AUX_FIELD_RW(Type, SetType, n.ty)
-        LUAU_AUX_FIELD_RW(IsMethod, SetIsMethod, n.isMethod)
-        LUAU_AUX_FIELD_RW(Access, SetAccess, n.access)
-        default: return false;
-        }
-    }
-    case Aux_ClassProperty:
-    {
-        auto& n = handle.classProp;
-        switch (atom)
-        {
-        LUAU_AUX_FIELD_RW(Name, SetName, n.name)
-        LUAU_AUX_FIELD_RW(Type, SetType, n.ty)
-        default: return false;
-        }
-    }
-    case Aux_ClassMethod:
-    {
-        auto& n = handle.classMethod;
-        switch (atom)
-        {
-        LUAU_AUX_FIELD_RW(Name, SetName, n.functionName)
-        LUAU_AUX_FIELD_RW(Func, SetFunc, n.function)
-        default: return false;
-        }
-    }
-    case Aux_Local:
-    {
-        auto* n = handle.local;
-        switch (atom)
-        {
-        LUAU_AUX_FIELD_RW(Name, SetName, n->name)
-        LUAU_AUX_FIELD_RW(Location, SetLocation, n->location)
-        LUAU_AUX_FIELD_RW(Shadow, SetShadow, n->shadow)
-        LUAU_AUX_FIELD_RW(IsConst, SetIsConst, n->isConst)
-        LUAU_AUX_FIELD_RW(Depth, SetDepth, n->functionDepth)
-        LUAU_AUX_FIELD_RW(Annotation, SetAnnotation, n->annotation)
-        default: return false;
-        }
-    }
-    case Aux_Comment:
-    {
-        auto& n = handle.comment;
-        switch (atom)
-        {
-        LUAU_AUX_FIELD_RW(Location, SetLocation, n.location)
-        LUAU_AUX_FIELD_RO(Type, n.type)
-        case ReflectAtom::Text:
-        {
-            LUAU_ASSERT(handle.doc);
-            auto [startOff, endOff] = locationToOffsets(handle.doc->lineOffsets, handle.doc->source.size(), n.location);
-            lua_pushlstring(L, handle.doc->source.data() + startOff, endOff - startOff);
-            return true;
-        }
-        default: return false;
-        }
-    }
-    case Aux_TableItem:
-    {
-        auto& n = handle.tableItem;
-        switch (atom)
-        {
-        LUAU_AUX_FIELD_RW(Key, SetKey, n.key)
-        LUAU_AUX_FIELD_RW(Value, SetValue, n.value)
-        LUAU_AUX_FIELD_RW(Kind, SetKind, n.kind)
-        default: return false;
-        }
-    }
-    case Aux_TypeList:
-    {
-        auto& n = handle.typeList;
-        switch (atom)
-        {
-        LUAU_AUX_FIELD_RW(Types, SetTypes, n.types)
-        LUAU_AUX_FIELD_RW(TailType, SetTailType, n.tailType)
-        default: return false;
-        }
-    }
-    case Aux_CstTableItem:
-    {
-        auto& n = handle.cstTableItem;
-        switch (atom)
-        {
-        LUAU_AUX_FIELD_RO(IndexerOpenPosition, n.indexerOpenPosition)
-        LUAU_AUX_FIELD_RO(IndexerClosePosition, n.indexerClosePosition)
-        LUAU_AUX_FIELD_RO(EqualsPosition, n.equalsPosition)
-        LUAU_AUX_FIELD_RO(SeparatorPosition, n.separatorPosition)
-        LUAU_AUX_FIELD_RO(Separator, n.separator)
-        default: return false;
-        }
-    }
+    LUAU_REFLECT_AUX_TYPES(LUAU_GENERATE_AUX_DISPATCH)
     }
     return false;
 }
 
+#undef LUAU_GENERATE_AUX_DISPATCH
+#undef LUAU_AUX_FIELD_RW
+#undef LUAU_AUX_FIELD_RO
+#undef LUAU_AUX_FIELD_FN_RO
+
+#define LUAU_AUX_FIELD_RW(atomGet, atomSet, memberExpr) \
+    pushReflectValue(L, handle.doc, memberExpr); \
+    lua_setfield(L, -2, getAtomString(ReflectAtom::atomGet));
+
+#define LUAU_AUX_FIELD_RO(atomGet, memberExpr) \
+    pushReflectValue(L, handle.doc, memberExpr); \
+    lua_setfield(L, -2, getAtomString(ReflectAtom::atomGet));
+
+#define LUAU_AUX_FIELD_FN_RO(atomGet, expr) \
+    pushReflectValue(L, handle.doc, expr); \
+    lua_setfield(L, -2, getAtomString(ReflectAtom::atomGet));
+
+#define LUAU_GENERATE_AUX_PROPS(KindEnum, Member, KindStr, Fields) \
+    case KindEnum: \
+    { \
+        auto& n = handle.Member; \
+        (void)n; \
+        Fields \
+        break; \
+    }
+
+static int astAuxProperties(lua_State* L, AstAuxData& handle)
+{
+    lua_createtable(L, 0, 8);
+
+    if (handle.kind == Aux_Local)
+        lua_pushlightuserdatatagged(L, (void*)handle.local, TagId);
+    else
+        lua_pushlightuserdatatagged(L, (void*)&handle, TagId);
+    lua_setfield(L, -2, "id");
+
+    lua_pushstring(L, getAstAuxKind(handle));
+    lua_setfield(L, -2, "kind");
+
+    switch (handle.kind)
+    {
+    LUAU_REFLECT_AUX_TYPES(LUAU_GENERATE_AUX_PROPS)
+    }
+
+    return 1;
+}
+
+#undef LUAU_GENERATE_AUX_PROPS
+#undef LUAU_AUX_FIELD_RW
+#undef LUAU_AUX_FIELD_RO
+#undef LUAU_AUX_FIELD_FN_RO
+
 static int dispatchAstAuxMethod(lua_State* L, AstAuxData& handle, ReflectAtom atom, const char* str, size_t len)
 {
+    if (atom == ReflectAtom::Properties)
+        return astAuxProperties(L, handle);
+
     if (dispatchAux(L, handle, atom))
         return 1;
 
@@ -233,7 +235,7 @@ static int astAuxToString(lua_State* L)
 
 void registerAstAux(lua_State* L)
 {
-    registerUserdataType(L, TagAux, "AstAux", astAuxDtor, astAuxIndex, astAuxToString, nullptr, nullptr, astAuxNamecall);
+    registerUserdataType(L, TagAux, "AstAux", astAuxDtor, astAuxIndex, astAuxToString, nullptr, astAuxNamecall);
 }
 
 } // namespace Luau

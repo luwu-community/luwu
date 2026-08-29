@@ -35,6 +35,7 @@ namespace Luau
     ATOM(Errors, "errors") \
     ATOM(Comments, "comments") \
     ATOM(LineOffsets, "lineOffsets") \
+    ATOM(Properties, "properties") \
     \
     /* Read-Write AST / CST / Aux Properties */ \
     ATOM_RW(Body, "body", SetBody, "setBody") \
@@ -107,6 +108,8 @@ namespace Luau
     ATOM_RW(Text, "text", SetText, "setText") \
     ATOM_RW(Key, "key", SetKey, "setKey") \
     ATOM_RW(Kind, "kind", SetKind, "setKind") \
+    ATOM_RW(Begin, "begin", SetBegin, "setBegin") \
+    ATOM_RW(End, "end", SetEnd, "setEnd") \
     \
     /* Read-Only AST Properties */ \
     ATOM(Category, "category") \
@@ -172,17 +175,6 @@ namespace Luau
     ATOM(OpenParenthesesPosition, "openParenthesesPosition") \
     ATOM(CloseParenthesesPosition, "closeParenthesesPosition") \
     \
-    /* Read-Only Location & Position */ \
-    ATOM(BeginLine, "beginLine") \
-    ATOM(BeginColumn, "beginColumn") \
-    ATOM(EndLine, "endLine") \
-    ATOM(EndColumn, "endColumn") \
-    ATOM(StartOffset, "startOffset") \
-    ATOM(EndOffset, "endOffset") \
-    ATOM(Line, "line") \
-    ATOM(Column, "column") \
-    ATOM(ComputedOffset, "computedOffset") \
-    \
     /* Read-Only Aux Fields */ \
     ATOM(IndexerOpenPosition, "indexerOpenPosition") \
     ATOM(IndexerClosePosition, "indexerClosePosition") \
@@ -199,6 +191,19 @@ enum class ReflectAtom : int16_t
 #undef ATOM_RW
     Count
 };
+
+inline const char* getAtomString(ReflectAtom atom)
+{
+    switch (atom)
+    {
+#define ATOM(variant, str) case ReflectAtom::variant: return str;
+#define ATOM_RW(variant, str, setVariant, setStr) case ReflectAtom::variant: return str; case ReflectAtom::setVariant: return setStr;
+    LUAU_REFLECT_ATOMS(ATOM, ATOM_RW)
+#undef ATOM
+#undef ATOM_RW
+    default: return "";
+    }
+}
 
 inline ReflectAtom resolveGlobalReflectAtom(std::string_view key)
 {
@@ -250,11 +255,9 @@ enum AstUserdataTag : int
 {
     TagDocument = LUA_INTERNAL_UTAG(0),
     TagNode     = LUA_INTERNAL_UTAG(1),
-    TagLocation = LUA_INTERNAL_UTAG(2),
-    TagCstNode  = LUA_INTERNAL_UTAG(3),
-    TagPosition = LUA_INTERNAL_UTAG(4),
-    TagAux      = LUA_INTERNAL_UTAG(5),
-    TagFilter   = LUA_INTERNAL_UTAG(6),
+    TagCstNode  = LUA_INTERNAL_UTAG(2),
+    TagAux      = LUA_INTERNAL_UTAG(3),
+    TagFilter   = LUA_INTERNAL_UTAG(4),
 };
 
 enum AstLightUserdataTag : int
@@ -344,22 +347,10 @@ struct AstNodeData
     Luau::AstNode* node = nullptr;
 };
 
-struct AstLocationData
-{
-    std::shared_ptr<AstDocumentState> doc;
-    Luau::Location location;
-};
-
 struct CstNodeData
 {
     std::shared_ptr<AstDocumentState> doc;
     const Luau::CstNode* node = nullptr;
-};
-
-struct AstPositionData
-{
-    std::shared_ptr<AstDocumentState> doc;
-    Luau::Position position;
 };
 
 enum AstAuxKind : uint8_t
@@ -408,7 +399,25 @@ struct AstAuxData
 };
 
 // Line and location offset utilities (adapted from lute)
-std::vector<size_t> computeLineOffsets(std::string_view content);
+inline std::vector<size_t> computeLineOffsets(std::string_view content)
+{
+    std::vector<size_t> result{};
+    result.emplace_back(0);
+
+    for (size_t i = 0; i < content.size(); i++)
+    {
+        auto ch = content[i];
+        if (ch == '\r' || ch == '\n')
+        {
+            if (ch == '\r' && i + 1 < content.size() && content[i + 1] == '\n')
+            {
+                i++;
+            }
+            result.push_back(i + 1);
+        }
+    }
+    return result;
+}
 
 inline size_t positionToOffset(const std::vector<size_t>& lineOffsets, size_t sourceLen, const Luau::Position& pos)
 {
@@ -429,9 +438,32 @@ inline std::pair<size_t, size_t> locationToOffsets(const std::vector<size_t>& li
 // Push helpers
 void pushAstDocument(lua_State* L, std::shared_ptr<AstDocumentState> doc);
 void pushAstNode(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, Luau::AstNode* node);
-void pushLocation(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::Location& loc);
 void pushCstNode(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::CstNode* node);
-void pushPosition(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::Position& pos);
+
+inline void pushPosition(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::Position& pos)
+{
+    if (pos == Luau::Position::missing())
+    {
+        lua_pushnil(L);
+        return;
+    }
+    double off = doc ? double(positionToOffset(doc->lineOffsets, doc->source.size(), pos)) : 0.0;
+#if LUA_VECTOR_SIZE == 4
+    lua_pushvector(L, float(pos.line + 1), float(pos.column + 1), float(off), 0.0f);
+#else
+    lua_pushvector(L, float(pos.line + 1), float(pos.column + 1), float(off));
+#endif
+}
+
+inline void pushLocation(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::Location& loc)
+{
+    lua_createtable(L, 0, 2);
+    pushPosition(L, doc, loc.begin);
+    lua_setfield(L, -2, "begin");
+    pushPosition(L, doc, loc.end);
+    lua_setfield(L, -2, "end");
+    lua_setreadonly(L, -1, true);
+}
 
 template<typename T>
 inline void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const T& item)
@@ -456,9 +488,7 @@ void pushAstFilter(lua_State* L, const AstFilterData& filter);
 // Check helpers
 AstDocumentData& checkAstDocument(lua_State* L, int idx);
 AstNodeData& checkAstNode(lua_State* L, int idx);
-AstLocationData& checkAstLocation(lua_State* L, int idx);
 CstNodeData& checkCstNode(lua_State* L, int idx);
-AstPositionData& checkAstPosition(lua_State* L, int idx);
 AstAuxData& checkAstAux(lua_State* L, int idx);
 AstFilterData& checkAstFilter(lua_State* L, int idx);
 AstFilterData extractAstFilter(lua_State* L, int idx);
@@ -591,12 +621,11 @@ inline void registerUserdataType(
     lua_CFunction index,
     lua_CFunction tostring,
     lua_CFunction eq = nullptr,
-    const luaL_Reg* methods = nullptr,
     lua_CFunction namecall = nullptr
 )
 {
     lua_setuserdatadtor(L, tag, dtor);
-    lua_createtable(L, 0, (eq ? 5 : 4) + (methods ? 4 : 0) + (namecall ? 1 : 0));
+    lua_createtable(L, 0, (eq ? 5 : 4) + (namecall ? 1 : 0));
     lua_pushboolean(L, false);
     lua_setfield(L, -2, "__metatable");
     lua_pushstring(L, typeName);
@@ -615,24 +644,7 @@ inline void registerUserdataType(
         lua_pushcfunction(L, namecall, "__namecall");
         lua_setfield(L, -2, "__namecall");
     }
-    if (methods)
-    {
-        for (const luaL_Reg* l = methods; l->name != nullptr; l++)
-        {
-            lua_pushcfunction(L, l->func, l->name);
-            lua_setfield(L, -2, l->name);
-        }
-    }
     lua_setuserdatametatable(L, tag);
-}
-
-// Push pre-cached userdata method from metatable without creating GC objects
-inline int pushUserdataMethod(lua_State* L, int tag, const char* name)
-{
-    lua_getuserdatametatable(L, tag);
-    lua_getfield(L, -1, name);
-    lua_replace(L, -2);
-    return 1;
 }
 
 // Push cached userdata method from metatable, or lazily allocate and cache it on first access
@@ -782,9 +794,7 @@ inline int pushCachedUserdataMethod(lua_State* L, int tag, const char* name, lua
 // Module registration functions
 void registerAstDocument(lua_State* L);
 void registerAstNode(lua_State* L);
-void registerAstLocation(lua_State* L);
 void registerCstNode(lua_State* L);
-void registerAstPosition(lua_State* L);
 void registerAstAux(lua_State* L);
 
 } // namespace Luau

@@ -68,9 +68,7 @@ int luaopen_reflect(lua_State* L)
 
     registerAstDocument(L);
     registerAstNode(L);
-    registerAstLocation(L);
     registerCstNode(L);
-    registerAstPosition(L);
     registerAstAux(L);
     registerAstFilter(L);
 

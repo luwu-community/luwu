@@ -26,24 +26,6 @@ static int astDocSource(lua_State* L)
     return 1;
 }
 
-static int astDocWalk(lua_State* L)
-{
-    auto& handle = checkAstDocument(L, 1);
-    auto& doc = handle.doc;
-    luaL_checktype(L, 2, LUA_TFUNCTION);
-
-    AstFilterData filter = extractAstFilter(L, 3);
-
-    if (doc->parseResult.root)
-    {
-        CallbackVisitor visitor(L, doc, 2, filter);
-        doc->parseResult.root->visit(&visitor);
-        if (visitor.errorOccurred)
-            lua_error(L);
-    }
-    return 0;
-}
-
 static int astDocComments(lua_State* L)
 {
     auto& handle = checkAstDocument(L, 1);
@@ -81,6 +63,65 @@ static int astDocLineOffsets(lua_State* L)
     return 1;
 }
 
+static int astDocProperties(lua_State* L)
+{
+    auto& handle = checkAstDocument(L, 1);
+    auto& doc = handle.doc;
+    lua_createtable(L, 0, 6);
+
+    lua_pushlightuserdatatagged(L, (void*)doc.get(), TagId);
+    lua_setfield(L, -2, "id");
+
+    pushAstNode(L, doc, doc->parseResult.root);
+    lua_setfield(L, -2, "root");
+
+    lua_pushlstring(L, doc->source.data(), doc->source.size());
+    lua_setfield(L, -2, "source");
+
+    const auto& comments = doc->parseResult.commentLocations;
+    pushArray(L, comments.size(), [&](size_t i) {
+        pushAstAux(L, doc, comments[i]);
+    });
+    lua_setfield(L, -2, "comments");
+
+    const auto& errors = doc->parseResult.errors;
+    pushArray(L, errors.size(), [&](size_t i) {
+        const auto& err = errors[i];
+        lua_createtable(L, 0, 2);
+        lua_pushstring(L, err.getMessage().c_str());
+        lua_setfield(L, -2, "message");
+        pushLocation(L, doc, err.getLocation());
+        lua_setfield(L, -2, "location");
+    });
+    lua_setfield(L, -2, "errors");
+
+    pushArray(L, doc->lineOffsets.size(), [&](size_t i) {
+        lua_pushinteger(L, int(doc->lineOffsets[i]));
+    });
+    lua_setfield(L, -2, "lineOffsets");
+
+    return 1;
+}
+
+static int dispatchAstDocMethod(lua_State* L, AstDocumentData& handle, ReflectAtom atom, const char* str, size_t len)
+{
+    switch (atom)
+    {
+    case ReflectAtom::Root:        return astDocRoot(L);
+    case ReflectAtom::Source:      return astDocSource(L);
+    case ReflectAtom::Comments:    return astDocComments(L);
+    case ReflectAtom::Errors:      return astDocErrors(L);
+    case ReflectAtom::LineOffsets: return astDocLineOffsets(L);
+    case ReflectAtom::Properties:  return astDocProperties(L);
+    default: break;
+    }
+
+    luaL_error(L, "%.*s is not a valid method of AstDocument", int(len), str);
+}
+
+LUAU_REFLECT_METHOD_TRAMPOLINE(astDocMethodTrampoline, checkAstDocument, dispatchAstDocMethod)
+LUAU_REFLECT_NAMECALL(astDocNamecall, checkAstDocument, dispatchAstDocMethod)
+
 static int astDocIndex(lua_State* L)
 {
     LUAU_REFLECT_PREPARE_INDEX(checkAstDocument);
@@ -88,16 +129,14 @@ static int astDocIndex(lua_State* L)
     switch (atom)
     {
     case ReflectAtom::Id:          lua_pushlightuserdatatagged(L, (void*)handle.doc.get(), TagId); return 1;
-    case ReflectAtom::Root:        return pushUserdataMethod(L, TagDocument, "root");
-    case ReflectAtom::Source:      return pushUserdataMethod(L, TagDocument, "source");
-    case ReflectAtom::Walk:        return pushUserdataMethod(L, TagDocument, "walk");
-    case ReflectAtom::Comments:    return pushUserdataMethod(L, TagDocument, "comments");
-    case ReflectAtom::Errors:      return pushUserdataMethod(L, TagDocument, "errors");
-    case ReflectAtom::LineOffsets: return pushUserdataMethod(L, TagDocument, "lineOffsets");
-    default:
-        lua_pushnil(L);
-        return 1;
+    default: break;
     }
+
+    if (atom != ReflectAtom::Unknown)
+        return pushCachedUserdataMethod(L, TagDocument, keyStr, astDocMethodTrampoline);
+
+    lua_pushnil(L);
+    return 1;
 }
 
 static int astDocToString(lua_State* L)
@@ -119,36 +158,9 @@ static int astDocEq(lua_State* L)
     return 1;
 }
 
-static int astDocNamecall(lua_State* L)
-{
-    LUAU_REFLECT_PREPARE_NAMECALL(checkAstDocument);
-
-    switch (atom)
-    {
-    case ReflectAtom::Root:        return astDocRoot(L);
-    case ReflectAtom::Source:      return astDocSource(L);
-    case ReflectAtom::Walk:        return astDocWalk(L);
-    case ReflectAtom::Comments:    return astDocComments(L);
-    case ReflectAtom::Errors:      return astDocErrors(L);
-    case ReflectAtom::LineOffsets: return astDocLineOffsets(L);
-    default: break;
-    }
-
-    luaL_error(L, "%.*s is not a valid method of AstDocument", int(len), str);
-}
-
 void registerAstDocument(lua_State* L)
 {
-    static const luaL_Reg s_docMethods[] = {
-        {"root", astDocRoot},
-        {"source", astDocSource},
-        {"walk", astDocWalk},
-        {"comments", astDocComments},
-        {"errors", astDocErrors},
-        {"lineOffsets", astDocLineOffsets},
-        {nullptr, nullptr},
-    };
-    registerUserdataType(L, TagDocument, "AstDocument", astDocumentDtor, astDocIndex, astDocToString, astDocEq, s_docMethods, astDocNamecall);
+    registerUserdataType(L, TagDocument, "AstDocument", astDocumentDtor, astDocIndex, astDocToString, astDocEq, astDocNamecall);
 }
 
 } // namespace Luau

@@ -112,7 +112,6 @@ static int astFilterIndex(lua_State* L)
 
 static int astFilterNamecall(lua_State* L)
 {
-    auto& handle = checkAstFilter(L, 1);
     LUAU_REFLECT_RESOLVE_NAMECALL_ATOM();
 
     switch (atom)
@@ -144,7 +143,7 @@ static int astFilterEq(lua_State* L)
 
 void registerAstFilter(lua_State* L)
 {
-    registerUserdataType(L, TagFilter, "AstFilter", astFilterDtor, astFilterIndex, astFilterToString, astFilterEq, nullptr, astFilterNamecall);
+    registerUserdataType(L, TagFilter, "AstFilter", astFilterDtor, astFilterIndex, astFilterToString, astFilterEq, astFilterNamecall);
 }
 
 int reflectFilter(lua_State* L)

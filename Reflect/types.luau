@@ -3,22 +3,13 @@
 
 export type Id = any
 
--- Source Position (1-indexed line and column)
-export type AstPosition = {
-    read line: number,
-    read column: number,
-    read computedOffset: number,
-}
+-- Source Position (x = 1-indexed line, y = 1-indexed column, z = 0-indexed computedOffset)
+export type AstPosition = vector
 
--- Luau::Location (1-indexed begin and end lines/columns)
+-- Luau::Location (1-indexed begin and end positions)
 export type AstLocation = {
-    read beginLine: number,
-    read beginColumn: number,
-    read endLine: number,
-    read endColumn: number,
-    read startOffset: number,
-    read endOffset: number,
-    read text: string,
+    read begin: AstPosition,
+    read ["end"]: AstPosition,
 }
 
 -- comment block
@@ -29,6 +20,7 @@ export type AstComment = {
     read location: (self: AstComment) -> AstLocation,
     read setLocation: (self: AstComment, location: AstLocation) -> AstComment,
     read text: (self: AstComment) -> string,
+    read properties: (self: AstComment) -> { [string]: any },
 }
 
 -- local variable definition/binding
@@ -48,6 +40,7 @@ export type AstLocal = {
     read setDepth: (self: AstLocal, depth: number) -> AstLocal,
     read annotation: (self: AstLocal) -> AstNode?,
     read setAnnotation: (self: AstLocal, annotation: AstNode?) -> AstLocal,
+    read properties: (self: AstLocal) -> { [string]: any },
 }
 
 -- parser errored
@@ -82,6 +75,7 @@ export type AstTableItem = {
     read setKey: (self: AstTableItem, key: AstNode?) -> AstTableItem,
     read value: (self: AstTableItem) -> AstNode,
     read setValue: (self: AstTableItem, value: AstNode) -> AstTableItem,
+    read properties: (self: AstTableItem) -> { [string]: any },
 }
 
 -- Auxiliary AST structures
@@ -96,6 +90,7 @@ export type AstTableProp = {
     read setType: (self: AstTableProp, type: AstType) -> AstTableProp,
     read access: (self: AstTableProp) -> ("read" | "write" | "readwrite"),
     read setAccess: (self: AstTableProp, access: "read" | "write" | "readwrite") -> AstTableProp,
+    read properties: (self: AstTableProp) -> { [string]: any },
 }
 
 export type AstTableIndexer = {
@@ -109,6 +104,7 @@ export type AstTableIndexer = {
     read setLocation: (self: AstTableIndexer, location: AstLocation) -> AstTableIndexer,
     read access: (self: AstTableIndexer) -> ("read" | "write" | "readwrite"),
     read setAccess: (self: AstTableIndexer, access: "read" | "write" | "readwrite") -> AstTableIndexer,
+    read properties: (self: AstTableIndexer) -> { [string]: any },
 }
 
 export type AstDeclaredExternTypeProperty = {
@@ -124,6 +120,7 @@ export type AstDeclaredExternTypeProperty = {
     read setIsMethod: (self: AstDeclaredExternTypeProperty, isMethod: boolean) -> AstDeclaredExternTypeProperty,
     read access: (self: AstDeclaredExternTypeProperty) -> ("read" | "write" | "readwrite"),
     read setAccess: (self: AstDeclaredExternTypeProperty, access: "read" | "write" | "readwrite") -> AstDeclaredExternTypeProperty,
+    read properties: (self: AstDeclaredExternTypeProperty) -> { [string]: any },
 }
 
 export type AstClassProperty = {
@@ -133,6 +130,7 @@ export type AstClassProperty = {
     read setName: (self: AstClassProperty, name: string) -> AstClassProperty,
     read type: (self: AstClassProperty) -> AstType?,
     read setType: (self: AstClassProperty, type: AstType?) -> AstClassProperty,
+    read properties: (self: AstClassProperty) -> { [string]: any },
 }
 
 export type AstClassMethod = {
@@ -142,6 +140,7 @@ export type AstClassMethod = {
     read setName: (self: AstClassMethod, name: string) -> AstClassMethod,
     read func: (self: AstClassMethod) -> AstExprFunction,
     read setFunc: (self: AstClassMethod, func: AstExprFunction) -> AstClassMethod,
+    read properties: (self: AstClassMethod) -> { [string]: any },
 }
 
 export type AstTypeList = {
@@ -151,6 +150,7 @@ export type AstTypeList = {
     read setTypes: (self: AstTypeList, types: {AstType}) -> AstTypeList,
     read tailType: (self: AstTypeList) -> AstTypePack?,
     read setTailType: (self: AstTypeList, tailType: AstTypePack?) -> AstTypeList,
+    read properties: (self: AstTypeList) -> { [string]: any },
 }
 
 export type AstAux =
@@ -178,11 +178,13 @@ export type CstTableItem = {
     read separatorPosition: (self: CstTableItem) -> AstPosition?,
     -- may be missing for last Item
     read separator: (self: CstTableItem) -> ("comma" | "semicolon" | "missing"),
+    read properties: (self: CstTableItem) -> { [string]: any },
 }
 
 export type CstNodeCommon = {
     read id: Id,
     read category: "generic",
+    read properties: (self: CstNode) -> { [string]: any },
 }
 
 export type CstAttr = CstNodeCommon & {
@@ -482,12 +484,13 @@ export type AstNodeCommon = {
     read cst: (self: AstNode) -> CstNode?,
     read children: (self: AstNode) -> {AstNode},
     read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?, filter: AstFilter?) -> (),
+    read properties: (self: AstNode) -> { [string]: any },
 }
 
 export type AstStatCommon = AstNodeCommon & {
     read category: "stat",
-    read hasSemicolon: (self: AstNode) -> boolean,
-    read setHasSemicolon: (self: AstNode, hasSemicolon: boolean) -> AstNode,
+    read hasSemicolon: (self: AstStat) -> boolean,
+    read setHasSemicolon: (self: AstStat, hasSemicolon: boolean) -> AstStat,
 }
 
 export type AstExprCommon = AstNodeCommon & {
@@ -1134,7 +1137,7 @@ export type AstDocument = {
     read errors: (self: AstDocument) -> {ParseError},
     read comments: (self: AstDocument) -> {AstComment},
     read lineOffsets: (self: AstDocument) -> {number},
-    read walk: (self: AstDocument, visitor: (node: AstNode) -> boolean?, filter: AstFilter?) -> (),
+    read properties: (self: AstDocument) -> { [string]: any },
 }
 
 local function parse(source: string, includeCst: boolean?): AstDocument

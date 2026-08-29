@@ -29,7 +29,7 @@ static int dostring(lua_State* L, const char* code)
         int status = lua_pcall(L, 0, 0, 0);
         if (status != 0)
         {
-            printf("Lua runtime error: %s\n", lua_tostring(L, -1));
+            fprintf(stderr, "Lua runtime error: %s\n", lua_tostring(L, -1));
         }
         return status;
     }
@@ -75,10 +75,11 @@ TEST_CASE("LazyAstTypeof")
         assert(localItem:name() == "x")
 
         local loc = stat:location()
-        assert(typeof(loc) == "AstLocation")
-        assert(loc.beginLine == 1)
-        assert(loc.beginColumn == 1)
-        assert(loc.text == "local x = 1")
+        assert(typeof(loc) == "table")
+        assert(typeof(loc.begin) == "vector")
+        assert(typeof(loc["end"]) == "vector")
+        assert(loc.begin.x == 1)
+        assert(loc.begin.y == 1)
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);
@@ -156,17 +157,17 @@ TEST_CASE("LazyAstChildrenAndWalk")
         assert(children[2].kind == "AstStatLocal")
         assert(children[3].kind == "AstStatReturn")
 
-        -- Test doc:walk()
+        -- Test root:walk()
         local nodeKinds = {}
-        doc:walk(function(node)
+        root:walk(function(node)
             table.insert(nodeKinds, node.kind)
             return true
         end)
         assert(#nodeKinds > 5)
 
-        -- Test doc:walk with filter
+        -- Test root:walk with filter
         local locals = {}
-        doc:walk(function(node)
+        root:walk(function(node)
             table.insert(locals, node)
         end, reflect.filter("AstStatLocal"))
         assert(#locals == 2)
@@ -254,7 +255,7 @@ TEST_CASE("LazyAstErrors")
         assert(#errors > 0)
         assert(errors[1].message ~= nil)
         assert(errors[1].location ~= nil)
-        assert(errors[1].location.beginLine == 2)
+        assert(errors[1].location.begin.x == 2)
         local comments = doc:comments()
         assert(#comments > 0)
         local lineOffsets = doc:lineOffsets()
@@ -304,13 +305,13 @@ TEST_CASE("LazyCstData")
         local callExprCst = callExpr:cst()
         assert(callExprCst ~= nil)
         assert(callExprCst.kind == "CstExprCall")
-        assert(typeof(callExprCst:openParens()) == "AstPosition")
-        assert(callExprCst:openParens().line == 2)
-        assert(callExprCst:openParens().computedOffset > 0)
+        assert(typeof(callExprCst:openParens()) == "vector")
+        assert(callExprCst:openParens().x == 2)
+        assert(callExprCst:openParens().z > 0)
         assert(#doc:lineOffsets() >= 2)
         assert(doc:lineOffsets()[1] == 0)
         assert(#callExprCst:commaPositions() == 1)
-        assert(typeof(callExprCst:commaPositions()[1]) == "AstPosition")
+        assert(typeof(callExprCst:commaPositions()[1]) == "vector")
 
         -- Check type function CST and AST category
         local typeDoc = reflect.parse("type Callback = (a: number, b: string) -> boolean", true)
@@ -319,14 +320,14 @@ TEST_CASE("LazyCstData")
         local aliasStatCst = aliasStat:cst()
         assert(aliasStatCst ~= nil)
         assert(aliasStatCst.kind == "CstStatTypeAlias")
-        assert(aliasStatCst:typeKeywordPosition().line == 1)
+        assert(aliasStatCst:typeKeywordPosition().x == 1)
 
         local typeFunc = aliasStat:type()
         assert(typeFunc.category == "type")
         local typeFuncCst = typeFunc:cst()
         assert(typeFuncCst ~= nil)
         assert(typeFuncCst.kind == "CstTypeFunction")
-        assert(typeFuncCst:returnArrowPosition().line == 1)
+        assert(typeFuncCst:returnArrowPosition().x == 1)
         assert(#typeFuncCst:argumentsCommaPositions() == 1)
         assert(#typeFuncCst:argumentNameColonPositions() == 2)
 
@@ -364,7 +365,7 @@ TEST_CASE("LazyAstComments")
         assert(typeof(c1) == "AstAux")
         assert(c1.kind == "AstComment")
         assert(c1:type() == "single")
-        assert(c1:location().beginLine == 1)
+        assert(c1:location().begin.x == 1)
         assert(c1:text() == "-- single comment")
 
         local c2 = comments[2]
@@ -526,33 +527,45 @@ TEST_CASE("TestFields")
         local stat1 = doc:root():body()[1]
         local loc = stat1:location()
 
-        -- Test direct field access on AstLocation
-        assert(loc.beginLine == 1)
-        assert(loc.beginColumn == 1)
-        assert(loc.endLine == 1)
-        assert(loc.endColumn == 12)
-        assert(loc.startOffset == 0)
-        assert(loc.endOffset == 11)
-        assert(loc.text == "local a = 1")
+        -- Test fields on AstLocation table
+        assert(typeof(loc) == "table")
+        assert(table.isfrozen(loc) == true)
+        assert(typeof(loc.begin) == "vector")
+        assert(typeof(loc["end"]) == "vector")
+        assert(loc.begin.x == 1)
+        assert(loc.begin.y == 1)
+        assert(loc.begin.z == 0)
+        assert(loc["end"].x == 1)
+        assert(loc["end"].y == 12)
+        assert(loc["end"].z == 11)
 
-        -- Test direct field access on AstPosition
+        -- Test mutating node location with setLocation
+        stat1:setLocation({ begin = vector.create(2, 3, 0), ["end"] = vector.create(2, 10, 0) })
+        local newLoc = stat1:location()
+        assert(newLoc.begin.x == 2)
+        assert(newLoc.begin.y == 3)
+        assert(newLoc["end"].x == 2)
+        assert(newLoc["end"].y == 10)
+
+        -- Test CST positions as vectors
         local call = doc:root():body()[2]:expr()
         local pos = call:cst():openParens()
-        assert(pos.line == 2)
-        assert(pos.column == 4)
-        assert(pos.computedOffset == 15)
+        assert(typeof(pos) == "vector")
+        assert(pos.x == 2)
+        assert(pos.y == 4)
+        assert(pos.z == 15)
 
         -- Test dot indexing a method (stat1.location(stat1))
         local bodyFn = stat1.location
         assert(typeof(bodyFn) == "function")
         local loc2 = bodyFn(stat1)
-        assert(loc2.beginLine == 1)
+        assert(loc2.begin.x == 2)
 
         -- Test dot indexing a CST method
         local cstFn = call:cst().openParens
         assert(typeof(cstFn) == "function")
         local pos2 = cstFn(call:cst())
-        assert(pos2.line == 2)
+        assert(pos2.x == 2)
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);
@@ -624,7 +637,7 @@ TEST_CASE("ReflectUseAtoms")
         local c = comments[1]
         assert(c:type() == "single")
         assert(c:text() == "-- hello")
-        assert(c:location().beginLine == 1)
+        assert(c:location().begin.x == 1)
         assert(c[123] == nil)
 
         -- Test root & statements
@@ -651,13 +664,13 @@ TEST_CASE("ReflectUseAtoms")
 
         -- Test walk method via namecall
         local foundCount = 0
-        doc:walk(function(node)
+        doc:root():walk(function(node)
             foundCount = foundCount + 1
         end)
         assert(foundCount > 0)
 
         local found = {}
-        doc:walk(function(node)
+        doc:root():walk(function(node)
             table.insert(found, node)
         end, reflect.filter("AstStatLocal"))
         assert(#found == 1)
@@ -668,16 +681,16 @@ TEST_CASE("ReflectUseAtoms")
         assert(cst[123] == nil)
         local colons = cst:varsAnnotationColonPositions()
         assert(#colons == 1)
-        assert(colons[1].line == 2)
-        assert(colons[1].column == 8)
-        assert(colons[1][123] == nil)
+        assert(colons[1].x == 2)
+        assert(colons[1].y == 8)
+        assert(typeof(colons[1]) == "vector")
 
-        -- Test location atoms
+        -- Test location table
         local loc = stat1:location()
-        assert(loc.beginLine == 2)
-        assert(loc.beginColumn == 1)
-        assert(loc.endLine == 2)
-        assert(loc[123] == nil)
+        assert(typeof(loc) == "table")
+        assert(loc.begin.x == 2)
+        assert(loc.begin.y == 1)
+        assert(loc["end"].x == 2)
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);
@@ -760,9 +773,9 @@ TEST_CASE("ReflectUserdataProtectedMetatable")
         assert(getmetatable(doc) == false)
         assert(getmetatable(root) == false)
         assert(getmetatable(stat) == false)
-        assert(getmetatable(loc) == false)
+        assert(typeof(loc) == "table")
         assert(getmetatable(cst) == false)
-        assert(getmetatable(pos) == false)
+        assert(typeof(pos) == "vector")
         assert(getmetatable(comment) == false)
         assert(getmetatable(flt) == false)
     )LUA";
@@ -804,7 +817,7 @@ TEST_CASE("ReflectAstFilter")
 
         -- Walk with filter
         local calls = {}
-        doc:walk(function(node)
+        root:walk(function(node)
             table.insert(calls, node)
         end, callFilter)
 
@@ -817,7 +830,7 @@ TEST_CASE("ReflectAstFilter")
         -- Category filter: stat
         local statFilter = reflect.filter("stat")
         local stats = {}
-        doc:walk(function(node)
+        root:walk(function(node)
             table.insert(stats, node)
         end, statFilter)
 
@@ -830,7 +843,7 @@ TEST_CASE("ReflectAstFilter")
         -- Multi-kind filter
         local multiFilter = reflect.filter("AstStatLocal", "AstStatLocalFunction")
         local localsAndFuncs = {}
-        doc:walk(function(node)
+        root:walk(function(node)
             table.insert(localsAndFuncs, node)
         end, multiFilter)
 
@@ -1026,6 +1039,79 @@ TEST_CASE("ReflectAstMutations")
         assert(tindexer:access() == "readwrite")
         assert(tindexer:setAccess("read") == tindexer)
         assert(tindexer:access() == "read")
+    )LUA";
+
+    CHECK_EQ(dostring(L, script), 0);
+}
+
+TEST_CASE("ReflectProperties")
+{
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+    Luau::luaopen_reflect(L);
+    lua_setglobal(L, "reflect");
+
+    const char* script = R"LUA(
+        local doc = reflect.parse("-- comment\nlocal x = 1\nif x then print(x) else print(2) end", true)
+        local docProps = doc:properties()
+        assert(docProps.id ~= nil)
+        assert(docProps.root ~= nil)
+        assert(type(docProps.source) == "string")
+        assert(#docProps.comments == 1)
+        assert(#docProps.errors == 0)
+        assert(#docProps.lineOffsets >= 1)
+
+        -- Comment aux properties
+        local comment = docProps.comments[1]
+        local commentProps = comment:properties()
+        assert(commentProps.id ~= nil)
+        assert(commentProps.kind == "AstComment")
+        assert(commentProps.type == "single")
+        assert(commentProps.location ~= nil)
+        assert(commentProps.text == "-- comment")
+
+        -- AstStatLocal & AstLocal properties
+        local root = docProps.root
+        local statLocal = root:body()[1]
+        local statProps = statLocal:properties()
+        assert(statProps.id ~= nil)
+        assert(statProps.kind == "AstStatLocal")
+        assert(statProps.category == "stat")
+        assert(statProps.hasSemicolon == false)
+        assert(#statProps.vars == 1)
+        assert(#statProps.values == 1)
+        assert(statProps.location ~= nil)
+        assert(statProps.text ~= nil)
+
+        local localVar = statProps.vars[1]
+        local localProps = localVar:properties()
+        assert(localProps.id ~= nil)
+        assert(localProps.kind == "AstLocal")
+        assert(localProps.name == "x")
+        assert(localProps.isConst == false)
+        assert(tostring(localProps.depth) == "0")
+
+        -- AstStatIf properties
+        local statIf = root:body()[2]
+        local ifProps = statIf:properties()
+        assert(ifProps.id ~= nil)
+        assert(ifProps.kind == "AstStatIf")
+        assert(ifProps.category == "stat")
+        assert(ifProps.condition ~= nil)
+        assert(ifProps.thenbody ~= nil)
+        assert(ifProps.elsebody ~= nil)
+
+        -- CST properties
+        local cst = statLocal:cst()
+        if cst then
+            local cstProps = cst:properties()
+            assert(cstProps.id ~= nil)
+            assert(cstProps.category == "generic")
+        end
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);
