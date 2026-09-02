@@ -126,20 +126,8 @@ static int astFilterNamecall(lua_State* L)
     luaL_error(L, "attempt to call non-existent method '%s'", str);
 }
 
-static int astFilterToString(lua_State* L)
-{
-    checkAstFilter(L, 1);
-    lua_pushstring(L, "AstFilter");
-    return 1;
-}
-
-static int astFilterEq(lua_State* L)
-{
-    auto& a = checkAstFilter(L, 1);
-    auto& b = checkAstFilter(L, 2);
-    lua_pushboolean(L, a.classMask[0] == b.classMask[0] && a.classMask[1] == b.classMask[1] && a.categoryMask == b.categoryMask);
-    return 1;
-}
+LUAU_REFLECT_DEFINE_TOSTRING(astFilterToString, "AstFilter")
+LUAU_REFLECT_DEFINE_EQ(astFilterEq, TagFilter, checkAstFilter, a.classMask[0] == b.classMask[0] && a.classMask[1] == b.classMask[1] && a.categoryMask == b.categoryMask)
 
 void registerAstFilter(lua_State* L)
 {

@@ -25,12 +25,135 @@ LUAU_FASTFLAG(OptLuwuReflectUseAtoms)
 namespace Luau
 {
 
+#define LUAU_REFLECT_AST_NODE_KINDS(NODE) \
+    /* Statements */ \
+    NODE(AstStatBlock) \
+    NODE(AstStatIf) \
+    NODE(AstStatWhile) \
+    NODE(AstStatRepeat) \
+    NODE(AstStatBreak) \
+    NODE(AstStatContinue) \
+    NODE(AstStatReturn) \
+    NODE(AstStatExpr) \
+    NODE(AstStatLocal) \
+    NODE(AstStatFor) \
+    NODE(AstStatForIn) \
+    NODE(AstStatAssign) \
+    NODE(AstStatCompoundAssign) \
+    NODE(AstStatFunction) \
+    NODE(AstStatLocalFunction) \
+    NODE(AstStatTypeAlias) \
+    NODE(AstStatTypeFunction) \
+    NODE(AstStatDeclareGlobal) \
+    NODE(AstStatDeclareFunction) \
+    NODE(AstStatDeclareExternType) \
+    NODE(AstStatClass) \
+    NODE(AstStatError) \
+    /* Expressions */ \
+    NODE(AstExprGroup) \
+    NODE(AstExprConstantNil) \
+    NODE(AstExprConstantBool) \
+    NODE(AstExprConstantNumber) \
+    NODE(AstExprConstantInteger) \
+    NODE(AstExprConstantString) \
+    NODE(AstExprLocal) \
+    NODE(AstExprGlobal) \
+    NODE(AstExprVarargs) \
+    NODE(AstExprCall) \
+    NODE(AstExprIndexName) \
+    NODE(AstExprIndexExpr) \
+    NODE(AstExprFunction) \
+    NODE(AstExprTable) \
+    NODE(AstExprUnary) \
+    NODE(AstExprBinary) \
+    NODE(AstExprTypeAssertion) \
+    NODE(AstExprIfElse) \
+    NODE(AstExprInterpString) \
+    NODE(AstExprInstantiate) \
+    NODE(AstExprError) \
+    /* Types & Generics & Attributes */ \
+    NODE(AstTypeReference) \
+    NODE(AstTypeTable) \
+    NODE(AstTypeFunction) \
+    NODE(AstTypeTypeof) \
+    NODE(AstTypeOptional) \
+    NODE(AstTypeUnion) \
+    NODE(AstTypeIntersection) \
+    NODE(AstTypeSingletonBool) \
+    NODE(AstTypeSingletonString) \
+    NODE(AstTypeGroup) \
+    NODE(AstTypeError) \
+    NODE(AstTypePackExplicit) \
+    NODE(AstTypePackVariadic) \
+    NODE(AstTypePackGeneric) \
+    NODE(AstGenericType) \
+    NODE(AstGenericTypePack) \
+    NODE(AstAttr)
+
+#define LUAU_REFLECT_CST_NODE_KINDS(NODE) \
+    NODE(CstAttr) \
+    NODE(CstParametrizedAttr) \
+    NODE(CstExprGroup) \
+    NODE(CstExprConstantNumber) \
+    NODE(CstExprConstantInteger) \
+    NODE(CstExprConstantString) \
+    NODE(CstExprCall) \
+    NODE(CstExprIndexExpr) \
+    NODE(CstExprFunction) \
+    NODE(CstExprTable) \
+    NODE(CstExprOp) \
+    NODE(CstExprTypeAssertion) \
+    NODE(CstExprIfElse) \
+    NODE(CstExprInterpString) \
+    NODE(CstExprExplicitTypeInstantiation) \
+    NODE(CstStatDo) \
+    NODE(CstStatRepeat) \
+    NODE(CstStatReturn) \
+    NODE(CstStatLocal) \
+    NODE(CstStatFor) \
+    NODE(CstStatForIn) \
+    NODE(CstStatAssign) \
+    NODE(CstStatCompoundAssign) \
+    NODE(CstStatFunction) \
+    NODE(CstStatLocalFunction) \
+    NODE(CstGenericType) \
+    NODE(CstGenericTypePack) \
+    NODE(CstStatTypeAlias) \
+    NODE(CstStatTypeFunction) \
+    NODE(CstTypeReference) \
+    NODE(CstTypeTable) \
+    NODE(CstTypeFunction) \
+    NODE(CstTypeTypeof) \
+    NODE(CstTypeUnion) \
+    NODE(CstTypeIntersection) \
+    NODE(CstTypeSingletonString) \
+    NODE(CstTypeGroup) \
+    NODE(CstTypePackExplicit) \
+    NODE(CstTypePackGeneric)
+
+#define LUAU_REFLECT_LOCAL_NODE_KINDS(NODE) \
+    NODE(AstLocal)
+
+#define LUAU_REFLECT_AUX_NODE_KINDS(NODE) \
+    NODE(AstComment) \
+    NODE(AstTableItem) \
+    NODE(AstTableProp) \
+    NODE(AstTableIndexer) \
+    NODE(AstDeclaredExternTypeProperty) \
+    NODE(AstClassProperty) \
+    NODE(AstClassMethod) \
+    NODE(AstTypeList) \
+    NODE(CstTableItem)
+
+#define LUAU_REFLECT_KIND_ATOM(Kind) ATOM(Kind, #Kind)
+
 #define LUAU_REFLECT_ATOMS(ATOM, ATOM_RW) \
     /* Special & Document & Allocator */ \
     ATOM(Id, "id") \
     ATOM(Matches, "matches") \
     ATOM(Root, "root") \
     ATOM(Source, "source") \
+    ATOM(Prettyprint, "prettyprint") \
     ATOM(Walk, "walk") \
     ATOM(Errors, "errors") \
     ATOM(Comments, "comments") \
@@ -39,6 +162,21 @@ namespace Luau
     ATOM(Allocator, "allocator") \
     ATOM(Parse, "parse") \
     ATOM(Parseexpr, "parseexpr") \
+    ATOM(Defaultnode, "defaultnode") \
+    \
+    /* Node Kind Atoms */ \
+    LUAU_REFLECT_AST_NODE_KINDS(LUAU_REFLECT_KIND_ATOM) \
+    LUAU_REFLECT_CST_NODE_KINDS(LUAU_REFLECT_KIND_ATOM) \
+    LUAU_REFLECT_LOCAL_NODE_KINDS(LUAU_REFLECT_KIND_ATOM) \
+    LUAU_REFLECT_AUX_NODE_KINDS(LUAU_REFLECT_KIND_ATOM) \
+    \
+    /* Category Atoms */ \
+    ATOM(CategoryStat, "stat") \
+    ATOM(CategoryExpr, "expr") \
+    ATOM(CategoryType, "type") \
+    ATOM(CategoryTypePack, "typePack") \
+    ATOM(CategoryGeneric, "generic") \
+    ATOM(CategoryAttr, "attr") \
     \
     /* Read-Write AST / CST / Aux Properties */ \
     ATOM_RW(Body, "body", SetBody, "setBody") \
@@ -262,6 +400,7 @@ enum AstUserdataTag : int
     TagAux       = LUA_INTERNAL_UTAG(3),
     TagFilter    = LUA_INTERNAL_UTAG(4),
     TagAllocator = LUA_INTERNAL_UTAG(5),
+    TagLocal     = LUA_INTERNAL_UTAG(6),
 };
 
 enum AstLightUserdataTag : int
@@ -380,6 +519,12 @@ struct CstNodeData
     const Luau::CstNode* node = nullptr;
 };
 
+struct AstLocalData
+{
+    std::shared_ptr<AstDocumentState> doc;
+    Luau::AstLocal* local = nullptr;
+};
+
 enum AstAuxKind : uint8_t
 {
     Aux_TableProp,
@@ -387,7 +532,6 @@ enum AstAuxKind : uint8_t
     Aux_DeclaredExternTypeProperty,
     Aux_ClassProperty,
     Aux_ClassMethod,
-    Aux_Local,
     Aux_Comment,
     Aux_TableItem,
     Aux_CstTableItem,
@@ -405,19 +549,19 @@ struct AstAuxData
         Luau::AstDeclaredExternTypeProperty declaredExternProp;
         Luau::AstClassProperty classProp;
         Luau::AstClassMethod classMethod;
-        Luau::AstLocal* local;
         Luau::Comment comment;
         Luau::AstExprTable::Item tableItem;
         Luau::CstExprTable::Item cstTableItem;
         Luau::AstTypeList typeList;
     };
 
+    AstAuxData() : doc(nullptr), kind(Aux_Comment), comment{} {}
+    AstAuxData(const std::shared_ptr<AstDocumentState>& doc) : doc(doc), kind(Aux_Comment), comment{} {}
     AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstTableProp& p) : doc(doc), kind(Aux_TableProp), tableProp(p) {}
     AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstTableIndexer& idx) : doc(doc), kind(Aux_TableIndexer), tableIndexer(idx) {}
     AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstDeclaredExternTypeProperty& p) : doc(doc), kind(Aux_DeclaredExternTypeProperty), declaredExternProp(p) {}
     AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstClassProperty& p) : doc(doc), kind(Aux_ClassProperty), classProp(p) {}
     AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstClassMethod& m) : doc(doc), kind(Aux_ClassMethod), classMethod(m) {}
-    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, Luau::AstLocal* l) : doc(doc), kind(Aux_Local), local(l) {}
     AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::Comment& c) : doc(doc), kind(Aux_Comment), comment(c) {}
     AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstExprTable::Item& item) : doc(doc), kind(Aux_TableItem), tableItem(item) {}
     AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::CstExprTable::Item& item) : doc(doc), kind(Aux_CstTableItem), cstTableItem(item) {}
@@ -500,16 +644,13 @@ inline void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& do
     new (data) AstAuxData{doc, item};
 }
 
-inline void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, Luau::AstLocal* local)
+inline void pushAstAuxData(lua_State* L, const AstAuxData& aux)
 {
-    if (!local)
-    {
-        lua_pushnil(L);
-        return;
-    }
     AstAuxData* data = static_cast<AstAuxData*>(lua_newuserdatataggedwithmetatable(L, sizeof(AstAuxData), TagAux));
-    new (data) AstAuxData{doc, local};
+    new (data) AstAuxData(aux);
 }
+
+void pushAstLocal(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, Luau::AstLocal* local);
 
 void pushAstFilter(lua_State* L, const AstFilterData& filter);
 
@@ -517,14 +658,21 @@ void pushAstFilter(lua_State* L, const AstFilterData& filter);
 AstDocumentData& checkAstDocument(lua_State* L, int idx);
 AstNodeData& checkAstNode(lua_State* L, int idx);
 CstNodeData& checkCstNode(lua_State* L, int idx);
+AstLocalData& checkAstLocal(lua_State* L, int idx);
 AstAuxData& checkAstAux(lua_State* L, int idx);
 AstFilterData& checkAstFilter(lua_State* L, int idx);
 AstFilterData extractAstFilter(lua_State* L, int idx);
 
+void registerAstLocal(lua_State* L);
 void registerAstFilter(lua_State* L);
 int reflectFilter(lua_State* L);
 
 const char* getAstAuxKind(const AstAuxData& handle);
+
+Luau::AstNode* createDefaultAstNode(std::string_view kind, Luau::Allocator& alloc);
+const Luau::CstNode* createDefaultCstNode(std::string_view kind, Luau::Allocator& alloc);
+Luau::AstLocal* createDefaultAstLocal(std::string_view kind, Luau::Allocator& alloc);
+bool createDefaultAstAux(std::string_view kind, const std::shared_ptr<AstDocumentState>& doc, AstAuxData& out);
 
 // Array push helpers
 template<typename F>
@@ -556,7 +704,7 @@ inline void pushNodeArray(lua_State* L, const std::shared_ptr<AstDocumentState>&
 inline void pushLocalArray(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstArray<Luau::AstLocal*>& array)
 {
     pushArray(L, array.size, [&](size_t i) {
-        pushAstAux(L, doc, array.data[i]);
+        pushAstLocal(L, doc, array.data[i]);
     });
 }
 
@@ -815,11 +963,41 @@ inline int pushCachedUserdataMethod(lua_State* L, int tag, const char* name, lua
     } \
     LUAU_REFLECT_DEFINE_USERDATA_BASIC(checkName, dtorName, DataType, TagValue, TypeNameStr)
 
+#define LUAU_REFLECT_DEFINE_TOSTRING(funcName, TypeNameStr) \
+    static int funcName(lua_State* L) \
+    { \
+        lua_pushstring(L, TypeNameStr); \
+        return 1; \
+    }
+
+#define LUAU_REFLECT_DEFINE_DYNAMIC_TOSTRING(funcName, checkFunc, getKindFunc, member) \
+    static int funcName(lua_State* L) \
+    { \
+        auto& handle = checkFunc(L, 1); \
+        lua_pushstring(L, getKindFunc(handle.member)); \
+        return 1; \
+    }
+
+#define LUAU_REFLECT_DEFINE_EQ(funcName, TagValue, checkFunc, compareExpr) \
+    static int funcName(lua_State* L) \
+    { \
+        if (lua_userdatatag(L, 1) != TagValue || lua_userdatatag(L, 2) != TagValue) \
+        { \
+            lua_pushboolean(L, false); \
+            return 1; \
+        } \
+        auto& a = checkFunc(L, 1); \
+        auto& b = checkFunc(L, 2); \
+        lua_pushboolean(L, (compareExpr)); \
+        return 1; \
+    }
+
 // Module registration functions
 void registerAstAllocator(lua_State* L);
 void registerAstDocument(lua_State* L);
 void registerAstNode(lua_State* L);
 void registerCstNode(lua_State* L);
 void registerAstAux(lua_State* L);
+void registerAstFilter(lua_State* L);
 
 } // namespace Luau

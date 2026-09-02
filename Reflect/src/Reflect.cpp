@@ -31,6 +31,7 @@ int luaopen_reflect(lua_State* L)
     registerAstNode(L);
     registerCstNode(L);
     registerAstAux(L);
+    registerAstLocal(L);
     registerAstFilter(L);
 
     lua_setlightuserdataname(L, TagId, "Id");

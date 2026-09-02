@@ -36,6 +36,8 @@ export type AstLocal = {
     read setShadow: (self: AstLocal, shadow: AstLocal?) -> AstLocal,
     read isConst: (self: AstLocal) -> boolean,
     read setIsConst: (self: AstLocal, isConst: boolean) -> AstLocal,
+    read exported: (self: AstLocal) -> boolean,
+    read setExported: (self: AstLocal, exported: boolean) -> AstLocal,
     read depth: (self: AstLocal) -> number,
     read setDepth: (self: AstLocal, depth: number) -> AstLocal,
     read annotation: (self: AstLocal) -> AstNode?,
@@ -62,7 +64,7 @@ local doc = reflect.parse([[
     }
 ]])
 
-local stat = doc.root:body()[1]        -- AstStatLocal
+local stat = doc:root():body()[1]        -- AstStatLocal
 local tableExpr = stat:values()[1]     -- AstExprTable
 local items = tableExpr:items()        -- { AstTableItem }
 ```
@@ -385,7 +387,7 @@ export type CstNode =
 -- Common AST node methods and fields
 export type AstNodeCommon = {
     read id: Id,
-    read text: (self: AstNode) -> string,
+    read prettyprint: (self: AstNode) -> string,
     read location: (self: AstNode) -> AstLocation,
     read setLocation: (self: AstNode, location: AstLocation) -> AstNode,
     read cst: (self: AstNode) -> CstNode?,
@@ -980,6 +982,7 @@ export type AstAllocator = {
     read id: Id,
     read parse: (self: AstAllocator, source: string, includeCst: boolean?) -> AstDocument,
     read parseexpr: (self: AstAllocator, source: string, includeCst: boolean?) -> AstNode,
+    read defaultnode: (self: AstAllocator, kind: string) -> AstNode | AstLocal | AstAux | CstNode,
     read properties: (self: AstAllocator) -> { [string]: any },
 }
 

@@ -79,7 +79,7 @@ inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentStat
 inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, Luau::AstLocal* val)
 {
     if (val)
-        pushAstAux(L, doc, val);
+        pushAstLocal(L, doc, val);
     else
         lua_pushnil(L);
 }
@@ -283,12 +283,12 @@ inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentStat
         out = nullptr;
         return;
     }
-    auto& aux = checkAstAux(L, argIdx);
-    if (aux.kind != Aux_Local || !aux.local)
+    auto& handle = checkAstLocal(L, argIdx);
+    if (!handle.local)
         luaL_typeerror(L, argIdx, "AstLocal");
-    if (doc && aux.doc && aux.doc->allocator() != doc->allocator())
+    if (doc && handle.doc && handle.doc->allocator() != doc->allocator())
         luaL_error(L, "cross-allocator AstLocal assignment is not permitted");
-    out = aux.local;
+    out = handle.local;
 }
 
 // Luwu will pass a table to the setter so we need to allocate space for the passed table when reading from luau
@@ -449,14 +449,6 @@ inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentStat
         lua_pushnil(L);
 }
 
-inline AstArray<char> getNodeText(const AstNodeData& handle, const Luau::AstNode* n)
-{
-    if (!handle.doc)
-        return {nullptr, 0};
-    auto [startOff, endOff] = locationToOffsets(handle.doc->lineOffsets, handle.doc->source.size(), n->location);
-    return {const_cast<char*>(handle.doc->source.data() + startOff), endOff - startOff};
-}
-
 inline const Luau::CstNode* getNodeCst(const AstNodeData& handle, const Luau::AstNode* n)
 {
     if (!handle.doc)
@@ -466,41 +458,5 @@ inline const Luau::CstNode* getNodeCst(const AstNodeData& handle, const Luau::As
     return nullptr;
 }
 
-#define LUAU_AUX_FIELD_RW(atomGet, atomSet, memberExpr) \
-    case ReflectAtom::atomGet: pushReflectValue(L, handle.doc, memberExpr); return true; \
-    case ReflectAtom::atomSet: readReflectValue(L, handle.doc, 2, memberExpr); lua_pushvalue(L, 1); return true;
-
-#define LUAU_AUX_FIELD_RO(atomGet, memberExpr) \
-    case ReflectAtom::atomGet: pushReflectValue(L, handle.doc, memberExpr); return true;
-
-#define LUAU_AUX_FIELD_FN_RO(atomGet, expr) \
-    case ReflectAtom::atomGet: pushReflectValue(L, handle.doc, expr); return true;
-
-#define LUAU_CST_FIELD_RO(atomGet, memberName) \
-    case ReflectAtom::atomGet: pushReflectValue(L, handle.doc, n->memberName); return true;
-
-#define LUAU_AST_HANDLER_START(name, NodeClass) \
-    static bool name(lua_State* L, AstNodeData& handle, ReflectAtom atom) \
-    { \
-        using NodeType = Luau::NodeClass; \
-        auto* n = static_cast<NodeType*>(handle.node); \
-        switch (atom) \
-        {
-
-#define LUAU_AST_FIELD_RW(atomGet, atomSet, memberName) \
-    case ReflectAtom::atomGet: pushReflectValue(L, handle.doc, n->memberName); return true; \
-    case ReflectAtom::atomSet: readReflectValue(L, handle.doc, 2, n->memberName); lua_pushvalue(L, 1); return true;
-
-#define LUAU_AST_FIELD_RO(atomGet, memberName) \
-    case ReflectAtom::atomGet: pushReflectValue(L, handle.doc, n->memberName); return true;
-
-#define LUAU_AST_FIELD_FN_RO(atomGet, expr) \
-    case ReflectAtom::atomGet: pushReflectValue(L, handle.doc, expr); return true;
-
-#define LUAU_AST_HANDLER_END() \
-        default: \
-            return false; \
-        } \
-    }
-
 } // namespace Luau
+

@@ -150,24 +150,8 @@ static int astDocIndex(lua_State* L)
     return 1;
 }
 
-static int astDocToString(lua_State* L)
-{
-    lua_pushstring(L, "AstDocument");
-    return 1;
-}
-
-static int astDocEq(lua_State* L)
-{
-    if (lua_userdatatag(L, 1) != TagDocument || lua_userdatatag(L, 2) != TagDocument)
-    {
-        lua_pushboolean(L, false);
-        return 1;
-    }
-    auto& a = checkAstDocument(L, 1);
-    auto& b = checkAstDocument(L, 2);
-    lua_pushboolean(L, a.doc == b.doc);
-    return 1;
-}
+LUAU_REFLECT_DEFINE_TOSTRING(astDocToString, "AstDocument")
+LUAU_REFLECT_DEFINE_EQ(astDocEq, TagDocument, checkAstDocument, a.doc == b.doc)
 
 void registerAstDocument(lua_State* L)
 {

@@ -60,6 +60,40 @@ static int astAllocatorParseExpr(lua_State* L)
     return 1;
 }
 
+static int astAllocatorDefaultnode(lua_State* L)
+{
+    auto& handle = checkAstAllocator(L, 1);
+    size_t len = 0;
+    const char* str = luaL_checklstring(L, 2, &len);
+    std::string_view kind(str, len);
+
+    auto doc = std::make_shared<AstDocumentState>(handle.state);
+
+    if (Luau::AstNode* node = createDefaultAstNode(kind, handle.state->allocator))
+    {
+        pushAstNode(L, doc, node);
+        return 1;
+    }
+    if (const Luau::CstNode* cst = createDefaultCstNode(kind, handle.state->allocator))
+    {
+        pushCstNode(L, doc, cst);
+        return 1;
+    }
+    if (Luau::AstLocal* local = createDefaultAstLocal(kind, handle.state->allocator))
+    {
+        pushAstLocal(L, doc, local);
+        return 1;
+    }
+    AstAuxData aux(doc);
+    if (createDefaultAstAux(kind, doc, aux))
+    {
+        pushAstAuxData(L, aux);
+        return 1;
+    }
+
+    luaL_error(L, "unknown node kind '%.*s'", int(len), str);
+}
+
 static int astAllocatorProperties(lua_State* L)
 {
     auto& handle = checkAstAllocator(L, 1);
@@ -73,10 +107,11 @@ static int dispatchAstAllocatorMethod(lua_State* L, AstAllocatorData& handle, Re
 {
     switch (atom)
     {
-    case ReflectAtom::Parse:      return astAllocatorParse(L);
-    case ReflectAtom::Parseexpr:  return astAllocatorParseExpr(L);
-    case ReflectAtom::Properties: return astAllocatorProperties(L);
-    default: break;
+    case ReflectAtom::Parse:       return astAllocatorParse(L);
+    case ReflectAtom::Parseexpr:   return astAllocatorParseExpr(L);
+    case ReflectAtom::Defaultnode: return astAllocatorDefaultnode(L);
+    case ReflectAtom::Properties:  return astAllocatorProperties(L);
+    default:                       break;
     }
 
     luaL_error(L, "%.*s is not a valid method of AstAllocator", int(len), str);
@@ -105,24 +140,8 @@ static int astAllocatorIndex(lua_State* L)
     return 1;
 }
 
-static int astAllocatorToString(lua_State* L)
-{
-    lua_pushstring(L, "AstAllocator");
-    return 1;
-}
-
-static int astAllocatorEq(lua_State* L)
-{
-    if (lua_userdatatag(L, 1) != TagAllocator || lua_userdatatag(L, 2) != TagAllocator)
-    {
-        lua_pushboolean(L, false);
-        return 1;
-    }
-    auto& a = checkAstAllocator(L, 1);
-    auto& b = checkAstAllocator(L, 2);
-    lua_pushboolean(L, a.state == b.state);
-    return 1;
-}
+LUAU_REFLECT_DEFINE_TOSTRING(astAllocatorToString, "AstAllocator")
+LUAU_REFLECT_DEFINE_EQ(astAllocatorEq, TagAllocator, checkAstAllocator, a.state == b.state)
 
 void registerAstAllocator(lua_State* L)
 {

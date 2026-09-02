@@ -696,6 +696,7 @@ if(TARGET Luau.Reflect)
         Reflect/src/AstNode.cpp
         Reflect/src/CstNode.cpp
         Reflect/src/AstAux.cpp
+        Reflect/src/AstLocal.cpp
         Reflect/src/AstFilter.cpp
     )
 endif()

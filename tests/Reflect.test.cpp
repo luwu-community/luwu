@@ -73,7 +73,7 @@ TEST_CASE("LazyAstTypeof")
         assert(val.category == "expr")
 
         local localItem = stat:vars()[1]
-        assert(typeof(localItem) == "AstAux")
+        assert(typeof(localItem) == "AstLocal")
         assert(localItem.kind == "AstLocal")
         assert(localItem:name() == "x")
 
@@ -237,7 +237,7 @@ TEST_CASE("LazyAstParseExpr")
         assert(right:op() == "*")
         assert(right:left():name() == "b")
         assert(right:right():value() == 2)
-        assert(expr:text() == "a + b * 2")
+        assert(expr:prettyprint() == "a + b * 2")
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);
@@ -1107,7 +1107,7 @@ TEST_CASE("ReflectProperties")
         assert(#statProps.vars == 1)
         assert(#statProps.values == 1)
         assert(statProps.location ~= nil)
-        assert(statProps.text ~= nil)
+        assert(statLocal:prettyprint() == "local x = 1")
 
         local localVar = statProps.vars[1]
         local localProps = localVar:properties()
@@ -1185,6 +1185,117 @@ TEST_CASE("AstAllocator")
         end)
         assert(not okLocal)
         assert(string.find(errLocal, "cross-allocator", 1, true) ~= nil)
+    )LUA";
+
+    CHECK_EQ(dostring(L, script), 0);
+}
+
+TEST_CASE("AstAllocatorDefaultNode")
+{
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
+    ScopedFastFlag sff3{FFlag::OptLuwuReflectUseAtoms, true};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    Luau::luaopen_reflect(L);
+    lua_setglobal(L, "reflect");
+
+    const char* script = R"LUA(
+        local alloc = reflect.allocator()
+
+        -- Ast Node Creation
+        local numExpr = alloc:defaultnode("AstExprConstantNumber")
+        assert(typeof(numExpr) == "AstNode")
+        assert(numExpr.kind == "AstExprConstantNumber")
+        assert(numExpr.category == "expr")
+        assert(numExpr:value() == 0)
+        assert(numExpr:setValue(42) == numExpr)
+        assert(numExpr:value() == 42)
+
+        local localStat = alloc:defaultnode("AstStatLocal")
+        assert(typeof(localStat) == "AstNode")
+        assert(localStat.kind == "AstStatLocal")
+        assert(localStat.category == "stat")
+        assert(#localStat:vars() == 0)
+        assert(#localStat:values() == 0)
+        assert(localStat:setValues({ numExpr }) == localStat)
+        assert(#localStat:values() == 1)
+        assert(localStat:values()[1] == numExpr)
+
+        local genType = alloc:defaultnode("AstGenericType")
+        assert(typeof(genType) == "AstNode")
+        assert(genType.kind == "AstGenericType")
+        assert(genType:setName("T") == genType)
+        assert(genType:name() == "T")
+
+        local genTypePack = alloc:defaultnode("AstGenericTypePack")
+        assert(typeof(genTypePack) == "AstNode")
+        assert(genTypePack.kind == "AstGenericTypePack")
+        assert(genTypePack:setName("U...") == genTypePack)
+        assert(genTypePack:name() == "U...")
+
+        local attr = alloc:defaultnode("AstAttr")
+        assert(typeof(attr) == "AstNode")
+        assert(attr.kind == "AstAttr")
+
+        -- Cst Node Creation
+        local cstLocal = alloc:defaultnode("CstStatLocal")
+        assert(typeof(cstLocal) == "CstNode")
+        assert(cstLocal.kind == "CstStatLocal")
+        assert(cstLocal.category == "generic")
+
+        -- AstLocal Creation (dedicated userdata)
+        local astLocal = alloc:defaultnode("AstLocal")
+        assert(typeof(astLocal) == "AstLocal")
+        assert(astLocal.kind == "AstLocal")
+        assert(astLocal:setName("myVar"):setIsConst(true) == astLocal)
+        assert(astLocal:name() == "myVar")
+        assert(astLocal:isConst() == true)
+
+        -- Aux Creation
+        local astComment = alloc:defaultnode("AstComment")
+        assert(typeof(astComment) == "AstAux")
+        assert(astComment.kind == "AstComment")
+
+        local astTableProp = alloc:defaultnode("AstTableProp")
+        assert(typeof(astTableProp) == "AstAux")
+        assert(astTableProp.kind == "AstTableProp")
+        assert(astTableProp:setName("myProp"):setAccess("read") == astTableProp)
+        assert(astTableProp:name() == "myProp")
+        assert(astTableProp:access() == "read")
+
+        -- Attach newly constructed default nodes into a parsed document on the same allocator
+        local doc = alloc:parse("local x = 1")
+        local root = doc:root()
+        root:body()[1]:setVars({ astLocal })
+        root:body()[1]:setValues({ numExpr })
+        assert(root:body()[1]:vars()[1] == astLocal)
+        assert(root:body()[1]:values()[1] == numExpr)
+
+        -- Cross-allocator safety check
+        local alloc2 = reflect.allocator()
+        local nodeOther = alloc2:defaultnode("AstExprConstantNumber")
+        local okCross, errCross = pcall(function()
+            root:body()[1]:setValues({ nodeOther })
+        end)
+        assert(not okCross)
+        assert(string.find(errCross, "cross-allocator", 1, true) ~= nil)
+
+        -- Error handling on unknown kind
+        local okUnknown, errUnknown = pcall(function()
+            alloc:defaultnode("NonExistentKind")
+        end)
+        assert(not okUnknown)
+        assert(string.find(errUnknown, "unknown node kind 'NonExistentKind'", 1, true) ~= nil)
+
+        -- Error handling on invalid argument types
+        local okNil, errNil = pcall(function()
+            (alloc :: any):defaultnode(123)
+        end)
+        assert(not okNil)
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);
