@@ -108,6 +108,13 @@ struct ErrorConverter
             return "'" + s + "'";
         };
 
+        // Normally this preamble just reads "Expected this to be"; when the mismatch reasoning
+        // was entirely about one specific, recognizable aspect of the type (e.g. a function's
+        // return type, or its arguments), a more specific phrase reads a lot more naturally,
+        // e.g. "Expected this function to return" instead of forcing the reader to infer that
+        // context from a wordy explanation below.
+        std::string preamble = tm.contextVerb ? ("Expected " + *tm.contextVerb) : "Expected this to be";
+
         auto constructErrorMessage = [&](std::string givenType,
                                          std::string wantedType,
                                          std::optional<std::string> givenModule,
@@ -131,8 +138,8 @@ struct ErrorConverter
             }
 
             if (givenType.length() <= luauIndentTypeMismatchMaxTypeLength || wantedType.length() <= luauIndentTypeMismatchMaxTypeLength)
-                return "Expected this to be " + wanted + ", but got " + given;
-            return "Expected this to be\n\t" + wanted + "\nbut got\n\t" + given;
+                return preamble + " " + wanted + ", but got " + given;
+            return preamble + "\n\t" + wanted + "\nbut got\n\t" + given;
         };
 
         if (givenTypeName == wantedTypeName)
@@ -556,7 +563,7 @@ struct ErrorConverter
             s += "'" + e.properties[i] + "'";
         }
 
-        s += afterFieldList + " found in type '" + toString(e.subType) + "' from expected type '" + toString(e.superType) + "'";
+        s += afterFieldList + " found in type\n  '" + toString(e.subType) + "'\nexpected type:\n  '" + toString(e.superType) + "'";
 
         return s;
     }
@@ -834,6 +841,23 @@ struct ErrorConverter
 
         LUAU_UNREACHABLE();
         return "<Invalid PropertyAccessViolation>";
+    }
+
+    std::string operator()(const PrivatePropertyAccess& e) const
+    {
+        const std::string stringKey = isIdentifier(e.key) ? e.key : "\"" + e.key + "\"";
+        return "Property " + stringKey + " is private; accessing it here will result in a runtime error";
+    }
+
+    std::string operator()(const ConstPropertyAssignment& e) const
+    {
+        const std::string stringKey = isIdentifier(e.key) ? e.key : "\"" + e.key + "\"";
+        return "Property " + stringKey + " is constant and may only be assigned to from within the class's '__init' constructor";
+    }
+
+    std::string operator()(const PrivateConstructorAccess& e) const
+    {
+        return "This class's constructor is private; call a factory function instead of calling the constructor directly";
     }
 
     std::string operator()(const CheckedFunctionIncorrectArgs& e) const
@@ -1125,6 +1149,21 @@ bool UnknownProperty::operator==(const UnknownProperty& rhs) const
 bool PropertyAccessViolation::operator==(const PropertyAccessViolation& rhs) const
 {
     return *table == *rhs.table && key == rhs.key && context == rhs.context;
+}
+
+bool PrivatePropertyAccess::operator==(const PrivatePropertyAccess& rhs) const
+{
+    return *table == *rhs.table && key == rhs.key;
+}
+
+bool ConstPropertyAssignment::operator==(const ConstPropertyAssignment& rhs) const
+{
+    return *table == *rhs.table && key == rhs.key;
+}
+
+bool PrivateConstructorAccess::operator==(const PrivateConstructorAccess& rhs) const
+{
+    return *classTy == *rhs.classTy;
 }
 
 bool NotATable::operator==(const NotATable& rhs) const
@@ -1670,6 +1709,12 @@ void copyError(T& e, TypeArena& destArena, CloneState& cloneState)
     }
     else if constexpr (std::is_same_v<T, PropertyAccessViolation>)
         e.table = clone(e.table);
+    else if constexpr (std::is_same_v<T, PrivatePropertyAccess>)
+        e.table = clone(e.table);
+    else if constexpr (std::is_same_v<T, ConstPropertyAssignment>)
+        e.table = clone(e.table);
+    else if constexpr (std::is_same_v<T, PrivateConstructorAccess>)
+        e.classTy = clone(e.classTy);
     else if constexpr (std::is_same_v<T, CheckedFunctionIncorrectArgs>)
     {
     }

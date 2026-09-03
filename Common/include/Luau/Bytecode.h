@@ -53,6 +53,8 @@
 // Version 10: Adds LBC_CONSTANT_CLASS_SHAPE and NEWCLASSMEMBER for use with Luau Classes. Experimental.
 // Version 11: Adds CALLFB, CMPPROTO and feedback vector description. Experimental.
 // Version 12: Adds cost function serialized for proto and prepend each proto with size in bytes. Experimental.
+// Version 13: Adds CHECKSELFCLASS for Luau Classes 'self' validation fast path. Experimental.
+// Version 14: Adds JUMPXISA for fused class.isinstance test-and-branch. Experimental.
 
 // # Bytecode type information history
 // Version 1: (from bytecode version 4) Type information for function signature. Currently supported.
@@ -452,6 +454,22 @@ enum LuauOpcode
     // AUX: proto id
     LOP_CMPPROTO,
 
+    // CHECKSELFCLASS: check that a register holds an object instance of a specific class, falling
+    // through when it does; used for Luau Classes 'self' validation in place of a class.isinstance() call
+    // A: self register
+    // B: class register
+    // C: jump offset to skip past the fallback error-raising code when the check passes
+    LOP_CHECKSELFCLASS,
+
+    // JUMPXISA: fused class.isinstance(value, class) test-and-branch (see rfcx/classes.md), emitted
+    // for `class.isinstance(x, C)` used as a condition when C is a statically-known class. Avoids the
+    // builtin call, the boolean materialization and the argument tag guard.
+    // A: value register
+    // D: jump offset
+    // AUX: class register in the low 8 bits; bit 31 is the polarity flag -- when set, jump if value
+    //      IS an instance of the class; when clear, jump if it is NOT (see LUAU_INSN_AUX_NOT)
+    LOP_JUMPXISA,
+
     // Enum entry for number of opcodes, not a valid opcode by itself!
     LOP__COUNT
 };
@@ -500,7 +518,7 @@ enum LuauBytecodeTag
 {
     // Bytecode version; runtime supports [MIN, MAX], compiler emits TARGET by default but may emit a higher version when flags are enabled
     LBC_VERSION_MIN = 3,
-    LBC_VERSION_MAX = 12,
+    LBC_VERSION_MAX = 14,
     LBC_VERSION_TARGET = 9,
     // Type encoding version
     LBC_TYPE_VERSION_MIN = 1,
@@ -524,6 +542,14 @@ enum LuauBytecodeTag
     LBC_CONSTANT__COUNT
 };
 
+// Per-member attribute bits serialized as part of LBC_CONSTANT_CLASS_SHAPE (Luau Classes,
+// experimental). The single source of truth for these bits; both the compiler
+// (Compiler/src/Compiler.cpp) and the VM (VM/src/lclass.h/.cpp) use these directly.
+#define LBC_CLASSMEMBER_PRIVATE (1 << 0)
+#define LBC_CLASSMEMBER_CONST (1 << 1)
+// Set on properties that have a default value expression (see AstClassProperty::defaultValue).
+#define LBC_CLASSMEMBER_HASDEFAULT (1 << 2)
+
 // Type table tags
 enum LuauBytecodeType
 {
@@ -539,6 +565,10 @@ enum LuauBytecodeType
     LBC_TYPE_BUFFER,
     LBC_TYPE_INTEGER,
     LBC_TYPE_SYMNONE,
+    // Luau Classes (experimental): a class value (the factory/namespace) and an object (instance).
+    // See rfcx/classes.md. Kept in the 12..14 gap below LBC_TYPE_ANY so existing values don't shift.
+    LBC_TYPE_CLASS = 12,
+    LBC_TYPE_OBJECT = 13,
 
     LBC_TYPE_ANY = 15,
 
@@ -738,6 +768,9 @@ enum LuauBuiltinFunction
     LBF_BUFFER_WRITEINTEGER,
 
     LBF_BUFFER_ISFROZEN,
+
+    // Luau Classes (rfcx/classes.md): class.isinstance(value, class) -> boolean
+    LBF_CLASS_ISINSTANCE,
 };
 
 // Capture type, used in LOP_CAPTURE

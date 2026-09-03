@@ -125,9 +125,15 @@ end)
 expectpass("basic printing", function ()
     assert(typeof(Point) == "class")
     assert(typeof(Point.zero) == "function")
-    -- For now we can pass tables to instance methods that expect objects
-    assert(Point.magnitude({x = 4, y = 3}) == 5)
 end)
+
+expectfail(
+    "instance methods reject a self that isn't an instance of the class",
+    "attempt to call method 'magnitude' with 'self' not being an instance of 'Point'",
+    function ()
+        Point.magnitude({x = 4, y = 3})
+    end
+)
 
 expectfail("classobject missing key", "this class does not have a key named 'doesnotexist'", function ()
     return Point.doesnotexist
@@ -502,6 +508,339 @@ expectpass("stack reallocation in creation", function()
     assert(f.z == 300)
 end)
 
+class UserWithInit
+    public first_name: string
+    public last_name: string
+    private ssn: string?
+
+    public function __init(self, first, last, ssn)
+        self.first_name = first
+        self.last_name = last
+        self.ssn = ssn
+    end
+
+    public function name(self): string
+        return self.first_name .. " " .. self.last_name
+    end
+
+    private function get_ssn(self): string
+        return self.ssn
+    end
+
+    public function reveal_ssn(self): string
+        -- Calling a private method from within another method of the same class is allowed.
+        return self:get_ssn()
+    end
+end
+
+expectpass("custom __init is used as the constructor", function()
+    local user = UserWithInit("Taz", "Parekh", "126-222-1123")
+    assert(user:name() == "Taz Parekh")
+    assert(user:reveal_ssn() == "126-222-1123")
+end)
+
+expectpass("custom __init can be called directly like a normal method", function()
+    local user = UserWithInit("a", "b", "c")
+    user:__init("Re", "Init", "999-99-9999")
+    assert(user:name() == "Re Init")
+    assert(user:reveal_ssn() == "999-99-9999")
+end)
+
+expectfail(
+    "private methods cannot be called from outside the class",
+    "'get_ssn' is a private member of 'UserWithInit', it cannot be accessed outside UserWithInit's class scope",
+    function()
+        local user = UserWithInit("Taz", "Parekh", "126-222-1123")
+        user:get_ssn()
+    end
+)
+
+expectpass("class.fields returns all public fields and values for an instance with no private members", function()
+    local p = Point { x = 1, y = 2 }
+    local fields, complete = class.fields(p)
+    assert(complete == true)
+    assert(fields.x == 1)
+    assert(fields.y == 2)
+    local count = 0
+    for _ in pairs(fields) do
+        count += 1
+    end
+    assert(count == 2)
+end)
+
+expectpass("class.fields omits private fields and reports complete = false", function()
+    local user = UserWithInit("Taz", "Parekh", "126-222-1123")
+    local fields, complete = class.fields(user)
+    assert(complete == false)
+    assert(fields.first_name == "Taz")
+    assert(fields.last_name == "Parekh")
+    -- The private 'ssn' field must never be exposed via class.fields.
+    assert(fields.ssn == nil)
+    local count = 0
+    for k in pairs(fields) do
+        assert(k ~= "ssn", "class.fields leaked a private field")
+        count += 1
+    end
+    assert(count == 2)
+end)
+
+expectpass("class.fields never leaks private methods either", function()
+    local user = UserWithInit("Taz", "Parekh", "126-222-1123")
+    local fields = class.fields(user)
+    assert(fields.get_ssn == nil)
+end)
+
+expectpass("class.fields works on a class object, not just an instance", function()
+    local fields, complete = class.fields(UserWithInit)
+    assert(complete == false)
+    -- No instance was passed, so public fields are present but unset (none, not nil,
+    -- so the keys are still visible via pairs).
+    assert(fields.first_name == none)
+    assert(fields.last_name == none)
+    assert(fields.ssn == nil)
+end)
+
+expectpass("class.fields uses 'none' rather than 'nil' so unset fields stay visible via pairs", function()
+    local fields = class.fields(Point)
+    local count = 0
+    for k, v in pairs(fields) do
+        assert(v == none)
+        count += 1
+    end
+    assert(count == 2)
+end)
+
+expectfail("class.fields raises on a non-class/object argument", "invalid argument #1 to 'fields' (class or object expected)", function()
+    class.fields("not a class or object")
+end)
+
+expectfail("class.fields raises on a missing argument", "missing argument #1", function()
+    class.fields()
+end)
+
+class Token
+    public const value: string
+
+    public function __init(self, value: string)
+        self.value = value
+    end
+
+    public function reset(self, value: string)
+        -- `const` fields can only be assigned from within `__init`.
+        self.value = value
+    end
+end
+
+expectpass("const fields can be assigned from within __init", function()
+    local token = Token("abc")
+    assert(token.value == "abc")
+end)
+
+expectfail(
+    "const fields cannot be assigned outside of __init",
+    "'value' is a const member of 'Token' and cannot be assigned outside Token's '__init' constructor",
+    function()
+        local token = Token("abc")
+        token:reset("def")
+    end
+)
+
+expectfail(
+    "const fields cannot be assigned from outside the class either",
+    "'value' is a const member of 'Token' and cannot be assigned outside Token's '__init' constructor",
+    function()
+        local token = Token("abc")
+        token.value = "def"
+    end
+)
+
+class Thingy
+    public const cat: string
+
+    private function __init(self, cat: string)
+        self.cat = cat
+    end
+
+    public function new(cat: string): Thingy
+        return Thingy(cat)
+    end
+end
+
+expectpass("private __init can be called from a public factory function within the class", function()
+    local thing = Thingy.new("meow")
+    assert(thing.cat == "meow")
+end)
+
+expectfail(
+    "private __init cannot be called directly from outside the class",
+    "'__init' is a private member of 'Thingy', it cannot be accessed outside Thingy's class scope",
+    function()
+        Thingy("meow")
+    end
+)
+
+class PointNoInit
+    x: number
+    y: number
+end
+
+expectpass("classes without __init still use the default POD constructor", function()
+    local p = PointNoInit({ x = 3, y = 4 })
+    assert(p.x == 3 and p.y == 4)
+    local p2 = PointNoInit()
+    assert(not p2.x and not p2.y)
+end)
+
+expectpass("default __init can be called directly like a normal method", function()
+    local p = PointNoInit({ x = 3, y = 4 })
+    p:__init({ x = 5, y = 6 })
+    assert(p.x == 5 and p.y == 6)
+    p:__init()
+    assert(not p.x and not p.y)
+end)
+
+expectpass("default __init can be called directly on the class object", function()
+    local p = PointNoInit({ x = 3, y = 4 })
+    PointNoInit.__init(p, { x = 7, y = 8 })
+    assert(p.x == 7 and p.y == 8)
+end)
+
+local widgetIdCounter = 0
+local function nextWidgetId()
+    widgetIdCounter += 1
+    return widgetIdCounter
+end
+
+class Widget
+    public const id = nextWidgetId()
+    public label: string
+
+    function __init(self, label)
+        self.label = label
+    end
+end
+
+expectpass("default field values are set before a custom __init runs", function()
+    local w = Widget("hello")
+    assert(w.label == "hello")
+    assert(type(w.id) == "number")
+end)
+
+expectpass("default field values are re-evaluated on every construction", function()
+    local w1 = Widget("a")
+    local w2 = Widget("b")
+    assert(w1.id ~= w2.id, `expected different ids per construction, got {w1.id} and {w2.id}`)
+end)
+
+local bareUpvalueBase = 42
+
+class BareUpvalueDefault
+    public x = bareUpvalueBase
+
+    function __init(self) end
+end
+
+expectpass("default field value referencing a bare outer local (no call) works", function()
+    local b = BareUpvalueDefault()
+    assert(b.x == 42)
+end)
+
+local mutableUpvalue = 1
+local function bumpMutableUpvalue()
+    mutableUpvalue = mutableUpvalue + 1
+end
+bumpMutableUpvalue()
+
+class MutableBareUpvalueDefault
+    public x = mutableUpvalue
+
+    function __init(self) end
+end
+
+expectpass("default field value referencing a mutable bare outer local works", function()
+    local m = MutableBareUpvalueDefault()
+    assert(m.x == 2, `expected 2, got {m.x}`)
+    bumpMutableUpvalue()
+    local m2 = MutableBareUpvalueDefault()
+    assert(m2.x == 3, `expected 3, got {m2.x}`)
+end)
+
+class PodPoint
+    x = 0
+    y = 0
+    public label: string
+end
+
+expectpass("POD classes (no custom __init) apply field defaults", function()
+    local p = PodPoint()
+    assert(p.x == 0 and p.y == 0)
+    assert(p.label == nil)
+end)
+
+expectpass("POD classes fill explicitly provided fields over their defaults", function()
+    local p = PodPoint({ x = 5, label = "hi" })
+    assert(p.x == 5)
+    assert(p.y == 0)
+    assert(p.label == "hi")
+end)
+
+local podCounter = 0
+local function nextPodId()
+    podCounter += 1
+    return podCounter
+end
+
+class PodWithUpvalueDefault
+    public id = nextPodId()
+end
+
+expectpass("POD class field defaults are re-evaluated on every construction", function()
+    local a = PodWithUpvalueDefault()
+    local b = PodWithUpvalueDefault()
+    assert(a.id ~= b.id, `expected different ids per construction, got {a.id} and {b.id}`)
+end)
+
+class SelfCheckCat
+    public name: string
+
+    public function __init(self, name: string)
+        self.name = name
+    end
+
+    public function meow(self): string
+        return `{self.name} says meow!`
+    end
+end
+
+class SelfCheckDog
+    public name: string
+
+    public function __init(self, name: string)
+        self.name = name
+    end
+end
+
+expectpass("calling a method via dot-syntax with the correct self works", function()
+    local cat = SelfCheckCat("Taz")
+    -- both `Class.method(instance)` (dot-syntax) and `instance:method()` (colon-syntax) should work
+    -- when `self` genuinely is an instance of the method's own class.
+    assert(SelfCheckCat.meow(cat) == "Taz says meow!")
+    assert(cat:meow() == "Taz says meow!")
+end)
+
+expectfail(
+    "calling a method via dot-syntax with a self from a different class errors",
+    "attempt to call method 'meow' with 'self' not being an instance of 'SelfCheckCat'",
+    function()
+        local dog = SelfCheckDog("Rex")
+        -- SelfCheckDog has no `meow` of its own, but SelfCheckCat's `meow` only reads `self.name`,
+        -- which SelfCheckDog also happens to have -- without a runtime check this would silently
+        -- "work" by accident and print "Rex says meow!", which is exactly the correctness footgun
+        -- this check exists to catch.
+        SelfCheckCat.meow(dog)
+    end
+)
+
 expectpass("hoisting: read before declaration is nil", function()
     assert(typeof(Hoisted) == "nil")
 end)
@@ -547,18 +886,466 @@ expectpass("hoisting: mutually referential classes work via capture by ref", fun
     assert(class.isinstance(p2, Parent))
 end)
 
-local function makeWidget(id)
-    return Widget({ id = id }) -- forward reference to Widget
+local function makeLateWidget(id)
+    return LateWidget({ id = id }) -- forward reference to LateWidget
 end
 
-class Widget
+class LateWidget
     public id
 end
 
 expectpass("hoisting: function defined before class works via capture by ref", function()
-    local w = makeWidget(42)
-    assert(class.isinstance(w, Widget))
+    local w = makeLateWidget(42)
+    assert(class.isinstance(w, LateWidget))
     assert(w.id == 42)
 end)
+
+class ReproCat
+    name: string
+    age: number
+    public function __init(self, name, age)
+        self.name = name
+        self.age = age
+    end
+    function meow(self, message)
+        message = message or "says meow"
+        return `{self.name} {message}`
+    end
+end
+
+class ReproList<T>
+    private const inner: { T }
+
+    public function __init(self, ...: T)
+        self.inner = { ... }
+    end
+
+    private function into_option(item: T?)
+        return item
+    end
+
+    public function pop_front(self)
+        local res = table.remove(self.inner, 1)
+        return ReproList.into_option(res)
+    end
+
+    public function push_back(self, item: T)
+        table.insert(self.inner, item)
+    end
+
+    public function front(self)
+        return ReproList.into_option(self.inner[1])
+    end
+
+    public function push_front(self, item: T)
+        table.insert(self.inner, 1, item)
+    end
+
+    public function __len(self)
+        return #self.inner
+    end
+end
+
+expectpass("repro: self-check works when constructed as an argument to a later generic class's constructor", function()
+    local cats = ReproList(
+        ReproCat("Taz", 12),
+        ReproCat("Nanuk", 2)
+    )
+    local crazy = ReproCat("Crazy", 20)
+    cats:push_front(crazy)
+end)
+
+class ReproFoo
+    public cats: { string }
+end
+
+class ReproPerson end
+
+class ReproClass
+    public id: string
+    public lecturer: ReproPerson
+    public tagline: string
+    public requirements
+    public students: { ReproPerson }
+    private password: string
+
+    public function __tostring(self)
+        return table.concat({
+            self.id,
+            tostring(self.lecturer),
+            self.tagline,
+        }, "\n")
+    end
+end
+
+expectpass("repro: full sequence like the reported failure", function()
+    local comp_4081 = ReproClass {
+        id = "4081",
+        lecturer = ReproPerson(),
+        requirements = "3081",
+        tagline = "COMP 4081",
+        password = "some password",
+        students = {}
+    }
+    local cat = ReproCat("Taz", 12)
+    assert(cat:meow("hehe") == "Taz hehe")
+end)
+
+-- OptimizeConstProp: object member access CSE / store-to-load forwarding / invalidation
+-- (see OBJECT_CONSTPROP.CLAUDE.md). These must stay correct with native codegen's field caching.
+class ConstPropBox
+    public v: number
+    const c: number = 42
+
+    function bump(self)
+        self.v += 100
+    end
+end
+
+expectpass("constprop: redundant reads of the same field fold but stay correct", function()
+    local b = ConstPropBox { v = 3 }
+    -- v.v read four times in one expression; must all observe 3
+    assert(b.v + b.v + b.v + b.v == 12)
+end)
+
+expectpass("constprop: a call between two reads must not reuse a stale cached field", function()
+    local function readtwice(b: ConstPropBox)
+        local a = b.v
+        b:bump() -- mutates b.v, must invalidate the cached read
+        local c = b.v
+        return a, c
+    end
+    local a, c = readtwice(ConstPropBox { v = 1 })
+    assert(a == 1 and c == 101)
+end)
+
+expectpass("constprop: write then read of the same field forwards the stored value", function()
+    local function f(b: ConstPropBox, n: number)
+        local acc = 0
+        for _ = 1, n do
+            b.v = b.v + 1
+            acc += b.v
+        end
+        return acc
+    end
+    assert(f(ConstPropBox { v = 0 }, 5) == 15)
+end)
+
+expectfail(
+    "constprop: an outside write must not reuse a prior read's weaker (non-const) guard",
+    "cannot be assigned outside",
+    function()
+        local b = ConstPropBox { v = 0 }
+        local _ = b.c -- read const (allowed), populates the read-address cache
+        b.c = 5       -- illegal outside-__init write: must still enforce const, not reuse the read addr
+    end
+)
+
+-- class.isinstance fast paths (rfcx/classes.md): the LBF_CLASS_ISINSTANCE builtin / CLASS_ISINSTANCE
+-- IR op (value position) and the fused JUMPXISA test-and-branch (condition position). All of these
+-- must agree with the plain library semantics for objects, non-objects and both branch polarities.
+class IsaFoo public x: number = 0 end
+class IsaBar public y: number = 0 end
+
+expectpass("isinstance: value position, objects and non-objects", function()
+    local foo = IsaFoo {}
+    assert(class.isinstance(foo, IsaFoo) == true)
+    assert(class.isinstance(foo, IsaBar) == false)
+    assert(class.isinstance(42, IsaFoo) == false)
+    assert(class.isinstance("s", IsaFoo) == false)
+    assert(class.isinstance(nil, IsaFoo) == false)
+    assert(class.isinstance({}, IsaFoo) == false)
+end)
+
+expectpass("isinstance: fused condition dispatch matches library semantics", function()
+    local function classify(v: any): string
+        if class.isinstance(v, IsaFoo) then
+            return "foo"
+        elseif class.isinstance(v, IsaBar) then
+            return "bar"
+        end
+        return "other"
+    end
+    assert(classify(IsaFoo {}) == "foo")
+    assert(classify(IsaBar {}) == "bar")
+    assert(classify(42) == "other")
+end)
+
+expectpass("isinstance: negated and short-circuit conditions", function()
+    local function notFoo(v: any): boolean
+        if not class.isinstance(v, IsaFoo) then
+            return true
+        end
+        return false
+    end
+    assert(notFoo(IsaBar {}) == true)
+    assert(notFoo(IsaFoo {}) == false)
+
+    -- `and` keeps class.isinstance in a value-producing spot rather than a bare condition
+    local foo = IsaFoo {}
+    assert((class.isinstance(foo, IsaFoo) and "yes" or "no") == "yes")
+    assert((class.isinstance(foo, IsaBar) and "yes" or "no") == "no")
+end)
+
+expectfail("isinstance: second argument must be a class", "class", function()
+    return class.isinstance(IsaFoo {}, 5)
+end)
+
+-- Method inlining must remain correct when the inlined method yields: the Luau bytecode inliner is
+-- yield-transparent (a yield suspends the whole coroutine; resume continues in the caller's inlined
+-- body), so a `self:method()` / typed `obj:method()` call that contains a coroutine.yield can inline
+-- without breaking suspend/resume. See rfcx/classes.md.
+class YieldGen
+    public base: number = 0
+
+    public function step(self, k: number): number
+        local fed = coroutine.yield(self.base + k)
+        return fed * 10
+    end
+
+    public function run(self): number
+        local a = self:step(1) -- self:method() inline target, yields mid-body
+        local b = self:step(2)
+        return a + b
+    end
+end
+
+expectpass("inlining: a self:method() that yields resumes correctly", function()
+    local co = coroutine.wrap(function()
+        return (YieldGen { base = 100 }):run()
+    end)
+    assert(co() == 101)         -- first yield: base + 1
+    assert(co(3) == 102)        -- feed 3 -> a = 30; second yield: base + 2
+    assert(co(4) == 70)         -- feed 4 -> b = 40; final return a + b = 70
+end)
+
+expectpass("inlining: a typed-receiver obj:method() that yields resumes correctly", function()
+    local function consume(y: YieldGen): number
+        local acc = 0
+        acc += y:step(1) -- cross-function inline of an all-public class method that yields
+        acc += y:step(2)
+        return acc
+    end
+    local co = coroutine.wrap(function()
+        return consume(YieldGen { base = 50 })
+    end)
+    assert(co() == 51)
+    assert(co(100) == 52)       -- step(1) resumes to 100*10 = 1000
+    assert(co(200) == 1000 + 2000) -- step(2) resumes to 200*10; acc = 1000 + 2000 = 3000
+end)
+
+-- coroutine.resume (not just wrap) must also drive a yielding inlined method correctly.
+class ResumeGen
+    public base: number = 0
+    public function tick(self, k: number): number
+        return coroutine.yield(self.base + k)
+    end
+    public function seq(self): number
+        local a = self:tick(1) -- inline target, yields
+        local b = self:tick(2)
+        return a + b
+    end
+end
+
+expectpass("inlining: coroutine.resume drives a yielding inlined method", function()
+    local co = coroutine.create(function()
+        return (ResumeGen { base = 20 }):seq()
+    end)
+    local ok1, y1 = coroutine.resume(co)     -- yields base + 1 = 21
+    assert(ok1 and y1 == 21)
+    local ok2, y2 = coroutine.resume(co, 5)  -- a = 5; yields base + 2 = 22
+    assert(ok2 and y2 == 22)
+    local ok3, r = coroutine.resume(co, 6)   -- b = 6; seq returns a + b = 11
+    assert(ok3 and r == 11)
+end)
+
+-- An inlined method may itself call coroutine.resume on a child coroutine.
+class ChildDriver
+    public function drive(self, child: thread): number
+        local ok, v = coroutine.resume(child, 7)
+        return ok and v or -1
+    end
+    public function run(self, child: thread): number
+        local r = self:drive(child) -- inline target, contains coroutine.resume
+        return r + 100
+    end
+end
+
+expectpass("inlining: a method calling coroutine.resume on a child works", function()
+    local child = coroutine.create(function()
+        local q = coroutine.yield()
+        return q * 2
+    end)
+    coroutine.resume(child) -- advance child to its yield
+    assert((ChildDriver {}):run(child) == 114) -- resumes child with 7 -> 14 -> +100
+end)
+
+-- A class method calling a *C* function that yields via the C API (lua_yield). singleYield() and
+-- multipleYields() are registered by the Classes conformance harness (Conformance.test.cpp).
+class CYielder
+    public base: number = 0
+
+    public function fetch(self): number
+        return singleYield() + self.base -- C function yields value 2, resumes (continuation) to 4
+    end
+
+    public function run(self): number
+        local x = self:fetch() -- inline target, carries the yielding C call into run's frame
+        return x + 1
+    end
+end
+
+expectpass("inlining: method calling a yielding C function (lua_yield) resumes correctly", function()
+    local co = coroutine.wrap(function()
+        return (CYielder { base = 100 }):run()
+    end)
+    assert(co() == 2)   -- value yielded by the C function
+    assert(co() == 105) -- continuation -> 4; fetch = 4 + 100 = 104; run = 105
+end)
+
+class MultiCYielder
+    public function pull(self, base: number): number
+        local m = multipleYields(base) -- C function yields base+1, base+2, base+3, returns base+4
+        return m
+    end
+    public function go(self): number
+        local v = self:pull(10) -- inline target
+        return v
+    end
+end
+
+expectpass("inlining: method with a multi-yielding C function resumes each time", function()
+    local co = coroutine.wrap(function()
+        return (MultiCYielder {}):go()
+    end)
+    assert(co() == 11) -- base + 1
+    assert(co() == 12) -- base + 2
+    assert(co() == 13) -- base + 3
+    assert(co() == 14) -- final return base + 4 -> go returns 14
+end)
+
+-- A custom __init is yieldable (constructor closure carries a continuation; luaR_createobject uses
+-- luaL_callyieldable, see lclass.cpp): __init may suspend the coroutine mid-construction and resume,
+-- yielding the fully-built object. A `const` field may still be assigned after the resume, because
+-- the write is still authorized inside __init's own closure.
+class YieldInit
+    public v: number = 0
+    public const id: number = 0
+    public function __init(self, seed: number)
+        local fed = coroutine.yield(seed) -- suspend inside the constructor
+        self.id = fed        -- const write AFTER resume, still inside __init -> authorized
+        self.v = fed * 2
+    end
+end
+
+expectpass("yielding __init: suspends and resumes into a complete object (via wrap)", function()
+    local co = coroutine.wrap(function()
+        local o = YieldInit(9)
+        return o.id, o.v
+    end)
+    assert(co() == 9)          -- value yielded from inside __init
+    local id, v = co(50)       -- resume: id = 50, v = 100
+    assert(id == 50 and v == 100)
+end)
+
+expectpass("yielding __init: driven by coroutine.resume", function()
+    local co = coroutine.create(function()
+        local o = YieldInit(7)
+        return o.v
+    end)
+    local ok1, y = coroutine.resume(co)
+    assert(ok1 and y == 7)
+    local ok2, v = coroutine.resume(co, 200)
+    assert(ok2 and v == 400)
+end)
+
+class CInit
+    public w: number = 0
+    public function __init(self)
+        self.w = singleYield() -- C function yields (2), resumes via continuation to 4
+    end
+end
+
+expectpass("yielding __init: a yielding C function inside the constructor", function()
+    local co = coroutine.wrap(function()
+        return CInit().w
+    end)
+    assert(co() == 2)   -- value yielded by the C function
+    assert(co() == 4)   -- continuation -> 4; self.w = 4
+end)
+
+expectpass("yielding __init: abandoning construction mid-yield does not corrupt state", function()
+    for _ = 1, 200 do
+        local co = coroutine.wrap(function()
+            return YieldInit(1).v
+        end)
+        co() -- suspend inside __init and never resume; the half-built object must GC cleanly
+    end
+    collectgarbage()
+end)
+
+-- Private-member access from a closure lexically nested inside a class method (see
+-- luaR_stampownerclass in VM/src/lclass.cpp): the nested closure gets its own Proto, distinct from
+-- the method's, but should still be authorized since it's lexically part of the method body.
+class NestedAccessCat
+    public name: string
+    private unique_id: number
+
+    public function __init(self, name: string)
+        self.name = name
+        self.unique_id = 12000
+    end
+
+    public function meow(self)
+        -- direct access from the method itself
+        local direct = self.unique_id
+        -- access from an immediately-invoked nested closure
+        local viaIife = (function()
+            return self.unique_id
+        end)()
+        -- access from a closure nested two levels deep
+        local viaDeeplyNested = (function()
+            return (function()
+                return self.unique_id
+            end)()
+        end)()
+        return direct, viaIife, viaDeeplyNested
+    end
+
+    -- a nested closure that escapes the method entirely; access should still be authorized
+    -- whenever it's eventually called, since authorization is keyed off the proto, not dynamic
+    -- call context
+    public function makeGetter(self)
+        return function()
+            return self.unique_id
+        end
+    end
+end
+
+expectpass("private member access from a closure nested directly inside a method", function()
+    local cat = NestedAccessCat("Taz")
+    local direct, viaIife, viaDeeplyNested = cat:meow()
+    assert(direct == 12000)
+    assert(viaIife == 12000)
+    assert(viaDeeplyNested == 12000)
+end)
+
+expectpass("private member access from a nested closure that escapes and is called later", function()
+    local cat = NestedAccessCat("Taz")
+    local getter = cat:makeGetter()
+    assert(getter() == 12000)
+end)
+
+expectfail(
+    "private member access from a closure that is NOT lexically nested inside any class method is still rejected",
+    "'unique_id' is a private member of 'NestedAccessCat', it cannot be accessed outside NestedAccessCat's class scope",
+    function()
+        local cat = NestedAccessCat("Taz")
+        local function outsideClosure()
+            return cat.unique_id
+        end
+        outsideClosure()
+    end
+)
 
 return 'OK'

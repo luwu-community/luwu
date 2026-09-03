@@ -62,7 +62,9 @@ TEST_CASE_FIXTURE(Fixture, "overload_resolution")
     const FunctionType* fooType = get<FunctionType>(requireType("foo"));
     REQUIRE(fooType != nullptr);
 
-    CHECK(toString(t) == "(((number) -> string) & ((string) -> number)) -> (string, number)");
+    // A and B are named type aliases referenced (not aliased themselves) in `foo`'s parameter
+    // position, so they now print by name rather than being expanded inline every time.
+    CHECK(toString(t) == "(A & B) -> (string, number)");
 }
 
 TEST_CASE_FIXTURE(Fixture, "tc_function")
@@ -2317,7 +2319,10 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "param_1_and_2_both_takes_the_same_generic_bu
         const std::string expected = R"(Expected this to be 'vec2?', but got '{| x: number |}'
 caused by:
   None of the union options are compatible. For example:
-required field 'y' not found in type '{| x: number |}' from expected type 'vec2')";
+required field 'y' not found in type
+  '{| x: number |}'
+expected type:
+  'vec2')";
         CHECK_EQ(expected, toString(result.errors[0]));
         CHECK_EQ("Expected this to be 'number', but got 'vec2'", toString(result.errors[1]));
     }

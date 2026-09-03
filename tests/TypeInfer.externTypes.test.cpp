@@ -13,6 +13,7 @@
 #include "doctest.h"
 
 #include <cstring>
+#include <sstream>
 
 using namespace Luau;
 using std::nullopt;
@@ -1704,6 +1705,95 @@ TEST_CASE_FIXTURE(Fixture, "extern_type_generics_unconstrained_generic_resolved_
 
     LUAU_CHECK_NO_ERRORS(result);
     CHECK_EQ("Result<List<string>, string>", toString(requireType("list_res")));
+}
+
+TEST_CASE_FIXTURE(Fixture, "extern_type_generics_inferred_from_union_argument_member")
+{
+    // `expect<T, E>(r: T | Exception<E>): T` called with an argument of type
+    // `string | Exception<FileIoError>` must bind T = string and E = FileIoError from matching
+    // up the union members positionally by shape, not by unifying every argument-union member
+    // against every parameter-union member indiscriminately. Two bugs used to conspire here:
+    // (1) Unifier2 had no ExternType-vs-ExternType case at all, so `Exception<E>`'s own type
+    // argument could never be bound from a concrete `Exception<FileIoError>` argument; and (2)
+    // union-member unification tried every (subOption, superOption) pair whose `areCompatible`
+    // check passed, and a bare free type (standing in for `T`) is trivially "compatible" with
+    // anything -- so `Exception<FileIoError>` also got unified against `T`, polluting T's lower
+    // bound to `string | Exception<FileIoError>` instead of leaving it as plain `string`.
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuauExternTypeUseDefinitionScope, true},
+        {FFlag::LuauGenericNominals, true},
+        {FFlag::LuauHigherOrderGenericInference, true},
+    };
+
+    loadDefinition(R"(
+        declare extern type Exception<Data> with
+            inner: Data
+        end
+
+        declare function expect<T, E>(r: T | Exception<E>): T
+    )");
+
+    CheckResult result = check(R"(
+        type FileIoError = { kind: string }
+
+        local function get(): string | Exception<FileIoError>
+            return "x" :: any
+        end
+
+        local content = expect(get())
+    )");
+
+    LUAU_CHECK_NO_ERRORS(result);
+    CHECK_EQ("string", toString(requireType("content")));
+}
+
+TEST_CASE_FIXTURE(Fixture, "extern_type_generics_mismatch_reasoning_is_terse_and_context_aware")
+{
+    // Regression test for a confusing TypeMismatch explanation. Two problems used to compound
+    // here: (1) when the sub type's reasoning path drilled further into a union than the super
+    // type's path did, the old phrasing repeated their shared "it returns the 1st entry in the
+    // type pack" lead-in twice back-to-back; and (2) even fixed, that lead-in is jargon ("type
+    // pack", "component of the union") that doesn't help readers and is redundant with the
+    // wanted/got types already printed above it. The mismatch is entirely about the function's
+    // return type, so the whole explanation should read as a single short, plain-English line:
+    // a context-aware preamble ("Expected this function to return") instead of the generic
+    // "Expected this to be", and a bare leaf comparison with no path narration at all.
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuauExternTypeUseDefinitionScope, true},
+        {FFlag::LuauGenericNominals, true},
+        {FFlag::LuauHigherOrderGenericInference, true},
+        {FFlag::LuauDropUnionSubtypeReasoning, true},
+    };
+
+    loadDefinition(R"(
+        declare extern type Exception<Data> with
+            inner: Data
+        end
+    )");
+
+    CheckResult result = check(R"(
+        type Wrapped = { x: number }
+
+        local function bad(x: string): Exception<Wrapped> | number
+            return 1 :: any
+        end
+
+        local f: (string) -> Exception<string> | number = bad
+    )");
+
+    REQUIRE_EQ(1, result.errors.size());
+    std::string message = toString(result.errors[0]);
+
+    CHECK_EQ(
+        "Expected this function to return\n"
+        "\t'(string) -> Exception<string> | number'\n"
+        "but got\n"
+        "\t'(string) -> Exception<Wrapped> | number'; \n"
+        "`Exception<Wrapped>` is not a subtype of `Exception<string> | number`",
+        message
+    );
 }
 
 TEST_CASE_FIXTURE(Fixture, "extern_type_generics_independent_instantiations_are_compatible_when_nested")

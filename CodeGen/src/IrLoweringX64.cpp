@@ -4,6 +4,7 @@
 #include "Luau/CodeGenOptions.h"
 #include "Luau/DenseHash.h"
 #include "Luau/IrCallWrapperX64.h"
+#include "Luau/Bytecode.h"
 #include "Luau/IrData.h"
 #include "Luau/IrUtils.h"
 #include "Luau/LoweringStats.h"
@@ -47,6 +48,68 @@ IrLoweringX64::IrLoweringX64(LogBuilder* logger, AssemblyBuilderX64& build, Modu
     );
 
     build.align(kFunctionAlignment, X64::AlignmentDataX64::Ud2);
+}
+
+// Luau Classes (rfcx/classes.md): authorize private/const access to the member at `slotReg` on
+// class `classReg` (an object's lclass, or a class object directly) without bailing to the
+// interpreter. A member with no access bits is unrestricted. A private/const member takes the fast
+// path only when the executing closure is one of the owning class's own methods -- i.e.
+// `classReg == currentClosure->l.p->ownerclass`, which is exactly luaR_closureownsprivateaccess
+// (method closures are unique per class). For writes, a const member additionally requires the
+// closure to be the class's __init (luaR_closureisinit). Everything else jumps to `mismatch`, where
+// the interpreter fallback raises the correct error. `slotReg` holds the raw member offset (before
+// it's scaled into a byte address) and must stay live across this call.
+static void emitClassMemberAuthX64(
+    AssemblyBuilderX64& build,
+    IrRegAllocX64& regs,
+    RegisterX64 classReg,
+    RegisterX64 slotReg,
+    bool isWrite,
+    Label& mismatch
+)
+{
+    uint8_t restrictBits = isWrite ? (LBC_CLASSMEMBER_PRIVATE | LBC_CLASSMEMBER_CONST) : LBC_CLASSMEMBER_PRIVATE;
+
+    Label authorized;
+
+    ScopedRegX64 flag{regs, SizeX64::qword};
+    ScopedRegX64 owner{regs, SizeX64::qword};
+
+    // flag = classReg->memberflags[slot]
+    build.mov(owner.reg, qword[classReg + offsetof(LuauClass, memberflags)]);
+    build.movzx(dwordReg(flag.reg), byte[owner.reg + slotReg]);
+
+    build.test(byteReg(flag.reg), restrictBits);
+    build.jcc(ConditionX64::Zero, authorized); // unrestricted member: no check needed
+
+    // owner = currentClosure->l.p->ownerclass (NULL for non-method closures -> never matches)
+    build.mov(owner.reg, sClosure);
+    build.mov(owner.reg, qword[owner.reg + offsetof(Closure, l.p)]);
+    build.mov(owner.reg, qword[owner.reg + offsetof(Proto, ownerclass)]);
+    build.cmp(owner.reg, classReg);
+    build.jcc(ConditionX64::NotEqual, mismatch); // access from outside the owning class
+
+    if (isWrite)
+    {
+        // in-class: private is authorized; a const member additionally requires __init
+        build.test(byteReg(flag.reg), int8_t(LBC_CLASSMEMBER_CONST));
+        build.jcc(ConditionX64::Zero, authorized);
+
+        build.cmp(byte[owner.reg + offsetof(LuauClass, hascustominit)], 0);
+        build.jcc(ConditionX64::Equal, mismatch); // no custom __init -> const is never writable
+
+        // require currentClosure == owner->staticmembers[initoffset - numberofinstancemembers]
+        build.mov(dwordReg(flag.reg), dword[owner.reg + offsetof(LuauClass, initoffset)]);
+        build.sub(dwordReg(flag.reg), dword[owner.reg + offsetof(LuauClass, numberofinstancemembers)]);
+        build.shl(flag.reg, kTValueSizeLog2);
+        build.mov(owner.reg, qword[owner.reg + offsetof(LuauClass, staticmembers)]);
+        build.add(owner.reg, flag.reg);
+        build.mov(owner.reg, qword[owner.reg + offsetof(TValue, value.gc)]);
+        build.cmp(owner.reg, sClosure);
+        build.jcc(ConditionX64::NotEqual, mismatch); // const write from a non-__init method
+    }
+
+    build.setLabel(authorized);
 }
 
 void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
@@ -1875,6 +1938,22 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.setcc(ConditionX64::Equal, byteReg(inst.regX64));
         break;
     }
+    case IrCmd::CLASS_ISINSTANCE:
+    {
+        // result = (tag == object) && (value->lclass == class); the deref is guarded by the tag check
+        inst.regX64 = regs.allocReg(SizeX64::dword, index);
+        build.xor_(inst.regX64, inst.regX64);
+
+        Label done;
+        build.cmp(regOp(OP_A(inst)), LUA_TOBJECT);
+        build.jcc(ConditionX64::NotEqual, done);
+
+        build.cmp(regOp(OP_C(inst)), qword[regOp(OP_B(inst)) + offsetof(LuauObject, lclass)]);
+        build.setcc(ConditionX64::Equal, byteReg(inst.regX64));
+
+        build.setLabel(done);
+        break;
+    }
     case IrCmd::NEW_TABLE:
     {
         IrCallWrapperX64 callWrap(regs, build, index);
@@ -2529,6 +2608,173 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         jumpOrAbortOnUndef(ConditionX64::NotEqual, OP_C(inst), index, next);
         break;
     }
+    case IrCmd::CHECK_OBJECT_CLASS:
+    {
+        ScopedRegX64 tmp{regs, SizeX64::qword};
+        build.mov(tmp.reg, qword[regOp(OP_A(inst)) + offsetof(LuauObject, lclass)]);
+        build.cmp(tmp.reg, regOp(OP_B(inst)));
+        jumpOrAbortOnUndef(ConditionX64::NotEqual, OP_C(inst), index, next);
+        break;
+    }
+    case IrCmd::TRY_OBJECT_MEMBER_ADDR:
+    {
+        Label abort; // used when guard aborts execution
+        const IrOp& mismatchOp = OP_D(inst);
+        Label& mismatch = mismatchOp.kind == IrOpKind::Undef ? abort : labelOp(mismatchOp);
+
+        inst.regX64 = regs.allocReg(SizeX64::qword, index);
+
+        ScopedRegX64 lclass{regs, SizeX64::qword};
+        ScopedRegX64 slot{regs, SizeX64::qword};
+        ScopedRegX64 key{regs, SizeX64::qword};
+
+        // slot = live cached member slot from the current bytecode instruction (self-patched by the interpreter)
+        build.mov(slot.reg, sCode);
+        build.movzx(dwordReg(slot.reg), byte[slot.reg + uintOp(OP_B(inst)) * sizeof(Instruction) + kOffsetOfInstructionC]);
+
+        build.mov(lclass.reg, qword[regOp(OP_A(inst)) + offsetof(LuauObject, lclass)]);
+
+        // bounds check: slot must be a valid instance member offset
+        build.cmp(dwordReg(slot.reg), dword[lclass.reg + offsetof(LuauClass, numberofinstancemembers)]);
+        build.jcc(ConditionX64::AboveEqual, mismatch);
+
+        // authorize private/const access (or bail) instead of unconditionally bailing on any
+        // private/const member -- must run before the key check clobbers lclass.reg below
+        emitClassMemberAuthX64(build, regs, lclass.reg, slot.reg, HAS_OP_E(inst) && uintOp(OP_E(inst)) != 0, mismatch);
+
+        // key check: offsettomember[slot] must name the expected member
+        build.mov(key.reg, luauConstantValue(vmConstOp(OP_C(inst))));
+        build.mov(lclass.reg, qword[lclass.reg + offsetof(LuauClass, offsettomember)]);
+        build.cmp(key.reg, qword[lclass.reg + slot.reg * 8]);
+        build.jcc(ConditionX64::NotEqual, mismatch);
+
+        // address = self->members + slot * sizeof(TValue)  (sizeof(TValue) isn't a valid SIB scale, so
+        // shift the index register itself rather than using a scaled-index addressing mode)
+        build.shl(slot.reg, kTValueSizeLog2);
+        build.mov(inst.regX64, qword[regOp(OP_A(inst)) + offsetof(LuauObject, members)]);
+        build.add(inst.regX64, slot.reg);
+
+        if (mismatchOp.kind == IrOpKind::Undef)
+        {
+            Label skip;
+            build.jmp(skip);
+            build.setLabel(abort);
+            build.ud2();
+            build.setLabel(skip);
+        }
+        break;
+    }
+    case IrCmd::TRY_CLASS_MEMBER_ADDR:
+    {
+        Label abort; // used when guard aborts execution
+        const IrOp& mismatchOp = OP_D(inst);
+        Label& mismatch = mismatchOp.kind == IrOpKind::Undef ? abort : labelOp(mismatchOp);
+
+        inst.regX64 = regs.allocReg(SizeX64::qword, index);
+
+        ScopedRegX64 slot{regs, SizeX64::qword};
+        ScopedRegX64 tmp{regs, SizeX64::qword};
+        ScopedRegX64 key{regs, SizeX64::qword};
+
+        // slot = live cached member slot from the current bytecode instruction (self-patched by the interpreter)
+        build.mov(slot.reg, sCode);
+        build.movzx(dwordReg(slot.reg), byte[slot.reg + uintOp(OP_B(inst)) * sizeof(Instruction) + kOffsetOfInstructionC]);
+
+        // bounds check: slot must be a valid static member offset (instance members are not readable here)
+        build.cmp(dwordReg(slot.reg), dword[regOp(OP_A(inst)) + offsetof(LuauClass, numberofinstancemembers)]);
+        build.jcc(ConditionX64::Below, mismatch);
+        build.cmp(dwordReg(slot.reg), dword[regOp(OP_A(inst)) + offsetof(LuauClass, numberofallmembers)]);
+        build.jcc(ConditionX64::AboveEqual, mismatch);
+
+        // authorize private static-member access (or bail); static access is read-only, so const
+        // never restricts it (isWrite = false)
+        emitClassMemberAuthX64(build, regs, regOp(OP_A(inst)), slot.reg, /* isWrite */ false, mismatch);
+
+        // key check: offsettomember[slot] must name the expected member
+        build.mov(key.reg, luauConstantValue(vmConstOp(OP_C(inst))));
+        build.mov(tmp.reg, qword[regOp(OP_A(inst)) + offsetof(LuauClass, offsettomember)]);
+        build.cmp(key.reg, qword[tmp.reg + slot.reg * 8]);
+        build.jcc(ConditionX64::NotEqual, mismatch);
+
+        // address = staticmembers + (slot - numberofinstancemembers) * sizeof(TValue) (sizeof(TValue)
+        // isn't a valid SIB scale, so shift the index register itself instead of using a scaled
+        // addressing mode)
+        build.sub(dwordReg(slot.reg), dword[regOp(OP_A(inst)) + offsetof(LuauClass, numberofinstancemembers)]);
+        build.shl(slot.reg, kTValueSizeLog2);
+        build.mov(inst.regX64, qword[regOp(OP_A(inst)) + offsetof(LuauClass, staticmembers)]);
+        build.add(inst.regX64, slot.reg);
+
+        if (mismatchOp.kind == IrOpKind::Undef)
+        {
+            Label skip;
+            build.jmp(skip);
+            build.setLabel(abort);
+            build.ud2();
+            build.setLabel(skip);
+        }
+        break;
+    }
+    case IrCmd::TRY_OBJECT_NAMECALL_ADDR:
+    {
+        Label abort; // used when guard aborts execution
+        const IrOp& mismatchOp = OP_D(inst);
+        Label& mismatch = mismatchOp.kind == IrOpKind::Undef ? abort : labelOp(mismatchOp);
+
+        inst.regX64 = regs.allocReg(SizeX64::qword, index);
+
+        ScopedRegX64 lclass{regs, SizeX64::qword};
+        ScopedRegX64 slot{regs, SizeX64::qword};
+        ScopedRegX64 key{regs, SizeX64::qword};
+
+        build.mov(slot.reg, sCode);
+        build.movzx(dwordReg(slot.reg), byte[slot.reg + uintOp(OP_B(inst)) * sizeof(Instruction) + kOffsetOfInstructionC]);
+
+        build.mov(lclass.reg, qword[regOp(OP_A(inst)) + offsetof(LuauObject, lclass)]);
+
+        // bounds check: slot must be a valid member offset (instance or static)
+        build.cmp(dwordReg(slot.reg), dword[lclass.reg + offsetof(LuauClass, numberofallmembers)]);
+        build.jcc(ConditionX64::AboveEqual, mismatch);
+
+        // authorize private method access (or bail); method resolution is a read, so const doesn't
+        // restrict it (isWrite = false)
+        emitClassMemberAuthX64(build, regs, lclass.reg, slot.reg, /* isWrite */ false, mismatch);
+
+        // key check: offsettomember[slot] must name the expected member
+        build.mov(key.reg, luauConstantValue(vmConstOp(OP_C(inst))));
+        build.mov(inst.regX64, qword[lclass.reg + offsetof(LuauClass, offsettomember)]);
+        build.cmp(key.reg, qword[inst.regX64 + slot.reg * 8]);
+        build.jcc(ConditionX64::NotEqual, mismatch);
+
+        Label isStatic;
+        Label done;
+        build.cmp(dwordReg(slot.reg), dword[lclass.reg + offsetof(LuauClass, numberofinstancemembers)]);
+        build.jcc(ConditionX64::AboveEqual, isStatic);
+
+        // instance: address = self->members + slot * sizeof(TValue)
+        build.shl(slot.reg, kTValueSizeLog2);
+        build.mov(inst.regX64, qword[regOp(OP_A(inst)) + offsetof(LuauObject, members)]);
+        build.add(inst.regX64, slot.reg);
+        build.jmp(done);
+
+        // static: address = lclass->staticmembers + (slot - numberofinstancemembers) * sizeof(TValue)
+        build.setLabel(isStatic);
+        build.sub(dwordReg(slot.reg), dword[lclass.reg + offsetof(LuauClass, numberofinstancemembers)]);
+        build.shl(slot.reg, kTValueSizeLog2);
+        build.mov(inst.regX64, qword[lclass.reg + offsetof(LuauClass, staticmembers)]);
+        build.add(inst.regX64, slot.reg);
+
+        build.setLabel(done);
+
+        if (mismatchOp.kind == IrOpKind::Undef)
+        {
+            Label skip;
+            build.jmp(skip);
+            build.setLabel(abort);
+            build.ud2();
+            build.setLabel(skip);
+        }
+        break;
+    }
     case IrCmd::CHECK_CMP_NUM:
     {
         IrCondition cond = conditionOp(OP_C(inst));
@@ -2592,8 +2838,34 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         callStepGc(regs, build);
         break;
     case IrCmd::BARRIER_OBJ:
-        callBarrierObject(regs, build, regOp(OP_A(inst)), OP_A(inst), noreg, OP_B(inst), OP_C(inst).kind == IrOpKind::Undef ? -1 : tagOp(OP_C(inst)));
+    {
+        // Inlined (not via callBarrierObject) so the call wrapper can be given this instruction's
+        // index and the real SSA object operand OP_A(inst): the wrapper's last-use logic then clears
+        // inst->regX64 when it consumes the object register, so freeLastUseRegs doesn't later free it
+        // a second time. callBarrierObject builds its own wrapper without an instIdx and so can't
+        // accept a tracked operand -- it only fits callers passing an untracked/released register
+        // (e.g. SET_UPVALUE). This mirrors BARRIER_TABLE_FORWARD exactly, only the barrier fn differs.
+        Label skip;
+
+        ScopedRegX64 tmp{regs, SizeX64::qword};
+
+        checkObjectBarrierConditions(
+            build, tmp.reg, regOp(OP_A(inst)), noreg, OP_B(inst), OP_C(inst).kind == IrOpKind::Undef ? -1 : tagOp(OP_C(inst)), skip
+        );
+
+        {
+            ScopedSpills spillGuard(regs);
+
+            IrCallWrapperX64 callWrap(regs, build, index);
+            callWrap.addArgument(SizeX64::qword, rState);
+            callWrap.addArgument(SizeX64::qword, regOp(OP_A(inst)), OP_A(inst));
+            callWrap.addArgument(SizeX64::qword, tmp);
+            callWrap.call(qword[rNativeContext + offsetof(NativeContext, luaC_barrierf)]);
+        }
+
+        build.setLabel(skip);
         break;
+    }
     case IrCmd::BARRIER_TABLE_BACK:
         callBarrierTableFast(regs, build, regOp(OP_A(inst)), OP_A(inst));
         break;

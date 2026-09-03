@@ -66,6 +66,7 @@ LUAU_FASTFLAG(LuauCodegenFixBufferLenCheck)
 LUAU_FASTFLAG(LuauYieldIter2)
 LUAU_FASTFLAG(LuauCustomYieldablePcalls)
 LUAU_FASTFLAG(DebugLuauUserDefinedClassesRuntime)
+LUAU_FASTFLAG(LuauBetterUserDefinedClasses)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportedClassIsNilWorkaround)
 LUAU_FASTFLAG(LuauAutoStack)
@@ -4487,14 +4488,46 @@ TEST_CASE("UserdataDirectAccess")
     );
 }
 
+TEST_CASE("ClassesExportHoistingRepro")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::DebugLuauUserDefinedClassesRuntime, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuauNonePrimitive, true},
+        {FFlag::LuauGenericNominals, true},
+        {FFlag::LuauExportValueSyntax, true},
+        {FFlag::LuauDefaultArguments, true},
+        {FFlag::LuauExportedClassIsNilWorkaround, true},
+    };
+
+    runConformance("classes_export_hoisting.luau");
+}
+
 TEST_CASE("Classes")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauUserDefinedClasses, true},
         {FFlag::DebugLuauUserDefinedClassesRuntime, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuauNonePrimitive, true},
+        {FFlag::LuauGenericNominals, true},
     };
 
-    runConformance("classes.luau");
+    runConformance(
+        "classes.luau",
+        [](lua_State* L)
+        {
+            // yielding C functions (via lua_yield with continuations) so classes.luau can verify that
+            // a class method calling a yielding C function still suspends/resumes correctly, including
+            // when that method is inlined -- see rfcx/classes.md
+            lua_pushcclosurek(L, singleYield, "singleYield", 0, singleYieldContinuation);
+            lua_setglobal(L, "singleYield");
+
+            lua_pushcclosurek(L, multipleYields, "multipleYields", 0, multipleYieldsContinuation);
+            lua_setglobal(L, "multipleYields");
+        }
+    );
 }
 
 TEST_CASE("ExportedClasses")

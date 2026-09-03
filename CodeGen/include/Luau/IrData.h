@@ -468,6 +468,13 @@ enum class IrCmd : uint8_t
     // A: pointer (Buffer)
     BUFFER_ISFROZEN,
 
+    // Luau Classes (rfcx/classes.md): compute class.isinstance(value, class) as an int 0/1 --
+    // true iff the value is an object whose class is exactly the given class.
+    // A: tag (of the value)
+    // B: pointer (the value's gc pointer, LuauObject; only dereferenced when A == LUA_TOBJECT)
+    // C: pointer (the expected LuauClass)
+    CLASS_ISINSTANCE,
+
     // Allocate new table
     // A: unsigned int (array element count)
     // B: unsigned int (node element count)
@@ -693,6 +700,47 @@ enum class IrCmd : uint8_t
     // B: block/vmexit/undef
     // When undef is specified instead of a block, execution is aborted on check failure
     CHECK_NODE_VALUE,
+
+    // Guard against a Luau Classes object not being an instance of a specific class (see rfcx/classes.md)
+    // A: pointer (LuauObject)
+    // B: pointer (LuauClass, the expected class)
+    // C: block/vmexit/undef
+    // When undef is specified instead of a block, execution is aborted on check failure
+    CHECK_OBJECT_CLASS,
+
+    // Try to get the address of an instance member (field) on a Luau Classes object using the cached
+    // member slot at the given bytecode position, or jump if the slot is stale (out of range for
+    // instance members, or doesn't name the expected member) -- see rfcx/classes.md. Also jumps if
+    // the member is private/const and this access isn't authorized from inside the owning class's
+    // own methods (see emitClassMemberAuthX64); the interpreter fallback then raises the error.
+    // A: pointer (LuauObject)
+    // B: unsigned int (pcpos, used to read the live cached slot from bytecode)
+    // C: Kn (expected member name)
+    // D: block/undef
+    // E: unsigned int (optional; 1 = write/SETTABLEKS, enforcing const in addition to private;
+    //    absent or 0 = read/GETTABLEKS, where const doesn't restrict access)
+    // When undef is specified instead of a block, execution is aborted on check failure
+    TRY_OBJECT_MEMBER_ADDR,
+
+    // Try to get the address of a static member on a Luau Classes class object using the cached
+    // member slot at the given bytecode position, or jump if the slot is stale (out of range for
+    // static members, or doesn't name the expected member) -- see rfcx/classes.md
+    // A: pointer (LuauClass)
+    // B: unsigned int (pcpos, used to read the live cached slot from bytecode)
+    // C: Kn (expected member name)
+    // D: block/undef
+    // When undef is specified instead of a block, execution is aborted on check failure
+    TRY_CLASS_MEMBER_ADDR,
+
+    // Try to get the address of any member (instance field or static method) on a Luau Classes
+    // object using the cached member slot at the given bytecode position, or jump if the slot is
+    // stale -- used for method resolution on NAMECALL, see rfcx/classes.md
+    // A: pointer (LuauObject)
+    // B: unsigned int (pcpos, used to read the live cached slot from bytecode)
+    // C: Kn (expected member name)
+    // D: block/undef
+    // When undef is specified instead of a block, execution is aborted on check failure
+    TRY_OBJECT_NAMECALL_ADDR,
 
     // Guard against access at specified offset with [min, max) range of bytes overflowing the buffer length
     // When base offset source number is provided, instruction will additionally validate that the integer and double versions of base are exact

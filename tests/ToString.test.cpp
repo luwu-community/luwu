@@ -16,6 +16,29 @@ LUAU_FASTFLAG(DebugLuauForceOldSolver)
 
 TEST_SUITE_BEGIN("ToString");
 
+TEST_CASE_FIXTURE(Fixture, "definition_file_union_and_function_alias_names_survive_clonePublicInterface")
+{
+    // Regression test: Module::clonePublicInterface (Module.cpp) moves declaredGlobals and
+    // exportedTypeBindings from a module's internalTypes arena into its interfaceTypes arena via
+    // Substitution.cpp's hand-rolled shallowClone, which explicitly enumerates fields per type kind
+    // instead of doing a generic copy. That clone already carried TableType::name/syntheticName,
+    // but not the newer UnionType/IntersectionType/FunctionType name fields, so any alias exposed
+    // through a `declare`/`export type` in a definition file silently lost its name at this exact
+    // clone boundary (regular, non-exported local bindings never hit this path, which is why the
+    // bug didn't show up in ordinary modules).
+    loadDefinition(R"(
+        export type Pathlike = number | string
+        declare function useIt(p: Pathlike): ()
+    )");
+
+    CheckResult result = check(R"(
+        local f = useIt
+    )");
+    LUAU_REQUIRE_NO_ERRORS(result);
+
+    CHECK_EQ("(Pathlike) -> ()", toString(requireType("f")));
+}
+
 TEST_CASE_FIXTURE(Fixture, "primitive")
 {
     CheckResult result = check("local a = nil    local b = 44    local c = 'lalala'    local d = true");
@@ -290,8 +313,10 @@ TEST_CASE_FIXTURE(Fixture, "overloaded_functions_always_printed_on_multiple_line
     opts.useLineBreaks = true;
 
     CHECK_EQ(
-        "((number) -> number)\n"
-        "& ((string) -> string)",
+        "( -- 2 overloads\n"
+        "    & ((number) -> number)\n"
+        "    & ((string) -> string)\n"
+        ")",
         toString(requireType("a"), opts)
     );
 }
@@ -319,7 +344,8 @@ TEST_CASE_FIXTURE(Fixture, "complex_unions_printed_on_multiple_lines")
     opts.useLineBreaks = true;
 
     CHECK_EQ(
-        "boolean\n"
+        "\n"
+        "| boolean\n"
         "| number\n"
         "| string",
         toString(requireType("a"), opts)

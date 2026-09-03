@@ -42,6 +42,12 @@ struct TypeMismatch
     std::string reason;
     std::shared_ptr<TypeError> error;
 
+    // When set, overrides the generic "Expected this to be" preamble with a more specific
+    // phrase (e.g. "this function to return"), so the message reads "Expected this function to
+    // return 'X' but got 'Y'" instead of leaving the reader to infer context from the reason
+    // text alone. Not part of any constructor; set directly on the constructed value.
+    std::optional<std::string> contextVerb;
+
     bool operator==(const TypeMismatch& rhs) const;
 };
 
@@ -403,6 +409,26 @@ struct NonStrictFunctionDefinitionError
     bool operator==(const NonStrictFunctionDefinitionError& rhs) const;
 };
 
+// Accessing a `private` member of a user-defined class from outside of that class's own
+// definition block (see FFlag::DebugLuauUserDefinedClasses, FFlag::LuauBetterUserDefinedClasses).
+struct PrivatePropertyAccess
+{
+    TypeId table;
+    Name key;
+
+    bool operator==(const PrivatePropertyAccess& rhs) const;
+};
+
+// Calling `ClassName(...)` directly from outside the class's own definition block, when the
+// class's `__init` constructor is `private` (see FFlag::DebugLuauUserDefinedClasses,
+// FFlag::LuauBetterUserDefinedClasses).
+struct PrivateConstructorAccess
+{
+    TypeId classTy;
+
+    bool operator==(const PrivateConstructorAccess& rhs) const;
+};
+
 struct PropertyAccessViolation
 {
     TypeId table;
@@ -415,6 +441,16 @@ struct PropertyAccessViolation
     } context;
 
     bool operator==(const PropertyAccessViolation& rhs) const;
+};
+
+// Assigning to a `const` member of a user-defined class from outside of that class's own
+// `__init` constructor (see FFlag::DebugLuauUserDefinedClasses, FFlag::LuauBetterUserDefinedClasses).
+struct ConstPropertyAssignment
+{
+    TypeId table;
+    Name key;
+
+    bool operator==(const ConstPropertyAssignment& rhs) const;
 };
 
 struct CheckedFunctionIncorrectArgs
@@ -637,6 +673,9 @@ using TypeErrorData = Variant<
     SwappedGenericTypeParameter,
     OptionalValueAccess,
     MissingUnionProperty,
+    PrivatePropertyAccess,
+    ConstPropertyAssignment,
+    PrivateConstructorAccess,
     TypesAreUnrelated,
     NormalizationTooComplex,
     TypePackMismatch,

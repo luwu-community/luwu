@@ -123,6 +123,12 @@ static uint8_t tryGetTagForTypename(std::string_view name, bool forTypeof)
     return 0xff;
 }
 
+// Write bit (OP_E) of a TRY_OBJECT_MEMBER_ADDR: 1 = SETTABLEKS (enforces const), else read
+static bool objectMemberIsWrite(IrFunction& function, IrInst& inst)
+{
+    return HAS_OP_E(inst) && function.uintOp(OP_E(inst)) != 0;
+}
+
 // Check if we can treat double as an integer in addition and subtraction
 static bool safeIntegerConstant(double value)
 {
@@ -300,6 +306,10 @@ struct ConstPropState
 
         hashValueCache.clear();
         arrayValueCache.clear();
+
+        // Object members are heap and can be mutated/aliased by any call, same lifetime as tables
+        tryObjectMemberCache.clear();
+        objectValueCache.clear();
     }
 
     void invalidateHeapBufferData()
@@ -1253,8 +1263,21 @@ struct ConstPropState
             // Double-check that TABLE_SETNUM invalidated the table array data
             CODEGEN_ASSERT(arrayValueCache.empty());
         }
+        else if (targetAddr.cmd == IrCmd::TRY_OBJECT_MEMBER_ADDR)
+        {
+            // A write to member 'B' can't affect a cached load of a differently-named member 'A', but
+            // the same-named member of a possibly-aliasing object must be invalidated (key is OP_C/Kn)
+            for (auto& [pointerIdx, loadedValueIdx] : objectValueCache)
+            {
+                IrInst& address = function.instructions[pointerIdx];
+
+                if (OP_C(address) == OP_C(targetAddr))
+                    loadedValueIdx = kInvalidInstIdx;
+            }
+        }
         else
         {
+            // GET_CLOSURE_UPVAL_ADDR writes aren't cached anywhere else in this pass, nothing to invalidate
             CODEGEN_ASSERT(targetAddr.cmd == IrCmd::GET_CLOSURE_UPVAL_ADDR);
         }
     }
@@ -1273,6 +1296,10 @@ struct ConstPropState
             IrOp offsetOp = getCombinedArrayLoadOffsetOp(targetAddr, writeOffsetOp);
 
             arrayValueCache.push_back({function.getInstIndex(targetAddr), offsetOp, instIdx});
+        }
+        else if (targetAddr.cmd == IrCmd::TRY_OBJECT_MEMBER_ADDR)
+        {
+            objectValueCache[function.getInstIndex(targetAddr)] = instIdx;
         }
         else
         {
@@ -1402,6 +1429,13 @@ struct ConstPropState
     std::vector<NumberedInstruction> getSlotNodeCache; // Additionally, pcpos argument might be different
     std::vector<NodeSlotState> checkSlotMatchCache;    // Additionally, fallback block argument might be different
 
+    // Luau Classes object member access (rfcx/classes.md). TRY_OBJECT_MEMBER_ADDR is a fused
+    // guard+address op, so we CSE the address directly. pcpos (OP_B) and fallback (OP_D) may differ;
+    // write bit (OP_E) is tracked so a read may reuse a dominating write's guard, but not vice versa.
+    std::vector<NumberedInstruction> tryObjectMemberCache;
+    // Maps a TRY_OBJECT_MEMBER_ADDR SSA index to the last instruction producing the value there
+    DenseHashMap<uint32_t, uint32_t> objectValueCache{kInvalidInstIdx};
+
     std::vector<uint32_t> getArrAddrCache;
     std::vector<uint32_t> checkArraySizeCache; // Additionally, fallback block argument might be different
 
@@ -1482,6 +1516,7 @@ static void handleBuiltinEffects(ConstPropState& state, LuauBuiltinFunction bfid
     case LBF_MATH_ROUND:
     case LBF_RAWGET:
     case LBF_RAWEQUAL:
+    case LBF_CLASS_ISINSTANCE:
     case LBF_TABLE_UNPACK:
     case LBF_VECTOR:
     case LBF_BIT32_COUNTLZ:
@@ -1822,6 +1857,37 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
                 }
 
                 state.arrayValueCache.push_back({OP_A(inst).index, offsetOp, index});
+            }
+            else if (source->cmd == IrCmd::TRY_OBJECT_MEMBER_ADDR)
+            {
+                uint32_t* prevIdx = state.objectValueCache.find(OP_A(inst).index);
+
+                if (prevIdx && *prevIdx != kInvalidInstIdx)
+                {
+                    IrInst& prev = function.instructions[*prevIdx];
+
+                    if (prev.cmd == IrCmd::LOAD_TVALUE)
+                    {
+                        // Previous load might have been removed as unused
+                        if (prev.useCount != 0)
+                            substitute(function, inst, IrOp{IrOpKind::Inst, *prevIdx});
+                    }
+                    else if (prev.cmd == IrCmd::STORE_SPLIT_TVALUE)
+                    {
+                        state.instTag[index] = function.tagOp(OP_B(prev));
+                        state.instValue[index] = OP_C(prev);
+                    }
+                    else if (prev.cmd == IrCmd::STORE_TVALUE)
+                    {
+                        // For safety, check that the operand of the previous store is still alive (store was not removed or replaced)
+                        if (auto arg = function.asInstOp(OP_B(prev)); arg && arg->useCount != 0)
+                            substitute(function, inst, OP_B(prev));
+                    }
+
+                    break;
+                }
+
+                state.objectValueCache[OP_A(inst).index] = index;
             }
         }
         break;
@@ -2622,8 +2688,43 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         if (int(state.getSlotNodeCache.size()) < FInt::LuauCodeGenReuseSlotLimit)
             state.getSlotNodeCache.push_back({index, state.instPos, state.instPos});
         break;
+    case IrCmd::TRY_OBJECT_MEMBER_ADDR:
+    {
+        bool curWrite = objectMemberIsWrite(function, inst);
+        int cacheSize = int(state.tryObjectMemberCache.size());
+
+        for (size_t i = 0; i < state.tryObjectMemberCache.size(); i++)
+        {
+            auto&& [prevIdx, num, lastNum] = state.tryObjectMemberCache[i];
+
+            IrInst& prev = function.instructions[prevIdx];
+
+            // Same object pointer (OP_A) and member name (OP_C); a read may reuse a dominating write's
+            // guard (write guard subsumes read guard), but a write must not reuse a read's weaker guard
+            if (OP_A(prev) == OP_A(inst) && OP_C(prev) == OP_C(inst) && (objectMemberIsWrite(function, prev) || !curWrite))
+            {
+                int limit = FInt::LuauCodeGenLiveSlotReuseLimit;
+
+                if (cacheSize > limit && state.getMaxInternalOverlap(state.tryObjectMemberCache, i) > limit)
+                    return;
+
+                lastNum = state.instPos;
+
+                substitute(function, inst, IrOp{IrOpKind::Inst, prevIdx});
+                return; // Break out from both the loop and the switch
+            }
+        }
+
+        if (cacheSize < FInt::LuauCodeGenReuseSlotLimit)
+            state.tryObjectMemberCache.push_back({index, state.instPos, state.instPos});
+        break;
+    }
     case IrCmd::GET_HASH_NODE_ADDR:
     case IrCmd::GET_CLOSURE_UPVAL_ADDR:
+        break;
+    case IrCmd::TRY_CLASS_MEMBER_ADDR:
+    case IrCmd::TRY_OBJECT_NAMECALL_ADDR:
+        // TODO(rfcx/classes.md): no reuse cache yet, unlike TRY_OBJECT_MEMBER_ADDR above
         break;
     case IrCmd::ADD_INT64:
     case IrCmd::SUB_INT64:
@@ -2937,6 +3038,10 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         break;
     case IrCmd::STRING_LEN:
     case IrCmd::BUFFER_ISFROZEN:
+        break;
+    case IrCmd::CLASS_ISINSTANCE:
+        // Pure function of (tag, value ptr, class ptr); two identical checks in a block can be CSE'd
+        state.substituteOrRecord(inst, index);
         break;
     case IrCmd::NEW_TABLE:
         state.instNotReadonly.insert(index);
@@ -3295,6 +3400,10 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
 
         if (int(state.checkSlotMatchCache.size()) < FInt::LuauCodeGenReuseSlotLimit)
             state.checkSlotMatchCache.push_back({index, true});
+        break;
+
+    case IrCmd::CHECK_OBJECT_CLASS:
+        // TODO(rfcx/classes.md): no redundant-check elimination yet, unlike CHECK_SLOT_MATCH above
         break;
 
     case IrCmd::ADD_VEC:

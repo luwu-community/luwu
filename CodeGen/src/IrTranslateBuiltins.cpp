@@ -970,6 +970,28 @@ static BuiltinImplResult translateBuiltinBufferIsFrozen(IrBuilder& build, int np
     return {BuiltinImplType::Full, 1};
 }
 
+// Luau Classes (rfcx/classes.md): class.isinstance(value, class) -> boolean, inlined as a tag-guarded
+// class-pointer comparison instead of a call into the class library.
+static BuiltinImplResult translateBuiltinClassIsinstance(IrBuilder& build, int nparams, int ra, int arg, IrOp args, int nresults, int pcpos)
+{
+    if (nparams < 2 || nresults > 1)
+        return {BuiltinImplType::None, -1};
+
+    // the second argument must be a class; deopt to the interpreter (which raises the argument error) otherwise
+    build.loadAndCheckTag(args, LUA_TCLASS, build.vmExit(pcpos));
+
+    IrOp valueTag = build.inst(IrCmd::LOAD_TAG, build.vmReg(arg));
+    IrOp valuePtr = build.inst(IrCmd::LOAD_POINTER, build.vmReg(arg));
+    IrOp classPtr = build.inst(IrCmd::LOAD_POINTER, args);
+
+    IrOp isInstance = build.inst(IrCmd::CLASS_ISINSTANCE, valueTag, valuePtr, classPtr);
+
+    build.inst(IrCmd::STORE_INT, build.vmReg(ra), isInstance);
+    build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TBOOLEAN));
+
+    return {BuiltinImplType::Full, 1};
+}
+
 static BuiltinImplResult translateBuiltinBufferRead(
     IrBuilder& build,
     int nparams,
@@ -2210,6 +2232,8 @@ BuiltinImplResult translateBuiltin(
         return {BuiltinImplType::None, -1};
     case LBF_BUFFER_ISFROZEN:
         return translateBuiltinBufferIsFrozen(build, nparams, ra, arg, args, nresults, pcpos);
+    case LBF_CLASS_ISINSTANCE:
+        return translateBuiltinClassIsinstance(build, nparams, ra, arg, args, nresults, pcpos);
     case LBF_BUFFER_WRITEINTEGER:
         if (FFlag::LuauCodegenBufferInteger)
             return translateBuiltinBufferWrite(build, nparams, ra, arg, args, arg3, nresults, pcpos, IrCmd::BUFFER_WRITEI64, 8, IrCmd::NOP, true);

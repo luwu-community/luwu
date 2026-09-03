@@ -34,6 +34,13 @@ struct Reasonings
     // this should be true if _all_ of the reasons have an error suppressing type, and false otherwise.
     bool suppressed;
 
+    // When every reasoning shares the same top-level context (e.g. all of them are about a
+    // function's return type, or all about its arguments), a short phrase describing that
+    // context (e.g. "this function to return"), for use in place of the generic "this to be" in
+    // the enclosing TypeMismatch preamble. Unset when reasonings disagree on context or don't
+    // originate from a recognized one.
+    std::optional<std::string> contextVerb;
+
     std::string toString()
     {
         if (reasons.empty())
@@ -43,6 +50,13 @@ struct Reasonings
         // sort the reasons here to achieve a stable error
         // stringification.
         std::sort(reasons.begin(), reasons.end());
+
+        // Dropping path narration (see explainReasonings_) means multiple distinct reasoning
+        // entries can end up rendering to the exact same text (e.g. two different union/pack
+        // slots that both boil down to "`nil` is not a subtype of `number`") -- printing the
+        // same line twice is just noise, so collapse them.
+        reasons.erase(std::unique(reasons.begin(), reasons.end()), reasons.end());
+
         std::string allReasons = reasons.size() < 2 ? "\n" : "\nthis is because ";
         for (const std::string& reason : reasons)
         {
@@ -216,6 +230,15 @@ private:
     );
     // If the provided type does not have the named property, report an error.
     void checkIndexTypeFromType(TypeId tableTy, const std::string& prop, ValueContext context, const Location& location, TypeId astIndexExprType);
+    // If the named property is `private` on some user-defined class in tableTy's hierarchy, and
+    // `location` falls outside of that class's own definition block, report an error.
+    void checkPrivatePropertyAccess(TypeId tableTy, const std::string& prop, const Location& location);
+    // If the named property is `const` on some user-defined class in tableTy's hierarchy, and
+    // `location` falls outside of that class's own `__init` constructor, report an error.
+    void checkConstPropertyAssignment(TypeId tableTy, const std::string& prop, ValueContext context, const Location& location);
+    // If classTy's `__init` is `private`, and `location` falls outside of that class's own
+    // definition block, report an error.
+    void checkPrivateConstructorAccess(TypeId classTy, const Location& location);
     PropertyType hasIndexTypeFromType(
         TypeId ty,
         const std::string& prop,

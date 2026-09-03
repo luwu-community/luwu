@@ -411,6 +411,10 @@ static void applyBuiltinCall(LuauBuiltinFunction bfid, BytecodeTypes& types)
     case LBF_RAWEQUAL:
         types.result = LBC_TYPE_BOOLEAN;
         break;
+    case LBF_CLASS_ISINSTANCE:
+        types.result = LBC_TYPE_BOOLEAN;
+        types.b = LBC_TYPE_CLASS;
+        break;
     case LBF_TABLE_UNPACK:
         types.result = LBC_TYPE_ANY;
         types.a = LBC_TYPE_TABLE;
@@ -1510,6 +1514,8 @@ void analyzeBytecodeTypes(IrFunction& function, const HostIrHooks& hostHooks)
             case LOP_GETVARARGS:
             case LOP_FORGPREP:
             case LOP_NEWCLASSMEMBER:
+            case LOP_CHECKSELFCLASS:
+            case LOP_JUMPXISA:
                 break;
             default:
                 CODEGEN_ASSERT(!"Unknown instruction");

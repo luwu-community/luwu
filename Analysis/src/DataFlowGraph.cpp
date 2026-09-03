@@ -898,6 +898,8 @@ ControlFlow DataFlowGraphBuilder::visit(AstStatClass* d)
                 {
                     if (prop.ty)
                         visitType(prop.ty);
+                    if (prop.defaultValue)
+                        visitExpr(prop.defaultValue);
                 },
                 [&](const AstClassMethod& method)
                 {

@@ -400,6 +400,10 @@ struct FunctionType
     bool isCheckedFunction = false;
     bool isDeprecatedFunction = false;
     std::shared_ptr<AstAttr::DeprecatedInfo> deprecatedInfo;
+
+    // Set when this function type is the target of a `type X = (...) -> ...` alias. See TableType::name/syntheticName.
+    std::optional<std::string> name;
+    std::optional<std::string> syntheticName;
 };
 
 enum class TableState
@@ -448,6 +452,16 @@ struct Property
 
     bool deprecated = false;
     std::string deprecatedSuggestion;
+
+    // True if this property was declared `private` on a user-defined class (see
+    // FFlag::DebugLuauUserDefinedClasses). Private members may only be accessed from
+    // within the class's own definition block.
+    bool isPrivate = false;
+
+    // True if this property was declared `const` on a user-defined class (see
+    // FFlag::DebugLuauUserDefinedClasses, FFlag::LuauBetterUserDefinedClasses). Const members
+    // may only be assigned to from within the class's own `__init` constructor.
+    bool isConst = false;
 
     // If this property was inferred from an expression, this field will be
     // populated with the source location of the corresponding table property.
@@ -549,6 +563,17 @@ struct ClassUserData
     virtual ~ClassUserData() {}
 };
 
+// Attached to a user-defined class's instance ExternType (see FFlag::DebugLuauUserDefinedClasses)
+// so consumers can tell which of its `props` are actual fields, as opposed to methods -- both
+// fields and non-metamethod instance methods live in the same `props` map, and Property alone
+// can't distinguish them: a method's `readTy` doesn't resolve to a FunctionType until constraint
+// solving finishes, which may be after a consumer (e.g. the `class.fields` magic function in
+// BuiltinDefinitions.cpp) needs to know. Populated by ConstraintGenerator's class handling.
+struct ClassFieldUserData final : ClassUserData
+{
+    std::set<Name> fieldNames;
+};
+
 struct Obj
 {
     TypeId ty;
@@ -581,6 +606,10 @@ struct ExternType
     std::shared_ptr<ClassUserData> userData;
     ModuleName definitionModuleName;
     std::optional<Location> definitionLocation;
+    // The location of this class's `__init` method's body, if it defines one. Used to allow
+    // assignment to `const` properties only from within the constructor (see
+    // FFlag::DebugLuauUserDefinedClasses, FFlag::LuauBetterUserDefinedClasses).
+    std::optional<Location> initLocation;
     std::optional<TableIndexer> indexer;
     /* This field represents a bidirectional relationship between classes and object types
        Given a Class, this relation should be a Obj in the variant, representing an instantiation of the class
@@ -763,12 +792,20 @@ struct NoRefineType
 struct UnionType
 {
     std::vector<TypeId> options;
+
+    // Set when this union type is the target of a `type X = ... | ...` alias. See TableType::name/syntheticName.
+    std::optional<std::string> name;
+    std::optional<std::string> syntheticName;
 };
 
 // `T & U`
 struct IntersectionType
 {
     std::vector<TypeId> parts;
+
+    // Set when this intersection type is the target of a `type X = ... & ...` alias. See TableType::name/syntheticName.
+    std::optional<std::string> name;
+    std::optional<std::string> syntheticName;
 };
 
 struct LazyType

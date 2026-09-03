@@ -1314,7 +1314,8 @@ TypeFunctionReductionResult<TypeId> refineTypeFunction(
         // NOTE: This block causes us to refine too early in some cases.
         if (auto negation = get<NegationType>(discriminant))
         {
-            if (auto primitive = get<PrimitiveType>(follow(negation->ty)); primitive && primitive->type == PrimitiveType::NilType)
+            if (auto primitive = get<PrimitiveType>(follow(negation->ty));
+                primitive && (primitive->type == PrimitiveType::NilType || primitive->type == PrimitiveType::NoneType))
             {
                 SimplifyResult result = simplifyIntersection(ctx->builtins, ctx->arena, target, discriminant);
                 return {result.result, {}};

@@ -33,6 +33,8 @@ LUAU_FASTFLAG(LuauExportedClassIsNilWorkaround)
 LUAU_FASTFLAG(DebugLuauNoInline)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 LUAU_FASTFLAG(LuauDefaultArguments)
+LUAU_FASTFLAG(LuauBetterUserDefinedClasses)
+LUAU_FASTFLAG(LuauGenericNominals)
 
 using namespace Luau;
 
@@ -11116,6 +11118,11 @@ RETURN R0 0
 TEST_CASE("ClassDeclWithMethod")
 {
     ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+    // This dump expects a plain CALL for the in-method `error(...)`; pin the
+    // feedback-vector opcode off so it stays deterministic under --fflags=true
+    // (where LuauEmitCallFeedback would otherwise emit CALLFB for this nested,
+    // non-builtin call). Tests that want CALLFB opt in explicitly.
+    ScopedFastFlag noCallFb{FFlag::LuauEmitCallFeedback, false};
 
     std::string source = R"(
         class Point
@@ -11129,11 +11136,16 @@ TEST_CASE("ClassDeclWithMethod")
     )";
     auto res0 = "\n" + compileFunction(source.c_str(), 0, 0, 0);
     CHECK(R"(
-GETTABLEKS R3 R0 K0 ['x']
-GETTABLEKS R4 R0 K0 ['x']
+GETUPVAL R1 0
+CHECKSELFCLASS R0 R1 L0
+GETGLOBAL R2 K0 ['error']
+LOADK R3 K1 ['attempt to call method 'magnitud'...]
+CALL R2 1 0
+L0: GETTABLEKS R3 R0 K2 ['x']
+GETTABLEKS R4 R0 K2 ['x']
 MUL R2 R3 R4
-GETTABLEKS R4 R0 K1 ['y']
-GETTABLEKS R5 R0 K1 ['y']
+GETTABLEKS R4 R0 K3 ['y']
+GETTABLEKS R5 R0 K3 ['y']
 MUL R3 R4 R5
 ADD R1 R2 R3
 RETURN R1 1
@@ -11143,6 +11155,7 @@ RETURN R1 1
 LOADNIL R0
 LOADKX R0 K4 [class Point (props: 2, methods: 1)]
 NEWCLOSURE R1 P0
+CAPTURE VAL R0
 NEWCLASSMEMBER R0 R1 ['magnitude']
 GETGLOBAL R1 K5 ['print']
 MOVE R2 R0
@@ -11171,13 +11184,18 @@ TEST_CASE("ClassDeclWithAmbiguousGlobal")
     )";
     auto res0 = "\n" + compileFunction(source.c_str(), 0, 0, 0);
     CHECK(R"(
-GETGLOBAL R1 K0 ['print']
-LOADK R2 K1 ['Point(x = %*, y = %*)']
-GETTABLEKS R4 R0 K2 ['x']
-GETTABLEKS R5 R0 K3 ['y']
-NAMECALL R2 R2 K4 ['format']
+GETUPVAL R1 0
+CHECKSELFCLASS R0 R1 L0
+GETGLOBAL R2 K0 ['error']
+LOADK R3 K1 ['attempt to call method 'print' w'...]
+CALLFB R2 1 0 [0]
+L0: GETGLOBAL R1 K2 ['print']
+LOADK R2 K3 ['Point(x = %*, y = %*)']
+GETTABLEKS R4 R0 K4 ['x']
+GETTABLEKS R5 R0 K5 ['y']
+NAMECALL R2 R2 K6 ['format']
 CALL R2 3 1
-CALLFB R1 1 0 [0]
+CALLFB R1 1 0 [1]
 RETURN R0 0
 )" == res0);
     auto res1 = "\n" + compileFunction(source.c_str(), 1, 0, 0);
@@ -11185,6 +11203,7 @@ RETURN R0 0
 LOADNIL R0
 LOADKX R0 K4 [class Point (props: 2, methods: 1)]
 NEWCLOSURE R1 P0
+CAPTURE VAL R0
 NEWCLASSMEMBER R0 R1 ['print']
 DUPTABLE R1 5
 LOADK R2 K0 ['Point']
@@ -11236,8 +11255,7 @@ RETURN R0 1
 LOADNIL R0
 LOADKX R0 K2 [class Point (props: 1, methods: 0)]
 NEWCLOSURE R1 P0
-CAPTURE REF R0
-CLOSEUPVALS R0
+CAPTURE VAL R0
 RETURN R0 0
 )" == outer);
 }
@@ -12125,13 +12143,15 @@ end
         R"(
 LOADNIL R0
 NEWTABLE R1 0 0
-LOADKX R0 K7 [class Point (props: 2, methods: 2)]
-DUPCLOSURE R2 K3 ['getX']
+LOADKX R0 K5 [class Point (props: 2, methods: 2)]
+NEWCLOSURE R2 P0
+CAPTURE VAL R1
 NEWCLASSMEMBER R0 R2 ['getX']
-DUPCLOSURE R2 K5 ['getY']
+NEWCLOSURE R2 P1
+CAPTURE VAL R1
 NEWCLASSMEMBER R0 R2 ['getY']
 SETTABLEKS R0 R1 K0 ['Point']
-GETIMPORT R2 10 [table.freeze]
+GETIMPORT R2 8 [table.freeze]
 MOVE R3 R1
 CALL R2 1 1
 RETURN R2 1

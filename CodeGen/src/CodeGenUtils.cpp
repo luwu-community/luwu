@@ -5,6 +5,7 @@
 
 #include "lbuiltins.h"
 #include "lbytecode.h"
+#include "lclass.h"
 #include "ldebug.h"
 #include "ldo.h"
 #include "lfunc.h"
@@ -22,6 +23,7 @@
 LUAU_FASTFLAG(LuauDirectFieldGet)
 LUAU_FASTFLAG(LuauCIProto)
 LUAU_FASTFLAG(LuauPromoteProto)
+LUAU_FASTFLAG(DebugLuauUserDefinedClassesRuntime)
 
 // All external function calls that can cause stack realloc or Lua calls have to be wrapped in VM_PROTECT
 // This makes sure that we save the pc (in case the Lua call needs to generate a backtrace) before the call,
@@ -572,6 +574,68 @@ const Instruction* executeGETTABLEKS(lua_State* L, const Instruction* pc, StkId 
             // fall through to slow path
         }
 
+        // Luau Classes (rfcx/classes.md): the native TRY_OBJECT_MEMBER_ADDR/TRY_CLASS_MEMBER_ADDR
+        // fast paths bail here on a stale cached slot. Mirror the interpreter's LOP_GETTABLEKS object/
+        // class handling *and* patch the cached slot (VM_PATCH_C) so the next native access hits the
+        // fast path -- without this, every access re-misses and re-enters this fallback forever.
+        if (FFlag::DebugLuauUserDefinedClassesRuntime && ttisobject(rb))
+        {
+            uint8_t slot = LUAU_INSN_C(insn);
+            LuauObject* inst = objectvalue(rb);
+
+            VM_PROTECT_PC(); // private-member auth / missing-member checks can raise
+
+            if (slot < inst->lclass->numberofallmembers && tsvalue(kv) == inst->lclass->offsettomember[slot])
+            {
+                if (inst->lclass->hasprivatemembers)
+                    luaR_checkprivateaccess(L, kv, inst->lclass, cl, slot);
+                setobj2s(L, ra, luaR_lookupmemberatoffset(inst, slot));
+                return pc;
+            }
+            else
+            {
+                const TValue* offset = luaH_getstr(inst->lclass->memberstooffset, tsvalue(kv));
+                if (ttisnil(offset))
+                    luaG_missingmembererror(L, rb, kv);
+                const uint32_t offsetnum = uint32_t(nvalue(offset));
+                if (inst->lclass->hasprivatemembers)
+                    luaR_checkprivateaccess(L, kv, inst->lclass, cl, offsetnum);
+                setobj2s(L, ra, luaR_lookupmemberatoffset(inst, offsetnum));
+                VM_PATCH_C(pc - 2, offsetnum);
+                return pc;
+            }
+        }
+        else if (FFlag::DebugLuauUserDefinedClassesRuntime && ttisclass(rb))
+        {
+            uint8_t slot = LUAU_INSN_C(insn);
+            LuauClass* lco = classvalue(rb);
+
+            VM_PROTECT_PC(); // private-member auth / missing-member checks can raise
+
+            if (slot < lco->numberofallmembers && slot >= lco->numberofinstancemembers && tsvalue(kv) == lco->offsettomember[slot])
+            {
+                if (lco->hasprivatemembers)
+                    luaR_checkprivateaccess(L, kv, lco, cl, slot);
+                setobj2s(L, ra, &lco->staticmembers[slot - lco->numberofinstancemembers]);
+                return pc;
+            }
+            else
+            {
+                const TValue* offset = luaH_getstr(lco->memberstooffset, tsvalue(kv));
+                if (ttisnil(offset))
+                    luaG_missingmembererror(L, rb, kv);
+                const uint32_t offsetnum = uint32_t(nvalue(offset));
+                // accessing an instance member (field) through the class object itself is an error
+                if (offsetnum < lco->numberofinstancemembers)
+                    luaG_missingmembererror(L, rb, kv);
+                if (lco->hasprivatemembers)
+                    luaR_checkprivateaccess(L, kv, lco, cl, offsetnum);
+                setobj2s(L, ra, &lco->staticmembers[offsetnum - lco->numberofinstancemembers]);
+                VM_PATCH_C(pc - 2, offsetnum);
+                return pc;
+            }
+        }
+
         // fall through to slow path
     }
 
@@ -642,12 +706,55 @@ const Instruction* executeSETTABLEKS(lua_State* L, const Instruction* pc, StkId 
             VM_PATCH_C(pc - 2, L->cachedslot);
             return pc;
         }
-        else
+
+        // Luau Classes (rfcx/classes.md): the native TRY_OBJECT_MEMBER_ADDR (write mode) fast path
+        // bails here on a stale cached slot. Mirror the interpreter's LOP_SETTABLEKS object handling
+        // *and* patch the cached slot (VM_PATCH_C) so the next native store hits the fast path.
+        if (FFlag::DebugLuauUserDefinedClassesRuntime && ttisobject(rb))
         {
-            // slow-path, may invoke Lua calls via __newindex metamethod
-            VM_PROTECT(luaV_settable(L, rb, kv, ra));
-            return pc;
+            uint8_t slot = LUAU_INSN_C(insn);
+            LuauObject* inst = objectvalue(rb);
+
+            VM_PROTECT_PC(); // private/const auth and missing/index errors can raise
+
+            if (slot < inst->lclass->numberofinstancemembers && tsvalue(kv) == inst->lclass->offsettomember[slot])
+            {
+                if (inst->lclass->hasprivatemembers || inst->lclass->hasconstmembers)
+                {
+                    if (inst->lclass->hasprivatemembers)
+                        luaR_checkprivateaccess(L, kv, inst->lclass, cl, slot);
+                    if (inst->lclass->hasconstmembers)
+                        luaR_checkconstassign(L, kv, inst->lclass, cl, slot);
+                }
+                setobj2class(L, &inst->members[slot], ra);
+                luaC_barrier(L, inst, ra);
+                return pc;
+            }
+            else
+            {
+                const TValue* offset = luaH_getstr(inst->lclass->memberstooffset, tsvalue(kv));
+                if (ttisnil(offset))
+                    luaG_missingmembererror(L, rb, kv);
+                const uint32_t offsetnum = uint32_t(nvalue(offset));
+                if (offsetnum >= inst->lclass->numberofinstancemembers)
+                    luaG_indexerror(L, rb, kv);
+                if (inst->lclass->hasprivatemembers || inst->lclass->hasconstmembers)
+                {
+                    if (inst->lclass->hasprivatemembers)
+                        luaR_checkprivateaccess(L, kv, inst->lclass, cl, offsetnum);
+                    if (inst->lclass->hasconstmembers)
+                        luaR_checkconstassign(L, kv, inst->lclass, cl, offsetnum);
+                }
+                setobj2class(L, &inst->members[offsetnum], ra);
+                luaC_barrier(L, inst, ra);
+                VM_PATCH_C(pc - 2, offsetnum);
+                return pc;
+            }
         }
+
+        // slow-path, may invoke Lua calls via __newindex metamethod
+        VM_PROTECT(luaV_settable(L, rb, kv, ra));
+        return pc;
     }
 }
 

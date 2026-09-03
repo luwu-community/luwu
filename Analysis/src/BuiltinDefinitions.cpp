@@ -30,6 +30,9 @@
  * about a function that takes any number of values, but where each value must have some specific type.
  */
 
+LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
+LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
+
 namespace Luau
 {
 
@@ -518,6 +521,15 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
         attachMagicFunction(*ttv->props["pack"].readTy, std::make_shared<MagicPack>());
         attachMagicFunction(*ttv->props["clone"].readTy, std::make_shared<MagicClone>());
         attachMagicFunction(*ttv->props["freeze"].readTy, std::make_shared<MagicFreeze>());
+    }
+
+    if (FFlag::DebugLuauUserDefinedClasses && FFlag::LuauAllowGlobalDeclarationToBeCalledClass)
+    {
+        if (TableType* ctv = getMutable<TableType>(getGlobalBinding(globals, "class")))
+        {
+            if (auto it = ctv->props.find("fields"); it != ctv->props.end() && it->second.readTy)
+                attachMagicFunction(*it->second.readTy, std::make_shared<MagicClassFields>());
+        }
     }
 
     TypeId requireTy = getGlobalBinding(globals, "require");
@@ -1787,6 +1799,85 @@ bool MagicFreeze::typeCheck(const MagicFunctionTypeCheckContext& ctx)
     {
         ctx.typechecker->reportError(CountMismatch{1, 1, ctx.callSite->args.size, CountMismatch::Arg, false, "table.freeze"}, ctx.callSite->location);
     }
+
+    return true;
+}
+
+// MagicClassFields overrides `class.fields`'s declared `({ [string]: unknown }, boolean)` return
+// with the precise per-field type map (and a literal `complete` boolean) when the argument is a
+// known class or object type, per rfcx/classes.md's "Type System" section.
+std::optional<WithPredicate<TypePackId>> MagicClassFields::handleOldSolver(
+    struct TypeChecker&,
+    const std::shared_ptr<struct Scope>&,
+    const class AstExprCall&,
+    WithPredicate<TypePackId>
+)
+{
+    return std::nullopt;
+}
+
+bool MagicClassFields::infer(const MagicFunctionCallContext& context)
+{
+    TypeArena* arena = context.solver->arena;
+    NotNull<BuiltinTypes> builtinTypes = context.solver->builtinTypes;
+
+    const auto& [paramTypes, paramTail] = flatten(context.arguments);
+    if (paramTypes.empty())
+        return false;
+
+    const ExternType* etv = get<ExternType>(follow(paramTypes[0]));
+    if (!etv)
+        return false;
+
+    // `etv` may either be the class (static) type or the object (instance) type. Fields only
+    // ever live on the instance type's props (see ConstraintGenerator's class handling); if we
+    // were handed the class type, its relation points (via Obj) at the corresponding instance
+    // type.
+    const ExternType* instanceEtv = etv;
+    if (etv->relation)
+    {
+        if (const Obj* obj = get_if<Obj>(&*etv->relation))
+            instanceEtv = get<ExternType>(follow(obj->ty));
+    }
+
+    if (!instanceEtv)
+        return false;
+
+    // `props` mixes fields and non-metamethod instance methods together; `ClassFieldUserData`
+    // (populated by ConstraintGenerator) is the authoritative list of which prop names are
+    // actually fields. If it's missing (e.g. an externally-declared `extern type` masquerading
+    // as a class), we have no reliable way to tell fields from methods, so bail out to the
+    // declared signature.
+    const ClassFieldUserData* fieldUserData = dynamic_cast<ClassFieldUserData*>(instanceEtv->userData.get());
+    if (!fieldUserData)
+        return false;
+
+    TableType::Props resultProps;
+    bool complete = true;
+
+    for (const auto& [name, prop] : instanceEtv->props)
+    {
+        if (fieldUserData->fieldNames.count(name) == 0)
+            continue;
+
+        if (!prop.readTy)
+            continue;
+
+        if (prop.isPrivate)
+        {
+            complete = false;
+            continue;
+        }
+
+        resultProps[name] = Property::readonly(*prop.readTy);
+    }
+
+    TypeId resultTableTy =
+        arena->addType(TableType{std::move(resultProps), std::nullopt, TypeLevel{}, context.constraint->scope.get(), TableState::Sealed});
+    TypeId completeTy = complete ? builtinTypes->trueType : builtinTypes->falseType;
+
+    TypePackId resultPack = arena->addTypePack({resultTableTy, completeTy});
+    asMutable(context.result)->ty.emplace<BoundTypePack>(resultPack);
 
     return true;
 }

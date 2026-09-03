@@ -414,6 +414,18 @@ typedef struct Proto
 
     void* userdata;
 
+    // Luau Classes (rfcx/classes.md): for a proto that is one of a class's own methods (including
+    // __init / __defaults) or is lexically nested anywhere inside one, the class it belongs to;
+    // NULL otherwise. Set (recursively, over the whole nested-proto tree) when the method closure is
+    // registered (luaR_addclassmember/luaR_stampownerclass) and GC-marked (traverseproto). Both the
+    // interpreter (luaR_closureownsprivateaccess) and native codegen use it to authorize
+    // private/const member access from inside the owning class's methods (and any closure nested in
+    // them) without needing to scan the class's static members: `object->lclass ==
+    // currentClosure->l.p->ownerclass` is exactly the "closure owns private access" test (method
+    // protos, and their nested protos, are unique per class), and const writes additionally require
+    // the closure to be the class's __init.
+    struct LuauClass* ownerclass;
+
     GCObject* gclist;
 
     int sizecode;
@@ -623,6 +635,48 @@ typedef struct LuauClass
     // the interpreter) and the number of instance members (branching on
     // instance or static members, creating class instances).
     uint32_t numberofallmembers;
+
+    // Set when this class defines a user `__init` method. When true, the
+    // class's constructor (`ClassName(...)`) calls `__init(self, ...)`
+    // instead of the default POD table-copy constructor.
+    bool hascustominit;
+
+    // The offset of `__init` in `staticmembers`, only meaningful when `hascustominit` is set.
+    // Used to find `__init`'s closure for the `const`-write brand check below.
+    uint32_t initoffset;
+
+    // Per-member attribute bits, indexed by the same offset as `offsettomember` (see
+    // LUAU_CLASSMEMBER_PRIVATE / LUAU_CLASSMEMBER_CONST in lclass.h). Owned by this class object;
+    // freed in luaR_freeclass.
+    uint8_t* memberflags;
+
+    // True if any entry in `memberflags` has LUAU_CLASSMEMBER_PRIVATE set. Lets the interpreter
+    // skip the private-access brand check entirely for classes with no private members, so public
+    // (the common case) access from outside the class costs nothing extra.
+    bool hasprivatemembers;
+
+    // True if any entry in `memberflags` has LUAU_CLASSMEMBER_CONST set. Same idea as
+    // `hasprivatemembers`, but for skipping the const-write check on SETTABLEKS.
+    bool hasconstmembers;
+
+    // True if any instance member has a default value expression (LBC_CLASSMEMBER_HASDEFAULT).
+    // Classes with a user-defined `__init` have their defaults inlined directly into `__init`'s
+    // bytecode by the compiler, so this flag goes unused on that path -- it's meaningful together
+    // with haspoddefaultsfn below, for the POD (no custom `__init`) constructor path.
+    bool hasdefaultmembers;
+
+    // True if this class has a synthesized `__defaults` static member: a niladic function,
+    // compiled alongside POD classes with at least one field default, that returns every field's
+    // default value (nil where unset) in declaration order. Only ever set when hasdefaultmembers
+    // is set and there's no custom `__init` (see hascustominit).
+    bool haspoddefaultsfn;
+
+    // The offset of `__defaults` in `staticmembers`, only meaningful when haspoddefaultsfn is set.
+    uint32_t poddefaultsoffset;
+
+    // Debug name of the constructor closure (e.g. "Foo() constructor"), shown
+    // in stack traces. Owned by this class object; freed in luaR_freeclass.
+    char* ctordebugname;
 
 } LuauClass;
 

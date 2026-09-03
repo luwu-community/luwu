@@ -15,6 +15,7 @@
 LUAU_FASTFLAG(LuauCodegenInteger3)
 LUAU_FASTFLAGVARIABLE(LuauCodegenBuilinDeadRange)
 LUAU_FASTFLAG(LuauBackedgeHeapCheck)
+LUAU_FASTFLAG(DebugLuauUserDefinedClassesRuntime)
 
 namespace Luau
 {
@@ -1777,6 +1778,91 @@ void translateInstGetTableKS(IrBuilder& build, const Instruction* pc, int pcpos)
         return;
     }
 
+    // Luau Classes (rfcx/classes.md): instance field access on an object, and static member access
+    // on a class. Gated strictly on the register's known bytecode type -- only a value the compiler
+    // has actually typed as an object/class takes these paths; anything else (including LBC_TYPE_ANY)
+    // falls through to ordinary table handling below. For a known object/class the tag is hard-
+    // guarded (deopt on miss) and the single relevant member path taken directly. Object access is
+    // the hot path (`self.field` inside a method); class access serves static members
+    // (`ClassName.method`). Both share the ordinary interpreter fallback for a stale slot cache.
+    //
+    // The three paths here are mutually exclusive (object and class return early), so `next` -- the
+    // continuation block for the following instruction -- is computed within whichever one runs
+    // rather than once up front; computing it up front would allocate a block the table path doesn't
+    // use, shifting every later block id.
+    if (bcTypes.a == LBC_TYPE_OBJECT)
+    {
+        IrOp next = build.blockAtInst(pcpos + 2);
+        IrOp objFallback = build.fallbackBlock(pcpos);
+
+        build.inst(IrCmd::CHECK_TAG, tb, build.constTag(LUA_TOBJECT), build.vmExit(pcpos));
+
+        IrOp vb = build.inst(IrCmd::LOAD_POINTER, build.vmReg(rb));
+        IrOp objAddr = build.inst(IrCmd::TRY_OBJECT_MEMBER_ADDR, vb, build.constUint(pcpos), build.vmConst(aux), objFallback);
+        IrOp objTv = build.inst(IrCmd::LOAD_TVALUE, objAddr);
+        build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), objTv);
+
+        FallbackStreamScope scope(build, objFallback, next);
+        build.inst(IrCmd::FALLBACK_GETTABLEKS, build.constUint(pcpos), build.vmReg(ra), build.vmReg(rb), build.vmConst(aux));
+        build.inst(IrCmd::JUMP, next);
+        return;
+    }
+
+    if (bcTypes.a == LBC_TYPE_CLASS)
+    {
+        IrOp next = build.blockAtInst(pcpos + 2);
+        IrOp classFallback = build.fallbackBlock(pcpos);
+
+        build.inst(IrCmd::CHECK_TAG, tb, build.constTag(LUA_TCLASS), build.vmExit(pcpos));
+
+        IrOp vc = build.inst(IrCmd::LOAD_POINTER, build.vmReg(rb));
+        IrOp classAddr = build.inst(IrCmd::TRY_CLASS_MEMBER_ADDR, vc, build.constUint(pcpos), build.vmConst(aux), classFallback);
+        IrOp classTv = build.inst(IrCmd::LOAD_TVALUE, classAddr);
+        build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), classTv);
+
+        FallbackStreamScope scope(build, classFallback, next);
+        build.inst(IrCmd::FALLBACK_GETTABLEKS, build.constUint(pcpos), build.vmReg(ra), build.vmReg(rb), build.vmConst(aux));
+        build.inst(IrCmd::JUMP, next);
+        return;
+    }
+
+    // Unknown receiver (ANY): objects are a co-equal speculation with tables, mirroring the
+    // interpreter's `ttistable ... else ttisobject` dispatch. Branch on the tag -- object takes the
+    // inline member path, anything else falls into the table path -- so untyped object field reads
+    // avoid the interpreter trampoline without regressing table receivers.
+    if (FFlag::DebugLuauUserDefinedClassesRuntime && bcTypes.a == LBC_TYPE_ANY)
+    {
+        IrOp next = build.blockAtInst(pcpos + 2);
+        IrOp fallback = build.fallbackBlock(pcpos);
+        IrOp objBlock = build.block(IrBlockKind::Internal);
+        IrOp tableBlock = build.block(IrBlockKind::Internal);
+
+        build.inst(IrCmd::JUMP_EQ_TAG, tb, build.constTag(LUA_TOBJECT), objBlock, tableBlock);
+
+        build.beginBlock(objBlock);
+        IrOp vbo = build.inst(IrCmd::LOAD_POINTER, build.vmReg(rb));
+        IrOp objAddr = build.inst(IrCmd::TRY_OBJECT_MEMBER_ADDR, vbo, build.constUint(pcpos), build.vmConst(aux), fallback);
+        IrOp objTv = build.inst(IrCmd::LOAD_TVALUE, objAddr);
+        build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), objTv);
+        build.inst(IrCmd::JUMP, next);
+
+        build.beginBlock(tableBlock);
+        build.inst(IrCmd::CHECK_TAG, tb, build.constTag(LUA_TTABLE), fallback);
+        IrOp vbt = build.inst(IrCmd::LOAD_POINTER, build.vmReg(rb));
+        IrOp addrSlotElT = build.inst(IrCmd::GET_SLOT_NODE_ADDR, vbt, build.constUint(pcpos), build.vmConst(aux));
+        build.inst(IrCmd::CHECK_SLOT_MATCH, addrSlotElT, build.vmConst(aux), fallback);
+        IrOp tvnT = build.inst(IrCmd::LOAD_TVALUE, addrSlotElT, build.constInt(offsetof(LuaNode, val)));
+        build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), tvnT);
+        build.inst(IrCmd::JUMP, next);
+
+        build.beginBlock(fallback);
+        build.inst(IrCmd::FALLBACK_GETTABLEKS, build.constUint(pcpos), build.vmReg(ra), build.vmReg(rb), build.vmConst(aux));
+        build.inst(IrCmd::JUMP, next);
+
+        build.beginBlock(next);
+        return;
+    }
+
     IrOp fallback = build.fallbackBlock(pcpos);
 
     build.inst(IrCmd::CHECK_TAG, tb, build.constTag(LUA_TTABLE), bcTypes.a == LBC_TYPE_TABLE ? build.vmExit(pcpos) : fallback);
@@ -1814,6 +1900,77 @@ void translateInstSetTableKS(IrBuilder& build, const Instruction* pc, int pcpos)
         build.inst(IrCmd::CHECK_TAG, tb, build.constTag(LUA_TUSERDATA), build.vmExit(pcpos));
 
         build.inst(IrCmd::FALLBACK_SETTABLEKS, build.constUint(pcpos), build.vmReg(ra), build.vmReg(rb), build.vmConst(aux));
+        return;
+    }
+
+    // Luau Classes (rfcx/classes.md): writing an instance field on an object, e.g. `self.x = ...`.
+    //
+    // This path fires only when the compiler has actually typed the receiver as an object which can happen
+    // in simple cases but is rare. We guard against tag here; if wrong we deopt.
+    // Every other receiver type -- including the untyped LBC_TYPE_ANY case handled just below 
+    // -- uses ordinary table handling instead.
+    //
+    // Only one of these paths runs (the object path returns early), so we don't allocate the
+    // continuation block `next` until we're inside the path that needs it. Allocating it up front
+    // would reserve a block the table path never uses and renumber every block after it.
+    if (bcTypes.a == LBC_TYPE_OBJECT)
+    {
+        IrOp next = build.blockAtInst(pcpos + 2);
+        IrOp objFallback = build.fallbackBlock(pcpos);
+
+        build.inst(IrCmd::CHECK_TAG, tb, build.constTag(LUA_TOBJECT), build.vmExit(pcpos));
+
+        IrOp vb = build.inst(IrCmd::LOAD_POINTER, build.vmReg(rb));
+        // write mode (op E = 1): enforce const in addition to private (see emitClassMemberAuthX64)
+        IrOp objAddr = build.inst(IrCmd::TRY_OBJECT_MEMBER_ADDR, vb, build.constUint(pcpos), build.vmConst(aux), objFallback, build.constUint(1));
+
+        IrOp objTva = build.inst(IrCmd::LOAD_TVALUE, build.vmReg(ra));
+        build.inst(IrCmd::STORE_TVALUE, objAddr, objTva);
+        build.inst(IrCmd::BARRIER_OBJ, vb, build.vmReg(ra), build.undef());
+
+        FallbackStreamScope scope(build, objFallback, next);
+        build.inst(IrCmd::FALLBACK_SETTABLEKS, build.constUint(pcpos), build.vmReg(ra), build.vmReg(rb), build.vmConst(aux));
+        build.inst(IrCmd::JUMP, next);
+        return;
+    }
+
+    // treat objects as co-equal with classes to benefit from LBC_TYPE_ANY
+    // we also need to do this so untyped objects don't fall into the table path and get sent back to interpreter
+    if (FFlag::DebugLuauUserDefinedClassesRuntime && bcTypes.a == LBC_TYPE_ANY)
+    {
+        IrOp next = build.blockAtInst(pcpos + 2);
+        IrOp fallback = build.fallbackBlock(pcpos);
+        IrOp objBlock = build.block(IrBlockKind::Internal);
+        IrOp tableBlock = build.block(IrBlockKind::Internal);
+
+        build.inst(IrCmd::JUMP_EQ_TAG, tb, build.constTag(LUA_TOBJECT), objBlock, tableBlock);
+
+        build.beginBlock(objBlock);
+        IrOp vbo = build.inst(IrCmd::LOAD_POINTER, build.vmReg(rb));
+        // write mode (op E = 1): enforce const in addition to private (see emitClassMemberAuthX64)
+        IrOp objAddr = build.inst(IrCmd::TRY_OBJECT_MEMBER_ADDR, vbo, build.constUint(pcpos), build.vmConst(aux), fallback, build.constUint(1));
+        IrOp objTva = build.inst(IrCmd::LOAD_TVALUE, build.vmReg(ra));
+        build.inst(IrCmd::STORE_TVALUE, objAddr, objTva);
+        build.inst(IrCmd::BARRIER_OBJ, vbo, build.vmReg(ra), build.undef());
+        build.inst(IrCmd::JUMP, next);
+
+        // duplicating table fallback logic to not touch existing code outside classes feature
+        build.beginBlock(tableBlock);
+        build.inst(IrCmd::CHECK_TAG, tb, build.constTag(LUA_TTABLE), fallback);
+        IrOp vbt = build.inst(IrCmd::LOAD_POINTER, build.vmReg(rb));
+        IrOp addrSlotElT = build.inst(IrCmd::GET_SLOT_NODE_ADDR, vbt, build.constUint(pcpos), build.vmConst(aux));
+        build.inst(IrCmd::CHECK_SLOT_MATCH, addrSlotElT, build.vmConst(aux), fallback);
+        build.inst(IrCmd::CHECK_READONLY, vbt, fallback);
+        IrOp tvaT = build.inst(IrCmd::LOAD_TVALUE, build.vmReg(ra));
+        build.inst(IrCmd::STORE_TVALUE, addrSlotElT, tvaT, build.constInt(offsetof(LuaNode, val)));
+        build.inst(IrCmd::BARRIER_TABLE_FORWARD, vbt, build.vmReg(ra), build.undef());
+        build.inst(IrCmd::JUMP, next);
+
+        build.beginBlock(fallback);
+        build.inst(IrCmd::FALLBACK_SETTABLEKS, build.constUint(pcpos), build.vmReg(ra), build.vmReg(rb), build.vmConst(aux));
+        build.inst(IrCmd::JUMP, next);
+
+        build.beginBlock(next);
         return;
     }
 
@@ -1983,6 +2140,55 @@ bool translateInstNamecall(IrBuilder& build, const Instruction* pc, int pcpos)
 
     IrOp next = build.blockAtInst(pcpos + getOpLength(LuauOpcode(LOP_NAMECALL)));
     IrOp fallback = build.fallbackBlock(pcpos);
+
+    // Luau Classes (rfcx/classes.md): method resolution on an object receiver (`self:method()`).
+    // Resolve the method address inline from the class members using the cached slot, store method
+    // into ra and self into ra+1, then fall through to CALL -- avoiding an interpreter trampoline.
+    auto emitObjectNamecall = [&]()
+    {
+        IrOp obj = build.inst(IrCmd::LOAD_POINTER, build.vmReg(rb));
+        IrOp addr = build.inst(IrCmd::TRY_OBJECT_NAMECALL_ADDR, obj, build.constUint(pcpos), build.vmConst(aux), fallback);
+
+        build.inst(IrCmd::STORE_POINTER, build.vmReg(ra + 1), obj);
+        build.inst(IrCmd::STORE_TAG, build.vmReg(ra + 1), build.constTag(LUA_TOBJECT));
+
+        IrOp method = build.inst(IrCmd::LOAD_TVALUE, addr);
+        build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), method);
+        build.inst(IrCmd::JUMP, next);
+    };
+
+    // Statically known object: hard-guard the tag (deopt on miss) and take the object path directly.
+    if (bcTypes.a == LBC_TYPE_OBJECT)
+    {
+        build.loadAndCheckTag(build.vmReg(rb), LUA_TOBJECT, build.vmExit(pcpos));
+        emitObjectNamecall();
+
+        build.beginBlock(fallback);
+        build.inst(IrCmd::FALLBACK_NAMECALL, build.constUint(pcpos), build.vmReg(ra), build.vmReg(rb), build.vmConst(aux));
+        build.inst(IrCmd::JUMP, next);
+
+        build.beginBlock(next);
+        return false;
+    }
+
+    // Unknown receiver (ANY): the hottest object method calls come from receivers the compiler can't
+    // type as objects (indexing a plain table, generic-for over a table field). Speculatively branch
+    // on the tag -- object takes the inline member path, anything else falls into the table path below
+    // -- so those calls avoid the interpreter trampoline without regressing table receivers.
+    if (FFlag::DebugLuauUserDefinedClassesRuntime && bcTypes.a == LBC_TYPE_ANY)
+    {
+        IrOp objBlock = build.block(IrBlockKind::Internal);
+        IrOp tableBlock = build.block(IrBlockKind::Internal);
+
+        IrOp tag = build.inst(IrCmd::LOAD_TAG, build.vmReg(rb));
+        build.inst(IrCmd::JUMP_EQ_TAG, tag, build.constTag(LUA_TOBJECT), objBlock, tableBlock);
+
+        build.beginBlock(objBlock);
+        emitObjectNamecall();
+
+        build.beginBlock(tableBlock);
+    }
+
     IrOp firstFastPathSuccess = build.block(IrBlockKind::Internal);
     IrOp secondFastPath = build.block(IrBlockKind::Internal);
 
@@ -2139,6 +2345,59 @@ void translateInstCmpProto(IrBuilder& build, const Instruction* pc, int pcpos)
     // Fallthrough in original bytecode is implicit, so we start next internal block here
     if (build.isInternalBlock(next))
         build.beginBlock(next);
+}
+
+void translateInstJumpXIsa(IrBuilder& build, const Instruction* pc, int pcpos)
+{
+    // Luau Classes (rfcx/classes.md): fused class.isinstance(value, class) test-and-branch. The class
+    // register is guaranteed by the compiler to hold a class, so no tag guard is needed here.
+    int ra = LUAU_INSN_A(*pc);
+    uint32_t aux = pc[1];
+    int classReg = aux & 0xff;
+    bool jumpIfInstance = (aux >> 31) != 0;
+
+    IrOp target = build.blockAtInst(pcpos + 1 + LUAU_INSN_D(*pc));
+    IrOp next = build.blockAtInst(pcpos + 2);
+
+    IrOp valueTag = build.inst(IrCmd::LOAD_TAG, build.vmReg(ra));
+    IrOp valuePtr = build.inst(IrCmd::LOAD_POINTER, build.vmReg(ra));
+    IrOp classPtr = build.inst(IrCmd::LOAD_POINTER, build.vmReg(classReg));
+
+    IrOp isInstance = build.inst(IrCmd::CLASS_ISINSTANCE, valueTag, valuePtr, classPtr);
+
+    build.inst(
+        IrCmd::JUMP_CMP_INT, isInstance, build.constInt(jumpIfInstance ? 1 : 0), build.cond(IrCondition::Equal), target, next
+    );
+
+    // Fallthrough in original bytecode is implicit, so we start next internal block here
+    if (build.isInternalBlock(next))
+        build.beginBlock(next);
+}
+
+void translateInstCheckSelfClass(IrBuilder& build, const Instruction* pc, int pcpos)
+{
+    int selfReg = LUAU_INSN_A(*pc);
+    int classReg = LUAU_INSN_B(*pc);
+    int skip = LUAU_INSN_C(*pc);
+
+    // On success (self is an instance of the class), the bytecode jumps forward past the inline
+    // `error(...)` fallback that follows; on failure it falls through directly into that fallback.
+    IrOp success = build.blockAtInst(pcpos + 1 + skip);
+    IrOp fail = build.blockAtInst(pcpos + 1);
+    IrOp checkClass = build.block(IrBlockKind::Internal);
+
+    IrOp selfTag = build.inst(IrCmd::LOAD_TAG, build.vmReg(selfReg));
+    build.inst(IrCmd::JUMP_EQ_TAG, selfTag, build.constTag(LUA_TOBJECT), checkClass, fail);
+
+    build.beginBlock(checkClass);
+    IrOp selfPtr = build.inst(IrCmd::LOAD_POINTER, build.vmReg(selfReg));
+    IrOp classPtr = build.inst(IrCmd::LOAD_POINTER, build.vmReg(classReg));
+    build.inst(IrCmd::CHECK_OBJECT_CLASS, selfPtr, classPtr, fail);
+    build.inst(IrCmd::JUMP, success);
+
+    // Fallthrough in original bytecode is implicit, so we start the fail block here
+    if (build.isInternalBlock(fail))
+        build.beginBlock(fail);
 }
 
 } // namespace CodeGen
