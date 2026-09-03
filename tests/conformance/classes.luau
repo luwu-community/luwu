@@ -1284,4 +1284,68 @@ expectpass("yielding __init: abandoning construction mid-yield does not corrupt 
     collectgarbage()
 end)
 
+-- Private-member access from a closure lexically nested inside a class method (see
+-- luaR_stampownerclass in VM/src/lclass.cpp): the nested closure gets its own Proto, distinct from
+-- the method's, but should still be authorized since it's lexically part of the method body.
+class NestedAccessCat
+    public name: string
+    private unique_id: number
+
+    public function __init(self, name: string)
+        self.name = name
+        self.unique_id = 12000
+    end
+
+    public function meow(self)
+        -- direct access from the method itself
+        local direct = self.unique_id
+        -- access from an immediately-invoked nested closure
+        local viaIife = (function()
+            return self.unique_id
+        end)()
+        -- access from a closure nested two levels deep
+        local viaDeeplyNested = (function()
+            return (function()
+                return self.unique_id
+            end)()
+        end)()
+        return direct, viaIife, viaDeeplyNested
+    end
+
+    -- a nested closure that escapes the method entirely; access should still be authorized
+    -- whenever it's eventually called, since authorization is keyed off the proto, not dynamic
+    -- call context
+    public function makeGetter(self)
+        return function()
+            return self.unique_id
+        end
+    end
+end
+
+expectpass("private member access from a closure nested directly inside a method", function()
+    local cat = NestedAccessCat("Taz")
+    local direct, viaIife, viaDeeplyNested = cat:meow()
+    assert(direct == 12000)
+    assert(viaIife == 12000)
+    assert(viaDeeplyNested == 12000)
+end)
+
+expectpass("private member access from a nested closure that escapes and is called later", function()
+    local cat = NestedAccessCat("Taz")
+    local getter = cat:makeGetter()
+    assert(getter() == 12000)
+end)
+
+expectfail(
+    "private member access from a closure that is NOT lexically nested inside any class method is still rejected",
+    "'unique_id' is a private member of 'NestedAccessCat', it cannot be accessed outside NestedAccessCat's class scope",
+    function()
+        local cat = NestedAccessCat("Taz")
+        local function outsideClosure()
+            return cat.unique_id
+        end
+        outsideClosure()
+    end
+)
+
 return 'OK'

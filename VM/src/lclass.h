@@ -38,15 +38,17 @@ LUAI_FUNC LuauClass* luaR_newclass(
 LUAI_FUNC bool luaR_closureisinit(const LuauClass* classdef, const Closure* cl);
 
 /**
- * Returns true if `cl` is one of `classdef`'s own method closures (including `__init`), ie
- * code that is lexically part of the class's own definition block. Used to allow private-member
- * access, and (via luaR_closureisinit) const-member writes.
+ * Returns true if `cl` is one of `classdef`'s own method closures (including `__init`), or a
+ * closure lexically nested anywhere inside one -- ie code that is lexically part of the class's
+ * own definition block. Used to allow private-member access, and (via luaR_closureisinit)
+ * const-member writes.
  *
- * We check closure identity (not source location or Proto) because a class's method closures are
- * created exactly once, when the class statement itself runs, and closure identity can't be
+ * We check `cl`'s Proto::ownerclass rather than source location because a class's method protos
+ * (and everything nested inside them) are stamped with the owning class exactly once, when the
+ * class statement itself runs (see luaR_addclassmember / luaR_stampownerclass), and that can't be
  * spoofed by calling a method via `.`-syntax with a mismatched `self` (e.g.
  * `SomeClass.method(notAnInstance)`) -- the field access still happens from within that same
- * closure regardless of what `self` was passed in.
+ * proto regardless of what `self` was passed in.
  */
 LUAI_FUNC bool luaR_closureownsprivateaccess(const LuauClass* classdef, const Closure* cl);
 

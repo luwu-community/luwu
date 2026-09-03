@@ -98,18 +98,10 @@ bool luaR_closureisinit(const LuauClass* classdef, const Closure* cl)
 
 bool luaR_closureownsprivateaccess(const LuauClass* classdef, const Closure* cl)
 {
-    if (cl->isC)
-        return false;
-
-    uint32_t numstaticmembers = classdef->numberofallmembers - classdef->numberofinstancemembers;
-    for (uint32_t i = 0; i < numstaticmembers; i++)
-    {
-        const TValue* v = &classdef->staticmembers[i];
-        if (ttisfunction(v) && clvalue(v) == cl)
-            return true;
-    }
-
-    return false;
+    // Since we're adding a property to keep track of class ownership to every single function proto
+    // for ncg lowering let's just use that prop. covers all closures lexically scoped inside
+    // private access owning closure as well.
+    return !cl->isC && cl->l.p->ownerclass == classdef;
 }
 
 void luaR_checkprivateaccess(lua_State* L, const TValue* key, const LuauClass* classdef, const Closure* cl, uint32_t offset)
@@ -140,6 +132,17 @@ void luaR_checkconstassign(lua_State* L, const TValue* key, const LuauClass* cla
     luaG_constassignerror(L, key, classdef->name);
 }
 
+// Stamps `ownerclass` recursively on function proto `p` and every function proto lexically nested
+// within it.
+static void luaR_stampownerclass(lua_State* L, Proto* p, LuauClass* classdef)
+{
+    p->ownerclass = classdef;
+    luaC_objbarrier(L, p, classdef);
+
+    for (int i = 0; i < p->sizep; i++)
+        luaR_stampownerclass(L, p->p[i], classdef);
+}
+
 void luaR_addclassmember(lua_State* L, LuauClass* classdef, TString* name, TValue* value)
 {
     LUAU_ASSERT(classdef->staticmembers != nullptr);
@@ -150,12 +153,12 @@ void luaR_addclassmember(lua_State* L, LuauClass* classdef, TString* name, TValu
     setobj2class(L, &classdef->staticmembers[offsetint - classdef->numberofinstancemembers], value);
     luaC_barrier(L, classdef, value);
 
-    // Stamp the method's proto with its owning class so native codegen can authorize private/const
-    // access from inside the class's own methods (see Proto::ownerclass). Only Lua closures carry a
-    // proto; C closures (e.g. the default __init) never take the private/const fast path anyway.
+    // Stamp this function/method's proto (and any function lexically within it) with info about
+    // the owning class so NCG and interpreter can authorize private access from any function lexically
+    // scoped within the class. 
     Closure* mcl = clvalue(value);
     if (!mcl->isC)
-        mcl->l.p->ownerclass = classdef;
+        luaR_stampownerclass(L, mcl->l.p, classdef);
 
     if (name == luaS_newlstr(L, "__init", 6))
     {
