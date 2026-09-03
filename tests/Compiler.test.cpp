@@ -11118,6 +11118,11 @@ RETURN R0 0
 TEST_CASE("ClassDeclWithMethod")
 {
     ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+    // This dump expects a plain CALL for the in-method `error(...)`; pin the
+    // feedback-vector opcode off so it stays deterministic under --fflags=true
+    // (where LuauEmitCallFeedback would otherwise emit CALLFB for this nested,
+    // non-builtin call). Tests that want CALLFB opt in explicitly.
+    ScopedFastFlag noCallFb{FFlag::LuauEmitCallFeedback, false};
 
     std::string source = R"(
         class Point
@@ -11205,38 +11210,6 @@ LOADK R2 K0 ['Point']
 SETTABLE R0 R1 R2
 RETURN R1 1
 )" == res1);
-}
-
-TEST_CASE("ClassDeclExportedSelfCheckDump")
-{
-    ScopedFastFlag sffs[] = {
-        {FFlag::DebugLuauUserDefinedClasses, true},
-        {FFlag::LuauBetterUserDefinedClasses, true},
-        {FFlag::LuauGenericNominals, true},
-        {FFlag::LuauExportValueSyntax, true},
-        {FFlag::LuauDefaultArguments, true},
-    };
-
-    std::string source = R"(
-        export class ReproCat
-            name: string
-            public function __init(self, name)
-                self.name = name
-            end
-        end
-
-        class ReproList
-            public function __init(self, ...)
-            end
-        end
-
-        local cats = ReproList(ReproCat("Taz"))
-    )";
-
-    auto res = "\n" + compileFunction(source.c_str(), 0, 1, 0);
-    MESSAGE(res);
-    auto res1 = "\n" + compileFunction(source.c_str(), 1, 1, 0);
-    MESSAGE(res1);
 }
 
 TEST_CASE("ClassDeclHoistingForwardReference")

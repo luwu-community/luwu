@@ -2001,6 +2001,20 @@ NormalizationResult Normalizer::unionNormalWithTy(
 
 // ------- Negations
 
+static TypeId findRootOfNominalType(TypeId ty)
+{
+    const ExternType* etv = get<ExternType>(ty);
+    LUAU_ASSERT(etv);
+    while (etv->parent)
+    {
+        ty = *etv->parent;
+        etv = get<ExternType>(ty);
+        LUAU_ASSERT(etv);
+    }
+    return ty;
+}
+
+
 std::optional<NormalizedType> Normalizer::negateNormal(const NormalizedType& here)
 {
     consumeFuel();
@@ -2045,19 +2059,23 @@ std::optional<NormalizedType> Normalizer::negateNormal(const NormalizedType& her
     }
     else
     {
-        TypeIds rootNegations{};
+        // need to ensure extern types that actually refer to 'objects' remain
+        // rooted to 'object' instead of 'userdata' now that externtype can refer
+        // to either an object of a class or an actual extern type userdata
+        std::map<TypeId, TypeIds> negationsByRoot;
 
         for (const auto& [hereParent, hereNegations] : here.externTypes.externTypes)
         {
-            if (hereParent != builtinTypes->externType)
-                rootNegations.insert(hereParent);
+            TypeId root = findRootOfNominalType(hereParent);
+            if (hereParent != root)
+                negationsByRoot[root].insert(hereParent);
 
             for (TypeId hereNegation : hereNegations)
                 unionExternTypesWithExternType(result.externTypes, hereNegation);
         }
 
-        if (!rootNegations.empty())
-            result.externTypes.pushPair(builtinTypes->externType, std::move(rootNegations));
+        for (auto& [root, negations] : negationsByRoot)
+            result.externTypes.pushPair(root, std::move(negations));
     }
 
     result.nils = get<NeverType>(here.nils) ? builtinTypes->nilType : builtinTypes->neverType;

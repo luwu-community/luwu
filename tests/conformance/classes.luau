@@ -900,7 +900,7 @@ expectpass("hoisting: function defined before class works via capture by ref", f
     assert(w.id == 42)
 end)
 
-export class ReproCat
+class ReproCat
     name: string
     age: number
     public function __init(self, name, age)

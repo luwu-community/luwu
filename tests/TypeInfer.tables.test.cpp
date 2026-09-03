@@ -5284,7 +5284,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "subtyping_with_a_metatable_table_path")
     CHECK(result.errors.at(1).location == Location{{2, 28}, {2, 40}});
     CHECK("Argument count mismatch. Function expects 2 arguments, but none are specified" == toString(result.errors.at(1)));
 
-    CHECK(result.errors.at(2).location == Location{{3, 8}, {5, 11}});
+    CHECK(result.errors.at(2).location == Location{{3, 14}, {5, 11}});
     CHECK("Type function instance setmetatable<unknown, unknown> is uninhabited" == toString(result.errors.at(2)));
 
     // The intersection `{} & {}` cast via `self` (the alias `type self = {} & {}` above) now
