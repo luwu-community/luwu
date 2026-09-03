@@ -966,7 +966,8 @@ TEST_CASE_FIXTURE(ClassesFixture, "class_refers_to_later_type_alias")
         end
     )"));
 
-    CHECK_EQ("(Foo) -> number | string", toString(requireType("getbar")));
+    // BarType is a named type alias referenced (not expanded) in the return position.
+    CHECK_EQ("(Foo) -> BarType", toString(requireType("getbar")));
 }
 
 TEST_CASE_FIXTURE(ClassesFixture, "accept_read_only_tables")

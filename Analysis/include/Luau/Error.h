@@ -42,6 +42,12 @@ struct TypeMismatch
     std::string reason;
     std::shared_ptr<TypeError> error;
 
+    // When set, overrides the generic "Expected this to be" preamble with a more specific
+    // phrase (e.g. "this function to return"), so the message reads "Expected this function to
+    // return 'X' but got 'Y'" instead of leaving the reader to infer context from the reason
+    // text alone. Not part of any constructor; set directly on the constructed value.
+    std::optional<std::string> contextVerb;
+
     bool operator==(const TypeMismatch& rhs) const;
 };
 

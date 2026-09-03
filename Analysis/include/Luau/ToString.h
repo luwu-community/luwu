@@ -49,6 +49,18 @@ struct ToStringOptions
     bool hideTableAliasExpansions = false;        // If true, all table aliases will not be expanded
     bool useQuestionMarks = true;                 // If true, use a postfix ? for options, else write them out as unions that include nil.
     bool ignoreSyntheticName = false;             // If true, ignore synthetic names on table types.
+    // If true, a `whereClauses` trailing section is populated in ToStringResult with a one-level
+    // expansion of each named type (table/union/intersection/function alias) referenced (but not
+    // itself the root) while printing this type, e.g. "where Metadata = { ... }".
+    bool includeWhereClauses = false;
+    // If true, a named TableType/MetatableType at the *root* of a toStringDetailed call expands to
+    // its structure instead of short-circuiting to its own name (union/intersection/function types
+    // already behave this way unconditionally - see TypeStringifier's per-Type operator()
+    // overloads). Off by default so existing callers that want the compact `Alias<T>`-style root
+    // display (e.g. hovering a type alias declaration itself) are unaffected; turn this on for
+    // callers that are instead displaying the type of a *value* (a hover over a variable, say),
+    // where showing the alias's own name back at the reader (`const fs: fs.fs`) is useless.
+    bool alwaysExpandRootAlias = false;
     size_t maxTableLength = size_t(FInt::LuauTableTypeMaximumStringifierLength); // Only applied to TableTypes
     size_t maxTypeLength = size_t(FInt::LuauTypeMaximumStringifierLength);
     size_t compositeTypesSingleLineLimit = 5; // The number of type elements permitted on a single line when printing type unions/intersections
@@ -70,6 +82,11 @@ struct ToStringResult
 
     // Records which TypeId produced each substring of the output. Only recorded for named types
     std::vector<ToStringSpan> typeSpans;
+
+    // Populated only when ToStringOptions::includeWhereClauses is set: a one-level expansion of
+    // each named type referenced while printing `name`, formatted as one "where X = ..." line per
+    // referenced alias. Empty if nothing was referenced or the option was off.
+    std::string whereClauses;
 
     bool invalid = false;
     bool error = false;

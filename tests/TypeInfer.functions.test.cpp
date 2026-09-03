@@ -62,7 +62,9 @@ TEST_CASE_FIXTURE(Fixture, "overload_resolution")
     const FunctionType* fooType = get<FunctionType>(requireType("foo"));
     REQUIRE(fooType != nullptr);
 
-    CHECK(toString(t) == "(((number) -> string) & ((string) -> number)) -> (string, number)");
+    // A and B are named type aliases referenced (not aliased themselves) in `foo`'s parameter
+    // position, so they now print by name rather than being expanded inline every time.
+    CHECK(toString(t) == "(A & B) -> (string, number)");
 }
 
 TEST_CASE_FIXTURE(Fixture, "tc_function")

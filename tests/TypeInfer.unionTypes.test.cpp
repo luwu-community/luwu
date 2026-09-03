@@ -379,7 +379,7 @@ TEST_CASE_FIXTURE(Fixture, "optional_call_error")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    CHECK_EQ("Value of type '((number) -> number)?' could be nil", toString(result.errors[0]));
+    CHECK_EQ("Value of type 'A?' could be nil", toString(result.errors[0]));
 }
 
 TEST_CASE_FIXTURE(Fixture, "optional_assignment_errors")
@@ -406,7 +406,7 @@ TEST_CASE_FIXTURE(Fixture, "optional_assignment_errors_2")
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     auto s = toString(result.errors[0]);
-    CHECK_EQ("Value of type '({ x: number } & { y: number })?' could be nil", s);
+    CHECK_EQ("Value of type 'A?' could be nil", s);
 }
 
 TEST_CASE_FIXTURE(Fixture, "optional_length_error")
@@ -539,9 +539,9 @@ end
             toString(result.errors[0]),
             "Expected this to be '{ w: number }', but got 'X | Y | Z'; \n"
             "this is because \n\t"
-            " * the 1st component of the union is `X`, which is not a subtype of `{ w: number }`\n\t"
-            " * the 2nd component of the union is `Y`, which is not a subtype of `{ w: number }`\n\t"
-            " * the 3rd component of the union is `Z`, which is not a subtype of `{ w: number }`"
+            " * `X` is not a subtype of `{ w: number }`\n\t"
+            " * `Y` is not a subtype of `{ w: number }`\n\t"
+            " * `Z` is not a subtype of `{ w: number }`"
         );
     }
     else

@@ -169,7 +169,8 @@ TEST_CASE_FIXTURE(Fixture, "overloaded_function_resolution_singleton_parameters"
     const FunctionType* fooType = get<FunctionType>(requireType("foo"));
     REQUIRE(fooType != nullptr);
 
-    CHECK(toString(t) == "(((\"A\") -> string) & ((\"B\") -> number)) -> (string, number)");
+    // A and B are named type aliases referenced (not expanded) in the parameter position.
+    CHECK(toString(t) == "(A & B) -> (string, number)");
 }
 
 TEST_CASE_FIXTURE(Fixture, "overloaded_function_call_with_singletons_mismatch")

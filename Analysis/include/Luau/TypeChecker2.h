@@ -34,6 +34,13 @@ struct Reasonings
     // this should be true if _all_ of the reasons have an error suppressing type, and false otherwise.
     bool suppressed;
 
+    // When every reasoning shares the same top-level context (e.g. all of them are about a
+    // function's return type, or all about its arguments), a short phrase describing that
+    // context (e.g. "this function to return"), for use in place of the generic "this to be" in
+    // the enclosing TypeMismatch preamble. Unset when reasonings disagree on context or don't
+    // originate from a recognized one.
+    std::optional<std::string> contextVerb;
+
     std::string toString()
     {
         if (reasons.empty())
@@ -43,6 +50,13 @@ struct Reasonings
         // sort the reasons here to achieve a stable error
         // stringification.
         std::sort(reasons.begin(), reasons.end());
+
+        // Dropping path narration (see explainReasonings_) means multiple distinct reasoning
+        // entries can end up rendering to the exact same text (e.g. two different union/pack
+        // slots that both boil down to "`nil` is not a subtype of `number`") -- printing the
+        // same line twice is just noise, so collapse them.
+        reasons.erase(std::unique(reasons.begin(), reasons.end()), reasons.end());
+
         std::string allReasons = reasons.size() < 2 ? "\n" : "\nthis is because ";
         for (const std::string& reason : reasons)
         {

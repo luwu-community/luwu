@@ -25,6 +25,7 @@ LUAU_DYNAMIC_FASTINTVARIABLE(LuauUnifierRecursionLimit, 100)
 
 LUAU_FASTFLAGVARIABLE(LuauLimitUnificationRecursion)
 LUAU_FASTFLAG(LuauHigherOrderGenericInference)
+LUAU_FASTFLAG(LuauGenericNominals)
 
 namespace Luau
 {
@@ -88,6 +89,33 @@ static bool areCompatible(TypeId left, TypeId right)
     }
 
     return true;
+}
+
+static bool sameNominalExternTypeRoot(const ExternType* a, const ExternType* b)
+{
+    return a->name == b->name && a->definitionModuleName == b->definitionModuleName && a->definitionLocation == b->definitionLocation;
+}
+
+// Returns true if `sub` and `sup` form a genuine, meaningful pairing for union-member matching
+// purposes -- currently, two ExternTypes stemming from the same generic nominal declaration (see
+// LuauGenericNominals). This is stricter than `areCompatible`, which only rules out impossible
+// pairings; this instead identifies pairings that should be preferred over unifying `sub` against
+// an unrelated free/generic catch-all member of the same union.
+static bool isGenuineUnionMatch(TypeId sub, TypeId sup)
+{
+    sub = follow(sub);
+    sup = follow(sup);
+
+    if (get<FreeType>(sub) || get<FreeType>(sup) || get<GenericType>(sub) || get<GenericType>(sup))
+        return false;
+
+    if (const ExternType* subEt = get<ExternType>(sub))
+    {
+        const ExternType* supEt = get<ExternType>(sup);
+        return supEt && sameNominalExternTypeRoot(subEt, supEt);
+    }
+
+    return false;
 }
 
 // returns `true` if `ty` is irresolvable and should be added to `incompleteSubtypes`.
@@ -279,6 +307,11 @@ UnifyResult Unifier2::unify_(TypeId subTy, TypeId superTy)
         return unify_(subTable, superTable);
     }
 
+    auto subExternType = get<ExternType>(subTy);
+    auto superExternType = get<ExternType>(superTy);
+    if (FFlag::LuauGenericNominals && subExternType && superExternType)
+        return unify_(subExternType, superExternType);
+
     auto subMetatable = get<MetatableType>(subTy);
     auto superMetatable = get<MetatableType>(superTy);
     if (subMetatable && superMetatable)
@@ -460,11 +493,32 @@ UnifyResult Unifier2::unify_(TypeId subTy, const UnionType* superUnion)
             return UnifyResult::Ok;
     }
 
+    // Prefer a genuine structural/nominal match over unifying against an unrelated free/generic
+    // catch-all union member. Without this, e.g. matching `error<FileIoError>` against
+    // `T | error<E>` would also unify it against the free type standing in for the unrelated `T`
+    // (since a bare free type is trivially "compatible" with anything), polluting `T`'s lower
+    // bound with a union member that should only have constrained `E`.
+    bool hasGenuineMatch = false;
+    if (FFlag::LuauGenericNominals)
+    {
+        for (auto superOption : superUnion->options)
+        {
+            if (isGenuineUnionMatch(subTy, superOption))
+            {
+                hasGenuineMatch = true;
+                break;
+            }
+        }
+    }
+
     UnifyResult result = UnifyResult::Ok;
 
     // if the occurs check fails for any option, it fails overall
     for (auto superOption : superUnion->options)
     {
+        if (hasGenuineMatch && !isGenuineUnionMatch(subTy, superOption))
+            continue;
+
         if (areCompatible(subTy, superOption))
             result &= unify_(subTy, superOption);
     }
@@ -578,6 +632,42 @@ UnifyResult Unifier2::unify_(TableType* subTable, const TableType* superTable)
             indexResultType = *subst;
 
         subTable->indexer = TableIndexer{indexType, indexResultType};
+    }
+
+    return result;
+}
+
+UnifyResult Unifier2::unify_(const ExternType* subExternType, const ExternType* superExternType)
+{
+    // Only positionally unify instantiated type parameters when both extern types stem from the
+    // same nominal declaration (see LuauGenericNominals) -- otherwise this pairing is unrelated
+    // (e.g. unifying `Dog` against `Cat`) and there's nothing to propagate between them.
+    if (subExternType->name != superExternType->name || subExternType->definitionModuleName != superExternType->definitionModuleName ||
+        subExternType->definitionLocation != superExternType->definitionLocation)
+        return UnifyResult::Ok;
+
+    UnifyResult result = UnifyResult::Ok;
+
+    auto subTypeParamsIter = subExternType->instantiatedTypeParams.begin();
+    auto superTypeParamsIter = superExternType->instantiatedTypeParams.begin();
+
+    while (subTypeParamsIter != subExternType->instantiatedTypeParams.end() &&
+           superTypeParamsIter != superExternType->instantiatedTypeParams.end())
+    {
+        result &= unify_(*subTypeParamsIter, *superTypeParamsIter);
+        subTypeParamsIter++;
+        superTypeParamsIter++;
+    }
+
+    auto subTypePackParamsIter = subExternType->instantiatedTypePackParams.begin();
+    auto superTypePackParamsIter = superExternType->instantiatedTypePackParams.begin();
+
+    while (subTypePackParamsIter != subExternType->instantiatedTypePackParams.end() &&
+           superTypePackParamsIter != superExternType->instantiatedTypePackParams.end())
+    {
+        result &= unify_(*subTypePackParamsIter, *superTypePackParamsIter);
+        subTypePackParamsIter++;
+        superTypePackParamsIter++;
     }
 
     return result;

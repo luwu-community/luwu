@@ -95,6 +95,8 @@ static TypeId shallowClone(TypeId ty, TypeArena& dest, const TxnLog* log)
             clone.isCheckedFunction = a.isCheckedFunction;
             clone.isDeprecatedFunction = a.isDeprecatedFunction;
             clone.deprecatedInfo = a.deprecatedInfo;
+            clone.name = a.name;
+            clone.syntheticName = a.syntheticName;
             return dest.addType(std::move(clone));
         }
         else if constexpr (std::is_same_v<T, TableType>)
@@ -120,12 +122,16 @@ static TypeId shallowClone(TypeId ty, TypeArena& dest, const TxnLog* log)
         {
             UnionType clone;
             clone.options = a.options;
+            clone.name = a.name;
+            clone.syntheticName = a.syntheticName;
             return dest.addType(std::move(clone));
         }
         else if constexpr (std::is_same_v<T, IntersectionType>)
         {
             IntersectionType clone;
             clone.parts = a.parts;
+            clone.name = a.name;
+            clone.syntheticName = a.syntheticName;
             return dest.addType(std::move(clone));
         }
         else if constexpr (std::is_same_v<T, ExternType>)

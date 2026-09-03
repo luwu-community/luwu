@@ -3198,11 +3198,97 @@ void TypeChecker2::visit(AstTypePackGeneric* tp)
     reportError(UnknownSymbol{tp->genericName.value, UnknownSymbol::Context::Type}, tp->location);
 }
 
+// Returns true if `prefix`'s components are a (possibly empty, possibly complete) prefix of
+// `whole`'s components. Used to detect when a subPath/superPath pair share a common lead-in
+// (e.g. both drill into "the 1st entry in the type pack") so that lead-in doesn't get printed
+// twice back-to-back in a mismatch explanation.
+static bool isPrefixPath(const TypePath::Path& prefix, const TypePath::Path& whole)
+{
+    if (prefix.components.size() > whole.components.size())
+        return false;
+
+    TypePath::Path wholePrefix{std::vector<TypePath::Component>(whole.components.begin(), whole.components.begin() + prefix.components.size())};
+    return prefix == wholePrefix;
+}
+
+// If every non-empty subPath/superPath among `reasonings` begins with the same recognized
+// PackField (Returns or Arguments), returns it. This tells us the whole mismatch is fundamentally
+// about one specific, nameable aspect of the type (e.g. "its return type"), which we can fold
+// into a short preamble instead of repeating jargon like "it returns" inside every reason.
+static std::optional<TypePath::PackField> commonLeadingPackField(const SubtypingReasonings& reasonings)
+{
+    std::optional<TypePath::PackField> common;
+
+    auto consider = [&](const TypePath::Path& path) -> bool
+    {
+        if (path.empty())
+            return true;
+
+        const TypePath::PackField* pf = get_if<TypePath::PackField>(&path.components[0]);
+        if (!pf || (*pf != TypePath::PackField::Returns && *pf != TypePath::PackField::Arguments))
+            return false;
+
+        if (!common)
+            common = *pf;
+        return *pf == *common;
+    };
+
+    for (const SubtypingReasoning& reasoning : reasonings)
+    {
+        if (!consider(reasoning.subPath) || !consider(reasoning.superPath))
+            return std::nullopt;
+    }
+
+    return common;
+}
+
+static std::optional<std::string> contextVerbForPackField(TypePath::PackField field)
+{
+    switch (field)
+    {
+    case TypePath::PackField::Returns:
+        return "this function to return";
+    case TypePath::PackField::Arguments:
+        return "this function to take";
+    default:
+        return std::nullopt;
+    }
+}
+
+// Builds a trimmed-down path for human-readable narration: drops indices into packs/unions/
+// intersections (e.g. "the 1st component of the union"), since which member differs is already
+// obvious from comparing the printed wanted/got types side by side, and drops a leading PackField
+// component that matches `commonContext`, since that's already conveyed by the enclosing
+// preamble (e.g. "Expected this function to return..."). Property names and other structural
+// markers are preserved, since those aren't recoverable just by reading the printed types.
+static TypePath::Path narrationPath(const TypePath::Path& path, std::optional<TypePath::PackField> commonContext)
+{
+    std::vector<TypePath::Component> result;
+    for (size_t i = 0; i < path.components.size(); ++i)
+    {
+        const TypePath::Component& c = path.components[i];
+
+        if (i == 0 && commonContext)
+        {
+            if (const TypePath::PackField* pf = get_if<TypePath::PackField>(&c); pf && *pf == *commonContext)
+                continue;
+        }
+
+        if (get_if<TypePath::Index>(&c))
+            continue;
+
+        result.push_back(c);
+    }
+    return TypePath::Path{std::move(result)};
+}
+
 template<typename TID>
 Reasonings TypeChecker2::explainReasonings_(TID subTy, TID superTy, Location location, const SubtypingResult& r)
 {
     if (r.reasoning.empty())
         return {};
+
+    std::optional<TypePath::PackField> commonContext = commonLeadingPackField(r.reasoning);
 
     std::vector<std::string> reasons;
     bool suppressed = true;
@@ -3258,6 +3344,9 @@ Reasonings TypeChecker2::explainReasonings_(TID subTy, TID superTy, Location loc
 
         std::stringstream reason;
 
+        TypePath::Path subNarration = narrationPath(reasoning.subPath, commonContext);
+        TypePath::Path superNarration = narrationPath(reasoning.superPath, commonContext);
+
         if ((FFlag::LuauPropertyModifierMismatchErrors || FFlag::LuauIndexerModifierMismatchErrors) && reasoning.isAccessModifierViolation)
         {
             if (FFlag::LuauPropertyModifierMismatchErrors && FFlag::LuauIndexerModifierMismatchErrors)
@@ -3309,17 +3398,33 @@ Reasonings TypeChecker2::explainReasonings_(TID subTy, TID superTy, Location loc
                     reason << propName << " is a write-only property in the latter type, but the former type requires a read-write property";
             }
         }
-        else if (reasoning.subPath == reasoning.superPath)
-            reason << toStringHuman(reasoning.subPath) << "`" << subLeafAsString << "` in the latter type and `" << superLeafAsString
+        // If, once the shared context (e.g. "this function returns") and union/pack indices are
+        // stripped out, there's nothing left worth narrating (the common case -- most mismatches
+        // are just "the type here doesn't match the type there", and which union/pack slot is
+        // already obvious from comparing the printed wanted/got types), skip narration entirely
+        // and just state the comparison.
+        else if (subNarration.empty() && superNarration.empty())
+            reason << baseReason;
+        else if (subNarration == superNarration)
+            reason << toStringHuman(subNarration) << "`" << subLeafAsString << "` in the latter type and `" << superLeafAsString
                    << "` in the former type, and " << baseReason;
-        else if (!reasoning.subPath.empty() && !reasoning.superPath.empty())
-            reason << toStringHuman(reasoning.subPath) << "`" << subLeafAsString << "` and " << toStringHuman(reasoning.superPath) << "`"
+        // If one non-empty path is a strict prefix of the other, they share a common lead-in --
+        // printing both paths in full repeats that lead-in verbatim, which reads as a confusing
+        // double explanation. Describe only the more specific (longer) path in that case.
+        else if (!subNarration.empty() && !superNarration.empty() && isPrefixPath(superNarration, subNarration))
+            reason << toStringHuman(subNarration) << "`" << subLeafAsString << "`, which is not " << relation << " `" << superLeafAsString
+                   << "`";
+        else if (!subNarration.empty() && !superNarration.empty() && isPrefixPath(subNarration, superNarration))
+            reason << toStringHuman(superNarration) << "`" << superLeafAsString << "`, and `" << subLeafAsString << "` is not " << relation
+                   << " it";
+        else if (!subNarration.empty() && !superNarration.empty())
+            reason << toStringHuman(subNarration) << "`" << subLeafAsString << "` and " << toStringHuman(superNarration) << "`"
                    << superLeafAsString << "`, and " << baseReason;
-        else if (!reasoning.subPath.empty())
-            reason << toStringHuman(reasoning.subPath) << "`" << subLeafAsString << "`, which is not " << relation << " `" << superLeafAsString
+        else if (!subNarration.empty())
+            reason << toStringHuman(subNarration) << "`" << subLeafAsString << "`, which is not " << relation << " `" << superLeafAsString
                    << "`";
         else
-            reason << toStringHuman(reasoning.superPath) << "`" << superLeafAsString << "`, and " << baseReason;
+            reason << toStringHuman(superNarration) << "`" << superLeafAsString << "`, and " << baseReason;
 
         if (FFlag::LuauBetterPackAndVariadicMismatchErrors && reasoning.variance == SubtypingVariance::Contravariant && subLeafTp && superLeafTp)
         {
@@ -3346,7 +3451,8 @@ Reasonings TypeChecker2::explainReasonings_(TID subTy, TID superTy, Location loc
         }
     }
 
-    return {std::move(reasons), suppressed};
+    std::optional<std::string> contextVerb = commonContext ? contextVerbForPackField(*commonContext) : std::nullopt;
+    return {std::move(reasons), suppressed, std::move(contextVerb)};
 }
 
 Reasonings TypeChecker2::explainReasonings(TypeId subTy, TypeId superTy, Location location, const SubtypingResult& r)
@@ -3450,7 +3556,11 @@ void TypeChecker2::explainError(TypeId subTy, TypeId superTy, Location location,
     Reasonings reasonings = explainReasonings(subTy, superTy, location, result);
 
     if (!reasonings.suppressed)
-        reportError(TypeMismatch{superTy, subTy, reasonings.toString()}, location);
+    {
+        TypeMismatch tm{superTy, subTy, reasonings.toString()};
+        tm.contextVerb = reasonings.contextVerb;
+        reportError(std::move(tm), location);
+    }
 }
 
 void TypeChecker2::explainError(TypePackId subTy, TypePackId superTy, Location location, const SubtypingResult& result)

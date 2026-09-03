@@ -5287,10 +5287,11 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "subtyping_with_a_metatable_table_path")
     CHECK(result.errors.at(2).location == Location{{3, 8}, {5, 11}});
     CHECK("Type function instance setmetatable<unknown, unknown> is uninhabited" == toString(result.errors.at(2)));
 
+    // The intersection `{} & {}` cast via `self` (the alias `type self = {} & {}` above) now
+    // prints by name rather than being expanded inline.
     CHECK(
-        "Expected this to be 'setmetatable<unknown, unknown>', but got '{ @metatable {  }, {  } & {  } }'; \n"
-        "the 1st entry in the type pack is `{ @metatable {  }, {  } & {  } }` and in the 1st entry in the type packreduces to "
-        "`never`, and `{ @metatable {  }, {  } & {  } }` is not a subtype of `never`" == toString(result.errors.at(3))
+        "Expected this to be 'setmetatable<unknown, unknown>', but got '{ @metatable {  }, self }'; \n"
+        "it reduces to `never`, and `{ @metatable {  }, self }` is not a subtype of `never`" == toString(result.errors.at(3))
     );
 }
 

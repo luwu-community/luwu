@@ -400,6 +400,10 @@ struct FunctionType
     bool isCheckedFunction = false;
     bool isDeprecatedFunction = false;
     std::shared_ptr<AstAttr::DeprecatedInfo> deprecatedInfo;
+
+    // Set when this function type is the target of a `type X = (...) -> ...` alias. See TableType::name/syntheticName.
+    std::optional<std::string> name;
+    std::optional<std::string> syntheticName;
 };
 
 enum class TableState
@@ -788,12 +792,20 @@ struct NoRefineType
 struct UnionType
 {
     std::vector<TypeId> options;
+
+    // Set when this union type is the target of a `type X = ... | ...` alias. See TableType::name/syntheticName.
+    std::optional<std::string> name;
+    std::optional<std::string> syntheticName;
 };
 
 // `T & U`
 struct IntersectionType
 {
     std::vector<TypeId> parts;
+
+    // Set when this intersection type is the target of a `type X = ... & ...` alias. See TableType::name/syntheticName.
+    std::optional<std::string> name;
+    std::optional<std::string> syntheticName;
 };
 
 struct LazyType

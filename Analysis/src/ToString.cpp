@@ -177,6 +177,35 @@ struct StringifierState
     bool exhaustive;
     bool ignoreSyntheticName = false;
 
+    // When set, the very next name-based short-circuit for exactly this TypeId is bypassed so its
+    // structure gets printed once instead of just its name. Used to expand a single alias's body
+    // for a `where` clause entry (see TypeStringifier::stringifyAliasBodyOnce).
+    std::optional<TypeId> suppressNameFor;
+
+    // False while expanding an alias body for a `where` clause entry, so alias references found
+    // *inside* that body are not themselves added to aliasReferences (this caps expansion at one
+    // level of nesting: referenced-from-root aliases get expanded, aliases they in turn reference
+    // are shown as bare names only).
+    bool collectingAliasRefs = true;
+
+    // Named types (table/union/intersection/function aliases) referenced anywhere in the printed
+    // type other than at the root, in first-seen order, deduplicated by name. Only populated when
+    // opts.includeWhereClauses is set.
+    std::vector<std::pair<std::string, TypeId>> aliasReferences;
+    DenseHashSet<std::string> aliasRefSeen{"$$$"};
+
+    void recordAliasReference(const std::string& name, TypeId ty)
+    {
+        if (!opts.includeWhereClauses || !collectingAliasRefs)
+            return;
+
+        if (aliasRefSeen.contains(name))
+            return;
+
+        aliasRefSeen.insert(name);
+        aliasReferences.emplace_back(name, ty);
+    }
+
     StringifierState(ToStringOptions& opts, ToStringResult& result)
         : opts(opts)
         , result(result)
@@ -466,6 +495,40 @@ static bool intersectionRendersWithMultipleParts(TypeId ty)
     return visibleCount > 1;
 }
 
+// True when `ty` will short-circuit to a bare alias name (see the name checks at the top of the
+// UnionType/IntersectionType/FunctionType operator() overloads below) rather than being expanded
+// structurally. Callers use this to skip adding disambiguating parens around an element that will
+// only ever print as a plain identifier.
+static bool willPrintAsBareName(TypeId ty, const StringifierState& state)
+{
+    TypeId followed = follow(ty);
+
+    if (state.suppressNameFor == followed)
+        return false;
+
+    bool showName = !state.exhaustive || state.opts.hideTableAliasExpansions;
+
+    auto hasBareName = [&](const auto* variant) -> bool
+    {
+        if (!variant)
+            return false;
+        if (showName && variant->name)
+            return true;
+        if (!state.exhaustive && !state.ignoreSyntheticName && variant->syntheticName)
+            return true;
+        return false;
+    };
+
+    if (hasBareName(Luau::get<FunctionType>(followed)))
+        return true;
+    if (hasBareName(Luau::get<UnionType>(followed)))
+        return true;
+    if (hasBareName(Luau::get<IntersectionType>(followed)))
+        return true;
+
+    return false;
+}
+
 struct TypeStringifier
 {
     StringifierState& state;
@@ -500,6 +563,37 @@ struct TypeStringifier
             },
             tv->ty
         );
+    }
+
+    // Expands `ty`'s structure exactly once, bypassing its own name short-circuit, for use as a
+    // `where` clause entry. Named types referenced *inside* that expansion are left as bare names
+    // (StringifierState::collectingAliasRefs is turned off for the duration), which is what caps
+    // this at one level of nesting.
+    std::string stringifyAliasBodyOnce(TypeId ty)
+    {
+        std::string saved = std::move(state.result.name);
+        state.result.name.clear();
+
+        std::optional<TypeId> savedSuppress = state.suppressNameFor;
+        bool savedCollecting = state.collectingAliasRefs;
+
+        state.suppressNameFor = ty;
+        state.collectingAliasRefs = false;
+
+        Luau::visit(
+            [this, ty](auto&& t)
+            {
+                return (*this)(ty, t);
+            },
+            ty->ty
+        );
+
+        state.suppressNameFor = savedSuppress;
+        state.collectingAliasRefs = savedCollecting;
+
+        std::string body = std::move(state.result.name);
+        state.result.name = std::move(saved);
+        return body;
     }
 
     void emitKey(const std::string& name)
@@ -746,8 +840,39 @@ struct TypeStringifier
         }
     }
 
-    void operator()(TypeId, const FunctionType& ftv)
+    void operator()(TypeId ty, const FunctionType& ftv)
     {
+        bool showName = (!state.exhaustive || state.opts.hideTableAliasExpansions) && state.suppressNameFor != ty;
+
+        if (showName && ftv.name)
+        {
+            if (state.opts.scope)
+            {
+                auto [success, moduleName] = canUseTypeNameInScope(state.opts.scope, *ftv.name);
+
+                if (!success)
+                    state.result.invalid = true;
+
+                if (moduleName)
+                {
+                    state.emit(*moduleName);
+                    state.emit(".");
+                }
+            }
+
+            state.recordAliasReference(*ftv.name, ty);
+            state.emitAndRecordSpan(*ftv.name, ty);
+            return;
+        }
+
+        if (!state.exhaustive && !state.ignoreSyntheticName && state.suppressNameFor != ty && ftv.syntheticName)
+        {
+            state.result.invalid = true;
+            state.recordAliasReference(*ftv.syntheticName, ty);
+            state.emitAndRecordSpan(*ftv.syntheticName, ty);
+            return;
+        }
+
         if (state.hasSeen(&ftv))
         {
             state.result.cycle = true;
@@ -821,7 +946,7 @@ struct TypeStringifier
             return stringify(*ttv.boundTo);
 
         // if hide table alias expansions are enabled and there is a name found for the table, use it
-        bool showName = !state.exhaustive || state.opts.hideTableAliasExpansions;
+        bool showName = (!state.exhaustive || state.opts.hideTableAliasExpansions) && state.suppressNameFor != ty;
 
         if (showName)
         {
@@ -842,17 +967,19 @@ struct TypeStringifier
                     }
                 }
 
+                state.recordAliasReference(*ttv.name, ty);
                 state.emitAndRecordSpan(*ttv.name, ty);
                 stringify(ttv.instantiatedTypeParams, ttv.instantiatedTypePackParams);
                 return;
             }
         }
 
-        if (!state.exhaustive && !state.ignoreSyntheticName)
+        if (!state.exhaustive && !state.ignoreSyntheticName && state.suppressNameFor != ty)
         {
             if (ttv.syntheticName)
             {
                 state.result.invalid = true;
+                state.recordAliasReference(*ttv.syntheticName, ty);
                 state.emitAndRecordSpan(*ttv.syntheticName, ty);
                 stringify(ttv.instantiatedTypeParams, ttv.instantiatedTypePackParams);
                 return;
@@ -961,8 +1088,9 @@ struct TypeStringifier
     void operator()(TypeId ty, const MetatableType& mtv)
     {
         state.result.invalid = true;
-        if (!state.exhaustive && mtv.syntheticName)
+        if (!state.exhaustive && mtv.syntheticName && state.suppressNameFor != ty)
         {
+            state.recordAliasReference(*mtv.syntheticName, ty);
             state.emitAndRecordSpan(*mtv.syntheticName, ty);
             return;
         }
@@ -1002,8 +1130,39 @@ struct TypeStringifier
         state.emit("*no-refine*");
     }
 
-    void operator()(TypeId, const UnionType& uv)
+    void operator()(TypeId ty, const UnionType& uv)
     {
+        bool showName = (!state.exhaustive || state.opts.hideTableAliasExpansions) && state.suppressNameFor != ty;
+
+        if (showName && uv.name)
+        {
+            if (state.opts.scope)
+            {
+                auto [success, moduleName] = canUseTypeNameInScope(state.opts.scope, *uv.name);
+
+                if (!success)
+                    state.result.invalid = true;
+
+                if (moduleName)
+                {
+                    state.emit(*moduleName);
+                    state.emit(".");
+                }
+            }
+
+            state.recordAliasReference(*uv.name, ty);
+            state.emitAndRecordSpan(*uv.name, ty);
+            return;
+        }
+
+        if (!state.exhaustive && !state.ignoreSyntheticName && state.suppressNameFor != ty && uv.syntheticName)
+        {
+            state.result.invalid = true;
+            state.recordAliasReference(*uv.syntheticName, ty);
+            state.emitAndRecordSpan(*uv.syntheticName, ty);
+            return;
+        }
+
         if (FFlag::LuauTruthyFalsy && isExactlyFalsyUnion(uv))
         {
             state.emit("falsy");
@@ -1043,7 +1202,8 @@ struct TypeStringifier
             std::string saved = std::move(state.result.name);
             size_t savedSpansSize = state.result.typeSpans.size();
 
-            bool needParens = !state.cycleNames.contains(el) && (intersectionRendersWithMultipleParts(el) || get<FunctionType>(el) != nullptr);
+            bool needParens = !state.cycleNames.contains(el) && !willPrintAsBareName(el, state) &&
+                              (intersectionRendersWithMultipleParts(el) || get<FunctionType>(el) != nullptr);
 
             if (needParens)
                 state.emit("(");
@@ -1088,9 +1248,21 @@ struct TypeStringifier
 
         bool first = true;
         bool shouldPlaceOnNewlines = results.size() > state.opts.compositeTypesSingleLineLimit;
+        // Only give the *first* option its own "| "-prefixed line when we're actually emitting real
+        // line breaks -- otherwise (a long union still rendered on one line because useLineBreaks is
+        // off) this would just stick a stray leading "| " in front of the first option.
+        bool uniformPipePrefix = shouldPlaceOnNewlines && state.opts.useLineBreaks;
         for (ElementResult& elem : results)
         {
-            if (!first)
+            // When multi-line, every option (including the first) goes on its own line prefixed
+            // with "| ", rather than only the 2nd+ options -- so a long enum-like union reads as a
+            // uniform list instead of having its first entry visually stuck onto the "= " prefix.
+            if (uniformPipePrefix)
+            {
+                state.newline();
+                state.emit("| ");
+            }
+            else if (!first)
             {
                 if (shouldPlaceOnNewlines)
                     state.newline();
@@ -1122,6 +1294,37 @@ struct TypeStringifier
 
     void operator()(TypeId ty, const IntersectionType& uv)
     {
+        bool showName = (!state.exhaustive || state.opts.hideTableAliasExpansions) && state.suppressNameFor != ty;
+
+        if (showName && uv.name)
+        {
+            if (state.opts.scope)
+            {
+                auto [success, moduleName] = canUseTypeNameInScope(state.opts.scope, *uv.name);
+
+                if (!success)
+                    state.result.invalid = true;
+
+                if (moduleName)
+                {
+                    state.emit(*moduleName);
+                    state.emit(".");
+                }
+            }
+
+            state.recordAliasReference(*uv.name, ty);
+            state.emitAndRecordSpan(*uv.name, ty);
+            return;
+        }
+
+        if (!state.exhaustive && !state.ignoreSyntheticName && state.suppressNameFor != ty && uv.syntheticName)
+        {
+            state.result.invalid = true;
+            state.recordAliasReference(*uv.syntheticName, ty);
+            state.emitAndRecordSpan(*uv.syntheticName, ty);
+            return;
+        }
+
         if (state.hasSeen(&uv))
         {
             state.result.cycle = true;
@@ -1158,7 +1361,8 @@ struct TypeStringifier
             std::string saved = std::move(state.result.name);
             size_t savedSpansSize = state.result.typeSpans.size();
 
-            bool needParens = !state.cycleNames.contains(el) && (get<UnionType>(el) != nullptr || get<FunctionType>(el) != nullptr);
+            bool needParens = !state.cycleNames.contains(el) && !willPrintAsBareName(el, state) &&
+                              (get<UnionType>(el) != nullptr || get<FunctionType>(el) != nullptr);
 
             if (needParens)
                 state.emit("(");
@@ -1198,11 +1402,36 @@ struct TypeStringifier
                 }
             );
 
+        // An overloaded function (every part of the intersection is a FunctionType) gets its own
+        // wrapping parens with a leading "-- N overloads" comment and every line (including the
+        // first) prefixed with "& ", e.g.:
+        //   ( -- 2 overloads
+        //       & ((path: string) -> Metadata)
+        //       & ((path: Path) -> Metadata | error<FileIoError>)
+        //   )
+        // A `--` comment runs to the end of the line, so this is only safe when line breaks are
+        // actually being emitted; with useLineBreaks off, fall back to the plain inline join below.
+        bool overloaded = isOverloadedFunction(ty);
+        bool wrapOverloadParens = overloaded && state.opts.useLineBreaks && results.size() > 1;
+
+        if (wrapOverloadParens)
+        {
+            state.emit("( -- ");
+            state.emit(std::to_string(results.size()));
+            state.emit(results.size() == 1 ? " overload" : " overloads");
+            state.indent();
+        }
+
         bool first = true;
-        bool shouldPlaceOnNewlines = results.size() > state.opts.compositeTypesSingleLineLimit || isOverloadedFunction(ty);
+        bool shouldPlaceOnNewlines = results.size() > state.opts.compositeTypesSingleLineLimit || overloaded;
         for (ElementResult& elem : results)
         {
-            if (!first)
+            if (wrapOverloadParens)
+            {
+                state.newline();
+                state.emit("& ");
+            }
+            else if (!first)
             {
                 if (shouldPlaceOnNewlines)
                     state.newline();
@@ -1217,6 +1446,13 @@ struct TypeStringifier
                 state.result.typeSpans.emplace_back(ToStringSpan{basePos + start, basePos + end, spanTy});
 
             first = false;
+        }
+
+        if (wrapOverloadParens)
+        {
+            state.dedent();
+            state.newline();
+            state.emit(")");
         }
     }
 
@@ -1654,7 +1890,7 @@ ToStringResult toStringDetailed(TypeId ty, ToStringOptions& opts)
 
     TypeStringifier tvs{state};
 
-    if (!opts.exhaustive)
+    if (!opts.exhaustive && !opts.alwaysExpandRootAlias)
     {
         if (state.ignoreSyntheticName)
         {
@@ -1679,6 +1915,14 @@ ToStringResult toStringDetailed(TypeId ty, ToStringOptions& opts)
         }
     }
 
+    // Unlike TableType/MetatableType above, a named UnionType/IntersectionType/FunctionType at the
+    // *root* of a toStringDetailed call always expands fully rather than short-circuiting to its
+    // own name - e.g. printing a type alias's own definition, or the type of a variable declared
+    // with that alias, should show what it expands to. Nested occurrences of the same alias
+    // elsewhere in the type still collapse to the name (see the per-Type operator() overloads in
+    // TypeStringifier), which is what feeds the `where` clause below.
+    state.suppressNameFor = ty;
+
     /* If the root itself is a cycle, we special case a little.
      * We go out of our way to print the following:
      *
@@ -1688,6 +1932,31 @@ ToStringResult toStringDetailed(TypeId ty, ToStringOptions& opts)
         state.emit(*p);
     else
         tvs.stringify(ty);
+
+    state.suppressNameFor = std::nullopt;
+
+    if (opts.includeWhereClauses && !state.aliasReferences.empty())
+    {
+        for (const auto& [name, refTy] : state.aliasReferences)
+        {
+            if (opts.maxTypeLength > 0 && result.whereClauses.length() > opts.maxTypeLength)
+            {
+                result.truncated = true;
+                result.whereClauses += "... *TRUNCATED*";
+                break;
+            }
+
+            std::string body = tvs.stringifyAliasBodyOnce(refTy);
+
+            if (!result.whereClauses.empty())
+                result.whereClauses += "\n";
+
+            result.whereClauses += "type ";
+            result.whereClauses += name;
+            result.whereClauses += " = ";
+            result.whereClauses += body;
+        }
+    }
 
     if (!state.cycleNames.empty() || !state.cycleTpNames.empty())
     {

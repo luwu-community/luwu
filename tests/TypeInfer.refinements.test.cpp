@@ -728,6 +728,50 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "truthy_refined_none_union_hover_type_does_no
     CHECK_EQ("string", toString(requireTypeAtPosition({5, 12})));
 }
 
+TEST_CASE_FIXTURE(BuiltinsFixture, "lvalue_typeof_none_refinement")
+{
+    CheckResult result = check(R"(
+        local function f(a: string | none)
+            if typeof(a) == "none" then
+                local foo = a
+            else
+                local foo = a
+            end
+
+            if typeof(a) ~= "none" then
+                local bar = a
+            else
+                local bar = a
+            end
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+
+    CHECK_EQ("none", toString(requireTypeAtPosition({3, 28})));
+    CHECK_EQ("string", toString(requireTypeAtPosition({5, 28})));
+    CHECK_EQ("string", toString(requireTypeAtPosition({9, 28})));
+    CHECK_EQ("none", toString(requireTypeAtPosition({11, 28})));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "boolean_optional_truthy_refinement_unaffected_by_none")
+{
+    CheckResult result = check(R"(
+        local function f(a: boolean?)
+            if a then
+                local foo = a
+            else
+                local foo = a
+            end
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+
+    CHECK_EQ("true", toString(requireTypeAtPosition({3, 28})));
+    CHECK_EQ("false?", toString(requireTypeAtPosition({5, 28})));
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "lvalue_is_equal_to_none_refinement")
 {
     CheckResult result = check(R"(

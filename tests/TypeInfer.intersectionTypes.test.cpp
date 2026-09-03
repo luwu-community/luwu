@@ -29,7 +29,8 @@ TEST_CASE_FIXTURE(Fixture, "select_correct_union_fn")
 
     LUAU_REQUIRE_NO_ERRORS(result);
 
-    CHECK_EQ("(((number) -> string) & ((string) -> number)) -> (string, number)", toString(requireType("foo")));
+    // A and B are named type aliases referenced (not expanded) in the parameter position.
+    CHECK_EQ("(A & B) -> (string, number)", toString(requireType("foo")));
 }
 
 TEST_CASE_FIXTURE(Fixture, "table_combines")
@@ -136,7 +137,8 @@ TEST_CASE_FIXTURE(Fixture, "should_still_pick_an_overload_whose_arguments_are_un
 
     LUAU_REQUIRE_NO_ERRORS(result);
 
-    CHECK_EQ("(((number) -> string) & ((string) -> number)) -> (string, number)", toString(requireType("foo")));
+    // A and B are named type aliases referenced (not expanded) in the parameter position.
+    CHECK_EQ("(A & B) -> (string, number)", toString(requireType("foo")));
 }
 
 TEST_CASE_FIXTURE(Fixture, "propagates_name")
@@ -437,9 +439,9 @@ local a: XYZ = 3
     {
         const std::string expected = "Expected this to be 'X & Y & Z', but got 'number'; \n"
                                      "this is because \n\t"
-                                     " * the 1st component of the intersection is `X`, and `number` is not a subtype of `X`\n\t"
-                                     " * the 2nd component of the intersection is `Y`, and `number` is not a subtype of `Y`\n\t"
-                                     " * the 3rd component of the intersection is `Z`, and `number` is not a subtype of `Z`";
+                                     " * `number` is not a subtype of `X`\n\t"
+                                     " * `number` is not a subtype of `Y`\n\t"
+                                     " * `number` is not a subtype of `Z`";
 
         CHECK_EQ(expected, toString(result.errors[0]));
     }
@@ -473,9 +475,9 @@ end
     {
         const std::string expected = "Expected this to be 'number', but got 'X & Y & Z'; \n"
                                      "this is because \n\t"
-                                     " * the 1st component of the intersection is `X`, which is not a subtype of `number`\n\t"
-                                     " * the 2nd component of the intersection is `Y`, which is not a subtype of `number`\n\t"
-                                     " * the 3rd component of the intersection is `Z`, which is not a subtype of `number`";
+                                     " * `X` is not a subtype of `number`\n\t"
+                                     " * `Y` is not a subtype of `number`\n\t"
+                                     " * `Z` is not a subtype of `number`";
         CHECK_EQ(expected, toString(result.errors[0]));
     }
     else
@@ -525,8 +527,8 @@ TEST_CASE_FIXTURE(Fixture, "intersect_bool_and_false")
     {
         const std::string expected = "Expected this to be 'true', but got 'boolean & false'; \n"
                                      "this is because \n\t"
-                                     " * the 1st component of the intersection is `boolean`, which is not a subtype of `true`\n\t"
-                                     " * the 2nd component of the intersection is `false`, which is not a subtype of `true`";
+                                     " * `boolean` is not a subtype of `true`\n\t"
+                                     " * `false` is not a subtype of `true`";
         CHECK_EQ(expected, toString(result.errors[0]));
     }
     else
@@ -549,9 +551,8 @@ TEST_CASE_FIXTURE(Fixture, "intersect_false_and_bool_and_false")
     {
         const std::string expected = "Expected this to be 'true', but got 'boolean & false & false'; \n"
                                      "this is because \n\t"
-                                     " * the 1st component of the intersection is `false`, which is not a subtype of `true`\n\t"
-                                     " * the 2nd component of the intersection is `boolean`, which is not a subtype of `true`\n\t"
-                                     " * the 3rd component of the intersection is `false`, which is not a subtype of `true`";
+                                     " * `boolean` is not a subtype of `true`\n\t"
+                                     " * `false` is not a subtype of `true`";
         CHECK_EQ(expected, toString(result.errors[0]));
     }
     else
@@ -580,8 +581,8 @@ TEST_CASE_FIXTURE(Fixture, "intersect_saturate_overloaded_functions")
             "but got\n"
             "\t'((number?) -> number?) & ((string?) -> string?)'; \n"
             "this is because \n"
-            "\t * in the 1st component of the intersection, the function returns the 1st entry in the type pack which has the 1st component of the union as `number` and it returns the 1st entry in the type pack is `nil`, and `number` is not a subtype of `nil`\n"
-            "\t * in the 2nd component of the intersection, the function returns the 1st entry in the type pack which has the 1st component of the union as `string` and it returns the 1st entry in the type pack is `nil`, and `string` is not a subtype of `nil`"
+            "\t * it returns `number` in the latter type and `nil` in the former type, and `number` is not a subtype of `nil`\n"
+            "\t * it returns `string` in the latter type and `nil` in the former type, and `string` is not a subtype of `nil`"
         ;
         const std::string expected2 =
             "Expected this to be\n"
@@ -589,10 +590,9 @@ TEST_CASE_FIXTURE(Fixture, "intersect_saturate_overloaded_functions")
             "but got\n"
             "	'((number?) -> number?) & ((string?) -> string?)';\n"
             "this is because\n"
-            "	 * in the 1st component of the intersection, the function returns the 1st entry in the type pack which has the 2nd component of the union as `nil` and it returns the 1st entry in the type pack is `number`, and `nil` is not a subtype of `number`\n"
-            "	 * in the 2nd component of the intersection, the function returns the 1st entry in the type pack which has the 1st component of the union as `string` and it returns the 1st entry in the type pack is `number`, and `string` is not a subtype of `number`\n"
-            "	 * in the 2nd component of the intersection, the function returns the 1st entry in the type pack which has the 2nd component of the union as `nil` and it returns the 1st entry in the type pack is `number`, and `nil` is not a subtype of `number`\n"
-            "	 * in the 2nd component of the intersection, the function takes the 1st entry in the type pack which is `string?` and it takes the 1st entry in the type pack is `number`, and `string?` is not a supertype of `number`"
+            "	 * it returns `nil` in the latter type and `number` in the former type, and `nil` is not a subtype of `number`\n"
+            "	 * it returns `string` in the latter type and `number` in the former type, and `string` is not a subtype of `number`\n"
+            "	 * it takes `string?` in the latter type and `number` in the former type, and `string?` is not a supertype of `number`"
         ;
         // clang-format on
 
@@ -646,11 +646,8 @@ TEST_CASE_FIXTURE(Fixture, "intersection_of_tables")
     if (!FFlag::DebugLuauForceOldSolver)
     {
         const std::string expected = "Expected this to be '{ p: nil }', but got '{ p: number?, q: number?, r: number? } & { p: number?, q: string? }'"
-                                     "; \nthis is because \n\t"
-                                     " * in the 1st component of the intersection, accessing `p` has the 1st component of the union as `number` and "
-                                     "accessing `p` results in `nil`, and `number` is not exactly `nil`\n\t"
-                                     " * in the 2nd component of the intersection, accessing `p` has the 1st component of the union as `number` and "
-                                     "accessing `p` results in `nil`, and `number` is not exactly `nil`";
+                                     "; \naccessing `p` results in `number` in the latter type and `nil` in the former type, and "
+                                     "`number` is not exactly `nil`";
         CHECK_EQ(expected, toString(result.errors[0]));
     }
     else
@@ -681,12 +678,12 @@ TEST_CASE_FIXTURE(Fixture, "intersection_of_tables_with_top_properties")
             "but got\n"
             "\t'{ p: number?, q: any } & { p: unknown, q: string? }'; \n"
             "this is because \n"
-            "\t* in the 1st component of the intersection, accessing `p` has the 1st component of the union as `number` and accessing `p` results in `string?`, and `number` is not exactly `string?`\n"
-            "\t* in the 1st component of the intersection, accessing `p` results in `number?` and accessing `p` has the 1st component of the union as `string`, and `number?` is not exactly `string`\n"
-            "\t* in the 1st component of the intersection, accessing `q` results in `any` and accessing `q` results in `number?`, and `any` is not exactly `number?`\n"
-            "\t* in the 2nd component of the intersection, accessing `p` results in `unknown` and accessing `p` results in `string?`, and `unknown` is not exactly `string?`\n"
-            "\t* in the 2nd component of the intersection, accessing `q` has the 1st component of the union as `string` and accessing `q` results in `number?`, and `string` is not exactly `number?`\n"
-            "\t* in the 2nd component of the intersection, accessing `q` results in `string?` and accessing `q` has the 1st component of the union as `number`, and `string?` is not exactly `number`"
+            "\t* accessing `p` results in `number?` in the latter type and `string` in the former type, and `number?` is not exactly `string`\n"
+            "\t* accessing `p` results in `number` in the latter type and `string?` in the former type, and `number` is not exactly `string?`\n"
+            "\t* accessing `p` results in `unknown` in the latter type and `string?` in the former type, and `unknown` is not exactly `string?`\n"
+            "\t* accessing `q` results in `any` in the latter type and `number?` in the former type, and `any` is not exactly `number?`\n"
+            "\t* accessing `q` results in `string?` in the latter type and `number` in the former type, and `string?` is not exactly `number`\n"
+            "\t* accessing `q` results in `string` in the latter type and `number?` in the former type, and `string` is not exactly `number?`"
         ;
         // clang-format on
 
@@ -736,22 +733,20 @@ TEST_CASE_FIXTURE(Fixture, "overloaded_functions_returning_intersections")
             "but got\n"
             "	'((number?) -> { p: number } & { q: number }) & ((string?) -> { p: number } & { r: number })'; \n"
             "this is because \n"
-            "	 * in the 1st component of the intersection, the function returns the 1st entry in the type pack which has the 1st component of the intersection as `{ p: number }` and it returns the 1st entry in the type pack is `{ p: number, q: number, r: number }`, and `{ p: number }` is not a subtype of `{ p: number, q: number, r: number }`\n"
-            "	 * in the 1st component of the intersection, the function returns the 1st entry in the type pack which has the 2nd component of the intersection as `{ q: number }` and it returns the 1st entry in the type pack is `{ p: number, q: number, r: number }`, and `{ q: number }` is not a subtype of `{ p: number, q: number, r: number }`\n"
-            "	 * in the 2nd component of the intersection, the function returns the 1st entry in the type pack which has the 1st component of the intersection as `{ p: number }` and it returns the 1st entry in the type pack is `{ p: number, q: number, r: number }`, and `{ p: number }` is not a subtype of `{ p: number, q: number, r: number }`\n"
-            "	 * in the 2nd component of the intersection, the function returns the 1st entry in the type pack which has the 2nd component of the intersection as `{ r: number }` and it returns the 1st entry in the type pack is `{ p: number, q: number, r: number }`, and `{ r: number }` is not a subtype of `{ p: number, q: number, r: number }`"
+            "	 * it returns `{ p: number }` in the latter type and `{ p: number, q: number, r: number }` in the former type, and `{ p: number }` is not a subtype of `{ p: number, q: number, r: number }`\n"
+            "	 * it returns `{ q: number }` in the latter type and `{ p: number, q: number, r: number }` in the former type, and `{ q: number }` is not a subtype of `{ p: number, q: number, r: number }`\n"
+            "	 * it returns `{ r: number }` in the latter type and `{ p: number, q: number, r: number }` in the former type, and `{ r: number }` is not a subtype of `{ p: number, q: number, r: number }`"
         ;
-        const std::string expected2 = 
+        const std::string expected2 =
             "Expected this to be\n"
             "\t'(number?) -> { p: number, q: number, r: number }'\n"
             "but got\n"
             "\t'((number?) -> { p: number } & { q: number }) & ((string?) -> { p: number } & { r: number })'; \n"
             "this is because \n"
-            "\t* in the 1st component of the intersection, the function returns the 1st entry in the type pack which has the 1st component of the intersection as `{ p: number }` and it returns the 1st entry in the type pack is `{ p: number, q: number, r: number }`, and `{ p: number }` is not a subtype of `{ p: number, q: number, r: number }`\n"
-            "\t* in the 1st component of the intersection, the function returns the 1st entry in the type pack which has the 2nd component of the intersection as `{ q: number }` and it returns the 1st entry in the type pack is `{ p: number, q: number, r: number }`, and `{ q: number }` is not a subtype of `{ p: number, q: number, r: number }`\n"
-            "\t* in the 2nd component of the intersection, the function returns the 1st entry in the type pack which has the 1st component of the intersection as `{ p: number }` and it returns the 1st entry in the type pack is `{ p: number, q: number, r: number }`, and `{ p: number }` is not a subtype of `{ p: number, q: number, r: number }`\n"
-            "\t* in the 2nd component of the intersection, the function returns the 1st entry in the type pack which has the 2nd component of the intersection as `{ r: number }` and it returns the 1st entry in the type pack is `{ p: number, q: number, r: number }`, and `{ r: number }` is not a subtype of `{ p: number, q: number, r: number }`\n"
-            "\t* in the 2nd component of the intersection, the function takes the 1st entry in the type pack which is `string?` and it takes the 1st entry in the type pack has the 1st component of the union as `number`, and `string?` is not a supertype of `number`"
+            "\t* it returns `{ p: number }` in the latter type and `{ p: number, q: number, r: number }` in the former type, and `{ p: number }` is not a subtype of `{ p: number, q: number, r: number }`\n"
+            "\t* it returns `{ q: number }` in the latter type and `{ p: number, q: number, r: number }` in the former type, and `{ q: number }` is not a subtype of `{ p: number, q: number, r: number }`\n"
+            "\t* it returns `{ r: number }` in the latter type and `{ p: number, q: number, r: number }` in the former type, and `{ r: number }` is not a subtype of `{ p: number, q: number, r: number }`\n"
+            "\t* it takes `string?` in the latter type and `number` in the former type, and `string?` is not a supertype of `number`"
         ;
         // clang-format on
 
@@ -852,12 +847,8 @@ TEST_CASE_FIXTURE(Fixture, "overloaded_functions_mentioning_generic_packs")
             "\nbut got\n\t"
             "'((number?, a...) -> (number?, b...)) & ((string?, a...) -> (string?, b...))'"
             "; \nthis is because \n\t"
-            " * in the 1st component of the intersection, the function returns the 1st entry in the type pack which has the 1st component of "
-            "the "
-            "union as `number` and it returns the 1st entry in the type pack is `nil`, and `number` is not a subtype of `nil`\n\t"
-            " * in the 2nd component of the intersection, the function returns the 1st entry in the type pack which has the 1st component of "
-            "the "
-            "union as `string` and it returns the 1st entry in the type pack is `nil`, and `string` is not a subtype of `nil`";
+            " * it returns `number` in the latter type and `nil` in the former type, and `number` is not a subtype of `nil`\n\t"
+            " * it returns `string` in the latter type and `nil` in the former type, and `string` is not a subtype of `nil`";
 
         const std::string expected2 =
             "Expected this to be\n\t"
@@ -865,24 +856,10 @@ TEST_CASE_FIXTURE(Fixture, "overloaded_functions_mentioning_generic_packs")
             "\nbut got\n\t"
             "'((number?, a...) -> (number?, b...)) & ((string?, a...) -> (string?, b...))'"
             "; \nthis is because \n\t"
-            " * in the 1st component of the intersection, the function returns a tail of `b...` and it returns a tail of `a...`, and `b...` is "
-            "not a "
-            "subtype of `a...`\n\t"
-            " * in the 1st component of the intersection, the function returns the 1st entry in the type pack which has the 1st component of "
-            "the "
-            "union as `number` and it returns the 1st entry in the type pack is `nil`, and `number` is not a subtype of `nil`\n\t"
-            " * in the 1st component of the intersection, the function takes a tail of `a...` and it takes a tail of `b...`, and `a...` is not "
-            "a "
-            "supertype of `b...`\n\t"
-            " * in the 2nd component of the intersection, the function returns a tail of `b...` and it returns a tail of `a...`, and `b...` is "
-            "not a "
-            "subtype of `a...`\n\t"
-            " * in the 2nd component of the intersection, the function returns the 1st entry in the type pack which has the 1st component of "
-            "the "
-            "union as `string` and it returns the 1st entry in the type pack is `nil`, and `string` is not a subtype of `nil`\n\t"
-            " * in the 2nd component of the intersection, the function takes a tail of `a...` and it takes a tail of `b...`, and `a...` is not "
-            "a "
-            "supertype of `b...`";
+            " * it returns `number` in the latter type and `nil` in the former type, and `number` is not a subtype of `nil`\n\t"
+            " * it returns `string` in the latter type and `nil` in the former type, and `string` is not a subtype of `nil`\n\t"
+            " * it returns a tail of `b...` in the latter type and `a...` in the former type, and `b...` is not a subtype of `a...`\n\t"
+            " * it takes a tail of `a...` in the latter type and `b...` in the former type, and `a...` is not a supertype of `b...`";
 
         CHECK_EQ(expected1, toString(result.errors[0]));
         CHECK_EQ(expected2, toString(result.errors[1]));
@@ -965,12 +942,8 @@ TEST_CASE_FIXTURE(Fixture, "overloadeded_functions_with_never_result")
             "\nbut got\n\t"
             "'((nil) -> never) & ((number) -> number)'"
             "; \nthis is because \n\t"
-            " * in the 1st component of the intersection, the function takes the 1st entry in the type pack which is `number` and it takes the "
-            "1st "
-            "entry in the type pack has the 2nd component of the union as `nil`, and `number` is not a supertype of `nil`\n\t"
-            " * in the 2nd component of the intersection, the function takes the 1st entry in the type pack which is `nil` and it takes the "
-            "1st "
-            "entry in the type pack has the 1st component of the union as `number`, and `nil` is not a supertype of `number`";
+            " * it takes `nil` in the latter type and `number` in the former type, and `nil` is not a supertype of `number`\n\t"
+            " * it takes `number` in the latter type and `nil` in the former type, and `number` is not a supertype of `nil`";
 
         const std::string expected2 =
             "Expected this to be\n\t"
@@ -978,15 +951,9 @@ TEST_CASE_FIXTURE(Fixture, "overloadeded_functions_with_never_result")
             "\nbut got\n\t"
             "'((nil) -> never) & ((number) -> number)'"
             "; \nthis is because \n\t"
-            " * in the 1st component of the intersection, the function returns the 1st entry in the type pack which is `number` and it returns "
-            "the "
-            "1st entry in the type pack is `never`, and `number` is not a subtype of `never`\n\t"
-            " * in the 1st component of the intersection, the function takes the 1st entry in the type pack which is `number` and it takes the "
-            "1st "
-            "entry in the type pack has the 2nd component of the union as `nil`, and `number` is not a supertype of `nil`\n\t"
-            " * in the 2nd component of the intersection, the function takes the 1st entry in the type pack which is `nil` and it takes the "
-            "1st "
-            "entry in the type pack has the 1st component of the union as `number`, and `nil` is not a supertype of `number`";
+            " * it returns `number` in the latter type and `never` in the former type, and `number` is not a subtype of `never`\n\t"
+            " * it takes `nil` in the latter type and `number` in the former type, and `nil` is not a supertype of `number`\n\t"
+            " * it takes `number` in the latter type and `nil` in the former type, and `number` is not a supertype of `nil`";
 
         CHECK_EQ(expected1, toString(result.errors[0]));
         CHECK_EQ(expected2, toString(result.errors[1]));
@@ -1021,12 +988,8 @@ TEST_CASE_FIXTURE(Fixture, "overloadeded_functions_with_never_arguments")
             "\nbut got\n\t"
             "'((never) -> string?) & ((number) -> number?)'"
             "; \nthis is because \n\t"
-            " * in the 1st component of the intersection, the function returns the 1st entry in the type pack which has the 1st component of "
-            "the "
-            "union as `number` and it returns the 1st entry in the type pack is `nil`, and `number` is not a subtype of `nil`\n\t"
-            " * in the 2nd component of the intersection, the function returns the 1st entry in the type pack which has the 1st component of "
-            "the "
-            "union as `string` and it returns the 1st entry in the type pack is `nil`, and `string` is not a subtype of `nil`";
+            " * it returns `number` in the latter type and `nil` in the former type, and `number` is not a subtype of `nil`\n\t"
+            " * it returns `string` in the latter type and `nil` in the former type, and `string` is not a subtype of `nil`";
 
         const std::string expected2 =
             "Expected this to be\n\t"
@@ -1034,21 +997,11 @@ TEST_CASE_FIXTURE(Fixture, "overloadeded_functions_with_never_arguments")
             "\nbut got\n\t"
             "'((never) -> string?) & ((number) -> number?)'"
             "; \nthis is because \n\t"
-            " * in the 1st component of the intersection, the function returns the 1st entry in the type pack which has the 1st component of "
-            "the "
-            "union as `number` and it returns the 1st entry in the type pack is `nil`, and `number` is not a subtype of `nil`\n\t"
-            " * in the 1st component of the intersection, the function takes the 1st entry in the type pack which is `number` and it takes the "
-            "1st "
-            "entry in the type pack has the 2nd component of the union as `nil`, and `number` is not a supertype of `nil`\n\t"
-            " * in the 2nd component of the intersection, the function returns the 1st entry in the type pack which has the 1st component of "
-            "the "
-            "union as `string` and it returns the 1st entry in the type pack is `nil`, and `string` is not a subtype of `nil`\n\t"
-            " * in the 2nd component of the intersection, the function takes the 1st entry in the type pack which is `never` and it takes the "
-            "1st "
-            "entry in the type pack has the 1st component of the union as `number`, and `never` is not a supertype of `number`\n\t"
-            " * in the 2nd component of the intersection, the function takes the 1st entry in the type pack which is `never` and it takes the "
-            "1st "
-            "entry in the type pack has the 2nd component of the union as `nil`, and `never` is not a supertype of `nil`";
+            " * it returns `number` in the latter type and `nil` in the former type, and `number` is not a subtype of `nil`\n\t"
+            " * it returns `string` in the latter type and `nil` in the former type, and `string` is not a subtype of `nil`\n\t"
+            " * it takes `never` in the latter type and `nil` in the former type, and `never` is not a supertype of `nil`\n\t"
+            " * it takes `never` in the latter type and `number` in the former type, and `never` is not a supertype of `number`\n\t"
+            " * it takes `number` in the latter type and `nil` in the former type, and `number` is not a supertype of `nil`";
 
         CHECK_EQ(expected1, toString(result.errors[0]));
         CHECK_EQ(expected2, toString(result.errors[1]));
@@ -1195,18 +1148,11 @@ TEST_CASE_FIXTURE(Fixture, "overloadeded_functions_with_weird_typepacks_4")
             "\nbut got\n\t"
             "'((a...) -> ()) & ((number, a...) -> number)'"
             "; \nthis is because \n\t"
-            " * in the 1st component of the intersection, the function takes a tail of `a...` and it takes the portion of the type pack "
-            "starting at "
-            "index 0 to the end`number?`, and `a...` is not a supertype of `number?`\n\t"
-            " * in the 2nd component of the intersection, the function returns is `number` and it returns `()`, and `number` is not a subtype "
-            "of "
-            "`()`\n\t"
-            " * in the 2nd component of the intersection, the function takes a tail of `a...` and it takes `number?`, and `a...` is not a "
-            "supertype "
-            "of `number?`\n\t"
-            " * in the 2nd component of the intersection, the function takes the 1st entry in the type pack which is `number` and it takes the "
-            "1st "
-            "entry in the type pack has the 2nd component of the union as `nil`, and `number` is not a supertype of `nil`";
+            " * it returns `number` in the latter type and `()` in the former type, and `number` is not a subtype of `()`\n\t"
+            " * it takes `number` in the latter type and `nil` in the former type, and `number` is not a supertype of `nil`\n\t"
+            " * it takes a tail of `a...` and it takes the portion of the type pack starting at index 0 to the end`number?`, and `a...` is not "
+            "a supertype of `number?`\n\t"
+            " * it takes a tail of `a...`, which is not a supertype of `number?`";
         CHECK(expected == toString(result.errors[0]));
     }
     else

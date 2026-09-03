@@ -1292,9 +1292,26 @@ bool ConstraintSolver::tryDispatch(const NameConstraint& c, NotNull<const Constr
     }
     else if (MetatableType* mtv = getMutable<MetatableType>(target))
         mtv->syntheticName = c.name;
-    else if (get<IntersectionType>(target) || get<UnionType>(target))
+    else if (UnionType* utv = getMutable<UnionType>(target))
     {
-        // nothing (yet)
+        if (c.synthetic && !utv->name)
+            utv->syntheticName = c.name;
+        else
+            utv->name = c.name;
+    }
+    else if (IntersectionType* itv = getMutable<IntersectionType>(target))
+    {
+        if (c.synthetic && !itv->name)
+            itv->syntheticName = c.name;
+        else
+            itv->name = c.name;
+    }
+    else if (FunctionType* ftv = getMutable<FunctionType>(target))
+    {
+        if (c.synthetic && !ftv->name)
+            ftv->syntheticName = c.name;
+        else
+            ftv->name = c.name;
     }
 
     return true;
