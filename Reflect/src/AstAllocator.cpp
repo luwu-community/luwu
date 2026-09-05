@@ -18,6 +18,7 @@ static int astAllocatorParse(lua_State* L)
     size_t len = 0;
     const char* src = luaL_checklstring(L, 2, &len);
     bool includeCst = lua_isboolean(L, 3) ? lua_toboolean(L, 3) : false;
+    bool processComments = lua_isboolean(L, 4) ? lua_toboolean(L, 4) : false;
 
     auto doc = std::make_shared<AstDocumentState>(handle.state);
     doc->source.assign(src, len);
@@ -30,6 +31,9 @@ static int astAllocatorParse(lua_State* L)
 
     doc->parseResult = Luau::Parser::parse(doc->source.data(), doc->source.size(), handle.state->names, handle.state->allocator, options);
 
+    if (processComments)
+        attachCommentsToAst(*doc);
+
     pushAstDocument(L, std::move(doc));
     return 1;
 }
@@ -40,6 +44,7 @@ static int astAllocatorParseExpr(lua_State* L)
     size_t len = 0;
     const char* src = luaL_checklstring(L, 2, &len);
     bool includeCst = lua_isboolean(L, 3) ? lua_toboolean(L, 3) : false;
+    bool processComments = lua_isboolean(L, 4) ? lua_toboolean(L, 4) : false;
 
     auto doc = std::make_shared<AstDocumentState>(handle.state);
     doc->source.assign(src, len);
@@ -53,8 +58,12 @@ static int astAllocatorParseExpr(lua_State* L)
     auto result = Luau::Parser::parseExpr(doc->source.data(), doc->source.size(), handle.state->names, handle.state->allocator, options);
     doc->parseResult.root = nullptr;
     doc->parseResult.errors = std::move(result.errors);
+    doc->parseResult.commentLocations = std::move(result.commentLocations);
     if (includeCst)
         doc->parseResult.cstNodeMap = std::move(result.cstNodeMap);
+
+    if (processComments && result.root)
+        attachCommentsToAst(*doc, result.root);
 
     pushAstNode(L, doc, result.root);
     return 1;

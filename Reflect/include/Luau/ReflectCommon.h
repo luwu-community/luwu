@@ -238,7 +238,7 @@ namespace Luau
     ATOM_RW(VariadicType, "variadicType", SetVariadicType, "setVariadicType") \
     ATOM_RW(Op, "op", SetOp, "setOp") \
     ATOM_RW(QuoteStyle, "quoteStyle", SetQuoteStyle, "setQuoteStyle") \
-    ATOM_RW(Location, "location", SetLocation, "setLocation") \
+    ATOM(OrigLocation, "origlocation") \
     ATOM_RW(HasSemicolon, "hasSemicolon", SetHasSemicolon, "setHasSemicolon") \
     ATOM_RW(Shadow, "shadow", SetShadow, "setShadow") \
     ATOM_RW(Depth, "depth", SetDepth, "setDepth") \
@@ -487,6 +487,7 @@ struct AstDocumentState
     std::shared_ptr<AstAllocatorState> arena;
     Luau::ParseResult parseResult;
     std::vector<size_t> lineOffsets;
+    DenseHashMap2<const Luau::AstNode*, std::vector<Luau::Comment>> nodeComments;
 
     AstDocumentState()
         : arena(std::make_shared<AstAllocatorState>())
@@ -663,16 +664,14 @@ AstAuxData& checkAstAux(lua_State* L, int idx);
 AstFilterData& checkAstFilter(lua_State* L, int idx);
 AstFilterData extractAstFilter(lua_State* L, int idx);
 
-void registerAstLocal(lua_State* L);
-void registerAstFilter(lua_State* L);
-int reflectFilter(lua_State* L);
-
 const char* getAstAuxKind(const AstAuxData& handle);
 
 Luau::AstNode* createDefaultAstNode(std::string_view kind, Luau::Allocator& alloc);
 const Luau::CstNode* createDefaultCstNode(std::string_view kind, Luau::Allocator& alloc);
 Luau::AstLocal* createDefaultAstLocal(std::string_view kind, Luau::Allocator& alloc);
 bool createDefaultAstAux(std::string_view kind, const std::shared_ptr<AstDocumentState>& doc, AstAuxData& out);
+void attachCommentsToAst(AstDocumentState& doc, Luau::AstNode* rootNode = nullptr);
+bool canNodeHoldComments(Luau::AstNode* node);
 
 // Array push helpers
 template<typename F>
@@ -728,65 +727,6 @@ inline void pushTypeOrPackArray(lua_State* L, const std::shared_ptr<AstDocumentS
 // Node Kind Lookup
 const char* getNodeKind(Luau::AstNode* node);
 const char* getCstNodeKind(const Luau::CstNode* node);
-
-// Visitor Helpers
-struct CallbackVisitor : public Luau::AstVisitor
-{
-    lua_State* L;
-    std::shared_ptr<AstDocumentState> doc;
-    int callbackIndex;
-    AstFilterData filter;
-    bool hasFilter = false;
-    bool errorOccurred = false;
-
-    CallbackVisitor(lua_State* L, std::shared_ptr<AstDocumentState> doc, int callbackIndex, const AstFilterData& filter = {})
-        : L(L)
-        , doc(doc)
-        , callbackIndex(callbackIndex)
-        , filter(filter)
-        , hasFilter(!filter.empty())
-    {
-    }
-
-    bool visit(Luau::AstNode* node) override
-    {
-        if (errorOccurred || !node)
-            return false;
-
-        if (hasFilter && !filter.matches(node))
-            return true;
-
-        lua_pushvalue(L, callbackIndex);
-        pushAstNode(L, doc, node);
-
-        int status = lua_pcall(L, 1, 1, 0);
-        if (status != 0)
-        {
-            errorOccurred = true;
-            return false;
-        }
-
-        if (lua_isboolean(L, -1) && !lua_toboolean(L, -1))
-        {
-            lua_pop(L, 1);
-            return false;
-        }
-
-        lua_pop(L, 1);
-        return true;
-    }
-
-    // By default visiting type annotations is disabled; we override this so visitor inspects these nodes
-    bool visit(Luau::AstType* node) override
-    {
-        return visit(static_cast<Luau::AstNode*>(node));
-    }
-
-    bool visit(Luau::AstTypePack* node) override
-    {
-        return visit(static_cast<Luau::AstNode*>(node));
-    }
-};
 
 // Userdata registration helper
 inline void registerUserdataType(
@@ -998,6 +938,8 @@ void registerAstDocument(lua_State* L);
 void registerAstNode(lua_State* L);
 void registerCstNode(lua_State* L);
 void registerAstAux(lua_State* L);
+void registerAstLocal(lua_State* L);
 void registerAstFilter(lua_State* L);
+int reflectFilter(lua_State* L);
 
 } // namespace Luau

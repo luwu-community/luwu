@@ -24,6 +24,7 @@ struct AstNodeClassInfo
     NodeMethodHandler methodHandler = nullptr;
     NodePropCollector propCollector = nullptr;
     NodeFactoryFn factory = nullptr;
+    bool canHoldComments = false;
 };
 
 static std::vector<AstNodeClassInfo> s_nodeClassTable;
@@ -36,6 +37,16 @@ NodeCategory getNodeCategory(Luau::AstNode* node)
     if (idx >= 0 && idx < int(s_nodeClassTable.size()))
         return s_nodeClassTable[idx].categoryEnum;
     return NodeCategory::Unknown;
+}
+
+bool canNodeHoldComments(Luau::AstNode* node)
+{
+    if (!node)
+        return false;
+    int idx = node->classIndex;
+    if (idx >= 0 && idx < int(s_nodeClassTable.size()))
+        return s_nodeClassTable[idx].canHoldComments;
+    return false;
 }
 
 int getNodeClassIndexByKind(std::string_view kind)
@@ -60,8 +71,9 @@ static void registerNodeClass(
 {
     int idx = T::ClassIndex();
     if (size_t(idx) >= s_nodeClassTable.size())
-        s_nodeClassTable.resize(idx + 1, AstNodeClassInfo{"AstNode", "unknown", NodeCategory::Unknown, nullptr, nullptr, nullptr});
-    s_nodeClassTable[idx] = AstNodeClassInfo{kind, categoryToString(category), category, methodHandler, propCollector, factory};
+        s_nodeClassTable.resize(idx + 1, AstNodeClassInfo{"AstNode", "unknown", NodeCategory::Unknown, nullptr, nullptr, nullptr, false});
+    bool canHoldComments = (category == NodeCategory::Stat);
+    s_nodeClassTable[idx] = AstNodeClassInfo{kind, categoryToString(category), category, methodHandler, propCollector, factory, canHoldComments};
 }
 
 Luau::AstNode* createDefaultAstNode(std::string_view kind, Luau::Allocator& alloc)
@@ -104,7 +116,7 @@ struct DirectChildCollector : public Luau::AstVisitor
 };
 
 #define LUAU_AST_NODE_BASE \
-    LUAU_AST_FIELD_RW(Location, SetLocation, location) \
+    LUAU_AST_FIELD_RO(OrigLocation, location) \
     LUAU_AST_FIELD_FN_RO(Cst, getNodeCst(handle, n))
 
 #define LUAU_AST_STAT_BASE \
@@ -563,6 +575,64 @@ static int astNodeChildren(lua_State* L)
     return 1;
 }
 
+struct CallbackVisitor : public Luau::AstVisitor
+{
+    lua_State* L;
+    std::shared_ptr<AstDocumentState> doc;
+    int callbackIndex;
+    AstFilterData filter;
+    bool hasFilter = false;
+    bool errorOccurred = false;
+
+    CallbackVisitor(lua_State* L, std::shared_ptr<AstDocumentState> doc, int callbackIndex, const AstFilterData& filter = {})
+        : L(L)
+        , doc(doc)
+        , callbackIndex(callbackIndex)
+        , filter(filter)
+        , hasFilter(!filter.empty())
+    {
+    }
+
+    bool visit(Luau::AstNode* node) override
+    {
+        if (errorOccurred || !node)
+            return false;
+
+        if (hasFilter && !filter.matches(node))
+            return true;
+
+        lua_pushvalue(L, callbackIndex);
+        pushAstNode(L, doc, node);
+
+        int status = lua_pcall(L, 1, 1, 0);
+        if (status != 0)
+        {
+            errorOccurred = true;
+            return false;
+        }
+
+        if (lua_isboolean(L, -1) && !lua_toboolean(L, -1))
+        {
+            lua_pop(L, 1);
+            return false;
+        }
+
+        lua_pop(L, 1);
+        return true;
+    }
+
+    // By default visiting type annotations is disabled; we override this so visitor inspects these nodes
+    bool visit(Luau::AstType* node) override
+    {
+        return visit(static_cast<Luau::AstNode*>(node));
+    }
+
+    bool visit(Luau::AstTypePack* node) override
+    {
+        return visit(static_cast<Luau::AstNode*>(node));
+    }
+};
+
 static int astNodeWalk(lua_State* L)
 {
     auto& handle = checkAstNode(L, 1);
@@ -605,6 +675,25 @@ static int astNodeProperties(lua_State* L)
         s_nodeClassTable[idx].propCollector(L, handle);
     }
 
+    if (handle.doc && handle.node)
+    {
+        if (const auto* comments = handle.doc->nodeComments.find(handle.node))
+        {
+            pushArray(L, comments->size(), [&](size_t i) {
+                pushAstAux(L, handle.doc, (*comments)[i]);
+            });
+        }
+        else
+        {
+            lua_newtable(L);
+        }
+    }
+    else
+    {
+        lua_newtable(L);
+    }
+    lua_setfield(L, -2, "comments");
+
     return 1;
 }
 
@@ -621,6 +710,79 @@ static int astNodePrettyprint(lua_State* L)
     return 1;
 }
 
+struct CommentAttacher : public Luau::AstVisitor
+{
+    AstDocumentState& doc;
+    const std::vector<Luau::Comment>& comments;
+    size_t cursor = 0;
+
+    CommentAttacher(AstDocumentState& doc)
+        : doc(doc)
+        , comments(doc.parseResult.commentLocations)
+    {
+    }
+
+    bool visit(Luau::AstNode* node) override
+    {
+        if (!canNodeHoldComments(node))
+            return true;
+
+        if (auto block = node->as<AstStatBlock>())
+        {
+            if (block->body.size > 0)
+                return true;
+        }
+
+        while (cursor < comments.size() && comments[cursor].location.end <= node->location.begin)
+        {
+            doc.nodeComments[node].push_back(comments[cursor++]);
+        }
+
+        if (cursor < comments.size() && comments[cursor].location.begin.line == node->location.end.line)
+        {
+            doc.nodeComments[node].push_back(comments[cursor++]);
+        }
+
+        return true;
+    }
+};
+
+void attachCommentsToAst(AstDocumentState& doc, Luau::AstNode* rootNode)
+{
+    const auto& comments = doc.parseResult.commentLocations;
+    Luau::AstNode* root = rootNode ? rootNode : static_cast<Luau::AstNode*>(doc.parseResult.root);
+    if (!root || comments.empty())
+        return;
+
+    CommentAttacher attacher(doc);
+    root->visit(&attacher);
+
+    while (attacher.cursor < comments.size())
+    {
+        doc.nodeComments[root].push_back(comments[attacher.cursor++]);
+    }
+}
+
+static int astNodeComments(lua_State* L)
+{
+    auto& handle = checkAstNode(L, 1);
+    if (!handle.doc || !handle.node)
+    {
+        lua_newtable(L);
+        return 1;
+    }
+    const auto* comments = handle.doc->nodeComments.find(handle.node);
+    if (!comments)
+    {
+        lua_newtable(L);
+        return 1;
+    }
+    pushArray(L, comments->size(), [&](size_t i) {
+        pushAstAux(L, handle.doc, (*comments)[i]);
+    });
+    return 1;
+}
+
 static int dispatchAstNodeMethod(lua_State* L, AstNodeData& handle, ReflectAtom atom, const char* str, size_t len)
 {
     switch (atom)
@@ -629,6 +791,7 @@ static int dispatchAstNodeMethod(lua_State* L, AstNodeData& handle, ReflectAtom 
     case ReflectAtom::Walk:        return astNodeWalk(L);
     case ReflectAtom::Properties:  return astNodeProperties(L);
     case ReflectAtom::Prettyprint: return astNodePrettyprint(L);
+    case ReflectAtom::Comments:    return astNodeComments(L);
     default: break;
     }
 

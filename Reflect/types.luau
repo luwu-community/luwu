@@ -17,8 +17,7 @@ export type AstComment = {
     read kind: "AstComment",
     -- Comment, BlockComment, or BrokenComment
     read type: (self: AstComment) -> ("single" | "block" | "broken" | "unknown"),
-    read location: (self: AstComment) -> AstLocation,
-    read setLocation: (self: AstComment, location: AstLocation) -> AstComment,
+    read origlocation: (self: AstComment) -> AstLocation,
     read text: (self: AstComment) -> string,
     read properties: (self: AstComment) -> { [string]: any },
 }
@@ -29,8 +28,7 @@ export type AstLocal = {
     read kind: "AstLocal",
     read name: (self: AstLocal) -> string,
     read setName: (self: AstLocal, name: string) -> AstLocal,
-    read location: (self: AstLocal) -> AstLocation,
-    read setLocation: (self: AstLocal, location: AstLocation) -> AstLocal,
+    read origlocation: (self: AstLocal) -> AstLocation,
     -- Shadowed local variable if this declaration shadows a variable from an outer scope
     read shadow: (self: AstLocal) -> AstLocal?,
     read setShadow: (self: AstLocal, shadow: AstLocal?) -> AstLocal,
@@ -86,8 +84,7 @@ export type AstTableProp = {
     read kind: "AstTableProp",
     read name: (self: AstTableProp) -> string,
     read setName: (self: AstTableProp, name: string) -> AstTableProp,
-    read location: (self: AstTableProp) -> AstLocation,
-    read setLocation: (self: AstTableProp, location: AstLocation) -> AstTableProp,
+    read origlocation: (self: AstTableProp) -> AstLocation,
     read type: (self: AstTableProp) -> AstType,
     read setType: (self: AstTableProp, type: AstType) -> AstTableProp,
     read access: (self: AstTableProp) -> ("read" | "write" | "readwrite"),
@@ -102,8 +99,7 @@ export type AstTableIndexer = {
     read setIndexType: (self: AstTableIndexer, indexType: AstType) -> AstTableIndexer,
     read resultType: (self: AstTableIndexer) -> AstType,
     read setResultType: (self: AstTableIndexer, resultType: AstType) -> AstTableIndexer,
-    read location: (self: AstTableIndexer) -> AstLocation,
-    read setLocation: (self: AstTableIndexer, location: AstLocation) -> AstTableIndexer,
+    read origlocation: (self: AstTableIndexer) -> AstLocation,
     read access: (self: AstTableIndexer) -> ("read" | "write" | "readwrite"),
     read setAccess: (self: AstTableIndexer, access: "read" | "write" | "readwrite") -> AstTableIndexer,
     read properties: (self: AstTableIndexer) -> { [string]: any },
@@ -114,8 +110,7 @@ export type AstDeclaredExternTypeProperty = {
     read kind: "AstDeclaredExternTypeProperty",
     read name: (self: AstDeclaredExternTypeProperty) -> string,
     read setName: (self: AstDeclaredExternTypeProperty, name: string) -> AstDeclaredExternTypeProperty,
-    read location: (self: AstDeclaredExternTypeProperty) -> AstLocation,
-    read setLocation: (self: AstDeclaredExternTypeProperty, location: AstLocation) -> AstDeclaredExternTypeProperty,
+    read origlocation: (self: AstDeclaredExternTypeProperty) -> AstLocation,
     read type: (self: AstDeclaredExternTypeProperty) -> AstType,
     read setType: (self: AstDeclaredExternTypeProperty, type: AstType) -> AstDeclaredExternTypeProperty,
     read isMethod: (self: AstDeclaredExternTypeProperty) -> boolean,
@@ -388,8 +383,8 @@ export type CstNode =
 export type AstNodeCommon = {
     read id: Id,
     read prettyprint: (self: AstNode) -> string,
-    read location: (self: AstNode) -> AstLocation,
-    read setLocation: (self: AstNode, location: AstLocation) -> AstNode,
+    read comments: (self: AstNode) -> {AstComment},
+    read origlocation: (self: AstNode) -> AstLocation,
     read cst: (self: AstNode) -> CstNode?,
     read children: (self: AstNode) -> {AstNode},
     read walk: (self: AstNode, visitor: (node: AstNode) -> boolean?, filter: AstFilter?) -> (),
@@ -980,8 +975,8 @@ export type AstFilter = {
 
 export type AstAllocator = {
     read id: Id,
-    read parse: (self: AstAllocator, source: string, includeCst: boolean?) -> AstDocument,
-    read parseexpr: (self: AstAllocator, source: string, includeCst: boolean?) -> AstNode,
+    read parse: (self: AstAllocator, source: string, includeCst: boolean?, processComments: boolean?) -> AstDocument,
+    read parseexpr: (self: AstAllocator, source: string, includeCst: boolean?, processComments: boolean?) -> AstNode,
     read defaultnode: (self: AstAllocator, kind: string) -> AstNode | AstLocal | AstAux | CstNode,
     read properties: (self: AstAllocator) -> { [string]: any },
 }

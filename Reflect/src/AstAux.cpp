@@ -44,19 +44,19 @@ inline AstArray<char> getCommentText(const AstAuxData& handle)
     AUX(Aux_TableProp, tableProp, "AstTableProp", \
         LUAU_AUX_DEFAULT(AstAuxData(doc, Luau::AstTableProp{Luau::AstName(), Luau::Location(), nullptr, Luau::AstTableAccess::ReadWrite, std::nullopt})) \
         LUAU_AUX_FIELD_RW(Name, SetName, n.name) \
-        LUAU_AUX_FIELD_RW(Location, SetLocation, n.location) \
+        LUAU_AUX_FIELD_RO(OrigLocation, n.location) \
         LUAU_AUX_FIELD_RW(Type, SetType, n.type) \
         LUAU_AUX_FIELD_RW(Access, SetAccess, n.access)) \
     AUX(Aux_TableIndexer, tableIndexer, "AstTableIndexer", \
         LUAU_AUX_DEFAULT(AstAuxData(doc, Luau::AstTableIndexer{nullptr, nullptr, Luau::Location(), Luau::AstTableAccess::ReadWrite, std::nullopt})) \
-        LUAU_AUX_FIELD_RW(Location, SetLocation, n.location) \
+        LUAU_AUX_FIELD_RO(OrigLocation, n.location) \
         LUAU_AUX_FIELD_RW(IndexType, SetIndexType, n.indexType) \
         LUAU_AUX_FIELD_RW(ResultType, SetResultType, n.resultType) \
         LUAU_AUX_FIELD_RW(Access, SetAccess, n.access)) \
     AUX(Aux_DeclaredExternTypeProperty, declaredExternProp, "AstDeclaredExternTypeProperty", \
         LUAU_AUX_DEFAULT(AstAuxData(doc, Luau::AstDeclaredExternTypeProperty{Luau::AstName(), Luau::Location(), nullptr, false, Luau::Location(), Luau::AstTableAccess::ReadWrite})) \
         LUAU_AUX_FIELD_RW(Name, SetName, n.name) \
-        LUAU_AUX_FIELD_RW(Location, SetLocation, n.location) \
+        LUAU_AUX_FIELD_RO(OrigLocation, n.location) \
         LUAU_AUX_FIELD_RW(Type, SetType, n.ty) \
         LUAU_AUX_FIELD_RW(IsMethod, SetIsMethod, n.isMethod) \
         LUAU_AUX_FIELD_RW(Access, SetAccess, n.access)) \
@@ -70,7 +70,7 @@ inline AstArray<char> getCommentText(const AstAuxData& handle)
         LUAU_AUX_FIELD_RW(Func, SetFunc, n.function)) \
     AUX(Aux_Comment, comment, "AstComment", \
         LUAU_AUX_DEFAULT(AstAuxData(doc, Luau::Comment{Luau::Lexeme::Type::Comment, Luau::Location()})) \
-        LUAU_AUX_FIELD_RW(Location, SetLocation, n.location) \
+        LUAU_AUX_FIELD_RO(OrigLocation, n.location) \
         LUAU_AUX_FIELD_RO(Type, n.type) \
         LUAU_AUX_FIELD_FN_RO(Text, getCommentText(handle))) \
     AUX(Aux_TableItem, tableItem, "AstTableItem", \

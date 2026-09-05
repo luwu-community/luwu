@@ -21,7 +21,7 @@ static int astLocalProperties(lua_State* L, AstLocalData& handle)
     lua_setfield(L, -2, "name");
 
     pushLocation(L, handle.doc, handle.local->location);
-    lua_setfield(L, -2, "location");
+    lua_setfield(L, -2, "origlocation");
 
     pushReflectValue(L, handle.doc, handle.local->shadow);
     lua_setfield(L, -2, "shadow");
@@ -57,13 +57,8 @@ static int dispatchAstLocalMethod(lua_State* L, AstLocalData& handle, ReflectAto
         lua_pushvalue(L, 1);
         return 1;
 
-    case ReflectAtom::Location:
+    case ReflectAtom::OrigLocation:
         pushLocation(L, handle.doc, handle.local->location);
-        return 1;
-
-    case ReflectAtom::SetLocation:
-        readReflectValue(L, handle.doc, 2, handle.local->location);
-        lua_pushvalue(L, 1);
         return 1;
 
     case ReflectAtom::Shadow:

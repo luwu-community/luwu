@@ -77,7 +77,7 @@ TEST_CASE("LazyAstTypeof")
         assert(localItem.kind == "AstLocal")
         assert(localItem:name() == "x")
 
-        local loc = stat:location()
+        local loc = stat:origlocation()
         assert(typeof(loc) == "table")
         assert(typeof(loc.begin) == "vector")
         assert(typeof(loc["end"]) == "vector")
@@ -374,7 +374,7 @@ TEST_CASE("LazyAstComments")
         assert(typeof(c1) == "AstAux")
         assert(c1.kind == "AstComment")
         assert(c1:type() == "single")
-        assert(c1:location().begin.x == 1)
+        assert(c1:origlocation().begin.x == 1)
         assert(c1:text() == "-- single comment")
 
         local c2 = comments[2]
@@ -537,7 +537,7 @@ TEST_CASE("TestFields")
         local arena = reflect.allocator()
         local doc = arena:parse("local a = 1\nfoo(1, 2)", true)
         local stat1 = doc:root():body()[1]
-        local loc = stat1:location()
+        local loc = stat1:origlocation()
 
         -- Test fields on AstLocation table
         assert(typeof(loc) == "table")
@@ -551,14 +551,6 @@ TEST_CASE("TestFields")
         assert(loc["end"].y == 12)
         assert(loc["end"].z == 11)
 
-        -- Test mutating node location with setLocation
-        stat1:setLocation({ begin = vector.create(2, 3, 0), ["end"] = vector.create(2, 10, 0) })
-        local newLoc = stat1:location()
-        assert(newLoc.begin.x == 2)
-        assert(newLoc.begin.y == 3)
-        assert(newLoc["end"].x == 2)
-        assert(newLoc["end"].y == 10)
-
         -- Test CST positions as vectors
         local call = doc:root():body()[2]:expr()
         local pos = call:cst():openParens()
@@ -567,11 +559,11 @@ TEST_CASE("TestFields")
         assert(pos.y == 4)
         assert(pos.z == 15)
 
-        -- Test dot indexing a method (stat1.location(stat1))
-        local bodyFn = stat1.location
+        -- Test dot indexing a method (stat1.origlocation(stat1))
+        local bodyFn = stat1.origlocation
         assert(typeof(bodyFn) == "function")
         local loc2 = bodyFn(stat1)
-        assert(loc2.begin.x == 2)
+        assert(loc2.begin.x == 1)
 
         -- Test dot indexing a CST method
         local cstFn = call:cst().openParens
@@ -651,7 +643,7 @@ TEST_CASE("ReflectUseAtoms")
         local c = comments[1]
         assert(c:type() == "single")
         assert(c:text() == "-- hello")
-        assert(c:location().begin.x == 1)
+        assert(c:origlocation().begin.x == 1)
         assert(c[123] == nil)
 
         -- Test root & statements
@@ -700,7 +692,7 @@ TEST_CASE("ReflectUseAtoms")
         assert(typeof(colons[1]) == "vector")
 
         -- Test location table
-        local loc = stat1:location()
+        local loc = stat1:origlocation()
         assert(typeof(loc) == "table")
         assert(loc.begin.x == 2)
         assert(loc.begin.y == 1)
@@ -780,7 +772,7 @@ TEST_CASE("ReflectUserdataProtectedMetatable")
         local doc = arena:parse("-- comment\ndo end", true)
         local root = doc:root()
         local stat = root:body()[1]
-        local loc = stat:location()
+        local loc = stat:origlocation()
         local cst = stat:cst()
         local pos = cst:endPosition()
         local comment = doc:comments()[1]
@@ -1038,11 +1030,11 @@ TEST_CASE("ReflectAstMutations")
         assert(locVar:isConst() == true)
         assert(tostring(locVar:depth()) == "4")
 
-        -- AstNode base metadata (setLocation, setHasSemicolon)
-        local origLoc = tblStat:location()
+        -- AstNode base metadata (origlocation, setHasSemicolon)
+        local origLoc = tblStat:origlocation()
         assert(tblStat:setHasSemicolon(true) == tblStat)
         assert(tblStat:hasSemicolon() == true)
-        assert(tblStat:setLocation(origLoc) == tblStat)
+        assert(origLoc ~= nil)
 
         -- AstTableProp and AstTableIndexer mutations
         local doc3 = arena:parse("type T = { read foo: string, [number]: boolean }")
@@ -1093,7 +1085,7 @@ TEST_CASE("ReflectProperties")
         assert(commentProps.id ~= nil)
         assert(commentProps.kind == "AstComment")
         assert(commentProps.type == "single")
-        assert(commentProps.location ~= nil)
+        assert(commentProps.origlocation ~= nil)
         assert(commentProps.text == "-- comment")
 
         -- AstStatLocal & AstLocal properties
@@ -1106,7 +1098,7 @@ TEST_CASE("ReflectProperties")
         assert(statProps.hasSemicolon == false)
         assert(#statProps.vars == 1)
         assert(#statProps.values == 1)
-        assert(statProps.location ~= nil)
+        assert(statProps.origlocation ~= nil)
         assert(statLocal:prettyprint() == "local x = 1")
 
         local localVar = statProps.vars[1]
@@ -1114,6 +1106,7 @@ TEST_CASE("ReflectProperties")
         assert(localProps.id ~= nil)
         assert(localProps.kind == "AstLocal")
         assert(localProps.name == "x")
+        assert(localProps.origlocation ~= nil)
         assert(localProps.isConst == false)
         assert(tostring(localProps.depth) == "0")
 
@@ -1296,6 +1289,51 @@ TEST_CASE("AstAllocatorDefaultNode")
             (alloc :: any):defaultnode(123)
         end)
         assert(not okNil)
+    )LUA";
+
+    CHECK_EQ(dostring(L, script), 0);
+}
+
+TEST_CASE("ReflectCommentTracking")
+{
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+    Luau::luaopen_reflect(L);
+    lua_setglobal(L, "reflect");
+
+    const char* script = R"LUA(
+        local arena = reflect.allocator()
+
+        -- Fast parse without processComments: node:comments() is empty
+        local docNoComments = arena:parse("-- leading\nlocal x = 1 -- trailing\n")
+        local statNo = docNoComments:root():body()[1]
+        assert(#statNo:comments() == 0)
+
+        -- Parse with processComments: comments attached to node
+        local docWithComments = arena:parse("-- leading\nlocal x = 1 -- trailing\n", true, true)
+        local root = docWithComments:root()
+        local stat = root:body()[1]
+        local comments = stat:comments()
+        assert(#comments == 2)
+        assert(comments[1]:text() == "-- leading")
+        assert(comments[2]:text() == "-- trailing")
+
+        -- Check properties table contains comments
+        local props = stat:properties()
+        assert(props.comments ~= nil)
+        assert(#props.comments == 2)
+        assert(props.comments[1]:text() == "-- leading")
+        assert(props.comments[2]:text() == "-- trailing")
+
+        -- ParseExpr with processComments
+        local expr = arena:parseexpr("1 + 2 -- expr comment\n", true, true)
+        local exprComments = expr:comments()
+        assert(#exprComments == 1)
+        assert(exprComments[1]:text() == "-- expr comment")
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);
