@@ -55,6 +55,7 @@
 // Version 12: Adds cost function serialized for proto and prepend each proto with size in bytes. Experimental.
 // Version 13: Adds CHECKSELFCLASS for Luau Classes 'self' validation fast path. Experimental.
 // Version 14: Adds JUMPXISA for fused class.isinstance test-and-branch. Experimental.
+// Version 15: Adds SELFCLASSERROR, the raising fallback for CHECKSELFCLASS. Experimental.
 
 // # Bytecode type information history
 // Version 1: (from bytecode version 4) Type information for function signature. Currently supported.
@@ -458,7 +459,7 @@ enum LuauOpcode
     // through when it does; used for Luau Classes 'self' validation in place of a class.isinstance() call
     // A: self register
     // B: class register
-    // C: jump offset to skip past the fallback error-raising code when the check passes
+    // C: jump offset to skip past the SELFCLASSERROR that follows when the check passes
     LOP_CHECKSELFCLASS,
 
     // JUMPXISA: fused class.isinstance(value, class) test-and-branch (see rfcx/classes.md), emitted
@@ -469,6 +470,16 @@ enum LuauOpcode
     // AUX: class register in the low 8 bits; bit 31 is the polarity flag -- when set, jump if value
     //      IS an instance of the class; when clear, jump if it is NOT (see LUAU_INSN_AUX_NOT)
     LOP_JUMPXISA,
+
+    // SELFCLASSERROR: raise the 'self' mismatch error for Luau Classes; emitted as the cold path a
+    // failing CHECKSELFCLASS falls into, and never reached otherwise. Raising here rather than
+    // through an inline `error(...)` call keeps the message out of the constant table and lets it
+    // name the receiver's *actual* class or type, which is only known at runtime.
+    // A: self register (the value that failed the check)
+    // B: class register (the class the method belongs to)
+    // C: 1 if the call site used `:` syntax, 0 for `.` syntax
+    // AUX: string constant index of the method's name
+    LOP_SELFCLASSERROR,
 
     // Enum entry for number of opcodes, not a valid opcode by itself!
     LOP__COUNT
@@ -518,7 +529,7 @@ enum LuauBytecodeTag
 {
     // Bytecode version; runtime supports [MIN, MAX], compiler emits TARGET by default but may emit a higher version when flags are enabled
     LBC_VERSION_MIN = 3,
-    LBC_VERSION_MAX = 14,
+    LBC_VERSION_MAX = 15,
     LBC_VERSION_TARGET = 9,
     // Type encoding version
     LBC_TYPE_VERSION_MIN = 1,

@@ -59,6 +59,7 @@ int getOpLength(LuauOpcode op)
     case LOP_CALLFB:
     case LOP_CMPPROTO:
     case LOP_JUMPXISA:
+    case LOP_SELFCLASSERROR:
         return 2;
 
     default:

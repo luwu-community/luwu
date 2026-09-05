@@ -123,6 +123,18 @@ struct Compiler
 {
     struct RegScope;
 
+    // Data compileFunction needs to emit a CHECKSELFCLASS self-validation for a method: an
+    // expression that evaluates to the owning class (for the check's class register), and the
+    // method's name for the SELFCLASSERROR that raises when the check fails. The class this method
+    // belongs to, the receiver's actual class or type, and the `.`/`:` spelling of the call are all
+    // supplied by the error opcode's operands, so nothing here is baked into a string.
+    struct SelfClassCheck
+    {
+        AstExpr* classExpr;
+        AstName methodName;
+    };
+
+
     Compiler(BytecodeBuilder& bytecode, const CompileOptions& options, AstNameTable& names)
         : bytecode(bytecode)
         , options(options)
@@ -458,8 +470,13 @@ struct Compiler
         // Runtime checking of `self` for methods (see rfcx/classes.md): verify `self` is actually
         // an instance of this method's own class before running anything else in the body,
         // including field defaults below -- an invalid `self` shouldn't get that far. Emitted as a
-        // single CHECKSELFCLASS opcode that falls through on success, with the `error(...)` fallback
-        // inlined right after it (reached only via the check's cold-path jump).
+        // single CHECKSELFCLASS opcode that falls through on success, with the raising
+        // SELFCLASSERROR right after it (reached only via the check's cold-path jump).
+        //
+        // A well-formed `obj:method()` can't reach this: the namecall resolves the method on the
+        // receiver's own class, so `self` is an instance by construction. Only a `.`-call with an
+        // explicit receiver (`SomeClass.method(x)`, or a method value called later) gets here, hence
+        // `selfCall= false`. Inline sites pass the real spelling; see compileInlinedCall.
         if (FFlag::DebugLuauUserDefinedClasses)
         {
             if (const SelfClassCheck* selfCheck = classMethodSelfChecks.find(func))
@@ -467,13 +484,7 @@ struct Compiler
                 RegScope rsCheck(this);
                 uint8_t classReg = compileExprAuto(selfCheck->classExpr, rsCheck);
 
-                size_t checkLabel = bytecode.emitLabel();
-                bytecode.emitABC(LOP_CHECKSELFCLASS, args, classReg, 0);
-
-                compileStat(selfCheck->errorStat);
-
-                if (!bytecode.patchSkipC(checkLabel, bytecode.emitLabel()))
-                    CompileError::raise(func->location, "Exceeded jump distance limit; simplify the code to compile");
+                emitSelfClassCheck(*selfCheck, args, classReg, /* selfCall= */ false, func->location);
             }
         }
 
@@ -1077,6 +1088,69 @@ struct Compiler
         return cost;
     }
 
+    // Runtime checking of `self` for methods (see rfcx/classes.md): a `self:method()` call on the
+    // *same* class from inside another method of that class needs no repeated CHECKSELFCLASS at the
+    // inline site -- the enclosing method's own prologue already validated that exact value. Only
+    // holds while `self` is never reassigned in the enclosing body.
+    bool selfIsAlreadyChecked(AstExprFunction* func, AstExpr* selfExpr)
+    {
+        if (!selfExpr || !currentFunction || currentFunction->args.size == 0)
+            return false;
+
+        AstExpr* recv = selfExpr;
+
+        for (;;)
+        {
+            if (AstExprGroup* g = recv->as<AstExprGroup>())
+                recv = g->expr;
+            else if (AstExprTypeAssertion* t = recv->as<AstExprTypeAssertion>())
+                recv = t->expr;
+            else
+                break;
+        }
+
+        AstExprLocal* le = recv->as<AstExprLocal>();
+
+        if (!le || le->local != currentFunction->args.data[0])
+            return false;
+
+        if (Variable* v = variables.find(le->local); v && v->written)
+            return false;
+
+        AstStatClass** callerClass = classMethodOwner.find(currentFunction);
+        AstStatClass** calleeClass = classMethodOwner.find(func);
+
+        return callerClass && calleeClass && *callerClass == *calleeClass;
+    }
+
+    // Emits the SELFCLASSERROR that raises for a failed `self` check. `selfCall` records whether the
+    // call site spelled the call with `:` or `.`, which the message distinguishes -- a colon call can
+    // only reach the wrong method body via a type annotation that lied and let the compiler inline
+    // it, so it gets told to look at its annotations.
+    void emitSelfClassError(const SelfClassCheck& selfCheck, uint8_t selfReg, uint8_t classReg, bool selfCall, const Location& location)
+    {
+        int32_t methodName = bytecode.addConstantString(sref(selfCheck.methodName));
+
+        if (methodName < 0)
+            CompileError::raise(location, "Exceeded constant limit; simplify the code to compile");
+
+        bytecode.emitABC(LOP_SELFCLASSERROR, selfReg, classReg, selfCall ? 1 : 0);
+        bytecode.emitAux(methodName);
+    }
+
+    // CHECKSELFCLASS falls through when `self` is an instance of the class in `classReg`, and jumps
+    // over the SELFCLASSERROR that follows; a mismatch falls into it and raises.
+    void emitSelfClassCheck(const SelfClassCheck& selfCheck, uint8_t selfReg, uint8_t classReg, bool selfCall, const Location& location)
+    {
+        size_t checkLabel = bytecode.emitLabel();
+        bytecode.emitABC(LOP_CHECKSELFCLASS, selfReg, classReg, 0);
+
+        emitSelfClassError(selfCheck, selfReg, classReg, selfCall, location);
+
+        if (!bytecode.patchSkipC(checkLabel, bytecode.emitLabel()))
+            CompileError::raise(location, "Exceeded jump distance limit; simplify the code to compile");
+    }
+
     void compileInlinedCall(AstExprCall* expr, AstExprFunction* func, uint8_t target, uint8_t targetCount, AstExpr* selfExpr = nullptr)
     {
         RegScope rs(this);
@@ -1211,6 +1285,49 @@ struct Compiler
             else
             {
                 locstants[arg.local] = arg.value;
+            }
+        }
+
+        // Runtime checking of `self` for methods (see rfcx/classes.md): compileFunction splices a
+        // CHECKSELFCLASS into the method's own prologue, but an inlined call never runs that prologue --
+        // only the body is copied here -- so the check has to be re-emitted at the inline site. Without
+        // it a receiver whose annotation lies about its class (`local p: Point2D = Point3D()`) would
+        // silently run the wrong class's method body instead of erroring.
+        if (FFlag::DebugLuauUserDefinedClasses && func->args.size > 0)
+        {
+            if (const SelfClassCheck* selfCheck = classMethodSelfChecks.find(func); selfCheck && !selfIsAlreadyChecked(func, selfExpr))
+            {
+                RegScope rsCheck(this);
+                int boundReg = getLocalReg(func->args.data[0]);
+                uint8_t selfReg;
+
+                if (boundReg < 0)
+                {
+                    // The receiver folded to a compile-time constant, so it can never be an instance.
+                    // Materialize it into a temp anyway -- re-evaluating a constant has no side
+                    // effects, and it gives the error something to name the receiver's type from.
+                    selfReg = allocReg(expr, 1u);
+
+                    if (AstExpr* selfArg = providedArgs > 0 ? argAt(0) : nullptr)
+                        compileExprTemp(selfArg, selfReg);
+                    else
+                        bytecode.emitABC(LOP_LOADNIL, selfReg, 0, 0);
+                }
+                else
+                {
+                    selfReg = uint8_t(boundReg);
+                }
+
+                uint8_t classReg = compileExprAuto(selfCheck->classExpr, rsCheck);
+
+                // compiling classExpr just moved the debug line to the method's declaration; the
+                // check being emitted belongs to this call, and that's the line its error must blame
+                setDebugLine(expr);
+
+                if (boundReg < 0)
+                    emitSelfClassError(*selfCheck, selfReg, classReg, expr->self, expr->location);
+                else
+                    emitSelfClassCheck(*selfCheck, selfReg, classReg, expr->self, expr->location);
             }
         }
 
@@ -1417,8 +1534,9 @@ struct Compiler
     // can be inlined at O2. The receiver's class must be statically known (see resolveReceiverClass),
     // and the privacy gate must pass: a method may only be inlined into a *different* class's body
     // when its class has no private members. Same-class inlining is always allowed (the executing
-    // closure's ownerclass is preserved). Either way the callee carries its own spliced CHECKSELFCLASS,
-    // so a receiver whose runtime class disagrees with the annotation can never run the wrong body.
+    // closure's ownerclass is preserved). Either way compileInlinedCall re-emits the method's
+    // CHECKSELFCLASS at the inline site, so a receiver whose runtime class disagrees with the
+    // annotation can never run the wrong body.
     AstExprFunction* tryResolveMethodCall(AstExprCall* expr)
     {
         if (!expr->self)
@@ -5246,15 +5364,6 @@ struct Compiler
         AstExpr* value;
     };
 
-    // Data compileFunction needs to emit a CHECKSELFCLASS self-validation for a method: an
-    // expression that evaluates to the owning class (for the check's class register), and the
-    // `error(...)` statement to run when the check fails.
-    struct SelfClassCheck
-    {
-        AstExpr* classExpr;
-        AstStat* errorStat;
-    };
-
     // Finds each class's user-defined `__init` (if any) together with the default value
     // expressions of its fields, so that compileFunction can inline `self.field = defaultExpr`
     // assignments at the top of `__init`'s body -- before the user's own statements -- with no
@@ -5325,21 +5434,14 @@ struct Compiler
         // the check along with everything else.
         SelfClassCheck buildSelfCheckStat(AstStatClass* node, const AstClassMethod& method)
         {
-            Location loc = node->location;
+            // the check belongs to this method, so point its debug info at the method's own name
+            // rather than at the class declaration -- `node->location` spans the entire class, which
+            // would blame the class's `end` line for every failed check in it
+            Location loc = method.nameLocation;
 
             AstExpr* classExpr = allocator.alloc<AstExprLocal>(loc, node->name, /* upvalue= */ true);
 
-            std::string message = "attempt to call method '" + std::string(method.functionName.value) +
-                                   "' with 'self' not being an instance of '" + std::string(node->name->name.value) + "'";
-            AstExpr* messageExpr = allocator.alloc<AstExprConstantString>(loc, copyString(message), AstExprConstantString::QuoteStyle::QuotedSimple);
-
-            AstExpr* errorGlobal = allocator.alloc<AstExprGlobal>(loc, names.getOrAdd("error"));
-            AstExpr* errorCall =
-                allocator.alloc<AstExprCall>(loc, errorGlobal, exprArray(messageExpr), /* self= */ false, AstArray<AstTypeOrPack>(), loc);
-
-            AstStat* errorStat = allocator.alloc<AstStatExpr>(loc, errorCall);
-
-            return SelfClassCheck{classExpr, errorStat};
+            return SelfClassCheck{classExpr, method.functionName};
         }
 
         bool visit(AstStatClass* node) override

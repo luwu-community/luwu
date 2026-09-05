@@ -1972,6 +1972,12 @@ void BytecodeBuilder::validateInstructions() const
             VREG(insns[i + 1] & 0xff); // class register lives in the low byte of aux
             break;
 
+        case LOP_SELFCLASSERROR:
+            VREG(LUAU_INSN_A(insn));
+            VREG(LUAU_INSN_B(insn));
+            VCONST(insns[i + 1], String);
+            break;
+
         default:
             LUAU_ASSERT(!"Unsupported opcode");
         }
@@ -2748,6 +2754,12 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
 
     case LOP_JUMPXISA:
         formatAppend(result, "JUMPXISA R%d R%d L%d%s\n", LUAU_INSN_A(insn), *code & 0xff, targetLabel, (*code >> 31) ? "" : " NOT");
+        break;
+
+    case LOP_SELFCLASSERROR:
+        formatAppend(result, "SELFCLASSERROR R%d R%d K%d [", LUAU_INSN_A(insn), LUAU_INSN_B(insn), *code);
+        dumpConstant(result, int(*code++), false);
+        formatAppend(result, "]%s\n", LUAU_INSN_C(insn) ? " SELF" : "");
         break;
 
     default:

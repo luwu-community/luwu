@@ -1941,12 +1941,25 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
     case IrCmd::CLASS_ISINSTANCE:
     {
         // result = (tag == object) && (value->lclass == class); the deref is guarded by the tag check
+        // constant propagation can replace the tag with a known constant (e.g. after CHECKSELFCLASS
+        // has already established that the value is an object), in which case the guard folds away
+        CODEGEN_ASSERT(OP_A(inst).kind == IrOpKind::Inst || OP_A(inst).kind == IrOpKind::Constant);
+        bool knownTag = OP_A(inst).kind == IrOpKind::Constant;
+
         inst.regX64 = regs.allocReg(SizeX64::dword, index);
         build.xor_(inst.regX64, inst.regX64);
 
+        // a value that is statically known not to be an object is never an instance
+        if (knownTag && tagOp(OP_A(inst)) != LUA_TOBJECT)
+            break;
+
         Label done;
-        build.cmp(regOp(OP_A(inst)), LUA_TOBJECT);
-        build.jcc(ConditionX64::NotEqual, done);
+
+        if (!knownTag)
+        {
+            build.cmp(regOp(OP_A(inst)), LUA_TOBJECT);
+            build.jcc(ConditionX64::NotEqual, done);
+        }
 
         build.cmp(regOp(OP_C(inst)), qword[regOp(OP_B(inst)) + offsetof(LuauObject, lclass)]);
         build.setcc(ConditionX64::Equal, byteReg(inst.regX64));

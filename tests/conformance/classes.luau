@@ -129,7 +129,7 @@ end)
 
 expectfail(
     "instance methods reject a self that isn't an instance of the class",
-    "attempt to call method 'magnitude' with 'self' not being an instance of 'Point'",
+    "attempt to call method 'Point.magnitude' with 'self' of type 'table'",
     function ()
         Point.magnitude({x = 4, y = 3})
     end
@@ -830,7 +830,7 @@ end)
 
 expectfail(
     "calling a method via dot-syntax with a self from a different class errors",
-    "attempt to call method 'meow' with 'self' not being an instance of 'SelfCheckCat'",
+    "attempt to call method 'SelfCheckCat.meow' with 'self' of class 'SelfCheckDog'",
     function()
         local dog = SelfCheckDog("Rex")
         -- SelfCheckDog has no `meow` of its own, but SelfCheckCat's `meow` only reads `self.name`,
@@ -1347,5 +1347,170 @@ expectfail(
         outsideClosure()
     end
 )
+
+-- Runtime checking of `self` for methods (rfcx/classes.md) has to survive method inlining at -O2:
+-- `compileInlinedCall` copies the method body into the call site without running the callee's
+-- prologue, so it re-emits the CHECKSELFCLASS itself. Without that, a hostile (or merely wrong)
+-- annotation would silently run the wrong class's method body instead of erroring.
+class InlinePoint2D
+    public x: number = 0
+
+    public function __init(self, x: number?)
+        if x then
+            self.x = x
+        end
+    end
+
+    public function get_x(self)
+        return self.x
+    end
+
+    public function double_x(self)
+        -- same-class `self:method()`: `self` was already validated by this method's own prologue,
+        -- so the inlined copy doesn't need a second check, but it must still be correct
+        local v = self:get_x()
+        return v * 2
+    end
+end
+
+class InlinePoint3D
+    public x: number = 0
+
+    public function __init(self, x: number?)
+        if x then
+            self.x = x
+        end
+    end
+
+    -- deliberately distinguishable from InlinePoint2D's body so that running the wrong one shows up
+    public function get_x(self)
+        return self.x * 100
+    end
+end
+
+expectpass("inlinable method calls on a correctly annotated receiver still work", function()
+    local p: InlinePoint2D = InlinePoint2D(3)
+    local x = p:get_x()
+    local d = p:double_x()
+    assert(x == 3)
+    assert(d == 6)
+end)
+
+expectpass("an annotation that lies about a receiver's class never runs the other class's method body", function()
+    local p: InlinePoint2D = (InlinePoint3D(3) :: any)
+
+    local ok, res = pcall(function()
+        local v = p:get_x()
+        return v
+    end)
+
+    -- when the call is inlined (-O2) the spliced CHECKSELFCLASS rejects the mismatched receiver;
+    -- when it isn't, the call dispatches dynamically to InlinePoint3D's own body. Running
+    -- InlinePoint2D's body against an InlinePoint3D (res == 3) is the bug, and is never allowed.
+    if ok then
+        assert(res == 300, `method call dispatched to the wrong class's body, got {res}`)
+    else
+        assert(
+            string.find(
+                res,
+                "attempt to call method 'InlinePoint2D:get_x' but 'self' is unexpectedly an object of class 'InlinePoint3D'",
+                1,
+                true
+            ),
+            `unexpected error: {res}`
+        )
+    end
+end)
+
+expectpass("a failed self-check that was not inlined blames the method's own declaration", function()
+    local declLine = debug.info(InlinePoint2D.get_x, "l")
+
+    local ok, err = pcall(function()
+        -- a dot-call with a bogus `self` is not inlinable, so the callee's own prologue check fires
+        return InlinePoint2D.get_x({x = 5})
+    end)
+
+    assert(not ok)
+    assert(string.find(err, `:{declLine}:`, 1, true), `expected the error at line {declLine}, got: {err}`)
+end)
+
+expectpass("a failed self-check that was inlined blames the call site, not the method declaration", function()
+    local p: InlinePoint2D = (InlinePoint3D(3) :: any)
+
+    local callLine
+    local ok, err = pcall(function()
+        callLine = debug.info(1, "l") + 1
+        local v = p:get_x()
+        return v
+    end)
+
+    -- only inlining (-O2) makes this fail at all; when it does, the location must be the call
+    if not ok then
+        assert(string.find(err, `:{callLine}:`, 1, true), `expected the error at line {callLine}, got: {err}`)
+    end
+end)
+
+-- The self-check error names the receiver's *actual* class or type, and distinguishes how the call
+-- was spelled: a `.` call passed the wrong receiver, while a `:` call can only reach the wrong
+-- method body via a type annotation that lied and let the compiler inline it.
+expectfail(
+    "a dot-call with an object of the wrong class names that class",
+    "attempt to call method 'InlinePoint2D.get_x' with 'self' of class 'InlinePoint3D'",
+    function()
+        return InlinePoint2D.get_x(InlinePoint3D(1))
+    end
+)
+
+expectfail(
+    "a dot-call with a non-object names its type instead",
+    "attempt to call method 'InlinePoint2D.get_x' with 'self' of type 'number'",
+    function()
+        return InlinePoint2D.get_x(42)
+    end
+)
+
+expectpass("a colon-call reaching the wrong body points at the annotation", function()
+    local p: InlinePoint2D = (InlinePoint3D(3) :: any)
+
+    local ok, err = pcall(function()
+        local v = p:get_x()
+        return v
+    end)
+
+    -- only inlining (-O2) makes this fail at all
+    if not ok then
+        assert(
+            string.find(
+                err,
+                "attempt to call method 'InlinePoint2D:get_x' but 'self' is unexpectedly an object of class 'InlinePoint3D'; " ..
+                    "remove any incorrect type annotations so inlining resolves to the correct class",
+                1,
+                true
+            ),
+            `unexpected error: {err}`
+        )
+    end
+end)
+
+-- `class.isinstance` compiles to a fastcall that native codegen inlines as a tag-guarded class
+-- pointer compare. Inside a method the tag of `self` is already known (the prologue's
+-- CHECKSELFCLASS established it), so constant propagation replaces the tag operand with a
+-- constant -- which the X64/A64 lowering has to accept rather than assume a register.
+class IsinstanceSelfCheck
+    public x: number = 7
+
+    public function get_x(self)
+        assert(class.isinstance(self, IsinstanceSelfCheck))
+        -- a value whose tag is statically known *not* to be an object folds the other way
+        local n = 42
+        assert(not class.isinstance(n, IsinstanceSelfCheck))
+        return self.x
+    end
+end
+
+expectpass("class.isinstance on a value with a statically known tag", function()
+    local v = IsinstanceSelfCheck()
+    assert(v:get_x() == 7)
+end)
 
 return 'OK'

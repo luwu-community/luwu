@@ -347,6 +347,35 @@ l_noret luaG_constassignerror(lua_State* L, const TValue* p2, const TString* cla
     luaG_runerrorL(L, "'%s' is a const member of '%s' and cannot be assigned outside %s's '__init' constructor", getstr(tsvalue(p2)), t1, t1);
 }
 
+// Luau Classes (rfcx/classes.md): a method's `self` is not an instance of the class that method
+// belongs to. `selfCall` distinguishes `obj:method()` from `Class.method(obj)`: a colon call can only
+// reach the wrong method body through a lying type annotation that let the compiler inline it, so it
+// gets a message that says where to look, while a dot call is simply the caller's mistake.
+l_noret luaG_selfclasserror(lua_State* L, const TValue* self, const LuauClass* expected, const TString* methodName, bool selfCall)
+{
+    const char* expectedName = getstr(expected->name);
+    const char* method = getstr(methodName);
+
+    if (!ttisobject(self))
+        luaG_runerrorL(
+            L, "attempt to call method '%s%c%s' with 'self' of type '%s'", expectedName, selfCall ? ':' : '.', method, luaT_objtypename(L, self)
+        );
+
+    const char* actualName = getstr(objectvalue(self)->lclass->name);
+
+    if (selfCall)
+        luaG_runerrorL(
+            L,
+            "attempt to call method '%s:%s' but 'self' is unexpectedly an object of class '%s'; remove any incorrect type annotations so "
+            "inlining resolves to the correct class",
+            expectedName,
+            method,
+            actualName
+        );
+
+    luaG_runerrorL(L, "attempt to call method '%s.%s' with 'self' of class '%s'", expectedName, method, actualName);
+}
+
 static void pusherror(lua_State* L, const char* msg)
 {
     CallInfo* ci = L->ci;

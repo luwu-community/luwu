@@ -24,6 +24,7 @@ LUAI_FUNC l_noret luaG_missingmembererror(lua_State* L, const TValue* p1, const 
 LUAI_FUNC l_noret luaG_readonlyerror(lua_State* L);
 LUAI_FUNC l_noret luaG_privateaccesserror(lua_State* L, const TValue* p2, const TString* className);
 LUAI_FUNC l_noret luaG_constassignerror(lua_State* L, const TValue* p2, const TString* className);
+LUAI_FUNC l_noret luaG_selfclasserror(lua_State* L, const TValue* self, const LuauClass* expected, const TString* methodName, bool selfCall);
 
 LUAI_FUNC LUA_PRINTF_ATTR(2, 3) l_noret luaG_runerrorL(lua_State* L, const char* fmt, ...);
 LUAI_FUNC void luaG_pusherror(lua_State* L, const char* error);

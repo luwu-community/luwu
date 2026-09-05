@@ -133,7 +133,7 @@ LUAU_FLAGVERSION(LuauBackedgeHeapCheck, 2)
         VM_DISPATCH_OP(LOP_JUMPXEQKB), VM_DISPATCH_OP(LOP_JUMPXEQKN), VM_DISPATCH_OP(LOP_JUMPXEQKS), VM_DISPATCH_OP(LOP_IDIV), \
         VM_DISPATCH_OP(LOP_IDIVK), VM_DISPATCH_OP(LOP_GETUDATAKS), VM_DISPATCH_OP(LOP_SETUDATAKS), VM_DISPATCH_OP(LOP_NAMECALLUDATA), \
         VM_DISPATCH_OP(LOP_NEWCLASSMEMBER), VM_DISPATCH_OP(LOP_CALLFB), VM_DISPATCH_OP(LOP_CMPPROTO), VM_DISPATCH_OP(LOP_CHECKSELFCLASS), \
-        VM_DISPATCH_OP(LOP_JUMPXISA),
+        VM_DISPATCH_OP(LOP_JUMPXISA), VM_DISPATCH_OP(LOP_SELFCLASSERROR),
 
 #if defined(__GNUC__) || defined(__clang__)
 #define VM_USE_CGOTO 1
@@ -3801,6 +3801,20 @@ reentry:
 
                 VM_ASSERT_PC(pc);
                 VM_NEXT();
+            }
+
+            VM_CASE(LOP_SELFCLASSERROR)
+            {
+                // Luau Classes (rfcx/classes.md): the cold path a failing CHECKSELFCLASS falls into.
+                // Always raises, so there is no VM_NEXT here.
+                Instruction insn = *pc++;
+                uint32_t aux = *pc++;
+                StkId self = VM_REG(LUAU_INSN_A(insn));
+                StkId classReg = VM_REG(LUAU_INSN_B(insn));
+                LUAU_ASSERT(ttisclass(classReg));
+
+                VM_PROTECT_PC();
+                luaG_selfclasserror(L, self, classvalue(classReg), tsvalue(VM_KV(aux)), LUAU_INSN_C(insn) != 0);
             }
 
             VM_CASE(LOP_JUMPXISA)

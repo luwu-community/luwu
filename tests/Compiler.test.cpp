@@ -11138,14 +11138,12 @@ TEST_CASE("ClassDeclWithMethod")
     CHECK(R"(
 GETUPVAL R1 0
 CHECKSELFCLASS R0 R1 L0
-GETGLOBAL R2 K0 ['error']
-LOADK R3 K1 ['attempt to call method 'magnitud'...]
-CALL R2 1 0
-L0: GETTABLEKS R3 R0 K2 ['x']
-GETTABLEKS R4 R0 K2 ['x']
+SELFCLASSERROR R0 R1 K0 ['magnitude']
+L0: GETTABLEKS R3 R0 K1 ['x']
+GETTABLEKS R4 R0 K1 ['x']
 MUL R2 R3 R4
-GETTABLEKS R4 R0 K3 ['y']
-GETTABLEKS R5 R0 K3 ['y']
+GETTABLEKS R4 R0 K2 ['y']
+GETTABLEKS R5 R0 K2 ['y']
 MUL R3 R4 R5
 ADD R1 R2 R3
 RETURN R1 1
@@ -11162,6 +11160,58 @@ MOVE R2 R0
 CALL R1 1 0
 RETURN R0 0
 )" == res1);
+}
+
+TEST_CASE("ClassMethodInlineSelfCheck")
+{
+    ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+    // see ClassDeclWithMethod: pin the feedback-vector opcode off so the in-method `error(...)`
+    // stays a plain CALL in this dump
+    ScopedFastFlag noCallFb{FFlag::LuauEmitCallFeedback, false};
+
+    // Runtime checking of `self` for methods (rfcx/classes.md) must survive method inlining at -O2:
+    // the inlined copy of the body never runs the callee's prologue, so compileInlinedCall re-emits
+    // the CHECKSELFCLASS itself. Without it, a receiver whose annotation lies about its class would
+    // silently run the wrong class's body.
+    std::string source = R"(
+        class Point
+            public x: number
+            function get_x(self)
+                return self.x
+            end
+            function double_x(self)
+                local v = self:get_x()
+                return v * 2
+            end
+        end
+        local function outside(p: Point)
+            local v = p:get_x()
+            return v
+        end
+        print(outside)
+    )";
+
+    // a same-class `self:method()` inline needs no second check: the enclosing method's own prologue
+    // already validated this exact value
+    auto res1 = "\n" + compileFunction(source.c_str(), 1, 2, 0);
+    CHECK(R"(
+GETUPVAL R1 0
+CHECKSELFCLASS R0 R1 L0
+SELFCLASSERROR R0 R1 K0 ['double_x']
+L0: GETTABLEKS R1 R0 K1 ['x']
+MULK R2 R1 K2 [2]
+RETURN R2 1
+)" == res1);
+
+    // inlining into a non-method (or any other class's) body re-emits the check at the call site
+    auto res2 = "\n" + compileFunction(source.c_str(), 2, 2, 0);
+    CHECK(R"(
+GETUPVAL R2 0
+CHECKSELFCLASS R0 R2 L0
+SELFCLASSERROR R0 R2 K0 ['get_x'] SELF
+L0: GETTABLEKS R1 R0 K1 ['x']
+RETURN R1 1
+)" == res2);
 }
 
 TEST_CASE("ClassDeclWithAmbiguousGlobal")
@@ -11186,16 +11236,14 @@ TEST_CASE("ClassDeclWithAmbiguousGlobal")
     CHECK(R"(
 GETUPVAL R1 0
 CHECKSELFCLASS R0 R1 L0
-GETGLOBAL R2 K0 ['error']
-LOADK R3 K1 ['attempt to call method 'print' w'...]
-CALLFB R2 1 0 [0]
-L0: GETGLOBAL R1 K2 ['print']
-LOADK R2 K3 ['Point(x = %*, y = %*)']
-GETTABLEKS R4 R0 K4 ['x']
-GETTABLEKS R5 R0 K5 ['y']
-NAMECALL R2 R2 K6 ['format']
+SELFCLASSERROR R0 R1 K0 ['print']
+L0: GETGLOBAL R1 K0 ['print']
+LOADK R2 K1 ['Point(x = %*, y = %*)']
+GETTABLEKS R4 R0 K2 ['x']
+GETTABLEKS R5 R0 K3 ['y']
+NAMECALL R2 R2 K4 ['format']
 CALL R2 3 1
-CALLFB R1 1 0 [1]
+CALLFB R1 1 0 [0]
 RETURN R0 0
 )" == res0);
     auto res1 = "\n" + compileFunction(source.c_str(), 1, 0, 0);

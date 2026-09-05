@@ -25,6 +25,9 @@ LUAU_FASTFLAG(LuauCallFeedback)
 LUAU_FASTFLAG(LuauCodegenA64ExitUseCheck)
 LUAU_FASTFLAG(LuauBackedgeHeapCheck)
 LUAU_FASTFLAG(LuauCodegenConstVectorBufferRead)
+LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
+LUAU_FASTFLAG(DebugLuauUserDefinedClassesRuntime)
+LUAU_FASTFLAG(LuauBetterUserDefinedClasses)
 
 #define ensureVectorSize3() \
     if constexpr (LUA_VECTOR_SIZE != 3) \
@@ -8498,4 +8501,59 @@ bb_bytecode_1:
 )"
     );
 }
+
+TEST_CASE_FIXTURE(LoweringFixture, "ClassIsinstanceKnownTag")
+{
+    ScopedFastFlag classes{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag classesRuntime{FFlag::DebugLuauUserDefinedClassesRuntime, true};
+    ScopedFastFlag betterClasses{FFlag::LuauBetterUserDefinedClasses, true};
+
+    // Inside a method the prologue's CHECKSELFCLASS already establishes that `self` is an object, so
+    // constant propagation folds the tag operand of CLASS_ISINSTANCE into a constant; lowering must
+    // accept that instead of assuming the operand is always another instruction's result.
+    CHECK_EQ(
+        "\n" + getCodegenAssembly(
+                   R"(
+class C
+    public x: number = 1
+
+    public function get_x(self)
+        return class.isinstance(self, C)
+    end
+end
+)",
+                   /* includeIrTypes= */ false,
+                   /* debugLevel= */ 1,
+                   /* optimizationLevel= */ 2,
+                   /* clipToFirstReturn= */ true
+               ),
+        R"(
+; function get_x($arg0) line 5
+bb_0:
+  CHECK_TAG R0, tobject, exit(entry)
+  JUMP bb_3
+bb_3:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  %4 = GET_UPVALUE U0
+  STORE_TVALUE R1, %4
+  JUMP bb_5
+bb_5:
+  %8 = LOAD_POINTER R0
+  %9 = LOAD_POINTER R1
+  CHECK_OBJECT_CLASS %8, %9, bb_4
+  JUMP bb_bytecode_2
+bb_bytecode_2:
+  implicit CHECK_SAFE_ENV exit(4)
+  STORE_TVALUE R3, %4
+  CHECK_TAG R3, tclass, exit(7)
+  %21 = CLASS_ISINSTANCE tobject, %8, %9
+  STORE_INT R1, %21
+  STORE_TAG R1, tboolean
+  INTERRUPT 11u
+  RETURN R1, 1i
+)"
+    );
+}
+
 TEST_SUITE_END();
