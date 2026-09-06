@@ -137,7 +137,7 @@ void luaV_gettable(lua_State* L, const TValue* t, TValue* key, StkId val)
                 Closure* cl = nullptr;
                 if (isLua(L->ci))
                     cl = clvalue(L->ci->func);
-                luaR_checkprivateaccess(L, key, inst->lclass, cl, offset);
+                luaR_checkprivateaccessfast(L, key, inst->lclass, cl, offset);
             }
             setobj2s(L, val, luaR_lookupmemberatoffset(inst, offset));
             return;
@@ -173,7 +173,7 @@ void luaV_gettable(lua_State* L, const TValue* t, TValue* key, StkId val)
                 Closure* cl = nullptr;
                 if (isLua(L->ci))
                     cl = clvalue(L->ci->func);
-                luaR_checkprivateaccess(L, key, lco, cl, offset);
+                luaR_checkprivateaccessfast(L, key, lco, cl, offset);
             }
 
             setobj2s(L, val, &lco->staticmembers[offset - lco->numberofinstancemembers]);
@@ -238,9 +238,9 @@ void luaV_settable(lua_State* L, const TValue* t, TValue* key, StkId val)
                 if (isLua(L->ci))
                     cl = clvalue(L->ci->func);
                 if (inst->lclass->hasprivatemembers)
-                    luaR_checkprivateaccess(L, key, inst->lclass, cl, offsetnum);
+                    luaR_checkprivateaccessfast(L, key, inst->lclass, cl, offsetnum);
                 if (inst->lclass->hasconstmembers)
-                    luaR_checkconstassign(L, key, inst->lclass, cl, offsetnum);
+                    luaR_checkconstassignfast(L, key, inst->lclass, cl, offsetnum);
             }
             setobj2class(L, &inst->members[offsetnum], val);
             luaC_barrier(L, inst, val);

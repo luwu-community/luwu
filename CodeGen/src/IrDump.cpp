@@ -393,6 +393,8 @@ const char* getCmdName(IrCmd cmd)
         return "CHECK_OBJECT_CLASS";
     case IrCmd::TRY_OBJECT_MEMBER_ADDR:
         return "TRY_OBJECT_MEMBER_ADDR";
+    case IrCmd::OBJECT_MEMBER_ADDR:
+        return "OBJECT_MEMBER_ADDR";
     case IrCmd::TRY_OBJECT_NAMECALL_ADDR:
         return "TRY_OBJECT_NAMECALL_ADDR";
     case IrCmd::TRY_CLASS_MEMBER_ADDR:

@@ -1485,6 +1485,35 @@ TEST_CASE("ExplicitTypeInstantiations")
     runConformance("explicit_type_instantiations.luau");
 }
 
+// Stands in for a native plugin (a cdylib registered as an ordinary global) reading a member with the
+// C API. It is called *from* Luwu code, so the class access check has to look through its C frame to
+// the Lua closure driving the call rather than trusting the C frame -- see luaR_accessauthority.
+int pluginReadMember(lua_State* L)
+{
+    luaL_checkany(L, 1);
+    const char* field = luaL_checkstring(L, 2);
+
+    lua_getfield(L, 1, field);
+    return 1;
+}
+
+// The same read, performed on a freshly created thread so that no Lua frame is on the stack at the
+// moment of the access: the shape that otherwise looks exactly like the embedder calling in.
+int pluginReadMemberOnNewThread(lua_State* L)
+{
+    luaL_checkany(L, 1);
+    const char* field = luaL_checkstring(L, 2);
+
+    lua_State* T = lua_newthread(L);
+
+    lua_pushvalue(L, 1);
+    lua_xmove(L, T, 1);
+    lua_getfield(T, -1, field);
+    lua_xmove(T, L, 1);
+
+    return 1;
+}
+
 int singleYield(lua_State* L)
 {
     lua_pushnumber(L, 2);
@@ -4510,6 +4539,8 @@ TEST_CASE("Classes")
         {FFlag::DebugLuauUserDefinedClasses, true},
         {FFlag::DebugLuauUserDefinedClassesRuntime, true},
         {FFlag::LuauBetterUserDefinedClasses, true},
+        // a primary constructor's parameter defaults are function parameter defaults
+        {FFlag::LuauDefaultArguments, true},
         {FFlag::LuauNonePrimitive, true},
         {FFlag::LuauGenericNominals, true},
     };
@@ -4526,6 +4557,13 @@ TEST_CASE("Classes")
 
             lua_pushcclosurek(L, multipleYields, "multipleYields", 0, multipleYieldsContinuation);
             lua_setglobal(L, "multipleYields");
+
+            // stand-ins for a native plugin trying to read a private member through the C API
+            lua_pushcfunction(L, pluginReadMember, "pluginReadMember");
+            lua_setglobal(L, "pluginReadMember");
+
+            lua_pushcfunction(L, pluginReadMemberOnNewThread, "pluginReadMemberOnNewThread");
+            lua_setglobal(L, "pluginReadMemberOnNewThread");
         }
     );
 }

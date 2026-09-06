@@ -1450,6 +1450,332 @@ expectpass("a failed self-check that was inlined blames the call site, not the m
     end
 end)
 
+
+-- Field defaults that are compile-time constants are serialized into the class shape and copied
+-- into each new instance, so such a class has no synthesized `__defaults` closure at all. A default
+-- that is *not* constant still has to be re-evaluated on every construction, and keeps the closure.
+class ConstDefaults
+    public n: number = 42
+    public s: string = "hi"
+    public flag: boolean = true
+    public neg: number = -7
+    public bare: number
+end
+
+expectpass("constant field defaults are applied to every instance", function()
+    local a, b = ConstDefaults(), ConstDefaults()
+    assert(a.n == 42 and a.s == "hi" and a.flag == true and a.neg == -7)
+    assert(a.bare == nil, "a field with no default is still nil")
+
+    -- the class holds the default; instances must not share storage with it or each other
+    a.n = 99
+    assert(b.n == 42 and ConstDefaults().n == 42, "defaults must not become shared state")
+end)
+
+expectpass("a table argument overrides defaults and leaves the rest alone", function()
+    local p = ConstDefaults { n = 1 }
+    assert(p.n == 1 and p.s == "hi")
+    assert(ConstDefaults { n = nil }.n == 42, "an explicitly nil field keeps its default")
+end)
+
+class ComputedDefaults
+    public fresh = {}
+    public n: number = 5
+end
+
+expectpass("a non-constant default is re-evaluated for every instance", function()
+    local a, b = ComputedDefaults(), ComputedDefaults()
+    assert(type(a.fresh) == "table" and type(b.fresh) == "table")
+    assert(a.fresh ~= b.fresh, "a `= {}` default must hand out a fresh table per instance")
+    assert(a.n == 5 and b.n == 5)
+end)
+
+local sideEffectSeen = 0
+local function bumpSideEffect()
+    sideEffectSeen += 1
+    return sideEffectSeen
+end
+
+class SideEffect
+    public v = bumpSideEffect()
+end
+
+expectpass("a default that observes side effects runs once per construction", function()
+    assert(SideEffect().v == 1)
+    assert(SideEffect().v == 2)
+    assert(sideEffectSeen == 2)
+end)
+
+-- Constructing an object allocates its fields inline with the object header, and __init is fetched
+-- from a fixed class offset and called with a directly-built frame; check the arg plumbing holds up
+-- at the edges.
+class ManyArgs
+    public first: number = 0
+    public last: number = 0
+    public total: number = 0
+
+    public function __init(self, a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, t)
+        self.first = a
+        self.last = t
+        self.total = a + b + c + d + e + f + g + h + i + j + k + l + m + n + o + p + q + r + s + t
+    end
+end
+
+expectpass("a constructor with enough arguments to grow the stack", function()
+    local m = ManyArgs(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20)
+    assert(m.first == 1 and m.last == 20 and m.total == 210, `got {m.first}/{m.last}/{m.total}`)
+end)
+
+expectpass("a table argument carrying an __index metatable still goes through the generic path", function()
+    local proxied = setmetatable({}, {
+        __index = function(_, key)
+            return key == "n" and 100 or nil
+        end,
+    })
+
+    local p = ConstDefaults(proxied)
+    assert(p.n == 100, `expected __index to be consulted, got {p.n}`)
+    assert(p.s == "hi", "fields the proxy doesn't supply keep their defaults")
+end)
+
+
+-- A call whose callee is a statically resolved class using the default constructor is compiled to a
+-- single NEWOBJECT, bypassing the class's __call metamethod and its C constructor. Classes that need
+-- a real call -- a user `__init`, or non-constant defaults behind `__defaults` -- must still get one.
+class NewObj
+    public x: number = 1
+    public y: number = 2
+end
+
+class NewObjInit
+    public x: number = 0
+    public function __init(self, x: number)
+        self.x = x
+    end
+end
+
+class NewObjComputed
+    public fresh = {}
+    public n: number = 3
+end
+
+expectpass("a class with a default constructor builds correctly with and without an argument", function()
+    assert(NewObj().x == 1 and NewObj().y == 2)
+    assert(NewObj {}.x == 1)
+    assert(NewObj { x = 7 }.x == 7 and NewObj { x = 7 }.y == 2)
+    assert(NewObj { x = 7, y = 8 }.y == 8)
+    assert(class.isinstance(NewObj(), NewObj), "still an instance of its class")
+end)
+
+expectpass("classes that need a real constructor call still get one", function()
+    assert(NewObjInit(5).x == 5)
+    local a, b = NewObjComputed(), NewObjComputed()
+    assert(a.n == 3 and a.fresh ~= b.fresh, "non-constant defaults keep re-evaluating")
+end)
+
+expectpass("constructing in a multret position yields exactly one value", function()
+    local function make()
+        return NewObj { x = 4 }
+    end
+
+    assert(make().x == 4)
+    assert(select("#", make()) == 1, "a constructor returns one value, not a multret tail")
+    assert(select("#", NewObj()) == 1)
+
+    -- as a trailing call argument, the constructor must not spread
+    local function count(...)
+        return select("#", ...)
+    end
+    assert(count(NewObj()) == 1)
+    assert(count(1, 2, NewObj()) == 3)
+end)
+
+expectpass("a constructor argument carrying __index is honoured", function()
+    local proxied = setmetatable({}, {
+        __index = function(_, key)
+            -- collect during the lookup: the half-built object must stay reachable
+            collectgarbage()
+            return key == "x" and 42 or nil
+        end,
+    })
+
+    local p = NewObj(proxied)
+    assert(p.x == 42, `expected __index to be consulted, got {p.x}`)
+    assert(p.y == 2, "fields the proxy doesn't supply keep their defaults")
+end)
+
+expectfail(
+    "the default constructor still rejects too many arguments",
+    "expected zero or one arguments",
+    function()
+        return NewObj(1, 2)
+    end
+)
+
+
+-- With a user-defined `__init`, NEWOBJECT allocates the instance and lays out `__init`'s frame for a
+-- plain CALL, so `__init` runs as an ordinary Lua call rather than through a C constructor.
+class InitArgs
+    public a = 0
+    public b = 0
+    public extra = 0
+
+    public function __init(self, a, b, ...)
+        self.a = a
+        self.b = b
+        self.extra = select("#", ...)
+    end
+end
+
+expectpass("__init receives its arguments, including varargs and missing ones", function()
+    local q = InitArgs(1, 2)
+    assert(q.a == 1 and q.b == 2 and q.extra == 0)
+    assert(InitArgs(1, 2, 3, 4).extra == 2, "varargs reach __init")
+
+    local short = InitArgs(1)
+    assert(short.a == 1 and short.b == nil, "arguments __init doesn't receive are nil")
+end)
+
+class InitDefaulted
+    public x: number = 11
+    public y: number = 22
+
+    public function __init(self, y)
+        if y then
+            self.y = y
+        end
+    end
+end
+
+expectpass("__init runs with field defaults already applied", function()
+    assert(InitDefaulted().x == 11 and InitDefaulted().y == 22)
+    assert(InitDefaulted(5).x == 11 and InitDefaulted(5).y == 5)
+end)
+
+class InitInner
+    public k = 0
+    public function __init(self, k)
+        self.k = k
+    end
+end
+
+class InitOuter
+    public inner = nil
+    public sum = 0
+
+    public function __init(self, k)
+        -- constructing inside a constructor nests the frames
+        self.inner = InitInner(k + 1)
+        self.sum = self.inner.k + k
+    end
+end
+
+expectpass("constructing inside a constructor", function()
+    local o = InitOuter(4)
+    assert(o.inner.k == 5 and o.sum == 9, `got {o.inner.k}/{o.sum}`)
+end)
+
+class InitYields
+    public v = 0
+    public function __init(self, v)
+        coroutine.yield("paused")
+        self.v = v
+    end
+end
+
+expectpass("a yielding __init suspends and resumes to the finished instance", function()
+    local co = coroutine.create(function()
+        return InitYields(7)
+    end)
+
+    local _, msg = coroutine.resume(co)
+    assert(msg == "paused")
+
+    local ok, obj = coroutine.resume(co)
+    assert(ok and obj.v == 7, "the constructor returns the instance after resuming")
+end)
+
+class InitBoom
+    public function __init(self)
+        error("boom")
+    end
+end
+
+expectfail("an error raised by __init propagates out of the constructor", "boom", function()
+    return InitBoom()
+end)
+
+class InitPrivate
+    public x = 0
+    private function __init(self)
+        self.x = 1
+    end
+end
+
+expectpass("a private __init is still not constructible from outside its class", function()
+    assert(not pcall(function()
+        return InitPrivate()
+    end))
+end)
+
+
+-- `ClassName { field = value }` whose keys all name declared fields is compiled with the values
+-- passed positionally, so no argument table is built. Anything the compiler can't place that way
+-- falls back to the table-argument form, which must stay observably identical.
+class Fields
+    public x: number = 1
+    public y: number = 2
+    public z: number = 3
+end
+
+expectpass("a field literal sets what it names and defaults the rest", function()
+    local a = Fields { x = 10, y = 20, z = 30 }
+    assert(a.x == 10 and a.y == 20 and a.z == 30)
+
+    local b = Fields { y = 99 }
+    assert(b.x == 1 and b.y == 99 and b.z == 3, "omitted fields keep their defaults")
+
+    assert(Fields {}.x == 1, "an empty literal is all defaults")
+    assert(Fields { x = nil }.x == 1, "an explicitly nil field keeps its default")
+    assert(Fields { x = false }.x == false, "false is a value, not an omission")
+end)
+
+expectpass("field values are evaluated in source order, not declaration order", function()
+    local order = {}
+    local function mark(name, value)
+        order[#order + 1] = name
+        return value
+    end
+
+    -- z is written first but declared last
+    local p = Fields { z = mark("z", 7), x = mark("x", 8) }
+    assert(p.z == 7 and p.x == 8 and p.y == 2)
+    assert(table.concat(order, ",") == "z,x", `expected z,x got {table.concat(order, ",")}`)
+end)
+
+expectpass("literals the positional form can't take still work", function()
+    -- a computed key, an array part, and a key that isn't a declared field
+    assert(Fields { [("x")] = 5 }.x == 5)
+    assert(Fields { 1, 2 }.x == 1, "an array part is ignored, as before")
+    assert(Fields { nope = 1 }.x == 1, "an unknown key is ignored, as before")
+end)
+
+-- past kMaxNewObjectFields the positional form stops paying for itself and the table form is used;
+-- this class is deliberately wider than that cap
+class WideFields
+    public f1: number = 0  public f2: number = 0  public f3: number = 0  public f4: number = 0
+    public f5: number = 0  public f6: number = 0  public f7: number = 0  public f8: number = 0
+    public f9: number = 0  public f10: number = 0 public f11: number = 0 public f12: number = 0
+    public f13: number = 0 public f14: number = 0 public f15: number = 0 public f16: number = 0
+    public f17: number = 9
+end
+
+expectpass("a class wider than the positional-form cap still constructs correctly", function()
+    local w = WideFields { f1 = 1, f17 = 17 }
+    assert(w.f1 == 1 and w.f17 == 17 and w.f2 == 0, `got {w.f1}/{w.f17}/{w.f2}`)
+    assert(WideFields {}.f17 == 9, "defaults still apply")
+end)
+
 -- The self-check error names the receiver's *actual* class or type, and distinguishes how the call
 -- was spelled: a `.` call passed the wrong receiver, while a `:` call can only reach the wrong
 -- method body via a type annotation that lied and let the compiler inline it.
@@ -1511,6 +1837,396 @@ end
 expectpass("class.isinstance on a value with a statically known tag", function()
     local v = IsinstanceSelfCheck()
     assert(v:get_x() == 7)
+end)
+
+--
+-- Primary constructors (rfcx/classes.md). Each parameter implicitly declares a public field, and the
+-- whole header compiles to a synthesized `__init`.
+--
+
+class PrimaryCat(name: string, age: number)
+    function describe(self)
+        return `{self.name} is {self.age}`
+    end
+end
+
+expectpass("a primary constructor initializes a field per parameter", function()
+    local cat = PrimaryCat("Taz", 14)
+    assert(cat.name == "Taz")
+    assert(cat.age == 14)
+    assert(cat:describe() == "Taz is 14")
+    assert(class.classof(cat) == PrimaryCat)
+end)
+
+expectpass("a primary constructor works when the class isn't statically resolved", function()
+    -- reached through a table field, so the compiler can't compile this to NEWOBJECT
+    local classes = { cat = PrimaryCat }
+    local cat = classes.cat("Oreo", 3)
+    assert(cat.name == "Oreo" and cat.age == 3)
+end)
+
+-- a parameter default fires only for an argument that was left out (or passed as nil), and a field
+-- initializer may derive a value from the parameters
+class PrimaryPercentage(current: number, total = 100)
+    value = ((current / total) * 100) // 1
+end
+
+expectpass("primary constructor parameter defaults", function()
+    local a = PrimaryPercentage(27, 42)
+    assert(a.value == 64 and a.current == 27 and a.total == 42)
+
+    local b = PrimaryPercentage(27)
+    assert(b.value == 27 and b.current == 27 and b.total == 100)
+
+    local c = PrimaryPercentage(27, nil)
+    assert(c.total == 100)
+end)
+
+-- like default field values, a parameter default is re-evaluated on every construction
+local primaryCounterCalls = 0
+local function nextPrimaryCounter()
+    primaryCounterCalls += 1
+    return primaryCounterCalls
+end
+
+class PrimaryCounter(current = nextPrimaryCounter())
+end
+
+expectpass("primary constructor parameter defaults are re-evaluated per construction", function()
+    local before = primaryCounterCalls
+    local first = PrimaryCounter()
+    local second = PrimaryCounter()
+
+    assert(second.current == first.current + 1)
+    assert(primaryCounterCalls == before + 2)
+
+    -- a supplied argument doesn't evaluate the default at all
+    local third = PrimaryCounter(99)
+    assert(third.current == 99)
+    assert(primaryCounterCalls == before + 2)
+end)
+
+-- restating a parameter in the class body is how its field gets an access specifier or a modifier;
+-- the `= hash` may be omitted, in which case the field is initialized from the parameter
+class PrimaryCard(userid: number, hash: string)
+    private const hash
+
+    public function same_hash(self, other)
+        return self.hash == other.hash
+    end
+end
+
+expectpass("a bare restatement makes a parameter's field private", function()
+    local a = PrimaryCard(1, "abc")
+    local b = PrimaryCard(2, "abc")
+
+    assert(a.userid == 1)
+    assert(a:same_hash(b))
+end)
+
+expectfail(
+    "a restated parameter's field is private outside the class",
+    "'hash' is a private member of 'PrimaryCard'",
+    function()
+        return PrimaryCard(1, "abc").hash
+    end
+)
+
+-- any expression may be applied to a parameter by restating it
+local function primaryNotNegative(name, v)
+    return if v >= 0 then v else error(`{name} should be positive`)
+end
+
+class PrimaryUDim(scale: number, offset: number)
+    scale = primaryNotNegative("scale", scale)
+end
+
+expectpass("an expression applied to a parameter", function()
+    local d = PrimaryUDim(3, -4)
+    assert(d.scale == 3)
+    -- only `scale` is validated; `offset` keeps the argument as passed
+    assert(d.offset == -4)
+end)
+
+expectfail("an expression applied to a parameter can raise", "scale should be positive", function()
+    return PrimaryUDim(-1, 0)
+end)
+
+-- fields are laid out class-body-first, then the parameters the body doesn't restate
+class PrimaryFrame(name: string, size: number)
+    private id = 7
+    public size = size * 2
+
+    public function get_id(self)
+        return self.id
+    end
+end
+
+expectpass("body fields and parameter fields coexist", function()
+    local f = PrimaryFrame("main", 10)
+    assert(f.name == "main")
+    assert(f.size == 20)
+    assert(f:get_id() == 7)
+end)
+
+-- evaluation order is: argument expressions, then defaults for the arguments left out, then field
+-- initializers in declaration order
+local primaryOrderLog = {}
+local function primaryNote(s, v)
+    table.insert(primaryOrderLog, s)
+    return v
+end
+
+class PrimaryOrder(a = primaryNote("default-a", 1), b = primaryNote("default-b", 2))
+    c = primaryNote("field-c", 3)
+end
+
+expectpass("primary constructor evaluation order", function()
+    primaryOrderLog = {}
+    local o = PrimaryOrder(primaryNote("arg-a", 10))
+
+    assert(table.concat(primaryOrderLog, ",") == "arg-a,default-b,field-c")
+    assert(o.a == 10 and o.b == 2 and o.c == 3)
+end)
+
+-- a class may construct itself from within its own methods
+class PrimaryVec(x: number, y: number)
+    function add(self, other)
+        return PrimaryVec(self.x + other.x, self.y + other.y)
+    end
+end
+
+expectpass("constructing a class from inside one of its own methods", function()
+    local v = PrimaryVec(1, 2):add(PrimaryVec(3, 4))
+    assert(v.x == 4 and v.y == 6)
+end)
+
+-- a private primary constructor may only be called from within its own class
+class PrimaryAccount private (holder: string, balance: number)
+    public function open(holder: string)
+        return PrimaryAccount(holder, 0)
+    end
+end
+
+expectpass("a private primary constructor is callable from inside its class", function()
+    local account = PrimaryAccount.open("taz")
+    assert(account.holder == "taz" and account.balance == 0)
+end)
+
+expectfail(
+    "a private primary constructor is not callable from outside its class",
+    "'__init' is a private member of 'PrimaryAccount'",
+    function()
+        return PrimaryAccount("hax", 99)
+    end
+)
+
+-- the synthesized `__init` is a real member, so it checks `self` like any other method
+class PrimaryPoint(x: number, y: number) end
+class PrimaryOther(x: number) end
+
+expectfail(
+    "the synthesized '__init' rejects a receiver of the wrong class",
+    "attempt to call method 'PrimaryPoint.__init' with 'self' of class 'PrimaryOther'",
+    function()
+        return PrimaryPoint.__init(PrimaryOther(1), 1, 2)
+    end
+)
+
+expectpass("the synthesized '__init' can be called on an instance of its own class", function()
+    local p = PrimaryPoint(1, 2)
+    p:__init(3, 4)
+    assert(p.x == 3 and p.y == 4)
+end)
+
+-- a class with a primary constructor has no table constructor: the table is just argument one
+class PrimaryPackage(owner: string, contents: number) end
+
+expectpass("a table passed to a primary constructor is an ordinary argument", function()
+    local pkg = PrimaryPackage({ owner = "x", contents = 1 } :: any)
+    assert(type(pkg.owner) == "table")
+    assert(pkg.contents == nil)
+end)
+
+-- an empty parameter list is not the same as no parameter list: it takes away the table constructor
+local primarySymbolCalls = 0
+local function nextPrimarySymbol()
+    primarySymbolCalls += 1
+    return primarySymbolCalls
+end
+
+class PrimarySymbol()
+    const id = nextPrimarySymbol()
+end
+
+expectpass("a primary constructor with no parameters", function()
+    local a = PrimarySymbol()
+    local b = PrimarySymbol()
+    assert(b.id == a.id + 1)
+end)
+
+--
+-- A C function is never an authority for private access. Everything a default embedding exposes to
+-- Luwu code -- pcall, xpcall, a coroutine body, a table.sort comparator, a string.gsub callback --
+-- runs with a Lua frame below it, and the check looks through the C frames to find it. Only the
+-- embedder's own C API calls, which have no Lua frame at all, still bypass.
+--
+
+class PrivateBypass private (secret: string)
+    private const secret
+
+    public function make(s: string)
+        return PrivateBypass(s)
+    end
+
+    public function reveal(self)
+        return self.secret
+    end
+end
+
+expectpass("a private constructor and field are reachable from inside the class", function()
+    local v = PrivateBypass.make("shh")
+    assert(v:reveal() == "shh")
+end)
+
+expectpass("pcall cannot launder a private constructor", function()
+    local ok, err = pcall(PrivateBypass, "hax")
+    assert(not ok, "pcall constructed a class with a private constructor")
+    assert(string.find(err, "'__init' is a private member of 'PrivateBypass'", 1, true), err)
+end)
+
+expectpass("xpcall cannot launder a private constructor", function()
+    local ok, err = xpcall(PrivateBypass, function(e)
+        return e
+    end, "hax")
+    assert(not ok, "xpcall constructed a class with a private constructor")
+    assert(string.find(err, "'__init' is a private member of 'PrivateBypass'", 1, true), err)
+end)
+
+expectpass("a coroutine cannot launder a private constructor", function()
+    local ok, err = coroutine.resume(coroutine.create(function()
+        return PrivateBypass("hax")
+    end))
+    assert(not ok, "a coroutine constructed a class with a private constructor")
+    assert(string.find(err, "'__init' is a private member of 'PrivateBypass'", 1, true), err)
+end)
+
+expectpass("a C function callback cannot launder a private field read", function()
+    local v = PrivateBypass.make("shh")
+
+    local sorted, sortErr = pcall(function()
+        local t = {v, v}
+        table.sort(t, function(a, b)
+            return a.secret < b.secret
+        end)
+    end)
+    assert(not sorted, "a table.sort comparator read a private field")
+    assert(string.find(sortErr, "'secret' is a private member of 'PrivateBypass'", 1, true), sortErr)
+
+    local gsubbed, gsubErr = pcall(function()
+        return (string.gsub("a", "a", function()
+            return v.secret
+        end))
+    end)
+    assert(not gsubbed, "a string.gsub callback read a private field")
+    assert(string.find(gsubErr, "'secret' is a private member of 'PrivateBypass'", 1, true), gsubErr)
+end)
+
+expectpass("native code reading a private member through the C API is allowed", function()
+    local v = PrivateBypass.make("shh")
+
+    -- Deliberate, and the counterpart to the tests above: native code that performs the access itself
+    -- is trusted, whether that is the embedder calling in or a cdylib plugin Luwu code called. It
+    -- holds the C API and the LuauObject pointer besides, so `private` was never a boundary it could
+    -- be held to; an embedder whose own internals are partly Luwu (and a debugger plugin) depends on
+    -- this working. What is *not* allowed is Luwu code reaching a private member through a builtin,
+    -- since a builtin performs no access of its own.
+    assert(pluginReadMember(v, "secret") == "shh")
+    assert(pluginReadMemberOnNewThread(v, "secret") == "shh")
+
+    -- public members read the same way, of course
+    assert(pluginReadMember(PrimaryCat("Taz", 14), "name") == "Taz")
+end)
+
+--
+-- A statically resolved construction of a class with a primary constructor doesn't call the
+-- synthesized `__init` at all: the parameters are evaluated into registers, each field initializer is
+-- compiled at the construction site, and NEWOBJECT's positional FIELDS form finishes the instance.
+-- These are the cases where that inlining could plausibly diverge from the call it replaces.
+--
+
+class PrimaryInlineDefaults(x = 5, y = 6) end
+
+expectpass("an argument that is nil at runtime still takes the parameter's default", function()
+    -- not a constant the compiler can see through: the default has to be applied at runtime
+    local absent = ({})[1]
+    local d = PrimaryInlineDefaults(absent, 9)
+
+    assert(d.x == 5)
+    assert(d.y == 9)
+end)
+
+class PrimaryInlineNest(v: number)
+    doubled = v * 2
+end
+
+expectpass("constructing a class inside its own constructor's arguments", function()
+    local n = PrimaryInlineNest(PrimaryInlineNest(3).doubled)
+
+    assert(n.v == 6)
+    assert(n.doubled == 12)
+end)
+
+-- a parameter read by more than one field initializer, and one restated by the class body: neither
+-- can be evaluated straight into a field register the way a plain parameter field is
+class PrimaryInlineMulti(w: number, h: number)
+    public area = w * h
+    private const w
+    public perim = 2 * (w + h)
+
+    public function get_w(self)
+        return self.w
+    end
+end
+
+expectpass("a parameter read by several field initializers", function()
+    local m = PrimaryInlineMulti(3, 4)
+
+    assert(m.area == 12)
+    assert(m.perim == 14)
+    assert(m.h == 4)
+    assert(m:get_w() == 3)
+end)
+
+class PrimaryInlineMaybe(v: number?)
+    got = v
+end
+
+expectpass("a field initializer that evaluates to nil stays nil", function()
+    assert(PrimaryInlineMaybe(nil).got == nil)
+    assert(PrimaryInlineMaybe(7).got == 7)
+end)
+
+-- wider than the positional form's field cap, so this one falls back to calling `__init`
+class PrimaryInlineWide(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18) end
+
+expectpass("a class too wide for the positional form still constructs", function()
+    local w = PrimaryInlineWide(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18)
+
+    assert(w.a1 == 1)
+    assert(w.a18 == 18)
+end)
+
+-- an initializer that reads an upvalue can't be compiled at the construction site (the site has no
+-- way to name it), so this one falls back to calling `__init` too
+local primaryInlineFactor = 10
+
+class PrimaryInlineCapture(v: number)
+    scaled = v * primaryInlineFactor
+end
+
+expectpass("a field initializer that captures an upvalue still constructs", function()
+    assert(PrimaryInlineCapture(3).scaled == 30)
 end)
 
 return 'OK'

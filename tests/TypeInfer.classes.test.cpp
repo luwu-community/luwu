@@ -11,6 +11,7 @@ using namespace Luau;
 
 LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
 LUAU_FASTFLAG(LuauBetterUserDefinedClasses)
+LUAU_FASTFLAG(LuauDefaultArguments)
 LUAU_FASTFLAG(LuauGenericNominals)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass);
 LUAU_FASTFLAG(LuauIntegerType2)
@@ -996,5 +997,334 @@ TEST_CASE_FIXTURE(ClassesFixture, "accept_read_only_tables")
     CHECK_EQ("({ read bar: number | string }) -> Foo", toString(requireType("inference")));
 }
 
+
+// Primary constructors (rfcx/classes.md): each parameter declares a public field, and the class is
+// constructed positionally through the `__init` the parameter list implies.
+
+TEST_CASE_FIXTURE(ClassesFixture, "primary_constructor_declares_a_field_per_parameter")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuauDefaultArguments, true},
+    };
+
+    LUAU_REQUIRE_NO_ERRORS(check(R"(
+        class Cat(name: string, age: number)
+            function describe(self)
+                return self.name
+            end
+        end
+
+        local cat = Cat("Taz", 14)
+        local name = cat.name
+        local age = cat.age
+    )"));
+
+    CHECK_EQ("string", toString(requireType("name")));
+    CHECK_EQ("number", toString(requireType("age")));
+    CHECK_EQ("Cat", toString(requireType("cat")));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "primary_constructor_argument_types_are_checked")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuauDefaultArguments, true},
+    };
+
+    auto result = check(R"(
+        class Cat(name: string, age: number)
+        end
+
+        local cat = Cat(12, 14)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<TypeMismatch>(result.errors[0]));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "primary_constructor_arity_is_checked")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuauDefaultArguments, true},
+    };
+
+    auto result = check(R"(
+        class Cat(name: string, age: number)
+        end
+
+        local cat = Cat("Taz")
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<CountMismatch>(result.errors[0]));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "primary_constructor_parameter_defaults")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuauDefaultArguments, true},
+    };
+
+    LUAU_REQUIRE_NO_ERRORS(check(R"(
+        class Percentage(current: number, total = 100)
+            value = (current / total) * 100
+        end
+
+        local a = Percentage(27, 42)
+        local b = Percentage(27)
+        local total = a.total
+        local value = a.value
+    )"));
+
+    // a parameter with a default may be omitted at the call site, but the field it declares is never
+    // nil -- the default fills it in
+    CHECK_EQ("number", toString(requireType("total")));
+    CHECK_EQ("number", toString(requireType("value")));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "primary_constructor_parameter_default_is_checked_against_its_annotation")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuauDefaultArguments, true},
+    };
+
+    auto result = check(R"(
+        class Percentage(current: number, total: number = "one hundred")
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<TypeMismatch>(result.errors[0]));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "primary_constructor_parameters_are_visible_to_field_initializers")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuauDefaultArguments, true},
+    };
+
+    LUAU_REQUIRE_NO_ERRORS(check(R"(
+        class Frame(name: string, size: number)
+            public doubled = size * 2
+            private label = name
+        end
+
+        local f = Frame("main", 10)
+        local doubled = f.doubled
+    )"));
+
+    CHECK_EQ("number", toString(requireType("doubled")));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "primary_constructor_parameters_are_not_visible_to_methods")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuauDefaultArguments, true},
+    };
+
+    // `name` in the method body is the global, not the parameter, so this is not a type error about
+    // strings -- it just isn't the parameter
+    LUAU_REQUIRE_NO_ERRORS(check(R"(
+        class Symbol(name: string)
+            public function describe(self): string
+                return self.name
+            end
+        end
+    )"));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "bare_restatement_takes_the_parameters_type")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuauDefaultArguments, true},
+    };
+
+    auto result = check(R"(
+        class Card(userid: number, hash: string)
+            private const hash
+
+            public function same(self, other: Card): boolean
+                return self.hash == other.hash
+            end
+        end
+
+        local card = Card(1, "abc")
+        local leaked = card.hash
+    )");
+
+    // the field is private, so reading it from outside the class is the only error here
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<PrivatePropertyAccess>(result.errors[0]));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "field_that_can_never_be_initialized")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuauDefaultArguments, true},
+    };
+
+    auto result = check(R"(
+        class Bottle()
+            brand = "Coke"
+            top: string
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    auto err = get<UninitializableClassField>(result.errors[0]);
+    REQUIRE(err);
+    CHECK_EQ("top", err->key);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "field_that_can_never_be_initialized_is_fine_when_optional")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuauDefaultArguments, true},
+    };
+
+    // ...and a field a parameter names, or one with a default, is initialized after all
+    LUAU_REQUIRE_NO_ERRORS(check(R"(
+        class Bottle(size: number)
+            brand = "Coke"
+            top: string?
+            size: number
+        end
+    )"));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "a_class_with_a_table_constructor_may_leave_fields_uninitialized")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuauDefaultArguments, true},
+    };
+
+    // the rule is specific to primary constructors: a POD class's table constructor can still supply
+    // the field
+    LUAU_REQUIRE_NO_ERRORS(check(R"(
+        class Bottle
+            top: string
+        end
+
+        local b = Bottle { top = "cap" }
+    )"));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "private_primary_constructor")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuauDefaultArguments, true},
+    };
+
+    auto result = check(R"(
+        class Account private (holder: string)
+            public function open(h: string): Account
+                return Account(h)
+            end
+        end
+
+        local a = Account("taz")
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<PrivateConstructorAccess>(result.errors[0]));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "primary_constructor_table_argument_is_positional")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuauDefaultArguments, true},
+    };
+
+    // a primary constructor takes away the table constructor: the table is just argument one
+    auto result = check(R"(
+        class Package(owner: string, contents: number)
+        end
+
+        local pkg = Package { owner = "x", contents = 1 }
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK(get<TypeMismatch>(result.errors[0]));
+    CHECK(get<CountMismatch>(result.errors[1]));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "generic_class_with_a_primary_constructor")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuauDefaultArguments, true},
+        {FFlag::LuauGenericNominals, true},
+    };
+
+    auto result = check(R"(
+        class Box<T>(inner: T)
+            public function get(self): T
+                return self.inner
+            end
+        end
+
+        local box = Box(5)
+        local unwrapped: number = box:get()
+        local mistyped: string = box:get()
+    )");
+
+    // the class's generic is inferred from the constructor argument, so `get` returns a number here
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<TypeMismatch>(result.errors[0]));
+    CHECK_EQ("Box<number>", toString(requireType("box")));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "bare_restatement_is_checked_against_the_parameters_type")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuauDefaultArguments, true},
+    };
+
+    // `private breed: number` still initializes the field from the parameter -- the `= breed` is
+    // implicit, not absent -- so the parameter's type has to fit the annotation
+    auto result = check(R"(
+        type CatBreed = "Orange" | "AmericanShorthair" | "Void"
+
+        class Cat(name: string, breed: CatBreed = "AmericanShorthair")
+            private breed: number
+
+            public function describe(self): string
+                return self.name
+            end
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<TypeMismatch>(result.errors[0]));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "bare_restatement_with_a_compatible_annotation")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuauDefaultArguments, true},
+    };
+
+    // widening the annotation is fine; the parameter's type still fits
+    LUAU_REQUIRE_NO_ERRORS(check(R"(
+        class Cat(name: string, age: number)
+            private const name: string
+            private age: number | string
+        end
+    )"));
+}
 
 TEST_SUITE_END();

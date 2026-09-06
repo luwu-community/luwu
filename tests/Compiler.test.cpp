@@ -11139,11 +11139,11 @@ TEST_CASE("ClassDeclWithMethod")
 GETUPVAL R1 0
 CHECKSELFCLASS R0 R1 L0
 SELFCLASSERROR R0 R1 K0 ['magnitude']
-L0: GETTABLEKS R3 R0 K1 ['x']
-GETTABLEKS R4 R0 K1 ['x']
+L0: GETOBJECTMEMBER R3 R0 0
+GETOBJECTMEMBER R4 R0 0
 MUL R2 R3 R4
-GETTABLEKS R4 R0 K2 ['y']
-GETTABLEKS R5 R0 K2 ['y']
+GETOBJECTMEMBER R4 R0 1
+GETOBJECTMEMBER R5 R0 1
 MUL R3 R4 R5
 ADD R1 R2 R3
 RETURN R1 1
@@ -11160,6 +11160,188 @@ MOVE R2 R0
 CALL R1 1 0
 RETURN R0 0
 )" == res1);
+}
+
+TEST_CASE("ClassConstantFieldDefaults")
+{
+    ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag betterClasses{FFlag::LuauBetterUserDefinedClasses, true};
+
+    // A POD class whose field defaults are all compile-time constants carries them in its own class
+    // shape, so it needs no synthesized `__defaults` closure -- no extra proto, no NEWCLASSMEMBER,
+    // and no call per construction. A class with any non-constant default still gets one, since such
+    // a default has to be re-evaluated on every construction.
+    std::string source = R"(
+        class ConstDefaults
+            public n: number = 42
+            public s: string = "hi"
+        end
+        class ComputedDefault
+            public t = {}
+            public n: number = 1
+        end
+        print(ConstDefaults, ComputedDefault)
+    )";
+
+    // function 0 is ComputedDefault's `__defaults`; ConstDefaults contributes no function at all
+    auto res0 = "\n" + compileFunction(source.c_str(), 0, 2, 0);
+    CHECK(R"(
+NEWTABLE R0 0 0
+LOADN R1 1
+RETURN R0 2
+)" == res0);
+
+    auto res1 = "\n" + compileFunction(source.c_str(), 1, 2, 0);
+    CHECK(R"(
+LOADNIL R0
+LOADNIL R1
+LOADKX R0 K5 [class ConstDefaults (props: 2, methods: 0)]
+LOADKX R1 K10 [class ComputedDefault (props: 2, methods: 1)]
+DUPCLOSURE R2 K8 []
+NEWCLASSMEMBER R1 R2 ['__defaults']
+GETIMPORT R2 12 [print]
+MOVE R3 R0
+MOVE R4 R1
+CALL R2 2 0
+RETURN R0 0
+)" == res1);
+}
+
+TEST_CASE("ClassNewObject")
+{
+    ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag betterClasses{FFlag::LuauBetterUserDefinedClasses, true};
+
+    // A call whose callee is a statically resolved class compiles to NEWOBJECT: on its own for a
+    // class using the default constructor, and followed by a plain CALL of `__init` for a class that
+    // declares one. A class with non-constant defaults behind a `__defaults` closure still needs the
+    // constructor to call it, so it keeps the ordinary CALL sequence.
+    std::string source = R"(
+        class Pod
+            public x: number = 1
+            public y: number = 2
+        end
+        class WithInit
+            public x: number = 0
+            public function __init(self, x) self.x = x end
+        end
+        class Computed
+            public t = {}
+        end
+        local a = Pod()
+        local b = Pod { x = 9 }
+        local c = WithInit(5)
+        local d = Computed()
+        print(a, b, c, d)
+    )";
+
+    auto res = "\n" + compileFunction(source.c_str(), 2, 2, 0);
+    CHECK(R"(
+LOADNIL R0
+LOADNIL R1
+LOADNIL R2
+LOADKX R0 K5 [class Pod (props: 2, methods: 0)]
+LOADKX R1 K9 [class WithInit (props: 1, methods: 1)]
+DUPCLOSURE R3 K7 ['__init']
+CAPTURE VAL R1
+NEWCLASSMEMBER R1 R3 ['__init']
+LOADKX R2 K14 [class Computed (props: 1, methods: 1)]
+DUPCLOSURE R3 K12 []
+NEWCLASSMEMBER R2 R3 ['__defaults']
+NEWOBJECT R3 R0 0
+LOADNIL R7
+LOADN R6 9
+NEWOBJECT R5 R0 2 FIELDS
+MOVE R4 R5
+LOADN R9 5
+NEWOBJECT R6 R1 1 INIT
+CALL R7 2 0
+MOVE R5 R6
+MOVE R6 R2
+CALL R6 0 1
+GETIMPORT R7 16 [print]
+MOVE R8 R3
+MOVE R9 R4
+MOVE R10 R5
+MOVE R11 R6
+CALL R7 4 0
+RETURN R0 0
+)" == res);
+}
+
+TEST_CASE("ClassPrimaryConstructor")
+{
+    ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag betterClasses{FFlag::LuauBetterUserDefinedClasses, true};
+
+    // A primary constructor (rfcx/classes.md) declares a public field per parameter. A statically
+    // resolved construction site doesn't call the synthesized `__init` at all: the parameters are
+    // evaluated into registers, each field's initializer is compiled inline, and NEWOBJECT's
+    // positional FIELDS form finishes the instance. The class body's own properties come first, then
+    // the parameters the body doesn't restate -- `id`, `size`, `name` here. `name` is read by nothing
+    // but its own field, so its argument is evaluated straight into that field's register: no
+    // temporary and no move. `size` is read by another field's initializer, so it keeps one.
+    std::string source = R"(
+        class Frame(name: string, size: number)
+            private id = 7
+            public size = size * 2
+        end
+        local f = Frame("main", 10)
+        print(f)
+    )";
+
+    auto res = "\n" + compileFunction(source.c_str(), 1, 2, 0);
+    CHECK(R"(
+LOADNIL R0
+LOADKX R0 K6 [class Frame (props: 3, methods: 1)]
+DUPCLOSURE R1 K4 ['__init']
+CAPTURE VAL R0
+NEWCLASSMEMBER R0 R1 ['__init']
+LOADK R5 K7 ['main']
+LOADN R6 10
+LOADN R3 7
+MULK R4 R6 K8 [2]
+NEWOBJECT R2 R0 3 FIELDS
+MOVE R1 R2
+GETIMPORT R2 10 [print]
+MOVE R3 R1
+CALL R2 1 0
+RETURN R0 0
+)" == res);
+}
+
+TEST_CASE("ClassPrimaryConstructorInit")
+{
+    ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag betterClasses{FFlag::LuauBetterUserDefinedClasses, true};
+    // a primary constructor's parameter defaults ride on the function parameter default flag
+    ScopedFastFlag defaultArgs{FFlag::LuauDefaultArguments, true};
+
+    // The body of that synthesized `__init`: the self check every method gets, then the parameter
+    // defaults, then one field assignment per field in declaration order -- body properties first,
+    // then the parameters the body didn't restate. Assignments are body statements rather than the
+    // prologue injection an explicit `__init` uses, which is what puts them after the defaults.
+    std::string source = R"(
+        class Frame(name: string, size = 10)
+            private id = 7
+            public size = size * 2
+        end
+    )";
+
+    auto res = "\n" + compileFunction(source.c_str(), 0, 2, 0);
+    CHECK(R"(
+GETUPVAL R3 0
+CHECKSELFCLASS R0 R3 L0
+SELFCLASSERROR R0 R3 K0 ['__init']
+L0: JUMPXEQKNIL R2 L1 NOT
+LOADN R2 10
+L1: LOADN R3 7
+SETTABLEKS R3 R0 K1 ['id']
+MULK R3 R2 K2 [2]
+SETTABLEKS R3 R0 K3 ['size']
+SETTABLEKS R1 R0 K4 ['name']
+RETURN R0 0
+)" == res);
 }
 
 TEST_CASE("ClassMethodInlineSelfCheck")
@@ -11239,8 +11421,8 @@ CHECKSELFCLASS R0 R1 L0
 SELFCLASSERROR R0 R1 K0 ['print']
 L0: GETGLOBAL R1 K0 ['print']
 LOADK R2 K1 ['Point(x = %*, y = %*)']
-GETTABLEKS R4 R0 K2 ['x']
-GETTABLEKS R5 R0 K3 ['y']
+GETOBJECTMEMBER R4 R0 0
+GETOBJECTMEMBER R5 R0 1
 NAMECALL R2 R2 K4 ['format']
 CALL R2 3 1
 CALLFB R1 1 0 [0]
@@ -12223,11 +12405,12 @@ local p = Point {x = 1, y = 2}
 LOADNIL R0
 NEWTABLE R1 0 0
 LOADKX R0 K3 [class Point (props: 2, methods: 0)]
-MOVE R2 R0
-DUPTABLE R3 6
-CALL R2 1 1
+LOADN R4 1
+LOADN R5 2
+NEWOBJECT R3 R0 2 FIELDS
+MOVE R2 R3
 SETTABLEKS R0 R1 K0 ['Point']
-GETIMPORT R3 9 [table.freeze]
+GETIMPORT R3 6 [table.freeze]
 MOVE R4 R1
 CALL R3 1 1
 RETURN R3 1

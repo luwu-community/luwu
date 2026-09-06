@@ -1046,7 +1046,8 @@ AstStatClass::AstStatClass(
     bool exported,
     const Location& keywordLocation,
     const AstArray<AstGenericType*>& generics,
-    const AstArray<AstGenericTypePack*>& genericPacks
+    const AstArray<AstGenericTypePack*>& genericPacks,
+    AstClassPrimaryConstructor* primaryConstructor
 )
     : AstStat(ClassIndex(), location)
     , name(name)
@@ -1054,6 +1055,7 @@ AstStatClass::AstStatClass(
     , exported(exported)
     , generics(generics)
     , genericPacks(genericPacks)
+    , primaryConstructor(primaryConstructor)
     , keywordLocation(keywordLocation)
 {
     LUAU_ASSERT(FFlag::DebugLuauUserDefinedClasses);
@@ -1064,6 +1066,21 @@ void AstStatClass::visit(AstVisitor* visitor)
     LUAU_ASSERT(FFlag::DebugLuauUserDefinedClasses);
     if (visitor->visit(this))
     {
+        if (primaryConstructor)
+        {
+            for (AstLocal* arg : primaryConstructor->args)
+            {
+                if (arg->annotation)
+                    arg->annotation->visit(visitor);
+            }
+
+            for (AstExpr* argDefault : primaryConstructor->argsDefaults)
+            {
+                if (argDefault)
+                    argDefault->visit(visitor);
+            }
+        }
+
         for (const auto& member : members)
         {
             Luau::visit(

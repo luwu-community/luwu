@@ -860,6 +860,14 @@ struct ErrorConverter
         return "This class's constructor is private; call a factory function instead of calling the constructor directly";
     }
 
+    std::string operator()(const UninitializableClassField& e) const
+    {
+        const std::string stringKey = isIdentifier(e.key) ? e.key : "\"" + e.key + "\"";
+        return "Field " + stringKey +
+               " will always be initialized to `nil` but is not marked as optional; consider providing a default field value, adding a class "
+               "parameter of the same name, or marking the field as optional with `?`";
+    }
+
     std::string operator()(const CheckedFunctionIncorrectArgs& e) const
     {
 
@@ -1159,6 +1167,11 @@ bool PrivatePropertyAccess::operator==(const PrivatePropertyAccess& rhs) const
 bool ConstPropertyAssignment::operator==(const ConstPropertyAssignment& rhs) const
 {
     return *table == *rhs.table && key == rhs.key;
+}
+
+bool UninitializableClassField::operator==(const UninitializableClassField& rhs) const
+{
+    return classTy == rhs.classTy && key == rhs.key;
 }
 
 bool PrivateConstructorAccess::operator==(const PrivateConstructorAccess& rhs) const
@@ -1714,6 +1727,8 @@ void copyError(T& e, TypeArena& destArena, CloneState& cloneState)
     else if constexpr (std::is_same_v<T, ConstPropertyAssignment>)
         e.table = clone(e.table);
     else if constexpr (std::is_same_v<T, PrivateConstructorAccess>)
+        e.classTy = clone(e.classTy);
+    else if constexpr (std::is_same_v<T, UninitializableClassField>)
         e.classTy = clone(e.classTy);
     else if constexpr (std::is_same_v<T, CheckedFunctionIncorrectArgs>)
     {

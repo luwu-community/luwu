@@ -57,6 +57,9 @@ public:
         // each member, in the same order (properties first, then methods).
         std::vector<uint8_t> propertyFlags;
         std::vector<uint8_t> methodFlags;
+        // Parallel to propertyNames: for a member flagged LBC_CLASSMEMBER_CONSTDEFAULT, the proto
+        // constant index of its default value; -1 for every other member.
+        std::vector<int32_t> propertyDefaults;
     };
 
     BytecodeBuilder(BytecodeEncoder* encoder = 0);

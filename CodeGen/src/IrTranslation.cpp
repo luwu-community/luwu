@@ -1883,6 +1883,41 @@ void translateInstGetTableKS(IrBuilder& build, const Instruction* pc, int pcpos)
     build.inst(IrCmd::JUMP, next);
 }
 
+// Luau Classes (rfcx/classes.md): read `self.field` where the compiler proved the receiver's class, so
+// the member offset is a constant. The tag is still guarded -- deopting to the interpreter on a miss,
+// which is where the error is raised -- but nothing about the class is re-derived.
+void translateInstGetObjectMember(IrBuilder& build, const Instruction* pc, int pcpos)
+{
+    int ra = LUAU_INSN_A(*pc);
+    int rb = LUAU_INSN_B(*pc);
+    uint32_t offset = pc[1];
+
+    IrOp tb = build.inst(IrCmd::LOAD_TAG, build.vmReg(rb));
+    build.inst(IrCmd::CHECK_TAG, tb, build.constTag(LUA_TOBJECT), build.vmExit(pcpos));
+
+    IrOp vb = build.inst(IrCmd::LOAD_POINTER, build.vmReg(rb));
+    IrOp addr = build.inst(IrCmd::OBJECT_MEMBER_ADDR, vb, build.constUint(offset), build.vmExit(pcpos));
+    IrOp tv = build.inst(IrCmd::LOAD_TVALUE, addr);
+    build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), tv);
+}
+
+// The write counterpart; never emitted for a `const` member, so there is no authorization here either.
+void translateInstSetObjectMember(IrBuilder& build, const Instruction* pc, int pcpos)
+{
+    int ra = LUAU_INSN_A(*pc);
+    int rb = LUAU_INSN_B(*pc);
+    uint32_t offset = pc[1];
+
+    IrOp tb = build.inst(IrCmd::LOAD_TAG, build.vmReg(rb));
+    build.inst(IrCmd::CHECK_TAG, tb, build.constTag(LUA_TOBJECT), build.vmExit(pcpos));
+
+    IrOp vb = build.inst(IrCmd::LOAD_POINTER, build.vmReg(rb));
+    IrOp addr = build.inst(IrCmd::OBJECT_MEMBER_ADDR, vb, build.constUint(offset), build.vmExit(pcpos));
+    IrOp tv = build.inst(IrCmd::LOAD_TVALUE, build.vmReg(ra));
+    build.inst(IrCmd::STORE_TVALUE, addr, tv);
+    build.inst(IrCmd::BARRIER_OBJ, vb, build.vmReg(ra), build.undef());
+}
+
 void translateInstSetTableKS(IrBuilder& build, const Instruction* pc, int pcpos)
 {
     int ra = LUAU_INSN_A(*pc);

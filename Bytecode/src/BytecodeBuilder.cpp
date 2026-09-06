@@ -1028,6 +1028,7 @@ void BytecodeBuilder::writeClassShape(std::string& ss, const ClassShape& cs) con
 {
     LUAU_ASSERT(cs.propertyFlags.size() == cs.propertyNames.size());
     LUAU_ASSERT(cs.methodFlags.size() == cs.methodNames.size());
+    LUAU_ASSERT(cs.propertyDefaults.empty() || cs.propertyDefaults.size() == cs.propertyNames.size());
 
     writeVarInt(ss, cs.className);
     writeVarInt(ss, cs.propertyNames.size());
@@ -1038,6 +1039,11 @@ void BytecodeBuilder::writeClassShape(std::string& ss, const ClassShape& cs) con
     {
         writeVarInt(ss, cs.propertyNames[i]);
         writeVarInt(ss, cs.propertyFlags[i]);
+
+        // a constant default is stored with the member itself, so the reader can copy it into the
+        // class and skip the `__defaults` closure entirely
+        if (cs.propertyFlags[i] & LBC_CLASSMEMBER_CONSTDEFAULT)
+            writeVarInt(ss, cs.propertyDefaults[i]);
     }
     for (size_t i = 0; i < cs.methodNames.size(); i++)
     {
@@ -1978,6 +1984,19 @@ void BytecodeBuilder::validateInstructions() const
             VCONST(insns[i + 1], String);
             break;
 
+        case LOP_GETOBJECTMEMBER:
+        case LOP_SETOBJECTMEMBER:
+            VREG(LUAU_INSN_A(insn));
+            VREG(LUAU_INSN_B(insn));
+            break;
+
+        case LOP_NEWOBJECT:
+            // with a user __init the instruction lays out `__init`, `self` and the arguments above A;
+            // the other forms use one register per argument or per field
+            VREG(LUAU_INSN_A(insn) + (LUAU_INSN_C(insn) == 1 ? 2 : 0) + insns[i + 1]);
+            VREG(LUAU_INSN_B(insn));
+            break;
+
         default:
             LUAU_ASSERT(!"Unsupported opcode");
         }
@@ -2761,6 +2780,21 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
         dumpConstant(result, int(*code++), false);
         formatAppend(result, "]%s\n", LUAU_INSN_C(insn) ? " SELF" : "");
         break;
+
+    case LOP_GETOBJECTMEMBER:
+        formatAppend(result, "GETOBJECTMEMBER R%d R%d %d\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn), *code++);
+        break;
+
+    case LOP_SETOBJECTMEMBER:
+        formatAppend(result, "SETOBJECTMEMBER R%d R%d %d\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn), *code++);
+        break;
+
+    case LOP_NEWOBJECT:
+    {
+        const char* form = LUAU_INSN_C(insn) == 1 ? " INIT" : (LUAU_INSN_C(insn) == 2 ? " FIELDS" : "");
+        formatAppend(result, "NEWOBJECT R%d R%d %d%s\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn), *code++, form);
+        break;
+    }
 
     default:
         LUAU_ASSERT(!"Unsupported opcode");

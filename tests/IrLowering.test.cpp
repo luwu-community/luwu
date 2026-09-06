@@ -8502,6 +8502,79 @@ bb_bytecode_1:
     );
 }
 
+TEST_CASE_FIXTURE(LoweringFixture, "ClassProvenSelfMemberAccess")
+{
+    ScopedFastFlag classes{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag classesRuntime{FFlag::DebugLuauUserDefinedClassesRuntime, true};
+    ScopedFastFlag betterClasses{FFlag::LuauBetterUserDefinedClasses, true};
+
+    // `self.field` inside a method compiles to GETOBJECTMEMBER/SETOBJECTMEMBER, which lower to a
+    // constant-offset address with no slot cache, no class-side bounds check, no name compare and no
+    // authorization -- the prologue's CHECKSELFCLASS already proved the class. Note this test has to
+    // live here: tests/conformance/classes.luau is past codegen's total-IR-instruction budget, so its
+    // protos are never natively compiled and could not catch a lowering bug at all.
+    //
+    // The repeated `self.x` is also the CSE case: the address is computed once and the second read
+    // reuses the first load's value.
+    CHECK_EQ(
+        "\n" + getCodegenAssembly(
+                   R"(
+class C
+    public x: number = 1
+    public y: number = 2
+
+    public function bump(self)
+        self.y = self.x + self.x
+        return self.y
+    end
+end
+)",
+                   /* includeIrTypes= */ false,
+                   /* debugLevel= */ 1,
+                   /* optimizationLevel= */ 2,
+                   /* clipToFirstReturn= */ true
+               ),
+        R"(
+; function bump($arg0) line 6
+bb_0:
+  CHECK_TAG R0, tobject, exit(entry)
+  JUMP bb_3
+bb_3:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  %4 = GET_UPVALUE U0
+  STORE_TVALUE R1, %4
+  JUMP bb_5
+bb_5:
+  %8 = LOAD_POINTER R0
+  %9 = LOAD_POINTER R1
+  CHECK_OBJECT_CLASS %8, %9, bb_4
+  JUMP bb_bytecode_2
+bb_bytecode_2:
+  %16 = OBJECT_MEMBER_ADDR %8, 0u, exit(4)
+  %17 = LOAD_TVALUE %16
+  STORE_TVALUE R2, %17
+  STORE_TVALUE R3, %17
+  CHECK_TAG R2, tnumber, bb_fallback_6
+  %29 = LOAD_DOUBLE R2
+  %31 = ADD_NUM %29, %29
+  STORE_DOUBLE R1, %31
+  STORE_TAG R1, tnumber
+  JUMP bb_7
+bb_4:
+  JUMP exit(2)
+bb_7:
+  %40 = LOAD_POINTER R0
+  %41 = OBJECT_MEMBER_ADDR %40, 1u, exit(9)
+  %42 = LOAD_TVALUE R1
+  STORE_TVALUE %41, %42
+  BARRIER_OBJ %40, R1, undef
+  INTERRUPT 13u
+  RETURN R1, 1i
+)"
+    );
+}
+
 TEST_CASE_FIXTURE(LoweringFixture, "ClassIsinstanceKnownTag")
 {
     ScopedFastFlag classes{FFlag::DebugLuauUserDefinedClasses, true};

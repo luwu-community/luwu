@@ -17,26 +17,54 @@ class Cat
 end
 const taz = Cat { name = "Taz", age = 14 }
 
-export class User
-    public id: string
-    public name: string
-    public dob: DateTime
-
-    private function __init(self, name, dob)
-        self.id = generate_id()
-        self.name = name
-        self.dob = dob
-    end
-
-    public function new(name: string, dob: DateTime): User
-        const self = User(name, dob)
-        return self
-    end
-
-    public function is_builders_club(self): boolean
-        -- ...
+class Dog(name: string, age: number)
+    function bark(self)
+        print(`{self.name} barked!`)
     end
 end
+
+const dog = Dog("Oreo", 14)
+dog:bark()
+
+export class Rounding(
+    top = vector.create(15, 15),
+    bottom = vector.create(15, 15)
+)
+    function zero(): Rounding
+        return Rounding(vector.zero, vector.zero)
+    end
+
+    function is_positive(self): boolean
+        return self.top.x > 0 and self.top.y > 0 and self.bottom.x > 0 and self.bottom.y > 0
+    end
+end
+
+export class Frame
+    name: string
+    position: vector
+    size: vector
+    rounding: Rounding
+
+    function __init(self, name: string, position: vector, size: vector?, rounding: Rounding?)
+        assert(#name > 0, "name should not be empty string")
+        self.name = name
+        assert(position.z == 0, "position should not have z")
+        self.position = position
+        if size then
+            assert(size.x > 0 and size.y > 0 and size.z >= 0, "size should have only positive components")
+            self.size = size
+        else
+            self.size = vector.create(100, 100)
+        end
+        if rounding and rounding:is_positive() then
+            self.rounding = rounding
+        else
+            self.rounding = Rounding()
+        end
+    end
+end
+
+const frame = Frame("MainFrame", vector.create(1, 2), vector.create(100, 40))
 ```
 
 ## Motivation
@@ -89,17 +117,22 @@ class List<T>
     private function __init(self, initial: { T }?, capacity: number)
         -- ...
     end
-    public function with_capacity(cap: number): List<T> -- class has private members, 'public' keyword required
+    -- class has private members, 'public' keyword required
+    public function with_capacity(cap: number): List<T>
         return List(nil, cap)
     end
 end
+
+-- classes can define a 'primary constructor' to skip __init:
+class Symbol(name: string) end
 ```
 
 Specifically:
 
 - A class definition starts with the contextual keyword `class`,
 - is followed by the class's name and an optional generics parameter list (`<A, B, ...>`),
-- contains zero or more class member (fields and methods) declarations (see below)
+- may be followed by the primary constructor, which includes an optional access specifier `private` or `public` and then the parameter list `(a: T, b, ...)`
+- contains zero or more class member (fields and methods) declarations (see below),
 - ends with the `end` keyword.
 
 Class definitions are a block construct like `for` loops, and do not evaluate to a value.
@@ -297,14 +330,13 @@ A `const` field must be initialized with a value, by the class's constructor. As
 
 ### Default field values
 
-A class may define fields with default value expressions. The RHS of the default value expression is evaluated with access to upvalues in the class'
-enclosing scope, but may not refer to previous fields or any functions defined within class. `const` fields assigned to by a default value expression *may*
-be mutated within the class' `__init` constructor because allowing such reduces implementation complexity.
+A class may define fields with default value expressions. The RHS of the default value expression is evaluated with access to upvalues in the class's enclosing scope as well as parameters from the class's primary constructor, but may not refer to previous fields or any functions defined within the class.
 
-Like default function arguments, default class field expressions are re-evaluated every time before a constructor is invoked to make a new object of the class.
+`const` fields assigned to by a default value expression *may* be mutated within the class' `__init` constructor because allowing such reduces implementation complexity.
 
-We chose this behavior to prevent stale default arguments and lead to similar footguns like in Python with its default function argument problem surrounding
-pass by reference data structures.
+Like default function arguments, default class field expressions are re-evaluated and assigned every time before a constructor is invoked to make a new object of the class.
+
+We chose this behavior to prevent stale default arguments and lead to similar footguns like in Python with its default function argument problem surrounding pass by reference data structures.
 
 This means:
 
@@ -314,11 +346,8 @@ const function somecounter()
     return math.random(1, 1000)
 end
 
-class Counter
+class Counter() -- primary constructor with 0 params to prevent assigning current
     const current = somecounter()
-    function __init(self)
-        -- pass, i want () syntax but nothing needed to assign
-    end
 end
 
 const counter1 = Counter()
@@ -330,7 +359,8 @@ const counter2 = Counter()
 
 To ensure more correct code, we prevent passing a different class of `self` to a method via `object.method(object)` syntax.
 This frees users from needing to assert `class.isinstance(self, TheClass)` if they want to ensure correct calling conventions.
-This also allows for further optimizations.
+
+This also allows for further optimizations, such as method inlining of methods of `self` within other methods of `self`.
 
 This restriction may be loosened in a future RFC for classes that opt into inheritance.
 
@@ -392,7 +422,163 @@ The `class.classof` function returns the class corresponding to the first argume
 
 ### Constructors
 
-#### Rationale
+There are 3 different forms of constructors:
+
+- Primary constructors: defined in parentheses alongside the class declaration.
+- The POD table constructor: defined when a class does not define a primary constructor.
+- An `__init` constructor function: the user explicitly defines a `function __init` that allows for custom initialization behavior.
+
+#### The primary constructor
+
+The primary (or parameterized) constructor may be defined in the class declaration header. The primary constructor exists to allow users to easily define classes that take in positional parameters without needing to define an `__init` and associated boilerplate, significantly reducing verbosity for a common construction paradigm.
+
+Additionally, having the positional primary constructor allows us to bypass `__init` and opens up a significant optimization opportunity in the extremely common case that users want to construct a class by passing multiple parameters instead of a table.
+
+Primary constructor parameters mostly follow the same rules as function parameters: they are allowed default values, may not have trailing commas, etc. As with default function parameter values, default primary constructor values are re-evaluated every call if necessary (when the relevant parameter is not passed).
+
+Primary constructor parameters are only visible to field initializations within the class body (same place as default field values) and are not accessible to functions within the class.
+
+```luau
+class UDim(scale: vector, offset: vector) end
+const dimmy = UDim(vector.create(1, 2), vector.create(0, 0))
+print(dimmy.scale) -- vector<1, 2, 0>
+print(dimmy.offset) -- vector<0, 0, 0>
+```
+
+Fields initialized by the primary constructor are `public` unless specified otherwise. Fields intended to be public do not need to be restated in the class body; defining them in the parameters defines them as a `public` field of the class.
+
+Users are allowed to redefine `public` fields from the primary constructor in the class body for clarity, but doing so is not recommended.
+
+```luau
+class Cat(name: string, age: number)
+    -- these 2 assignments are useless
+    public name = name
+    public age = age
+end
+```
+
+To apply an access specifier and/or modifier to a field, explicitly define a field of the same name of the relevant parameter(s).
+
+If the field name matches a parameter name, assigning the parameter to the field (`= parameter_name`) may be omitted.
+
+```luau
+class Card(userid: Id, hash: string)
+    private const hash
+end
+class Home(address, owner)
+    private owner
+end
+```
+
+To declare a `private` primary constructor, put the `private` keyword between the class name and the parameters.
+
+Calling a private primary constructor from outside the lexical scope of its class results in a runtime error. Although the parser could generate a syntax error for this, doing so would be inconsistent with calling private `__init` constructors as well as any private class constructors from classes imported from another module.
+
+```luau
+class Account private (
+    holder: User,
+    balance = Money(0)
+)
+    private balance
+    public id = next_account_id()
+
+    public function user_allowed_to_open_account(user: User)
+        if bank.has_any_infractions(user) then
+            return false
+        end
+        const open_accounts = bank.get_open_accounts(user)
+        if #open_accounts > 10 then
+            return false
+        end
+        const credit_score = User:check_authorize_credit_score_access()
+        if credit_score and not credit_score:is_good() then
+            return false
+        end
+        return true
+    end
+
+    public function new(user: User, starting_balance: Money?): Account?
+        if Account.user_allowed_to_open_account(user) then
+            return Account(user, starting_balance)
+        end
+        return nil
+    end
+end
+```
+
+An explicit `public` access specifier may be declared in front of the primary constructor parameters list, but such a specifier is not very useful:
+
+```luau
+class Seal public (name: string)
+end
+```
+
+As with default field values, any expression may be used upon a primary constructor parameter:
+
+```luau
+const function not_negative(name: string, v: vector): vector
+    return if v.x >= 0 and v.y >= 0 then v else error(`{name} should be positive`)
+end
+class UDim(scale: vector, offset: vector)
+    scale = not_negative("scale", scale)
+    offset = not_negative("offset", offset)
+end
+```
+
+Note that fields from the primary constructor will still be included even if they're only used to derive a value;
+if the user wants to prevent those fields from being included they should use an `__init` constructor instead:
+
+```luau
+class Percentage(current: number, total = 100)
+    value = ((current / total) * 100) // 1
+end
+const perc = Percentage(27, 42)
+print(perc.value) -- 64
+print(perc.current) -- 27
+print(perc.total) -- 42
+```
+
+An `__init` constructor may not be defined explicitly when a primary constructor is present; doing so will cause a syntax error.
+
+Calling the primary constructor with the wrong number of arguments will result in a `TypeError` in static analysis, but will pass `nil` to the fields at runtime. This may trigger default parameter values or default field values for any relevant parameters or fields.
+
+Any fields that would implicitly be initialized to `nil` by the primary constructor in a way that doesn't match the field's type annotation should raise a `TypeError` in static analysis:
+
+```luau
+class Bottle()
+    brand = "Coke"
+    top: Instance -- TypeError: this field will always be initialized to `nil` but is not marked as optional; consider providing a default field value, adding a class parameter of the same name, or marking the field as optional with `?`
+end
+```
+
+Like the default table constructor, primary constructors also implicitly define an `__init` that may be called on the class or as a method on objects of the class. The behavior is identical to an equivalently defined `public/private function __init`.
+
+Any calls to the primary constructor that do not match the constructor's type signature should obviously raise a TypeError in static analysis:
+
+```luau
+class Package(owner: User, contents: { Item }) end
+
+const packy = Package {
+    owner = user,
+    contents = {} :: { Item }
+} -- TypeError: Expected this to be 'User', but got '{ owner: User, contents: { Item } }'
+```
+
+We should surface a dedicated syntax error when users try to define an access specifier *within* the constructor parameters, otherwise users familiar with languages like Kotlin would get an unexpected and poorly-worded syntax error:
+
+```luau
+class Island(
+    private name: string -- SyntaxError: Luwu does not currently support access specifiers here, redefine this field within the class body to change its access specifier
+)
+end
+
+class Island(
+    public name: string -- SyntaxError: This class parameter already creates a public field; Luwu does not currently support access specifiers here, redefine the field within the class body to change its access specifier
+)
+end
+```
+
+#### The `__init` constructor
 
 Right now in Luau 0.730 this is valid syntax (with the classes feature enabled)
 
@@ -413,8 +599,6 @@ for all flavors of classes. The POD syntax not only allocates a table (fixable i
 our default constructor behavior.
 
 Additionally, a lack of a customizable constructor is a problem if we want to add inheritance in the future.
-
-#### Solution
 
 To fix this issue, we propose a constructor function named `__init`. Among other influences, this is inspired
 by the similarly-named `__init__` from Python. This constructor's name is also chosen to match the `__init` proposed in upstream Luau.
@@ -480,9 +664,6 @@ end
 
 Users can define the `__init` constructor as `public` or `private`.
 
-If the `__init` constructor is `private`, then the class must be created via a special factory function and cannot
-be instantiated otherwise.
-
 ```luau
 class User
     public first_name: string
@@ -490,6 +671,7 @@ class User
     private ssn: string?
 
     --- A public constructor which initializes the public and private fields.
+    --- This is equivalent (but slower!) than using a primary constructor on User.
     public function __init(self, first: string, last: string, ssn: string?) 
         self.first_name = first
         self.last_name = last
@@ -510,6 +692,9 @@ end
 
 const user = User("Taz", "Parekh", "126-222-1123")
 ```
+
+If the `__init` constructor is `private`, then the class must be created via a factory function and cannot
+be instantiated otherwise.
 
 If a class has a `private` constructor, but no function in the class instantiates an object from that `private` constructor, a type error is raised:
 
@@ -539,24 +724,42 @@ class User
 end
 ```
 
+Equivalently, with primary constructor syntax instead of an explicit `__init` constructor:
+
+```luau
+-- TypeError: this class can never be instantiated because its constructor is private and is never called; did you mean to return an instance of this class from a `public function` instead? Call the constructor to silence.
+class User private (
+    first_name: string,
+    last_name: string,
+    ssn: string?
+)
+    public function name(self): string
+        return self.first_name .. " " .. self.last_name
+    end
+
+    private function get_ssn(self): string
+        if self.ssn then
+            return self.ssn
+        end
+        return get_ssn_from_files(self)
+    end
+end
+```
+
 Attempting to initialize an object of a class with a `private` constructor outside of its class will raise a runtime error.
 
 By restricting the constructor, a class can require its users to construct it with factory functions that respect the class's
 specific invariants.
 
 ```luau
-class User
-    public id: string
-    public first_name: string
-    public last_name: string
-    private ssn: string?
-
-    -- Cannot be directly accessed using User() outside this class scope
-    private function __init(self, first: string, last: string, ssn: string?) 
-        self.first_name = first
-        self.last_name = last
-        self.ssn = ssn
-    end
+-- Cannot be directly accessed using User() outside this class scope
+class User private (
+    id: string,
+    first_name: string,
+    last_name: string,
+    ssn: string?
+)
+    private ssn
 
     public function new(id: string): User | Error<string>
         const ssn_for_user = ssns.get(id)
@@ -711,23 +914,3 @@ const cat = Cat("Taz", 12)
 ## Future work
 
 - Add composition, interfaces, inheritance if we want to.
-- Syntax sugar for parameter-based `__init` constructors, such as:
-
-```luau
-class Cat(name: string, age: number)
-    name = name
-    age = age
-end
-
--- equivalent to
-
-class Cat
-    name: string
-    age: number
-
-    function __init(self, name, age)
-        self.name = name
-        self.age = age
-    end
-end
-```

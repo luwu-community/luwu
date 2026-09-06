@@ -1358,6 +1358,74 @@ void TypeChecker2::visit(AstStatClass* stat)
 {
     LUAU_ASSERT(FFlag::DebugLuauUserDefinedClasses);
 
+    // Luau Classes (rfcx/classes.md): a primary constructor's parameters are checked like default
+    // function arguments -- annotation resolved, default checked against it.
+    if (const AstClassPrimaryConstructor* primaryConstructor = stat->primaryConstructor)
+    {
+        for (size_t i = 0; i < primaryConstructor->args.size; ++i)
+        {
+            AstLocal* param = primaryConstructor->args.data[i];
+            AstExpr* paramDefault = primaryConstructor->argsDefaults.data[i];
+
+            if (param->annotation)
+                visit(param->annotation);
+
+            if (paramDefault && param->annotation)
+                testIsSubtype(lookupType(paramDefault), lookupAnnotation(param->annotation), paramDefault->location);
+        }
+
+        // A class with a primary constructor has no table constructor, so a field the body gives no
+        // default and no parameter names can never be initialized -- it is `nil` forever. That is
+        // fine if the field's type says so, and an error if it doesn't.
+        NotNull<Scope> scope{findInnermostScope(stat->location)};
+        std::optional<TypeFun> classTypeFun = scope->lookupType(stat->name->name.value);
+
+        for (const AstClassMember& member : stat->members)
+        {
+            const AstClassProperty* prop = member.get_if<AstClassProperty>();
+
+            if (!prop || prop->defaultValue || !prop->ty)
+                continue;
+
+            size_t paramIndex = primaryConstructor->args.size;
+            for (size_t i = 0; i < primaryConstructor->args.size; ++i)
+                if (primaryConstructor->args.data[i]->name == prop->name)
+                {
+                    paramIndex = i;
+                    break;
+                }
+
+            TypeId propTy = follow(lookupAnnotation(prop->ty));
+
+            if (paramIndex < primaryConstructor->args.size)
+            {
+                // A bare restatement is initialized from the parameter it names, so the parameter's
+                // type has to fit the annotation -- `class Cat(breed: CatBreed) private breed: number
+                // end` assigns a CatBreed to a number-typed field.
+                AstLocal* param = primaryConstructor->args.data[paramIndex];
+                AstExpr* paramDefault = primaryConstructor->argsDefaults.data[paramIndex];
+
+                std::optional<TypeId> paramTy;
+                if (param->annotation)
+                    paramTy = lookupAnnotation(param->annotation);
+                else if (paramDefault)
+                    paramTy = lookupType(paramDefault);
+
+                // the annotation is what the restatement is *for*, so it is what we blame
+                if (paramTy)
+                    testIsSubtype(*paramTy, propTy, prop->ty->location);
+
+                continue;
+            }
+
+            if (!classTypeFun)
+                continue;
+
+            if (!subtyping->isSubtype(builtinTypes->nilType, propTy, scope).isSubtype)
+                reportError(UninitializableClassField{classTypeFun->type, prop->name.value}, prop->nameLocation);
+        }
+    }
+
     for (const auto& member : stat->members)
     {
         if (const auto* prop = member.get_if<AstClassProperty>())

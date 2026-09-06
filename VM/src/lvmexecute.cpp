@@ -133,7 +133,8 @@ LUAU_FLAGVERSION(LuauBackedgeHeapCheck, 2)
         VM_DISPATCH_OP(LOP_JUMPXEQKB), VM_DISPATCH_OP(LOP_JUMPXEQKN), VM_DISPATCH_OP(LOP_JUMPXEQKS), VM_DISPATCH_OP(LOP_IDIV), \
         VM_DISPATCH_OP(LOP_IDIVK), VM_DISPATCH_OP(LOP_GETUDATAKS), VM_DISPATCH_OP(LOP_SETUDATAKS), VM_DISPATCH_OP(LOP_NAMECALLUDATA), \
         VM_DISPATCH_OP(LOP_NEWCLASSMEMBER), VM_DISPATCH_OP(LOP_CALLFB), VM_DISPATCH_OP(LOP_CMPPROTO), VM_DISPATCH_OP(LOP_CHECKSELFCLASS), \
-        VM_DISPATCH_OP(LOP_JUMPXISA), VM_DISPATCH_OP(LOP_SELFCLASSERROR),
+        VM_DISPATCH_OP(LOP_JUMPXISA), VM_DISPATCH_OP(LOP_SELFCLASSERROR), VM_DISPATCH_OP(LOP_NEWOBJECT), \
+        VM_DISPATCH_OP(LOP_GETOBJECTMEMBER), VM_DISPATCH_OP(LOP_SETOBJECTMEMBER),
 
 #if defined(__GNUC__) || defined(__clang__)
 #define VM_USE_CGOTO 1
@@ -666,7 +667,7 @@ reentry:
                         if (LUAU_LIKELY(slot < inst->lclass->numberofallmembers && tsvalue(kv) == inst->lclass->offsettomember[slot]))
                         {
                             if (LUAU_UNLIKELY(inst->lclass->hasprivatemembers))
-                                luaR_checkprivateaccess(L, kv, inst->lclass, cl, slot);
+                                luaR_checkprivateaccessfast(L, kv, inst->lclass, cl, slot);
                             setobj2s(L, ra, luaR_lookupmemberatoffset(inst, slot));
                             VM_NEXT();
                         }
@@ -678,7 +679,7 @@ reentry:
                                 luaG_missingmembererror(L, rb, kv);
                             const uint32_t offsetnum = uint32_t(nvalue(offset));
                             if (LUAU_UNLIKELY(inst->lclass->hasprivatemembers))
-                                luaR_checkprivateaccess(L, kv, inst->lclass, cl, offsetnum);
+                                luaR_checkprivateaccessfast(L, kv, inst->lclass, cl, offsetnum);
                             setobj2s(L, ra, luaR_lookupmemberatoffset(inst, offsetnum));
                             VM_PATCH_C(pc - 2, offsetnum);
                             VM_NEXT();
@@ -695,7 +696,7 @@ reentry:
                             ))
                         {
                             if (LUAU_UNLIKELY(lco->hasprivatemembers))
-                                luaR_checkprivateaccess(L, kv, lco, cl, slot);
+                                luaR_checkprivateaccessfast(L, kv, lco, cl, slot);
                             setobj2s(L, ra, &lco->staticmembers[slot - lco->numberofinstancemembers]);
                             VM_NEXT();
                         }
@@ -710,7 +711,7 @@ reentry:
                             if (offsetnum < lco->numberofinstancemembers)
                                 luaG_missingmembererror(L, rb, kv);
                             if (LUAU_UNLIKELY(lco->hasprivatemembers))
-                                luaR_checkprivateaccess(L, kv, lco, cl, offsetnum);
+                                luaR_checkprivateaccessfast(L, kv, lco, cl, offsetnum);
                             setobj2s(L, ra, &lco->staticmembers[offsetnum - lco->numberofinstancemembers]);
                             VM_PATCH_C(pc - 2, offsetnum);
                             VM_NEXT();
@@ -804,9 +805,9 @@ reentry:
                             if (LUAU_UNLIKELY(inst->lclass->hasprivatemembers || inst->lclass->hasconstmembers))
                             {
                                 if (inst->lclass->hasprivatemembers)
-                                    luaR_checkprivateaccess(L, kv, inst->lclass, cl, slot);
+                                    luaR_checkprivateaccessfast(L, kv, inst->lclass, cl, slot);
                                 if (inst->lclass->hasconstmembers)
-                                    luaR_checkconstassign(L, kv, inst->lclass, cl, slot);
+                                    luaR_checkconstassignfast(L, kv, inst->lclass, cl, slot);
                             }
                             setobj2class(L, &inst->members[slot], ra);
                             luaC_barrier(L, inst, ra);
@@ -824,9 +825,9 @@ reentry:
                             if (LUAU_UNLIKELY(inst->lclass->hasprivatemembers || inst->lclass->hasconstmembers))
                             {
                                 if (inst->lclass->hasprivatemembers)
-                                    luaR_checkprivateaccess(L, kv, inst->lclass, cl, offsetnum);
+                                    luaR_checkprivateaccessfast(L, kv, inst->lclass, cl, offsetnum);
                                 if (inst->lclass->hasconstmembers)
-                                    luaR_checkconstassign(L, kv, inst->lclass, cl, offsetnum);
+                                    luaR_checkconstassignfast(L, kv, inst->lclass, cl, offsetnum);
                             }
                             setobj2class(L, &inst->members[offsetnum], ra);
                             luaC_barrier(L, inst, ra);
@@ -1064,7 +1065,7 @@ reentry:
                     if (slot < inst->lclass->numberofallmembers && tsvalue(kv) == inst->lclass->offsettomember[slot])
                     {
                         if (LUAU_UNLIKELY(inst->lclass->hasprivatemembers))
-                            luaR_checkprivateaccess(L, kv, inst->lclass, cl, slot);
+                            luaR_checkprivateaccessfast(L, kv, inst->lclass, cl, slot);
                         // note: order of copies allows rb to alias ra+1 or ra
                         setobj2s(L, ra + 1, rb);
                         setobj2s(L, ra, luaR_lookupmemberatoffset(inst, slot));
@@ -1077,7 +1078,7 @@ reentry:
                             luaG_missingmembererror(L, rb, kv);
                         const uint32_t offsetnum = uint32_t(nvalue(offset));
                         if (LUAU_UNLIKELY(inst->lclass->hasprivatemembers))
-                            luaR_checkprivateaccess(L, kv, inst->lclass, cl, offsetnum);
+                            luaR_checkprivateaccessfast(L, kv, inst->lclass, cl, offsetnum);
                         setobj2s(L, ra + 1, rb);
                         setobj2s(L, ra, luaR_lookupmemberatoffset(inst, offsetnum));
                         VM_PATCH_C(pc - 2, offsetnum);
@@ -3800,6 +3801,147 @@ reentry:
                     pc += LUAU_INSN_C(insn);
 
                 VM_ASSERT_PC(pc);
+                VM_NEXT();
+            }
+
+            VM_CASE(LOP_NEWOBJECT)
+            {
+                // Luau Classes (rfcx/classes.md): construct an instance of a POD class directly.
+                Instruction insn = *pc++;
+                uint32_t aux = *pc++;
+                StkId ra = VM_REG(LUAU_INSN_A(insn));
+                StkId classReg = VM_REG(LUAU_INSN_B(insn));
+                int form = LUAU_INSN_C(insn);
+                bool custominit = form == 1;
+
+                // The compiler emits this only for a class it resolved statically, and picks the shape
+                // from that class's own declaration. All of it is re-checked here because the operand
+                // is about to be dereferenced as a LuauClass.
+                // The FIELDS form initializes every member itself, so it is also the shape used for a
+                // class whose `__init` came from a primary constructor -- that `__init` does nothing
+                // but assign fields from its parameters, which the construction site has already done.
+                // Any other custom `__init` has to actually run, hence the hascustominit agreement.
+                bool fieldsform = form == 2;
+                if (LUAU_UNLIKELY(
+                        !ttisclass(classReg) ||
+                        (fieldsform ? classvalue(classReg)->hascustominit && !classvalue(classReg)->hasprimaryinit
+                                    : classvalue(classReg)->hascustominit != custominit) ||
+                        (!custominit && classvalue(classReg)->haspoddefaultsfn) ||
+                        (fieldsform && classvalue(classReg)->numberofinstancemembers != aux)
+                    ))
+                {
+                    VM_PROTECT_PC();
+                    luaG_runerror(L, "attempt to construct a value that is not a class of the expected shape");
+                }
+
+                LuauClass* classdef = classvalue(classReg);
+
+                VM_PROTECT_PC(); // the allocation below may fail due to OOM
+
+                // When the construction site supplies every member (the FIELDS form) and the class has
+                // no constant defaults to preserve, the members are written here from registers -- so
+                // the nil-fill luaR_newobject would do first is dead, and so is the per-member nil test
+                // below. Nothing between the allocation and the fill can collect, and the object isn't
+                // reachable until after it.
+                if (fieldsform && !classdef->memberdefaults)
+                {
+                    LuauObject* object = luaR_newobjectuninit(L, classdef);
+
+                    for (uint32_t idx = 0; idx < aux; idx++)
+                        setobj(L, &object->members[idx], ra + 1 + idx);
+
+                    setobjectvalue(L, ra, object);
+
+                    luaC_barrierfast(L, object);
+
+                    VM_PROTECT(luaC_checkGC(L));
+                    VM_NEXT();
+                }
+
+                LuauObject* object = luaR_newobject(L, classdef);
+
+                // Anchor the object on the stack before anything else: applying fields can run an
+                // __index metamethod, which can run the collector, and until the object is stored
+                // somewhere reachable nothing keeps it alive.
+                setobjectvalue(L, ra, object);
+
+                if (custominit)
+                {
+                    // Lay out `__init`'s frame for the CALL that follows; __init's offset is fixed when
+                    // the class is created, and the arguments are already in place above `self`.
+                    LUAU_ASSERT(classdef->initoffset >= classdef->numberofinstancemembers);
+                    setobj2s(L, ra + 1, &classdef->staticmembers[classdef->initoffset - classdef->numberofinstancemembers]);
+                    setobjectvalue(L, ra + 2, object);
+                }
+                else if (form == 2)
+                {
+                    // one value per member in declaration order; nil keeps the member's default
+                    for (uint32_t idx = 0; idx < aux; idx++)
+                    {
+                        StkId value = ra + 1 + idx;
+
+                        if (!ttisnil(value))
+                            setobj(L, &object->members[idx], value);
+                    }
+                }
+                else if (aux == 1)
+                {
+                    StkId arg = ra + 1;
+
+                    // a table carrying a metatable needs the generic, __index-aware path
+                    if (LUAU_LIKELY(ttistable(arg) && hvalue(arg)->metatable == NULL))
+                        luaR_applyobjectfields(L, classdef, object, hvalue(arg));
+                    else
+                        VM_PROTECT(luaR_applyobjectfieldsslow(L, classdef, object, arg));
+                }
+
+                luaC_barrierfast(L, object);
+
+                VM_PROTECT(luaC_checkGC(L));
+                VM_NEXT();
+            }
+
+            VM_CASE(LOP_GETOBJECTMEMBER)
+            {
+                // Luau Classes (rfcx/classes.md): read `self.field` at a known offset. The compiler
+                // only emits this where the receiver's class is proven -- a method's own `self`, whose
+                // class the prologue's CHECKSELFCLASS established and which the method never
+                // reassigns -- so the member's offset is a compile-time constant and none of
+                // GETTABLEKS's per-access work applies. What is left is only what keeps malformed
+                // bytecode from reading outside the instance.
+                Instruction insn = *pc++;
+                uint32_t aux = *pc++;
+                StkId ra = VM_REG(LUAU_INSN_A(insn));
+                StkId rb = VM_REG(LUAU_INSN_B(insn));
+
+                if (LUAU_UNLIKELY(!ttisobject(rb) || aux >= objectvalue(rb)->numberofmembers))
+                {
+                    VM_PROTECT_PC();
+                    luaG_runerror(L, "attempt to read a member of a value that is not an object of the expected class");
+                }
+
+                setobj2s(L, ra, &objectvalue(rb)->members[aux]);
+                VM_NEXT();
+            }
+
+            VM_CASE(LOP_SETOBJECTMEMBER)
+            {
+                // See LOP_GETOBJECTMEMBER. Never emitted for a `const` member, so there is no
+                // const-assignment check to make here either.
+                Instruction insn = *pc++;
+                uint32_t aux = *pc++;
+                StkId ra = VM_REG(LUAU_INSN_A(insn));
+                StkId rb = VM_REG(LUAU_INSN_B(insn));
+
+                if (LUAU_UNLIKELY(!ttisobject(rb) || aux >= objectvalue(rb)->numberofmembers))
+                {
+                    VM_PROTECT_PC();
+                    luaG_runerror(L, "attempt to write a member of a value that is not an object of the expected class");
+                }
+
+                LuauObject* inst = objectvalue(rb);
+                setobj2class(L, &inst->members[aux], ra);
+                luaC_barrier(L, inst, ra);
                 VM_NEXT();
             }
 

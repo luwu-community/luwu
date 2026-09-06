@@ -232,6 +232,8 @@ static void errorToString(std::ostream& stream, const T& err)
         stream << "ConstPropertyAssignment { table = " << toString(err.table) << ", prop = '" << err.key << "' }";
     else if constexpr (std::is_same_v<T, PrivateConstructorAccess>)
         stream << "PrivateConstructorAccess { classTy = " << toString(err.classTy) << " }";
+    else if constexpr (std::is_same_v<T, UninitializableClassField>)
+        stream << "UninitializableClassField { classTy = " << toString(err.classTy) << ", key = '" << err.key << "' }";
     else if constexpr (std::is_same_v<T, CheckedFunctionIncorrectArgs>)
         stream << "CheckedFunction {  functionName = '" + err.functionName + ", expected = " + std::to_string(err.expected) +
                       ", actual = " + std::to_string(err.actual) + "}";

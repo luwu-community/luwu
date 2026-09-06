@@ -64,6 +64,7 @@ static bool isUnsafeToSink(IrCmd cmd)
     case IrCmd::TRY_NUM_TO_INDEX:
     case IrCmd::TRY_CALL_FASTGETTM:
     case IrCmd::TRY_OBJECT_MEMBER_ADDR:
+    case IrCmd::OBJECT_MEMBER_ADDR:
     case IrCmd::TRY_CLASS_MEMBER_ADDR:
     case IrCmd::TRY_OBJECT_NAMECALL_ADDR:
         return true;
@@ -1179,6 +1180,10 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
     case IrCmd::TRY_CLASS_MEMBER_ADDR:
     case IrCmd::TRY_OBJECT_NAMECALL_ADDR:
         state.checkLiveIns(OP_D(inst), index, true);
+        break;
+    case IrCmd::OBJECT_MEMBER_ADDR:
+        // same as the TRY_ forms above, but its branch operand is C (there is no cached-slot operand)
+        state.checkLiveIns(OP_C(inst), index, true);
         break;
     case IrCmd::CHECK_FASTCALL_RES:
         state.checkLiveIns(OP_B(inst), index, true);

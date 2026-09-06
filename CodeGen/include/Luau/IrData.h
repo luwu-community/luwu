@@ -722,6 +722,16 @@ enum class IrCmd : uint8_t
     // When undef is specified instead of a block, execution is aborted on check failure
     TRY_OBJECT_MEMBER_ADDR,
 
+    // Address of an instance member at a *known* offset on a Luau Classes object, for a receiver whose
+    // class the compiler has proven (a method's own `self`; see rfcx/classes.md and LOP_GETOBJECTMEMBER).
+    // Nothing about the class is re-checked here -- no slot cache, no name compare, no private/const
+    // authorization -- only that the offset is inside the instance, which is what keeps malformed
+    // bytecode memory-safe.
+    // A: pointer (LuauObject)
+    // B: unsigned int (member offset)
+    // C: block/undef, taken when the offset is out of range
+    OBJECT_MEMBER_ADDR,
+
     // Try to get the address of a static member on a Luau Classes class object using the cached
     // member slot at the given bytecode position, or jump if the slot is stale (out of range for
     // static members, or doesn't name the expected member) -- see rfcx/classes.md

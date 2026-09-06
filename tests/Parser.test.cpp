@@ -4183,6 +4183,308 @@ end
     CHECK_EQ(result.errors[2].getMessage(), R"(Duplicate class member '%error-id%')");
 }
 
+TEST_CASE_FIXTURE(Fixture, "class_primary_constructor")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+        // a parameter default is a function parameter default (see parseClassPrimaryConstructor)
+        {FFlag::LuauDefaultArguments, true},
+    };
+
+    ParseResult result = tryParse(R"(
+        class Cat(name: string, age = 3)
+        end
+    )");
+
+    REQUIRE(result.errors.empty());
+
+    const AstStatClass* cls = result.root->body.data[0]->as<AstStatClass>();
+    REQUIRE(cls);
+    REQUIRE(cls->primaryConstructor);
+    CHECK(cls->primaryConstructor->visibility == AstClassMemberVisibility::Public);
+    CHECK(!cls->primaryConstructor->qualifierLocation.has_value());
+
+    REQUIRE(cls->primaryConstructor->args.size == 2);
+    REQUIRE(cls->primaryConstructor->argsDefaults.size == 2);
+
+    CHECK(cls->primaryConstructor->args.data[0]->name == "name");
+    REQUIRE(cls->primaryConstructor->args.data[0]->annotation);
+    CHECK(cls->primaryConstructor->argsDefaults.data[0] == nullptr);
+
+    CHECK(cls->primaryConstructor->args.data[1]->name == "age");
+    CHECK(cls->primaryConstructor->args.data[1]->annotation == nullptr);
+    REQUIRE(cls->primaryConstructor->argsDefaults.data[1]);
+    CHECK(cls->primaryConstructor->argsDefaults.data[1]->as<AstExprConstantNumber>());
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_primary_constructor_with_no_parameters")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    // `class Counter()` is not the same as `class Counter`: the empty parameter list is what takes
+    // away the default table constructor (rfcx/classes.md), so it has to survive parsing.
+    ParseResult result = tryParse(R"(
+        class Counter()
+        end
+        class Tally
+        end
+    )");
+
+    REQUIRE(result.errors.empty());
+
+    const AstStatClass* counter = result.root->body.data[0]->as<AstStatClass>();
+    REQUIRE(counter);
+    REQUIRE(counter->primaryConstructor);
+    CHECK(counter->primaryConstructor->args.size == 0);
+
+    const AstStatClass* tally = result.root->body.data[1]->as<AstStatClass>();
+    REQUIRE(tally);
+    CHECK(tally->primaryConstructor == nullptr);
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_primary_constructor_private")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    ParseResult result = tryParse(R"(
+        class Account private (holder: string)
+        end
+        class Seal public (name: string)
+        end
+    )");
+
+    REQUIRE(result.errors.empty());
+
+    const AstStatClass* account = result.root->body.data[0]->as<AstStatClass>();
+    REQUIRE(account);
+    REQUIRE(account->primaryConstructor);
+    CHECK(account->primaryConstructor->visibility == AstClassMemberVisibility::Private);
+    CHECK(account->primaryConstructor->qualifierLocation.has_value());
+
+    const AstStatClass* seal = result.root->body.data[1]->as<AstStatClass>();
+    REQUIRE(seal);
+    REQUIRE(seal->primaryConstructor);
+    CHECK(seal->primaryConstructor->visibility == AstClassMemberVisibility::Public);
+    CHECK(seal->primaryConstructor->qualifierLocation.has_value());
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_primary_constructor_parameters_are_visible_to_field_initializers")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    ParseResult result = tryParse(R"(
+        class Card(userid: number, hash: string)
+            private const hash = hash
+        end
+    )");
+
+    REQUIRE(result.errors.empty());
+
+    const AstStatClass* cls = result.root->body.data[0]->as<AstStatClass>();
+    REQUIRE(cls);
+    REQUIRE(cls->members.size == 1);
+
+    auto hash = cls->members.data[0].get_if<AstClassProperty>();
+    REQUIRE(hash);
+    REQUIRE(hash->defaultValue);
+
+    // the initializer's `hash` is the *parameter*, not a global and not the field
+    auto local = hash->defaultValue->as<AstExprLocal>();
+    REQUIRE(local);
+    CHECK(local->local == cls->primaryConstructor->args.data[1]);
+    // the parameter belongs to the synthesized `__init`, one function scope deeper than the class,
+    // so a field initializer referring to it is a local access rather than an upvalue capture
+    CHECK(!local->upvalue);
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_primary_constructor_parameters_are_not_visible_to_methods")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    ParseResult result = tryParse(R"(
+        class Symbol(name: string)
+            function describe(self)
+                return name
+            end
+        end
+    )");
+
+    REQUIRE(result.errors.empty());
+
+    const AstStatClass* cls = result.root->body.data[0]->as<AstStatClass>();
+    REQUIRE(cls);
+
+    auto describe = cls->members.data[0].get_if<AstClassMethod>();
+    REQUIRE(describe);
+    REQUIRE(describe->function->body->body.size == 1);
+
+    auto ret = describe->function->body->body.data[0]->as<AstStatReturn>();
+    REQUIRE(ret);
+    REQUIRE(ret->list.size == 1);
+    // parameters are only in scope for field initializers, so this is the global `name`
+    CHECK(ret->list.data[0]->as<AstExprGlobal>());
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_primary_constructor_rejects_explicit_init")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    matchParseError(
+        R"(
+class Cat(name: string, age: number)
+    function __init(self, name, age) end
+end
+        )",
+        "Cannot define an '__init' constructor because this class defines a primary constructor on line 2; remove the primary constructor to "
+        "define '__init' explicitly"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_primary_constructor_rejects_qualifiers_on_parameters")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    // `class Island(private name: string)` is how Kotlin spells this, so each specifier gets a
+    // message aimed at that mistake rather than a generic parse failure (rfcx/classes.md).
+    matchParseError(
+        R"(
+class Island(
+    private name: string
+)
+end
+        )",
+        "Luwu does not currently support access specifiers here, redefine this field within the class body to change its access specifier"
+    );
+
+    matchParseError(
+        R"(
+class Island(
+    public name: string
+)
+end
+        )",
+        "This class parameter already creates a public field; Luwu does not currently support access specifiers here, redefine the field within "
+        "the class body to change its access specifier"
+    );
+
+    matchParseError(
+        R"(
+class Frame(const name: string)
+end
+        )",
+        "Luwu does not currently support modifiers here, redefine this field within the class body to apply 'const' to it"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_primary_constructor_rejects_duplicate_parameters")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    matchParseError(
+        R"(
+class Point(x: number, x: number)
+end
+        )",
+        "Duplicate primary constructor parameter 'x'"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_primary_constructor_parameter_collides_with_method")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    // a parameter declares a field of the same name, so a method may not reuse it -- but a *property*
+    // of the same name may, since that is how access specifiers get applied to a parameter's field
+    matchParseError(
+        R"(
+class Symbol(name: string)
+    function name(self) end
+end
+        )",
+        "Duplicate class member 'name'"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_primary_constructor_rejects_trailing_comma")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    matchParseError(
+        R"(
+class Cat(name: string, age: number,)
+end
+        )",
+        "A class's primary constructor cannot have a trailing comma"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_missing_end_is_reported_as_such")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    // A class body and a statement list overlap (`const t0 = os.clock()` is valid as either), so a
+    // class missing its `end` used to swallow everything after it and then report a pile of nonsense
+    // at whatever token finally failed to parse as a member.
+    ParseResult result = tryParse(R"(
+class Pod
+
+const t0 = os.clock()
+print(t0)
+    )");
+
+    REQUIRE(result.errors.size() == 1);
+    CHECK_EQ(result.errors[0].getMessage(), "Expected 'end' (to close 'class' at line 2), got 'print'");
+    // the statement the class was never going to contain is handed back to the enclosing block
+    CHECK_EQ(result.errors[0].getLocation().begin.line, 4);
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_primary_constructor_rejects_variadic")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    matchParseError(
+        R"(
+class Args(first: string, ...)
+end
+        )",
+        "A class's primary constructor cannot be variadic"
+    );
+}
+
 TEST_CASE_FIXTURE(Fixture, "overlapping_property_and_method_names")
 {
     ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};

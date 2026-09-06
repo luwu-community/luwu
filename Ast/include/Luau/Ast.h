@@ -1210,6 +1210,25 @@ struct AstClassMethod
 
 using AstClassMember = Variant<AstClassProperty, AstClassMethod>;
 
+// Luau Classes (rfcx/classes.md): the primary constructor of a class, `class Cat(name: string, age = 0)`.
+// A class using the default (POD) table constructor has none of these at all; a class written as
+// `class Cat()` has one with zero parameters, which is what deliberately disables the table constructor.
+//
+// Parameters are ordinary function parameters -- annotations and default values both optional -- and
+// each one implicitly declares a public field of the same name. They are only in scope within the
+// class body's field initializer expressions, never within its methods.
+struct AstClassPrimaryConstructor
+{
+    // Location of the `public`/`private` keyword before the parameter list; nullopt when absent.
+    std::optional<Location> qualifierLocation = std::nullopt;
+    AstClassMemberVisibility visibility = AstClassMemberVisibility::Public;
+    AstArray<AstLocal*> args;
+    // Parallel to `args`; an entry is nullptr when that parameter has no default value.
+    AstArray<AstExpr*> argsDefaults;
+    // Location of the parameter list, parentheses included.
+    Location argLocation;
+};
+
 class AstStatClass : public AstStat
 {
 public:
@@ -1220,6 +1239,8 @@ public:
     bool exported;
     AstArray<AstGenericType*> generics;
     AstArray<AstGenericTypePack*> genericPacks;
+    // Null when the class has no primary constructor, i.e. it uses the default table constructor.
+    AstClassPrimaryConstructor* primaryConstructor = nullptr;
     // Set once the class's closing `end` has actually been matched, as opposed to being
     // synthesized by error recovery. Mirrors AstStatBlock::hasEnd.
     bool hasEnd = false;
@@ -1231,7 +1252,8 @@ public:
         bool exported,
         const Location& keywordLocation,
         const AstArray<AstGenericType*>& generics = {},
-        const AstArray<AstGenericTypePack*>& genericPacks = {}
+        const AstArray<AstGenericTypePack*>& genericPacks = {},
+        AstClassPrimaryConstructor* primaryConstructor = nullptr
     );
 
     void visit(AstVisitor* visitor) override;

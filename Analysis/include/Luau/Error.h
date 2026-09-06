@@ -429,6 +429,17 @@ struct PrivateConstructorAccess
     bool operator==(const PrivateConstructorAccess& rhs) const;
 };
 
+// A field of a class with a primary constructor that nothing can ever initialize: the class body
+// gives it no default value, no parameter shares its name, and its type does not admit `nil`
+// (see FFlag::DebugLuauUserDefinedClasses, FFlag::LuauBetterUserDefinedClasses).
+struct UninitializableClassField
+{
+    TypeId classTy;
+    Name key;
+
+    bool operator==(const UninitializableClassField& rhs) const;
+};
+
 struct PropertyAccessViolation
 {
     TypeId table;
@@ -676,6 +687,7 @@ using TypeErrorData = Variant<
     PrivatePropertyAccess,
     ConstPropertyAssignment,
     PrivateConstructorAccess,
+    UninitializableClassField,
     TypesAreUnrelated,
     NormalizationTooComplex,
     TypePackMismatch,

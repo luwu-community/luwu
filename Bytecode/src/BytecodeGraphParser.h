@@ -1021,6 +1021,25 @@ struct BytecodeGraphParser
                 addVmConstInput(node, aux);
                 break;
 
+            case LOP_GETOBJECTMEMBER:
+                addVmRegInput(node, LUAU_INSN_B(insn));
+                addImmInput(node, static_cast<int32_t>(aux));
+                addProducer(LUAU_INSN_A(insn), nodeOp);
+                break;
+
+            case LOP_SETOBJECTMEMBER:
+                addVmRegInput(node, LUAU_INSN_A(insn));
+                addVmRegInput(node, LUAU_INSN_B(insn));
+                addImmInput(node, static_cast<int32_t>(aux));
+                break;
+
+            case LOP_NEWOBJECT:
+                addVmRegInput(node, LUAU_INSN_A(insn));
+                addVmRegInput(node, LUAU_INSN_B(insn));
+                addImmInput(node, static_cast<int32_t>(LUAU_INSN_C(insn)));
+                addImmInput(node, static_cast<int32_t>(aux));
+                break;
+
             case LOP_NEWCLASSMEMBER:
                 LUAU_ASSERT(FFlag::DebugLuauUserDefinedClasses);
                 addVmRegInput(node, LUAU_INSN_A(insn));

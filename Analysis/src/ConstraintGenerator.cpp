@@ -1075,6 +1075,20 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
             // property either has a default value or there are no properties at all.
             bool anyRequiredCtorArg = false;
 
+            // Luau Classes (rfcx/classes.md): a primary constructor's parameters each declare a public
+            // field, unless the class body restates the parameter -- in which case the restatement is
+            // the declaration, and carries the access specifier and modifiers. The constructor's own
+            // type is built from the parameters in the second pass, once their annotations can be
+            // resolved; see visit(AstStatClass*).
+            auto restatedInBody = [&](const AstName& name)
+            {
+                for (const AstClassMember& member : classDecl->members)
+                    if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && prop->name == name)
+                        return true;
+
+                return false;
+            };
+
             for (const auto& member : classDecl->members)
             {
                 Luau::visit(
@@ -1143,6 +1157,24 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
                 );
             }
 
+            if (classDecl->primaryConstructor)
+            {
+                for (AstLocal* param : classDecl->primaryConstructor->args)
+                {
+                    if (memberTypes.contains(param->name) || restatedInBody(param->name))
+                        continue;
+
+                    auto [propertyType, _] = memberTypes.try_insert(param->name, arena->addType(BlockedType{}));
+                    instanceFieldNames.insert(param->name.value);
+
+                    // a parameter's field is public and non-const; changing either is what restating
+                    // it in the class body is for
+                    auto& p = props[param->name.value];
+                    p = Property::rw(propertyType);
+                    p.location = param->location;
+                }
+            }
+
             TypeId instanceMetatable = arena->addType(TableType{instanceMetatableProps, std::nullopt, TypeLevel{}, scope.get(), TableState::Sealed});
 
             auto classFieldUserData = std::make_shared<ClassFieldUserData>();
@@ -1185,7 +1217,9 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
                     !classInstanceEtv->instantiatedTypeParams.empty() || !classInstanceEtv->instantiatedTypePackParams.empty();
             }
 
-            bool hasCustomInit = false;
+            // A primary constructor counts here too: its `__init` is synthesized from the parameter
+            // list, so neither it nor the constructor is the POD table constructor below.
+            bool hasCustomInit = classDecl->primaryConstructor != nullptr;
             for (const auto& member : classDecl->members)
             {
                 if (const auto* method = member.get_if<AstClassMethod>(); method && method->functionName == "__init")
@@ -1193,6 +1227,22 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
                     hasCustomInit = true;
                     break;
                 }
+            }
+
+            // Blocked alongside ctorTy, and filled in with it once the parameters resolve.
+            TypeId primaryInitTy = nullptr;
+
+            if (classDecl->primaryConstructor)
+            {
+                primaryInitTy = arena->addType(BlockedType{});
+
+                Property initProp = Property::readonly(primaryInitTy);
+                initProp.location = classDecl->primaryConstructor->argLocation;
+                initProp.isPrivate = classDecl->primaryConstructor->visibility == AstClassMemberVisibility::Private;
+
+                if (ExternType* classInstanceEtv = getMutable<ExternType>(classInstanceTy))
+                    classInstanceEtv->props["__init"] = initProp;
+                staticProps["__init"] = initProp;
             }
 
             // If the class defines a custom `__init`, the constructor's real
@@ -1273,7 +1323,9 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
                     TypeFun{classTypeParams, classTypePackParams, classInstanceTy, classDecl->location};
 
             classDeclRecords[classDecl->name] = std::make_unique<ClassDeclRecord>(
-                ClassDeclRecord{classInstanceTy, std::move(memberTypes), ctorTy, std::move(classTypeParams), std::move(classTypePackParams)}
+                ClassDeclRecord{
+                    classInstanceTy, std::move(memberTypes), ctorTy, primaryInitTy, std::move(classTypeParams), std::move(classTypePackParams)
+                }
             );
         }
     }
@@ -2668,6 +2720,72 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatClass* stat
         }
     }
 
+    // Luau Classes (rfcx/classes.md): a primary constructor's parameters are in scope for the class's
+    // field initializer expressions and nowhere else, so they are bound in a scope of their own that
+    // the methods below are deliberately not checked in.
+    ScopePtr initializerScope = bodyScope;
+    std::vector<TypeId> primaryCtorParamTypes;
+
+    if (const AstClassPrimaryConstructor* primaryConstructor = statClass->primaryConstructor)
+    {
+        // Deliberately not childScope(): that would register the scope under the *class's* location,
+        // and TypeChecker2's findInnermostScope would then hand it to everything inside the class,
+        // method bodies included -- which loses their return types. Registering it under the
+        // parameter list's own location keeps it owned (so types referring to it stay valid) without
+        // it enclosing anything it has no business enclosing.
+        initializerScope = std::make_shared<Scope>(bodyScope);
+        initializerScope->location = primaryConstructor->argLocation;
+        initializerScope->returnType = bodyScope->returnType;
+        initializerScope->varargPack = bodyScope->varargPack;
+        bodyScope->children.emplace_back(initializerScope.get());
+        scopes.emplace_back(primaryConstructor->argLocation, initializerScope);
+
+        for (size_t i = 0; i < primaryConstructor->args.size; ++i)
+        {
+            AstLocal* param = primaryConstructor->args.data[i];
+            AstExpr* paramDefault = primaryConstructor->argsDefaults.data[i];
+
+            TypeId paramTy;
+
+            if (param->annotation)
+            {
+                paramTy = resolveType(bodyScope, param->annotation, /* inTypeArguments */ false);
+
+                // as with a default function argument, the default has to fit the annotation
+                if (paramDefault)
+                {
+                    Inference found = check(bodyScope, paramDefault, paramTy);
+                    addConstraint(bodyScope, paramDefault->location, SubtypeConstraint{found.ty, paramTy});
+                }
+            }
+            else if (paramDefault)
+                paramTy = check(bodyScope, paramDefault).ty;
+            else
+                paramTy = builtinTypes->anyType;
+
+            primaryCtorParamTypes.push_back(paramTy);
+
+            initializerScope->bindings[param] = Binding{paramTy, param->location};
+
+            if (!FFlag::DebugLuauCFG)
+                initializerScope->lvalueTypes[dfg->getDef(param)] = paramTy;
+        }
+    }
+
+    // Which parameter, if any, a class member restates -- `class Card(hash: string) private const hash
+    // end` names one field, declared by the parameter and given its access by the restatement.
+    auto primaryCtorParamIndex = [&](const AstName& name) -> std::optional<size_t>
+    {
+        if (!statClass->primaryConstructor)
+            return std::nullopt;
+
+        for (size_t i = 0; i < statClass->primaryConstructor->args.size; ++i)
+            if (statClass->primaryConstructor->args.data[i]->name == name)
+                return i;
+
+        return std::nullopt;
+    };
+
     for (const auto& member : statClass->members)
     {
         Luau::visit(
@@ -2696,12 +2814,25 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatClass* stat
                         target = resolveType(bodyScope, classProp.ty, false);
                         if (classProp.defaultValue)
                         {
-                            Inference found = check(bodyScope, classProp.defaultValue, target);
-                            addConstraint(bodyScope, classProp.defaultValue->location, SubtypeConstraint{found.ty, target});
+                            Inference found = check(initializerScope, classProp.defaultValue, target);
+                            addConstraint(initializerScope, classProp.defaultValue->location, SubtypeConstraint{found.ty, target});
+                        }
+                        else if (std::optional<size_t> paramIndex = primaryCtorParamIndex(classProp.name))
+                        {
+                            // a bare restatement (`private breed: number`) is still initialized from the
+                            // parameter it names, so the parameter's type has to fit the annotation the
+                            // restatement gives the field -- there just isn't an expression to blame
+                            addConstraint(
+                                initializerScope, classProp.nameLocation, SubtypeConstraint{primaryCtorParamTypes[*paramIndex], target}
+                            );
                         }
                     }
                     else if (classProp.defaultValue)
-                        target = check(bodyScope, classProp.defaultValue).ty;
+                        target = check(initializerScope, classProp.defaultValue).ty;
+                    else if (std::optional<size_t> paramIndex = primaryCtorParamIndex(classProp.name))
+                        // a bare restatement (`private const hash`) is initialized from the parameter
+                        // it names, so it has that parameter's type
+                        target = primaryCtorParamTypes[*paramIndex];
                     else
                         target = builtinTypes->anyType;
                     emplaceType<BoundType>(asMutable(blockedTy), target);
@@ -2791,6 +2922,87 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatClass* stat
             },
             member
         );
+    }
+
+    // Luau Classes (rfcx/classes.md): with the parameters' types resolved, the constructor a primary
+    // constructor implies can be built -- `Cat(name: string, age: number)` -- along with the `__init`
+    // the RFC says it defines, and the field each parameter the class body didn't restate declares.
+    if (const AstClassPrimaryConstructor* primaryConstructor = statClass->primaryConstructor)
+    {
+        std::vector<TypeId> ctorArgs;
+        std::vector<TypeId> initArgs;
+        std::vector<std::optional<FunctionArgument>> argNames;
+
+        // the constructor is reached as the class value's `__call`, so its first argument is the
+        // class itself; `__init` takes the instance instead
+        ctorArgs.push_back(builtinTypes->unknownType);
+        initArgs.push_back(classDeclRecord->ty);
+        argNames.push_back(std::nullopt);
+
+        for (size_t i = 0; i < primaryConstructor->args.size; ++i)
+        {
+            AstLocal* param = primaryConstructor->args.data[i];
+            TypeId paramTy = primaryCtorParamTypes[i];
+
+            // An argument for a parameter with a default may be left out; what the field ends up with
+            // is the default rather than nil, so only the *signature* is optional here, not the type
+            // the parameter has inside the class.
+            TypeId argTy = primaryConstructor->argsDefaults.data[i] ? makeOption(builtinTypes, *arena, paramTy) : paramTy;
+
+            ctorArgs.push_back(argTy);
+            initArgs.push_back(argTy);
+            argNames.push_back(FunctionArgument{param->name.value, param->location});
+
+            // the parameter's own field, when the class body doesn't restate it (a restatement
+            // resolves the member type itself, above)
+            if (TypeId* memberTy = classDeclRecord->memberTypes.find(param->name))
+            {
+                TypeId blockedTy = follow(*memberTy);
+                if (is<BlockedType>(blockedTy))
+                    emplaceType<BoundType>(asMutable(blockedTy), paramTy);
+            }
+        }
+
+        std::vector<TypeId> ctorGenerics;
+        std::vector<TypePackId> ctorGenericPacks;
+        for (const GenericTypeDefinition& param : classDeclRecord->typeParams)
+            ctorGenerics.push_back(param.ty);
+        for (const GenericTypePackDefinition& param : classDeclRecord->typePackParams)
+            ctorGenericPacks.push_back(param.tp);
+
+        TypeId newCtorTy = arena->addType(FunctionType{
+            ctorGenerics,
+            ctorGenericPacks,
+            arena->addTypePack(std::move(ctorArgs)),
+            arena->addTypePack({classDeclRecord->ty}),
+            /* defn */ std::nullopt,
+            /* hasSelf */ true
+        });
+
+        // keep the parameter names, so tooling prints `Cat(name: string, age: number)`
+        if (FunctionType* newCtorFtv = getMutable<FunctionType>(newCtorTy))
+            newCtorFtv->argNames = argNames;
+
+        if (classDeclRecord->ctorTy && is<BlockedType>(follow(classDeclRecord->ctorTy)))
+            emplaceType<BoundType>(asMutable(follow(classDeclRecord->ctorTy)), newCtorTy);
+
+        TypeId newInitTy = arena->addType(FunctionType{
+            std::move(ctorGenerics),
+            std::move(ctorGenericPacks),
+            arena->addTypePack(std::move(initArgs)),
+            arena->addTypePack({}),
+            /* defn */ std::nullopt,
+            /* hasSelf */ true
+        });
+
+        if (FunctionType* newInitFtv = getMutable<FunctionType>(newInitTy))
+            newInitFtv->argNames = std::move(argNames);
+
+        if (classDeclRecord->primaryInitTy && is<BlockedType>(follow(classDeclRecord->primaryInitTy)))
+            emplaceType<BoundType>(asMutable(follow(classDeclRecord->primaryInitTy)), newInitTy);
+
+        if (ExternType* classInstanceEtv = getMutable<ExternType>(follow(classDeclRecord->ty)))
+            classInstanceEtv->initLocation = primaryConstructor->argLocation;
     }
 
     return ControlFlow::None;

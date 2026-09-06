@@ -645,6 +645,13 @@ typedef struct LuauClass
     // Used to find `__init`'s closure for the `const`-write brand check below.
     uint32_t initoffset;
 
+    // Set when this class's `__init` is the one a primary constructor implies (`class Cat(name)`),
+    // i.e. it does nothing but assign fields from its parameters. That is what makes it sound for a
+    // construction site to initialize the instance positionally and skip the call entirely -- see
+    // LOP_NEWOBJECT's FIELDS form, which checks this before honoring that shape on a class with a
+    // custom `__init`. Only ever set together with `hascustominit`.
+    bool hasprimaryinit;
+
     // Per-member attribute bits, indexed by the same offset as `offsettomember` (see
     // LUAU_CLASSMEMBER_PRIVATE / LUAU_CLASSMEMBER_CONST in lclass.h). Owned by this class object;
     // freed in luaR_freeclass.
@@ -673,6 +680,14 @@ typedef struct LuauClass
 
     // The offset of `__defaults` in `staticmembers`, only meaningful when haspoddefaultsfn is set.
     uint32_t poddefaultsoffset;
+
+    // Compile-time-constant field defaults: one TValue per instance member, in the same offset order
+    // as `offsettomember`, nil for a member with no default. Copied straight into a new instance by
+    // the POD constructor, which is why such a class needs no `__defaults` closure at all. NULL when
+    // the class has no defaults, or when any default is a non-constant expression (that one has to be
+    // re-evaluated per construction, so the whole class falls back to `__defaults`). Owned by this
+    // class object; freed in luaR_freeclass and marked in traverseclass.
+    TValue* memberdefaults;
 
     // Debug name of the constructor closure (e.g. "Foo() constructor"), shown
     // in stack traces. Owned by this class object; freed in luaR_freeclass.

@@ -606,17 +606,37 @@ static int loadsafe(
                 TString* initName = luaS_newlstr(L, "__init", 6);
                 bool hasCustomInit = false;
                 size_t peekOffset = offset;
+                bool hasConstDefaults = false;
+
                 for (uint32_t idx = 0; idx < numMembers; idx++)
                 {
                     uint32_t mid = readVarInt(data, size, peekOffset);
-                    readVarInt(data, size, peekOffset); // flags
+                    uint32_t flags = readVarInt(data, size, peekOffset);
                     hasCustomInit |= tsvalue(&p->k[mid]) == initName;
+
+                    // a constant default is stored inline right after its member's flags
+                    if (flags & LBC_CLASSMEMBER_CONSTDEFAULT)
+                    {
+                        readVarInt(data, size, peekOffset);
+                        hasConstDefaults = true;
+                    }
                 }
 
                 uint32_t numMembersWithInit = hasCustomInit ? numMembers : numMembers + 1;
                 TString** offsetToMember = luaM_newarray(L, numMembersWithInit, TString*, L->activememcat);
                 uint8_t* memberFlags = luaM_newarray(L, numMembersWithInit, uint8_t, L->activememcat);
                 LuaTable* membersToOffset = luaH_new(L, 0, numMembersWithInit);
+
+                // Constant field defaults, one per instance member in offset order. Members are written
+                // properties-first, so index idx here is exactly the member's runtime offset.
+                TValue* memberDefaults = NULL;
+
+                if (hasConstDefaults)
+                {
+                    memberDefaults = luaM_newarray(L, numProperties, TValue, L->activememcat);
+                    for (uint32_t idx = 0; idx < numProperties; idx++)
+                        setnilvalue(&memberDefaults[idx]);
+                }
 
                 for (uint32_t idx = 0; idx < numMembers; idx++)
                 {
@@ -625,6 +645,15 @@ static int loadsafe(
                     LUAU_ASSERT(ttisstring(memberName));
                     offsetToMember[idx] = tsvalue(memberName);
                     memberFlags[idx] = uint8_t(readVarInt(data, size, offset));
+
+                    if (memberFlags[idx] & LBC_CLASSMEMBER_CONSTDEFAULT)
+                    {
+                        uint32_t did = readVarInt(data, size, offset);
+                        LUAU_ASSERT(memberDefaults && idx < numProperties);
+                        // the default's own constant is written before the shape, so it's already loaded
+                        setobj(L, &memberDefaults[idx], &p->k[did]);
+                    }
+
                     TValue* val = luaH_setstr(L, membersToOffset, tsvalue(memberName));
                     setnvalue(val, idx);
                 }
@@ -641,6 +670,8 @@ static int loadsafe(
                 membersToOffset->readonly = true;
 
                 LuauClass* lco = luaR_newclass(L, tsvalue(classname), membersToOffset, offsetToMember, memberFlags, numProperties, numMethods);
+                if (memberDefaults)
+                    luaR_setmemberdefaults(L, lco, memberDefaults);
                 if (!hasCustomInit)
                     luaR_adddefaultinit(L, lco);
                 setclassvalue(L, &p->k[j], lco);

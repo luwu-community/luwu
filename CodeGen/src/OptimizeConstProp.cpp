@@ -309,6 +309,7 @@ struct ConstPropState
 
         // Object members are heap and can be mutated/aliased by any call, same lifetime as tables
         tryObjectMemberCache.clear();
+        objectMemberCache.clear();
         objectValueCache.clear();
     }
 
@@ -1263,16 +1264,32 @@ struct ConstPropState
             // Double-check that TABLE_SETNUM invalidated the table array data
             CODEGEN_ASSERT(arrayValueCache.empty());
         }
-        else if (targetAddr.cmd == IrCmd::TRY_OBJECT_MEMBER_ADDR)
+        else if (targetAddr.cmd == IrCmd::TRY_OBJECT_MEMBER_ADDR || targetAddr.cmd == IrCmd::OBJECT_MEMBER_ADDR)
         {
-            // A write to member 'B' can't affect a cached load of a differently-named member 'A', but
-            // the same-named member of a possibly-aliasing object must be invalidated (key is OP_C/Kn)
+            // A write to one member can't affect a cached load of a different member, but the same
+            // member of a possibly-aliasing object must be invalidated. Which operand identifies the
+            // member differs: TRY_OBJECT_MEMBER_ADDR is keyed by name constant (OP_C), while
+            // OBJECT_MEMBER_ADDR is keyed by the constant offset (OP_B). A cached load through one form
+            // is only compared against a write through the same form; a class is only ever accessed
+            // through one of them within a function, since the proof that picks the direct form is a
+            // property of the whole method.
             for (auto& [pointerIdx, loadedValueIdx] : objectValueCache)
             {
                 IrInst& address = function.instructions[pointerIdx];
 
-                if (OP_C(address) == OP_C(targetAddr))
+                if (address.cmd != targetAddr.cmd)
+                {
                     loadedValueIdx = kInvalidInstIdx;
+                }
+                else if (address.cmd == IrCmd::OBJECT_MEMBER_ADDR)
+                {
+                    if (OP_B(address) == OP_B(targetAddr))
+                        loadedValueIdx = kInvalidInstIdx;
+                }
+                else if (OP_C(address) == OP_C(targetAddr))
+                {
+                    loadedValueIdx = kInvalidInstIdx;
+                }
             }
         }
         else
@@ -1297,7 +1314,7 @@ struct ConstPropState
 
             arrayValueCache.push_back({function.getInstIndex(targetAddr), offsetOp, instIdx});
         }
-        else if (targetAddr.cmd == IrCmd::TRY_OBJECT_MEMBER_ADDR)
+        else if (targetAddr.cmd == IrCmd::TRY_OBJECT_MEMBER_ADDR || targetAddr.cmd == IrCmd::OBJECT_MEMBER_ADDR)
         {
             objectValueCache[function.getInstIndex(targetAddr)] = instIdx;
         }
@@ -1433,6 +1450,9 @@ struct ConstPropState
     // guard+address op, so we CSE the address directly. pcpos (OP_B) and fallback (OP_D) may differ;
     // write bit (OP_E) is tracked so a read may reuse a dominating write's guard, but not vice versa.
     std::vector<NumberedInstruction> tryObjectMemberCache;
+    // The same, for the proven-class direct form: keyed by object pointer (OP_A) and constant member
+    // offset (OP_B), with no guard strength to reconcile.
+    std::vector<NumberedInstruction> objectMemberCache;
     // Maps a TRY_OBJECT_MEMBER_ADDR SSA index to the last instruction producing the value there
     DenseHashMap<uint32_t, uint32_t> objectValueCache{kInvalidInstIdx};
 
@@ -1858,7 +1878,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
 
                 state.arrayValueCache.push_back({OP_A(inst).index, offsetOp, index});
             }
-            else if (source->cmd == IrCmd::TRY_OBJECT_MEMBER_ADDR)
+            else if (source->cmd == IrCmd::TRY_OBJECT_MEMBER_ADDR || source->cmd == IrCmd::OBJECT_MEMBER_ADDR)
             {
                 uint32_t* prevIdx = state.objectValueCache.find(OP_A(inst).index);
 
@@ -2717,6 +2737,36 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
 
         if (cacheSize < FInt::LuauCodeGenReuseSlotLimit)
             state.tryObjectMemberCache.push_back({index, state.instPos, state.instPos});
+        break;
+    }
+    case IrCmd::OBJECT_MEMBER_ADDR:
+    {
+        // Luau Classes (rfcx/classes.md): a proven `self.field` address depends only on the object and
+        // a constant offset, and carries no guard beyond a bounds check, so a repeat of the same pair
+        // is the same address. Reusing it is what lets the value cache above forward a load or a store
+        // to a later read of the same field -- the second `self.x` in a method costs nothing.
+        for (size_t i = 0; i < state.objectMemberCache.size(); i++)
+        {
+            auto&& [prevIdx, num, lastNum] = state.objectMemberCache[i];
+
+            IrInst& prev = function.instructions[prevIdx];
+
+            if (OP_A(prev) == OP_A(inst) && OP_B(prev) == OP_B(inst))
+            {
+                int limit = FInt::LuauCodeGenLiveSlotReuseLimit;
+
+                if (int(state.objectMemberCache.size()) > limit && state.getMaxInternalOverlap(state.objectMemberCache, i) > limit)
+                    return;
+
+                lastNum = state.instPos;
+
+                substitute(function, inst, IrOp{IrOpKind::Inst, prevIdx});
+                return; // Break out from both the loop and the switch
+            }
+        }
+
+        if (int(state.objectMemberCache.size()) < FInt::LuauCodeGenReuseSlotLimit)
+            state.objectMemberCache.push_back({index, state.instPos, state.instPos});
         break;
     }
     case IrCmd::GET_HASH_NODE_ADDR:

@@ -60,6 +60,9 @@ int getOpLength(LuauOpcode op)
     case LOP_CMPPROTO:
     case LOP_JUMPXISA:
     case LOP_SELFCLASSERROR:
+    case LOP_NEWOBJECT:
+    case LOP_GETOBJECTMEMBER:
+    case LOP_SETOBJECTMEMBER:
         return 2;
 
     default:
@@ -171,6 +174,7 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::GET_HASH_NODE_ADDR:
     case IrCmd::GET_CLOSURE_UPVAL_ADDR:
     case IrCmd::TRY_OBJECT_MEMBER_ADDR:
+    case IrCmd::OBJECT_MEMBER_ADDR:
     case IrCmd::TRY_CLASS_MEMBER_ADDR:
     case IrCmd::TRY_OBJECT_NAMECALL_ADDR:
         return IrValueKind::Pointer;

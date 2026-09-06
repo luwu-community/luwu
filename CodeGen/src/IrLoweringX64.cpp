@@ -2677,6 +2677,28 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         }
         break;
     }
+    case IrCmd::OBJECT_MEMBER_ADDR:
+    {
+        // Luau Classes (rfcx/classes.md): the receiver's class is proven (see LOP_GETOBJECTMEMBER), so
+        // the member's offset is a constant and nothing about the class needs re-checking here. Only
+        // the bounds check remains, and only to keep malformed bytecode memory-safe.
+        inst.regX64 = regs.allocReg(SizeX64::qword, index);
+
+        uint32_t offset = uintOp(OP_B(inst));
+
+        // the guard target is an ordinary deopt (a VM exit, a block, or undef), so it goes through the
+        // shared guard helper rather than labelOp -- a VM exit is not a block
+        build.cmp(dword[regOp(OP_A(inst)) + offsetof(LuauObject, numberofmembers)], offset);
+        jumpOrAbortOnUndef(ConditionX64::BelowEqual, OP_C(inst), index, next);
+
+        // address = self->members + offset * sizeof(TValue)
+        build.mov(inst.regX64, qword[regOp(OP_A(inst)) + offsetof(LuauObject, members)]);
+
+        if (offset != 0)
+            build.add(inst.regX64, offset * sizeof(TValue));
+
+        break;
+    }
     case IrCmd::TRY_CLASS_MEMBER_ADDR:
     {
         Label abort; // used when guard aborts execution

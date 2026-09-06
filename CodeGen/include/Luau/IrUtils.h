@@ -69,6 +69,7 @@ inline bool isNonTerminatingJump(IrCmd cmd)
     case IrCmd::CHECK_NODE_VALUE:
     case IrCmd::CHECK_OBJECT_CLASS:
     case IrCmd::TRY_OBJECT_MEMBER_ADDR:
+    case IrCmd::OBJECT_MEMBER_ADDR:
     case IrCmd::TRY_CLASS_MEMBER_ADDR:
     case IrCmd::TRY_OBJECT_NAMECALL_ADDR:
     case IrCmd::CHECK_BUFFER_LEN:

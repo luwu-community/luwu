@@ -194,6 +194,18 @@ private:
 
     AstStat* parseClassStat(const Location& start, bool exported, const Location& classKeywordLocation);
 
+    // True when the class body is looking at something that reads as a statement rather than a class
+    // member, which means the class was never closed. See its definition.
+    bool classBodyLooksLikeStatement();
+
+    // Luau Classes (rfcx/classes.md): parse a class's primary constructor parameter list, e.g. the
+    // `(name: string, age = 0)` of `class Cat(name: string, age = 0)`.
+    AstClassPrimaryConstructor* parseClassPrimaryConstructor(const std::optional<Location>& qualifierLocation, AstClassMemberVisibility visibility);
+
+    // Brings a primary constructor's parameters into scope, returning the offset to pass to
+    // restoreLocals once the expression that needed them has been parsed.
+    unsigned int pushClassPrimaryConstructorParams(AstClassPrimaryConstructor* primaryConstructor);
+
     // type function Name ... end
     AstStat* parseTypeFunction(const Location& start, bool exported, Position typeKeywordPosition);
 

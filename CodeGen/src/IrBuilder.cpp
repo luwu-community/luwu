@@ -689,7 +689,16 @@ void IrBuilder::translateInst(LuauOpcode op, const Instruction* pc, int i)
     // SELFCLASSERROR only ever runs on a failed self check, so deopting to the interpreter to raise
     // costs nothing on any path that matters.
     case LOP_SELFCLASSERROR:
+    case LOP_NEWOBJECT:
         inst(IrCmd::JUMP, vmExit(i));
+        break;
+
+    case LOP_GETOBJECTMEMBER:
+        translateInstGetObjectMember(*this, pc, i);
+        break;
+
+    case LOP_SETOBJECTMEMBER:
+        translateInstSetObjectMember(*this, pc, i);
         break;
 
     case LOP_CHECKSELFCLASS:

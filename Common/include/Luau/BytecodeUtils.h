@@ -41,6 +41,9 @@ inline int getOpLength(LuauOpcode op)
     case LOP_CMPPROTO:
     case LOP_JUMPXISA:
     case LOP_SELFCLASSERROR:
+    case LOP_NEWOBJECT:
+    case LOP_GETOBJECTMEMBER:
+    case LOP_SETOBJECTMEMBER:
         return 2;
 
     default:
