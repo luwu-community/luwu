@@ -10,6 +10,7 @@
 using namespace Luau;
 
 LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
+LUAU_FASTFLAG(DebugLuauUserDefinedClassesRuntime)
 LUAU_FASTFLAG(LuauBetterUserDefinedClasses)
 LUAU_FASTFLAG(LuauDefaultArguments)
 LUAU_FASTFLAG(LuauGenericNominals)
@@ -27,6 +28,11 @@ struct ClassesFixture : Fixture
 @checked declare function require(target: any): any
 declare function sqrt(n: number): number
 declare function tostring<T>(value: T): string
+declare function typeof<T>(value: T): string
+
+declare extern type Duration with
+    read seconds: number
+end
 
 declare class: {
     isinstance: @checked (o: unknown, c: class) -> boolean,
@@ -656,6 +662,52 @@ end
     LUAU_REQUIRE_NO_ERRORS(result);
     CHECK_EQ("string", toString(requireTypeAtPosition({7, 18})));
     CHECK_EQ("Point", toString(requireTypeAtPosition({9, 18})));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "typeof_object_refines_to_object_arm")
+{
+    ScopedFastFlag sff_better{FFlag::LuauBetterUserDefinedClasses, true};
+    ScopedFastFlag sff_runtime{FFlag::DebugLuauUserDefinedClassesRuntime, true};
+
+    CheckResult result = check(R"(
+class Cat
+    name = "Taz"
+    function __init(self)
+    end
+end
+
+local cat = Cat()
+local x = cat :: Cat | { [string]: string }
+
+if typeof(x) == "object" then
+    local a = x
+else
+    local b = x
+end
+)");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("Cat", toString(requireTypeAtPosition({11, 14})));
+    CHECK_EQ("{ [string]: string }", toString(requireTypeAtPosition({13, 14})));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "userdata_is_namable_and_narrows_via_typeof")
+{
+    // `userdata` is now a writable type annotation (like `object`/`class`), and `typeof(x) == "..."`
+    // narrows it to the matching extern datatype (a direct child of the userdata root).
+    CheckResult result = check(R"(
+local function f(x: userdata)
+    if typeof(x) == "Duration" then
+        local a = x
+    else
+        local b = x
+    end
+end
+)");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("Duration", toString(requireTypeAtPosition({3, 18})));
+    CHECK_EQ("userdata & ~Duration", toString(requireTypeAtPosition({5, 18})));
 }
 
 TEST_CASE_FIXTURE(ClassesFixture, "not_isinstance_refines_unknown")

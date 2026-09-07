@@ -14,6 +14,7 @@
 #include "Luau/Variant.h"
 #include "Luau/VecDeque.h"
 
+#include <array>
 #include <atomic>
 #include <map>
 #include <memory>
@@ -593,7 +594,7 @@ using NominalRelation = Variant<Obj, Klass>;
  * The properties of a class are always exactly known.
  * Extern types optionally have a parent type.
  * Two different extern types that share the same properties are nevertheless distinct and mutually incompatible.
- */
+*/
 struct ExternType
 {
     using Props = TableType::Props;
@@ -601,21 +602,40 @@ struct ExternType
     Name name;
     Props props;
     std::optional<TypeId> parent;
+
+    // The root of this type's nominal hierarchy: `userdata` for an embedder
+    // extern type, `class`/`object` for a user class value/instance. `nullopt`
+    // means this type *is* a root (a built-in top type: `userdata`, `object`,
+    // `class`, `vector`) -- i.e. a "primitive" modeled as an ExternType.
+    //
+    // Derived from `parent` at construction (a child inherits its parent's
+    // root; a parentless type is its own root), so it can't drift. This is the
+    // single source of truth for "which hierarchy is this / is this a root",
+    // replacing the ~20 ad-hoc `parent`/`relation` derivations upstream had.
+    std::optional<TypeId> root;
+
     std::optional<TypeId> metatable; // metaclass?
     Tags tags;
     std::shared_ptr<ClassUserData> userData;
     ModuleName definitionModuleName;
     std::optional<Location> definitionLocation;
-    // The location of this class's `__init` method's body, if it defines one. Used to allow
-    // assignment to `const` properties only from within the constructor (see
-    // FFlag::DebugLuauUserDefinedClasses, FFlag::LuauBetterUserDefinedClasses).
+
+    /*
+        If this NominalType is a class, contains the location of the class's `__init` method'
+        body, if the class defines one. 
+        
+        This is used to check that `const` properties are only assigned within their `__init` constructor
+        (see FFlag::DebugLuauUserDefinedClasses, FFlag::LuauBetterUserDefinedClasses)
+    */
     std::optional<Location> initLocation;
     std::optional<TableIndexer> indexer;
-    /* This field represents a bidirectional relationship between classes and object types
-       Given a Class, this relation should be a Obj in the variant, representing an instantiation of the class
-       Given a Object, this relation should be a Klass in the variant, representing the class prototype
-       Other sources of Extern Types will not have this relation set - this is for the classes fixture so that
-       we can go between class and object easily, given just the extern type
+
+    /*  
+        This field represents a bidirectional relationship between classes and object types
+        Given a Class, this relation should be a Obj in the variant, representing an instantiation of the class
+        Given a Object, this relation should be a Klass in the variant, representing the class prototype
+        Other sources of Extern Types will not have this relation set - this is for the classes fixture so that
+        we can go between class and object easily, given just the extern type
      */
     std::optional<NominalRelation> relation;
 
@@ -629,6 +649,8 @@ struct ExternType
     std::vector<TypeId> instantiatedTypeParams;
     std::vector<TypePackId> instantiatedTypePackParams;
 
+    // `root` is derived from `parent` (see the field comment); these are defined
+    // out-of-line in Type.cpp because that derivation needs `get<ExternType>`.
     ExternType(
         Name name,
         Props props,
@@ -638,17 +660,7 @@ struct ExternType
         std::shared_ptr<ClassUserData> userData,
         ModuleName definitionModuleName,
         std::optional<Location> definitionLocation
-    )
-        : name(std::move(name))
-        , props(std::move(props))
-        , parent(parent)
-        , metatable(metatable)
-        , tags(std::move(tags))
-        , userData(std::move(userData))
-        , definitionModuleName(std::move(definitionModuleName))
-        , definitionLocation(definitionLocation)
-    {
-    }
+    );
 
     ExternType(
         Name name,
@@ -660,18 +672,7 @@ struct ExternType
         ModuleName definitionModuleName,
         std::optional<Location> definitionLocation,
         std::optional<TableIndexer> indexer
-    )
-        : name(std::move(name))
-        , props(std::move(props))
-        , parent(parent)
-        , metatable(metatable)
-        , tags(std::move(tags))
-        , userData(std::move(userData))
-        , definitionModuleName(std::move(definitionModuleName))
-        , definitionLocation(definitionLocation)
-        , indexer(indexer)
-    {
-    }
+    );
 };
 
 // Data required to initialize a user-defined function and its environment
@@ -1069,7 +1070,13 @@ struct BuiltinTypes
     TypeId errorRecoveryType(TypeId guess) const;
     TypePackId errorRecoveryTypePack(TypePackId guess) const;
 
+    // Every nominal-type root, for logic that reasons about the whole extern
+    // lattice rather than one type (e.g. the normalizer's top/unknown checks).
+    // These are the parentless extern-type tops: userdata/class/object/vector.
+    std::array<TypeId, 4> nominalRoots() const;
+
     friend TypeId makeStringMetatable(NotNull<BuiltinTypes> builtinTypes, SolverMode mode);
+    friend void makeVectorMetatable(NotNull<BuiltinTypes> builtinTypes);
     friend struct GlobalTypes;
 
 private:
@@ -1090,6 +1097,10 @@ public:
     const TypeId externType;
     const TypeId objectType;
     const TypeId classType;
+    // `vector` is a language primitive that reuses the ExternType representation (fields x/y/z + a
+    // metatable). It is its own nominal root (parent/root nullopt); its props/metatable are filled
+    // in by makeVectorMetatable during global setup.
+    const TypeId vectorType;
     const TypeId tableType;
     const TypeId emptyTableType;
     const TypeId trueType;

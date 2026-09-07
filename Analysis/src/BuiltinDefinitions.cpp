@@ -347,6 +347,41 @@ static void finalizeGlobalBindings(ScopePtr scope)
     }
 }
 
+// `vector` is a language primitive (its own nominal root) that reuses the ExternType
+// representation for its x/y/z fields and operator metatable. Like the string metatable, this is
+// built directly on the shared `builtinTypes` arena so there is a single canonical `vector` type.
+void makeVectorMetatable(NotNull<BuiltinTypes> builtinTypes)
+{
+    NotNull<TypeArena> arena{builtinTypes->arena.get()};
+    const TypeId vectorTy = builtinTypes->vectorType;
+    const TypeId numberType = builtinTypes->numberType;
+
+    ExternType* vectorCls = getMutable<ExternType>(vectorTy);
+    LUAU_ASSERT(vectorCls);
+
+    vectorCls->props["x"] = Property::readonly(numberType);
+    vectorCls->props["y"] = Property::readonly(numberType);
+    vectorCls->props["z"] = Property::readonly(numberType);
+
+    vectorCls->metatable = arena->addType(TableType{{}, std::nullopt, TypeLevel{}, TableState::Sealed});
+    TableType* metatableTy = getMutable<TableType>(*vectorCls->metatable);
+
+    metatableTy->props["__add"] = {makeFunction(*arena, vectorTy, {vectorTy}, {vectorTy})};
+    metatableTy->props["__sub"] = {makeFunction(*arena, vectorTy, {vectorTy}, {vectorTy})};
+    metatableTy->props["__unm"] = {makeFunction(*arena, vectorTy, {}, {vectorTy})};
+
+    std::initializer_list<TypeId> mulOverloads{
+        makeFunction(*arena, vectorTy, {vectorTy}, {vectorTy}),
+        makeFunction(*arena, vectorTy, {numberType}, {vectorTy}),
+    };
+    metatableTy->props["__mul"] = {makeIntersection(*arena, mulOverloads)};
+    metatableTy->props["__div"] = {makeIntersection(*arena, mulOverloads)};
+    metatableTy->props["__idiv"] = {makeIntersection(*arena, mulOverloads)};
+
+    // vectorType is persistent, so its freshly-added metatable must be too.
+    persist(*vectorCls->metatable);
+}
+
 void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeCheckForAutocomplete)
 {
     LUAU_ASSERT(!globals.globalTypes.types.isFrozen());
@@ -379,28 +414,6 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
 
     addGlobalBinding(globals, "string", *it->second.readTy, "@luau");
     addGlobalBinding(globals, "string", *it->second.writeTy, "@luau");
-
-    // Setup 'vector' metatable
-    if (auto it = globals.globalScope->exportedTypeBindings.find("vector"); it != globals.globalScope->exportedTypeBindings.end())
-    {
-        TypeId vectorTy = it->second.type;
-        ExternType* vectorCls = getMutable<ExternType>(vectorTy);
-
-        vectorCls->metatable = arena.addType(TableType{{}, std::nullopt, TypeLevel{}, TableState::Sealed});
-        TableType* metatableTy = Luau::getMutable<TableType>(vectorCls->metatable);
-
-        metatableTy->props["__add"] = {makeFunction(arena, vectorTy, {vectorTy}, {vectorTy})};
-        metatableTy->props["__sub"] = {makeFunction(arena, vectorTy, {vectorTy}, {vectorTy})};
-        metatableTy->props["__unm"] = {makeFunction(arena, vectorTy, {}, {vectorTy})};
-
-        std::initializer_list<TypeId> mulOverloads{
-            makeFunction(arena, vectorTy, {vectorTy}, {vectorTy}),
-            makeFunction(arena, vectorTy, {builtinTypes->numberType}, {vectorTy}),
-        };
-        metatableTy->props["__mul"] = {makeIntersection(arena, mulOverloads)};
-        metatableTy->props["__div"] = {makeIntersection(arena, mulOverloads)};
-        metatableTy->props["__idiv"] = {makeIntersection(arena, mulOverloads)};
-    }
 
     // next<K, V>(t: Table<K, V>, i: K?) -> (K?, V)
     TypePackId nextArgsTypePack = arena.addTypePack(TypePack{{mapOfKtoV, makeOption(builtinTypes, arena, genericK)}});
@@ -1834,7 +1847,7 @@ bool MagicClassFields::infer(const MagicFunctionCallContext& context)
     // were handed the class type, its relation points (via Obj) at the corresponding instance
     // type.
     const ExternType* instanceEtv = etv;
-    if (etv->relation)
+    if (etv->root == builtinTypes->classType && etv->relation)
     {
         if (const Obj* obj = get_if<Obj>(&*etv->relation))
             instanceEtv = get<ExternType>(follow(obj->ty));

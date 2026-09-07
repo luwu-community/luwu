@@ -137,6 +137,9 @@ static TypeId shallowClone(TypeId ty, TypeArena& dest, const TxnLog* log)
         else if constexpr (std::is_same_v<T, ExternType>)
         {
             ExternType clone{a.name, a.props, a.parent, a.metatable, a.tags, a.userData, a.definitionModuleName, a.definitionLocation, a.indexer};
+            // Preserve the hierarchy root explicitly; roots are persistent builtins that are never
+            // cloned, so this stays valid even as `parent` is re-pointed to substituted children.
+            clone.root = a.root;
             if (FFlag::DebugLuauUserDefinedClasses)
                 clone.relation = a.relation;
             if (FFlag::LuauGenericNominals)

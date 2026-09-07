@@ -2122,7 +2122,7 @@ void TypeChecker2::checkPrivateConstructorAccess(TypeId classTy, const Location&
         return;
 
     const ExternType* cls = get<ExternType>(follow(classTy));
-    if (!cls || !cls->relation)
+    if (!cls || cls->root != builtinTypes->classType || !cls->relation)
         return;
 
     const Obj* obj = get_if<Obj>(&*cls->relation);

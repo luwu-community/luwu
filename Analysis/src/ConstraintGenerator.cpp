@@ -2416,7 +2416,8 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatDeclareExte
 
     Name className(declaredExternType->name.value);
 
-    TypeId externTy = arena->addType(ExternType(std::move(className), {}, superTy, std::nullopt, {}, {}, module->name, declaredExternType->location));
+    TypeId externTy =
+        arena->addType(ExternType(std::move(className), {}, superTy, std::nullopt, {}, {}, module->name, declaredExternType->location));
     ExternType* etv = getMutable<ExternType>(externTy);
 
     TypeId metaTy = arena->addType(TableType{TableState::Sealed, scope->level, scope.get()});
@@ -4135,8 +4136,15 @@ std::tuple<TypeId, TypeId, RefinementId> ConstraintGenerator::checkBinary(
         {
             TypeId ty = follow(typeFun->type);
 
-            // We're only interested in the root type of any extern type.
-            if (auto etv = get<ExternType>(ty); etv && (etv->parent == builtinTypes->externType || hasTag(ty, kTypeofRootTag)))
+            // We're only interested in a type that `typeof` can actually name.
+            // For userdata that's a datatype root (a direct child of the
+            // `userdata` root, e.g. `Instance`); `typeof` returns those by name.
+            // For classes `typeof` returns "object"/"class" uniformly, so the
+            // only nameable discriminants there are the `object`/`class` roots
+            // themselves -- never an individual class (whose typeof is "object").
+            if (auto etv = get<ExternType>(ty); etv &&
+                (etv->parent == builtinTypes->externType || ty == builtinTypes->objectType || ty == builtinTypes->classType ||
+                 hasTag(ty, kTypeofRootTag)))
                 discriminantTy = ty;
         }
 

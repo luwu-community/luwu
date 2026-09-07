@@ -2537,7 +2537,9 @@ TypeFunctionReductionResult<TypeId> objectofTypeFunction(
     if (isPending(targetTy, ctx->solver))
         return {std::nullopt, Reduction::MaybeOk, {targetTy}, {}};
 
-    if (auto klass = get<ExternType>(targetTy); klass && klass->relation)
+    // objectof maps a class value to its instance type; only a class value (a type rooted at
+    // `class`) has one. `root` is the classifier; `relation` carries the link to the object type.
+    if (auto klass = get<ExternType>(targetTy); klass && klass->root == ctx->builtins->classType && klass->relation)
     {
         if (auto obj = klass->relation->get_if<Obj>())
             return {obj->ty, Reduction::MaybeOk, {}, {}};
