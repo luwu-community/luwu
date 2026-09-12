@@ -129,6 +129,8 @@ const char* getCmdName(IrCmd cmd)
         return "GET_HASH_NODE_ADDR";
     case IrCmd::GET_CLOSURE_UPVAL_ADDR:
         return "GET_CLOSURE_UPVAL_ADDR";
+    case IrCmd::LOAD_OWNER_CLASS:
+        return "LOAD_OWNER_CLASS";
     case IrCmd::STORE_TAG:
         return "STORE_TAG";
     case IrCmd::STORE_EXTRA:

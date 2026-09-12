@@ -686,9 +686,6 @@ void IrBuilder::translateInst(LuauOpcode op, const Instruction* pc, int i)
     // first instruction of every self-taking method, so leaving it as an unconditional exit would
     // force every class method to interpret in full; see translateInstCheckSelfClass.
     case LOP_NEWCLASSMEMBER:
-    // SELFCLASSERROR only ever runs on a failed self check, so deopting to the interpreter to raise
-    // costs nothing on any path that matters.
-    case LOP_SELFCLASSERROR:
     case LOP_NEWOBJECT:
         inst(IrCmd::JUMP, vmExit(i));
         break;

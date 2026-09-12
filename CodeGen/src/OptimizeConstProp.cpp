@@ -2772,6 +2772,10 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::GET_HASH_NODE_ADDR:
     case IrCmd::GET_CLOSURE_UPVAL_ADDR:
         break;
+    case IrCmd::LOAD_OWNER_CLASS:
+        // Proto::ownerclass is fixed for the executing closure, so this is loop-invariant; nothing to
+        // propagate, but it is a candidate for CSE if a frame ever loads it more than once.
+        break;
     case IrCmd::TRY_CLASS_MEMBER_ADDR:
     case IrCmd::TRY_OBJECT_NAMECALL_ADDR:
         // TODO(rfcx/classes.md): no reuse cache yet, unlike TRY_OBJECT_MEMBER_ADDR above

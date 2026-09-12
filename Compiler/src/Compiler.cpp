@@ -155,7 +155,7 @@ struct Compiler
 
     // Data compileFunction needs to emit a CHECKSELFCLASS self-validation for a method: an
     // expression that evaluates to the owning class (for the check's class register), and the
-    // method's name for the SELFCLASSERROR that raises when the check fails. The class this method
+    // method's name for the error CHECKSELFCLASS raises when the check fails. The class this method
     // belongs to, the receiver's actual class or type, and the `.`/`:` spelling of the call are all
     // supplied by the error opcode's operands, so nothing here is baked into a string.
     struct SelfClassCheck
@@ -502,9 +502,8 @@ struct Compiler
 
         // Runtime checking of `self` for methods (see rfcx/classes.md): verify `self` is actually
         // an instance of this method's own class before running anything else in the body,
-        // including field defaults below -- an invalid `self` shouldn't get that far. Emitted as a
-        // single CHECKSELFCLASS opcode that falls through on success, with the raising
-        // SELFCLASSERROR right after it (reached only via the check's cold-path jump).
+        // including field defaults below -- an invalid `self` shouldn't get that far. A single
+        // CHECKSELFCLASS opcode: falls through on success, raises on mismatch.
         //
         // A well-formed `obj:method()` can't reach this: the namecall resolves the method on the
         // receiver's own class, so `self` is an instance by construction. Only a `.`-call with an
@@ -514,10 +513,12 @@ struct Compiler
         {
             if (const SelfClassCheck* selfCheck = classMethodSelfChecks.find(func))
             {
-                RegScope rsCheck(this);
-                uint8_t classReg = compileExprAuto(selfCheck->classExpr, rsCheck);
-
-                emitSelfClassCheck(*selfCheck, args, classReg, /* selfCall= */ false, func->location);
+                // The class is a constant of this very proto, so the check reads it from
+                // Proto::ownerclass rather than a register: no GETUPVAL per call, and no upvalue
+                // capture forced on a method that would otherwise have none (which would cost it
+                // DUPCLOSURE sharing). See LBC_SELFCLASS_OWNER. Inline sites cannot use this form --
+                // they run under the caller's proto -- and still pass a register.
+                emitSelfClassCheck(*selfCheck, args, LBC_SELFCLASS_OWNER, /* selfCall= */ false, func->location);
             }
         }
 
@@ -1253,32 +1254,20 @@ struct Compiler
         return callerClass && calleeClass && *callerClass == *calleeClass;
     }
 
-    // Emits the SELFCLASSERROR that raises for a failed `self` check. `selfCall` records whether the
-    // call site spelled the call with `:` or `.`, which the message distinguishes -- a colon call can
-    // only reach the wrong method body via a type annotation that lied and let the compiler inline
-    // it, so it gets told to look at its annotations.
-    void emitSelfClassError(const SelfClassCheck& selfCheck, uint8_t selfReg, uint8_t classReg, bool selfCall, const Location& location)
+    // CHECKSELFCLASS falls through when `self` is an instance of the class in `classReg`, and raises
+    // otherwise.
+    //
+    // `selfCall` means this function was called with `:` syntax. 
+    // The only time `selfCall` is true is here is if we're in O2 and we've inlined a method body for a class that isn't `self`'s class.
+    void emitSelfClassCheck(const SelfClassCheck& selfCheck, uint8_t selfReg, uint8_t classReg, bool selfCall, const Location& location)
     {
         int32_t methodName = bytecode.addConstantString(sref(selfCheck.methodName));
 
         if (methodName < 0)
             CompileError::raise(location, "Exceeded constant limit; simplify the code to compile");
 
-        bytecode.emitABC(LOP_SELFCLASSERROR, selfReg, classReg, selfCall ? 1 : 0);
+        bytecode.emitABC(LOP_CHECKSELFCLASS, selfReg, classReg, selfCall ? 1 : 0);
         bytecode.emitAux(methodName);
-    }
-
-    // CHECKSELFCLASS falls through when `self` is an instance of the class in `classReg`, and jumps
-    // over the SELFCLASSERROR that follows; a mismatch falls into it and raises.
-    void emitSelfClassCheck(const SelfClassCheck& selfCheck, uint8_t selfReg, uint8_t classReg, bool selfCall, const Location& location)
-    {
-        size_t checkLabel = bytecode.emitLabel();
-        bytecode.emitABC(LOP_CHECKSELFCLASS, selfReg, classReg, 0);
-
-        emitSelfClassError(selfCheck, selfReg, classReg, selfCall, location);
-
-        if (!bytecode.patchSkipC(checkLabel, bytecode.emitLabel()))
-            CompileError::raise(location, "Exceeded jump distance limit; simplify the code to compile");
     }
 
     void compileInlinedCall(AstExprCall* expr, AstExprFunction* func, uint8_t target, uint8_t targetCount, AstExpr* selfExpr = nullptr)
@@ -1418,13 +1407,29 @@ struct Compiler
             }
         }
 
-        // Runtime checking of `self` for methods (see rfcx/classes.md): compileFunction splices a
-        // CHECKSELFCLASS into the method's own prologue, but an inlined call never runs that prologue --
-        // only the body is copied here -- so the check has to be re-emitted at the inline site. Without
-        // it a receiver whose annotation lies about its class (`local p: Point2D = Point3D()`) would
-        // silently run the wrong class's method body instead of erroring.
         if (FFlag::DebugLuauUserDefinedClasses && func->args.size > 0)
         {
+            // `selfCall` means this function was called with `:` syntax. 
+            // The only time `selfCall` is true is here is if we're in O2 and we've inlined a method body for a class that isn't `self`'s class.
+            // This can be because `self` is annotated incorrectly or in the more common case that the wrong type of `self` was passed to a free function
+            // that directly calls methods on `self`: 
+            //
+            // const function push(list: List, first: string, last: string)
+            //     list:push(first)
+            //     list:push(last)
+            // end
+            //
+            // we'll try to inline `list:push` here but when called with a `self` of the wrong class (like a VecDeque maybe) that also has `:push`
+            // we correctly namecall to `VecDeque:push` in O0 and O1 but would incorrectly inline `List`'s implementation of `:push` in O2.
+            // I chose to error for this instead of simply jumping over the wrong instructions because it means we'd allow a lot of unused instructions
+            // that only get jumped over, and the user's code is wrong in that they called a method with the wrong type...
+            //
+            // If the user wants --!optimize 2 optimizations, they probably want to know that they have code that isn't getting those optimizations
+            // due to an incorrect callsite or annotation. We can't say that the type annotation we used to inline the method was 'wrong' or 'lying'
+            // or was an 'attempt to bypass private access' because it could've just as well been a simple mistake at a callsite that wants to use
+            // --!optimize 2 inlining (or they're using a runtime that just enabled o2 by default and didn't even know this could happen).
+            //
+            // Since Luwu is more okay with being stricter than Luau I felt this was a reasonable decision to catch incorrect code.
             if (const SelfClassCheck* selfCheck = classMethodSelfChecks.find(func); selfCheck && !selfIsAlreadyChecked(func, selfExpr))
             {
                 RegScope rsCheck(this);
@@ -1454,10 +1459,7 @@ struct Compiler
                 // check being emitted belongs to this call, and that's the line its error must blame
                 setDebugLine(expr);
 
-                if (boundReg < 0)
-                    emitSelfClassError(*selfCheck, selfReg, classReg, expr->self, expr->location);
-                else
-                    emitSelfClassCheck(*selfCheck, selfReg, classReg, expr->self, expr->location);
+                emitSelfClassCheck(*selfCheck, selfReg, classReg, expr->self, expr->location);
             }
         }
 

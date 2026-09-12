@@ -11136,10 +11136,8 @@ TEST_CASE("ClassDeclWithMethod")
     )";
     auto res0 = "\n" + compileFunction(source.c_str(), 0, 0, 0);
     CHECK(R"(
-GETUPVAL R1 0
-CHECKSELFCLASS R0 R1 L0
-SELFCLASSERROR R0 R1 K0 ['magnitude']
-L0: GETOBJECTMEMBER R3 R0 0
+CHECKSELFCLASS R0 OWNER K0 ['magnitude']
+GETOBJECTMEMBER R3 R0 0
 GETOBJECTMEMBER R4 R0 0
 MUL R2 R3 R4
 GETOBJECTMEMBER R4 R0 1
@@ -11153,7 +11151,6 @@ RETURN R1 1
 LOADNIL R0
 LOADKX R0 K4 [class Point (props: 2, methods: 1)]
 NEWCLOSURE R1 P0
-CAPTURE VAL R0
 NEWCLASSMEMBER R0 R1 ['magnitude']
 GETGLOBAL R1 K5 ['print']
 MOVE R2 R0
@@ -11243,7 +11240,6 @@ LOADNIL R2
 LOADKX R0 K5 [class Pod (props: 2, methods: 0)]
 LOADKX R1 K9 [class WithInit (props: 1, methods: 1)]
 DUPCLOSURE R3 K7 ['__init']
-CAPTURE VAL R1
 NEWCLASSMEMBER R1 R3 ['__init']
 LOADKX R2 K14 [class Computed (props: 1, methods: 1)]
 DUPCLOSURE R3 K12 []
@@ -11295,7 +11291,6 @@ TEST_CASE("ClassPrimaryConstructor")
 LOADNIL R0
 LOADKX R0 K6 [class Frame (props: 3, methods: 1)]
 DUPCLOSURE R1 K4 ['__init']
-CAPTURE VAL R0
 NEWCLASSMEMBER R0 R1 ['__init']
 LOADK R5 K7 ['main']
 LOADN R6 10
@@ -11330,12 +11325,10 @@ TEST_CASE("ClassPrimaryConstructorInit")
 
     auto res = "\n" + compileFunction(source.c_str(), 0, 2, 0);
     CHECK(R"(
-GETUPVAL R3 0
-CHECKSELFCLASS R0 R3 L0
-SELFCLASSERROR R0 R3 K0 ['__init']
-L0: JUMPXEQKNIL R2 L1 NOT
+CHECKSELFCLASS R0 OWNER K0 ['__init']
+JUMPXEQKNIL R2 L0 NOT
 LOADN R2 10
-L1: LOADN R3 7
+L0: LOADN R3 7
 SETTABLEKS R3 R0 K1 ['id']
 MULK R3 R2 K2 [2]
 SETTABLEKS R3 R0 K3 ['size']
@@ -11377,10 +11370,8 @@ TEST_CASE("ClassMethodInlineSelfCheck")
     // already validated this exact value
     auto res1 = "\n" + compileFunction(source.c_str(), 1, 2, 0);
     CHECK(R"(
-GETUPVAL R1 0
-CHECKSELFCLASS R0 R1 L0
-SELFCLASSERROR R0 R1 K0 ['double_x']
-L0: GETTABLEKS R1 R0 K1 ['x']
+CHECKSELFCLASS R0 OWNER K0 ['double_x']
+GETTABLEKS R1 R0 K1 ['x']
 MULK R2 R1 K2 [2]
 RETURN R2 1
 )" == res1);
@@ -11389,9 +11380,8 @@ RETURN R2 1
     auto res2 = "\n" + compileFunction(source.c_str(), 2, 2, 0);
     CHECK(R"(
 GETUPVAL R2 0
-CHECKSELFCLASS R0 R2 L0
-SELFCLASSERROR R0 R2 K0 ['get_x'] SELF
-L0: GETTABLEKS R1 R0 K1 ['x']
+CHECKSELFCLASS R0 R2 K0 ['get_x'] SELF
+GETTABLEKS R1 R0 K1 ['x']
 RETURN R1 1
 )" == res2);
 }
@@ -11416,10 +11406,8 @@ TEST_CASE("ClassDeclWithAmbiguousGlobal")
     )";
     auto res0 = "\n" + compileFunction(source.c_str(), 0, 0, 0);
     CHECK(R"(
-GETUPVAL R1 0
-CHECKSELFCLASS R0 R1 L0
-SELFCLASSERROR R0 R1 K0 ['print']
-L0: GETGLOBAL R1 K0 ['print']
+CHECKSELFCLASS R0 OWNER K0 ['print']
+GETGLOBAL R1 K0 ['print']
 LOADK R2 K1 ['Point(x = %*, y = %*)']
 GETOBJECTMEMBER R4 R0 0
 GETOBJECTMEMBER R5 R0 1
@@ -11433,7 +11421,6 @@ RETURN R0 0
 LOADNIL R0
 LOADKX R0 K4 [class Point (props: 2, methods: 1)]
 NEWCLOSURE R1 P0
-CAPTURE VAL R0
 NEWCLASSMEMBER R0 R1 ['print']
 DUPTABLE R1 5
 LOADK R2 K0 ['Point']
@@ -12373,15 +12360,13 @@ end
         R"(
 LOADNIL R0
 NEWTABLE R1 0 0
-LOADKX R0 K5 [class Point (props: 2, methods: 2)]
-NEWCLOSURE R2 P0
-CAPTURE VAL R1
+LOADKX R0 K7 [class Point (props: 2, methods: 2)]
+DUPCLOSURE R2 K3 ['getX']
 NEWCLASSMEMBER R0 R2 ['getX']
-NEWCLOSURE R2 P1
-CAPTURE VAL R1
+DUPCLOSURE R2 K5 ['getY']
 NEWCLASSMEMBER R0 R2 ['getY']
 SETTABLEKS R0 R1 K0 ['Point']
-GETIMPORT R2 8 [table.freeze]
+GETIMPORT R2 10 [table.freeze]
 MOVE R3 R1
 CALL R2 1 1
 RETURN R2 1

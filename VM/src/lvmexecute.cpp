@@ -133,7 +133,7 @@ LUAU_FLAGVERSION(LuauBackedgeHeapCheck, 2)
         VM_DISPATCH_OP(LOP_JUMPXEQKB), VM_DISPATCH_OP(LOP_JUMPXEQKN), VM_DISPATCH_OP(LOP_JUMPXEQKS), VM_DISPATCH_OP(LOP_IDIV), \
         VM_DISPATCH_OP(LOP_IDIVK), VM_DISPATCH_OP(LOP_GETUDATAKS), VM_DISPATCH_OP(LOP_SETUDATAKS), VM_DISPATCH_OP(LOP_NAMECALLUDATA), \
         VM_DISPATCH_OP(LOP_NEWCLASSMEMBER), VM_DISPATCH_OP(LOP_CALLFB), VM_DISPATCH_OP(LOP_CMPPROTO), VM_DISPATCH_OP(LOP_CHECKSELFCLASS), \
-        VM_DISPATCH_OP(LOP_JUMPXISA), VM_DISPATCH_OP(LOP_SELFCLASSERROR), VM_DISPATCH_OP(LOP_NEWOBJECT), \
+        VM_DISPATCH_OP(LOP_JUMPXISA), VM_DISPATCH_OP(LOP_NEWOBJECT), \
         VM_DISPATCH_OP(LOP_GETOBJECTMEMBER), VM_DISPATCH_OP(LOP_SETOBJECTMEMBER),
 
 #if defined(__GNUC__) || defined(__clang__)
@@ -3793,20 +3793,42 @@ reentry:
             VM_CASE(LOP_CHECKSELFCLASS)
             {
                 Instruction insn = *pc++;
+                uint32_t aux = *pc++;
                 StkId self = VM_REG(LUAU_INSN_A(insn));
-                StkId classReg = VM_REG(LUAU_INSN_B(insn));
-                LUAU_ASSERT(ttisclass(classReg));
 
-                if (ttisobject(self) && objectvalue(self)->lclass == classvalue(classReg))
-                    pc += LUAU_INSN_C(insn);
+                // A method's own prologue check takes the class from the executing closure's proto
+                // rather than a register: it is a constant of that proto, so a register would mean a
+                // GETUPVAL per call plus a forced upvalue capture (see LBC_SELFCLASS_OWNER). An
+                // inlined copy of the body still passes a register, because it runs under the
+                // *caller's* proto, whose ownerclass is a different class or none.
+                LuauClass* classdef;
 
-                VM_ASSERT_PC(pc);
-                VM_NEXT();
+                if (LUAU_INSN_B(insn) == LBC_SELFCLASS_OWNER)
+                {
+                    classdef = cl->l.p->ownerclass;
+                }
+                else
+                {
+                    StkId classReg = VM_REG(LUAU_INSN_B(insn));
+                    LUAU_ASSERT(ttisclass(classReg));
+                    classdef = classvalue(classReg);
+                }
+
+                if (LUAU_LIKELY(ttisobject(self) && objectvalue(self)->lclass == classdef))
+                {
+                    VM_NEXT();
+                }
+                else
+                {
+                    // cold: always raises
+                    VM_PROTECT_PC();
+                    luaG_selfclasserror(L, self, classdef, tsvalue(VM_KV(aux)), LUAU_INSN_C(insn) != 0);
+                }
             }
 
             VM_CASE(LOP_NEWOBJECT)
             {
-                // Luau Classes (rfcx/classes.md): construct an instance of a POD class directly.
+                // Luwu Classes (rfcx/classes.md): construct an instance of a POD class directly.
                 Instruction insn = *pc++;
                 uint32_t aux = *pc++;
                 StkId ra = VM_REG(LUAU_INSN_A(insn));
@@ -3945,23 +3967,9 @@ reentry:
                 VM_NEXT();
             }
 
-            VM_CASE(LOP_SELFCLASSERROR)
-            {
-                // Luau Classes (rfcx/classes.md): the cold path a failing CHECKSELFCLASS falls into.
-                // Always raises, so there is no VM_NEXT here.
-                Instruction insn = *pc++;
-                uint32_t aux = *pc++;
-                StkId self = VM_REG(LUAU_INSN_A(insn));
-                StkId classReg = VM_REG(LUAU_INSN_B(insn));
-                LUAU_ASSERT(ttisclass(classReg));
-
-                VM_PROTECT_PC();
-                luaG_selfclasserror(L, self, classvalue(classReg), tsvalue(VM_KV(aux)), LUAU_INSN_C(insn) != 0);
-            }
-
             VM_CASE(LOP_JUMPXISA)
             {
-                // Luau Classes (rfcx/classes.md): fused class.isinstance(value, class) test-and-branch.
+                // Luwu Classes (rfcx/classes.md): fused class.isinstance(value, class) test-and-branch.
                 Instruction insn = *pc++;
                 uint32_t aux = *pc;
                 StkId ra = VM_REG(LUAU_INSN_A(insn));

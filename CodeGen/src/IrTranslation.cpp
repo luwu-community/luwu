@@ -2413,26 +2413,29 @@ void translateInstCheckSelfClass(IrBuilder& build, const Instruction* pc, int pc
 {
     int selfReg = LUAU_INSN_A(*pc);
     int classReg = LUAU_INSN_B(*pc);
-    int skip = LUAU_INSN_C(*pc);
 
-    // On success (self is an instance of the class), the bytecode jumps forward past the inline
-    // `error(...)` fallback that follows; on failure it falls through directly into that fallback.
-    IrOp success = build.blockAtInst(pcpos + 1 + skip);
-    IrOp fail = build.blockAtInst(pcpos + 1);
-    IrOp checkClass = build.block(IrBlockKind::Internal);
+    // A mismatch raises rather than branching anywhere, so both tests are plain guards that exit to
+    // the interpreter at this same instruction; it re-runs the check, fails again and produces the
+    // error (it has the method name in AUX and can name the receiver's actual class). That leaves
+    // the success path as straight-line code with no basic blocks at all.
+    IrOp fail = build.vmExit(pcpos);
 
+    // note the LOAD_TAG: CHECK_TAG's operand has to be an SSA value, not a raw VmReg. Liveness
+    // (visitVmRegDefsUses) has no case for CHECK_TAG, so a register operand reaches its default
+    // branch and trips CODEGEN_ASSERT(op.kind != IrOpKind::VmReg); the register use is meant to be
+    // recorded by the LOAD_TAG feeding it. This is exactly what IrBuilder::loadAndCheckTag does.
     IrOp selfTag = build.inst(IrCmd::LOAD_TAG, build.vmReg(selfReg));
-    build.inst(IrCmd::JUMP_EQ_TAG, selfTag, build.constTag(LUA_TOBJECT), checkClass, fail);
+    build.inst(IrCmd::CHECK_TAG, selfTag, build.constTag(LUA_TOBJECT), fail);
 
-    build.beginBlock(checkClass);
     IrOp selfPtr = build.inst(IrCmd::LOAD_POINTER, build.vmReg(selfReg));
-    IrOp classPtr = build.inst(IrCmd::LOAD_POINTER, build.vmReg(classReg));
-    build.inst(IrCmd::CHECK_OBJECT_CLASS, selfPtr, classPtr, fail);
-    build.inst(IrCmd::JUMP, success);
 
-    // Fallthrough in original bytecode is implicit, so we start the fail block here
-    if (build.isInternalBlock(fail))
-        build.beginBlock(fail);
+    // A method's own prologue check takes its class from Proto::ownerclass rather than a register
+    // (see LBC_SELFCLASS_OWNER); an inlined copy of the body runs under the caller's proto and still
+    // passes a register.
+    IrOp classPtr = classReg == LBC_SELFCLASS_OWNER ? build.inst(IrCmd::LOAD_OWNER_CLASS)
+                                                    : build.inst(IrCmd::LOAD_POINTER, build.vmReg(classReg));
+
+    build.inst(IrCmd::CHECK_OBJECT_CLASS, selfPtr, classPtr, fail);
 }
 
 } // namespace CodeGen

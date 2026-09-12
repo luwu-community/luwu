@@ -110,6 +110,14 @@ enum class IrCmd : uint8_t
     // When undef is specified, uses current function Closure.
     GET_CLOSURE_UPVAL_ADDR,
 
+    // Luwu Classes (rfcx/classes.md): load the class the currently executing closure's proto belongs
+    // to (`Closure::l.p->ownerclass`), or NULL when it belongs to none. Backs the
+    // LBC_SELFCLASS_OWNER form of CHECKSELFCLASS, where a method validates `self` against its own
+    // class without that class occupying a register or forcing an upvalue capture. Loop-invariant
+    // within a frame, so it is worth hoisting/CSE-ing.
+    // No operands.
+    LOAD_OWNER_CLASS,
+
     // Store a tag into TValue
     // A: Rn
     // B: tag

@@ -40,7 +40,7 @@ inline int getOpLength(LuauOpcode op)
     case LOP_CALLFB:
     case LOP_CMPPROTO:
     case LOP_JUMPXISA:
-    case LOP_SELFCLASSERROR:
+    case LOP_CHECKSELFCLASS:
     case LOP_NEWOBJECT:
     case LOP_GETOBJECTMEMBER:
     case LOP_SETOBJECTMEMBER:
@@ -105,7 +105,6 @@ inline bool isSkipC(LuauOpcode op)
     switch (op)
     {
     case LOP_LOADB:
-    case LOP_CHECKSELFCLASS:
         return true;
 
     default:

@@ -1010,13 +1010,11 @@ struct BytecodeGraphParser
 
             case LOP_CHECKSELFCLASS:
                 addVmRegInput(node, LUAU_INSN_A(insn));
-                addVmRegInput(node, LUAU_INSN_B(insn));
-                addImmInput(node, static_cast<int32_t>(LUAU_INSN_C(insn)));
-                break;
-
-            case LOP_SELFCLASSERROR:
-                addVmRegInput(node, LUAU_INSN_A(insn));
-                addVmRegInput(node, LUAU_INSN_B(insn));
+                // operand B is a register, or LBC_SELFCLASS_OWNER meaning "take the class from
+                // Proto::ownerclass". Only a real register takes part in renaming, so the sentinel
+                // rides along as an immediate and the register slot is a placeholder in that case.
+                addVmRegInput(node, LUAU_INSN_B(insn) == LBC_SELFCLASS_OWNER ? 0 : LUAU_INSN_B(insn));
+                addImmInput(node, static_cast<int32_t>(LUAU_INSN_B(insn) == LBC_SELFCLASS_OWNER ? 1 : 0));
                 addImmInput(node, static_cast<int32_t>(LUAU_INSN_C(insn)));
                 addVmConstInput(node, aux);
                 break;

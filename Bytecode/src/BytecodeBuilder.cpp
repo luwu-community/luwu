@@ -1968,20 +1968,16 @@ void BytecodeBuilder::validateInstructions() const
 
         case LOP_CHECKSELFCLASS:
             VREG(LUAU_INSN_A(insn));
-            VREG(LUAU_INSN_B(insn));
-            VJUMP(LUAU_INSN_C(insn));
+            // operand B is LBC_SELFCLASS_OWNER (the class comes from Proto::ownerclass) or a register
+            if (LUAU_INSN_B(insn) != LBC_SELFCLASS_OWNER)
+                VREG(LUAU_INSN_B(insn));
+            VCONST(insns[i + 1], String);
             break;
 
         case LOP_JUMPXISA:
             VREG(LUAU_INSN_A(insn));
             VJUMP(LUAU_INSN_D(insn));
             VREG(insns[i + 1] & 0xff); // class register lives in the low byte of aux
-            break;
-
-        case LOP_SELFCLASSERROR:
-            VREG(LUAU_INSN_A(insn));
-            VREG(LUAU_INSN_B(insn));
-            VCONST(insns[i + 1], String);
             break;
 
         case LOP_GETOBJECTMEMBER:
@@ -2768,17 +2764,16 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
         break;
 
     case LOP_CHECKSELFCLASS:
-        formatAppend(result, "CHECKSELFCLASS R%d R%d L%d\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn), targetLabel);
+        if (LUAU_INSN_B(insn) == LBC_SELFCLASS_OWNER)
+            formatAppend(result, "CHECKSELFCLASS R%d OWNER K%d [", LUAU_INSN_A(insn), *code);
+        else
+            formatAppend(result, "CHECKSELFCLASS R%d R%d K%d [", LUAU_INSN_A(insn), LUAU_INSN_B(insn), *code);
+        dumpConstant(result, int(*code++), false);
+        formatAppend(result, "]%s\n", LUAU_INSN_C(insn) ? " SELF" : "");
         break;
 
     case LOP_JUMPXISA:
         formatAppend(result, "JUMPXISA R%d R%d L%d%s\n", LUAU_INSN_A(insn), *code & 0xff, targetLabel, (*code >> 31) ? "" : " NOT");
-        break;
-
-    case LOP_SELFCLASSERROR:
-        formatAppend(result, "SELFCLASSERROR R%d R%d K%d [", LUAU_INSN_A(insn), LUAU_INSN_B(insn), *code);
-        dumpConstant(result, int(*code++), false);
-        formatAppend(result, "]%s\n", LUAU_INSN_C(insn) ? " SELF" : "");
         break;
 
     case LOP_GETOBJECTMEMBER:

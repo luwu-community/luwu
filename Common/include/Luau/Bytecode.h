@@ -53,8 +53,8 @@
 // Version 10: Adds LBC_CONSTANT_CLASS_SHAPE and NEWCLASSMEMBER for use with Luau Classes. Experimental.
 // Version 11: Adds CALLFB, CMPPROTO and feedback vector description. Experimental.
 // Version 12: Adds cost function serialized for proto and prepend each proto with size in bytes. Experimental.
-// Version 13: Adds CHECKSELFCLASS, SELFCLASSERROR, JUMPXISA, NEWOBJECT, GETOBJECTMEMBER and
-//   SETOBJECTMEMBER for Luau Classes, and constant field defaults and primary constructors
+// Version 13: Adds CHECKSELFCLASS, JUMPXISA, NEWOBJECT, GETOBJECTMEMBER and
+//   SETOBJECTMEMBER for Luwu Classes, and constant field defaults and primary constructors
 //   (LBC_CLASSMEMBER_PRIMARYINIT) in LBC_CONSTANT_CLASS_SHAPE. Experimental.
 
 // # Bytecode type information history
@@ -456,10 +456,15 @@ enum LuauOpcode
     LOP_CMPPROTO,
 
     // CHECKSELFCLASS: check that a register holds an object instance of a specific class, falling
-    // through when it does; used for Luau Classes 'self' validation in place of a class.isinstance() call
+    // through when it does and raising when it does not; used for Luwu Classes 'self' validation in
+    // place of a class.isinstance() call. Raising here rather than through an inline `error(...)`
+    // call keeps the message out of the constant table and lets it name the receiver's *actual*
+    // class or type, which is only known at runtime.
     // A: self register
-    // B: class register
-    // C: jump offset to skip past the SELFCLASSERROR that follows when the check passes
+    // B: class register, or LBC_SELFCLASS_OWNER to take the class from the executing closure's
+    //    Proto::ownerclass instead (see LBC_SELFCLASS_OWNER)
+    // C: 1 if the call site used `:` syntax, 0 for `.` syntax; only affects the error message
+    // AUX: string constant index of the method's name, for the error message
     LOP_CHECKSELFCLASS,
 
     // JUMPXISA: fused class.isinstance(value, class) test-and-branch (see rfcx/classes.md), emitted
@@ -470,16 +475,6 @@ enum LuauOpcode
     // AUX: class register in the low 8 bits; bit 31 is the polarity flag -- when set, jump if value
     //      IS an instance of the class; when clear, jump if it is NOT (see LUAU_INSN_AUX_NOT)
     LOP_JUMPXISA,
-
-    // SELFCLASSERROR: raise the 'self' mismatch error for Luau Classes; emitted as the cold path a
-    // failing CHECKSELFCLASS falls into, and never reached otherwise. Raising here rather than
-    // through an inline `error(...)` call keeps the message out of the constant table and lets it
-    // name the receiver's *actual* class or type, which is only known at runtime.
-    // A: self register (the value that failed the check)
-    // B: class register (the class the method belongs to)
-    // C: 1 if the call site used `:` syntax, 0 for `.` syntax
-    // AUX: string constant index of the method's name
-    LOP_SELFCLASSERROR,
 
     // NEWOBJECT: allocate an instance of a class, with every field set to its constant default.
     // Emitted for a call whose callee is a statically resolved class (see isKnownClassExpr), in place
@@ -609,6 +604,22 @@ enum LuauBytecodeTag
 // instance positionally (LOP_NEWOBJECT's FIELDS form) instead of calling it: the VM checks this bit
 // before honoring that form on a class that has a custom `__init`.
 #define LBC_CLASSMEMBER_PRIMARYINIT (1 << 4)
+
+// Luwu Classes (rfcx/classes.md): operand B of LOP_CHECKSELFCLASS. Instead of naming a register
+// holding the class, take the class from the executing closure's `Proto::ownerclass`.
+//
+// A method's prologue check uses this form. The class it validates against is a constant of the
+// proto, stamped there by luaR_addclassmember and GC-marked with it, so reading it from a register
+// would cost a GETUPVAL on every call and force every method to capture its class as an upvalue --
+// which in turn denies DUPCLOSURE sharing to methods that have no other upvalue.
+//
+// An *inlined* copy of a method body must NOT use this form: it executes inside the caller's proto,
+// whose ownerclass is a different class or none, so it passes the class in a register. See
+// Compiler.cpp's emitSelfClassCheck call sites.
+//
+// 255 is safe as a sentinel because the compiler never allocates it: kMaxRegisterCount is 255 and
+// allocation is bounded by `top + count > kMaxRegisterCount`, so valid registers are 0..254.
+#define LBC_SELFCLASS_OWNER 255
 
 // Type table tags
 enum LuauBytecodeType

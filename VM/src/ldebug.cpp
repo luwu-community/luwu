@@ -347,31 +347,56 @@ l_noret luaG_constassignerror(lua_State* L, const TValue* p2, const TString* cla
     luaG_runerrorL(L, "'%s' is a const member of '%s' and cannot be assigned outside %s's '__init' constructor", getstr(tsvalue(p2)), t1, t1);
 }
 
-// Luau Classes (rfcx/classes.md): a method's `self` is not an instance of the class that method
-// belongs to. `selfCall` distinguishes `obj:method()` from `Class.method(obj)`: a colon call can only
-// reach the wrong method body through a lying type annotation that let the compiler inline it, so it
-// gets a message that says where to look, while a dot call is simply the caller's mistake.
+// Luwu Classes (rfcx/classes.md): this is called when `self` (or the LHS) of a methodcall isn't 
+// actually an object of the class it's supposed to be.
+// 
+// `selfCall` means this function was called with `:` syntax. 
+// The only time `selfCall` is true is here is if we're in O2 and we've inlined a method body for a class that isn't `self`'s class.
+// This can be because `self` is annotated incorrectly or in the more common case that the wrong type of `self` was passed to a free function
+// that directly calls methods on `self`: 
+// const function push(list: List, first: string, last: string)
+//     list:push(first)
+//     list:push(last)
+// end
+// we'll try to inline `list:push` here but when called with a `self` of the wrong class (like a VecDeque maybe) that also has `:push`
+// we correctly namecall to `VecDeque:push` in O0 and O1 but would incorrectly inline `List`'s implementation of `:push` in O2.
+// I chose to error for this instead of simply jumping over the wrong instructions because it means we'd allow a lot of unused instructions
+// that only get jumped over, and the user's code is wrong in that they called a method with the wrong type...
+// If the user wants --!optimize 2 optimizations, they probably want to know that they have code that isn't getting those optimizations
+// due to an incorrect callsite or annotation. We can't say that the type annotation we used to inline the method was 'wrong' or 'lying'
+// or was an 'attempt to bypass private access' because it could've just as well been a simple mistake at a callsite that wants to use
+// --!optimize 2 inlining (or they're using a runtime that just enabled o2 by default and didn't even know this could happen).
+// Since Luwu is more okay with being stricter than Luau I felt this was a reasonable decision to catch incorrect code.
 l_noret luaG_selfclasserror(lua_State* L, const TValue* self, const LuauClass* expected, const TString* methodName, bool selfCall)
 {
-    const char* expectedName = getstr(expected->name);
+    // `expected` is NULL only if malformed bytecode put a LBC_SELFCLASS_OWNER-form CHECKSELFCLASS in
+    // a proto that is not a class method, so its Proto::ownerclass was never stamped. The check then
+    // fails (nothing compares equal to NULL) and lands here; name it rather than dereferencing NULL.
+    const char* expectedName = expected ? getstr(expected->name) : "?";
     const char* method = getstr(methodName);
 
     if (!ttisobject(self))
+    {
+        int specificIndexingSyntax = selfCall ? ':' : '.';
         luaG_runerrorL(
-            L, "attempt to call method '%s%c%s' with 'self' of type '%s'", expectedName, selfCall ? ':' : '.', method, luaT_objtypename(L, self)
+            L, "attempt to call method '%s%c%s' with 'self' of type '%s'", expectedName, specificIndexingSyntax, method, luaT_objtypename(L, self)
         );
+    }
 
     const char* actualName = getstr(objectvalue(self)->lclass->name);
 
     if (selfCall)
+    {
         luaG_runerrorL(
             L,
-            "attempt to call method '%s:%s' but 'self' is unexpectedly an object of class '%s'; remove any incorrect type annotations so "
-            "inlining resolves to the correct class",
+            "attempt to call inlined method '%s:%s' on an object of class '%s'; this occurred because inlining optimizations are enabled "
+            "and the passed 'self' did not match the expected type annotation '%s'",
             expectedName,
             method,
-            actualName
+            actualName,
+            expectedName
         );
+    }
 
     luaG_runerrorL(L, "attempt to call method '%s.%s' with 'self' of class '%s'", expectedName, method, actualName);
 }

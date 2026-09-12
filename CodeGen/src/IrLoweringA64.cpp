@@ -529,6 +529,14 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.add(inst.regA64, inst.regA64, temp2x, kLuaNodeSizeLog2); // "zero extend" temp2 to get a larger shift (top 32 bits are zero)
         break;
     }
+    case IrCmd::LOAD_OWNER_CLASS:
+    {
+        // currentClosure->l.p->ownerclass; NULL for a closure that is not a class member
+        inst.regA64 = regs.allocReg(KindA64::x, index);
+        build.ldr(inst.regA64, mem(rClosure, offsetof(Closure, l.p)));
+        build.ldr(inst.regA64, mem(inst.regA64, offsetof(Proto, ownerclass)));
+        break;
+    }
     case IrCmd::GET_CLOSURE_UPVAL_ADDR:
     {
         inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst)});

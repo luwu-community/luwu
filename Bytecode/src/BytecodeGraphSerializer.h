@@ -553,12 +553,15 @@ struct BytecodeGraphSerializer
             break;
 
         case LOP_CHECKSELFCLASS:
-            bcb.emitABC(LOP_CHECKSELFCLASS, getRegInput(insn, 0), getRegInput(insn, 1), getImmInt(insn, 2));
-            break;
-
-        case LOP_SELFCLASSERROR:
-            bcb.emitABC(LOP_SELFCLASSERROR, getRegInput(insn, 0), getRegInput(insn, 1), getImmInt(insn, 2));
-            bcb.emitAux(getVmConstInputAux(insn, 3));
+            bcb.emitABC(
+                LOP_CHECKSELFCLASS,
+                getRegInput(insn, 0),
+                // see the parser: index 2 records whether operand B was the LBC_SELFCLASS_OWNER
+                // sentinel rather than a real register
+                getImmInt(insn, 2) ? uint8_t(LBC_SELFCLASS_OWNER) : getRegInput(insn, 1),
+                uint8_t(getImmInt(insn, 3))
+            );
+            bcb.emitAux(getVmConstInputAux(insn, 4));
             break;
 
         case LOP_GETOBJECTMEMBER:

@@ -265,6 +265,15 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.add(inst.regX64, tmp.reg);
         break;
     };
+    case IrCmd::LOAD_OWNER_CLASS:
+    {
+        // currentClosure->l.p->ownerclass; NULL for a closure that is not a class member
+        inst.regX64 = regs.allocReg(SizeX64::qword, index);
+        build.mov(inst.regX64, sClosure);
+        build.mov(inst.regX64, qword[inst.regX64 + offsetof(Closure, l.p)]);
+        build.mov(inst.regX64, qword[inst.regX64 + offsetof(Proto, ownerclass)]);
+        break;
+    }
     case IrCmd::GET_CLOSURE_UPVAL_ADDR:
     {
         inst.regX64 = regs.allocRegOrReuse(SizeX64::qword, index, {OP_A(inst)});
