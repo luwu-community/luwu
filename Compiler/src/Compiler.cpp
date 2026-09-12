@@ -6372,6 +6372,17 @@ struct Compiler
 
             classByName[node->name->name] = node;
 
+            // Luwu Classes (rfcx/classes.md): a class goes in classesWithPrivateMembers when any part
+            // of it is `private`, because that is what makes its method bodies unsafe to inline into a
+            // *foreign* closure (see tryResolveMethodCall). Every private access -- a field, a method,
+            // a static, the constructor -- is authorized at runtime against the executing closure's
+            // `Proto::ownerclass` (luaR_closureownsprivateaccess), and inlining relocates the access
+            // into a closure whose ownerclass is a different class, or none. The check then fails on
+            // code that was perfectly legal where it was written. So the constructor counts too: a
+            // `Foo(...)` inside one of Foo's own methods is a private-`__init` access.
+            if (node->primaryConstructor && node->primaryConstructor->visibility == AstClassMemberVisibility::Private)
+                classesWithPrivateMembers.insert(node);
+
             for (const auto& member : node->members)
             {
                 Luau::visit(
@@ -6395,6 +6406,11 @@ struct Compiler
                         },
                         [&](const AstClassMethod& method)
                         {
+                            // Covers a private instance method, a private static, and an explicit
+                            // `private function __init` alike -- all three are ownerclass-authorized.
+                            if (method.visibility == AstClassMemberVisibility::Private)
+                                classesWithPrivateMembers.insert(node);
+
                             if (method.functionName == "__init")
                                 init = method.function;
 

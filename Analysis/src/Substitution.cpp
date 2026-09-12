@@ -888,6 +888,27 @@ void Substitution::replaceChildren(TypeId ty)
             etv->indexer->indexResultType = replace(etv->indexer->indexResultType);
         }
 
+        // `clone()` copies `relation` across verbatim and `isDirty` descends into it, so it has to
+        // be re-pointed here like every other child. Leaving it alone left the substituted copy
+        // holding a pointer into the arena the original came from, which is freed once that module
+        // is done, so `objectof` would later read whatever type had reused that slot.
+        if (FFlag::DebugLuauUserDefinedClasses && etv->relation)
+        {
+            Luau::visit(
+                overloaded{
+                    [&](Obj& obj)
+                    {
+                        obj.ty = replace(obj.ty);
+                    },
+                    [&](Klass& klass)
+                    {
+                        klass.ty = replace(klass.ty);
+                    }
+                },
+                *etv->relation
+            );
+        }
+
         if (FFlag::LuauGenericNominals)
         {
             for (TypeId& itp : etv->instantiatedTypeParams)

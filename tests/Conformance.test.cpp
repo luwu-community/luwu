@@ -4568,6 +4568,22 @@ TEST_CASE("Classes")
     );
 }
 
+TEST_CASE("ClassesInlining")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::DebugLuauUserDefinedClassesRuntime, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    // Method inlining only runs at O2, and the conformance default is O1 -- at O1 every case in this
+    // file passes vacuously. See tests/conformance/classes_inlining.luau.
+    lua_CompileOptions copts = defaultOptions();
+    copts.optimizationLevel = 2;
+
+    runConformance("classes_inlining.luau", nullptr, nullptr, nullptr, &copts);
+}
+
 TEST_CASE("ExportedClasses")
 {
     ScopedFastFlag sffs[] = {
