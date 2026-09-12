@@ -384,6 +384,8 @@ IrValueKind getCmdValueKind(IrCmd cmd)
         return IrValueKind::Pointer;
     case IrCmd::FALLBACK_DUPCLOSURE:
     case IrCmd::FALLBACK_FORGPREP:
+    case IrCmd::FALLBACK_NEWOBJECT:
+    case IrCmd::FALLBACK_NEWCLASSMEMBER:
         return IrValueKind::None;
     case IrCmd::SUBSTITUTE:
         return IrValueKind::Unknown;

@@ -203,6 +203,38 @@ static void visitVmRegDefsUses(T& visitor, IrFunction& function, IrInst& inst)
 
         visitor.defRange(vmRegOp(OP_B(inst)), 3);
         break;
+    case IrCmd::FALLBACK_NEWCLASSMEMBER:
+        visitor.use(OP_B(inst));
+        visitor.use(OP_C(inst));
+        break;
+    case IrCmd::FALLBACK_NEWOBJECT:
+    {
+        // See IrData.h for the operand shapes. The class is read in place, and the registers above
+        // the instance hold either the constructor arguments (forms 0 and 1) or one value per field
+        // (form 2); form 1 additionally fills in __init and self for the CALL the compiler emits
+        // behind this instruction.
+        int ra = vmRegOp(OP_B(inst));
+        int form = function.intOp(OP_D(inst));
+        int count = function.intOp(OP_E(inst));
+
+        visitor.use(OP_C(inst));
+
+        if (form == 1)
+        {
+            if (count > 0)
+                visitor.useRange(ra + 3, count);
+
+            visitor.defRange(ra, 3);
+        }
+        else
+        {
+            if (count > 0)
+                visitor.useRange(ra + 1, count);
+
+            visitor.def(OP_B(inst));
+        }
+        break;
+    }
     case IrCmd::ADJUST_STACK_TO_REG:
         visitor.defRange(vmRegOp(OP_A(inst)), -1);
         break;

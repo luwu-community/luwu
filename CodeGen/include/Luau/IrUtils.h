@@ -109,6 +109,8 @@ inline bool canInvalidateSafeEnv(IrCmd cmd)
     case IrCmd::FALLBACK_SETTABLEKS:
     case IrCmd::FALLBACK_NAMECALL:
     case IrCmd::FALLBACK_FORGPREP:
+    case IrCmd::FALLBACK_NEWOBJECT:
+    case IrCmd::FALLBACK_NEWCLASSMEMBER:
         return true;
     default:
         break;

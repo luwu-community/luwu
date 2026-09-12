@@ -3645,6 +3645,16 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         state.invalidate(IrOp{OP_B(inst).kind, vmRegOp(OP_B(inst)) + 2u});
         state.invalidateUserCall();
         break;
+    case IrCmd::FALLBACK_NEWCLASSMEMBER:
+        // Adding a member can run the collector, but writes no registers.
+        state.invalidateUserCall();
+        break;
+    case IrCmd::FALLBACK_NEWOBJECT:
+        // Construction writes the instance (and, for a user __init, the frame it lays out above it),
+        // and applying fields can run an __index metamethod, i.e. arbitrary Lua.
+        state.invalidateRegisterRange(vmRegOp(OP_B(inst)), function.intOp(OP_D(inst)) == 1 ? 3 : 1);
+        state.invalidateUserCall();
+        break;
     }
 }
 

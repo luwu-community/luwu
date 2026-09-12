@@ -952,6 +952,25 @@ enum class IrCmd : uint8_t
     // C: block
     FALLBACK_FORGPREP,
 
+    // Luwu Classes (rfcx/classes.md): construct an instance of a statically resolved class.
+    // Construction has no machine code lowering; it runs through the same C fallback the interpreter
+    // uses, which keeps native execution going afterwards instead of abandoning the rest of the
+    // function to the interpreter (and, unlike a bare exit, keeps the register liveness honest).
+    // A: unsigned int (bytecode instruction index)
+    // B: Rn (instance destination, also the base of the constructor's register window)
+    // C: Rn (class)
+    // D: int (form: 0 default constructor, 1 user __init, 2 fields passed positionally)
+    // E: int (AUX: argument count for forms 0 and 1, field count for form 2)
+    FALLBACK_NEWOBJECT,
+
+    // Luwu Classes (rfcx/classes.md): add a member (a method, a primary constructor's synthesized
+    // __init, or a __defaults closure) to a class under construction. Runs as a C fallback for the
+    // same reason as FALLBACK_NEWOBJECT.
+    // A: unsigned int (bytecode instruction index)
+    // B: Rn (class)
+    // C: Rn (member value)
+    FALLBACK_NEWCLASSMEMBER,
+
     // Instruction that passes value through, it is produced by constant folding and users substitute it with the value
     // A: operand of any type
     SUBSTITUTE,

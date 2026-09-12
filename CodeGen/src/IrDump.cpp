@@ -463,6 +463,10 @@ const char* getCmdName(IrCmd cmd)
         return "FALLBACK_DUPCLOSURE";
     case IrCmd::FALLBACK_FORGPREP:
         return "FALLBACK_FORGPREP";
+    case IrCmd::FALLBACK_NEWOBJECT:
+        return "FALLBACK_NEWOBJECT";
+    case IrCmd::FALLBACK_NEWCLASSMEMBER:
+        return "FALLBACK_NEWCLASSMEMBER";
     case IrCmd::SUBSTITUTE:
         return "SUBSTITUTE";
     case IrCmd::MARK_USED:

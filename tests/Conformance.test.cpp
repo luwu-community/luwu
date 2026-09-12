@@ -4584,6 +4584,20 @@ TEST_CASE("ClassesInlining")
     runConformance("classes_inlining.luau", nullptr, nullptr, nullptr, &copts);
 }
 
+TEST_CASE("ClassesNativeCodegen")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::DebugLuauUserDefinedClassesRuntime, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    // Deliberately a separate, small file from classes.luau: that one is past codegen's total-IR
+    // instruction budget, so its protos are never natively compiled and it cannot exercise the
+    // lowering of the class opcodes at all. See tests/conformance/classes_ncg.luau.
+    runConformance("classes_ncg.luau");
+}
+
 TEST_CASE("ExportedClasses")
 {
     ScopedFastFlag sffs[] = {

@@ -3512,6 +3512,12 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         regs.spill(index);
         emitFallback(build, offsetof(NativeContext, executeDUPCLOSURE), uintOp(OP_A(inst)));
         break;
+    case IrCmd::FALLBACK_NEWOBJECT:
+        emitFallback(build, offsetof(NativeContext, executeNEWOBJECT), uintOp(OP_A(inst)));
+        break;
+    case IrCmd::FALLBACK_NEWCLASSMEMBER:
+        emitFallback(build, offsetof(NativeContext, executeNEWCLASSMEMBER), uintOp(OP_A(inst)));
+        break;
     case IrCmd::FALLBACK_FORGPREP:
         regs.spill(index);
         emitFallback(build, offsetof(NativeContext, executeFORGPREP), uintOp(OP_A(inst)));
