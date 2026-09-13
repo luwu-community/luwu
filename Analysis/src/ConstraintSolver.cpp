@@ -1553,6 +1553,10 @@ bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNul
             for (const GenericTypePackDefinition& param : tf->typePackParams)
                 templateTypePackParams.push_back(param.tp);
 
+            // Structured bindings can't be captured by lambdas before C++20 (older clang rejects it).
+            const std::vector<TypeId>& typeArgumentsRef = typeArguments;
+            const std::vector<TypePackId>& packArgumentsRef = packArguments;
+
             auto deferProp = [&](TypeId blockedProp)
             {
                 TypeId placeholder = arena->addType(BlockedType{});
@@ -1565,9 +1569,9 @@ bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNul
                         follow(tf->type),
                         target,
                         templateTypeParams,
-                        typeArguments,
+                        typeArgumentsRef,
                         templateTypePackParams,
-                        packArguments
+                        packArgumentsRef
                     }
                 );
                 getMutable<BlockedType>(placeholder)->setOwner(propConstraint);
