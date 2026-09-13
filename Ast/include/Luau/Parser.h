@@ -597,6 +597,7 @@ private:
     std::vector<AstTypeOrPack> scratchTypeOrPack;
     std::vector<AstDeclaredExternTypeProperty> scratchDeclaredClassProps;
     std::vector<AstClassMember> scratchClassDeclarations;
+    std::vector<AstClassPrimaryConstructorParamQualifiers> scratchClassParamQualifiers;
     std::vector<AstExprTable::Item> scratchItem;
     std::vector<CstExprTable::Item> scratchCstItem;
     std::vector<AstArgumentName> scratchArgName;

@@ -2773,13 +2773,15 @@ struct Compiler
             );
         }
 
-        // Luau Classes (rfcx/classes.md): every primary constructor parameter the class body does not
-        // restate declares a public field of its own. They are emitted after the body's properties,
-        // so a parameter restated in the body keeps the position its restatement gives it.
+        // Luwu Classes (rfcx/classes.md): every primary constructor parameter the class body does not
+        // restate declares a field of its own, public unless the parameter says otherwise. They are
+        // emitted after the body's properties, so a parameter restated in the body keeps the position
+        // its restatement gives it.
         if (decl->primaryConstructor)
         {
-            for (AstLocal* arg : decl->primaryConstructor->args)
+            for (size_t i = 0; i < decl->primaryConstructor->args.size; ++i)
             {
+                AstLocal* arg = decl->primaryConstructor->args.data[i];
                 bool restated = false;
 
                 for (const AstClassMember& member : decl->members)
@@ -2792,12 +2794,22 @@ struct Compiler
                 if (restated)
                     continue;
 
+                LUAU_ASSERT(decl->primaryConstructor->argsQualifiers.size == decl->primaryConstructor->args.size);
+                const AstClassPrimaryConstructorParamQualifiers& qualifiers = decl->primaryConstructor->argsQualifiers.data[i];
+
                 int propNameCid = bytecode.addConstantString(sref(arg->name));
                 checkConstant(propNameCid, arg->location);
                 shape.propertyNames.emplace_back(propNameCid);
-                // a parameter's field is public, non-const, and initialized by the synthesized
-                // `__init` rather than by a default in the class shape
-                shape.propertyFlags.emplace_back(0);
+
+                // a parameter's field is initialized by the synthesized `__init` rather than by a
+                // default in the class shape, so it never carries HASDEFAULT
+                uint8_t flags = 0;
+                if (qualifiers.visibility == AstClassMemberVisibility::Private)
+                    flags |= LBC_CLASSMEMBER_PRIVATE;
+                if (qualifiers.isConst)
+                    flags |= LBC_CLASSMEMBER_CONST;
+
+                shape.propertyFlags.emplace_back(flags);
                 shape.propertyDefaults.emplace_back(-1);
             }
         }
@@ -6439,6 +6451,15 @@ struct Compiler
             // `Foo(...)` inside one of Foo's own methods is a private-`__init` access.
             if (node->primaryConstructor && node->primaryConstructor->visibility == AstClassMemberVisibility::Private)
                 classesWithPrivateMembers.insert(node);
+
+            // ... and a parameter that declares its field `private` counts the same as a `private`
+            // field in the class body (rfcx/classes.md), whether or not the body restates it.
+            if (node->primaryConstructor)
+            {
+                for (const AstClassPrimaryConstructorParamQualifiers& qualifiers : node->primaryConstructor->argsQualifiers)
+                    if (qualifiers.visibility == AstClassMemberVisibility::Private)
+                        classesWithPrivateMembers.insert(node);
+            }
 
             for (const auto& member : node->members)
             {

@@ -1467,8 +1467,9 @@ void TypeChecker2::visit(AstStatClass* stat)
 
                 ++fieldCount;
 
-                // a parameter that isn't restated declares a public field
-                hasPublicField = true;
+                if (primaryConstructor->argsQualifiers.size != primaryConstructor->args.size ||
+                    primaryConstructor->argsQualifiers.data[i].visibility == AstClassMemberVisibility::Public)
+                    hasPublicField = true;
             }
         }
 

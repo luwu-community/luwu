@@ -17,8 +17,8 @@ local function expectfail(s, expected, f)
 end
 
 class Point
-    public x
-    public y
+    x
+    y
 
     function magnitude(self)
         return math.sqrt(self.x * self.x + self.y * self.y)
@@ -135,9 +135,17 @@ expectfail(
     end
 )
 
-expectfail("classobject missing key", "this class does not have a key named 'doesnotexist'", function ()
+expectfail("classobject missing member", "class 'Point' does not have a member named 'doesnotexist'; did you mean to access a field of an object of this class instead?", function ()
     return Point.doesnotexist
 end)
+
+expectfail(
+    "an instance field reached through the class names the field",
+    "'x' is a field of objects of class 'Point', not a member of the class itself; did you mean to access it on an object of 'Point' instead?",
+    function()
+        return Point.x
+    end
+)
 
 expectfail("classobject invalid key", "cannot index class with a table", function ()
     return Point[{}]
@@ -188,12 +196,12 @@ expectpass("classinstance pcall method", function()
     assert(msg:match("Not a pythagorean triple!"), `Message was: {msg}`)
 end)
 
-expectfail("classinstance assign nonexistent prop", "this object does not have a key named 'huh'", function()
+expectfail("classinstance assign nonexistent field", "objects of class 'Point' do not have a field named 'huh'", function()
     local p = Point({ x = 3, y = 4 })
     p.huh = "???"
 end)
 
-expectfail("classinstance get nonexistent prop", "this object does not have a key named 'huh'", function()
+expectfail("classinstance get nonexistent field", "objects of class 'Point' do not have a field named 'huh'", function()
     local p = Point {}
     print(p.huh)
 end)
@@ -203,7 +211,7 @@ expectfail("classinstance assign method", "attempt to index object with 'zero'",
     p.zero = "???"
 end)
 
-expectfail("classinstance call missing method", "this object does not have a key named 'hmm'", function()
+expectfail("classinstance call missing method", "objects of class 'Point' do not have a field named 'hmm'", function()
     local p = Point {}
     print(p:hmm())
 end)
@@ -246,7 +254,7 @@ class Secret
         }
     end
 
-    public cb
+    cb
 
     function render(self)
         return self.cb()
@@ -273,7 +281,7 @@ end)
 local count = 0
 
 class Counter
-    public count
+    count
     function make()
         count += 1
         return Counter { count = count }
@@ -349,8 +357,8 @@ expectfail("classinstance __tostring must return string", "'__tostring' must ret
 end)
 
 class Entry
-    public tier: string
-    public ordering: number
+    tier: string
+    ordering: number
 
     function __lt(self, other)
         if self.tier ~= other.tier then
@@ -712,8 +720,8 @@ local function nextWidgetId()
 end
 
 class Widget
-    public const id = nextWidgetId()
-    public label: string
+    const id = nextWidgetId()
+    label: string
 
     function __init(self, label)
         self.label = label
@@ -735,7 +743,7 @@ end)
 local bareUpvalueBase = 42
 
 class BareUpvalueDefault
-    public x = bareUpvalueBase
+    x = bareUpvalueBase
 
     function __init(self) end
 end
@@ -752,7 +760,7 @@ end
 bumpMutableUpvalue()
 
 class MutableBareUpvalueDefault
-    public x = mutableUpvalue
+    x = mutableUpvalue
 
     function __init(self) end
 end
@@ -768,7 +776,7 @@ end)
 class PodPoint
     x = 0
     y = 0
-    public label: string
+    label: string
 end
 
 expectpass("POD classes (no custom __init) apply field defaults", function()
@@ -856,7 +864,7 @@ expectpass("hoisting: read after declaration is class", function()
 end)
 
 class Parent
-    public children: {Child}
+    children: {Child}
 
     function createChild(self)
         local child = Child({parent = self}) -- forward reference to Child
@@ -866,7 +874,7 @@ class Parent
 end
 
 class Child
-    public parent: Parent
+    parent: Parent
 
     function createParent(self)
         local p = Parent({children = {self}})
@@ -903,7 +911,7 @@ end)
 class ReproCat
     name: string
     age: number
-    public function __init(self, name, age)
+    function __init(self, name, age)
         self.name = name
         self.age = age
     end
@@ -994,7 +1002,7 @@ end)
 -- OptimizeConstProp: object member access CSE / store-to-load forwarding / invalidation
 -- (see OBJECT_CONSTPROP.CLAUDE.md). These must stay correct with native codegen's field caching.
 class ConstPropBox
-    public v: number
+    v: number
     const c: number = 42
 
     function bump(self)
@@ -1909,7 +1917,7 @@ end)
 
 -- restating a parameter in the class body is how its field gets an access specifier or a modifier;
 -- the `= hash` may be omitted, in which case the field is initialized from the parameter
-class PrimaryCard(userid: number, hash: string)
+class PrimaryCard(public userid: number, hash: string)
     private const hash
 
     public function same_hash(self, other)
@@ -1933,6 +1941,64 @@ expectfail(
     end
 )
 
+-- a parameter may carry the access specifier and `const` modifier of the field it declares, instead
+-- of restating the field in the class body (Kotlin-style, rfcx/classes.md)
+class PrimaryKey private (
+    public const name: string,
+    private const secret: string
+)
+    public function make(name)
+        return PrimaryKey(name, `secret-{name}`)
+    end
+
+    public function matches(self, other)
+        return self.secret == other.secret
+    end
+end
+
+expectpass("qualified parameters declare their fields' access and constness", function()
+    local k = PrimaryKey.make("taz")
+    assert(k.name == "taz")
+    assert(k:matches(PrimaryKey.make("taz")))
+    assert(not k:matches(PrimaryKey.make("nanuk")))
+end)
+
+expectfail(
+    "a parameter marked private is private outside the class",
+    "'secret' is a private member of 'PrimaryKey'",
+    function()
+        return PrimaryKey.make("taz").secret
+    end
+)
+
+expectfail(
+    "a parameter marked const cannot be assigned outside the constructor",
+    "'name' is a const member of 'PrimaryKey'",
+    function()
+        PrimaryKey.make("taz").name = "nanuk"
+    end
+)
+
+expectfail("a private primary constructor is private outside the class", "'__init' is a private member of 'PrimaryKey'", function()
+    return PrimaryKey("taz", "nope")
+end)
+
+-- `const` with no access specifier leaves the field public, and does not make the class one that
+-- has to spell out access specifiers everywhere
+class PrimaryNonNegative(const inner: number)
+    function doubled(self)
+        return self.inner * 2
+    end
+end
+
+expectpass("an unqualified const parameter declares a public const field", function()
+    assert(PrimaryNonNegative(21):doubled() == 42)
+end)
+
+expectfail("... that is still const", "'inner' is a const member of 'PrimaryNonNegative'", function()
+    PrimaryNonNegative(1).inner = 2
+end)
+
 -- any expression may be applied to a parameter by restating it
 local function primaryNotNegative(name, v)
     return if v >= 0 then v else error(`{name} should be positive`)
@@ -1954,7 +2020,7 @@ expectfail("an expression applied to a parameter can raise", "scale should be po
 end)
 
 -- fields are laid out class-body-first, then the parameters the body doesn't restate
-class PrimaryFrame(name: string, size: number)
+class PrimaryFrame(public name: string, size: number)
     private id = 7
     public size = size * 2
 
@@ -2003,7 +2069,7 @@ expectpass("constructing a class from inside one of its own methods", function()
 end)
 
 -- a private primary constructor may only be called from within its own class
-class PrimaryAccount private (holder: string, balance: number)
+class PrimaryAccount private (public holder: string, public balance: number)
     public function open(holder: string)
         return PrimaryAccount(holder, 0)
     end
@@ -2180,7 +2246,7 @@ end)
 
 -- a parameter read by more than one field initializer, and one restated by the class body: neither
 -- can be evaluated straight into a field register the way a plain parameter field is
-class PrimaryInlineMulti(w: number, h: number)
+class PrimaryInlineMulti(w: number, public h: number)
     public area = w * h
     private const w
     public perim = 2 * (w + h)

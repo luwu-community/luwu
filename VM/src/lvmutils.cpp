@@ -166,7 +166,7 @@ void luaV_gettable(lua_State* L, const TValue* t, TValue* key, StkId val)
             //  local _ = Box.item
             //
             if (offset < lco->numberofinstancemembers)
-                luaG_missingmembererror(L, t, key);
+                luaG_instancefieldonclasserror(L, t, key);
 
             if (LUAU_UNLIKELY(lco->hasprivatemembers))
             {

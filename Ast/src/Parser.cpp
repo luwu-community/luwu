@@ -1608,6 +1608,7 @@ LUAU_NOINLINE AstClassPrimaryConstructor* Parser::parseClassPrimaryConstructor(
     expectAndConsume('(', "class primary constructor");
 
     TempVector<Binding> args(scratchBinding);
+    TempVector<AstClassPrimaryConstructorParamQualifiers> argQualifiers(scratchClassParamQualifiers);
     DenseHashSet<AstName> argNames{{}};
 
     // The parameters, and the default value expressions attached to them, are compiled into the
@@ -1626,33 +1627,38 @@ LUAU_NOINLINE AstClassPrimaryConstructor* Parser::parseClassPrimaryConstructor(
         }
         else
         {
-            // `class Island(private name: string)` is how Kotlin spells this, so it is worth a
-            // dedicated diagnostic rather than the confusing parse failure it would otherwise be:
-            // access specifiers and modifiers are applied by restating the field in the class body.
-            while (lexer.current().type == Lexeme::Name && lexer.lookahead().type == Lexeme::Name)
+            // Luwu Classes (rfcx/classes.md): a parameter may carry the access specifier and the
+            // `const` modifier of the field it declares, Kotlin-style: `class SshKey private (public
+            // const public_key: string, private const private_key: string)`. A qualifier is only a
+            // qualifier when another name follows it, so a parameter may still be *named* `public`,
+            // `private` or `const`.
+            AstClassPrimaryConstructorParamQualifiers qualifiers;
+
+            // `const public x` is the wrong order; the modifier follows the access specifier.
+            if (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "const" && lexer.lookahead().type == Lexeme::Name &&
+                (AstName(lexer.lookahead().name) == "public" || AstName(lexer.lookahead().name) == "private"))
             {
-                AstName specifier = AstName(lexer.current().name);
+                report(
+                    lexer.current().location, "The 'const' modifier must come after the access specifier, e.g. '%s const'", lexer.lookahead().name
+                );
+                nextLexeme(); // skip the misplaced 'const' and let the access specifier parse normally
+            }
 
-                if (specifier == "public")
-                    report(
-                        lexer.current().location,
-                        "This class parameter already creates a public field; Luwu does not currently support access specifiers here, redefine "
-                        "the field within the class body to change its access specifier"
-                    );
-                else if (specifier == "private")
-                    report(
-                        lexer.current().location,
-                        "Luwu does not currently support access specifiers here, redefine this field within the class body to change its access "
-                        "specifier"
-                    );
-                else if (specifier == "const")
-                    report(
-                        lexer.current().location,
-                        "Luwu does not currently support modifiers here, redefine this field within the class body to apply 'const' to it"
-                    );
-                else
-                    break;
+            if (lexer.current().type == Lexeme::Name && lexer.lookahead().type == Lexeme::Name &&
+                (AstName(lexer.current().name) == "public" || AstName(lexer.current().name) == "private"))
+            {
+                qualifiers.qualifierLocation = lexer.current().location;
 
+                if (AstName(lexer.current().name) == "private")
+                    qualifiers.visibility = AstClassMemberVisibility::Private;
+
+                nextLexeme();
+            }
+
+            if (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "const" && lexer.lookahead().type == Lexeme::Name)
+            {
+                qualifiers.constLocation = lexer.current().location;
+                qualifiers.isConst = true;
                 nextLexeme();
             }
 
@@ -1666,6 +1672,7 @@ LUAU_NOINLINE AstClassPrimaryConstructor* Parser::parseClassPrimaryConstructor(
                 argNames.insert(binding.name.name);
 
             args.push_back(binding);
+            argQualifiers.push_back(qualifiers);
         }
 
         if (lexer.current().type != ',')
@@ -1708,20 +1715,23 @@ LUAU_NOINLINE AstClassPrimaryConstructor* Parser::parseClassPrimaryConstructor(
     primaryConstructor->visibility = visibility;
     primaryConstructor->args = copy(vars);
     primaryConstructor->argsDefaults = copy(varsDefaults);
+    primaryConstructor->argsQualifiers = copy(argQualifiers);
     primaryConstructor->argLocation = Location(start, end);
 
     return primaryConstructor;
 }
 
-// Luau Classes (rfcx/classes.md): does the token the class body is sitting on read as a statement
+// Luwu Classes (rfcx/classes.md): does the token the class body is sitting on read as a statement
 // rather than as a member declaration? A member is `name`, `name: T`, `name = expr` or a `function`;
 // anything that starts a statement outright, or a name followed by a call/index/comma, is a sign the
 // class was never closed and we are now eating the code that follows it.
 bool Parser::classBodyLooksLikeStatement()
 {
+    if (lexer.current().type == '(')
+        return true;
+
     switch (lexer.current().type)
     {
-    case '(':
     case Lexeme::ReservedLocal:
     case Lexeme::ReservedReturn:
     case Lexeme::ReservedIf:
@@ -1791,6 +1801,38 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
             primaryConstructorParams.insert(arg->name);
     }
 
+    // Luwu Classes (rfcx/classes.md): a parameter may carry its field's access specifier and `const`
+    // modifier directly (`class SshKey(public const public_key: string)`). Restating such a field in
+    // the class body is allowed, but the restatement has to agree with the parameter, and once
+    // *anything* in the class carries an access specifier, everything must.
+    bool sawQualifiedParam = false;
+    bool sawPrivateMember = false;
+
+    if (primaryConstructor)
+    {
+        for (const AstClassPrimaryConstructorParamQualifiers& qualifiers : primaryConstructor->argsQualifiers)
+        {
+            if (qualifiers.qualifierLocation)
+                sawQualifiedParam = true;
+
+            if (qualifiers.visibility == AstClassMemberVisibility::Private)
+                sawPrivateMember = true;
+        }
+    }
+
+    // Index of the primary constructor parameter a class body member restates, or -1.
+    auto findPrimaryConstructorParam = [&](const AstName& memberName) -> int
+    {
+        if (!primaryConstructor)
+            return -1;
+
+        for (size_t i = 0; i < primaryConstructor->args.size; ++i)
+            if (primaryConstructor->args.data[i]->name == memberName)
+                return int(i);
+
+        return -1;
+    };
+
     // Not pushed as a local: this is what makes hoisted classes work.
     AstLocal* nameLocal =
         allocator.alloc<AstLocal>(name->name, name->location, nullptr, functionStack.size() - 1, functionStack.back().loopDepth, nullptr, true);
@@ -1810,14 +1852,18 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
     // slightly more performant here (e.g.: a "scratch" set).
     DenseHashSet<AstName> classMemberNamespace{{}};
 
-    // Under LuauBetterUserDefinedClasses, if any member is explicitly marked
-    // `private`, then every member must carry an explicit `public` or
-    // `private` qualifier to avoid ambiguity. We collect the locations of
-    // members that didn't have an explicit qualifier as we go, and only
-    // report them once we know whether the class ended up with a `private`
-    // member.
-    bool sawPrivateMember = false;
+    // Under LuauBetterUserDefinedClasses, if *any* member carries an explicit
+    // access specifier -- `public` just as much as `private` -- then every
+    // member must carry one, so that a bare `x: number` never has to be read
+    // against the rest of the class to know how it is accessed. We collect the
+    // locations of members that didn't have an explicit qualifier as we go, and
+    // only report them once we know whether the class ended up with any
+    // qualifier at all (rfcx/classes.md).
     std::vector<std::pair<Location, bool>> unqualifiedMemberLocations; // (location, isFunction)
+    std::vector<Location> explicitPublicQualifierLocations;
+    // Primary constructor parameters whose field the class body restates with an explicit access
+    // specifier: that is the other place a parameter's field may be qualified.
+    DenseHashSet<AstName> paramsQualifiedInBody{{}};
 
     // Set once we conclude the class was never closed, so the trailing `end` isn't reported missing a
     // second time.
@@ -1858,6 +1904,8 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
         if (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "public")
         {
             qualifierLocation = lexer.current().location;
+            if (FFlag::LuauBetterUserDefinedClasses)
+                explicitPublicQualifierLocations.push_back(*qualifierLocation);
             nextLexeme();
         }
         else if (FFlag::LuauBetterUserDefinedClasses && lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "private")
@@ -1884,7 +1932,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
                 nextLexeme();
             }
 
-            std::optional<Name> propName = parseNameOpt("class property name");
+            std::optional<Name> propName = parseNameOpt("class field name");
             if (!propName)
             {
                 if (FFlag::LuauBetterUserDefinedClasses)
@@ -1894,6 +1942,45 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
 
             if (FFlag::LuauBetterUserDefinedClasses && !qualifierLocation)
                 unqualifiedMemberLocations.push_back({propName->location, /* isFunction */ false});
+
+            // Luwu Classes (rfcx/classes.md): restating a primary constructor parameter's field is how
+            // an *unqualified* parameter list gets its access specifiers, but a parameter that already
+            // states its own may not be contradicted here -- reading `public text` in the header and
+            // `private text` in the body would leave neither one trustworthy.
+            if (FFlag::LuauBetterUserDefinedClasses)
+            {
+                if (int paramIndex = findPrimaryConstructorParam(propName->name); paramIndex >= 0)
+                {
+                    const AstClassPrimaryConstructorParamQualifiers& param = primaryConstructor->argsQualifiers.data[paramIndex];
+
+                    if (qualifierLocation)
+                        paramsQualifiedInBody.insert(propName->name);
+
+                    if (param.qualifierLocation && qualifierLocation && param.visibility != visibility)
+                    {
+                        // Do not inline these into the report call: MSVC miscompiles inlined ternaries
+                        // feeding %s in Windows Debug CI (see the identical note further down).
+                        const char* declared = param.visibility == AstClassMemberVisibility::Private ? "private" : "public";
+                        const char* restated = visibility == AstClassMemberVisibility::Private ? "private" : "public";
+                        report(
+                            propName->location,
+                            "Field '%s' was explicitly marked as %s on line %d, cannot reassign it as %s",
+                            propName->name.value,
+                            declared,
+                            param.qualifierLocation->begin.line + 1,
+                            restated
+                        );
+                    }
+
+                    if (param.isConst && !isConst)
+                        report(
+                            propName->location,
+                            "Field '%s' was explicitly marked as const on line %d, cannot reassign it as mutable",
+                            propName->name.value,
+                            param.constLocation->begin.line + 1
+                        );
+                }
+            }
 
             AstType* propType = nullptr;
             std::optional<Location> typeColonLocation;
@@ -1934,7 +2021,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
             }
 
             if (strncmp(propName->name.value, "__", 2) == 0)
-                report(propName->location, "Class properties cannot start with '__'");
+                report(propName->location, "Class fields cannot start with '__'");
 
             bool hasSemicolon = false;
             if (FFlag::LuauBetterUserDefinedClasses && lexer.current().type == ';')
@@ -2058,23 +2145,77 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
         }
         else
         {
-            report(lexer.current().location, "Only class properties and functions can be declared within a class");
+            report(lexer.current().location, "Only class fields and functions can be declared within a class");
             nextLexeme(); // skip the unexpected token to avoid an infinite loop
         }
     }
 
-    if (FFlag::LuauBetterUserDefinedClasses && sawPrivateMember)
+    // Luwu Classes (rfcx/classes.md): access specifiers are all-or-nothing across a class. A class
+    // that writes none of them is entirely public, which is the POD case the RFC deliberately keeps
+    // terse; but the moment one member -- or one primary constructor parameter -- says `public` or
+    // `private`, every other member and parameter has to say which it is, so that the unqualified ones
+    // can never be mistaken for an oversight. Note the primary constructor's *own* qualifier (`class
+    // PositiveNumber private (...)`) is not a member qualifier and does not trigger any of this.
+    if (FFlag::LuauBetterUserDefinedClasses && (sawPrivateMember || sawQualifiedParam || !explicitPublicQualifierLocations.empty()))
     {
-        for (const auto& [loc, isFunction] : unqualifiedMemberLocations)
+        if (sawPrivateMember || sawQualifiedParam)
         {
-            // Do not inline this ternary because doing so causes MSVC to miscompile in Windows Debug CI.
-            // It is some weird issue with format string %s specifically in MSVC RTC1 that will cause a segfault.
-            const char* memberKind = isFunction ? "function" : "field";
-            report(
-                loc,
-                "Class contains a 'private' member; put the 'public' or 'private' keyword in front of this %s to prevent ambiguity",
-                memberKind
-            );
+            for (const auto& [loc, isFunction] : unqualifiedMemberLocations)
+            {
+                // Do not inline these ternaries because doing so causes MSVC to miscompile in Windows Debug CI.
+                // It is some weird issue with format string %s specifically in MSVC RTC1 that will cause a segfault.
+                const char* memberKind = isFunction ? "function" : "field";
+
+                if (sawPrivateMember)
+                    report(
+                        loc,
+                        "This class contains non-public members; put the 'public' or 'private' keyword in front of this %s to prevent ambiguity",
+                        memberKind
+                    );
+                else
+                    report(
+                        loc,
+                        "This class mixes explicit and implicit 'public'; put the 'public' or 'private' keyword in front of this %s to prevent "
+                        "ambiguity",
+                        memberKind
+                    );
+            }
+        }
+        else if (!unqualifiedMemberLocations.empty())
+        {
+            // Everything qualified here is qualified `public`, which is the one case where deleting
+            // the qualifiers is as good a fix as adding the rest, so point at them instead.
+            for (const Location& loc : explicitPublicQualifierLocations)
+                report(
+                    loc,
+                    "This class mixes explicit and implicit 'public'; remove 'public' or add 'public' or 'private' to all other members to prevent "
+                    "ambiguity"
+                );
+        }
+
+        // A parameter's field is qualified either in the parameter list or by the class body member
+        // that restates it; a field qualified in neither is the same ambiguity as an unqualified
+        // member, and gets a message pointing at whichever of the two places is the natural fix.
+        if (primaryConstructor)
+        {
+            for (size_t i = 0; i < primaryConstructor->args.size; ++i)
+            {
+                AstLocal* arg = primaryConstructor->args.data[i];
+
+                if (primaryConstructor->argsQualifiers.data[i].qualifierLocation || paramsQualifiedInBody.contains(arg->name))
+                    continue;
+
+                if (sawQualifiedParam)
+                    report(arg->location, "Qualify this class field parameter as 'public' or 'private' to prevent ambiguity");
+                else
+                    report(
+                        arg->location,
+                        "Field '%s' at position %d of class field parameters must be explicitly marked as 'public' or 'private' in the class "
+                        "parameter list or the class body",
+                        arg->name.value,
+                        int(i + 1)
+                    );
+            }
         }
     }
 

@@ -3854,7 +3854,7 @@ TEST_CASE_FIXTURE(Fixture, "class_property_default_value")
     ParseResult result = tryParse(R"(
         class Cat
             public const cat: string = "idk"
-            age = 3
+            public age = 3
         end
     )");
 
@@ -3878,7 +3878,7 @@ TEST_CASE_FIXTURE(Fixture, "class_property_default_value")
     auto age = cls->members.data[1].get_if<AstClassProperty>();
     REQUIRE(age);
     CHECK(age->name == "age");
-    CHECK(!age->qualifierLocation.has_value());
+    CHECK(age->qualifierLocation.has_value());
     CHECK(age->ty == nullptr);
     REQUIRE(age->equalsLocation.has_value());
     REQUIRE(age->defaultValue);
@@ -4283,7 +4283,7 @@ TEST_CASE_FIXTURE(Fixture, "class_primary_constructor_parameters_are_visible_to_
     };
 
     ParseResult result = tryParse(R"(
-        class Card(userid: number, hash: string)
+        class Card(public userid: number, hash: string)
             private const hash = hash
         end
     )");
@@ -4356,43 +4356,176 @@ end
     );
 }
 
-TEST_CASE_FIXTURE(Fixture, "class_primary_constructor_rejects_qualifiers_on_parameters")
+TEST_CASE_FIXTURE(Fixture, "class_primary_constructor_parses_qualifiers_on_parameters")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuauDefaultArguments, true},
+    };
+
+    // Kotlin-style: a parameter may carry the access specifier and `const` modifier of the field it
+    // declares, instead of restating the field in the class body (rfcx/classes.md).
+    AstStatBlock* block = parse(R"(
+class SshKey private (
+    public const public_key: string,
+    private const private_key: string
+)
+end
+class Frame(const name: string, size = 1)
+end
+    )");
+
+    REQUIRE(block);
+    REQUIRE(block->body.size == 2);
+
+    AstStatClass* sshKey = block->body.data[0]->as<AstStatClass>();
+    REQUIRE(sshKey);
+    REQUIRE(sshKey->primaryConstructor);
+    CHECK(sshKey->primaryConstructor->visibility == AstClassMemberVisibility::Private);
+    REQUIRE(sshKey->primaryConstructor->argsQualifiers.size == 2);
+
+    CHECK(sshKey->primaryConstructor->argsQualifiers.data[0].visibility == AstClassMemberVisibility::Public);
+    CHECK(sshKey->primaryConstructor->argsQualifiers.data[0].qualifierLocation.has_value());
+    CHECK(sshKey->primaryConstructor->argsQualifiers.data[0].isConst);
+
+    CHECK(sshKey->primaryConstructor->argsQualifiers.data[1].visibility == AstClassMemberVisibility::Private);
+    CHECK(sshKey->primaryConstructor->argsQualifiers.data[1].qualifierLocation.has_value());
+    CHECK(sshKey->primaryConstructor->argsQualifiers.data[1].isConst);
+
+    AstStatClass* frame = block->body.data[1]->as<AstStatClass>();
+    REQUIRE(frame);
+    REQUIRE(frame->primaryConstructor);
+    REQUIRE(frame->primaryConstructor->argsQualifiers.size == 2);
+
+    // `const` with no access specifier leaves the field public, and does not make the class one that
+    // requires access specifiers everywhere
+    CHECK(!frame->primaryConstructor->argsQualifiers.data[0].qualifierLocation.has_value());
+    CHECK(frame->primaryConstructor->argsQualifiers.data[0].isConst);
+    CHECK(!frame->primaryConstructor->argsQualifiers.data[1].isConst);
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_primary_constructor_qualified_parameters_require_qualifiers_everywhere")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauUserDefinedClasses, true},
         {FFlag::LuauBetterUserDefinedClasses, true},
     };
 
-    // `class Island(private name: string)` is how Kotlin spells this, so each specifier gets a
-    // message aimed at that mistake rather than a generic parse failure (rfcx/classes.md).
     matchParseError(
         R"(
-class Island(
-    private name: string
-)
+class Box(
+    public size: vector,
+    cat
+) end
+        )",
+        "Qualify this class field parameter as 'public' or 'private' to prevent ambiguity"
+    );
+
+    // a qualified parameter makes the *body* require qualifiers too
+    matchParseError(
+        R"(
+class Box(public size: vector)
+    cat
 end
         )",
-        "Luwu does not currently support access specifiers here, redefine this field within the class body to change its access specifier"
+        "This class mixes explicit and implicit 'public'; put the 'public' or 'private' keyword in front of this field to prevent ambiguity"
+    );
+
+    // ... and the parameter list is where the body's qualifiers reach, so a parameter qualified in
+    // neither place is reported by position
+    matchParseError(
+        R"(
+class Rectangle(position: vector, size: vector, id: number?)
+    private id
+    public size
+end
+        )",
+        "Field 'position' at position 1 of class field parameters must be explicitly marked as 'public' or 'private' in the class parameter list "
+        "or the class body"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_body_may_not_contradict_qualified_parameters")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuauDefaultArguments, true},
+    };
+
+    matchParseError(
+        R"(
+class TextBox(
+    public name: string,
+    public text: string
+)
+    private text
+    private name
+end
+        )",
+        "Field 'text' was explicitly marked as public on line 4, cannot reassign it as private"
     );
 
     matchParseError(
         R"(
-class Island(
-    public name: string
+class TextBox(
+    public name: string,
+    private frame: Frame
 )
+    public frame
+    public name
 end
         )",
-        "This class parameter already creates a public field; Luwu does not currently support access specifiers here, redefine the field within "
-        "the class body to change its access specifier"
+        "Field 'frame' was explicitly marked as private on line 4, cannot reassign it as public"
     );
 
     matchParseError(
         R"(
-class Frame(const name: string)
+class NonNegative(const inner: number)
+    inner = math.max(0, inner)
 end
         )",
-        "Luwu does not currently support modifiers here, redefine this field within the class body to apply 'const' to it"
+        "Field 'inner' was explicitly marked as const on line 2, cannot reassign it as mutable"
     );
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_may_not_mix_explicit_and_implicit_public")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    matchParseError(
+        R"(
+class Coord
+    public x: number
+    y: number
+end
+        )",
+        "This class mixes explicit and implicit 'public'; remove 'public' or add 'public' or 'private' to all other members to prevent ambiguity"
+    );
+
+    matchParseError(
+        R"(
+class Vector4
+    x: number
+    y: number
+    private w: number
+end
+        )",
+        "This class contains non-public members; put the 'public' or 'private' keyword in front of this field to prevent ambiguity"
+    );
+
+    // a `private` primary constructor is not a member qualifier: it does not force the rest of the
+    // class to qualify itself (rfcx/classes.md)
+    AstStatBlock* block = parse(R"(
+class PositiveNumber private (const inner: number)
+    function new(n: number) return PositiveNumber(n) end
+end
+    )");
+    REQUIRE(block);
 }
 
 TEST_CASE_FIXTURE(Fixture, "class_primary_constructor_rejects_duplicate_parameters")
@@ -4543,7 +4676,7 @@ TEST_CASE_FIXTURE(Fixture, "classes_can_only_have_functions_and_properties")
             end
         end
     )",
-        "Only class properties and functions can be declared within a class"
+        "Only class fields and functions can be declared within a class"
     );
 }
 
@@ -4581,7 +4714,7 @@ TEST_CASE_FIXTURE(Fixture, "disallow_double_underscore_properties")
             public __add: any
         end
     )",
-        "Class properties cannot start with '__'"
+        "Class fields cannot start with '__'"
     );
 }
 
@@ -4608,13 +4741,13 @@ TEST_CASE_FIXTURE(Fixture, "classes_can_interleave_methods_and_properties")
 
     ParseResult res = tryParse(R"(
         class Student
-            public name: string
+            name: string
 
             function getname(self): string
                 return self.name:upper()
             end
 
-            public year: number
+            year: number
 
             function getyear(self): number
                 assert(self.year >= 1900 and self.year < 2100)
@@ -4655,9 +4788,9 @@ TEST_CASE_FIXTURE(Fixture, "large_classes_example")
 
     ParseResult result = tryParse(R"(
         class PlayerStats
-            public name: string
-            public health: number
-            public level: number
+            name: string
+            health: number
+            level: number
 
             -- Static 'Constructor'
             function new(name: string)
@@ -6844,7 +6977,7 @@ export local answer = 42
     matchParseError(
         R"(
 export class Player
-    public health: number
+    health: number
 
     function setHealth(self, health: number)
         self.health = health

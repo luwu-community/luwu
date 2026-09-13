@@ -7,8 +7,8 @@
 -- the result in a global instead.
 local source = [[
     export class Cat
-        public name: string
-        public age: number
+        name: string
+        age: number
         function new(name: string)
             return Cat {
                 name = name,

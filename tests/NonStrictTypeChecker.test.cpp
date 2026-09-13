@@ -903,7 +903,7 @@ TEST_CASE_FIXTURE(NonStrictTypeCheckerFixture, "typecheck_class_method_bodies")
     CheckResult result = checkNonStrict(R"(
         --!nonstrict
         class Student
-            public name: number
+            name: number
             function greet(self)
                 return `Hello, {lower(self.name)}!`
             end

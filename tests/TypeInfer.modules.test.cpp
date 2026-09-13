@@ -1211,8 +1211,8 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "export_class")
 
     fileResolver.source["game/A"] = R"(
         export class Point
-            public x: number
-            public y: number
+            x: number
+            y: number
 
             function __tostring(self)
                 return `Point x={self.x} y={self.y}`
@@ -1242,8 +1242,8 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "non_exported_class")
 
     fileResolver.source["game/A"] = R"(
         class Point
-            public x: number
-            public y: number
+            x: number
+            y: number
 
             function __tostring(self)
                 return `Point x={self.x} y={self.y}`

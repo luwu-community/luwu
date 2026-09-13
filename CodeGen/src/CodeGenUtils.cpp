@@ -627,7 +627,7 @@ const Instruction* executeGETTABLEKS(lua_State* L, const Instruction* pc, StkId 
                 const uint32_t offsetnum = uint32_t(nvalue(offset));
                 // accessing an instance member (field) through the class object itself is an error
                 if (offsetnum < lco->numberofinstancemembers)
-                    luaG_missingmembererror(L, rb, kv);
+                    luaG_instancefieldonclasserror(L, rb, kv);
                 if (lco->hasprivatemembers)
                     luaR_checkprivateaccess(L, kv, lco, cl, offsetnum);
                 setobj2s(L, ra, &lco->staticmembers[offsetnum - lco->numberofinstancemembers]);

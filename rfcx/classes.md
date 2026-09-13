@@ -40,12 +40,13 @@ export class Rounding(
 end
 
 export class Frame
-    name: string
-    position: vector
-    size: vector
-    rounding: Rounding
+    private id: Id
+    public name: string
+    public position: vector
+    public size: vector
+    public rounding: Rounding
 
-    function __init(self, name: string, position: vector, size: vector?, rounding: Rounding?)
+    public function __init(self, name: string, position: vector, size: vector?, rounding: Rounding?)
         assert(#name > 0, "name should not be empty string")
         self.name = name
         assert(position.z == 0, "position should not have z")
@@ -61,6 +62,8 @@ export class Frame
         else
             self.rounding = Rounding()
         end
+        const id = next_internal_id()
+        self.id = id
     end
 end
 
@@ -84,7 +87,7 @@ Nonetheless, we should mention some of their original "Classes!" RFC's motivatio
 >   - Since every instance of a class has the same set of properties, we can split the hash table: The set of fields can be associated with the class and instances only need to carry the values of those fields.  We think this can improve performance by improving cache locality.
 > - Encapsulation at its current state cannot be truly achieved, tables cannot truly be locked-down, and most workarounds for it are too complex for what it's trying to achieve.
 
-In this RFC, we'll be focusing on a base design for classes that allows us to later implement one or both of the following: interfaces and/or inheritance.
+In this RFC, we'll be focusing on a base design for classes that allows us to later implement a way implement reusable logic shared between classes.
 
 ## Design
 
@@ -94,7 +97,7 @@ Our design of classes aims to equally support 2 primary usecases, "POD" and "hea
 
 The POD (plain old data) usecase supports users who want to use classes as "named tables" (or structs) to describe mostly data with maybe a few functions. We don't want to increase verbosity and force access specifiers, etc. when using classes as lightweight data structures.
 
-The other main usecase is "heavy", when the user opts into encapsulation (`private`), access specifiers, const members, and in the future, composition, interfaces, and inheritance.
+The other main usecase is "heavy", when the user opts into encapsulation (`private`), access specifiers, const members, and in the future, composition with traits.
 
 ### Class definition syntax
 
@@ -106,9 +109,18 @@ class ClassName end
 class Cat
     name: string
     age: number
-    -- all fields are public, 'public' keyword not required on fields/methods
+    -- all fields are public, 'public' keyword not required on fields/functions
     function meow(self)
         print(`{self.name} says meow!`)
+    end
+end
+
+class Dog
+    public name: string
+    public age: number
+    -- class contains members marked with access specifiers; all members must define access specifiers
+    public function bark(self)
+        print(`{self.name} barked!`)
     end
 end
 
@@ -125,23 +137,41 @@ end
 
 -- classes can define a 'primary constructor' to skip __init:
 class Symbol(name: string) end
+
+-- classes may have a private primary constructor
+class SecretSymbol private (name: string)
+    private name
+    public function new() return SecretSymbol(get_random_name()) end
+    public function is_same_symbol(self, other: Symbol | SecretSymbol)
+        if class.isinstance(other, Symbol) then
+            return false
+        end
+        return self.name == other.name
+    end
+end
 ```
 
 Specifically:
 
-- A class definition starts with the contextual keyword `class`,
-- is followed by the class's name and an optional generics parameter list (`<A, B, ...>`),
-- may be followed by the primary constructor, which includes an optional access specifier `private` or `public` and then the parameter list `(a: T, b, ...)`
-- contains zero or more class member (fields and methods) declarations (see below),
-- ends with the `end` keyword.
+- A class definition contains the class header and class body.
+- The class header starts with the contextual keyword `class`,
+- is followed by the class's name, which must be a valid identifier,
+- may be followed by an optional generic parameter list like `<A, B, C = type>`, which may contain default generic parameters,
+- may be followed by the primary constructor:
+  - if present, the primary constructor may start with an access specifier `private` or `public`
+  - if present, the primary constructor must contain a class field parameter list in one of three forms, none of which are allowed to contain variadic (`...`) parameters:
+    - A function-like parameter list like `(a: T, b: B, c = default, d)`, which may be empty,
+    - A field parameter list without access specifiers, like `(a: string, const b = 2, const c)`
+    - A field parameter list with access specifiers, like `(public x: T, private const y = default)`.
+- After the class header starts the class body.
+- The class body contains zero or more class member (fields and functions) declarations (see below),
+- The class body ends with the `end` keyword.
 
 Class definitions are a block construct like `for` loops, and do not evaluate to a value.
 
-Instead, evaluating a class definition scopes the class to the entire module, similarly to a global.
-Due to this, defining two classes with the same name in the same module is currently forbidden.
+Defining two classes with the same name in the same module is forbidden and raises a syntax error.
 
-Classes must be defined in the top level of a module; attempting to define a class anywhere else raises a syntax error.
-This is a limitation imposed by upstream Luau, and we hope to loosen this restriction later.
+Classes must be defined in the top level of a module; attempting to define a class anywhere else, including in a `do/end` block, a function, another class, or any control flow statement or expression, raises a syntax error.
 
 ### The `class` primitive
 
@@ -149,7 +179,10 @@ The action of evaluating a class definition statement introduces a *class* value
 
 A `class` is a value that serves as a factory for instances of the class and as a namespace for any functions that are defined on the class.
 
-Classes are always `const` and frozen.
+Class bindings are always `const` and `class` values are always frozen.
+
+Accessing a nonexistent member of a class results in a runtime error.
+Similarly, attempting to access a field present on objects of this class (but not on the class itself), also raises a runtime error.
 
 Taking references to class methods via `ClassName.method` syntax is allowed so that classes can easily compose with existing APIs:
 
@@ -157,15 +190,15 @@ Taking references to class methods via `ClassName.method` syntax is allowed so t
 local n = pcall(SomeClass.getName, someClassObject)
 ```
 
-The top type of all classes is named `class`.  `type()` and `typeof()` return `"class"` when passed a class.
+The top type of all classes is named `class`. `type()` and `typeof()` return `"class"` when passed a class.
 
 ### The `object` primitive
 
-Objects, often referred to as "class instances", are a new type of value in the VM. They are similar but not quite the same as tables. They have no array part, for instance.
+Objects, often referred to as "class instances", are a new type of value in the VM. Objects are lightweight, do not have an array portion, and may only have members with specific names.
 
 `pairs`, `ipairs` , `getmetatable`, and `setmetatable` all raise a runtime error when invoked on an object. Similarly, an object may not be iterated over unless its class implements `__iter`.
 
-Reading or writing a nonexistent class property raises an error. This makes it easy to disambiguate between a nonexistent property and a property whose value is nil.
+Reading or writing a nonexistent class field raises a runtime error. This makes it easy to disambiguate between a nonexistent field and a field whose value is nil.
 
 We introduce a new top type for instances of a class: `object`. The builtin `type()` and `typeof()` functions return `"object"` for any class instance.
 
@@ -185,6 +218,8 @@ typeof(inst) == "object"
 Comparisons between object instances are the same as with tables: If `__eq` is not defined, object comparisons use physical (pointer) equality.  `__eq` is only invoked if both operands are the same type.
 
 ### Class member syntax
+
+The term 'field' refers to properties on objects. The term 'function' includes both static functions on a class as well as methods that exist on a class but are called via methodcall syntax on objects of the class. Class members include both fields and functions.
 
 We introduce two specific flavors of keywords to help introduce class members: access specifiers and modifiers.
 
@@ -224,17 +259,17 @@ Methods are introduced with the familiar `function` keyword and follow existing 
 Specifically:
 
 - If a class only has public members, the `public` keyword may be omitted,
-- If a class has members with any other access specifier other than `public`, then the access specifier is required,
+- If a class has members with any access specifier, then access specifiers are required on all members,
 - A modifier `const` may optionally follow the access specifier. If `const` is specified, it must follow the access specifier.
 - If the member is a field, a valid identifier with an optional type annotation should follow,
 - If the member is a field, an optional default value expression may be provided after the identifier or type annotation,
 - If the member is a function, use the familiar `function` definition syntax.
 
-Since all functions on classes are inherently const, explicitly defining a `const function` inside a class should also raise a syntax error. We raise a syntax error for this because `const function` syntax would otherwise be valid both inside and outside a class, and such a function could easily be unintentionally moved or copy/pasted inside a class block instead of the module's top level scope.
+Since all functions on classes are inherently const, explicitly defining a `const function` inside a class is forbidden. We raise a syntax error for this because `const function` syntax would otherwise be valid both inside and outside a class, and such a function could easily be unintentionally moved or copy/pasted inside a class block instead of the module's top level scope.
 
 ### Access Specifiers
 
-Access specifiers allows the user to control access to a specific field within a class. For the scope of this RFC, we will only be introducing the `public` and `private` access specifiers, although we plan on investigating `protected` as well as granular visibility (like `pub(crate)` in Rust) at a future date.
+Access specifiers allows the user to control access to a specific field within a class. For the scope of this RFC, we will only be introducing the `public` and `private` access specifiers.
 
 #### `public` access specifier
 
@@ -253,17 +288,6 @@ class Vector3
 end
 ```
 
-To reduce ambiguity, if a class defines a field with any access specifier other than `public`, then the class must specify access specifiers for **all** members:
-
-```luau
-class Vector4
-    x: number -- Syntax error: class contains non-public members; add `public` keyword to all public fields to prevent ambiguity
-    y: number
-    z: number
-    private w: number
-end
-```
-
 We acknowledge that omitting type annotations here can look pretty bad, but we feel that the ability to use classes without worrying about access specifiers outweighs the minority of people who would use this brand new feature with zero type annotations.
 
 An example of a badly formatted (and unannotated) but valid class definition:
@@ -275,9 +299,24 @@ class Employee id
 end
 ```
 
+To reduce ambiguity, if a class defines a field with any access specifier, then the class must specify access specifiers for **all** members:
+
+```luau
+class Vector4
+    x: number -- SyntaxError: This class contains non-public members; add the `public` keyword here to prevent ambiguity
+    y: number
+    z: number
+    private w: number
+end
+class Coord
+    public x: number -- SyntaxError: This class mixes explicit and implicit `public`. Remove `public` or add `public` or `private` to all other members to prevent ambiguity.
+    y: number
+end
+```
+
 #### `private` access specifier
 
-To achieve full encapsulation, we introduce the `private` access specifier.
+To allow full encapsulation, we introduce the `private` access specifier.
 This is a contextual keyword that only applies within class member declarations.
 
 If a member is marked as private, it is only accessible from within its enclosing class definition block,
@@ -313,10 +352,10 @@ const user = User { -- The default constructor can initialize private fields.
 }
 ```
 
-If a class only has `private` fields, we raise a type error because such a class will not be usable.
+If a class only has `private` fields and no functions, we raise a type error because such a class will not be usable.
 
 ```luau
-class UseMe -- TypeError: this class cannot be used because it only has private members
+class UseMe -- TypeError: this class cannot be used because it only has private fields
     private please: string
     private uses: number
 end
@@ -326,7 +365,7 @@ end
 
 The `const` modifier may only be applied to fields (all functions/methods are always `const`), and should be placed after an access specifier.
 
-A `const` field must be initialized with a value, by the class's constructor. As noted below, `const` fields are not enforced as being const during class construction, to allow the class constructor to modify the fields explictly, pass them to functions that do, etc.
+A `const` field must be initialized with a value, by the class's constructor. As noted below, `const` fields are not enforced as being const during class construction, to allow the class constructor to modify the fields explicitly, pass them to functions that do, etc.
 
 ### Default field values
 
@@ -334,14 +373,13 @@ A class may define fields with default value expressions. The RHS of the default
 
 `const` fields assigned to by a default value expression *may* be mutated within the class' `__init` constructor because allowing such reduces implementation complexity.
 
-Like default function arguments, default class field expressions are re-evaluated and assigned every time before a constructor is invoked to make a new object of the class.
+Like default function arguments, default class field expressions are re-evaluated and assigned every time before a constructor is invoked to make a new object of the class. This means that classes with non-constant default field value expressions are more expensive to instantiate than those without default values or with constant default values.
 
-We chose this behavior to prevent stale default arguments and lead to similar footguns like in Python with its default function argument problem surrounding pass by reference data structures.
+We chose this behavior to prevent stale default arguments and to limit footguns such as Python's default function argument problem surrounding pass by reference data structures.
 
 This means:
 
 ```luau
-
 const function somecounter()
     return math.random(1, 1000)
 end
@@ -360,9 +398,8 @@ const counter2 = Counter()
 To ensure more correct code, we prevent passing a different class of `self` to a method via `object.method(object)` syntax.
 This frees users from needing to assert `class.isinstance(self, TheClass)` if they want to ensure correct calling conventions.
 
-This also allows for further optimizations, such as method inlining of methods of `self` within other methods of `self`.
-
-This restriction may be loosened in a future RFC for classes that opt into inheritance.
+This also allows for further in-module optimizations, such as method inlining of methods of `self` within other methods of `self`.
+Unfortunately, this increases the cost of cross-module method calls of methods with small bodies compared to equivalent metatable-OOP implementations of the same class.
 
 ### Metamethods
 
@@ -434,9 +471,11 @@ The primary (or parameterized) constructor may be defined in the class declarati
 
 Additionally, having the positional primary constructor allows us to bypass `__init` and opens up a significant optimization opportunity in the extremely common case that users want to construct a class by passing multiple parameters instead of a table.
 
-Primary constructor parameters mostly follow the same rules as function parameters: they are allowed default values, may not have trailing commas, etc. As with default function parameter values, default primary constructor values are re-evaluated every call if necessary (when the relevant parameter is not passed).
+Primary constructor parameters mostly follow the same rules as function parameters: they are allowed default values, may not have trailing commas, etc.
+Primary constructor parameters are allowed to define access specifiers and modifiers like in Kotlin.
+As with default function parameter values, default primary constructor values are re-evaluated every call if necessary (when the relevant parameter is not passed).
 
-Primary constructor parameters are only visible to field initializations within the class body (same place as default field values) and are not accessible to functions within the class.
+Primary constructor parameters are only visible to field initializations within the class body (same place as default field values) and are not accessible to functions within the class. If the class body defines fields of the same name as parameter names, we assume the field references or otherwise modifies the parameter and do not count such fields as duplicates.
 
 ```luau
 class UDim(scale: vector, offset: vector) end
@@ -445,41 +484,106 @@ print(dimmy.scale) -- vector<1, 2, 0>
 print(dimmy.offset) -- vector<0, 0, 0>
 ```
 
-Fields initialized by the primary constructor are `public` unless specified otherwise. Fields intended to be public do not need to be restated in the class body; defining them in the parameters defines them as a `public` field of the class.
-
-Users are allowed to redefine `public` fields from the primary constructor in the class body for clarity, but doing so is not recommended.
+If the parameter list does not contain fields with access specifiers, all fields introduced by the class field parameters are `public` unless specified otherwise in the class body.
 
 ```luau
-class Cat(name: string, age: number)
-    -- these 2 assignments are useless
-    public name = name
-    public age = age
+class Vector4(x, y, z, w) end -- x, y, z, w are public
+class Employee(name: string, pay: number)
+    private id = nextid()
+    public name
+    private pay
 end
 ```
 
-To apply an access specifier and/or modifier to a field, explicitly define a field of the same name of the relevant parameter(s).
+Alternatively, fields may be qualified with access specifiers and/or modifiers directly in the class field parameter list.
 
-If the field name matches a parameter name, assigning the parameter to the field (`= parameter_name`) may be omitted.
+If *any* class field parameter uses an access specifier, *all* other parameters and all class members *must* also specify an access specifier to prevent ambiguity:
 
 ```luau
-class Card(userid: Id, hash: string)
-    private const hash
+class SshKey private (
+    public const public_key: string,
+    private const private_key: string
+)
+    public function keygen(): SshKey
+        const keys = crypt.ssh.keygen()
+        return SshKey(keys.public, keys.private)
+    end
 end
-class Home(address, owner)
-    private owner
+
+class Box(
+    public size: vector,
+    cat -- SyntaxError: Qualify this class field parameter as `public` or `private` to prevent ambiguity
+) end
+```
+
+To prevent confusion, uses of qualified field parameters in the class body must match their declarations in class field parameters:
+
+```luau
+class TextBox(
+    public name: string,
+    public text: string,
+    private frame = Frame.default(),
+    public placeholder_text: string?
+)
+    private text -- SyntaxError: Field 'text' was explicitly marked as public on line 3, cannot reassign it as private
+    public frame -- SyntaxError: Field 'frame' was explicitly marked as private on line 4, cannot reassign it as public
+    public placeholder_text: string = escape_strings(placeholder_text or "") -- this is fine, access specifiers match
+end
+
+class NonNegative(const inner: number)
+    inner = math.max(0, inner) -- SyntaxError: Field 'inner' was explicitly marked as const on line 1, cannot reassign it as mutable
 end
 ```
 
-To declare a `private` primary constructor, put the `private` keyword between the class name and the parameters.
+It is possible a class may have multiple class field parameters used in the class body. To prevent users from needing to restate access specifiers and modifiers between the parameter list and class body, users may use the class field parameter list without access specifiers as long as all fields are given access specifiers in the class body:
+
+```luau
+class Frame(name, position, size, rounding = Rounding.default())
+    public name: string
+    public const id = nextid()
+    private position: vector
+    private size: vector = vector.abs(size)
+    public rounding: Rounding = rounding:clamp()
+end
+
+-- SyntaxError: Field `position` at position 1 of class field parameters must be explicitly marked as `public` or `private` in the class parameter list or the class body
+class Rectangle(position: vector, size: vector, id: number?) 
+    private id
+    public size
+end
+```
+
+To declare a `private` primary constructor, put the `private` keyword between the class name and the parameters. If the only part of a class that's private is its primary constructor, the user is *not* required to mark all other fields/functions on the class with an access specifier!
+
+```luau
+class PositiveNumber private (
+    const inner: number
+)
+    function new(n: number): PositiveNumber?
+        if n >= 0 then
+            return PositiveNumber(n)
+        else
+            return nil
+        end
+    end
+    function __add(self, other: PositiveNumber | number)
+        if class.isinstance(other, PositiveNumber) then
+            return PositiveNumber(self.inner + other.inner)
+        elseif other >= 0 then
+            return PositiveNumber(self.inner + other)
+        end
+        error(`Attempt to add PositiveNumber to something that isn't positive! (got {other})`)
+    end
+end
+```
 
 Calling a private primary constructor from outside the lexical scope of its class results in a runtime error. Although the parser could generate a syntax error for this, doing so would be inconsistent with calling private `__init` constructors as well as any private class constructors from classes imported from another module.
 
 ```luau
 class Account private (
-    holder: User,
-    balance = Money(0)
+    public holder: User,
+    private balance = Money(0)
 )
-    private balance
     public id = next_account_id()
 
     public function user_allowed_to_open_account(user: User)
@@ -506,14 +610,14 @@ class Account private (
 end
 ```
 
-An explicit `public` access specifier may be declared in front of the primary constructor parameters list, but such a specifier is not very useful:
+An explicit `public` access specifier may be declared in front of the primary constructor parameters list. If any fields or functions on the class are `private`, the user *may* explicitly specify the access specifier of the primary constructor, but they aren't required to.
 
 ```luau
 class Seal public (name: string)
 end
 ```
 
-As with default field values, any expression may be used upon a primary constructor parameter:
+Primary constructor parameters are visible in default field value assignment.
 
 ```luau
 const function not_negative(name: string, v: vector): vector
@@ -529,11 +633,12 @@ Note that fields from the primary constructor will still be included even if the
 if the user wants to prevent those fields from being included they should use an `__init` constructor instead:
 
 ```luau
-class Percentage(current: number, total = 100)
-    value = ((current / total) * 100) // 1
+-- this class actually has 3 fields: current, total, and value!
+class Percentage(current: number, total: number = 100)
+    value = string.format("%.2f%%", current / total * 100)
 end
 const perc = Percentage(27, 42)
-print(perc.value) -- 64
+print(perc.value) -- 64.29%
 print(perc.current) -- 27
 print(perc.total) -- 42
 ```
@@ -562,20 +667,6 @@ const packy = Package {
     owner = user,
     contents = {} :: { Item }
 } -- TypeError: Expected this to be 'User', but got '{ owner: User, contents: { Item } }'
-```
-
-We should surface a dedicated syntax error when users try to define an access specifier *within* the constructor parameters, otherwise users familiar with languages like Kotlin would get an unexpected and poorly-worded syntax error:
-
-```luau
-class Island(
-    private name: string -- SyntaxError: Luwu does not currently support access specifiers here, redefine this field within the class body to change its access specifier
-)
-end
-
-class Island(
-    public name: string -- SyntaxError: This class parameter already creates a public field; Luwu does not currently support access specifiers here, redefine the field within the class body to change its access specifier
-)
-end
 ```
 
 #### The `__init` constructor
@@ -610,13 +701,13 @@ At runtime, all of `self`'s fields will be initialized to the field's default va
 Once called, the `__init` function *should* then assign to all needed fields in `self` (not checked at runtime), and should not return any values. Field `const`ness is not enforced between initial allocation and when the `Class()` expression finishes evaluation.
 Any values returned by `__init` will be ignored. The `Class()` expression then returns `self` to the caller.
 
-If a user forgets to assign to a field in `__init`, a type error `"TypeError: constructor does not initialize property <name>"` is raised, but at runtime the field will be `nil`.
+If a user forgets to assign to a field in `__init`, a type error `"TypeError: constructor does not initialize field <name>"` is raised, but at runtime the field will be `nil`.
 
 #### The Default (POD) Constructor
 
 To facilitate POD-like behavior, the default `__init` implementation will accept a POD-like table of fields.
 
-If a class does not explicitly define a constructor, it is given a default constructor. The default constructor takes a mapping from property name to value and initializes the newly-created object with those fields.
+If a class does not explicitly define a constructor, it is given a default constructor. The default constructor takes a mapping from field name to value and initializes the newly-created object with those fields.
 
 ```luau
 class Point
@@ -636,7 +727,7 @@ class Point
 end
 
 const pointy = Point() -- Point(x = 0, y = 0); no arguments need to be specified 
-const pointy2 = = Point { x = 4 } -- Point(x = 4, y = 0)
+const pointy2 = Point { x = 4 } -- Point(x = 4, y = 0)
 ```
 
 There is no runtime check on fields passed to the default constructor: if no argument or `nil` is passed, the default constructor initializes all class fields to each field's default value or `nil` if a default value is unspecified.
@@ -650,8 +741,8 @@ The default constructor is a real function just like any other and so it can be 
 
 ```luau
 class Point
-    public x: number
-    public y: number
+    x: number
+    y: number
 
     function reset(self)
         -- note this modifies `self` in place, it doesn't allocate a new self
@@ -729,9 +820,9 @@ Equivalently, with primary constructor syntax instead of an explicit `__init` co
 ```luau
 -- TypeError: this class can never be instantiated because its constructor is private and is never called; did you mean to return an instance of this class from a `public function` instead? Call the constructor to silence.
 class User private (
-    first_name: string,
-    last_name: string,
-    ssn: string?
+    public first_name: string,
+    public last_name: string,
+    private ssn: string?
 )
     public function name(self): string
         return self.first_name .. " " .. self.last_name
@@ -754,13 +845,11 @@ specific invariants.
 ```luau
 -- Cannot be directly accessed using User() outside this class scope
 class User private (
-    id: string,
-    first_name: string,
-    last_name: string,
-    ssn: string?
+    public id: string,
+    public first_name: string,
+    public last_name: string,
+    private ssn: string?
 )
-    private ssn
-
     public function new(id: string): User | Error<string>
         const ssn_for_user = ssns.get(id)
         if typeof(ssn_for_user) == "Error" then
@@ -838,7 +927,7 @@ const user = User.new("deviaze")
 -- TypeError: Field 'do_not_use_this_or_i_get_fired' of class 'User' is private; accessing it here will raise a runtime error
 print(user.do_not_use_this_or_i_get_fired)
 
--- TypeError: Method 'terminate' of class 'User' is private; calling it from here will always raise a runtime error
+-- TypeError: Function 'terminate' of class 'User' is private; calling it here will raise a runtime error
 user:terminate()
 ```
 

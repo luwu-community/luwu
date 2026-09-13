@@ -85,8 +85,8 @@ TEST_CASE_FIXTURE(ClassesFixture, "Point_tostring")
     ScopedFastFlag sff_DebugLuauUserDefinedClasses{FFlag::DebugLuauUserDefinedClasses, true};
     auto result = check(R"(
 class Point
-    public x
-    public y
+    x
+    y
     function __tostring(self)
         return `Point(x={self.x}, y={self.y})`
     end
@@ -103,8 +103,8 @@ TEST_CASE_FIXTURE(ClassesFixture, "Point_eq_mm")
 {
     auto result = check(R"(
 class Point
-    public x
-    public y
+    x
+    y
 
     function __eq(self, other)
         return self.x == other.x and self.y == other.y
@@ -175,8 +175,8 @@ TEST_CASE_FIXTURE(ClassesFixture, "class_structure")
 {
     auto result = check(R"(
 class Point
-    public x
-    public y
+    x
+    y
 
     function magnitude(self)
         return sqrt(self.x * self.x + self.y * self.y)
@@ -229,8 +229,8 @@ TEST_CASE_FIXTURE(ClassesFixture, "class_with_fields_still_requires_argument_tab
 {
     auto result = check(R"(
 class Person
-    public name
-    public age
+    name
+    age
 
     function greet(self)
         return self.name
@@ -334,10 +334,10 @@ TEST_CASE_FIXTURE(ClassesFixture, "class_pod_constructor_argument_still_required
 
     auto result = check(R"(
 class Mixed
-    a = 0
+    public a = 0
     public b: string
 
-    function greet(self)
+    public function greet(self)
         return self.b
     end
 end
@@ -358,7 +358,7 @@ class Thingy
     public name: string
     public age: number
 
-    function __init(self, name: string, age: number)
+    public function __init(self, name: string, age: number)
         self.name = name
         self.age = age
     end
@@ -391,7 +391,7 @@ class Thingy
     public name: string
     public age: number
 
-    function __init(self, name: string, age: number)
+    public function __init(self, name: string, age: number)
         self.name = name
         self.age = age
     end
@@ -481,7 +481,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "class_const_property_can_be_assigned_from_ini
 class Thingy
     public const name: string
 
-    function __init(self, name: string)
+    public function __init(self, name: string)
         self.name = name
     end
 end
@@ -498,11 +498,11 @@ TEST_CASE_FIXTURE(ClassesFixture, "class_const_property_cannot_be_assigned_from_
 class Thingy
     public const name: string
 
-    function __init(self, name: string)
+    public function __init(self, name: string)
         self.name = name
     end
 
-    function rename(self, name: string)
+    public function rename(self, name: string)
         self.name = name
     end
 end
@@ -525,7 +525,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "class_const_property_cannot_be_assigned_from_
 class Thingy
     public const name: string
 
-    function __init(self, name: string)
+    public function __init(self, name: string)
         self.name = name
     end
 end
@@ -551,11 +551,11 @@ TEST_CASE_FIXTURE(ClassesFixture, "class_non_const_property_can_be_assigned_anyw
 class Thingy
     public name: string
 
-    function __init(self, name: string)
+    public function __init(self, name: string)
         self.name = name
     end
 
-    function rename(self, name: string)
+    public function rename(self, name: string)
         self.name = name
     end
 end
@@ -895,8 +895,8 @@ TEST_CASE_FIXTURE(ClassesFixture, "class_fields_on_instance_reports_precise_fiel
 {
     CheckResult result = check(R"(
 class Point
-    public x: number
-    public y: number
+    x: number
+    y: number
 
     function magnitude(self)
         return sqrt(self.x * self.x + self.y * self.y)
@@ -940,8 +940,8 @@ TEST_CASE_FIXTURE(ClassesFixture, "class_fields_omits_methods_from_the_type")
 {
     CheckResult result = check(R"(
 class Point
-    public x: number
-    public y: number
+    x: number
+    y: number
 
     function magnitude(self)
         return sqrt(self.x * self.x + self.y * self.y)
@@ -1167,7 +1167,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "primary_constructor_parameters_are_visible_to
     };
 
     LUAU_REQUIRE_NO_ERRORS(check(R"(
-        class Frame(name: string, size: number)
+        class Frame(public name: string, public size: number)
             public doubled = size * 2
             private label = name
         end
@@ -1189,12 +1189,38 @@ TEST_CASE_FIXTURE(ClassesFixture, "primary_constructor_parameters_are_not_visibl
     // `name` in the method body is the global, not the parameter, so this is not a type error about
     // strings -- it just isn't the parameter
     LUAU_REQUIRE_NO_ERRORS(check(R"(
-        class Symbol(name: string)
+        class Symbol(public name: string)
             public function describe(self): string
                 return self.name
             end
         end
     )"));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "qualified_parameters_declare_their_fields_access_and_constness")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuauDefaultArguments, true},
+    };
+
+    // a parameter may carry its field's access specifier and `const` modifier directly, instead of
+    // restating the field in the class body (rfcx/classes.md)
+    auto result = check(R"(
+        class SshKey(public const public_key: string, private const private_key: string)
+            public function fingerprint(self): string
+                return self.private_key
+            end
+        end
+
+        local key = SshKey("pub", "priv")
+        local leaked = key.private_key
+        key.public_key = "other"
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK(get<PrivatePropertyAccess>(result.errors[0]));
+    CHECK(get<ConstPropertyAssignment>(result.errors[1]));
 }
 
 TEST_CASE_FIXTURE(ClassesFixture, "bare_restatement_takes_the_parameters_type")
@@ -1205,7 +1231,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "bare_restatement_takes_the_parameters_type")
     };
 
     auto result = check(R"(
-        class Card(userid: number, hash: string)
+        class Card(public userid: number, hash: string)
             private const hash
 
             public function same(self, other: Card): boolean
@@ -1260,17 +1286,20 @@ TEST_CASE_FIXTURE(ClassesFixture, "class_with_only_private_fields_and_no_functio
             private uses: number
         end
 
+        class Secret(private key: string) end
+
         class Card(hash: string)
             private const hash
         end
     )");
 
-    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
     for (const TypeError& err : result.errors)
         CHECK(get<UnusableClass>(err));
     CHECK_EQ("This class cannot be used because it only has private fields", toString(result.errors[0]));
     CHECK_EQ(1, result.errors[0].location.begin.line);
     CHECK_EQ(6, result.errors[1].location.begin.line);
+    CHECK_EQ(8, result.errors[2].location.begin.line);
 }
 
 TEST_CASE_FIXTURE(ClassesFixture, "class_with_private_fields_is_usable_through_a_function_or_a_public_field")
@@ -1301,6 +1330,8 @@ TEST_CASE_FIXTURE(ClassesFixture, "class_with_private_fields_is_usable_through_a
             private please: string
             public uses: number
         end
+
+        class WithPublicParam(public name: string, private key: string) end
     )"));
 }
 
@@ -1380,7 +1411,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "private_primary_constructor")
     };
 
     auto result = check(R"(
-        class Account private (holder: string)
+        class Account private (public holder: string)
             public function open(h: string): Account
                 return Account(h)
             end
@@ -1422,7 +1453,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "generic_class_with_a_primary_constructor")
     };
 
     auto result = check(R"(
-        class Box<T>(inner: T)
+        class Box<T>(public inner: T)
             public function get(self): T
                 return self.inner
             end
@@ -1451,7 +1482,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "bare_restatement_is_checked_against_the_param
     auto result = check(R"(
         type CatBreed = "Orange" | "AmericanShorthair" | "Void"
 
-        class Cat(name: string, breed: CatBreed = "AmericanShorthair")
+        class Cat(public name: string, breed: CatBreed = "AmericanShorthair")
             private breed: number
 
             public function describe(self): string

@@ -1159,19 +1159,30 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
 
             if (classDecl->primaryConstructor)
             {
-                for (AstLocal* param : classDecl->primaryConstructor->args)
+                for (size_t i = 0; i < classDecl->primaryConstructor->args.size; ++i)
                 {
+                    AstLocal* param = classDecl->primaryConstructor->args.data[i];
+
                     if (memberTypes.contains(param->name) || restatedInBody(param->name))
                         continue;
 
                     auto [propertyType, _] = memberTypes.try_insert(param->name, arena->addType(BlockedType{}));
                     instanceFieldNames.insert(param->name.value);
 
-                    // a parameter's field is public and non-const; changing either is what restating
-                    // it in the class body is for
+                    // a parameter's field is public and non-const unless the parameter says otherwise
+                    // (`class SshKey(private const key: string)`); restating it in the class body is
+                    // the other way to say the same thing
                     auto& p = props[param->name.value];
                     p = Property::rw(propertyType);
                     p.location = param->location;
+
+                    if (FFlag::DebugLuauUserDefinedClasses && FFlag::LuauBetterUserDefinedClasses &&
+                        classDecl->primaryConstructor->argsQualifiers.size == classDecl->primaryConstructor->args.size)
+                    {
+                        const AstClassPrimaryConstructorParamQualifiers& qualifiers = classDecl->primaryConstructor->argsQualifiers.data[i];
+                        p.isPrivate = qualifiers.visibility == AstClassMemberVisibility::Private;
+                        p.isConst = qualifiers.isConst;
+                    }
                 }
             }
 

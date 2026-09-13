@@ -22,9 +22,7 @@ local function expectpass(s, f)
 end
 
 -- 1. private primary constructor
-class PrimaryCtor private (x: number)
-    public x: number
-
+class PrimaryCtor private (public x: number)
     public function make(x: number): PrimaryCtor
         return PrimaryCtor(x)
     end
@@ -37,9 +35,7 @@ class PrimaryCtor private (x: number)
     end
 end
 
-class PrimaryHolder(inner: PrimaryCtor)
-    public inner: PrimaryCtor
-
+class PrimaryHolder(public inner: PrimaryCtor)
     public function dup(self): number
         local c = self.inner:clone()
         return c.x
@@ -159,9 +155,7 @@ class Vec2(x: number, y: number)
     end
 end
 
-class Body(pos: Vec2)
-    public pos: Vec2
-
+class Body(public pos: Vec2)
     public function shift(self, by: Vec2): number
         local p = self.pos:add(by)
         return p.x + p.y

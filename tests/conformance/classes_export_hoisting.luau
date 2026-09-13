@@ -11,7 +11,7 @@ local source = [[
     export class ReproCat
         name: string
         age: number
-        public function __init(self, name, age)
+        function __init(self, name, age)
             self.name = name
             self.age = age
         end

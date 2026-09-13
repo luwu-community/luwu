@@ -11126,8 +11126,8 @@ TEST_CASE("ClassDeclWithMethod")
 
     std::string source = R"(
         class Point
-            public x: number
-            public y: number
+            x: number
+            y: number
             function magnitude(self)
                 return self.x * self.x + self.y * self.y
             end
@@ -11278,7 +11278,7 @@ TEST_CASE("ClassPrimaryConstructor")
     // but its own field, so its argument is evaluated straight into that field's register: no
     // temporary and no move. `size` is read by another field's initializer, so it keeps one.
     std::string source = R"(
-        class Frame(name: string, size: number)
+        class Frame(public name: string, public size: number)
             private id = 7
             public size = size * 2
         end
@@ -11317,7 +11317,7 @@ TEST_CASE("ClassPrimaryConstructorInit")
     // then the parameters the body didn't restate. Assignments are body statements rather than the
     // prologue injection an explicit `__init` uses, which is what puts them after the defaults.
     std::string source = R"(
-        class Frame(name: string, size = 10)
+        class Frame(public name: string, public size = 10)
             private id = 7
             public size = size * 2
         end
@@ -11350,7 +11350,7 @@ TEST_CASE("ClassMethodInlineSelfCheck")
     // silently run the wrong class's body.
     std::string source = R"(
         class Point
-            public x: number
+            x: number
             function get_x(self)
                 return self.x
             end
@@ -11528,8 +11528,8 @@ TEST_CASE("ClassDeclWithAmbiguousGlobal")
 
     std::string source = R"(
         class Point
-            public x: number
-            public y: number
+            x: number
+            y: number
             function print(self)
                 print(`Point(x = {self.x}, y = {self.y})`)
             end
@@ -12455,8 +12455,8 @@ TEST_CASE("ExportClass")
     CHECK_EQ(
         "\n" + compileFunction0(R"(
 export class Point
-    public x: number
-    public y: number
+    x: number
+    y: number
 end
 )"),
         R"(
@@ -12475,8 +12475,8 @@ RETURN R2 1
         "\n" + compileFunction(
                    R"(
 export class Point
-    public x: number
-    public y: number
+    x: number
+    y: number
 
     function getX(self)
         return self.x
@@ -12509,8 +12509,8 @@ RETURN R2 1
         "\n" + compileFunction(
                    R"(
 export class Point
-    public x: number
-    public y: number
+    x: number
+    y: number
 end
 
 local p = Point {x = 1, y = 2}

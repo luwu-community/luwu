@@ -122,8 +122,7 @@ end)
 -- inside its own class". The authority is the executing closure's Proto::ownerclass. NEWOBJECT is
 -- only emitted for a direct, statically resolved `ClassName(...)` callee, so pcall-laundered and
 -- aliased calls still go through luaR_createobject; both must stay denied either way.
-class Acct private (owner: string, balance: number)
-    public owner
+class Acct private (public owner: string, balance: number)
     private balance
 
     public function new(o: string, b: number): Acct

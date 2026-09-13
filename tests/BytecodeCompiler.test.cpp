@@ -1000,8 +1000,8 @@ TEST_CASE_FIXTURE(BytecodeCompilerFixture, "classes_bytecode_roundtrips")
 
     checkRoundtrip(R"(
         class Point
-            public x
-            public y
+            x
+            y
 
             function magnitude(self)
                 return math.sqrt(self.x * self.x + self.y * self.y)

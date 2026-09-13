@@ -910,8 +910,8 @@ TEST_CASE_FIXTURE(Fixture, "point_class")
 
     CheckResult result = check(R"(
         class Point
-            public x: number
-            public y: number
+            x: number
+            y: number
 
             function length(self)
                 return 100
@@ -1150,8 +1150,8 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typecheck_class_method_field_access")
 
     CheckResult result = check(R"(
         class Point
-            public x: number?
-            public y: number?
+            x: number?
+            y: number?
             function magnitude(self)
                 return math.sqrt(self.x * self.x + self.y * self.y)
             end
@@ -1177,9 +1177,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typecheck_class_annotations")
 
     CheckResult result = check(R"(
         class Point
-            public x: number
-            public y: number
-            public name: string
+            x: number
+            y: number
+            name: string
             function magnitude(self): string
                 -- self.name is not a number
                 self.name = self.x
@@ -1204,8 +1204,8 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "read_unknown_property_from_class_object_or_i
 
     CheckResult result = check(R"(
         class Point
-            public x: number
-            public y: number
+            x: number
+            y: number
 
             function zero()
                 return Point {x=0, y=0}
@@ -1237,8 +1237,8 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "writes_to_class_object_properties_are_forbid
 
     CheckResult result = check(R"(
         class Point
-            public x: number
-            public y: number
+            x: number
+            y: number
 
             function zero()
                 return Point {x=0, y=0}
@@ -1294,8 +1294,8 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "writes_to_unknown_class_instance_properties_
 
     CheckResult result = check(R"(
         class Point
-            public x: number
-            public y: number
+            x: number
+            y: number
 
             function zero()
                 return Point {x=0, y=0}

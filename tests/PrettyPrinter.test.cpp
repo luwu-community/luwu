@@ -2136,8 +2136,8 @@ TEST_CASE("simple_class_example")
 
     std::string code = R"(
 class Point
-    public x: number
-    public y: number
+    x: number
+    y: number
     function length(self)
         return 100
     end
@@ -2158,11 +2158,11 @@ class Point
     function length(self)
         return 100
     end
-    public x
+    x
     function new(): Point
         return Point { x = 0, y = 0 }
     end
-    public y
+    y
 end
     )";
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
