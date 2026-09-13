@@ -4602,6 +4602,7 @@ TEST_CASE("ExportedClasses")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
         {FFlag::DebugLuauUserDefinedClassesRuntime, true},
         {FFlag::LuauExportValueSyntax, true},
         {FFlag::LuauExportedClassIsNilWorkaround, true},

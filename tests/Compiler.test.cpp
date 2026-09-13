@@ -11118,6 +11118,7 @@ RETURN R0 0
 TEST_CASE("ClassDeclWithMethod")
 {
     ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag better{FFlag::LuauBetterUserDefinedClasses, true};
     // This dump expects a plain CALL for the in-method `error(...)`; pin the
     // feedback-vector opcode off so it stays deterministic under --fflags=true
     // (where LuauEmitCallFeedback would otherwise emit CALLFB for this nested,
@@ -11340,6 +11341,7 @@ RETURN R0 0
 TEST_CASE("ClassMethodInlineSelfCheck")
 {
     ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag better{FFlag::LuauBetterUserDefinedClasses, true};
     // see ClassDeclWithMethod: pin the feedback-vector opcode off so the in-method `error(...)`
     // stays a plain CALL in this dump
     ScopedFastFlag noCallFb{FFlag::LuauEmitCallFeedback, false};
@@ -11523,6 +11525,7 @@ TEST_CASE("ClassDeclWithAmbiguousGlobal")
     ScopedFastFlag sffs[] = {
         {FFlag::LuauCompileStringInterpTargetTop, true},
         {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
         {FFlag::LuauEmitCallFeedback, true},
     };
 
@@ -12449,6 +12452,7 @@ TEST_CASE("ExportClass")
     ScopedFastFlag sffs[] = {
         {FFlag::LuauExportValueSyntax, true},
         {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
         {FFlag::LuauExportedClassIsNilWorkaround, false},
     };
 

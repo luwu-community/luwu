@@ -14,3 +14,8 @@ opt-level = 0
 
 [profile.release]
 opt-level = 3
+
+[[test]]
+name = "luwu"
+path = "tests/luwu.rs"
+harness = false

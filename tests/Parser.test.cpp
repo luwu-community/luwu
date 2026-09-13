@@ -4738,6 +4738,7 @@ TEST_CASE_FIXTURE(Fixture, "allowed_metamethods_still_work")
 TEST_CASE_FIXTURE(Fixture, "classes_can_interleave_methods_and_properties")
 {
     ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag better{FFlag::LuauBetterUserDefinedClasses, true};
 
     ParseResult res = tryParse(R"(
         class Student
@@ -4785,6 +4786,7 @@ TEST_CASE_FIXTURE(Fixture, "classes_can_interleave_methods_and_properties")
 TEST_CASE_FIXTURE(Fixture, "large_classes_example")
 {
     ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag better{FFlag::LuauBetterUserDefinedClasses, true};
 
     ParseResult result = tryParse(R"(
         class PlayerStats
@@ -6918,7 +6920,7 @@ return {
 
 TEST_CASE_FIXTURE(Fixture, "export_value_parse_failures")
 {
-    ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}, {FFlag::DebugLuauUserDefinedClasses, true}};
+    ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}, {FFlag::DebugLuauUserDefinedClasses, true}, {FFlag::LuauBetterUserDefinedClasses, true}};
 
     auto expectParseError = [&](const std::string& source)
     {

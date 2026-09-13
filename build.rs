@@ -61,6 +61,7 @@ fn count_make_compile_steps(manifest_dir: &str, build_dir: &Path, jobs: &str) ->
         .arg("-n")
         .arg(format!("-j{jobs}"))
         .arg(format!("BUILD={}", build_dir.display()))
+        .arg("werror=1")
         .arg("luau")
         .arg("luau-analyze")
         .output();
@@ -137,7 +138,8 @@ fn main() {
             .arg(&manifest_dir)
             .arg("-B")
             .arg(&build_dir)
-            .arg(format!("-DCMAKE_BUILD_TYPE={build_type}")));
+            .arg(format!("-DCMAKE_BUILD_TYPE={build_type}"))
+            .arg("-DLUAU_WERROR=ON"));
 
         let mut child = Command::new("cmake")
             .arg("--build")
@@ -173,6 +175,9 @@ fn main() {
             .current_dir(&manifest_dir)
             .arg(format!("-j{jobs}"))
             .arg(format!("BUILD={}", build_dir.display()))
+            // Warnings are errors, as in CI. This has to match tests/luwu.rs: both share one build
+            // directory and make won't recompile an object just because the flags changed.
+            .arg("werror=1")
             .arg("luau")
             .arg("luau-analyze")
             .stdout(Stdio::piped())

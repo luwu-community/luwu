@@ -17,6 +17,7 @@ using namespace Luau;
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauFixPropReadsOnMetatableTypes)
+LUAU_FASTFLAG(LuauBetterUserDefinedClasses)
 
 TEST_SUITE_BEGIN("TypeInferOOP");
 
@@ -905,6 +906,7 @@ TEST_CASE_FIXTURE(Fixture, "point_class")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
         {FFlag::DebugLuauForceOldSolver, false},
     };
 
@@ -1146,6 +1148,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typecheck_class_method_field_access")
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauForceOldSolver, false},
         {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
     };
 
     CheckResult result = check(R"(
@@ -1173,6 +1176,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typecheck_class_annotations")
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauForceOldSolver, false},
         {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
     };
 
     CheckResult result = check(R"(
@@ -1200,6 +1204,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "read_unknown_property_from_class_object_or_i
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauForceOldSolver, false},
         {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
     };
 
     CheckResult result = check(R"(
@@ -1233,6 +1238,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "writes_to_class_object_properties_are_forbid
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauForceOldSolver, false},
         {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
     };
 
     CheckResult result = check(R"(
@@ -1290,6 +1296,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "writes_to_unknown_class_instance_properties_
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauForceOldSolver, false},
         {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
     };
 
     CheckResult result = check(R"(

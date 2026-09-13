@@ -884,6 +884,7 @@ struct TypeMapVisitor : AstVisitor
             case LBF_MATH_ISFINITE:
             case LBF_RAWEQUAL:
             case LBF_BUFFER_ISFROZEN:
+            case LBF_CLASS_ISINSTANCE:
                 recordResolvedType(node, &builtinTypes.booleanType);
                 break;
 

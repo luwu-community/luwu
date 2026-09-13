@@ -83,6 +83,7 @@ TEST_SUITE_BEGIN("ClassesConformance");
 TEST_CASE_FIXTURE(ClassesFixture, "Point_tostring")
 {
     ScopedFastFlag sff_DebugLuauUserDefinedClasses{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag sff_LuauBetterUserDefinedClasses{FFlag::LuauBetterUserDefinedClasses, true};
     auto result = check(R"(
 class Point
     x
@@ -101,6 +102,11 @@ local _ = tostring(p)
 
 TEST_CASE_FIXTURE(ClassesFixture, "Point_eq_mm")
 {
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
     auto result = check(R"(
 class Point
     x
@@ -173,6 +179,11 @@ p:__add()
 
 TEST_CASE_FIXTURE(ClassesFixture, "class_structure")
 {
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
     auto result = check(R"(
 class Point
     x
@@ -227,6 +238,11 @@ local e = Empty()
 
 TEST_CASE_FIXTURE(ClassesFixture, "class_with_fields_still_requires_argument_table")
 {
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
     auto result = check(R"(
 class Person
     name
@@ -893,6 +909,11 @@ TEST_CASE_FIXTURE(ClassesFixture, "isinstance_refines_imported_class_but_not_a_c
 
 TEST_CASE_FIXTURE(ClassesFixture, "class_fields_on_instance_reports_precise_field_types_and_complete_true")
 {
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
     CheckResult result = check(R"(
 class Point
     x: number
@@ -938,6 +959,11 @@ local fields, complete = class.fields(u)
 
 TEST_CASE_FIXTURE(ClassesFixture, "class_fields_omits_methods_from_the_type")
 {
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
     CheckResult result = check(R"(
 class Point
     x: number
