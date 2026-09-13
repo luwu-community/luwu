@@ -33,6 +33,8 @@ LUAU_FASTFLAG(LuauExportedClassIsNilWorkaround)
 LUAU_FASTFLAG(DebugLuauNoInline)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 LUAU_FASTFLAG(LuauDefaultArguments)
+LUAU_FASTFLAG(LuauBetterUserDefinedClasses)
+LUAU_FASTFLAG(LuauGenericNominals)
 
 using namespace Luau;
 
@@ -11116,11 +11118,17 @@ RETURN R0 0
 TEST_CASE("ClassDeclWithMethod")
 {
     ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag better{FFlag::LuauBetterUserDefinedClasses, true};
+    // This dump expects a plain CALL for the in-method `error(...)`; pin the
+    // feedback-vector opcode off so it stays deterministic under --fflags=true
+    // (where LuauEmitCallFeedback would otherwise emit CALLFB for this nested,
+    // non-builtin call). Tests that want CALLFB opt in explicitly.
+    ScopedFastFlag noCallFb{FFlag::LuauEmitCallFeedback, false};
 
     std::string source = R"(
         class Point
-            public x: number
-            public y: number
+            x: number
+            y: number
             function magnitude(self)
                 return self.x * self.x + self.y * self.y
             end
@@ -11129,11 +11137,12 @@ TEST_CASE("ClassDeclWithMethod")
     )";
     auto res0 = "\n" + compileFunction(source.c_str(), 0, 0, 0);
     CHECK(R"(
-GETTABLEKS R3 R0 K0 ['x']
-GETTABLEKS R4 R0 K0 ['x']
+CHECKSELFCLASS R0 OWNER K0 ['magnitude']
+GETOBJECTMEMBER R3 R0 0
+GETOBJECTMEMBER R4 R0 0
 MUL R2 R3 R4
-GETTABLEKS R4 R0 K1 ['y']
-GETTABLEKS R5 R0 K1 ['y']
+GETOBJECTMEMBER R4 R0 1
+GETOBJECTMEMBER R5 R0 1
 MUL R3 R4 R5
 ADD R1 R2 R3
 RETURN R1 1
@@ -11151,18 +11160,379 @@ RETURN R0 0
 )" == res1);
 }
 
+TEST_CASE("ClassConstantFieldDefaults")
+{
+    ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag betterClasses{FFlag::LuauBetterUserDefinedClasses, true};
+
+    // A POD class whose field defaults are all compile-time constants carries them in its own class
+    // shape, so it needs no synthesized `__defaults` closure -- no extra proto, no NEWCLASSMEMBER,
+    // and no call per construction. A class with any non-constant default still gets one, since such
+    // a default has to be re-evaluated on every construction.
+    std::string source = R"(
+        class ConstDefaults
+            public n: number = 42
+            public s: string = "hi"
+        end
+        class ComputedDefault
+            public t = {}
+            public n: number = 1
+        end
+        print(ConstDefaults, ComputedDefault)
+    )";
+
+    // function 0 is ComputedDefault's `__defaults`; ConstDefaults contributes no function at all
+    auto res0 = "\n" + compileFunction(source.c_str(), 0, 2, 0);
+    CHECK(R"(
+NEWTABLE R0 0 0
+LOADN R1 1
+RETURN R0 2
+)" == res0);
+
+    auto res1 = "\n" + compileFunction(source.c_str(), 1, 2, 0);
+    CHECK(R"(
+LOADNIL R0
+LOADNIL R1
+LOADKX R0 K5 [class ConstDefaults (props: 2, methods: 0)]
+LOADKX R1 K10 [class ComputedDefault (props: 2, methods: 1)]
+DUPCLOSURE R2 K8 []
+NEWCLASSMEMBER R1 R2 ['__defaults']
+GETIMPORT R2 12 [print]
+MOVE R3 R0
+MOVE R4 R1
+CALL R2 2 0
+RETURN R0 0
+)" == res1);
+}
+
+TEST_CASE("ClassNewObject")
+{
+    ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag betterClasses{FFlag::LuauBetterUserDefinedClasses, true};
+
+    // A call whose callee is a statically resolved class compiles to NEWOBJECT: on its own for a
+    // class using the default constructor, and followed by a plain CALL of `__init` for a class that
+    // declares one. A class with non-constant defaults behind a `__defaults` closure still needs the
+    // constructor to call it, so it keeps the ordinary CALL sequence.
+    std::string source = R"(
+        class Pod
+            public x: number = 1
+            public y: number = 2
+        end
+        class WithInit
+            public x: number = 0
+            public function __init(self, x) self.x = x end
+        end
+        class Computed
+            public t = {}
+        end
+        local a = Pod()
+        local b = Pod { x = 9 }
+        local c = WithInit(5)
+        local d = Computed()
+        print(a, b, c, d)
+    )";
+
+    auto res = "\n" + compileFunction(source.c_str(), 2, 2, 0);
+    CHECK(R"(
+LOADNIL R0
+LOADNIL R1
+LOADNIL R2
+LOADKX R0 K5 [class Pod (props: 2, methods: 0)]
+LOADKX R1 K9 [class WithInit (props: 1, methods: 1)]
+DUPCLOSURE R3 K7 ['__init']
+NEWCLASSMEMBER R1 R3 ['__init']
+LOADKX R2 K14 [class Computed (props: 1, methods: 1)]
+DUPCLOSURE R3 K12 []
+NEWCLASSMEMBER R2 R3 ['__defaults']
+NEWOBJECT R3 R0 0
+LOADNIL R7
+LOADN R6 9
+NEWOBJECT R5 R0 2 FIELDS
+MOVE R4 R5
+LOADN R9 5
+NEWOBJECT R6 R1 1 INIT
+CALL R7 2 0
+MOVE R5 R6
+MOVE R6 R2
+CALL R6 0 1
+GETIMPORT R7 16 [print]
+MOVE R8 R3
+MOVE R9 R4
+MOVE R10 R5
+MOVE R11 R6
+CALL R7 4 0
+RETURN R0 0
+)" == res);
+}
+
+TEST_CASE("ClassPrimaryConstructor")
+{
+    ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag betterClasses{FFlag::LuauBetterUserDefinedClasses, true};
+
+    // A primary constructor (rfcx/classes.md) declares a public field per parameter. A statically
+    // resolved construction site doesn't call the synthesized `__init` at all: the parameters are
+    // evaluated into registers, each field's initializer is compiled inline, and NEWOBJECT's
+    // positional FIELDS form finishes the instance. The class body's own properties come first, then
+    // the parameters the body doesn't restate -- `id`, `size`, `name` here. `name` is read by nothing
+    // but its own field, so its argument is evaluated straight into that field's register: no
+    // temporary and no move. `size` is read by another field's initializer, so it keeps one.
+    std::string source = R"(
+        class Frame(public name: string, public size: number)
+            private id = 7
+            public size = size * 2
+        end
+        local f = Frame("main", 10)
+        print(f)
+    )";
+
+    auto res = "\n" + compileFunction(source.c_str(), 1, 2, 0);
+    CHECK(R"(
+LOADNIL R0
+LOADKX R0 K6 [class Frame (props: 3, methods: 1)]
+DUPCLOSURE R1 K4 ['__init']
+NEWCLASSMEMBER R0 R1 ['__init']
+LOADK R5 K7 ['main']
+LOADN R6 10
+LOADN R3 7
+MULK R4 R6 K8 [2]
+NEWOBJECT R2 R0 3 FIELDS
+MOVE R1 R2
+GETIMPORT R2 10 [print]
+MOVE R3 R1
+CALL R2 1 0
+RETURN R0 0
+)" == res);
+}
+
+TEST_CASE("ClassPrimaryConstructorInit")
+{
+    ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag betterClasses{FFlag::LuauBetterUserDefinedClasses, true};
+    // a primary constructor's parameter defaults ride on the function parameter default flag
+    ScopedFastFlag defaultArgs{FFlag::LuauDefaultArguments, true};
+
+    // The body of that synthesized `__init`: the self check every method gets, then the parameter
+    // defaults, then one field assignment per field in declaration order -- body properties first,
+    // then the parameters the body didn't restate. Assignments are body statements rather than the
+    // prologue injection an explicit `__init` uses, which is what puts them after the defaults.
+    std::string source = R"(
+        class Frame(public name: string, public size = 10)
+            private id = 7
+            public size = size * 2
+        end
+    )";
+
+    auto res = "\n" + compileFunction(source.c_str(), 0, 2, 0);
+    CHECK(R"(
+CHECKSELFCLASS R0 OWNER K0 ['__init']
+JUMPXEQKNIL R2 L0 NOT
+LOADN R2 10
+L0: LOADN R3 7
+SETTABLEKS R3 R0 K1 ['id']
+MULK R3 R2 K2 [2]
+SETTABLEKS R3 R0 K3 ['size']
+SETTABLEKS R1 R0 K4 ['name']
+RETURN R0 0
+)" == res);
+}
+
+TEST_CASE("ClassMethodInlineSelfCheck")
+{
+    ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag better{FFlag::LuauBetterUserDefinedClasses, true};
+    // see ClassDeclWithMethod: pin the feedback-vector opcode off so the in-method `error(...)`
+    // stays a plain CALL in this dump
+    ScopedFastFlag noCallFb{FFlag::LuauEmitCallFeedback, false};
+
+    // Runtime checking of `self` for methods (rfcx/classes.md) must survive method inlining at -O2:
+    // the inlined copy of the body never runs the callee's prologue, so compileInlinedCall re-emits
+    // the CHECKSELFCLASS itself. Without it, a receiver whose annotation lies about its class would
+    // silently run the wrong class's body.
+    std::string source = R"(
+        class Point
+            x: number
+            function get_x(self)
+                return self.x
+            end
+            function double_x(self)
+                local v = self:get_x()
+                return v * 2
+            end
+        end
+        local function outside(p: Point)
+            local v = p:get_x()
+            return v
+        end
+        print(outside)
+    )";
+
+    // a same-class `self:method()` inline needs no second check: the enclosing method's own prologue
+    // already validated this exact value
+    auto res1 = "\n" + compileFunction(source.c_str(), 1, 2, 0);
+    CHECK(R"(
+CHECKSELFCLASS R0 OWNER K0 ['double_x']
+GETTABLEKS R1 R0 K1 ['x']
+MULK R2 R1 K2 [2]
+RETURN R2 1
+)" == res1);
+
+    // inlining into a non-method (or any other class's) body re-emits the check at the call site
+    auto res2 = "\n" + compileFunction(source.c_str(), 2, 2, 0);
+    CHECK(R"(
+GETUPVAL R2 0
+CHECKSELFCLASS R0 R2 K0 ['get_x'] SELF
+GETTABLEKS R1 R0 K1 ['x']
+RETURN R1 1
+)" == res2);
+}
+
+TEST_CASE("ClassMethodInlineNoRecursion")
+{
+    ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+    // see ClassDeclWithMethod: pin the feedback-vector opcode off so the non-inlined recursive
+    // `self:pong(...)` stays a plain CALL in this dump
+    ScopedFastFlag noCallFb{FFlag::LuauEmitCallFeedback, false};
+
+    // A method that calls itself (directly or mutually with a sibling method) must never get
+    // inlined into its own body: tryResolveMethodCall resolves `self:method()` to the very
+    // AstExprFunction currently being compiled, but that function's Function record (canInline,
+    // cost model) is only registered in `functions` once its own compilation finishes -- so `fi`
+    // is null while we're still inside it, and the general "don't inline into an unregistered
+    // function" guard (shared with plain function recursion, see InlineProhibitedRecursion) keeps
+    // the recursive call as a real CALL/CALLM instead of splicing the body into itself.
+    CHECK_EQ(
+        compileWithRemarks(R"(
+class Fact
+    function compute(self, n)
+        if n <= 1 then
+            return 1
+        end
+        return n * self:compute(n - 1)
+    end
+end
+)"),
+        R"(
+class Fact
+    function compute(self, n)
+        if n <= 1 then
+            return 1
+        end
+        return n * self:compute(n - 1)
+    end
+end
+)"
+    );
+
+    // Mutual recursion between two sibling methods is not itself prohibited -- `ping` is fully
+    // registered by the time `pong` is compiled, so `pong`'s call to `self:ping(...)` is free to
+    // inline (and does) -- but that's fine: it's one-shot, not a cycle. The call to `pong` inside
+    // `ping`'s own body can't inline `pong` back (pong isn't registered yet, still mid-compile),
+    // and the freshly-inlined copy of `ping` spliced into `pong` still calls the *real* `pong`
+    // (itself, mid-compile, still unregistered) rather than re-inlining -- so there is no cycle.
+    CHECK_EQ(
+        compileWithRemarks(R"(
+class Ping
+    function ping(self, n)
+        if n <= 0 then
+            return 0
+        end
+        local v = self:pong(n - 1)
+        return v
+    end
+    function pong(self, n)
+        if n <= 0 then
+            return 0
+        end
+        local v = self:ping(n - 1)
+        return v
+    end
+end
+)"),
+        R"(
+class Ping
+    function ping(self, n)
+        if n <= 0 then
+            return 0
+        end
+        local v = self:pong(n - 1)
+        return v
+    end
+    function pong(self, n)
+        if n <= 0 then
+            return 0
+        end
+        -- remark: inlining succeeded (cost 7, profit 1.42x, depth 0)
+        local v = self:ping(n - 1)
+        return v
+    end
+end
+)"
+    );
+
+    // Confirm the shape directly: `pong`'s own bytecode gets `ping`'s body spliced in (the
+    // `n <= 0` guard appears twice), but the nested `self:pong(...)` call inside that inlined
+    // copy is a genuine NAMECALL/CALL to the real (unregistered, mid-compile) pong -- not another
+    // level of inlining, so the mutual recursion can never blow up the compiler.
+    CHECK_EQ(
+        "\n" + compileFunction(
+                   R"(
+class Ping
+    function ping(self, n)
+        if n <= 0 then
+            return 0
+        end
+        local v = self:pong(n - 1)
+        return v
+    end
+    function pong(self, n)
+        if n <= 0 then
+            return 0
+        end
+        local v = self:ping(n - 1)
+        return v
+    end
+end
+)",
+                   1,
+                   2,
+                   0
+               ),
+        R"(
+CHECKSELFCLASS R0 OWNER K0 ['pong']
+LOADN R2 0
+JUMPIFNOTLE R1 R2 L0
+LOADN R2 0
+RETURN R2 1
+L0: SUBK R3 R1 K1 [1]
+LOADN R4 0
+JUMPIFNOTLE R3 R4 L1
+LOADN R2 0
+RETURN R2 1
+L1: SUBK R6 R3 K1 [1]
+NAMECALL R4 R0 K0 ['pong']
+CALL R4 2 1
+MOVE R2 R4
+RETURN R2 1
+)"
+    );
+
+}
+
 TEST_CASE("ClassDeclWithAmbiguousGlobal")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuauCompileStringInterpTargetTop, true},
         {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
         {FFlag::LuauEmitCallFeedback, true},
     };
 
     std::string source = R"(
         class Point
-            public x: number
-            public y: number
+            x: number
+            y: number
             function print(self)
                 print(`Point(x = {self.x}, y = {self.y})`)
             end
@@ -11171,10 +11541,11 @@ TEST_CASE("ClassDeclWithAmbiguousGlobal")
     )";
     auto res0 = "\n" + compileFunction(source.c_str(), 0, 0, 0);
     CHECK(R"(
+CHECKSELFCLASS R0 OWNER K0 ['print']
 GETGLOBAL R1 K0 ['print']
 LOADK R2 K1 ['Point(x = %*, y = %*)']
-GETTABLEKS R4 R0 K2 ['x']
-GETTABLEKS R5 R0 K3 ['y']
+GETOBJECTMEMBER R4 R0 0
+GETOBJECTMEMBER R5 R0 1
 NAMECALL R2 R2 K4 ['format']
 CALL R2 3 1
 CALLFB R1 1 0 [0]
@@ -11236,8 +11607,7 @@ RETURN R0 1
 LOADNIL R0
 LOADKX R0 K2 [class Point (props: 1, methods: 0)]
 NEWCLOSURE R1 P0
-CAPTURE REF R0
-CLOSEUPVALS R0
+CAPTURE VAL R0
 RETURN R0 0
 )" == outer);
 }
@@ -12082,14 +12452,15 @@ TEST_CASE("ExportClass")
     ScopedFastFlag sffs[] = {
         {FFlag::LuauExportValueSyntax, true},
         {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
         {FFlag::LuauExportedClassIsNilWorkaround, false},
     };
 
     CHECK_EQ(
         "\n" + compileFunction0(R"(
 export class Point
-    public x: number
-    public y: number
+    x: number
+    y: number
 end
 )"),
         R"(
@@ -12108,8 +12479,8 @@ RETURN R2 1
         "\n" + compileFunction(
                    R"(
 export class Point
-    public x: number
-    public y: number
+    x: number
+    y: number
 
     function getX(self)
         return self.x
@@ -12142,8 +12513,8 @@ RETURN R2 1
         "\n" + compileFunction(
                    R"(
 export class Point
-    public x: number
-    public y: number
+    x: number
+    y: number
 end
 
 local p = Point {x = 1, y = 2}
@@ -12155,11 +12526,12 @@ local p = Point {x = 1, y = 2}
 LOADNIL R0
 NEWTABLE R1 0 0
 LOADKX R0 K3 [class Point (props: 2, methods: 0)]
-MOVE R2 R0
-DUPTABLE R3 6
-CALL R2 1 1
+LOADN R4 1
+LOADN R5 2
+NEWOBJECT R3 R0 2 FIELDS
+MOVE R2 R3
 SETTABLEKS R0 R1 K0 ['Point']
-GETIMPORT R3 9 [table.freeze]
+GETIMPORT R3 6 [table.freeze]
 MOVE R4 R1
 CALL R3 1 1
 RETURN R3 1

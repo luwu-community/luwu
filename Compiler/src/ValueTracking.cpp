@@ -96,8 +96,13 @@ struct ValueVisitor : AstVisitor
         if (!FFlag::DebugLuauUserDefinedClasses)
             return false;
 
+        // Unlike AstStatLocalFunction, we don't mark this local written just for existing --
+        // a class's own hoisting placeholder write is not a real mutation (see
+        // Compiler::classLocalFinalized). Only a genuine reassignment via AstStatAssign/
+        // AstStatCompoundAssign elsewhere should mark this local written. We still have to touch
+        // `variables` so the entry exists (defaulting to unwritten) for shouldShareClosure's lookup.
         classLocals[decl->name->name] = decl->name;
-        variables[decl->name].written = true;
+        (void)variables[decl->name];
 
         return true;
     }

@@ -16,6 +16,29 @@ LUAU_FASTFLAG(DebugLuauForceOldSolver)
 
 TEST_SUITE_BEGIN("ToString");
 
+TEST_CASE_FIXTURE(Fixture, "definition_file_union_and_function_alias_names_survive_clonePublicInterface")
+{
+    // Regression test: Module::clonePublicInterface (Module.cpp) moves declaredGlobals and
+    // exportedTypeBindings from a module's internalTypes arena into its interfaceTypes arena via
+    // Substitution.cpp's hand-rolled shallowClone, which explicitly enumerates fields per type kind
+    // instead of doing a generic copy. That clone already carried TableType::name/syntheticName,
+    // but not the newer UnionType/IntersectionType/FunctionType name fields, so any alias exposed
+    // through a `declare`/`export type` in a definition file silently lost its name at this exact
+    // clone boundary (regular, non-exported local bindings never hit this path, which is why the
+    // bug didn't show up in ordinary modules).
+    loadDefinition(R"(
+        export type Pathlike = number | string
+        declare function useIt(p: Pathlike): ()
+    )");
+
+    CheckResult result = check(R"(
+        local f = useIt
+    )");
+    LUAU_REQUIRE_NO_ERRORS(result);
+
+    CHECK_EQ("(Pathlike) -> ()", toString(requireType("f")));
+}
+
 TEST_CASE_FIXTURE(Fixture, "primitive")
 {
     CheckResult result = check("local a = nil    local b = 44    local c = 'lalala'    local d = true");
@@ -290,8 +313,10 @@ TEST_CASE_FIXTURE(Fixture, "overloaded_functions_always_printed_on_multiple_line
     opts.useLineBreaks = true;
 
     CHECK_EQ(
-        "((number) -> number)\n"
-        "& ((string) -> string)",
+        "( -- 2 overloads\n"
+        "    & ((number) -> number)\n"
+        "    & ((string) -> string)\n"
+        ")",
         toString(requireType("a"), opts)
     );
 }
@@ -319,7 +344,8 @@ TEST_CASE_FIXTURE(Fixture, "complex_unions_printed_on_multiple_lines")
     opts.useLineBreaks = true;
 
     CHECK_EQ(
-        "boolean\n"
+        "\n"
+        "| boolean\n"
         "| number\n"
         "| string",
         toString(requireType("a"), opts)
@@ -434,6 +460,24 @@ TEST_CASE_FIXTURE(Fixture, "stringifying_table_type_correctly_use_matching_table
     ToStringOptions o;
     o.maxTableLength = 40;
     CHECK_EQ(toString(&tv, o), "{ a: number, b: number, c: number, d: number, e: number, ... 5 more ... }");
+}
+
+TEST_CASE_FIXTURE(Fixture, "table_length_elision_is_a_comment_when_using_line_breaks")
+{
+    TableType ttv{TableState::Sealed, TypeLevel{}};
+    for (char c : std::string("abcdefghij"))
+        ttv.props[std::string(1, c)] = {getBuiltins()->numberType};
+
+    Type tv{ttv};
+
+    ToStringOptions o;
+    o.maxTableLength = 40;
+    o.useLineBreaks = true;
+    CHECK_EQ(toString(&tv, o), "{\n    a: number,\n    b: number,\n    c: number,\n    -- ⋯ 7 more properties\n}");
+
+    // The elision comment must not swallow the closing brace even when it's the only entry.
+    o.maxTableLength = 1;
+    CHECK_EQ(toString(&tv, o), "{\n    -- ⋯ 10 more properties\n}");
 }
 
 TEST_CASE_FIXTURE(Fixture, "stringifying_cyclic_union_type_bails_early")
@@ -1060,6 +1104,35 @@ TEST_CASE_FIXTURE(Fixture, "record_type_compositions_generic")
     CHECK_EQ(startPosObject, 4);
     CHECK_EQ(endPosObject, 10);
     CHECK_EQ(recordedTyObject, requireTypeAlias("Object"));
+}
+
+TEST_CASE_FIXTURE(Fixture, "expanded_root_alias_prints_recursive_references_by_name")
+{
+    // Expanding the root alias bypasses its name short-circuit, so a recursive reference back to it
+    // used to fall through to the cycle guard and print `*CYCLE*` -- which doesn't say which type
+    // recursed once more than one property can.
+    CheckResult result = check(R"(
+        type ThingRecurses = {
+            inside_here: ThingRecurses,
+        }
+        type List<T> = {
+            value: T,
+            next: List<T>?,
+        }
+    )");
+
+    ToStringOptions opts;
+    opts.alwaysExpandRootAlias = true;
+    opts.includeWhereClauses = true;
+
+    ToStringResult thing = toStringDetailed(requireTypeAlias("ThingRecurses"), opts);
+    CHECK_EQ("{ inside_here: ThingRecurses }", thing.name);
+    CHECK_EQ("", thing.whereClauses);
+    CHECK_EQ(std::string::npos, thing.name.find("CYCLE"));
+
+    std::string list = toString(requireTypeAlias("List"), opts);
+    CHECK_EQ(std::string::npos, list.find("CYCLE"));
+    CHECK_NE(std::string::npos, list.find("next: List<T>?"));
 }
 
 TEST_SUITE_END();

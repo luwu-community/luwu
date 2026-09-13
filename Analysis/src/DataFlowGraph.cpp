@@ -890,6 +890,34 @@ ControlFlow DataFlowGraphBuilder::visit(AstStatClass* d)
     currentScope()->bindings[d->name->name] = def;
     captures[d->name->name].allVersions.push_back(def);
 
+    // Luwu Classes (rfcx/classes.md): a primary constructor's parameters are visible to the class's
+    // field initializer expressions and to nothing else, so they get a scope of their own that the
+    // class's methods are visited outside of. They are compiled into the synthesized `__init`, hence
+    // the function-flavored scope, and every parameter needs a def before a field initializer that
+    // refers to it is visited.
+    DfgScope* primaryConstructorScope = nullptr;
+
+    if (d->primaryConstructor)
+    {
+        primaryConstructorScope = makeChildScope(DfgScope::Function);
+        PushScope ps{scopeStack, primaryConstructorScope};
+
+        for (AstLocal* param : d->primaryConstructor->args)
+        {
+            if (param->annotation)
+                visitType(param->annotation);
+
+            DefId def = defArena->freshCell(param, param->location);
+            graph.localDefs[param] = def;
+            primaryConstructorScope->bindings[param] = def;
+            captures[param].allVersions.push_back(def);
+        }
+
+        for (AstExpr* paramDefault : d->primaryConstructor->argsDefaults)
+            if (paramDefault)
+                visitExpr(paramDefault);
+    }
+
     for (const auto& member : d->members)
     {
         Luau::visit(
@@ -898,6 +926,16 @@ ControlFlow DataFlowGraphBuilder::visit(AstStatClass* d)
                 {
                     if (prop.ty)
                         visitType(prop.ty);
+                    if (prop.defaultValue)
+                    {
+                        if (primaryConstructorScope)
+                        {
+                            PushScope ps{scopeStack, primaryConstructorScope};
+                            visitExpr(prop.defaultValue);
+                        }
+                        else
+                            visitExpr(prop.defaultValue);
+                    }
                 },
                 [&](const AstClassMethod& method)
                 {

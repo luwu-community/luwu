@@ -313,6 +313,33 @@ struct TypeInstantiationConstraint
     std::vector<TypePackId> typePackArguments;
 };
 
+// LuauGenericNominals: a generic class can be instantiated (`Box<number>`) before its own members
+// have been solved. A reference to the class from inside its own body always is, and so is a
+// forward reference to a class declared later in the file. A member's type is still a BlockedType
+// at that point, and copying it into the instantiation shares it, so binding it later hands the
+// instantiation the *uninstantiated* member -- `Box<number>:get()` would return `T`. The
+// instantiation gets a fresh BlockedType for such a member instead, and this constraint fills that
+// in with the substituted member once the template's own member is known.
+struct InstantiateNominalPropConstraint
+{
+    // The member's type on the template class, blocked until the class body is solved.
+    TypeId templateProp;
+    // The BlockedType standing in for it on the instantiation, which this constraint binds.
+    TypeId target;
+
+    // The class being instantiated and the instantiation itself, so that a member mentioning the
+    // class (`self`, or a method returning `Box<T>`) lands on the instantiation rather than on a
+    // second copy of it.
+    TypeId templateType;
+    TypeId instantiatedType;
+
+    // The template's parameters paired positionally with the arguments the instantiation supplied.
+    std::vector<TypeId> typeParams;
+    std::vector<TypeId> typeArguments;
+    std::vector<TypePackId> typePackParams;
+    std::vector<TypePackId> typePackArguments;
+};
+
 struct PushTypeConstraint
 {
     TypeId expectedType;
@@ -343,7 +370,8 @@ using ConstraintV = Variant<
     SimplifyConstraint,
     PushFunctionTypeConstraint,
     PushTypeConstraint,
-    TypeInstantiationConstraint>;
+    TypeInstantiationConstraint,
+    InstantiateNominalPropConstraint>;
 
 struct Constraint
 {

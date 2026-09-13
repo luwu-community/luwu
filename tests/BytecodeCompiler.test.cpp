@@ -17,6 +17,7 @@ using namespace Luau;
 using namespace Luau::Bytecode;
 
 LUAU_FASTFLAG(LuauEmitCallFeedback)
+LUAU_FASTFLAG(LuauBetterUserDefinedClasses)
 
 namespace
 {
@@ -997,11 +998,12 @@ TEST_CASE_FIXTURE(BytecodeCompilerFixture, "classes_bytecode_roundtrips")
 {
 
     ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag better{FFlag::LuauBetterUserDefinedClasses, true};
 
     checkRoundtrip(R"(
         class Point
-            public x
-            public y
+            x
+            y
 
             function magnitude(self)
                 return math.sqrt(self.x * self.x + self.y * self.y)

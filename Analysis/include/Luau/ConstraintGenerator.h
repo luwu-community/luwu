@@ -71,6 +71,22 @@ struct ClassDeclRecord
 {
     TypeId ty = nullptr;
     DenseHashMap<AstName, TypeId> memberTypes{AstName{""}};
+    // The type of the class's constructor (the `__call` metamethod on the
+    // class value). Blocked until `__init`'s signature has been checked, if
+    // the class defines a custom `__init`; otherwise resolved eagerly to the
+    // default POD constructor's type.
+    TypeId ctorTy = nullptr;
+
+    // Luwu Classes (rfcx/classes.md): the `__init` a primary constructor implies. Blocked until the
+    // parameters' annotations have been resolved, alongside ctorTy. Null when the class has no
+    // primary constructor -- a POD class's `__init` is resolved eagerly, and an explicit one is a
+    // member like any other.
+    TypeId primaryInitTy = nullptr;
+
+    // The class's own generics (e.g. the `T` in `class Box<T> ... end`), under
+    // LuauGenericNominals. Empty for non-generic classes.
+    std::vector<GenericTypeDefinition> typeParams;
+    std::vector<GenericTypePackDefinition> typePackParams;
 };
 
 struct ConstraintGenerator
@@ -120,6 +136,7 @@ struct ConstraintGenerator
     // The private scope of an extern type declaration, used to resolve type references
     // (e.g. a generic method's own type parameters) within its body. See LuauExternTypeUseDefinitionScope.
     DenseHashMap<const AstStatDeclareExternType*, ScopePtr> astExternTypeDefiningScopes{nullptr};
+    DenseHashMap<const AstStatClass*, ScopePtr> astClassDefiningScopes{nullptr};
 
     NotNull<const DataFlowGraph> dfg;
     RefinementArena refinementArena;

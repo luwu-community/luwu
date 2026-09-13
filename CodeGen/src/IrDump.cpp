@@ -129,6 +129,8 @@ const char* getCmdName(IrCmd cmd)
         return "GET_HASH_NODE_ADDR";
     case IrCmd::GET_CLOSURE_UPVAL_ADDR:
         return "GET_CLOSURE_UPVAL_ADDR";
+    case IrCmd::LOAD_OWNER_CLASS:
+        return "LOAD_OWNER_CLASS";
     case IrCmd::STORE_TAG:
         return "STORE_TAG";
     case IrCmd::STORE_EXTRA:
@@ -307,6 +309,8 @@ const char* getCmdName(IrCmd cmd)
         return "STRING_LEN";
     case IrCmd::BUFFER_ISFROZEN:
         return "BUFFER_ISFROZEN";
+    case IrCmd::CLASS_ISINSTANCE:
+        return "CLASS_ISINSTANCE";
     case IrCmd::NEW_TABLE:
         return "NEW_TABLE";
     case IrCmd::DUP_TABLE:
@@ -387,6 +391,16 @@ const char* getCmdName(IrCmd cmd)
         return "CHECK_NODE_NO_NEXT";
     case IrCmd::CHECK_NODE_VALUE:
         return "CHECK_NODE_VALUE";
+    case IrCmd::CHECK_OBJECT_CLASS:
+        return "CHECK_OBJECT_CLASS";
+    case IrCmd::TRY_OBJECT_MEMBER_ADDR:
+        return "TRY_OBJECT_MEMBER_ADDR";
+    case IrCmd::OBJECT_MEMBER_ADDR:
+        return "OBJECT_MEMBER_ADDR";
+    case IrCmd::TRY_OBJECT_NAMECALL_ADDR:
+        return "TRY_OBJECT_NAMECALL_ADDR";
+    case IrCmd::TRY_CLASS_MEMBER_ADDR:
+        return "TRY_CLASS_MEMBER_ADDR";
     case IrCmd::CHECK_BUFFER_LEN:
         return "CHECK_BUFFER_LEN";
     case IrCmd::CHECK_BUFFER_MUTABLE:
@@ -449,6 +463,10 @@ const char* getCmdName(IrCmd cmd)
         return "FALLBACK_DUPCLOSURE";
     case IrCmd::FALLBACK_FORGPREP:
         return "FALLBACK_FORGPREP";
+    case IrCmd::FALLBACK_NEWOBJECT:
+        return "FALLBACK_NEWOBJECT";
+    case IrCmd::FALLBACK_NEWCLASSMEMBER:
+        return "FALLBACK_NEWCLASSMEMBER";
     case IrCmd::SUBSTITUTE:
         return "SUBSTITUTE";
     case IrCmd::MARK_USED:
@@ -875,6 +893,10 @@ const char* getBytecodeTypeName(uint8_t type, const char* const* userdataTypes)
         return "buffer";
     case LBC_TYPE_SYMNONE:
         return "none";
+    case LBC_TYPE_CLASS:
+        return "class";
+    case LBC_TYPE_OBJECT:
+        return "object";
     case LBC_TYPE_ANY:
         return "any";
     }

@@ -724,13 +724,13 @@ TEST_CASE_FIXTURE(NormalizeFixture, "negated_function_is_anything_except_a_funct
 {
     if (FFlag::LuauIntegerType2)
     {
-        CHECK("(boolean | buffer | integer | none | number | string | table | thread | userdata)?" == toString(normal(R"(
+        CHECK("(boolean | buffer | class | integer | none | number | object | string | table | thread | userdata | vector)?" == toString(normal(R"(
         Not<fun>
     )")));
     }
     else
     {
-        CHECK("(boolean | buffer | none | number | string | table | thread | userdata)?" == toString(normal(R"(
+        CHECK("(boolean | buffer | class | none | number | object | string | table | thread | userdata | vector)?" == toString(normal(R"(
         Not<fun>
     )")));
     }
@@ -758,13 +758,13 @@ TEST_CASE_FIXTURE(NormalizeFixture, "bare_negated_boolean")
 {
     if (FFlag::LuauIntegerType2)
     {
-        CHECK("(buffer | function | integer | none | number | string | table | thread | userdata)?" == toString(normal(R"(
+        CHECK("(buffer | class | function | integer | none | number | object | string | table | thread | userdata | vector)?" == toString(normal(R"(
             Not<boolean>
         )")));
     }
     else
     {
-        CHECK("(buffer | function | none | number | string | table | thread | userdata)?" == toString(normal(R"(
+        CHECK("(buffer | class | function | none | number | object | string | table | thread | userdata | vector)?" == toString(normal(R"(
             Not<boolean>
         )")));
     }
@@ -986,9 +986,9 @@ TEST_CASE_FIXTURE(NormalizeFixture, "negations_of_tables")
 {
     CHECK(nullptr == toNormalizedType("Not<{}>", !FFlag::DebugLuauForceOldSolver ? 1 : 0));
     if (FFlag::LuauIntegerType2)
-        CHECK("(boolean | buffer | function | integer | none | number | string | thread | userdata)?" == toString(normal("Not<tbl>")));
+        CHECK("(boolean | buffer | class | function | integer | none | number | object | string | thread | userdata | vector)?" == toString(normal("Not<tbl>")));
     else
-        CHECK("(boolean | buffer | function | none | number | string | thread | userdata)?" == toString(normal("Not<tbl>")));
+        CHECK("(boolean | buffer | class | function | none | number | object | string | thread | userdata | vector)?" == toString(normal("Not<tbl>")));
     CHECK("table" == toString(normal("Not<Not<tbl>>")));
 }
 
@@ -1211,7 +1211,7 @@ TEST_CASE_FIXTURE(NormalizeFixture, "intersection_of_table_and_truthy")
     // CLI-214308: This does not seem correct, we should be saying ...
     //
     //  (userdata & { x: number }) | { x: number }
-    CHECK("userdata | { x: number }" == toString(ty));
+    CHECK("class | object | userdata | vector | { x: number }" == toString(ty));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "normalizer_should_be_able_to_detect_cyclic_tables_and_not_stack_overflow")

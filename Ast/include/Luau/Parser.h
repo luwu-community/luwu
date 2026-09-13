@@ -190,9 +190,21 @@ private:
     AstStat* parseReturn();
 
     // type Name `=' Type
-    AstStat* parseTypeAlias(const Location& start, bool exported, Position typeKeywordPosition);
+    AstStat* parseTypeAlias(const Location& start, bool exported, Position typeKeywordPosition, const Location& typeKeywordLocation);
 
-    AstStat* parseClassStat(const Location& start, bool exported);
+    AstStat* parseClassStat(const Location& start, bool exported, const Location& classKeywordLocation);
+
+    // True when the class body is looking at something that reads as a statement rather than a class
+    // member, which means the class was never closed. See its definition.
+    bool classBodyLooksLikeStatement();
+
+    // Luwu Classes (rfcx/classes.md): parse a class's primary constructor parameter list, e.g. the
+    // `(name: string, age = 0)` of `class Cat(name: string, age = 0)`.
+    AstClassPrimaryConstructor* parseClassPrimaryConstructor(const std::optional<Location>& qualifierLocation, AstClassMemberVisibility visibility);
+
+    // Brings a primary constructor's parameters into scope, returning the offset to pass to
+    // restoreLocals once the expression that needed them has been parsed.
+    unsigned int pushClassPrimaryConstructorParams(AstClassPrimaryConstructor* primaryConstructor);
 
     // type function Name ... end
     AstStat* parseTypeFunction(const Location& start, bool exported, Position typeKeywordPosition);
@@ -229,7 +241,14 @@ private:
         const Name* localName,
         const AstArray<AstAttr*>& attributes,
         const bool isConst = false,
-        TempVector<CstAttrList*>* cstAttrLists = nullptr
+        TempVector<CstAttrList*>* cstAttrLists = nullptr,
+        // Used only for the closing 'end' indentation-mismatch diagnostic; defaults to
+        // `matchFunction` itself. Callers that need that diagnostic to report a different column
+        // than the true 'function' keyword (e.g. 'local function'/'const function' aligning it to
+        // 'local'/'const' instead) pass a separate lexeme here rather than mutating `matchFunction`,
+        // since `matchFunction.location` is also used as the real, unadjusted 'function' keyword
+        // location for the resulting AstExprFunction and its CST node.
+        const Lexeme* endMatchLexeme = nullptr
     );
 
     // explist ::= {exp `,'} exp
@@ -578,6 +597,7 @@ private:
     std::vector<AstTypeOrPack> scratchTypeOrPack;
     std::vector<AstDeclaredExternTypeProperty> scratchDeclaredClassProps;
     std::vector<AstClassMember> scratchClassDeclarations;
+    std::vector<AstClassPrimaryConstructorParamQualifiers> scratchClassParamQualifiers;
     std::vector<AstExprTable::Item> scratchItem;
     std::vector<CstExprTable::Item> scratchCstItem;
     std::vector<AstArgumentName> scratchArgName;

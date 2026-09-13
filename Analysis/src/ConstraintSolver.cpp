@@ -967,7 +967,7 @@ bool ConstraintSolver::tryDispatch(NotNull<const Constraint> constraint, bool fo
     else if (auto nc = get<NameConstraint>(*constraint))
         success = tryDispatch(*nc, constraint);
     else if (auto taec = get<TypeAliasExpansionConstraint>(*constraint))
-        success = tryDispatch(*taec, constraint);
+        success = tryDispatch(*taec, constraint, force);
     else if (auto fcc = get<FunctionCallConstraint>(*constraint))
         success = tryDispatch(*fcc, constraint, force);
     else if (auto fcc = get<FunctionCheckConstraint>(*constraint))
@@ -1000,6 +1000,8 @@ bool ConstraintSolver::tryDispatch(NotNull<const Constraint> constraint, bool fo
         success = tryDispatch(*esgc, constraint);
     else if (auto ptc = get<PushTypeConstraint>(*constraint))
         success = tryDispatch(*ptc, constraint, force);
+    else if (auto inpc = get<InstantiateNominalPropConstraint>(*constraint))
+        success = tryDispatch(*inpc, constraint, force);
     else
         LUAU_ASSERT(false);
 
@@ -1292,15 +1294,32 @@ bool ConstraintSolver::tryDispatch(const NameConstraint& c, NotNull<const Constr
     }
     else if (MetatableType* mtv = getMutable<MetatableType>(target))
         mtv->syntheticName = c.name;
-    else if (get<IntersectionType>(target) || get<UnionType>(target))
+    else if (UnionType* utv = getMutable<UnionType>(target))
     {
-        // nothing (yet)
+        if (c.synthetic && !utv->name)
+            utv->syntheticName = c.name;
+        else
+            utv->name = c.name;
+    }
+    else if (IntersectionType* itv = getMutable<IntersectionType>(target))
+    {
+        if (c.synthetic && !itv->name)
+            itv->syntheticName = c.name;
+        else
+            itv->name = c.name;
+    }
+    else if (FunctionType* ftv = getMutable<FunctionType>(target))
+    {
+        if (c.synthetic && !ftv->name)
+            ftv->syntheticName = c.name;
+        else
+            ftv->name = c.name;
     }
 
     return true;
 }
 
-bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNull<const Constraint> constraint)
+bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNull<const Constraint> constraint, bool force)
 {
     const PendingExpansionType* petv = get<PendingExpansionType>(follow(c.target));
     if (!petv)
@@ -1389,6 +1408,40 @@ bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNul
     {
         bindResult(tf->type);
         return true;
+    }
+
+    // A generic class can be reached here before its own body has been solved: a reference to the
+    // class from inside itself always is, and so is a forward reference to a class declared later
+    // in the file. Its members are still BlockedTypes then, and instantiating shares them rather
+    // than substituting them, so `Box<number>:get()` would come back returning `T`. Wait for the
+    // members instead. There is no cycle in this: the class's own annotations become
+    // PendingExpansionTypes at constraint-generation time, so a member can be solved without this
+    // expansion having run. If we are being force-dispatched there is nothing left to wait for, and
+    // the substitution below defers each still-blocked member individually.
+    if (FFlag::LuauGenericNominals && !force)
+    {
+        if (const ExternType* templateEtv = get<ExternType>(follow(tf->type)))
+        {
+            bool anyBlocked = false;
+
+            for (const auto& [_, prop] : templateEtv->props)
+            {
+                if (prop.readTy && isBlocked(follow(*prop.readTy)))
+                {
+                    block(follow(*prop.readTy), constraint);
+                    anyBlocked = true;
+                }
+
+                if (prop.writeTy && !prop.isShared() && isBlocked(follow(*prop.writeTy)))
+                {
+                    block(follow(*prop.writeTy), constraint);
+                    anyBlocked = true;
+                }
+            }
+
+            if (anyBlocked)
+                return false;
+        }
     }
 
     InstantiationSignature signature{
@@ -1483,6 +1536,63 @@ bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNul
             marker.root = target;
             marker.traverse(target);
             targetExternType->hasUnresolvedGenerics = marker.found;
+
+            // A class can be instantiated before its own body has been solved -- always so for a
+            // reference to the class from inside itself, and likewise for a forward reference to a
+            // class declared later on. Such a member is still a BlockedType here, and the
+            // substitution above copied it by reference, so binding it later would hand this
+            // instantiation the member *without* the type arguments applied. Stand a fresh blocked
+            // type in its place and substitute it once the template's member is known.
+            std::vector<TypeId> templateTypeParams;
+            templateTypeParams.reserve(tf->typeParams.size());
+            for (const GenericTypeDefinition& param : tf->typeParams)
+                templateTypeParams.push_back(param.ty);
+
+            std::vector<TypePackId> templateTypePackParams;
+            templateTypePackParams.reserve(tf->typePackParams.size());
+            for (const GenericTypePackDefinition& param : tf->typePackParams)
+                templateTypePackParams.push_back(param.tp);
+
+            // Structured bindings can't be captured by lambdas before C++20 (older clang rejects it).
+            const std::vector<TypeId>& typeArgumentsRef = typeArguments;
+            const std::vector<TypePackId>& packArgumentsRef = packArguments;
+
+            auto deferProp = [&](TypeId blockedProp)
+            {
+                TypeId placeholder = arena->addType(BlockedType{});
+                NotNull<Constraint> propConstraint = pushConstraint(
+                    constraint->scope,
+                    constraint->location,
+                    InstantiateNominalPropConstraint{
+                        blockedProp,
+                        placeholder,
+                        follow(tf->type),
+                        target,
+                        templateTypeParams,
+                        typeArgumentsRef,
+                        templateTypePackParams,
+                        packArgumentsRef
+                    }
+                );
+                getMutable<BlockedType>(placeholder)->setOwner(propConstraint);
+                return placeholder;
+            };
+
+            for (auto& [_, prop] : targetExternType->props)
+            {
+                const bool shared = prop.isShared();
+
+                if (prop.readTy && isBlocked(follow(*prop.readTy)))
+                {
+                    TypeId placeholder = deferProp(follow(*prop.readTy));
+                    prop.readTy = placeholder;
+                    if (shared)
+                        prop.writeTy = placeholder;
+                }
+
+                if (!shared && prop.writeTy && isBlocked(follow(*prop.writeTy)))
+                    prop.writeTy = deferProp(follow(*prop.writeTy));
+            }
         }
     }
 
@@ -1948,6 +2058,26 @@ bool ConstraintSolver::tryDispatch(const FunctionCheckConstraint& c, NotNull<con
 
     // FIXME: Bidirectional type checking of overloaded functions is not yet supported.
     const FunctionType* ftv = get<FunctionType>(fn);
+
+    // `fn` may not be a function directly but instead something callable via a `__call`
+    // metamethod (e.g. a class value being invoked as its own constructor: `Cat { ... }`).
+    // Unwrap that so bidirectional inference still pushes expected types into the arguments --
+    // see OverloadResolver::testFunctionOrCallMetamethod for the equivalent unwrapping done
+    // during actual call resolution.
+    bool viaCallMetamethod = false;
+    if (!ftv)
+    {
+        ErrorVec dummyErrors;
+        if (auto callMetamethod = findMetatableEntry(builtinTypes, dummyErrors, fn, "__call", constraint->location))
+        {
+            // The `__call` metamethod can itself be overloaded (an intersection); bidirectional
+            // inference doesn't support overloaded functions in general (see FIXME above), so we
+            // only handle the simple, non-overloaded case here.
+            ftv = get<FunctionType>(follow(*callMetamethod));
+            viaCallMetamethod = ftv != nullptr;
+        }
+    }
+
     if (!ftv)
         return true;
 
@@ -1979,17 +2109,25 @@ bool ConstraintSolver::tryDispatch(const FunctionCheckConstraint& c, NotNull<con
     // We don't attempt to perform bidirectional inference on the self type.
     const size_t typeOffset = c.callSite->self ? 1 : 0;
 
-    const std::vector<TypeId> expectedArgs = FFlag::LuauBidirectionalInferenceVariadics
-                                                 ? extendTypePack(*arena, builtinTypes, ftv->argTypes, c.callSite->args.size + typeOffset).head
-                                                 : flatten(ftv->argTypes).first;
+    // When calling through a `__call` metamethod, `ftv->argTypes` has an extra leading parameter
+    // for the callable value forwarded as its own "self" (see
+    // OverloadResolver::testFunctionOrCallMetamethod) that isn't present in `argsPack`/the AST
+    // call's arguments -- so skip it when indexing into `expectedArgs`, but not when indexing into
+    // `argPackHead` (which has no such extra entry).
+    const size_t expectedArgOffset = typeOffset + (viaCallMetamethod ? 1 : 0);
+
+    const std::vector<TypeId> expectedArgs =
+        FFlag::LuauBidirectionalInferenceVariadics
+            ? extendTypePack(*arena, builtinTypes, ftv->argTypes, c.callSite->args.size + expectedArgOffset).head
+            : flatten(ftv->argTypes).first;
     const std::vector<TypeId> argPackHead = flatten(argsPack).first;
 
     // TODO: Clip with LuauRemoveExtraSubtypingInstances
     Subtyping subtyping_DEPRECATED{builtinTypes, arena, normalizer, typeFunctionRuntime, NotNull{&iceReporter}};
 
-    for (size_t i = 0; i < c.callSite->args.size && i + typeOffset < expectedArgs.size() && i + typeOffset < argPackHead.size(); ++i)
+    for (size_t i = 0; i < c.callSite->args.size && i + expectedArgOffset < expectedArgs.size() && i + typeOffset < argPackHead.size(); ++i)
     {
-        TypeId expectedArgTy = follow(expectedArgs[i + typeOffset]);
+        TypeId expectedArgTy = follow(expectedArgs[i + expectedArgOffset]);
         AstExpr* expr = unwrapGroup(c.callSite->args.data[i]);
 
         PushTypeResult result = pushTypeInto(
@@ -3082,6 +3220,51 @@ bool ConstraintSolver::tryDispatch(const PushFunctionTypeConstraint& c, NotNull<
         (FFlag::LuauInstantiateFunctionTypeBeforePush || !ContainsAnyGeneric_DEPRECATED::hasAnyGeneric(expectedFn->retTypes)))
         bind(constraint, fn->retTypes, expectedFn->retTypes);
 
+    return true;
+}
+
+bool ConstraintSolver::tryDispatch(const InstantiateNominalPropConstraint& c, NotNull<const Constraint> constraint, bool force)
+{
+    LUAU_ASSERT(FFlag::LuauGenericNominals);
+
+    TypeId templateProp = follow(c.templateProp);
+
+    if (isBlocked(templateProp))
+    {
+        // A member that never resolves would keep this constraint alive forever, so on a forced
+        // dispatch stop waiting. There is nothing useful to substitute at that point.
+        if (!force)
+            return block(templateProp, constraint);
+
+        bind(constraint, c.target, builtinTypes->errorType);
+        return true;
+    }
+
+    ApplyTypeFunction applyTypeFunction{arena};
+
+    for (size_t i = 0; i < c.typeParams.size() && i < c.typeArguments.size(); ++i)
+        applyTypeFunction.typeArguments[c.typeParams[i]] = c.typeArguments[i];
+
+    for (size_t i = 0; i < c.typePackParams.size() && i < c.typePackArguments.size(); ++i)
+        applyTypeFunction.typePackArguments[c.typePackParams[i]] = c.typePackArguments[i];
+
+    // A member that mentions the class itself -- `self`, or a method returning `Box<T>` -- has to
+    // land on the instantiation we are filling in, not on a fresh copy of the template. Mapping the
+    // template onto the instantiation does that; `dontTraverseInto` keeps the substitution from
+    // then rewriting the instantiation's own children out from under us.
+    applyTypeFunction.typeArguments[follow(c.templateType)] = c.instantiatedType;
+    applyTypeFunction.dontTraverseInto(c.instantiatedType);
+
+    std::optional<TypeId> substituted = applyTypeFunction.substitute(templateProp);
+
+    if (!substituted)
+    {
+        reportError(CodeTooComplex{}, constraint->location);
+        bind(constraint, c.target, builtinTypes->errorType);
+        return true;
+    }
+
+    bind(constraint, c.target, *substituted);
     return true;
 }
 

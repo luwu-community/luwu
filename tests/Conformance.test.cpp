@@ -66,6 +66,7 @@ LUAU_FASTFLAG(LuauCodegenFixBufferLenCheck)
 LUAU_FASTFLAG(LuauYieldIter2)
 LUAU_FASTFLAG(LuauCustomYieldablePcalls)
 LUAU_FASTFLAG(DebugLuauUserDefinedClassesRuntime)
+LUAU_FASTFLAG(LuauBetterUserDefinedClasses)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportedClassIsNilWorkaround)
 LUAU_FASTFLAG(LuauAutoStack)
@@ -1482,6 +1483,35 @@ TEST_CASE("Pack")
 TEST_CASE("ExplicitTypeInstantiations")
 {
     runConformance("explicit_type_instantiations.luau");
+}
+
+// Stands in for a native plugin (a cdylib registered as an ordinary global) reading a member with the
+// C API. It is called *from* Luwu code, so the class access check has to look through its C frame to
+// the Lua closure driving the call rather than trusting the C frame -- see luaR_accessauthority.
+int pluginReadMember(lua_State* L)
+{
+    luaL_checkany(L, 1);
+    const char* field = luaL_checkstring(L, 2);
+
+    lua_getfield(L, 1, field);
+    return 1;
+}
+
+// The same read, performed on a freshly created thread so that no Lua frame is on the stack at the
+// moment of the access: the shape that otherwise looks exactly like the embedder calling in.
+int pluginReadMemberOnNewThread(lua_State* L)
+{
+    luaL_checkany(L, 1);
+    const char* field = luaL_checkstring(L, 2);
+
+    lua_State* T = lua_newthread(L);
+
+    lua_pushvalue(L, 1);
+    lua_xmove(L, T, 1);
+    lua_getfield(T, -1, field);
+    lua_xmove(T, L, 1);
+
+    return 1;
 }
 
 int singleYield(lua_State* L)
@@ -4487,20 +4517,92 @@ TEST_CASE("UserdataDirectAccess")
     );
 }
 
+TEST_CASE("ClassesExportHoistingRepro")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::DebugLuauUserDefinedClassesRuntime, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuauNonePrimitive, true},
+        {FFlag::LuauGenericNominals, true},
+        {FFlag::LuauExportValueSyntax, true},
+        {FFlag::LuauDefaultArguments, true},
+        {FFlag::LuauExportedClassIsNilWorkaround, true},
+    };
+
+    runConformance("classes_export_hoisting.luau");
+}
+
 TEST_CASE("Classes")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauUserDefinedClasses, true},
         {FFlag::DebugLuauUserDefinedClassesRuntime, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+        // a primary constructor's parameter defaults are function parameter defaults
+        {FFlag::LuauDefaultArguments, true},
+        {FFlag::LuauNonePrimitive, true},
+        {FFlag::LuauGenericNominals, true},
     };
 
-    runConformance("classes.luau");
+    runConformance(
+        "classes.luau",
+        [](lua_State* L)
+        {
+            // yielding C functions (via lua_yield with continuations) so classes.luau can verify that
+            // a class method calling a yielding C function still suspends/resumes correctly, including
+            // when that method is inlined -- see rfcx/classes.md
+            lua_pushcclosurek(L, singleYield, "singleYield", 0, singleYieldContinuation);
+            lua_setglobal(L, "singleYield");
+
+            lua_pushcclosurek(L, multipleYields, "multipleYields", 0, multipleYieldsContinuation);
+            lua_setglobal(L, "multipleYields");
+
+            // stand-ins for a native plugin trying to read a private member through the C API
+            lua_pushcfunction(L, pluginReadMember, "pluginReadMember");
+            lua_setglobal(L, "pluginReadMember");
+
+            lua_pushcfunction(L, pluginReadMemberOnNewThread, "pluginReadMemberOnNewThread");
+            lua_setglobal(L, "pluginReadMemberOnNewThread");
+        }
+    );
+}
+
+TEST_CASE("ClassesInlining")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::DebugLuauUserDefinedClassesRuntime, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    // Method inlining only runs at O2, and the conformance default is O1 -- at O1 every case in this
+    // file passes vacuously. See tests/conformance/classes_inlining.luau.
+    lua_CompileOptions copts = defaultOptions();
+    copts.optimizationLevel = 2;
+
+    runConformance("classes_inlining.luau", nullptr, nullptr, nullptr, &copts);
+}
+
+TEST_CASE("ClassesNativeCodegen")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::DebugLuauUserDefinedClassesRuntime, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    // Deliberately a separate, small file from classes.luau: that one is past codegen's total-IR
+    // instruction budget, so its protos are never natively compiled and it cannot exercise the
+    // lowering of the class opcodes at all. See tests/conformance/classes_ncg.luau.
+    runConformance("classes_ncg.luau");
 }
 
 TEST_CASE("ExportedClasses")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
         {FFlag::DebugLuauUserDefinedClassesRuntime, true},
         {FFlag::LuauExportValueSyntax, true},
         {FFlag::LuauExportedClassIsNilWorkaround, true},

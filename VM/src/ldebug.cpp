@@ -315,12 +315,46 @@ l_noret luaG_indexerror(lua_State* L, const TValue* p1, const TValue* p2)
         luaG_runerror(L, "attempt to index %s with %s", t1, t2);
 }
 
+// Luwu Classes (rfcx/classes.md): a name the value does not have. The RFC's glossary splits the two
+// halves of this: objects carry *fields*, while a class's namespace holds *members* -- its static
+// functions plus the field names its objects are laid out with. Neither is a table, so neither has
+// "keys". A class also gets pointed at the object case, because reaching for a field through the
+// class (`Cat.age`) is by far the most common way to land here.
 l_noret luaG_missingmembererror(lua_State* L, const TValue* p1, const TValue* p2)
 {
     if (!ttisstring(p2))
         luaG_runerrorL(L, "cannot index %s with a %s", luaT_objtypename(L, p1), luaT_objtypename(L, p2));
-    else
-        luaG_runerrorL(L, "this %s does not have a key named '%s'", luaT_objtypename(L, p1), getstr(tsvalue(p2)));
+
+    const char* key = getstr(tsvalue(p2));
+
+    if (ttisclass(p1))
+        luaG_runerrorL(
+            L,
+            "class '%s' does not have a member named '%s'; did you mean to access a field of an object of this class instead?",
+            getstr(classvalue(p1)->name),
+            key
+        );
+
+    if (ttisobject(p1))
+        luaG_runerrorL(L, "objects of class '%s' do not have a field named '%s'", getstr(objectvalue(p1)->lclass->name), key);
+
+    luaG_runerrorL(L, "this %s does not have a field named '%s'", luaT_objtypename(L, p1), key);
+}
+
+// Luwu Classes (rfcx/classes.md): `Cat.age` where `age` is one of Cat's *fields*. The class knows the
+// name perfectly well -- it lays its objects out with it -- so this deserves better than being told
+// the class has never heard of it.
+l_noret luaG_instancefieldonclasserror(lua_State* L, const TValue* p1, const TValue* p2)
+{
+    const char* className = getstr(classvalue(p1)->name);
+
+    luaG_runerrorL(
+        L,
+        "'%s' is a field of objects of class '%s', not a member of the class itself; did you mean to access it on an object of '%s' instead?",
+        getstr(tsvalue(p2)),
+        className,
+        className
+    );
 }
 
 l_noret luaG_methoderror(lua_State* L, const TValue* p1, const TString* p2)
@@ -333,6 +367,72 @@ l_noret luaG_methoderror(lua_State* L, const TValue* p1, const TString* p2)
 l_noret luaG_readonlyerror(lua_State* L)
 {
     luaG_runerror(L, "attempt to modify a readonly table");
+}
+
+l_noret luaG_privateaccesserror(lua_State* L, const TValue* p2, const TString* className)
+{
+    const char* t1 = getstr(className);
+    luaG_runerrorL(L, "'%s' is a private member of '%s', it cannot be accessed outside %s's class scope", getstr(tsvalue(p2)), t1, t1);
+}
+
+l_noret luaG_constassignerror(lua_State* L, const TValue* p2, const TString* className)
+{
+    const char* t1 = getstr(className);
+    luaG_runerrorL(L, "'%s' is a const member of '%s' and cannot be assigned outside %s's '__init' constructor", getstr(tsvalue(p2)), t1, t1);
+}
+
+// Luwu Classes (rfcx/classes.md): this is called when `self` (or the LHS) of a methodcall isn't 
+// actually an object of the class it's supposed to be.
+// 
+// `selfCall` means this function was called with `:` syntax. 
+// The only time `selfCall` is true is here is if we're in O2 and we've inlined a method body for a class that isn't `self`'s class.
+// This can be because `self` is annotated incorrectly or in the more common case that the wrong type of `self` was passed to a free function
+// that directly calls methods on `self`: 
+// const function push(list: List, first: string, last: string)
+//     list:push(first)
+//     list:push(last)
+// end
+// we'll try to inline `list:push` here but when called with a `self` of the wrong class (like a VecDeque maybe) that also has `:push`
+// we correctly namecall to `VecDeque:push` in O0 and O1 but would incorrectly inline `List`'s implementation of `:push` in O2.
+// I chose to error for this instead of simply jumping over the wrong instructions because it means we'd allow a lot of unused instructions
+// that only get jumped over, and the user's code is wrong in that they called a method with the wrong type...
+// If the user wants --!optimize 2 optimizations, they probably want to know that they have code that isn't getting those optimizations
+// due to an incorrect callsite or annotation. We can't say that the type annotation we used to inline the method was 'wrong' or 'lying'
+// or was an 'attempt to bypass private access' because it could've just as well been a simple mistake at a callsite that wants to use
+// --!optimize 2 inlining (or they're using a runtime that just enabled o2 by default and didn't even know this could happen).
+// Since Luwu is more okay with being stricter than Luau I felt this was a reasonable decision to catch incorrect code.
+l_noret luaG_selfclasserror(lua_State* L, const TValue* self, const LuauClass* expected, const TString* methodName, bool selfCall)
+{
+    // `expected` is NULL only if malformed bytecode put a LBC_SELFCLASS_OWNER-form CHECKSELFCLASS in
+    // a proto that is not a class method, so its Proto::ownerclass was never stamped. The check then
+    // fails (nothing compares equal to NULL) and lands here; name it rather than dereferencing NULL.
+    const char* expectedName = expected ? getstr(expected->name) : "?";
+    const char* method = getstr(methodName);
+
+    if (!ttisobject(self))
+    {
+        int specificIndexingSyntax = selfCall ? ':' : '.';
+        luaG_runerrorL(
+            L, "attempt to call method '%s%c%s' with 'self' of type '%s'", expectedName, specificIndexingSyntax, method, luaT_objtypename(L, self)
+        );
+    }
+
+    const char* actualName = getstr(objectvalue(self)->lclass->name);
+
+    if (selfCall)
+    {
+        luaG_runerrorL(
+            L,
+            "attempt to call inlined method '%s:%s' on an object of class '%s'; this occurred because inlining optimizations are enabled "
+            "and the passed 'self' did not match the expected type annotation '%s'",
+            expectedName,
+            method,
+            actualName,
+            expectedName
+        );
+    }
+
+    luaG_runerrorL(L, "attempt to call method '%s.%s' with 'self' of class '%s'", expectedName, method, actualName);
 }
 
 static void pusherror(lua_State* L, const char* msg)

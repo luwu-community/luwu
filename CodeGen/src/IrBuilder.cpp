@@ -109,6 +109,12 @@ static void buildArgumentTypeChecks(IrBuilder& build, IrOp entry)
         case LBC_TYPE_SYMNONE:
             build.inst(IrCmd::CHECK_TAG, load, build.constTag(LUA_TSYMNONE), build.vmExit(kVmExitEntryGuardPc));
             break;
+        case LBC_TYPE_CLASS:
+            build.inst(IrCmd::CHECK_TAG, load, build.constTag(LUA_TCLASS), build.vmExit(kVmExitEntryGuardPc));
+            break;
+        case LBC_TYPE_OBJECT:
+            build.inst(IrCmd::CHECK_TAG, load, build.constTag(LUA_TOBJECT), build.vmExit(kVmExitEntryGuardPc));
+            break;
         default:
             if (tag >= LBC_TYPE_TAGGED_USERDATA_BASE && tag < LBC_TYPE_TAGGED_USERDATA_END)
             {
@@ -675,10 +681,42 @@ void IrBuilder::translateInst(LuauOpcode op, const Instruction* pc, int i)
         inst(IrCmd::FALLBACK_FORGPREP, constUint(i), vmReg(LUAU_INSN_A(*pc)), loopStart);
         break;
     }
-    // We do not support classes in NCG at the moment, so if we see a class
-    // operation then unconditionally exit to the VM.
+    // Class declaration and construction have no machine code lowering yet, but neither can be a bare
+    // `JUMP vmExit`: such a jump carries no VM register operands, so nothing downstream knows which
+    // registers the interpreter will go on to read, and stores that are still needed get eliminated
+    // -- a numeric for loop's limit/step/index, say, sitting below these instructions' own operands
+    // and otherwise untouched by them. They run as ordinary C fallbacks instead, which also keeps the
+    // rest of the function native rather than abandoning it to the interpreter at the first
+    // construction. (CHECKSELFCLASS is lowered properly; see translateInstCheckSelfClass.)
     case LOP_NEWCLASSMEMBER:
-        inst(IrCmd::JUMP, vmExit(i));
+        inst(IrCmd::FALLBACK_NEWCLASSMEMBER, constUint(i), vmReg(LUAU_INSN_A(*pc)), vmReg(LUAU_INSN_C(*pc)));
+        break;
+
+    case LOP_NEWOBJECT:
+        inst(
+            IrCmd::FALLBACK_NEWOBJECT,
+            constUint(i),
+            vmReg(LUAU_INSN_A(*pc)),
+            vmReg(LUAU_INSN_B(*pc)),
+            constInt(LUAU_INSN_C(*pc)),
+            constInt(int(pc[1]))
+        );
+        break;
+
+    case LOP_GETOBJECTMEMBER:
+        translateInstGetObjectMember(*this, pc, i);
+        break;
+
+    case LOP_SETOBJECTMEMBER:
+        translateInstSetObjectMember(*this, pc, i);
+        break;
+
+    case LOP_CHECKSELFCLASS:
+        translateInstCheckSelfClass(*this, pc, i);
+        break;
+
+    case LOP_JUMPXISA:
+        translateInstJumpXIsa(*this, pc, i);
         break;
 
     case LOP_CMPPROTO:

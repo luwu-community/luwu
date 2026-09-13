@@ -21,6 +21,7 @@ LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(DebugLuauNoInline)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
+LUAU_FASTFLAG(LuauBetterUserDefinedClasses)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAG(LuauTrackPrefixLocal)
 LUAU_FASTFLAG(LuauDefaultArguments)
@@ -173,6 +174,55 @@ TEST_CASE_FIXTURE(Fixture, "local_with_annotation")
     REQUIRE_EQ(1, local->values.size);
 
     REQUIRE_EQ(stringAtLocation(code, l->location), "foo");
+}
+
+TEST_CASE_FIXTURE(Fixture, "local_keyword_location_is_populated_without_export")
+{
+    std::string code = "local x = 1";
+
+    AstStatBlock* block = parse(code);
+    AstStatLocal* local = block->body.data[0]->as<AstStatLocal>();
+    REQUIRE(local != nullptr);
+
+    REQUIRE(local->keywordLocation.has_value());
+    CHECK_EQ(stringAtLocation(code, *local->keywordLocation), "local");
+}
+
+TEST_CASE_FIXTURE(Fixture, "local_function_keyword_locations_on_same_line")
+{
+    // Regression test: matchFunction.location is patched in-place for diagnostics when 'local'
+    // and 'function' share a line, so functionLocation must be captured before that patch runs.
+    std::string code = "local function foo() end";
+
+    AstStatBlock* block = parse(code);
+    AstStatLocalFunction* fn = block->body.data[0]->as<AstStatLocalFunction>();
+    REQUIRE(fn != nullptr);
+
+    CHECK_EQ(stringAtLocation(code, fn->keywordLocation), "local");
+    CHECK_EQ(stringAtLocation(code, fn->functionLocation), "function");
+}
+
+TEST_CASE_FIXTURE(Fixture, "if_elseif_else_keyword_locations_cover_only_the_keyword")
+{
+    std::string code = R"(
+if a then
+    b()
+elseif c then
+    d()
+else
+    e()
+end
+    )";
+
+    AstStatBlock* block = parse(code);
+    AstStatIf* topIf = block->body.data[0]->as<AstStatIf>();
+    REQUIRE(topIf != nullptr);
+
+    CHECK_EQ(stringAtLocation(code, topIf->ifLocation), "if");
+
+    AstStatIf* elseifStat = topIf->elsebody->as<AstStatIf>();
+    REQUIRE(elseifStat != nullptr);
+    CHECK_EQ(stringAtLocation(code, elseifStat->ifLocation), "elseif");
 }
 
 TEST_CASE_FIXTURE(Fixture, "type_names_can_contain_dots")
@@ -3584,6 +3634,385 @@ TEST_CASE_FIXTURE(Fixture, "class_declaration")
     CHECK(global->name == first->name->name);
 }
 
+TEST_CASE_FIXTURE(Fixture, "class_all_public_members_can_omit_public_keyword")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    ParseResult result = tryParse(R"(
+        class Vector3
+            x: number
+            y: number
+            z: number
+        end
+    )");
+
+    REQUIRE(result.errors.empty());
+
+    const AstStatClass* cls = result.root->body.data[0]->as<AstStatClass>();
+    REQUIRE(cls);
+    REQUIRE(cls->members.size == 3);
+
+    for (const auto& member : cls->members)
+    {
+        auto prop = member.get_if<AstClassProperty>();
+        REQUIRE(prop);
+        CHECK(!prop->qualifierLocation.has_value());
+        CHECK(prop->visibility == AstClassMemberVisibility::Public);
+    }
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_without_LuauBetterUserDefinedClasses_still_requires_public_keyword")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, false},
+    };
+
+    ParseResult result = tryParse(R"(
+        class Vector3
+            x: number
+        end
+    )");
+
+    CHECK(!result.errors.empty());
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_private_member_requires_qualifiers_on_all_members")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    ParseResult result = tryParse(R"(
+        class Vector4
+            x: number
+            y: number
+            z: number
+            private w: number
+        end
+    )");
+
+    CHECK(!result.errors.empty());
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_private_member_with_all_qualifiers_present_parses_cleanly")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    ParseResult result = tryParse(R"(
+        class User
+            public first_name: string
+            public last_name: string
+            private ssn: string?
+
+            public function name(self): string
+                return self.first_name
+            end
+
+            private function get_ssn(self): string
+                return self.ssn
+            end
+        end
+    )");
+
+    REQUIRE(result.errors.empty());
+
+    const AstStatClass* cls = result.root->body.data[0]->as<AstStatClass>();
+    REQUIRE(cls);
+    REQUIRE(cls->members.size == 5);
+
+    auto ssn = cls->members.data[2].get_if<AstClassProperty>();
+    REQUIRE(ssn);
+    CHECK(ssn->name == "ssn");
+    CHECK(ssn->visibility == AstClassMemberVisibility::Private);
+
+    auto getSsn = cls->members.data[4].get_if<AstClassMethod>();
+    REQUIRE(getSsn);
+    CHECK(getSsn->functionName == "get_ssn");
+    CHECK(getSsn->visibility == AstClassMemberVisibility::Private);
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_const_property_after_qualifier")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    ParseResult result = tryParse(R"(
+        class Point2
+            public const x: number
+            private const y: number
+        end
+    )");
+
+    REQUIRE(result.errors.empty());
+
+    const AstStatClass* cls = result.root->body.data[0]->as<AstStatClass>();
+    REQUIRE(cls);
+    REQUIRE(cls->members.size == 2);
+
+    auto x = cls->members.data[0].get_if<AstClassProperty>();
+    REQUIRE(x);
+    CHECK(x->name == "x");
+    CHECK(x->visibility == AstClassMemberVisibility::Public);
+    CHECK(x->isConst);
+    REQUIRE(x->constLocation.has_value());
+
+    auto y = cls->members.data[1].get_if<AstClassProperty>();
+    REQUIRE(y);
+    CHECK(y->name == "y");
+    CHECK(y->visibility == AstClassMemberVisibility::Private);
+    CHECK(y->isConst);
+    REQUIRE(y->constLocation.has_value());
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_const_property_implicit_public")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    ParseResult result = tryParse(R"(
+        class Vector3
+            const x: number
+        end
+    )");
+
+    REQUIRE(result.errors.empty());
+
+    const AstStatClass* cls = result.root->body.data[0]->as<AstStatClass>();
+    REQUIRE(cls);
+    REQUIRE(cls->members.size == 1);
+
+    auto x = cls->members.data[0].get_if<AstClassProperty>();
+    REQUIRE(x);
+    CHECK(x->name == "x");
+    CHECK(!x->qualifierLocation.has_value());
+    CHECK(x->visibility == AstClassMemberVisibility::Public);
+    CHECK(x->isConst);
+    REQUIRE(x->constLocation.has_value());
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_const_property_without_qualifier_or_type")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    ParseResult result = tryParse(R"(
+        class Vector3
+            const x
+        end
+    )");
+
+    REQUIRE(result.errors.empty());
+
+    const AstStatClass* cls = result.root->body.data[0]->as<AstStatClass>();
+    REQUIRE(cls);
+    REQUIRE(cls->members.size == 1);
+
+    auto x = cls->members.data[0].get_if<AstClassProperty>();
+    REQUIRE(x);
+    CHECK(x->name == "x");
+    CHECK(x->isConst);
+    CHECK(x->ty == nullptr);
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_const_property_without_LuauBetterUserDefinedClasses_is_rejected")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, false},
+    };
+
+    ParseResult result = tryParse(R"(
+        class Vector3
+            public const x: number
+        end
+    )");
+
+    CHECK(!result.errors.empty());
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_property_default_value")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    ParseResult result = tryParse(R"(
+        class Cat
+            public const cat: string = "idk"
+            public age = 3
+        end
+    )");
+
+    REQUIRE(result.errors.empty());
+
+    const AstStatClass* cls = result.root->body.data[0]->as<AstStatClass>();
+    REQUIRE(cls);
+    REQUIRE(cls->members.size == 2);
+
+    auto cat = cls->members.data[0].get_if<AstClassProperty>();
+    REQUIRE(cat);
+    CHECK(cat->name == "cat");
+    CHECK(cat->visibility == AstClassMemberVisibility::Public);
+    CHECK(cat->isConst);
+    REQUIRE(cat->equalsLocation.has_value());
+    REQUIRE(cat->defaultValue);
+    auto catValue = cat->defaultValue->as<AstExprConstantString>();
+    REQUIRE(catValue);
+    CHECK(std::string(catValue->value.data, catValue->value.size) == "idk");
+
+    auto age = cls->members.data[1].get_if<AstClassProperty>();
+    REQUIRE(age);
+    CHECK(age->name == "age");
+    CHECK(age->qualifierLocation.has_value());
+    CHECK(age->ty == nullptr);
+    REQUIRE(age->equalsLocation.has_value());
+    REQUIRE(age->defaultValue);
+    auto ageValue = age->defaultValue->as<AstExprConstantNumber>();
+    REQUIRE(ageValue);
+    CHECK(ageValue->value == 3.0);
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_property_default_value_without_type_annotation")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    ParseResult result = tryParse(R"(
+        class Point
+            x = 0
+            y = 0
+        end
+    )");
+
+    REQUIRE(result.errors.empty());
+
+    const AstStatClass* cls = result.root->body.data[0]->as<AstStatClass>();
+    REQUIRE(cls);
+    REQUIRE(cls->members.size == 2);
+
+    auto x = cls->members.data[0].get_if<AstClassProperty>();
+    REQUIRE(x);
+    CHECK(x->ty == nullptr);
+    REQUIRE(x->defaultValue);
+    CHECK(x->defaultValue->as<AstExprConstantNumber>());
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_property_default_value_without_LuauBetterUserDefinedClasses_is_rejected")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, false},
+    };
+
+    ParseResult result = tryParse(R"(
+        class Vector3
+            public x: number = 0
+        end
+    )");
+
+    CHECK(!result.errors.empty());
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_const_before_qualifier_is_a_syntax_error")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    // `const` is only recognized after the `public`/`private` qualifier (or in front of a bare,
+    // implicitly-public name). Writing it the other way around is a dedicated syntax error rather
+    // than silently reinterpreting `public`/`private` as an ordinary property name.
+    ParseResult result = tryParse(R"(
+        class Vector3
+            const public x: number
+        end
+    )");
+
+    REQUIRE(result.errors.size() == 1);
+    CHECK(result.errors[0].getMessage() == "The 'const' modifier must come after the access specifier, e.g. 'public const'");
+
+    const AstStatClass* cls = result.root->body.data[0]->as<AstStatClass>();
+    REQUIRE(cls);
+    REQUIRE(cls->members.size == 1);
+
+    // Recovery: the misplaced `const` is skipped, so `public` is parsed normally as the
+    // qualifier for a single (non-const) `x` property.
+    auto x = cls->members.data[0].get_if<AstClassProperty>();
+    REQUIRE(x);
+    CHECK(x->name == "x");
+    CHECK(!x->isConst);
+    CHECK(x->qualifierLocation.has_value());
+    CHECK(x->visibility == AstClassMemberVisibility::Public);
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_const_before_private_qualifier_is_a_syntax_error")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    ParseResult result = tryParse(R"(
+        class Vector3
+            const private x: number
+        end
+    )");
+
+    REQUIRE(result.errors.size() == 1);
+    CHECK(result.errors[0].getMessage() == "The 'const' modifier must come after the access specifier, e.g. 'private const'");
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_const_does_not_apply_to_methods")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    ParseResult result = tryParse(R"(
+        class Vector3
+            const function foo(self) end
+        end
+    )");
+
+    CHECK(!result.errors.empty());
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_const_and_private_member_qualifier_ambiguity_check_still_applies")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    ParseResult result = tryParse(R"(
+        class Vector4
+            const x: number
+            private const y: number
+        end
+    )");
+
+    CHECK(!result.errors.empty());
+}
+
 TEST_CASE_FIXTURE(Fixture, "class_parse_errors")
 {
     tryParse(R"( class Hello )");
@@ -3648,7 +4077,10 @@ TEST_CASE_FIXTURE(Fixture, "class_public_function")
 
 TEST_CASE_FIXTURE(Fixture, "class_recovery_invalid_body_token")
 {
-    ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, false},
+    };
 
     ParseResult result = tryParse(R"(
 class Foo
@@ -3674,7 +4106,10 @@ end
 
 TEST_CASE_FIXTURE(Fixture, "class_recovery_public_no_name_and_invalid_body_token")
 {
-    ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, false},
+    };
 
     ParseResult result = tryParse(R"(
 class Foo
@@ -3748,6 +4183,441 @@ end
     CHECK_EQ(result.errors[2].getMessage(), R"(Duplicate class member '%error-id%')");
 }
 
+TEST_CASE_FIXTURE(Fixture, "class_primary_constructor")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+        // a parameter default is a function parameter default (see parseClassPrimaryConstructor)
+        {FFlag::LuauDefaultArguments, true},
+    };
+
+    ParseResult result = tryParse(R"(
+        class Cat(name: string, age = 3)
+        end
+    )");
+
+    REQUIRE(result.errors.empty());
+
+    const AstStatClass* cls = result.root->body.data[0]->as<AstStatClass>();
+    REQUIRE(cls);
+    REQUIRE(cls->primaryConstructor);
+    CHECK(cls->primaryConstructor->visibility == AstClassMemberVisibility::Public);
+    CHECK(!cls->primaryConstructor->qualifierLocation.has_value());
+
+    REQUIRE(cls->primaryConstructor->args.size == 2);
+    REQUIRE(cls->primaryConstructor->argsDefaults.size == 2);
+
+    CHECK(cls->primaryConstructor->args.data[0]->name == "name");
+    REQUIRE(cls->primaryConstructor->args.data[0]->annotation);
+    CHECK(cls->primaryConstructor->argsDefaults.data[0] == nullptr);
+
+    CHECK(cls->primaryConstructor->args.data[1]->name == "age");
+    CHECK(cls->primaryConstructor->args.data[1]->annotation == nullptr);
+    REQUIRE(cls->primaryConstructor->argsDefaults.data[1]);
+    CHECK(cls->primaryConstructor->argsDefaults.data[1]->as<AstExprConstantNumber>());
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_primary_constructor_with_no_parameters")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    // `class Counter()` is not the same as `class Counter`: the empty parameter list is what takes
+    // away the default table constructor (rfcx/classes.md), so it has to survive parsing.
+    ParseResult result = tryParse(R"(
+        class Counter()
+        end
+        class Tally
+        end
+    )");
+
+    REQUIRE(result.errors.empty());
+
+    const AstStatClass* counter = result.root->body.data[0]->as<AstStatClass>();
+    REQUIRE(counter);
+    REQUIRE(counter->primaryConstructor);
+    CHECK(counter->primaryConstructor->args.size == 0);
+
+    const AstStatClass* tally = result.root->body.data[1]->as<AstStatClass>();
+    REQUIRE(tally);
+    CHECK(tally->primaryConstructor == nullptr);
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_primary_constructor_private")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    ParseResult result = tryParse(R"(
+        class Account private (holder: string)
+        end
+        class Seal public (name: string)
+        end
+    )");
+
+    REQUIRE(result.errors.empty());
+
+    const AstStatClass* account = result.root->body.data[0]->as<AstStatClass>();
+    REQUIRE(account);
+    REQUIRE(account->primaryConstructor);
+    CHECK(account->primaryConstructor->visibility == AstClassMemberVisibility::Private);
+    CHECK(account->primaryConstructor->qualifierLocation.has_value());
+
+    const AstStatClass* seal = result.root->body.data[1]->as<AstStatClass>();
+    REQUIRE(seal);
+    REQUIRE(seal->primaryConstructor);
+    CHECK(seal->primaryConstructor->visibility == AstClassMemberVisibility::Public);
+    CHECK(seal->primaryConstructor->qualifierLocation.has_value());
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_primary_constructor_parameters_are_visible_to_field_initializers")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    ParseResult result = tryParse(R"(
+        class Card(public userid: number, hash: string)
+            private const hash = hash
+        end
+    )");
+
+    REQUIRE(result.errors.empty());
+
+    const AstStatClass* cls = result.root->body.data[0]->as<AstStatClass>();
+    REQUIRE(cls);
+    REQUIRE(cls->members.size == 1);
+
+    auto hash = cls->members.data[0].get_if<AstClassProperty>();
+    REQUIRE(hash);
+    REQUIRE(hash->defaultValue);
+
+    // the initializer's `hash` is the *parameter*, not a global and not the field
+    auto local = hash->defaultValue->as<AstExprLocal>();
+    REQUIRE(local);
+    CHECK(local->local == cls->primaryConstructor->args.data[1]);
+    // the parameter belongs to the synthesized `__init`, one function scope deeper than the class,
+    // so a field initializer referring to it is a local access rather than an upvalue capture
+    CHECK(!local->upvalue);
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_primary_constructor_parameters_are_not_visible_to_methods")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    ParseResult result = tryParse(R"(
+        class Symbol(name: string)
+            function describe(self)
+                return name
+            end
+        end
+    )");
+
+    REQUIRE(result.errors.empty());
+
+    const AstStatClass* cls = result.root->body.data[0]->as<AstStatClass>();
+    REQUIRE(cls);
+
+    auto describe = cls->members.data[0].get_if<AstClassMethod>();
+    REQUIRE(describe);
+    REQUIRE(describe->function->body->body.size == 1);
+
+    auto ret = describe->function->body->body.data[0]->as<AstStatReturn>();
+    REQUIRE(ret);
+    REQUIRE(ret->list.size == 1);
+    // parameters are only in scope for field initializers, so this is the global `name`
+    CHECK(ret->list.data[0]->as<AstExprGlobal>());
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_primary_constructor_rejects_explicit_init")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    matchParseError(
+        R"(
+class Cat(name: string, age: number)
+    function __init(self, name, age) end
+end
+        )",
+        "Cannot define an '__init' constructor because this class defines a primary constructor on line 2; remove the primary constructor to "
+        "define '__init' explicitly"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_primary_constructor_parses_qualifiers_on_parameters")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuauDefaultArguments, true},
+    };
+
+    // Kotlin-style: a parameter may carry the access specifier and `const` modifier of the field it
+    // declares, instead of restating the field in the class body (rfcx/classes.md).
+    AstStatBlock* block = parse(R"(
+class SshKey private (
+    public const public_key: string,
+    private const private_key: string
+)
+end
+class Frame(const name: string, size = 1)
+end
+    )");
+
+    REQUIRE(block);
+    REQUIRE(block->body.size == 2);
+
+    AstStatClass* sshKey = block->body.data[0]->as<AstStatClass>();
+    REQUIRE(sshKey);
+    REQUIRE(sshKey->primaryConstructor);
+    CHECK(sshKey->primaryConstructor->visibility == AstClassMemberVisibility::Private);
+    REQUIRE(sshKey->primaryConstructor->argsQualifiers.size == 2);
+
+    CHECK(sshKey->primaryConstructor->argsQualifiers.data[0].visibility == AstClassMemberVisibility::Public);
+    CHECK(sshKey->primaryConstructor->argsQualifiers.data[0].qualifierLocation.has_value());
+    CHECK(sshKey->primaryConstructor->argsQualifiers.data[0].isConst);
+
+    CHECK(sshKey->primaryConstructor->argsQualifiers.data[1].visibility == AstClassMemberVisibility::Private);
+    CHECK(sshKey->primaryConstructor->argsQualifiers.data[1].qualifierLocation.has_value());
+    CHECK(sshKey->primaryConstructor->argsQualifiers.data[1].isConst);
+
+    AstStatClass* frame = block->body.data[1]->as<AstStatClass>();
+    REQUIRE(frame);
+    REQUIRE(frame->primaryConstructor);
+    REQUIRE(frame->primaryConstructor->argsQualifiers.size == 2);
+
+    // `const` with no access specifier leaves the field public, and does not make the class one that
+    // requires access specifiers everywhere
+    CHECK(!frame->primaryConstructor->argsQualifiers.data[0].qualifierLocation.has_value());
+    CHECK(frame->primaryConstructor->argsQualifiers.data[0].isConst);
+    CHECK(!frame->primaryConstructor->argsQualifiers.data[1].isConst);
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_primary_constructor_qualified_parameters_require_qualifiers_everywhere")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    matchParseError(
+        R"(
+class Box(
+    public size: vector,
+    cat
+) end
+        )",
+        "Qualify this class field parameter as 'public' or 'private' to prevent ambiguity"
+    );
+
+    // a qualified parameter makes the *body* require qualifiers too
+    matchParseError(
+        R"(
+class Box(public size: vector)
+    cat
+end
+        )",
+        "This class mixes explicit and implicit 'public'; put the 'public' or 'private' keyword in front of this field to prevent ambiguity"
+    );
+
+    // ... and the parameter list is where the body's qualifiers reach, so a parameter qualified in
+    // neither place is reported by position
+    matchParseError(
+        R"(
+class Rectangle(position: vector, size: vector, id: number?)
+    private id
+    public size
+end
+        )",
+        "Field 'position' at position 1 of class field parameters must be explicitly marked as 'public' or 'private' in the class parameter list "
+        "or the class body"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_body_may_not_contradict_qualified_parameters")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuauDefaultArguments, true},
+    };
+
+    matchParseError(
+        R"(
+class TextBox(
+    public name: string,
+    public text: string
+)
+    private text
+    private name
+end
+        )",
+        "Field 'text' was explicitly marked as public on line 4, cannot reassign it as private"
+    );
+
+    matchParseError(
+        R"(
+class TextBox(
+    public name: string,
+    private frame: Frame
+)
+    public frame
+    public name
+end
+        )",
+        "Field 'frame' was explicitly marked as private on line 4, cannot reassign it as public"
+    );
+
+    matchParseError(
+        R"(
+class NonNegative(const inner: number)
+    inner = math.max(0, inner)
+end
+        )",
+        "Field 'inner' was explicitly marked as const on line 2, cannot reassign it as mutable"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_may_not_mix_explicit_and_implicit_public")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    matchParseError(
+        R"(
+class Coord
+    public x: number
+    y: number
+end
+        )",
+        "This class mixes explicit and implicit 'public'; remove 'public' or add 'public' or 'private' to all other members to prevent ambiguity"
+    );
+
+    matchParseError(
+        R"(
+class Vector4
+    x: number
+    y: number
+    private w: number
+end
+        )",
+        "This class contains non-public members; put the 'public' or 'private' keyword in front of this field to prevent ambiguity"
+    );
+
+    // a `private` primary constructor is not a member qualifier: it does not force the rest of the
+    // class to qualify itself (rfcx/classes.md)
+    AstStatBlock* block = parse(R"(
+class PositiveNumber private (const inner: number)
+    function new(n: number) return PositiveNumber(n) end
+end
+    )");
+    REQUIRE(block);
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_primary_constructor_rejects_duplicate_parameters")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    matchParseError(
+        R"(
+class Point(x: number, x: number)
+end
+        )",
+        "Duplicate primary constructor parameter 'x'"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_primary_constructor_parameter_collides_with_method")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    // a parameter declares a field of the same name, so a method may not reuse it -- but a *property*
+    // of the same name may, since that is how access specifiers get applied to a parameter's field
+    matchParseError(
+        R"(
+class Symbol(name: string)
+    function name(self) end
+end
+        )",
+        "Duplicate class member 'name'"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_primary_constructor_rejects_trailing_comma")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    matchParseError(
+        R"(
+class Cat(name: string, age: number,)
+end
+        )",
+        "A class's primary constructor cannot have a trailing comma"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_missing_end_is_reported_as_such")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    // A class body and a statement list overlap (`const t0 = os.clock()` is valid as either), so a
+    // class missing its `end` used to swallow everything after it and then report a pile of nonsense
+    // at whatever token finally failed to parse as a member.
+    ParseResult result = tryParse(R"(
+class Pod
+
+const t0 = os.clock()
+print(t0)
+    )");
+
+    REQUIRE(result.errors.size() == 1);
+    CHECK_EQ(result.errors[0].getMessage(), "Expected 'end' (to close 'class' at line 2), got 'print'");
+    // the statement the class was never going to contain is handed back to the enclosing block
+    CHECK_EQ(result.errors[0].getLocation().begin.line, 4);
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_primary_constructor_rejects_variadic")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    matchParseError(
+        R"(
+class Args(first: string, ...)
+end
+        )",
+        "A class's primary constructor cannot be variadic"
+    );
+}
+
 TEST_CASE_FIXTURE(Fixture, "overlapping_property_and_method_names")
 {
     ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
@@ -3793,7 +4663,10 @@ TEST_CASE_FIXTURE(Fixture, "class_method_missing_end_error")
 
 TEST_CASE_FIXTURE(Fixture, "classes_can_only_have_functions_and_properties")
 {
-    ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuauBetterUserDefinedClasses, false},
+    };
 
     matchParseError(
         R"(
@@ -3803,7 +4676,7 @@ TEST_CASE_FIXTURE(Fixture, "classes_can_only_have_functions_and_properties")
             end
         end
     )",
-        "Only class properties and functions can be declared within a class"
+        "Only class fields and functions can be declared within a class"
     );
 }
 
@@ -3841,7 +4714,7 @@ TEST_CASE_FIXTURE(Fixture, "disallow_double_underscore_properties")
             public __add: any
         end
     )",
-        "Class properties cannot start with '__'"
+        "Class fields cannot start with '__'"
     );
 }
 
@@ -3865,16 +4738,17 @@ TEST_CASE_FIXTURE(Fixture, "allowed_metamethods_still_work")
 TEST_CASE_FIXTURE(Fixture, "classes_can_interleave_methods_and_properties")
 {
     ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag better{FFlag::LuauBetterUserDefinedClasses, true};
 
     ParseResult res = tryParse(R"(
         class Student
-            public name: string
+            name: string
 
             function getname(self): string
                 return self.name:upper()
             end
 
-            public year: number
+            year: number
 
             function getyear(self): number
                 assert(self.year >= 1900 and self.year < 2100)
@@ -3912,12 +4786,13 @@ TEST_CASE_FIXTURE(Fixture, "classes_can_interleave_methods_and_properties")
 TEST_CASE_FIXTURE(Fixture, "large_classes_example")
 {
     ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag better{FFlag::LuauBetterUserDefinedClasses, true};
 
     ParseResult result = tryParse(R"(
         class PlayerStats
-            public name: string
-            public health: number
-            public level: number
+            name: string
+            health: number
+            level: number
 
             -- Static 'Constructor'
             function new(name: string)
@@ -6045,7 +6920,7 @@ return {
 
 TEST_CASE_FIXTURE(Fixture, "export_value_parse_failures")
 {
-    ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}, {FFlag::DebugLuauUserDefinedClasses, true}};
+    ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}, {FFlag::DebugLuauUserDefinedClasses, true}, {FFlag::LuauBetterUserDefinedClasses, true}};
 
     auto expectParseError = [&](const std::string& source)
     {
@@ -6104,7 +6979,7 @@ export local answer = 42
     matchParseError(
         R"(
 export class Player
-    public health: number
+    health: number
 
     function setHealth(self, health: number)
         self.health = health

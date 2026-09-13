@@ -53,6 +53,13 @@ public:
         int32_t className;
         std::vector<int32_t> propertyNames;
         std::vector<int32_t> methodNames;
+        // Parallel to propertyNames/methodNames; LUAU_CLASSMEMBER_* bits (see VM/src/lclass.h) for
+        // each member, in the same order (properties first, then methods).
+        std::vector<uint8_t> propertyFlags;
+        std::vector<uint8_t> methodFlags;
+        // Parallel to propertyNames: for a member flagged LBC_CLASSMEMBER_CONSTDEFAULT, the proto
+        // constant index of its default value; -1 for every other member.
+        std::vector<int32_t> propertyDefaults;
     };
 
     BytecodeBuilder(BytecodeEncoder* encoder = 0);

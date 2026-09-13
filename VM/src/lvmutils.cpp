@@ -132,6 +132,13 @@ void luaV_gettable(lua_State* L, const TValue* t, TValue* key, StkId val)
                 luaG_missingmembererror(L, t, key);
 
             const uint32_t offset = uint32_t(nvalue(offsettval));
+            if (LUAU_UNLIKELY(inst->lclass->hasprivatemembers))
+            {
+                Closure* cl = nullptr;
+                if (isLua(L->ci))
+                    cl = clvalue(L->ci->func);
+                luaR_checkprivateaccessfast(L, key, inst->lclass, cl, offset);
+            }
             setobj2s(L, val, luaR_lookupmemberatoffset(inst, offset));
             return;
         }
@@ -159,7 +166,15 @@ void luaV_gettable(lua_State* L, const TValue* t, TValue* key, StkId val)
             //  local _ = Box.item
             //
             if (offset < lco->numberofinstancemembers)
-                luaG_missingmembererror(L, t, key);
+                luaG_instancefieldonclasserror(L, t, key);
+
+            if (LUAU_UNLIKELY(lco->hasprivatemembers))
+            {
+                Closure* cl = nullptr;
+                if (isLua(L->ci))
+                    cl = clvalue(L->ci->func);
+                luaR_checkprivateaccessfast(L, key, lco, cl, offset);
+            }
 
             setobj2s(L, val, &lco->staticmembers[offset - lco->numberofinstancemembers]);
             return;
@@ -217,6 +232,16 @@ void luaV_settable(lua_State* L, const TValue* t, TValue* key, StkId val)
             LUAU_ASSERT(offsetnum < inst->lclass->numberofallmembers);
             if (offsetnum >= inst->lclass->numberofinstancemembers)
                 luaG_indexerror(L, t, key);
+            if (LUAU_UNLIKELY((inst->lclass->hasprivatemembers || inst->lclass->hasconstmembers)))
+            {
+                Closure* cl = nullptr;
+                if (isLua(L->ci))
+                    cl = clvalue(L->ci->func);
+                if (inst->lclass->hasprivatemembers)
+                    luaR_checkprivateaccessfast(L, key, inst->lclass, cl, offsetnum);
+                if (inst->lclass->hasconstmembers)
+                    luaR_checkconstassignfast(L, key, inst->lclass, cl, offsetnum);
+            }
             setobj2class(L, &inst->members[offsetnum], val);
             luaC_barrier(L, inst, val);
             return;

@@ -14,6 +14,7 @@ LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
 LUAU_FASTFLAG(LuauTableEntriesDontNeedToMatchIndent)
 LUAU_FASTFLAG(LuauCstAttr)
 LUAU_FASTFLAG(LuauDefaultArguments)
+LUAU_FASTFLAG(LuauBetterUserDefinedClasses)
 
 using namespace Luau;
 
@@ -2133,11 +2134,12 @@ TEST_CASE("fuzzer_class")
 TEST_CASE("simple_class_example")
 {
     ScopedFastFlag fflag{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag better{FFlag::LuauBetterUserDefinedClasses, true};
 
     std::string code = R"(
 class Point
-    public x: number
-    public y: number
+    x: number
+    y: number
     function length(self)
         return 100
     end
@@ -2152,17 +2154,18 @@ end
 TEST_CASE("remixed_simple_class")
 {
     ScopedFastFlag fflag{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag better{FFlag::LuauBetterUserDefinedClasses, true};
 
     std::string code = R"(
 class Point
     function length(self)
         return 100
     end
-    public x
+    x
     function new(): Point
         return Point { x = 0, y = 0 }
     end
-    public y
+    y
 end
     )";
     CHECK_EQ(code, prettyPrint(code, {}, true).code);

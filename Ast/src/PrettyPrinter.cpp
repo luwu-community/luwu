@@ -1391,14 +1391,64 @@ struct Printer
             writer.advance(c->name->location.begin);
             writer.identifier(c->name->name.value);
 
+            // Luwu Classes (rfcx/classes.md): the primary constructor's parameter list has to be
+            // reproduced even when it is empty -- `class Counter()` and `class Counter` differ, the
+            // former having no default table constructor.
+            if (const AstClassPrimaryConstructor* primaryConstructor = c->primaryConstructor)
+            {
+                if (primaryConstructor->qualifierLocation)
+                {
+                    writer.advance(primaryConstructor->qualifierLocation->begin);
+                    writer.keyword(primaryConstructor->visibility == AstClassMemberVisibility::Private ? "private" : "public");
+                }
+
+                writer.advance(primaryConstructor->argLocation.begin);
+                writer.symbol("(");
+
+                CommaSeparatorInserter comma(writer);
+
+                for (size_t i = 0; i < primaryConstructor->args.size; ++i)
+                {
+                    AstLocal* arg = primaryConstructor->args.data[i];
+
+                    comma();
+
+                    advance(arg->location.begin);
+                    writer.identifier(arg->name.value);
+
+                    if (writeTypes && arg->annotation)
+                    {
+                        writer.symbol(":");
+                        visualizeTypeAnnotation(*arg->annotation);
+                    }
+
+                    if (AstExpr* defaultValue = primaryConstructor->argsDefaults.data[i])
+                    {
+                        writer.maybeSpace(defaultValue->location.begin, 2);
+                        writer.symbol("=");
+                        visualize(*defaultValue);
+                    }
+                }
+
+                writer.symbol(")");
+            }
+
             for (const auto& member : c->members)
             {
                 visit(
                     overloaded{
                         [&](const AstClassProperty& prop)
                         {
-                            writer.advance(prop.qualifierLocation.begin);
-                            writer.keyword("public");
+                            if (prop.qualifierLocation)
+                            {
+                                writer.advance(prop.qualifierLocation->begin);
+                                writer.keyword(prop.visibility == AstClassMemberVisibility::Private ? "private" : "public");
+                            }
+                            if (prop.constLocation)
+                            {
+                                writer.advance(prop.constLocation->begin);
+                                writer.keyword("const");
+                            }
                             writer.advance(prop.nameLocation.begin);
                             writer.identifier(prop.name.value);
                             if (writeTypes && prop.ty)
@@ -1414,7 +1464,7 @@ struct Printer
                             if (method.qualifierLocation)
                             {
                                 writer.advance(method.qualifierLocation->begin);
-                                writer.keyword("public");
+                                writer.keyword(method.visibility == AstClassMemberVisibility::Private ? "private" : "public");
                             }
                             writer.advance(method.keywordLocation.begin);
                             writer.keyword("function");

@@ -28,6 +28,22 @@ struct MagicRequire final : MagicFunction
     bool infer(const MagicFunctionCallContext& context) override;
 };
 
+// Overrides `class.fields`'s declared `({ [string]: unknown }, boolean)` return with the precise
+// per-field type map (and a literal `complete` boolean) when the argument is a known class or
+// object type. Exposed here (rather than kept file-local in BuiltinDefinitions.cpp) so fixtures
+// that load their own class library declarations, like ClassesFixture in
+// tests/TypeInfer.classes.test.cpp, can attach it too.
+struct MagicClassFields final : MagicFunction
+{
+    std::optional<WithPredicate<TypePackId>> handleOldSolver(
+        struct TypeChecker&,
+        const std::shared_ptr<struct Scope>&,
+        const class AstExprCall&,
+        WithPredicate<TypePackId>
+    ) override;
+    bool infer(const MagicFunctionCallContext& context) override;
+};
+
 void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeCheckForAutocomplete = false);
 TypeId makeUnion(TypeArena& arena, std::vector<TypeId>&& types);
 TypeId makeIntersection(TypeArena& arena, std::vector<TypeId>&& types);

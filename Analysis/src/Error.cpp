@@ -92,6 +92,28 @@ static const std::unordered_map<std::string, const char*> kUnaryOps{{"unm", "-"}
 // putting a type function in this list indicates that it is expected to _always_ reduce
 static const std::unordered_set<std::string> kUnreachableTypeFunctions{"refine", "singleton", "union", "intersect", "and", "or"};
 
+// An ExternType is only "external" when the embedder handed it to us. A Luwu class value is rooted
+// at `class` and one of its instances at `object` (rfcx/classes.md), and those are the words the
+// language itself uses -- `typeof` on an instance answers "object" -- so name the type after its
+// hierarchy root rather than telling someone that `Dog` is an external type.
+static const char* externTypeNoun(TypeId t)
+{
+    const ExternType* etv = get<ExternType>(t);
+    if (!etv || !etv->root)
+        return "external type";
+
+    const ExternType* rootEtv = get<ExternType>(follow(*etv->root));
+    if (!rootEtv)
+        return "external type";
+
+    if (rootEtv->name == "class")
+        return "class";
+    if (rootEtv->name == "object")
+        return "object";
+
+    return "external type";
+}
+
 struct ErrorConverter
 {
     FileResolver* fileResolver = nullptr;
@@ -107,6 +129,13 @@ struct ErrorConverter
         {
             return "'" + s + "'";
         };
+
+        // Normally this preamble just reads "Expected this to be"; when the mismatch reasoning
+        // was entirely about one specific, recognizable aspect of the type (e.g. a function's
+        // return type, or its arguments), a more specific phrase reads a lot more naturally,
+        // e.g. "Expected this function to return" instead of forcing the reader to infer that
+        // context from a wordy explanation below.
+        std::string preamble = tm.contextVerb ? ("Expected " + *tm.contextVerb) : "Expected this to be";
 
         auto constructErrorMessage = [&](std::string givenType,
                                          std::string wantedType,
@@ -131,8 +160,8 @@ struct ErrorConverter
             }
 
             if (givenType.length() <= luauIndentTypeMismatchMaxTypeLength || wantedType.length() <= luauIndentTypeMismatchMaxTypeLength)
-                return "Expected this to be " + wanted + ", but got " + given;
-            return "Expected this to be\n\t" + wanted + "\nbut got\n\t" + given;
+                return preamble + " " + wanted + ", but got " + given;
+            return preamble + "\n\t" + wanted + "\nbut got\n\t" + given;
         };
 
         if (givenTypeName == wantedTypeName)
@@ -196,7 +225,7 @@ struct ErrorConverter
         if (get<TableType>(t))
             return "Key '" + e.key + "' not found in table '" + Luau::toString(t) + "'";
         else if (get<ExternType>(t))
-            return "Key '" + e.key + "' not found in external type '" + Luau::toString(t) + "'";
+            return "Key '" + e.key + "' not found in " + externTypeNoun(t) + " '" + Luau::toString(t) + "'";
         else
             return "Type '" + Luau::toString(e.table) + "' does not have key '" + e.key + "'";
     }
@@ -368,7 +397,7 @@ struct ErrorConverter
 
         TypeId t = follow(e.table);
         if (get<ExternType>(t))
-            s += "external type";
+            s += externTypeNoun(t);
         else
             s += "table";
 
@@ -556,7 +585,7 @@ struct ErrorConverter
             s += "'" + e.properties[i] + "'";
         }
 
-        s += afterFieldList + " found in type '" + toString(e.subType) + "' from expected type '" + toString(e.superType) + "'";
+        s += afterFieldList + " found in type\n  '" + toString(e.subType) + "'\nexpected type:\n  '" + toString(e.superType) + "'";
 
         return s;
     }
@@ -834,6 +863,36 @@ struct ErrorConverter
 
         LUAU_UNREACHABLE();
         return "<Invalid PropertyAccessViolation>";
+    }
+
+    std::string operator()(const PrivatePropertyAccess& e) const
+    {
+        const std::string member = "'" + e.key + "' of class '" + e.className + "' is private; ";
+        if (e.isFunction)
+            return "Function " + member + "calling it here will raise a runtime error";
+        return "Field " + member + "accessing it here will raise a runtime error";
+    }
+
+    std::string operator()(const ConstPropertyAssignment& e) const
+    {
+        return "Field '" + e.key + "' of class '" + e.className + "' is constant; assigning to it outside of '__init' will raise a runtime error";
+    }
+
+    std::string operator()(const UnusableClass& e) const
+    {
+        return "This class cannot be used because it only has private fields";
+    }
+
+    std::string operator()(const PrivateConstructorAccess& e) const
+    {
+        return "This class's constructor is private; call a factory function instead of calling the constructor directly";
+    }
+
+    std::string operator()(const UninitializableClassField& e) const
+    {
+        return "Field '" + e.key +
+               "' will always be initialized to `nil` but is not marked as optional; consider providing a default field value, adding a class "
+               "parameter of the same name, or marking the field as optional with `?`";
     }
 
     std::string operator()(const CheckedFunctionIncorrectArgs& e) const
@@ -1125,6 +1184,31 @@ bool UnknownProperty::operator==(const UnknownProperty& rhs) const
 bool PropertyAccessViolation::operator==(const PropertyAccessViolation& rhs) const
 {
     return *table == *rhs.table && key == rhs.key && context == rhs.context;
+}
+
+bool PrivatePropertyAccess::operator==(const PrivatePropertyAccess& rhs) const
+{
+    return *table == *rhs.table && key == rhs.key && isFunction == rhs.isFunction && className == rhs.className;
+}
+
+bool ConstPropertyAssignment::operator==(const ConstPropertyAssignment& rhs) const
+{
+    return *table == *rhs.table && key == rhs.key && className == rhs.className;
+}
+
+bool UninitializableClassField::operator==(const UninitializableClassField& rhs) const
+{
+    return classTy == rhs.classTy && key == rhs.key;
+}
+
+bool UnusableClass::operator==(const UnusableClass& rhs) const
+{
+    return classTy == rhs.classTy;
+}
+
+bool PrivateConstructorAccess::operator==(const PrivateConstructorAccess& rhs) const
+{
+    return *classTy == *rhs.classTy;
 }
 
 bool NotATable::operator==(const NotATable& rhs) const
@@ -1670,6 +1754,16 @@ void copyError(T& e, TypeArena& destArena, CloneState& cloneState)
     }
     else if constexpr (std::is_same_v<T, PropertyAccessViolation>)
         e.table = clone(e.table);
+    else if constexpr (std::is_same_v<T, PrivatePropertyAccess>)
+        e.table = clone(e.table);
+    else if constexpr (std::is_same_v<T, ConstPropertyAssignment>)
+        e.table = clone(e.table);
+    else if constexpr (std::is_same_v<T, PrivateConstructorAccess>)
+        e.classTy = clone(e.classTy);
+    else if constexpr (std::is_same_v<T, UninitializableClassField>)
+        e.classTy = clone(e.classTy);
+    else if constexpr (std::is_same_v<T, UnusableClass>)
+        e.classTy = clone(e.classTy);
     else if constexpr (std::is_same_v<T, CheckedFunctionIncorrectArgs>)
     {
     }

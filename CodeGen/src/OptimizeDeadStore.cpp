@@ -63,6 +63,9 @@ static bool isUnsafeToSink(IrCmd cmd)
     // Branch operand targets a fallback block: can't appear in an exit sync sequence
     case IrCmd::TRY_NUM_TO_INDEX:
     case IrCmd::TRY_CALL_FASTGETTM:
+    case IrCmd::TRY_OBJECT_MEMBER_ADDR:
+    case IrCmd::TRY_CLASS_MEMBER_ADDR:
+    case IrCmd::TRY_OBJECT_NAMECALL_ADDR:
         return true;
     default:
         return false;
@@ -1172,6 +1175,11 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
     case IrCmd::TRY_CALL_FASTGETTM:
         state.checkLiveIns(OP_C(inst), index, true);
         break;
+    case IrCmd::TRY_OBJECT_MEMBER_ADDR:
+    case IrCmd::TRY_CLASS_MEMBER_ADDR:
+    case IrCmd::TRY_OBJECT_NAMECALL_ADDR:
+        state.checkLiveIns(OP_D(inst), index, true);
+        break;
     case IrCmd::CHECK_FASTCALL_RES:
         state.checkLiveIns(OP_B(inst), index, true);
         break;
@@ -1204,6 +1212,9 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
     case IrCmd::CHECK_NODE_VALUE:
     case IrCmd::CHECK_BUFFER_MUTABLE:
         state.checkLiveIns(OP_B(inst), index, true);
+        break;
+    case IrCmd::CHECK_OBJECT_CLASS:
+        state.checkLiveIns(OP_C(inst), index, true);
         break;
     case IrCmd::CHECK_BUFFER_LEN:
         state.checkLiveIns(OP_F(inst), index, true);
@@ -1266,6 +1277,8 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
     case IrCmd::FALLBACK_NAMECALL:
     case IrCmd::FALLBACK_DUPCLOSURE:
     case IrCmd::FALLBACK_FORGPREP:
+    case IrCmd::FALLBACK_NEWOBJECT:
+    case IrCmd::FALLBACK_NEWCLASSMEMBER:
         if (state.hasGcoToClear)
             state.flushGcoRegs();
 
@@ -1309,6 +1322,8 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
     case IrCmd::FALLBACK_NAMECALL:
     case IrCmd::FALLBACK_DUPCLOSURE:
     case IrCmd::FALLBACK_FORGPREP:
+    case IrCmd::FALLBACK_NEWOBJECT:
+    case IrCmd::FALLBACK_NEWCLASSMEMBER:
         // CALL directly executes a Luau function on the same native stack frame
     case IrCmd::CALL:
         // These instructions use lowering that is not aware of register allocator and demand no active values to exist
