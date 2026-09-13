@@ -92,6 +92,28 @@ static const std::unordered_map<std::string, const char*> kUnaryOps{{"unm", "-"}
 // putting a type function in this list indicates that it is expected to _always_ reduce
 static const std::unordered_set<std::string> kUnreachableTypeFunctions{"refine", "singleton", "union", "intersect", "and", "or"};
 
+// An ExternType is only "external" when the embedder handed it to us. A Luwu class value is rooted
+// at `class` and one of its instances at `object` (rfcx/classes.md), and those are the words the
+// language itself uses -- `typeof` on an instance answers "object" -- so name the type after its
+// hierarchy root rather than telling someone that `Dog` is an external type.
+static const char* externTypeNoun(TypeId t)
+{
+    const ExternType* etv = get<ExternType>(t);
+    if (!etv || !etv->root)
+        return "external type";
+
+    const ExternType* rootEtv = get<ExternType>(follow(*etv->root));
+    if (!rootEtv)
+        return "external type";
+
+    if (rootEtv->name == "class")
+        return "class";
+    if (rootEtv->name == "object")
+        return "object";
+
+    return "external type";
+}
+
 struct ErrorConverter
 {
     FileResolver* fileResolver = nullptr;
@@ -203,7 +225,7 @@ struct ErrorConverter
         if (get<TableType>(t))
             return "Key '" + e.key + "' not found in table '" + Luau::toString(t) + "'";
         else if (get<ExternType>(t))
-            return "Key '" + e.key + "' not found in external type '" + Luau::toString(t) + "'";
+            return "Key '" + e.key + "' not found in " + externTypeNoun(t) + " '" + Luau::toString(t) + "'";
         else
             return "Type '" + Luau::toString(e.table) + "' does not have key '" + e.key + "'";
     }
@@ -375,7 +397,7 @@ struct ErrorConverter
 
         TypeId t = follow(e.table);
         if (get<ExternType>(t))
-            s += "external type";
+            s += externTypeNoun(t);
         else
             s += "table";
 
@@ -845,14 +867,20 @@ struct ErrorConverter
 
     std::string operator()(const PrivatePropertyAccess& e) const
     {
-        const std::string stringKey = isIdentifier(e.key) ? e.key : "\"" + e.key + "\"";
-        return "Property " + stringKey + " is private; accessing it here will result in a runtime error";
+        const std::string member = "'" + e.key + "' of class '" + e.className + "' is private; ";
+        if (e.isFunction)
+            return "Function " + member + "calling it here will raise a runtime error";
+        return "Field " + member + "accessing it here will raise a runtime error";
     }
 
     std::string operator()(const ConstPropertyAssignment& e) const
     {
-        const std::string stringKey = isIdentifier(e.key) ? e.key : "\"" + e.key + "\"";
-        return "Property " + stringKey + " is constant and may only be assigned to from within the class's '__init' constructor";
+        return "Field '" + e.key + "' of class '" + e.className + "' is constant; assigning to it outside of '__init' will raise a runtime error";
+    }
+
+    std::string operator()(const UnusableClass& e) const
+    {
+        return "This class cannot be used because it only has private fields";
     }
 
     std::string operator()(const PrivateConstructorAccess& e) const
@@ -862,9 +890,8 @@ struct ErrorConverter
 
     std::string operator()(const UninitializableClassField& e) const
     {
-        const std::string stringKey = isIdentifier(e.key) ? e.key : "\"" + e.key + "\"";
-        return "Field " + stringKey +
-               " will always be initialized to `nil` but is not marked as optional; consider providing a default field value, adding a class "
+        return "Field '" + e.key +
+               "' will always be initialized to `nil` but is not marked as optional; consider providing a default field value, adding a class "
                "parameter of the same name, or marking the field as optional with `?`";
     }
 
@@ -1161,17 +1188,22 @@ bool PropertyAccessViolation::operator==(const PropertyAccessViolation& rhs) con
 
 bool PrivatePropertyAccess::operator==(const PrivatePropertyAccess& rhs) const
 {
-    return *table == *rhs.table && key == rhs.key;
+    return *table == *rhs.table && key == rhs.key && isFunction == rhs.isFunction && className == rhs.className;
 }
 
 bool ConstPropertyAssignment::operator==(const ConstPropertyAssignment& rhs) const
 {
-    return *table == *rhs.table && key == rhs.key;
+    return *table == *rhs.table && key == rhs.key && className == rhs.className;
 }
 
 bool UninitializableClassField::operator==(const UninitializableClassField& rhs) const
 {
     return classTy == rhs.classTy && key == rhs.key;
+}
+
+bool UnusableClass::operator==(const UnusableClass& rhs) const
+{
+    return classTy == rhs.classTy;
 }
 
 bool PrivateConstructorAccess::operator==(const PrivateConstructorAccess& rhs) const
@@ -1729,6 +1761,8 @@ void copyError(T& e, TypeArena& destArena, CloneState& cloneState)
     else if constexpr (std::is_same_v<T, PrivateConstructorAccess>)
         e.classTy = clone(e.classTy);
     else if constexpr (std::is_same_v<T, UninitializableClassField>)
+        e.classTy = clone(e.classTy);
+    else if constexpr (std::is_same_v<T, UnusableClass>)
         e.classTy = clone(e.classTy);
     else if constexpr (std::is_same_v<T, CheckedFunctionIncorrectArgs>)
     {

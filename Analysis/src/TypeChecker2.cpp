@@ -1426,6 +1426,60 @@ void TypeChecker2::visit(AstStatClass* stat)
         }
     }
 
+    // A class whose fields are all private and which has no functions can be constructed, but nothing
+    // can ever read or write what it holds: only the class's own functions may touch a private field,
+    // and there are none (rfcx/classes.md).
+    if (FFlag::LuauBetterUserDefinedClasses)
+    {
+        size_t fieldCount = 0;
+        bool hasPublicField = false;
+        bool hasFunction = false;
+
+        for (const AstClassMember& member : stat->members)
+        {
+            if (const AstClassProperty* prop = member.get_if<AstClassProperty>())
+            {
+                ++fieldCount;
+                hasPublicField |= prop->visibility == AstClassMemberVisibility::Public;
+            }
+            else
+                hasFunction = true;
+        }
+
+        // a primary constructor parameter declares a field too, unless the class body restates it, in
+        // which case the restatement was already counted above
+        if (const AstClassPrimaryConstructor* primaryConstructor = stat->primaryConstructor)
+        {
+            for (size_t i = 0; i < primaryConstructor->args.size; ++i)
+            {
+                AstName paramName = primaryConstructor->args.data[i]->name;
+
+                bool restated = false;
+                for (const AstClassMember& member : stat->members)
+                {
+                    const AstClassProperty* prop = member.get_if<AstClassProperty>();
+                    if (prop && prop->name == paramName)
+                        restated = true;
+                }
+
+                if (restated)
+                    continue;
+
+                ++fieldCount;
+
+                // a parameter that isn't restated declares a public field
+                hasPublicField = true;
+            }
+        }
+
+        if (fieldCount > 0 && !hasPublicField && !hasFunction)
+        {
+            NotNull<Scope> scope{findInnermostScope(stat->location)};
+            if (std::optional<TypeFun> classTypeFun = scope->lookupType(stat->name->name.value))
+                reportError(UnusableClass{classTypeFun->type}, stat->name->location);
+        }
+    }
+
     for (const auto& member : stat->members)
     {
         if (const auto* prop = member.get_if<AstClassProperty>())
@@ -2084,8 +2138,10 @@ void TypeChecker2::checkPrivatePropertyAccess(TypeId tableTy, const std::string&
         auto it = cls->props.find(prop);
         if (it != cls->props.end())
         {
+            // a class's functions are its only read-only members; its fields are always read-write,
+            // even `const` ones (see ConstraintGenerator)
             if (it->second.isPrivate && !(cls->definitionLocation && cls->definitionLocation->encloses(location)))
-                reportError(PrivatePropertyAccess{tableTy, prop}, location);
+                reportError(PrivatePropertyAccess{tableTy, prop, it->second.isReadOnly(), cls->name}, location);
             return;
         }
 
@@ -2108,7 +2164,7 @@ void TypeChecker2::checkConstPropertyAssignment(TypeId tableTy, const std::strin
         if (it != cls->props.end())
         {
             if (it->second.isConst && !(cls->initLocation && cls->initLocation->encloses(location)))
-                reportError(ConstPropertyAssignment{tableTy, prop}, location);
+                reportError(ConstPropertyAssignment{tableTy, prop, cls->name}, location);
             return;
         }
 
@@ -3406,9 +3462,43 @@ Reasonings TypeChecker2::explainReasonings_(TID subTy, TID superTy, Location loc
         if (superLeafAsString.empty())
             superLeafAsString = "()";
 
+        // When the only thing wrong is that the given type might be `nil`, the subtyping test fails
+        // on the `nil` member of a union, and naming that member ("`nil` is not a subtype of
+        // `number`") makes the reader work backwards to figure out which type it came out of. Name
+        // the optional type they actually wrote instead, and say what is wrong with it.
+        std::optional<std::string> optionalSubLeaf;
+        if (subLeafTy && superLeafTy && isNil(*subLeafTy) && !isNil(*superLeafTy))
+        {
+            TypePath::Path enclosingPath = reasoning.subPath;
+            if (!enclosingPath.components.empty() && get_if<TypePath::Index>(&enclosingPath.components.back()))
+            {
+                enclosingPath.components.pop_back();
+
+                if (std::optional<TypeOrPack> optEnclosing = traverse(subTy, enclosingPath, builtinTypes, subtyping->arena))
+                {
+                    if (auto enclosingTy = get<TypeId>(*optEnclosing); enclosingTy && isOptional(*enclosingTy))
+                    {
+                        optionalSubLeaf = toString(*enclosingTy);
+                        subLeafAsString = *optionalSubLeaf;
+                    }
+                }
+            }
+        }
+
         std::stringstream baseReasonBuilder;
-        baseReasonBuilder << "`" << subLeafAsString << "` is not " << relation << " `" << superLeafAsString << "`";
+        if (optionalSubLeaf)
+            baseReasonBuilder << "`" << subLeafAsString << "` could be `nil`";
+        else
+            baseReasonBuilder << "`" << subLeafAsString << "` is not " << relation << " `" << superLeafAsString << "`";
         std::string baseReason = baseReasonBuilder.str();
+
+        // The same comparison as `baseReason`, phrased to follow a narrated path ("accessing `n`
+        // results in ...").
+        std::string subLeafNotSuper = optionalSubLeaf ? ("`" + subLeafAsString + "`, which could be `nil`")
+                                                      : ("`" + subLeafAsString + "`, which is not " + relation + " `" + superLeafAsString + "`");
+        std::string superLeafAndSubNot = optionalSubLeaf
+                                             ? ("`" + superLeafAsString + "`, and `" + subLeafAsString + "` could be `nil`")
+                                             : ("`" + superLeafAsString + "`, and `" + subLeafAsString + "` is not " + relation + " it");
 
         std::stringstream reason;
 
@@ -3480,17 +3570,14 @@ Reasonings TypeChecker2::explainReasonings_(TID subTy, TID superTy, Location loc
         // printing both paths in full repeats that lead-in verbatim, which reads as a confusing
         // double explanation. Describe only the more specific (longer) path in that case.
         else if (!subNarration.empty() && !superNarration.empty() && isPrefixPath(superNarration, subNarration))
-            reason << toStringHuman(subNarration) << "`" << subLeafAsString << "`, which is not " << relation << " `" << superLeafAsString
-                   << "`";
+            reason << toStringHuman(subNarration) << subLeafNotSuper;
         else if (!subNarration.empty() && !superNarration.empty() && isPrefixPath(subNarration, superNarration))
-            reason << toStringHuman(superNarration) << "`" << superLeafAsString << "`, and `" << subLeafAsString << "` is not " << relation
-                   << " it";
+            reason << toStringHuman(superNarration) << superLeafAndSubNot;
         else if (!subNarration.empty() && !superNarration.empty())
             reason << toStringHuman(subNarration) << "`" << subLeafAsString << "` and " << toStringHuman(superNarration) << "`"
                    << superLeafAsString << "`, and " << baseReason;
         else if (!subNarration.empty())
-            reason << toStringHuman(subNarration) << "`" << subLeafAsString << "`, which is not " << relation << " `" << superLeafAsString
-                   << "`";
+            reason << toStringHuman(subNarration) << subLeafNotSuper;
         else
             reason << toStringHuman(superNarration) << "`" << superLeafAsString << "`, and " << baseReason;
 

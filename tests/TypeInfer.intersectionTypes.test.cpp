@@ -588,9 +588,10 @@ TEST_CASE_FIXTURE(Fixture, "intersect_saturate_overloaded_functions")
             "Expected this to be\n"
             "	'(number) -> number'\n"
             "but got\n"
-            "	'((number?) -> number?) & ((string?) -> string?)';\n"
-            "this is because\n"
-            "	 * it returns `nil` in the latter type and `number` in the former type, and `nil` is not a subtype of `number`\n"
+            "	'((number?) -> number?) & ((string?) -> string?)'; \n"
+            "this is because \n"
+            "	 * it returns `number?` in the latter type and `number` in the former type, and `number?` could be `nil`\n"
+            "	 * it returns `string?` in the latter type and `number` in the former type, and `string?` could be `nil`\n"
             "	 * it returns `string` in the latter type and `number` in the former type, and `string` is not a subtype of `number`\n"
             "	 * it takes `string?` in the latter type and `number` in the former type, and `string?` is not a supertype of `number`"
         ;

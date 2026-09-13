@@ -512,6 +512,9 @@ end
     auto err = get<ConstPropertyAssignment>(result.errors[0]);
     REQUIRE(err);
     CHECK_EQ("name", err->key);
+    CHECK_EQ(
+        "Field 'name' of class 'Thingy' is constant; assigning to it outside of '__init' will raise a runtime error", toString(result.errors[0])
+    );
 }
 
 TEST_CASE_FIXTURE(ClassesFixture, "class_const_property_cannot_be_assigned_from_outside_the_class")
@@ -535,6 +538,9 @@ t.name = "bye"
     auto err = get<ConstPropertyAssignment>(result.errors[0]);
     REQUIRE(err);
     CHECK_EQ("name", err->key);
+    CHECK_EQ(
+        "Field 'name' of class 'Thingy' is constant; assigning to it outside of '__init' will raise a runtime error", toString(result.errors[0])
+    );
 }
 
 TEST_CASE_FIXTURE(ClassesFixture, "class_non_const_property_can_be_assigned_anywhere")
@@ -1234,6 +1240,101 @@ TEST_CASE_FIXTURE(ClassesFixture, "field_that_can_never_be_initialized")
     auto err = get<UninitializableClassField>(result.errors[0]);
     REQUIRE(err);
     CHECK_EQ("top", err->key);
+    CHECK_EQ(
+        "Field 'top' will always be initialized to `nil` but is not marked as optional; consider providing a default field value, adding a "
+        "class parameter of the same name, or marking the field as optional with `?`",
+        toString(result.errors[0])
+    );
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_with_only_private_fields_and_no_functions_is_unusable")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuauDefaultArguments, true},
+    };
+
+    auto result = check(R"(
+        class UseMe
+            private please: string
+            private uses: number
+        end
+
+        class Card(hash: string)
+            private const hash
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    for (const TypeError& err : result.errors)
+        CHECK(get<UnusableClass>(err));
+    CHECK_EQ("This class cannot be used because it only has private fields", toString(result.errors[0]));
+    CHECK_EQ(1, result.errors[0].location.begin.line);
+    CHECK_EQ(6, result.errors[1].location.begin.line);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_with_private_fields_is_usable_through_a_function_or_a_public_field")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuauDefaultArguments, true},
+    };
+
+    LUAU_REQUIRE_NO_ERRORS(check(R"(
+        class Empty end
+
+        class WithFunction
+            private please: string
+            public function get(self): string
+                return self.please
+            end
+        end
+
+        class WithMetamethod
+            private please: string
+            public function __tostring(self): string
+                return self.please
+            end
+        end
+
+        class WithPublicField
+            private please: string
+            public uses: number
+        end
+    )"));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "private_member_access_error_names_fields_and_functions")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauBetterUserDefinedClasses, true},
+    };
+
+    auto result = check(R"(
+        class User
+            private ssn: string
+            public function new(ssn: string): User
+                return User { ssn = ssn }
+            end
+            private function terminate(self) end
+        end
+
+        local user = User.new("126-222-1123")
+        local leaked = user.ssn
+        user:terminate()
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+
+    auto field = get<PrivatePropertyAccess>(result.errors[0]);
+    REQUIRE(field);
+    CHECK_FALSE(field->isFunction);
+    CHECK_EQ("Field 'ssn' of class 'User' is private; accessing it here will raise a runtime error", toString(result.errors[0]));
+
+    auto function = get<PrivatePropertyAccess>(result.errors[1]);
+    REQUIRE(function);
+    CHECK(function->isFunction);
+    CHECK_EQ("Function 'terminate' of class 'User' is private; calling it here will raise a runtime error", toString(result.errors[1]));
 }
 
 TEST_CASE_FIXTURE(ClassesFixture, "field_that_can_never_be_initialized_is_fine_when_optional")
@@ -1375,7 +1476,106 @@ TEST_CASE_FIXTURE(ClassesFixture, "bare_restatement_with_a_compatible_annotation
         class Cat(name: string, age: number)
             private const name: string
             private age: number | string
+
+            public function getName(self): string
+                return self.name
+            end
         end
+    )"));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "missing_key_error_names_the_class_or_object_not_an_external_type")
+{
+    CheckResult result = check(R"(
+        class Dog
+            public name: string
+        end
+
+        local d = Dog { name = "rex" }
+        local a = d.age
+        local b = Dog.age
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ("Key 'age' not found in object 'Dog'", toString(result.errors[0]));
+    CHECK_EQ("Key 'age' not found in class 'Dog'", toString(result.errors[1]));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "generic_class_instantiated_from_inside_its_own_body")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuauGenericNominals, true},
+    };
+
+    // `Box<number>` here is resolved while `Box`'s own members are still unsolved, so the
+    // instantiation has to wait for them rather than sharing them uninstantiated.
+    LUAU_REQUIRE_NO_ERRORS(check(R"(
+class Box<T>
+    public value: T
+    public function makenum(v: number): Box<number>
+        return Box { value = v }
+    end
+    public function get(self): T
+        return self.value
+    end
+end
+
+local b = Box.makenum(1)
+local n: number = b:get()
+    )"));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "generic_class_instantiated_by_a_forward_reference")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuauGenericNominals, true},
+    };
+
+    // Same as above, but the unsolved class is a different one, declared further down the file.
+    LUAU_REQUIRE_NO_ERRORS(check(R"(
+class Box<T>
+    public value: T
+    public function mk(v: number): Other<number>
+        return Other { v = v }
+    end
+end
+
+class Other<U>
+    public v: U
+    public function get(self): U
+        return self.v
+    end
+end
+
+local o = Box.mk(1)
+local n: number = o:get()
+    )"));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "generic_class_instantiated_through_a_static_method_generic")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuauGenericNominals, true},
+    };
+
+    // `Box<N>` is resolved inside the body and then instantiated again at the call site, so both
+    // substitutions have to land on the members.
+    LUAU_REQUIRE_NO_ERRORS(check(R"(
+class Box<T>
+    public value: T
+    public function with<N>(v: N): Box<N>
+        return Box { value = v }
+    end
+    public function get(self): T
+        return self.value
+    end
+end
+
+local b = Box.with<<number>>(1)
+local n: number = b:get()
     )"));
 }
 

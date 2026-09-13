@@ -2480,6 +2480,9 @@ std::string toString(const Constraint& constraint, ToStringOptions& opts)
                    "), (typePackArguments = " + dump(c.typePackArguments) + ")";
         else if constexpr (std::is_same_v<T, PushTypeConstraint>)
             return "push_type " + tos(c.expectedType) + " => " + tos(c.targetType);
+        else if constexpr (std::is_same_v<T, InstantiateNominalPropConstraint>)
+            return "instantiate_nominal_prop " + tos(c.templateProp) + " of " + tos(c.templateType) + " => " + tos(c.target) + " of " +
+                   tos(c.instantiatedType);
         else
             static_assert(always_false_v<T>, "Non-exhaustive constraint switch");
     };

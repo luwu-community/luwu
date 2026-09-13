@@ -415,6 +415,10 @@ struct PrivatePropertyAccess
 {
     TypeId table;
     Name key;
+    // the member is one of the class's functions rather than one of its fields
+    bool isFunction = false;
+    // the class that declares the member, which may be an ancestor of `table`'s class
+    Name className;
 
     bool operator==(const PrivatePropertyAccess& rhs) const;
 };
@@ -440,6 +444,16 @@ struct UninitializableClassField
     bool operator==(const UninitializableClassField& rhs) const;
 };
 
+// A class whose fields are all `private` and which has no functions: it can be constructed, but no
+// code can ever read or write what it holds (see FFlag::DebugLuauUserDefinedClasses,
+// FFlag::LuauBetterUserDefinedClasses).
+struct UnusableClass
+{
+    TypeId classTy;
+
+    bool operator==(const UnusableClass& rhs) const;
+};
+
 struct PropertyAccessViolation
 {
     TypeId table;
@@ -460,6 +474,8 @@ struct ConstPropertyAssignment
 {
     TypeId table;
     Name key;
+    // the class that declares the field, which may be an ancestor of `table`'s class
+    Name className;
 
     bool operator==(const ConstPropertyAssignment& rhs) const;
 };
@@ -688,6 +704,7 @@ using TypeErrorData = Variant<
     ConstPropertyAssignment,
     PrivateConstructorAccess,
     UninitializableClassField,
+    UnusableClass,
     TypesAreUnrelated,
     NormalizationTooComplex,
     TypePackMismatch,

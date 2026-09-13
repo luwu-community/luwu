@@ -217,13 +217,14 @@ public:
     bool tryDispatch(const GeneralizationConstraint& c, NotNull<const Constraint> constraint);
     bool tryDispatch(const IterableConstraint& c, NotNull<const Constraint> constraint, bool force);
     bool tryDispatch(const NameConstraint& c, NotNull<const Constraint> constraint);
-    bool tryDispatch(const TypeAliasExpansionConstraint& c, NotNull<const Constraint> constraint);
+    bool tryDispatch(const TypeAliasExpansionConstraint& c, NotNull<const Constraint> constraint, bool force);
     bool tryDispatch(const FunctionCallConstraint& c, NotNull<const Constraint> constraint, bool force);
     bool tryDispatch(const FunctionCheckConstraint& c, NotNull<const Constraint> constraint, bool force);
     // Clip with LuauRemovePrimitiveTypeConstraint
     bool DEPRECATED_tryDispatch(const DEPRECATED_PrimitiveTypeConstraint& c, NotNull<const Constraint> constraint);
     bool tryDispatch(const HasPropConstraint& c, NotNull<const Constraint> constraint);
     bool tryDispatch(const TypeInstantiationConstraint& c, NotNull<const Constraint> constraint);
+    bool tryDispatch(const InstantiateNominalPropConstraint& c, NotNull<const Constraint> constraint, bool force);
 
     bool tryDispatchHasIndexer(
         int& recursionDepth,

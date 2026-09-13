@@ -1030,7 +1030,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "tonumber_returns_optional_number_type")
     {
         CHECK_EQ(
             "Expected this to be 'number', but got 'number?'; \n"
-            "`nil` is not a subtype of `number`",
+            "`number?` could be `nil`",
             toString(result.errors[0])
         );
     }

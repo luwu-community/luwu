@@ -967,7 +967,7 @@ bool ConstraintSolver::tryDispatch(NotNull<const Constraint> constraint, bool fo
     else if (auto nc = get<NameConstraint>(*constraint))
         success = tryDispatch(*nc, constraint);
     else if (auto taec = get<TypeAliasExpansionConstraint>(*constraint))
-        success = tryDispatch(*taec, constraint);
+        success = tryDispatch(*taec, constraint, force);
     else if (auto fcc = get<FunctionCallConstraint>(*constraint))
         success = tryDispatch(*fcc, constraint, force);
     else if (auto fcc = get<FunctionCheckConstraint>(*constraint))
@@ -1000,6 +1000,8 @@ bool ConstraintSolver::tryDispatch(NotNull<const Constraint> constraint, bool fo
         success = tryDispatch(*esgc, constraint);
     else if (auto ptc = get<PushTypeConstraint>(*constraint))
         success = tryDispatch(*ptc, constraint, force);
+    else if (auto inpc = get<InstantiateNominalPropConstraint>(*constraint))
+        success = tryDispatch(*inpc, constraint, force);
     else
         LUAU_ASSERT(false);
 
@@ -1317,7 +1319,7 @@ bool ConstraintSolver::tryDispatch(const NameConstraint& c, NotNull<const Constr
     return true;
 }
 
-bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNull<const Constraint> constraint)
+bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNull<const Constraint> constraint, bool force)
 {
     const PendingExpansionType* petv = get<PendingExpansionType>(follow(c.target));
     if (!petv)
@@ -1406,6 +1408,40 @@ bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNul
     {
         bindResult(tf->type);
         return true;
+    }
+
+    // A generic class can be reached here before its own body has been solved: a reference to the
+    // class from inside itself always is, and so is a forward reference to a class declared later
+    // in the file. Its members are still BlockedTypes then, and instantiating shares them rather
+    // than substituting them, so `Box<number>:get()` would come back returning `T`. Wait for the
+    // members instead. There is no cycle in this: the class's own annotations become
+    // PendingExpansionTypes at constraint-generation time, so a member can be solved without this
+    // expansion having run. If we are being force-dispatched there is nothing left to wait for, and
+    // the substitution below defers each still-blocked member individually.
+    if (FFlag::LuauGenericNominals && !force)
+    {
+        if (const ExternType* templateEtv = get<ExternType>(follow(tf->type)))
+        {
+            bool anyBlocked = false;
+
+            for (const auto& [_, prop] : templateEtv->props)
+            {
+                if (prop.readTy && isBlocked(follow(*prop.readTy)))
+                {
+                    block(follow(*prop.readTy), constraint);
+                    anyBlocked = true;
+                }
+
+                if (prop.writeTy && !prop.isShared() && isBlocked(follow(*prop.writeTy)))
+                {
+                    block(follow(*prop.writeTy), constraint);
+                    anyBlocked = true;
+                }
+            }
+
+            if (anyBlocked)
+                return false;
+        }
     }
 
     InstantiationSignature signature{
@@ -1500,6 +1536,59 @@ bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNul
             marker.root = target;
             marker.traverse(target);
             targetExternType->hasUnresolvedGenerics = marker.found;
+
+            // A class can be instantiated before its own body has been solved -- always so for a
+            // reference to the class from inside itself, and likewise for a forward reference to a
+            // class declared later on. Such a member is still a BlockedType here, and the
+            // substitution above copied it by reference, so binding it later would hand this
+            // instantiation the member *without* the type arguments applied. Stand a fresh blocked
+            // type in its place and substitute it once the template's member is known.
+            std::vector<TypeId> templateTypeParams;
+            templateTypeParams.reserve(tf->typeParams.size());
+            for (const GenericTypeDefinition& param : tf->typeParams)
+                templateTypeParams.push_back(param.ty);
+
+            std::vector<TypePackId> templateTypePackParams;
+            templateTypePackParams.reserve(tf->typePackParams.size());
+            for (const GenericTypePackDefinition& param : tf->typePackParams)
+                templateTypePackParams.push_back(param.tp);
+
+            auto deferProp = [&](TypeId blockedProp)
+            {
+                TypeId placeholder = arena->addType(BlockedType{});
+                NotNull<Constraint> propConstraint = pushConstraint(
+                    constraint->scope,
+                    constraint->location,
+                    InstantiateNominalPropConstraint{
+                        blockedProp,
+                        placeholder,
+                        follow(tf->type),
+                        target,
+                        templateTypeParams,
+                        typeArguments,
+                        templateTypePackParams,
+                        packArguments
+                    }
+                );
+                getMutable<BlockedType>(placeholder)->setOwner(propConstraint);
+                return placeholder;
+            };
+
+            for (auto& [_, prop] : targetExternType->props)
+            {
+                const bool shared = prop.isShared();
+
+                if (prop.readTy && isBlocked(follow(*prop.readTy)))
+                {
+                    TypeId placeholder = deferProp(follow(*prop.readTy));
+                    prop.readTy = placeholder;
+                    if (shared)
+                        prop.writeTy = placeholder;
+                }
+
+                if (!shared && prop.writeTy && isBlocked(follow(*prop.writeTy)))
+                    prop.writeTy = deferProp(follow(*prop.writeTy));
+            }
         }
     }
 
@@ -3127,6 +3216,51 @@ bool ConstraintSolver::tryDispatch(const PushFunctionTypeConstraint& c, NotNull<
         (FFlag::LuauInstantiateFunctionTypeBeforePush || !ContainsAnyGeneric_DEPRECATED::hasAnyGeneric(expectedFn->retTypes)))
         bind(constraint, fn->retTypes, expectedFn->retTypes);
 
+    return true;
+}
+
+bool ConstraintSolver::tryDispatch(const InstantiateNominalPropConstraint& c, NotNull<const Constraint> constraint, bool force)
+{
+    LUAU_ASSERT(FFlag::LuauGenericNominals);
+
+    TypeId templateProp = follow(c.templateProp);
+
+    if (isBlocked(templateProp))
+    {
+        // A member that never resolves would keep this constraint alive forever, so on a forced
+        // dispatch stop waiting. There is nothing useful to substitute at that point.
+        if (!force)
+            return block(templateProp, constraint);
+
+        bind(constraint, c.target, builtinTypes->errorType);
+        return true;
+    }
+
+    ApplyTypeFunction applyTypeFunction{arena};
+
+    for (size_t i = 0; i < c.typeParams.size() && i < c.typeArguments.size(); ++i)
+        applyTypeFunction.typeArguments[c.typeParams[i]] = c.typeArguments[i];
+
+    for (size_t i = 0; i < c.typePackParams.size() && i < c.typePackArguments.size(); ++i)
+        applyTypeFunction.typePackArguments[c.typePackParams[i]] = c.typePackArguments[i];
+
+    // A member that mentions the class itself -- `self`, or a method returning `Box<T>` -- has to
+    // land on the instantiation we are filling in, not on a fresh copy of the template. Mapping the
+    // template onto the instantiation does that; `dontTraverseInto` keeps the substitution from
+    // then rewriting the instantiation's own children out from under us.
+    applyTypeFunction.typeArguments[follow(c.templateType)] = c.instantiatedType;
+    applyTypeFunction.dontTraverseInto(c.instantiatedType);
+
+    std::optional<TypeId> substituted = applyTypeFunction.substitute(templateProp);
+
+    if (!substituted)
+    {
+        reportError(CodeTooComplex{}, constraint->location);
+        bind(constraint, c.target, builtinTypes->errorType);
+        return true;
+    }
+
+    bind(constraint, c.target, *substituted);
     return true;
 }
 

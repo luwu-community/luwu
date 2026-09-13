@@ -1128,4 +1128,33 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "oss_2025")
     )"));
 }
 
+TEST_CASE_FIXTURE(BuiltinsFixture, "optional_mismatch_reasoning_names_the_optional_type")
+{
+    // The subtyping test fails on the `nil` member of the union, but naming that member makes the
+    // reader work backwards to figure out which type it came from. Name the optional instead.
+    CheckResult result = check(R"(
+        local function f(): number? return 1 end
+        local a: number = f()
+
+        local t: { n: number? } = { n = 1 }
+        local u: { n: number } = t
+
+        local v: { number? } = {}
+        local w: { number } = v
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
+    CHECK_EQ("Expected this to be 'number', but got 'number?'; \n`number?` could be `nil`", toString(result.errors[0]));
+    CHECK_EQ(
+        "Expected this to be\n\t'{ n: number }'\nbut got\n\t'{ n: number? }'; \naccessing `n` results in `number?` in the latter type and "
+        "`number` in the former type, and `number?` could be `nil`",
+        toString(result.errors[1])
+    );
+    CHECK_EQ(
+        "Expected this to be '{number}', but got '{number?}'; \nthe result of indexing is `number?` in the latter type and `number` in the former "
+        "type, and `number?` could be `nil`",
+        toString(result.errors[2])
+    );
+}
+
 TEST_SUITE_END();
