@@ -93,7 +93,7 @@ static const std::unordered_map<std::string, const char*> kUnaryOps{{"unm", "-"}
 static const std::unordered_set<std::string> kUnreachableTypeFunctions{"refine", "singleton", "union", "intersect", "and", "or"};
 
 // An ExternType is only "external" when the embedder handed it to us. A Luwu class value is rooted
-// at `class` and one of its instances at `object` (rfcx/classes.md), and those are the words the
+// at `class` and one of its instances at `object` (rfcs/classes.md), and those are the words the
 // language itself uses -- `typeof` on an instance answers "object" -- so name the type after its
 // hierarchy root rather than telling someone that `Dog` is an external type.
 static const char* externTypeNoun(TypeId t)

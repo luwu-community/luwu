@@ -50,7 +50,7 @@ IrLoweringX64::IrLoweringX64(LogBuilder* logger, AssemblyBuilderX64& build, Modu
     build.align(kFunctionAlignment, X64::AlignmentDataX64::Ud2);
 }
 
-// Luwu Classes (rfcx/classes.md): authorize private/const access to the member at `slotReg` on
+// Luwu Classes (rfcs/classes.md): authorize private/const access to the member at `slotReg` on
 // class `classReg` (an object's lclass, or a class object directly) without bailing to the
 // interpreter. A member with no access bits is unrestricted. A private/const member takes the fast
 // path only when the executing closure is one of the owning class's own methods -- i.e.
@@ -2688,7 +2688,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
     }
     case IrCmd::OBJECT_MEMBER_ADDR:
     {
-        // Luwu Classes (rfcx/classes.md): the receiver's class is proven (see LOP_GETOBJECTMEMBER), so
+        // Luwu Classes (rfcs/classes.md): the receiver's class is proven (see LOP_GETOBJECTMEMBER), so
         // the member's offset is a constant and nothing needs re-checking here -- not the class, and
         // not the offset against numberofmembers either. Two loads and an add, with no branch.
         inst.regX64 = regs.allocReg(SizeX64::qword, index);

@@ -9,7 +9,7 @@ Luwu is backwards compatible with Luau up to and including version 0.730, with p
 
 For more information about Luwu and how to contribute, please join our Discord server [hina & ferris](https://discord.gg/3MJ37CFNWh). Credit for the name goes to @Crazyblox!
 
-For RFCs and changes to the language, please see the [RFCs folder](/rfcx/). To propose new features, discuss them in our `#features` channel on Discord.
+For RFCs and changes to the language, please see the [RFCs folder](/rfcs/). To propose new features, discuss them in our `#features` channel on Discord.
 
 # Usage
 

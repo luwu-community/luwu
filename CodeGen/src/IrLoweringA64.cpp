@@ -299,7 +299,7 @@ static uint32_t getFloatBits(float value)
     return result;
 }
 
-// Luwu Classes (rfcx/classes.md): a64 counterpart of emitClassMemberAuthX64 -- authorize
+// Luwu Classes (rfcs/classes.md): a64 counterpart of emitClassMemberAuthX64 -- authorize
 // private/const access to the member at `slotReg` on `classReg` (an object's lclass, or a class
 // object directly), or jump to `mismatch` (the interpreter fallback, which raises the error). A
 // member with no access bits is unrestricted; a private/const member takes the fast path only when

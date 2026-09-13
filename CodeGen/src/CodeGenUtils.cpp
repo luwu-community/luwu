@@ -574,7 +574,7 @@ const Instruction* executeGETTABLEKS(lua_State* L, const Instruction* pc, StkId 
             // fall through to slow path
         }
 
-        // Luwu Classes (rfcx/classes.md): the native TRY_OBJECT_MEMBER_ADDR/TRY_CLASS_MEMBER_ADDR
+        // Luwu Classes (rfcs/classes.md): the native TRY_OBJECT_MEMBER_ADDR/TRY_CLASS_MEMBER_ADDR
         // fast paths bail here on a stale cached slot. Mirror the interpreter's LOP_GETTABLEKS object/
         // class handling *and* patch the cached slot (VM_PATCH_C) so the next native access hits the
         // fast path -- without this, every access re-misses and re-enters this fallback forever.
@@ -707,7 +707,7 @@ const Instruction* executeSETTABLEKS(lua_State* L, const Instruction* pc, StkId 
             return pc;
         }
 
-        // Luwu Classes (rfcx/classes.md): the native TRY_OBJECT_MEMBER_ADDR (write mode) fast path
+        // Luwu Classes (rfcs/classes.md): the native TRY_OBJECT_MEMBER_ADDR (write mode) fast path
         // bails here on a stale cached slot. Mirror the interpreter's LOP_SETTABLEKS object handling
         // *and* patch the cached slot (VM_PATCH_C) so the next native store hits the fast path.
         if (FFlag::DebugLuauUserDefinedClassesRuntime && ttisobject(rb))
@@ -940,7 +940,7 @@ const Instruction* executeFORGPREP(lua_State* L, const Instruction* pc, StkId ba
     return pc;
 }
 
-// Luwu Classes (rfcx/classes.md): the native lowering of LOP_NEWOBJECT. Construction is not lowered
+// Luwu Classes (rfcs/classes.md): the native lowering of LOP_NEWOBJECT. Construction is not lowered
 // to machine code, but it must not be a bare exit to the interpreter either: an unconditional
 // `JUMP vmExit` carries no register liveness, so the analysis would let stores to registers the rest
 // of the bytecode still reads (a numeric for loop's limit/step/index, say) be eliminated, and the
@@ -1048,7 +1048,7 @@ const Instruction* executeNEWOBJECT(lua_State* L, const Instruction* pc, StkId b
     return pc;
 }
 
-// Luwu Classes (rfcx/classes.md): the native lowering of LOP_NEWCLASSMEMBER. Like construction, this
+// Luwu Classes (rfcs/classes.md): the native lowering of LOP_NEWCLASSMEMBER. Like construction, this
 // runs as a C fallback rather than a bare exit to the interpreter -- see executeNEWOBJECT for why.
 // Kept in step with VM_CASE(LOP_NEWCLASSMEMBER) in lvmexecute.cpp.
 const Instruction* executeNEWCLASSMEMBER(lua_State* L, const Instruction* pc, StkId base, TValue* k)

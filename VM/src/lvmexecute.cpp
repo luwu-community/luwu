@@ -3828,7 +3828,7 @@ reentry:
 
             VM_CASE(LOP_NEWOBJECT)
             {
-                // Luwu Classes (rfcx/classes.md): construct an instance of a POD class directly.
+                // Luwu Classes (rfcs/classes.md): construct an instance of a POD class directly.
                 Instruction insn = *pc++;
                 uint32_t aux = *pc++;
                 StkId ra = VM_REG(LUAU_INSN_A(insn));
@@ -3859,7 +3859,7 @@ reentry:
 
                 LuauClass* classdef = classvalue(classReg);
 
-                // Luwu Classes (rfcx/classes.md): a private `__init` is only callable from inside its
+                // Luwu Classes (rfcs/classes.md): a private `__init` is only callable from inside its
                 // own class. The `__call` path gets that from luaR_createobject, and NEWOBJECT exists
                 // to skip that C frame, so without this the fast path would be a hole in `private`.
                 //
@@ -3951,7 +3951,7 @@ reentry:
 
             VM_CASE(LOP_GETOBJECTMEMBER)
             {
-                // Luwu Classes (rfcx/classes.md): read `self.field` at a known offset, skipping all of
+                // Luwu Classes (rfcs/classes.md): read `self.field` at a known offset, skipping all of
                 // GETTABLEKS's per-access work -- no slot cache, no name compare, no private-access
                 // check. That is only sound under what the compiler guarantees at every emit site (see
                 // provenSelfClass in Compiler.cpp):
@@ -3998,7 +3998,7 @@ reentry:
 
             VM_CASE(LOP_JUMPXISA)
             {
-                // Luwu Classes (rfcx/classes.md): fused class.isinstance(value, class) test-and-branch.
+                // Luwu Classes (rfcs/classes.md): fused class.isinstance(value, class) test-and-branch.
                 Instruction insn = *pc++;
                 uint32_t aux = *pc;
                 StkId ra = VM_REG(LUAU_INSN_A(insn));

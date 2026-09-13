@@ -414,7 +414,7 @@ typedef struct Proto
 
     void* userdata;
 
-    // Luwu Classes (rfcx/classes.md): for a proto that is one of a class's own methods (including
+    // Luwu Classes (rfcs/classes.md): for a proto that is one of a class's own methods (including
     // __init / __defaults) or is lexically nested anywhere inside one, the class it belongs to;
     // NULL otherwise. Set (recursively, over the whole nested-proto tree) when the method closure is
     // registered (luaR_addclassmember/luaR_stampownerclass) and GC-marked (traverseproto). Both the

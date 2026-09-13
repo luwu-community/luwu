@@ -1778,7 +1778,7 @@ void translateInstGetTableKS(IrBuilder& build, const Instruction* pc, int pcpos)
         return;
     }
 
-    // Luwu Classes (rfcx/classes.md): instance field access on an object, and static member access
+    // Luwu Classes (rfcs/classes.md): instance field access on an object, and static member access
     // on a class. Gated strictly on the register's known bytecode type -- only a value the compiler
     // has actually typed as an object/class takes these paths; anything else (including LBC_TYPE_ANY)
     // falls through to ordinary table handling below. For a known object/class the tag is hard-
@@ -1883,7 +1883,7 @@ void translateInstGetTableKS(IrBuilder& build, const Instruction* pc, int pcpos)
     build.inst(IrCmd::JUMP, next);
 }
 
-// Luwu Classes (rfcx/classes.md): read `self.field` where the compiler proved the receiver's class, so
+// Luwu Classes (rfcs/classes.md): read `self.field` where the compiler proved the receiver's class, so
 // the member offset is a constant. The tag is still guarded -- deopting to the interpreter on a miss,
 // which is where the error is raised -- but nothing about the class is re-derived.
 void translateInstGetObjectMember(IrBuilder& build, const Instruction* pc, int pcpos)
@@ -1938,7 +1938,7 @@ void translateInstSetTableKS(IrBuilder& build, const Instruction* pc, int pcpos)
         return;
     }
 
-    // Luwu Classes (rfcx/classes.md): writing an instance field on an object, e.g. `self.x = ...`.
+    // Luwu Classes (rfcs/classes.md): writing an instance field on an object, e.g. `self.x = ...`.
     //
     // This path fires only when the compiler has actually typed the receiver as an object which can happen
     // in simple cases but is rare. We guard against tag here; if wrong we deopt.
@@ -2176,7 +2176,7 @@ bool translateInstNamecall(IrBuilder& build, const Instruction* pc, int pcpos)
     IrOp next = build.blockAtInst(pcpos + getOpLength(LuauOpcode(LOP_NAMECALL)));
     IrOp fallback = build.fallbackBlock(pcpos);
 
-    // Luwu Classes (rfcx/classes.md): method resolution on an object receiver (`self:method()`).
+    // Luwu Classes (rfcs/classes.md): method resolution on an object receiver (`self:method()`).
     // Resolve the method address inline from the class members using the cached slot, store method
     // into ra and self into ra+1, then fall through to CALL -- avoiding an interpreter trampoline.
     auto emitObjectNamecall = [&]()
@@ -2384,7 +2384,7 @@ void translateInstCmpProto(IrBuilder& build, const Instruction* pc, int pcpos)
 
 void translateInstJumpXIsa(IrBuilder& build, const Instruction* pc, int pcpos)
 {
-    // Luwu Classes (rfcx/classes.md): fused class.isinstance(value, class) test-and-branch. The class
+    // Luwu Classes (rfcs/classes.md): fused class.isinstance(value, class) test-and-branch. The class
     // register is guaranteed by the compiler to hold a class, so no tag guard is needed here.
     int ra = LUAU_INSN_A(*pc);
     uint32_t aux = pc[1];

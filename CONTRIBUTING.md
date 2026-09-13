@@ -8,7 +8,7 @@ Some questions help improve the language, implementation or documentation by ins
 
 ## Documentation
 
-Luwu is based on Luau, so the [upstream Luau documentation](https://luau.org) remains a useful reference for compatible behavior. Luwu-specific proposals and changes are documented in the [extra RFCs folder](/rfcx/).
+Luwu is based on Luau, so the [upstream Luau documentation](https://luau.org) remains a useful reference for compatible behavior. Luwu-specific proposals and changes are documented in the [extra RFCs folder](/rfcs/).
 Changes that improve clarity, fix grammatical issues, or explain Luwu-specific behavior are warmly welcomed.
 
 Please feel free to [create a pull request](https://help.github.com/articles/about-pull-requests/) to improve our documentation. Note that at this point the documentation is English-only.
@@ -25,7 +25,7 @@ Of course, feel free to [create a pull request](https://help.github.com/articles
 If you're thinking of adding a new feature to the language, library, analysis tools, etc., please *don't* start by submitting a pull request.
 Discuss the idea in the `#features` channel on the [Luwu Discord server](https://discord.gg/3MJ37CFNWh) before starting implementation so the community can refine the proposal and identify potential conflicts.
 
-For features that result in an observable change to the language's syntax or semantics, create an RFC in the [extra RFCs folder](/rfcx/) using the provided [template](/rfcx/TEMPLATE.md). Follow the process in the [extra RFC guidelines](/rfcx/README.md), including the implementation, feature flag, and maintainer requirements.
+For features that result in an observable change to the language's syntax or semantics, create an RFC in the [extra RFCs folder](/rfcs/) using the provided [template](/rfcs/TEMPLATE.md). Follow the process in the [extra RFC guidelines](/rfcs/README.md), including the implementation, feature flag, and maintainer requirements.
 
 Luwu is willing to evolve independently from upstream Luau, but every feature must still be evaluated for language simplicity, maintainability, performance, and cross-feature interactions.
 Feature requests may not be accepted even if a comprehensive RFC is written; the benefits need to justify the costs to the language and its community.

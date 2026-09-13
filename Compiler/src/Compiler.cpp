@@ -119,7 +119,7 @@ static BytecodeBuilder::StringRef sref(AstArray<const char> data)
     return {data.data, data.size};
 }
 
-// Luwu Classes (rfcx/classes.md): a field default that is a compile-time constant can be stored on
+// Luwu Classes (rfcs/classes.md): a field default that is a compile-time constant can be stored on
 // the class itself and copied into every new instance, so the class needs no `__defaults` closure at
 // all. Anything else -- a table literal, a call, a concatenation of locals -- has to be re-evaluated
 // on each construction (a `= {}` default must hand out a *fresh* table), and keeps the closure.
@@ -500,7 +500,7 @@ struct Compiler
 
         currentFunction = func;
 
-        // Runtime checking of `self` for methods (see rfcx/classes.md): verify `self` is actually
+        // Runtime checking of `self` for methods (see rfcs/classes.md): verify `self` is actually
         // an instance of this method's own class before running anything else in the body,
         // including field defaults below -- an invalid `self` shouldn't get that far. A single
         // CHECKSELFCLASS opcode: falls through on success, raises on mismatch.
@@ -718,7 +718,7 @@ struct Compiler
         if (isConstant(expr))
             return false;
 
-        // Luwu Classes (rfcx/classes.md): constructing an instance always yields exactly one value,
+        // Luwu Classes (rfcs/classes.md): constructing an instance always yields exactly one value,
         // whether it goes through NEWOBJECT or the class's default constructor. Saying so here is what
         // lets `return ClassName(...)` and similar multret positions use the fixed-result path.
         if (FFlag::DebugLuauUserDefinedClasses && !expr->self && isKnownClassExpr(expr->func))
@@ -1128,11 +1128,11 @@ struct Compiler
         return cost;
     }
 
-    // Runtime checking of `self` for methods (see rfcx/classes.md): a `self:method()` call on the
+    // Runtime checking of `self` for methods (see rfcs/classes.md): a `self:method()` call on the
     // *same* class from inside another method of that class needs no repeated CHECKSELFCLASS at the
     // inline site -- the enclosing method's own prologue already validated that exact value. Only
     // holds while `self` is never reassigned in the enclosing body.
-    // Luwu Classes (rfcx/classes.md): the class of a receiver whose class is *proven* rather than
+    // Luwu Classes (rfcs/classes.md): the class of a receiver whose class is *proven* rather than
     // inferred -- the enclosing method's own `self`, which the method prologue's CHECKSELFCLASS has
     // already established is an instance of the method's class, and which the method never reassigns.
     //
@@ -1163,7 +1163,7 @@ struct Compiler
         return owner ? *owner : nullptr;
     }
 
-    // Luwu Classes (rfcx/classes.md): the offset of an instance member within a class, which is its
+    // Luwu Classes (rfcs/classes.md): the offset of an instance member within a class, which is its
     // index in declaration order. **Must agree with the order compileClassDeclaration emits members
     // in**: the class body's properties first, then a primary constructor's parameters that the body
     // doesn't restate. Returns -1 for anything that isn't an instance field of this class -- a method
@@ -1680,7 +1680,7 @@ struct Compiler
         return nullptr;
     }
 
-    // Luwu Classes (rfcx/classes.md): resolve an `obj:method()` call to a class instance method so it
+    // Luwu Classes (rfcs/classes.md): resolve an `obj:method()` call to a class instance method so it
     // can be inlined at O2. The receiver's class must be statically known (see resolveReceiverClass),
     // and the privacy gate must pass: a method may only be inlined into a *different* class's body
     // when its class has no private members. Same-class inlining is always allowed (the executing
@@ -1709,7 +1709,7 @@ struct Compiler
         return findInstanceMethod(recvClass, idx->index);
     }
 
-    // Luwu Classes (rfcx/classes.md): this class's own `__init`, or null when it uses the default
+    // Luwu Classes (rfcs/classes.md): this class's own `__init`, or null when it uses the default
     // (POD) constructor.
     const AstClassMethod* findClassInit(AstStatClass* decl)
     {
@@ -1725,7 +1725,7 @@ struct Compiler
     // every declared field, which stops paying for itself on a wide class initialized sparsely.
     static const size_t kMaxNewObjectFields = 16;
 
-    // Luwu Classes (rfcx/classes.md): try the statically resolved fast path for the POD table
+    // Luwu Classes (rfcs/classes.md): try the statically resolved fast path for the POD table
     // constructor syntax. 
     // 
     // `ClassName { field = value }` compiles to the positional NEWOBJECT ... FIELDS form,
@@ -1821,7 +1821,7 @@ struct Compiler
         return true;
     }
 
-    // Luwu Classes (rfcx/classes.md): can a primary constructor's field initializers be compiled at
+    // Luwu Classes (rfcs/classes.md): can a primary constructor's field initializers be compiled at
     // the construction site rather than inside the synthesized `__init`? Only the constructor's own
     // parameters, globals and constants are reachable from there. Any other local would be an upvalue
     // of `__init`, which the construction site has no way to name, and a closure could capture one
@@ -1857,7 +1857,7 @@ struct Compiler
         }
     };
 
-    // Luwu Classes (rfcx/classes.md): try the statically resolved fast path for the class field
+    // Luwu Classes (rfcs/classes.md): try the statically resolved fast path for the class field
     // parameter list syntax (primary constructor).
     //
     // `ClassName(a, b)` compiles to the positional NEWOBJECT ... FIELDS form.
@@ -2133,7 +2133,7 @@ struct Compiler
         return true;
     }
 
-    // Luwu Classes (rfcx/classes.md): try to compile `ClassName(...)` into a NEWOBJECT. Only a class
+    // Luwu Classes (rfcs/classes.md): try to compile `ClassName(...)` into a NEWOBJECT. Only a class
     // declared in this module can be resolved statically at all (isKnownClassExpr), and only those
     // reach here. The opcode allocates the instance itself, skipping the class's `__call` metamethod
     // and the luaR_createobject C frame a generic CALL goes through.
@@ -2306,14 +2306,14 @@ struct Compiler
             }
         }
 
-        // Luwu Classes (rfcx/classes.md): construct instances of a statically known class inline
+        // Luwu Classes (rfcs/classes.md): construct instances of a statically known class inline
         if (FFlag::DebugLuauUserDefinedClasses && !expr->self && !multRet && targetCount == 1)
         {
             if (tryCompileNewObject(expr, target))
                 return;
         }
 
-        // Luwu Classes (rfcx/classes.md): inline `obj:method()` calls whose receiver class is
+        // Luwu Classes (rfcs/classes.md): inline `obj:method()` calls whose receiver class is
         // statically known and passes the privacy gate (see tryResolveMethodCall).
         if (options.optimizationLevel >= 2 && expr->self && FFlag::DebugLuauUserDefinedClasses)
         {
@@ -2773,7 +2773,7 @@ struct Compiler
             );
         }
 
-        // Luwu Classes (rfcx/classes.md): every primary constructor parameter the class body does not
+        // Luwu Classes (rfcs/classes.md): every primary constructor parameter the class body does not
         // restate declares a field of its own, public unless the parameter says otherwise. They are
         // emitted after the body's properties, so a parameter restated in the body keeps the position
         // its restatement gives it.
@@ -2982,10 +2982,10 @@ struct Compiler
         return cv ? *cv : Constant{Constant::Type_Unknown};
     }
 
-    // Luwu Classes (rfcx/classes.md): is `node` a reference to a statically-known class declaration
+    // Luwu Classes (rfcs/classes.md): is `node` a reference to a statically-known class declaration
     // (a const class local, possibly captured as an upvalue)? Only then is it safe to fuse
     // class.isinstance into JUMPXISA, whose second operand is asserted to be a class.
-    // Luwu Classes (rfcx/classes.md): true when `node` evaluates to a class declared in this module,
+    // Luwu Classes (rfcs/classes.md): true when `node` evaluates to a class declared in this module,
     // which callers rely on to emit opcodes that take a class operand (JUMPXISA).
     //
     // A class name is never lexically scoped -- the parser leaves references to it as globals, and
@@ -3003,7 +3003,7 @@ struct Compiler
         return false;
     }
 
-    // Luwu Classes (rfcx/classes.md): compile `class.isinstance(x, C)` used as a condition into a
+    // Luwu Classes (rfcs/classes.md): compile `class.isinstance(x, C)` used as a condition into a
     // single fused JUMPXISA test-and-branch, when C is a statically-known class. Returns false (so the
     // caller falls back to the ordinary builtin path) otherwise. `onlyTruth` selects the branch
     // polarity, matching the generic JUMPIF/JUMPIFNOT emitted by compileConditionValue below.
@@ -3323,7 +3323,7 @@ struct Compiler
             }
         }
 
-        // Luwu Classes (rfcx/classes.md): fuse `class.isinstance(x, C)` conditions into JUMPXISA
+        // Luwu Classes (rfcs/classes.md): fuse `class.isinstance(x, C)` conditions into JUMPXISA
         if (AstExprCall* call = node->as<AstExprCall>())
         {
             if (tryCompileConditionIsinstance(call, target, skipJump, onlyTruth))
@@ -4059,7 +4059,7 @@ struct Compiler
         if (cid < 0)
             CompileError::raise(expr->location, "Exceeded constant limit; simplify the code to compile");
 
-        // Luwu Classes (rfcx/classes.md): `self.field` inside a method needs none of GETTABLEKS's
+        // Luwu Classes (rfcs/classes.md): `self.field` inside a method needs none of GETTABLEKS's
         // per-access work -- the class is proven, so the member's offset is a constant.
         if (int offset = provenSelfMemberOffset(expr->expr, expr->index, /* forWrite= */ false); offset >= 0)
         {
@@ -4528,7 +4528,7 @@ struct Compiler
         uint8_t number; // index-1 (0-255) in IndexNumber
         BytecodeBuilder::StringRef name;
         Location location;
-        // Luwu Classes (rfcx/classes.md): for an IndexName whose receiver is a proven `self` and whose
+        // Luwu Classes (rfcs/classes.md): for an IndexName whose receiver is a proven `self` and whose
         // member is a writable instance field, the member's constant offset; -1 otherwise. See
         // provenSelfMemberOffset.
         int objectMember = -1;
@@ -6277,7 +6277,7 @@ struct Compiler
 
         // Builds the CHECKSELFCLASS data for a method, spliced in as the very first statement of a
         // method's body by compileFunction. Runtime checking of `self` for methods (see
-        // rfcx/classes.md) has to live here -- inlined into the method's own bytecode -- rather than
+        // rfcs/classes.md) has to live here -- inlined into the method's own bytecode -- rather than
         // as a check at the call boundary, because a call-boundary check is trivially skipped when
         // the compiler inlines the call (dot-call sites like `SomeClass.method(notAnInstance)` are
         // exactly the ones eligible for inlining). Splicing it into the body means inlining copies
@@ -6306,7 +6306,7 @@ struct Compiler
             return nullptr;
         }
 
-        // Luwu Classes (rfcx/classes.md): synthesize the `__init` a primary constructor implies. It is
+        // Luwu Classes (rfcs/classes.md): synthesize the `__init` a primary constructor implies. It is
         // an ordinary function taking `self` followed by the constructor's own parameters, so
         //
         //   class Percentage(current: number, total = 100)
@@ -6441,7 +6441,7 @@ struct Compiler
 
             classByName[node->name->name] = node;
 
-            // Luwu Classes (rfcx/classes.md): a class goes in classesWithPrivateMembers when any part
+            // Luwu Classes (rfcs/classes.md): a class goes in classesWithPrivateMembers when any part
             // of it is `private`, because that is what makes its method bodies unsafe to inline into a
             // *foreign* closure (see tryResolveMethodCall). Every private access -- a field, a method,
             // a static, the constructor -- is authorized at runtime against the executing closure's
@@ -6453,7 +6453,7 @@ struct Compiler
                 classesWithPrivateMembers.insert(node);
 
             // ... and a parameter that declares its field `private` counts the same as a `private`
-            // field in the class body (rfcx/classes.md), whether or not the body restates it.
+            // field in the class body (rfcs/classes.md), whether or not the body restates it.
             if (node->primaryConstructor)
             {
                 for (const AstClassPrimaryConstructorParamQualifiers& qualifiers : node->primaryConstructor->argsQualifiers)
@@ -6783,7 +6783,7 @@ struct Compiler
     // Populated by ClassInitDefaultsVisitor with a CHECKSELFCLASS check (class local + fallback
     // `error(...)` statement) for every class method that takes `self` as its first parameter
     // (i.e. not a static function). compileFunction emits this as the very first thing in the
-    // method's body (see rfcx/classes.md "Runtime checking of `self` for methods"). Must be
+    // method's body (see rfcs/classes.md "Runtime checking of `self` for methods"). Must be
     // known before compileFunction runs for that function, same as classInitFieldDefaults above.
     DenseHashMap<AstExprFunction*, SelfClassCheck> classMethodSelfChecks;
     // Populated by ClassInitDefaultsVisitor; maps each instance method's AstExprFunction to its
@@ -6796,7 +6796,7 @@ struct Compiler
     DenseHashMap<AstName, AstStatClass*> classByName{AstName{}};
     // Classes that declare at least one private member. A method may be inlined into a *different*
     // class's body only if its owning class is absent here: private field access is authorized by the
-    // executing closure's ownerclass, which inlining rewrites to the caller's class (see rfcx/classes.md).
+    // executing closure's ownerclass, which inlining rewrites to the caller's class (see rfcs/classes.md).
     DenseHashSet<AstStatClass*> classesWithPrivateMembers{nullptr};
     // Seeded false for every hoisted (top-level) class by preallocateHoistedClasses, flipped to
     // true by compileClassDeclaration right after that class's real LOADKX write is emitted, ahead

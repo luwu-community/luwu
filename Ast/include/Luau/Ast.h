@@ -1210,7 +1210,7 @@ struct AstClassMethod
 
 using AstClassMember = Variant<AstClassProperty, AstClassMethod>;
 
-// Luwu Classes (rfcx/classes.md): the access specifier and modifiers written directly on a primary
+// Luwu Classes (rfcs/classes.md): the access specifier and modifiers written directly on a primary
 // constructor parameter, Kotlin-style: `class SshKey(public const public_key: string)`. A parameter
 // that carries neither is described by a default-constructed instance of this.
 struct AstClassPrimaryConstructorParamQualifiers
@@ -1223,7 +1223,7 @@ struct AstClassPrimaryConstructorParamQualifiers
     bool isConst = false;
 };
 
-// Luwu Classes (rfcx/classes.md): the primary constructor of a class, `class Cat(name: string, age = 0)`.
+// Luwu Classes (rfcs/classes.md): the primary constructor of a class, `class Cat(name: string, age = 0)`.
 // A class using the default (POD) table constructor has none of these at all; a class written as
 // `class Cat()` has one with zero parameters, which is what deliberately disables the table constructor.
 //

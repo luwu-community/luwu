@@ -387,7 +387,7 @@ static int getBuiltinFunctionId(const Builtin& builtin, const CompileOptions& op
         }
     }
 
-    // Luwu Classes (rfcx/classes.md): class.isinstance(value, class). Recognizing it as a fastcall
+    // Luwu Classes (rfcs/classes.md): class.isinstance(value, class). Recognizing it as a fastcall
     // turns the per-branch dispatch (`if class.isinstance(node, Foo)`) from a full call into an inline
     // object-class comparison. The FASTCALL safe-env guard falls back to the real call if `class`
     // isn't the class library, so this stays correct even when the classes feature is disabled.

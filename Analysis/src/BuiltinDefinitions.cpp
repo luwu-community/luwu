@@ -1818,7 +1818,7 @@ bool MagicFreeze::typeCheck(const MagicFunctionTypeCheckContext& ctx)
 
 // MagicClassFields overrides `class.fields`'s declared `({ [string]: unknown }, boolean)` return
 // with the precise per-field type map (and a literal `complete` boolean) when the argument is a
-// known class or object type, per rfcx/classes.md's "Type System" section.
+// known class or object type, per rfcs/classes.md's "Type System" section.
 std::optional<WithPredicate<TypePackId>> MagicClassFields::handleOldSolver(
     struct TypeChecker&,
     const std::shared_ptr<struct Scope>&,

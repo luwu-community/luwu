@@ -1082,7 +1082,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "accept_read_only_tables")
 }
 
 
-// Primary constructors (rfcx/classes.md): each parameter declares a public field, and the class is
+// Primary constructors (rfcs/classes.md): each parameter declares a public field, and the class is
 // constructed positionally through the `__init` the parameter list implies.
 
 TEST_CASE_FIXTURE(ClassesFixture, "primary_constructor_declares_a_field_per_parameter")
@@ -1231,7 +1231,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "qualified_parameters_declare_their_fields_acc
     };
 
     // a parameter may carry its field's access specifier and `const` modifier directly, instead of
-    // restating the field in the class body (rfcx/classes.md)
+    // restating the field in the class body (rfcs/classes.md)
     auto result = check(R"(
         class SshKey(public const public_key: string, private const private_key: string)
             public function fingerprint(self): string

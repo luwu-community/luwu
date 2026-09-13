@@ -1593,7 +1593,7 @@ const std::unordered_set<std::string> EXPLICITLY_DISALLOWED_METAMETHODS{
 // classStatement ::= `class` Name classProps `end`
 // classProps ::= classProp [classProps]
 // classProp ::= name [: classQualifier* type]
-// Luwu Classes (rfcx/classes.md): parse the parameter list of a class's primary constructor, e.g. the
+// Luwu Classes (rfcs/classes.md): parse the parameter list of a class's primary constructor, e.g. the
 // `(name: string, age = 0)` of `class Cat(name: string, age = 0)`. Each parameter implicitly declares
 // a public field of the same name, and the whole list is compiled into a synthesized `__init`.
 LUAU_NOINLINE AstClassPrimaryConstructor* Parser::parseClassPrimaryConstructor(
@@ -1627,7 +1627,7 @@ LUAU_NOINLINE AstClassPrimaryConstructor* Parser::parseClassPrimaryConstructor(
         }
         else
         {
-            // Luwu Classes (rfcx/classes.md): a parameter may carry the access specifier and the
+            // Luwu Classes (rfcs/classes.md): a parameter may carry the access specifier and the
             // `const` modifier of the field it declares, Kotlin-style: `class SshKey private (public
             // const public_key: string, private const private_key: string)`. A qualifier is only a
             // qualifier when another name follows it, so a parameter may still be *named* `public`,
@@ -1721,7 +1721,7 @@ LUAU_NOINLINE AstClassPrimaryConstructor* Parser::parseClassPrimaryConstructor(
     return primaryConstructor;
 }
 
-// Luwu Classes (rfcx/classes.md): does the token the class body is sitting on read as a statement
+// Luwu Classes (rfcs/classes.md): does the token the class body is sitting on read as a statement
 // rather than as a member declaration? A member is `name`, `name: T`, `name = expr` or a `function`;
 // anything that starts a statement outright, or a name followed by a call/index/comma, is a sign the
 // class was never closed and we are now eating the code that follows it.
@@ -1766,7 +1766,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
     if (FFlag::LuauBetterUserDefinedClasses && FFlag::LuauGenericNominals)
         std::tie(generics, genericPacks) = parseGenericTypeList(/* withDefaultValues= */ false);
 
-    // Luwu Classes (rfcx/classes.md): an optional primary constructor, which may carry an access
+    // Luwu Classes (rfcs/classes.md): an optional primary constructor, which may carry an access
     // specifier of its own: `class Cat(name: string)`, `class Account private (holder: User)`.
     // The `(` lookahead is what keeps `public`/`private` here from being confused with the access
     // specifier of the class's first member.
@@ -1801,7 +1801,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
             primaryConstructorParams.insert(arg->name);
     }
 
-    // Luwu Classes (rfcx/classes.md): a parameter may carry its field's access specifier and `const`
+    // Luwu Classes (rfcs/classes.md): a parameter may carry its field's access specifier and `const`
     // modifier directly (`class SshKey(public const public_key: string)`). Restating such a field in
     // the class body is allowed, but the restatement has to agree with the parameter, and once
     // *anything* in the class carries an access specifier, everything must.
@@ -1858,7 +1858,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
     // against the rest of the class to know how it is accessed. We collect the
     // locations of members that didn't have an explicit qualifier as we go, and
     // only report them once we know whether the class ended up with any
-    // qualifier at all (rfcx/classes.md).
+    // qualifier at all (rfcs/classes.md).
     std::vector<std::pair<Location, bool>> unqualifiedMemberLocations; // (location, isFunction)
     std::vector<Location> explicitPublicQualifierLocations;
     // Primary constructor parameters whose field the class body restates with an explicit access
@@ -1943,7 +1943,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
             if (FFlag::LuauBetterUserDefinedClasses && !qualifierLocation)
                 unqualifiedMemberLocations.push_back({propName->location, /* isFunction */ false});
 
-            // Luwu Classes (rfcx/classes.md): restating a primary constructor parameter's field is how
+            // Luwu Classes (rfcs/classes.md): restating a primary constructor parameter's field is how
             // an *unqualified* parameter list gets its access specifiers, but a parameter that already
             // states its own may not be contradicted here -- reading `public text` in the header and
             // `private text` in the body would leave neither one trustworthy.
@@ -2150,7 +2150,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
         }
     }
 
-    // Luwu Classes (rfcx/classes.md): access specifiers are all-or-nothing across a class. A class
+    // Luwu Classes (rfcs/classes.md): access specifiers are all-or-nothing across a class. A class
     // that writes none of them is entirely public, which is the POD case the RFC deliberately keeps
     // terse; but the moment one member -- or one primary constructor parameter -- says `public` or
     // `private`, every other member and parameter has to say which it is, so that the unqualified ones
@@ -5661,7 +5661,7 @@ AstLocal* Parser::pushLocal(const Binding& binding)
     return local;
 }
 
-// Luwu Classes (rfcx/classes.md): bring a class's primary constructor parameters into scope for a
+// Luwu Classes (rfcs/classes.md): bring a class's primary constructor parameters into scope for a
 // field initializer expression, the only place they are visible. Their AstLocals were created once,
 // at the depth of the synthesized `__init`, by parseClassPrimaryConstructor; this re-enters them into
 // the scope chain so restoreLocals can take them back out.

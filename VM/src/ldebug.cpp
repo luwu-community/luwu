@@ -315,7 +315,7 @@ l_noret luaG_indexerror(lua_State* L, const TValue* p1, const TValue* p2)
         luaG_runerror(L, "attempt to index %s with %s", t1, t2);
 }
 
-// Luwu Classes (rfcx/classes.md): a name the value does not have. The RFC's glossary splits the two
+// Luwu Classes (rfcs/classes.md): a name the value does not have. The RFC's glossary splits the two
 // halves of this: objects carry *fields*, while a class's namespace holds *members* -- its static
 // functions plus the field names its objects are laid out with. Neither is a table, so neither has
 // "keys". A class also gets pointed at the object case, because reaching for a field through the
@@ -341,7 +341,7 @@ l_noret luaG_missingmembererror(lua_State* L, const TValue* p1, const TValue* p2
     luaG_runerrorL(L, "this %s does not have a field named '%s'", luaT_objtypename(L, p1), key);
 }
 
-// Luwu Classes (rfcx/classes.md): `Cat.age` where `age` is one of Cat's *fields*. The class knows the
+// Luwu Classes (rfcs/classes.md): `Cat.age` where `age` is one of Cat's *fields*. The class knows the
 // name perfectly well -- it lays its objects out with it -- so this deserves better than being told
 // the class has never heard of it.
 l_noret luaG_instancefieldonclasserror(lua_State* L, const TValue* p1, const TValue* p2)
@@ -381,7 +381,7 @@ l_noret luaG_constassignerror(lua_State* L, const TValue* p2, const TString* cla
     luaG_runerrorL(L, "'%s' is a const member of '%s' and cannot be assigned outside %s's '__init' constructor", getstr(tsvalue(p2)), t1, t1);
 }
 
-// Luwu Classes (rfcx/classes.md): this is called when `self` (or the LHS) of a methodcall isn't 
+// Luwu Classes (rfcs/classes.md): this is called when `self` (or the LHS) of a methodcall isn't 
 // actually an object of the class it's supposed to be.
 // 
 // `selfCall` means this function was called with `:` syntax. 

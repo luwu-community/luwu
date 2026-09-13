@@ -1391,7 +1391,7 @@ struct Printer
             writer.advance(c->name->location.begin);
             writer.identifier(c->name->name.value);
 
-            // Luwu Classes (rfcx/classes.md): the primary constructor's parameter list has to be
+            // Luwu Classes (rfcs/classes.md): the primary constructor's parameter list has to be
             // reproduced even when it is empty -- `class Counter()` and `class Counter` differ, the
             // former having no default table constructor.
             if (const AstClassPrimaryConstructor* primaryConstructor = c->primaryConstructor)

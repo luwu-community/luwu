@@ -1358,7 +1358,7 @@ void TypeChecker2::visit(AstStatClass* stat)
 {
     LUAU_ASSERT(FFlag::DebugLuauUserDefinedClasses);
 
-    // Luwu Classes (rfcx/classes.md): a primary constructor's parameters are checked like default
+    // Luwu Classes (rfcs/classes.md): a primary constructor's parameters are checked like default
     // function arguments -- annotation resolved, default checked against it.
     if (const AstClassPrimaryConstructor* primaryConstructor = stat->primaryConstructor)
     {
@@ -1428,7 +1428,7 @@ void TypeChecker2::visit(AstStatClass* stat)
 
     // A class whose fields are all private and which has no functions can be constructed, but nothing
     // can ever read or write what it holds: only the class's own functions may touch a private field,
-    // and there are none (rfcx/classes.md).
+    // and there are none (rfcs/classes.md).
     if (FFlag::LuauBetterUserDefinedClasses)
     {
         size_t fieldCount = 0;

@@ -4551,7 +4551,7 @@ TEST_CASE("Classes")
         {
             // yielding C functions (via lua_yield with continuations) so classes.luau can verify that
             // a class method calling a yielding C function still suspends/resumes correctly, including
-            // when that method is inlined -- see rfcx/classes.md
+            // when that method is inlined -- see rfcs/classes.md
             lua_pushcclosurek(L, singleYield, "singleYield", 0, singleYieldContinuation);
             lua_setglobal(L, "singleYield");
 

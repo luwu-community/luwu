@@ -11271,7 +11271,7 @@ TEST_CASE("ClassPrimaryConstructor")
     ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
     ScopedFastFlag betterClasses{FFlag::LuauBetterUserDefinedClasses, true};
 
-    // A primary constructor (rfcx/classes.md) declares a public field per parameter. A statically
+    // A primary constructor (rfcs/classes.md) declares a public field per parameter. A statically
     // resolved construction site doesn't call the synthesized `__init` at all: the parameters are
     // evaluated into registers, each field's initializer is compiled inline, and NEWOBJECT's
     // positional FIELDS form finishes the instance. The class body's own properties come first, then
@@ -11346,7 +11346,7 @@ TEST_CASE("ClassMethodInlineSelfCheck")
     // stays a plain CALL in this dump
     ScopedFastFlag noCallFb{FFlag::LuauEmitCallFeedback, false};
 
-    // Runtime checking of `self` for methods (rfcx/classes.md) must survive method inlining at -O2:
+    // Runtime checking of `self` for methods (rfcs/classes.md) must survive method inlining at -O2:
     // the inlined copy of the body never runs the callee's prologue, so compileInlinedCall re-emits
     // the CHECKSELFCLASS itself. Without it, a receiver whose annotation lies about its class would
     // silently run the wrong class's body.

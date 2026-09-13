@@ -4226,7 +4226,7 @@ TEST_CASE_FIXTURE(Fixture, "class_primary_constructor_with_no_parameters")
     };
 
     // `class Counter()` is not the same as `class Counter`: the empty parameter list is what takes
-    // away the default table constructor (rfcx/classes.md), so it has to survive parsing.
+    // away the default table constructor (rfcs/classes.md), so it has to survive parsing.
     ParseResult result = tryParse(R"(
         class Counter()
         end
@@ -4365,7 +4365,7 @@ TEST_CASE_FIXTURE(Fixture, "class_primary_constructor_parses_qualifiers_on_param
     };
 
     // Kotlin-style: a parameter may carry the access specifier and `const` modifier of the field it
-    // declares, instead of restating the field in the class body (rfcx/classes.md).
+    // declares, instead of restating the field in the class body (rfcs/classes.md).
     AstStatBlock* block = parse(R"(
 class SshKey private (
     public const public_key: string,
@@ -4519,7 +4519,7 @@ end
     );
 
     // a `private` primary constructor is not a member qualifier: it does not force the rest of the
-    // class to qualify itself (rfcx/classes.md)
+    // class to qualify itself (rfcs/classes.md)
     AstStatBlock* block = parse(R"(
 class PositiveNumber private (const inner: number)
     function new(n: number) return PositiveNumber(n) end

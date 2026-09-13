@@ -110,7 +110,7 @@ enum class IrCmd : uint8_t
     // When undef is specified, uses current function Closure.
     GET_CLOSURE_UPVAL_ADDR,
 
-    // Luwu Classes (rfcx/classes.md): load the class the currently executing closure's proto belongs
+    // Luwu Classes (rfcs/classes.md): load the class the currently executing closure's proto belongs
     // to (`Closure::l.p->ownerclass`), or NULL when it belongs to none. Backs the
     // LBC_SELFCLASS_OWNER form of CHECKSELFCLASS, where a method validates `self` against its own
     // class without that class occupying a register or forcing an upvalue capture. Loop-invariant
@@ -476,7 +476,7 @@ enum class IrCmd : uint8_t
     // A: pointer (Buffer)
     BUFFER_ISFROZEN,
 
-    // Luwu Classes (rfcx/classes.md): compute class.isinstance(value, class) as an int 0/1 --
+    // Luwu Classes (rfcs/classes.md): compute class.isinstance(value, class) as an int 0/1 --
     // true iff the value is an object whose class is exactly the given class.
     // A: tag (of the value)
     // B: pointer (the value's gc pointer, LuauObject; only dereferenced when A == LUA_TOBJECT)
@@ -709,7 +709,7 @@ enum class IrCmd : uint8_t
     // When undef is specified instead of a block, execution is aborted on check failure
     CHECK_NODE_VALUE,
 
-    // Guard against a Luwu Classes object not being an instance of a specific class (see rfcx/classes.md)
+    // Guard against a Luwu Classes object not being an instance of a specific class (see rfcs/classes.md)
     // A: pointer (LuauObject)
     // B: pointer (LuauClass, the expected class)
     // C: block/vmexit/undef
@@ -718,7 +718,7 @@ enum class IrCmd : uint8_t
 
     // Try to get the address of an instance member (field) on a Luwu Classes object using the cached
     // member slot at the given bytecode position, or jump if the slot is stale (out of range for
-    // instance members, or doesn't name the expected member) -- see rfcx/classes.md. Also jumps if
+    // instance members, or doesn't name the expected member) -- see rfcs/classes.md. Also jumps if
     // the member is private/const and this access isn't authorized from inside the owning class's
     // own methods (see emitClassMemberAuthX64); the interpreter fallback then raises the error.
     // A: pointer (LuauObject)
@@ -731,7 +731,7 @@ enum class IrCmd : uint8_t
     TRY_OBJECT_MEMBER_ADDR,
 
     // Address of an instance member at a *known* offset on a Luwu Classes object, for a receiver whose
-    // class the compiler has proven (a method's own `self`; see rfcx/classes.md and LOP_GETOBJECTMEMBER).
+    // class the compiler has proven (a method's own `self`; see rfcs/classes.md and LOP_GETOBJECTMEMBER).
     // Nothing is re-checked here -- no slot cache, no name compare, no private/const authorization, and
     // no bounds check either: the offset is inside the instance for any bytecode the compiler produced,
     // and invalid bytecode is the embedder's contract to keep. Not a guard, so it never branches.
@@ -741,7 +741,7 @@ enum class IrCmd : uint8_t
 
     // Try to get the address of a static member on a Luwu Classes class object using the cached
     // member slot at the given bytecode position, or jump if the slot is stale (out of range for
-    // static members, or doesn't name the expected member) -- see rfcx/classes.md
+    // static members, or doesn't name the expected member) -- see rfcs/classes.md
     // A: pointer (LuauClass)
     // B: unsigned int (pcpos, used to read the live cached slot from bytecode)
     // C: Kn (expected member name)
@@ -751,7 +751,7 @@ enum class IrCmd : uint8_t
 
     // Try to get the address of any member (instance field or static method) on a Luwu Classes
     // object using the cached member slot at the given bytecode position, or jump if the slot is
-    // stale -- used for method resolution on NAMECALL, see rfcx/classes.md
+    // stale -- used for method resolution on NAMECALL, see rfcs/classes.md
     // A: pointer (LuauObject)
     // B: unsigned int (pcpos, used to read the live cached slot from bytecode)
     // C: Kn (expected member name)
@@ -951,7 +951,7 @@ enum class IrCmd : uint8_t
     // C: block
     FALLBACK_FORGPREP,
 
-    // Luwu Classes (rfcx/classes.md): construct an instance of a statically resolved class.
+    // Luwu Classes (rfcs/classes.md): construct an instance of a statically resolved class.
     // Construction has no machine code lowering; it runs through the same C fallback the interpreter
     // uses, which keeps native execution going afterwards instead of abandoning the rest of the
     // function to the interpreter (and, unlike a bare exit, keeps the register liveness honest).
@@ -962,7 +962,7 @@ enum class IrCmd : uint8_t
     // E: int (AUX: argument count for forms 0 and 1, field count for form 2)
     FALLBACK_NEWOBJECT,
 
-    // Luwu Classes (rfcx/classes.md): add a member (a method, a primary constructor's synthesized
+    // Luwu Classes (rfcs/classes.md): add a member (a method, a primary constructor's synthesized
     // __init, or a __defaults closure) to a class under construction. Runs as a C fallback for the
     // same reason as FALLBACK_NEWOBJECT.
     // A: unsigned int (bytecode instruction index)

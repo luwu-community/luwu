@@ -467,7 +467,7 @@ enum LuauOpcode
     // AUX: string constant index of the method's name, for the error message
     LOP_CHECKSELFCLASS,
 
-    // JUMPXISA: fused class.isinstance(value, class) test-and-branch (see rfcx/classes.md), emitted
+    // JUMPXISA: fused class.isinstance(value, class) test-and-branch (see rfcs/classes.md), emitted
     // for `class.isinstance(x, C)` used as a condition when C is a statically-known class. Avoids the
     // builtin call, the boolean materialization and the argument tag guard.
     // A: value register
@@ -588,7 +588,7 @@ enum LuauBytecodeTag
     LBC_CONSTANT__COUNT
 };
 
-// Luwu Classes (rfcx/classes.md): per-member attribute bits serialized as part of
+// Luwu Classes (rfcs/classes.md): per-member attribute bits serialized as part of
 // LBC_CONSTANT_CLASS_SHAPE. The single source of truth for these bits; both the compiler
 // (Compiler/src/Compiler.cpp) and the VM (VM/src/lclass.h/.cpp) use these directly.
 #define LBC_CLASSMEMBER_PRIVATE (1 << 0)
@@ -606,7 +606,7 @@ enum LuauBytecodeTag
 // before honoring that form on a class that has a custom `__init`.
 #define LBC_CLASSMEMBER_PRIMARYINIT (1 << 4)
 
-// Luwu Classes (rfcx/classes.md): operand B of LOP_CHECKSELFCLASS. Instead of naming a register
+// Luwu Classes (rfcs/classes.md): operand B of LOP_CHECKSELFCLASS. Instead of naming a register
 // holding the class, take the class from the executing closure's `Proto::ownerclass`.
 //
 // A method's prologue check uses this form. The class it validates against is a constant of the
@@ -637,7 +637,7 @@ enum LuauBytecodeType
     LBC_TYPE_BUFFER,
     LBC_TYPE_INTEGER,
     LBC_TYPE_SYMNONE,
-    // Luwu Classes (rfcx/classes.md): a class value (the factory/namespace) and an object
+    // Luwu Classes (rfcs/classes.md): a class value (the factory/namespace) and an object
     // (instance). Kept in the 12..14 gap below LBC_TYPE_ANY so existing values don't shift.
     LBC_TYPE_CLASS = 12,
     LBC_TYPE_OBJECT = 13,
@@ -841,7 +841,7 @@ enum LuauBuiltinFunction
 
     LBF_BUFFER_ISFROZEN,
 
-    // Luwu Classes (rfcx/classes.md): class.isinstance(value, class) -> boolean
+    // Luwu Classes (rfcs/classes.md): class.isinstance(value, class) -> boolean
     LBF_CLASS_ISINSTANCE,
 };
 

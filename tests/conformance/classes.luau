@@ -1049,7 +1049,7 @@ expectfail(
     end
 )
 
--- class.isinstance fast paths (rfcx/classes.md): the LBF_CLASS_ISINSTANCE builtin / CLASS_ISINSTANCE
+-- class.isinstance fast paths (rfcs/classes.md): the LBF_CLASS_ISINSTANCE builtin / CLASS_ISINSTANCE
 -- IR op (value position) and the fused JUMPXISA test-and-branch (condition position). All of these
 -- must agree with the plain library semantics for objects, non-objects and both branch polarities.
 class IsaFoo public x: number = 0 end
@@ -1102,7 +1102,7 @@ end)
 -- Method inlining must remain correct when the inlined method yields: the Luau bytecode inliner is
 -- yield-transparent (a yield suspends the whole coroutine; resume continues in the caller's inlined
 -- body), so a `self:method()` / typed `obj:method()` call that contains a coroutine.yield can inline
--- without breaking suspend/resume. See rfcx/classes.md.
+-- without breaking suspend/resume. See rfcs/classes.md.
 class YieldGen
     public base: number = 0
 
@@ -1356,7 +1356,7 @@ expectfail(
     end
 )
 
--- Runtime checking of `self` for methods (rfcx/classes.md) has to survive method inlining at -O2:
+-- Runtime checking of `self` for methods (rfcs/classes.md) has to survive method inlining at -O2:
 -- `compileInlinedCall` copies the method body into the call site without running the callee's
 -- prologue, so it re-emits the CHECKSELFCLASS itself. Without that, a hostile (or merely wrong)
 -- annotation would silently run the wrong class's method body instead of erroring.
@@ -1849,7 +1849,7 @@ expectpass("class.isinstance on a value with a statically known tag", function()
 end)
 
 --
--- Primary constructors (rfcx/classes.md). Each parameter implicitly declares a public field, and the
+-- Primary constructors (rfcs/classes.md). Each parameter implicitly declares a public field, and the
 -- whole header compiles to a synthesized `__init`.
 --
 
@@ -1942,7 +1942,7 @@ expectfail(
 )
 
 -- a parameter may carry the access specifier and `const` modifier of the field it declares, instead
--- of restating the field in the class body (Kotlin-style, rfcx/classes.md)
+-- of restating the field in the class body (Kotlin-style, rfcs/classes.md)
 class PrimaryKey private (
     public const name: string,
     private const secret: string

@@ -1446,7 +1446,7 @@ struct ConstPropState
     std::vector<NumberedInstruction> getSlotNodeCache; // Additionally, pcpos argument might be different
     std::vector<NodeSlotState> checkSlotMatchCache;    // Additionally, fallback block argument might be different
 
-    // Luwu Classes object member access (rfcx/classes.md). TRY_OBJECT_MEMBER_ADDR is a fused
+    // Luwu Classes object member access (rfcs/classes.md). TRY_OBJECT_MEMBER_ADDR is a fused
     // guard+address op, so we CSE the address directly. pcpos (OP_B) and fallback (OP_D) may differ;
     // write bit (OP_E) is tracked so a read may reuse a dominating write's guard, but not vice versa.
     std::vector<NumberedInstruction> tryObjectMemberCache;
@@ -2741,7 +2741,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     }
     case IrCmd::OBJECT_MEMBER_ADDR:
     {
-        // Luwu Classes (rfcx/classes.md): a proven `self.field` address depends only on the object and
+        // Luwu Classes (rfcs/classes.md): a proven `self.field` address depends only on the object and
         // a constant offset, and carries no guard at all, so a repeat of the same pair is the same
         // address. Reusing it is what lets the value cache above forward a load or a store
         // to a later read of the same field -- the second `self.x` in a method costs nothing.
@@ -2778,7 +2778,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         break;
     case IrCmd::TRY_CLASS_MEMBER_ADDR:
     case IrCmd::TRY_OBJECT_NAMECALL_ADDR:
-        // TODO(rfcx/classes.md): no reuse cache yet, unlike TRY_OBJECT_MEMBER_ADDR above
+        // TODO(rfcs/classes.md): no reuse cache yet, unlike TRY_OBJECT_MEMBER_ADDR above
         break;
     case IrCmd::ADD_INT64:
     case IrCmd::SUB_INT64:
@@ -3457,7 +3457,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         break;
 
     case IrCmd::CHECK_OBJECT_CLASS:
-        // TODO(rfcx/classes.md): no redundant-check elimination yet, unlike CHECK_SLOT_MATCH above
+        // TODO(rfcs/classes.md): no redundant-check elimination yet, unlike CHECK_SLOT_MATCH above
         break;
 
     case IrCmd::ADD_VEC:
