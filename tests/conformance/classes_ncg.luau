@@ -117,4 +117,82 @@ expectpass("declaring a class with methods leaves the surrounding locals intact"
     assert(Declared{ v = 41 }:bump() == 42)
 end)
 
+-- LOP_NEWOBJECT is now emitted for a class with a private constructor too, which means the opcode --
+-- not luaR_createobject's C frame -- is what enforces "a private constructor is only callable from
+-- inside its own class". The authority is the executing closure's Proto::ownerclass. NEWOBJECT is
+-- only emitted for a direct, statically resolved `ClassName(...)` callee, so pcall-laundered and
+-- aliased calls still go through luaR_createobject; both must stay denied either way.
+class Acct private (owner: string, balance: number)
+    public owner
+    private balance
+
+    public function new(o: string, b: number): Acct
+        return Acct(o, b)
+    end
+
+    public function nested(o: string, b: number): Acct
+        -- a closure lexically inside a method inherits ownerclass (luaR_stampownerclass is recursive)
+        local f = function()
+            return Acct(o, b)
+        end
+        return f()
+    end
+
+    public function bal(self): number
+        return self.balance
+    end
+end
+
+class ExplicitInit
+    public x: number
+
+    private function __init(self, x: number)
+        self.x = x
+    end
+
+    public function new(x: number): ExplicitInit
+        return ExplicitInit(x)
+    end
+end
+
+expectpass("a private constructor is callable from inside its own class", function()
+    assert(Acct.new("a", 10):bal() == 10)
+    assert(Acct.nested("b", 20):bal() == 20)
+    assert(ExplicitInit.new(5).x == 5)
+end)
+
+local function denied(f, what)
+    local ok, err = pcall(f)
+    assert(not ok, `{what} was ALLOWED`)
+    assert(type(err) == "string" and string.find(err, "private", 1, true), `{what}: unexpected error {err}`)
+end
+
+expectpass("a private constructor is not callable from outside, by any route", function()
+    -- the direct call is the one that compiles to NEWOBJECT
+    denied(function()
+        return Acct("c", 30)
+    end, "direct call from outside")
+
+    denied(function()
+        return ExplicitInit(1)
+    end, "direct call to a private __init from outside")
+
+    -- these never become NEWOBJECT sites; they must stay denied on the luaR_createobject path.
+    -- pcall is checked directly rather than through `denied`: it catches the error instead of
+    -- propagating it, so wrapping it in another pcall would report success either way.
+    local laundered, launderErr = pcall(Acct, "d", 40)
+    assert(not laundered, "pcall laundering was ALLOWED")
+    assert(type(launderErr) == "string" and string.find(launderErr, "private", 1, true), `pcall laundering: unexpected error {launderErr}`)
+
+    local alias = Acct
+    denied(function()
+        return alias("e", 50)
+    end, "aliased call")
+
+    local function outsideHelper()
+        return Acct("f", 60)
+    end
+    denied(outsideHelper, "a plain local function outside the class")
+end)
+
 return 'OK'

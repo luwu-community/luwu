@@ -1593,7 +1593,7 @@ const std::unordered_set<std::string> EXPLICITLY_DISALLOWED_METAMETHODS{
 // classStatement ::= `class` Name classProps `end`
 // classProps ::= classProp [classProps]
 // classProp ::= name [: classQualifier* type]
-// Luau Classes (rfcx/classes.md): parse the parameter list of a class's primary constructor, e.g. the
+// Luwu Classes (rfcx/classes.md): parse the parameter list of a class's primary constructor, e.g. the
 // `(name: string, age = 0)` of `class Cat(name: string, age = 0)`. Each parameter implicitly declares
 // a public field of the same name, and the whole list is compiled into a synthesized `__init`.
 LUAU_NOINLINE AstClassPrimaryConstructor* Parser::parseClassPrimaryConstructor(
@@ -1756,7 +1756,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
     if (FFlag::LuauBetterUserDefinedClasses && FFlag::LuauGenericNominals)
         std::tie(generics, genericPacks) = parseGenericTypeList(/* withDefaultValues= */ false);
 
-    // Luau Classes (rfcx/classes.md): an optional primary constructor, which may carry an access
+    // Luwu Classes (rfcx/classes.md): an optional primary constructor, which may carry an access
     // specifier of its own: `class Cat(name: string)`, `class Account private (holder: User)`.
     // The `(` lookahead is what keeps `public`/`private` here from being confused with the access
     // specifier of the class's first member.
@@ -5520,7 +5520,7 @@ AstLocal* Parser::pushLocal(const Binding& binding)
     return local;
 }
 
-// Luau Classes (rfcx/classes.md): bring a class's primary constructor parameters into scope for a
+// Luwu Classes (rfcx/classes.md): bring a class's primary constructor parameters into scope for a
 // field initializer expression, the only place they are visible. Their AstLocals were created once,
 // at the depth of the synthesized `__init`, by parseClassPrimaryConstructor; this re-enters them into
 // the scope chain so restoreLocals can take them back out.

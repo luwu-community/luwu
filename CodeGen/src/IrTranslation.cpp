@@ -1778,7 +1778,7 @@ void translateInstGetTableKS(IrBuilder& build, const Instruction* pc, int pcpos)
         return;
     }
 
-    // Luau Classes (rfcx/classes.md): instance field access on an object, and static member access
+    // Luwu Classes (rfcx/classes.md): instance field access on an object, and static member access
     // on a class. Gated strictly on the register's known bytecode type -- only a value the compiler
     // has actually typed as an object/class takes these paths; anything else (including LBC_TYPE_ANY)
     // falls through to ordinary table handling below. For a known object/class the tag is hard-
@@ -1883,7 +1883,7 @@ void translateInstGetTableKS(IrBuilder& build, const Instruction* pc, int pcpos)
     build.inst(IrCmd::JUMP, next);
 }
 
-// Luau Classes (rfcx/classes.md): read `self.field` where the compiler proved the receiver's class, so
+// Luwu Classes (rfcx/classes.md): read `self.field` where the compiler proved the receiver's class, so
 // the member offset is a constant. The tag is still guarded -- deopting to the interpreter on a miss,
 // which is where the error is raised -- but nothing about the class is re-derived.
 void translateInstGetObjectMember(IrBuilder& build, const Instruction* pc, int pcpos)
@@ -1896,7 +1896,7 @@ void translateInstGetObjectMember(IrBuilder& build, const Instruction* pc, int p
     build.inst(IrCmd::CHECK_TAG, tb, build.constTag(LUA_TOBJECT), build.vmExit(pcpos));
 
     IrOp vb = build.inst(IrCmd::LOAD_POINTER, build.vmReg(rb));
-    IrOp addr = build.inst(IrCmd::OBJECT_MEMBER_ADDR, vb, build.constUint(offset), build.vmExit(pcpos));
+    IrOp addr = build.inst(IrCmd::OBJECT_MEMBER_ADDR, vb, build.constUint(offset));
     IrOp tv = build.inst(IrCmd::LOAD_TVALUE, addr);
     build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), tv);
 }
@@ -1912,7 +1912,7 @@ void translateInstSetObjectMember(IrBuilder& build, const Instruction* pc, int p
     build.inst(IrCmd::CHECK_TAG, tb, build.constTag(LUA_TOBJECT), build.vmExit(pcpos));
 
     IrOp vb = build.inst(IrCmd::LOAD_POINTER, build.vmReg(rb));
-    IrOp addr = build.inst(IrCmd::OBJECT_MEMBER_ADDR, vb, build.constUint(offset), build.vmExit(pcpos));
+    IrOp addr = build.inst(IrCmd::OBJECT_MEMBER_ADDR, vb, build.constUint(offset));
     IrOp tv = build.inst(IrCmd::LOAD_TVALUE, build.vmReg(ra));
     build.inst(IrCmd::STORE_TVALUE, addr, tv);
     build.inst(IrCmd::BARRIER_OBJ, vb, build.vmReg(ra), build.undef());
@@ -1938,7 +1938,7 @@ void translateInstSetTableKS(IrBuilder& build, const Instruction* pc, int pcpos)
         return;
     }
 
-    // Luau Classes (rfcx/classes.md): writing an instance field on an object, e.g. `self.x = ...`.
+    // Luwu Classes (rfcx/classes.md): writing an instance field on an object, e.g. `self.x = ...`.
     //
     // This path fires only when the compiler has actually typed the receiver as an object which can happen
     // in simple cases but is rare. We guard against tag here; if wrong we deopt.
@@ -2176,7 +2176,7 @@ bool translateInstNamecall(IrBuilder& build, const Instruction* pc, int pcpos)
     IrOp next = build.blockAtInst(pcpos + getOpLength(LuauOpcode(LOP_NAMECALL)));
     IrOp fallback = build.fallbackBlock(pcpos);
 
-    // Luau Classes (rfcx/classes.md): method resolution on an object receiver (`self:method()`).
+    // Luwu Classes (rfcx/classes.md): method resolution on an object receiver (`self:method()`).
     // Resolve the method address inline from the class members using the cached slot, store method
     // into ra and self into ra+1, then fall through to CALL -- avoiding an interpreter trampoline.
     auto emitObjectNamecall = [&]()
@@ -2384,7 +2384,7 @@ void translateInstCmpProto(IrBuilder& build, const Instruction* pc, int pcpos)
 
 void translateInstJumpXIsa(IrBuilder& build, const Instruction* pc, int pcpos)
 {
-    // Luau Classes (rfcx/classes.md): fused class.isinstance(value, class) test-and-branch. The class
+    // Luwu Classes (rfcx/classes.md): fused class.isinstance(value, class) test-and-branch. The class
     // register is guaranteed by the compiler to hold a class, so no tag guard is needed here.
     int ra = LUAU_INSN_A(*pc);
     uint32_t aux = pc[1];

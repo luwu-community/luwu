@@ -1413,7 +1413,7 @@ expectpass("an annotation that lies about a receiver's class never runs the othe
         assert(
             string.find(
                 res,
-                "attempt to call method 'InlinePoint2D:get_x' but 'self' is unexpectedly an object of class 'InlinePoint3D'",
+                "attempt to call inlined method 'InlinePoint2D:get_x' on an object of class 'InlinePoint3D'",
                 1,
                 true
             ),
@@ -1808,8 +1808,9 @@ expectpass("a colon-call reaching the wrong body points at the annotation", func
         assert(
             string.find(
                 err,
-                "attempt to call method 'InlinePoint2D:get_x' but 'self' is unexpectedly an object of class 'InlinePoint3D'; " ..
-                    "remove any incorrect type annotations so inlining resolves to the correct class",
+                "attempt to call inlined method 'InlinePoint2D:get_x' on an object of class 'InlinePoint3D'; " ..
+                    "this occurred because inlining optimizations are enabled and the passed 'self' did not match the " ..
+                    "expected type annotation 'InlinePoint2D'",
                 1,
                 true
             ),

@@ -119,7 +119,7 @@ static BytecodeBuilder::StringRef sref(AstArray<const char> data)
     return {data.data, data.size};
 }
 
-// Luau Classes (rfcx/classes.md): a field default that is a compile-time constant can be stored on
+// Luwu Classes (rfcx/classes.md): a field default that is a compile-time constant can be stored on
 // the class itself and copied into every new instance, so the class needs no `__defaults` closure at
 // all. Anything else -- a table literal, a call, a concatenation of locals -- has to be re-evaluated
 // on each construction (a `= {}` default must hand out a *fresh* table), and keeps the closure.
@@ -718,7 +718,7 @@ struct Compiler
         if (isConstant(expr))
             return false;
 
-        // Luau Classes (rfcx/classes.md): constructing an instance always yields exactly one value,
+        // Luwu Classes (rfcx/classes.md): constructing an instance always yields exactly one value,
         // whether it goes through NEWOBJECT or the class's default constructor. Saying so here is what
         // lets `return ClassName(...)` and similar multret positions use the fixed-result path.
         if (FFlag::DebugLuauUserDefinedClasses && !expr->self && isKnownClassExpr(expr->func))
@@ -1132,7 +1132,7 @@ struct Compiler
     // *same* class from inside another method of that class needs no repeated CHECKSELFCLASS at the
     // inline site -- the enclosing method's own prologue already validated that exact value. Only
     // holds while `self` is never reassigned in the enclosing body.
-    // Luau Classes (rfcx/classes.md): the class of a receiver whose class is *proven* rather than
+    // Luwu Classes (rfcx/classes.md): the class of a receiver whose class is *proven* rather than
     // inferred -- the enclosing method's own `self`, which the method prologue's CHECKSELFCLASS has
     // already established is an instance of the method's class, and which the method never reassigns.
     //
@@ -1163,7 +1163,7 @@ struct Compiler
         return owner ? *owner : nullptr;
     }
 
-    // Luau Classes (rfcx/classes.md): the offset of an instance member within a class, which is its
+    // Luwu Classes (rfcx/classes.md): the offset of an instance member within a class, which is its
     // index in declaration order. **Must agree with the order compileClassDeclaration emits members
     // in**: the class body's properties first, then a primary constructor's parameters that the body
     // doesn't restate. Returns -1 for anything that isn't an instance field of this class -- a method
@@ -1602,13 +1602,12 @@ struct Compiler
         return nullptr;
     }
 
-    // Find an instance method (one taking `self`) named `name` in a class, eligible as an inline
-    // target. `__init` is never eligible: it is the only context where writing a `const` member is
-    // authorized, and that authorization is gated on the executing closure being the class's own
-    // `__init` (luaR_closureisinit). Inlining its body into another closure would run those const
-    // writes under the wrong closure and wrongly reject them (see rfcx/classes.md).
+    // Find an inlineable method named `name` in a class.
     AstExprFunction* findInstanceMethod(AstStatClass* cls, AstName name)
     {
+        // We can't inline `__init` because it's the only method allowed to mutate const properties
+        // (luaR_closureisinit) and inlining it here would cause const property writes within to be
+        // incorrectly rejected.
         if (name == "__init")
             return nullptr;
 
@@ -1620,6 +1619,28 @@ struct Compiler
                     return m->function;
             }
         }
+        return nullptr;
+    }
+
+    // The declared type of a class field, which lives in one of two places: on the body's
+    // AstClassProperty, or -- for a field introduced by a primary constructor -- on the constructor
+    // parameter that declares it. A body restatement of a parameter field is optional and is allowed
+    // to omit the annotation (`class Home(owner: Person) private owner end`), so a property that
+    // names no class still falls through to the parameter.
+    AstType* findClassFieldType(AstStatClass* cls, AstName name)
+    {
+        if (const AstClassProperty* prop = findClassProperty(cls, name); prop && prop->ty)
+            return prop->ty;
+
+        if (cls->primaryConstructor)
+        {
+            for (AstLocal* param : cls->primaryConstructor->args)
+            {
+                if (param->name == name)
+                    return param->annotation;
+            }
+        }
+
         return nullptr;
     }
 
@@ -1653,16 +1674,13 @@ struct Compiler
         else if (AstExprIndexName* idx = recv->as<AstExprIndexName>())
         {
             if (AstStatClass* baseClass = resolveReceiverClass(idx->expr))
-            {
-                if (const AstClassProperty* prop = findClassProperty(baseClass, idx->index))
-                    return classFromType(prop->ty);
-            }
+                return classFromType(findClassFieldType(baseClass, idx->index));
         }
 
         return nullptr;
     }
 
-    // Luau Classes (rfcx/classes.md): resolve an `obj:method()` call to a class instance method so it
+    // Luwu Classes (rfcx/classes.md): resolve an `obj:method()` call to a class instance method so it
     // can be inlined at O2. The receiver's class must be statically known (see resolveReceiverClass),
     // and the privacy gate must pass: a method may only be inlined into a *different* class's body
     // when its class has no private members. Same-class inlining is always allowed (the executing
@@ -1691,7 +1709,7 @@ struct Compiler
         return findInstanceMethod(recvClass, idx->index);
     }
 
-    // Luau Classes (rfcx/classes.md): this class's own `__init`, or null when it uses the default
+    // Luwu Classes (rfcx/classes.md): this class's own `__init`, or null when it uses the default
     // (POD) constructor.
     const AstClassMethod* findClassInit(AstStatClass* decl)
     {
@@ -1707,12 +1725,24 @@ struct Compiler
     // every declared field, which stops paying for itself on a wide class initialized sparsely.
     static const size_t kMaxNewObjectFields = 16;
 
-    // Luau Classes (rfcx/classes.md): compile `ClassName { field = value }` into NEWOBJECT with the
-    // field values passed positionally, so no argument table is ever built. Every entry has to be a
-    // `field = value` record naming a declared field of the class; anything else (an array part, a
-    // computed key, a key that isn't a field) falls back to the table-argument form, which still
-    // ignores unknown keys exactly as before.
-    bool tryCompileNewObjectFields(AstExprCall* expr, AstStatClass* decl, AstExprTable* fields, uint8_t target)
+    // Luwu Classes (rfcx/classes.md): try the statically resolved fast path for the POD table
+    // constructor syntax. 
+    // 
+    // `ClassName { field = value }` compiles to the positional NEWOBJECT ... FIELDS form,
+    // instead of allocating a real table, the table syntax's entries are taken apart here and passed
+    // as one register per declared field.
+    //
+    // Returns false without emitting anything when the literal can't be taken apart, and
+    // tryCompileNewObject then passes it as an ordinary argument table.
+    //
+    // Reasons why this may need to fall back:
+    //
+    //   - an entry isn't a `field = value` record, i.e. an array part or a computed key
+    //   - a key names no declared field. `ClassName { bogus = 1 }` is not an error: the table form
+    //     silently ignores that key, and the positional form has no register to put it in, so falling
+    //     back is the only way to keep those semantics.
+    //   - the class declares no fields at all, or more than kMaxNewObjectFields of them
+    bool tryCompileNewObjectTableConstructor(AstExprCall* expr, AstStatClass* decl, AstExprTable* fields, uint8_t target)
     {
         std::vector<const AstClassProperty*> properties;
 
@@ -1791,7 +1821,7 @@ struct Compiler
         return true;
     }
 
-    // Luau Classes (rfcx/classes.md): can a primary constructor's field initializers be compiled at
+    // Luwu Classes (rfcx/classes.md): can a primary constructor's field initializers be compiled at
     // the construction site rather than inside the synthesized `__init`? Only the constructor's own
     // parameters, globals and constants are reachable from there. Any other local would be an upvalue
     // of `__init`, which the construction site has no way to name, and a closure could capture one
@@ -1827,16 +1857,28 @@ struct Compiler
         }
     };
 
-    // Luau Classes (rfcx/classes.md): compile `ClassName(a, b)` on a class with a primary constructor
-    // into the positional NEWOBJECT ... FIELDS form -- the constructor's parameters are evaluated into
-    // registers, each field's initializer is compiled right here, and the instance is finished by
-    // NEWOBJECT alone. That removes the `__init` call entirely, which is the whole point of the primary
-    // constructor: it exists so that `class Cat(name, age)` costs no more than a table literal.
+    // Luwu Classes (rfcx/classes.md): try the statically resolved fast path for the class field
+    // parameter list syntax (primary constructor).
     //
-    // The synthesized `__init` still exists and is still what a dynamic construction (`local mk = Cat;
-    // mk(...)`) calls; this is purely the statically resolved path. The VM checks the class agrees
-    // (LBC_CLASSMEMBER_PRIMARYINIT) before honoring the shape.
-    bool tryCompileNewObjectPrimary(AstExprCall* expr, AstStatClass* decl, uint8_t target)
+    // `ClassName(a, b)` compiles to the positional NEWOBJECT ... FIELDS form.
+    // The arguments are evaluated into registers, each field's initializer is compiled right here,
+    // and NEWOBJECT finishes the instance. When this succeeds `__init` doesn't need to be called.
+    //
+    // Returns false without emitting anything when the initializers can't be moved to the call site.
+    // tryCompileNewObject then falls back to calling `__init`.
+    // 
+    // Reasons why this may need to fall back:
+    //
+    //   - an initializer reads a local that isn't a constructor parameter, or contains a closure or
+    //     `...`; only parameters, globals and constants can be named from the call site
+    //     (PrimaryInitInlineVisitor)
+    //   - the class has more than kMaxNewObjectFields fields, past which a register and a LOADNIL
+    //     per field stop paying for themselves
+    //   - the call passes more arguments than the constructor has parameters, since the extras would
+    //     still have to be evaluated for their side effects
+    //   - `__init` costs more than FInt::LuauCompileInlineThreshold, this being an inline of its work
+    //     into every construction site
+    bool tryCompileNewObjectFieldParameters(AstExprCall* expr, AstStatClass* decl, uint8_t target)
     {
         AstClassPrimaryConstructor* primaryConstructor = decl->primaryConstructor;
         LUAU_ASSERT(primaryConstructor);
@@ -1925,9 +1967,10 @@ struct Compiler
         while (AstExprGroup* group = callee->as<AstExprGroup>())
             callee = group->expr;
 
-        // Which parameters are read by an initializer other than their own field's. A parameter that
-        // isn't -- the whole of a plain `class Cat(name, age)` -- can be evaluated straight into the
-        // register its field occupies, with no temporary and no move.
+        // Which parameters are read by an initializer other than their own field's? 
+        // A parameter that isn't used in evaluating a different field can be 
+        // evaluated straight into the register its field occupies with no 
+        // temporary and no move.
         DenseHashSet<AstLocal*> parametersReadElsewhere{nullptr};
 
         for (const AstClassProperty* prop : properties)
@@ -2090,11 +2133,33 @@ struct Compiler
         return true;
     }
 
-    // Luau Classes (rfcx/classes.md): compile `ClassName(...)` into a NEWOBJECT, skipping the class's
-    // `__call` metamethod and the C constructor frame a generic CALL would go through. A class with a
-    // user-defined `__init` still needs it called, so NEWOBJECT lays out its frame and an ordinary
-    // CALL follows; a class using the default constructor is finished by NEWOBJECT alone. Returns
-    // false so the caller falls back to the ordinary call path when neither shape applies.
+    // Luwu Classes (rfcx/classes.md): try to compile `ClassName(...)` into a NEWOBJECT. Only a class
+    // declared in this module can be resolved statically at all (isKnownClassExpr), and only those
+    // reach here. The opcode allocates the instance itself, skipping the class's `__call` metamethod
+    // and the luaR_createobject C frame a generic CALL goes through.
+    //
+    // This picks which of NEWOBJECT's three forms fits, and emits the last two itself:
+    //
+    //   - FIELDS (operand C = 2): the fast path, taken by `Cat(name, age)` on a class field parameter
+    //     list (tryCompileNewObjectFieldParameters), and by `Cat { name = name, age = age }` on a POD
+    //     class whose keys all name declared fields (tryCompileNewObjectTableConstructor). AUX is the
+    //     class's member count, and A + 1 onwards hold one value per member in declaration order, nil
+    //     meaning "keep this member's default".
+    //   - INIT (C = 1): a custom `__init` has to run, so NEWOBJECT lays out its frame and an ordinary
+    //     CALL follows. A primary constructor lands here when FIELDS declined.
+    //   - DEFAULT (C = 0): the POD constructor's generic form -- `Cat()`, or a `Cat(t)` whose argument
+    //     FIELDS couldn't take apart. AUX is the argument count, and the table in A + 1, when there
+    //     is one, is actually allocated and read by name at runtime (luaR_applyobjectfields).
+    //
+    // Returns false without emitting anything when no form fits, and compileExprCall compiles an
+    // ordinary call instead.
+    //
+    // Reasons why this may need to fall back:
+    //
+    //   - the class has non-constant field defaults, which live in a `__defaults` closure that has to
+    //     be called (classPodDefaultsFn)
+    //   - an argument is multret, which needs the call-style argument setup the generic path does
+    //   - a default constructor was passed more than one argument
     bool tryCompileNewObject(AstExprCall* expr, uint8_t target)
     {
         if (!isKnownClassExpr(expr->func))
@@ -2125,15 +2190,7 @@ struct Compiler
         AstClassPrimaryConstructor* primaryConstructor = (*decl)->primaryConstructor;
         bool hasCustomInit = init != nullptr || primaryConstructor != nullptr;
 
-        // a private `__init` is only callable from inside its own class; leave enforcing that to the
-        // constructor rather than duplicating the check here
-        if (init && init->visibility == AstClassMemberVisibility::Private)
-            return false;
-
-        if (primaryConstructor && primaryConstructor->visibility == AstClassMemberVisibility::Private)
-            return false;
-
-        // the default constructor takes nothing, or one table of field values
+        // the default constructor takes zero or 1 arguments
         if (!hasCustomInit && expr->args.size > 1)
             return false;
 
@@ -2144,7 +2201,7 @@ struct Compiler
 
         // A primary constructor's `__init` does nothing but assign fields from its parameters, so the
         // construction site can do that itself and skip the call.
-        if (primaryConstructor && tryCompileNewObjectPrimary(expr, *decl, target))
+        if (primaryConstructor && tryCompileNewObjectFieldParameters(expr, *decl, target))
             return true;
 
         RegScope rs(this);
@@ -2159,7 +2216,7 @@ struct Compiler
             if (expr->args.size == 1)
             {
                 if (AstExprTable* fields = expr->args.data[0]->as<AstExprTable>();
-                    fields && tryCompileNewObjectFields(expr, *decl, fields, target))
+                    fields && tryCompileNewObjectTableConstructor(expr, *decl, fields, target))
                     return true;
             }
 
@@ -2249,14 +2306,14 @@ struct Compiler
             }
         }
 
-        // Luau Classes (rfcx/classes.md): construct instances of a statically known class inline
+        // Luwu Classes (rfcx/classes.md): construct instances of a statically known class inline
         if (FFlag::DebugLuauUserDefinedClasses && !expr->self && !multRet && targetCount == 1)
         {
             if (tryCompileNewObject(expr, target))
                 return;
         }
 
-        // Luau Classes (rfcx/classes.md): inline `obj:method()` calls whose receiver class is
+        // Luwu Classes (rfcx/classes.md): inline `obj:method()` calls whose receiver class is
         // statically known and passes the privacy gate (see tryResolveMethodCall).
         if (options.optimizationLevel >= 2 && expr->self && FFlag::DebugLuauUserDefinedClasses)
         {
@@ -2913,10 +2970,10 @@ struct Compiler
         return cv ? *cv : Constant{Constant::Type_Unknown};
     }
 
-    // Luau Classes (rfcx/classes.md): is `node` a reference to a statically-known class declaration
+    // Luwu Classes (rfcx/classes.md): is `node` a reference to a statically-known class declaration
     // (a const class local, possibly captured as an upvalue)? Only then is it safe to fuse
     // class.isinstance into JUMPXISA, whose second operand is asserted to be a class.
-    // Luau Classes (rfcx/classes.md): true when `node` evaluates to a class declared in this module,
+    // Luwu Classes (rfcx/classes.md): true when `node` evaluates to a class declared in this module,
     // which callers rely on to emit opcodes that take a class operand (JUMPXISA).
     //
     // A class name is never lexically scoped -- the parser leaves references to it as globals, and
@@ -2934,7 +2991,7 @@ struct Compiler
         return false;
     }
 
-    // Luau Classes (rfcx/classes.md): compile `class.isinstance(x, C)` used as a condition into a
+    // Luwu Classes (rfcx/classes.md): compile `class.isinstance(x, C)` used as a condition into a
     // single fused JUMPXISA test-and-branch, when C is a statically-known class. Returns false (so the
     // caller falls back to the ordinary builtin path) otherwise. `onlyTruth` selects the branch
     // polarity, matching the generic JUMPIF/JUMPIFNOT emitted by compileConditionValue below.
@@ -3254,7 +3311,7 @@ struct Compiler
             }
         }
 
-        // Luau Classes (rfcx/classes.md): fuse `class.isinstance(x, C)` conditions into JUMPXISA
+        // Luwu Classes (rfcx/classes.md): fuse `class.isinstance(x, C)` conditions into JUMPXISA
         if (AstExprCall* call = node->as<AstExprCall>())
         {
             if (tryCompileConditionIsinstance(call, target, skipJump, onlyTruth))
@@ -3990,7 +4047,7 @@ struct Compiler
         if (cid < 0)
             CompileError::raise(expr->location, "Exceeded constant limit; simplify the code to compile");
 
-        // Luau Classes (rfcx/classes.md): `self.field` inside a method needs none of GETTABLEKS's
+        // Luwu Classes (rfcx/classes.md): `self.field` inside a method needs none of GETTABLEKS's
         // per-access work -- the class is proven, so the member's offset is a constant.
         if (int offset = provenSelfMemberOffset(expr->expr, expr->index, /* forWrite= */ false); offset >= 0)
         {
@@ -4459,7 +4516,7 @@ struct Compiler
         uint8_t number; // index-1 (0-255) in IndexNumber
         BytecodeBuilder::StringRef name;
         Location location;
-        // Luau Classes (rfcx/classes.md): for an IndexName whose receiver is a proven `self` and whose
+        // Luwu Classes (rfcx/classes.md): for an IndexName whose receiver is a proven `self` and whose
         // member is a writable instance field, the member's constant offset; -1 otherwise. See
         // provenSelfMemberOffset.
         int objectMember = -1;
@@ -6237,7 +6294,7 @@ struct Compiler
             return nullptr;
         }
 
-        // Luau Classes (rfcx/classes.md): synthesize the `__init` a primary constructor implies. It is
+        // Luwu Classes (rfcx/classes.md): synthesize the `__init` a primary constructor implies. It is
         // an ordinary function taking `self` followed by the constructor's own parameters, so
         //
         //   class Percentage(current: number, total = 100)
@@ -6695,7 +6752,7 @@ struct Compiler
     // synthesized from it. See ClassInitDefaultsVisitor::buildPrimaryConstructorInit.
     DenseHashMap<AstStatClass*, AstExprFunction*> classPrimaryInitFn;
     // Cost of each primary constructor's `__init` body, computed on first use by
-    // tryCompileNewObjectPrimary and reused by every other construction site of that class.
+    // tryCompileNewObjectFieldParameters and reused by every other construction site of that class.
     DenseHashMap<AstStatClass*, int> classPrimaryInitCost;
     // Populated by ClassInitDefaultsVisitor for a POD class whose field defaults are *all* compile-time
     // constants: the default expression per instance member in declaration order (an AstExprConstantNil

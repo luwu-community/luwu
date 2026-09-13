@@ -77,7 +77,7 @@ struct ClassDeclRecord
     // default POD constructor's type.
     TypeId ctorTy = nullptr;
 
-    // Luau Classes (rfcx/classes.md): the `__init` a primary constructor implies. Blocked until the
+    // Luwu Classes (rfcx/classes.md): the `__init` a primary constructor implies. Blocked until the
     // parameters' annotations have been resolved, alongside ctorTy. Null when the class has no
     // primary constructor -- a POD class's `__init` is resolved eagerly, and an explicit one is a
     // member like any other.

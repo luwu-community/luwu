@@ -86,7 +86,7 @@ static LuauBytecodeType getType(
         if (LuauBytecodeType prim = getPrimitiveType(ref->name); prim != LBC_TYPE_INVALID)
             return prim;
 
-        // Luau Classes (rfcx/classes.md): a type annotation naming a declared class (`x: Account`)
+        // Luwu Classes (rfcx/classes.md): a type annotation naming a declared class (`x: Account`)
         // refers to an instance of that class, i.e. an object, not host userdata. Without this,
         // such annotations fell through to the LBC_TYPE_USERDATA guess below, which made native
         // codegen emit an entry-arg CHECK_TAG against LUA_TUSERDATA that always fails for a real
@@ -192,7 +192,7 @@ static std::string getFunctionType(
         AstLocal* arg = func->args.data[i];
 
         LuauBytecodeType ty;
-        // Luau Classes (rfcx/classes.md): a method's leading unannotated `self` is always an
+        // Luwu Classes (rfcx/classes.md): a method's leading unannotated `self` is always an
         // instance of the owning class, so type it as an object. `self` may not be annotated (the
         // parser rejects that), which is why this can't come through the annotation path below.
         if (isClassMethod && i == 0 && arg->name == "self" && arg->annotation == nullptr)
@@ -259,7 +259,7 @@ struct TypeMapVisitor : AstVisitor
     DenseHashMap<AstLocal*, const AstType*> resolvedLocals;
     DenseHashMap<AstExpr*, const AstType*> resolvedExprs;
     DenseHashMap<AstLocal*, const AstType*> functionReturnTypes{nullptr};
-    // Luau Classes (rfcx/classes.md): method functions whose leading `self` param is a class
+    // Luwu Classes (rfcx/classes.md): method functions whose leading `self` param is a class
     // instance; populated in visit(AstStatClass) before descending into the method bodies.
     DenseHashSet<AstExprFunction*> classMethods{nullptr};
     // Names of declared classes seen so far (forward order), so a type annotation naming a class
@@ -963,14 +963,14 @@ struct TypeMapVisitor : AstVisitor
                     recordResolvedType(node, *typePtr);
                 else if (LuauBytecodeType* classTy = localTypes.find(local->local); classTy && *classTy == LBC_TYPE_CLASS)
                 {
-                    // Luau Classes (rfcx/classes.md): calling the class value directly constructs a
+                    // Luwu Classes (rfcx/classes.md): calling the class value directly constructs a
                     // new instance (`Account(...)`), so the call result is an object.
                     recordResolvedType(node, &builtinTypes.objectType);
                 }
             }
             else if (AstExprIndexName* indexName = node->func->as<AstExprIndexName>())
             {
-                // Luau Classes: a static member call on the class value (`Account.new(...)`) whose
+                // Luwu Classes: a static member call on the class value (`Account.new(...)`) whose
                 // declared return type names a class returns an object of that class.
                 if (AstExprLocal* objLocal = indexName->expr->as<AstExprLocal>())
                 {

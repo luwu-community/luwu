@@ -981,7 +981,7 @@ static int luauF_rawequal(lua_State* L, StkId res, TValue* arg0, int nresults, S
     return -1;
 }
 
-// Luau Classes (rfcx/classes.md): class.isinstance(value, class) -> value is an instance of class.
+// Luwu Classes (rfcx/classes.md): class.isinstance(value, class) -> value is an instance of class.
 // arg0 is the value under test; args[0] is the class. Only fast-pathed when the second argument is
 // actually a class; otherwise fall back to the library function to raise the usual argument error.
 static int luauF_class_isinstance(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)

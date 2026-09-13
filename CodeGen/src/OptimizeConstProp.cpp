@@ -1446,7 +1446,7 @@ struct ConstPropState
     std::vector<NumberedInstruction> getSlotNodeCache; // Additionally, pcpos argument might be different
     std::vector<NodeSlotState> checkSlotMatchCache;    // Additionally, fallback block argument might be different
 
-    // Luau Classes object member access (rfcx/classes.md). TRY_OBJECT_MEMBER_ADDR is a fused
+    // Luwu Classes object member access (rfcx/classes.md). TRY_OBJECT_MEMBER_ADDR is a fused
     // guard+address op, so we CSE the address directly. pcpos (OP_B) and fallback (OP_D) may differ;
     // write bit (OP_E) is tracked so a read may reuse a dominating write's guard, but not vice versa.
     std::vector<NumberedInstruction> tryObjectMemberCache;
@@ -2741,9 +2741,9 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     }
     case IrCmd::OBJECT_MEMBER_ADDR:
     {
-        // Luau Classes (rfcx/classes.md): a proven `self.field` address depends only on the object and
-        // a constant offset, and carries no guard beyond a bounds check, so a repeat of the same pair
-        // is the same address. Reusing it is what lets the value cache above forward a load or a store
+        // Luwu Classes (rfcx/classes.md): a proven `self.field` address depends only on the object and
+        // a constant offset, and carries no guard at all, so a repeat of the same pair is the same
+        // address. Reusing it is what lets the value cache above forward a load or a store
         // to a later read of the same field -- the second `self.x` in a method costs nothing.
         for (size_t i = 0; i < state.objectMemberCache.size(); i++)
         {

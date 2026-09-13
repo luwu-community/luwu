@@ -890,7 +890,7 @@ ControlFlow DataFlowGraphBuilder::visit(AstStatClass* d)
     currentScope()->bindings[d->name->name] = def;
     captures[d->name->name].allVersions.push_back(def);
 
-    // Luau Classes (rfcx/classes.md): a primary constructor's parameters are visible to the class's
+    // Luwu Classes (rfcx/classes.md): a primary constructor's parameters are visible to the class's
     // field initializer expressions and to nothing else, so they get a scope of their own that the
     // class's methods are visited outside of. They are compiled into the synthesized `__init`, hence
     // the function-flavored scope, and every parameter needs a def before a field initializer that

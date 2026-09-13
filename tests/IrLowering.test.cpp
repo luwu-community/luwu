@@ -8538,38 +8538,30 @@ end
 ; function bump($arg0) line 6
 bb_0:
   CHECK_TAG R0, tobject, exit(entry)
-  JUMP bb_3
-bb_3:
+  JUMP bb_2
+bb_2:
   JUMP bb_bytecode_1
 bb_bytecode_1:
-  %4 = GET_UPVALUE U0
-  STORE_TVALUE R1, %4
-  JUMP bb_5
-bb_5:
-  %8 = LOAD_POINTER R0
-  %9 = LOAD_POINTER R1
-  CHECK_OBJECT_CLASS %8, %9, bb_4
-  JUMP bb_bytecode_2
-bb_bytecode_2:
-  %16 = OBJECT_MEMBER_ADDR %8, 0u, exit(4)
-  %17 = LOAD_TVALUE %16
-  STORE_TVALUE R2, %17
-  STORE_TVALUE R3, %17
-  CHECK_TAG R2, tnumber, bb_fallback_6
-  %29 = LOAD_DOUBLE R2
-  %31 = ADD_NUM %29, %29
-  STORE_DOUBLE R1, %31
+  %6 = LOAD_POINTER R0
+  %7 = LOAD_OWNER_CLASS
+  CHECK_OBJECT_CLASS %6, %7, exit(0)
+  %12 = OBJECT_MEMBER_ADDR %6, 0u
+  %13 = LOAD_TVALUE %12
+  STORE_TVALUE R2, %13
+  STORE_TVALUE R3, %13
+  CHECK_TAG R2, tnumber, bb_fallback_3
+  %25 = LOAD_DOUBLE R2
+  %27 = ADD_NUM %25, %25
+  STORE_DOUBLE R1, %27
   STORE_TAG R1, tnumber
-  JUMP bb_7
+  JUMP bb_4
 bb_4:
-  JUMP exit(2)
-bb_7:
-  %40 = LOAD_POINTER R0
-  %41 = OBJECT_MEMBER_ADDR %40, 1u, exit(9)
-  %42 = LOAD_TVALUE R1
-  STORE_TVALUE %41, %42
-  BARRIER_OBJ %40, R1, undef
-  INTERRUPT 13u
+  %36 = LOAD_POINTER R0
+  %37 = OBJECT_MEMBER_ADDR %36, 1u
+  %38 = LOAD_TVALUE R1
+  STORE_TVALUE %37, %38
+  BARRIER_OBJ %36, R1, undef
+  INTERRUPT 11u
   RETURN R1, 1i
 )"
     );
@@ -8604,26 +8596,22 @@ end
 ; function get_x($arg0) line 5
 bb_0:
   CHECK_TAG R0, tobject, exit(entry)
-  JUMP bb_3
-bb_3:
+  JUMP bb_2
+bb_2:
   JUMP bb_bytecode_1
 bb_bytecode_1:
-  %4 = GET_UPVALUE U0
-  STORE_TVALUE R1, %4
-  JUMP bb_5
-bb_5:
-  %8 = LOAD_POINTER R0
-  %9 = LOAD_POINTER R1
-  CHECK_OBJECT_CLASS %8, %9, bb_4
-  JUMP bb_bytecode_2
-bb_bytecode_2:
-  implicit CHECK_SAFE_ENV exit(4)
-  STORE_TVALUE R3, %4
-  CHECK_TAG R3, tclass, exit(7)
-  %21 = CLASS_ISINSTANCE tobject, %8, %9
-  STORE_INT R1, %21
+  implicit CHECK_SAFE_ENV exit(0)
+  %6 = LOAD_POINTER R0
+  %7 = LOAD_OWNER_CLASS
+  CHECK_OBJECT_CLASS %6, %7, exit(0)
+  %9 = GET_UPVALUE U0
+  STORE_TVALUE R3, %9
+  CHECK_TAG R3, tclass, exit(5)
+  %16 = LOAD_POINTER R3
+  %17 = CLASS_ISINSTANCE tobject, %6, %16
+  STORE_INT R1, %17
   STORE_TAG R1, tboolean
-  INTERRUPT 11u
+  INTERRUPT 9u
   RETURN R1, 1i
 )"
     );

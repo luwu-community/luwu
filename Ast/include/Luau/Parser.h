@@ -198,7 +198,7 @@ private:
     // member, which means the class was never closed. See its definition.
     bool classBodyLooksLikeStatement();
 
-    // Luau Classes (rfcx/classes.md): parse a class's primary constructor parameter list, e.g. the
+    // Luwu Classes (rfcx/classes.md): parse a class's primary constructor parameter list, e.g. the
     // `(name: string, age = 0)` of `class Cat(name: string, age = 0)`.
     AstClassPrimaryConstructor* parseClassPrimaryConstructor(const std::optional<Location>& qualifierLocation, AstClassMemberVisibility visibility);
 

@@ -970,7 +970,7 @@ static BuiltinImplResult translateBuiltinBufferIsFrozen(IrBuilder& build, int np
     return {BuiltinImplType::Full, 1};
 }
 
-// Luau Classes (rfcx/classes.md): class.isinstance(value, class) -> boolean, inlined as a tag-guarded
+// Luwu Classes (rfcx/classes.md): class.isinstance(value, class) -> boolean, inlined as a tag-guarded
 // class-pointer comparison instead of a call into the class library.
 static BuiltinImplResult translateBuiltinClassIsinstance(IrBuilder& build, int nparams, int ra, int arg, IrOp args, int nresults, int pcpos)
 {

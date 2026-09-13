@@ -299,7 +299,7 @@ static uint32_t getFloatBits(float value)
     return result;
 }
 
-// Luau Classes (rfcx/classes.md): a64 counterpart of emitClassMemberAuthX64 -- authorize
+// Luwu Classes (rfcx/classes.md): a64 counterpart of emitClassMemberAuthX64 -- authorize
 // private/const access to the member at `slotReg` on `classReg` (an object's lclass, or a class
 // object directly), or jump to `mismatch` (the interpreter fallback, which raises the error). A
 // member with no access bits is unrestricted; a private/const member takes the fast path only when
@@ -2853,29 +2853,10 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
     }
     case IrCmd::OBJECT_MEMBER_ADDR:
     {
-        // See the X64 lowering: proven class, constant offset, bounds check only.
-        Label fresh; // used when the guard aborts execution or jumps to a VM exit
-        Label& mismatch = getTargetLabel(OP_C(inst), index, fresh);
-
+        // See the X64 lowering: proven class, constant offset, no check of any kind and no branch.
         inst.regA64 = regs.allocReg(KindA64::x, index);
 
-        RegisterA64 tempw = regs.allocTemp(KindA64::w);
         uint32_t offset = uintOp(OP_B(inst));
-
-        build.ldr(tempw, mem(regOp(OP_A(inst)), offsetof(LuauObject, numberofmembers)));
-
-        if (offset <= 0xffff)
-        {
-            build.cmp(tempw, uint16_t(offset));
-        }
-        else
-        {
-            RegisterA64 boundw = regs.allocTemp(KindA64::w);
-            build.mov(boundw, int(offset));
-            build.cmp(tempw, boundw);
-        }
-
-        build.b(ConditionA64::UnsignedLessEqual, mismatch);
 
         build.ldr(inst.regA64, mem(regOp(OP_A(inst)), offsetof(LuauObject, members)));
 
@@ -2886,7 +2867,6 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             build.add(inst.regA64, inst.regA64, tempx);
         }
 
-        finalizeTargetLabel(OP_C(inst), index, fresh);
         break;
     }
     case IrCmd::TRY_CLASS_MEMBER_ADDR:

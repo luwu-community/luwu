@@ -11386,6 +11386,138 @@ RETURN R1 1
 )" == res2);
 }
 
+TEST_CASE("ClassMethodInlineNoRecursion")
+{
+    ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+    // see ClassDeclWithMethod: pin the feedback-vector opcode off so the non-inlined recursive
+    // `self:pong(...)` stays a plain CALL in this dump
+    ScopedFastFlag noCallFb{FFlag::LuauEmitCallFeedback, false};
+
+    // A method that calls itself (directly or mutually with a sibling method) must never get
+    // inlined into its own body: tryResolveMethodCall resolves `self:method()` to the very
+    // AstExprFunction currently being compiled, but that function's Function record (canInline,
+    // cost model) is only registered in `functions` once its own compilation finishes -- so `fi`
+    // is null while we're still inside it, and the general "don't inline into an unregistered
+    // function" guard (shared with plain function recursion, see InlineProhibitedRecursion) keeps
+    // the recursive call as a real CALL/CALLM instead of splicing the body into itself.
+    CHECK_EQ(
+        compileWithRemarks(R"(
+class Fact
+    function compute(self, n)
+        if n <= 1 then
+            return 1
+        end
+        return n * self:compute(n - 1)
+    end
+end
+)"),
+        R"(
+class Fact
+    function compute(self, n)
+        if n <= 1 then
+            return 1
+        end
+        return n * self:compute(n - 1)
+    end
+end
+)"
+    );
+
+    // Mutual recursion between two sibling methods is not itself prohibited -- `ping` is fully
+    // registered by the time `pong` is compiled, so `pong`'s call to `self:ping(...)` is free to
+    // inline (and does) -- but that's fine: it's one-shot, not a cycle. The call to `pong` inside
+    // `ping`'s own body can't inline `pong` back (pong isn't registered yet, still mid-compile),
+    // and the freshly-inlined copy of `ping` spliced into `pong` still calls the *real* `pong`
+    // (itself, mid-compile, still unregistered) rather than re-inlining -- so there is no cycle.
+    CHECK_EQ(
+        compileWithRemarks(R"(
+class Ping
+    function ping(self, n)
+        if n <= 0 then
+            return 0
+        end
+        local v = self:pong(n - 1)
+        return v
+    end
+    function pong(self, n)
+        if n <= 0 then
+            return 0
+        end
+        local v = self:ping(n - 1)
+        return v
+    end
+end
+)"),
+        R"(
+class Ping
+    function ping(self, n)
+        if n <= 0 then
+            return 0
+        end
+        local v = self:pong(n - 1)
+        return v
+    end
+    function pong(self, n)
+        if n <= 0 then
+            return 0
+        end
+        -- remark: inlining succeeded (cost 7, profit 1.42x, depth 0)
+        local v = self:ping(n - 1)
+        return v
+    end
+end
+)"
+    );
+
+    // Confirm the shape directly: `pong`'s own bytecode gets `ping`'s body spliced in (the
+    // `n <= 0` guard appears twice), but the nested `self:pong(...)` call inside that inlined
+    // copy is a genuine NAMECALL/CALL to the real (unregistered, mid-compile) pong -- not another
+    // level of inlining, so the mutual recursion can never blow up the compiler.
+    CHECK_EQ(
+        "\n" + compileFunction(
+                   R"(
+class Ping
+    function ping(self, n)
+        if n <= 0 then
+            return 0
+        end
+        local v = self:pong(n - 1)
+        return v
+    end
+    function pong(self, n)
+        if n <= 0 then
+            return 0
+        end
+        local v = self:ping(n - 1)
+        return v
+    end
+end
+)",
+                   1,
+                   2,
+                   0
+               ),
+        R"(
+CHECKSELFCLASS R0 OWNER K0 ['pong']
+LOADN R2 0
+JUMPIFNOTLE R1 R2 L0
+LOADN R2 0
+RETURN R2 1
+L0: SUBK R3 R1 K1 [1]
+LOADN R4 0
+JUMPIFNOTLE R3 R4 L1
+LOADN R2 0
+RETURN R2 1
+L1: SUBK R6 R3 K1 [1]
+NAMECALL R4 R0 K0 ['pong']
+CALL R4 2 1
+MOVE R2 R4
+RETURN R2 1
+)"
+    );
+
+}
+
 TEST_CASE("ClassDeclWithAmbiguousGlobal")
 {
     ScopedFastFlag sffs[] = {

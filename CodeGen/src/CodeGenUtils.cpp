@@ -574,7 +574,7 @@ const Instruction* executeGETTABLEKS(lua_State* L, const Instruction* pc, StkId 
             // fall through to slow path
         }
 
-        // Luau Classes (rfcx/classes.md): the native TRY_OBJECT_MEMBER_ADDR/TRY_CLASS_MEMBER_ADDR
+        // Luwu Classes (rfcx/classes.md): the native TRY_OBJECT_MEMBER_ADDR/TRY_CLASS_MEMBER_ADDR
         // fast paths bail here on a stale cached slot. Mirror the interpreter's LOP_GETTABLEKS object/
         // class handling *and* patch the cached slot (VM_PATCH_C) so the next native access hits the
         // fast path -- without this, every access re-misses and re-enters this fallback forever.
@@ -707,7 +707,7 @@ const Instruction* executeSETTABLEKS(lua_State* L, const Instruction* pc, StkId 
             return pc;
         }
 
-        // Luau Classes (rfcx/classes.md): the native TRY_OBJECT_MEMBER_ADDR (write mode) fast path
+        // Luwu Classes (rfcx/classes.md): the native TRY_OBJECT_MEMBER_ADDR (write mode) fast path
         // bails here on a stale cached slot. Mirror the interpreter's LOP_SETTABLEKS object handling
         // *and* patch the cached slot (VM_PATCH_C) so the next native store hits the fast path.
         if (FFlag::DebugLuauUserDefinedClassesRuntime && ttisobject(rb))
@@ -950,7 +950,7 @@ const Instruction* executeFORGPREP(lua_State* L, const Instruction* pc, StkId ba
 // Kept in step with VM_CASE(LOP_NEWOBJECT) in lvmexecute.cpp -- see there for the shape rules.
 const Instruction* executeNEWOBJECT(lua_State* L, const Instruction* pc, StkId base, TValue* k)
 {
-    [[maybe_unused]] Closure* cl = clvalue(L->ci->func);
+    Closure* cl = clvalue(L->ci->func);
     Instruction insn = *pc++;
     uint32_t aux = *pc++;
     StkId ra = VM_REG(LUAU_INSN_A(insn));
@@ -974,6 +974,18 @@ const Instruction* executeNEWOBJECT(lua_State* L, const Instruction* pc, StkId b
     }
 
     LuauClass* classdef = classvalue(classReg);
+
+    // See VM_CASE(LOP_NEWOBJECT): a private constructor is only callable from inside its own class,
+    // and NEWOBJECT skips the C constructor frame where luaR_createobject would enforce that. `cl` is
+    // the executing closure, which is the code doing the constructing.
+    if (LUAU_UNLIKELY(classdef->hascustominit && classdef->hasprivatemembers))
+    {
+        TValue initname;
+        setsvalue(L, &initname, classdef->offsettomember[classdef->initoffset]);
+
+        VM_PROTECT_PC();
+        luaR_checkprivateaccess(L, &initname, classdef, cl, classdef->initoffset);
+    }
 
     VM_PROTECT_PC(); // the allocation below may fail due to OOM
 

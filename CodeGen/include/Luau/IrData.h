@@ -476,7 +476,7 @@ enum class IrCmd : uint8_t
     // A: pointer (Buffer)
     BUFFER_ISFROZEN,
 
-    // Luau Classes (rfcx/classes.md): compute class.isinstance(value, class) as an int 0/1 --
+    // Luwu Classes (rfcx/classes.md): compute class.isinstance(value, class) as an int 0/1 --
     // true iff the value is an object whose class is exactly the given class.
     // A: tag (of the value)
     // B: pointer (the value's gc pointer, LuauObject; only dereferenced when A == LUA_TOBJECT)
@@ -709,14 +709,14 @@ enum class IrCmd : uint8_t
     // When undef is specified instead of a block, execution is aborted on check failure
     CHECK_NODE_VALUE,
 
-    // Guard against a Luau Classes object not being an instance of a specific class (see rfcx/classes.md)
+    // Guard against a Luwu Classes object not being an instance of a specific class (see rfcx/classes.md)
     // A: pointer (LuauObject)
     // B: pointer (LuauClass, the expected class)
     // C: block/vmexit/undef
     // When undef is specified instead of a block, execution is aborted on check failure
     CHECK_OBJECT_CLASS,
 
-    // Try to get the address of an instance member (field) on a Luau Classes object using the cached
+    // Try to get the address of an instance member (field) on a Luwu Classes object using the cached
     // member slot at the given bytecode position, or jump if the slot is stale (out of range for
     // instance members, or doesn't name the expected member) -- see rfcx/classes.md. Also jumps if
     // the member is private/const and this access isn't authorized from inside the owning class's
@@ -730,17 +730,16 @@ enum class IrCmd : uint8_t
     // When undef is specified instead of a block, execution is aborted on check failure
     TRY_OBJECT_MEMBER_ADDR,
 
-    // Address of an instance member at a *known* offset on a Luau Classes object, for a receiver whose
+    // Address of an instance member at a *known* offset on a Luwu Classes object, for a receiver whose
     // class the compiler has proven (a method's own `self`; see rfcx/classes.md and LOP_GETOBJECTMEMBER).
-    // Nothing about the class is re-checked here -- no slot cache, no name compare, no private/const
-    // authorization -- only that the offset is inside the instance, which is what keeps malformed
-    // bytecode memory-safe.
+    // Nothing is re-checked here -- no slot cache, no name compare, no private/const authorization, and
+    // no bounds check either: the offset is inside the instance for any bytecode the compiler produced,
+    // and invalid bytecode is the embedder's contract to keep. Not a guard, so it never branches.
     // A: pointer (LuauObject)
     // B: unsigned int (member offset)
-    // C: block/undef, taken when the offset is out of range
     OBJECT_MEMBER_ADDR,
 
-    // Try to get the address of a static member on a Luau Classes class object using the cached
+    // Try to get the address of a static member on a Luwu Classes class object using the cached
     // member slot at the given bytecode position, or jump if the slot is stale (out of range for
     // static members, or doesn't name the expected member) -- see rfcx/classes.md
     // A: pointer (LuauClass)
@@ -750,7 +749,7 @@ enum class IrCmd : uint8_t
     // When undef is specified instead of a block, execution is aborted on check failure
     TRY_CLASS_MEMBER_ADDR,
 
-    // Try to get the address of any member (instance field or static method) on a Luau Classes
+    // Try to get the address of any member (instance field or static method) on a Luwu Classes
     // object using the cached member slot at the given bytecode position, or jump if the slot is
     // stale -- used for method resolution on NAMECALL, see rfcx/classes.md
     // A: pointer (LuauObject)

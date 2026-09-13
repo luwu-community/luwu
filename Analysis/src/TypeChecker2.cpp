@@ -1358,7 +1358,7 @@ void TypeChecker2::visit(AstStatClass* stat)
 {
     LUAU_ASSERT(FFlag::DebugLuauUserDefinedClasses);
 
-    // Luau Classes (rfcx/classes.md): a primary constructor's parameters are checked like default
+    // Luwu Classes (rfcx/classes.md): a primary constructor's parameters are checked like default
     // function arguments -- annotation resolved, default checked against it.
     if (const AstClassPrimaryConstructor* primaryConstructor = stat->primaryConstructor)
     {
