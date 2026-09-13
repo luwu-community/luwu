@@ -565,6 +565,47 @@ struct TypeStringifier
         );
     }
 
+    // A named type reached again while its own structure is still being printed is a recursive
+    // reference to that alias. Normally the name short-circuit catches it first, but not when the
+    // name was bypassed to expand it (the root of a toStringDetailed call, or a `where` clause body
+    // -- see suppressNameFor), in which case it falls through to the cycle guard. Print the alias's
+    // name there instead of `*CYCLE*`, which doesn't say *which* type recursed -- ambiguous as soon
+    // as more than one property can. Returns false (leaving the `*CYCLE*` fallback to the caller)
+    // for unnamed types, and in exhaustive mode, where names are never used.
+    bool emitRecursiveAliasName(TypeId ty, const std::optional<std::string>& name, const std::optional<std::string>& syntheticName)
+    {
+        if (state.exhaustive)
+            return false;
+
+        if (name)
+        {
+            if (state.opts.scope)
+            {
+                auto [success, moduleName] = canUseTypeNameInScope(state.opts.scope, *name);
+
+                if (!success)
+                    state.result.invalid = true;
+
+                if (moduleName)
+                {
+                    state.emit(*moduleName);
+                    state.emit(".");
+                }
+            }
+
+            state.emitAndRecordSpan(*name, ty);
+            return true;
+        }
+
+        if (syntheticName && !state.ignoreSyntheticName)
+        {
+            state.emitAndRecordSpan(*syntheticName, ty);
+            return true;
+        }
+
+        return false;
+    }
+
     // Expands `ty`'s structure exactly once, bypassing its own name short-circuit, for use as a
     // `where` clause entry. Named types referenced *inside* that expansion are left as bare names
     // (StringifierState::collectingAliasRefs is turned off for the duration), which is what caps
@@ -875,6 +916,9 @@ struct TypeStringifier
 
         if (state.hasSeen(&ftv))
         {
+            if (emitRecursiveAliasName(ty, ftv.name, ftv.syntheticName))
+                return;
+
             state.result.cycle = true;
             state.emit("*CYCLE*");
             return;
@@ -988,6 +1032,12 @@ struct TypeStringifier
 
         if (state.hasSeen(&ttv))
         {
+            if (emitRecursiveAliasName(ty, ttv.name, ttv.syntheticName))
+            {
+                stringify(ttv.instantiatedTypeParams, ttv.instantiatedTypePackParams);
+                return;
+            }
+
             state.result.cycle = true;
             state.emit("*CYCLE*");
             return;
@@ -1063,9 +1113,25 @@ struct TypeStringifier
 
             if (state.opts.maxTableLength > 0 && (length - 2 * index) >= state.opts.maxTableLength)
             {
-                state.emit("... ");
-                state.emit(std::to_string(ttv.props.size() - index));
-                state.emit(" more ...");
+                size_t remaining = ttv.props.size() - index;
+                if (state.opts.useLineBreaks)
+                {
+                    // One property per line, so the elision can be a comment of its own -- `...
+                    // N more ...` there reads as a malformed property and throws off highlighting
+                    // wherever the output is shown as code (e.g. an editor hover). The closing
+                    // brace always follows on its own line (`comma` forces the newline below).
+                    state.emit("-- ⋯ ");
+                    state.emit(std::to_string(remaining));
+                    state.emit(remaining == 1 ? " more property" : " more properties");
+                    comma = true;
+                }
+                else
+                {
+                    // Single-line output can't use a comment: it would swallow the closing brace.
+                    state.emit("... ");
+                    state.emit(std::to_string(remaining));
+                    state.emit(" more ...");
+                }
                 break;
             }
 
@@ -1171,6 +1237,9 @@ struct TypeStringifier
 
         if (state.hasSeen(&uv))
         {
+            if (emitRecursiveAliasName(ty, uv.name, uv.syntheticName))
+                return;
+
             state.result.cycle = true;
             state.emit("*CYCLE*");
             return;
@@ -1327,6 +1396,9 @@ struct TypeStringifier
 
         if (state.hasSeen(&uv))
         {
+            if (emitRecursiveAliasName(ty, uv.name, uv.syntheticName))
+                return;
+
             state.result.cycle = true;
             state.emit("*CYCLE*");
             return;

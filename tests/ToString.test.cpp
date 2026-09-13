@@ -462,6 +462,24 @@ TEST_CASE_FIXTURE(Fixture, "stringifying_table_type_correctly_use_matching_table
     CHECK_EQ(toString(&tv, o), "{ a: number, b: number, c: number, d: number, e: number, ... 5 more ... }");
 }
 
+TEST_CASE_FIXTURE(Fixture, "table_length_elision_is_a_comment_when_using_line_breaks")
+{
+    TableType ttv{TableState::Sealed, TypeLevel{}};
+    for (char c : std::string("abcdefghij"))
+        ttv.props[std::string(1, c)] = {getBuiltins()->numberType};
+
+    Type tv{ttv};
+
+    ToStringOptions o;
+    o.maxTableLength = 40;
+    o.useLineBreaks = true;
+    CHECK_EQ(toString(&tv, o), "{\n    a: number,\n    b: number,\n    c: number,\n    -- ⋯ 7 more properties\n}");
+
+    // The elision comment must not swallow the closing brace even when it's the only entry.
+    o.maxTableLength = 1;
+    CHECK_EQ(toString(&tv, o), "{\n    -- ⋯ 10 more properties\n}");
+}
+
 TEST_CASE_FIXTURE(Fixture, "stringifying_cyclic_union_type_bails_early")
 {
     Type tv{UnionType{{getBuiltins()->stringType, getBuiltins()->numberType}}};
@@ -1086,6 +1104,35 @@ TEST_CASE_FIXTURE(Fixture, "record_type_compositions_generic")
     CHECK_EQ(startPosObject, 4);
     CHECK_EQ(endPosObject, 10);
     CHECK_EQ(recordedTyObject, requireTypeAlias("Object"));
+}
+
+TEST_CASE_FIXTURE(Fixture, "expanded_root_alias_prints_recursive_references_by_name")
+{
+    // Expanding the root alias bypasses its name short-circuit, so a recursive reference back to it
+    // used to fall through to the cycle guard and print `*CYCLE*` -- which doesn't say which type
+    // recursed once more than one property can.
+    CheckResult result = check(R"(
+        type ThingRecurses = {
+            inside_here: ThingRecurses,
+        }
+        type List<T> = {
+            value: T,
+            next: List<T>?,
+        }
+    )");
+
+    ToStringOptions opts;
+    opts.alwaysExpandRootAlias = true;
+    opts.includeWhereClauses = true;
+
+    ToStringResult thing = toStringDetailed(requireTypeAlias("ThingRecurses"), opts);
+    CHECK_EQ("{ inside_here: ThingRecurses }", thing.name);
+    CHECK_EQ("", thing.whereClauses);
+    CHECK_EQ(std::string::npos, thing.name.find("CYCLE"));
+
+    std::string list = toString(requireTypeAlias("List"), opts);
+    CHECK_EQ(std::string::npos, list.find("CYCLE"));
+    CHECK_NE(std::string::npos, list.find("next: List<T>?"));
 }
 
 TEST_SUITE_END();
