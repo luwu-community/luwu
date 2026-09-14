@@ -32,14 +32,6 @@ const char* getAstAuxKind(const AstAuxData& handle)
     return "unknown";
 }
 
-inline AstArray<char> getCommentText(const AstAuxData& handle)
-{
-    if (!handle.doc)
-        return {nullptr, 0};
-    auto [startOff, endOff] = locationToOffsets(handle.doc->lineOffsets, handle.doc->source.size(), handle.comment.location);
-    return {const_cast<char*>(handle.doc->source.data() + startOff), endOff - startOff};
-}
-
 #define LUAU_REFLECT_AUX_TYPES(AUX) \
     AUX(Aux_TableProp, tableProp, "AstTableProp", \
         LUAU_AUX_DEFAULT(AstAuxData(doc, Luau::AstTableProp{Luau::AstName(), Luau::Location(), nullptr, Luau::AstTableAccess::ReadWrite, std::nullopt})) \
@@ -69,10 +61,10 @@ inline AstArray<char> getCommentText(const AstAuxData& handle)
         LUAU_AUX_FIELD_RW(Name, SetName, n.functionName) \
         LUAU_AUX_FIELD_RW(Func, SetFunc, n.function)) \
     AUX(Aux_Comment, comment, "AstComment", \
-        LUAU_AUX_DEFAULT(AstAuxData(doc, Luau::Comment{Luau::Lexeme::Type::Comment, Luau::Location()})) \
-        LUAU_AUX_FIELD_RO(OrigLocation, n.location) \
-        LUAU_AUX_FIELD_RO(Type, n.type) \
-        LUAU_AUX_FIELD_FN_RO(Text, getCommentText(handle))) \
+        LUAU_AUX_DEFAULT(AstAuxData(doc, ReflectComment{Luau::Lexeme::Type::Comment, "--", Luau::Location()})) \
+        LUAU_AUX_FIELD_RW(Type, SetType, handle.comment.type) \
+        LUAU_AUX_FIELD_RW(Text, SetText, handle.comment.text) \
+        LUAU_AUX_FIELD_RO(OrigLocation, handle.comment.location)) \
     AUX(Aux_TableItem, tableItem, "AstTableItem", \
         LUAU_AUX_DEFAULT(AstAuxData(doc, Luau::AstExprTable::Item{Luau::AstExprTable::Item::Kind::List, nullptr, nullptr})) \
         LUAU_AUX_FIELD_RW(Key, SetKey, n.key) \
@@ -268,11 +260,8 @@ static int astAuxToString(lua_State* L)
         lua_pushfstring(L, "AstAux(AstClassMethod: %s)", handle.classMethod.functionName.value);
         return 1;
     case Aux_Comment:
-    {
-        const auto& loc = handle.comment.location;
-        lua_pushfstring(L, "AstAux(AstComment: %d:%d - %d:%d)", loc.begin.line + 1, loc.begin.column + 1, loc.end.line + 1, loc.end.column + 1);
+        lua_pushfstring(L, "AstAux(AstComment: %s)", handle.comment.text.c_str());
         return 1;
-    }
     default:
         lua_pushfstring(L, "AstAux(%s)", getAstAuxKind(handle));
         return 1;

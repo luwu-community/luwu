@@ -247,6 +247,8 @@ namespace Luau
     ATOM_RW(ResultType, "resultType", SetResultType, "setResultType") \
     ATOM_RW(IsMethod, "isMethod", SetIsMethod, "setIsMethod") \
     ATOM_RW(Text, "text", SetText, "setText") \
+    ATOM_RW(LeadingComments, "leadingComments", SetLeadingComments, "setLeadingComments") \
+    ATOM_RW(TrailingComments, "trailingComments", SetTrailingComments, "setTrailingComments") \
     ATOM_RW(Key, "key", SetKey, "setKey") \
     ATOM_RW(Kind, "kind", SetKind, "setKind") \
     ATOM_RW(Begin, "begin", SetBegin, "setBegin") \
@@ -481,13 +483,26 @@ struct AstAllocatorData
     std::shared_ptr<AstAllocatorState> state;
 };
 
+struct ReflectComment
+{
+    Luau::Lexeme::Type type = Luau::Lexeme::Type::Comment;
+    std::string text;
+    Luau::Location location;
+};
+
+struct ClassifiedNodeComments
+{
+    std::vector<ReflectComment> leading;
+    std::vector<ReflectComment> trailing;
+};
+
 struct AstDocumentState
 {
     std::string source;
     std::shared_ptr<AstAllocatorState> arena;
     Luau::ParseResult parseResult;
     std::vector<size_t> lineOffsets;
-    DenseHashMap2<const Luau::AstNode*, std::vector<Luau::Comment>> nodeComments;
+    DenseHashMap2<const Luau::AstNode*, ClassifiedNodeComments> nodeComments;
 
     AstDocumentState()
         : arena(std::make_shared<AstAllocatorState>())
@@ -543,6 +558,7 @@ struct AstAuxData
 {
     std::shared_ptr<AstDocumentState> doc;
     AstAuxKind kind;
+    ReflectComment comment;
     union
     {
         Luau::AstTableProp tableProp;
@@ -550,7 +566,6 @@ struct AstAuxData
         Luau::AstDeclaredExternTypeProperty declaredExternProp;
         Luau::AstClassProperty classProp;
         Luau::AstClassMethod classMethod;
-        Luau::Comment comment;
         Luau::AstExprTable::Item tableItem;
         Luau::CstExprTable::Item cstTableItem;
         Luau::AstTypeList typeList;
@@ -563,7 +578,7 @@ struct AstAuxData
     AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstDeclaredExternTypeProperty& p) : doc(doc), kind(Aux_DeclaredExternTypeProperty), declaredExternProp(p) {}
     AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstClassProperty& p) : doc(doc), kind(Aux_ClassProperty), classProp(p) {}
     AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstClassMethod& m) : doc(doc), kind(Aux_ClassMethod), classMethod(m) {}
-    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::Comment& c) : doc(doc), kind(Aux_Comment), comment(c) {}
+    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const ReflectComment& c) : doc(doc), kind(Aux_Comment), comment(c) {}
     AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstExprTable::Item& item) : doc(doc), kind(Aux_TableItem), tableItem(item) {}
     AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::CstExprTable::Item& item) : doc(doc), kind(Aux_CstTableItem), cstTableItem(item) {}
     AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstTypeList& tl) : doc(doc), kind(Aux_TypeList), typeList(tl) {}
@@ -605,6 +620,12 @@ inline std::pair<size_t, size_t> locationToOffsets(const std::vector<size_t>& li
     if (end < start)
         end = start;
     return {start, end};
+}
+
+inline ReflectComment extractReflectComment(const AstDocumentState& doc, const Luau::Comment& c)
+{
+    auto [startOff, endOff] = locationToOffsets(doc.lineOffsets, doc.source.size(), c.location);
+    return ReflectComment{c.type, doc.source.substr(startOff, endOff - startOff), c.location};
 }
 
 // Push helpers
@@ -780,156 +801,182 @@ inline int pushCachedUserdataMethod(lua_State* L, int tag, const char* name, lua
     return 1;
 }
 
-#define LUAU_REFLECT_RESOLVE_INDEX_ATOM() \
-    int atomId = -1; \
-    size_t keyLen = 0; \
-    const char* keyStr = lua_tolstringatom(L, 2, &keyLen, FFlag::OptLuwuReflectUseAtoms ? &atomId : nullptr); \
-    if (!keyStr) \
-    { \
-        lua_pushnil(L); \
-        return 1; \
-    } \
-    ReflectAtom atom = resolveReflectAtom(atomId, keyStr, keyLen)
+inline ReflectAtom resolveIndexAtom(lua_State* L, const char*& outKeyStr)
+{
+    int atomId = -1;
+    size_t keyLen = 0;
+    const char* keyStr = lua_tolstringatom(L, 2, &keyLen, FFlag::OptLuwuReflectUseAtoms ? &atomId : nullptr);
+    if (!keyStr)
+    {
+        outKeyStr = nullptr;
+        return ReflectAtom::Unknown;
+    }
+    outKeyStr = keyStr;
+    return resolveReflectAtom(atomId, keyStr, keyLen);
+}
 
-#define LUAU_REFLECT_RESOLVE_NAMECALL_ATOM() \
-    int atomId = -1; \
-    size_t len = 0; \
-    const char* str = lua_namecallwithlen(L, FFlag::OptLuwuReflectUseAtoms ? &atomId : nullptr, &len); \
-    if (!str) \
-        luaL_error(L, "missing method name in namecall"); \
-    ReflectAtom atom = resolveReflectAtom(atomId, str, len)
+inline ReflectAtom resolveNamecallAtom(lua_State* L, const char*& outStr, size_t& outLen)
+{
+    int atomId = -1;
+    size_t len = 0;
+    const char* str = lua_namecallwithlen(L, FFlag::OptLuwuReflectUseAtoms ? &atomId : nullptr, &len);
+    if (!str)
+        luaL_error(L, "missing method name in namecall");
+    outStr = str;
+    outLen = len;
+    return resolveReflectAtom(atomId, str, len);
+}
 
-#define LUAU_REFLECT_PREPARE_INDEX(checkFunc) \
-    auto& handle = checkFunc(L, 1); \
-    LUAU_REFLECT_RESOLVE_INDEX_ATOM()
+template<typename DataType, auto CheckFn, auto DispatchFn>
+inline int reflectMethodTrampoline(lua_State* L)
+{
+    auto& handle = CheckFn(L, 1);
+    size_t len = 0;
+    const char* str = lua_tolstring(L, lua_upvalueindex(1), &len);
+    ReflectAtom atom = resolveGlobalReflectAtom(std::string_view(str, len));
+    return DispatchFn(L, handle, atom, str, len);
+}
 
-#define LUAU_REFLECT_PREPARE_NAMECALL(checkFunc) \
-    auto& handle = checkFunc(L, 1); \
-    LUAU_REFLECT_RESOLVE_NAMECALL_ATOM()
+template<typename DataType, auto CheckFn, auto DispatchFn>
+inline int reflectNamecall(lua_State* L)
+{
+    auto& handle = CheckFn(L, 1);
+    const char* str = nullptr;
+    size_t len = 0;
+    ReflectAtom atom = resolveNamecallAtom(L, str, len);
+    return DispatchFn(L, handle, atom, str, len);
+}
+
+template<typename DataType, auto CheckFn, auto GetKindFn, auto GetCategoryFn, int TagValue, lua_CFunction TrampolineFn>
+inline int reflectNodeIndex(lua_State* L)
+{
+    auto& handle = CheckFn(L, 1);
+    const char* keyStr = nullptr;
+    ReflectAtom atom = resolveIndexAtom(L, keyStr);
+    if (!keyStr)
+    {
+        lua_pushnil(L);
+        return 1;
+    }
+    switch (atom)
+    {
+    case ReflectAtom::Kind:
+        lua_pushstring(L, GetKindFn(handle.node));
+        return 1;
+    case ReflectAtom::Category:
+        lua_pushstring(L, GetCategoryFn(handle.node));
+        return 1;
+    case ReflectAtom::Id:
+        lua_pushlightuserdatatagged(L, (void*)handle.node, TagId);
+        return 1;
+    default:
+        break;
+    }
+    if (atom != ReflectAtom::Unknown)
+        return pushCachedUserdataMethod(L, TagValue, keyStr, TrampolineFn);
+    lua_pushnil(L);
+    return 1;
+}
+
+template<typename NodeType, typename Table>
+inline const char* getNodeKindFromTable(NodeType node, const Table& classTable, const char* defaultName)
+{
+    if (!node)
+        return "nil";
+    int idx = node->classIndex;
+    if (idx >= 0 && idx < int(classTable.size()) && classTable[idx].kind)
+        return classTable[idx].kind;
+    return defaultName;
+}
+
+template<typename NodeType, typename Table>
+inline const char* getNodeCategoryFromTable(NodeType node, const Table& classTable, const char* defaultName)
+{
+    if (!node)
+        return "nil";
+    int idx = node->classIndex;
+    if (idx >= 0 && idx < int(classTable.size()) && classTable[idx].category)
+        return classTable[idx].category;
+    return defaultName;
+}
+
+template<int TagValue, typename DataType>
+inline DataType& checkReflectUserdata(lua_State* L, int idx, const char* typeName)
+{
+    if (lua_userdatatag(L, idx) != TagValue)
+        luaL_typeerrorL(L, idx, typeName);
+    return *static_cast<DataType*>(lua_touserdata(L, idx));
+}
+
+template<typename DataType>
+inline void reflectUserdataDtor(lua_State* L, void* userdata)
+{
+    static_cast<DataType*>(userdata)->~DataType();
+}
+
+template<int TagValue, typename DataType, typename NodeType>
+inline void pushReflectPointerUserdata(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, NodeType node)
+{
+    if (!node)
+    {
+        lua_pushnil(L);
+        return;
+    }
+    DataType* data = static_cast<DataType*>(lua_newuserdatataggedwithmetatable(L, sizeof(DataType), TagValue));
+    new (data) DataType{doc, node};
+}
+
+template<int TagValue, typename DataType, typename ValueType>
+inline void pushReflectValueUserdata(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, ValueType value)
+{
+    DataType* data = static_cast<DataType*>(lua_newuserdatataggedwithmetatable(L, sizeof(DataType), TagValue));
+    new (data) DataType{doc, value};
+}
+
+#define LUAU_REFLECT_RESOLVE_INDEX_ATOM() const char* keyStr = nullptr; ReflectAtom atom = resolveIndexAtom(L, keyStr); if (!keyStr) { lua_pushnil(L); return 1; }
+#define LUAU_REFLECT_RESOLVE_NAMECALL_ATOM() const char* str = nullptr; size_t len = 0; ReflectAtom atom = resolveNamecallAtom(L, str, len);
+
+#define LUAU_REFLECT_PREPARE_INDEX(checkFunc) auto& handle = checkFunc(L, 1); LUAU_REFLECT_RESOLVE_INDEX_ATOM()
+#define LUAU_REFLECT_PREPARE_NAMECALL(checkFunc) auto& handle = checkFunc(L, 1); LUAU_REFLECT_RESOLVE_NAMECALL_ATOM()
 
 #define LUAU_REFLECT_METHOD_TRAMPOLINE(funcName, checkFunc, dispatchFunc) \
-    static int funcName(lua_State* L) \
-    { \
-        auto& handle = checkFunc(L, 1); \
-        size_t len = 0; \
-        const char* str = lua_tolstring(L, lua_upvalueindex(1), &len); \
-        ReflectAtom atom = resolveGlobalReflectAtom(std::string_view(str, len)); \
-        return dispatchFunc(L, handle, atom, str, len); \
-    }
+    static int funcName(lua_State* L) { return reflectMethodTrampoline<std::decay_t<decltype(checkFunc(nullptr, 0))>, checkFunc, dispatchFunc>(L); }
 
 #define LUAU_REFLECT_NAMECALL(funcName, checkFunc, dispatchFunc) \
-    static int funcName(lua_State* L) \
-    { \
-        LUAU_REFLECT_PREPARE_NAMECALL(checkFunc); \
-        return dispatchFunc(L, handle, atom, str, len); \
-    }
+    static int funcName(lua_State* L) { return reflectNamecall<std::decay_t<decltype(checkFunc(nullptr, 0))>, checkFunc, dispatchFunc>(L); }
 
 #define LUAU_REFLECT_INDEX(funcName, checkFunc, getKindFunc, getCategoryFunc, TagValue, trampolineFunc) \
-    static int funcName(lua_State* L) \
-    { \
-        LUAU_REFLECT_PREPARE_INDEX(checkFunc); \
-        switch (atom) \
-        { \
-        case ReflectAtom::Kind: \
-            lua_pushstring(L, getKindFunc(handle.node)); \
-            return 1; \
-        case ReflectAtom::Category: \
-            lua_pushstring(L, getCategoryFunc(handle.node)); \
-            return 1; \
-        case ReflectAtom::Id: \
-            lua_pushlightuserdatatagged(L, (void*)handle.node, TagId); \
-            return 1; \
-        default: \
-            break; \
-        } \
-        if (atom != ReflectAtom::Unknown) \
-            return pushCachedUserdataMethod(L, TagValue, keyStr, trampolineFunc); \
-        lua_pushnil(L); \
-        return 1; \
-    }
+    static int funcName(lua_State* L) { return reflectNodeIndex<std::decay_t<decltype(checkFunc(nullptr, 0))>, checkFunc, getKindFunc, getCategoryFunc, TagValue, trampolineFunc>(L); }
 
 #define LUAU_REFLECT_GET_NODE_KIND(funcName, NodeType, classTable, defaultName) \
-    const char* funcName(NodeType node) \
-    { \
-        if (!node) \
-            return "nil"; \
-        int idx = node->classIndex; \
-        if (idx >= 0 && idx < int(classTable.size()) && classTable[idx].kind) \
-            return classTable[idx].kind; \
-        return defaultName; \
-    }
+    const char* funcName(NodeType node) { return getNodeKindFromTable(node, classTable, defaultName); }
 
 #define LUAU_REFLECT_GET_NODE_CATEGORY(funcName, NodeType, classTable, defaultName) \
-    const char* funcName(NodeType node) \
-    { \
-        if (!node) \
-            return "nil"; \
-        int idx = node->classIndex; \
-        if (idx >= 0 && idx < int(classTable.size()) && classTable[idx].category) \
-            return classTable[idx].category; \
-        return defaultName; \
-    }
+    const char* funcName(NodeType node) { return getNodeCategoryFromTable(node, classTable, defaultName); }
 
 #define LUAU_REFLECT_DEFINE_USERDATA_BASIC(checkName, dtorName, DataType, TagValue, TypeNameStr) \
-    DataType& checkName(lua_State* L, int idx) \
-    { \
-        if (lua_userdatatag(L, idx) != TagValue) \
-            luaL_typeerrorL(L, idx, TypeNameStr); \
-        return *static_cast<DataType*>(lua_touserdata(L, idx)); \
-    } \
-    static void dtorName(lua_State* L, void* userdata) \
-    { \
-        static_cast<DataType*>(userdata)->~DataType(); \
-    }
+    DataType& checkName(lua_State* L, int idx) { return checkReflectUserdata<TagValue, DataType>(L, idx, TypeNameStr); } \
+    static void dtorName(lua_State* L, void* userdata) { reflectUserdataDtor<DataType>(L, userdata); }
 
 #define LUAU_REFLECT_DEFINE_POINTER_USERDATA(pushName, checkName, dtorName, DataType, NodeType, TagValue, TypeNameStr) \
-    void pushName(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, NodeType node) \
-    { \
-        if (!node) \
-        { \
-            lua_pushnil(L); \
-            return; \
-        } \
-        DataType* data = static_cast<DataType*>(lua_newuserdatataggedwithmetatable(L, sizeof(DataType), TagValue)); \
-        new (data) DataType{doc, node}; \
-    } \
+    void pushName(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, NodeType node) { pushReflectPointerUserdata<TagValue, DataType>(L, doc, node); } \
     LUAU_REFLECT_DEFINE_USERDATA_BASIC(checkName, dtorName, DataType, TagValue, TypeNameStr)
 
 #define LUAU_REFLECT_DEFINE_VALUE_USERDATA(pushName, checkName, dtorName, DataType, ValueType, TagValue, TypeNameStr) \
-    void pushName(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, ValueType value) \
-    { \
-        DataType* data = static_cast<DataType*>(lua_newuserdatataggedwithmetatable(L, sizeof(DataType), TagValue)); \
-        new (data) DataType{doc, value}; \
-    } \
+    void pushName(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, ValueType value) { pushValueUserdata<TagValue, DataType>(L, doc, value); } \
     LUAU_REFLECT_DEFINE_USERDATA_BASIC(checkName, dtorName, DataType, TagValue, TypeNameStr)
 
 #define LUAU_REFLECT_DEFINE_TOSTRING(funcName, TypeNameStr) \
-    static int funcName(lua_State* L) \
-    { \
-        lua_pushstring(L, TypeNameStr); \
-        return 1; \
-    }
+    static int funcName(lua_State* L) { lua_pushstring(L, TypeNameStr); return 1; }
 
 #define LUAU_REFLECT_DEFINE_DYNAMIC_TOSTRING(funcName, checkFunc, getKindFunc, member) \
-    static int funcName(lua_State* L) \
-    { \
-        auto& handle = checkFunc(L, 1); \
-        lua_pushstring(L, getKindFunc(handle.member)); \
-        return 1; \
-    }
+    static int funcName(lua_State* L) { auto& handle = checkFunc(L, 1); lua_pushstring(L, getKindFunc(handle.member)); return 1; }
 
 #define LUAU_REFLECT_DEFINE_EQ(funcName, TagValue, checkFunc, compareExpr) \
     static int funcName(lua_State* L) \
     { \
-        if (lua_userdatatag(L, 1) != TagValue || lua_userdatatag(L, 2) != TagValue) \
-        { \
-            lua_pushboolean(L, false); \
-            return 1; \
-        } \
-        auto& a = checkFunc(L, 1); \
-        auto& b = checkFunc(L, 2); \
-        lua_pushboolean(L, (compareExpr)); \
-        return 1; \
+        if (lua_userdatatag(L, 1) != TagValue || lua_userdatatag(L, 2) != TagValue) { lua_pushboolean(L, false); return 1; } \
+        auto& a = checkFunc(L, 1); auto& b = checkFunc(L, 2); lua_pushboolean(L, (compareExpr)); return 1; \
     }
 
 // Module registration functions

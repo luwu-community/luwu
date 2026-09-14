@@ -32,7 +32,7 @@ static int astDocComments(lua_State* L)
     auto& doc = handle.doc;
     const auto& comments = doc->parseResult.commentLocations;
     pushArray(L, comments.size(), [&](size_t i) {
-        pushAstAux(L, doc, comments[i]);
+        pushAstAux(L, doc, extractReflectComment(*doc, comments[i]));
     });
     return 1;
 }
@@ -90,7 +90,7 @@ static int astDocProperties(lua_State* L)
 
     const auto& comments = doc->parseResult.commentLocations;
     pushArray(L, comments.size(), [&](size_t i) {
-        pushAstAux(L, doc, comments[i]);
+        pushAstAux(L, doc, extractReflectComment(*doc, comments[i]));
     });
     lua_setfield(L, -2, "comments");
 

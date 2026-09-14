@@ -675,24 +675,23 @@ static int astNodeProperties(lua_State* L)
         s_nodeClassTable[idx].propCollector(L, handle);
     }
 
-    if (handle.doc && handle.node)
-    {
-        if (const auto* comments = handle.doc->nodeComments.find(handle.node))
+    auto pushCommentList = [&](const char* field, const std::vector<ReflectComment>* list) {
+        if (list && !list->empty())
         {
-            pushArray(L, comments->size(), [&](size_t i) {
-                pushAstAux(L, handle.doc, (*comments)[i]);
+            pushArray(L, list->size(), [&](size_t i) {
+                pushAstAux(L, handle.doc, (*list)[i]);
             });
         }
         else
         {
             lua_newtable(L);
         }
-    }
-    else
-    {
-        lua_newtable(L);
-    }
-    lua_setfield(L, -2, "comments");
+        lua_setfield(L, -2, field);
+    };
+
+    const auto* comments = (handle.doc && handle.node) ? handle.doc->nodeComments.find(handle.node) : nullptr;
+    pushCommentList("leadingComments", comments ? &comments->leading : nullptr);
+    pushCommentList("trailingComments", comments ? &comments->trailing : nullptr);
 
     return 1;
 }
@@ -722,6 +721,11 @@ struct CommentAttacher : public Luau::AstVisitor
     {
     }
 
+    ReflectComment extractComment(const Luau::Comment& c)
+    {
+        return extractReflectComment(doc, c);
+    }
+
     bool visit(Luau::AstNode* node) override
     {
         if (!canNodeHoldComments(node))
@@ -735,12 +739,12 @@ struct CommentAttacher : public Luau::AstVisitor
 
         while (cursor < comments.size() && comments[cursor].location.end <= node->location.begin)
         {
-            doc.nodeComments[node].push_back(comments[cursor++]);
+            doc.nodeComments[node].leading.push_back(extractComment(comments[cursor++]));
         }
 
         if (cursor < comments.size() && comments[cursor].location.begin.line == node->location.end.line)
         {
-            doc.nodeComments[node].push_back(comments[cursor++]);
+            doc.nodeComments[node].trailing.push_back(extractComment(comments[cursor++]));
         }
 
         return true;
@@ -759,11 +763,11 @@ void attachCommentsToAst(AstDocumentState& doc, Luau::AstNode* rootNode)
 
     while (attacher.cursor < comments.size())
     {
-        doc.nodeComments[root].push_back(comments[attacher.cursor++]);
+        doc.nodeComments[root].trailing.push_back(attacher.extractComment(comments[attacher.cursor++]));
     }
 }
 
-static int astNodeComments(lua_State* L)
+static int astNodeGetComments(lua_State* L, bool trailing)
 {
     auto& handle = checkAstNode(L, 1);
     if (!handle.doc || !handle.node)
@@ -777,21 +781,82 @@ static int astNodeComments(lua_State* L)
         lua_newtable(L);
         return 1;
     }
-    pushArray(L, comments->size(), [&](size_t i) {
-        pushAstAux(L, handle.doc, (*comments)[i]);
+    const auto& list = trailing ? comments->trailing : comments->leading;
+    pushArray(L, list.size(), [&](size_t i) {
+        pushAstAux(L, handle.doc, list[i]);
     });
     return 1;
+}
+
+static int astNodeLeadingComments(lua_State* L)
+{
+    return astNodeGetComments(L, false);
+}
+
+static int astNodeTrailingComments(lua_State* L)
+{
+    return astNodeGetComments(L, true);
+}
+
+static void parseCommentArray(lua_State* L, int argIdx, std::vector<ReflectComment>& out)
+{
+    luaL_checktype(L, argIdx, LUA_TTABLE);
+    int len = int(lua_objlen(L, argIdx));
+    out.clear();
+    out.reserve(len);
+    for (int i = 1; i <= len; ++i)
+    {
+        lua_rawgeti(L, argIdx, i);
+        if (lua_userdatatag(L, -1) == TagAux)
+        {
+            auto& aux = *static_cast<AstAuxData*>(lua_touserdata(L, -1));
+            if (aux.kind == Aux_Comment)
+                out.push_back(aux.comment);
+            else
+                luaL_error(L, "expected AstComment at index %d in comment array", i);
+        }
+        else
+        {
+            luaL_error(L, "expected AstComment at index %d in comment array", i);
+        }
+        lua_pop(L, 1);
+    }
+}
+
+static int astNodeSetComments(lua_State* L, bool trailing)
+{
+    auto& handle = checkAstNode(L, 1);
+    if (!handle.doc || !handle.node)
+        luaL_error(L, "cannot set comments on null node");
+    auto& target = trailing ? handle.doc->nodeComments[handle.node].trailing : handle.doc->nodeComments[handle.node].leading;
+    parseCommentArray(L, 2, target);
+    lua_pushvalue(L, 1);
+    return 1;
+}
+
+static int astNodeSetLeadingComments(lua_State* L)
+{
+    return astNodeSetComments(L, false);
+}
+
+static int astNodeSetTrailingComments(lua_State* L)
+{
+    return astNodeSetComments(L, true);
 }
 
 static int dispatchAstNodeMethod(lua_State* L, AstNodeData& handle, ReflectAtom atom, const char* str, size_t len)
 {
     switch (atom)
     {
-    case ReflectAtom::Children:    return astNodeChildren(L);
-    case ReflectAtom::Walk:        return astNodeWalk(L);
-    case ReflectAtom::Properties:  return astNodeProperties(L);
-    case ReflectAtom::Prettyprint: return astNodePrettyprint(L);
-    case ReflectAtom::Comments:    return astNodeComments(L);
+    case ReflectAtom::Children:            return astNodeChildren(L);
+    case ReflectAtom::Walk:                return astNodeWalk(L);
+    case ReflectAtom::Properties:          return astNodeProperties(L);
+    case ReflectAtom::Prettyprint:         return astNodePrettyprint(L);
+    case ReflectAtom::LeadingComments:     return astNodeLeadingComments(L);
+    case ReflectAtom::SetLeadingComments:  return astNodeSetLeadingComments(L);
+    case ReflectAtom::TrailingComments:    return astNodeTrailingComments(L);
+    case ReflectAtom::SetTrailingComments: return astNodeSetTrailingComments(L);
+    case ReflectAtom::Comments:            return astNodeLeadingComments(L);
     default: break;
     }
 

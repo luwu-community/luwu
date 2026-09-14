@@ -1308,32 +1308,59 @@ TEST_CASE("ReflectCommentTracking")
     const char* script = R"LUA(
         local arena = reflect.allocator()
 
-        -- Fast parse without processComments: node:comments() is empty
+        -- Fast parse without processComments: leadingComments and trailingComments are empty
         local docNoComments = arena:parse("-- leading\nlocal x = 1 -- trailing\n")
         local statNo = docNoComments:root():body()[1]
-        assert(#statNo:comments() == 0)
+        assert(#statNo:leadingComments() == 0)
+        assert(#statNo:trailingComments() == 0)
 
-        -- Parse with processComments: comments attached to node
+        -- Parse with processComments: comments classified into leading and trailing
         local docWithComments = arena:parse("-- leading\nlocal x = 1 -- trailing\n", true, true)
         local root = docWithComments:root()
         local stat = root:body()[1]
-        local comments = stat:comments()
-        assert(#comments == 2)
-        assert(comments[1]:text() == "-- leading")
-        assert(comments[2]:text() == "-- trailing")
+        local leading = stat:leadingComments()
+        local trailing = stat:trailingComments()
+        assert(#leading == 1)
+        assert(leading[1]:text() == "-- leading")
+        assert(leading[1]:type() == "single")
+        assert(leading[1]:origlocation().begin.x == 1)
+        assert(#trailing == 1)
+        assert(trailing[1]:text() == "-- trailing")
+        assert(trailing[1]:type() == "single")
+        assert(trailing[1]:origlocation().begin.x == 2)
 
-        -- Check properties table contains comments
+        -- Check properties table contains leadingComments and trailingComments
         local props = stat:properties()
-        assert(props.comments ~= nil)
-        assert(#props.comments == 2)
-        assert(props.comments[1]:text() == "-- leading")
-        assert(props.comments[2]:text() == "-- trailing")
+        assert(props.leadingComments ~= nil)
+        assert(#props.leadingComments == 1)
+        assert(props.leadingComments[1]:text() == "-- leading")
+        assert(props.trailingComments ~= nil)
+        assert(#props.trailingComments == 1)
+        assert(props.trailingComments[1]:text() == "-- trailing")
+
+        -- Mutating comments with AstComment userdata
+        local newLeading = arena:defaultnode("AstComment"):setText("-- new leading"):setType("single")
+        stat:setLeadingComments({ newLeading })
+        assert(#stat:leadingComments() == 1)
+        assert(stat:leadingComments()[1]:text() == "-- new leading")
+
+        local customComment = arena:defaultnode("AstComment"):setText("-- custom trailing"):setType("single")
+        stat:setTrailingComments({ customComment })
+        assert(#stat:trailingComments() == 1)
+        assert(stat:trailingComments()[1]:text() == "-- custom trailing")
+        assert(stat:trailingComments()[1]:type() == "single")
+
+        -- Setting string directly should fail
+        local okString = pcall(function()
+            stat:setLeadingComments({ "-- raw string" })
+        end)
+        assert(not okString)
 
         -- ParseExpr with processComments
         local expr = arena:parseexpr("1 + 2 -- expr comment\n", true, true)
-        local exprComments = expr:comments()
-        assert(#exprComments == 1)
-        assert(exprComments[1]:text() == "-- expr comment")
+        local exprTrailing = expr:trailingComments()
+        assert(#exprTrailing == 1)
+        assert(exprTrailing[1]:text() == "-- expr comment")
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);

@@ -54,6 +54,11 @@ inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentStat
     lua_pushlstring(L, val.data, val.size);
 }
 
+inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const std::string& val)
+{
+    lua_pushlstring(L, val.data(), val.size());
+}
+
 template<typename T>
 inline std::enable_if_t<std::is_enum_v<T>> pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, T val)
 {
@@ -232,6 +237,13 @@ inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentStat
     char* copy = static_cast<char*>(doc->allocator()->allocate(len));
     std::memcpy(copy, s, len);
     out = Luau::AstArray<char>{copy, len};
+}
+
+inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, std::string& out)
+{
+    size_t len = 0;
+    const char* str = luaL_checklstring(L, argIdx, &len);
+    out.assign(str, len);
 }
 
 template<typename T>

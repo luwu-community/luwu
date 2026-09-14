@@ -17,8 +17,10 @@ export type AstComment = {
     read kind: "AstComment",
     -- Comment, BlockComment, or BrokenComment
     read type: (self: AstComment) -> ("single" | "block" | "broken" | "unknown"),
+    read setType: (self: AstComment, type: "single" | "block" | "broken") -> AstComment,
     read origlocation: (self: AstComment) -> AstLocation,
     read text: (self: AstComment) -> string,
+    read setText: (self: AstComment, text: string) -> AstComment,
     read properties: (self: AstComment) -> { [string]: any },
 }
 
@@ -383,7 +385,10 @@ export type CstNode =
 export type AstNodeCommon = {
     read id: Id,
     read prettyprint: (self: AstNode) -> string,
-    read comments: (self: AstNode) -> {AstComment},
+    read leadingComments: (self: AstNode) -> {AstComment},
+    read setLeadingComments: (self: AstNode, comments: {AstComment}) -> AstNode,
+    read trailingComments: (self: AstNode) -> {AstComment},
+    read setTrailingComments: (self: AstNode, comments: {AstComment}) -> AstNode,
     read origlocation: (self: AstNode) -> AstLocation,
     read cst: (self: AstNode) -> CstNode?,
     read children: (self: AstNode) -> {AstNode},
