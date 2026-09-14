@@ -34,9 +34,9 @@ LUAU_FASTFLAGVARIABLE(LuauTableEntriesDontNeedToMatchIndent)
 LUAU_FASTFLAGVARIABLE(LuauCstAttr)
 LUAU_FASTFLAGVARIABLE(LuauStoreConstKeywordBegin)
 LUAU_FASTFLAGVARIABLE(LuauTrackPrefixLocal)
-LUAU_FASTFLAGVARIABLE(LuauDefaultArguments)
-LUAU_FASTFLAGVARIABLE(LuauExternTypeGenericMethods)
-LUAU_FASTFLAGVARIABLE(LuauGenericNominals)
+LUAU_FASTFLAGVARIABLE(LuwuDefaultArguments)
+LUAU_FASTFLAGVARIABLE(LuwuExternTypeGenericMethods)
+LUAU_FASTFLAGVARIABLE(LuwuGenericNominals)
 LUAU_FASTFLAGVARIABLE(LuauNoDuplicateBinaryPrefix)
 
 // Clip with DebugLuauReportReturnTypeVariadicWithTypeSuffix
@@ -1664,7 +1664,7 @@ LUAU_NOINLINE AstClassPrimaryConstructor* Parser::parseClassPrimaryConstructor(
 
             // a primary constructor's parameters are function parameters that happen to belong to a
             // class, so their defaults ride on the same flag function parameter defaults do
-            Binding binding = parseBinding(/* isConst= */ false, /* allowDefault= */ FFlag::LuauDefaultArguments);
+            Binding binding = parseBinding(/* isConst= */ false, /* allowDefault= */ FFlag::LuwuDefaultArguments);
 
             if (argNames.contains(binding.name.name))
                 report(binding.name.location, "Duplicate primary constructor parameter '%s'", binding.name.name.value);
@@ -1763,7 +1763,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
 
     AstArray<AstGenericType*> generics{};
     AstArray<AstGenericTypePack*> genericPacks{};
-    if (FFlag::LuauBetterUserDefinedClasses && FFlag::LuauGenericNominals)
+    if (FFlag::LuauBetterUserDefinedClasses && FFlag::LuwuGenericNominals)
         std::tie(generics, genericPacks) = parseGenericTypeList(/* withDefaultValues= */ false);
 
     // Luwu Classes (rfcs/classes.md): an optional primary constructor, which may carry an access
@@ -2294,7 +2294,7 @@ AstDeclaredExternTypeProperty Parser::parseDeclaredExternTypeMethod(const AstArr
     AstArray<AstGenericType*> generics;
     AstArray<AstGenericTypePack*> genericPacks;
 
-    if (FFlag::LuauExternTypeGenericMethods)
+    if (FFlag::LuwuExternTypeGenericMethods)
     {
         std::tie(generics, genericPacks) = parseGenericTypeList(/* withDefaultValues= */ false);
     }
@@ -2459,7 +2459,7 @@ AstStat* Parser::parseDeclaration(const Location& start, const AstArray<AstAttr*
         AstArray<AstGenericType*> classGenerics;
         AstArray<AstGenericTypePack*> classGenericPacks;
 
-        if (FFlag::LuauGenericNominals)
+        if (FFlag::LuwuGenericNominals)
         {
             std::tie(classGenerics, classGenericPacks) = parseGenericTypeList(/* withDefaultValues= */ false);
         }
@@ -2913,14 +2913,14 @@ std::pair<AstExprFunction*, AstLocal*> Parser::parseFunctionBody(
             std::tie(vararg, varargLocation, varargAnnotation) = parseBindingList(
                 args,
                 /* allowDot3= */ true,
-                /* allowDefault= */ FFlag::LuauDefaultArguments,
+                /* allowDefault= */ FFlag::LuwuDefaultArguments,
                 &cstNode->argsCommaPositions,
                 nullptr,
                 &cstNode->varargAnnotationColonPosition
             );
         else
             std::tie(vararg, varargLocation, varargAnnotation) =
-                parseBindingList(args, /* allowDot3= */ true, /* allowDefault= */ FFlag::LuauDefaultArguments);
+                parseBindingList(args, /* allowDot3= */ true, /* allowDefault= */ FFlag::LuwuDefaultArguments);
     }
 
     std::optional<Location> argLocation;

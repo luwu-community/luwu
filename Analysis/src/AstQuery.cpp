@@ -12,7 +12,7 @@
 
 #include <algorithm>
 
-LUAU_FASTFLAG(LuauDefaultArguments)
+LUAU_FASTFLAG(LuwuDefaultArguments)
 
 namespace Luau
 {
@@ -459,7 +459,7 @@ struct FindExprOrLocal : public AstVisitor
         {
             visitLocal(fn->args.data[i]);
         }
-        if (FFlag::LuauDefaultArguments)
+        if (FFlag::LuwuDefaultArguments)
         {
             for (auto arg : fn->argsDefaults)
             {

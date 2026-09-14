@@ -1,5 +1,7 @@
 # RFC: Per-Thread Thread State Change Hook (`userthreadstatechange`)
 
+Status: Stable
+
 ## Summary
 
 RFC "Thread State Change Hook (`userthreadstatechange`)" added a global lua_Callback for all thread state changes. This RFC changes that to be at a per-thread level for efficiency purposes. The existing behavior can anyways be achieved through this RFC with the `userthread` lua_Callback if desired.

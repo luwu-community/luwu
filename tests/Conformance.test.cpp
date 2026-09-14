@@ -75,10 +75,10 @@ LUAU_FASTFLAG(LuauGcTraceUdata)
 LUAU_DYNAMIC_FASTFLAG(LuauGcTableStepFix)
 LUAU_FASTFLAG(LuauCodegenFixTwoResA64Builtin)
 LUAU_FASTFLAG(LuauMathRoundNegZero)
-LUAU_FASTFLAG(LuauDefaultArguments)
-LUAU_FASTFLAG(LuauNonePrimitive)
+LUAU_FASTFLAG(LuwuDefaultArguments)
+LUAU_FASTFLAG(LuwuNonePrimitive)
 LUAU_FASTFLAG(LuauDirectFieldGet)
-LUAU_FASTFLAG(LuauPcallMulti)
+LUAU_FASTFLAG(LuwuPcallMulti)
 
 #ifndef LUAU_CONFORMANCE_SOURCE_DIR
 // Walks up from the current directory looking for the Client folder,
@@ -1979,7 +1979,7 @@ static void populateRTTI(lua_State* L, Luau::TypeId type)
 TEST_CASE("Types")
 {
     ScopedFastFlag integerType{FFlag::LuauIntegerType2, true};
-    ScopedFastFlag nonePrimitive{FFlag::LuauNonePrimitive, true};
+    ScopedFastFlag nonePrimitive{FFlag::LuwuNonePrimitive, true};
 
     runConformance(
         "types.luau",
@@ -2893,7 +2893,7 @@ TEST_CASE("ApiCalls")
 
 TEST_CASE("ApiPcallMulti")
 {
-    ScopedFastFlag luauPcallMulti{FFlag::LuauPcallMulti, true};
+    ScopedFastFlag luauPcallMulti{FFlag::LuwuPcallMulti, true};
     StateRef globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
     // A simple function that errors
@@ -4523,10 +4523,10 @@ TEST_CASE("ClassesExportHoistingRepro")
         {FFlag::DebugLuauUserDefinedClasses, true},
         {FFlag::DebugLuauUserDefinedClassesRuntime, true},
         {FFlag::LuauBetterUserDefinedClasses, true},
-        {FFlag::LuauNonePrimitive, true},
-        {FFlag::LuauGenericNominals, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuGenericNominals, true},
         {FFlag::LuauExportValueSyntax, true},
-        {FFlag::LuauDefaultArguments, true},
+        {FFlag::LuwuDefaultArguments, true},
         {FFlag::LuauExportedClassIsNilWorkaround, true},
     };
 
@@ -4540,9 +4540,9 @@ TEST_CASE("Classes")
         {FFlag::DebugLuauUserDefinedClassesRuntime, true},
         {FFlag::LuauBetterUserDefinedClasses, true},
         // a primary constructor's parameter defaults are function parameter defaults
-        {FFlag::LuauDefaultArguments, true},
-        {FFlag::LuauNonePrimitive, true},
-        {FFlag::LuauGenericNominals, true},
+        {FFlag::LuwuDefaultArguments, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuGenericNominals, true},
     };
 
     runConformance(
@@ -5138,14 +5138,14 @@ TEST_CASE("CodegenRandomizeFunctionalCorrectness")
 
 TEST_CASE("DefaultArguments")
 {
-    ScopedFastFlag sff{FFlag::LuauDefaultArguments, true};
+    ScopedFastFlag sff{FFlag::LuwuDefaultArguments, true};
 
     runConformance("defaultarg.luau");
 }
 
 TEST_CASE("None")
 {
-    ScopedFastFlag sff{FFlag::LuauNonePrimitive, true};
+    ScopedFastFlag sff{FFlag::LuwuNonePrimitive, true};
 
     runConformance("none.luau");
 }

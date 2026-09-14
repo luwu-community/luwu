@@ -1,5 +1,9 @@
 # RFC: Faster Luwu-managed references
 
+Status: Implemented (Flagged)
+
+FFlag: LuwuManagedReferences2
+
 ## Summary
 
 Add new `lua_refpool`, `lua_unrefpool` and `lua_getrefpool` APIs to use an internal reference pool instead of the Luwu registry (which is slow compared to a thread stack or internal reference pool). This allows embedders to drop hacks like thread stacks in favor of a faster native reference API built into Luwu and is one step toward improving the C API. The existing `lua_ref`, `lua_unref` and `lua_getref` APIs are kept for backwards compatibility.

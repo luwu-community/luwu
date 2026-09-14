@@ -3,7 +3,7 @@
 
 #include "Luau/Common.h"
 
-LUAU_FASTFLAG(LuauDefaultArguments)
+LUAU_FASTFLAG(LuwuDefaultArguments)
 
 namespace Luau
 {
@@ -346,7 +346,7 @@ void AstExprFunction::visit(AstVisitor* visitor)
                 arg->annotation->visit(visitor);
         }
 
-        if (FFlag::LuauDefaultArguments)
+        if (FFlag::LuwuDefaultArguments)
         {
             for (AstExpr* argDefault : argsDefaults)
             {

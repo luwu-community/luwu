@@ -639,12 +639,12 @@ struct ExternType
      */
     std::optional<NominalRelation> relation;
 
-    // True if this ExternType is a generic nominal type instantiation (see LuauGenericNominals)
+    // True if this ExternType is a generic nominal type instantiation (see LuwuGenericNominals)
     // that still contains an unresolved generic somewhere inside it. Substitution visitors use
     // this to decide whether to descend into it looking for further generics to replace.
     bool hasUnresolvedGenerics = false;
 
-    // The type arguments this ExternType was instantiated with (see LuauGenericNominals), used
+    // The type arguments this ExternType was instantiated with (see LuwuGenericNominals), used
     // to display instantiations like `Box<number>` when stringifying the type.
     std::vector<TypeId> instantiatedTypeParams;
     std::vector<TypePackId> instantiatedTypePackParams;

@@ -12,7 +12,7 @@
 
 
 LUAU_FASTINTVARIABLE(LuauMaxCFGDataflowIterations, 2);
-LUAU_FASTFLAG(LuauGenericNominals)
+LUAU_FASTFLAG(LuwuGenericNominals)
 
 namespace Luau::CFG
 {
@@ -192,7 +192,7 @@ TypeId TypeStateMap::getDiscriminantOf(const Refine& refine)
         discriminantTy = builtinTypes->externType;
     }
     else if (auto typeFun = globalScope->lookupType(name);
-             typeFun && (FFlag::LuauGenericNominals ? get<ExternType>(follow(typeFun->type)) != nullptr
+             typeFun && (FFlag::LuwuGenericNominals ? get<ExternType>(follow(typeFun->type)) != nullptr
                                                      : (typeFun->typeParams.empty() && typeFun->typePackParams.empty())))
     {
         TypeId ty = follow(typeFun->type);

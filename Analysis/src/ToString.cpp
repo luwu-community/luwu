@@ -20,7 +20,7 @@
 
 LUAU_FASTFLAG(LuauSolverV2)
 LUAU_FASTFLAG(LuauIntegerType2)
-LUAU_FASTFLAG(LuauGenericNominals)
+LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FASTFLAGVARIABLE(LuauTruthyFalsy)
 
 /*
@@ -1172,7 +1172,7 @@ struct TypeStringifier
     void operator()(TypeId ty, const ExternType& etv)
     {
         state.emitAndRecordSpan(etv.name, ty);
-        if (FFlag::LuauGenericNominals)
+        if (FFlag::LuwuGenericNominals)
         {
             if (state.hasSeen(&etv))
             {

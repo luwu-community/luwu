@@ -11,7 +11,7 @@
 
 LUAU_FASTINT(LuauVisitRecursionLimit)
 LUAU_FASTFLAG(LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier)
-LUAU_FASTFLAG(LuauGenericNominals)
+LUAU_FASTFLAG(LuwuGenericNominals)
 
 namespace Luau
 {
@@ -354,7 +354,7 @@ struct GenericTypeVisitor
                     traverse(etv->indexer->indexResultType);
                 }
 
-                if (FFlag::LuauGenericNominals)
+                if (FFlag::LuwuGenericNominals)
                 {
                     for (TypeId itp : etv->instantiatedTypeParams)
                         traverse(itp);

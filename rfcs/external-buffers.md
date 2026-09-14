@@ -1,6 +1,8 @@
 # External Buffers
 
-Status: Implemented
+Status: Implemented (Flagged)
+
+FFlag: LuwuExternallyManagedBuffers, LuwuBufferIsFrozen
 
 ## Summary
 

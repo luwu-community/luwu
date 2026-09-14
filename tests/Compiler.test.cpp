@@ -32,9 +32,9 @@ LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportedClassIsNilWorkaround)
 LUAU_FASTFLAG(DebugLuauNoInline)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
-LUAU_FASTFLAG(LuauDefaultArguments)
+LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuauBetterUserDefinedClasses)
-LUAU_FASTFLAG(LuauGenericNominals)
+LUAU_FASTFLAG(LuwuGenericNominals)
 
 using namespace Luau;
 
@@ -11311,7 +11311,7 @@ TEST_CASE("ClassPrimaryConstructorInit")
     ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
     ScopedFastFlag betterClasses{FFlag::LuauBetterUserDefinedClasses, true};
     // a primary constructor's parameter defaults ride on the function parameter default flag
-    ScopedFastFlag defaultArgs{FFlag::LuauDefaultArguments, true};
+    ScopedFastFlag defaultArgs{FFlag::LuwuDefaultArguments, true};
 
     // The body of that synthesized `__init`: the self check every method gets, then the parameter
     // defaults, then one field assignment per field in declaration order -- body properties first,
@@ -12541,7 +12541,7 @@ RETURN R3 1
 
 TEST_CASE("DefaultArguments")
 {
-    ScopedFastFlag sff{FFlag::LuauDefaultArguments, true};
+    ScopedFastFlag sff{FFlag::LuwuDefaultArguments, true};
 
     // Assigning constants as default arguments
     CHECK_EQ(

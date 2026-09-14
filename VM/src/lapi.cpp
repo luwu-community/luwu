@@ -20,15 +20,15 @@
 #include <string.h>
 
 LUAU_FASTFLAG(LuauDirectFieldGet)
-LUAU_FASTFLAG(LuauNonePrimitive)
+LUAU_FASTFLAG(LuwuNonePrimitive)
 LUAU_FASTFLAGVARIABLE(LuauAutoStack)
 LUAU_FASTFLAGVARIABLE(LuauCloneTableFix)
-LUAU_FASTFLAGVARIABLE(LuauExternallyManagedBuffers)
-LUAU_FASTFLAGVARIABLE(LuauExternalString)
-LUAU_FASTFLAGVARIABLE(DebugLuauAllowNonNullTerminatedStrings)
-LUAU_FASTFLAGVARIABLE(LuauFatCClosure)
-LUAU_FASTFLAGVARIABLE(LuauManagedReferences2)
-LUAU_FASTFLAGVARIABLE(LuauPcallMulti)
+LUAU_FASTFLAGVARIABLE(LuwuExternallyManagedBuffers)
+LUAU_FASTFLAGVARIABLE(LuwuExternalString)
+LUAU_FASTFLAGVARIABLE(DebugLuwuAllowNonNullTerminatedStrings)
+LUAU_FASTFLAGVARIABLE(LuwuFatCClosure)
+LUAU_FASTFLAGVARIABLE(LuwuManagedReferences2)
+LUAU_FASTFLAGVARIABLE(LuwuPcallMulti)
 LUAU_FASTFLAG(LuauGcTraceUdata)
 
 /*
@@ -697,7 +697,7 @@ void lua_pushnil(lua_State* L)
 
 void lua_pushsymnone(lua_State* L)
 {
-    LUAU_ASSERT(FFlag::LuauNonePrimitive);
+    LUAU_ASSERT(FFlag::LuwuNonePrimitive);
     ensure_stack(L, 1);
     setsymnonevalue(L->top);
     api_incr_top(L);
@@ -816,7 +816,7 @@ void lua_pushcclosurek(lua_State* L, lua_CFunction fn, const char* debugname, in
 
 void* lua_pushcclosurewithdatak(lua_State* L, lua_CFunction fn, const char* debugname, lua_Continuation cont, size_t size, lua_ClosureWithDataFree dtor)
 {
-    LUAU_ASSERT(FFlag::LuauFatCClosure);
+    LUAU_ASSERT(FFlag::LuwuFatCClosure);
     
     api_check(L, fn != nullptr);
     luaC_checkGC(L);
@@ -836,7 +836,7 @@ void* lua_pushcclosurewithdatak(lua_State* L, lua_CFunction fn, const char* debu
 
 void* lua_getcclosuredata(lua_State* L)
 {
-    LUAU_ASSERT(FFlag::LuauFatCClosure);
+    LUAU_ASSERT(FFlag::LuwuFatCClosure);
         
     Closure* cl = curr_func(L);
     if (cl && cl->isC == 2)
@@ -1235,7 +1235,7 @@ int lua_pcall(lua_State* L, int nargs, int nresults, int errfunc)
 
 int lua_pcallmulti(lua_State* L, int nargs, int nresults, int errfunc)
 {
-    LUAU_ASSERT(FFlag::LuauPcallMulti);
+    LUAU_ASSERT(FFlag::LuwuPcallMulti);
     api_check(L, nargs >= 0);
     api_check(L, nresults >= LUA_MULTRET);
     api_checknelems(L, nargs + 1);
@@ -1641,7 +1641,7 @@ void* lua_newbuffer(lua_State* L, size_t sz)
 
 void* lua_newexternalbuffer(lua_State* L, size_t sz, void* data, void* userdata, lua_BufferFree free_cb, int mode)
 {
-    LUAU_ASSERT(FFlag::LuauExternallyManagedBuffers);
+    LUAU_ASSERT(FFlag::LuwuExternallyManagedBuffers);
     api_check(L, mode == 1 || mode == 2);
     luaC_checkGC(L);
     luaC_threadbarrier(L);
@@ -1666,8 +1666,8 @@ void* lua_getbufferuserdata(lua_State* L, int idx)
 
 const char* lua_pushexternalstring(lua_State* L, const char* data, size_t len, void* userdata, lua_StringFree free_cb)
 {
-    LUAU_ASSERT(FFlag::LuauExternalString);
-    if (!FFlag::DebugLuauAllowNonNullTerminatedStrings)
+    LUAU_ASSERT(FFlag::LuwuExternalString);
+    if (!FFlag::DebugLuwuAllowNonNullTerminatedStrings)
         api_check(L, data[len] == '\0');
     luaC_checkGC(L);
     luaC_threadbarrier(L);
@@ -1680,14 +1680,14 @@ const char* lua_pushexternalstring(lua_State* L, const char* data, size_t len, v
 
 int lua_isstringexternal(lua_State* L, int idx)
 {
-    LUAU_ASSERT(FFlag::LuauExternalString);
+    LUAU_ASSERT(FFlag::LuwuExternalString);
     StkId p = index2addr(L, idx);
     return ttisstring(p) ? (!tsisinline(tsvalue(p))) : 0;
 }
 
 void* lua_getstringexternaluserdata(lua_State* L, int idx)
 {
-    LUAU_ASSERT(FFlag::LuauExternalString);
+    LUAU_ASSERT(FFlag::LuwuExternalString);
     StkId p = index2addr(L, idx);
     if (ttisstring(p) && !tsisinline(tsvalue(p)))
     {
@@ -1780,7 +1780,7 @@ uintptr_t lua_encodepointer(lua_State* L, uintptr_t p)
 
 int lua_refpool(lua_State* L, int idx)
 {
-    LUAU_ASSERT(FFlag::LuauManagedReferences2);
+    LUAU_ASSERT(FFlag::LuwuManagedReferences2);
     api_check(L, idx != LUA_REGISTRYINDEX); // idx is a stack index for value
     int ref = LUA_REFNIL;
     global_State* g = L->global;
@@ -1817,7 +1817,7 @@ int lua_refpool(lua_State* L, int idx)
 
 int lua_getrefpool(lua_State* L, int ref)
 {
-    LUAU_ASSERT(FFlag::LuauManagedReferences2);
+    LUAU_ASSERT(FFlag::LuwuManagedReferences2);
     luaC_threadbarrier(L);
     ensure_stack(L, 1);
     global_State* g = L->global;
@@ -1835,7 +1835,7 @@ int lua_getrefpool(lua_State* L, int ref)
 
 void lua_unrefpool(lua_State* L, int ref)
 {
-    LUAU_ASSERT(FFlag::LuauManagedReferences2);
+    LUAU_ASSERT(FFlag::LuwuManagedReferences2);
     if (ref <= LUA_REFNIL)
         return;
 

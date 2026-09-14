@@ -33,14 +33,14 @@ static void setLuauFlag(std::string_view name, bool state)
 static void setLuauFlags(bool state)
 {
     for (Luau::FValue<bool>* flag = Luau::FValue<bool>::list; flag; flag = flag->next)
-        if (strncmp(flag->name, "Luau", 4) == 0)
+        if (strncmp(flag->name, "Luau", 4) == 0 || strncmp(flag->name, "Luwu", 4) == 0)
             flag->value = state;
 }
 
 void setLuauFlagsDefault()
 {
     for (Luau::FValue<bool>* flag = Luau::FValue<bool>::list; flag; flag = flag->next)
-        if (strncmp(flag->name, "Luau", 4) == 0 && !Luau::isAnalysisFlagExperimental(flag->name))
+        if ((strncmp(flag->name, "Luau", 4) == 0 || strncmp(flag->name, "Luwu", 4) == 0) && !Luau::isAnalysisFlagExperimental(flag->name))
             flag->value = true;
 }
 

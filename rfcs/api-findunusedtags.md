@@ -1,6 +1,6 @@
 # `lua_findunuseduserdatatag`, `lua_findunusedlightuserdatatag`
 
-Status: Implemented
+Status: Stable
 
 ## Summary
 Implement functions for finding unused userdata and light userdata tags.

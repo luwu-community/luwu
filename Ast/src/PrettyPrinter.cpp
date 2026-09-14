@@ -14,7 +14,7 @@ LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 
 LUAU_FASTFLAG(LuauCstAttr)
-LUAU_FASTFLAG(LuauDefaultArguments)
+LUAU_FASTFLAG(LuwuDefaultArguments)
 
 namespace
 {
@@ -1557,7 +1557,7 @@ struct Printer
                 visualizeTypeAnnotation(*local->annotation);
             }
 
-            if (FFlag::LuauDefaultArguments)
+            if (FFlag::LuwuDefaultArguments)
             {
                 if (AstExpr* defaultValue = func.argsDefaults.data[i])
                 {

@@ -84,7 +84,7 @@ struct ClassDeclRecord
     TypeId primaryInitTy = nullptr;
 
     // The class's own generics (e.g. the `T` in `class Box<T> ... end`), under
-    // LuauGenericNominals. Empty for non-generic classes.
+    // LuwuGenericNominals. Empty for non-generic classes.
     std::vector<GenericTypeDefinition> typeParams;
     std::vector<GenericTypePackDefinition> typePackParams;
 };

@@ -44,7 +44,7 @@ LUAU_FASTFLAGVARIABLE(DebugLuauLogSolver)
 LUAU_FASTFLAGVARIABLE(DebugLuauLogBindings)
 LUAU_FASTFLAGVARIABLE(LuauFixPropReadsOnMetatableTypes)
 LUAU_FASTFLAGVARIABLE(LuauAlsoInstantiateInferredArguments)
-LUAU_FASTFLAG(LuauGenericNominals)
+LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FLAGVERSION(LuauAlsoInstantiateInferredArguments, 2)
 LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
 LUAU_FASTFLAGVARIABLE(LuauRemoveConstraintSolverEmplace)
@@ -354,7 +354,7 @@ struct InstantiationQueuer : IterativeTypeVisitor
 
     bool visit(TypeId ty, const ExternType& etv) override
     {
-        if (FFlag::LuauGenericNominals && etv.hasUnresolvedGenerics)
+        if (FFlag::LuwuGenericNominals && etv.hasUnresolvedGenerics)
             return true;
 
         return false;
@@ -447,7 +447,7 @@ struct InfiniteTypeFinder : IterativeTypeVisitor
         // is: `To` is bound fresh at each call site, not at Option's own definition. Without
         // this carve-out, this reference to `Option<To>` looks identical to the genuinely
         // infinite `type Foo<T> = { x: Foo<SomeOtherType> }` case, since `To != T`.
-        if (FFlag::LuauGenericNominals && (!ftv.generics.empty() || !ftv.genericPacks.empty()))
+        if (FFlag::LuwuGenericNominals && (!ftv.generics.empty() || !ftv.genericPacks.empty()))
             return false;
 
         return true;
@@ -1418,7 +1418,7 @@ bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNul
     // PendingExpansionTypes at constraint-generation time, so a member can be solved without this
     // expansion having run. If we are being force-dispatched there is nothing left to wait for, and
     // the substitution below defers each still-blocked member individually.
-    if (FFlag::LuauGenericNominals && !force)
+    if (FFlag::LuwuGenericNominals && !force)
     {
         if (const ExternType* templateEtv = get<ExternType>(follow(tf->type)))
         {
@@ -1480,7 +1480,7 @@ bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNul
     // e.g. `<T...>(T...) -> T...` instantiated with `any` for `T...` becomes
     // `<any>(any) -> any`, where none of these things are _generics_.
     ApplyTypeFunction applyTypeFunction{arena};
-    if (FFlag::LuauGenericNominals)
+    if (FFlag::LuwuGenericNominals)
         applyTypeFunction.genericNominalRoot = follow(tf->type);
     for (size_t i = 0; i < typeArguments.size(); ++i)
     {
@@ -1500,7 +1500,7 @@ bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNul
     if (!maybeInstantiated.has_value())
     {
         // TODO (CLI-56761): Report an error unconditionally, not just under this flag.
-        if (FFlag::LuauGenericNominals)
+        if (FFlag::LuwuGenericNominals)
             reportError(CodeTooComplex{}, constraint->location);
         bindResult(builtinTypes->errorType);
         return true;
@@ -1511,7 +1511,7 @@ bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNul
 
     // Record whether this freshly-instantiated generic nominal type still contains an
     // unresolved generic anywhere inside it. See ExternType::hasUnresolvedGenerics.
-    if (FFlag::LuauGenericNominals && get<ExternType>(follow(tf->type)))
+    if (FFlag::LuwuGenericNominals && get<ExternType>(follow(tf->type)))
     {
         // If none of the type arguments were actually used in the template body, substitution
         // hands back tf->type unchanged (no clone). We still want a distinct object per
@@ -1901,7 +1901,7 @@ bool ConstraintSolver::tryDispatch(const FunctionCallConstraint& c, NotNull<cons
     for (TypePackId freeTp : u2.newFreshTypePacks)
         trackInteriorFreeTypePack(constraint->scope, freeTp);
 
-    if (FFlag::LuauGenericNominals && c.expectedType)
+    if (FFlag::LuwuGenericNominals && c.expectedType)
         patchUnconstrainedGenericsFromExpectedType(overloadToUse, follow(*c.expectedType), u2.genericSubstitutions);
 
     if (!u2.genericSubstitutions.empty() || !u2.genericPackSubstitutions.empty())
@@ -3225,7 +3225,7 @@ bool ConstraintSolver::tryDispatch(const PushFunctionTypeConstraint& c, NotNull<
 
 bool ConstraintSolver::tryDispatch(const InstantiateNominalPropConstraint& c, NotNull<const Constraint> constraint, bool force)
 {
-    LUAU_ASSERT(FFlag::LuauGenericNominals);
+    LUAU_ASSERT(FFlag::LuwuGenericNominals);
 
     TypeId templateProp = follow(c.templateProp);
 
@@ -3369,7 +3369,7 @@ TypeId ConstraintSolver::instantiateFunctionType(
     auto result = r.substitute(clonedFunctionTypeId);
     if (!result)
     {
-        if (FFlag::LuauGenericNominals)
+        if (FFlag::LuwuGenericNominals)
             reportError(CodeTooComplex{}, location);
         return builtinTypes->errorType;
     }

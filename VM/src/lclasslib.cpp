@@ -8,7 +8,7 @@
 
 #include "Luau/Common.h"
 
-LUAU_FASTFLAG(LuauNonePrimitive)
+LUAU_FASTFLAG(LuwuNonePrimitive)
 
 static int class_isinstance(lua_State* L)
 {
@@ -72,7 +72,7 @@ static int class_fields(lua_State* L)
         const TValue* value = object ? &object->members[offset] : NULL;
         if (value && !ttisnil(value))
             luaA_pushvalue(L, value);
-        else if (FFlag::LuauNonePrimitive)
+        else if (FFlag::LuwuNonePrimitive)
             lua_pushsymnone(L);
         else
             lua_pushnil(L);

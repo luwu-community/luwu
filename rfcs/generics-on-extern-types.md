@@ -1,6 +1,8 @@
 # Generic parameters on extern types
 
-FFlags: LuauGenericNominals, LuauExternTypeGenericMethods
+Status: Implemented (Flagged)
+
+FFlags: LuwuGenericNominals, LuwuExternTypeGenericMethods
 
 Implementation-related upstream bugfix FFlags: LuauExternTypeUseDefinitionScope
 

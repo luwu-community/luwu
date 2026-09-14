@@ -6,7 +6,7 @@ LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
 LUAU_FASTFLAG(LuauUdtfTypeIsSubtypeOf)
-LUAU_FASTFLAG(LuauBufferIsFrozen)
+LUAU_FASTFLAG(LuwuBufferIsFrozen)
 
 namespace Luau
 {
@@ -387,7 +387,7 @@ std::string getBuiltinDefinitionSource()
     result += kBuiltinDefinitionBufferSrcCore;
     if (FFlag::LuauIntegerType2 && FFlag::LuauIntegerLibrary)
         result += kBuiltinDefinitionBufferSrcInteger;
-    if (FFlag::LuauBufferIsFrozen)
+    if (FFlag::LuwuBufferIsFrozen)
         result += kBuiltinDefinitionBufferSrcIsFrozen;
     result += kBuiltinDefinitionBufferSrcClose;
 

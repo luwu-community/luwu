@@ -26,7 +26,7 @@ int main(int argc, char** argv)
     Luau::assertHandler() = assertionHandler;
 
     for (Luau::FValue<bool>* flag = Luau::FValue<bool>::list; flag; flag = flag->next)
-        if (strncmp(flag->name, "Luau", 4) == 0)
+        if (strncmp(flag->name, "Luau", 4) == 0 || strncmp(flag->name, "Luwu", 4) == 0)
             flag->value = true;
 
     if (argc >= 2 && strcmp(argv[1], "--help") == 0)

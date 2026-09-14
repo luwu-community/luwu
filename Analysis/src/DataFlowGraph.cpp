@@ -15,7 +15,7 @@ LUAU_FASTFLAG(LuauSolverV2)
 LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
 LUAU_FASTFLAGVARIABLE(LuauDoNotOverwriteAstDefs)
 LUAU_FASTFLAGVARIABLE(LuauAvoidTrivialPhis)
-LUAU_FASTFLAG(LuauDefaultArguments)
+LUAU_FASTFLAG(LuwuDefaultArguments)
 
 namespace Luau
 {
@@ -1191,7 +1191,7 @@ DataFlowResult DataFlowGraphBuilder::visitFunction(AstExprFunction* f, NotNull<D
     if (f->returnAnnotation)
         visitTypePack(f->returnAnnotation);
 
-    if (FFlag::LuauDefaultArguments)
+    if (FFlag::LuwuDefaultArguments)
     {
         for (AstExpr* paramDefault : f->argsDefaults)
             if (paramDefault)

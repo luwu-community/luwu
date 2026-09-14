@@ -29,7 +29,7 @@ LUAU_FASTINTVARIABLE(LuauTypeMaximumStringifierLength, 500)
 LUAU_FASTINTVARIABLE(LuauTableTypeMaximumStringifierLength, 0)
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAG(LuauInstantiateInSubtyping)
-LUAU_FASTFLAG(LuauGenericNominals)
+LUAU_FASTFLAG(LuwuGenericNominals)
 
 namespace Luau
 {
@@ -1217,9 +1217,9 @@ bool isSubclass(const ExternType* cls, const ExternType* parent)
     {
         if (cls == parent)
             return true;
-        else if (FFlag::LuauGenericNominals && isSameGenericNominalInstantiation(cls, parent))
+        else if (FFlag::LuwuGenericNominals && isSameGenericNominalInstantiation(cls, parent))
             return true;
-        else if (FFlag::LuauGenericNominals && isBareGenericNominalRoot(cls, parent))
+        else if (FFlag::LuwuGenericNominals && isBareGenericNominalRoot(cls, parent))
             return true;
         else if (!cls->parent)
             return false;

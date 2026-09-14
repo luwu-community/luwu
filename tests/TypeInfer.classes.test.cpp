@@ -12,8 +12,8 @@ using namespace Luau;
 LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
 LUAU_FASTFLAG(DebugLuauUserDefinedClassesRuntime)
 LUAU_FASTFLAG(LuauBetterUserDefinedClasses)
-LUAU_FASTFLAG(LuauDefaultArguments)
-LUAU_FASTFLAG(LuauGenericNominals)
+LUAU_FASTFLAG(LuwuDefaultArguments)
+LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass);
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuauExportValueSyntax)
@@ -587,7 +587,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "class_generic_parameter_is_inferred_from_cons
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuauBetterUserDefinedClasses, true},
-        {FFlag::LuauGenericNominals, true},
+        {FFlag::LuwuGenericNominals, true},
     };
 
     auto result = check(R"(
@@ -1089,7 +1089,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "primary_constructor_declares_a_field_per_para
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuauBetterUserDefinedClasses, true},
-        {FFlag::LuauDefaultArguments, true},
+        {FFlag::LuwuDefaultArguments, true},
     };
 
     LUAU_REQUIRE_NO_ERRORS(check(R"(
@@ -1113,7 +1113,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "primary_constructor_argument_types_are_checke
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuauBetterUserDefinedClasses, true},
-        {FFlag::LuauDefaultArguments, true},
+        {FFlag::LuwuDefaultArguments, true},
     };
 
     auto result = check(R"(
@@ -1131,7 +1131,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "primary_constructor_arity_is_checked")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuauBetterUserDefinedClasses, true},
-        {FFlag::LuauDefaultArguments, true},
+        {FFlag::LuwuDefaultArguments, true},
     };
 
     auto result = check(R"(
@@ -1149,7 +1149,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "primary_constructor_parameter_defaults")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuauBetterUserDefinedClasses, true},
-        {FFlag::LuauDefaultArguments, true},
+        {FFlag::LuwuDefaultArguments, true},
     };
 
     LUAU_REQUIRE_NO_ERRORS(check(R"(
@@ -1173,7 +1173,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "primary_constructor_parameter_default_is_chec
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuauBetterUserDefinedClasses, true},
-        {FFlag::LuauDefaultArguments, true},
+        {FFlag::LuwuDefaultArguments, true},
     };
 
     auto result = check(R"(
@@ -1189,7 +1189,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "primary_constructor_parameters_are_visible_to
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuauBetterUserDefinedClasses, true},
-        {FFlag::LuauDefaultArguments, true},
+        {FFlag::LuwuDefaultArguments, true},
     };
 
     LUAU_REQUIRE_NO_ERRORS(check(R"(
@@ -1209,7 +1209,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "primary_constructor_parameters_are_not_visibl
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuauBetterUserDefinedClasses, true},
-        {FFlag::LuauDefaultArguments, true},
+        {FFlag::LuwuDefaultArguments, true},
     };
 
     // `name` in the method body is the global, not the parameter, so this is not a type error about
@@ -1227,7 +1227,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "qualified_parameters_declare_their_fields_acc
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuauBetterUserDefinedClasses, true},
-        {FFlag::LuauDefaultArguments, true},
+        {FFlag::LuwuDefaultArguments, true},
     };
 
     // a parameter may carry its field's access specifier and `const` modifier directly, instead of
@@ -1253,7 +1253,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "bare_restatement_takes_the_parameters_type")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuauBetterUserDefinedClasses, true},
-        {FFlag::LuauDefaultArguments, true},
+        {FFlag::LuwuDefaultArguments, true},
     };
 
     auto result = check(R"(
@@ -1278,7 +1278,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "field_that_can_never_be_initialized")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuauBetterUserDefinedClasses, true},
-        {FFlag::LuauDefaultArguments, true},
+        {FFlag::LuwuDefaultArguments, true},
     };
 
     auto result = check(R"(
@@ -1303,7 +1303,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "class_with_only_private_fields_and_no_functio
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuauBetterUserDefinedClasses, true},
-        {FFlag::LuauDefaultArguments, true},
+        {FFlag::LuwuDefaultArguments, true},
     };
 
     auto result = check(R"(
@@ -1332,7 +1332,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "class_with_private_fields_is_usable_through_a
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuauBetterUserDefinedClasses, true},
-        {FFlag::LuauDefaultArguments, true},
+        {FFlag::LuwuDefaultArguments, true},
     };
 
     LUAU_REQUIRE_NO_ERRORS(check(R"(
@@ -1398,7 +1398,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "field_that_can_never_be_initialized_is_fine_w
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuauBetterUserDefinedClasses, true},
-        {FFlag::LuauDefaultArguments, true},
+        {FFlag::LuwuDefaultArguments, true},
     };
 
     // ...and a field a parameter names, or one with a default, is initialized after all
@@ -1415,7 +1415,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "a_class_with_a_table_constructor_may_leave_fi
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuauBetterUserDefinedClasses, true},
-        {FFlag::LuauDefaultArguments, true},
+        {FFlag::LuwuDefaultArguments, true},
     };
 
     // the rule is specific to primary constructors: a POD class's table constructor can still supply
@@ -1433,7 +1433,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "private_primary_constructor")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuauBetterUserDefinedClasses, true},
-        {FFlag::LuauDefaultArguments, true},
+        {FFlag::LuwuDefaultArguments, true},
     };
 
     auto result = check(R"(
@@ -1454,7 +1454,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "primary_constructor_table_argument_is_positio
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuauBetterUserDefinedClasses, true},
-        {FFlag::LuauDefaultArguments, true},
+        {FFlag::LuwuDefaultArguments, true},
     };
 
     // a primary constructor takes away the table constructor: the table is just argument one
@@ -1474,8 +1474,8 @@ TEST_CASE_FIXTURE(ClassesFixture, "generic_class_with_a_primary_constructor")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuauBetterUserDefinedClasses, true},
-        {FFlag::LuauDefaultArguments, true},
-        {FFlag::LuauGenericNominals, true},
+        {FFlag::LuwuDefaultArguments, true},
+        {FFlag::LuwuGenericNominals, true},
     };
 
     auto result = check(R"(
@@ -1500,7 +1500,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "bare_restatement_is_checked_against_the_param
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuauBetterUserDefinedClasses, true},
-        {FFlag::LuauDefaultArguments, true},
+        {FFlag::LuwuDefaultArguments, true},
     };
 
     // `private breed: number` still initializes the field from the parameter -- the `= breed` is
@@ -1525,7 +1525,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "bare_restatement_with_a_compatible_annotation
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuauBetterUserDefinedClasses, true},
-        {FFlag::LuauDefaultArguments, true},
+        {FFlag::LuwuDefaultArguments, true},
     };
 
     // widening the annotation is fine; the parameter's type still fits
@@ -1562,7 +1562,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "generic_class_instantiated_from_inside_its_ow
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuauBetterUserDefinedClasses, true},
-        {FFlag::LuauGenericNominals, true},
+        {FFlag::LuwuGenericNominals, true},
     };
 
     // `Box<number>` here is resolved while `Box`'s own members are still unsolved, so the
@@ -1587,7 +1587,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "generic_class_instantiated_by_a_forward_refer
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuauBetterUserDefinedClasses, true},
-        {FFlag::LuauGenericNominals, true},
+        {FFlag::LuwuGenericNominals, true},
     };
 
     // Same as above, but the unsolved class is a different one, declared further down the file.
@@ -1615,7 +1615,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "generic_class_instantiated_through_a_static_m
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuauBetterUserDefinedClasses, true},
-        {FFlag::LuauGenericNominals, true},
+        {FFlag::LuwuGenericNominals, true},
     };
 
     // `Box<N>` is resolved inside the body and then instantiated again at the call site, so both

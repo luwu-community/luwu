@@ -19,7 +19,7 @@
 
 LUAU_FASTFLAG(LuauYieldIter2)
 LUAU_FASTFLAG(LuauCustomYieldablePcalls)
-LUAU_FASTFLAG(LuauPcallMulti)
+LUAU_FASTFLAG(LuwuPcallMulti)
 LUAU_FASTFLAGVARIABLE(LuauXpcallFixMessageYieldPath)
 
 // keep max stack allocation request under 1GB
@@ -402,7 +402,7 @@ void luaD_seterrorobj(lua_State* L, int errcode, StkId oldtop)
 
 void luaD_seterrorobj_multi(lua_State* L, int errcode, StkId oldtop, int num_err_results)
 {
-    LUAU_ASSERT(FFlag::LuauPcallMulti);
+    LUAU_ASSERT(FFlag::LuwuPcallMulti);
     switch (errcode)
     {
     case LUA_ERRMEM:
@@ -582,7 +582,7 @@ static void callerrfunc(lua_State* L, void* ud)
 
 static void callerrfunc_multi(lua_State* L, void* ud)
 {
-    LUAU_ASSERT(FFlag::LuauPcallMulti);
+    LUAU_ASSERT(FFlag::LuwuPcallMulti);
     StkId errfunc = cast_to(StkId, ud);
 
     setobj2s(L, L->top, L->top - 1);
@@ -903,7 +903,7 @@ int luaD_pcall(lua_State* L, Pfunc func, void* u, ptrdiff_t old_top, ptrdiff_t e
 
 int luaD_pcall_multi(lua_State* L, Pfunc func, void* u, ptrdiff_t old_top, ptrdiff_t ef)
 {
-    LUAU_ASSERT(FFlag::LuauPcallMulti);
+    LUAU_ASSERT(FFlag::LuwuPcallMulti);
     unsigned short oldnCcalls = L->nCcalls;
     unsigned short oldbaseCcalls = L->baseCcalls;
     ptrdiff_t old_ci = saveci(L, L->ci);

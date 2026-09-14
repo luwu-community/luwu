@@ -9,7 +9,7 @@
 #endif
 
 LUAU_FASTFLAG(LuauIntegerLibrary)
-LUAU_FASTFLAGVARIABLE(LuauBufferIsFrozen)
+LUAU_FASTFLAGVARIABLE(LuwuBufferIsFrozen)
 
 #include <string.h>
 
@@ -447,7 +447,7 @@ int luaopen_buffer(lua_State* L)
     else
         luaL_register(L, LUA_BUFFERLIBNAME, bufferlib_NOINTEGER);
 
-    if (FFlag::LuauBufferIsFrozen)
+    if (FFlag::LuwuBufferIsFrozen)
     {
         lua_pushcfunction(L, buffer_isfrozen, "isfrozen");
         lua_setfield(L, -2, "isfrozen");

@@ -25,7 +25,7 @@ LUAU_DYNAMIC_FASTINTVARIABLE(LuauUnifierRecursionLimit, 100)
 
 LUAU_FASTFLAGVARIABLE(LuauLimitUnificationRecursion)
 LUAU_FASTFLAG(LuauHigherOrderGenericInference)
-LUAU_FASTFLAG(LuauGenericNominals)
+LUAU_FASTFLAG(LuwuGenericNominals)
 
 namespace Luau
 {
@@ -98,7 +98,7 @@ static bool sameNominalExternTypeRoot(const ExternType* a, const ExternType* b)
 
 // Returns true if `sub` and `sup` form a genuine, meaningful pairing for union-member matching
 // purposes -- currently, two ExternTypes stemming from the same generic nominal declaration (see
-// LuauGenericNominals). This is stricter than `areCompatible`, which only rules out impossible
+// LuwuGenericNominals). This is stricter than `areCompatible`, which only rules out impossible
 // pairings; this instead identifies pairings that should be preferred over unifying `sub` against
 // an unrelated free/generic catch-all member of the same union.
 static bool isGenuineUnionMatch(TypeId sub, TypeId sup)
@@ -309,7 +309,7 @@ UnifyResult Unifier2::unify_(TypeId subTy, TypeId superTy)
 
     auto subExternType = get<ExternType>(subTy);
     auto superExternType = get<ExternType>(superTy);
-    if (FFlag::LuauGenericNominals && subExternType && superExternType)
+    if (FFlag::LuwuGenericNominals && subExternType && superExternType)
         return unify_(subExternType, superExternType);
 
     auto subMetatable = get<MetatableType>(subTy);
@@ -499,7 +499,7 @@ UnifyResult Unifier2::unify_(TypeId subTy, const UnionType* superUnion)
     // (since a bare free type is trivially "compatible" with anything), polluting `T`'s lower
     // bound with a union member that should only have constrained `E`.
     bool hasGenuineMatch = false;
-    if (FFlag::LuauGenericNominals)
+    if (FFlag::LuwuGenericNominals)
     {
         for (auto superOption : superUnion->options)
         {
@@ -640,7 +640,7 @@ UnifyResult Unifier2::unify_(TableType* subTable, const TableType* superTable)
 UnifyResult Unifier2::unify_(const ExternType* subExternType, const ExternType* superExternType)
 {
     // Only positionally unify instantiated type parameters when both extern types stem from the
-    // same nominal declaration (see LuauGenericNominals) -- otherwise this pairing is unrelated
+    // same nominal declaration (see LuwuGenericNominals) -- otherwise this pairing is unrelated
     // (e.g. unifying `Dog` against `Cat`) and there's nothing to propagate between them.
     if (subExternType->name != superExternType->name || subExternType->definitionModuleName != superExternType->definitionModuleName ||
         subExternType->definitionLocation != superExternType->definitionLocation)

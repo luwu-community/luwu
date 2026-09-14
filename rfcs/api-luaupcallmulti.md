@@ -1,5 +1,8 @@
 # RFC: Pcall error handler with multiple return values
-FFlag: LuauPcallMulti
+
+Status: Implemented (Flagged)
+
+FFlag: LuwuPcallMulti
 
 ## Summary
 

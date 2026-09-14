@@ -7,7 +7,7 @@
 #include <memory>
 #include <string.h>
 
-LUAU_FASTFLAG(LuauFatCClosure)
+LUAU_FASTFLAG(LuwuFatCClosure)
 
 TEST_SUITE_BEGIN("FatCClosure");
 
@@ -36,7 +36,7 @@ using StateRef = std::unique_ptr<lua_State, void (*)(lua_State*)>;
 
 TEST_CASE("FatCClosureCreationAndCall")
 {
-    ScopedFastFlag sff{FFlag::LuauFatCClosure, true};
+    ScopedFastFlag sff{FFlag::LuwuFatCClosure, true};
     StateRef state(luaL_newstate(), lua_close);
     lua_State* L = state.get();
     
@@ -66,7 +66,7 @@ TEST_CASE("FatCClosureCreationAndCall")
 
 TEST_CASE("FatCClosureDtorOnClose")
 {
-    ScopedFastFlag sff{FFlag::LuauFatCClosure, true};
+    ScopedFastFlag sff{FFlag::LuwuFatCClosure, true};
     test_dtor_calls = 0;
     
     {
@@ -89,7 +89,7 @@ TEST_CASE("FatCClosureDtorOnClose")
 
 TEST_CASE("FatCClosureDebugInfo")
 {
-    ScopedFastFlag sff{FFlag::LuauFatCClosure, true};
+    ScopedFastFlag sff{FFlag::LuwuFatCClosure, true};
     StateRef state(luaL_newstate(), lua_close);
     lua_State* L = state.get();
     
@@ -111,7 +111,7 @@ static int my_plain_closure(lua_State* L)
 
 TEST_CASE("FatCClosureDataNullForPlain")
 {
-    ScopedFastFlag sff{FFlag::LuauFatCClosure, true};
+    ScopedFastFlag sff{FFlag::LuwuFatCClosure, true};
     StateRef state(luaL_newstate(), lua_close);
     lua_State* L = state.get();
     

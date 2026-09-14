@@ -20,7 +20,7 @@ struct ApplyTypeFunction : Substitution
     // Never set under deferred constraint resolution.
     bool encounteredForwardedType;
 
-    // When instantiating a nominal type with generic parameters (see LuauGenericNominals),
+    // When instantiating a nominal type with generic parameters (see LuwuGenericNominals),
     // this is the TypeId of the template ExternType currently being expanded, which is
     // `tf->type` in ConstraintSolver::tryDispatch(TypeAliasExpansionConstraint). ExternTypes
     // are normally opaque leaves to this substitution, so their contents are left alone and

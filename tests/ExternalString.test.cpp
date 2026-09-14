@@ -7,7 +7,7 @@
 #include "doctest.h"
 #include "ScopedFlags.h"
 
-LUAU_FASTFLAG(LuauExternalString)
+LUAU_FASTFLAG(LuwuExternalString)
 
 #include <memory>
 #include <string.h>
@@ -39,7 +39,7 @@ static int dostring(lua_State* L, const char* code)
 
 TEST_SUITE_BEGIN("ExternalStrings");
 
-LUAU_FASTFLAG(DebugLuauAllowNonNullTerminatedStrings)
+LUAU_FASTFLAG(DebugLuwuAllowNonNullTerminatedStrings)
 
 static int too_big_external_string_cb(lua_State* L)
 {
@@ -52,8 +52,8 @@ static int too_big_external_string_cb(lua_State* L)
 
 TEST_CASE("ExternalStringTooBig")
 {
-    ScopedFastFlag sff{FFlag::LuauExternalString, true};
-    ScopedFastFlag sff2{FFlag::DebugLuauAllowNonNullTerminatedStrings, true};
+    ScopedFastFlag sff{FFlag::LuwuExternalString, true};
+    ScopedFastFlag sff2{FFlag::DebugLuwuAllowNonNullTerminatedStrings, true};
     std::unique_ptr<lua_State, void (*)(lua_State*)> state(luaL_newstate(), lua_close);
     lua_State* L = state.get();
     
@@ -66,7 +66,7 @@ TEST_CASE("ExternalStringTooBig")
 
 TEST_CASE("ExternalStringBasic")
 {
-    ScopedFastFlag sff{FFlag::LuauExternalString, true};
+    ScopedFastFlag sff{FFlag::LuwuExternalString, true};
     std::unique_ptr<lua_State, void (*)(lua_State*)> state(luaL_newstate(), lua_close);
     lua_State* L = state.get();
     luaL_openlibs(L);
@@ -104,7 +104,7 @@ TEST_CASE("ExternalStringBasic")
 
 TEST_CASE("ExternalStringDedup")
 {
-    ScopedFastFlag sff{FFlag::LuauExternalString, true};
+    ScopedFastFlag sff{FFlag::LuwuExternalString, true};
     std::unique_ptr<lua_State, void (*)(lua_State*)> state(luaL_newstate(), lua_close);
     lua_State* L = state.get();
 
@@ -134,7 +134,7 @@ TEST_CASE("ExternalStringDedup")
 
 TEST_CASE("ExternalStringDedupReverse")
 {
-    ScopedFastFlag sff{FFlag::LuauExternalString, true};
+    ScopedFastFlag sff{FFlag::LuwuExternalString, true};
     std::unique_ptr<lua_State, void (*)(lua_State*)> state(luaL_newstate(), lua_close);
     lua_State* L = state.get();
 
@@ -163,8 +163,8 @@ TEST_CASE("ExternalStringDedupReverse")
 
 TEST_CASE("ExternalStringBuffinishOverread")
 {
-    ScopedFastFlag sff{FFlag::LuauExternalString, true};
-    ScopedFastFlag sff2{FFlag::DebugLuauAllowNonNullTerminatedStrings, true};
+    ScopedFastFlag sff{FFlag::LuwuExternalString, true};
+    ScopedFastFlag sff2{FFlag::DebugLuwuAllowNonNullTerminatedStrings, true};
     std::unique_ptr<lua_State, void (*)(lua_State*)> state(luaL_newstate(), lua_close);
     lua_State* L = state.get();
     luaL_openlibs(L);

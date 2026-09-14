@@ -33,7 +33,7 @@ LUAU_FASTFLAG(LuauInstantiateInSubtyping)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
 LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
-LUAU_FASTFLAG(LuauDefaultArguments)
+LUAU_FASTFLAG(LuwuDefaultArguments)
 
 namespace Luau
 {
@@ -4010,7 +4010,7 @@ std::pair<TypeId, ScopePtr> TypeChecker::checkFunctionSignature(
                 argType = anyIfNonstrict(freshType(funScope));
         }
 
-        if (FFlag::LuauDefaultArguments)
+        if (FFlag::LuwuDefaultArguments)
         {
             if (expr.argsDefaults.data[i])
             {
@@ -4047,7 +4047,7 @@ std::pair<TypeId, ScopePtr> TypeChecker::checkFunctionSignature(
 
         funScope->bindings[local] = {argType, local->location};
 
-        if (FFlag::LuauDefaultArguments && expr.argsDefaults.data[i])
+        if (FFlag::LuwuDefaultArguments && expr.argsDefaults.data[i])
         {
             argTypes.push_back(unionOfTypes(nilType, argType, scope, expr.argsDefaults.data[i]->location));
         }

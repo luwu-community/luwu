@@ -16,7 +16,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* Data, size_t Size)
 {
     for (Luau::FValue<bool>* flag = Luau::FValue<bool>::list; flag; flag = flag->next)
     {
-        if (strncmp(flag->name, "Luau", 4) == 0)
+        if (strncmp(flag->name, "Luau", 4) == 0 || strncmp(flag->name, "Luwu", 4) == 0)
             flag->value = true;
     }
 

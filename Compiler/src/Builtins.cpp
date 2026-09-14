@@ -9,8 +9,8 @@
 
 LUAU_FASTFLAGVARIABLE(LuauIntegerFastcalls)
 LUAU_FASTFLAGVARIABLE(LuauIntegerBufferFastcalls)
-LUAU_FASTFLAG(LuauBufferIsFrozen)
 LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
+LUAU_FASTFLAG(LuwuBufferIsFrozen)
 
 namespace Luau
 {
@@ -261,7 +261,7 @@ static int getBuiltinFunctionId(const Builtin& builtin, const CompileOptions& op
             return LBF_BUFFER_READINTEGER;
         if (FFlag::LuauIntegerFastcalls && FFlag::LuauIntegerBufferFastcalls && builtin.method == "writeinteger")
             return LBF_BUFFER_WRITEINTEGER;
-        if (FFlag::LuauBufferIsFrozen && builtin.method == "isfrozen")
+        if (FFlag::LuwuBufferIsFrozen && builtin.method == "isfrozen")
             return LBF_BUFFER_ISFROZEN;
     }
 

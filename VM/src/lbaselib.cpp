@@ -12,7 +12,7 @@
 #include <stdlib.h>
 
 LUAU_FASTFLAG(LuauCustomYieldablePcalls)
-LUAU_FASTFLAGVARIABLE(LuauNonePrimitive)
+LUAU_FASTFLAGVARIABLE(LuwuNonePrimitive)
 
 static void writestring(const char* s, size_t l)
 {
@@ -503,7 +503,7 @@ int luaopen_base(lua_State* L)
     lua_pushliteral(L, "Luau");
     lua_setglobal(L, "_VERSION"); // set global _VERSION
 
-    if (FFlag::LuauNonePrimitive)
+    if (FFlag::LuwuNonePrimitive)
     {
         lua_pushsymnone(L);
         lua_setglobal(L, "none");

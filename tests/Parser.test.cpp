@@ -24,9 +24,9 @@ LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
 LUAU_FASTFLAG(LuauBetterUserDefinedClasses)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAG(LuauTrackPrefixLocal)
-LUAU_FASTFLAG(LuauDefaultArguments)
-LUAU_FASTFLAG(LuauExternTypeGenericMethods)
-LUAU_FASTFLAG(LuauGenericNominals)
+LUAU_FASTFLAG(LuwuDefaultArguments)
+LUAU_FASTFLAG(LuwuExternTypeGenericMethods)
+LUAU_FASTFLAG(LuwuGenericNominals)
 
 LUAU_FASTFLAG(LuauNoDuplicateBinaryPrefix)
 
@@ -2208,18 +2208,18 @@ TEST_CASE_FIXTURE(Fixture, "parse_declarations")
 TEST_CASE_FIXTURE(Fixture, "default_arguments_are_gated")
 {
     {
-        ScopedFastFlag sff{FFlag::LuauDefaultArguments, false};
+        ScopedFastFlag sff{FFlag::LuwuDefaultArguments, false};
         matchParseError("local function foo(x = 1) end", "Expected ')' (to close '(' at column 19), got '='");
     }
 
-    ScopedFastFlag sff{FFlag::LuauDefaultArguments, true};
+    ScopedFastFlag sff{FFlag::LuwuDefaultArguments, true};
 
     parse("local function foo(x = 1) end");
 }
 
 TEST_CASE_FIXTURE(Fixture, "default_arguments_are_not_allowed_in_declarations")
 {
-    ScopedFastFlag sff{FFlag::LuauDefaultArguments, true};
+    ScopedFastFlag sff{FFlag::LuwuDefaultArguments, true};
 
     matchParseError("declare function foo(x: number = 1)", "Expected ')' (to close '(' at column 21), got '='");
     matchParseError(
@@ -2683,7 +2683,7 @@ TEST_CASE_FIXTURE(Fixture, "variadic_definition_parsing")
 
 TEST_CASE_FIXTURE(Fixture, "extern_type_generic_methods_are_gated")
 {
-    ScopedFastFlag sff{FFlag::LuauExternTypeGenericMethods, false};
+    ScopedFastFlag sff{FFlag::LuwuExternTypeGenericMethods, false};
 
     matchParseError(
         R"(
@@ -2697,7 +2697,7 @@ TEST_CASE_FIXTURE(Fixture, "extern_type_generic_methods_are_gated")
 
 TEST_CASE_FIXTURE(Fixture, "extern_type_generic_methods")
 {
-    ScopedFastFlag sff{FFlag::LuauExternTypeGenericMethods, true};
+    ScopedFastFlag sff{FFlag::LuwuExternTypeGenericMethods, true};
 
     AstStatBlock* stat = parseEx(R"(
         declare extern type Cat with
@@ -2728,7 +2728,7 @@ TEST_CASE_FIXTURE(Fixture, "extern_type_generic_methods")
 
 TEST_CASE_FIXTURE(Fixture, "extern_type_generic_method_packs")
 {
-    ScopedFastFlag sff{FFlag::LuauExternTypeGenericMethods, true};
+    ScopedFastFlag sff{FFlag::LuwuExternTypeGenericMethods, true};
 
     AstStatBlock* stat = parseEx(R"(
         declare extern type Cat with
@@ -2753,7 +2753,7 @@ TEST_CASE_FIXTURE(Fixture, "extern_type_generic_method_packs")
 
 TEST_CASE_FIXTURE(Fixture, "extern_type_generic_methods_support_multiple_params")
 {
-    ScopedFastFlag sff{FFlag::LuauExternTypeGenericMethods, true};
+    ScopedFastFlag sff{FFlag::LuwuExternTypeGenericMethods, true};
 
     AstStatBlock* stat = parseEx(R"(
         declare extern type Cat with
@@ -2781,7 +2781,7 @@ TEST_CASE_FIXTURE(Fixture, "extern_type_generic_property_syntax_workaround_is_un
     // Properties declared with `name: <T>(...) -> ...` syntax (rather than the `function name<T>(...)` sugar)
     // go through the general-purpose parseType() -> parseFunctionType() path, which has always supported
     // its own generics. This is the workaround referenced in issue #8 for getting generic methods on extern
-    // types prior to LuauExternTypeGenericMethods; it works today regardless of the flag, and continues to
+    // types prior to LuwuExternTypeGenericMethods; it works today regardless of the flag, and continues to
     // work once class-level generics land, since it's parsed independently of `function`-sugared methods.
     AstStatBlock* stat = parseEx(R"(
         declare extern type Cat with
@@ -2809,7 +2809,7 @@ TEST_CASE_FIXTURE(Fixture, "extern_type_generic_property_syntax_workaround_is_un
 
 TEST_CASE_FIXTURE(Fixture, "extern_type_generics_are_gated")
 {
-    ScopedFastFlag sff{FFlag::LuauGenericNominals, false};
+    ScopedFastFlag sff{FFlag::LuwuGenericNominals, false};
 
     matchParseError(
         R"(
@@ -2823,7 +2823,7 @@ TEST_CASE_FIXTURE(Fixture, "extern_type_generics_are_gated")
 
 TEST_CASE_FIXTURE(Fixture, "extern_type_generics")
 {
-    ScopedFastFlag sff{FFlag::LuauGenericNominals, true};
+    ScopedFastFlag sff{FFlag::LuwuGenericNominals, true};
 
     AstStatBlock* stat = parseEx(R"(
         declare extern type Box<T> with
@@ -2844,7 +2844,7 @@ TEST_CASE_FIXTURE(Fixture, "extern_type_generics")
 
 TEST_CASE_FIXTURE(Fixture, "extern_type_generics_support_multiple_params_and_packs")
 {
-    ScopedFastFlag sff{FFlag::LuauGenericNominals, true};
+    ScopedFastFlag sff{FFlag::LuwuGenericNominals, true};
 
     AstStatBlock* stat = parseEx(R"(
         declare extern type Result<T, E, Rest...> with
@@ -2868,8 +2868,8 @@ TEST_CASE_FIXTURE(Fixture, "extern_type_generics_support_multiple_params_and_pac
 TEST_CASE_FIXTURE(Fixture, "extern_type_and_method_generics_together")
 {
     ScopedFastFlag sffs[] = {
-        {FFlag::LuauGenericNominals, true},
-        {FFlag::LuauExternTypeGenericMethods, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::LuwuExternTypeGenericMethods, true},
     };
 
     AstStatBlock* stat = parseEx(R"(
@@ -4189,7 +4189,7 @@ TEST_CASE_FIXTURE(Fixture, "class_primary_constructor")
         {FFlag::DebugLuauUserDefinedClasses, true},
         {FFlag::LuauBetterUserDefinedClasses, true},
         // a parameter default is a function parameter default (see parseClassPrimaryConstructor)
-        {FFlag::LuauDefaultArguments, true},
+        {FFlag::LuwuDefaultArguments, true},
     };
 
     ParseResult result = tryParse(R"(
@@ -4361,7 +4361,7 @@ TEST_CASE_FIXTURE(Fixture, "class_primary_constructor_parses_qualifiers_on_param
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauUserDefinedClasses, true},
         {FFlag::LuauBetterUserDefinedClasses, true},
-        {FFlag::LuauDefaultArguments, true},
+        {FFlag::LuwuDefaultArguments, true},
     };
 
     // Kotlin-style: a parameter may carry the access specifier and `const` modifier of the field it
@@ -4451,7 +4451,7 @@ TEST_CASE_FIXTURE(Fixture, "class_body_may_not_contradict_qualified_parameters")
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauUserDefinedClasses, true},
         {FFlag::LuauBetterUserDefinedClasses, true},
-        {FFlag::LuauDefaultArguments, true},
+        {FFlag::LuwuDefaultArguments, true},
     };
 
     matchParseError(

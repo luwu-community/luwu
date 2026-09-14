@@ -313,7 +313,7 @@ struct TypeInstantiationConstraint
     std::vector<TypePackId> typePackArguments;
 };
 
-// LuauGenericNominals: a generic class can be instantiated (`Box<number>`) before its own members
+// LuwuGenericNominals: a generic class can be instantiated (`Box<number>`) before its own members
 // have been solved. A reference to the class from inside its own body always is, and so is a
 // forward reference to a class declared later in the file. A member's type is still a BlockedType
 // at that point, and copying it into the instantiation shares it, so binding it later hands the
