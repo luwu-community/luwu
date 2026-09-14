@@ -125,11 +125,52 @@ class UserdataDef(BaseModel):
     is_const: bool = False
     output_file: str = ""
     register_func: Optional[str] = None
+    class_info_name: Optional[str] = None
+    class_table_name: Optional[str] = None
+    class_index_getter: str = "T::ClassIndex()"
     headers: list[str] = []
     categories: list[str] = []
     base_fields: list[FieldDef] = []
     stat_fields: list[FieldDef] = []
     nodes: list[NodeDef] = []
+
+
+BUILTIN_ATOMS: list[tuple[str, str]] = [
+    # Special & Document & Allocator
+    ("Id", "id"),
+    ("Matches", "matches"),
+    ("Root", "root"),
+    ("Source", "source"),
+    ("Prettyprint", "prettyprint"),
+    ("Walk", "walk"),
+    ("Errors", "errors"),
+    ("Comments", "comments"),
+    ("LineOffsets", "lineOffsets"),
+    ("Properties", "properties"),
+    ("Allocator", "allocator"),
+    ("Parse", "parse"),
+    ("Parseexpr", "parseexpr"),
+    ("Defaultnode", "defaultnode"),
+    # Node methods
+    ("Category", "category"),
+    ("Children", "children"),
+    # AstLocal kind & properties
+    ("AstLocal", "AstLocal"),
+    ("Shadow", "shadow"),
+    ("SetShadow", "setShadow"),
+    ("Depth", "depth"),
+    ("SetDepth", "setDepth"),
+    # Comment methods
+    ("LeadingComments", "leadingComments"),
+    ("SetLeadingComments", "setLeadingComments"),
+    ("TrailingComments", "trailingComments"),
+    ("SetTrailingComments", "setTrailingComments"),
+    # Range / Position methods
+    ("Begin", "begin"),
+    ("SetBegin", "setBegin"),
+    ("End", "end"),
+    ("SetEnd", "setEnd"),
+]
 
 
 class ReflectSchema(BaseModel):
@@ -164,6 +205,45 @@ class ReflectSchema(BaseModel):
 
         return sorted(result, key=lambda x: x[0])
 
+    def all_atoms(self) -> list[tuple[str, str]]:
+        atoms: dict[str, str] = dict(BUILTIN_ATOMS)
+
+        for ud in self.userdatas:
+            for n in ud.nodes:
+                atoms[n.name] = n.name
+
+        for ud in self.userdatas:
+            for cat in ud.categories:
+                atoms[f"Category{cat}"] = cat[0].lower() + cat[1:]
+
+        for atom, name, is_rw in self.all_property_atoms():
+            atoms[atom] = name
+            if is_rw:
+                atoms[f"Set{atom}"] = f"set{atom}"
+
+        return sorted(atoms.items(), key=lambda x: x[0])
+
+    def atom_string_map(self) -> list[tuple[str, str]]:
+        mapping: dict[str, str] = {}
+
+        for ud in self.userdatas:
+            for cat in ud.categories:
+                mapping[cat[0].lower() + cat[1:]] = f"Category{cat}"
+
+        for variant, string_val in BUILTIN_ATOMS:
+            mapping[string_val] = variant
+
+        for ud in self.userdatas:
+            for n in ud.nodes:
+                mapping[n.name] = n.name
+
+        for atom, name, is_rw in self.all_property_atoms():
+            mapping[name] = atom
+            if is_rw:
+                mapping[f"set{atom}"] = f"Set{atom}"
+
+        return sorted(mapping.items(), key=lambda x: x[0])
+
 
 AST_NODES_USERDATA = UserdataDef(
     name="AstNode",
@@ -172,7 +252,11 @@ AST_NODES_USERDATA = UserdataDef(
     is_const=False,
     output_file="AstNodes.gen.inl",
     register_func="registerNodeClass",
+    class_info_name="AstNodeClassInfo",
+    class_table_name="s_nodeClassTable",
+    class_index_getter="T::ClassIndex()",
     headers=[
+        "<vector>",
         '"Luau/Ast.h"',
         '"Luau/Cst.h"',
         '"Luau/ReflectCommon.h"',
@@ -890,7 +974,11 @@ CST_NODES_USERDATA = UserdataDef(
     is_const=True,
     output_file="CstNodes.gen.inl",
     register_func="registerCstNodeClass",
+    class_info_name="CstNodeClassInfo",
+    class_table_name="s_cstClassTable",
+    class_index_getter="T::CstClassIndex()",
     headers=[
+        "<vector>",
         '"Luau/Cst.h"',
         '"Luau/ReflectCommon.h"',
         '"Luau/ReflectAstHandler.h"',
@@ -1473,9 +1561,375 @@ GLOBAL_SCHEMA = ReflectSchema(
 )
 
 
+def _indent(level: int) -> str:
+    return "    " * level
+
+
+class CppNode(BaseModel):
+    def render(self, indent: int = 0) -> str:
+        raise NotImplementedError
+
+
+class Raw(CppNode):
+    text: str
+
+    def render(self, indent: int = 0) -> str:
+        if not self.text:
+            return ""
+        return f"{_indent(indent)}{self.text}"
+
+
+class CppType(BaseModel):
+    def format_decl(self, name: str = "") -> str:
+        raise NotImplementedError
+
+    def __str__(self) -> str:
+        return self.format_decl()
+
+
+class RawType(CppType):
+    text: str
+
+    def format_decl(self, name: str = "") -> str:
+        if name:
+            return f"{self.text} {name}"
+        return self.text
+
+
+class FuncPtr(CppType):
+    return_type: CppType = RawType(text="void")
+    params: list[CppType] = []
+
+    def format_decl(self, name: str = "") -> str:
+        param_str = ", ".join(p.format_decl() for p in self.params)
+        ptr_part = f"*{name}" if name else "*"
+
+        if isinstance(self.return_type, FuncPtr):
+            return self.return_type.format_decl(f"({ptr_part})({param_str})")
+
+        ret = self.return_type.format_decl()
+        return f"{ret} ({ptr_part})({param_str})"
+
+
+class Ptr(CppType):
+    pointee: CppType
+    is_const: bool = False
+
+    def format_decl(self, name: str = "") -> str:
+        const_prefix = "const " if self.is_const else ""
+        decl = f"{const_prefix}{self.pointee.format_decl()}*"
+        if name:
+            return f"{decl} {name}"
+        return decl
+
+
+class Ref(CppType):
+    referent: CppType
+    is_const: bool = False
+
+    def format_decl(self, name: str = "") -> str:
+        const_prefix = "const " if self.is_const else ""
+        decl = f"{const_prefix}{self.referent.format_decl()}&"
+        if name:
+            return f"{decl} {name}"
+        return decl
+
+
+class StructField(BaseModel):
+    type: CppType
+    name: str
+    default: Optional[str] = None
+
+    def render(self, indent: int = 0) -> str:
+        decl = self.type.format_decl(self.name)
+        if self.default is not None:
+            return f"{_indent(indent)}{decl} = {self.default};"
+        return f"{_indent(indent)}{decl};"
+
+
+class Struct(CppNode):
+    name: str
+    fields: list[StructField] = []
+
+    def render(self, indent: int = 0) -> str:
+        lines = [
+            f"{_indent(indent)}struct {self.name}",
+            f"{_indent(indent)}{{",
+        ]
+        for f in self.fields:
+            lines.append(f.render(indent + 1))
+        lines.append(f"{_indent(indent)}}};")
+        return "\n".join(lines)
+
+
+class Variable(CppNode):
+    type: CppType
+    name: str
+    is_static: bool = False
+    is_const: bool = False
+    init: Optional[str] = None
+
+    def render(self, indent: int = 0) -> str:
+        prefix = ""
+        if self.is_static:
+            prefix += "static "
+        if self.is_const:
+            prefix += "const "
+        decl = self.type.format_decl(self.name)
+        init_str = f" = {self.init}" if self.init is not None else ""
+        return f"{_indent(indent)}{prefix}{decl}{init_str};"
+
+
+class LambdaInitVar(CppNode):
+    type: CppType
+    name: str
+    is_static: bool = True
+    is_const: bool = True
+    body: list[CppNode] = []
+
+    def render(self, indent: int = 0) -> str:
+        prefix = ""
+        if self.is_static:
+            prefix += "static "
+        if self.is_const:
+            prefix += "const "
+        type_str = self.type.format_decl()
+        lines = [
+            f"{_indent(indent)}{prefix}{type_str} {self.name} = []() {{",
+        ]
+        if self.body:
+            lines.append(CppGenerator.render_items(self.body, indent + 1))
+        lines.append(f"{_indent(indent)}}}();")
+        return "\n".join(lines)
+
+
+class Param(BaseModel):
+    type: CppType
+    name: str = ""
+    default: Optional[str] = None
+
+    def render(self) -> str:
+        decl = self.type.format_decl(self.name)
+        if self.default is not None:
+            return f"{decl} = {self.default}"
+        return decl
+
+
+class Block(CppNode):
+    body: list[CppNode] = []
+
+    def render(self, indent: int = 0) -> str:
+        lines = [f"{_indent(indent)}{{"]
+        if self.body:
+            lines.append(CppGenerator.render_items(self.body, indent + 1))
+        lines.append(f"{_indent(indent)}}}")
+        return "\n".join(lines)
+
+
+class SwitchCase(BaseModel):
+    label: str
+    body: list[CppNode] = []
+
+    def render(self, indent: int = 0) -> str:
+        lines = [f"{_indent(indent)}case {self.label}:"]
+        for stmt in self.body:
+            assert isinstance(
+                stmt, CppNode
+            ), f"Items in SwitchCase must be CppNode instances, got {type(stmt).__name__}: {stmt!r}"
+            if isinstance(stmt, Block):
+                lines.append(stmt.render(indent))
+            else:
+                lines.append(stmt.render(indent + 1))
+        return "\n".join(lines)
+
+
+class Switch(CppNode):
+    expr: str
+    cases: list[SwitchCase] = []
+    default_body: Optional[list[CppNode]] = None
+
+    def render(self, indent: int = 0) -> str:
+        lines = [
+            f"{_indent(indent)}switch ({self.expr})",
+            f"{_indent(indent)}{{",
+        ]
+        for c in self.cases:
+            lines.append(c.render(indent))
+        if self.default_body is not None:
+            lines.append(f"{_indent(indent)}default:")
+            for stmt in self.default_body:
+                assert isinstance(
+                    stmt, CppNode
+                ), f"Items in Switch default must be CppNode instances, got {type(stmt).__name__}: {stmt!r}"
+                if isinstance(stmt, Block):
+                    lines.append(stmt.render(indent))
+                else:
+                    lines.append(stmt.render(indent + 1))
+        lines.append(f"{_indent(indent)}}}")
+        return "\n".join(lines)
+
+
+class If(CppNode):
+    cond: str
+    then_body: list[CppNode] = []
+    else_body: list[CppNode] = []
+
+    def render(self, indent: int = 0) -> str:
+        lines = [
+            f"{_indent(indent)}if ({self.cond})",
+            f"{_indent(indent)}{{",
+        ]
+        if self.then_body:
+            lines.append(CppGenerator.render_items(self.then_body, indent + 1))
+        lines.append(f"{_indent(indent)}}}")
+        if self.else_body:
+            lines.append(f"{_indent(indent)}else")
+            lines.append(f"{_indent(indent)}{{")
+            lines.append(CppGenerator.render_items(self.else_body, indent + 1))
+            lines.append(f"{_indent(indent)}}}")
+        return "\n".join(lines)
+
+
+class Function(CppNode):
+    name: str
+    return_type: CppType = RawType(text="void")
+    params: list[Param] = []
+    template_params: list[str] = []
+    is_static: bool = False
+    is_inline: bool = False
+    multiline_params: bool = False
+    body: list[CppNode] = []
+
+    def render(self, indent: int = 0) -> str:
+        lines: list[str] = []
+        if self.template_params:
+            tp = ", ".join(self.template_params)
+            lines.append(f"{_indent(indent)}template<{tp}>")
+
+        prefix = ""
+        if self.is_static:
+            prefix += "static "
+        if self.is_inline:
+            prefix += "inline "
+
+        ret_decl = (
+            self.return_type.format_decl(self.name)
+            if isinstance(self.return_type, FuncPtr)
+            else f"{self.return_type.format_decl()} {self.name}"
+        )
+        prefix += ret_decl
+
+        if self.multiline_params and len(self.params) > 1:
+            lines.append(f"{_indent(indent)}{prefix}(")
+            for i, p in enumerate(self.params):
+                comma = "," if i < len(self.params) - 1 else ""
+                lines.append(f"{_indent(indent + 1)}{p.render()}{comma}")
+            lines.append(f"{_indent(indent)})")
+        else:
+            p_str = ", ".join(p.render() for p in self.params)
+            lines.append(f"{_indent(indent)}{prefix}({p_str})")
+
+        lines.append(f"{_indent(indent)}{{")
+        if self.body:
+            lines.append(CppGenerator.render_items(self.body, indent + 1))
+        lines.append(f"{_indent(indent)}}}")
+        return "\n".join(lines)
+
+
+class EnumVariant(BaseModel):
+    name: str
+    value: Optional[Union[int, str]] = None
+
+    def render(self, indent: int = 0) -> str:
+        if self.value is not None:
+            return f"{_indent(indent)}{self.name} = {self.value},"
+        return f"{_indent(indent)}{self.name},"
+
+
+class Enum(CppNode):
+    name: str
+    is_class: bool = True
+    underlying_type: Optional[str] = None
+    variants: list[EnumVariant] = []
+
+    def render(self, indent: int = 0) -> str:
+        cls_str = "class " if self.is_class else ""
+        type_str = f" : {self.underlying_type}" if self.underlying_type else ""
+        lines = [
+            f"{_indent(indent)}enum {cls_str}{self.name}{type_str}",
+            f"{_indent(indent)}{{",
+        ]
+        for v in self.variants:
+            lines.append(v.render(indent + 1))
+        lines.append(f"{_indent(indent)}}};")
+        return "\n".join(lines)
+
+
+class Namespace(CppNode):
+    name: str
+    body: list[CppNode] = []
+
+    def render(self, indent: int = 0) -> str:
+        lines = [
+            f"{_indent(indent)}namespace {self.name}",
+            f"{_indent(indent)}{{",
+            "",
+        ]
+        for item in self.body:
+            assert isinstance(
+                item, CppNode
+            ), f"Items in Namespace must be CppNode instances, got {type(item).__name__}: {item!r}"
+            lines.append(item.render(indent))
+            lines.append("")
+        lines.append(f"{_indent(indent)}}} // namespace {self.name}")
+        return "\n".join(lines)
+
+
+class TranslationUnit(CppNode):
+    comment: str = "// Auto-generated by Reflect/generate_reflect_cpp.py. DO NOT EDIT!"
+    pragma_once: bool = True
+    includes: list[str] = []
+    body: list[CppNode] = []
+
+    def render(self, indent: int = 0) -> str:
+        lines: list[str] = []
+        if self.comment:
+            lines.append(self.comment)
+        if self.pragma_once:
+            lines.append("#pragma once")
+            lines.append("")
+        if self.includes:
+            for inc in self.includes:
+                if inc.startswith("<") or inc.startswith('"'):
+                    lines.append(f"#include {inc}")
+                else:
+                    lines.append(f'#include "{inc}"')
+            lines.append("")
+        for item in self.body:
+            assert isinstance(
+                item, CppNode
+            ), f"Items in TranslationUnit must be CppNode instances, got {type(item).__name__}: {item!r}"
+            lines.append(item.render(indent))
+        return "\n".join(lines) + "\n"
+
+
 class CppGenerator:
     def __init__(self, schema: ReflectSchema):
         self.schema = schema
+
+    @staticmethod
+    def render_items(items: list[CppNode], indent: int = 0) -> str:
+        lines: list[str] = []
+        for item in items:
+            assert isinstance(
+                item, CppNode
+            ), f"Items must be CppNode instances (wrap raw strings in Raw(text=...)), got {type(item).__name__}: {item!r}"
+            rendered = item.render(indent)
+            if rendered != "":
+                lines.append(rendered)
+            elif isinstance(item, Raw) and item.text == "":
+                lines.append("")
+        return "\n".join(lines)
 
     def generate_inl(self, target: Union[str, UserdataDef]) -> str:
         ud = self.schema.get_userdata(target) if isinstance(target, str) else target
@@ -1488,52 +1942,173 @@ class CppGenerator:
         raise ValueError(f"Unsupported storage type: {ud.storage}")
 
     def _generate_pointer_inl(self, ud: UserdataDef) -> str:
-        out: list[str] = [
-            "// Auto-generated by Reflect/generate_reflect_cpp.py. DO NOT EDIT!",
-            "#pragma once",
-            "",
-        ]
-        for h in ud.headers:
-            out.append(f"#include {h}")
-        out.append("")
-        out.append("namespace Luau")
-        out.append("{")
-        out.append("")
-
         const_prefix = "const " if ud.is_const else ""
         base_ptr = f"{const_prefix}Luau::{ud.name}*"
         handle_type = f"{ud.name}Data"
 
-        if ud.register_func:
-            cat_param = "NodeCategory category, " if ud.categories else ""
-            out.append("template<typename T>")
-            out.append(f"void {ud.register_func}(")
-            out.append("    const char* kind,")
-            if cat_param:
-                out.append(f"    {cat_param}")
-            out.append(f"    bool (*methodHandler)(lua_State* L, {handle_type}& handle, ReflectAtom atom),")
-            out.append(f"    void (*propCollector)(lua_State* L, {handle_type}& handle),")
-            out.append(f"    {base_ptr} (*factory)(Luau::Allocator& alloc)")
-            out.append(");")
-            out.append("")
+        ns_items: list[CppNode] = []
 
-        # Global factory function
-        out.append(f"{base_ptr} createDefault{ud.name}(ReflectAtom atom, Luau::Allocator& alloc)")
-        out.append("{")
-        out.append("    switch (atom)")
-        out.append("    {")
+        method_handler_type = FuncPtr(
+            return_type=RawType(text="bool"),
+            params=[
+                RawType(text="lua_State* L"),
+                RawType(text=f"{handle_type}& handle"),
+                RawType(text="ReflectAtom atom"),
+            ],
+        )
+        prop_collector_type = FuncPtr(
+            return_type=RawType(text="void"),
+            params=[
+                RawType(text="lua_State* L"),
+                RawType(text=f"{handle_type}& handle"),
+            ],
+        )
+        factory_type = FuncPtr(
+            return_type=RawType(text=base_ptr),
+            params=[
+                RawType(text="Luau::Allocator& alloc"),
+            ],
+        )
+
+        if ud.register_func and ud.class_info_name and ud.class_table_name:
+            fields = [
+                StructField(type=RawType(text="const char*"), name="kind", default="nullptr"),
+            ]
+            if ud.categories:
+                fields.append(StructField(type=RawType(text="const char*"), name="category", default="nullptr"))
+                fields.append(StructField(type=RawType(text="NodeCategory"), name="categoryEnum", default="NodeCategory::Unknown"))
+            else:
+                fields.append(StructField(type=RawType(text="const char*"), name="category", default='"generic"'))
+            fields.append(
+                StructField(
+                    type=method_handler_type,
+                    name="methodHandler",
+                    default="nullptr",
+                )
+            )
+            fields.append(
+                StructField(
+                    type=prop_collector_type,
+                    name="propCollector",
+                    default="nullptr",
+                )
+            )
+            fields.append(
+                StructField(
+                    type=factory_type,
+                    name="factory",
+                    default="nullptr",
+                )
+            )
+            if ud.categories:
+                fields.append(StructField(type=RawType(text="bool"), name="canHoldComments", default="false"))
+
+            ns_items.append(Struct(name=ud.class_info_name, fields=fields))
+            ns_items.append(
+                Variable(
+                    type=RawType(text=f"std::vector<{ud.class_info_name}>"),
+                    name=ud.class_table_name,
+                    is_static=True,
+                )
+            )
+
+            reg_params = [
+                Param(type=RawType(text="const char*"), name="kind"),
+            ]
+            if ud.categories:
+                reg_params.append(Param(type=RawType(text="NodeCategory"), name="category"))
+            reg_params.extend([
+                Param(
+                    type=method_handler_type,
+                    name="methodHandler",
+                    default="nullptr",
+                ),
+                Param(
+                    type=prop_collector_type,
+                    name="propCollector",
+                    default="nullptr",
+                ),
+                Param(
+                    type=factory_type,
+                    name="factory",
+                    default="nullptr",
+                ),
+            ])
+
+            reg_body: list[CppNode] = [
+                Raw(text=f"int idx = {ud.class_index_getter};"),
+            ]
+            if ud.categories:
+                reg_body.append(
+                    If(
+                        cond=f"size_t(idx) >= {ud.class_table_name}.size()",
+                        then_body=[
+                            Raw(
+                                text=f'{ud.class_table_name}.resize(idx + 1, {ud.class_info_name}{{"{ud.name}", "unknown", NodeCategory::Unknown, nullptr, nullptr, nullptr, false}});'
+                            )
+                        ],
+                    )
+                )
+                reg_body.append(Raw(text="bool canHoldComments = (category == NodeCategory::Stat);"))
+                reg_body.append(
+                    Raw(
+                        text=f"{ud.class_table_name}[idx] = {ud.class_info_name}{{kind, categoryToString(category), category, methodHandler, propCollector, factory, canHoldComments}};"
+                    )
+                )
+            else:
+                reg_body.append(
+                    If(
+                        cond=f"size_t(idx) >= {ud.class_table_name}.size()",
+                        then_body=[
+                            Raw(
+                                text=f'{ud.class_table_name}.resize(idx + 1, {ud.class_info_name}{{"{ud.name}", "generic", nullptr, nullptr, nullptr}});'
+                            )
+                        ],
+                    )
+                )
+                reg_body.append(
+                    Raw(
+                        text=f'{ud.class_table_name}[idx] = {ud.class_info_name}{{kind, "generic", methodHandler, propCollector, factory}};'
+                    )
+                )
+
+            ns_items.append(
+                Function(
+                    name=ud.register_func,
+                    return_type=RawType(text="void"),
+                    template_params=["typename T"],
+                    is_static=True,
+                    multiline_params=True,
+                    params=reg_params,
+                    body=reg_body,
+                )
+            )
+
+        factory_cases = []
         for node in ud.nodes:
             if node.factory and node.factory.strategy == "alloc":
                 args_str = ", ".join(node.factory.args)
-                out.append(f"    case ReflectAtom::{node.name}:")
-                out.append(f"        return alloc.alloc<Luau::{node.name}>({args_str});")
-        out.append("    default:")
-        out.append("        return nullptr;")
-        out.append("    }")
-        out.append("}")
-        out.append("")
+                factory_cases.append(
+                    SwitchCase(
+                        label=f"ReflectAtom::{node.name}",
+                        body=[Raw(text=f"return alloc.alloc<Luau::{node.name}>({args_str});")],
+                    )
+                )
 
-        # Per-class factory, method handler, and prop collector
+        ns_items.append(
+            Function(
+                name=f"createDefault{ud.name}",
+                return_type=RawType(text=base_ptr),
+                params=[
+                    Param(type=RawType(text="ReflectAtom"), name="atom"),
+                    Param(type=RawType(text="Luau::Allocator&"), name="alloc"),
+                ],
+                body=[
+                    Switch(expr="atom", cases=factory_cases, default_body=[Raw(text="return nullptr;")])
+                ],
+            )
+        )
+
         for node in ud.nodes:
             class_name = node.name
             class_ptr = f"{const_prefix}Luau::{class_name}*"
@@ -1543,176 +2118,361 @@ class CppGenerator:
                 fields.extend(ud.stat_fields)
             fields.extend(node.fields)
 
-            # Factory
             args_str = ", ".join(node.factory.args) if node.factory and node.factory.args else ""
-            out.append(f"static {base_ptr} createDefault{class_name}(Luau::Allocator& alloc)")
-            out.append("{")
-            out.append(f"    return alloc.alloc<Luau::{class_name}>({args_str});")
-            out.append("}")
-            out.append("")
+            ns_items.append(
+                Function(
+                    name=f"createDefault{class_name}",
+                    return_type=RawType(text=base_ptr),
+                    is_static=True,
+                    params=[Param(type=RawType(text="Luau::Allocator&"), name="alloc")],
+                    body=[Raw(text=f"return alloc.alloc<Luau::{class_name}>({args_str});")],
+                )
+            )
 
-            # Method handler switch(atom)
-            out.append(f"static bool handle{class_name}Methods(lua_State* L, {handle_type}& handle, ReflectAtom atom)")
-            out.append("{")
             if not fields:
-                out.append("    return false;")
+                handler_body: list[CppNode] = [Raw(text="return false;")]
             else:
-                out.append(f"    auto* n = static_cast<{class_ptr}>(handle.node);")
-                out.append("    switch (atom)")
-                out.append("    {")
+                method_cases = []
                 for f in fields:
                     read_target = f.read_expr("n->")
                     if read_target:
-                        out.append(f"    case ReflectAtom::{f.atom_name}:")
-                        out.append(f"        pushReflectValue(L, handle.doc, {read_target});")
-                        out.append("        return true;")
+                        method_cases.append(
+                            SwitchCase(
+                                label=f"ReflectAtom::{f.atom_name}",
+                                body=[
+                                    Raw(text=f"pushReflectValue(L, handle.doc, {read_target});"),
+                                    Raw(text="return true;"),
+                                ],
+                            )
+                        )
                     write_target = f.write_expr("n->")
                     if write_target:
-                        out.append(f"    case ReflectAtom::{f.set_atom_name}:")
-                        out.append(f"        readReflectValue(L, handle.doc, 2, {write_target});")
-                        out.append("        lua_pushvalue(L, 1);")
-                        out.append("        return true;")
-                out.append("    default:")
-                out.append("        return false;")
-                out.append("    }")
-            out.append("}")
-            out.append("")
+                        method_cases.append(
+                            SwitchCase(
+                                label=f"ReflectAtom::{f.set_atom_name}",
+                                body=[
+                                    Raw(text=f"readReflectValue(L, handle.doc, 2, {write_target});"),
+                                    Raw(text="lua_pushvalue(L, 1);"),
+                                    Raw(text="return true;"),
+                                ],
+                            )
+                        )
+                handler_body = [
+                    Raw(text=f"auto* n = static_cast<{class_ptr}>(handle.node);"),
+                    Switch(expr="atom", cases=method_cases, default_body=[Raw(text="return false;")]),
+                ]
 
-            # Prop collector
-            out.append(f"static void collect{class_name}Props(lua_State* L, {handle_type}& handle)")
-            out.append("{")
+            ns_items.append(
+                Function(
+                    name=f"handle{class_name}Methods",
+                    return_type=RawType(text="bool"),
+                    is_static=True,
+                    params=[
+                        Param(type=RawType(text="lua_State*"), name="L"),
+                        Param(type=RawType(text=f"{handle_type}&"), name="handle"),
+                        Param(type=RawType(text="ReflectAtom"), name="atom"),
+                    ],
+                    body=handler_body,
+                )
+            )
+
+            collector_body: list[CppNode] = []
             if fields:
-                out.append(f"    auto* n = static_cast<{class_ptr}>(handle.node);")
-                out.append("    (void)n;")
+                collector_body.append(Raw(text=f"auto* n = static_cast<{class_ptr}>(handle.node);"))
+                collector_body.append(Raw(text="(void)n;"))
                 for f in fields:
                     read_target = f.read_expr("n->")
                     if read_target:
-                        out.append(f"    pushReflectValue(L, handle.doc, {read_target});")
-                        out.append(f'    lua_setfield(L, -2, "{f.name}");')
-            out.append("}")
-            out.append("")
+                        collector_body.append(Raw(text=f"pushReflectValue(L, handle.doc, {read_target});"))
+                        collector_body.append(Raw(text=f'lua_setfield(L, -2, "{f.name}");'))
 
-        # Registration function
-        out.append(f"static void register{ud.name}Classes()")
-        out.append("{")
+            ns_items.append(
+                Function(
+                    name=f"collect{class_name}Props",
+                    return_type=RawType(text="void"),
+                    is_static=True,
+                    params=[
+                        Param(type=RawType(text="lua_State*"), name="L"),
+                        Param(type=RawType(text=f"{handle_type}&"), name="handle"),
+                    ],
+                    body=collector_body,
+                )
+            )
+
+        reg_calls = []
         for node in ud.nodes:
             cat_arg = f"NodeCategory::{node.category}, " if node.category else ""
-            out.append(
-                f'    {ud.register_func}<Luau::{node.name}>("{node.name}", {cat_arg}'
+            reg_calls.append(
+                f'{ud.register_func}<Luau::{node.name}>("{node.name}", {cat_arg}'
                 f"handle{node.name}Methods, collect{node.name}Props, createDefault{node.name});"
             )
-        out.append("}")
-        out.append("")
-        out.append("} // namespace Luau")
-        out.append("")
 
-        return "\n".join(out)
+        ns_items.append(
+            Function(
+                name=f"register{ud.name}Classes",
+                return_type=RawType(text="void"),
+                is_static=True,
+                body=[Raw(text=c) for c in reg_calls],
+            )
+        )
+
+        tu = TranslationUnit(
+            includes=ud.headers,
+            body=[Namespace(name="Luau", body=ns_items)],
+        )
+        return tu.render()
 
     def _generate_union_inl(self, ud: UserdataDef) -> str:
-        out: list[str] = [
-            "// Auto-generated by Reflect/generate_reflect_cpp.py. DO NOT EDIT!",
-            "#pragma once",
-            "",
-        ]
-        for h in ud.headers:
-            out.append(f"#include {h}")
-        out.append("")
-        out.append("namespace Luau")
-        out.append("{")
-        out.append("")
+        ns_items: list[CppNode] = []
 
-        # Factory function createDefaultAstAux(ReflectAtom atom, ...)
-        out.append("bool createDefaultAstAux(ReflectAtom atom, const std::shared_ptr<AstDocumentState>& doc, AstAuxData& out)")
-        out.append("{")
-        out.append("    switch (atom)")
-        out.append("    {")
+        aux_factory_cases = []
         for node in ud.nodes:
-            out.append(f"    case ReflectAtom::{node.name}:")
             if node.factory and node.factory.strategy == "aux_union" and node.factory.inner_type:
                 args_str = ", ".join(node.factory.args)
-                out.append(f"        out = AstAuxData(doc, {node.factory.inner_type}{{{args_str}}});")
-                out.append("        return true;")
+                body: list[CppNode] = [
+                    Raw(text=f"out = AstAuxData(doc, {node.factory.inner_type}{{{args_str}}});"),
+                    Raw(text="return true;"),
+                ]
             elif node.factory and node.factory.custom_expr:
-                out.append(f"        out = {node.factory.custom_expr};")
-                out.append("        return true;")
+                body = [
+                    Raw(text=f"out = {node.factory.custom_expr};"),
+                    Raw(text="return true;"),
+                ]
             else:
-                out.append("        return false;")
-        out.append("    default:")
-        out.append("        return false;")
-        out.append("    }")
-        out.append("}")
-        out.append("")
+                body = [Raw(text="return false;")]
+            aux_factory_cases.append(SwitchCase(label=f"ReflectAtom::{node.name}", body=body))
 
-        # dispatchAux with direct switch(handle.kind) and nested switch(atom)
-        out.append("static bool dispatchAux(lua_State* L, AstAuxData& handle, ReflectAtom atom)")
-        out.append("{")
-        out.append("    switch (handle.kind)")
-        out.append("    {")
+        ns_items.append(
+            Function(
+                name="createDefaultAstAux",
+                return_type=RawType(text="bool"),
+                params=[
+                    Param(type=RawType(text="ReflectAtom"), name="atom"),
+                    Param(type=RawType(text="const std::shared_ptr<AstDocumentState>&"), name="doc"),
+                    Param(type=RawType(text="AstAuxData&"), name="out"),
+                ],
+                body=[
+                    Switch(expr="atom", cases=aux_factory_cases, default_body=[Raw(text="return false;")])
+                ],
+            )
+        )
+
+        dispatch_cases = []
         for node in ud.nodes:
             enum_name = node.enum_name or f"Aux_{node.name}"
-            out.append(f"    case {enum_name}:")
-            out.append("    {")
+            case_body: list[CppNode] = []
             if node.union_member:
-                out.append(f"        auto& n = handle.{node.union_member};")
-                out.append("        (void)n;")
-            out.append("        switch (atom)")
-            out.append("        {")
+                case_body.append(Raw(text=f"auto& n = handle.{node.union_member};"))
+                case_body.append(Raw(text="(void)n;"))
+
+            atom_cases = []
             for f in node.fields:
                 read_target = f.read_expr()
                 if read_target:
-                    out.append(f"        case ReflectAtom::{f.atom_name}:")
-                    out.append(f"            pushReflectValue(L, handle.doc, {read_target});")
-                    out.append("            return true;")
+                    atom_cases.append(
+                        SwitchCase(
+                            label=f"ReflectAtom::{f.atom_name}",
+                            body=[
+                                Raw(text=f"pushReflectValue(L, handle.doc, {read_target});"),
+                                Raw(text="return true;"),
+                            ],
+                        )
+                    )
                 write_target = f.write_expr()
                 if write_target:
-                    out.append(f"        case ReflectAtom::{f.set_atom_name}:")
-                    out.append(f"            readReflectValue(L, handle.doc, 2, {write_target});")
-                    out.append("            lua_pushvalue(L, 1);")
-                    out.append("            return true;")
-            out.append("        default:")
-            out.append("            return false;")
-            out.append("        }")
-            out.append("    }")
-        out.append("    default:")
-        out.append("        return false;")
-        out.append("    }")
-        out.append("}")
-        out.append("")
+                    atom_cases.append(
+                        SwitchCase(
+                            label=f"ReflectAtom::{f.set_atom_name}",
+                            body=[
+                                Raw(text=f"readReflectValue(L, handle.doc, 2, {write_target});"),
+                                Raw(text="lua_pushvalue(L, 1);"),
+                                Raw(text="return true;"),
+                            ],
+                        )
+                    )
 
-        # collectAuxProps
-        out.append("static void collectAuxProps(lua_State* L, AstAuxData& handle)")
-        out.append("{")
-        out.append("    switch (handle.kind)")
-        out.append("    {")
+            case_body.append(Switch(expr="atom", cases=atom_cases, default_body=[Raw(text="return false;")]))
+            dispatch_cases.append(SwitchCase(label=enum_name, body=[Block(body=case_body)]))
+
+        ns_items.append(
+            Function(
+                name="dispatchAux",
+                return_type=RawType(text="bool"),
+                is_static=True,
+                params=[
+                    Param(type=RawType(text="lua_State*"), name="L"),
+                    Param(type=RawType(text="AstAuxData&"), name="handle"),
+                    Param(type=RawType(text="ReflectAtom"), name="atom"),
+                ],
+                body=[
+                    Switch(expr="handle.kind", cases=dispatch_cases, default_body=[Raw(text="return false;")])
+                ],
+            )
+        )
+
+        collect_cases = []
         for node in ud.nodes:
             enum_name = node.enum_name or f"Aux_{node.name}"
-            out.append(f"    case {enum_name}:")
-            out.append("    {")
+            case_body = []
             if node.union_member:
-                out.append(f"        auto& n = handle.{node.union_member};")
-                out.append("        (void)n;")
+                case_body.append(Raw(text=f"auto& n = handle.{node.union_member};"))
+                case_body.append(Raw(text="(void)n;"))
             for f in node.fields:
                 read_target = f.read_expr()
                 if read_target:
-                    out.append(f"        pushReflectValue(L, handle.doc, {read_target});")
-                    out.append(f'        lua_setfield(L, -2, "{f.name}");')
-            out.append("        break;")
-            out.append("    }")
-        out.append("    default:")
-        out.append("        break;")
-        out.append("    }")
-        out.append("}")
-        out.append("")
-        out.append("} // namespace Luau")
-        out.append("")
+                    case_body.append(Raw(text=f"pushReflectValue(L, handle.doc, {read_target});"))
+                    case_body.append(Raw(text=f'lua_setfield(L, -2, "{f.name}");'))
+            case_body.append(Raw(text="break;"))
+            collect_cases.append(SwitchCase(label=enum_name, body=[Block(body=case_body)]))
 
-        return "\n".join(out)
+        ns_items.append(
+            Function(
+                name="collectAuxProps",
+                return_type=RawType(text="void"),
+                is_static=True,
+                params=[
+                    Param(type=RawType(text="lua_State*"), name="L"),
+                    Param(type=RawType(text="AstAuxData&"), name="handle"),
+                ],
+                body=[
+                    Switch(expr="handle.kind", cases=collect_cases, default_body=[Raw(text="break;")])
+                ],
+            )
+        )
+
+        tu = TranslationUnit(
+            includes=ud.headers,
+            body=[Namespace(name="Luau", body=ns_items)],
+        )
+        return tu.render()
+
+    def generate_atoms_h(self) -> str:
+        atoms = self.schema.all_atoms()
+        atom_map = self.schema.atom_string_map()
+
+        ns_items: list[CppNode] = []
+
+        variants = [
+            EnumVariant(name="Unknown", value=-1),
+            *(EnumVariant(name=v) for v, _ in atoms),
+            EnumVariant(name="Count"),
+        ]
+        ns_items.append(
+            Enum(name="ReflectAtom", is_class=True, underlying_type="int16_t", variants=variants)
+        )
+
+        atom_cases = [
+            SwitchCase(label=f"ReflectAtom::{variant}", body=[Raw(text=f'return "{string_val}";')])
+            for variant, string_val in atoms
+        ]
+        ns_items.append(
+            Function(
+                name="getAtomString",
+                return_type=RawType(text="const char*"),
+                is_inline=True,
+                params=[Param(type=RawType(text="ReflectAtom"), name="atom")],
+                body=[
+                    Switch(expr="atom", cases=atom_cases, default_body=[Raw(text='return "";')])
+                ],
+            )
+        )
+
+        map_body: list[CppNode] = [
+            Raw(text="DenseHashMap2<std::string_view, ReflectAtom> map;"),
+            *(Raw(text=f'map["{string_val}"] = ReflectAtom::{variant};') for string_val, variant in atom_map),
+            Raw(text="return map;"),
+        ]
+        ns_items.append(
+            Function(
+                name="resolveGlobalReflectAtom",
+                return_type=RawType(text="ReflectAtom"),
+                is_inline=True,
+                params=[Param(type=RawType(text="std::string_view"), name="key")],
+                body=[
+                    LambdaInitVar(
+                        type=RawType(text="DenseHashMap2<std::string_view, ReflectAtom>"),
+                        name="s_atomMap",
+                        body=map_body,
+                    ),
+                    Raw(text=""),
+                    If(
+                        cond="const ReflectAtom* atom = s_atomMap.find(key)",
+                        then_body=[Raw(text="return *atom;")],
+                    ),
+                    Raw(text=""),
+                    Raw(text="return ReflectAtom::Unknown;"),
+                ],
+            )
+        )
+
+        ns_items.append(
+            Function(
+                name="resolveReflectAtom",
+                return_type=RawType(text="ReflectAtom"),
+                is_inline=True,
+                params=[
+                    Param(type=RawType(text="int"), name="atomId"),
+                    Param(type=RawType(text="std::string_view"), name="key"),
+                ],
+                body=[
+                    If(
+                        cond="atomId >= 0",
+                        then_body=[
+                            If(
+                                cond="atomId < int(ReflectAtom::Count)",
+                                then_body=[Raw(text="return ReflectAtom(atomId);")],
+                            ),
+                            Raw(text="return ReflectAtom::Unknown;"),
+                        ],
+                    ),
+                    Raw(text="return resolveGlobalReflectAtom(key);"),
+                ],
+            )
+        )
+
+        ns_items.append(
+            Function(
+                name="resolveReflectAtom",
+                return_type=RawType(text="ReflectAtom"),
+                is_inline=True,
+                params=[
+                    Param(type=RawType(text="int"), name="atomId"),
+                    Param(type=RawType(text="const char*"), name="str"),
+                    Param(type=RawType(text="size_t"), name="len"),
+                ],
+                body=[
+                    If(
+                        cond="atomId >= 0",
+                        then_body=[
+                            If(
+                                cond="atomId < int(ReflectAtom::Count)",
+                                then_body=[Raw(text="return ReflectAtom(atomId);")],
+                            ),
+                            Raw(text="return ReflectAtom::Unknown;"),
+                        ],
+                    ),
+                    Raw(text="return resolveGlobalReflectAtom(std::string_view(str, len));"),
+                ],
+            )
+        )
+
+        tu = TranslationUnit(
+            includes=[
+                '"Luau/DenseHash2.h"',
+                "<cstdint>",
+                "<string_view>",
+            ],
+            body=[Namespace(name="Luau", body=ns_items)],
+        )
+        return tu.render()
 
 
 def main() -> int:
     base_dir = Path(__file__).resolve().parent
     src_dir = base_dir / "src"
     src_dir.mkdir(parents=True, exist_ok=True)
+    inc_dir = base_dir / "include" / "Luau"
+    inc_dir.mkdir(parents=True, exist_ok=True)
 
     generator = CppGenerator(GLOBAL_SCHEMA)
 
@@ -1723,9 +2483,15 @@ def main() -> int:
             inl_path.write_text(content, encoding="utf-8")
             print(f"Generated: {inl_path}")
 
+    atoms_path = inc_dir / "ReflectAtoms.gen.h"
+    atoms_content = generator.generate_atoms_h()
+    atoms_path.write_text(atoms_content, encoding="utf-8")
+    print(f"Generated: {atoms_path}")
+
     print("\nSummary:")
     for ud in GLOBAL_SCHEMA.userdatas:
         print(f"  {ud.name:<10} : {len(ud.nodes)} nodes")
+    print(f"  ReflectAtom: {len(GLOBAL_SCHEMA.all_atoms())} atoms")
     print("Code generation successful.")
 
     return 0
