@@ -1566,11 +1566,21 @@ def _indent(level: int) -> str:
 
 
 class CppNode(BaseModel):
+    """Base node for C++ code generation AST."""
+
     def render(self, indent: int = 0) -> str:
+        """Render node into C++ source code."""
         raise NotImplementedError
+
+    @property
+    def is_blank_line(self) -> bool:
+        """True if node emits an intentional blank line."""
+        return False
 
 
 class Raw(CppNode):
+    """Unparsed literal C++ statement or code snippet."""
+
     text: str
 
     def render(self, indent: int = 0) -> str:
@@ -1578,16 +1588,75 @@ class Raw(CppNode):
             return ""
         return f"{_indent(indent)}{self.text}"
 
+    @property
+    def is_blank_line(self) -> bool:
+        return self.text == ""
+
+
+class BlankLine(CppNode):
+    """Explicit blank line in generated C++ output."""
+
+    def render(self, indent: int = 0) -> str:
+        return ""
+
+    @property
+    def is_blank_line(self) -> bool:
+        return True
+
+
+class Return(CppNode):
+    """C++ `return [expr];` statement."""
+
+    expr: Optional[str] = None
+
+    def render(self, indent: int = 0) -> str:
+        if self.expr is not None:
+            return f"{_indent(indent)}return {self.expr};"
+        return f"{_indent(indent)}return;"
+
+
+class Break(CppNode):
+    """C++ `break;` statement."""
+
+    def render(self, indent: int = 0) -> str:
+        return f"{_indent(indent)}break;"
+
+
+class Unused(CppNode):
+    """C++ `(void)<name>;` statement to silence unused-variable warnings."""
+
+    name: str
+
+    def render(self, indent: int = 0) -> str:
+        return f"{_indent(indent)}(void){self.name};"
+
 
 class CppType(BaseModel):
+    """Base declarative C++ type with fluent pointer, ref, and param helpers."""
+
     def format_decl(self, name: str = "") -> str:
+        """Format type declaration, optionally binding an identifier name."""
         raise NotImplementedError
 
     def __str__(self) -> str:
         return self.format_decl()
 
+    def ptr(self, is_const: bool = False) -> Ptr:
+        """Derive pointer type (`T*` or `const T*`)."""
+        return Ptr(pointee=self, is_const=is_const)
+
+    def ref(self, is_const: bool = False) -> Ref:
+        """Derive reference type (`T&` or `const T&`)."""
+        return Ref(referent=self, is_const=is_const)
+
+    def param(self, name: str = "", default: Optional[str] = None) -> Param:
+        """Create function parameter binding this type to a name and default value."""
+        return Param(type=self, name=name, default=default)
+
 
 class RawType(CppType):
+    """Escape-hatch type from a literal string."""
+
     text: str
 
     def format_decl(self, name: str = "") -> str:
@@ -1596,8 +1665,81 @@ class RawType(CppType):
         return self.text
 
 
+class Type(CppType):
+    """Named C++ type (e.g. `int`, `void`, `ReflectAtom`)."""
+
+    name: str
+
+    def format_decl(self, name: str = "") -> str:
+        if name:
+            return f"{self.name} {name}"
+        return self.name
+
+
+class TemplateType(CppType):
+    """Parameterized template type (e.g. `std::vector<T>`, `DenseHashMap2<K, V>`)."""
+
+    name: str
+    args: list[CppType] = []
+
+    def format_decl(self, name: str = "") -> str:
+        args_str = ", ".join(a.format_decl() for a in self.args)
+        decl = f"{self.name}<{args_str}>"
+        if name:
+            return f"{decl} {name}"
+        return decl
+
+
+class Ptr(CppType):
+    """Pointer type (`T*` or `const T*`)."""
+
+    pointee: CppType
+    is_const: bool = False
+
+    def format_decl(self, name: str = "") -> str:
+        const_prefix = "const " if self.is_const else ""
+        decl = f"{const_prefix}{self.pointee.format_decl()}*"
+        if name:
+            return f"{decl} {name}"
+        return decl
+
+
+class Ref(CppType):
+    """Reference type (`T&` or `const T&`)."""
+
+    referent: CppType
+    is_const: bool = False
+
+    def format_decl(self, name: str = "") -> str:
+        const_prefix = "const " if self.is_const else ""
+        decl = f"{const_prefix}{self.referent.format_decl()}&"
+        if name:
+            return f"{decl} {name}"
+        return decl
+
+
+class Param(CppType):
+    """Function parameter binding a type to an identifier and optional default value."""
+
+    type: CppType
+    name: str = ""
+    default: Optional[str] = None
+
+    def format_decl(self, name: str = "") -> str:
+        n = name if name else self.name
+        decl = self.type.format_decl(n)
+        if self.default is not None:
+            return f"{decl} = {self.default}"
+        return decl
+
+    def render(self) -> str:
+        return self.format_decl()
+
+
 class FuncPtr(CppType):
-    return_type: CppType = RawType(text="void")
+    """Function pointer type supporting nested return types and parameters."""
+
+    return_type: CppType
     params: list[CppType] = []
 
     def format_decl(self, name: str = "") -> str:
@@ -1611,31 +1753,21 @@ class FuncPtr(CppType):
         return f"{ret} ({ptr_part})({param_str})"
 
 
-class Ptr(CppType):
-    pointee: CppType
-    is_const: bool = False
-
-    def format_decl(self, name: str = "") -> str:
-        const_prefix = "const " if self.is_const else ""
-        decl = f"{const_prefix}{self.pointee.format_decl()}*"
-        if name:
-            return f"{decl} {name}"
-        return decl
-
-
-class Ref(CppType):
-    referent: CppType
-    is_const: bool = False
-
-    def format_decl(self, name: str = "") -> str:
-        const_prefix = "const " if self.is_const else ""
-        decl = f"{const_prefix}{self.referent.format_decl()}&"
-        if name:
-            return f"{decl} {name}"
-        return decl
+VOID = Type(name="void")
+BOOL = Type(name="bool")
+INT = Type(name="int")
+SIZE_T = Type(name="size_t")
+STRING_VIEW = Type(name="std::string_view")
+CONST_CHAR_PTR = Ptr(pointee=Type(name="char"), is_const=True)
+LUA_STATE_PTR = Ptr(pointee=Type(name="lua_State"))
+REFLECT_ATOM = Type(name="ReflectAtom")
+NODE_CATEGORY = Type(name="NodeCategory")
+ALLOCATOR_REF = Ref(referent=Type(name="Luau::Allocator"))
 
 
 class StructField(BaseModel):
+    """Member field in a C++ struct definition."""
+
     type: CppType
     name: str
     default: Optional[str] = None
@@ -1648,6 +1780,8 @@ class StructField(BaseModel):
 
 
 class Struct(CppNode):
+    """C++ `struct <name> { ... };` definition."""
+
     name: str
     fields: list[StructField] = []
 
@@ -1663,6 +1797,8 @@ class Struct(CppNode):
 
 
 class Variable(CppNode):
+    """C++ variable declaration or definition."""
+
     type: CppType
     name: str
     is_static: bool = False
@@ -1681,6 +1817,8 @@ class Variable(CppNode):
 
 
 class LambdaInitVar(CppNode):
+    """Variable initialized via immediately invoked lambda expression (IIFE)."""
+
     type: CppType
     name: str
     is_static: bool = True
@@ -1703,19 +1841,9 @@ class LambdaInitVar(CppNode):
         return "\n".join(lines)
 
 
-class Param(BaseModel):
-    type: CppType
-    name: str = ""
-    default: Optional[str] = None
-
-    def render(self) -> str:
-        decl = self.type.format_decl(self.name)
-        if self.default is not None:
-            return f"{decl} = {self.default}"
-        return decl
-
-
 class Block(CppNode):
+    """Enclosed `{ ... }` block scope."""
+
     body: list[CppNode] = []
 
     def render(self, indent: int = 0) -> str:
@@ -1727,6 +1855,8 @@ class Block(CppNode):
 
 
 class SwitchCase(BaseModel):
+    """`case <label>:` branch in a C++ `switch` statement."""
+
     label: str
     body: list[CppNode] = []
 
@@ -1738,12 +1868,16 @@ class SwitchCase(BaseModel):
             ), f"Items in SwitchCase must be CppNode instances, got {type(stmt).__name__}: {stmt!r}"
             if isinstance(stmt, Block):
                 lines.append(stmt.render(indent))
+            elif stmt.is_blank_line:
+                lines.append("")
             else:
                 lines.append(stmt.render(indent + 1))
         return "\n".join(lines)
 
 
 class Switch(CppNode):
+    """C++ `switch (<expr>) { ... }` statement."""
+
     expr: str
     cases: list[SwitchCase] = []
     default_body: Optional[list[CppNode]] = None
@@ -1763,6 +1897,8 @@ class Switch(CppNode):
                 ), f"Items in Switch default must be CppNode instances, got {type(stmt).__name__}: {stmt!r}"
                 if isinstance(stmt, Block):
                     lines.append(stmt.render(indent))
+                elif stmt.is_blank_line:
+                    lines.append("")
                 else:
                     lines.append(stmt.render(indent + 1))
         lines.append(f"{_indent(indent)}}}")
@@ -1770,6 +1906,8 @@ class Switch(CppNode):
 
 
 class If(CppNode):
+    """C++ `if (<cond>) { ... } [else { ... }]` construct."""
+
     cond: str
     then_body: list[CppNode] = []
     else_body: list[CppNode] = []
@@ -1791,8 +1929,10 @@ class If(CppNode):
 
 
 class Function(CppNode):
+    """C++ function definition or declaration."""
+
     name: str
-    return_type: CppType = RawType(text="void")
+    return_type: CppType = VOID
     params: list[Param] = []
     template_params: list[str] = []
     is_static: bool = False
@@ -1837,6 +1977,8 @@ class Function(CppNode):
 
 
 class EnumVariant(BaseModel):
+    """Enumerator variant in a C++ enum."""
+
     name: str
     value: Optional[Union[int, str]] = None
 
@@ -1847,6 +1989,8 @@ class EnumVariant(BaseModel):
 
 
 class Enum(CppNode):
+    """C++ `enum [class] <name> [: <underlying_type>] { ... };` definition."""
+
     name: str
     is_class: bool = True
     underlying_type: Optional[str] = None
@@ -1866,6 +2010,8 @@ class Enum(CppNode):
 
 
 class Namespace(CppNode):
+    """C++ `namespace <name> { ... }` scope."""
+
     name: str
     body: list[CppNode] = []
 
@@ -1886,6 +2032,8 @@ class Namespace(CppNode):
 
 
 class TranslationUnit(CppNode):
+    """Top-level C++ translation unit with includes, `#pragma once`, and body nodes."""
+
     comment: str = "// Auto-generated by Reflect/generate_reflect_cpp.py. DO NOT EDIT!"
     pragma_once: bool = True
     includes: list[str] = []
@@ -1927,7 +2075,7 @@ class CppGenerator:
             rendered = item.render(indent)
             if rendered != "":
                 lines.append(rendered)
-            elif isinstance(item, Raw) and item.text == "":
+            elif item.is_blank_line:
                 lines.append("")
         return "\n".join(lines)
 
@@ -1942,43 +2090,44 @@ class CppGenerator:
         raise ValueError(f"Unsupported storage type: {ud.storage}")
 
     def _generate_pointer_inl(self, ud: UserdataDef) -> str:
-        const_prefix = "const " if ud.is_const else ""
-        base_ptr = f"{const_prefix}Luau::{ud.name}*"
-        handle_type = f"{ud.name}Data"
+        base_node_type = Type(name=f"Luau::{ud.name}")
+        base_ptr_type = base_node_type.ptr(is_const=ud.is_const)
+        handle_type = Type(name=f"{ud.name}Data")
+        handle_ref = handle_type.ref()
 
         ns_items: list[CppNode] = []
 
         method_handler_type = FuncPtr(
-            return_type=RawType(text="bool"),
+            return_type=BOOL,
             params=[
-                RawType(text="lua_State* L"),
-                RawType(text=f"{handle_type}& handle"),
-                RawType(text="ReflectAtom atom"),
+                LUA_STATE_PTR.param("L"),
+                handle_ref.param("handle"),
+                REFLECT_ATOM.param("atom"),
             ],
         )
         prop_collector_type = FuncPtr(
-            return_type=RawType(text="void"),
+            return_type=VOID,
             params=[
-                RawType(text="lua_State* L"),
-                RawType(text=f"{handle_type}& handle"),
+                LUA_STATE_PTR.param("L"),
+                handle_ref.param("handle"),
             ],
         )
         factory_type = FuncPtr(
-            return_type=RawType(text=base_ptr),
+            return_type=base_ptr_type,
             params=[
-                RawType(text="Luau::Allocator& alloc"),
+                ALLOCATOR_REF.param("alloc"),
             ],
         )
 
         if ud.register_func and ud.class_info_name and ud.class_table_name:
             fields = [
-                StructField(type=RawType(text="const char*"), name="kind", default="nullptr"),
+                StructField(type=CONST_CHAR_PTR, name="kind", default="nullptr"),
             ]
             if ud.categories:
-                fields.append(StructField(type=RawType(text="const char*"), name="category", default="nullptr"))
-                fields.append(StructField(type=RawType(text="NodeCategory"), name="categoryEnum", default="NodeCategory::Unknown"))
+                fields.append(StructField(type=CONST_CHAR_PTR, name="category", default="nullptr"))
+                fields.append(StructField(type=NODE_CATEGORY, name="categoryEnum", default="NodeCategory::Unknown"))
             else:
-                fields.append(StructField(type=RawType(text="const char*"), name="category", default='"generic"'))
+                fields.append(StructField(type=CONST_CHAR_PTR, name="category", default='"generic"'))
             fields.append(
                 StructField(
                     type=method_handler_type,
@@ -2001,38 +2150,26 @@ class CppGenerator:
                 )
             )
             if ud.categories:
-                fields.append(StructField(type=RawType(text="bool"), name="canHoldComments", default="false"))
+                fields.append(StructField(type=BOOL, name="canHoldComments", default="false"))
 
             ns_items.append(Struct(name=ud.class_info_name, fields=fields))
             ns_items.append(
                 Variable(
-                    type=RawType(text=f"std::vector<{ud.class_info_name}>"),
+                    type=TemplateType(name="std::vector", args=[Type(name=ud.class_info_name)]),
                     name=ud.class_table_name,
                     is_static=True,
                 )
             )
 
             reg_params = [
-                Param(type=RawType(text="const char*"), name="kind"),
+                CONST_CHAR_PTR.param("kind"),
             ]
             if ud.categories:
-                reg_params.append(Param(type=RawType(text="NodeCategory"), name="category"))
+                reg_params.append(NODE_CATEGORY.param("category"))
             reg_params.extend([
-                Param(
-                    type=method_handler_type,
-                    name="methodHandler",
-                    default="nullptr",
-                ),
-                Param(
-                    type=prop_collector_type,
-                    name="propCollector",
-                    default="nullptr",
-                ),
-                Param(
-                    type=factory_type,
-                    name="factory",
-                    default="nullptr",
-                ),
+                method_handler_type.param("methodHandler", default="nullptr"),
+                prop_collector_type.param("propCollector", default="nullptr"),
+                factory_type.param("factory", default="nullptr"),
             ])
 
             reg_body: list[CppNode] = [
@@ -2075,7 +2212,7 @@ class CppGenerator:
             ns_items.append(
                 Function(
                     name=ud.register_func,
-                    return_type=RawType(text="void"),
+                    return_type=VOID,
                     template_params=["typename T"],
                     is_static=True,
                     multiline_params=True,
@@ -2091,27 +2228,27 @@ class CppGenerator:
                 factory_cases.append(
                     SwitchCase(
                         label=f"ReflectAtom::{node.name}",
-                        body=[Raw(text=f"return alloc.alloc<Luau::{node.name}>({args_str});")],
+                        body=[Return(expr=f"alloc.alloc<Luau::{node.name}>({args_str})")],
                     )
                 )
 
         ns_items.append(
             Function(
                 name=f"createDefault{ud.name}",
-                return_type=RawType(text=base_ptr),
+                return_type=base_ptr_type,
                 params=[
-                    Param(type=RawType(text="ReflectAtom"), name="atom"),
-                    Param(type=RawType(text="Luau::Allocator&"), name="alloc"),
+                    REFLECT_ATOM.param("atom"),
+                    ALLOCATOR_REF.param("alloc"),
                 ],
                 body=[
-                    Switch(expr="atom", cases=factory_cases, default_body=[Raw(text="return nullptr;")])
+                    Switch(expr="atom", cases=factory_cases, default_body=[Return(expr="nullptr")])
                 ],
             )
         )
 
         for node in ud.nodes:
             class_name = node.name
-            class_ptr = f"{const_prefix}Luau::{class_name}*"
+            class_ptr = f"{'const ' if ud.is_const else ''}Luau::{class_name}*"
 
             fields: list[FieldDef] = list(ud.base_fields)
             if node.base == "AstStat":
@@ -2122,15 +2259,15 @@ class CppGenerator:
             ns_items.append(
                 Function(
                     name=f"createDefault{class_name}",
-                    return_type=RawType(text=base_ptr),
+                    return_type=base_ptr_type,
                     is_static=True,
-                    params=[Param(type=RawType(text="Luau::Allocator&"), name="alloc")],
-                    body=[Raw(text=f"return alloc.alloc<Luau::{class_name}>({args_str});")],
+                    params=[ALLOCATOR_REF.param("alloc")],
+                    body=[Return(expr=f"alloc.alloc<Luau::{class_name}>({args_str})")],
                 )
             )
 
             if not fields:
-                handler_body: list[CppNode] = [Raw(text="return false;")]
+                handler_body: list[CppNode] = [Return(expr="false")]
             else:
                 method_cases = []
                 for f in fields:
@@ -2141,7 +2278,7 @@ class CppGenerator:
                                 label=f"ReflectAtom::{f.atom_name}",
                                 body=[
                                     Raw(text=f"pushReflectValue(L, handle.doc, {read_target});"),
-                                    Raw(text="return true;"),
+                                    Return(expr="true"),
                                 ],
                             )
                         )
@@ -2153,24 +2290,24 @@ class CppGenerator:
                                 body=[
                                     Raw(text=f"readReflectValue(L, handle.doc, 2, {write_target});"),
                                     Raw(text="lua_pushvalue(L, 1);"),
-                                    Raw(text="return true;"),
+                                    Return(expr="true"),
                                 ],
                             )
                         )
                 handler_body = [
                     Raw(text=f"auto* n = static_cast<{class_ptr}>(handle.node);"),
-                    Switch(expr="atom", cases=method_cases, default_body=[Raw(text="return false;")]),
+                    Switch(expr="atom", cases=method_cases, default_body=[Return(expr="false")]),
                 ]
 
             ns_items.append(
                 Function(
                     name=f"handle{class_name}Methods",
-                    return_type=RawType(text="bool"),
+                    return_type=BOOL,
                     is_static=True,
                     params=[
-                        Param(type=RawType(text="lua_State*"), name="L"),
-                        Param(type=RawType(text=f"{handle_type}&"), name="handle"),
-                        Param(type=RawType(text="ReflectAtom"), name="atom"),
+                        LUA_STATE_PTR.param("L"),
+                        handle_ref.param("handle"),
+                        REFLECT_ATOM.param("atom"),
                     ],
                     body=handler_body,
                 )
@@ -2179,7 +2316,7 @@ class CppGenerator:
             collector_body: list[CppNode] = []
             if fields:
                 collector_body.append(Raw(text=f"auto* n = static_cast<{class_ptr}>(handle.node);"))
-                collector_body.append(Raw(text="(void)n;"))
+                collector_body.append(Unused(name="n"))
                 for f in fields:
                     read_target = f.read_expr("n->")
                     if read_target:
@@ -2189,11 +2326,11 @@ class CppGenerator:
             ns_items.append(
                 Function(
                     name=f"collect{class_name}Props",
-                    return_type=RawType(text="void"),
+                    return_type=VOID,
                     is_static=True,
                     params=[
-                        Param(type=RawType(text="lua_State*"), name="L"),
-                        Param(type=RawType(text=f"{handle_type}&"), name="handle"),
+                        LUA_STATE_PTR.param("L"),
+                        handle_ref.param("handle"),
                     ],
                     body=collector_body,
                 )
@@ -2210,7 +2347,7 @@ class CppGenerator:
         ns_items.append(
             Function(
                 name=f"register{ud.name}Classes",
-                return_type=RawType(text="void"),
+                return_type=VOID,
                 is_static=True,
                 body=[Raw(text=c) for c in reg_calls],
             )
@@ -2224,6 +2361,8 @@ class CppGenerator:
 
     def _generate_union_inl(self, ud: UserdataDef) -> str:
         ns_items: list[CppNode] = []
+        ast_aux_ref = Type(name="AstAuxData").ref()
+        doc_state_ref = TemplateType(name="std::shared_ptr", args=[Type(name="AstDocumentState")]).ref(is_const=True)
 
         aux_factory_cases = []
         for node in ud.nodes:
@@ -2231,28 +2370,28 @@ class CppGenerator:
                 args_str = ", ".join(node.factory.args)
                 body: list[CppNode] = [
                     Raw(text=f"out = AstAuxData(doc, {node.factory.inner_type}{{{args_str}}});"),
-                    Raw(text="return true;"),
+                    Return(expr="true"),
                 ]
             elif node.factory and node.factory.custom_expr:
                 body = [
                     Raw(text=f"out = {node.factory.custom_expr};"),
-                    Raw(text="return true;"),
+                    Return(expr="true"),
                 ]
             else:
-                body = [Raw(text="return false;")]
+                body = [Return(expr="false")]
             aux_factory_cases.append(SwitchCase(label=f"ReflectAtom::{node.name}", body=body))
 
         ns_items.append(
             Function(
                 name="createDefaultAstAux",
-                return_type=RawType(text="bool"),
+                return_type=BOOL,
                 params=[
-                    Param(type=RawType(text="ReflectAtom"), name="atom"),
-                    Param(type=RawType(text="const std::shared_ptr<AstDocumentState>&"), name="doc"),
-                    Param(type=RawType(text="AstAuxData&"), name="out"),
+                    REFLECT_ATOM.param("atom"),
+                    doc_state_ref.param("doc"),
+                    ast_aux_ref.param("out"),
                 ],
                 body=[
-                    Switch(expr="atom", cases=aux_factory_cases, default_body=[Raw(text="return false;")])
+                    Switch(expr="atom", cases=aux_factory_cases, default_body=[Return(expr="false")])
                 ],
             )
         )
@@ -2263,7 +2402,7 @@ class CppGenerator:
             case_body: list[CppNode] = []
             if node.union_member:
                 case_body.append(Raw(text=f"auto& n = handle.{node.union_member};"))
-                case_body.append(Raw(text="(void)n;"))
+                case_body.append(Unused(name="n"))
 
             atom_cases = []
             for f in node.fields:
@@ -2274,7 +2413,7 @@ class CppGenerator:
                             label=f"ReflectAtom::{f.atom_name}",
                             body=[
                                 Raw(text=f"pushReflectValue(L, handle.doc, {read_target});"),
-                                Raw(text="return true;"),
+                                Return(expr="true"),
                             ],
                         )
                     )
@@ -2286,26 +2425,26 @@ class CppGenerator:
                             body=[
                                 Raw(text=f"readReflectValue(L, handle.doc, 2, {write_target});"),
                                 Raw(text="lua_pushvalue(L, 1);"),
-                                Raw(text="return true;"),
+                                Return(expr="true"),
                             ],
                         )
                     )
 
-            case_body.append(Switch(expr="atom", cases=atom_cases, default_body=[Raw(text="return false;")]))
+            case_body.append(Switch(expr="atom", cases=atom_cases, default_body=[Return(expr="false")]))
             dispatch_cases.append(SwitchCase(label=enum_name, body=[Block(body=case_body)]))
 
         ns_items.append(
             Function(
                 name="dispatchAux",
-                return_type=RawType(text="bool"),
+                return_type=BOOL,
                 is_static=True,
                 params=[
-                    Param(type=RawType(text="lua_State*"), name="L"),
-                    Param(type=RawType(text="AstAuxData&"), name="handle"),
-                    Param(type=RawType(text="ReflectAtom"), name="atom"),
+                    LUA_STATE_PTR.param("L"),
+                    ast_aux_ref.param("handle"),
+                    REFLECT_ATOM.param("atom"),
                 ],
                 body=[
-                    Switch(expr="handle.kind", cases=dispatch_cases, default_body=[Raw(text="return false;")])
+                    Switch(expr="handle.kind", cases=dispatch_cases, default_body=[Return(expr="false")])
                 ],
             )
         )
@@ -2316,26 +2455,26 @@ class CppGenerator:
             case_body = []
             if node.union_member:
                 case_body.append(Raw(text=f"auto& n = handle.{node.union_member};"))
-                case_body.append(Raw(text="(void)n;"))
+                case_body.append(Unused(name="n"))
             for f in node.fields:
                 read_target = f.read_expr()
                 if read_target:
                     case_body.append(Raw(text=f"pushReflectValue(L, handle.doc, {read_target});"))
                     case_body.append(Raw(text=f'lua_setfield(L, -2, "{f.name}");'))
-            case_body.append(Raw(text="break;"))
+            case_body.append(Break())
             collect_cases.append(SwitchCase(label=enum_name, body=[Block(body=case_body)]))
 
         ns_items.append(
             Function(
                 name="collectAuxProps",
-                return_type=RawType(text="void"),
+                return_type=VOID,
                 is_static=True,
                 params=[
-                    Param(type=RawType(text="lua_State*"), name="L"),
-                    Param(type=RawType(text="AstAuxData&"), name="handle"),
+                    LUA_STATE_PTR.param("L"),
+                    ast_aux_ref.param("handle"),
                 ],
                 body=[
-                    Switch(expr="handle.kind", cases=collect_cases, default_body=[Raw(text="break;")])
+                    Switch(expr="handle.kind", cases=collect_cases, default_body=[Break()])
                 ],
             )
         )
@@ -2362,45 +2501,46 @@ class CppGenerator:
         )
 
         atom_cases = [
-            SwitchCase(label=f"ReflectAtom::{variant}", body=[Raw(text=f'return "{string_val}";')])
+            SwitchCase(label=f"ReflectAtom::{variant}", body=[Return(expr=f'"{string_val}"')])
             for variant, string_val in atoms
         ]
         ns_items.append(
             Function(
                 name="getAtomString",
-                return_type=RawType(text="const char*"),
+                return_type=CONST_CHAR_PTR,
                 is_inline=True,
-                params=[Param(type=RawType(text="ReflectAtom"), name="atom")],
+                params=[REFLECT_ATOM.param("atom")],
                 body=[
-                    Switch(expr="atom", cases=atom_cases, default_body=[Raw(text='return "";')])
+                    Switch(expr="atom", cases=atom_cases, default_body=[Return(expr='""')])
                 ],
             )
         )
 
+        map_type = TemplateType(name="DenseHashMap2", args=[STRING_VIEW, REFLECT_ATOM])
         map_body: list[CppNode] = [
-            Raw(text="DenseHashMap2<std::string_view, ReflectAtom> map;"),
+            Variable(type=map_type, name="map"),
             *(Raw(text=f'map["{string_val}"] = ReflectAtom::{variant};') for string_val, variant in atom_map),
-            Raw(text="return map;"),
+            Return(expr="map"),
         ]
         ns_items.append(
             Function(
                 name="resolveGlobalReflectAtom",
-                return_type=RawType(text="ReflectAtom"),
+                return_type=REFLECT_ATOM,
                 is_inline=True,
-                params=[Param(type=RawType(text="std::string_view"), name="key")],
+                params=[STRING_VIEW.param("key")],
                 body=[
                     LambdaInitVar(
-                        type=RawType(text="DenseHashMap2<std::string_view, ReflectAtom>"),
+                        type=map_type,
                         name="s_atomMap",
                         body=map_body,
                     ),
-                    Raw(text=""),
+                    BlankLine(),
                     If(
                         cond="const ReflectAtom* atom = s_atomMap.find(key)",
-                        then_body=[Raw(text="return *atom;")],
+                        then_body=[Return(expr="*atom")],
                     ),
-                    Raw(text=""),
-                    Raw(text="return ReflectAtom::Unknown;"),
+                    BlankLine(),
+                    Return(expr="ReflectAtom::Unknown"),
                 ],
             )
         )
@@ -2408,11 +2548,11 @@ class CppGenerator:
         ns_items.append(
             Function(
                 name="resolveReflectAtom",
-                return_type=RawType(text="ReflectAtom"),
+                return_type=REFLECT_ATOM,
                 is_inline=True,
                 params=[
-                    Param(type=RawType(text="int"), name="atomId"),
-                    Param(type=RawType(text="std::string_view"), name="key"),
+                    INT.param("atomId"),
+                    STRING_VIEW.param("key"),
                 ],
                 body=[
                     If(
@@ -2420,12 +2560,12 @@ class CppGenerator:
                         then_body=[
                             If(
                                 cond="atomId < int(ReflectAtom::Count)",
-                                then_body=[Raw(text="return ReflectAtom(atomId);")],
+                                then_body=[Return(expr="ReflectAtom(atomId)")],
                             ),
-                            Raw(text="return ReflectAtom::Unknown;"),
+                            Return(expr="ReflectAtom::Unknown"),
                         ],
                     ),
-                    Raw(text="return resolveGlobalReflectAtom(key);"),
+                    Return(expr="resolveGlobalReflectAtom(key)"),
                 ],
             )
         )
@@ -2433,12 +2573,12 @@ class CppGenerator:
         ns_items.append(
             Function(
                 name="resolveReflectAtom",
-                return_type=RawType(text="ReflectAtom"),
+                return_type=REFLECT_ATOM,
                 is_inline=True,
                 params=[
-                    Param(type=RawType(text="int"), name="atomId"),
-                    Param(type=RawType(text="const char*"), name="str"),
-                    Param(type=RawType(text="size_t"), name="len"),
+                    INT.param("atomId"),
+                    CONST_CHAR_PTR.param("str"),
+                    SIZE_T.param("len"),
                 ],
                 body=[
                     If(
@@ -2446,12 +2586,12 @@ class CppGenerator:
                         then_body=[
                             If(
                                 cond="atomId < int(ReflectAtom::Count)",
-                                then_body=[Raw(text="return ReflectAtom(atomId);")],
+                                then_body=[Return(expr="ReflectAtom(atomId)")],
                             ),
-                            Raw(text="return ReflectAtom::Unknown;"),
+                            Return(expr="ReflectAtom::Unknown"),
                         ],
                     ),
-                    Raw(text="return resolveGlobalReflectAtom(std::string_view(str, len));"),
+                    Return(expr="resolveGlobalReflectAtom(std::string_view(str, len))"),
                 ],
             )
         )
