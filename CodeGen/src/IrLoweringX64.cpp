@@ -53,12 +53,12 @@ IrLoweringX64::IrLoweringX64(LogBuilder* logger, AssemblyBuilderX64& build, Modu
 // Luwu Classes (rfcs/classes.md): authorize private/const access to the member at `slotReg` on
 // class `classReg` (an object's lclass, or a class object directly) without bailing to the
 // interpreter. A member with no access bits is unrestricted. A private/const member takes the fast
-// path only when the executing closure is one of the owning class's own methods -- i.e.
-// `classReg == currentClosure->l.p->ownerclass`, which is exactly luaR_closureownsprivateaccess
-// (method closures are unique per class). For writes, a const member additionally requires the
-// closure to be the class's __init (luaR_closureisinit). Everything else jumps to `mismatch`, where
-// the interpreter fallback raises the correct error. `slotReg` holds the raw member offset (before
-// it's scaled into a byte address) and must stay live across this call.
+// path only when `classReg == currentClosure->l.p->ownerclass`, which is exactly
+// luaR_closureownsprivateaccess (the class's methods and closures nested in them). For writes, a
+// const member additionally requires the closure to be the class's __init (luaR_closureisinit).
+// Everything else jumps to `mismatch`, where the interpreter fallback raises the correct error.
+// `slotReg` holds the raw member offset (before it's scaled into a byte address) and must stay live
+// across this call.
 static void emitClassMemberAuthX64(
     AssemblyBuilderX64& build,
     IrRegAllocX64& regs,
@@ -68,7 +68,9 @@ static void emitClassMemberAuthX64(
     Label& mismatch
 )
 {
-    uint8_t restrictBits = isWrite ? (LBC_CLASSMEMBER_PRIVATE | LBC_CLASSMEMBER_CONST) : LBC_CLASSMEMBER_PRIVATE;
+    // A read also stops on a blocked `__init` (LBC_CLASSMEMBER_INITBLOCKED), which no closure is
+    // authorized for; writes never target `__init`, since it is a static member.
+    uint8_t restrictBits = isWrite ? (LBC_CLASSMEMBER_PRIVATE | LBC_CLASSMEMBER_CONST) : (LBC_CLASSMEMBER_PRIVATE | LBC_CLASSMEMBER_INITBLOCKED);
 
     Label authorized;
 
@@ -82,12 +84,18 @@ static void emitClassMemberAuthX64(
     build.test(byteReg(flag.reg), restrictBits);
     build.jcc(ConditionX64::Zero, authorized); // unrestricted member: no check needed
 
-    // owner = currentClosure->l.p->ownerclass (NULL for non-method closures -> never matches)
+    // owner = currentClosure->l.p->ownerclass (NULL outside any class -> never matches)
     build.mov(owner.reg, sClosure);
     build.mov(owner.reg, qword[owner.reg + offsetof(Closure, l.p)]);
     build.mov(owner.reg, qword[owner.reg + offsetof(Proto, ownerclass)]);
     build.cmp(owner.reg, classReg);
     build.jcc(ConditionX64::NotEqual, mismatch); // access from outside the owning class
+
+    if (!isWrite)
+    {
+        build.test(byteReg(flag.reg), int8_t(LBC_CLASSMEMBER_INITBLOCKED));
+        build.jcc(ConditionX64::NotZero, mismatch); // blocked `__init`, even from inside the class
+    }
 
     if (isWrite)
     {
@@ -2650,7 +2658,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         ScopedRegX64 slot{regs, SizeX64::qword};
         ScopedRegX64 key{regs, SizeX64::qword};
 
-        // slot = live cached member slot from the current bytecode instruction (self-patched by the interpreter)
+        // slot = live cached member slot from the current bytecode instruction (patched by the interpreter or the native fallbacks)
         build.mov(slot.reg, sCode);
         build.movzx(dwordReg(slot.reg), byte[slot.reg + uintOp(OP_B(inst)) * sizeof(Instruction) + kOffsetOfInstructionC]);
 
@@ -2670,11 +2678,10 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.cmp(key.reg, qword[lclass.reg + slot.reg * 8]);
         build.jcc(ConditionX64::NotEqual, mismatch);
 
-        // address = self->members + slot * sizeof(TValue)  (sizeof(TValue) isn't a valid SIB scale, so
-        // shift the index register itself rather than using a scaled-index addressing mode)
+        // address = self + LUAR_OBJECT_MEMBERS_OFFSET + slot * sizeof(TValue)  (sizeof(TValue) isn't a valid SIB
+        // scale, so shift the index register itself rather than using a scaled-index addressing mode)
         build.shl(slot.reg, kTValueSizeLog2);
-        build.mov(inst.regX64, qword[regOp(OP_A(inst)) + offsetof(LuauObject, members)]);
-        build.add(inst.regX64, slot.reg);
+        build.lea(inst.regX64, addr[regOp(OP_A(inst)) + slot.reg + LUAR_OBJECT_MEMBERS_OFFSET]);
 
         if (mismatchOp.kind == IrOpKind::Undef)
         {
@@ -2688,19 +2695,70 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
     }
     case IrCmd::OBJECT_MEMBER_ADDR:
     {
-        // Luwu Classes (rfcs/classes.md): the receiver's class is proven (see LOP_GETOBJECTMEMBER), so
+        // Luwu Classes (rfcs/classes.md): the receiver's class is proven (see LOP_GETOBJECTMEMBER) or it was
+        // just allocated (NEW_OBJECT), so
         // the member's offset is a constant and nothing needs re-checking here -- not the class, and
-        // not the offset against numberofmembers either. Two loads and an add, with no branch.
+        // not the offset against numberofmembers either. A single lea, with no load and no branch.
         inst.regX64 = regs.allocReg(SizeX64::qword, index);
 
         uint32_t offset = uintOp(OP_B(inst));
 
-        // address = self->members + offset * sizeof(TValue)
-        build.mov(inst.regX64, qword[regOp(OP_A(inst)) + offsetof(LuauObject, members)]);
+        // address = self + LUAR_OBJECT_MEMBERS_OFFSET + offset * sizeof(TValue)
+        build.lea(inst.regX64, addr[regOp(OP_A(inst)) + int32_t(LUAR_OBJECT_MEMBERS_OFFSET + offset * sizeof(TValue))]);
 
-        if (offset != 0)
-            build.add(inst.regX64, offset * sizeof(TValue));
+        break;
+    }
+    case IrCmd::CHECK_CLASS_FIELDS_CONSTRUCTIBLE:
+    {
+        // Mirrors the FIELDS-form shape rules in executeNEWOBJECT, narrowed to the member-copy case (see
+        // IrData.h). A private `__init` is tested by its own member flag rather than hasprivatemembers,
+        // which a class with const fields always sets, and is allowed when the executing closure belongs
+        // to the class -- luaR_checkprivateconstructor's rule, read the same way emitClassMemberAuthX64
+        // reads it (native code always runs a Lua closure).
+        Label fresh;
+        Label& fail = getTargetLabel(OP_C(inst), index, fresh);
+        RegisterX64 classReg = regOp(OP_A(inst));
 
+        build.cmp(dword[classReg + offsetof(LuauClass, numberofinstancemembers)], int32_t(uintOp(OP_B(inst))));
+        build.jcc(ConditionX64::NotEqual, fail);
+        build.cmp(qword[classReg + offsetof(LuauClass, memberdefaults)], 0);
+        build.jcc(ConditionX64::NotEqual, fail);
+        build.cmp(byte[classReg + offsetof(LuauClass, haspoddefaultsfn)], 0);
+        build.jcc(ConditionX64::NotEqual, fail);
+
+        Label constructible;
+        build.cmp(byte[classReg + offsetof(LuauClass, hascustominit)], 0);
+        build.jcc(ConditionX64::Equal, constructible);
+
+        build.cmp(byte[classReg + offsetof(LuauClass, hasprimaryinit)], 0);
+        build.jcc(ConditionX64::Equal, fail);
+
+        {
+            ScopedRegX64 flags{regs, SizeX64::qword};
+            ScopedRegX64 offset{regs, SizeX64::qword};
+            build.mov(flags.reg, qword[classReg + offsetof(LuauClass, memberflags)]);
+            build.mov(dwordReg(offset.reg), dword[classReg + offsetof(LuauClass, initoffset)]);
+            build.test(byte[flags.reg + offset.reg], int8_t(LBC_CLASSMEMBER_PRIVATE));
+            build.jcc(ConditionX64::Zero, constructible);
+
+            // private: only from one of the class's own methods (or a closure nested in one)
+            build.mov(flags.reg, sClosure);
+            build.mov(flags.reg, qword[flags.reg + offsetof(Closure, l.p)]);
+            build.cmp(qword[flags.reg + offsetof(Proto, ownerclass)], classReg);
+            build.jcc(ConditionX64::NotEqual, fail);
+        }
+
+        build.setLabel(constructible);
+        finalizeTargetLabel(OP_C(inst), index, fresh);
+        break;
+    }
+    case IrCmd::NEW_OBJECT:
+    {
+        IrCallWrapperX64 callWrap(regs, build, index);
+        callWrap.addArgument(SizeX64::qword, rState);
+        callWrap.addArgument(SizeX64::qword, regOp(OP_A(inst)), OP_A(inst));
+        callWrap.call(qword[rNativeContext + offsetof(NativeContext, luaR_newobjectuninit)]);
+        inst.regX64 = regs.takeReg(rax, index);
         break;
     }
     case IrCmd::TRY_CLASS_MEMBER_ADDR:
@@ -2715,7 +2773,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         ScopedRegX64 tmp{regs, SizeX64::qword};
         ScopedRegX64 key{regs, SizeX64::qword};
 
-        // slot = live cached member slot from the current bytecode instruction (self-patched by the interpreter)
+        // slot = live cached member slot from the current bytecode instruction (patched by the interpreter or the native fallbacks)
         build.mov(slot.reg, sCode);
         build.movzx(dwordReg(slot.reg), byte[slot.reg + uintOp(OP_B(inst)) * sizeof(Instruction) + kOffsetOfInstructionC]);
 
@@ -2789,10 +2847,9 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.cmp(dwordReg(slot.reg), dword[lclass.reg + offsetof(LuauClass, numberofinstancemembers)]);
         build.jcc(ConditionX64::AboveEqual, isStatic);
 
-        // instance: address = self->members + slot * sizeof(TValue)
+        // instance: address = self + LUAR_OBJECT_MEMBERS_OFFSET + slot * sizeof(TValue)
         build.shl(slot.reg, kTValueSizeLog2);
-        build.mov(inst.regX64, qword[regOp(OP_A(inst)) + offsetof(LuauObject, members)]);
-        build.add(inst.regX64, slot.reg);
+        build.lea(inst.regX64, addr[regOp(OP_A(inst)) + slot.reg + LUAR_OBJECT_MEMBERS_OFFSET]);
         build.jmp(done);
 
         // static: address = lclass->staticmembers + (slot - numberofinstancemembers) * sizeof(TValue)

@@ -55,7 +55,8 @@ static LuauBytecodeType getType(
     const DenseHashMap<AstName, uint8_t>& userdataTypes,
     BytecodeBuilder& bytecode,
     DenseHashSet<AstName>& seenAliases,
-    const DenseHashSet<AstName>& classNames
+    const DenseHashSet<AstName>& classNames,
+    const DenseHashSet<AstName>& classGenerics
 )
 {
     if (const AstTypeReference* ref = ty->as<AstTypeReference>())
@@ -73,11 +74,15 @@ static LuauBytecodeType getType(
             else
             {
                 seenAliases.insert(ref->name);
-                return getType((*alias)->type, (*alias)->generics, typeAliases, hostVectorType, userdataTypes, bytecode, seenAliases, classNames);
+                return getType((*alias)->type, (*alias)->generics, typeAliases, hostVectorType, userdataTypes, bytecode, seenAliases, classNames, classGenerics);
             }
         }
 
-        if (isGeneric(ref->name, generics))
+        // Luwu Classes (rfcs/classes.md): a generic of the enclosing class (`T` in `class List<T>`) is as
+        // unknown as a function's own generic. Without this it fell through to the userdata guess below,
+        // and a method like `push(self, value: T)` got an entry guard against userdata that fails for
+        // every real argument, sending each call back to the interpreter.
+        if (isGeneric(ref->name, generics) || classGenerics.contains(ref->name))
             return LBC_TYPE_ANY;
 
         if (hostVectorType && ref->name == hostVectorType)
@@ -118,7 +123,7 @@ static LuauBytecodeType getType(
 
         for (AstType* ty : un->types)
         {
-            LuauBytecodeType et = getType(ty, generics, typeAliases, hostVectorType, userdataTypes, bytecode, seenAliases, classNames);
+            LuauBytecodeType et = getType(ty, generics, typeAliases, hostVectorType, userdataTypes, bytecode, seenAliases, classNames, classGenerics);
 
             if (et == LBC_TYPE_NIL)
             {
@@ -147,7 +152,7 @@ static LuauBytecodeType getType(
     }
     else if (const AstTypeGroup* group = ty->as<AstTypeGroup>())
     {
-        return getType(group->type, generics, typeAliases, hostVectorType, userdataTypes, bytecode, seenAliases, classNames);
+        return getType(group->type, generics, typeAliases, hostVectorType, userdataTypes, bytecode, seenAliases, classNames, classGenerics);
     }
     else if (const AstTypeOptional* optional = ty->as<AstTypeOptional>())
     {
@@ -172,7 +177,8 @@ static std::string getFunctionType(
     const DenseHashMap<AstName, uint8_t>& userdataTypes,
     BytecodeBuilder& bytecode,
     bool isClassMethod,
-    const DenseHashSet<AstName>& classNames
+    const DenseHashSet<AstName>& classNames,
+    const DenseHashSet<AstName>& classGenerics
 )
 {
     bool self = func->self != 0;
@@ -203,7 +209,7 @@ static std::string getFunctionType(
         {
             DenseHashSet<AstName> seenAliases{AstName()};
             ty = arg->annotation
-                     ? getType(arg->annotation, func->generics, typeAliases, hostVectorType, userdataTypes, bytecode, seenAliases, classNames)
+                     ? getType(arg->annotation, func->generics, typeAliases, hostVectorType, userdataTypes, bytecode, seenAliases, classNames, classGenerics)
                      : LBC_TYPE_ANY;
         }
 
@@ -266,6 +272,9 @@ struct TypeMapVisitor : AstVisitor
     // (`x: Account`) or a direct constructor call (`Account(...)`) resolves to an object, not the
     // LBC_TYPE_USERDATA guess used for unrecognized type names.
     DenseHashSet<AstName> classNames{AstName()};
+    // Generic type parameters of the class whose body is being visited (see visit(AstStatClass)); getType
+    // treats them like a function's own generics.
+    DenseHashSet<AstName> classGenerics{AstName()};
     // Maps a class's module-scoped local to its declaration, so constructor-call detection
     // (`Account(...)`) can recognize the callee as a class value.
     DenseHashMap<AstLocal*, AstStatClass*> classDecls{nullptr};
@@ -357,7 +366,7 @@ struct TypeMapVisitor : AstVisitor
         resolvedExprs[expr] = ty;
 
         DenseHashSet<AstName> seenAliases{AstName()};
-        LuauBytecodeType bty = getType(ty, {}, typeAliases, hostVectorType, userdataTypes, bytecode, seenAliases, classNames);
+        LuauBytecodeType bty = getType(ty, {}, typeAliases, hostVectorType, userdataTypes, bytecode, seenAliases, classNames, classGenerics);
         exprTypes[expr] = bty;
         return bty;
     }
@@ -369,7 +378,7 @@ struct TypeMapVisitor : AstVisitor
         resolvedLocals[local] = ty;
 
         DenseHashSet<AstName> seenAliases{AstName()};
-        LuauBytecodeType bty = getType(ty, {}, typeAliases, hostVectorType, userdataTypes, bytecode, seenAliases, classNames);
+        LuauBytecodeType bty = getType(ty, {}, typeAliases, hostVectorType, userdataTypes, bytecode, seenAliases, classNames, classGenerics);
 
         if (bty != LBC_TYPE_ANY)
             localTypes[local] = bty;
@@ -478,7 +487,7 @@ struct TypeMapVisitor : AstVisitor
 
     bool visit(AstExprFunction* node) override
     {
-        std::string type = getFunctionType(node, typeAliases, hostVectorType, userdataTypes, bytecode, classMethods.contains(node), classNames);
+        std::string type = getFunctionType(node, typeAliases, hostVectorType, userdataTypes, bytecode, classMethods.contains(node), classNames, classGenerics);
 
         if (!type.empty())
             functionTypes[node] = std::move(type);
@@ -508,7 +517,45 @@ struct TypeMapVisitor : AstVisitor
             }
         }
 
-        return true; // Let generic visitor descend into member functions and default-value exprs
+        // Descend here rather than returning true, so the class's generics are in scope for exactly its
+        // body: method parameter types, locals inside methods and field default expressions. Classes can
+        // only be declared at module scope, so there is no outer class scope to restore beyond clearing.
+        for (AstGenericType* generic : node->generics)
+            classGenerics.insert(generic->name);
+
+        if (node->primaryConstructor)
+        {
+            for (AstLocal* arg : node->primaryConstructor->args)
+            {
+                if (arg->annotation)
+                    arg->annotation->visit(this);
+            }
+
+            for (AstExpr* argDefault : node->primaryConstructor->argsDefaults)
+            {
+                if (argDefault)
+                    argDefault->visit(this);
+            }
+        }
+
+        for (const AstClassMember& member : node->members)
+        {
+            if (const AstClassProperty* prop = Luau::get_if<AstClassProperty>(&member))
+            {
+                if (prop->ty)
+                    prop->ty->visit(this);
+                if (prop->defaultValue)
+                    prop->defaultValue->visit(this);
+            }
+            else if (const AstClassMethod* method = Luau::get_if<AstClassMethod>(&member))
+            {
+                method->function->visit(this);
+            }
+        }
+
+        classGenerics.clear();
+
+        return false;
     }
 
     bool visit(AstExprLocal* node) override

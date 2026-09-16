@@ -1466,6 +1466,59 @@ TEST_CASE_FIXTURE(Fixture, "extern_type_generics_instantiate")
     CHECK_EQ("number", toString(requireType("x")));
 }
 
+TEST_CASE_FIXTURE(Fixture, "extern_type_generic_default_is_used_when_omitted")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuauExternTypeUseDefinitionScope, true},
+        {FFlag::LuwuGenericNominals, true},
+    };
+
+    loadDefinition(R"(
+        declare extern type Box<T = string> with
+            value: T
+        end
+
+        declare function makeBox(): Box
+    )");
+
+    CheckResult result = check(R"(
+        local b = makeBox()
+        local x = b.value
+        local explicitly = (nil :: any) :: Box<number>
+    )");
+
+    LUAU_CHECK_NO_ERRORS(result);
+    CHECK_EQ("Box<string>", toString(requireType("b")));
+    CHECK_EQ("string", toString(requireType("x")));
+    CHECK_EQ("Box<number>", toString(requireType("explicitly")));
+}
+
+TEST_CASE_FIXTURE(Fixture, "extern_type_generic_default_can_reference_earlier_parameter")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuauExternTypeUseDefinitionScope, true},
+        {FFlag::LuwuGenericNominals, true},
+    };
+
+    loadDefinition(R"(
+        declare extern type Pair<A, B = A> with
+            first: A
+            second: B
+        end
+    )");
+
+    CheckResult result = check(R"(
+        local p = (nil :: any) :: Pair<number>
+        local s = p.second
+    )");
+
+    LUAU_CHECK_NO_ERRORS(result);
+    CHECK_EQ("Pair<number, number>", toString(requireType("p")));
+    CHECK_EQ("number", toString(requireType("s")));
+}
+
 TEST_CASE_FIXTURE(Fixture, "extern_type_generics_nested_instantiation")
 {
     ScopedFastFlag sffs[] = {

@@ -1254,10 +1254,42 @@ struct TypeStringifier
         size_t resultsLength = 0;
         bool lengthLimitHit = false;
 
-        for (auto el : &uv)
-        {
-            el = follow(el);
+        // A union's options are flattened -- `A | (B | C)` prints as `A | B | C` -- but a nested
+        // union that has a name of its own should stay that name instead of spilling its options
+        // into the enclosing union: `Encoding?` reads as `Encoding?`, not as every string literal
+        // `Encoding` is made of, followed by a `?`.
+        std::vector<TypeId> elements;
+        // A union may hold itself, directly or through another union, so flattening has to remember
+        // which ones it has already walked into: an option that leads back to a union already being
+        // flattened contributes nothing new, and following it again never terminates.
+        DenseHashSet<TypeId> flattenedUnions{nullptr};
+        flattenedUnions.insert(follow(ty));
 
+        auto collectOptions = [&](auto&& collectOptions, TypeId option) -> void
+        {
+            option = follow(option);
+
+            if (const UnionType* nested = get<UnionType>(option); nested && !willPrintAsBareName(option, state))
+            {
+                if (flattenedUnions.contains(option))
+                    return;
+
+                flattenedUnions.insert(option);
+
+                for (TypeId nestedOption : nested->options)
+                    collectOptions(collectOptions, nestedOption);
+            }
+            else
+            {
+                elements.push_back(option);
+            }
+        };
+
+        for (TypeId option : uv.options)
+            collectOptions(collectOptions, option);
+
+        for (TypeId el : elements)
+        {
             if (state.opts.useQuestionMarks && isNil(el))
             {
                 optional = true;

@@ -202,7 +202,7 @@ bool NormalizedType::isUnknown() const
     }
 
     // Check is extern type: the nominal component is `unknown` only when every
-    // root hierarchy (userdata/class/object) is present with no negations.
+    // nominal root (see BuiltinTypes::nominalRoots) is present with no negations.
     std::array<TypeId, 4> nominalRoots = builtinTypes->nominalRoots();
     bool isTopExternType = externTypes.externTypes.size() == nominalRoots.size();
     if (isTopExternType)
@@ -622,9 +622,8 @@ static int tyvarIndex(TypeId ty)
 
 static bool isTop(NotNull<BuiltinTypes> builtinTypes, const NormalizedExternType& externTypes)
 {
-    // The top of the nominal lattice is every root hierarchy present with no
-    // negations. There are three roots now (userdata/class/object), not just
-    // `userdata`, so all of them must be present and unnegated.
+    // The top of the nominal lattice is every nominal root (userdata/class/
+    // object/vector) present with no negations.
     std::array<TypeId, 4> roots = builtinTypes->nominalRoots();
     if (externTypes.externTypes.size() != roots.size())
         return false;

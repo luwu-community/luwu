@@ -2773,7 +2773,15 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
         break;
 
     case LOP_JUMPXISA:
-        formatAppend(result, "JUMPXISA R%d R%d L%d%s\n", LUAU_INSN_A(insn), *code & 0xff, targetLabel, (*code >> 31) ? "" : " NOT");
+        formatAppend(
+            result,
+            "JUMPXISA R%d R%d L%d%s%s\n",
+            LUAU_INSN_A(insn),
+            *code & 0xff,
+            targetLabel,
+            (*code >> 31) ? "" : " NOT",
+            (*code & LBC_JUMPXISA_CHECKCLASS) ? " CHECKCLASS" : ""
+        );
         break;
 
     case LOP_GETOBJECTMEMBER:

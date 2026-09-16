@@ -25,7 +25,7 @@
 
 LUAU_FASTINT(LuauTypeInferIterationLimit)
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
-LUAU_FASTFLAG(LuauBetterUserDefinedClasses)
+LUAU_FASTFLAG(LuwuBetterUserDefinedClasses)
 LUAU_FASTFLAGVARIABLE(DebugLuauMagicVariableNames)
 LUAU_FASTFLAGVARIABLE(LuauAutocompleteConst)
 LUAU_FASTFLAGVARIABLE(LuauAutocompleteExport)
@@ -2364,7 +2364,7 @@ AutocompleteResult autocomplete_(
     {
         AutocompleteEntryMap ret;
         ret["public"] = {AutocompleteEntryKind::Keyword};
-        if (FFlag::LuauBetterUserDefinedClasses)
+        if (FFlag::LuwuBetterUserDefinedClasses)
             ret["private"] = {AutocompleteEntryKind::Keyword};
         ret["function"] = {AutocompleteEntryKind::Keyword};
         return {std::move(ret), ancestry, AutocompleteContext::Keyword};

@@ -9,6 +9,7 @@
 #include <optional>
 #include <functional>
 #include <string>
+#include <string_view>
 
 #include <string.h>
 #include <stdint.h>
@@ -17,6 +18,9 @@ LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
 
 namespace Luau
 {
+
+template<typename T>
+std::optional<T> fromString(std::string_view s);
 
 struct AstName
 {
@@ -665,7 +669,17 @@ class AstExprIfElse : public AstExpr
 public:
     LUAU_RTTI(AstExprIfElse)
 
-    AstExprIfElse(const Location& location, AstExpr* condition, bool hasThen, AstExpr* trueExpr, bool hasElse, AstExpr* falseExpr);
+    AstExprIfElse(
+        const Location& location,
+        AstExpr* condition,
+        bool hasThen,
+        AstExpr* trueExpr,
+        bool hasElse,
+        AstExpr* falseExpr,
+        const Location& ifLocation,
+        const std::optional<Location>& thenLocation,
+        const std::optional<Location>& elseLocation
+    );
 
     void visit(AstVisitor* visitor) override;
 
@@ -674,6 +688,17 @@ public:
     AstExpr* trueExpr;
     bool hasElse;
     AstExpr* falseExpr;
+
+    // Location of the leading 'if' or 'elseif' keyword token only. An `elseif` clause is parsed as
+    // a nested AstExprIfElse in the false branch, so a node whose ifLocation spans six columns is
+    // an `elseif` rather than an `if`.
+    Location ifLocation;
+
+    std::optional<Location> thenLocation;
+
+    // Only set for a literal `else` token: an `elseif` clause carries its own keyword as the
+    // ifLocation of the nested AstExprIfElse it parses into, and leaves this unset.
+    std::optional<Location> elseLocation;
 };
 
 class AstExprInterpString : public AstExpr
@@ -1179,6 +1204,10 @@ enum class AstClassMemberVisibility
     Public,
     Private,
 };
+
+std::string toString(AstClassMemberVisibility visibility);
+template<>
+std::optional<AstClassMemberVisibility> fromString<AstClassMemberVisibility>(std::string_view s);
 
 struct AstClassProperty
 {

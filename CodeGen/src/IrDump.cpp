@@ -397,6 +397,10 @@ const char* getCmdName(IrCmd cmd)
         return "TRY_OBJECT_MEMBER_ADDR";
     case IrCmd::OBJECT_MEMBER_ADDR:
         return "OBJECT_MEMBER_ADDR";
+    case IrCmd::CHECK_CLASS_FIELDS_CONSTRUCTIBLE:
+        return "CHECK_CLASS_FIELDS_CONSTRUCTIBLE";
+    case IrCmd::NEW_OBJECT:
+        return "NEW_OBJECT";
     case IrCmd::TRY_OBJECT_NAMECALL_ADDR:
         return "TRY_OBJECT_NAMECALL_ADDR";
     case IrCmd::TRY_CLASS_MEMBER_ADDR:

@@ -540,6 +540,7 @@ struct BytecodeGraphParser
                     addImmInput(node, static_cast<bool>(aux >> 31));
                     addJumpInput(node, jumpTarget);
                     addVmRegInput(node, aux & 0xff);
+                    addImmInput(node, static_cast<bool>(aux & LBC_JUMPXISA_CHECKCLASS));
                     break;
 
                 case LOP_JUMPIF:

@@ -482,7 +482,16 @@ static void computeCfgLiveInOutRegSets(IrFunction& function)
             // Exit from a regular block to a fallback block is not considered a block terminator
             // This is because fallback blocks define an alternative implementation of the same operations
             // This can cause the current block to define more registers that actually were available at fallback entry
-            if (curr.kind != IrBlockKind::Fallback && succ.kind == IrBlockKind::Fallback)
+            //
+            // Luwu Classes (rfcs/classes.md): an edge between two fallback blocks of the same instruction is skipped
+            // too. A field access or method call on an untyped receiver puts its object path in a fallback block,
+            // and a failed check there jumps to the instruction's generic fallback (see translateInstGetTableKS).
+            // Counting that edge breaks on pending call results. In `a:m(b:n())`, the results of `b:n()` are still
+            // on the stack when `m` is resolved, and the generic NAMECALL fallback overwrites the register where
+            // they start.
+            bool sameInstructionFallback = curr.kind == IrBlockKind::Fallback && succ.kind == IrBlockKind::Fallback && curr.startpc == succ.startpc;
+
+            if ((curr.kind != IrBlockKind::Fallback && succ.kind == IrBlockKind::Fallback) || sameInstructionFallback)
             {
                 // If this is the only successor, this skip will not be valid
                 CODEGEN_ASSERT(successorsIt.size() != 1);

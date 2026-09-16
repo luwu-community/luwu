@@ -998,7 +998,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "react_use_state_partial_annotation")
 
     // BasicStateAction is a named type alias referenced (not expanded) in the parameter position;
     // UnionType doesn't track instantiated generic args the way TableType does, so the `<number>`
-    // instantiation doesn't show here - a known, accepted limitation (see rfcs notes).
+    // instantiation doesn't show here - a known, accepted limitation.
     CHECK_EQ("(BasicStateAction) -> ()", toString(requireType("setV")));
 
     CHECK_EQ("number?", toString(requireType("w")));

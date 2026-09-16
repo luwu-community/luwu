@@ -114,7 +114,7 @@ enum class IrCmd : uint8_t
     // to (`Closure::l.p->ownerclass`), or NULL when it belongs to none. Backs the
     // LBC_SELFCLASS_OWNER form of CHECKSELFCLASS, where a method validates `self` against its own
     // class without that class occupying a register or forcing an upvalue capture. Loop-invariant
-    // within a frame, so it is worth hoisting/CSE-ing.
+    // within a frame.
     // No operands.
     LOAD_OWNER_CLASS,
 
@@ -731,13 +731,32 @@ enum class IrCmd : uint8_t
     TRY_OBJECT_MEMBER_ADDR,
 
     // Address of an instance member at a *known* offset on a Luwu Classes object, for a receiver whose
-    // class the compiler has proven (a method's own `self`; see rfcs/classes.md and LOP_GETOBJECTMEMBER).
+    // class the compiler has proven (a method's or inlined method's `self`, or a local in a `class.isinstance`
+    // branch; see LOP_GETOBJECTMEMBER).
     // Nothing is re-checked here -- no slot cache, no name compare, no private/const authorization, and
     // no bounds check either: the offset is inside the instance for any bytecode the compiler produced,
     // and invalid bytecode is the embedder's contract to keep. Not a guard, so it never branches.
     // A: pointer (LuauObject)
     // B: unsigned int (member offset)
     OBJECT_MEMBER_ADDR,
+
+    // Luwu Classes (rfcs/classes.md): guard that a class can be constructed natively by NEWOBJECT's FIELDS
+    // form -- the same shape rules executeNEWOBJECT checks, restricted to the case that is nothing but a
+    // member-by-member copy: the constructor is the default or a primary constructor, there is no
+    // `__defaults` closure and no constant default to preserve (so every member is written), the class
+    // has exactly the expected number of instance members, and its `__init` (if any) is either public or
+    // private with the executing closure belonging to the class (luaR_checkprivateconstructor's rule; a
+    // private constructor used from outside falls back, and the fallback raises). Jumps otherwise.
+    // A: pointer (LuauClass)
+    // B: unsigned int (expected number of instance members)
+    // C: block/vmexit/undef
+    // When undef is specified instead of a block, execution is aborted on check failure
+    CHECK_CLASS_FIELDS_CONSTRUCTIBLE,
+
+    // Luwu Classes (rfcs/classes.md): allocate an object of a class with its members uninitialized
+    // (luaR_newobjectuninit). Every member must be stored before anything can collect or observe it.
+    // A: pointer (LuauClass)
+    NEW_OBJECT,
 
     // Try to get the address of a static member on a Luwu Classes class object using the cached
     // member slot at the given bytecode position, or jump if the slot is stale (out of range for
@@ -951,10 +970,11 @@ enum class IrCmd : uint8_t
     // C: block
     FALLBACK_FORGPREP,
 
-    // Luwu Classes (rfcs/classes.md): construct an instance of a statically resolved class.
-    // Construction has no machine code lowering; it runs through the same C fallback the interpreter
-    // uses, which keeps native execution going afterwards instead of abandoning the rest of the
-    // function to the interpreter (and, unlike a bare exit, keeps the register liveness honest).
+    // Luwu Classes (rfcs/classes.md): construct an instance of a statically resolved class. Forms the
+    // native lowering doesn't handle, and its guard misses, run through the same C implementation the
+    // interpreter uses, which keeps native execution going afterwards instead of abandoning the rest
+    // of the function to the interpreter (and, unlike a bare exit, keeps the register liveness
+    // honest).
     // A: unsigned int (bytecode instruction index)
     // B: Rn (instance destination, also the base of the constructor's register window)
     // C: Rn (class)

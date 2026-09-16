@@ -522,13 +522,26 @@ void AstExprTypeAssertion::visit(AstVisitor* visitor)
     }
 }
 
-AstExprIfElse::AstExprIfElse(const Location& location, AstExpr* condition, bool hasThen, AstExpr* trueExpr, bool hasElse, AstExpr* falseExpr)
+AstExprIfElse::AstExprIfElse(
+    const Location& location,
+    AstExpr* condition,
+    bool hasThen,
+    AstExpr* trueExpr,
+    bool hasElse,
+    AstExpr* falseExpr,
+    const Location& ifLocation,
+    const std::optional<Location>& thenLocation,
+    const std::optional<Location>& elseLocation
+)
     : AstExpr(ClassIndex(), location)
     , condition(condition)
     , hasThen(hasThen)
     , trueExpr(trueExpr)
     , hasElse(hasElse)
     , falseExpr(falseExpr)
+    , ifLocation(ifLocation)
+    , thenLocation(thenLocation)
+    , elseLocation(elseLocation)
 {
 }
 
@@ -1101,6 +1114,29 @@ void AstStatClass::visit(AstVisitor* visitor)
             );
         }
     }
+}
+
+std::string toString(AstClassMemberVisibility visibility)
+{
+    switch (visibility)
+    {
+    case AstClassMemberVisibility::Public:
+        return "public";
+    case AstClassMemberVisibility::Private:
+        return "private";
+    default:
+        return "unknown";
+    }
+}
+
+template<>
+std::optional<AstClassMemberVisibility> fromString<AstClassMemberVisibility>(std::string_view s)
+{
+    if (s == "public")
+        return AstClassMemberVisibility::Public;
+    if (s == "private")
+        return AstClassMemberVisibility::Private;
+    return std::nullopt;
 }
 
 AstStatDeclareFunction::AstStatDeclareFunction(

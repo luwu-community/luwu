@@ -72,9 +72,9 @@ struct ClassDeclRecord
     TypeId ty = nullptr;
     DenseHashMap<AstName, TypeId> memberTypes{AstName{""}};
     // The type of the class's constructor (the `__call` metamethod on the
-    // class value). Blocked until `__init`'s signature has been checked, if
-    // the class defines a custom `__init`; otherwise resolved eagerly to the
-    // default POD constructor's type.
+    // class value). Blocked until `__init`'s signature is known, if the class
+    // defines `__init` or a primary constructor; otherwise resolved eagerly to
+    // the default POD constructor's type.
     TypeId ctorTy = nullptr;
 
     // Luwu Classes (rfcs/classes.md): the `__init` a primary constructor implies. Blocked until the
@@ -583,6 +583,20 @@ private:
     void updateRValueRefinements(const ScopePtr& scope, DefId def, TypeId ty) const;
     void updateRValueRefinements(Scope* scope, DefId def, TypeId ty) const;
     void resolveGenericDefaultParameters(const ScopePtr& defnScope, AstStatTypeAlias* alias, const TypeFun& fun);
+
+    // Binds a generic parameter list's names into `defnScope` and, for each parameter that was
+    // written with a default (`<T = string>`), resolves that default and unblocks the placeholder
+    // `createGenerics`/`createGenericPacks` left in the corresponding GenericTypeDefinition.
+    //
+    // Binding and resolution are interleaved in declaration order so that a later default can refer
+    // to an earlier parameter, as in `<A, B = A>`.
+    void resolveGenericDefaultParameters(
+        const ScopePtr& defnScope,
+        AstArray<AstGenericType*> generics,
+        AstArray<AstGenericTypePack*> genericPacks,
+        const std::vector<GenericTypeDefinition>& typeParams,
+        const std::vector<GenericTypePackDefinition>& typePackParams
+    );
 };
 
 } // namespace Luau

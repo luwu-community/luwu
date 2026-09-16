@@ -27,7 +27,7 @@ LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
 LUAU_FASTFLAG(DebugLuauUserDefinedClassesRuntime)
 LUAU_FASTFLAG(LuauCyclicRequireShortCircuit)
-LUAU_FASTFLAG(LuauBetterUserDefinedClasses)
+LUAU_FASTFLAG(LuwuBetterUserDefinedClasses)
 LUAU_DYNAMIC_FASTFLAG(LuauSelfIsSelfAndAlwaysSelf)
 
 #if __APPLE__
@@ -1308,7 +1308,7 @@ TEST_CASE("RequireExportClass")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuauExportValueSyntax, true}, {FFlag::DebugLuauUserDefinedClasses, true}, {FFlag::DebugLuauUserDefinedClassesRuntime, true},
-        {FFlag::LuauBetterUserDefinedClasses, true}
+        {FFlag::LuwuBetterUserDefinedClasses, true}
     };
 
     // we create a new fixture so the new lua_State has the class library

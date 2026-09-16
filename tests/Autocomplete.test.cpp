@@ -19,7 +19,7 @@ LUAU_DYNAMIC_FASTINT(LuauSubtypingRecursionLimit)
 
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
-LUAU_FASTFLAG(LuauBetterUserDefinedClasses)
+LUAU_FASTFLAG(LuwuBetterUserDefinedClasses)
 LUAU_FASTFLAG(LuauAutocompleteFunctionArglistSuggestion)
 LUAU_FASTFLAG(LuauAutocompleteMetatableInheritance)
 LUAU_FASTFLAG(LuauCheckTypeForDeprecated)
@@ -1045,7 +1045,7 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_class_member_position_offers_qualifie
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauUserDefinedClasses, true},
-        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
     };
 
     check(R"(
@@ -1066,7 +1066,7 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_class_member_position_hides_private_w
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauUserDefinedClasses, true},
-        {FFlag::LuauBetterUserDefinedClasses, false},
+        {FFlag::LuwuBetterUserDefinedClasses, false},
     };
 
     check(R"(

@@ -317,9 +317,10 @@ struct TypeInstantiationConstraint
 // have been solved. A reference to the class from inside its own body always is, and so is a
 // forward reference to a class declared later in the file. A member's type is still a BlockedType
 // at that point, and copying it into the instantiation shares it, so binding it later hands the
-// instantiation the *uninstantiated* member -- `Box<number>:get()` would return `T`. The
-// instantiation gets a fresh BlockedType for such a member instead, and this constraint fills that
-// in with the substituted member once the template's own member is known.
+// instantiation the *uninstantiated* member -- `Box<number>:get()` would return `T`. Expansion
+// waits for such members; if it is force-dispatched first, the instantiation gets a fresh
+// BlockedType for each one instead, and this constraint fills that in with the substituted member
+// once the template's own member is known.
 struct InstantiateNominalPropConstraint
 {
     // The member's type on the template class, blocked until the class body is solved.

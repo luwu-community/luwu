@@ -368,7 +368,8 @@ declare integer: {
 static const char* kBuiltinDefinitionClassSrc = R"CLASS_SRC(
 declare class: {
     isinstance: @checked (o: unknown, c: class) -> boolean,
-    classof: @checked (o: unknown) -> class?,
+    of: @checked (o: unknown) -> class?,
+    name: @checked (o: class | object) -> string,
     fields: @checked (o: class | object) -> ({ [string]: unknown }, boolean)
 }
 )CLASS_SRC";

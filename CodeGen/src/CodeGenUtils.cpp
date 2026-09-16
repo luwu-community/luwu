@@ -785,6 +785,37 @@ const Instruction* executeNAMECALL(lua_State* L, const Instruction* pc, StkId ba
         if (ttisnil(ra))
             luaG_methoderror(L, ra + 1, tsvalue(kv));
     }
+    else if (FFlag::DebugLuauUserDefinedClassesRuntime && ttisobject(rb))
+    {
+        // Luwu Classes (rfcs/classes.md): the native TRY_OBJECT_NAMECALL_ADDR fast path bails here on a
+        // stale cached slot. Mirror the interpreter's LOP_NAMECALL object handling *and* patch the cached
+        // slot, as executeGETTABLEKS does -- without the patch the slot is never learned under native code,
+        // so every method call on an object re-misses and resolves the name through this fallback.
+        uint8_t slot = LUAU_INSN_C(insn);
+        LuauObject* inst = objectvalue(rb);
+
+        VM_PROTECT_PC(); // private-member auth / missing-member checks can raise
+
+        uint32_t offset = slot;
+
+        if (slot >= inst->lclass->numberofallmembers || tsvalue(kv) != inst->lclass->offsettomember[slot])
+        {
+            const TValue* found = luaH_getstr(inst->lclass->memberstooffset, tsvalue(kv));
+            if (ttisnil(found))
+                luaG_missingmembererror(L, rb, kv);
+            offset = uint32_t(nvalue(found));
+        }
+
+        if (inst->lclass->hasprivatemembers)
+            luaR_checkprivateaccess(L, kv, inst->lclass, cl, offset);
+
+        // note: order of copies allows rb to alias ra+1 or ra
+        setobj2s(L, ra + 1, rb);
+        setobj2s(L, ra, luaR_lookupmemberatoffset(inst, offset));
+
+        if (offset != slot && offset <= 0xff)
+            VM_PATCH_C(pc - 2, offset);
+    }
     else
     {
         LuaTable* mt = ttisuserdata(rb) ? uvalue(rb)->metatable : L->global->mt[ttype(rb)];
@@ -940,8 +971,8 @@ const Instruction* executeFORGPREP(lua_State* L, const Instruction* pc, StkId ba
     return pc;
 }
 
-// Luwu Classes (rfcs/classes.md): the native lowering of LOP_NEWOBJECT. Construction is not lowered
-// to machine code, but it must not be a bare exit to the interpreter either: an unconditional
+// Luwu Classes (rfcs/classes.md): LOP_NEWOBJECT for native code -- the non-FIELDS forms, and FIELDS-form
+// guard misses. This must not be a bare exit to the interpreter: an unconditional
 // `JUMP vmExit` carries no register liveness, so the analysis would let stores to registers the rest
 // of the bytecode still reads (a numeric for loop's limit/step/index, say) be eliminated, and the
 // interpreter would resume on top of garbage. Running it as an ordinary fallback keeps the register
@@ -980,11 +1011,8 @@ const Instruction* executeNEWOBJECT(lua_State* L, const Instruction* pc, StkId b
     // the executing closure, which is the code doing the constructing.
     if (LUAU_UNLIKELY(classdef->hascustominit && classdef->hasprivatemembers))
     {
-        TValue initname;
-        setsvalue(L, &initname, classdef->offsettomember[classdef->initoffset]);
-
         VM_PROTECT_PC();
-        luaR_checkprivateaccess(L, &initname, classdef, cl, classdef->initoffset);
+        luaR_checkprivateconstructor(L, classdef, cl);
     }
 
     VM_PROTECT_PC(); // the allocation below may fail due to OOM

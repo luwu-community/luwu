@@ -44,7 +44,7 @@ LUAU_FASTFLAG(LuauBidirectionalInferenceSimplifyTables)
 LUAU_FASTFLAGVARIABLE(LuauBetterPackAndVariadicMismatchErrors)
 
 LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
-LUAU_FASTFLAG(LuauBetterUserDefinedClasses)
+LUAU_FASTFLAG(LuwuBetterUserDefinedClasses)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 
 namespace Luau
@@ -1350,6 +1350,8 @@ void TypeChecker2::visit(AstStatDeclareGlobal* stat)
 
 void TypeChecker2::visit(AstStatDeclareExternType* stat)
 {
+    visitGenerics(stat->generics, stat->genericPacks);
+
     for (const AstDeclaredExternTypeProperty& prop : stat->props)
         visit(prop.ty);
 }
@@ -1357,6 +1359,8 @@ void TypeChecker2::visit(AstStatDeclareExternType* stat)
 void TypeChecker2::visit(AstStatClass* stat)
 {
     LUAU_ASSERT(FFlag::DebugLuauUserDefinedClasses);
+
+    visitGenerics(stat->generics, stat->genericPacks);
 
     // Luwu Classes (rfcs/classes.md): a primary constructor's parameters are checked like default
     // function arguments -- annotation resolved, default checked against it.
@@ -1429,7 +1433,7 @@ void TypeChecker2::visit(AstStatClass* stat)
     // A class whose fields are all private and which has no functions can be constructed, but nothing
     // can ever read or write what it holds: only the class's own functions may touch a private field,
     // and there are none (rfcs/classes.md).
-    if (FFlag::LuauBetterUserDefinedClasses)
+    if (FFlag::LuwuBetterUserDefinedClasses)
     {
         size_t fieldCount = 0;
         bool hasPublicField = false;
@@ -1478,6 +1482,62 @@ void TypeChecker2::visit(AstStatClass* stat)
             NotNull<Scope> scope{findInnermostScope(stat->location)};
             if (std::optional<TypeFun> classTypeFun = scope->lookupType(stat->name->name.value))
                 reportError(UnusableClass{classTypeFun->type}, stat->name->location);
+        }
+    }
+
+    // A class with a private constructor can only be instantiated from its own body. If nothing there calls it
+    // (`Name(...)` or `Name { ... }`, in a method, a closure nested in one, or a field default), no instance can
+    // ever exist (rfcs/classes.md).
+    if (FFlag::LuwuBetterUserDefinedClasses)
+    {
+        bool privateConstructor = stat->primaryConstructor && stat->primaryConstructor->visibility == AstClassMemberVisibility::Private;
+
+        for (const AstClassMember& member : stat->members)
+        {
+            const AstClassMethod* method = member.get_if<AstClassMethod>();
+            if (method && method->functionName == "__init" && method->visibility == AstClassMemberVisibility::Private)
+                privateConstructor = true;
+        }
+
+        if (privateConstructor)
+        {
+            struct ConstructorCallFinder : AstVisitor
+            {
+                AstName className;
+                bool found = false;
+
+                bool visit(AstExprCall* call) override
+                {
+                    AstExpr* callee = call->func;
+                    while (AstExprGroup* group = callee->as<AstExprGroup>())
+                        callee = group->expr;
+
+                    if (AstExprGlobal* global = callee->as<AstExprGlobal>(); global && global->name == className)
+                        found = true;
+                    else if (AstExprLocal* local = callee->as<AstExprLocal>(); local && local->local->name == className)
+                        found = true;
+
+                    return !found;
+                }
+            };
+
+            ConstructorCallFinder finder;
+            finder.className = stat->name->name;
+
+            for (const AstClassMember& member : stat->members)
+            {
+                if (const AstClassMethod* method = member.get_if<AstClassMethod>())
+                    method->function->visit(&finder);
+                else if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && prop->defaultValue)
+                    prop->defaultValue->visit(&finder);
+            }
+
+            if (!finder.found)
+            {
+                NotNull<Scope> scope{findInnermostScope(stat->location)};
+                if (std::optional<TypeFun> classTypeFun = scope->lookupType(stat->name->name.value))
+                    reportError(UninstantiableClass{classTypeFun->type}, stat->name->location);
+            }
         }
     }
 
@@ -2012,14 +2072,21 @@ void TypeChecker2::visitCall(AstExprCall* call)
         {
             const bool isVariadic = Luau::isVariadic(fn->argTypes);
 
-            // A `__call` metamethod is invoked with `call->func` forwarded as its
-            // first argument, but `argHead` (built from `call->args`) doesn't
-            // include it -- account for it here or the reported count is off by one.
+            // A `__call` metamethod is invoked with `call->func` forwarded as its first argument, which
+            // `argHead` (built from `call->args`) doesn't include. Report the counts as the call is written:
+            // leave the forwarded argument out of the expected parameters rather than adding it to the
+            // arguments. For a class, `Cat("tom")` against `Cat(name, age)` then reads "expects 2, got 1".
             size_t specifiedCount = argHead.size();
-            if (result2.metamethods.contains(fnTy))
-                specifiedCount += 1;
 
             auto [minParams, optMaxParams] = getParameterExtents(TxnLog::empty(), fn->argTypes);
+            if (result2.metamethods.contains(fnTy))
+            {
+                if (minParams > 0)
+                    minParams -= 1;
+                if (optMaxParams && *optMaxParams > 0)
+                    *optMaxParams -= 1;
+            }
+
             reportError(CountMismatch{minParams, optMaxParams, specifiedCount, CountMismatch::Arg, isVariadic}, call->func->location);
             return;
         }
@@ -2152,7 +2219,7 @@ void TypeChecker2::checkPrivatePropertyAccess(TypeId tableTy, const std::string&
 
 void TypeChecker2::checkConstPropertyAssignment(TypeId tableTy, const std::string& prop, ValueContext context, const Location& location)
 {
-    if (!FFlag::DebugLuauUserDefinedClasses || !FFlag::LuauBetterUserDefinedClasses)
+    if (!FFlag::DebugLuauUserDefinedClasses || !FFlag::LuwuBetterUserDefinedClasses)
         return;
 
     if (context != ValueContext::LValue)
@@ -2175,7 +2242,7 @@ void TypeChecker2::checkConstPropertyAssignment(TypeId tableTy, const std::strin
 
 void TypeChecker2::checkPrivateConstructorAccess(TypeId classTy, const Location& location)
 {
-    if (!FFlag::DebugLuauUserDefinedClasses || !FFlag::LuauBetterUserDefinedClasses)
+    if (!FFlag::DebugLuauUserDefinedClasses || !FFlag::LuwuBetterUserDefinedClasses)
         return;
 
     const ExternType* cls = get<ExternType>(follow(classTy));
@@ -2914,15 +2981,19 @@ TypeId TypeChecker2::visit(AstExprBinary* expr, AstNode* overrideKey)
             return builtinTypes->booleanType;
         }
 
-        reportError(
-            GenericError{format(
-                "Types '%s' and '%s' cannot be compared with relational operator %s",
-                toString(leftType).c_str(),
-                toString(rightType).c_str(),
-                toString(expr->op).c_str()
-            )},
-            expr->location
+        // A relational operator on an optional fails because of the `nil`, not because the two types
+        // are unrelated to each other; say which operand it is. See describeOptionalOperands.
+        std::string comparisonError = format(
+            "Types '%s' and '%s' cannot be compared with relational operator %s",
+            toString(leftType).c_str(),
+            toString(rightType).c_str(),
+            toString(expr->op).c_str()
         );
+
+        if (std::optional<std::string> nilClause = describeOptionalOperands(leftType, rightType))
+            comparisonError += "; " + *nilClause;
+
+        reportError(GenericError{std::move(comparisonError)}, expr->location);
         return builtinTypes->errorType;
     }
 

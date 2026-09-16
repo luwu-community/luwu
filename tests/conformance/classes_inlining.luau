@@ -2,17 +2,16 @@
 -- Luwu Classes (rfcs/classes.md): method inlining must never relocate a private access into a
 -- closure that does not own it.
 --
--- At O2 the compiler inlines `obj:method()` bodies. Every `private` access -- a field, a method, a
--- static, the constructor -- is authorized at runtime against the *executing closure's*
--- `Proto::ownerclass` (luaR_closureownsprivateaccess), so splicing such a body into a foreign
--- closure makes the check judge it against the wrong class and reject code that was legal where it
--- was written. `tryResolveMethodCall`'s gate exists to prevent that: a class with anything private
--- is not an inline target for a *different* class's body (same-class inlining is always fine,
--- because the ownerclass is preserved).
+-- At O2 the compiler inlines `obj:method()` bodies. Every runtime-checked `private` access -- a field, a
+-- method, a static, the constructor -- is authorized against the *executing closure's*
+-- `Proto::ownerclass` (luaR_closureownsprivateaccess), so splicing such a body into a foreign closure
+-- makes the check judge it against the wrong class and reject code that was legal where it was written.
 --
--- The gate used to be keyed on private *properties* only, so a class whose sole private thing was
--- its constructor or a method sailed through and failed at runtime. Every class below therefore has
--- NO private fields -- that is the whole point; adding one would mask the bug being tested.
+-- A method of a class with private members may still be inlined into outside code when its body's private
+-- access doesn't depend on the running closure: it touches private fields only through its own `self`,
+-- which the inline site's CHECKSELFCLASS proves, so they compile to constant offsets with no runtime check
+-- (InlinedPrivateAccessVisitor in Compiler.cpp). Anything else keeps the call. Cases 1-4 are bodies that
+-- must keep the call; 7 onwards cover bodies that inline and must behave exactly like the call.
 --
 -- MUST BE RUN AT -O2. At O1 the inliner never runs and every case here passes vacuously.
 
@@ -184,6 +183,169 @@ end
 
 expectpass("same-class inlining still works when the class has private members", function()
     assert(SameClass { n = 4 }:twice() == 10)
+end)
+
+-- 7. private fields through the inlined method's own `self`: inlined into outside code, and still correct
+class Counter private (private count: number)
+    public function new(): Counter
+        return Counter(0)
+    end
+
+    public function bump(self): number
+        self.count += 1
+        return self.count
+    end
+
+    public function peek(self): number
+        return self.count
+    end
+end
+
+expectpass("a method touching private fields only through self inlines into outside code", function()
+    local c: Counter = Counter.new()
+    for _ = 1, 5 do
+        c:bump()
+    end
+    assert(c:peek() == 5)
+end)
+
+-- 8. an annotation that lies about the receiver still can't reach a private field at a constant offset:
+-- the inline site's CHECKSELFCLASS rejects the object before the body runs, even when the impostor has
+-- the same layout
+class Impostor(public count: number)
+end
+
+local function peekCounter(counter: Counter): number
+    local count = counter:peek()
+    return count
+end
+
+expectpass("a lying annotation is rejected before an inlined body reads a private field", function()
+    local ok, result = pcall(peekCounter, Impostor(41))
+    assert(not ok, `reading through a lying annotation must fail, got {result}`)
+    assert(string.find(result, "Counter", 1, true), result)
+end)
+
+-- 9. bodies whose private access stays runtime-checked must keep the call and behave as written
+class Config private (private token: string, public name: string)
+    public function new(token: string, name: string): Config
+        return Config(token, name)
+    end
+
+    -- a runtime key could name a private member
+    public function get(self, key: string): string
+        return self[key]
+    end
+
+    -- a private field on something other than `self`
+    public function sameToken(self, other: Config): boolean
+        return self.token == other.token
+    end
+
+    -- a private field reached from a nested function
+    public function tokenReader(self): () -> string
+        return function()
+            return self.token
+        end
+    end
+end
+
+expectpass("reflective, other-receiver and nested private access keep working at O2", function()
+    local a: Config = Config.new("abc", "a")
+    local b: Config = Config.new("abc", "b")
+    assert(a:get("token") == "abc")
+    assert(a:get("name") == "a")
+    assert(a:sameToken(b))
+    assert(a:tokenReader()() == "abc")
+end)
+
+-- 10. a runtime key on a field declared as a table is fine to inline
+class Bag private (private items: { number })
+    public function new(): Bag
+        return Bag({ 10, 20, 30 })
+    end
+
+    public function at(self, i: number): number
+        return self.items[i]
+    end
+end
+
+expectpass("a runtime index into a table-typed private field inlines and reads correctly", function()
+    local bag: Bag = Bag.new()
+    local sum = 0
+    for i = 1, 3 do
+        sum += bag:at(i)
+    end
+    assert(sum == 60)
+end)
+
+-- 11. a method calling another method on its own `self` inside an inlined body
+class Pair private (private a: number, private b: number)
+    public function new(a: number, b: number): Pair
+        return Pair(a, b)
+    end
+
+    public function first(self): number
+        return self.a
+    end
+
+    public function total(self): number
+        return self:first() + self.b
+    end
+end
+
+expectpass("nested method calls on an inlined self keep private access", function()
+    local p: Pair = Pair.new(3, 4)
+    assert(p:total() == 7)
+end)
+
+-- 12. inlining a function that contains a closure into a class method must not hand that closure's
+-- (shared) proto the class's private access: the closure is outside code wherever it is created
+local function makeSecretReader()
+    return function(o)
+        return o.secret
+    end
+end
+
+class Vault private (private secret: string)
+    public function new(): Vault
+        return Vault("hunter2")
+    end
+
+    public function touch(self): number
+        local _reader = makeSecretReader()
+        return 1
+    end
+end
+
+expectpass("a closure inlined into a class method doesn't gain private access elsewhere", function()
+    local v = Vault.new()
+    assert(v:touch() == 1)
+    local reader = makeSecretReader()
+    local ok, err = pcall(reader, v)
+    assert(not ok, "outside code read a private field")
+    assert(string.find(err, "private", 1, true), err)
+end)
+
+-- 13. a private method called through a typed receiver from outside the class must still raise: the call itself
+-- is the private access, so inlining it would skip the check (found by tests/classes_fuzz)
+class Guarded
+    public n: number
+
+    private function secret(self): number
+        return self.n
+    end
+end
+
+local function callSecret(g: Guarded): number
+    local r = g:secret()
+    return r
+end
+
+expectpass("a private method can't be called from outside through an inlined typed call", function()
+    local ok, err = pcall(callSecret, Guarded { n = 5 })
+    assert(not ok, "a private method was callable from outside at O2")
+    assert(string.find(err, "private", 1, true), err)
 end)
 
 return 'OK'

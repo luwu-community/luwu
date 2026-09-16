@@ -78,12 +78,23 @@ LuauClass* luaR_newclass(
     classdef->memberflags = memberflags;
     classdef->hasprivatemembers = false;
     classdef->hasconstmembers = false;
-    classdef->hasdefaultmembers = false;
     for (uint32_t i = 0; i < classdef->numberofallmembers; i++)
     {
         classdef->hasprivatemembers |= (memberflags[i] & LBC_CLASSMEMBER_PRIVATE) != 0;
         classdef->hasconstmembers |= (memberflags[i] & LBC_CLASSMEMBER_CONST) != 0;
-        classdef->hasdefaultmembers |= (memberflags[i] & LBC_CLASSMEMBER_HASDEFAULT) != 0;
+    }
+
+    // Calling `__init` on a constructed object would reassign its `const` fields, so a class with a
+    // `const` field makes its `__init` unreadable as a member (see LBC_CLASSMEMBER_INITBLOCKED). Every
+    // class has an `__init` member by now: a custom or primary one from the shape, or the default one the loader
+    // reserves. Setting `hasprivatemembers` routes every member read through luaR_checkprivateaccess,
+    // which is where the bit is enforced.
+    if (classdef->hasconstmembers)
+    {
+        const TValue* initoffset = luaH_getstr(memberstooffset, luaS_newlstr(L, "__init", 6));
+        LUAU_ASSERT(!ttisnil(initoffset));
+        memberflags[uint32_t(nvalue(initoffset))] |= LBC_CLASSMEMBER_INITBLOCKED;
+        classdef->hasprivatemembers = true;
     }
 
     return classdef;
@@ -126,6 +137,11 @@ static const Closure* luaR_callinglua(lua_State* L)
 
 void luaR_checkprivateaccess(lua_State* L, const TValue* key, const LuauClass* classdef, const Closure* cl, uint32_t offset)
 {
+    // Unlike `private`, this binds native code and the class's own methods too: the rule is that a
+    // constructed object's `const` fields are never reassigned, whoever would be doing it.
+    if (LUAU_UNLIKELY((classdef->memberflags[offset] & LBC_CLASSMEMBER_INITBLOCKED) != 0))
+        luaG_blockedinitaccesserror(L, classdef->name);
+
     if ((classdef->memberflags[offset] & LBC_CLASSMEMBER_PRIVATE) == 0)
         return;
 
@@ -143,16 +159,28 @@ void luaR_checkprivateaccess(lua_State* L, const TValue* key, const LuauClass* c
     luaG_privateaccesserror(L, key, classdef->name);
 }
 
+void luaR_checkprivateconstructor(lua_State* L, const LuauClass* classdef, const Closure* cl)
+{
+    if (!classdef->hascustominit || (classdef->memberflags[classdef->initoffset] & LBC_CLASSMEMBER_PRIVATE) == 0)
+        return;
+
+    // See luaR_checkprivateaccess for why native code is trusted.
+    if (!cl || cl->isC || luaR_closureownsprivateaccess(classdef, cl))
+        return;
+
+    TValue initname;
+    setsvalue(L, &initname, classdef->offsettomember[classdef->initoffset]);
+    luaG_privateaccesserror(L, &initname, classdef->name);
+}
+
 void luaR_checkconstassign(lua_State* L, const TValue* key, const LuauClass* classdef, const Closure* cl, uint32_t offset)
 {
     if ((classdef->memberflags[offset] & LBC_CLASSMEMBER_CONST) == 0)
         return;
 
-    // See luaR_checkprivateaccess: native code doing the assignment itself is trusted.
-    if (!cl || cl->isC)
-        return;
-
-    if (luaR_closureisinit(classdef, cl))
+    // Unlike `private`, native code is held to this too: `const` is a language guarantee, and nothing a
+    // C function does is construction (construction writes members directly, not through here).
+    if (cl && luaR_closureisinit(classdef, cl))
         return;
 
     luaG_constassignerror(L, key, classdef->name);
@@ -215,12 +243,17 @@ void luaR_addclassmember(lua_State* L, LuauClass* classdef, TString* name, TValu
         TValue* dest = luaH_setstr(L, classdef->instancemetatable, name);
         setobj2t(L, dest, value);
         luaC_barrier(L, classdef->instancemetatable, value);
+
+        // Nothing outside the VM can reach this table (getmetatable returns nil for objects), but it
+        // is the operator path's source of truth, so keep it locked like the class's own metatable.
+        // luaH_setstr above ignores `readonly`, so later metamethods of this class still land.
+        classdef->instancemetatable->readonly = true;
     }
 }
 
-// Initializes the class instance (object) with POD constructor, with L->base + 1 being the stack location we expect
+// Initializes the object with the POD constructor, with L->base + 1 being the stack location we expect
 // the user-provided table matching expected fields to values to be. Since classes can have 0 fields that need to be
-// initialized we also allow Class() here as well (if class actually had fields they will be nill)
+// initialized we also allow Class() here as well (if class actually had fields they will be nil)
 //
 // Field defaults come from one of two places: constant defaults are serialized into the class shape
 // and copied straight out of classdef->memberdefaults, while a class with any non-constant default
@@ -386,19 +419,13 @@ int luaR_createobject(lua_State* L)
     LuauClass* classdef = classvalue(L->base);
 
     // Ensure a private constructor is only callable from within its own class.
-    if (classdef->hascustominit && classdef->hasprivatemembers &&
-        (classdef->memberflags[classdef->initoffset] & LBC_CLASSMEMBER_PRIVATE))
-    {
-        // Construction happens on behalf of whoever called the class, so authority is the nearest Lua
-        // frame rather than the frame directly below: for `pcall(SomeClass, ...)` that frame is
-        // `pcall`, and a builtin is not authority for anything. Native code with no Lua frame under it
-        // at all is trusted, same as an access it performs itself.
-        const Closure* callercl = luaR_callinglua(L);
-
-        TValue initname;
-        setsvalue(L, &initname, classdef->offsettomember[classdef->initoffset]);
-        luaR_checkprivateaccess(L, &initname, classdef, callercl, classdef->initoffset);
-    }
+    //
+    // Construction happens on behalf of whoever called the class, so authority is the nearest Lua
+    // frame rather than the frame directly below: for `pcall(SomeClass, ...)` that frame is `pcall`,
+    // and a builtin is not authority for anything. Native code with no Lua frame under it at all is
+    // trusted, same as an access it performs itself.
+    if (classdef->hascustominit && classdef->hasprivatemembers)
+        luaR_checkprivateconstructor(L, classdef, luaR_callinglua(L));
 
     LuauObject* object = luaR_newobject(L, classdef);
     int numargs = lua_gettop(L);

@@ -410,7 +410,7 @@ struct NonStrictFunctionDefinitionError
 };
 
 // Accessing a `private` member of a user-defined class from outside of that class's own
-// definition block (see FFlag::DebugLuauUserDefinedClasses, FFlag::LuauBetterUserDefinedClasses).
+// definition block (see FFlag::DebugLuauUserDefinedClasses, FFlag::LuwuBetterUserDefinedClasses).
 struct PrivatePropertyAccess
 {
     TypeId table;
@@ -425,7 +425,7 @@ struct PrivatePropertyAccess
 
 // Calling `ClassName(...)` directly from outside the class's own definition block, when the
 // class's `__init` constructor is `private` (see FFlag::DebugLuauUserDefinedClasses,
-// FFlag::LuauBetterUserDefinedClasses).
+// FFlag::LuwuBetterUserDefinedClasses).
 struct PrivateConstructorAccess
 {
     TypeId classTy;
@@ -435,7 +435,7 @@ struct PrivateConstructorAccess
 
 // A field of a class with a primary constructor that nothing can ever initialize: the class body
 // gives it no default value, no parameter shares its name, and its type does not admit `nil`
-// (see FFlag::DebugLuauUserDefinedClasses, FFlag::LuauBetterUserDefinedClasses).
+// (see FFlag::DebugLuauUserDefinedClasses, FFlag::LuwuBetterUserDefinedClasses).
 struct UninitializableClassField
 {
     TypeId classTy;
@@ -446,12 +446,21 @@ struct UninitializableClassField
 
 // A class whose fields are all `private` and which has no functions: it can be constructed, but no
 // code can ever read or write what it holds (see FFlag::DebugLuauUserDefinedClasses,
-// FFlag::LuauBetterUserDefinedClasses).
+// FFlag::LuwuBetterUserDefinedClasses).
 struct UnusableClass
 {
     TypeId classTy;
 
     bool operator==(const UnusableClass& rhs) const;
+};
+
+// A class whose constructor is private (a `private` primary constructor or `private function __init`) and that
+// never calls it from its own body: nothing can ever create an instance (rfcs/classes.md).
+struct UninstantiableClass
+{
+    TypeId classTy;
+
+    bool operator==(const UninstantiableClass& rhs) const;
 };
 
 struct PropertyAccessViolation
@@ -469,7 +478,7 @@ struct PropertyAccessViolation
 };
 
 // Assigning to a `const` member of a user-defined class from outside of that class's own
-// `__init` constructor (see FFlag::DebugLuauUserDefinedClasses, FFlag::LuauBetterUserDefinedClasses).
+// `__init` constructor (see FFlag::DebugLuauUserDefinedClasses, FFlag::LuwuBetterUserDefinedClasses).
 struct ConstPropertyAssignment
 {
     TypeId table;
@@ -733,7 +742,8 @@ using TypeErrorData = Variant<
     UnappliedTypeFunction,
     InstantiateGenericsOnNonFunction,
     TypeInstantiationCountMismatch,
-    AmbiguousFunctionCall>;
+    AmbiguousFunctionCall,
+    UninstantiableClass>;
 
 struct TypeErrorSummary
 {

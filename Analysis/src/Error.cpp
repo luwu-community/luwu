@@ -10,6 +10,7 @@
 #include "Luau/Type.h"
 #include "Luau/TypeChecker2.h"
 #include "Luau/TypeFunction.h"
+#include "Luau/TypeUtils.h"
 
 #include <optional>
 #include <string>
@@ -706,7 +707,14 @@ struct ErrorConverter
             {
                 result += "operand of type " + Luau::toString(tfit->typeArguments[0]);
 
-                if (tfit->function->name != "not")
+                // `nil` never carries a metamethod, so an operand that could be `nil` is the reason
+                // the operator failed, and the one the reader can do something about. Pointing at a
+                // missing `__unm` instead sends them looking at the wrong type.
+                std::optional<std::string> nilClause = describeOptionalOperands(tfit->typeArguments[0], std::nullopt);
+
+                if (nilClause)
+                    result += "; " + *nilClause;
+                else if (tfit->function->name != "not")
                     result += "; there is no corresponding overload for __" + tfit->function->name;
             }
             else
@@ -736,10 +744,16 @@ struct ErrorConverter
         {
             std::string result = "Operator '" + std::string(binaryString->second) + "' could not be applied to operands of types ";
 
+            // Set in the two-operand case below: names the operands that could be `nil`. See
+            // describeOptionalOperands.
+            std::optional<std::string> nilClause;
+
             if (tfit->typeArguments.size() == 2 && tfit->packArguments.empty())
             {
                 // this is the expected case.
                 result += Luau::toString(tfit->typeArguments[0]) + " and " + Luau::toString(tfit->typeArguments[1]);
+
+                nilClause = describeOptionalOperands(tfit->typeArguments[0], tfit->typeArguments[1]);
             }
             else
             {
@@ -759,7 +773,15 @@ struct ErrorConverter
                     result += ", " + Luau::toString(packArg);
             }
 
-            result += "; there is no corresponding overload for __" + tfit->function->name;
+            // `number? + number?` has a perfectly good `__add`; what it does not have is a guarantee
+            // that either side is there. Naming the metamethod as well would send the reader after a
+            // second, often imaginary problem -- `string? .. number` concatenates fine once the `nil`
+            // is gone -- so when an operand could be `nil`, that is the whole message. A genuine
+            // second mismatch surfaces on the next check, once the `nil` is handled.
+            if (nilClause)
+                result += "; " + *nilClause;
+            else
+                result += "; there is no corresponding overload for __" + tfit->function->name;
 
             return result;
         }
@@ -881,6 +903,12 @@ struct ErrorConverter
     std::string operator()(const UnusableClass& e) const
     {
         return "This class cannot be used because it only has private fields";
+    }
+
+    std::string operator()(const UninstantiableClass& e) const
+    {
+        return "This class can never be instantiated because its constructor is private and is never called; did you mean to return "
+               "an instance of this class from a `public function` instead? Call the constructor to silence";
     }
 
     std::string operator()(const PrivateConstructorAccess& e) const
@@ -1202,6 +1230,11 @@ bool UninitializableClassField::operator==(const UninitializableClassField& rhs)
 }
 
 bool UnusableClass::operator==(const UnusableClass& rhs) const
+{
+    return classTy == rhs.classTy;
+}
+
+bool UninstantiableClass::operator==(const UninstantiableClass& rhs) const
 {
     return classTy == rhs.classTy;
 }
@@ -1763,6 +1796,8 @@ void copyError(T& e, TypeArena& destArena, CloneState& cloneState)
     else if constexpr (std::is_same_v<T, UninitializableClassField>)
         e.classTy = clone(e.classTy);
     else if constexpr (std::is_same_v<T, UnusableClass>)
+        e.classTy = clone(e.classTy);
+    else if constexpr (std::is_same_v<T, UninstantiableClass>)
         e.classTy = clone(e.classTy);
     else if constexpr (std::is_same_v<T, CheckedFunctionIncorrectArgs>)
     {

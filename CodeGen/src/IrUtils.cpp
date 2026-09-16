@@ -296,6 +296,7 @@ IrValueKind getCmdValueKind(IrCmd cmd)
         return IrValueKind::Int;
     case IrCmd::NEW_TABLE:
     case IrCmd::DUP_TABLE:
+    case IrCmd::NEW_OBJECT:
         return IrValueKind::Pointer;
     case IrCmd::TRY_NUM_TO_INDEX:
         return IrValueKind::Int;
@@ -351,6 +352,7 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::CHECK_NODE_NO_NEXT:
     case IrCmd::CHECK_NODE_VALUE:
     case IrCmd::CHECK_OBJECT_CLASS:
+    case IrCmd::CHECK_CLASS_FIELDS_CONSTRUCTIBLE:
     case IrCmd::CHECK_BUFFER_LEN:
     case IrCmd::CHECK_BUFFER_MUTABLE:
     case IrCmd::CHECK_USERDATA_TAG:

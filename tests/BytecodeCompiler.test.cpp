@@ -17,7 +17,7 @@ using namespace Luau;
 using namespace Luau::Bytecode;
 
 LUAU_FASTFLAG(LuauEmitCallFeedback)
-LUAU_FASTFLAG(LuauBetterUserDefinedClasses)
+LUAU_FASTFLAG(LuwuBetterUserDefinedClasses)
 
 namespace
 {
@@ -998,7 +998,7 @@ TEST_CASE_FIXTURE(BytecodeCompilerFixture, "classes_bytecode_roundtrips")
 {
 
     ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
-    ScopedFastFlag better{FFlag::LuauBetterUserDefinedClasses, true};
+    ScopedFastFlag better{FFlag::LuwuBetterUserDefinedClasses, true};
 
     checkRoundtrip(R"(
         class Point

@@ -43,7 +43,7 @@ LUAU_FASTINTVARIABLE(LuauPrimitiveInferenceInTableLimit, 500)
 LUAU_FASTFLAGVARIABLE(LuauDisallowRedefiningBuiltinTypes)
 LUAU_FASTFLAG(LuauTypeFunctionStructuredErrors)
 LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
-LUAU_FASTFLAG(LuauBetterUserDefinedClasses)
+LUAU_FASTFLAG(LuwuBetterUserDefinedClasses)
 LUAU_FASTFLAGVARIABLE(LuauTidyTypePrototyping)
 LUAU_FASTFLAGVARIABLE(LuauDoNotEmplaceAnnotatedType)
 LUAU_FASTFLAGVARIABLE(LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier)
@@ -1049,7 +1049,7 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
             // generics (e.g. the `T` in `class Box<T> ... end`) resolve correctly. See the
             // equivalent handling for `declare extern type` above.
             ScopePtr defnScope = scope;
-            if (FFlag::LuauBetterUserDefinedClasses && FFlag::LuwuGenericNominals)
+            if (FFlag::LuwuBetterUserDefinedClasses && FFlag::LuwuGenericNominals)
             {
                 defnScope = childScope(classDecl, scope);
                 astClassDefiningScopes[classDecl] = defnScope;
@@ -1058,7 +1058,7 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
             // Objects are ExternTypes, where the metatable field represents the metamethods associated with the instance, ** not ** the class itself.
             // Class: ExternType { props, parent: top class type, metatable: {__call -- this lets it be called as a constructor } }
             // Object: ExternType { props, parent: top object type for now, metatable: instance metamethods }
-            // TODO: we should add a direct reference to the `class` on the `object` type (probably useful for classof)
+            // TODO: we should add a direct reference to the `class` on the `object` type (probably useful for class.of)
             TableType::Props staticProps;
             ExternType::Props props;
             TableType::Props instanceMetatableProps;
@@ -1075,8 +1075,8 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
             // property either has a default value or there are no properties at all.
             bool anyRequiredCtorArg = false;
 
-            // Luwu Classes (rfcs/classes.md): a primary constructor's parameters each declare a public
-            // field, unless the class body restates the parameter -- in which case the restatement is
+            // Luwu Classes (rfcs/classes.md): a primary constructor's parameters each declare a field
+            // (public and mutable unless qualified), unless the class body restates the parameter -- in which case the restatement is
             // the declaration, and carries the access specifier and modifiers. The constructor's own
             // type is built from the parameters in the second pass, once their annotations can be
             // resolved; see visit(AstStatClass*).
@@ -1108,7 +1108,7 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
                             // we'll ICE or misbehave.
                             p = Property::rw(propertyType);
                             p.location = classProp.nameLocation;
-                            if (FFlag::DebugLuauUserDefinedClasses && FFlag::LuauBetterUserDefinedClasses)
+                            if (FFlag::DebugLuauUserDefinedClasses && FFlag::LuwuBetterUserDefinedClasses)
                             {
                                 p.isPrivate = classProp.visibility == AstClassMemberVisibility::Private;
                                 p.isConst = classProp.isConst;
@@ -1139,7 +1139,7 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
 
                             auto prop = Property::readonly(propertyType);
                             prop.location = method.nameLocation;
-                            if (FFlag::DebugLuauUserDefinedClasses && FFlag::LuauBetterUserDefinedClasses)
+                            if (FFlag::DebugLuauUserDefinedClasses && FFlag::LuwuBetterUserDefinedClasses)
                                 prop.isPrivate = method.visibility == AstClassMemberVisibility::Private;
                             if (method.function->args.size < 1 || method.function->args.data[0]->name != "self" ||
                                 method.functionName == "__init")
@@ -1176,7 +1176,7 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
                     p = Property::rw(propertyType);
                     p.location = param->location;
 
-                    if (FFlag::DebugLuauUserDefinedClasses && FFlag::LuauBetterUserDefinedClasses &&
+                    if (FFlag::DebugLuauUserDefinedClasses && FFlag::LuwuBetterUserDefinedClasses &&
                         classDecl->primaryConstructor->argsQualifiers.size == classDecl->primaryConstructor->args.size)
                     {
                         const AstClassPrimaryConstructorParamQualifiers& qualifiers = classDecl->primaryConstructor->argsQualifiers.data[i];
@@ -1206,14 +1206,14 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
 
             std::vector<GenericTypeDefinition> classTypeParams;
             std::vector<GenericTypePackDefinition> classTypePackParams;
-            if (FFlag::LuauBetterUserDefinedClasses && FFlag::LuwuGenericNominals)
+            if (FFlag::LuwuBetterUserDefinedClasses && FFlag::LuwuGenericNominals)
             {
                 for (const auto& [name, gen] : createGenerics(defnScope, classDecl->generics, /* useCache */ true, /* addTypes */ false))
                     classTypeParams.push_back(gen);
                 for (const auto& [name, genPack] : createGenericPacks(defnScope, classDecl->genericPacks, /* useCache */ true, /* addTypes */ false))
                     classTypePackParams.push_back(genPack);
 
-                // Methods implicitly take `self`, typed as the bare class instance type
+                // Methods implicitly take `self`, typed as the bare object type
                 // (classInstanceTy). For a generic class, `self` needs to be `Box<T>` (applied to
                 // the class's own generics), not the bare, unparameterized `Box` -- otherwise
                 // calling a method on `Box<number>` fails to match against `self`, since neither
@@ -1256,10 +1256,10 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
                 staticProps["__init"] = initProp;
             }
 
-            // If the class defines a custom `__init`, the constructor's real
-            // signature isn't known until `__init`'s own signature has been
-            // checked (see the `AstClassMethod` visitor below), so we leave
-            // this blocked for now.
+            // If the class defines a custom `__init` or a primary constructor,
+            // the constructor's real signature isn't known until `__init`'s
+            // signature or the parameters' annotations have been resolved (see
+            // visit(AstStatClass*)), so we leave this blocked for now.
             TypeId ctorTy;
             if (hasCustomInit)
             {
@@ -2189,11 +2189,22 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatIf* ifState
 
 void ConstraintGenerator::resolveGenericDefaultParameters(const ScopePtr& defnScope, AstStatTypeAlias* alias, const TypeFun& fun)
 {
-    LUAU_ASSERT(alias->generics.size == fun.typeParams.size());
-    for (size_t i = 0; i < alias->generics.size; i++)
+    resolveGenericDefaultParameters(defnScope, alias->generics, alias->genericPacks, fun.typeParams, fun.typePackParams);
+}
+
+void ConstraintGenerator::resolveGenericDefaultParameters(
+    const ScopePtr& defnScope,
+    AstArray<AstGenericType*> generics,
+    AstArray<AstGenericTypePack*> genericPacks,
+    const std::vector<GenericTypeDefinition>& typeParams,
+    const std::vector<GenericTypePackDefinition>& typePackParams
+)
+{
+    LUAU_ASSERT(generics.size == typeParams.size());
+    for (size_t i = 0; i < generics.size; i++)
     {
-        auto astTy = alias->generics.data[i];
-        auto param = fun.typeParams[i];
+        auto astTy = generics.data[i];
+        auto param = typeParams[i];
         if (param.defaultValue && astTy->defaultValue != nullptr)
         {
             auto resolvesTo = astTy->defaultValue;
@@ -2203,11 +2214,11 @@ void ConstraintGenerator::resolveGenericDefaultParameters(const ScopePtr& defnSc
         defnScope->privateTypeBindings[astTy->name.value] = TypeFun{param.ty};
     }
 
-    LUAU_ASSERT(alias->genericPacks.size == fun.typePackParams.size());
-    for (size_t i = 0; i < alias->genericPacks.size; i++)
+    LUAU_ASSERT(genericPacks.size == typePackParams.size());
+    for (size_t i = 0; i < genericPacks.size; i++)
     {
-        auto astPack = alias->genericPacks.data[i];
-        auto param = fun.typePackParams[i];
+        auto astPack = genericPacks.data[i];
+        auto param = typePackParams[i];
         if (param.defaultValue && astPack->defaultValue != nullptr)
         {
             auto resolvesTo = astPack->defaultValue;
@@ -2456,21 +2467,15 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatDeclareExte
     // resolving to an unrelated same-named generic elsewhere in the file.
     if (FFlag::LuwuGenericNominals)
     {
-        LUAU_ASSERT(declaredExternType->generics.size == bindingIt->second.typeParams.size());
-        for (size_t i = 0; i < declaredExternType->generics.size; ++i)
-        {
-            AstGenericType* astTy = declaredExternType->generics.data[i];
-            const GenericTypeDefinition& param = bindingIt->second.typeParams[i];
-            bodyScope->privateTypeBindings[astTy->name.value] = TypeFun{param.ty};
-        }
-
-        LUAU_ASSERT(declaredExternType->genericPacks.size == bindingIt->second.typePackParams.size());
-        for (size_t i = 0; i < declaredExternType->genericPacks.size; ++i)
-        {
-            AstGenericTypePack* astPack = declaredExternType->genericPacks.data[i];
-            const GenericTypePackDefinition& param = bindingIt->second.typePackParams[i];
-            bodyScope->privateTypePackBindings[astPack->name.value] = param.tp;
-        }
+        // This also resolves any defaults the parameter list was written with
+        // (`declare extern type Box<T = string> with ... end`).
+        resolveGenericDefaultParameters(
+            bodyScope,
+            declaredExternType->generics,
+            declaredExternType->genericPacks,
+            bindingIt->second.typeParams,
+            bindingIt->second.typePackParams
+        );
 
         // Methods implicitly take `self`, typed below as the bare extern type (externTy). For a
         // generic extern type, `self` needs to be `Box<T>` (applied to the type's own generics),
@@ -2710,26 +2715,15 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatClass* stat
     // (rather than the enclosing scope), so that references to the class's own generics (e.g. the
     // `T` in `class Box<T> ... end`) resolve to these type-level generics.
     ScopePtr bodyScope = scope;
-    if (FFlag::LuauBetterUserDefinedClasses && FFlag::LuwuGenericNominals)
+    if (FFlag::LuwuBetterUserDefinedClasses && FFlag::LuwuGenericNominals)
     {
         if (ScopePtr* defnScopePtr = astClassDefiningScopes.find(statClass))
             bodyScope = *defnScopePtr;
 
-        LUAU_ASSERT(statClass->generics.size == classDeclRecord->typeParams.size());
-        for (size_t i = 0; i < statClass->generics.size; ++i)
-        {
-            AstGenericType* astTy = statClass->generics.data[i];
-            const GenericTypeDefinition& param = classDeclRecord->typeParams[i];
-            bodyScope->privateTypeBindings[astTy->name.value] = TypeFun{param.ty};
-        }
-
-        LUAU_ASSERT(statClass->genericPacks.size == classDeclRecord->typePackParams.size());
-        for (size_t i = 0; i < statClass->genericPacks.size; ++i)
-        {
-            AstGenericTypePack* astPack = statClass->genericPacks.data[i];
-            const GenericTypePackDefinition& param = classDeclRecord->typePackParams[i];
-            bodyScope->privateTypePackBindings[astPack->name.value] = param.tp;
-        }
+        // This also resolves any defaults the parameter list was written with (`class Box<T = string>`).
+        resolveGenericDefaultParameters(
+            bodyScope, statClass->generics, statClass->genericPacks, classDeclRecord->typeParams, classDeclRecord->typePackParams
+        );
     }
 
     // Luwu Classes (rfcs/classes.md): a primary constructor's parameters are in scope for the class's
@@ -2819,7 +2813,7 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatClass* stat
                     // value expression (if any) rather than falling back to `any`. When there IS
                     // an annotation, the property keeps that type, but the default value must
                     // still be checked against it (mirrors default function argument checking
-                    // above in checkFunctionSignature).
+                    // in checkFunctionSignature).
                     TypeId target;
                     if (classProp.ty)
                     {
@@ -2875,7 +2869,7 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatClass* stat
 
                     if (method.functionName == "__init")
                     {
-                        if (FFlag::DebugLuauUserDefinedClasses && FFlag::LuauBetterUserDefinedClasses)
+                        if (FFlag::DebugLuauUserDefinedClasses && FFlag::LuwuBetterUserDefinedClasses)
                         {
                             if (ExternType* classInstanceEtv = getMutable<ExternType>(follow(classDeclRecord->ty)))
                                 classInstanceEtv->initLocation = method.function->location;

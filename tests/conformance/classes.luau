@@ -84,42 +84,42 @@ expectfail("class_second_arg_is_not_classobject", "invalid argument #2 to 'isins
     class.isinstance(Point({x = 1, y = 2}), "not a class")
 end)
 
-expectfail("classof raises on missing first argument", "missing argument #1", function()
+expectfail("class.of raises on missing first argument", "missing argument #1", function()
     class.isinstance()
 end)
 
-expectfail("classof raises on missing second argument", "missing argument #2", function()
+expectfail("class.of raises on missing second argument", "missing argument #2", function()
     class.isinstance(nil)
 end)
 
-expectpass("classof returns nil for non-classinstance values", function()
-    assert(class.classof(nil) == nil)
-    assert(class.classof(false) == nil)
-    assert(class.classof(42) == nil)
-    assert(class.classof("hello") == nil)
-    assert(class.classof({}) == nil)
-    -- A class object is not itself a class instance.
-    assert(class.classof(Point) == nil)
+expectpass("class.of returns nil for values that are not objects", function()
+    assert(class.of(nil) == nil)
+    assert(class.of(false) == nil)
+    assert(class.of(42) == nil)
+    assert(class.of("hello") == nil)
+    assert(class.of({}) == nil)
+    -- A class is not itself an object.
+    assert(class.of(Point) == nil)
 end)
 
-expectfail("classof raises on missing argument", "missing argument #1", function()
-    class.classof()
+expectfail("class.of raises on missing argument", "missing argument #1", function()
+    class.of()
 end)
 
-expectpass("classof returns the class object for a class instance", function()
+expectpass("class.of returns the class of an object", function()
     local p = Point { x = 1, y = 2 }
-    local c = class.classof(p)
+    local c = class.of(p)
     assert(c == Point)
     assert(typeof(c) == "class")
 end)
 
-expectpass("classof result is usable as the second arg to isinstance", function()
+expectpass("class.of result is usable as the second arg to isinstance", function()
     local p = Point { x = 3, y = 4 }
     local notAPoint = NotAPoint ({ x = 1 })
-    -- classof(notAPoint) is NotAPoint, so a Point instance is not an instance of it.
-    assert(not class.isinstance(p, class.classof(notAPoint)))
-    -- classof(p) is Point, so p is an instance of it.
-    assert(class.isinstance(p, class.classof(p)))
+    -- class.of(notAPoint) is NotAPoint, so a Point instance is not an instance of it.
+    assert(not class.isinstance(p, class.of(notAPoint)))
+    -- class.of(p) is Point, so p is an instance of it.
+    assert(class.isinstance(p, class.of(p)))
 end)
 
 expectpass("basic printing", function ()
@@ -169,7 +169,7 @@ expectpass("classobject no construction arg", function ()
     assert(not p.x and not p.y)
 end)
 
-expectpass("classinstance basics", function()
+expectpass("object basics", function()
     local p = Point({ x = 3, y = 4 })
     assert(p.x == 3 and p.y == 4)
     assert(p:magnitude() == 5)
@@ -182,41 +182,41 @@ expectpass("classinstance basics", function()
     assert(not success)
 end)
 
-expectpass("classinstance mutable", function ()
+expectpass("object mutable", function ()
     local p = Point()
     p.x = 84
     p.y = 13
     assert(p:magnitude() == 85)
 end)
 
-expectpass("classinstance pcall method", function()
+expectpass("object pcall method", function()
     local p = Point({ x = 1, y = 2})
     local success, msg = pcall(Point.asserttriple, p)
     assert(not success, "Expected pcall to fail")
     assert(msg:match("Not a pythagorean triple!"), `Message was: {msg}`)
 end)
 
-expectfail("classinstance assign nonexistent field", "objects of class 'Point' do not have a field named 'huh'", function()
+expectfail("object assign nonexistent field", "objects of class 'Point' do not have a field named 'huh'", function()
     local p = Point({ x = 3, y = 4 })
     p.huh = "???"
 end)
 
-expectfail("classinstance get nonexistent field", "objects of class 'Point' do not have a field named 'huh'", function()
+expectfail("object get nonexistent field", "objects of class 'Point' do not have a field named 'huh'", function()
     local p = Point {}
     print(p.huh)
 end)
 
-expectfail("classinstance assign method", "attempt to index object with 'zero'", function()
+expectfail("object assign method", "attempt to index object with 'zero'", function()
     local p = Point({ x = 3, y = 4 })
     p.zero = "???"
 end)
 
-expectfail("classinstance call missing method", "objects of class 'Point' do not have a field named 'hmm'", function()
+expectfail("object call missing method", "objects of class 'Point' do not have a field named 'hmm'", function()
     local p = Point {}
     print(p:hmm())
 end)
 
-expectpass("classinstance dynamic lookup", function ()
+expectpass("object dynamic lookup", function ()
     local p = Point { x = 42, y = 13 }
     local function getfield(s)
         return p[s]
@@ -224,7 +224,7 @@ expectpass("classinstance dynamic lookup", function ()
     assert(getfield("x") == 42)
 end)
 
-expectpass("classinstance operator overloads", function ()
+expectpass("object operator overloads", function ()
     local p1 = Point { x = 1, y = 4 }
     local p2 = Point { x = 2, y = 5 }
     local p3 = p1 + p2
@@ -233,7 +233,7 @@ expectpass("classinstance operator overloads", function ()
     assert(p4.x == 2 and p4.y == 20)
 end)
 
-expectpass("classinstance partially constructed class", function ()
+expectpass("object partially constructed class", function ()
     local p = Point { y = 99 }
     assert(not p.x and p.y == 99)
     p.x = 20
@@ -261,7 +261,7 @@ class Secret
     end
 end
 
-expectpass("classinstance more operator overloads", function()
+expectpass("object more operator overloads", function()
     local s1 = Secret.make("I am the ")
     local s2 = Secret.make("modren man!")
     local s3 = s1 .. s2
@@ -288,7 +288,7 @@ class Counter
     end
 end
 
-expectpass("classinstance upvalues", function()
+expectpass("object upvalues", function()
     local c1 = Counter.make()
     assert(c1.count == 1)
     local c2 = Counter.make()
@@ -323,19 +323,19 @@ expectpass("classes use __eq", function ()
     assert(p1 ~= Point.zero())
 end)
 
-expectpass("classinstance __tostring", function ()
+expectpass("object __tostring", function ()
     local p = Point { x = 3, y = 4 }
     assert(tostring(p) == "Point(x=3, y=4)")
     assert(`{p}` == "Point(x=3, y=4)")
 end)
 
-expectpass("classinstance __tostring reflects properties", function ()
+expectpass("object __tostring reflects properties", function ()
     local p = Point { x = 10, y = 20 }
     p.x = 99
     assert(tostring(p) == "Point(x=99, y=20)")
 end)
 
-expectpass("classinstance without __tostring uses default format", function ()
+expectpass("object without __tostring uses default format", function ()
     local b = Box { item = "sword" }
     local s = tostring(b)
     assert(string.match(s, "^object:") ~= nil, `expected default format, got: {s}`)
@@ -352,7 +352,7 @@ class BadToString
     end
 end
 
-expectfail("classinstance __tostring must return string", "'__tostring' must return a string", function ()
+expectfail("object __tostring must return string", "'__tostring' must return a string", function ()
     tostring(BadToString {})
 end)
 
@@ -462,7 +462,7 @@ expectpass("type reports 'class' for class objects", function()
     assert(typeof(Cls) == "class", `expected typeof(Cls) == "class", got {typeof(Cls)}`)
 end)
 
-expectpass("type reports 'object' for class instances", function()
+expectpass("type reports 'object' for objects", function()
     local inst = Cls {}
     assert(type(inst) == "object", `expected type(inst) == "object", got {type(inst)}`)
     assert(typeof(inst) == "object", `expected typeof(inst) == "object", got {typeof(inst)}`)
@@ -1130,7 +1130,7 @@ end)
 expectpass("inlining: a typed-receiver obj:method() that yields resumes correctly", function()
     local function consume(y: YieldGen): number
         local acc = 0
-        acc += y:step(1) -- cross-function inline of an all-public class method that yields
+        acc += y:step(1) -- cross-function inline of a class method that yields
         acc += y:step(2)
         return acc
     end
@@ -1549,7 +1549,8 @@ end)
 
 -- A call whose callee is a statically resolved class using the default constructor is compiled to a
 -- single NEWOBJECT, bypassing the class's __call metamethod and its C constructor. Classes that need
--- a real call -- a user `__init`, or non-constant defaults behind `__defaults` -- must still get one.
+-- a call -- a user `__init` (NEWOBJECT then CALL, below), or non-constant defaults behind `__defaults`
+-- (through `__call`) -- must still get one.
 class NewObj
     public x: number = 1
     public y: number = 2
@@ -1864,7 +1865,7 @@ expectpass("a primary constructor initializes a field per parameter", function()
     assert(cat.name == "Taz")
     assert(cat.age == 14)
     assert(cat:describe() == "Taz is 14")
-    assert(class.classof(cat) == PrimaryCat)
+    assert(class.of(cat) == PrimaryCat)
 end)
 
 expectpass("a primary constructor works when the class isn't statically resolved", function()
@@ -1997,6 +1998,16 @@ end)
 
 expectfail("... that is still const", "'inner' is a const member of 'PrimaryNonNegative'", function()
     PrimaryNonNegative(1).inner = 2
+end)
+
+class PrimaryConstSelfWrite(public const hash: number)
+    public function rehash(self)
+        self.hash = 6
+    end
+end
+
+expectfail("a const parameter field is still const through a method's own `self`", "'hash' is a const member of 'PrimaryConstSelfWrite'", function()
+    PrimaryConstSelfWrite(1):rehash()
 end)
 
 -- any expression may be applied to a parameter by restating it
@@ -2133,10 +2144,10 @@ expectpass("a primary constructor with no parameters", function()
 end)
 
 --
--- A C function is never an authority for private access. Everything a default embedding exposes to
--- Luwu code -- pcall, xpcall, a coroutine body, a table.sort comparator, a string.gsub callback --
--- runs with a Lua frame below it, and the check looks through the C frames to find it. Only the
--- embedder's own C API calls, which have no Lua frame at all, still bypass.
+-- A builtin never lends its C frame to the Luwu code it runs. A private constructor called through
+-- pcall, xpcall or a coroutine is checked against the nearest Lua frame, and a table.sort comparator
+-- or string.gsub callback is a Lua closure checked like any other. Only native code performing the
+-- access itself bypasses `private` (see the last test).
 --
 
 class PrivateBypass private (secret: string)
@@ -2294,6 +2305,226 @@ end
 
 expectpass("a field initializer that captures an upvalue still constructs", function()
     assert(PrimaryInlineCapture(3).scaled == 30)
+end)
+
+-- Calling `__init` on a constructed object would reassign its `const` fields, so a class with any
+-- `const` field makes its `__init` unreadable as a member, from anywhere. Construction never reads it by
+-- name and is unaffected. See rfcs/classes.md.
+
+class ConstInit
+    public const id: number
+    public label: string
+
+    public function __init(self, id: number, label: string)
+        self.id = id
+        self.label = label
+    end
+
+    public function reinit(self)
+        self:__init(99, "again")
+    end
+end
+
+class ConstPod
+    const id: number
+    label: string
+end
+
+class ConstPrimary(const id: number, label: string) end
+
+local BLOCKED_INIT = "'__init' of 'ConstInit' cannot be accessed or called explicitly because ConstInit has const fields"
+
+expectpass("a class with const fields still constructs through every constructor form", function()
+    local a = ConstInit(1, "a")
+    assert(a.id == 1 and a.label == "a")
+    local b = ConstPod { id = 2, label = "b" }
+    assert(b.id == 2 and b.label == "b")
+    local c = ConstPrimary(3, "c")
+    assert(c.id == 3 and c.label == "c")
+    local alias = ConstInit
+    assert(alias(4, "d").id == 4)
+    local ok, e = pcall(ConstInit, 5, "e")
+    assert(ok and e.id == 5)
+end)
+
+expectfail("__init with const fields cannot be called as a method", BLOCKED_INIT, function()
+    ConstInit(1, "a"):__init(2, "b")
+end)
+
+expectfail("__init with const fields cannot be read off the class", BLOCKED_INIT, function()
+    return ConstInit.__init
+end)
+
+expectfail("__init with const fields cannot be read off an object", BLOCKED_INIT, function()
+    return ConstInit(1, "a").__init
+end)
+
+expectfail("__init with const fields cannot be called from inside the class either", BLOCKED_INIT, function()
+    ConstInit(1, "a"):reinit()
+end)
+
+expectfail("__init with const fields cannot be read through a dynamic key", BLOCKED_INIT, function()
+    local key = "__" .. "init"
+    return ConstInit[key]
+end)
+
+expectfail(
+    "a default __init is blocked on a POD class with const fields",
+    "'__init' of 'ConstPod' cannot be accessed or called explicitly because ConstPod has const fields",
+    function()
+        ConstPod { id = 1, label = "a" }:__init { id = 2 }
+    end
+)
+
+expectfail(
+    "a primary constructor's __init is blocked when it has const parameters",
+    "'__init' of 'ConstPrimary' cannot be accessed or called explicitly because ConstPrimary has const fields",
+    function()
+        ConstPrimary(1, "a"):__init(2, "b")
+    end
+)
+
+expectfail("native code cannot read a blocked __init either", BLOCKED_INIT, function()
+    pluginReadMember(ConstInit, "__init")
+end)
+
+expectpass("__init stays callable on classes without const fields", function()
+    local p = PointNoInit { x = 1, y = 2 }
+    p:__init { x = 3, y = 4 }
+    assert(p.x == 3 and p.y == 4)
+end)
+
+expectpass("getmetatable returns nil for classes and objects, even with metamethods", function()
+    assert(getmetatable(Point) == nil)
+    assert(getmetatable(Point { x = 1, y = 2 }) == nil)
+    local gm = getmetatable -- not a fastcall
+    assert(gm(Point) == nil)
+    assert(gm(Point { x = 1, y = 2 }) == nil)
+end)
+
+expectpass("metamethods still apply without an exposed metatable", function()
+    local p = Point { x = 1, y = 2 }
+    assert(tostring(p) == "Point(x=1, y=2)")
+    assert((p + p).x == 2)
+    assert(p == Point { x = 1, y = 2 })
+end)
+
+expectfail("setmetatable raises on an object", "invalid argument #1 to 'setmetatable' (table expected, got object)", function()
+    setmetatable(Point { x = 1, y = 2 }, {})
+end)
+
+expectpass("class.name returns the declared name of a class or object's class", function()
+    assert(class.name(Point) == "Point")
+    assert(class.name(Point { x = 1, y = 2 }) == "Point")
+    assert(class.name(ConstPrimary(1, "a")) == "ConstPrimary")
+end)
+
+expectfail("class.name raises on a value that is not a class or object", "invalid argument #1 to 'name' (class or object expected, got table)", function()
+    class.name({})
+end)
+
+expectfail("class.name raises on a missing argument", "missing argument #1 to 'name' (class or object expected)", function()
+    class.name()
+end)
+
+-- The C API surface for classes; the plugin* helpers are C functions registered by Conformance.test.cpp.
+
+expectfail(
+    "lua_setfield raises on a const field",
+    "'id' is a const member of 'ConstInit' and cannot be assigned outside ConstInit's '__init' constructor",
+    function()
+        pluginWriteMember(ConstInit(1, "a"), "id", 2)
+    end
+)
+
+expectpass("lua_setfield writes non-const fields, private ones included", function()
+    local v = ConstInit(1, "a")
+    pluginWriteMember(v, "label", "b")
+    assert(v.label == "b")
+    local u = UserWithInit("a", "b", "c")
+    pluginWriteMember(u, "ssn", "d")
+    assert(u:reveal_ssn() == "d")
+end)
+
+expectfail("lua_setfield raises on a method of an object", "attempt to index object with 'reinit'", function()
+    pluginWriteMember(ConstInit(1, "a"), "reinit", function() end)
+end)
+
+expectfail("lua_setfield raises on a method of a class", "attempt to index class with 'reinit'", function()
+    pluginWriteMember(ConstInit, "reinit", function() end)
+end)
+
+expectfail("lua_setmetatable raises on an object", "cannot set the metatable of a object", function()
+    pluginSetMetatable(Point { x = 1, y = 2 })
+end)
+
+expectfail("lua_setmetatable raises on a class", "cannot set the metatable of a class", function()
+    pluginSetMetatable(Point)
+end)
+
+expectpass("lua_getmetatable pushes nothing for classes and objects", function()
+    assert(pluginGetMetatable(Point) == false)
+    assert(pluginGetMetatable(Point { x = 1, y = 2 }) == false)
+    assert(pluginGetMetatable(setmetatable({}, {})) == true)
+end)
+
+expectpass("lua_newobject constructs through every constructor form", function()
+    local a = pluginNewObject(ConstInit, 1, "a")
+    assert(class.of(a) == ConstInit and a.id == 1 and a.label == "a")
+    local b = pluginNewObject(ConstPod, { id = 2, label = "b" })
+    assert(class.of(b) == ConstPod and b.id == 2 and b.label == "b")
+    local c = pluginNewObject(ConstPrimary, 3, "c")
+    assert(class.of(c) == ConstPrimary and c.id == 3 and c.label == "c")
+    assert(pluginNewObject(PointNoInit).x == nil)
+end)
+
+expectpass("lua_newobject may call a private constructor", function()
+    assert(pluginNewObject(Thingy, "meow").cat == "meow")
+end)
+
+class RaisingInit
+    public function __init(self)
+        error("boom from __init")
+    end
+end
+
+expectfail("lua_newobject raises what the constructor raises", "boom from __init", function()
+    pluginNewObject(RaisingInit)
+end)
+
+expectfail("lua_newobject raises on a value that is not a class", "attempt to construct a table value", function()
+    pluginNewObject({})
+end)
+
+expectpass("lua_getmemberaccess reports each member's access specifier", function()
+    assert(pluginMemberAccess(UserWithInit, "first_name") == "public")
+    assert(pluginMemberAccess(UserWithInit, "ssn") == "private")
+    assert(pluginMemberAccess(UserWithInit, "get_ssn") == "private")
+    assert(pluginMemberAccess(UserWithInit("a", "b", "c"), "name") == "public")
+    assert(pluginMemberAccess(UserWithInit, "nope") == "missing")
+    -- the block on reading `__init` is not an access specifier
+    assert(pluginMemberAccess(ConstInit, "__init") == "public")
+end)
+
+expectfail("lua_getmemberaccess raises on a value that is not a class or object", "expected a class or object, got number", function()
+    pluginMemberAccess(5, "x")
+end)
+
+expectpass("lua_ismemberconst reports const fields, and functions as const", function()
+    assert(pluginIsMemberConst(ConstInit, "id") == true)
+    assert(pluginIsMemberConst(ConstInit(1, "a"), "label") == false)
+    assert(pluginIsMemberConst(ConstInit, "reinit") == true)
+    assert(pluginIsMemberConst(ConstInit, "nope") == false)
+end)
+
+expectfail("lua_ismemberconst raises on a value that is not a class or object", "expected a class or object, got string", function()
+    pluginIsMemberConst("hi", "x")
+end)
+
+expectpass("lua_getclassname returns the class name, or nothing for other values", function()
+    assert(pluginClassName(ConstPrimary) == "ConstPrimary")
+    assert(pluginClassName(ConstPrimary(1, "a")) == "ConstPrimary")
+    assert(pluginClassName({}) == nil)
 end)
 
 return 'OK'

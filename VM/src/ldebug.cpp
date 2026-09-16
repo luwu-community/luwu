@@ -381,26 +381,19 @@ l_noret luaG_constassignerror(lua_State* L, const TValue* p2, const TString* cla
     luaG_runerrorL(L, "'%s' is a const member of '%s' and cannot be assigned outside %s's '__init' constructor", getstr(tsvalue(p2)), t1, t1);
 }
 
-// Luwu Classes (rfcs/classes.md): this is called when `self` (or the LHS) of a methodcall isn't 
-// actually an object of the class it's supposed to be.
-// 
-// `selfCall` means this function was called with `:` syntax. 
-// The only time `selfCall` is true is here is if we're in O2 and we've inlined a method body for a class that isn't `self`'s class.
-// This can be because `self` is annotated incorrectly or in the more common case that the wrong type of `self` was passed to a free function
-// that directly calls methods on `self`: 
-// const function push(list: List, first: string, last: string)
-//     list:push(first)
-//     list:push(last)
-// end
-// we'll try to inline `list:push` here but when called with a `self` of the wrong class (like a VecDeque maybe) that also has `:push`
-// we correctly namecall to `VecDeque:push` in O0 and O1 but would incorrectly inline `List`'s implementation of `:push` in O2.
-// I chose to error for this instead of simply jumping over the wrong instructions because it means we'd allow a lot of unused instructions
-// that only get jumped over, and the user's code is wrong in that they called a method with the wrong type...
-// If the user wants --!optimize 2 optimizations, they probably want to know that they have code that isn't getting those optimizations
-// due to an incorrect callsite or annotation. We can't say that the type annotation we used to inline the method was 'wrong' or 'lying'
-// or was an 'attempt to bypass private access' because it could've just as well been a simple mistake at a callsite that wants to use
-// --!optimize 2 inlining (or they're using a runtime that just enabled o2 by default and didn't even know this could happen).
-// Since Luwu is more okay with being stricter than Luau I felt this was a reasonable decision to catch incorrect code.
+l_noret luaG_blockedinitaccesserror(lua_State* L, const TString* className)
+{
+    const char* t1 = getstr(className);
+    luaG_runerrorL(L, "'__init' of '%s' cannot be accessed or called explicitly because %s has const fields", t1, t1);
+}
+
+// Luwu Classes (rfcs/classes.md): raised by CHECKSELFCLASS when `self` isn't an object of the method's class.
+// `selfCall` is true when the check was emitted at an O2 inline site for a `:` call, and only changes the message.
+//
+// An inline site fails when the receiver's annotation names the wrong class, e.g. a VecDeque passed to
+// `function push(list: List, v) list:push(v) end`: O0/O1 dispatch to `VecDeque:push`, but O2 inlined
+// `List:push`. Erroring rather than falling back to a dynamic call keeps inline sites small, and tells the
+// user their call site or annotation is wrong and isn't getting the O2 optimization they asked for.
 l_noret luaG_selfclasserror(lua_State* L, const TValue* self, const LuauClass* expected, const TString* methodName, bool selfCall)
 {
     // `expected` is NULL only if malformed bytecode put a LBC_SELFCLASS_OWNER-form CHECKSELFCLASS in

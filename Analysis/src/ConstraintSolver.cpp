@@ -1537,9 +1537,8 @@ bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNul
             marker.traverse(target);
             targetExternType->hasUnresolvedGenerics = marker.found;
 
-            // A class can be instantiated before its own body has been solved -- always so for a
-            // reference to the class from inside itself, and likewise for a forward reference to a
-            // class declared later on. Such a member is still a BlockedType here, and the
+            // On a forced dispatch a member of the template can still be blocked (see the wait
+            // above). Such a member is still a BlockedType here, and the
             // substitution above copied it by reference, so binding it later would hand this
             // instantiation the member *without* the type arguments applied. Stand a fresh blocked
             // type in its place and substitute it once the template's member is known.

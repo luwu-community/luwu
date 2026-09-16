@@ -2,7 +2,7 @@
 
 FFlags:
 
-- LuauBetterUserDefinedClasses
+- LuwuBetterUserDefinedClasses
 - DebugLuauUserDefinedClasses
 - DebugLuauUserDefinedClassesRuntime
 
@@ -437,6 +437,8 @@ Keep in mind that only `__init` applies to the class and the object; defining an
 defines them for **`objects`** (instances) of the class instead of the class itself.
 It is impossible to define custom metamethods for a `class`, only `object`s of a class.
 
+Since class and object metatables are supposed to be fully locked-down, `getmetatable` should always return `nil` when called on a `class` or `object` and `setmetatable` raises an error when called on a `class` or `object`. We choose to return `nil` for `getmetatable` since that's the current behavior of calling it on primitives that don't have a metatable (such as `number`) and to prevent existing serializers from erroring on a function that used to not error.
+
 ### The `class` library
 
 We introduce a new global library `class`. Its contents are:
@@ -444,18 +446,21 @@ We introduce a new global library `class`. Its contents are:
 ```luau
 local class: {
     isinstance: (o: unknown, C: class) -> boolean,
-    classof: (o: unknown) -> class?,
+    of: (o: unknown) -> class?,
+    name: (o: class | object) -> string,
     fields: (o: class | object) -> ({ [string]: unknown }, boolean)
 }
 ```
 
 This library also serves as an obvious extension point for future features like reflection. In the future, we may allow classes to opt-out of reflection using this library.
 
-The function `class.isinstance(o, Class)` returns `true` if the object `o` is an instance of `Class`. At runtime, it raises an error if the second argument is not a class. If the first argument is not an `object`, `class.isinstance` returns false. (eg `class.isinstance(5, MyClass)`)
+The function `class.isinstance(o, Class)` returns `true` if the object `o` is an instance of `Class`. It returns `false` if `o` is the `Class` value itself. At runtime, it raises an error if the second argument is not a class. If the first argument is not an `object`, `class.isinstance` returns false. Even though the name `class.isinstance` is not ideal (we don't have "instances", we have "objects"; `isinstance` implies inheritance once Luau supports inheritance), we choose to keep the name `class.isinstance` from upstream just for a slightly better source-to-source compatibility for classes that don't inherit and have all fully qualified `public` fields. We will have specific syntax errors against the `extends` keyword in class declarations to help users migrating Luau code to Luwu. In the future, we may deprecate this function once we implement an `is` keyword that consolidates refinements between classes/objects, primitives, and extern types.
 
-The function `class.fields` returns a map of all public fields (not methods) of the class or object, with their values, as well as a boolean `complete`, representing whether the returned map is a complete representation of the fields on that object (the class does not have any private fields).
+The function `class.fields` returns a map of all public fields (not methods) of the class or object, with their values, as well as a boolean `complete`, representing whether the returned map is a complete representation of the fields on that object (the class does not have any private fields). When `class.fields` is called on a `class` instead of an `object`, returns a map of the field names to `none` instead of `nil` or the default values of those fields. We similarly set table values to `none` instead of `nil` for any field values on an `object` that are `nil`. This is so we don't return a useless table (`nil` can't be stored in tables), we don't omit any field names from `object`s, and so calling `class.fields` doesn't accidentally invoke a default value expression that executes side-effects (such as an IIFE that modifies top-level scope before returning the default value). This function relies on the `none` primitive for proper functionality, and it is intended that Luwu classes and Luwu's none primitive are enabled together while both features are implemented (flagged) but not yet stable.
 
-The `class.classof` function returns the class corresponding to the first argument. If the first argument is not an `object`, the result is `nil`.
+The `class.name` function returns the identifier name defined in the class declaration. All classes have names, and classes are not anonymous, therefore this function should always return a value when it succeeds. Raises an error if `o` is not an `object` or a `class`.
+
+The `class.of` function returns the class corresponding to the first argument. If the first argument is not an `object`, the result is `nil`. We chose to rename `class.classof` from upstream to just `class.of` because it's better API design, matches existing APIs and is a lower-traffic function than `class.isinstance` for code that needs compatibility between Luwu and Luau.
 
 ### Constructors
 
@@ -656,7 +661,7 @@ class Bottle()
 end
 ```
 
-Like the default table constructor, primary constructors also implicitly define an `__init` that may be called on the class or as a method on objects of the class. The behavior is identical to an equivalently defined `public/private function __init`.
+Like the default table constructor, primary constructors also implicitly define an `__init` that may be called on the class or as a method on objects of the class. The behavior is identical to an equivalently defined `public/private function __init`. Calling this method is blocked when the class has any `const` fields.
 
 Any calls to the primary constructor that do not match the constructor's type signature should obviously raise a TypeError in static analysis:
 
@@ -671,37 +676,21 @@ const packy = Package {
 
 #### The `__init` constructor
 
-Right now in Luau 0.730 this is valid syntax (with the classes feature enabled)
-
-```luau
-class Cat
-    public name: string
-    public age: number
-    function meow(self, content: string): string
-        return `{self.name} says {content}`
-    end
-end
-```
-
-However, we have no way to initialize `Cat` without using the default POD syntax.
-POD-like constructors `Class { x = x, y = y }` syntax provides a nice default, "named-table" like functionality
-that feels great with existing code for POD-like data types. On the other hand, POD-like constructors are not the correct choice
-for all flavors of classes. The POD syntax not only allocates a table (fixable in compiler), but there's also no way to customize
-our default constructor behavior.
-
-Additionally, a lack of a customizable constructor is a problem if we want to add inheritance in the future.
-
-To fix this issue, we propose a constructor function named `__init`. Among other influences, this is inspired
-by the similarly-named `__init__` from Python. This constructor's name is also chosen to match the `__init` proposed in upstream Luau.
+To allow users to customize initialization logic, we propose a constructor function named `__init`. Among other influences, this is inspired by the similarly-named `__init__` from Python as well as the `__init` proposed in upstream Luau.
 
 When `Class(...args)` syntax is used to invoke the class constructor, the "magic box self allocator" in C allocates an uninitialized object of the class and passes it to `Class.__init(self, ...args)` as `self`.
 
 At runtime, all of `self`'s fields will be initialized to the field's default value if one is present, or `nil` if a default value is not specified, irrespective of type annotations.
 
-Once called, the `__init` function *should* then assign to all needed fields in `self` (not checked at runtime), and should not return any values. Field `const`ness is not enforced between initial allocation and when the `Class()` expression finishes evaluation.
+Once called, the `__init` function *should* then assign to all needed fields in `self` (not checked at runtime), and should not return any values.
+
+Field `const`ness is not enforced between initial allocation and when the `Class()` expression finishes evaluation.
+
 Any values returned by `__init` will be ignored. The `Class()` expression then returns `self` to the caller.
 
-If a user forgets to assign to a field in `__init`, a type error `"TypeError: constructor does not initialize field <name>"` is raised, but at runtime the field will be `nil`.
+If a user forgets to assign to a field in `__init`, a type error `"TypeError: constructor does not initialize field <name>"` is raised, but at runtime the field will be `nil`. Due to the difficulty of control flow analysis in the existing typesolver, this does not need to be implemented in this initial RFC implementation, and may be reapproached at a later date.
+
+Due to the nature of `__init`, `const` fields may be reassigned during `__init`. To prevent `const` fields from being arbitrarily reassigned after initial object construction, we prevent calling the `__init` constructor explicitly (via `self:__init(...)` or `Class.__init(self, ...)`) if the class has any `const` fields. Attempting to do so raises a runtime error. If a user obtains a class's `__init` using unconventional means, such as by calling `debug.info(1, "f")` to save the `__init` closure and call it later with a fully constructed `self`... just let them do it; the exact behavior of what happens in that case is left unspecified.
 
 #### The Default (POD) Constructor
 
@@ -940,29 +929,56 @@ Attempting to modify a `const` field should raise a type error.
 
 ## C API
 
+We expose a lightweight C API for interacting with user-defined classes from the embedder side. Classes are a user-facing feature, so embedders shouldn't need to create classes themselves via the C-Stack API (use userdata instead), but embedders should be able to interact with classes passed by users. If an embedder needs to create a class, they should do so by loading Luwu source code that defines and returns/exports a class.
+
+### Existing APIs modified for classes/objects
+
+Embedders may access fields and functions on objects and classes via `lua_getfield` and `lua_setfield`, which importantly bypasses private access. This intentionally allows embedder code to access any field on objects passed to the embedder by users. Trying to access or modify a nonexistent field of a `class` or `object`, or an `object` via the `class`, raises a runtime error. Note that `const` fields and functions on an object or class are immutable, so `lua_setfield` on them raises a runtime error. This is to prevent the C API from accidentally breaking optimizations such as method inlining.
+
+Similarly, `lua_setmetatable` also raises an error when called on an object or class, like `setmetatable` does in user code. This is because otherwise embedders would accidentally override the global metatable for the `object`/`class` primitives which is not intended by the language. Like when called on `number` or `boolean`, `lua_getmetatable` returns 0 and pushes nothing to the stack.
+
+Note that table-expecting functions, including but not limited to `lua_raw*` functions, `lua_cleartable`, `lua_clonetable`, etc., are not meant to be used on `classes` or `objects`--doing so is UB.
+
+The type naming functions, `lua_type`, `lua_typename`, and `luaL_typename`, return the following:
+
+| API             | Primitive | Return        |
+| --------------- | --------- | ------------- |
+| `lua_type`      | Object    | `LUA_TOBJECT` |
+| `lua_type`      | Class     | `LUA_TCLASS`  |
+| `lua_typename`  | Object    | `"object"`    |
+| `lua_typename`  | Class     | `"class"`     |
+| `luaL_typename` | Object    | `"object"`    |
+| `luaL_typename` | Class     | `"class"`     |
+
+Note that `luaL_typename` has the exact semantics of `typeof` here in user code, it returns "class" and "object" and not the actual class name or object's class name. This is because classes and objects are not globally unique and therefore their identifier names aren't either. Use the new API `lua_getclassname` instead.
+
 ### `int lua_isclass(lua_State* L, int idx);`
 
-Returns 1 if the value at the index is a class.
+Returns 1 if the value at the index is a class or 0 otherwise.
 
 ### `int lua_isobject(lua_State* L, int idx);`
 
-Returns 1 if the value at the index is an object.
+Returns 1 if the value at the index is an object or 0 otherwise.
 
-### `void* lua_newobject(lua_State* L, int idx);`
+### `void lua_newobject(lua_State* L, int idx);`
 
-Places a new `object` from the `class` at the index and calls the class's `__init` constructor with all the field values on the stack between top and the index. Places the new `object` on top of the stack.
+Creates and initializes a new `object` from the class at `idx`, calling the class's constructor with all arguments on the stack between top and `idx`. Raises any errors that the constructor raises, including errors from within user-defined `__init` functions. Pops the `class` and all arguments passed to the constructor. Places the new `object` on the top of the stack. This function is allowed to call private constructors.
 
-### `void* lua_newclass(lua_State* L, size_t sz);`
+### `int lua_getmemberaccess(lua_State* L, int idx, const char* membername);`
 
-Places a new `class` object with the data size `sz` on top of the stack.
+Returns the access specifier of `membername` on the `class` or `object` at `idx`. Returns `LUA_MEMBERMISSING (0)` if the member doesn't exist, `LUA_MEMBERPUBLIC (1)` if the member exists and is `public`, and `LUA_MEMBERPRIVATE (2)` if the member exists and is `private`. Raises an error if the value at `idx` is not a class nor an object.
 
-### `const char* lua_getclassname(lua_State* L, int idx)`
+### `int lua_ismemberconst(lua_State* L, int idx, const char* membername);`
 
-Returns the class name (the name of the identifier the class binding was declared with) of the class or object at `idx`. If the value at `idx` is an `object`, follows the class pointer to find the class that object is an instance of.
+Returns the constness of `membername` on the `class` or `object` at `idx`. Returns 0 if the member does not exist or is not `const`, and 1 if the member exists and is `const`. Raises an error if the value at `idx` is not a class nor an object. Use `lua_getmemberaccess` to check if a member exists.
+
+### `const char* lua_getclassname(lua_State* L, int idx);`
+
+Returns the class name (the name of the identifier the class binding was declared with) of the class or object at `idx`. If the value at `idx` is an `object`, follows the class pointer to find the class that object is an instance of. The returned string is valid for the lifetime of the class--users should clone it immediately if they plan on keeping it around for a while.
 
 ## Drawbacks
 
-- Implementing classes in a different way from upstream Roblox's Luau may lead to inconsistencies between future code written for upstream Luau vs our Luau. We feel the less complex semantics and implementation of our version of classes (not forcing `.new`, more explicit semantics) is a better long-term goal for the language.
+- Implementing classes in a different way from upstream Roblox's Luau may lead to inconsistencies between future code written for upstream Luau vs our Luau. We feel the less complex semantics and implementation of our version of classes is a better long-term goal for the language.
 - Extreme complexity of this feature when simpler implementations (only POD), sugar around metatable OOP, etc. could exist
 - Private fields throwing a runtime error on access violation imposes performance drawbacks that will need to be worked around in the compiler and VM.
 

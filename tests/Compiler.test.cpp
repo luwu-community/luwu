@@ -33,7 +33,7 @@ LUAU_FASTFLAG(LuauExportedClassIsNilWorkaround)
 LUAU_FASTFLAG(DebugLuauNoInline)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 LUAU_FASTFLAG(LuwuDefaultArguments)
-LUAU_FASTFLAG(LuauBetterUserDefinedClasses)
+LUAU_FASTFLAG(LuwuBetterUserDefinedClasses)
 LUAU_FASTFLAG(LuwuGenericNominals)
 
 using namespace Luau;
@@ -11115,10 +11115,134 @@ RETURN R0 0
 )" == res0);
 }
 
+TEST_CASE("ClassGenericsAreUntypedInMethodSignatures")
+{
+    ScopedFastFlag classes{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag betterClasses{FFlag::LuwuBetterUserDefinedClasses, true};
+    ScopedFastFlag genericNominals{FFlag::LuwuGenericNominals, true};
+
+    // A class's own generic (`T` in `class List<T>`) must type like a function generic -- unknown -- in
+    // method parameters and in locals inside methods. It used to fall through to the host-userdata guess,
+    // giving `push(self, value: T)` an entry guard against userdata that every real argument fails, so each
+    // native call went back to the interpreter.
+    const char* source = R"(
+class List<T>
+    public items: { T }
+
+    public function push(self, value: T, index: number, other: List<T>)
+        local copy: T = value
+        self.items[index] = copy
+    end
+end
+)";
+
+    Luau::BytecodeBuilder bcb;
+    bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code | Luau::BytecodeBuilder::Dump_Types);
+
+    Luau::CompileOptions options;
+    options.typeInfoLevel = 1;
+
+    Luau::compileOrThrow(bcb, source, options);
+
+    CHECK_EQ("\n" + bcb.dumpFunction(0), R"(
+R0: object [argument]
+R1: any [argument]
+R2: number [argument]
+R3: object [argument]
+R1: any from 2 to 6
+CHECKSELFCLASS R0 OWNER K0 ['push']
+GETOBJECTMEMBER R4 R0 0
+SETTABLE R1 R4 R2
+RETURN R0 0
+)");
+}
+
+TEST_CASE("ClassTypedLocalRangeStartsAfterInitializer")
+{
+    ScopedFastFlag classes{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag betterClasses{FFlag::LuwuBetterUserDefinedClasses, true};
+    ScopedFastFlag genericNominals{FFlag::LuwuGenericNominals, true};
+    ScopedFastFlag noCallFb{FFlag::LuauEmitCallFeedback, false};
+
+    // `local box: Box<number> = Box.make()` evaluates `Box.make` in the local's own register, so that register
+    // holds the class, then the function, before it ever holds the object. Codegen trusts a declared register
+    // type over what it computes and guards it with a VM exit, so a range starting at the register's allocation
+    // exits at the GETTABLEKS on every run. The declared range has to start where the initializer finishes.
+    const char* source = R"(
+class Box<T>
+    public value: T
+
+    public function make(): Box<T>
+        return Box { value = nil }
+    end
+end
+
+function use()
+    local box: Box<number> = Box.make()
+    return box
+end
+)";
+
+    Luau::BytecodeBuilder bcb;
+    bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code | Luau::BytecodeBuilder::Dump_Types);
+
+    Luau::CompileOptions options;
+    options.typeInfoLevel = 1;
+
+    Luau::compileOrThrow(bcb, source, options);
+
+    CHECK_EQ("\n" + bcb.dumpFunction(1), R"(
+U0: class
+R0: object from 4 to 5
+GETUPVAL R0 0
+GETTABLEKS R0 R0 K0 ['make']
+CALL R0 0 1
+RETURN R0 1
+)");
+}
+
+TEST_CASE("ClassGenericAnnotationResolvesReceiverForInlining")
+{
+    ScopedFastFlag classes{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag betterClasses{FFlag::LuwuBetterUserDefinedClasses, true};
+    ScopedFastFlag genericNominals{FFlag::LuwuGenericNominals, true};
+
+    // Type arguments are erased at runtime, so `Box<number>` names the same class as `Box` for resolving a
+    // method call's receiver. The inlined body keeps its CHECKSELFCLASS, so a lying annotation still can't run
+    // the wrong method.
+    const char* source = R"(
+class Box<T>
+    public value: T
+
+    public function get(self): T
+        return self.value
+    end
+end
+
+function use(box: Box<number>, plain: Box)
+    local a = box:get()
+    local b = plain:get()
+    return a, b
+end
+)";
+
+    Luau::BytecodeBuilder bcb;
+    bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code);
+
+    Luau::CompileOptions options;
+    options.optimizationLevel = 2;
+
+    Luau::compileOrThrow(bcb, source, options);
+
+    std::string code = bcb.dumpFunction(1);
+    CHECK(code.find("NAMECALL") == std::string::npos);
+    CHECK(code.find("CHECKSELFCLASS") != std::string::npos);
+}
+
 TEST_CASE("ClassDeclWithMethod")
 {
     ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
-    ScopedFastFlag better{FFlag::LuauBetterUserDefinedClasses, true};
+    ScopedFastFlag better{FFlag::LuwuBetterUserDefinedClasses, true};
     // This dump expects a plain CALL for the in-method `error(...)`; pin the
     // feedback-vector opcode off so it stays deterministic under --fflags=true
     // (where LuauEmitCallFeedback would otherwise emit CALLFB for this nested,
@@ -11163,7 +11287,7 @@ RETURN R0 0
 TEST_CASE("ClassConstantFieldDefaults")
 {
     ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
-    ScopedFastFlag betterClasses{FFlag::LuauBetterUserDefinedClasses, true};
+    ScopedFastFlag betterClasses{FFlag::LuwuBetterUserDefinedClasses, true};
 
     // A POD class whose field defaults are all compile-time constants carries them in its own class
     // shape, so it needs no synthesized `__defaults` closure -- no extra proto, no NEWCLASSMEMBER,
@@ -11208,7 +11332,7 @@ RETURN R0 0
 TEST_CASE("ClassNewObject")
 {
     ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
-    ScopedFastFlag betterClasses{FFlag::LuauBetterUserDefinedClasses, true};
+    ScopedFastFlag betterClasses{FFlag::LuwuBetterUserDefinedClasses, true};
 
     // A call whose callee is a statically resolved class compiles to NEWOBJECT: on its own for a
     // class using the default constructor, and followed by a plain CALL of `__init` for a class that
@@ -11269,7 +11393,7 @@ RETURN R0 0
 TEST_CASE("ClassPrimaryConstructor")
 {
     ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
-    ScopedFastFlag betterClasses{FFlag::LuauBetterUserDefinedClasses, true};
+    ScopedFastFlag betterClasses{FFlag::LuwuBetterUserDefinedClasses, true};
 
     // A primary constructor (rfcs/classes.md) declares a public field per parameter. A statically
     // resolved construction site doesn't call the synthesized `__init` at all: the parameters are
@@ -11309,7 +11433,7 @@ RETURN R0 0
 TEST_CASE("ClassPrimaryConstructorInit")
 {
     ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
-    ScopedFastFlag betterClasses{FFlag::LuauBetterUserDefinedClasses, true};
+    ScopedFastFlag betterClasses{FFlag::LuwuBetterUserDefinedClasses, true};
     // a primary constructor's parameter defaults ride on the function parameter default flag
     ScopedFastFlag defaultArgs{FFlag::LuwuDefaultArguments, true};
 
@@ -11341,7 +11465,7 @@ RETURN R0 0
 TEST_CASE("ClassMethodInlineSelfCheck")
 {
     ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
-    ScopedFastFlag better{FFlag::LuauBetterUserDefinedClasses, true};
+    ScopedFastFlag better{FFlag::LuwuBetterUserDefinedClasses, true};
     // see ClassDeclWithMethod: pin the feedback-vector opcode off so the in-method `error(...)`
     // stays a plain CALL in this dump
     ScopedFastFlag noCallFb{FFlag::LuauEmitCallFeedback, false};
@@ -11369,11 +11493,12 @@ TEST_CASE("ClassMethodInlineSelfCheck")
     )";
 
     // a same-class `self:method()` inline needs no second check: the enclosing method's own prologue
-    // already validated this exact value
+    // already validated this exact value. Either way the inlined `self` is proven, so its fields are read
+    // at a constant offset (inlineProvenSelfClass).
     auto res1 = "\n" + compileFunction(source.c_str(), 1, 2, 0);
     CHECK(R"(
 CHECKSELFCLASS R0 OWNER K0 ['double_x']
-GETTABLEKS R1 R0 K1 ['x']
+GETOBJECTMEMBER R1 R0 0
 MULK R2 R1 K2 [2]
 RETURN R2 1
 )" == res1);
@@ -11383,7 +11508,7 @@ RETURN R2 1
     CHECK(R"(
 GETUPVAL R2 0
 CHECKSELFCLASS R0 R2 K0 ['get_x'] SELF
-GETTABLEKS R1 R0 K1 ['x']
+GETOBJECTMEMBER R1 R0 0
 RETURN R1 1
 )" == res2);
 }
@@ -11525,7 +11650,7 @@ TEST_CASE("ClassDeclWithAmbiguousGlobal")
     ScopedFastFlag sffs[] = {
         {FFlag::LuauCompileStringInterpTargetTop, true},
         {FFlag::DebugLuauUserDefinedClasses, true},
-        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
         {FFlag::LuauEmitCallFeedback, true},
     };
 
@@ -12452,7 +12577,7 @@ TEST_CASE("ExportClass")
     ScopedFastFlag sffs[] = {
         {FFlag::LuauExportValueSyntax, true},
         {FFlag::DebugLuauUserDefinedClasses, true},
-        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
         {FFlag::LuauExportedClassIsNilWorkaround, false},
     };
 

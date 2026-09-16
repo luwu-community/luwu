@@ -11,7 +11,7 @@ using namespace Luau;
 
 LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
 LUAU_FASTFLAG(DebugLuauUserDefinedClassesRuntime)
-LUAU_FASTFLAG(LuauBetterUserDefinedClasses)
+LUAU_FASTFLAG(LuwuBetterUserDefinedClasses)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass);
@@ -36,7 +36,8 @@ end
 
 declare class: {
     isinstance: @checked (o: unknown, c: class) -> boolean,
-    classof: @checked (o: unknown) -> class?,
+    of: @checked (o: unknown) -> class?,
+    name: @checked (o: class | object) -> string,
     fields: @checked (o: class | object) -> ({ [string]: unknown }, boolean)
 }
 )LUAU_SRC";
@@ -63,6 +64,10 @@ declare class: {
             auto fieldsIt = ctv->props.find("fields");
             LUAU_ASSERT(fieldsIt != ctv->props.end() && fieldsIt->second.readTy);
             attachMagicFunction(*fieldsIt->second.readTy, std::make_shared<MagicClassFields>());
+
+            auto nameIt = ctv->props.find("name");
+            LUAU_ASSERT(nameIt != ctv->props.end() && nameIt->second.readTy);
+            attachMagicFunction(*nameIt->second.readTy, std::make_shared<MagicClassName>());
         }
 
         registerTestTypes();
@@ -83,7 +88,7 @@ TEST_SUITE_BEGIN("ClassesConformance");
 TEST_CASE_FIXTURE(ClassesFixture, "Point_tostring")
 {
     ScopedFastFlag sff_DebugLuauUserDefinedClasses{FFlag::DebugLuauUserDefinedClasses, true};
-    ScopedFastFlag sff_LuauBetterUserDefinedClasses{FFlag::LuauBetterUserDefinedClasses, true};
+    ScopedFastFlag sff_LuwuBetterUserDefinedClasses{FFlag::LuwuBetterUserDefinedClasses, true};
     auto result = check(R"(
 class Point
     x
@@ -104,7 +109,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "Point_eq_mm")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauUserDefinedClasses, true},
-        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
     };
 
     auto result = check(R"(
@@ -181,7 +186,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "class_structure")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauUserDefinedClasses, true},
-        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
     };
 
     auto result = check(R"(
@@ -240,7 +245,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "class_with_fields_still_requires_argument_tab
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauUserDefinedClasses, true},
-        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
     };
 
     auto result = check(R"(
@@ -262,7 +267,7 @@ local p = Person()
 
 TEST_CASE_FIXTURE(ClassesFixture, "class_property_default_value_infers_type_from_default")
 {
-    ScopedFastFlag sff_LuauBetterUserDefinedClasses{FFlag::LuauBetterUserDefinedClasses, true};
+    ScopedFastFlag sff_LuwuBetterUserDefinedClasses{FFlag::LuwuBetterUserDefinedClasses, true};
 
     auto result = check(R"(
 class Cat
@@ -285,7 +290,7 @@ local a = cat.age
 
 TEST_CASE_FIXTURE(ClassesFixture, "class_property_with_type_annotation_takes_priority_over_default_value_type")
 {
-    ScopedFastFlag sff_LuauBetterUserDefinedClasses{FFlag::LuauBetterUserDefinedClasses, true};
+    ScopedFastFlag sff_LuwuBetterUserDefinedClasses{FFlag::LuwuBetterUserDefinedClasses, true};
 
     // If the annotation were ignored in favor of inferring from the default value, `label`'s type
     // would be the narrower `string` (from `"unnamed"`) instead of the annotated `string?`.
@@ -306,7 +311,7 @@ local l = w.label
 
 TEST_CASE_FIXTURE(ClassesFixture, "class_property_default_value_incompatible_with_annotation_is_an_error")
 {
-    ScopedFastFlag sff_LuauBetterUserDefinedClasses{FFlag::LuauBetterUserDefinedClasses, true};
+    ScopedFastFlag sff_LuwuBetterUserDefinedClasses{FFlag::LuwuBetterUserDefinedClasses, true};
 
     auto result = check(R"(
 class Cat
@@ -322,7 +327,7 @@ end
 
 TEST_CASE_FIXTURE(ClassesFixture, "class_pod_constructor_argument_optional_when_all_properties_have_defaults")
 {
-    ScopedFastFlag sff_LuauBetterUserDefinedClasses{FFlag::LuauBetterUserDefinedClasses, true};
+    ScopedFastFlag sff_LuwuBetterUserDefinedClasses{FFlag::LuwuBetterUserDefinedClasses, true};
 
     auto result = check(R"(
 local last_id = 0
@@ -346,7 +351,7 @@ local a = Id()
 
 TEST_CASE_FIXTURE(ClassesFixture, "class_pod_constructor_argument_still_required_when_any_property_lacks_a_default")
 {
-    ScopedFastFlag sff_LuauBetterUserDefinedClasses{FFlag::LuauBetterUserDefinedClasses, true};
+    ScopedFastFlag sff_LuwuBetterUserDefinedClasses{FFlag::LuwuBetterUserDefinedClasses, true};
 
     auto result = check(R"(
 class Mixed
@@ -367,7 +372,7 @@ local m = Mixed()
 
 TEST_CASE_FIXTURE(ClassesFixture, "class_custom_init_constructor_signature")
 {
-    ScopedFastFlag sff_LuauBetterUserDefinedClasses{FFlag::LuauBetterUserDefinedClasses, true};
+    ScopedFastFlag sff_LuwuBetterUserDefinedClasses{FFlag::LuwuBetterUserDefinedClasses, true};
 
     auto result = check(R"(
 class Thingy
@@ -400,7 +405,7 @@ local p = Thingy
 
 TEST_CASE_FIXTURE(ClassesFixture, "class_custom_init_constructor_call_is_checked")
 {
-    ScopedFastFlag sff_LuauBetterUserDefinedClasses{FFlag::LuauBetterUserDefinedClasses, true};
+    ScopedFastFlag sff_LuwuBetterUserDefinedClasses{FFlag::LuwuBetterUserDefinedClasses, true};
 
     auto result = check(R"(
 class Thingy
@@ -424,7 +429,7 @@ local wrongShape = Thingy({ name = "hi", age = 5 })
 
 TEST_CASE_FIXTURE(ClassesFixture, "class_private_init_can_be_called_from_a_factory_function")
 {
-    ScopedFastFlag sff_LuauBetterUserDefinedClasses{FFlag::LuauBetterUserDefinedClasses, true};
+    ScopedFastFlag sff_LuwuBetterUserDefinedClasses{FFlag::LuwuBetterUserDefinedClasses, true};
 
     auto result = check(R"(
 class Thingy
@@ -447,7 +452,7 @@ local thing = Thingy.new("meow")
 
 TEST_CASE_FIXTURE(ClassesFixture, "class_private_init_cannot_be_called_directly_from_outside")
 {
-    ScopedFastFlag sff_LuauBetterUserDefinedClasses{FFlag::LuauBetterUserDefinedClasses, true};
+    ScopedFastFlag sff_LuwuBetterUserDefinedClasses{FFlag::LuwuBetterUserDefinedClasses, true};
 
     auto result = check(R"(
 class Thingy
@@ -472,7 +477,7 @@ local thing = Thingy("meow")
 
 TEST_CASE_FIXTURE(ClassesFixture, "class_public_init_can_be_called_from_outside")
 {
-    ScopedFastFlag sff_LuauBetterUserDefinedClasses{FFlag::LuauBetterUserDefinedClasses, true};
+    ScopedFastFlag sff_LuwuBetterUserDefinedClasses{FFlag::LuwuBetterUserDefinedClasses, true};
 
     auto result = check(R"(
 class Thingy
@@ -491,7 +496,7 @@ local thing = Thingy("meow")
 
 TEST_CASE_FIXTURE(ClassesFixture, "class_const_property_can_be_assigned_from_init")
 {
-    ScopedFastFlag sff_LuauBetterUserDefinedClasses{FFlag::LuauBetterUserDefinedClasses, true};
+    ScopedFastFlag sff_LuwuBetterUserDefinedClasses{FFlag::LuwuBetterUserDefinedClasses, true};
 
     auto result = check(R"(
 class Thingy
@@ -508,7 +513,7 @@ end
 
 TEST_CASE_FIXTURE(ClassesFixture, "class_const_property_cannot_be_assigned_from_other_methods")
 {
-    ScopedFastFlag sff_LuauBetterUserDefinedClasses{FFlag::LuauBetterUserDefinedClasses, true};
+    ScopedFastFlag sff_LuwuBetterUserDefinedClasses{FFlag::LuwuBetterUserDefinedClasses, true};
 
     auto result = check(R"(
 class Thingy
@@ -535,7 +540,7 @@ end
 
 TEST_CASE_FIXTURE(ClassesFixture, "class_const_property_cannot_be_assigned_from_outside_the_class")
 {
-    ScopedFastFlag sff_LuauBetterUserDefinedClasses{FFlag::LuauBetterUserDefinedClasses, true};
+    ScopedFastFlag sff_LuwuBetterUserDefinedClasses{FFlag::LuwuBetterUserDefinedClasses, true};
 
     auto result = check(R"(
 class Thingy
@@ -561,7 +566,7 @@ t.name = "bye"
 
 TEST_CASE_FIXTURE(ClassesFixture, "class_non_const_property_can_be_assigned_anywhere")
 {
-    ScopedFastFlag sff_LuauBetterUserDefinedClasses{FFlag::LuauBetterUserDefinedClasses, true};
+    ScopedFastFlag sff_LuwuBetterUserDefinedClasses{FFlag::LuwuBetterUserDefinedClasses, true};
 
     auto result = check(R"(
 class Thingy
@@ -586,7 +591,7 @@ t.name = "bye"
 TEST_CASE_FIXTURE(ClassesFixture, "class_generic_parameter_is_inferred_from_constructor")
 {
     ScopedFastFlag sffs[] = {
-        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
         {FFlag::LuwuGenericNominals, true},
     };
 
@@ -618,6 +623,123 @@ local f: string = e:get()
     REQUIRE(tm);
     CHECK_EQ("string", toString(tm->wantedType));
     CHECK_EQ("number", toString(tm->givenType));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_generic_parameter_default_is_used_when_omitted")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuBetterUserDefinedClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+    };
+
+    auto result = check(R"(
+class Box<T = string>
+    value: T
+end
+
+local a: Box = Box { value = "hi" }
+local b: Box<number> = Box { value = 1 }
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("Box<string>", toString(requireType("a")));
+    CHECK_EQ("Box<number>", toString(requireType("b")));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_generic_parameter_default_is_checked_against_annotation")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuBetterUserDefinedClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+    };
+
+    auto result = check(R"(
+class Box<T = string>
+    value: T
+end
+
+local bad: Box = Box { value = 1 }
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    auto tm = get<TypeMismatch>(result.errors[0]);
+    REQUIRE(tm);
+    CHECK_EQ("Box<string>", toString(tm->wantedType));
+    CHECK_EQ("Box<number>", toString(tm->givenType));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_generic_parameter_default_can_reference_earlier_parameter")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuBetterUserDefinedClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+    };
+
+    auto result = check(R"(
+class Pair<A, B = A>
+    first: A
+    second: B
+end
+
+local p: Pair<number> = Pair { first = 1, second = 2 }
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("Pair<number, number>", toString(requireType("p")));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_generic_parameter_without_default_still_requires_an_argument")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuBetterUserDefinedClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+    };
+
+    auto result = check(R"(
+class Pair<A, B = A>
+    first: A
+    second: B
+end
+
+type Bad = Pair
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<IncorrectGenericParameterCount>(result.errors[0]));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_generic_default_reports_unknown_type")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuBetterUserDefinedClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+    };
+
+    auto result = check(R"(
+class Box<T = ThisTypeDoesNotExist>
+    value: T
+end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<UnknownSymbol>(result.errors[0]));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_duplicate_generic_parameter_is_reported")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuBetterUserDefinedClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+    };
+
+    auto result = check(R"(
+class Dup<T, T>
+    value: T
+end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<DuplicateGenericParameter>(result.errors[0]));
 }
 
 TEST_CASE_FIXTURE(ClassesFixture, "isinstance_refines_unknown_value")
@@ -688,7 +810,7 @@ end
 
 TEST_CASE_FIXTURE(ClassesFixture, "typeof_object_refines_to_object_arm")
 {
-    ScopedFastFlag sff_better{FFlag::LuauBetterUserDefinedClasses, true};
+    ScopedFastFlag sff_better{FFlag::LuwuBetterUserDefinedClasses, true};
     ScopedFastFlag sff_runtime{FFlag::DebugLuauUserDefinedClassesRuntime, true};
 
     CheckResult result = check(R"(
@@ -911,7 +1033,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "class_fields_on_instance_reports_precise_fiel
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauUserDefinedClasses, true},
-        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
     };
 
     CheckResult result = check(R"(
@@ -935,7 +1057,7 @@ local fields, complete = class.fields(p)
 
 TEST_CASE_FIXTURE(ClassesFixture, "class_fields_omits_private_fields_from_the_type_and_reports_complete_false")
 {
-    ScopedFastFlag sff_LuauBetterUserDefinedClasses{FFlag::LuauBetterUserDefinedClasses, true};
+    ScopedFastFlag sff_LuwuBetterUserDefinedClasses{FFlag::LuwuBetterUserDefinedClasses, true};
 
     CheckResult result = check(R"(
 class User
@@ -961,7 +1083,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "class_fields_omits_methods_from_the_type")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauUserDefinedClasses, true},
-        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
     };
 
     CheckResult result = check(R"(
@@ -996,6 +1118,119 @@ local fields, complete = class.fields(Point)
     LUAU_REQUIRE_NO_ERRORS(result);
     CHECK_EQ("{ read x: number, read y: number }", toString(requireType("fields")));
     CHECK_EQ("true", toString(requireType("complete")));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_name_of_a_class_or_object_is_its_name_as_a_singleton")
+{
+    ScopedFastFlag sff_LuwuBetterUserDefinedClasses{FFlag::LuwuBetterUserDefinedClasses, true};
+
+    CheckResult result = check(R"(
+class Cat
+    name: string
+end
+
+local c = Cat { name = "Taz" }
+local ofObject = class.name(c)
+local ofClass = class.name(Cat)
+local annotated: "Cat" = class.name(c)
+)");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("\"Cat\"", toString(requireType("ofObject")));
+    CHECK_EQ("\"Cat\"", toString(requireType("ofClass")));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_name_of_a_union_of_objects_is_a_union_of_singletons")
+{
+    ScopedFastFlag sff_LuwuBetterUserDefinedClasses{FFlag::LuwuBetterUserDefinedClasses, true};
+
+    CheckResult result = check(R"(
+class Cat end
+class Dog end
+class Walrus end
+
+local function nameOf(pet: Cat | Dog | Walrus)
+    return class.name(pet)
+end
+
+local n = nameOf(Dog())
+local exhaustive: "Cat" | "Dog" | "Walrus" = n
+)");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("\"Cat\" | \"Dog\" | \"Walrus\"", toString(requireType("n")));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_name_collapses_a_class_and_its_objects_to_one_singleton")
+{
+    ScopedFastFlag sff_LuwuBetterUserDefinedClasses{FFlag::LuwuBetterUserDefinedClasses, true};
+
+    CheckResult result = check(R"(
+class Cat end
+class Dog end
+
+local function nameOf(x: Cat | typeof(Cat) | Dog)
+    return class.name(x)
+end
+
+local n = nameOf(Cat)
+)");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("\"Cat\" | \"Dog\"", toString(requireType("n")));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_name_collapses_instantiations_of_a_generic_class")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuBetterUserDefinedClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+    };
+
+    CheckResult result = check(R"(
+class Box<T>
+    value: T
+end
+
+local function nameOf(b: Box<number> | Box<string>)
+    return class.name(b)
+end
+
+local n = nameOf(Box { value = 1 })
+)");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("\"Box\"", toString(requireType("n")));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_name_falls_back_to_string_when_the_class_is_not_known")
+{
+    ScopedFastFlag sff_LuwuBetterUserDefinedClasses{FFlag::LuwuBetterUserDefinedClasses, true};
+
+    CheckResult result = check(R"(
+class Cat end
+
+local function ofAnyObject(o: object)
+    return class.name(o)
+end
+
+local function ofAnyClass(c: class)
+    return class.name(c)
+end
+
+local function ofOptional(c: Cat?)
+    return class.name(c)
+end
+
+local a = ofAnyObject(Cat())
+local b = ofAnyClass(Cat)
+)");
+
+    CHECK_EQ("string", toString(requireType("a")));
+    CHECK_EQ("string", toString(requireType("b")));
+    // `Cat?` is not a class or object, so the call is an error, but the magic function still leaves
+    // the declared return type in place rather than claiming a singleton
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
 }
 
 TEST_CASE_FIXTURE(ClassesFixture, "typed_self_parameter_after_class_declaration")
@@ -1088,7 +1323,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "accept_read_only_tables")
 TEST_CASE_FIXTURE(ClassesFixture, "primary_constructor_declares_a_field_per_parameter")
 {
     ScopedFastFlag sffs[] = {
-        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
         {FFlag::LuwuDefaultArguments, true},
     };
 
@@ -1112,7 +1347,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "primary_constructor_declares_a_field_per_para
 TEST_CASE_FIXTURE(ClassesFixture, "primary_constructor_argument_types_are_checked")
 {
     ScopedFastFlag sffs[] = {
-        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
         {FFlag::LuwuDefaultArguments, true},
     };
 
@@ -1130,7 +1365,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "primary_constructor_argument_types_are_checke
 TEST_CASE_FIXTURE(ClassesFixture, "primary_constructor_arity_is_checked")
 {
     ScopedFastFlag sffs[] = {
-        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
         {FFlag::LuwuDefaultArguments, true},
     };
 
@@ -1148,7 +1383,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "primary_constructor_arity_is_checked")
 TEST_CASE_FIXTURE(ClassesFixture, "primary_constructor_parameter_defaults")
 {
     ScopedFastFlag sffs[] = {
-        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
         {FFlag::LuwuDefaultArguments, true},
     };
 
@@ -1172,7 +1407,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "primary_constructor_parameter_defaults")
 TEST_CASE_FIXTURE(ClassesFixture, "primary_constructor_parameter_default_is_checked_against_its_annotation")
 {
     ScopedFastFlag sffs[] = {
-        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
         {FFlag::LuwuDefaultArguments, true},
     };
 
@@ -1188,7 +1423,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "primary_constructor_parameter_default_is_chec
 TEST_CASE_FIXTURE(ClassesFixture, "primary_constructor_parameters_are_visible_to_field_initializers")
 {
     ScopedFastFlag sffs[] = {
-        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
         {FFlag::LuwuDefaultArguments, true},
     };
 
@@ -1208,12 +1443,11 @@ TEST_CASE_FIXTURE(ClassesFixture, "primary_constructor_parameters_are_visible_to
 TEST_CASE_FIXTURE(ClassesFixture, "primary_constructor_parameters_are_not_visible_to_methods")
 {
     ScopedFastFlag sffs[] = {
-        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
         {FFlag::LuwuDefaultArguments, true},
     };
 
-    // `name` in the method body is the global, not the parameter, so this is not a type error about
-    // strings -- it just isn't the parameter
+    // methods read the field through `self`; the parameter itself isn't in scope there
     LUAU_REQUIRE_NO_ERRORS(check(R"(
         class Symbol(public name: string)
             public function describe(self): string
@@ -1226,7 +1460,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "primary_constructor_parameters_are_not_visibl
 TEST_CASE_FIXTURE(ClassesFixture, "qualified_parameters_declare_their_fields_access_and_constness")
 {
     ScopedFastFlag sffs[] = {
-        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
         {FFlag::LuwuDefaultArguments, true},
     };
 
@@ -1252,7 +1486,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "qualified_parameters_declare_their_fields_acc
 TEST_CASE_FIXTURE(ClassesFixture, "bare_restatement_takes_the_parameters_type")
 {
     ScopedFastFlag sffs[] = {
-        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
         {FFlag::LuwuDefaultArguments, true},
     };
 
@@ -1277,7 +1511,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "bare_restatement_takes_the_parameters_type")
 TEST_CASE_FIXTURE(ClassesFixture, "field_that_can_never_be_initialized")
 {
     ScopedFastFlag sffs[] = {
-        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
         {FFlag::LuwuDefaultArguments, true},
     };
 
@@ -1302,7 +1536,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "field_that_can_never_be_initialized")
 TEST_CASE_FIXTURE(ClassesFixture, "class_with_only_private_fields_and_no_functions_is_unusable")
 {
     ScopedFastFlag sffs[] = {
-        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
         {FFlag::LuwuDefaultArguments, true},
     };
 
@@ -1328,10 +1562,95 @@ TEST_CASE_FIXTURE(ClassesFixture, "class_with_only_private_fields_and_no_functio
     CHECK_EQ(8, result.errors[2].location.begin.line);
 }
 
+TEST_CASE_FIXTURE(ClassesFixture, "class_with_a_private_constructor_it_never_calls_is_uninstantiable")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuBetterUserDefinedClasses, true},
+        {FFlag::LuwuDefaultArguments, true},
+    };
+
+    auto result = check(R"(
+        class Primary private (public name: string)
+            public function hi(self): string
+                return self.name
+            end
+        end
+
+        class Init
+            public name: string
+            private function __init(self, name: string)
+                self.name = name
+            end
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    for (const TypeError& err : result.errors)
+        CHECK(get<UninstantiableClass>(err));
+    CHECK_EQ(
+        "This class can never be instantiated because its constructor is private and is never called; did you mean to return an instance "
+        "of this class from a `public function` instead? Call the constructor to silence",
+        toString(result.errors[0])
+    );
+    CHECK_EQ(1, result.errors[0].location.begin.line);
+    CHECK_EQ(7, result.errors[1].location.begin.line);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_with_a_private_constructor_called_from_its_body_is_instantiable")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuBetterUserDefinedClasses, true},
+        {FFlag::LuwuDefaultArguments, true},
+    };
+
+    LUAU_REQUIRE_NO_ERRORS(check(R"(
+        class Factory private (public name: string)
+            public function make(): Factory
+                return Factory("x")
+            end
+        end
+
+        class Nested private (public name: string)
+            public function maker(): () -> Nested
+                return function()
+                    return Nested("x")
+                end
+            end
+        end
+
+        class Pod
+            public name: string = ""
+            private function __init(self)
+            end
+
+            public function make(): Pod
+                return Pod()
+            end
+        end
+    )"));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "primary_constructor_argument_count_excludes_the_class")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuBetterUserDefinedClasses, true},
+        {FFlag::LuwuDefaultArguments, true},
+    };
+
+    // the constructor is the class's `__call`, which receives the class first; the count reports the call as written
+    auto result = check(R"(
+        class Point(public x: number, public y: number) end
+        local _ = Point(1)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ("Argument count mismatch. Function expects 2 arguments, but only 1 is specified", toString(result.errors[0]));
+}
+
 TEST_CASE_FIXTURE(ClassesFixture, "class_with_private_fields_is_usable_through_a_function_or_a_public_field")
 {
     ScopedFastFlag sffs[] = {
-        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
         {FFlag::LuwuDefaultArguments, true},
     };
 
@@ -1364,7 +1683,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "class_with_private_fields_is_usable_through_a
 TEST_CASE_FIXTURE(ClassesFixture, "private_member_access_error_names_fields_and_functions")
 {
     ScopedFastFlag sffs[] = {
-        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
     };
 
     auto result = check(R"(
@@ -1397,7 +1716,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "private_member_access_error_names_fields_and_
 TEST_CASE_FIXTURE(ClassesFixture, "field_that_can_never_be_initialized_is_fine_when_optional")
 {
     ScopedFastFlag sffs[] = {
-        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
         {FFlag::LuwuDefaultArguments, true},
     };
 
@@ -1414,7 +1733,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "field_that_can_never_be_initialized_is_fine_w
 TEST_CASE_FIXTURE(ClassesFixture, "a_class_with_a_table_constructor_may_leave_fields_uninitialized")
 {
     ScopedFastFlag sffs[] = {
-        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
         {FFlag::LuwuDefaultArguments, true},
     };
 
@@ -1432,7 +1751,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "a_class_with_a_table_constructor_may_leave_fi
 TEST_CASE_FIXTURE(ClassesFixture, "private_primary_constructor")
 {
     ScopedFastFlag sffs[] = {
-        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
         {FFlag::LuwuDefaultArguments, true},
     };
 
@@ -1453,7 +1772,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "private_primary_constructor")
 TEST_CASE_FIXTURE(ClassesFixture, "primary_constructor_table_argument_is_positional")
 {
     ScopedFastFlag sffs[] = {
-        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
         {FFlag::LuwuDefaultArguments, true},
     };
 
@@ -1473,7 +1792,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "primary_constructor_table_argument_is_positio
 TEST_CASE_FIXTURE(ClassesFixture, "generic_class_with_a_primary_constructor")
 {
     ScopedFastFlag sffs[] = {
-        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
         {FFlag::LuwuDefaultArguments, true},
         {FFlag::LuwuGenericNominals, true},
     };
@@ -1499,7 +1818,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "generic_class_with_a_primary_constructor")
 TEST_CASE_FIXTURE(ClassesFixture, "bare_restatement_is_checked_against_the_parameters_type")
 {
     ScopedFastFlag sffs[] = {
-        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
         {FFlag::LuwuDefaultArguments, true},
     };
 
@@ -1524,7 +1843,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "bare_restatement_is_checked_against_the_param
 TEST_CASE_FIXTURE(ClassesFixture, "bare_restatement_with_a_compatible_annotation")
 {
     ScopedFastFlag sffs[] = {
-        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
         {FFlag::LuwuDefaultArguments, true},
     };
 
@@ -1561,7 +1880,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "missing_key_error_names_the_class_or_object_n
 TEST_CASE_FIXTURE(ClassesFixture, "generic_class_instantiated_from_inside_its_own_body")
 {
     ScopedFastFlag sffs[] = {
-        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
         {FFlag::LuwuGenericNominals, true},
     };
 
@@ -1586,7 +1905,7 @@ local n: number = b:get()
 TEST_CASE_FIXTURE(ClassesFixture, "generic_class_instantiated_by_a_forward_reference")
 {
     ScopedFastFlag sffs[] = {
-        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
         {FFlag::LuwuGenericNominals, true},
     };
 
@@ -1614,7 +1933,7 @@ local n: number = o:get()
 TEST_CASE_FIXTURE(ClassesFixture, "generic_class_instantiated_through_a_static_method_generic")
 {
     ScopedFastFlag sffs[] = {
-        {FFlag::LuauBetterUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
         {FFlag::LuwuGenericNominals, true},
     };
 

@@ -3828,7 +3828,7 @@ reentry:
 
             VM_CASE(LOP_NEWOBJECT)
             {
-                // Luwu Classes (rfcs/classes.md): construct an instance of a POD class directly.
+                // Luwu Classes (rfcs/classes.md): construct an instance of a statically resolved class directly.
                 Instruction insn = *pc++;
                 uint32_t aux = *pc++;
                 StkId ra = VM_REG(LUAU_INSN_A(insn));
@@ -3873,15 +3873,12 @@ reentry:
                 // The INIT form needs this too: it reads `__init` straight out of staticmembers, with
                 // no per-member check of its own.
                 //
-                // The condition is a cheap filter, not the rule -- luaR_checkprivateaccess returns
-                // early unless `__init` itself carries LBC_CLASSMEMBER_PRIVATE.
+                // The condition is a cheap filter, not the rule -- luaR_checkprivateconstructor
+                // returns early unless `__init` itself carries LBC_CLASSMEMBER_PRIVATE.
                 if (LUAU_UNLIKELY(classdef->hascustominit && classdef->hasprivatemembers))
                 {
-                    TValue initname;
-                    setsvalue(L, &initname, classdef->offsettomember[classdef->initoffset]);
-
                     VM_PROTECT_PC();
-                    luaR_checkprivateaccess(L, &initname, classdef, cl, classdef->initoffset);
+                    luaR_checkprivateconstructor(L, classdef, cl);
                 }
 
                 VM_PROTECT_PC(); // the allocation below may fail due to OOM
@@ -3954,15 +3951,16 @@ reentry:
                 // Luwu Classes (rfcs/classes.md): read `self.field` at a known offset, skipping all of
                 // GETTABLEKS's per-access work -- no slot cache, no name compare, no private-access
                 // check. That is only sound under what the compiler guarantees at every emit site (see
-                // provenSelfClass in Compiler.cpp):
+                // provenSelfMemberOffset in Compiler.cpp). The receiver is one of:
                 //
-                //   - the receiver is the executing method's own `self` parameter, not a local that
-                //     merely holds an instance
-                //   - a CHECKSELFCLASS has already run on that exact value in this frame, so its class
-                //     is known from a runtime check and never from a type annotation, which can lie
-                //   - the method never reassigns `self`, so the checked value is still the one here
-                //   - the class is the one the method is lexically declared in, so member offsets are
-                //     that class's declaration order
+                //   - the executing method's own `self`, after its CHECKSELFCLASS prologue
+                //   - an inlined method's `self`, after the CHECKSELFCLASS emitted at the inline site
+                //   - a local inside the then-branch of `if class.isinstance(local, C)`, compiled to JUMPXISA
+                //     against a class `C` declared in this module
+                //
+                // In every case the value is never reassigned and its class comes from a runtime check, never
+                // from a type annotation. A private member is only read this way through a proven `self` or
+                // from inside one of the class's methods.
                 //
                 // A member's offset is therefore a compile-time constant, and the receiver is an object
                 // of that class. Both are asserted rather than checked, the way VM_REG asserts its
@@ -4003,7 +4001,20 @@ reentry:
                 uint32_t aux = *pc;
                 StkId ra = VM_REG(LUAU_INSN_A(insn));
                 StkId classReg = VM_REG(aux & 0xff);
-                LUAU_ASSERT(ttisclass(classReg));
+
+                if (aux & LBC_JUMPXISA_CHECKCLASS)
+                {
+                    // a class the compiler couldn't resolve: raise exactly what the builtin would
+                    if (LUAU_UNLIKELY(!ttisclass(classReg)))
+                    {
+                        VM_PROTECT_PC();
+                        luaG_runerror(L, "invalid argument #2 to 'isinstance' (class expected, got %s)", luaT_objtypename(L, classReg));
+                    }
+                }
+                else
+                {
+                    LUAU_ASSERT(ttisclass(classReg));
+                }
 
                 int isInstance = ttisobject(ra) && objectvalue(ra)->lclass == classvalue(classReg);
 

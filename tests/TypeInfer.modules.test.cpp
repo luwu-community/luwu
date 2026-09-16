@@ -19,7 +19,7 @@ LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
 LUAU_FASTINT(LuauSolverConstraintLimit)
 LUAU_FASTFLAG(LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier)
-LUAU_FASTFLAG(LuauBetterUserDefinedClasses)
+LUAU_FASTFLAG(LuwuBetterUserDefinedClasses)
 
 using namespace Luau;
 
@@ -1208,7 +1208,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "export_class")
         {FFlag::LuauExportValueTypecheck, true},
         {FFlag::DebugLuauForceOldSolver, false},
         {FFlag::DebugLuauUserDefinedClasses, true},
-        {FFlag::LuauBetterUserDefinedClasses, true}
+        {FFlag::LuwuBetterUserDefinedClasses, true}
     };
 
     fileResolver.source["game/A"] = R"(
@@ -1240,7 +1240,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "export_class")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "non_exported_class")
 {
-    ScopedFastFlag sff[] = {{FFlag::DebugLuauForceOldSolver, false}, {FFlag::DebugLuauUserDefinedClasses, true}, {FFlag::LuauBetterUserDefinedClasses, true}};
+    ScopedFastFlag sff[] = {{FFlag::DebugLuauForceOldSolver, false}, {FFlag::DebugLuauUserDefinedClasses, true}, {FFlag::LuwuBetterUserDefinedClasses, true}};
 
     fileResolver.source["game/A"] = R"(
         class Point

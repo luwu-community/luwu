@@ -422,8 +422,8 @@ static void traverseproto(global_State* g, Proto* f)
         markobject(g, f->deoptimized);
 
     // Luwu Classes (rfcs/classes.md): keep the owning class alive while its method proto is alive.
-    // Native codegen only compares this pointer (never dereferences it), but marking prevents a
-    // stale/reused-address false positive in the private/const authorization guard.
+    // Private-access authorization compares this pointer, and CHECKSELFCLASS's LBC_SELFCLASS_OWNER form
+    // uses it as the class (its error path reads the class name).
     if (f->ownerclass)
         markobject(g, f->ownerclass);
 }

@@ -542,6 +542,8 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
         {
             if (auto it = ctv->props.find("fields"); it != ctv->props.end() && it->second.readTy)
                 attachMagicFunction(*it->second.readTy, std::make_shared<MagicClassFields>());
+            if (auto it = ctv->props.find("name"); it != ctv->props.end() && it->second.readTy)
+                attachMagicFunction(*it->second.readTy, std::make_shared<MagicClassName>());
         }
     }
 
@@ -1891,6 +1893,67 @@ bool MagicClassFields::infer(const MagicFunctionCallContext& context)
 
     TypePackId resultPack = arena->addTypePack({resultTableTy, completeTy});
     asMutable(context.result)->ty.emplace<BoundTypePack>(resultPack);
+
+    return true;
+}
+
+std::optional<WithPredicate<TypePackId>> MagicClassName::handleOldSolver(
+    struct TypeChecker&,
+    const std::shared_ptr<struct Scope>&,
+    const class AstExprCall&,
+    WithPredicate<TypePackId>
+)
+{
+    return std::nullopt;
+}
+
+// Collects the distinct class names of `ty`, which must be a class type, an object type, or a union
+// of them. Returns false for anything else -- including the `class`/`object` top types themselves,
+// whose name isn't known -- so the caller can fall back to the declared `string`.
+static bool collectClassNames(NotNull<BuiltinTypes> builtinTypes, TypeId ty, std::vector<Name>& names)
+{
+    ty = follow(ty);
+
+    if (const UnionType* ut = get<UnionType>(ty))
+    {
+        for (TypeId option : ut->options)
+        {
+            if (!collectClassNames(builtinTypes, option, names))
+                return false;
+        }
+        return true;
+    }
+
+    const ExternType* etv = get<ExternType>(ty);
+    if (!etv || !etv->root || (*etv->root != builtinTypes->classType && *etv->root != builtinTypes->objectType))
+        return false;
+
+    // a class and its objects share a name, as do the instantiations of a generic class
+    if (std::find(names.begin(), names.end(), etv->name) == names.end())
+        names.push_back(etv->name);
+
+    return true;
+}
+
+bool MagicClassName::infer(const MagicFunctionCallContext& context)
+{
+    TypeArena* arena = context.solver->arena;
+
+    const auto& [paramTypes, paramTail] = flatten(context.arguments);
+    if (paramTypes.empty())
+        return false;
+
+    std::vector<Name> names;
+    if (!collectClassNames(context.solver->builtinTypes, paramTypes[0], names))
+        return false;
+
+    std::vector<TypeId> singletons;
+    singletons.reserve(names.size());
+    for (const Name& name : names)
+        singletons.push_back(arena->addType(SingletonType{StringSingleton{name}}));
+
+    TypeId resultTy = singletons.size() == 1 ? singletons[0] : arena->addType(UnionType{std::move(singletons)});
+    asMutable(context.result)->ty.emplace<BoundTypePack>(arena->addTypePack({resultTy}));
 
     return true;
 }

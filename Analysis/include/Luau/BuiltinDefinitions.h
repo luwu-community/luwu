@@ -44,6 +44,20 @@ struct MagicClassFields final : MagicFunction
     bool infer(const MagicFunctionCallContext& context) override;
 };
 
+// Narrows `class.name`'s declared `string` return to the class's name as a string singleton when the
+// argument is a class or object type, and to a union of singletons for a union of them. Exposed for
+// the same reason as MagicClassFields.
+struct MagicClassName final : MagicFunction
+{
+    std::optional<WithPredicate<TypePackId>> handleOldSolver(
+        struct TypeChecker&,
+        const std::shared_ptr<struct Scope>&,
+        const class AstExprCall&,
+        WithPredicate<TypePackId>
+    ) override;
+    bool infer(const MagicFunctionCallContext& context) override;
+};
+
 void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeCheckForAutocomplete = false);
 TypeId makeUnion(TypeArena& arena, std::vector<TypeId>&& types);
 TypeId makeIntersection(TypeArena& arena, std::vector<TypeId>&& types);

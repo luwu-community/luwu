@@ -681,7 +681,7 @@ void IrBuilder::translateInst(LuauOpcode op, const Instruction* pc, int i)
         inst(IrCmd::FALLBACK_FORGPREP, constUint(i), vmReg(LUAU_INSN_A(*pc)), loopStart);
         break;
     }
-    // Class declaration and construction have no machine code lowering yet, but neither can be a bare
+    // Class declaration and non-native construction have no machine code lowering, but neither can be a bare
     // `JUMP vmExit`: such a jump carries no VM register operands, so nothing downstream knows which
     // registers the interpreter will go on to read, and stores that are still needed get eliminated
     // -- a numeric for loop's limit/step/index, say, sitting below these instructions' own operands
@@ -693,14 +693,7 @@ void IrBuilder::translateInst(LuauOpcode op, const Instruction* pc, int i)
         break;
 
     case LOP_NEWOBJECT:
-        inst(
-            IrCmd::FALLBACK_NEWOBJECT,
-            constUint(i),
-            vmReg(LUAU_INSN_A(*pc)),
-            vmReg(LUAU_INSN_B(*pc)),
-            constInt(LUAU_INSN_C(*pc)),
-            constInt(int(pc[1]))
-        );
+        translateInstNewObject(*this, pc, i);
         break;
 
     case LOP_GETOBJECTMEMBER:

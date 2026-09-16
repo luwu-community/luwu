@@ -423,8 +423,97 @@ TEST_CASE_FIXTURE(Fixture, "optional_length_error")
 
     // CLI-119936: This shouldn't double error but does under the new solver.
     LUAU_REQUIRE_ERROR_COUNT(2, result);
-    CHECK_EQ("Operator '#' could not be applied to operand of type A?; there is no corresponding overload for __len", toString(result.errors[0]));
+    CHECK_EQ("Operator '#' could not be applied to operand of type A?; the operand could be `nil`", toString(result.errors[0]));
     CHECK_EQ("Value of type 'A?' could be nil", toString(result.errors[1]));
+}
+
+TEST_CASE_FIXTURE(Fixture, "optional_binary_operands_are_named_as_possibly_nil")
+{
+    ScopedFastFlag _{FFlag::DebugLuauForceOldSolver, false};
+
+    CheckResult both = check(R"(
+        local a = (nil :: any) :: number?
+        local b = (nil :: any) :: number?
+        local x = a + b
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, both);
+    CHECK_EQ(
+        "Operator '+' could not be applied to operands of types number? and number?; one or both operands could be `nil`",
+        toString(both.errors[0])
+    );
+
+    CheckResult left = check(R"(
+        local a = (nil :: any) :: number?
+        local c = 1
+        local x = a + c
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, left);
+    CHECK_EQ("Operator '+' could not be applied to operands of types number? and number; the left operand could be `nil`", toString(left.errors[0]));
+
+    CheckResult right = check(R"(
+        local b = (nil :: any) :: number?
+        local c = 1
+        local x = c + b
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, right);
+    CHECK_EQ(
+        "Operator '+' could not be applied to operands of types number and number?; the right operand could be `nil`", toString(right.errors[0])
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "optional_operand_replaces_the_metamethod_note")
+{
+    ScopedFastFlag _{FFlag::DebugLuauForceOldSolver, false};
+
+    // `string .. number` concatenates fine, so naming `__concat` here would send the reader after a
+    // problem that does not exist; the `nil` is the whole story.
+    CheckResult result = check(R"(
+        local a = (nil :: any) :: string?
+        local b = 1
+        local x = a .. b
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        "Operator '..' could not be applied to operands of types string? and number; the left operand could be `nil`", toString(result.errors[0])
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "non_optional_operands_still_name_the_metamethod")
+{
+    ScopedFastFlag _{FFlag::DebugLuauForceOldSolver, false};
+
+    CheckResult result = check(R"(
+        local a = 1
+        local b = "two"
+        local x = a + b
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        "Operator '+' could not be applied to operands of types number and string; there is no corresponding overload for __add",
+        toString(result.errors[0])
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "optional_relational_comparison_names_the_nil_operands")
+{
+    ScopedFastFlag _{FFlag::DebugLuauForceOldSolver, false};
+
+    CheckResult result = check(R"(
+        local a = (nil :: any) :: number?
+        local b = (nil :: any) :: number?
+        local x = a < b
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        "Types 'number?' and 'number?' cannot be compared with relational operator <; one or both operands could be `nil`",
+        toString(result.errors[0])
+    );
 }
 
 TEST_CASE_FIXTURE(Fixture, "optional_missing_key_error_details")

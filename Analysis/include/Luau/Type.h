@@ -460,7 +460,7 @@ struct Property
     bool isPrivate = false;
 
     // True if this property was declared `const` on a user-defined class (see
-    // FFlag::DebugLuauUserDefinedClasses, FFlag::LuauBetterUserDefinedClasses). Const members
+    // FFlag::DebugLuauUserDefinedClasses, FFlag::LuwuBetterUserDefinedClasses). Const members
     // may only be assigned to from within the class's own `__init` constructor.
     bool isConst = false;
 
@@ -621,11 +621,11 @@ struct ExternType
     std::optional<Location> definitionLocation;
 
     /*
-        If this NominalType is a class, contains the location of the class's `__init` method'
-        body, if the class defines one. 
+        If this ExternType is a class, contains the location of the class's `__init` method
+        body, if the class defines one.
         
         This is used to check that `const` properties are only assigned within their `__init` constructor
-        (see FFlag::DebugLuauUserDefinedClasses, FFlag::LuauBetterUserDefinedClasses)
+        (see FFlag::DebugLuauUserDefinedClasses, FFlag::LuwuBetterUserDefinedClasses)
     */
     std::optional<Location> initLocation;
     std::optional<TableIndexer> indexer;

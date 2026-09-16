@@ -8,6 +8,7 @@
 #include "lbuiltins.h"
 #include "lgc.h"
 #include "ltable.h"
+#include "lclass.h"
 #include "lfunc.h"
 #include "lvm.h"
 
@@ -45,6 +46,7 @@ void initFunctions(NativeContext& context)
     context.luaH_getn = luaH_getn;
     context.luaH_new = luaH_new;
     context.luaH_clone = luaH_clone;
+    context.luaR_newobjectuninit = luaR_newobjectuninit;
     context.luaH_resizearray = luaH_resizearray;
     context.luaH_setnum = luaH_setnum;
 

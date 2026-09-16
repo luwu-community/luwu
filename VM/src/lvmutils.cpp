@@ -126,7 +126,7 @@ void luaV_gettable(lua_State* L, const TValue* t, TValue* key, StkId val)
             LuauObject* inst = objectvalue(t);
             const TValue* offsettval = luaH_get(inst->lclass->memberstooffset, key);
 
-            // Class instances throw if you try to access a member that is not
+            // Objects throw if you try to access a member that is not
             // present.
             if (ttisnil(offsettval))
                 luaG_missingmembererror(L, t, key);
@@ -395,7 +395,7 @@ int luaV_equalval(lua_State* L, const TValue* t1, const TValue* t2)
         // is not a strict requirement for comparison metamethods.
         LuauObject* t1inst = objectvalue(t1);
         LuauObject* t2inst = objectvalue(t2);
-        // Class instances with differing class objects are always inequal.
+        // Objects of differing classes are always inequal.
         if (t1inst->lclass != t2inst->lclass)
             return false;
         // Otherwise, check if `__eq` exists and use that

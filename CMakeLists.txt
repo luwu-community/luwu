@@ -310,6 +310,13 @@ if(LUAU_BUILD_TESTS)
     endif ()
     target_compile_definitions(Luau.Conformance PRIVATE LUAU_CONFORMANCE_SOURCE_DIR="${LUAU_CONFORMANCE_SOURCE_DIR}")
 
+    # Luwu Classes: the ClassesFuzz conformance case drives tests/classes_fuzz (a seal script) against the luau CLI
+    if(TARGET Luau.Repl.CLI AND NOT CMAKE_SYSTEM_NAME MATCHES "Android|iOS")
+        file(REAL_PATH "tests/classes_fuzz" LUWU_CLASSES_FUZZ_DIR)
+        target_compile_definitions(Luau.Conformance PRIVATE LUWU_CLASSES_FUZZ_DIR="${LUWU_CLASSES_FUZZ_DIR}" LUWU_REPL_CLI_PATH="$<TARGET_FILE:Luau.Repl.CLI>")
+        add_dependencies(Luau.Conformance Luau.Repl.CLI)
+    endif()
+
     target_compile_options(Luau.CLI.Test PRIVATE ${LUAU_OPTIONS})
     target_compile_definitions(Luau.CLI.Test PRIVATE DOCTEST_CONFIG_USE_STD_HEADERS)
     target_include_directories(Luau.CLI.Test PRIVATE extern CLI)

@@ -529,7 +529,9 @@ struct BytecodeGraphSerializer
         case LOP_JUMPXISA:
             recordJump(insn, 2);
             bcb.emitAD(insn.op, getRegInput(insn, 0), 0);
-            bcb.emitAux(static_cast<uint32_t>(getImmBool(insn, 1)) << 31 | getRegInput(insn, 3));
+            bcb.emitAux(
+                static_cast<uint32_t>(getImmBool(insn, 1)) << 31 | getRegInput(insn, 3) | (getImmBool(insn, 4) ? LBC_JUMPXISA_CHECKCLASS : 0u)
+            );
             break;
 
         case LOP_IDIV:
