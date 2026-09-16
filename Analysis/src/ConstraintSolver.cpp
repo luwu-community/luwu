@@ -1729,6 +1729,11 @@ static void patchUnconstrainedGenericsFromExpectedType(TypeId overloadFn, TypeId
 
         // Only patch generics that argument matching left completely unconstrained; if
         // arguments already pinned a lower bound, trust that over the expected type.
+        //
+        // Widening a pinned bound to the expected type here is NOT sound: argument matching has
+        // already run against the old bound by this point, so overriding it discards that check --
+        // `Exception("hello")` against an annotated `Exception<number>` stops erroring entirely.
+        // Making the expected type win has to happen before arguments are matched, not here.
         if (!is<NeverType>(follow(ft->lowerBound)) || !is<UnknownType>(follow(ft->upperBound)))
             continue;
 
@@ -2021,6 +2026,60 @@ bool ConstraintSolver::tryDispatch(const FunctionCallConstraint& c, NotNull<cons
     return true;
 }
 
+// Luwu: pair each still-generic type parameter of the nominal `fn` returns with the corresponding
+// type argument of `expectedType`, when the two name the same class. `expectedType` may be a union
+// (a function returning `string | Exception<Info>`, say), in which case the single option naming
+// that class is used -- more than one is ambiguous and yields nothing.
+static void collectNominalGenericBindings(const FunctionType* ftv, TypeId expectedType, DenseHashMap<TypeId, TypeId>& bindings)
+{
+    if (!ftv)
+        return;
+
+    TypePackId retPack = follow(ftv->retTypes);
+    auto it = begin(retPack);
+    if (it == end(retPack))
+        return;
+
+    const ExternType* retEt = get<ExternType>(follow(*it));
+    if (!retEt)
+        return;
+
+    auto namesSameClass = [&](const ExternType* other)
+    {
+        return other && retEt->name == other->name && retEt->definitionModuleName == other->definitionModuleName &&
+               retEt->definitionLocation == other->definitionLocation && retEt->instantiatedTypeParams.size() == other->instantiatedTypeParams.size();
+    };
+
+    const ExternType* expectedEt = get<ExternType>(follow(expectedType));
+
+    if (!expectedEt)
+    {
+        if (const UnionType* utv = get<UnionType>(follow(expectedType)))
+        {
+            for (TypeId option : utv)
+            {
+                const ExternType* optionEt = get<ExternType>(follow(option));
+                if (!namesSameClass(optionEt))
+                    continue;
+
+                if (expectedEt)
+                    return; // ambiguous
+                expectedEt = optionEt;
+            }
+        }
+    }
+
+    if (!namesSameClass(expectedEt))
+        return;
+
+    for (size_t i = 0; i < retEt->instantiatedTypeParams.size(); ++i)
+    {
+        TypeId param = follow(retEt->instantiatedTypeParams[i]);
+        if (get<GenericType>(param))
+            bindings[param] = follow(expectedEt->instantiatedTypeParams[i]);
+    }
+}
+
 bool ConstraintSolver::tryDispatch(const FunctionCheckConstraint& c, NotNull<const Constraint> constraint, bool force)
 {
     TypeId fn = follow(c.fn);
@@ -2087,13 +2146,27 @@ bool ConstraintSolver::tryDispatch(const FunctionCheckConstraint& c, NotNull<con
 
     Unifier2 u2{arena, builtinTypes, constraint->scope, NotNull{&iceReporter}};
 
+    // Luwu: a call that constructs a nominal (`Exception(...)`) against a known expected type
+    // (`: Exception<Info>`) can solve that nominal's generics from the expectation before its
+    // arguments are checked. Without this they become `never`/`unknown` below, a table literal
+    // argument has nothing to check against and widens -- `{ kind = "InvalidInput" }` infers
+    // `{ kind: string }` -- and the resulting `Exception<{ kind: string }>` is then rejected against
+    // the annotation. A nominal's type parameters are invariant, so there is no recovering from that
+    // afterwards; the writer's only workaround is to restate the annotation on a temporary.
+    DenseHashMap<TypeId, TypeId> nominalBindings{nullptr};
+    if (FFlag::LuwuGenericNominals && c.expectedType)
+        collectNominalGenericBindings(ftv, follow(*c.expectedType), nominalBindings);
+
     for (auto generic : ftv->generics)
     {
         // We may see non-generic types here, for example when evaluating a
         // recursive function call.
         if (auto gty = get<GenericType>(follow(generic)))
         {
-            replacements[generic] = gty->polarity == Polarity::Negative ? builtinTypes->neverType : builtinTypes->unknownType;
+            if (TypeId* bound = nominalBindings.find(follow(generic)))
+                replacements[generic] = *bound;
+            else
+                replacements[generic] = gty->polarity == Polarity::Negative ? builtinTypes->neverType : builtinTypes->unknownType;
             genericTypesAndPacks.insert(generic);
         }
     }
@@ -2127,6 +2200,13 @@ bool ConstraintSolver::tryDispatch(const FunctionCheckConstraint& c, NotNull<con
     for (size_t i = 0; i < c.callSite->args.size && i + expectedArgOffset < expectedArgs.size() && i + typeOffset < argPackHead.size(); ++i)
     {
         TypeId expectedArgTy = follow(expectedArgs[i + expectedArgOffset]);
+
+        // Luwu: a parameter whose type is one of the nominal's generics has a real expected type
+        // once that generic is solved from the call's own expected type -- push that in, rather
+        // than the bare generic, so a literal argument is checked against it instead of widening.
+        if (TypeId* bound = nominalBindings.find(expectedArgTy))
+            expectedArgTy = follow(*bound);
+
         AstExpr* expr = unwrapGroup(c.callSite->args.data[i]);
 
         PushTypeResult result = pushTypeInto(

@@ -31,6 +31,7 @@ LUAU_FASTFLAGVARIABLE(LuauDontBindOptionalGenericToNil)
 LUAU_FASTFLAGVARIABLE(LuauImproveUniqueTableWidthSubtyping)
 LUAU_FASTFLAG(LuauBidirectionalInferenceSimplifyTables)
 LUAU_FASTFLAG(LuauIndexerModifierMismatchErrors)
+LUAU_FASTFLAG(LuwuGenericNominals)
 
 namespace Luau
 {
@@ -2261,7 +2262,43 @@ SubtypingResult Subtyping::isCovariantWith(
     NotNull<Scope> scope
 )
 {
-    return {isSubclass(subExternType, superExternType)};
+    if (isSubclass(subExternType, superExternType))
+        return {true};
+
+    // Luwu: `isSubclass` compares a generic nominal's type arguments with `sameNominalTypeArg`
+    // (Type.cpp), which can only answer pointer identity or another nominal -- it lives in Type.cpp
+    // and has no subtyping machinery to call. So two separately-constructed but identical arguments
+    // never match, and `Exception<{ n: number }>` is not a subtype of `Exception<{ n: number }>`.
+    // Here the machinery *is* available, so compare the arguments properly. A nominal's type
+    // parameters are invariant, so this is equivalence, not subtyping -- `Exception<string>` still
+    // has nothing to do with `Exception<number>`.
+    if (FFlag::LuwuGenericNominals && subExternType->name == superExternType->name &&
+        subExternType->definitionModuleName == superExternType->definitionModuleName &&
+        subExternType->definitionLocation == superExternType->definitionLocation &&
+        subExternType->instantiatedTypeParams.size() == superExternType->instantiatedTypeParams.size() &&
+        subExternType->instantiatedTypePackParams.size() == superExternType->instantiatedTypePackParams.size() &&
+        !subExternType->instantiatedTypeParams.empty())
+    {
+        SubtypingResult result{true};
+
+        for (size_t i = 0; i < subExternType->instantiatedTypeParams.size(); ++i)
+        {
+            result.andAlso(
+                isInvariantWith(env, follow(subExternType->instantiatedTypeParams[i]), follow(superExternType->instantiatedTypeParams[i]), scope)
+            );
+        }
+
+        for (size_t i = 0; i < subExternType->instantiatedTypePackParams.size(); ++i)
+        {
+            if (follow(subExternType->instantiatedTypePackParams[i]) != follow(superExternType->instantiatedTypePackParams[i]))
+                return {false};
+        }
+
+        if (result.isSubtype)
+            return result;
+    }
+
+    return {false};
 }
 
 SubtypingResult Subtyping::isCovariantWith(

@@ -1161,12 +1161,29 @@ struct TypeStringifier
             return;
         }
 
+        // The `typeof(setmetatable(...))` class idiom reaches itself through every method's `self`,
+        // so expanding one -- at the root, or in a `where` clause body, where the name above is
+        // deliberately bypassed -- can arrive back here. Every other name-carrying variant guards
+        // that; this one did not, and only the cycle-name short-circuit in `stringify` kept it from
+        // recursing forever.
+        if (state.hasSeen(&mtv))
+        {
+            if (emitRecursiveAliasName(ty, std::nullopt, mtv.syntheticName))
+                return;
+
+            state.result.cycle = true;
+            state.emit("*CYCLE*");
+            return;
+        }
+
         state.emit("{ @metatable ");
         stringify(mtv.metatable);
         state.emit(",");
         state.newline();
         stringify(mtv.table);
         state.emit(" }");
+
+        state.unsee(&mtv);
     }
 
     void operator()(TypeId ty, const ExternType& etv)
@@ -1917,6 +1934,43 @@ static void assignCycleNames(
             continue;
         }
 
+        // Luwu: the named-table case above covers only TableType, but every other variant that can
+        // be the target of an alias carries a name too, and the idioms Luau OOP is actually written
+        // in land on those: `typeof(setmetatable(...))` is a MetatableType, and
+        // `typeof(X.Prototype) & { ... }` an IntersectionType. Both recurse through every method's
+        // `self`, so both are *always* cyclic -- which made them the shapes that could never print
+        // as their own name, leaving a table of them reading as `t65` repeated. Each of these
+        // printers has its own name short-circuit and its own hasSeen guard, so leaving them
+        // unnamed here is safe, exactly as it is for a named table.
+        if (!exhaustive)
+        {
+            TypeId cycleTyFollowed = follow(cycleTy);
+
+            auto isNamed = [](const auto* t)
+            {
+                return t && (t->name || t->syntheticName);
+            };
+
+            if (auto mtv = get<MetatableType>(cycleTyFollowed); mtv && mtv->syntheticName)
+                continue;
+            // UnionType and FunctionType are deliberately not here, and both are worth explaining,
+            // because the reasoning bounds how far this can be taken:
+            //
+            //  - A named type that still ends up *expanded* -- as the root, or as a `where` clause
+            //    body -- reaches its own recursive reference with `exhaustive` set, where
+            //    `emitRecursiveAliasName` declines and the printer emits `*CYCLE*`. `*CYCLE*` says
+            //    less than `t1` did, so for shapes that are routinely expanded this is a downgrade.
+            //    `RefinementTest.cannot_call_a_function_union` pins exactly that for a named union.
+            //  - A self-recursive function alias is its own root, so `suppressNameFor` makes
+            //    `willPrintAsBareName` answer false and the union/intersection printers parenthesize
+            //    what they no longer find in `cycleNames` (`(F)?` where `t1?` used to do).
+            //
+            // The two kept here are the ones written as classes, which are read far more often than
+            // they are expanded.
+            if (isNamed(get<IntersectionType>(cycleTyFollowed)))
+                continue;
+        }
+
         name = "t" + std::to_string(nextIndex);
         ++nextIndex;
 
@@ -1970,6 +2024,33 @@ static void tableTypeToStringDetailed(
         result.typeSpans.emplace_back(ToStringSpan{startPos, endPos, ty});
 
     tvs.stringify(ttv->instantiatedTypeParams, ttv->instantiatedTypePackParams);
+}
+
+// Luwu: the alias name a type carries, whichever variant it is. `ty` must already be followed.
+// MetatableType is the odd one out -- it has no `name`, only a `syntheticName`.
+static std::optional<std::string> rootAliasName(TypeId ty, bool ignoreSyntheticName)
+{
+    auto named = [&](const std::optional<std::string>& name, const std::optional<std::string>& syntheticName) -> std::optional<std::string>
+    {
+        if (name)
+            return *name;
+        if (!ignoreSyntheticName && syntheticName)
+            return *syntheticName;
+        return std::nullopt;
+    };
+
+    if (auto ttv = get<TableType>(ty))
+        return named(ttv->name, ttv->syntheticName);
+    if (auto mtv = get<MetatableType>(ty))
+        return named(std::nullopt, mtv->syntheticName);
+    if (auto itv = get<IntersectionType>(ty))
+        return named(itv->name, itv->syntheticName);
+    if (auto utv = get<UnionType>(ty))
+        return named(utv->name, utv->syntheticName);
+    if (auto ftv = get<FunctionType>(ty))
+        return named(ftv->name, ftv->syntheticName);
+
+    return std::nullopt;
 }
 
 ToStringResult toStringDetailed(TypeId ty, ToStringOptions& opts)

@@ -3455,7 +3455,16 @@ InferencePack ConstraintGenerator::checkExprCall(
      */
 
     NotNull<Constraint> checkConstraint = addConstraint(
-        scope, call->func->location, FunctionCheckConstraint{fnType, argPack, call, NotNull{&module->astTypes}, NotNull{&module->astExpectedTypes}}
+        scope,
+        call->func->location,
+        FunctionCheckConstraint{
+            fnType,
+            argPack,
+            call,
+            NotNull{&module->astTypes},
+            NotNull{&module->astExpectedTypes},
+            FFlag::LuwuGenericNominals ? expectedType : std::nullopt,
+        }
     );
 
     addAllAsDependencies(funcBeginCheckpoint, funcEndCheckpoint, this, checkConstraint);

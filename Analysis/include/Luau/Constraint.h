@@ -127,6 +127,12 @@ struct FunctionCheckConstraint
     class AstExprCall* callSite = nullptr;
     NotNull<DenseHashMap<const AstExpr*, TypeId>> astTypes;
     NotNull<DenseHashMap<const AstExpr*, TypeId>> astExpectedTypes;
+
+    // The type this call is expected to produce, if any. Used to solve the generics of a nominal
+    // the call constructs before its arguments are checked, so that a literal argument is checked
+    // against the expected type argument rather than widened. See FunctionCallConstraint's own
+    // `expectedType`, which resolves the same generics after the fact for a different purpose.
+    std::optional<TypeId> expectedType;
 };
 
 // prim FreeType ExpectedType PrimitiveType
