@@ -168,6 +168,14 @@ struct StringifierState
 
     DenseHashMap<TypeId, std::string> cycleNames{{}};
     DenseHashMap<TypePackId, std::string> cycleTpNames{{}};
+    // Luwu: the subset of the two maps above that was actually emitted. A `where` clause should
+    // define the names the reader can see and nothing else: a cycle can be *found* by
+    // findCyclicTypes and then never printed, because the root short-circuited to its own name or
+    // the occurrence sat inside a part that was truncated. Defining those produced a `where` with
+    // bindings for names that appear nowhere -- and, when every one of them was unused, the bare
+    // dangling `Request where ` with nothing after it at all.
+    DenseHashSet<TypeId> usedCycleNames{nullptr};
+    DenseHashSet<TypePackId> usedCycleTpNames{nullptr};
     Set<void*> seen{{}};
     // `$$$` was chosen as the tombstone for `usedNames` since it is not a valid name syntactically and is relatively short for string comparison
     // reasons.
@@ -552,6 +560,7 @@ struct TypeStringifier
 
         if (auto p = state.cycleNames.find(tv))
         {
+            state.usedCycleNames.insert(tv);
             state.emit(*p);
             return;
         }
@@ -1713,6 +1722,7 @@ struct TypePackStringifier
 
         if (auto p = state.cycleTpNames.find(tp))
         {
+            state.usedCycleTpNames.insert(tp);
             state.emit(*p);
             return;
         }
@@ -2114,7 +2124,12 @@ ToStringResult toStringDetailed(TypeId ty, ToStringOptions& opts)
      * t1 where t1 = the_whole_root_type
      */
     if (auto p = state.cycleNames.find(ty))
+    {
+        // Emitted directly rather than through TypeStringifier::stringify, so record it here too --
+        // otherwise the root's own cycle is never marked used and loses its `where` binding.
+        state.usedCycleNames.insert(ty);
         state.emit(*p);
+    }
     else
         tvs.stringify(ty);
 
@@ -2143,71 +2158,146 @@ ToStringResult toStringDetailed(TypeId ty, ToStringOptions& opts)
         }
     }
 
-    if (!state.cycleNames.empty() || !state.cycleTpNames.empty())
-    {
-        result.cycle = true;
-        state.emit(" where ");
-    }
-
-    state.exhaustive = true;
-
-    std::vector<std::pair<TypeId, std::string>> sortedCycleNames{state.cycleNames.begin(), state.cycleNames.end()};
-    std::sort(
-        sortedCycleNames.begin(),
-        sortedCycleNames.end(),
-        [](const auto& a, const auto& b)
-        {
-            return a.second < b.second;
-        }
-    );
-
-    bool semi = false;
-    for (const auto& [cycleTy, name] : sortedCycleNames)
-    {
-        if (semi)
-            state.emit(" ; ");
-
-        state.emit(name);
-        state.emit(" = ");
-        Luau::visit(
-            [&tvs, cycleTy = cycleTy](auto&& t)
-            {
-                return tvs(cycleTy, t);
-            },
-            cycleTy->ty
-        );
-
-        semi = true;
-    }
-
-    std::vector<std::pair<TypePackId, std::string>> sortedCycleTpNames(state.cycleTpNames.begin(), state.cycleTpNames.end());
-    std::sort(
-        sortedCycleTpNames.begin(),
-        sortedCycleTpNames.end(),
-        [](const auto& a, const auto& b)
-        {
-            return a.second < b.second;
-        }
-    );
-
+    // Luwu: define only the cycle names that actually reached the output, and keep going until the
+    // bodies stop introducing new ones (a body can reference another cycle). Emitting a binding per
+    // *discovered* cycle instead produced definitions for names the text never used, and -- when the
+    // root short-circuited to its own name so none of them were used -- a bare trailing
+    // `Request where ` with nothing after it.
     TypePackStringifier tps{state};
 
-    for (const auto& [cycleTp, name] : sortedCycleTpNames)
-    {
-        if (semi)
-            state.emit(" ; ");
+    // Collected as (name, body) and sorted by name at the end: bodies are *discovered* in usage
+    // order (the root first, then whatever its body referenced), but the clause reads better -- and
+    // stays stable for callers comparing strings -- ordered by name.
+    std::vector<std::pair<std::string, std::string>> whereEntries;
 
-        state.emit(name);
-        state.emit(" = ");
-        Luau::visit(
-            [&tps, cycleTy = cycleTp](auto&& t)
+    auto appendBody = [&](auto printBody, const std::string& name)
+    {
+        std::string saved = std::move(result.name);
+        result.name.clear();
+
+        printBody();
+
+        std::string body = std::move(result.name);
+        result.name = std::move(saved);
+
+        whereEntries.emplace_back(name, std::move(body));
+    };
+
+    DenseHashSet<TypeId> definedTys{nullptr};
+    DenseHashSet<TypePackId> definedTps{nullptr};
+
+    bool addedAny = true;
+    while (addedAny)
+    {
+        addedAny = false;
+
+        std::vector<std::pair<TypeId, std::string>> pendingTys;
+        for (const auto& [cycleTy, name] : state.cycleNames)
+        {
+            if (state.usedCycleNames.contains(cycleTy) && !definedTys.contains(cycleTy))
+                pendingTys.emplace_back(cycleTy, name);
+        }
+
+        std::vector<std::pair<TypePackId, std::string>> pendingTps;
+        for (const auto& [cycleTp, name] : state.cycleTpNames)
+        {
+            if (state.usedCycleTpNames.contains(cycleTp) && !definedTps.contains(cycleTp))
+                pendingTps.emplace_back(cycleTp, name);
+        }
+
+        auto byName = [](const auto& a, const auto& b)
+        {
+            return a.second < b.second;
+        };
+        std::sort(pendingTys.begin(), pendingTys.end(), byName);
+        std::sort(pendingTps.begin(), pendingTps.end(), byName);
+
+        for (const auto& [cycleTy, name] : pendingTys)
+        {
+            definedTys.insert(cycleTy);
+            addedAny = true;
+
+            appendBody(
+                [&]()
+                {
+                    // Expand this cycle with only *its own* name bypassed, rather than switching
+                    // names off wholesale: `exhaustive` suppresses every name, so a body mentioning
+                    // another named type re-expanded it (`Cache<K, V>` printed as
+                    // `t1 & { store: { [K]: V } }`) and one message could spell a type two ways.
+                    //
+                    // Only safe where this printer can also define the names it uses -- that is what
+                    // `includeWhereClauses` means. Without it, a corecursive pair would print
+                    // `t1 = () -> (number, B)` with `B` defined nowhere, which says less than
+                    // expanding it did (see `corecursive_function_types`).
+                    std::optional<TypeId> savedSuppress = state.suppressNameFor;
+                    const bool savedExhaustive = state.exhaustive;
+
+                    if (state.opts.includeWhereClauses)
+                        state.suppressNameFor = cycleTy;
+                    else
+                        state.exhaustive = true;
+
+                    Luau::visit(
+                        [&tvs, cycleTy = cycleTy](auto&& t)
+                        {
+                            return tvs(cycleTy, t);
+                        },
+                        cycleTy->ty
+                    );
+
+                    state.suppressNameFor = savedSuppress;
+                    state.exhaustive = savedExhaustive;
+                },
+                name
+            );
+        }
+
+        for (const auto& [cycleTp, name] : pendingTps)
+        {
+            definedTps.insert(cycleTp);
+            addedAny = true;
+
+            appendBody(
+                [&]()
+                {
+                    Luau::visit(
+                        [&tps, cycleTp = cycleTp](auto&& t)
+                        {
+                            return tps(cycleTp, t);
+                        },
+                        cycleTp->ty
+                    );
+                },
+                name
+            );
+        }
+    }
+
+    if (!whereEntries.empty())
+    {
+        std::sort(
+            whereEntries.begin(),
+            whereEntries.end(),
+            [](const auto& a, const auto& b)
             {
-                return tps(cycleTy, t);
-            },
-            cycleTp->ty
+                return a.first < b.first;
+            }
         );
 
-        semi = true;
+        result.cycle = true;
+        state.emit(" where ");
+
+        bool semi = false;
+        for (const auto& [name, body] : whereEntries)
+        {
+            if (semi)
+                state.emit(" ; ");
+
+            state.emit(name);
+            state.emit(" = ");
+            state.emit(body);
+            semi = true;
+        }
     }
 
     if (opts.maxTypeLength > 0 && result.name.length() > opts.maxTypeLength)
@@ -2246,75 +2336,141 @@ ToStringResult toStringDetailed(TypePackId tp, ToStringOptions& opts)
      * t1 where t1 = the_whole_root_type
      */
     if (auto p = state.cycleTpNames.find(tp))
+    {
+        state.usedCycleTpNames.insert(tp);
         state.emit(*p);
+    }
     else
         tvs.stringify(tp);
 
-    if (!cycles.empty() || !cycleTPs.empty())
-    {
-        result.cycle = true;
-        state.emit(" where ");
-    }
-
-    state.exhaustive = true;
-
-    std::vector<std::pair<TypeId, std::string>> sortedCycleNames{state.cycleNames.begin(), state.cycleNames.end()};
-    std::sort(
-        sortedCycleNames.begin(),
-        sortedCycleNames.end(),
-        [](const auto& a, const auto& b)
-        {
-            return a.second < b.second;
-        }
-    );
-
-    bool semi = false;
-    for (const auto& [cycleTy, name] : sortedCycleNames)
-    {
-        if (semi)
-            state.emit(" ; ");
-
-        state.emit(name);
-        state.emit(" = ");
-        Luau::visit(
-            [&tvs, cycleTy = cycleTy](auto t)
-            {
-                return tvs(cycleTy, t);
-            },
-            cycleTy->ty
-        );
-
-        semi = true;
-    }
-
-    std::vector<std::pair<TypePackId, std::string>> sortedCycleTpNames{state.cycleTpNames.begin(), state.cycleTpNames.end()};
-    std::sort(
-        sortedCycleTpNames.begin(),
-        sortedCycleTpNames.end(),
-        [](const auto& a, const auto& b)
-        {
-            return a.second < b.second;
-        }
-    );
-
+    // Luwu: same as the TypeId overload -- define only the cycle names that actually reached the
+    // output, iterating until the bodies stop introducing new ones. This one tested `cycles` (every
+    // cycle *found*) rather than `cycleNames` (every cycle actually *named*), and those differ:
+    // assignCycleNames deliberately leaves a named type unnamed so it can print as its own name. A
+    // root that did exactly that produced ` where ` followed by nothing at all.
     TypePackStringifier tps{tvs.state};
 
-    for (const auto& [cycleTp, name] : sortedCycleTpNames)
-    {
-        if (semi)
-            state.emit(" ; ");
+    std::vector<std::pair<std::string, std::string>> whereEntries;
 
-        state.emit(name);
-        state.emit(" = ");
-        Luau::visit(
-            [&tps, cycleTp = cycleTp](auto t)
+    auto appendBody = [&](auto printBody, const std::string& name)
+    {
+        std::string saved = std::move(result.name);
+        result.name.clear();
+
+        printBody();
+
+        std::string body = std::move(result.name);
+        result.name = std::move(saved);
+
+        whereEntries.emplace_back(name, std::move(body));
+    };
+
+    DenseHashSet<TypeId> definedTys{nullptr};
+    DenseHashSet<TypePackId> definedTps{nullptr};
+
+    bool addedAny = true;
+    while (addedAny)
+    {
+        addedAny = false;
+
+        std::vector<std::pair<TypeId, std::string>> pendingTys;
+        for (const auto& [cycleTy, name] : state.cycleNames)
+        {
+            if (state.usedCycleNames.contains(cycleTy) && !definedTys.contains(cycleTy))
+                pendingTys.emplace_back(cycleTy, name);
+        }
+
+        std::vector<std::pair<TypePackId, std::string>> pendingTps;
+        for (const auto& [cycleTp, name] : state.cycleTpNames)
+        {
+            if (state.usedCycleTpNames.contains(cycleTp) && !definedTps.contains(cycleTp))
+                pendingTps.emplace_back(cycleTp, name);
+        }
+
+        auto byName = [](const auto& a, const auto& b)
+        {
+            return a.second < b.second;
+        };
+        std::sort(pendingTys.begin(), pendingTys.end(), byName);
+        std::sort(pendingTps.begin(), pendingTps.end(), byName);
+
+        for (const auto& [cycleTy, name] : pendingTys)
+        {
+            definedTys.insert(cycleTy);
+            addedAny = true;
+
+            appendBody(
+                [&]()
+                {
+                    std::optional<TypeId> savedSuppress = state.suppressNameFor;
+                    const bool savedExhaustive = state.exhaustive;
+
+                    if (state.opts.includeWhereClauses)
+                        state.suppressNameFor = cycleTy;
+                    else
+                        state.exhaustive = true;
+
+                    Luau::visit(
+                        [&tvs, cycleTy = cycleTy](auto&& t)
+                        {
+                            return tvs(cycleTy, t);
+                        },
+                        cycleTy->ty
+                    );
+
+                    state.suppressNameFor = savedSuppress;
+                    state.exhaustive = savedExhaustive;
+                },
+                name
+            );
+        }
+
+        for (const auto& [cycleTp, name] : pendingTps)
+        {
+            definedTps.insert(cycleTp);
+            addedAny = true;
+
+            appendBody(
+                [&]()
+                {
+                    Luau::visit(
+                        [&tps, cycleTp = cycleTp](auto t)
+                        {
+                            return tps(cycleTp, t);
+                        },
+                        cycleTp->ty
+                    );
+                },
+                name
+            );
+        }
+    }
+
+    if (!whereEntries.empty())
+    {
+        std::sort(
+            whereEntries.begin(),
+            whereEntries.end(),
+            [](const auto& a, const auto& b)
             {
-                return tps(cycleTp, t);
-            },
-            cycleTp->ty
+                return a.first < b.first;
+            }
         );
 
-        semi = true;
+        result.cycle = true;
+        state.emit(" where ");
+
+        bool semi = false;
+        for (const auto& [name, body] : whereEntries)
+        {
+            if (semi)
+                state.emit(" ; ");
+
+            state.emit(name);
+            state.emit(" = ");
+            state.emit(body);
+            semi = true;
+        }
     }
 
     if (opts.maxTypeLength > 0 && result.name.length() > opts.maxTypeLength)
@@ -2349,6 +2505,30 @@ std::string toStringNamedFunction(const std::string& funcName, const FunctionTyp
 {
     ToStringResult result;
     StringifierState state{opts, result};
+
+    // Luwu: name the cycles before printing, exactly as toStringDetailed does. Without this
+    // `state.cycleNames` is empty, so a recursive type in a signature has no `t<n>` to collapse to
+    // and degrades to a bare `*CYCLE*` -- which doesn't say *which* type recursed, and in the shapes
+    // this matters for (an OOP prototype table, whose every method takes `self`) there are several
+    // candidates on screen at once. A `where` clause is emitted below for whatever gets named.
+    std::set<TypeId> cycles;
+    std::set<TypePackId> cycleTPs;
+
+    // `findCyclicTypes` assigns to its out-params rather than adding to them, so accumulate.
+    auto gatherCycles = [&](auto ty)
+    {
+        std::set<TypeId> found;
+        std::set<TypePackId> foundTPs;
+        findCyclicTypes(found, foundTPs, ty, opts.exhaustive);
+        cycles.insert(found.begin(), found.end());
+        cycleTPs.insert(foundTPs.begin(), foundTPs.end());
+    };
+
+    gatherCycles(ftv.argTypes);
+    gatherCycles(ftv.retTypes);
+
+    assignCycleNames(cycles, cycleTPs, state.cycleNames, state.cycleTpNames, opts.exhaustive);
+
     TypeStringifier tvs{state};
 
     state.emit(funcName);
@@ -2434,6 +2614,52 @@ std::string toStringNamedFunction(const std::string& funcName, const FunctionTyp
     if (wrap)
         state.emit(")");
 
+    // Luwu: define whatever cycle names were used, so `t1` in the signature above means something.
+    if (!state.cycleNames.empty())
+    {
+        state.emit(" where ");
+
+        std::vector<std::pair<TypeId, std::string>> sorted{state.cycleNames.begin(), state.cycleNames.end()};
+        std::sort(
+            sorted.begin(),
+            sorted.end(),
+            [](const auto& a, const auto& b)
+            {
+                return a.second < b.second;
+            }
+        );
+
+        bool semi = false;
+        for (const auto& [cycleTy, name] : sorted)
+        {
+            if (semi)
+                state.emit(" ; ");
+
+            state.emit(name);
+            state.emit(" = ");
+
+            // Luwu: expand *this* cycle, but leave every other named type in the body as its name.
+            // `exhaustive` used to be set for the whole loop, which suppresses names globally -- so a
+            // body mentioning `Cache<K, V>` printed it re-expanded as `t1 & { store: { [K]: V } }`,
+            // and the same type could appear spelled two different ways within one message. Only the
+            // type being expanded needs its own name bypassed, which is what `suppressNameFor` is
+            // for (see stringifyAliasBodyOnce, which already does exactly this).
+            std::optional<TypeId> savedSuppress = state.suppressNameFor;
+            state.suppressNameFor = cycleTy;
+
+            Luau::visit(
+                [&tvs, cycleTy = cycleTy](auto&& t)
+                {
+                    return tvs(cycleTy, t);
+                },
+                cycleTy->ty
+            );
+
+            state.suppressNameFor = savedSuppress;
+
+            semi = true;
+        }
+    }
 
     return result.name;
 }

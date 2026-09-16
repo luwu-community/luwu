@@ -2265,7 +2265,7 @@ SubtypingResult Subtyping::isCovariantWith(
     if (isSubclass(subExternType, superExternType))
         return {true};
 
-    // Luwu: `isSubclass` compares a generic nominal's type arguments with `sameNominalTypeArg`
+    // LuwuGenericNominals: `isSubclass` compares a generic nominal's type arguments with `sameNominalTypeArg`
     // (Type.cpp), which can only answer pointer identity or another nominal -- it lives in Type.cpp
     // and has no subtyping machinery to call. So two separately-constructed but identical arguments
     // never match, and `Exception<{ n: number }>` is not a subtype of `Exception<{ n: number }>`.

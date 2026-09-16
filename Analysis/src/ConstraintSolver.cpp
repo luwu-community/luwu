@@ -1743,6 +1743,8 @@ static void patchUnconstrainedGenericsFromExpectedType(TypeId overloadFn, TypeId
     }
 }
 
+static std::optional<TypeId> selectExpectedNominal(const FunctionType* ftv, TypeId expectedType);
+
 bool ConstraintSolver::tryDispatch(const FunctionCallConstraint& c, NotNull<const Constraint> constraint, bool force)
 {
     TypeId fn = follow(c.fn);
@@ -2026,51 +2028,72 @@ bool ConstraintSolver::tryDispatch(const FunctionCallConstraint& c, NotNull<cons
     return true;
 }
 
-// Luwu: pair each still-generic type parameter of the nominal `fn` returns with the corresponding
-// type argument of `expectedType`, when the two name the same class. `expectedType` may be a union
-// (a function returning `string | Exception<Info>`, say), in which case the single option naming
-// that class is used -- more than one is ambiguous and yields nothing.
-static void collectNominalGenericBindings(const FunctionType* ftv, TypeId expectedType, DenseHashMap<TypeId, TypeId>& bindings)
+// LuwuGenericNominals: the option of `expectedType` that names the same generic nominal as `ftv` returns, if there
+// is exactly one. `expectedType` may be a union -- a function declared
+// `(): string | Exception<Info>` returning `Exception(...)`, say -- in which case the single option
+// naming that class is the one this call is expected to produce. More than one is ambiguous and
+// yields nothing, as does an expectation that names a different class.
+//
+// This is deliberately an identity check on the class itself (name + definition site + arity) and
+// never looks at the type arguments: matching them is the caller's business, and pairing two
+// unrelated nominals would be exactly the confusion nominality exists to prevent.
+static std::optional<TypeId> selectExpectedNominal(const FunctionType* ftv, TypeId expectedType)
 {
     if (!ftv)
-        return;
+        return std::nullopt;
 
     TypePackId retPack = follow(ftv->retTypes);
     auto it = begin(retPack);
     if (it == end(retPack))
-        return;
+        return std::nullopt;
 
     const ExternType* retEt = get<ExternType>(follow(*it));
     if (!retEt)
-        return;
+        return std::nullopt;
 
     auto namesSameClass = [&](const ExternType* other)
     {
         return other && retEt->name == other->name && retEt->definitionModuleName == other->definitionModuleName &&
-               retEt->definitionLocation == other->definitionLocation && retEt->instantiatedTypeParams.size() == other->instantiatedTypeParams.size();
+               retEt->definitionLocation == other->definitionLocation &&
+               retEt->instantiatedTypeParams.size() == other->instantiatedTypeParams.size() &&
+               retEt->instantiatedTypePackParams.size() == other->instantiatedTypePackParams.size();
     };
 
-    const ExternType* expectedEt = get<ExternType>(follow(expectedType));
+    expectedType = follow(expectedType);
 
-    if (!expectedEt)
+    if (namesSameClass(get<ExternType>(expectedType)))
+        return expectedType;
+
+    if (const UnionType* utv = get<UnionType>(expectedType))
     {
-        if (const UnionType* utv = get<UnionType>(follow(expectedType)))
+        std::optional<TypeId> found;
+        for (TypeId option : utv)
         {
-            for (TypeId option : utv)
-            {
-                const ExternType* optionEt = get<ExternType>(follow(option));
-                if (!namesSameClass(optionEt))
-                    continue;
+            option = follow(option);
+            if (!namesSameClass(get<ExternType>(option)))
+                continue;
 
-                if (expectedEt)
-                    return; // ambiguous
-                expectedEt = optionEt;
-            }
+            if (found)
+                return std::nullopt; // ambiguous
+            found = option;
         }
+        return found;
     }
 
-    if (!namesSameClass(expectedEt))
+    return std::nullopt;
+}
+
+// LuwuGenericNominals: pair each still-generic type parameter of the nominal `ftv` returns with the corresponding
+// type argument of the expectation, for pushing into the call's arguments.
+static void collectNominalGenericBindings(const FunctionType* ftv, TypeId expectedType, DenseHashMap<TypeId, TypeId>& bindings)
+{
+    std::optional<TypeId> expected = selectExpectedNominal(ftv, expectedType);
+    if (!expected)
         return;
+
+    const ExternType* retEt = get<ExternType>(follow(*begin(follow(ftv->retTypes))));
+    const ExternType* expectedEt = get<ExternType>(*expected);
+    LUAU_ASSERT(retEt && expectedEt);
 
     for (size_t i = 0; i < retEt->instantiatedTypeParams.size(); ++i)
     {
@@ -2146,7 +2169,7 @@ bool ConstraintSolver::tryDispatch(const FunctionCheckConstraint& c, NotNull<con
 
     Unifier2 u2{arena, builtinTypes, constraint->scope, NotNull{&iceReporter}};
 
-    // Luwu: a call that constructs a nominal (`Exception(...)`) against a known expected type
+    // LuwuGenericNominals: a call that constructs a nominal (`Exception(...)`) against a known expected type
     // (`: Exception<Info>`) can solve that nominal's generics from the expectation before its
     // arguments are checked. Without this they become `never`/`unknown` below, a table literal
     // argument has nothing to check against and widens -- `{ kind = "InvalidInput" }` infers
@@ -2201,7 +2224,7 @@ bool ConstraintSolver::tryDispatch(const FunctionCheckConstraint& c, NotNull<con
     {
         TypeId expectedArgTy = follow(expectedArgs[i + expectedArgOffset]);
 
-        // Luwu: a parameter whose type is one of the nominal's generics has a real expected type
+        // LuwuGenericNominals: a parameter whose type is one of the nominal's generics has a real expected type
         // once that generic is solved from the call's own expected type -- push that in, rather
         // than the bare generic, so a literal argument is checked against it instead of widening.
         if (TypeId* bound = nominalBindings.find(expectedArgTy))
