@@ -1002,7 +1002,7 @@ local function allocator(): AstAllocator
     error("Not implemented")
 end
 
-local function filter(...: string | { string } | AstFilter): AstFilter
+local function filter(...: string | AstFilter): AstFilter
     error("Not implemented")
 end
 

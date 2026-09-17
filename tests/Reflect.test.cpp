@@ -860,8 +860,8 @@ TEST_CASE("ReflectAstFilter")
         assert(localsAndFuncs[1].kind == "AstStatLocal")
         assert(localsAndFuncs[2].kind == "AstStatLocalFunction")
 
-        -- Multi-kind from table
-        local tableFilter = reflect.filter({"AstStatLocal", "AstStatLocalFunction"})
+        -- Multi-kind from table using unpack
+        local tableFilter = reflect.filter(unpack({"AstStatLocal", "AstStatLocalFunction"}))
         assert(multiFilter == tableFilter)
 
         -- Node:walk with filter

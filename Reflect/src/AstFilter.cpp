@@ -153,33 +153,9 @@ int reflectFilter(lua_State* L)
             if (!filter.addKind(std::string_view(str, len)))
                 luaL_error(L, "unknown node kind or category '%.*s'", int(len), str);
         }
-        else if (lua_istable(L, i))
-        {
-            int len = lua_objlen(L, i);
-            for (int j = 1; j <= len; j++)
-            {
-                lua_rawgeti(L, i, j);
-                if (lua_isstring(L, -1))
-                {
-                    size_t strLen = 0;
-                    const char* str = lua_tolstring(L, -1, &strLen);
-                    if (!filter.addKind(std::string_view(str, strLen)))
-                    {
-                        lua_pop(L, 1);
-                        luaL_error(L, "unknown node kind or category '%.*s'", int(strLen), str);
-                    }
-                }
-                else
-                {
-                    lua_pop(L, 1);
-                    luaL_error(L, "expected string in filter table at index %d", j);
-                }
-                lua_pop(L, 1);
-            }
-        }
         else
         {
-            luaL_typeerror(L, i, "string, table, or AstFilter");
+            luaL_typeerror(L, i, "string or AstFilter");
         }
     }
 
