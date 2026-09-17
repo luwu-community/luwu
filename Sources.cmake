@@ -553,6 +553,7 @@ if(TARGET Luau.UnitTest)
         tests/StringUtils.test.cpp
         tests/Subtyping.test.cpp
         tests/Symbol.test.cpp
+        tests/Reflect.test.cpp
         tests/ToDot.test.cpp
         tests/TopoSort.test.cpp
         tests/ToString.test.cpp
@@ -681,4 +682,21 @@ if(TARGET Luau.Bytecode.CLI)
     # Luau.Bytecode.CLI Sources
     target_sources(Luau.Bytecode.CLI PRIVATE
         CLI/src/Bytecode.cpp)
+endif()
+
+if(TARGET Luau.Reflect)
+    # Luau.Reflect Sources
+    target_sources(Luau.Reflect PRIVATE
+        Reflect/include/Luau/Reflect.h
+        Reflect/include/Luau/ReflectCommon.h
+        Reflect/include/Luau/ReflectAstHandler.h
+        Reflect/src/Reflect.cpp
+        Reflect/src/AstAllocator.cpp
+        Reflect/src/AstDocument.cpp
+        Reflect/src/AstNode.cpp
+        Reflect/src/CstNode.cpp
+        Reflect/src/AstAux.cpp
+        Reflect/src/AstLocal.cpp
+        Reflect/src/AstFilter.cpp
+    )
 endif()
