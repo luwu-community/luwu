@@ -76,6 +76,7 @@ LUAU_FASTFLAG(LuwuBetterUserDefinedClasses)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportedClassIsNilWorkaround)
 LUAU_FASTFLAG(LuauAutoStack)
+LUAU_FASTFLAG(LuwuTableDrop)
 LUAU_FASTFLAG(LuauUdataMetatablePinned)
 LUAU_FASTFLAG(LuauGcTraceUdata)
 LUAU_DYNAMIC_FASTFLAG(LuauGcTableStepFix)
@@ -1271,6 +1272,8 @@ TEST_CASE("Math")
 
 TEST_CASE("Tables")
 {
+    ScopedFastFlag tableDropFlag{FFlag::LuwuTableDrop, true};
+
     runConformance(
         "tables.luau",
         [](lua_State* L)
@@ -1297,6 +1300,20 @@ TEST_CASE("Tables")
             lua_setglobal(L, "makelud");
         }
     );
+}
+
+TEST_CASE("TableDropFlagDisabled")
+{
+    ScopedFastFlag tableDropFlag{FFlag::LuwuTableDrop, false};
+
+    lua_State* L = luaL_newstate();
+    luaL_openlibs(L);
+
+    lua_getglobal(L, "table");
+    lua_getfield(L, -1, "drop");
+    CHECK(lua_isnil(L, -1));
+
+    lua_close(L);
 }
 
 TEST_CASE("PatternMatch")
@@ -2081,6 +2098,7 @@ TEST_CASE("Types")
 {
     ScopedFastFlag integerType{FFlag::LuauIntegerType2, true};
     ScopedFastFlag nonePrimitive{FFlag::LuwuNonePrimitive, true};
+    ScopedFastFlag tableDropFlag{FFlag::LuwuTableDrop, true};
 
     runConformance(
         "types.luau",

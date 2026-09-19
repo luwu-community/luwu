@@ -455,6 +455,24 @@ do
   assert(table.find(t4, makeobjb(500)) == nil)
 end
 
+-- test table.drop
+do
+  local t = {"apple", "banana", "orange", "banana", "pear"}
+  assert(table.drop(t, "banana") == 2)
+  assert(table.concat(t, ",") == "apple,orange,pear")
+
+  local t2 = {"x", "y", "x", "z", "x"}
+  assert(table.drop(t2, "x", 2) == 2)
+  assert(table.concat(t2, ",") == "y,z,x")
+
+  assert(pcall(table.drop, {1, 2, 1, 3}, 1, 0) == false)
+  assert(table.drop({1, 2, 3}, 4) == 0)
+  assert(table.drop({1, 2, 3}, 0) == 0)
+
+  local frozen = table.freeze({"a", "b", "a"})
+  assert(pcall(table.drop, frozen, "a") == false)
+end
+
 -- test table.concat
 do
   -- regular usage
