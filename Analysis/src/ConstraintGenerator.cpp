@@ -3691,8 +3691,22 @@ Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprGlobal* globa
     {
         return Inference{*ty, refinementArena.proposition(key, builtinTypes->truthyType)};
     }
-    else
-        return Inference{builtinTypes->errorType};
+
+    // A control flow join hands us a phi def that nothing has bound a type to, and `lookup` won't
+    // resolve one of those. For ordinary globals that never comes up: `prepopulateGlobalScope`
+    // walks every `AstExprGlobal` in the module up front and maps its def -- join phis included --
+    // onto whatever the global is bound to. A Luwu class is referenced as a global too, but its
+    // binding isn't created until the class prepass in visitBlockWithoutChildScope, which runs
+    // *after* that walk, so no such mapping exists and any reference downstream of an `if` that
+    // also mentions the class fell through to `errorType`. Globals carry no typestate, so the
+    // binding is the answer prepopulation would have given.
+    if (FFlag::DebugLuauUserDefinedClasses && get<Phi>(def))
+    {
+        if (auto ty = scope->lookup(global->name))
+            return Inference{*ty, refinementArena.proposition(key, builtinTypes->truthyType)};
+    }
+
+    return Inference{builtinTypes->errorType};
 }
 
 Inference ConstraintGenerator::checkIndexName(

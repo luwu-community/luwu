@@ -1955,4 +1955,71 @@ local n: number = b:get()
     )"));
 }
 
+TEST_CASE_FIXTURE(ClassesFixture, "class_referenced_after_a_branch_that_also_references_it")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
+    };
+
+    // A class is referenced as a global, and the join at the end of the `if` produces a phi def
+    // that nothing binds a type to: `prepopulateGlobalScope` maps every global reference's def
+    // onto its binding up front, but it runs before the class prepass creates that binding. Every
+    // reference to the class downstream of the branch used to silently come back as *error-type*,
+    // which swallowed real errors rather than producing new ones -- hence the deliberately wrong
+    // annotations, which are what the bug made disappear.
+    auto result = check(R"(
+class Prefix(prefix: string)
+    function is_dot(self)
+        return self.prefix == "."
+    end
+end
+
+local function parse(s: string)
+    if s == "./" then
+        local inside: number = Prefix(".")
+    end
+    local after: number = Prefix("..")
+    return after
+end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ("Prefix", toString(get<TypeMismatch>(result.errors[0])->givenType));
+    CHECK_EQ("Prefix", toString(get<TypeMismatch>(result.errors[1])->givenType));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "constructor_argument_that_is_itself_a_constructor_call")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
+    };
+
+    // Construction dispatches through the class's `__call` metamethod, and a final argument that
+    // is itself a call contributes a type *pack*, which skips the per-argument check in
+    // TypeChecker2 and leaves overload resolution as the only thing looking at it. Its report was
+    // indexed one slot short of the pack the resolver actually tested (which carries the forwarded
+    // callee at the front), so for a one-argument constructor it resolved against nothing at all
+    // and the mismatch went unreported. Every other spelling of the same wrong argument -- a
+    // literal, a local, a parenthesized call -- was caught, which is what made this so quiet.
+    auto result = check(R"(
+class Comp(x: string) end
+class Other(y: string) end
+class Path(inner: Comp) end
+
+local viaCall = Path(Other("x"))
+local viaLocal = Path((nil :: any) :: Other)
+local viaParens = Path((Other("x")))
+local fine = Path(Comp("x"))
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
+    for (size_t i = 0; i < 3; ++i)
+    {
+        CHECK_EQ("Comp", toString(get<TypeMismatch>(result.errors[i])->wantedType));
+        CHECK_EQ("Other", toString(get<TypeMismatch>(result.errors[i])->givenType));
+    }
+}
+
 TEST_SUITE_END();

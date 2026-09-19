@@ -1,4 +1,5 @@
 /build/
+/rfcx/*
 /build[.-]*/
 /out
 /cmake/
