@@ -124,6 +124,11 @@ public:
     std::string toString() const;
 };
 
+std::string toString(Lexeme::Type type);
+
+template<>
+std::optional<Lexeme::Type> fromString<Lexeme::Type>(std::string_view s);
+
 static_assert(sizeof(Lexeme) <= 32, "Size of `Lexeme` struct should be up to 32 bytes.");
 
 class AstNameTable
