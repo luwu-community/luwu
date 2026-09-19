@@ -2036,33 +2036,6 @@ static void tableTypeToStringDetailed(
     tvs.stringify(ttv->instantiatedTypeParams, ttv->instantiatedTypePackParams);
 }
 
-// Luwu: the alias name a type carries, whichever variant it is. `ty` must already be followed.
-// MetatableType is the odd one out -- it has no `name`, only a `syntheticName`.
-static std::optional<std::string> rootAliasName(TypeId ty, bool ignoreSyntheticName)
-{
-    auto named = [&](const std::optional<std::string>& name, const std::optional<std::string>& syntheticName) -> std::optional<std::string>
-    {
-        if (name)
-            return *name;
-        if (!ignoreSyntheticName && syntheticName)
-            return *syntheticName;
-        return std::nullopt;
-    };
-
-    if (auto ttv = get<TableType>(ty))
-        return named(ttv->name, ttv->syntheticName);
-    if (auto mtv = get<MetatableType>(ty))
-        return named(std::nullopt, mtv->syntheticName);
-    if (auto itv = get<IntersectionType>(ty))
-        return named(itv->name, itv->syntheticName);
-    if (auto utv = get<UnionType>(ty))
-        return named(utv->name, utv->syntheticName);
-    if (auto ftv = get<FunctionType>(ty))
-        return named(ftv->name, ftv->syntheticName);
-
-    return std::nullopt;
-}
-
 ToStringResult toStringDetailed(TypeId ty, ToStringOptions& opts)
 {
     /*
