@@ -2212,8 +2212,12 @@ ToStringResult toStringDetailed(TypeId ty, ToStringOptions& opts)
         std::sort(pendingTys.begin(), pendingTys.end(), byName);
         std::sort(pendingTps.begin(), pendingTps.end(), byName);
 
-        for (const auto& [cycleTy, name] : pendingTys)
+        for (const auto& pendingTy : pendingTys)
         {
+            // Bound as ordinary locals: a structured binding cannot be captured by a lambda in C++17.
+            TypeId cycleTy = pendingTy.first;
+            const std::string& name = pendingTy.second;
+
             definedTys.insert(cycleTy);
             addedAny = true;
 
@@ -2252,8 +2256,12 @@ ToStringResult toStringDetailed(TypeId ty, ToStringOptions& opts)
             );
         }
 
-        for (const auto& [cycleTp, name] : pendingTps)
+        for (const auto& pendingTp : pendingTps)
         {
+            // Bound as ordinary locals: a structured binding cannot be captured by a lambda in C++17.
+            TypePackId cycleTp = pendingTp.first;
+            const std::string& name = pendingTp.second;
+
             definedTps.insert(cycleTp);
             addedAny = true;
 
@@ -2394,8 +2402,12 @@ ToStringResult toStringDetailed(TypePackId tp, ToStringOptions& opts)
         std::sort(pendingTys.begin(), pendingTys.end(), byName);
         std::sort(pendingTps.begin(), pendingTps.end(), byName);
 
-        for (const auto& [cycleTy, name] : pendingTys)
+        for (const auto& pendingTy : pendingTys)
         {
+            // Bound as ordinary locals: a structured binding cannot be captured by a lambda in C++17.
+            TypeId cycleTy = pendingTy.first;
+            const std::string& name = pendingTy.second;
+
             definedTys.insert(cycleTy);
             addedAny = true;
 
@@ -2425,8 +2437,12 @@ ToStringResult toStringDetailed(TypePackId tp, ToStringOptions& opts)
             );
         }
 
-        for (const auto& [cycleTp, name] : pendingTps)
+        for (const auto& pendingTp : pendingTps)
         {
+            // Bound as ordinary locals: a structured binding cannot be captured by a lambda in C++17.
+            TypePackId cycleTp = pendingTp.first;
+            const std::string& name = pendingTp.second;
+
             definedTps.insert(cycleTp);
             addedAny = true;
 

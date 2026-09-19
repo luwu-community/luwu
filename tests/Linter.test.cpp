@@ -2334,7 +2334,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "TableRemoveFootgunLint")
     REQUIRE(3 == result.warnings.size());
     CHECK_EQ(
         result.warnings[0].text,
-        "If this is `nil`, `table.remove` will remove the last element of the array. This is a common mistake--consider using `table.drop` instead, or if order is not important, use a key/value table with `true` values for better performance."
+        "If this is `nil`, `table.remove` will remove the last element of the array.\nConsider using `table.drop` instead. If order is not important, use a key/value table for better performance."
     );
     CHECK_EQ(
         result.warnings[1].text,
