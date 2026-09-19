@@ -2630,7 +2630,10 @@ local y: number = tmp.p.y
         const std::string expected = R"(Expected this to be exactly 'HasSuper', but got 'tmp'
 caused by:
   Property 'p' is not compatible.
-extra field 'y' found in type '{| x: number, y: number |}' from expected type 'Super')";
+extra field 'y' found in type
+  '{| x: number, y: number |}'
+expected type:
+  'Super')";
         CHECK_EQ(expected, toString(result.errors[0]));
     }
 }
@@ -3718,14 +3721,20 @@ TEST_CASE_FIXTURE(Fixture, "scalar_is_not_a_subtype_of_a_compatible_polymorphic_
             R"(Expected this to be 't1 where t1 = {- absolutely_no_scalar_has_this_method: (t1) -> (a...) -}', but got 'string'
 caused by:
   The given type's metatable does not satisfy the requirements.
-required field 'absolutely_no_scalar_has_this_method' not found in type 'typeof(string)' from expected type 't1 where t1 = {- absolutely_no_scalar_has_this_method: (t1) -> (a...) -}')";
+required field 'absolutely_no_scalar_has_this_method' not found in type
+  'typeof(string)'
+expected type:
+  't1 where t1 = {- absolutely_no_scalar_has_this_method: (t1) -> (a...) -}')";
         CHECK_EQ(expected1, toString(result.errors[0]));
 
         const std::string expected2 =
             R"(Expected this to be 't1 where t1 = {- absolutely_no_scalar_has_this_method: (t1) -> (a...) -}', but got '"bar"'
 caused by:
   The given type's metatable does not satisfy the requirements.
-required field 'absolutely_no_scalar_has_this_method' not found in type 'typeof(string)' from expected type 't1 where t1 = {- absolutely_no_scalar_has_this_method: (t1) -> (a...) -}')";
+required field 'absolutely_no_scalar_has_this_method' not found in type
+  'typeof(string)'
+expected type:
+  't1 where t1 = {- absolutely_no_scalar_has_this_method: (t1) -> (a...) -}')";
         CHECK_EQ(expected2, toString(result.errors[1]));
 
         const std::string expected3 = R"(Expected this to be
@@ -3737,7 +3746,10 @@ caused by:
 Expected this to be 't1 where t1 = {- absolutely_no_scalar_has_this_method: (t1) -> (a...) -}', but got '"bar"'
 caused by:
   The given type's metatable does not satisfy the requirements.
-required field 'absolutely_no_scalar_has_this_method' not found in type 'typeof(string)' from expected type 't1 where t1 = {- absolutely_no_scalar_has_this_method: (t1) -> (a...) -}')";
+required field 'absolutely_no_scalar_has_this_method' not found in type
+  'typeof(string)'
+expected type:
+  't1 where t1 = {- absolutely_no_scalar_has_this_method: (t1) -> (a...) -}')";
         CHECK_EQ(expected3, toString(result.errors[2]));
     }
 }
@@ -3789,7 +3801,10 @@ TEST_CASE_FIXTURE(Fixture, "a_free_shape_cannot_turn_into_a_scalar_if_it_is_not_
             R"(Expected this to be 'string', but got 't1 where t1 = {+ absolutely_no_scalar_has_this_method: (t1) -> (a, b...) +}'
 caused by:
   The given type's metatable does not satisfy the requirements.
-required field 'absolutely_no_scalar_has_this_method' not found in type 'typeof(string)' from expected type 't1 where t1 = {+ absolutely_no_scalar_has_this_method: (t1) -> (a, b...) +}')";
+required field 'absolutely_no_scalar_has_this_method' not found in type
+  'typeof(string)'
+expected type:
+  't1 where t1 = {+ absolutely_no_scalar_has_this_method: (t1) -> (a, b...) +}')";
         CHECK_EQ(expected, toString(result.errors[0]));
 
         CHECK_EQ("<a, b...>(t1) -> string where t1 = {+ absolutely_no_scalar_has_this_method: (t1) -> (a, b...) +}", toString(requireType("f")));
@@ -5269,13 +5284,14 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "subtyping_with_a_metatable_table_path")
     CHECK(result.errors.at(1).location == Location{{2, 28}, {2, 40}});
     CHECK("Argument count mismatch. Function expects 2 arguments, but none are specified" == toString(result.errors.at(1)));
 
-    CHECK(result.errors.at(2).location == Location{{3, 8}, {5, 11}});
+    CHECK(result.errors.at(2).location == Location{{3, 14}, {5, 11}});
     CHECK("Type function instance setmetatable<unknown, unknown> is uninhabited" == toString(result.errors.at(2)));
 
+    // The intersection `{} & {}` cast via `self` (the alias `type self = {} & {}` above) now
+    // prints by name rather than being expanded inline.
     CHECK(
-        "Expected this to be 'setmetatable<unknown, unknown>', but got '{ @metatable {  }, {  } & {  } }'; \n"
-        "the 1st entry in the type pack is `{ @metatable {  }, {  } & {  } }` and in the 1st entry in the type packreduces to "
-        "`never`, and `{ @metatable {  }, {  } & {  } }` is not a subtype of `never`" == toString(result.errors.at(3))
+        "Expected this to be 'setmetatable<unknown, unknown>', but got '{ @metatable {  }, self }'; \n"
+        "it reduces to `never`, and `{ @metatable {  }, self }` is not a subtype of `never`" == toString(result.errors.at(3))
     );
 }
 
@@ -5737,7 +5753,10 @@ TEST_CASE_FIXTURE(Fixture, "bigger_nested_table_causes_big_type_error")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    std::string expected = R"(required field 'name' not found in type '{ path: string, type: "file" }' from expected type 'File')";
+    std::string expected = R"(required field 'name' not found in type
+  '{ path: string, type: "file" }'
+expected type:
+  'File')";
     CHECK_EQ(expected, toString(result.errors[0]));
     CHECK_EQ(result.errors[0].location, Location{{21, 20}, {24, 21}});
 }

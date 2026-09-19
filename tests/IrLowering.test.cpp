@@ -25,6 +25,9 @@ LUAU_FASTFLAG(LuauCallFeedback)
 LUAU_FASTFLAG(LuauCodegenA64ExitUseCheck)
 LUAU_FASTFLAG(LuauBackedgeHeapCheck)
 LUAU_FASTFLAG(LuauCodegenConstVectorBufferRead)
+LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
+LUAU_FASTFLAG(DebugLuauUserDefinedClassesRuntime)
+LUAU_FASTFLAG(LuwuBetterUserDefinedClasses)
 
 #define ensureVectorSize3() \
     if constexpr (LUA_VECTOR_SIZE != 3) \
@@ -8498,4 +8501,177 @@ bb_bytecode_1:
 )"
     );
 }
+
+TEST_CASE_FIXTURE(LoweringFixture, "ClassProvenSelfMemberAccess")
+{
+    ScopedFastFlag classes{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag classesRuntime{FFlag::DebugLuauUserDefinedClassesRuntime, true};
+    ScopedFastFlag betterClasses{FFlag::LuwuBetterUserDefinedClasses, true};
+
+    // `self.field` inside a method compiles to GETOBJECTMEMBER/SETOBJECTMEMBER, which lower to a
+    // constant-offset address with no slot cache, no class-side bounds check, no name compare and no
+    // authorization -- the prologue's CHECKSELFCLASS already proved the class. Note this test has to
+    // live here: tests/conformance/classes.luau has `@native` functions, so only those are natively
+    // compiled and it could not catch a lowering bug in the rest.
+    //
+    // The repeated `self.x` is also the CSE case: the address is computed once and the second read
+    // reuses the first load's value.
+    CHECK_EQ(
+        "\n" + getCodegenAssembly(
+                   R"(
+class C
+    public x: number = 1
+    public y: number = 2
+
+    public function bump(self)
+        self.y = self.x + self.x
+        return self.y
+    end
+end
+)",
+                   /* includeIrTypes= */ false,
+                   /* debugLevel= */ 1,
+                   /* optimizationLevel= */ 2,
+                   /* clipToFirstReturn= */ true
+               ),
+        R"(
+; function bump($arg0) line 6
+bb_0:
+  CHECK_TAG R0, tobject, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  %6 = LOAD_POINTER R0
+  %7 = LOAD_OWNER_CLASS
+  CHECK_OBJECT_CLASS %6, %7, exit(0)
+  %12 = OBJECT_MEMBER_ADDR %6, 0u
+  %13 = LOAD_TVALUE %12
+  STORE_TVALUE R2, %13
+  STORE_TVALUE R3, %13
+  CHECK_TAG R2, tnumber, bb_fallback_3
+  %25 = LOAD_DOUBLE R2
+  %27 = ADD_NUM %25, %25
+  STORE_DOUBLE R1, %27
+  STORE_TAG R1, tnumber
+  JUMP bb_4
+bb_4:
+  %36 = LOAD_POINTER R0
+  %37 = OBJECT_MEMBER_ADDR %36, 1u
+  %38 = LOAD_TVALUE R1
+  STORE_TVALUE %37, %38
+  BARRIER_OBJ %36, R1, undef
+  INTERRUPT 11u
+  RETURN R1, 1i
+)"
+    );
+}
+
+TEST_CASE_FIXTURE(LoweringFixture, "ClassesRuntimeKeepsUntypedTableFieldAccessLinear")
+{
+    ScopedFastFlag classes{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag classesRuntime{FFlag::DebugLuauUserDefinedClassesRuntime, true};
+    ScopedFastFlag betterClasses{FFlag::LuwuBetterUserDefinedClasses, true};
+
+    // With the classes runtime on, field access on a plain table must compile to the same IR as without it.
+    // The object path for untyped receivers must not add a branch in front of the table path (see
+    // translateInstGetTableKS for why).
+    //
+    // Expected: one tag check, which jumps to the object path in `bb_fallback_2` on a miss. One pointer load.
+    // The first slot address is reused for the write, and the stores are unboxed with no barrier.
+    CHECK_EQ(
+        "\n" + getCodegenAssembly(
+                   R"(
+local function deposit(self, amount)
+    self.balance += amount
+    self.count += 1
+end
+)",
+                   /* includeIrTypes= */ false,
+                   /* debugLevel= */ 1,
+                   /* optimizationLevel= */ 2,
+                   /* clipToFirstReturn= */ true
+               ),
+        R"(
+; function deposit($arg0, $arg1) line 2
+bb_bytecode_0:
+  CHECK_TAG R0, ttable, bb_fallback_2
+  %2 = LOAD_POINTER R0
+  %3 = GET_SLOT_NODE_ADDR %2, 0u, K0 ('balance')
+  CHECK_SLOT_MATCH %3, K0 ('balance'), bb_fallback_1
+  %5 = LOAD_TVALUE %3, 0i
+  STORE_TVALUE R2, %5
+  JUMP bb_linear_17
+bb_linear_17:
+  CHECK_TAG R2, tnumber, bb_fallback_4
+  CHECK_TAG R1, tnumber, bb_fallback_4
+  %101 = LOAD_DOUBLE R2
+  %103 = ADD_NUM %101, R1
+  STORE_DOUBLE R2, %103
+  CHECK_READONLY %2, bb_fallback_6
+  STORE_SPLIT_TVALUE %3, tnumber, %103, 0i
+  %119 = GET_SLOT_NODE_ADDR %2, 5u, K1 ('count')
+  CHECK_SLOT_MATCH %119, K1 ('count'), bb_fallback_9
+  %121 = LOAD_TVALUE %119, 0i
+  STORE_TVALUE R2, %121
+  CHECK_TAG R2, tnumber, bb_fallback_12
+  %126 = LOAD_DOUBLE R2
+  %127 = ADD_NUM %126, 1
+  STORE_SPLIT_TVALUE %119, tnumber, %127, 0i
+  INTERRUPT 10u
+  RETURN R0, 0i
+)"
+    );
+}
+
+TEST_CASE_FIXTURE(LoweringFixture, "ClassIsinstanceKnownTag")
+{
+    ScopedFastFlag classes{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag classesRuntime{FFlag::DebugLuauUserDefinedClassesRuntime, true};
+    ScopedFastFlag betterClasses{FFlag::LuwuBetterUserDefinedClasses, true};
+
+    // Inside a method the prologue's CHECKSELFCLASS already establishes that `self` is an object, so
+    // constant propagation folds the tag operand of CLASS_ISINSTANCE into a constant; lowering must
+    // accept that instead of assuming the operand is always another instruction's result.
+    CHECK_EQ(
+        "\n" + getCodegenAssembly(
+                   R"(
+class C
+    public x: number = 1
+
+    public function get_x(self)
+        return class.isinstance(self, C)
+    end
+end
+)",
+                   /* includeIrTypes= */ false,
+                   /* debugLevel= */ 1,
+                   /* optimizationLevel= */ 2,
+                   /* clipToFirstReturn= */ true
+               ),
+        R"(
+; function get_x($arg0) line 5
+bb_0:
+  CHECK_TAG R0, tobject, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  implicit CHECK_SAFE_ENV exit(0)
+  %6 = LOAD_POINTER R0
+  %7 = LOAD_OWNER_CLASS
+  CHECK_OBJECT_CLASS %6, %7, exit(0)
+  %9 = GET_UPVALUE U0
+  STORE_TVALUE R3, %9
+  CHECK_TAG R3, tclass, exit(5)
+  %16 = LOAD_POINTER R3
+  %17 = CLASS_ISINSTANCE tobject, %6, %16
+  STORE_INT R1, %17
+  STORE_TAG R1, tboolean
+  INTERRUPT 9u
+  RETURN R1, 1i
+)"
+    );
+}
+
 TEST_SUITE_END();

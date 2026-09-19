@@ -33,6 +33,8 @@ GlobalTypes::GlobalTypes(NotNull<BuiltinTypes> builtinTypes, SolverMode mode)
         globalScope->addBuiltinTypeBinding("truthy", TypeFun{{}, builtinTypes->truthyType});
         globalScope->addBuiltinTypeBinding("falsy", TypeFun{{}, builtinTypes->falsyType});
     }
+    globalScope->addBuiltinTypeBinding("userdata", TypeFun{{}, builtinTypes->externType});
+    globalScope->addBuiltinTypeBinding("vector", TypeFun{{}, builtinTypes->vectorType});
     if (FFlag::DebugLuauUserDefinedClasses)
     {
         globalScope->addBuiltinTypeBinding("object", TypeFun{{}, builtinTypes->objectType});
@@ -43,6 +45,7 @@ GlobalTypes::GlobalTypes(NotNull<BuiltinTypes> builtinTypes, SolverMode mode)
     TypeId stringMetatableTy = makeStringMetatable(builtinTypes, mode);
     asMutable(builtinTypes->stringType)->ty.emplace<PrimitiveType>(PrimitiveType::String, stringMetatableTy);
     persist(stringMetatableTy);
+    makeVectorMetatable(builtinTypes);
     freeze(*builtinTypes->arena);
 }
 

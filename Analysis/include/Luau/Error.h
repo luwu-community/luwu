@@ -42,6 +42,12 @@ struct TypeMismatch
     std::string reason;
     std::shared_ptr<TypeError> error;
 
+    // When set, overrides the generic "Expected this to be" preamble with a more specific
+    // phrase (e.g. "this function to return"), so the message reads "Expected this function to
+    // return 'X' but got 'Y'" instead of leaving the reader to infer context from the reason
+    // text alone. Not part of any constructor; set directly on the constructed value.
+    std::optional<std::string> contextVerb;
+
     bool operator==(const TypeMismatch& rhs) const;
 };
 
@@ -403,6 +409,60 @@ struct NonStrictFunctionDefinitionError
     bool operator==(const NonStrictFunctionDefinitionError& rhs) const;
 };
 
+// Accessing a `private` member of a user-defined class from outside of that class's own
+// definition block (see FFlag::DebugLuauUserDefinedClasses, FFlag::LuwuBetterUserDefinedClasses).
+struct PrivatePropertyAccess
+{
+    TypeId table;
+    Name key;
+    // the member is one of the class's functions rather than one of its fields
+    bool isFunction = false;
+    // the class that declares the member, which may be an ancestor of `table`'s class
+    Name className;
+
+    bool operator==(const PrivatePropertyAccess& rhs) const;
+};
+
+// Calling `ClassName(...)` directly from outside the class's own definition block, when the
+// class's `__init` constructor is `private` (see FFlag::DebugLuauUserDefinedClasses,
+// FFlag::LuwuBetterUserDefinedClasses).
+struct PrivateConstructorAccess
+{
+    TypeId classTy;
+
+    bool operator==(const PrivateConstructorAccess& rhs) const;
+};
+
+// A field of a class with a primary constructor that nothing can ever initialize: the class body
+// gives it no default value, no parameter shares its name, and its type does not admit `nil`
+// (see FFlag::DebugLuauUserDefinedClasses, FFlag::LuwuBetterUserDefinedClasses).
+struct UninitializableClassField
+{
+    TypeId classTy;
+    Name key;
+
+    bool operator==(const UninitializableClassField& rhs) const;
+};
+
+// A class whose fields are all `private` and which has no functions: it can be constructed, but no
+// code can ever read or write what it holds (see FFlag::DebugLuauUserDefinedClasses,
+// FFlag::LuwuBetterUserDefinedClasses).
+struct UnusableClass
+{
+    TypeId classTy;
+
+    bool operator==(const UnusableClass& rhs) const;
+};
+
+// A class whose constructor is private (a `private` primary constructor or `private function __init`) and that
+// never calls it from its own body: nothing can ever create an instance (rfcs/classes.md).
+struct UninstantiableClass
+{
+    TypeId classTy;
+
+    bool operator==(const UninstantiableClass& rhs) const;
+};
+
 struct PropertyAccessViolation
 {
     TypeId table;
@@ -415,6 +475,18 @@ struct PropertyAccessViolation
     } context;
 
     bool operator==(const PropertyAccessViolation& rhs) const;
+};
+
+// Assigning to a `const` member of a user-defined class from outside of that class's own
+// `__init` constructor (see FFlag::DebugLuauUserDefinedClasses, FFlag::LuwuBetterUserDefinedClasses).
+struct ConstPropertyAssignment
+{
+    TypeId table;
+    Name key;
+    // the class that declares the field, which may be an ancestor of `table`'s class
+    Name className;
+
+    bool operator==(const ConstPropertyAssignment& rhs) const;
 };
 
 struct CheckedFunctionIncorrectArgs
@@ -637,6 +709,11 @@ using TypeErrorData = Variant<
     SwappedGenericTypeParameter,
     OptionalValueAccess,
     MissingUnionProperty,
+    PrivatePropertyAccess,
+    ConstPropertyAssignment,
+    PrivateConstructorAccess,
+    UninitializableClassField,
+    UnusableClass,
     TypesAreUnrelated,
     NormalizationTooComplex,
     TypePackMismatch,
@@ -665,7 +742,8 @@ using TypeErrorData = Variant<
     UnappliedTypeFunction,
     InstantiateGenericsOnNonFunction,
     TypeInstantiationCountMismatch,
-    AmbiguousFunctionCall>;
+    AmbiguousFunctionCall,
+    UninstantiableClass>;
 
 struct TypeErrorSummary
 {

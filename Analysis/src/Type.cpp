@@ -862,6 +862,7 @@ BuiltinTypes::BuiltinTypes()
     , externType(arena->addType(Type{ExternType{"userdata", {}, std::nullopt, std::nullopt, {}, {}, {}, {}}, /*persistent*/ true}))
     , objectType(arena->addType(Type{ExternType{"object", {}, std::nullopt, std::nullopt, {}, {}, {}, {}}, /*persistent*/ true}))
     , classType(arena->addType(Type{ExternType{"class", {}, std::nullopt, std::nullopt, {}, {}, {}, {}}, /*persistent*/ true}))
+    , vectorType(arena->addType(Type{ExternType{"vector", {}, std::nullopt, std::nullopt, {}, {}, {}, {}}, /*persistent*/ true}))
     , tableType(arena->addType(Type{PrimitiveType{PrimitiveType::Table}, /*persistent*/ true}))
     , emptyTableType(arena->addType(Type{TableType{TableState::Sealed, TypeLevel{}, nullptr}, /*persistent*/ true}))
     , trueType(arena->addType(Type{SingletonType{BooleanSingleton{true}}, /*persistent*/ true}))
@@ -906,6 +907,70 @@ TypeId BuiltinTypes::errorRecoveryType(TypeId guess) const
 TypePackId BuiltinTypes::errorRecoveryTypePack(TypePackId guess) const
 {
     return guess;
+}
+
+std::array<TypeId, 4> BuiltinTypes::nominalRoots() const
+{
+    return {externType, classType, objectType, vectorType};
+}
+
+// A nominal type's root is its parent's root (or the parent itself, if the
+// parent is a root). A parentless type is its own root, represented as nullopt.
+static std::optional<TypeId> deriveNominalRoot(std::optional<TypeId> parent)
+{
+    if (!parent)
+        return std::nullopt;
+
+    if (const ExternType* parentEtv = get<ExternType>(follow(*parent)))
+        return parentEtv->root.value_or(*parent);
+
+    return std::nullopt;
+}
+
+ExternType::ExternType(
+    Name name,
+    Props props,
+    std::optional<TypeId> parent,
+    std::optional<TypeId> metatable,
+    Tags tags,
+    std::shared_ptr<ClassUserData> userData,
+    ModuleName definitionModuleName,
+    std::optional<Location> definitionLocation
+)
+    : name(std::move(name))
+    , props(std::move(props))
+    , parent(parent)
+    , root(deriveNominalRoot(parent))
+    , metatable(metatable)
+    , tags(std::move(tags))
+    , userData(std::move(userData))
+    , definitionModuleName(std::move(definitionModuleName))
+    , definitionLocation(definitionLocation)
+{
+}
+
+ExternType::ExternType(
+    Name name,
+    Props props,
+    std::optional<TypeId> parent,
+    std::optional<TypeId> metatable,
+    Tags tags,
+    std::shared_ptr<ClassUserData> userData,
+    ModuleName definitionModuleName,
+    std::optional<Location> definitionLocation,
+    std::optional<TableIndexer> indexer
+)
+    : name(std::move(name))
+    , props(std::move(props))
+    , parent(parent)
+    , root(deriveNominalRoot(parent))
+    , metatable(metatable)
+    , tags(std::move(tags))
+    , userData(std::move(userData))
+    , definitionModuleName(std::move(definitionModuleName))
+    , definitionLocation(definitionLocation)
+    , indexer(indexer)
+{
 }
 
 void persist(TypeId ty)

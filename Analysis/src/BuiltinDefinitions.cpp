@@ -30,6 +30,9 @@
  * about a function that takes any number of values, but where each value must have some specific type.
  */
 
+LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
+LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
+
 namespace Luau
 {
 
@@ -344,6 +347,41 @@ static void finalizeGlobalBindings(ScopePtr scope)
     }
 }
 
+// `vector` is a language primitive (its own nominal root) that reuses the ExternType
+// representation for its x/y/z fields and operator metatable. Like the string metatable, this is
+// built directly on the shared `builtinTypes` arena so there is a single canonical `vector` type.
+void makeVectorMetatable(NotNull<BuiltinTypes> builtinTypes)
+{
+    NotNull<TypeArena> arena{builtinTypes->arena.get()};
+    const TypeId vectorTy = builtinTypes->vectorType;
+    const TypeId numberType = builtinTypes->numberType;
+
+    ExternType* vectorCls = getMutable<ExternType>(vectorTy);
+    LUAU_ASSERT(vectorCls);
+
+    vectorCls->props["x"] = Property::readonly(numberType);
+    vectorCls->props["y"] = Property::readonly(numberType);
+    vectorCls->props["z"] = Property::readonly(numberType);
+
+    vectorCls->metatable = arena->addType(TableType{{}, std::nullopt, TypeLevel{}, TableState::Sealed});
+    TableType* metatableTy = getMutable<TableType>(*vectorCls->metatable);
+
+    metatableTy->props["__add"] = {makeFunction(*arena, vectorTy, {vectorTy}, {vectorTy})};
+    metatableTy->props["__sub"] = {makeFunction(*arena, vectorTy, {vectorTy}, {vectorTy})};
+    metatableTy->props["__unm"] = {makeFunction(*arena, vectorTy, {}, {vectorTy})};
+
+    std::initializer_list<TypeId> mulOverloads{
+        makeFunction(*arena, vectorTy, {vectorTy}, {vectorTy}),
+        makeFunction(*arena, vectorTy, {numberType}, {vectorTy}),
+    };
+    metatableTy->props["__mul"] = {makeIntersection(*arena, mulOverloads)};
+    metatableTy->props["__div"] = {makeIntersection(*arena, mulOverloads)};
+    metatableTy->props["__idiv"] = {makeIntersection(*arena, mulOverloads)};
+
+    // vectorType is persistent, so its freshly-added metatable must be too.
+    persist(*vectorCls->metatable);
+}
+
 void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeCheckForAutocomplete)
 {
     LUAU_ASSERT(!globals.globalTypes.types.isFrozen());
@@ -376,28 +414,6 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
 
     addGlobalBinding(globals, "string", *it->second.readTy, "@luau");
     addGlobalBinding(globals, "string", *it->second.writeTy, "@luau");
-
-    // Setup 'vector' metatable
-    if (auto it = globals.globalScope->exportedTypeBindings.find("vector"); it != globals.globalScope->exportedTypeBindings.end())
-    {
-        TypeId vectorTy = it->second.type;
-        ExternType* vectorCls = getMutable<ExternType>(vectorTy);
-
-        vectorCls->metatable = arena.addType(TableType{{}, std::nullopt, TypeLevel{}, TableState::Sealed});
-        TableType* metatableTy = Luau::getMutable<TableType>(vectorCls->metatable);
-
-        metatableTy->props["__add"] = {makeFunction(arena, vectorTy, {vectorTy}, {vectorTy})};
-        metatableTy->props["__sub"] = {makeFunction(arena, vectorTy, {vectorTy}, {vectorTy})};
-        metatableTy->props["__unm"] = {makeFunction(arena, vectorTy, {}, {vectorTy})};
-
-        std::initializer_list<TypeId> mulOverloads{
-            makeFunction(arena, vectorTy, {vectorTy}, {vectorTy}),
-            makeFunction(arena, vectorTy, {builtinTypes->numberType}, {vectorTy}),
-        };
-        metatableTy->props["__mul"] = {makeIntersection(arena, mulOverloads)};
-        metatableTy->props["__div"] = {makeIntersection(arena, mulOverloads)};
-        metatableTy->props["__idiv"] = {makeIntersection(arena, mulOverloads)};
-    }
 
     // next<K, V>(t: Table<K, V>, i: K?) -> (K?, V)
     TypePackId nextArgsTypePack = arena.addTypePack(TypePack{{mapOfKtoV, makeOption(builtinTypes, arena, genericK)}});
@@ -518,6 +534,17 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
         attachMagicFunction(*ttv->props["pack"].readTy, std::make_shared<MagicPack>());
         attachMagicFunction(*ttv->props["clone"].readTy, std::make_shared<MagicClone>());
         attachMagicFunction(*ttv->props["freeze"].readTy, std::make_shared<MagicFreeze>());
+    }
+
+    if (FFlag::DebugLuauUserDefinedClasses && FFlag::LuauAllowGlobalDeclarationToBeCalledClass)
+    {
+        if (TableType* ctv = getMutable<TableType>(getGlobalBinding(globals, "class")))
+        {
+            if (auto it = ctv->props.find("fields"); it != ctv->props.end() && it->second.readTy)
+                attachMagicFunction(*it->second.readTy, std::make_shared<MagicClassFields>());
+            if (auto it = ctv->props.find("name"); it != ctv->props.end() && it->second.readTy)
+                attachMagicFunction(*it->second.readTy, std::make_shared<MagicClassName>());
+        }
     }
 
     TypeId requireTy = getGlobalBinding(globals, "require");
@@ -1787,6 +1814,146 @@ bool MagicFreeze::typeCheck(const MagicFunctionTypeCheckContext& ctx)
     {
         ctx.typechecker->reportError(CountMismatch{1, 1, ctx.callSite->args.size, CountMismatch::Arg, false, "table.freeze"}, ctx.callSite->location);
     }
+
+    return true;
+}
+
+// MagicClassFields overrides `class.fields`'s declared `({ [string]: unknown }, boolean)` return
+// with the precise per-field type map (and a literal `complete` boolean) when the argument is a
+// known class or object type, per rfcs/classes.md's "Type System" section.
+std::optional<WithPredicate<TypePackId>> MagicClassFields::handleOldSolver(
+    struct TypeChecker&,
+    const std::shared_ptr<struct Scope>&,
+    const class AstExprCall&,
+    WithPredicate<TypePackId>
+)
+{
+    return std::nullopt;
+}
+
+bool MagicClassFields::infer(const MagicFunctionCallContext& context)
+{
+    TypeArena* arena = context.solver->arena;
+    NotNull<BuiltinTypes> builtinTypes = context.solver->builtinTypes;
+
+    const auto& [paramTypes, paramTail] = flatten(context.arguments);
+    if (paramTypes.empty())
+        return false;
+
+    const ExternType* etv = get<ExternType>(follow(paramTypes[0]));
+    if (!etv)
+        return false;
+
+    // `etv` may either be the class (static) type or the object (instance) type. Fields only
+    // ever live on the instance type's props (see ConstraintGenerator's class handling); if we
+    // were handed the class type, its relation points (via Obj) at the corresponding instance
+    // type.
+    const ExternType* instanceEtv = etv;
+    if (etv->root == builtinTypes->classType && etv->relation)
+    {
+        if (const Obj* obj = get_if<Obj>(&*etv->relation))
+            instanceEtv = get<ExternType>(follow(obj->ty));
+    }
+
+    if (!instanceEtv)
+        return false;
+
+    // `props` mixes fields and non-metamethod instance methods together; `ClassFieldUserData`
+    // (populated by ConstraintGenerator) is the authoritative list of which prop names are
+    // actually fields. If it's missing (e.g. an externally-declared `extern type` masquerading
+    // as a class), we have no reliable way to tell fields from methods, so bail out to the
+    // declared signature.
+    const ClassFieldUserData* fieldUserData = dynamic_cast<ClassFieldUserData*>(instanceEtv->userData.get());
+    if (!fieldUserData)
+        return false;
+
+    TableType::Props resultProps;
+    bool complete = true;
+
+    for (const auto& [name, prop] : instanceEtv->props)
+    {
+        if (fieldUserData->fieldNames.count(name) == 0)
+            continue;
+
+        if (!prop.readTy)
+            continue;
+
+        if (prop.isPrivate)
+        {
+            complete = false;
+            continue;
+        }
+
+        resultProps[name] = Property::readonly(*prop.readTy);
+    }
+
+    TypeId resultTableTy =
+        arena->addType(TableType{std::move(resultProps), std::nullopt, TypeLevel{}, context.constraint->scope.get(), TableState::Sealed});
+    TypeId completeTy = complete ? builtinTypes->trueType : builtinTypes->falseType;
+
+    TypePackId resultPack = arena->addTypePack({resultTableTy, completeTy});
+    asMutable(context.result)->ty.emplace<BoundTypePack>(resultPack);
+
+    return true;
+}
+
+std::optional<WithPredicate<TypePackId>> MagicClassName::handleOldSolver(
+    struct TypeChecker&,
+    const std::shared_ptr<struct Scope>&,
+    const class AstExprCall&,
+    WithPredicate<TypePackId>
+)
+{
+    return std::nullopt;
+}
+
+// Collects the distinct class names of `ty`, which must be a class type, an object type, or a union
+// of them. Returns false for anything else -- including the `class`/`object` top types themselves,
+// whose name isn't known -- so the caller can fall back to the declared `string`.
+static bool collectClassNames(NotNull<BuiltinTypes> builtinTypes, TypeId ty, std::vector<Name>& names)
+{
+    ty = follow(ty);
+
+    if (const UnionType* ut = get<UnionType>(ty))
+    {
+        for (TypeId option : ut->options)
+        {
+            if (!collectClassNames(builtinTypes, option, names))
+                return false;
+        }
+        return true;
+    }
+
+    const ExternType* etv = get<ExternType>(ty);
+    if (!etv || !etv->root || (*etv->root != builtinTypes->classType && *etv->root != builtinTypes->objectType))
+        return false;
+
+    // a class and its objects share a name, as do the instantiations of a generic class
+    if (std::find(names.begin(), names.end(), etv->name) == names.end())
+        names.push_back(etv->name);
+
+    return true;
+}
+
+bool MagicClassName::infer(const MagicFunctionCallContext& context)
+{
+    TypeArena* arena = context.solver->arena;
+
+    const auto& [paramTypes, paramTail] = flatten(context.arguments);
+    if (paramTypes.empty())
+        return false;
+
+    std::vector<Name> names;
+    if (!collectClassNames(context.solver->builtinTypes, paramTypes[0], names))
+        return false;
+
+    std::vector<TypeId> singletons;
+    singletons.reserve(names.size());
+    for (const Name& name : names)
+        singletons.push_back(arena->addType(SingletonType{StringSingleton{name}}));
+
+    TypeId resultTy = singletons.size() == 1 ? singletons[0] : arena->addType(UnionType{std::move(singletons)});
+    asMutable(context.result)->ty.emplace<BoundTypePack>(arena->addTypePack({resultTy}));
 
     return true;
 }

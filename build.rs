@@ -16,7 +16,7 @@
 // stale (dangling) after `cargo clean` until the next build recreates them.
 //
 // Compiling is slow and cargo hides a build script's stdout/stderr unless it
-// fails, so we open the real terminal directly (see build-stub/progress.rs)
+// fails, so we open the real terminal directly (see rust-build-stub/progress.rs)
 // to show a live "Compiling [n/total] File.cpp" line while it runs.
 #[path = "rust-build-stub/progress.rs"]
 mod progress;

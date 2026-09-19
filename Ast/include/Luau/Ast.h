@@ -9,6 +9,7 @@
 #include <optional>
 #include <functional>
 #include <string>
+#include <string_view>
 
 #include <string.h>
 #include <stdint.h>
@@ -17,6 +18,9 @@ LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
 
 namespace Luau
 {
+
+template<typename T>
+std::optional<T> fromString(std::string_view s);
 
 struct AstName
 {
@@ -665,7 +669,17 @@ class AstExprIfElse : public AstExpr
 public:
     LUAU_RTTI(AstExprIfElse)
 
-    AstExprIfElse(const Location& location, AstExpr* condition, bool hasThen, AstExpr* trueExpr, bool hasElse, AstExpr* falseExpr);
+    AstExprIfElse(
+        const Location& location,
+        AstExpr* condition,
+        bool hasThen,
+        AstExpr* trueExpr,
+        bool hasElse,
+        AstExpr* falseExpr,
+        const Location& ifLocation,
+        const std::optional<Location>& thenLocation,
+        const std::optional<Location>& elseLocation
+    );
 
     void visit(AstVisitor* visitor) override;
 
@@ -674,6 +688,17 @@ public:
     AstExpr* trueExpr;
     bool hasElse;
     AstExpr* falseExpr;
+
+    // Location of the leading 'if' or 'elseif' keyword token only. An `elseif` clause is parsed as
+    // a nested AstExprIfElse in the false branch, so a node whose ifLocation spans six columns is
+    // an `elseif` rather than an `if`.
+    Location ifLocation;
+
+    std::optional<Location> thenLocation;
+
+    // Only set for a literal `else` token: an `elseif` clause carries its own keyword as the
+    // ifLocation of the nested AstExprIfElse it parses into, and leaves this unset.
+    std::optional<Location> elseLocation;
 };
 
 class AstExprInterpString : public AstExpr
@@ -741,7 +766,8 @@ public:
         AstStatBlock* thenbody,
         AstStat* elsebody,
         const std::optional<Location>& thenLocation,
-        const std::optional<Location>& elseLocation
+        const std::optional<Location>& elseLocation,
+        const Location& ifLocation
     );
 
     void visit(AstVisitor* visitor) override;
@@ -754,6 +780,9 @@ public:
 
     // Active for 'elseif' as well
     std::optional<Location> elseLocation;
+
+    // Location of the leading 'if' or 'elseif' keyword token only (not the whole clause).
+    Location ifLocation;
 };
 
 class AstStatWhile : public AstStat
@@ -761,7 +790,14 @@ class AstStatWhile : public AstStat
 public:
     LUAU_RTTI(AstStatWhile)
 
-    AstStatWhile(const Location& location, AstExpr* condition, AstStatBlock* body, bool hasDo, const Location& doLocation);
+    AstStatWhile(
+        const Location& location,
+        AstExpr* condition,
+        AstStatBlock* body,
+        bool hasDo,
+        const Location& doLocation,
+        const Location& whileLocation
+    );
 
     void visit(AstVisitor* visitor) override;
 
@@ -770,6 +806,9 @@ public:
 
     bool hasDo = false;
     Location doLocation;
+
+    // Location of the leading 'while' keyword token only.
+    Location whileLocation;
 };
 
 class AstStatRepeat : public AstStat
@@ -777,7 +816,14 @@ class AstStatRepeat : public AstStat
 public:
     LUAU_RTTI(AstStatRepeat)
 
-    AstStatRepeat(const Location& location, AstExpr* condition, AstStatBlock* body, bool DEPRECATED_hasUntil);
+    AstStatRepeat(
+        const Location& location,
+        AstExpr* condition,
+        AstStatBlock* body,
+        bool DEPRECATED_hasUntil,
+        const Location& repeatLocation,
+        const Location& untilLocation
+    );
 
     void visit(AstVisitor* visitor) override;
 
@@ -785,6 +831,11 @@ public:
     AstStatBlock* body;
 
     bool DEPRECATED_hasUntil = false;
+
+    // Location of the leading 'repeat' keyword token only.
+    Location repeatLocation;
+    // Location of the 'until' keyword token only.
+    Location untilLocation;
 };
 
 class AstStatBreak : public AstStat
@@ -812,11 +863,14 @@ class AstStatReturn : public AstStat
 public:
     LUAU_RTTI(AstStatReturn)
 
-    AstStatReturn(const Location& location, const AstArray<AstExpr*>& list);
+    AstStatReturn(const Location& location, const AstArray<AstExpr*>& list, const Location& returnLocation);
 
     void visit(AstVisitor* visitor) override;
 
     AstArray<AstExpr*> list;
+
+    // Location of the leading 'return' keyword token only.
+    Location returnLocation;
 };
 
 class AstStatExpr : public AstStat
@@ -852,7 +906,7 @@ public:
     bool isConst = false;
     bool isExported = false;
 
-    // if the StatLocal is being exported, this is the location of `const` or `local`
+    // Location of the leading `const` or `local` keyword token only.
     std::optional<Location> keywordLocation;
     std::optional<Location> equalsSignLocation;
 };
@@ -870,7 +924,8 @@ public:
         AstExpr* step,
         AstStatBlock* body,
         bool hasDo,
-        const Location& doLocation
+        const Location& doLocation,
+        const Location& forLocation
     );
 
     void visit(AstVisitor* visitor) override;
@@ -883,6 +938,9 @@ public:
 
     bool hasDo = false;
     Location doLocation;
+
+    // Location of the leading 'for' keyword token only.
+    Location forLocation;
 };
 
 class AstStatForIn : public AstStat
@@ -898,7 +956,8 @@ public:
         bool hasIn,
         const Location& inLocation,
         bool hasDo,
-        const Location& doLocation
+        const Location& doLocation,
+        const Location& forLocation
     );
 
     void visit(AstVisitor* visitor) override;
@@ -912,6 +971,9 @@ public:
 
     bool hasDo = false;
     Location doLocation;
+
+    // Location of the leading 'for' keyword token only.
+    Location forLocation;
 };
 
 class AstStatAssign : public AstStat
@@ -946,12 +1008,15 @@ class AstStatFunction : public AstStat
 public:
     LUAU_RTTI(AstStatFunction)
 
-    AstStatFunction(const Location& location, AstExpr* name, AstExprFunction* func);
+    AstStatFunction(const Location& location, AstExpr* name, AstExprFunction* func, const Location& functionLocation);
 
     void visit(AstVisitor* visitor) override;
 
     AstExpr* name;
     AstExprFunction* func;
+
+    // Location of the leading 'function' keyword token only.
+    Location functionLocation;
 };
 
 class AstStatLocalFunction : public AstStat
@@ -959,7 +1024,15 @@ class AstStatLocalFunction : public AstStat
 public:
     LUAU_RTTI(AstStatLocalFunction)
 
-    AstStatLocalFunction(const Location& location, AstLocal* name, AstExprFunction* func, bool isConst, Position constKeywordBegin);
+    AstStatLocalFunction(
+        const Location& location,
+        AstLocal* name,
+        AstExprFunction* func,
+        bool isConst,
+        Position constKeywordBegin,
+        const Location& keywordLocation,
+        const Location& functionLocation
+    );
 
     void visit(AstVisitor* visitor) override;
 
@@ -968,6 +1041,11 @@ public:
     bool isConst;
     // Position of the `const` keyword; Position::missing() when isConst is false.
     Position constKeywordBegin;
+
+    // Location of the leading `local` or `const` keyword token only.
+    Location keywordLocation;
+    // Location of the `function` keyword token only.
+    Location functionLocation;
 };
 
 class AstStatTypeAlias : public AstStat
@@ -982,7 +1060,8 @@ public:
         const AstArray<AstGenericType*>& generics,
         const AstArray<AstGenericTypePack*>& genericPacks,
         AstType* type,
-        bool exported
+        bool exported,
+        const Location& typeLocation
     );
 
     void visit(AstVisitor* visitor) override;
@@ -993,6 +1072,9 @@ public:
     AstArray<AstGenericTypePack*> genericPacks;
     AstType* type;
     bool exported;
+
+    // Location of the leading 'type' keyword token only.
+    Location typeLocation;
 };
 
 class AstStatTypeFunction : public AstStat
@@ -1023,13 +1105,22 @@ class AstStatDeclareGlobal : public AstStat
 public:
     LUAU_RTTI(AstStatDeclareGlobal)
 
-    AstStatDeclareGlobal(const Location& location, const AstName& name, const Location& nameLocation, AstType* type);
+    AstStatDeclareGlobal(
+        const Location& location,
+        const AstName& name,
+        const Location& nameLocation,
+        AstType* type,
+        const Location& declareLocation
+    );
 
     void visit(AstVisitor* visitor) override;
 
     AstName name;
     Location nameLocation;
     AstType* type;
+
+    // Location of the leading 'declare' keyword token only.
+    Location declareLocation;
 };
 
 class AstStatDeclareFunction : public AstStat
@@ -1047,7 +1138,9 @@ public:
         const AstArray<AstArgumentName>& paramNames,
         bool vararg,
         const Location& varargLocation,
-        AstTypePack* retTypes
+        AstTypePack* retTypes,
+        const Location& declareLocation,
+        const Location& functionLocation
     );
 
     AstStatDeclareFunction(
@@ -1061,7 +1154,9 @@ public:
         const AstArray<AstArgumentName>& paramNames,
         bool vararg,
         const Location& varargLocation,
-        AstTypePack* retTypes
+        AstTypePack* retTypes,
+        const Location& declareLocation,
+        const Location& functionLocation
     );
 
     void visit(AstVisitor* visitor) override;
@@ -1080,6 +1175,11 @@ public:
     bool vararg = false;
     Location varargLocation;
     AstTypePack* retTypes;
+
+    // Location of the leading 'declare' keyword token only.
+    Location declareLocation;
+    // Location of the 'function' keyword token only.
+    Location functionLocation;
 };
 
 enum class AstTableAccess
@@ -1099,25 +1199,80 @@ struct AstDeclaredExternTypeProperty
     AstTableAccess access = AstTableAccess::ReadWrite;
 };
 
+enum class AstClassMemberVisibility
+{
+    Public,
+    Private,
+};
+
+std::string toString(AstClassMemberVisibility visibility);
+template<>
+std::optional<AstClassMemberVisibility> fromString<AstClassMemberVisibility>(std::string_view s);
+
 struct AstClassProperty
 {
-    Location qualifierLocation;
+    std::optional<Location> qualifierLocation = std::nullopt;
+    AstClassMemberVisibility visibility = AstClassMemberVisibility::Public;
     AstName name;
     Location nameLocation;
     std::optional<Location> typeColonLocation = std::nullopt;
     AstType* ty = nullptr;
+    bool hasSemicolon = false;
+    bool isConst = false;
+    // Location of the `const` keyword; nullopt when isConst is false.
+    std::optional<Location> constLocation = std::nullopt;
+    // Location of the `=` token; nullopt when defaultValue is nullptr.
+    std::optional<Location> equalsLocation = std::nullopt;
+    AstExpr* defaultValue = nullptr;
 };
 
 struct AstClassMethod
 {
     std::optional<Location> qualifierLocation;
+    AstClassMemberVisibility visibility = AstClassMemberVisibility::Public;
     Location keywordLocation;
     AstName functionName;
     Location nameLocation;
     AstExprFunction* function;
+    bool hasSemicolon = false;
 };
 
 using AstClassMember = Variant<AstClassProperty, AstClassMethod>;
+
+// Luwu Classes (rfcs/classes.md): the access specifier and modifiers written directly on a primary
+// constructor parameter, Kotlin-style: `class SshKey(public const public_key: string)`. A parameter
+// that carries neither is described by a default-constructed instance of this.
+struct AstClassPrimaryConstructorParamQualifiers
+{
+    // Location of the `public`/`private` keyword in front of the parameter; nullopt when absent.
+    std::optional<Location> qualifierLocation = std::nullopt;
+    AstClassMemberVisibility visibility = AstClassMemberVisibility::Public;
+    // Location of the `const` modifier; nullopt when the parameter's field is not const.
+    std::optional<Location> constLocation = std::nullopt;
+    bool isConst = false;
+};
+
+// Luwu Classes (rfcs/classes.md): the primary constructor of a class, `class Cat(name: string, age = 0)`.
+// A class using the default (POD) table constructor has none of these at all; a class written as
+// `class Cat()` has one with zero parameters, which is what deliberately disables the table constructor.
+//
+// Parameters are ordinary function parameters -- annotations and default values both optional -- and
+// each one implicitly declares a field of the same name, public and non-const unless the parameter
+// says otherwise (see argsQualifiers) or the class body restates it. They are only in scope within
+// the class body's field initializer expressions, never within its methods.
+struct AstClassPrimaryConstructor
+{
+    // Location of the `public`/`private` keyword before the parameter list; nullopt when absent.
+    std::optional<Location> qualifierLocation = std::nullopt;
+    AstClassMemberVisibility visibility = AstClassMemberVisibility::Public;
+    AstArray<AstLocal*> args;
+    // Parallel to `args`; an entry is nullptr when that parameter has no default value.
+    AstArray<AstExpr*> argsDefaults;
+    // Parallel to `args`; the access specifier and modifiers written on each parameter, if any.
+    AstArray<AstClassPrimaryConstructorParamQualifiers> argsQualifiers;
+    // Location of the parameter list, parentheses included.
+    Location argLocation;
+};
 
 class AstStatClass : public AstStat
 {
@@ -1127,10 +1282,29 @@ public:
     AstLocal* name;
     AstArray<AstClassMember> members;
     bool exported;
+    AstArray<AstGenericType*> generics;
+    AstArray<AstGenericTypePack*> genericPacks;
+    // Null when the class has no primary constructor, i.e. it uses the default table constructor.
+    AstClassPrimaryConstructor* primaryConstructor = nullptr;
+    // Set once the class's closing `end` has actually been matched, as opposed to being
+    // synthesized by error recovery. Mirrors AstStatBlock::hasEnd.
+    bool hasEnd = false;
 
-    AstStatClass(const Location& location, AstLocal* name, AstArray<AstClassMember> members, bool exported);
+    AstStatClass(
+        const Location& location,
+        AstLocal* name,
+        AstArray<AstClassMember> members,
+        bool exported,
+        const Location& keywordLocation,
+        const AstArray<AstGenericType*>& generics = {},
+        const AstArray<AstGenericTypePack*>& genericPacks = {},
+        AstClassPrimaryConstructor* primaryConstructor = nullptr
+    );
 
     void visit(AstVisitor* visitor) override;
+
+    // Location of the leading 'class'/'object' keyword token only.
+    Location keywordLocation;
 };
 
 struct AstTableIndexer
@@ -1153,6 +1327,9 @@ public:
         const AstName& name,
         std::optional<AstName> superName,
         const AstArray<AstDeclaredExternTypeProperty>& props,
+        const Location& declareLocation,
+        const Location& classLocation,
+        const std::optional<Location>& extendsLocation,
         AstTableIndexer* indexer = nullptr,
         const AstArray<AstGenericType*>& generics = {},
         const AstArray<AstGenericTypePack*>& genericPacks = {}
@@ -1168,6 +1345,13 @@ public:
 
     AstArray<AstGenericType*> generics;
     AstArray<AstGenericTypePack*> genericPacks;
+
+    // Location of the leading 'declare' keyword token only.
+    Location declareLocation;
+    // Location of the 'class' or 'type' keyword token only.
+    Location classLocation;
+    // Location of the 'extends' keyword token only; nullopt when there's no superclass clause.
+    std::optional<Location> extendsLocation;
 };
 
 class AstType : public AstNode

@@ -315,12 +315,46 @@ l_noret luaG_indexerror(lua_State* L, const TValue* p1, const TValue* p2)
         luaG_runerror(L, "attempt to index %s with %s", t1, t2);
 }
 
+// Luwu Classes (rfcs/classes.md): a name the value does not have. The RFC's glossary splits the two
+// halves of this: objects carry *fields*, while a class's namespace holds *members* -- its static
+// functions plus the field names its objects are laid out with. Neither is a table, so neither has
+// "keys". A class also gets pointed at the object case, because reaching for a field through the
+// class (`Cat.age`) is by far the most common way to land here.
 l_noret luaG_missingmembererror(lua_State* L, const TValue* p1, const TValue* p2)
 {
     if (!ttisstring(p2))
         luaG_runerrorL(L, "cannot index %s with a %s", luaT_objtypename(L, p1), luaT_objtypename(L, p2));
-    else
-        luaG_runerrorL(L, "this %s does not have a key named '%s'", luaT_objtypename(L, p1), getstr(tsvalue(p2)));
+
+    const char* key = getstr(tsvalue(p2));
+
+    if (ttisclass(p1))
+        luaG_runerrorL(
+            L,
+            "class '%s' does not have a member named '%s'; did you mean to access a field of an object of this class instead?",
+            getstr(classvalue(p1)->name),
+            key
+        );
+
+    if (ttisobject(p1))
+        luaG_runerrorL(L, "objects of class '%s' do not have a field named '%s'", getstr(objectvalue(p1)->lclass->name), key);
+
+    luaG_runerrorL(L, "this %s does not have a field named '%s'", luaT_objtypename(L, p1), key);
+}
+
+// Luwu Classes (rfcs/classes.md): `Cat.age` where `age` is one of Cat's *fields*. The class knows the
+// name perfectly well -- it lays its objects out with it -- so this deserves better than being told
+// the class has never heard of it.
+l_noret luaG_instancefieldonclasserror(lua_State* L, const TValue* p1, const TValue* p2)
+{
+    const char* className = getstr(classvalue(p1)->name);
+
+    luaG_runerrorL(
+        L,
+        "'%s' is a field of objects of class '%s', not a member of the class itself; did you mean to access it on an object of '%s' instead?",
+        getstr(tsvalue(p2)),
+        className,
+        className
+    );
 }
 
 l_noret luaG_methoderror(lua_State* L, const TValue* p1, const TString* p2)
@@ -333,6 +367,65 @@ l_noret luaG_methoderror(lua_State* L, const TValue* p1, const TString* p2)
 l_noret luaG_readonlyerror(lua_State* L)
 {
     luaG_runerror(L, "attempt to modify a readonly table");
+}
+
+l_noret luaG_privateaccesserror(lua_State* L, const TValue* p2, const TString* className)
+{
+    const char* t1 = getstr(className);
+    luaG_runerrorL(L, "'%s' is a private member of '%s', it cannot be accessed outside %s's class scope", getstr(tsvalue(p2)), t1, t1);
+}
+
+l_noret luaG_constassignerror(lua_State* L, const TValue* p2, const TString* className)
+{
+    const char* t1 = getstr(className);
+    luaG_runerrorL(L, "'%s' is a const member of '%s' and cannot be assigned outside %s's '__init' constructor", getstr(tsvalue(p2)), t1, t1);
+}
+
+l_noret luaG_blockedinitaccesserror(lua_State* L, const TString* className)
+{
+    const char* t1 = getstr(className);
+    luaG_runerrorL(L, "'__init' of '%s' cannot be accessed or called explicitly because %s has const fields", t1, t1);
+}
+
+// Luwu Classes (rfcs/classes.md): raised by CHECKSELFCLASS when `self` isn't an object of the method's class.
+// `selfCall` is true when the check was emitted at an O2 inline site for a `:` call, and only changes the message.
+//
+// An inline site fails when the receiver's annotation names the wrong class, e.g. a VecDeque passed to
+// `function push(list: List, v) list:push(v) end`: O0/O1 dispatch to `VecDeque:push`, but O2 inlined
+// `List:push`. Erroring rather than falling back to a dynamic call keeps inline sites small, and tells the
+// user their call site or annotation is wrong and isn't getting the O2 optimization they asked for.
+l_noret luaG_selfclasserror(lua_State* L, const TValue* self, const LuauClass* expected, const TString* methodName, bool selfCall)
+{
+    // `expected` is NULL only if malformed bytecode put a LBC_SELFCLASS_OWNER-form CHECKSELFCLASS in
+    // a proto that is not a class method, so its Proto::ownerclass was never stamped. The check then
+    // fails (nothing compares equal to NULL) and lands here; name it rather than dereferencing NULL.
+    const char* expectedName = expected ? getstr(expected->name) : "?";
+    const char* method = getstr(methodName);
+
+    if (!ttisobject(self))
+    {
+        int specificIndexingSyntax = selfCall ? ':' : '.';
+        luaG_runerrorL(
+            L, "attempt to call method '%s%c%s' with 'self' of type '%s'", expectedName, specificIndexingSyntax, method, luaT_objtypename(L, self)
+        );
+    }
+
+    const char* actualName = getstr(objectvalue(self)->lclass->name);
+
+    if (selfCall)
+    {
+        luaG_runerrorL(
+            L,
+            "attempt to call inlined method '%s:%s' on an object of class '%s'; this occurred because inlining optimizations are enabled "
+            "and the passed 'self' did not match the expected type annotation '%s'",
+            expectedName,
+            method,
+            actualName,
+            expectedName
+        );
+    }
+
+    luaG_runerrorL(L, "attempt to call method '%s.%s' with 'self' of class '%s'", expectedName, method, actualName);
 }
 
 static void pusherror(lua_State* L, const char* msg)

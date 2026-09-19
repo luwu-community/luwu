@@ -66,7 +66,7 @@ TEST_CASE_FIXTURE(Fixture, "typeguard_inference_incomplete")
             if type(a) == 'boolean' then
                 local a1:{fn:()->(unknown,...unknown)}&boolean=a
             elseif a.fn() then
-                local a2:{fn:()->(unknown,...unknown)}&(userdata|function|nil|number|integer|string|thread|buffer|none|table)=a
+                local a2:{fn:()->(unknown,...unknown)}&(userdata|class|object|vector|function|nil|number|integer|string|thread|buffer|none|table)=a
             end
         end
     )";
@@ -77,7 +77,7 @@ TEST_CASE_FIXTURE(Fixture, "typeguard_inference_incomplete")
             if type(a) == 'boolean' then
                 local a1:{fn:()->(unknown,...unknown)}&boolean=a
             elseif a.fn() then
-                local a2:{fn:()->(unknown,...unknown)}&(userdata|function|nil|number|string|thread|buffer|none|table)=a
+                local a2:{fn:()->(unknown,...unknown)}&(userdata|class|object|vector|function|nil|number|string|thread|buffer|none|table)=a
             end
         end
     )";
@@ -673,7 +673,9 @@ TEST_CASE_FIXTURE(IsSubtypeFixture, "intersection_of_functions_of_different_arit
     // CHECK(!isSubtype(a, b)); // !!
     // CHECK(!isSubtype(b, a));
 
-    CHECK("((any) -> ()) & ((any, any) -> ())" == toString(requireType("t")));
+    // T's own name is suppressed at the root (it always expands to its structure), but the
+    // A/B parts referenced within that structure are named type aliases, so they print by name.
+    CHECK("A & B" == toString(requireType("t")));
 }
 
 TEST_CASE_FIXTURE(IsSubtypeFixture, "functions_with_mismatching_arity")

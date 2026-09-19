@@ -3,6 +3,7 @@
 #include "Luau/Type.h"
 #include "lua.h"
 #include "lapix.h"
+#include "lobject.h"
 #include "lualib.h"
 #include "luacode.h"
 #include "luacodegen.h"
@@ -24,6 +25,10 @@
 
 #include <cstdlib>
 #include <fstream>
+#include <chrono>
+#include <functional>
+#include <tuple>
+#include <thread>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -35,6 +40,7 @@
 #define getCwd _getcwd
 #else
 #include <unistd.h>
+#include <sys/wait.h>
 #define getCwd getcwd
 #endif
 
@@ -66,6 +72,7 @@ LUAU_FASTFLAG(LuauCodegenFixBufferLenCheck)
 LUAU_FASTFLAG(LuauYieldIter2)
 LUAU_FASTFLAG(LuauCustomYieldablePcalls)
 LUAU_FASTFLAG(DebugLuauUserDefinedClassesRuntime)
+LUAU_FASTFLAG(LuwuBetterUserDefinedClasses)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportedClassIsNilWorkaround)
 LUAU_FASTFLAG(LuauAutoStack)
@@ -1499,6 +1506,130 @@ TEST_CASE("Pack")
 TEST_CASE("ExplicitTypeInstantiations")
 {
     runConformance("explicit_type_instantiations.luau");
+}
+
+// Stands in for a native plugin (a cdylib registered as an ordinary global) reading a member with the
+// C API. It is called *from* Luwu code, but the access is its own, so it is trusted like the embedder
+// (see luaR_checkprivateaccess).
+int pluginReadMember(lua_State* L)
+{
+    luaL_checkany(L, 1);
+    const char* field = luaL_checkstring(L, 2);
+
+    lua_getfield(L, 1, field);
+    return 1;
+}
+
+// The same read, performed on a freshly created thread so that no Lua frame is on the stack at the
+// moment of the access: the shape that otherwise looks exactly like the embedder calling in.
+int pluginReadMemberOnNewThread(lua_State* L)
+{
+    luaL_checkany(L, 1);
+    const char* field = luaL_checkstring(L, 2);
+
+    lua_State* T = lua_newthread(L);
+
+    lua_pushvalue(L, 1);
+    lua_xmove(L, T, 1);
+    lua_getfield(T, -1, field);
+    lua_xmove(T, L, 1);
+
+    return 1;
+}
+
+// Stand-ins for a native plugin exercising the rest of the C API for classes (rfcs/classes.md).
+int pluginWriteMember(lua_State* L)
+{
+    luaL_checkany(L, 1);
+    const char* field = luaL_checkstring(L, 2);
+    luaL_checkany(L, 3);
+
+    lua_settop(L, 3);
+    lua_setfield(L, 1, field);
+    return 0;
+}
+
+int pluginSetMetatable(lua_State* L)
+{
+    luaL_checkany(L, 1);
+
+    lua_newtable(L);
+    lua_setmetatable(L, 1);
+    return 0;
+}
+
+int pluginGetMetatable(lua_State* L)
+{
+    luaL_checkany(L, 1);
+
+    int top = lua_gettop(L);
+    int has = lua_getmetatable(L, 1);
+    // nothing may be pushed when there is no metatable
+    if (lua_gettop(L) != top + has)
+        luaL_error(L, "lua_getmetatable returned %d but pushed %d values", has, lua_gettop(L) - top);
+    lua_pushboolean(L, has);
+    return 1;
+}
+
+int pluginNewObject(lua_State* L)
+{
+    luaL_checkany(L, 1);
+
+    // leave a sentinel below the class so the stack effect is observable: the class and every argument
+    // must be replaced by exactly one object
+    lua_pushliteral(L, "sentinel");
+    lua_insert(L, 1);
+
+    lua_newobject(L, 2);
+
+    if (lua_gettop(L) != 2 || !lua_isobject(L, 2) || !lua_isstring(L, 1) || strcmp(lua_tostring(L, 1), "sentinel") != 0)
+        luaL_error(L, "lua_newobject left an unexpected stack");
+    return 1;
+}
+
+int pluginMemberAccess(lua_State* L)
+{
+    luaL_checkany(L, 1);
+    const char* member = luaL_checkstring(L, 2);
+
+    switch (lua_getmemberaccess(L, 1, member))
+    {
+    case LUA_MEMBERMISSING:
+        lua_pushliteral(L, "missing");
+        break;
+    case LUA_MEMBERPUBLIC:
+        lua_pushliteral(L, "public");
+        break;
+    case LUA_MEMBERPRIVATE:
+        lua_pushliteral(L, "private");
+        break;
+    default:
+        luaL_error(L, "unexpected member access");
+    }
+    return 1;
+}
+
+int pluginIsMemberConst(lua_State* L)
+{
+    luaL_checkany(L, 1);
+    const char* member = luaL_checkstring(L, 2);
+
+    int isconst = lua_ismemberconst(L, 1, member);
+    if (isconst != 0 && isconst != 1)
+        luaL_error(L, "lua_ismemberconst returned %d", isconst);
+    lua_pushboolean(L, isconst);
+    return 1;
+}
+
+int pluginClassName(lua_State* L)
+{
+    luaL_checkany(L, 1);
+
+    if (const char* name = lua_getclassname(L, 1))
+        lua_pushstring(L, name);
+    else
+        lua_pushnil(L);
+    return 1;
 }
 
 int singleYield(lua_State* L)
@@ -4505,20 +4636,759 @@ TEST_CASE("UserdataDirectAccess")
     );
 }
 
+TEST_CASE("ClassesExportHoistingRepro")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::DebugLuauUserDefinedClassesRuntime, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::LuauExportValueSyntax, true},
+        {FFlag::LuwuDefaultArguments, true},
+        {FFlag::LuauExportedClassIsNilWorkaround, true},
+    };
+
+    runConformance("classes_export_hoisting.luau");
+}
+
 TEST_CASE("Classes")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauUserDefinedClasses, true},
         {FFlag::DebugLuauUserDefinedClassesRuntime, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
+        // a primary constructor's parameter defaults are function parameter defaults
+        {FFlag::LuwuDefaultArguments, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuGenericNominals, true},
     };
 
-    runConformance("classes.luau");
+    runConformance(
+        "classes.luau",
+        [](lua_State* L)
+        {
+            // yielding C functions (via lua_yield with continuations) so classes.luau can verify that
+            // a class method calling a yielding C function still suspends/resumes correctly, including
+            // when that method is inlined -- see rfcs/classes.md
+            lua_pushcclosurek(L, singleYield, "singleYield", 0, singleYieldContinuation);
+            lua_setglobal(L, "singleYield");
+
+            lua_pushcclosurek(L, multipleYields, "multipleYields", 0, multipleYieldsContinuation);
+            lua_setglobal(L, "multipleYields");
+
+            // stand-ins for a native plugin trying to read a private member through the C API
+            lua_pushcfunction(L, pluginReadMember, "pluginReadMember");
+            lua_setglobal(L, "pluginReadMember");
+
+            lua_pushcfunction(L, pluginReadMemberOnNewThread, "pluginReadMemberOnNewThread");
+            lua_setglobal(L, "pluginReadMemberOnNewThread");
+
+            lua_pushcfunction(L, pluginWriteMember, "pluginWriteMember");
+            lua_setglobal(L, "pluginWriteMember");
+
+            lua_pushcfunction(L, pluginSetMetatable, "pluginSetMetatable");
+            lua_setglobal(L, "pluginSetMetatable");
+
+            lua_pushcfunction(L, pluginGetMetatable, "pluginGetMetatable");
+            lua_setglobal(L, "pluginGetMetatable");
+
+            lua_pushcfunction(L, pluginNewObject, "pluginNewObject");
+            lua_setglobal(L, "pluginNewObject");
+
+            lua_pushcfunction(L, pluginMemberAccess, "pluginMemberAccess");
+            lua_setglobal(L, "pluginMemberAccess");
+
+            lua_pushcfunction(L, pluginIsMemberConst, "pluginIsMemberConst");
+            lua_setglobal(L, "pluginIsMemberConst");
+
+            lua_pushcfunction(L, pluginClassName, "pluginClassName");
+            lua_setglobal(L, "pluginClassName");
+        }
+    );
+}
+
+TEST_CASE("ClassesInlining")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::DebugLuauUserDefinedClassesRuntime, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
+    };
+
+    // Method inlining only runs at O2, and the conformance default is O1 -- at O1 every case in this
+    // file passes vacuously. See tests/conformance/classes_inlining.luau.
+    lua_CompileOptions copts = defaultOptions();
+    copts.optimizationLevel = 2;
+
+    runConformance("classes_inlining.luau", nullptr, nullptr, nullptr, &copts);
+}
+
+TEST_CASE("ClassesNativeCodegen")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::DebugLuauUserDefinedClassesRuntime, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
+    };
+
+    // Deliberately a separate file from classes.luau: that one contains `@native` functions, and a module
+    // with any `@native` function natively compiles only those, so the rest of its protos stay interpreted
+    // and can't exercise the lowering of the class opcodes. See tests/conformance/classes_ncg.luau.
+    runConformance("classes_ncg.luau");
+}
+
+// Luwu Classes (rfcs/classes.md): the C API for classes, called the way an embedder calls it -- from C,
+// with no Lua frame anywhere on the stack. That is the case the language rules single out: native code
+// bypasses `private`, but is still held to `const` and to the block on reading `__init`.
+namespace
+{
+
+enum class ClassesCApiHook
+{
+    None,
+    CollectGarbage,
+    WriteConstField,
+};
+
+ClassesCApiHook classesCApiHook = ClassesCApiHook::None;
+
+// Called from `Frozen.__init` with the object under construction.
+int classesCApiHookFn(lua_State* L)
+{
+    switch (classesCApiHook)
+    {
+    case ClassesCApiHook::None:
+        break;
+    case ClassesCApiHook::CollectGarbage:
+        lua_gc(L, LUA_GCCOLLECT, 0);
+        break;
+    case ClassesCApiHook::WriteConstField:
+        // a C function called from inside `__init` is not `__init`
+        lua_pushnumber(L, 999);
+        lua_setfield(L, 1, "id");
+        break;
+    }
+    return 0;
+}
+
+int classesCApiThunk(lua_State* L)
+{
+    (*static_cast<std::function<void(lua_State*)>*>(lua_tolightuserdata(L, lua_upvalueindex(1))))(L);
+    return 0;
+}
+
+// Runs `f` in a protected C frame (still no Lua frame) and returns the error message, or "" on success.
+std::string classesCApiProtected(lua_State* L, std::function<void(lua_State*)> f)
+{
+    lua_pushlightuserdata(L, &f);
+    lua_pushcclosure(L, classesCApiThunk, "classesCApiThunk", 1);
+    if (lua_pcall(L, 0, 0, 0) == LUA_OK)
+        return "";
+
+    std::string message = lua_tostring(L, -1) ? lua_tostring(L, -1) : "<non-string error>";
+    lua_pop(L, 1);
+    return message;
+}
+
+} // namespace
+
+TEST_CASE("ClassesCApi")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::DebugLuauUserDefinedClassesRuntime, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
+        {FFlag::LuwuDefaultArguments, true},
+        {FFlag::LuwuNonePrimitive, true},
+    };
+
+    StateRef globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    lua_pushcfunction(L, classesCApiHookFn, "hook");
+    lua_setglobal(L, "hook");
+    classesCApiHook = ClassesCApiHook::None;
+
+    const char* source = R"(
+class Plain
+    public x: number
+    private y: number = 2
+end
+
+class Frozen
+    public const id: number
+    public label: string
+    private secret: number
+
+    public function __init(self, id: number, label: string, ...)
+        self.id = id
+        self.label = label
+        self.secret = select("#", ...)
+        hook(self)
+    end
+
+    public function __add(self, other)
+        return Frozen(self.id + other.id, "sum")
+    end
+
+    private function hidden(self) end
+end
+
+class Hidden private (public const code: number, private note: string) end
+
+class Yielder
+    function __init(self)
+        coroutine.yield()
+    end
+end
+
+Plain_ = Plain
+Frozen_ = Frozen
+Hidden_ = Hidden
+Yielder_ = Yielder
+)";
+
+    size_t bytecodeSize = 0;
+    char* bytecode = luau_compile(source, strlen(source), nullptr, &bytecodeSize);
+    int loadResult = luau_load(L, "=ClassesCApi", bytecode, bytecodeSize, 0);
+    free(bytecode);
+    REQUIRE(loadResult == 0);
+    REQUIRE(lua_pcall(L, 0, 0, 0) == LUA_OK);
+    REQUIRE(lua_gettop(L) == 0);
+
+    SUBCASE("lua_newobject calls __init with its arguments and replaces class and arguments with the object")
+    {
+        lua_pushliteral(L, "below");
+        lua_getglobal(L, "Frozen_");
+        lua_pushnumber(L, 7);
+        lua_pushliteral(L, "seven");
+        lua_pushboolean(L, true);
+        lua_pushnil(L);
+
+        lua_newobject(L, 2);
+
+        REQUIRE(lua_gettop(L) == 2);
+        CHECK(lua_isstring(L, 1));
+        REQUIRE(lua_isobject(L, 2));
+        lua_getfield(L, 2, "id");
+        CHECK(lua_tonumber(L, -1) == 7);
+        lua_getfield(L, 2, "label");
+        CHECK(strcmp(lua_tostring(L, -1), "seven") == 0);
+        lua_getfield(L, 2, "secret"); // native code bypasses `private`
+        CHECK(lua_tonumber(L, -1) == 2);
+    }
+
+    SUBCASE("lua_newobject accepts a negative index")
+    {
+        lua_getglobal(L, "Frozen_");
+        lua_pushnumber(L, 1);
+        lua_pushliteral(L, "a");
+
+        lua_newobject(L, -3);
+
+        REQUIRE(lua_gettop(L) == 1);
+        CHECK(lua_isobject(L, 1));
+    }
+
+    SUBCASE("lua_newobject grows the stack for many arguments")
+    {
+        const int extra = 1000;
+        REQUIRE(lua_checkstack(L, extra + 3));
+        lua_getglobal(L, "Frozen_");
+        lua_pushnumber(L, 1);
+        lua_pushliteral(L, "many");
+        for (int i = 0; i < extra; i++)
+            lua_pushnumber(L, i);
+
+        lua_newobject(L, 1);
+
+        REQUIRE(lua_gettop(L) == 1);
+        lua_getfield(L, 1, "secret");
+        CHECK(lua_tonumber(L, -1) == extra);
+    }
+
+    SUBCASE("lua_newobject keeps the object alive through a full collection inside __init")
+    {
+        classesCApiHook = ClassesCApiHook::CollectGarbage;
+        lua_getglobal(L, "Frozen_");
+        lua_pushnumber(L, 3);
+        lua_pushliteral(L, "collected");
+
+        lua_newobject(L, 1);
+        classesCApiHook = ClassesCApiHook::None;
+        lua_gc(L, LUA_GCCOLLECT, 0);
+
+        REQUIRE(lua_isobject(L, 1));
+        lua_getfield(L, 1, "label");
+        CHECK(strcmp(lua_tostring(L, -1), "collected") == 0);
+    }
+
+    SUBCASE("lua_newobject runs the POD constructor and applies defaults")
+    {
+        lua_getglobal(L, "Plain_");
+        lua_newtable(L);
+        lua_pushnumber(L, 5);
+        lua_setfield(L, -2, "x");
+        lua_newobject(L, 1);
+        REQUIRE(lua_gettop(L) == 1);
+        lua_getfield(L, 1, "x");
+        CHECK(lua_tonumber(L, -1) == 5);
+        lua_getfield(L, 1, "y");
+        CHECK(lua_tonumber(L, -1) == 2);
+        lua_settop(L, 0);
+
+        lua_getglobal(L, "Plain_");
+        lua_newobject(L, 1);
+        REQUIRE(lua_gettop(L) == 1);
+        lua_getfield(L, 1, "x");
+        CHECK(lua_isnil(L, -1));
+    }
+
+    SUBCASE("lua_newobject calls a private primary constructor")
+    {
+        lua_getglobal(L, "Hidden_");
+        lua_pushnumber(L, 42);
+        lua_pushliteral(L, "psst");
+        lua_newobject(L, 1);
+        REQUIRE(lua_gettop(L) == 1);
+        lua_getfield(L, 1, "code");
+        CHECK(lua_tonumber(L, -1) == 42);
+        lua_getfield(L, 1, "note");
+        CHECK(strcmp(lua_tostring(L, -1), "psst") == 0);
+    }
+
+    SUBCASE("lua_newobject raises on a value that is not a class")
+    {
+        std::string err = classesCApiProtected(
+            L,
+            [](lua_State* L)
+            {
+                lua_newtable(L);
+                lua_newobject(L, 1);
+            }
+        );
+        CHECK(err == "attempt to construct a table value");
+    }
+
+    SUBCASE("lua_newobject raises what __init raises, including a C function writing a const field")
+    {
+        classesCApiHook = ClassesCApiHook::WriteConstField;
+        std::string err = classesCApiProtected(
+            L,
+            [](lua_State* L)
+            {
+                lua_getglobal(L, "Frozen_");
+                lua_pushnumber(L, 1);
+                lua_pushliteral(L, "a");
+                lua_newobject(L, 1);
+            }
+        );
+        classesCApiHook = ClassesCApiHook::None;
+        CHECK(err == "'id' is a const member of 'Frozen' and cannot be assigned outside Frozen's '__init' constructor");
+    }
+
+    SUBCASE("lua_newobject cannot yield inside __init")
+    {
+        lua_State* T = lua_newthread(L);
+        lua_pushcfunction(
+            T,
+            [](lua_State* T)
+            {
+                lua_getglobal(T, "Yielder_");
+                lua_newobject(T, 1);
+                return 1;
+            },
+            "newYielder"
+        );
+        CHECK(lua_resume(T, nullptr, 0) == LUA_ERRRUN);
+        CHECK(strstr(lua_tostring(T, -1), "yield") != nullptr);
+    }
+
+    SUBCASE("lua_setfield from the embedder: const raises, private and public fields write")
+    {
+        lua_getglobal(L, "Frozen_");
+        lua_pushnumber(L, 1);
+        lua_pushliteral(L, "a");
+        lua_newobject(L, 1);
+        lua_setglobal(L, "frozen");
+
+        std::string err = classesCApiProtected(
+            L,
+            [](lua_State* L)
+            {
+                lua_getglobal(L, "frozen");
+                lua_pushnumber(L, 2);
+                lua_setfield(L, 1, "id");
+            }
+        );
+        CHECK(err == "'id' is a const member of 'Frozen' and cannot be assigned outside Frozen's '__init' constructor");
+
+        lua_getglobal(L, "frozen");
+        lua_getfield(L, 1, "id");
+        CHECK(lua_tonumber(L, -1) == 1);
+        lua_pop(L, 1);
+
+        lua_pushliteral(L, "b");
+        lua_setfield(L, 1, "label");
+        lua_pushnumber(L, 99);
+        lua_setfield(L, 1, "secret");
+        lua_getfield(L, 1, "label");
+        CHECK(strcmp(lua_tostring(L, -1), "b") == 0);
+        lua_getfield(L, 1, "secret");
+        CHECK(lua_tonumber(L, -1) == 99);
+    }
+
+    SUBCASE("reading a blocked __init from the embedder raises; an unblocked one does not")
+    {
+        const char* blocked = "'__init' of 'Frozen' cannot be accessed or called explicitly because Frozen has const fields";
+
+        std::string classErr = classesCApiProtected(
+            L,
+            [](lua_State* L)
+            {
+                lua_getglobal(L, "Frozen_");
+                lua_getfield(L, 1, "__init");
+            }
+        );
+        CHECK(classErr == blocked);
+
+        std::string objectErr = classesCApiProtected(
+            L,
+            [](lua_State* L)
+            {
+                lua_getglobal(L, "Frozen_");
+                lua_pushnumber(L, 1);
+                lua_pushliteral(L, "a");
+                lua_newobject(L, 1);
+                lua_getfield(L, 1, "__init");
+            }
+        );
+        CHECK(objectErr == blocked);
+
+        lua_getglobal(L, "Plain_");
+        CHECK(lua_getfield(L, 1, "__init") == LUA_TFUNCTION);
+    }
+
+    SUBCASE("metatables of classes and objects are never exposed or replaced")
+    {
+        lua_getglobal(L, "Frozen_");
+        lua_pushnumber(L, 1);
+        lua_pushliteral(L, "a");
+        lua_newobject(L, 1);
+        lua_getglobal(L, "Frozen_");
+
+        // both have a metatable internally: the object's holds __add, the class's holds __call
+        CHECK(lua_getmetatable(L, 1) == 0);
+        CHECK(lua_getmetatable(L, 2) == 0);
+        CHECK(lua_gettop(L) == 2);
+
+        lua_setglobal(L, "cls");
+        lua_setglobal(L, "obj");
+
+        for (const char* global : {"obj", "cls"})
+        {
+            std::string err = classesCApiProtected(
+                L,
+                [global](lua_State* L)
+                {
+                    lua_getglobal(L, global);
+                    lua_newtable(L);
+                    lua_setmetatable(L, 1);
+                }
+            );
+            CHECK(err == (std::string("cannot set the metatable of a ") + (strcmp(global, "obj") == 0 ? "object" : "class")));
+        }
+
+        // a failed lua_setmetatable must not have installed a metatable for every object instead
+        lua_getglobal(L, "Plain_");
+        lua_newobject(L, 1);
+        CHECK(lua_getmetatable(L, 1) == 0);
+    }
+
+    SUBCASE("luaL_getmetafield and luaL_callmeta still find an object's metamethods")
+    {
+        lua_getglobal(L, "Frozen_");
+        lua_pushnumber(L, 1);
+        lua_pushliteral(L, "a");
+        lua_newobject(L, 1);
+
+        CHECK(luaL_getmetafield(L, 1, "__add") == 1);
+        CHECK(lua_gettop(L) == 2);
+        CHECK(lua_isfunction(L, 2));
+        lua_pop(L, 1);
+
+        CHECK(luaL_getmetafield(L, 1, "__sub") == 0);
+        CHECK(luaL_callmeta(L, 1, "__tostring") == 0);
+        CHECK(lua_gettop(L) == 1);
+
+        // a class with no metamethods has no metatable at all
+        lua_getglobal(L, "Plain_");
+        lua_newobject(L, 2);
+        CHECK(luaL_getmetafield(L, 2, "__add") == 0);
+        CHECK(lua_gettop(L) == 2);
+    }
+
+    SUBCASE("lua_getmemberaccess")
+    {
+        lua_getglobal(L, "Frozen_");
+        lua_getglobal(L, "Hidden_");
+        lua_pushnumber(L, 1);
+        lua_pushliteral(L, "a");
+        lua_newobject(L, 2);
+
+        CHECK(lua_getmemberaccess(L, 1, "id") == LUA_MEMBERPUBLIC); // an instance field, queried on the class
+        CHECK(lua_getmemberaccess(L, 1, "secret") == LUA_MEMBERPRIVATE);
+        CHECK(lua_getmemberaccess(L, 1, "hidden") == LUA_MEMBERPRIVATE);
+        CHECK(lua_getmemberaccess(L, 1, "__add") == LUA_MEMBERPUBLIC);
+        CHECK(lua_getmemberaccess(L, 1, "__init") == LUA_MEMBERPUBLIC); // blocked, but that isn't access
+        CHECK(lua_getmemberaccess(L, 1, "nope") == LUA_MEMBERMISSING);
+        CHECK(lua_getmemberaccess(L, 2, "code") == LUA_MEMBERPUBLIC);
+        CHECK(lua_getmemberaccess(L, 2, "note") == LUA_MEMBERPRIVATE);
+        CHECK(lua_getmemberaccess(L, 2, "__init") == LUA_MEMBERPRIVATE); // a private primary constructor
+        CHECK(lua_gettop(L) == 2);
+
+        std::string err = classesCApiProtected(
+            L,
+            [](lua_State* L)
+            {
+                lua_pushnumber(L, 5);
+                lua_getmemberaccess(L, 1, "x");
+            }
+        );
+        CHECK(err == "expected a class or object, got number");
+    }
+
+    SUBCASE("lua_ismemberconst")
+    {
+        lua_getglobal(L, "Frozen_");
+        lua_getglobal(L, "Hidden_");
+        lua_pushnumber(L, 1);
+        lua_pushliteral(L, "a");
+        lua_newobject(L, 2);
+
+        CHECK(lua_ismemberconst(L, 1, "id") == 1);
+        CHECK(lua_ismemberconst(L, 1, "label") == 0);
+        CHECK(lua_ismemberconst(L, 1, "hidden") == 1); // functions are always immutable
+        CHECK(lua_ismemberconst(L, 1, "__add") == 1);
+        CHECK(lua_ismemberconst(L, 1, "nope") == 0);
+        CHECK(lua_ismemberconst(L, 2, "code") == 1); // a `const` primary constructor parameter
+        CHECK(lua_ismemberconst(L, 2, "note") == 0);
+        CHECK(lua_ismemberconst(L, 2, "__init") == 1);
+        CHECK(lua_gettop(L) == 2);
+
+        std::string err = classesCApiProtected(
+            L,
+            [](lua_State* L)
+            {
+                lua_pushliteral(L, "hi");
+                lua_ismemberconst(L, 1, "x");
+            }
+        );
+        CHECK(err == "expected a class or object, got string");
+    }
+
+    SUBCASE("lua_getclassname")
+    {
+        lua_getglobal(L, "Hidden_");
+        lua_getglobal(L, "Hidden_");
+        lua_pushnumber(L, 1);
+        lua_pushliteral(L, "a");
+        lua_newobject(L, 2);
+        lua_pushnumber(L, 5);
+
+        CHECK(strcmp(lua_getclassname(L, 1), "Hidden") == 0);
+        CHECK(strcmp(lua_getclassname(L, 2), "Hidden") == 0);
+        CHECK(lua_getclassname(L, 3) == nullptr);
+        CHECK(lua_getclassname(L, 10) == nullptr); // an unused stack slot
+        CHECK(lua_gettop(L) == 3);
+    }
+}
+
+// Luwu Classes (rfcs/classes.md): differential and crash fuzzing of classes. tests/classes_fuzz/run.luau generates random
+// class programs and runs each through the luau CLI at every optimization level, interpreted and natively compiled,
+// comparing results against -O0 and reporting any crash, assert or divergence. It is a seal script, so this case is
+// skipped unless seal 0.8.x at >= 0.8.1 is available (ChildProcess:status arrived in 0.8.1; 0.9.0 breaks the APIs it uses) -- set LUWU_SEAL to point at a binary that
+// isn't on PATH (PATH lookup finds seal.exe on Windows). LUWU_CLASSES_FUZZ_COUNT and LUWU_CLASSES_FUZZ_START pick the seeds (default 300 programs from 1).
+// Run from an assert-enabled build: the fuzzer uses the luau CLI built alongside this binary.
+TEST_CASE("ClassesFuzz")
+{
+#if !defined(LUWU_CLASSES_FUZZ_DIR) || !defined(LUWU_REPL_CLI_PATH)
+    MESSAGE("skipped: classes fuzzer isn't configured for this build");
+#else
+#ifdef _WIN32
+    const char* nullDevice = "NUL";
+    const char* tempEnv = "TEMP";
+#else
+    const char* nullDevice = "/dev/null";
+    const char* tempEnv = "TMPDIR";
+#endif
+
+    auto runCommand = [](std::string command, std::string& output) -> int
+    {
+        output.clear();
+#ifdef _WIN32
+        // _popen runs `cmd /c <command>`, and cmd strips the first and last quote of a command that starts with one
+        command = "\"" + command + "\"";
+        FILE* pipe = _popen(command.c_str(), "r");
+#else
+        FILE* pipe = popen(command.c_str(), "r");
+#endif
+        if (!pipe)
+            return -1;
+
+        char buffer[4096];
+        while (size_t read = fread(buffer, 1, sizeof(buffer), pipe))
+            output.append(buffer, read);
+
+#ifdef _WIN32
+        return _pclose(pipe);
+#else
+        int status = pclose(pipe);
+        return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+#endif
+    };
+
+    std::string cli = LUWU_REPL_CLI_PATH;
+    struct stat st;
+    if (stat(cli.c_str(), &st) != 0)
+    {
+        MESSAGE("skipped: luau CLI not found at " << cli);
+        return;
+    }
+
+    const char* sealEnv = std::getenv("LUWU_SEAL");
+    std::string seal = sealEnv && *sealEnv ? sealEnv : "seal";
+
+    std::string versionOutput;
+    if (runCommand("\"" + seal + "\" --version 2>" + nullDevice, versionOutput) != 0)
+    {
+        MESSAGE("skipped: seal not found (install seal 0.8.x, >= 0.8.1, or set LUWU_SEAL)");
+        return;
+    }
+
+    while (!versionOutput.empty() && isspace((unsigned char)versionOutput.back()))
+        versionOutput.pop_back();
+
+    int major = 0, minor = 0, patch = 0;
+    // run.luau targets seal 0.8.x: 0.8.1 added ChildProcess:status, and 0.9.0 makes breaking changes to the std APIs it uses
+    if (sscanf(versionOutput.c_str(), "%d.%d.%d", &major, &minor, &patch) != 3 || std::make_tuple(major, minor, patch) < std::make_tuple(0, 8, 1) ||
+        std::make_tuple(major, minor, patch) >= std::make_tuple(0, 9, 0))
+    {
+        MESSAGE("skipped: seal " << versionOutput << " isn't supported, the classes fuzzer needs seal 0.8.x at >= 0.8.1");
+        return;
+    }
+
+    const char* countEnv = std::getenv("LUWU_CLASSES_FUZZ_COUNT");
+    const char* startEnv = std::getenv("LUWU_CLASSES_FUZZ_START");
+    std::string count = countEnv && *countEnv ? countEnv : "300";
+    std::string start = startEnv && *startEnv ? startEnv : "1";
+    unsigned jobs = std::max(1u, std::thread::hardware_concurrency());
+
+    const char* tmp = std::getenv(tempEnv);
+    std::string work = std::string(tmp && *tmp ? tmp : "/tmp") + "/luwu_classes_fuzz_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+
+    std::string command = "\"" + seal + "\" \"" LUWU_CLASSES_FUZZ_DIR "/run.luau\" --luau \"" + cli + "\" --start " + start + " --count " + count +
+                          " --jobs " + std::to_string(jobs) + " --work \"" + work + "\" 2>&1";
+
+    std::string output;
+    int exitCode = runCommand(command, output);
+
+    INFO(command);
+    INFO(output);
+    CHECK(exitCode == 0);
+#endif
+}
+
+TEST_CASE("ClassesNativeNamecallLearnsMemberSlot")
+{
+    // Native TRY_OBJECT_NAMECALL_ADDR reads the member offset cached in NAMECALL's operand C, and the only
+    // thing that writes it under native code is the fallback it misses into (executeNAMECALL). If that
+    // stops patching, method calls on objects still work but resolve the name through the fallback on
+    // every call -- a ~5ns-per-call slowdown no behavioral test can see. So check the patch itself.
+    if (!luau_codegen_supported())
+        return;
+
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::DebugLuauUserDefinedClassesRuntime, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
+    };
+
+    StateRef globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+    luau_codegen_create(L);
+
+    // `drive` takes its receiver untyped, as a method call on an object from another module does
+    const char* source = R"(
+class Counter
+    public a: number
+    public b: number
+
+    public function first(self): number
+        return self.a
+    end
+
+    public function second(self): number
+        return self.b
+    end
+end
+
+function drive(o)
+    local sum = 0
+    for _ = 1, 100 do
+        sum += o:second()
+    end
+    return sum
+end
+
+counter = Counter { a = 1, b = 2 }
+)";
+
+    lua_CompileOptions compileOptions = {};
+    compileOptions.optimizationLevel = 2;
+    size_t bytecodeSize = 0;
+    char* bytecode = luau_compile(source, strlen(source), &compileOptions, &bytecodeSize);
+    int loadResult = luau_load(L, "=ClassesNativeNamecallLearnsMemberSlot", bytecode, bytecodeSize, 0);
+    free(bytecode);
+    REQUIRE(loadResult == 0);
+
+    Luau::CodeGen::CompilationResult nativeResult = Luau::CodeGen::compile(L, -1, defaultCodegenOptions());
+    REQUIRE(nativeResult.result == Luau::CodeGen::CodeGenCompilationResult::Success);
+    REQUIRE(lua_pcall(L, 0, 0, 0) == LUA_OK);
+
+    lua_getglobal(L, "drive");
+    Proto* proto = static_cast<const Closure*>(lua_topointer(L, -1))->l.p;
+    REQUIRE(proto->execdata != nullptr);
+
+    lua_getglobal(L, "counter");
+    const LuauClass* counterClass = static_cast<const LuauObject*>(lua_topointer(L, -1))->lclass;
+    REQUIRE(lua_pcall(L, 1, 1, 0) == LUA_OK);
+    CHECK(lua_tonumber(L, -1) == 200);
+
+    int namecalls = 0;
+
+    for (int pc = 0; pc < proto->sizecode; pc++)
+    {
+        if (LUAU_INSN_OP(proto->code[pc]) != LOP_NAMECALL)
+            continue;
+
+        namecalls++;
+        uint8_t slot = LUAU_INSN_C(proto->code[pc]);
+        REQUIRE(slot < counterClass->numberofallmembers);
+        CHECK(strcmp(getstr(counterClass->offsettomember[slot]), "second") == 0);
+    }
+
+    CHECK(namecalls == 1);
 }
 
 TEST_CASE("ExportedClasses")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
         {FFlag::DebugLuauUserDefinedClassesRuntime, true},
         {FFlag::LuauExportValueSyntax, true},
         {FFlag::LuauExportedClassIsNilWorkaround, true},

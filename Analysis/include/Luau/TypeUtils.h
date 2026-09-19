@@ -444,4 +444,17 @@ bool isBlocked(TypeId ty);
  */
 std::optional<TypePackId> getApproximateReturnTypeForFunctionCall(TypeId ty);
 
+/**
+ * Names the operands of an operator that could be `nil`, for an error message: "one or both operands
+ * could be `nil`", "the left operand could be `nil`", "the operand could be `nil`".
+ *
+ * `nil` never carries a metamethod, so an optional operand is always a reason the operator could not
+ * be applied -- and, unlike a missing metamethod on a type the reader did not think they were using,
+ * it is the reason they can act on.
+ *
+ * Pass nullopt for `right` for a unary operator. Returns nullopt when no operand could be `nil`.
+ * Deliberately narrower than `isOptional`, which also answers true for `any` and `unknown`.
+ */
+std::optional<std::string> describeOptionalOperands(TypeId left, std::optional<TypeId> right);
+
 } // namespace Luau

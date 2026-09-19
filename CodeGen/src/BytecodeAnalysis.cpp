@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <array>
 
+LUAU_FASTFLAG(DebugLuauUserDefinedClassesRuntime)
+
 namespace Luau
 {
 namespace CodeGen
@@ -411,6 +413,10 @@ static void applyBuiltinCall(LuauBuiltinFunction bfid, BytecodeTypes& types)
     case LBF_RAWEQUAL:
         types.result = LBC_TYPE_BOOLEAN;
         break;
+    case LBF_CLASS_ISINSTANCE:
+        types.result = LBC_TYPE_BOOLEAN;
+        types.b = LBC_TYPE_CLASS;
+        break;
     case LBF_TABLE_UNPACK:
         types.result = LBC_TYPE_ANY;
         types.a = LBC_TYPE_TABLE;
@@ -776,10 +782,108 @@ uint8_t getRegTag(std::array<uint8_t, 256>& regTags, BytecodeTypeInfo& bcTypeInf
     return regTags[reg];
 }
 
+// Luwu Classes (rfcs/classes.md): for each bytecode block, the register that a `class.isinstance(x, C)`
+// branch into it proves holds an object, or -1. Recognizes the fused form
+// (`JUMPXISA x ...`, with or without CHECKCLASS) and the unfused builtin form (`FASTCALL2 isinstance x C`,
+// `CALL`, then `JUMPIF`/`JUMPIFNOT` on its result). Only a block whose single predecessor is that branch
+// qualifies. The result is a type hint like any other: codegen guards the tag, so a wrong hint costs a VM
+// exit, never correctness -- it just lets field accesses and method calls on `x` take the object path
+// directly instead of missing the table path first.
+static std::vector<int> findIsinstanceProvenObjectRegs(const IrFunction& function)
+{
+    Proto* proto = function.proto;
+
+    std::vector<int> provenReg(proto->sizecode, -1);
+    std::vector<uint8_t> predecessors(proto->sizecode, 0);
+    // pc of a jump -> argument register of the `FASTCALL2 isinstance` whose skip lands on it, or -1
+    std::vector<int> isinstanceArgAt(proto->sizecode, -1);
+
+    auto addEdge = [&](int pc)
+    {
+        if (pc >= 0 && pc < proto->sizecode && predecessors[pc] < 2)
+            predecessors[pc]++;
+    };
+
+    for (const BytecodeBlock& block : function.bcBlocks)
+    {
+        const Instruction* pc = &proto->code[block.finishpc];
+        LuauOpcode op = LuauOpcode(LUAU_INSN_OP(*pc));
+
+        int target = getJumpTarget(*pc, uint32_t(block.finishpc));
+        if (target >= 0 && !isFastCall(op))
+            addEdge(target);
+
+        if (op != LOP_RETURN && op != LOP_JUMP && op != LOP_JUMPBACK && op != LOP_JUMPX)
+            addEdge(block.finishpc + getOpLength(op));
+    }
+
+    for (int i = 0; i < proto->sizecode;)
+    {
+        const Instruction* pc = &proto->code[i];
+        LuauOpcode op = LuauOpcode(LUAU_INSN_OP(*pc));
+
+        if (op == LOP_FASTCALL2 && LUAU_INSN_A(*pc) == LBF_CLASS_ISINSTANCE)
+        {
+            int jumppc = getJumpTarget(*pc, uint32_t(i));
+            int callpc = jumppc - 1; // CALL is one instruction, directly before the skip target
+            const Instruction call = proto->code[callpc];
+            const Instruction jump = proto->code[jumppc];
+            LuauOpcode jumpop = LuauOpcode(LUAU_INSN_OP(jump));
+
+            int argReg = LUAU_INSN_B(*pc);
+            int callReg = LUAU_INSN_A(call);
+            int nparams = LUAU_INSN_B(call) - 1;
+
+            bool callMatches = LUAU_INSN_OP(call) == LOP_CALL && LUAU_INSN_C(call) == 2;
+            bool jumpMatches = (jumpop == LOP_JUMPIF || jumpop == LOP_JUMPIFNOT) && int(LUAU_INSN_A(jump)) == callReg;
+            bool shapeMatches = callMatches && jumpMatches;
+            // the argument register must survive the call's frame setup and its result
+            bool argSurvives = nparams >= 0 && (argReg < callReg || argReg > callReg + nparams);
+
+            if (shapeMatches && argSurvives)
+                isinstanceArgAt[jumppc] = argReg;
+        }
+
+        i += getOpLength(op);
+    }
+
+    for (const BytecodeBlock& block : function.bcBlocks)
+    {
+        int finish = block.finishpc;
+        const Instruction* pc = &proto->code[finish];
+        LuauOpcode op = LuauOpcode(LUAU_INSN_OP(*pc));
+        int fallthrough = finish + getOpLength(op);
+        int target = getJumpTarget(*pc, uint32_t(finish));
+
+        int reg = -1;
+        int provenBlock = -1;
+
+        if (op == LOP_JUMPXISA)
+        {
+            reg = LUAU_INSN_A(*pc);
+            // aux bit 31 set: jump when it IS an instance
+            provenBlock = LUAU_INSN_AUX_NOT(pc[1]) ? target : fallthrough;
+        }
+        else if ((op == LOP_JUMPIF || op == LOP_JUMPIFNOT) && isinstanceArgAt[finish] >= 0)
+        {
+            reg = isinstanceArgAt[finish];
+            provenBlock = op == LOP_JUMPIF ? target : fallthrough;
+        }
+
+        if (reg >= 0 && provenBlock >= 0 && provenBlock < proto->sizecode && predecessors[provenBlock] == 1)
+            provenReg[provenBlock] = reg;
+    }
+
+    return provenReg;
+}
+
 void analyzeBytecodeTypes(IrFunction& function, const HostIrHooks& hostHooks)
 {
     Proto* proto = function.proto;
     CODEGEN_ASSERT(proto);
+
+    std::vector<int> isinstanceProvenRegs =
+        FFlag::DebugLuauUserDefinedClassesRuntime ? findIsinstanceProvenObjectRegs(function) : std::vector<int>();
 
     BytecodeTypeInfo& bcTypeInfo = function.bcTypeInfo;
 
@@ -809,6 +913,9 @@ void analyzeBytecodeTypes(IrFunction& function, const HostIrHooks& hostHooks)
 
         for (int i = proto->numparams; i < proto->maxstacksize; ++i)
             regTags[i] = LBC_TYPE_ANY;
+
+        if (!isinstanceProvenRegs.empty() && isinstanceProvenRegs[block.startpc] >= 0)
+            regTags[isinstanceProvenRegs[block.startpc]] = LBC_TYPE_OBJECT;
 
         // Namecall instruction has a hook which specifies the result of the next call instruction
         LuauBytecodeType knownNextCallResult = LBC_TYPE_ANY;
@@ -1510,6 +1617,11 @@ void analyzeBytecodeTypes(IrFunction& function, const HostIrHooks& hostHooks)
             case LOP_GETVARARGS:
             case LOP_FORGPREP:
             case LOP_NEWCLASSMEMBER:
+            case LOP_CHECKSELFCLASS:
+            case LOP_JUMPXISA:
+            case LOP_NEWOBJECT:
+            case LOP_GETOBJECTMEMBER:
+            case LOP_SETOBJECTMEMBER:
                 break;
             default:
                 CODEGEN_ASSERT(!"Unknown instruction");

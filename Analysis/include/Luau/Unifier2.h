@@ -107,6 +107,7 @@ private:
     UnifyResult unify_(const IntersectionType* subIntersection, TypeId superTy);
     UnifyResult unify_(TypeId subTy, const IntersectionType* superIntersection);
     UnifyResult unify_(TableType* subTable, const TableType* superTable);
+    UnifyResult unify_(const ExternType* subExternType, const ExternType* superExternType);
     UnifyResult unify_(const MetatableType* subMetatable, const MetatableType* superMetatable);
 
     UnifyResult unify_(const AnyType* subAny, const FunctionType* superFn);

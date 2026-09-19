@@ -430,11 +430,10 @@ type Packed4<T...> = (Packed3<T...>, T...) -> (Packed3<T...>, T...)
 
     auto tf = lookupType("Packed4");
     REQUIRE(tf);
-    CHECK_EQ(
-        toString(*tf),
-        "((((T...) -> (T...), T...) -> ((T...) -> (T...), T...), T...) -> (((T...) -> (T...), T...) -> ((T...) -> (T...), T...), T...), T...) -> "
-        "((((T...) -> (T...), T...) -> ((T...) -> (T...), T...), T...) -> (((T...) -> (T...), T...) -> ((T...) -> (T...), T...), T...), T...)"
-    );
+    // Packed4's own name is suppressed at the root (it always expands to its structure one
+    // level), but the nested Packed3 references within that structure are a named type alias,
+    // so they print by name rather than recursing arbitrarily deep.
+    CHECK_EQ(toString(*tf), "(Packed3, T...) -> (Packed3, T...)");
 }
 
 TEST_CASE_FIXTURE(Fixture, "type_alias_type_pack_variadic")
@@ -928,12 +927,12 @@ a = b
     if (!FFlag::DebugLuauForceOldSolver)
     {
 
-        const std::string expected = "Expected this to be\n\t"
+        const std::string expected = "Expected this function to return\n\t"
                                      "'() -> (number, ...string)'"
                                      "\nbut got\n\t"
                                      "'() -> (number, ...boolean)'"
                                      "; \n"
-                                     "it returns a tail of the variadic `boolean` in the latter type and `string` in the former "
+                                     "it has a tail of the variadic `boolean` in the latter type and `string` in the former "
                                      "type, and `boolean` is not a subtype of `string`";
 
         CHECK(expected == toString(result.errors[0]));

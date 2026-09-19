@@ -58,6 +58,11 @@ int getOpLength(LuauOpcode op)
     case LOP_NEWCLASSMEMBER:
     case LOP_CALLFB:
     case LOP_CMPPROTO:
+    case LOP_JUMPXISA:
+    case LOP_CHECKSELFCLASS:
+    case LOP_NEWOBJECT:
+    case LOP_GETOBJECTMEMBER:
+    case LOP_SETOBJECTMEMBER:
         return 2;
 
     default:
@@ -90,6 +95,7 @@ bool isJumpD(LuauOpcode op)
     case LOP_JUMPXEQKN:
     case LOP_JUMPXEQKS:
     case LOP_CMPPROTO:
+    case LOP_JUMPXISA:
         return true;
 
     default:
@@ -102,6 +108,7 @@ bool isSkipC(LuauOpcode op)
     switch (int(op))
     {
     case LOP_LOADB:
+    case LOP_CHECKSELFCLASS:
         return true;
 
     default:
@@ -166,6 +173,11 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::GET_SLOT_NODE_ADDR:
     case IrCmd::GET_HASH_NODE_ADDR:
     case IrCmd::GET_CLOSURE_UPVAL_ADDR:
+    case IrCmd::LOAD_OWNER_CLASS:
+    case IrCmd::TRY_OBJECT_MEMBER_ADDR:
+    case IrCmd::OBJECT_MEMBER_ADDR:
+    case IrCmd::TRY_CLASS_MEMBER_ADDR:
+    case IrCmd::TRY_OBJECT_NAMECALL_ADDR:
         return IrValueKind::Pointer;
     case IrCmd::STORE_TAG:
     case IrCmd::STORE_EXTRA:
@@ -280,9 +292,11 @@ IrValueKind getCmdValueKind(IrCmd cmd)
         return IrValueKind::Pointer;
     case IrCmd::STRING_LEN:
     case IrCmd::BUFFER_ISFROZEN:
+    case IrCmd::CLASS_ISINSTANCE:
         return IrValueKind::Int;
     case IrCmd::NEW_TABLE:
     case IrCmd::DUP_TABLE:
+    case IrCmd::NEW_OBJECT:
         return IrValueKind::Pointer;
     case IrCmd::TRY_NUM_TO_INDEX:
         return IrValueKind::Int;
@@ -337,6 +351,8 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::CHECK_SLOT_MATCH:
     case IrCmd::CHECK_NODE_NO_NEXT:
     case IrCmd::CHECK_NODE_VALUE:
+    case IrCmd::CHECK_OBJECT_CLASS:
+    case IrCmd::CHECK_CLASS_FIELDS_CONSTRUCTIBLE:
     case IrCmd::CHECK_BUFFER_LEN:
     case IrCmd::CHECK_BUFFER_MUTABLE:
     case IrCmd::CHECK_USERDATA_TAG:
@@ -370,6 +386,8 @@ IrValueKind getCmdValueKind(IrCmd cmd)
         return IrValueKind::Pointer;
     case IrCmd::FALLBACK_DUPCLOSURE:
     case IrCmd::FALLBACK_FORGPREP:
+    case IrCmd::FALLBACK_NEWOBJECT:
+    case IrCmd::FALLBACK_NEWCLASSMEMBER:
         return IrValueKind::None;
     case IrCmd::SUBSTITUTE:
         return IrValueKind::Unknown;
@@ -1943,6 +1961,10 @@ std::optional<uint8_t> tryGetLuauTagForBcType(uint8_t bcType, bool ignoreOptiona
         return LUA_TBUFFER;
     case LBC_TYPE_SYMNONE:
         return LUA_TSYMNONE;
+    case LBC_TYPE_CLASS:
+        return LUA_TCLASS;
+    case LBC_TYPE_OBJECT:
+        return LUA_TOBJECT;
     default:
         if (bcType >= LBC_TYPE_TAGGED_USERDATA_BASE && bcType < LBC_TYPE_TAGGED_USERDATA_END)
             return LUA_TUSERDATA;

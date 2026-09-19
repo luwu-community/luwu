@@ -201,15 +201,18 @@ bool NormalizedType::isUnknown() const
                            strings.isString() && isThread(threads) && isBuffer(buffers) && Luau::isNone(nones);
     }
 
-    // Check is extern type
-    bool isTopExternType = false;
-    for (const auto& [t, disj] : externTypes.externTypes)
+    // Check is extern type: the nominal component is `unknown` only when every
+    // nominal root (see BuiltinTypes::nominalRoots) is present with no negations.
+    std::array<TypeId, 4> nominalRoots = builtinTypes->nominalRoots();
+    bool isTopExternType = externTypes.externTypes.size() == nominalRoots.size();
+    if (isTopExternType)
     {
-        if (get<ExternType>(t))
+        for (TypeId root : nominalRoots)
         {
-            if (t == builtinTypes->externType && disj.empty())
+            auto it = externTypes.externTypes.find(root);
+            if (it == externTypes.externTypes.end() || !it->second.empty())
             {
-                isTopExternType = true;
+                isTopExternType = false;
                 break;
             }
         }
@@ -619,15 +622,18 @@ static int tyvarIndex(TypeId ty)
 
 static bool isTop(NotNull<BuiltinTypes> builtinTypes, const NormalizedExternType& externTypes)
 {
-    if (externTypes.externTypes.size() != 1)
+    // The top of the nominal lattice is every nominal root (userdata/class/
+    // object/vector) present with no negations.
+    std::array<TypeId, 4> roots = builtinTypes->nominalRoots();
+    if (externTypes.externTypes.size() != roots.size())
         return false;
 
-    auto first = externTypes.externTypes.begin();
-    if (first->first != builtinTypes->externType)
-        return false;
-
-    if (!first->second.empty())
-        return false;
+    for (TypeId root : roots)
+    {
+        auto it = externTypes.externTypes.find(root);
+        if (it == externTypes.externTypes.end() || !it->second.empty())
+            return false;
+    }
 
     return true;
 }
@@ -636,7 +642,8 @@ static void resetToTop(NotNull<BuiltinTypes> builtinTypes, NormalizedExternType&
 {
     externTypes.ordering.clear();
     externTypes.externTypes.clear();
-    externTypes.pushPair(builtinTypes->externType, TypeIds{});
+    for (TypeId root : builtinTypes->nominalRoots())
+        externTypes.pushPair(root, TypeIds{});
 }
 
 #ifdef LUAU_ASSERTENABLED
@@ -2001,6 +2008,7 @@ NormalizationResult Normalizer::unionNormalWithTy(
 
 // ------- Negations
 
+
 std::optional<NormalizedType> Normalizer::negateNormal(const NormalizedType& here)
 {
     consumeFuel();
@@ -2045,19 +2053,24 @@ std::optional<NormalizedType> Normalizer::negateNormal(const NormalizedType& her
     }
     else
     {
-        TypeIds rootNegations{};
+        // need to ensure extern types that actually refer to 'objects' remain
+        // rooted to 'object' instead of 'userdata' now that externtype can refer
+        // to either an object of a class or an actual extern type userdata
+        std::map<TypeId, TypeIds> negationsByRoot;
 
         for (const auto& [hereParent, hereNegations] : here.externTypes.externTypes)
         {
-            if (hereParent != builtinTypes->externType)
-                rootNegations.insert(hereParent);
+            // A type's hierarchy root is its `root` pointer, or itself if it is a root.
+            TypeId root = get<ExternType>(hereParent)->root.value_or(hereParent);
+            if (hereParent != root)
+                negationsByRoot[root].insert(hereParent);
 
             for (TypeId hereNegation : hereNegations)
                 unionExternTypesWithExternType(result.externTypes, hereNegation);
         }
 
-        if (!rootNegations.empty())
-            result.externTypes.pushPair(builtinTypes->externType, std::move(rootNegations));
+        for (auto& [root, negations] : negationsByRoot)
+            result.externTypes.pushPair(root, std::move(negations));
     }
 
     result.nils = get<NeverType>(here.nils) ? builtinTypes->nilType : builtinTypes->neverType;
@@ -3672,7 +3685,8 @@ TypeId Normalizer::typeFromNormal(const NormalizedType& norm)
 
     if (isTop(builtinTypes, norm.externTypes))
     {
-        result.push_back(builtinTypes->externType);
+        for (TypeId root : builtinTypes->nominalRoots())
+            result.push_back(root);
     }
     else if (!norm.externTypes.isNever())
     {

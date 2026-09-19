@@ -291,12 +291,10 @@ static constexpr const char* kBuiltinDefinitionBufferSrcClose = R"BUILTIN_SRC(
 
 static const char* const kBuiltinDefinitionVectorSrc = R"BUILTIN_SRC(
 
--- While vector would have been better represented as a built-in primitive type, type solver extern type handling covers most of the properties
-declare extern type vector with
-    read x: number
-    read y: number
-    read z: number
-end
+-- `vector` is a language primitive that reuses the ExternType representation; its type (a nominal
+-- root with read x/y/z fields + operator metatable) is created in C++ as `builtinTypes->vectorType`
+-- and bound to the name `vector` in GlobalTypes (see makeVectorMetatable). Only the library value
+-- is declared here.
 
 declare vector: {
     create: @checked (x: number, y: number, z: number?) -> vector,
@@ -371,7 +369,9 @@ declare integer: {
 static const char* kBuiltinDefinitionClassSrc = R"CLASS_SRC(
 declare class: {
     isinstance: @checked (o: unknown, c: class) -> boolean,
-    classof: @checked (o: unknown) -> class?
+    of: @checked (o: unknown) -> class?,
+    name: @checked (o: class | object) -> string,
+    fields: @checked (o: class | object) -> ({ [string]: unknown }, boolean)
 }
 )CLASS_SRC";
 

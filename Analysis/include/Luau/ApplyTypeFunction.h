@@ -31,6 +31,12 @@ struct ApplyTypeFunction : Substitution
     // superclass, etc.) stays fully opaque, same as before.
     TypeId genericNominalRoot = nullptr;
 
+    // Callers instantiating a nominal type map the template onto the instantiation (see
+    // ConstraintSolver::tryDispatch(InstantiateNominalPropConstraint)) and need to say that the
+    // instantiation itself must not be walked; `Substitution` keeps this protected for its own
+    // subclasses, which call it from `clean()`.
+    using Substitution::dontTraverseInto;
+
     std::unordered_map<TypeId, TypeId> typeArguments;
     std::unordered_map<TypePackId, TypePackId> typePackArguments;
     bool ignoreChildren(TypeId ty) override;

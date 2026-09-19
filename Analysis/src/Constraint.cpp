@@ -200,6 +200,10 @@ std::pair<TypeIds, TypePackIds> Constraint::getMaybeMutatedTypes() const
     {
         rci.traverse(ptc->targetType);
     }
+    else if (auto inpc = get<InstantiateNominalPropConstraint>(*this))
+    {
+        rci.traverse(inpc->target);
+    }
 
     return {std::move(types), std::move(typePacks)};
 }

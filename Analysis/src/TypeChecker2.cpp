@@ -44,6 +44,7 @@ LUAU_FASTFLAG(LuauBidirectionalInferenceSimplifyTables)
 LUAU_FASTFLAGVARIABLE(LuauBetterPackAndVariadicMismatchErrors)
 
 LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
+LUAU_FASTFLAG(LuwuBetterUserDefinedClasses)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 
 namespace Luau
@@ -1349,6 +1350,8 @@ void TypeChecker2::visit(AstStatDeclareGlobal* stat)
 
 void TypeChecker2::visit(AstStatDeclareExternType* stat)
 {
+    visitGenerics(stat->generics, stat->genericPacks);
+
     for (const AstDeclaredExternTypeProperty& prop : stat->props)
         visit(prop.ty);
 }
@@ -1357,16 +1360,269 @@ void TypeChecker2::visit(AstStatClass* stat)
 {
     LUAU_ASSERT(FFlag::DebugLuauUserDefinedClasses);
 
+    visitGenerics(stat->generics, stat->genericPacks);
+
+    // Luwu Classes (rfcs/classes.md): a primary constructor's parameters are checked like default
+    // function arguments -- annotation resolved, default checked against it.
+    if (const AstClassPrimaryConstructor* primaryConstructor = stat->primaryConstructor)
+    {
+        for (size_t i = 0; i < primaryConstructor->args.size; ++i)
+        {
+            AstLocal* param = primaryConstructor->args.data[i];
+            AstExpr* paramDefault = primaryConstructor->argsDefaults.data[i];
+
+            if (param->annotation)
+                visit(param->annotation);
+
+            if (paramDefault && param->annotation)
+                testIsSubtype(lookupType(paramDefault), lookupAnnotation(param->annotation), paramDefault->location);
+        }
+
+        // A class with a primary constructor has no table constructor, so a field the body gives no
+        // default and no parameter names can never be initialized -- it is `nil` forever. That is
+        // fine if the field's type says so, and an error if it doesn't.
+        NotNull<Scope> scope{findInnermostScope(stat->location)};
+        std::optional<TypeFun> classTypeFun = scope->lookupType(stat->name->name.value);
+
+        for (const AstClassMember& member : stat->members)
+        {
+            const AstClassProperty* prop = member.get_if<AstClassProperty>();
+
+            if (!prop || prop->defaultValue || !prop->ty)
+                continue;
+
+            size_t paramIndex = primaryConstructor->args.size;
+            for (size_t i = 0; i < primaryConstructor->args.size; ++i)
+                if (primaryConstructor->args.data[i]->name == prop->name)
+                {
+                    paramIndex = i;
+                    break;
+                }
+
+            TypeId propTy = follow(lookupAnnotation(prop->ty));
+
+            if (paramIndex < primaryConstructor->args.size)
+            {
+                // A bare restatement is initialized from the parameter it names, so the parameter's
+                // type has to fit the annotation -- `class Cat(breed: CatBreed) private breed: number
+                // end` assigns a CatBreed to a number-typed field.
+                AstLocal* param = primaryConstructor->args.data[paramIndex];
+                AstExpr* paramDefault = primaryConstructor->argsDefaults.data[paramIndex];
+
+                std::optional<TypeId> paramTy;
+                if (param->annotation)
+                    paramTy = lookupAnnotation(param->annotation);
+                else if (paramDefault)
+                    paramTy = lookupType(paramDefault);
+
+                // the annotation is what the restatement is *for*, so it is what we blame
+                if (paramTy)
+                    testIsSubtype(*paramTy, propTy, prop->ty->location);
+
+                continue;
+            }
+
+            if (!classTypeFun)
+                continue;
+
+            if (!subtyping->isSubtype(builtinTypes->nilType, propTy, scope).isSubtype)
+                reportError(UninitializableClassField{classTypeFun->type, prop->name.value}, prop->nameLocation);
+        }
+    }
+
+    // A class whose fields are all private and which has no functions can be constructed, but nothing
+    // can ever read or write what it holds: only the class's own functions may touch a private field,
+    // and there are none (rfcs/classes.md).
+    if (FFlag::LuwuBetterUserDefinedClasses)
+    {
+        size_t fieldCount = 0;
+        bool hasPublicField = false;
+        bool hasFunction = false;
+
+        for (const AstClassMember& member : stat->members)
+        {
+            if (const AstClassProperty* prop = member.get_if<AstClassProperty>())
+            {
+                ++fieldCount;
+                hasPublicField |= prop->visibility == AstClassMemberVisibility::Public;
+            }
+            else
+                hasFunction = true;
+        }
+
+        // a primary constructor parameter declares a field too, unless the class body restates it, in
+        // which case the restatement was already counted above
+        if (const AstClassPrimaryConstructor* primaryConstructor = stat->primaryConstructor)
+        {
+            for (size_t i = 0; i < primaryConstructor->args.size; ++i)
+            {
+                AstName paramName = primaryConstructor->args.data[i]->name;
+
+                bool restated = false;
+                for (const AstClassMember& member : stat->members)
+                {
+                    const AstClassProperty* prop = member.get_if<AstClassProperty>();
+                    if (prop && prop->name == paramName)
+                        restated = true;
+                }
+
+                if (restated)
+                    continue;
+
+                ++fieldCount;
+
+                if (primaryConstructor->argsQualifiers.size != primaryConstructor->args.size ||
+                    primaryConstructor->argsQualifiers.data[i].visibility == AstClassMemberVisibility::Public)
+                    hasPublicField = true;
+            }
+        }
+
+        if (fieldCount > 0 && !hasPublicField && !hasFunction)
+        {
+            NotNull<Scope> scope{findInnermostScope(stat->location)};
+            if (std::optional<TypeFun> classTypeFun = scope->lookupType(stat->name->name.value))
+                reportError(UnusableClass{classTypeFun->type}, stat->name->location);
+        }
+    }
+
+    // A class with a private constructor can only be instantiated from its own body. If nothing there calls it
+    // (`Name(...)` or `Name { ... }`, in a method, a closure nested in one, or a field default), no instance can
+    // ever exist (rfcs/classes.md).
+    if (FFlag::LuwuBetterUserDefinedClasses)
+    {
+        bool privateConstructor = stat->primaryConstructor && stat->primaryConstructor->visibility == AstClassMemberVisibility::Private;
+
+        for (const AstClassMember& member : stat->members)
+        {
+            const AstClassMethod* method = member.get_if<AstClassMethod>();
+            if (method && method->functionName == "__init" && method->visibility == AstClassMemberVisibility::Private)
+                privateConstructor = true;
+        }
+
+        if (privateConstructor)
+        {
+            struct ConstructorCallFinder : AstVisitor
+            {
+                AstName className;
+                bool found = false;
+
+                bool visit(AstExprCall* call) override
+                {
+                    AstExpr* callee = call->func;
+                    while (AstExprGroup* group = callee->as<AstExprGroup>())
+                        callee = group->expr;
+
+                    if (AstExprGlobal* global = callee->as<AstExprGlobal>(); global && global->name == className)
+                        found = true;
+                    else if (AstExprLocal* local = callee->as<AstExprLocal>(); local && local->local->name == className)
+                        found = true;
+
+                    return !found;
+                }
+            };
+
+            ConstructorCallFinder finder;
+            finder.className = stat->name->name;
+
+            for (const AstClassMember& member : stat->members)
+            {
+                if (const AstClassMethod* method = member.get_if<AstClassMethod>())
+                    method->function->visit(&finder);
+                else if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && prop->defaultValue)
+                    prop->defaultValue->visit(&finder);
+            }
+
+            if (!finder.found)
+            {
+                NotNull<Scope> scope{findInnermostScope(stat->location)};
+                if (std::optional<TypeFun> classTypeFun = scope->lookupType(stat->name->name.value))
+                    reportError(UninstantiableClass{classTypeFun->type}, stat->name->location);
+            }
+        }
+    }
+
     for (const auto& member : stat->members)
     {
         if (const auto* prop = member.get_if<AstClassProperty>())
         {
             if (prop->ty)
                 visit(prop->ty);
+
+            // If there's no annotation, the property's type was already inferred from the default
+            // value itself (see ConstraintGenerator), so there's nothing to compare against here.
+            if (prop->ty && prop->defaultValue)
+                testIsSubtype(lookupType(prop->defaultValue), lookupAnnotation(prop->ty), prop->defaultValue->location);
         }
         else if (const auto* method = member.get_if<AstClassMethod>())
         {
             visit(method->function);
+
+            if (method->functionName == "__tostring")
+            {
+                if (const FunctionType* ftv = get<FunctionType>(lookupType(method->function)))
+                {
+                    NotNull<Scope> scope{findInnermostScope(method->function->location)};
+                    std::optional<TypeId> ret = first(ftv->retTypes);
+                    if (!ret || !subtyping->isSubtype(follow(*ret), builtinTypes->stringType, scope).isSubtype)
+                        reportError(GenericError{"Metamethod '__tostring' must return a string"}, method->function->location);
+                }
+            }
+            else if (method->functionName == "__init")
+            {
+                if (const FunctionType* ftv = get<FunctionType>(lookupType(method->function)))
+                {
+                    if (first(ftv->retTypes))
+                        reportError(
+                            GenericError{"__init constructor should assign fields to self and should not return a value"},
+                            method->function->location
+                        );
+                }
+            }
+            else if (method->functionName == "__eq" || method->functionName == "__lt" || method->functionName == "__le")
+            {
+                if (const FunctionType* ftv = get<FunctionType>(lookupType(method->function)))
+                {
+                    NotNull<Scope> scope{findInnermostScope(method->function->location)};
+                    std::optional<TypeId> ret = first(ftv->retTypes);
+                    if (!ret || !subtyping->isSubtype(follow(*ret), builtinTypes->booleanType, scope).isSubtype)
+                        reportError(
+                            GenericError{format("Metamethod '%s' must return a boolean", method->functionName.value)},
+                            method->function->location
+                        );
+                }
+            }
+            else if (method->functionName == "__len")
+            {
+                if (const FunctionType* ftv = get<FunctionType>(lookupType(method->function)))
+                {
+                    NotNull<Scope> scope{findInnermostScope(method->function->location)};
+                    std::optional<TypeId> ret = first(ftv->retTypes);
+                    if (!ret || !subtyping->isSubtype(follow(*ret), builtinTypes->numberType, scope).isSubtype)
+                        reportError(GenericError{"Metamethod '__len' must return a number"}, method->function->location);
+                }
+            }
+            else if (
+                method->functionName == "__add" || method->functionName == "__sub" || method->functionName == "__mul" ||
+                method->functionName == "__div" || method->functionName == "__mod" || method->functionName == "__pow" ||
+                method->functionName == "__idiv" || method->functionName == "__unm" || method->functionName == "__concat"
+            )
+            {
+                if (const FunctionType* ftv = get<FunctionType>(lookupType(method->function)))
+                {
+                    if (!first(ftv->retTypes))
+                        reportError(
+                            GenericError{format("Metamethod '%s' must return a value", method->functionName.value)}, method->function->location
+                        );
+                }
+            }
+            else if (method->functionName == "__iter")
+            {
+                if (const FunctionType* ftv = get<FunctionType>(lookupType(method->function)))
+                {
+                    if (!first(ftv->retTypes))
+                        reportError(GenericError{"Metamethod '__iter' must return a value"}, method->function->location);
+                }
+            }
         }
         else
             LUAU_ASSERT(!"Unknown class member!");
@@ -1633,12 +1889,30 @@ void TypeChecker2::visitCall(AstExprCall* call)
         argExprs.push_back(indexExpr->expr);
     }
 
+    const FunctionType* fty = get<FunctionType>(fnTy);
+    size_t selfOffset = call->self ? 1 : 0;
+
+    if (!fty && !call->self)
+    {
+        // `fnTy` isn't itself callable, so this call is dispatched through a
+        // `__call` metamethod, which forwards `call->func` as its first
+        // argument -- same as `self` above -- so param types need to be read
+        // starting from its second parameter.
+        if (auto callMm = findMetatableEntry(builtinTypes, module->errors, fnTy, "__call", call->func->location))
+        {
+            fty = get<FunctionType>(follow(*callMm));
+            if (fty)
+            {
+                selfOffset = 1;
+                checkPrivateConstructorAccess(fnTy, call->func->location);
+            }
+        }
+    }
+
     // FIXME: Similar to bidirectional inference prior, this does not support
     // overloaded functions nor generic typeArguments (yet).
-    if (auto fty = get<FunctionType>(fnTy); fty && fty->generics.empty() && fty->genericPacks.empty() && call->args.size > 0)
+    if (fty && fty->generics.empty() && fty->genericPacks.empty() && call->args.size > 0)
     {
-        size_t selfOffset = call->self ? 1 : 0;
-
         std::vector<TypeId> paramsHead = extendTypePack(*module->internalTypes, builtinTypes, fty->argTypes, call->args.size + selfOffset).head;
 
         for (size_t idx = 0; idx < call->args.size; ++idx)
@@ -1751,8 +2025,24 @@ void TypeChecker2::visitCall(AstExprCall* call)
         {
             if (const SubtypingReasonings* sr = get_if<SubtypingReasonings>(&reasons))
             {
+                // `OverloadResolver::testFunctionOrCallMetamethod` forwards the callee as the
+                // `__call` metamethod's first argument, so every path in `reasons` is indexed
+                // against a pack one longer than the one we built out of `call->args`. Rebuild
+                // that pack (and the matching expression list) here, or argument N's reasoning
+                // resolves against argument N - 1 -- and for a one-argument call, such as a class
+                // constructor, against nothing at all, which `maybeEmplaceError` silently drops.
+                TypePackId reportedArgsPack = argsPack;
+                std::vector<AstExpr*> reportedArgExprs = argExprs;
+                if (result2.metamethods.contains(ty))
+                {
+                    reportedArgsPack = module->internalTypes->addTypePack({fnTy}, argsPack);
+                    reportedArgExprs.insert(reportedArgExprs.begin(), call->func);
+                }
+
                 for (const SubtypingReasoning& reason : *sr)
-                    resolver.reportErrors(module->errors, ty, call->func->location, module->name, argsPack, argExprs, reason);
+                    resolver.reportErrors(
+                        module->errors, ty, call->func->location, module->name, reportedArgsPack, reportedArgExprs, reason
+                    );
             }
             else if (const auto errorVec = get_if<ErrorVec>(&reasons))
             {
@@ -1798,8 +2088,22 @@ void TypeChecker2::visitCall(AstExprCall* call)
         {
             const bool isVariadic = Luau::isVariadic(fn->argTypes);
 
+            // A `__call` metamethod is invoked with `call->func` forwarded as its first argument, which
+            // `argHead` (built from `call->args`) doesn't include. Report the counts as the call is written:
+            // leave the forwarded argument out of the expected parameters rather than adding it to the
+            // arguments. For a class, `Cat("tom")` against `Cat(name, age)` then reads "expects 2, got 1".
+            size_t specifiedCount = argHead.size();
+
             auto [minParams, optMaxParams] = getParameterExtents(TxnLog::empty(), fn->argTypes);
-            reportError(CountMismatch{minParams, optMaxParams, argHead.size(), CountMismatch::Arg, isVariadic}, call->func->location);
+            if (result2.metamethods.contains(fnTy))
+            {
+                if (minParams > 0)
+                    minParams -= 1;
+                if (optMaxParams && *optMaxParams > 0)
+                    *optMaxParams -= 1;
+            }
+
+            reportError(CountMismatch{minParams, optMaxParams, specifiedCount, CountMismatch::Arg, isVariadic}, call->func->location);
             return;
         }
     }
@@ -1907,11 +2211,83 @@ TypeId TypeChecker2::stripFromNilAndReport(TypeId ty, const Location& location)
     return ty;
 }
 
+void TypeChecker2::checkPrivatePropertyAccess(TypeId tableTy, const std::string& prop, const Location& location)
+{
+    if (!FFlag::DebugLuauUserDefinedClasses)
+        return;
+
+    const ExternType* cls = get<ExternType>(follow(tableTy));
+    while (cls)
+    {
+        auto it = cls->props.find(prop);
+        if (it != cls->props.end())
+        {
+            // a class's functions are its only read-only members; its fields are always read-write,
+            // even `const` ones (see ConstraintGenerator)
+            if (it->second.isPrivate && !(cls->definitionLocation && cls->definitionLocation->encloses(location)))
+                reportError(PrivatePropertyAccess{tableTy, prop, it->second.isReadOnly(), cls->name}, location);
+            return;
+        }
+
+        cls = cls->parent ? get<ExternType>(follow(*cls->parent)) : nullptr;
+    }
+}
+
+void TypeChecker2::checkConstPropertyAssignment(TypeId tableTy, const std::string& prop, ValueContext context, const Location& location)
+{
+    if (!FFlag::DebugLuauUserDefinedClasses || !FFlag::LuwuBetterUserDefinedClasses)
+        return;
+
+    if (context != ValueContext::LValue)
+        return;
+
+    const ExternType* cls = get<ExternType>(follow(tableTy));
+    while (cls)
+    {
+        auto it = cls->props.find(prop);
+        if (it != cls->props.end())
+        {
+            if (it->second.isConst && !(cls->initLocation && cls->initLocation->encloses(location)))
+                reportError(ConstPropertyAssignment{tableTy, prop, cls->name}, location);
+            return;
+        }
+
+        cls = cls->parent ? get<ExternType>(follow(*cls->parent)) : nullptr;
+    }
+}
+
+void TypeChecker2::checkPrivateConstructorAccess(TypeId classTy, const Location& location)
+{
+    if (!FFlag::DebugLuauUserDefinedClasses || !FFlag::LuwuBetterUserDefinedClasses)
+        return;
+
+    const ExternType* cls = get<ExternType>(follow(classTy));
+    if (!cls || cls->root != builtinTypes->classType || !cls->relation)
+        return;
+
+    const Obj* obj = get_if<Obj>(&*cls->relation);
+    if (!obj)
+        return;
+
+    const ExternType* instanceCls = get<ExternType>(follow(obj->ty));
+    if (!instanceCls)
+        return;
+
+    auto it = instanceCls->props.find("__init");
+    if (it == instanceCls->props.end())
+        return;
+
+    if (it->second.isPrivate && !(instanceCls->definitionLocation && instanceCls->definitionLocation->encloses(location)))
+        reportError(PrivateConstructorAccess{classTy}, location);
+}
+
 void TypeChecker2::visitExprName(AstExpr* expr, Location location, const std::string& propName, ValueContext context, TypeId astIndexExprTy)
 {
     visit(expr, ValueContext::RValue);
     TypeId leftType = stripFromNilAndReport(lookupType(expr), location);
     checkIndexTypeFromType(leftType, propName, context, location, astIndexExprTy);
+    checkPrivatePropertyAccess(leftType, propName, location);
+    checkConstPropertyAssignment(leftType, propName, context, location);
 }
 
 void TypeChecker2::visit(AstExprIndexName* indexName, ValueContext context)
@@ -2621,15 +2997,19 @@ TypeId TypeChecker2::visit(AstExprBinary* expr, AstNode* overrideKey)
             return builtinTypes->booleanType;
         }
 
-        reportError(
-            GenericError{format(
-                "Types '%s' and '%s' cannot be compared with relational operator %s",
-                toString(leftType).c_str(),
-                toString(rightType).c_str(),
-                toString(expr->op).c_str()
-            )},
-            expr->location
+        // A relational operator on an optional fails because of the `nil`, not because the two types
+        // are unrelated to each other; say which operand it is. See describeOptionalOperands.
+        std::string comparisonError = format(
+            "Types '%s' and '%s' cannot be compared with relational operator %s",
+            toString(leftType).c_str(),
+            toString(rightType).c_str(),
+            toString(expr->op).c_str()
         );
+
+        if (std::optional<std::string> nilClause = describeOptionalOperands(leftType, rightType))
+            comparisonError += "; " + *nilClause;
+
+        reportError(GenericError{std::move(comparisonError)}, expr->location);
         return builtinTypes->errorType;
     }
 
@@ -3030,11 +3410,97 @@ void TypeChecker2::visit(AstTypePackGeneric* tp)
     reportError(UnknownSymbol{tp->genericName.value, UnknownSymbol::Context::Type}, tp->location);
 }
 
+// Returns true if `prefix`'s components are a (possibly empty, possibly complete) prefix of
+// `whole`'s components. Used to detect when a subPath/superPath pair share a common lead-in
+// (e.g. both drill into "the 1st entry in the type pack") so that lead-in doesn't get printed
+// twice back-to-back in a mismatch explanation.
+static bool isPrefixPath(const TypePath::Path& prefix, const TypePath::Path& whole)
+{
+    if (prefix.components.size() > whole.components.size())
+        return false;
+
+    TypePath::Path wholePrefix{std::vector<TypePath::Component>(whole.components.begin(), whole.components.begin() + prefix.components.size())};
+    return prefix == wholePrefix;
+}
+
+// If every non-empty subPath/superPath among `reasonings` begins with the same recognized
+// PackField (Returns or Arguments), returns it. This tells us the whole mismatch is fundamentally
+// about one specific, nameable aspect of the type (e.g. "its return type"), which we can fold
+// into a short preamble instead of repeating jargon like "it returns" inside every reason.
+static std::optional<TypePath::PackField> commonLeadingPackField(const SubtypingReasonings& reasonings)
+{
+    std::optional<TypePath::PackField> common;
+
+    auto consider = [&](const TypePath::Path& path) -> bool
+    {
+        if (path.empty())
+            return true;
+
+        const TypePath::PackField* pf = get_if<TypePath::PackField>(&path.components[0]);
+        if (!pf || (*pf != TypePath::PackField::Returns && *pf != TypePath::PackField::Arguments))
+            return false;
+
+        if (!common)
+            common = *pf;
+        return *pf == *common;
+    };
+
+    for (const SubtypingReasoning& reasoning : reasonings)
+    {
+        if (!consider(reasoning.subPath) || !consider(reasoning.superPath))
+            return std::nullopt;
+    }
+
+    return common;
+}
+
+static std::optional<std::string> contextVerbForPackField(TypePath::PackField field)
+{
+    switch (field)
+    {
+    case TypePath::PackField::Returns:
+        return "this function to return";
+    case TypePath::PackField::Arguments:
+        return "this function to take";
+    default:
+        return std::nullopt;
+    }
+}
+
+// Builds a trimmed-down path for human-readable narration: drops indices into packs/unions/
+// intersections (e.g. "the 1st component of the union"), since which member differs is already
+// obvious from comparing the printed wanted/got types side by side, and drops a leading PackField
+// component that matches `commonContext`, since that's already conveyed by the enclosing
+// preamble (e.g. "Expected this function to return..."). Property names and other structural
+// markers are preserved, since those aren't recoverable just by reading the printed types.
+static TypePath::Path narrationPath(const TypePath::Path& path, std::optional<TypePath::PackField> commonContext)
+{
+    std::vector<TypePath::Component> result;
+    for (size_t i = 0; i < path.components.size(); ++i)
+    {
+        const TypePath::Component& c = path.components[i];
+
+        if (i == 0 && commonContext)
+        {
+            if (const TypePath::PackField* pf = get_if<TypePath::PackField>(&c); pf && *pf == *commonContext)
+                continue;
+        }
+
+        if (get_if<TypePath::Index>(&c))
+            continue;
+
+        result.push_back(c);
+    }
+    return TypePath::Path{std::move(result)};
+}
+
 template<typename TID>
 Reasonings TypeChecker2::explainReasonings_(TID subTy, TID superTy, Location location, const SubtypingResult& r)
 {
     if (r.reasoning.empty())
         return {};
+
+    std::optional<TypePath::PackField> commonContext = commonLeadingPackField(r.reasoning);
 
     std::vector<std::string> reasons;
     bool suppressed = true;
@@ -3084,11 +3550,48 @@ Reasonings TypeChecker2::explainReasonings_(TID subTy, TID superTy, Location loc
         if (superLeafAsString.empty())
             superLeafAsString = "()";
 
+        // When the only thing wrong is that the given type might be `nil`, the subtyping test fails
+        // on the `nil` member of a union, and naming that member ("`nil` is not a subtype of
+        // `number`") makes the reader work backwards to figure out which type it came out of. Name
+        // the optional type they actually wrote instead, and say what is wrong with it.
+        std::optional<std::string> optionalSubLeaf;
+        if (subLeafTy && superLeafTy && isNil(*subLeafTy) && !isNil(*superLeafTy))
+        {
+            TypePath::Path enclosingPath = reasoning.subPath;
+            if (!enclosingPath.components.empty() && get_if<TypePath::Index>(&enclosingPath.components.back()))
+            {
+                enclosingPath.components.pop_back();
+
+                if (std::optional<TypeOrPack> optEnclosing = traverse(subTy, enclosingPath, builtinTypes, subtyping->arena))
+                {
+                    if (auto enclosingTy = get<TypeId>(*optEnclosing); enclosingTy && isOptional(*enclosingTy))
+                    {
+                        optionalSubLeaf = toString(*enclosingTy);
+                        subLeafAsString = *optionalSubLeaf;
+                    }
+                }
+            }
+        }
+
         std::stringstream baseReasonBuilder;
-        baseReasonBuilder << "`" << subLeafAsString << "` is not " << relation << " `" << superLeafAsString << "`";
+        if (optionalSubLeaf)
+            baseReasonBuilder << "`" << subLeafAsString << "` could be `nil`";
+        else
+            baseReasonBuilder << "`" << subLeafAsString << "` is not " << relation << " `" << superLeafAsString << "`";
         std::string baseReason = baseReasonBuilder.str();
 
+        // The same comparison as `baseReason`, phrased to follow a narrated path ("accessing `n`
+        // results in ...").
+        std::string subLeafNotSuper = optionalSubLeaf ? ("`" + subLeafAsString + "`, which could be `nil`")
+                                                      : ("`" + subLeafAsString + "`, which is not " + relation + " `" + superLeafAsString + "`");
+        std::string superLeafAndSubNot = optionalSubLeaf
+                                             ? ("`" + superLeafAsString + "`, and `" + subLeafAsString + "` could be `nil`")
+                                             : ("`" + superLeafAsString + "`, and `" + subLeafAsString + "` is not " + relation + " it");
+
         std::stringstream reason;
+
+        TypePath::Path subNarration = narrationPath(reasoning.subPath, commonContext);
+        TypePath::Path superNarration = narrationPath(reasoning.superPath, commonContext);
 
         if ((FFlag::LuauPropertyModifierMismatchErrors || FFlag::LuauIndexerModifierMismatchErrors) && reasoning.isAccessModifierViolation)
         {
@@ -3141,17 +3644,30 @@ Reasonings TypeChecker2::explainReasonings_(TID subTy, TID superTy, Location loc
                     reason << propName << " is a write-only property in the latter type, but the former type requires a read-write property";
             }
         }
-        else if (reasoning.subPath == reasoning.superPath)
-            reason << toStringHuman(reasoning.subPath) << "`" << subLeafAsString << "` in the latter type and `" << superLeafAsString
+        // If, once the shared context (e.g. "this function returns") and union/pack indices are
+        // stripped out, there's nothing left worth narrating (the common case -- most mismatches
+        // are just "the type here doesn't match the type there", and which union/pack slot is
+        // already obvious from comparing the printed wanted/got types), skip narration entirely
+        // and just state the comparison.
+        else if (subNarration.empty() && superNarration.empty())
+            reason << baseReason;
+        else if (subNarration == superNarration)
+            reason << toStringHuman(subNarration) << "`" << subLeafAsString << "` in the latter type and `" << superLeafAsString
                    << "` in the former type, and " << baseReason;
-        else if (!reasoning.subPath.empty() && !reasoning.superPath.empty())
-            reason << toStringHuman(reasoning.subPath) << "`" << subLeafAsString << "` and " << toStringHuman(reasoning.superPath) << "`"
+        // If one non-empty path is a strict prefix of the other, they share a common lead-in --
+        // printing both paths in full repeats that lead-in verbatim, which reads as a confusing
+        // double explanation. Describe only the more specific (longer) path in that case.
+        else if (!subNarration.empty() && !superNarration.empty() && isPrefixPath(superNarration, subNarration))
+            reason << toStringHuman(subNarration) << subLeafNotSuper;
+        else if (!subNarration.empty() && !superNarration.empty() && isPrefixPath(subNarration, superNarration))
+            reason << toStringHuman(superNarration) << superLeafAndSubNot;
+        else if (!subNarration.empty() && !superNarration.empty())
+            reason << toStringHuman(subNarration) << "`" << subLeafAsString << "` and " << toStringHuman(superNarration) << "`"
                    << superLeafAsString << "`, and " << baseReason;
-        else if (!reasoning.subPath.empty())
-            reason << toStringHuman(reasoning.subPath) << "`" << subLeafAsString << "`, which is not " << relation << " `" << superLeafAsString
-                   << "`";
+        else if (!subNarration.empty())
+            reason << toStringHuman(subNarration) << subLeafNotSuper;
         else
-            reason << toStringHuman(reasoning.superPath) << "`" << superLeafAsString << "`, and " << baseReason;
+            reason << toStringHuman(superNarration) << "`" << superLeafAsString << "`, and " << baseReason;
 
         if (FFlag::LuauBetterPackAndVariadicMismatchErrors && reasoning.variance == SubtypingVariance::Contravariant && subLeafTp && superLeafTp)
         {
@@ -3178,7 +3694,8 @@ Reasonings TypeChecker2::explainReasonings_(TID subTy, TID superTy, Location loc
         }
     }
 
-    return {std::move(reasons), suppressed};
+    std::optional<std::string> contextVerb = commonContext ? contextVerbForPackField(*commonContext) : std::nullopt;
+    return {std::move(reasons), suppressed, std::move(contextVerb)};
 }
 
 Reasonings TypeChecker2::explainReasonings(TypeId subTy, TypeId superTy, Location location, const SubtypingResult& r)
@@ -3282,7 +3799,11 @@ void TypeChecker2::explainError(TypeId subTy, TypeId superTy, Location location,
     Reasonings reasonings = explainReasonings(subTy, superTy, location, result);
 
     if (!reasonings.suppressed)
-        reportError(TypeMismatch{superTy, subTy, reasonings.toString()}, location);
+    {
+        TypeMismatch tm{superTy, subTy, reasonings.toString()};
+        tm.contextVerb = reasonings.contextVerb;
+        reportError(std::move(tm), location);
+    }
 }
 
 void TypeChecker2::explainError(TypePackId subTy, TypePackId superTy, Location location, const SubtypingResult& result)

@@ -62,7 +62,9 @@ TEST_CASE_FIXTURE(Fixture, "overload_resolution")
     const FunctionType* fooType = get<FunctionType>(requireType("foo"));
     REQUIRE(fooType != nullptr);
 
-    CHECK(toString(t) == "(((number) -> string) & ((string) -> number)) -> (string, number)");
+    // A and B are named type aliases referenced (not aliased themselves) in `foo`'s parameter
+    // position, so they now print by name rather than being expanded inline every time.
+    CHECK(toString(t) == "(A & B) -> (string, number)");
 }
 
 TEST_CASE_FIXTURE(Fixture, "tc_function")
@@ -2317,7 +2319,10 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "param_1_and_2_both_takes_the_same_generic_bu
         const std::string expected = R"(Expected this to be 'vec2?', but got '{| x: number |}'
 caused by:
   None of the union options are compatible. For example:
-required field 'y' not found in type '{| x: number |}' from expected type 'vec2')";
+required field 'y' not found in type
+  '{| x: number |}'
+expected type:
+  'vec2')";
         CHECK_EQ(expected, toString(result.errors[0]));
         CHECK_EQ("Expected this to be 'number', but got 'vec2'", toString(result.errors[1]));
     }
@@ -2380,6 +2385,33 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "attempt_to_call_an_intersection_of_tables_wi
     )");
 
     LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "call_metamethod_checks_a_multret_final_argument")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    // The resolver forwards the callee as the metamethod's first argument, so the reasoning it
+    // hands back is indexed against a pack one longer than the one built from the call's own
+    // arguments. A final argument that is itself a call contributes a pack rather than a single
+    // type, which skips the per-argument check in TypeChecker2::visit(AstExprCall*) and leaves
+    // overload resolution as the only thing looking at it -- and its report was landing one slot
+    // short, so the mismatch was silently dropped.
+    CheckResult result = check(R"(
+        type Callable = typeof(setmetatable({}, {} :: { __call: (Callable, number) -> string }))
+
+        local c = (nil :: any) :: Callable
+        local function mk(): boolean return true end
+
+        local viaPack = c(mk())
+        local viaValue = c(true)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ("number", toString(get<TypeMismatch>(result.errors[0])->wantedType));
+    CHECK_EQ("boolean", toString(get<TypeMismatch>(result.errors[0])->givenType));
+    CHECK_EQ("number", toString(get<TypeMismatch>(result.errors[1])->wantedType));
+    CHECK_EQ("boolean", toString(get<TypeMismatch>(result.errors[1])->givenType));
 }
 
 TEST_CASE_FIXTURE(Fixture, "generic_packs_are_not_variadic")

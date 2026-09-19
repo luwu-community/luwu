@@ -95,6 +95,8 @@ static TypeId shallowClone(TypeId ty, TypeArena& dest, const TxnLog* log)
             clone.isCheckedFunction = a.isCheckedFunction;
             clone.isDeprecatedFunction = a.isDeprecatedFunction;
             clone.deprecatedInfo = a.deprecatedInfo;
+            clone.name = a.name;
+            clone.syntheticName = a.syntheticName;
             return dest.addType(std::move(clone));
         }
         else if constexpr (std::is_same_v<T, TableType>)
@@ -120,17 +122,24 @@ static TypeId shallowClone(TypeId ty, TypeArena& dest, const TxnLog* log)
         {
             UnionType clone;
             clone.options = a.options;
+            clone.name = a.name;
+            clone.syntheticName = a.syntheticName;
             return dest.addType(std::move(clone));
         }
         else if constexpr (std::is_same_v<T, IntersectionType>)
         {
             IntersectionType clone;
             clone.parts = a.parts;
+            clone.name = a.name;
+            clone.syntheticName = a.syntheticName;
             return dest.addType(std::move(clone));
         }
         else if constexpr (std::is_same_v<T, ExternType>)
         {
             ExternType clone{a.name, a.props, a.parent, a.metatable, a.tags, a.userData, a.definitionModuleName, a.definitionLocation, a.indexer};
+            // Preserve the hierarchy root explicitly; roots are persistent builtins that are never
+            // cloned, so this stays valid even as `parent` is re-pointed to substituted children.
+            clone.root = a.root;
             if (FFlag::DebugLuauUserDefinedClasses)
                 clone.relation = a.relation;
             if (FFlag::LuwuGenericNominals)
@@ -877,6 +886,27 @@ void Substitution::replaceChildren(TypeId ty)
         {
             etv->indexer->indexType = replace(etv->indexer->indexType);
             etv->indexer->indexResultType = replace(etv->indexer->indexResultType);
+        }
+
+        // `clone()` copies `relation` across verbatim and `isDirty` descends into it, so it has to
+        // be re-pointed here like every other child. Leaving it alone left the substituted copy
+        // holding a pointer into the arena the original came from, which is freed once that module
+        // is done, so `objectof` would later read whatever type had reused that slot.
+        if (FFlag::DebugLuauUserDefinedClasses && etv->relation)
+        {
+            Luau::visit(
+                overloaded{
+                    [&](Obj& obj)
+                    {
+                        obj.ty = replace(obj.ty);
+                    },
+                    [&](Klass& klass)
+                    {
+                        klass.ty = replace(klass.ty);
+                    }
+                },
+                *etv->relation
+            );
         }
 
         if (FFlag::LuwuGenericNominals)
