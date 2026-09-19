@@ -981,6 +981,20 @@ static int luauF_rawequal(lua_State* L, StkId res, TValue* arg0, int nresults, S
     return -1;
 }
 
+// Luwu Classes (rfcs/classes.md): class.isinstance(value, class) -> value is an instance of class.
+// arg0 is the value under test; args[0] is the class. Only fast-pathed when the second argument is
+// actually a class; otherwise fall back to the library function to raise the usual argument error.
+static int luauF_class_isinstance(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
+{
+    if (nparams >= 2 && nresults <= 1 && ttisclass(args))
+    {
+        setbvalue(res, ttisobject(arg0) && objectvalue(arg0)->lclass == classvalue(args));
+        return 1;
+    }
+
+    return -1;
+}
+
 static int luauF_rawget(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
     if (nparams >= 2 && nresults <= 1 && ttistable(arg0))
@@ -1222,6 +1236,8 @@ static int luauF_getmetatable(lua_State* L, StkId res, TValue* arg0, int nresult
             mt = hvalue(arg0)->metatable;
         else if (ttisuserdata(arg0))
             mt = uvalue(arg0)->metatable;
+        else if (ttisobject(arg0) || ttisclass(arg0))
+            mt = NULL; // Luwu Classes (rfcs/classes.md): never exposed, see lua_getmetatable
         else
             mt = L->global->mt[ttype(arg0)];
 
@@ -2782,6 +2798,8 @@ const luau_FastFunction luauF_table[256] = {
     luauF_bufferwritelong,
 
     luauF_bufferisfrozen,
+
+    luauF_class_isinstance,
 
 // When adding builtins, add them above this line; what follows is 64 "dummy" entries with luauF_missing fallback.
 // This is important so that older versions of the runtime that don't support newer builtins automatically fall back via luauF_missing.

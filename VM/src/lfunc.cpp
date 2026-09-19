@@ -41,6 +41,7 @@ Proto* luaF_newproto(lua_State* L)
     f->typeinfo = NULL;
 
     f->userdata = NULL;
+    f->ownerclass = NULL;
 
     f->gclist = NULL;
 

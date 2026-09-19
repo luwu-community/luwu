@@ -93,7 +93,7 @@ std::optional<std::string> TypeFunctionRuntime::registerFunction_DEPRECATED(AstS
 
     AstExpr* exprFunction = function->body;
     AstArray<AstExpr*> exprReturns{&exprFunction, 1};
-    AstStatReturn stmtReturn{Location{}, exprReturns};
+    AstStatReturn stmtReturn{Location{}, exprReturns, Location{}};
     AstStat* stmtArray[] = {&stmtReturn};
     AstArray<AstStat*> stmts{stmtArray, 1};
     AstStatBlock exec{Location{}, stmts};
@@ -179,7 +179,7 @@ std::optional<TypeFunctionError> TypeFunctionRuntime::registerFunction(AstStatTy
 
     AstExpr* exprFunction = function->body;
     AstArray<AstExpr*> exprReturns{&exprFunction, 1};
-    AstStatReturn stmtReturn{Location{}, exprReturns};
+    AstStatReturn stmtReturn{Location{}, exprReturns, Location{}};
     AstStat* stmtArray[] = {&stmtReturn};
     AstArray<AstStat*> stmts{stmtArray, 1};
     AstStatBlock exec{Location{}, stmts};

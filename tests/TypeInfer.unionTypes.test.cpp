@@ -379,7 +379,7 @@ TEST_CASE_FIXTURE(Fixture, "optional_call_error")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    CHECK_EQ("Value of type '((number) -> number)?' could be nil", toString(result.errors[0]));
+    CHECK_EQ("Value of type 'A?' could be nil", toString(result.errors[0]));
 }
 
 TEST_CASE_FIXTURE(Fixture, "optional_assignment_errors")
@@ -406,7 +406,7 @@ TEST_CASE_FIXTURE(Fixture, "optional_assignment_errors_2")
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     auto s = toString(result.errors[0]);
-    CHECK_EQ("Value of type '({ x: number } & { y: number })?' could be nil", s);
+    CHECK_EQ("Value of type 'A?' could be nil", s);
 }
 
 TEST_CASE_FIXTURE(Fixture, "optional_length_error")
@@ -423,8 +423,97 @@ TEST_CASE_FIXTURE(Fixture, "optional_length_error")
 
     // CLI-119936: This shouldn't double error but does under the new solver.
     LUAU_REQUIRE_ERROR_COUNT(2, result);
-    CHECK_EQ("Operator '#' could not be applied to operand of type A?; there is no corresponding overload for __len", toString(result.errors[0]));
+    CHECK_EQ("Operator '#' could not be applied to operand of type A?; the operand could be `nil`", toString(result.errors[0]));
     CHECK_EQ("Value of type 'A?' could be nil", toString(result.errors[1]));
+}
+
+TEST_CASE_FIXTURE(Fixture, "optional_binary_operands_are_named_as_possibly_nil")
+{
+    ScopedFastFlag _{FFlag::DebugLuauForceOldSolver, false};
+
+    CheckResult both = check(R"(
+        local a = (nil :: any) :: number?
+        local b = (nil :: any) :: number?
+        local x = a + b
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, both);
+    CHECK_EQ(
+        "Operator '+' could not be applied to operands of types number? and number?; one or both operands could be `nil`",
+        toString(both.errors[0])
+    );
+
+    CheckResult left = check(R"(
+        local a = (nil :: any) :: number?
+        local c = 1
+        local x = a + c
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, left);
+    CHECK_EQ("Operator '+' could not be applied to operands of types number? and number; the left operand could be `nil`", toString(left.errors[0]));
+
+    CheckResult right = check(R"(
+        local b = (nil :: any) :: number?
+        local c = 1
+        local x = c + b
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, right);
+    CHECK_EQ(
+        "Operator '+' could not be applied to operands of types number and number?; the right operand could be `nil`", toString(right.errors[0])
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "optional_operand_replaces_the_metamethod_note")
+{
+    ScopedFastFlag _{FFlag::DebugLuauForceOldSolver, false};
+
+    // `string .. number` concatenates fine, so naming `__concat` here would send the reader after a
+    // problem that does not exist; the `nil` is the whole story.
+    CheckResult result = check(R"(
+        local a = (nil :: any) :: string?
+        local b = 1
+        local x = a .. b
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        "Operator '..' could not be applied to operands of types string? and number; the left operand could be `nil`", toString(result.errors[0])
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "non_optional_operands_still_name_the_metamethod")
+{
+    ScopedFastFlag _{FFlag::DebugLuauForceOldSolver, false};
+
+    CheckResult result = check(R"(
+        local a = 1
+        local b = "two"
+        local x = a + b
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        "Operator '+' could not be applied to operands of types number and string; there is no corresponding overload for __add",
+        toString(result.errors[0])
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "optional_relational_comparison_names_the_nil_operands")
+{
+    ScopedFastFlag _{FFlag::DebugLuauForceOldSolver, false};
+
+    CheckResult result = check(R"(
+        local a = (nil :: any) :: number?
+        local b = (nil :: any) :: number?
+        local x = a < b
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        "Types 'number?' and 'number?' cannot be compared with relational operator <; one or both operands could be `nil`",
+        toString(result.errors[0])
+    );
 }
 
 TEST_CASE_FIXTURE(Fixture, "optional_missing_key_error_details")
@@ -539,9 +628,9 @@ end
             toString(result.errors[0]),
             "Expected this to be '{ w: number }', but got 'X | Y | Z'; \n"
             "this is because \n\t"
-            " * the 1st component of the union is `X`, which is not a subtype of `{ w: number }`\n\t"
-            " * the 2nd component of the union is `Y`, which is not a subtype of `{ w: number }`\n\t"
-            " * the 3rd component of the union is `Z`, which is not a subtype of `{ w: number }`"
+            " * `X` is not a subtype of `{ w: number }`\n\t"
+            " * `Y` is not a subtype of `{ w: number }`\n\t"
+            " * `Z` is not a subtype of `{ w: number }`"
         );
     }
     else
@@ -549,7 +638,10 @@ end
         CHECK_EQ(toString(result.errors[0]), R"(Expected this to be '{ w: number }', but got 'X | Y | Z'
 caused by:
   Not all union options are compatible.
-required field 'w' not found in type 'X' from expected type '{ w: number }')");
+required field 'w' not found in type
+  'X'
+expected type:
+  '{ w: number }')");
     }
 }
 
@@ -586,13 +678,16 @@ local a: X? = { w = 4 }
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     if (!FFlag::DebugLuauForceOldSolver)
-        CHECK("required field 'x' not found in type '{ w: number }' from expected type 'X'" == toString(result.errors[0]));
+        CHECK("required field 'x' not found in type\n  '{ w: number }'\nexpected type:\n  'X'" == toString(result.errors[0]));
     else
     {
         const std::string expected = R"(Expected this to be 'X?', but got 'a'
 caused by:
   None of the union options are compatible. For example:
-required field 'x' not found in type 'a' from expected type 'X')";
+required field 'x' not found in type
+  'a'
+expected type:
+  'X')";
         CHECK_EQ(expected, toString(result.errors[0]));
     }
 }
@@ -1120,6 +1215,35 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "oss_2025")
 
         table.insert(foo, bar)
     )"));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "optional_mismatch_reasoning_names_the_optional_type")
+{
+    // The subtyping test fails on the `nil` member of the union, but naming that member makes the
+    // reader work backwards to figure out which type it came from. Name the optional instead.
+    CheckResult result = check(R"(
+        local function f(): number? return 1 end
+        local a: number = f()
+
+        local t: { n: number? } = { n = 1 }
+        local u: { n: number } = t
+
+        local v: { number? } = {}
+        local w: { number } = v
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
+    CHECK_EQ("Expected this to be 'number', but got 'number?'; \n`number?` could be `nil`", toString(result.errors[0]));
+    CHECK_EQ(
+        "Expected this to be\n\t'{ n: number }'\nbut got\n\t'{ n: number? }'; \naccessing `n` results in `number?` in the latter type and "
+        "`number` in the former type, and `number?` could be `nil`",
+        toString(result.errors[1])
+    );
+    CHECK_EQ(
+        "Expected this to be '{number}', but got '{number?}'; \nthe result of indexing is `number?` in the latter type and `number` in the former "
+        "type, and `number?` could be `nil`",
+        toString(result.errors[2])
+    );
 }
 
 TEST_SUITE_END();

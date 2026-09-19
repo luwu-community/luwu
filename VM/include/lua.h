@@ -535,6 +535,19 @@ LUA_API int lua_getrefpool(lua_State* L, int ref);
 #define lua_isclass(L, n) (lua_type(L, (n)) == LUA_TCLASS)
 #define lua_isobject(L, n) (lua_type(L, (n)) == LUA_TOBJECT)
 
+// Luwu Classes (rfcs/classes.md)
+enum lua_MemberAccess
+{
+    LUA_MEMBERMISSING = 0,
+    LUA_MEMBERPUBLIC,
+    LUA_MEMBERPRIVATE,
+};
+
+LUA_API void lua_newobject(lua_State* L, int idx);
+LUA_API int lua_getmemberaccess(lua_State* L, int idx, const char* membername);
+LUA_API int lua_ismemberconst(lua_State* L, int idx, const char* membername);
+LUA_API const char* lua_getclassname(lua_State* L, int idx);
+
 LUA_API int lua_getbuffermode(lua_State* L, int idx);
 LUA_API void* lua_getbufferuserdata(lua_State* L, int idx);
 

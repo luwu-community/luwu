@@ -127,6 +127,12 @@ struct FunctionCheckConstraint
     class AstExprCall* callSite = nullptr;
     NotNull<DenseHashMap<const AstExpr*, TypeId>> astTypes;
     NotNull<DenseHashMap<const AstExpr*, TypeId>> astExpectedTypes;
+
+    // The type this call is expected to produce, if any. Used to solve the generics of a nominal
+    // the call constructs before its arguments are checked, so that a literal argument is checked
+    // against the expected type argument rather than widened. See FunctionCallConstraint's own
+    // `expectedType`, which resolves the same generics after the fact for a different purpose.
+    std::optional<TypeId> expectedType;
 };
 
 // prim FreeType ExpectedType PrimitiveType
@@ -313,6 +319,34 @@ struct TypeInstantiationConstraint
     std::vector<TypePackId> typePackArguments;
 };
 
+// LuwuGenericNominals: a generic class can be instantiated (`Box<number>`) before its own members
+// have been solved. A reference to the class from inside its own body always is, and so is a
+// forward reference to a class declared later in the file. A member's type is still a BlockedType
+// at that point, and copying it into the instantiation shares it, so binding it later hands the
+// instantiation the *uninstantiated* member -- `Box<number>:get()` would return `T`. Expansion
+// waits for such members; if it is force-dispatched first, the instantiation gets a fresh
+// BlockedType for each one instead, and this constraint fills that in with the substituted member
+// once the template's own member is known.
+struct InstantiateNominalPropConstraint
+{
+    // The member's type on the template class, blocked until the class body is solved.
+    TypeId templateProp;
+    // The BlockedType standing in for it on the instantiation, which this constraint binds.
+    TypeId target;
+
+    // The class being instantiated and the instantiation itself, so that a member mentioning the
+    // class (`self`, or a method returning `Box<T>`) lands on the instantiation rather than on a
+    // second copy of it.
+    TypeId templateType;
+    TypeId instantiatedType;
+
+    // The template's parameters paired positionally with the arguments the instantiation supplied.
+    std::vector<TypeId> typeParams;
+    std::vector<TypeId> typeArguments;
+    std::vector<TypePackId> typePackParams;
+    std::vector<TypePackId> typePackArguments;
+};
+
 struct PushTypeConstraint
 {
     TypeId expectedType;
@@ -343,7 +377,8 @@ using ConstraintV = Variant<
     SimplifyConstraint,
     PushFunctionTypeConstraint,
     PushTypeConstraint,
-    TypeInstantiationConstraint>;
+    TypeInstantiationConstraint,
+    InstantiateNominalPropConstraint>;
 
 struct Constraint
 {

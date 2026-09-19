@@ -21,6 +21,7 @@ LUAU_FASTINT(LuauNonStrictTypeCheckerRecursionLimit)
 LUAU_FASTINT(LuauCheckRecursionLimit)
 LUAU_FASTFLAG(LuauAddRecursionCounterToNonStrictTypeChecker)
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
+LUAU_FASTFLAG(LuwuBetterUserDefinedClasses)
 
 using namespace Luau;
 
@@ -898,12 +899,13 @@ TEST_CASE_FIXTURE(NonStrictTypeCheckerFixture, "typecheck_class_method_bodies")
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauForceOldSolver, false},
         {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
     };
 
     CheckResult result = checkNonStrict(R"(
         --!nonstrict
         class Student
-            public name: number
+            name: number
             function greet(self)
                 return `Hello, {lower(self.name)}!`
             end

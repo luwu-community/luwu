@@ -1110,5 +1110,44 @@ OccursCheckResult occursCheck(TypePackId needle, TypePackId haystack)
     return OccursCheckResult::Pass;
 }
 
+// Deliberately narrower than `isOptional`, which also answers true for `any` and `unknown`: "could be
+// `nil`" is misleading for those, and what we are after here is the `T?` the reader actually wrote.
+static bool couldBeNil(TypeId ty)
+{
+    ty = follow(ty);
+
+    if (isNil(ty))
+        return true;
+
+    if (const UnionType* utv = get<UnionType>(ty))
+    {
+        for (TypeId option : utv->options)
+        {
+            if (couldBeNil(option))
+                return true;
+        }
+    }
+
+    return false;
+}
+
+std::optional<std::string> describeOptionalOperands(TypeId left, std::optional<TypeId> right)
+{
+    const bool leftCouldBeNil = couldBeNil(left);
+
+    if (!right)
+        return leftCouldBeNil ? std::make_optional<std::string>("the operand could be `nil`") : std::nullopt;
+
+    const bool rightCouldBeNil = couldBeNil(*right);
+
+    if (leftCouldBeNil && rightCouldBeNil)
+        return std::string{"one or both operands could be `nil`"};
+    if (leftCouldBeNil)
+        return std::string{"the left operand could be `nil`"};
+    if (rightCouldBeNil)
+        return std::string{"the right operand could be `nil`"};
+
+    return std::nullopt;
+}
 
 } // namespace Luau
