@@ -11,6 +11,8 @@
 #include "ldebug.h"
 #include "lvm.h"
 
+LUAU_FASTFLAGVARIABLE(LuwuTableDrop)
+
 static int foreachi(lua_State* L)
 {
     luaL_checktype(L, 1, LUA_TTABLE);
@@ -549,6 +551,48 @@ static int tfind(lua_State* L)
     return 1;
 }
 
+static int tdrop(lua_State* L)
+{
+    luaL_checktype(L, 1, LUA_TTABLE);
+    luaL_checkany(L, 2);
+
+    int n = lua_objlen(L, 1);
+    int maxRemoved = luaL_optinteger(L, 3, INT_MAX);
+    if (!lua_isnoneornil(L, 3))
+        luaL_argcheck(L, maxRemoved > 0, 3, "count must be greater than 0");
+
+    LuaTable* t = hvalue(L->base);
+    if (t->readonly)
+        luaG_readonlyerror(L);
+
+    int writeIndex = 1;
+    int removed = 0;
+
+    for (int i = 1; i <= n; ++i)
+    {
+        lua_rawgeti(L, 1, i);
+
+        if (removed < maxRemoved && equalobj(L, L->base + 1, L->top - 1))
+        {
+            lua_pop(L, 1);
+            ++removed;
+            continue;
+        }
+
+        lua_rawseti(L, 1, writeIndex);
+        ++writeIndex;
+    }
+
+    for (int i = writeIndex; i <= n; ++i)
+    {
+        lua_pushnil(L);
+        lua_rawseti(L, 1, i);
+    }
+
+    lua_pushinteger(L, removed);
+    return 1;
+}
+
 static int tclear(lua_State* L)
 {
     luaL_checktype(L, 1, LUA_TTABLE);
@@ -616,9 +660,31 @@ static const luaL_Reg tab_funcs[] = {
     {NULL, NULL},
 };
 
+static const luaL_Reg tab_funcs_with_drop[] = {
+    {"concat", tconcat},
+    {"foreach", foreach},
+    {"foreachi", foreachi},
+    {"getn", getn},
+    {"maxn", maxn},
+    {"insert", tinsert},
+    {"remove", tremove},
+    {"sort", tsort},
+    {"pack", tpack},
+    {"unpack", tunpack},
+    {"move", tmove},
+    {"create", tcreate},
+    {"find", tfind},
+    {"drop", tdrop},
+    {"clear", tclear},
+    {"freeze", tfreeze},
+    {"isfrozen", tisfrozen},
+    {"clone", tclone},
+    {NULL, NULL},
+};
+
 int luaopen_table(lua_State* L)
 {
-    luaL_register(L, LUA_TABLIBNAME, tab_funcs);
+    luaL_register(L, LUA_TABLIBNAME, FFlag::LuwuTableDrop ? tab_funcs_with_drop : tab_funcs);
 
     // Lua 5.1 compat
     lua_pushcfunction(L, tunpack, "unpack");
