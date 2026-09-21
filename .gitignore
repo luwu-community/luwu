@@ -23,3 +23,6 @@ __pycache__
 .cache
 .clangd
 /copytoluwu.luau
+
+# scratch/working notes: anything *ignore.* stays out of version control
+*ignore.*

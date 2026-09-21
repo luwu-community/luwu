@@ -8,7 +8,7 @@
     `main` prints one line per operation: `<label>\tok\t<value>\t<value>` or `<label>\terr`. The runner compares
     those lines across optimization levels and codegen modes. A label starting with `~` marks an operation whose
     error *status* may legitimately differ between optimization levels -- the documented O2 divergences in
-    CLASSES_IMPL_NOTES.CLAUDE.md section 8 (lying receiver annotations, private access laundered by inlining) --
+    classes_notes.ignore.md section 8 (lying receiver annotations, private access laundered by inlining) --
     so for those only values are compared, and only when both sides succeed.
 
     Programs contain two placeholders the runner fills in per configuration: OPTLEVEL and MODNAME.

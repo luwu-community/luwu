@@ -11239,6 +11239,320 @@ end
     CHECK(code.find("CHECKSELFCLASS") != std::string::npos);
 }
 
+TEST_CASE("ClassConstructionResolvesReceiverForInlining")
+{
+    ScopedFastFlag classes{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag betterClasses{FFlag::LuwuBetterUserDefinedClasses, true};
+
+    // A local initialized by constructing a class in this module is an instance of that class with no
+    // annotation, so its method calls inline (classFromConstruction). A local that is assigned to
+    // anywhere is not, and keeps its NAMECALL.
+    const char* source = R"(
+class Cat
+    public name: string
+
+    public function meow(self): string
+        return self.name
+    end
+end
+
+function use(n: string, other)
+    local cat = Cat(n)
+    local a = cat:meow()
+
+    local reassigned = Cat(n)
+    reassigned = other
+    local b = reassigned:meow()
+
+    return a, b
+end
+)";
+
+    Luau::BytecodeBuilder bcb;
+    bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code);
+
+    Luau::CompileOptions options;
+    options.optimizationLevel = 2;
+
+    Luau::compileOrThrow(bcb, source, options);
+
+    std::string code = bcb.dumpFunction(1);
+
+    // exactly one of the two calls survives as a NAMECALL: the one on the reassigned local
+    CHECK_EQ(code.find("NAMECALL"), code.rfind("NAMECALL"));
+    CHECK(code.find("NAMECALL") != std::string::npos);
+
+    // construction is a *proven* receiver, so the inlined call carries no CHECKSELFCLASS: the object
+    // was made by this very class and nothing could have replaced it
+    CHECK(code.find("CHECKSELFCLASS") == std::string::npos);
+}
+
+TEST_CASE("ClassReceiverTrustTiersDecideSelfCheck")
+{
+    ScopedFastFlag classes{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag betterClasses{FFlag::LuwuBetterUserDefinedClasses, true};
+
+    // rfcs/classes.md: every receiver resolution is either *proven* (a runtime check on this path
+    // establishes the exact class) or *trusted* (an annotation says so). Both inline; only proven ones
+    // may skip the inline site's CHECKSELFCLASS. This pins the split itself -- a new resolution path
+    // must not acquire elision by accident.
+    const char* source = R"(
+class Vec(public x: number)
+    public function get(self): number
+        return self.x
+    end
+end
+
+class Holder(public v: Vec)
+    public function viaField(self): number
+        local r = self.v:get()
+        return r
+    end
+end
+
+function viaConstruction(n: number): number
+    local v = Vec(n)
+    local r = v:get()
+    return r
+end
+
+function viaAnnotation(v: Vec): number
+    local r = v:get()
+    return r
+end
+
+function viaIsinstance(p): number
+    if class.isinstance(p, Vec) then
+        local r = p:get()
+        return r
+    end
+    return 0
+end
+)";
+
+    Luau::BytecodeBuilder bcb;
+    bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code);
+
+    Luau::CompileOptions options;
+    options.optimizationLevel = 2;
+
+    Luau::compileOrThrow(bcb, source, options);
+
+    // every one of them inlines
+    for (int f : {1, 2, 3, 4})
+        CHECK_MESSAGE(bcb.dumpFunction(f).find("NAMECALL") == std::string::npos, "function " << f << " did not inline");
+
+    // trusted: a declared field type (the method's own prologue check is the first CHECKSELFCLASS here,
+    // the inline site's is the second) and a declared local type
+    std::string viaField = bcb.dumpFunction(1);
+    CHECK(viaField.find("CHECKSELFCLASS") != viaField.rfind("CHECKSELFCLASS"));
+    CHECK(bcb.dumpFunction(3).find("CHECKSELFCLASS") != std::string::npos);
+
+    // proven: construction, and a class.isinstance branch
+    CHECK(bcb.dumpFunction(2).find("CHECKSELFCLASS") == std::string::npos);
+    CHECK(bcb.dumpFunction(4).find("CHECKSELFCLASS") == std::string::npos);
+}
+
+TEST_CASE("ClassIsinstanceProvenReceiverInlinesWithoutSelfCheck")
+{
+    ScopedFastFlag classes{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag betterClasses{FFlag::LuwuBetterUserDefinedClasses, true};
+
+    // Inside `if class.isinstance(p, Path)`, JUMPXISA has checked the exact class on this path and the
+    // local can't have been reassigned, so the method call inlines with no CHECKSELFCLASS of its own --
+    // unlike the annotation path, where the check is what makes a lying annotation safe.
+    const char* source = R"(
+class Path
+    public raw: string
+
+    public function ext(self): string
+        return self.raw
+    end
+end
+
+function fromUnion(p: Path | string): string
+    if class.isinstance(p, Path) then
+        local a = p:ext()
+        return a
+    end
+    return ""
+end
+
+function fromUnknown(p): string
+    if class.isinstance(p, Path) then
+        local a = p:ext()
+        return a
+    end
+    return ""
+end
+
+function annotated(p: Path): string
+    local a = p:ext()
+    return a
+end
+)";
+
+    Luau::BytecodeBuilder bcb;
+    bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code);
+
+    Luau::CompileOptions options;
+    options.optimizationLevel = 2;
+
+    Luau::compileOrThrow(bcb, source, options);
+
+    // a refined union receiver and a fully unknown one behave the same: the proof is the runtime check,
+    // not the static type
+    for (int f : {1, 2})
+    {
+        std::string code = bcb.dumpFunction(f);
+
+        CHECK(code.find("JUMPXISA") != std::string::npos);
+        CHECK(code.find("NAMECALL") == std::string::npos);
+        CHECK(code.find("CHECKSELFCLASS") == std::string::npos);
+        CHECK(code.find("GETOBJECTMEMBER") != std::string::npos);
+    }
+
+    // the annotated receiver still inlines, but keeps its check
+    std::string annotated = bcb.dumpFunction(3);
+    CHECK(annotated.find("NAMECALL") == std::string::npos);
+    CHECK(annotated.find("CHECKSELFCLASS") != std::string::npos);
+}
+
+TEST_CASE("ClassIsinstanceProofIsLostWhenTheLocalIsWritten")
+{
+    ScopedFastFlag classes{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag betterClasses{FFlag::LuwuBetterUserDefinedClasses, true};
+
+    // The isinstance proof elides the inline site's CHECKSELFCLASS, so a write that could outlive the
+    // JUMPXISA would leave an inlined body reading a constant field offset off the wrong value.
+    // matchIsinstanceProvenLocal refuses to prove a local that is written *anywhere* in the module --
+    // flow-insensitively, so a write after the branch or inside a nested closure kills it too. Every
+    // function here must keep its NAMECALL except the clean one.
+    const char* source = R"(
+class Cat(public name: string)
+    public function meow(self): string
+        return self.name
+    end
+end
+
+function nilInBranch(c: Cat?): string
+    if class.isinstance(c, Cat) then
+        c = nil
+        local r = c:meow()
+        return r
+    end
+    return ""
+end
+
+function castInBranch(c: Cat?, other): string
+    if class.isinstance(c, Cat) then
+        c = other :: Cat?
+        local r = c:meow()
+        return r
+    end
+    return ""
+end
+
+function writtenLater(c: Cat?): string
+    local out = ""
+    if class.isinstance(c, Cat) then
+        local r = c:meow()
+        out = r
+    end
+    c = nil
+    return out
+end
+
+function writtenByClosure(c: Cat?): string
+    if class.isinstance(c, Cat) then
+        local clear = function()
+            c = nil
+        end
+        clear()
+        local r = c:meow()
+        return r
+    end
+    return ""
+end
+
+function copiedToOptional(c: Cat?): string
+    if class.isinstance(c, Cat) then
+        local d: Cat? = c
+        local r = d:meow()
+        return r
+    end
+    return ""
+end
+
+function clean(c: Cat?): string
+    if class.isinstance(c, Cat) then
+        local r = c:meow()
+        return r
+    end
+    return ""
+end
+)";
+
+    Luau::BytecodeBuilder bcb;
+    bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code);
+
+    Luau::CompileOptions options;
+    options.optimizationLevel = 2;
+
+    Luau::compileOrThrow(bcb, source, options);
+
+    // 0 is meow; 1-3 are nilInBranch, castInBranch, writtenLater; 4 is writtenByClosure's nested closure
+    // (protos are emitted innermost first) and 5 is writtenByClosure itself; 6 is copiedToOptional
+    for (int f : {1, 2, 3, 5, 6})
+        CHECK_MESSAGE(
+            bcb.dumpFunction(f).find("NAMECALL") != std::string::npos, "function " << f << " inlined a receiver a write should have unproven"
+        );
+
+    // and the untouched local still inlines with no check of its own
+    std::string clean = bcb.dumpFunction(7);
+    CHECK(clean.find("NAMECALL") == std::string::npos);
+    CHECK(clean.find("CHECKSELFCLASS") == std::string::npos);
+    CHECK(clean.find("GETOBJECTMEMBER") != std::string::npos);
+}
+
+TEST_CASE("ClassIsinstanceProofDoesNotInlinePrivateMethods")
+{
+    ScopedFastFlag classes{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag betterClasses{FFlag::LuwuBetterUserDefinedClasses, true};
+
+    // The call to a private method *is* the private access NAMECALL checks, so proving the receiver's
+    // class doesn't make it inlinable from outside the class -- proving the class and being allowed to
+    // call the method are separate questions.
+    const char* source = R"(
+class Guarded
+    public n: number
+
+    private function secret(self): number
+        return self.n
+    end
+end
+
+function outside(p): number
+    if class.isinstance(p, Guarded) then
+        local r = p:secret()
+        return r
+    end
+    return 0
+end
+)";
+
+    Luau::BytecodeBuilder bcb;
+    bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code);
+
+    Luau::CompileOptions options;
+    options.optimizationLevel = 2;
+
+    Luau::compileOrThrow(bcb, source, options);
+
+    std::string code = bcb.dumpFunction(1);
+    CHECK(code.find("NAMECALL") != std::string::npos);
+}
+
 TEST_CASE("ClassDeclWithMethod")
 {
     ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};

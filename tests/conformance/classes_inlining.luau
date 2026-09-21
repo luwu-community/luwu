@@ -348,4 +348,171 @@ expectpass("a private method can't be called from outside through an inlined typ
     assert(string.find(err, "private", 1, true), err)
 end)
 
+-- 14. a local initialized by constructing a class is that class's instance with no annotation, so its
+-- method calls inline (classFromConstruction). Behaviour must be identical to the annotated and the
+-- reassigned cases, and the privacy rules must not loosen just because the receiver resolved without
+-- the user writing a type.
+class Counted
+    public n: number
+
+    private function bump(self, by: number): number
+        self.n += by
+        return self.n
+    end
+
+    public function add(self, by: number): number
+        local r = self:bump(by)
+        return r
+    end
+end
+
+expectpass("an unannotated construction-initialized local inlines its method calls", function()
+    local c = Counted { n = 0 }
+    local a = c:add(2)
+    local b = c:add(3)
+    assert(a == 2 and b == 5, `{a}, {b}`)
+    assert(c.n == 5, tostring(c.n))
+
+    -- the same class reached through a reassigned local, which does not resolve statically
+    local d = Counted { n = 0 }
+    d = Counted { n = 10 }
+    assert(d:add(1) == 11, tostring(d.n))
+end)
+
+expectpass("resolving a receiver through its construction does not grant private access", function()
+    local c = Counted { n = 0 }
+    local ok, err = pcall(function()
+        return c:bump(1)
+    end)
+    assert(not ok, "a private method was callable from outside through an unannotated local")
+    assert(string.find(err, "private", 1, true), err)
+end)
+
+expectpass("a constructed instance passed to an inlined function resolves there too", function()
+    local function twice(counter, by: number): number
+        counter:add(by)
+        local r = counter:add(by)
+        return r
+    end
+
+    assert(twice(Counted { n = 0 }, 4) == 8)
+end)
+
+-- 15. a `class.isinstance` branch proves the receiver's exact class at runtime, so method calls inside it
+-- inline *and* skip the inline site's CHECKSELFCLASS (JUMPXISA already did that work on this path).
+-- Because the check is gone, the proof itself is now load-bearing: an object of another class with the
+-- same layout must never reach the branch.
+class Refined
+    public n: number
+
+    private function hidden(self): number
+        return self.n * 3
+    end
+
+    public function twice(self): number
+        return self.n * 2
+    end
+end
+
+class RefinedImpostor
+    public n: number
+
+    public function twice(self): number
+        return self.n * 100
+    end
+end
+
+local function describe(p): number
+    if class.isinstance(p, Refined) then
+        local r = p:twice()
+        return r + p.n
+    elseif class.isinstance(p, RefinedImpostor) then
+        local r = p:twice()
+        return r
+    end
+    return -1
+end
+
+expectpass("a class.isinstance-proven receiver inlines its method calls", function()
+    assert(describe(Refined { n = 4 }) == 12, tostring(describe(Refined { n = 4 })))
+    assert(describe(RefinedImpostor { n = 4 }) == 400, tostring(describe(RefinedImpostor { n = 4 })))
+    assert(describe("not an object") == -1)
+    assert(describe(nil) == -1)
+    assert(describe({ n = 4 }) == -1)
+end)
+
+expectpass("a proven receiver still can't call a private method from outside", function()
+    local ok, err = pcall(function()
+        local p = Refined { n = 1 }
+        if class.isinstance(p, Refined) then
+            return p:hidden()
+        end
+        return 0
+    end)
+    assert(not ok, "a private method was callable from outside a proven branch")
+    assert(string.find(err, "private", 1, true), err)
+end)
+
+expectpass("the proof does not escape into a nested closure", function()
+    local function later(p)
+        if class.isinstance(p, Refined) then
+            return function()
+                return p:twice()
+            end
+        end
+        return function()
+            return -1
+        end
+    end
+
+    assert(later(Refined { n = 3 })() == 6)
+    assert(later(RefinedImpostor { n = 3 })() == -1)
+end)
+
+-- 16. the two receiver tiers. A *proven* receiver (construction, `class.isinstance`, a method's own
+-- checked `self`) inlines with no CHECKSELFCLASS at the site; a *trusted* one (a declared local or field
+-- type) inlines but keeps it, and that check is what makes a lying annotation raise. Both must produce
+-- the same answers as an ordinary call.
+class Tier(public n: number)
+    public function double(self): number
+        return self.n * 2
+    end
+end
+
+class TierImpostor(public n: number)
+    public function double(self): number
+        return self.n * 1000
+    end
+end
+
+class TierHolder(public inner: Tier)
+    public function viaField(self): number
+        local r = self.inner:double()
+        return r
+    end
+end
+
+expectpass("a proven receiver inlines correctly without a self check", function()
+    local t = Tier(21)
+    assert(t:double() == 42)
+
+    -- an inlined function's parameter is proven by the argument it was given
+    local function twice(v, by: number): number
+        local a = v:double()
+        return a + by
+    end
+    assert(twice(Tier(5), 1) == 11)
+end)
+
+expectpass("a trusted receiver keeps the check that makes a lying annotation raise", function()
+    local h = TierHolder(Tier(3))
+    assert(h:viaField() == 6)
+
+    -- nothing checks what a field actually holds, so the inline site's check has to
+    h.inner = TierImpostor(3) :: any
+    local ok, err = pcall(h.viaField, h)
+    assert(not ok, "a lying field type reached an inlined body")
+    assert(string.find(err, "Tier", 1, true), err)
+end)
+
 return 'OK'

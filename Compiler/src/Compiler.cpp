@@ -1574,43 +1574,25 @@ struct Compiler
         return visitor.keeps;
     }
 
-    // Runtime checking of `self` for methods (see rfcs/classes.md): a `self:method()` inline needs no
-    // repeated CHECKSELFCLASS when the receiver is already proven an instance of the callee's class --
-    // the enclosing method's own unreassigned `self`, or an inlined `self` proven at its inline site.
+    // Runtime checking of `self` for methods (see rfcs/classes.md): the inline site's CHECKSELFCLASS is
+    // redundant exactly when the receiver's class is *proven* on this path and it is the callee's class.
+    // A receiver the compiler only trusts an annotation for keeps its check: that check is what turns a
+    // wrong annotation into an error instead of running one class's body against another class's object.
+    // See ReceiverClass for which is which -- this must never re-derive the answer itself, or a new
+    // resolution path can acquire elision by accident.
     bool selfIsAlreadyChecked(AstExprFunction* func, AstExpr* selfExpr)
     {
         if (!selfExpr || !currentFunction)
             return false;
 
-        AstExpr* recv = selfExpr;
+        ReceiverClass recv = resolveReceiverClass(selfExpr);
 
-        for (;;)
-        {
-            if (AstExprGroup* g = recv->as<AstExprGroup>())
-                recv = g->expr;
-            else if (AstExprTypeAssertion* t = recv->as<AstExprTypeAssertion>())
-                recv = t->expr;
-            else
-                break;
-        }
+        if (!recv.proven)
+            return false;
 
         AstStatClass** calleeOwner = classMethodOwner.find(func);
 
-        if (AstStatClass* inlined = inlineProvenSelfClass(recv))
-            return calleeOwner && *calleeOwner == inlined;
-
-        AstExprLocal* le = recv->as<AstExprLocal>();
-
-        if (!le || currentFunction->args.size == 0 || le->local != currentFunction->args.data[0])
-            return false;
-
-        if (Variable* v = variables.find(le->local); v && v->written)
-            return false;
-
-        AstStatClass** callerClass = classMethodOwner.find(currentFunction);
-        AstStatClass** calleeClass = classMethodOwner.find(func);
-
-        return callerClass && calleeClass && *callerClass == *calleeClass;
+        return calleeOwner && *calleeOwner == recv.cls;
     }
 
     // CHECKSELFCLASS falls through when `self` is an instance of the class in `classReg`, and raises
@@ -1965,6 +1947,45 @@ struct Compiler
         return nullptr;
     }
 
+    // Luwu Classes (rfcs/classes.md): a local whose initializer constructs a class declared in this
+    // module holds an instance of that class, with no annotation needed -- `local cat = Cat(name)` is
+    // enough to inline `cat:meow()`. `Cat(...)` evaluates to a fresh instance of `Cat` and nothing
+    // else: a class binding is const and cannot be reassigned (the parser rejects it), and a custom
+    // `__init`'s own result is discarded, with luaR_createobject returning the object it built. So the
+    // only way the local could hold something other than a `Cat` is an assignment -- and
+    // `Variable::written` records those from anywhere in the module, nested closures included, so an
+    // unwritten local's class holds for its whole lifetime.
+    //
+    // This also covers an inlined function's parameter: tryCompileInlinedCall points a parameter's
+    // `init` at the argument expression it was given, so `f(Cat())` inlines the `c:meow()` inside
+    // `f(c)` too.
+    AstStatClass* classFromConstruction(AstLocal* local)
+    {
+        Variable* v = variables.find(local);
+
+        if (!v || v->written || !v->init)
+            return nullptr;
+
+        AstExprCall* call = v->init->as<AstExprCall>();
+
+        if (!call || call->self)
+            return nullptr;
+
+        AstExpr* callee = call->func;
+
+        while (AstExprGroup* group = callee->as<AstExprGroup>())
+            callee = group->expr;
+
+        AstExprGlobal* global = callee->as<AstExprGlobal>();
+
+        if (!global || !classLocals.contains(global->name))
+            return nullptr;
+
+        AstStatClass** decl = classByName.find(global->name);
+
+        return decl ? *decl : nullptr;
+    }
+
     const AstClassProperty* findClassProperty(AstStatClass* cls, AstName name)
     {
         for (const AstClassMember& member : cls->members)
@@ -2025,7 +2046,30 @@ struct Compiler
     //  - the enclosing method's own `self` (its class is the method's owning class),
     //  - a local/argument carrying a class type annotation (`p: Particle`),
     //  - a typed field access `<recv>.field` whose declared field type names a class.
-    AstStatClass* resolveReceiverClass(AstExpr* recv)
+    // Luwu Classes (rfcs/classes.md): a receiver's class, and *how* the compiler knows it. The two tiers
+    // decide one thing -- whether the inline site may skip CHECKSELFCLASS (see selfIsAlreadyChecked):
+    //
+    //   proven  -- the runtime guarantees it on this path: a method's own checked `self`, an inlined
+    //              `self` its site proved, a `class.isinstance` branch, or a local initialized by
+    //              constructing the class. The check would be dead code, so it is not emitted.
+    //   trusted -- an annotation says so: a local's declared type, or a declared class field's type.
+    //              Type info is unsound, so the check stays, and it is what makes a lying annotation
+    //              raise rather than run the wrong body at constant field offsets.
+    //
+    // Never promote a trusted receiver to proven. If a new resolution path is added, it is trusted
+    // unless a runtime check on that path establishes the exact class.
+    struct ReceiverClass
+    {
+        AstStatClass* cls = nullptr;
+        bool proven = false;
+
+        explicit operator bool() const
+        {
+            return cls != nullptr;
+        }
+    };
+
+    ReceiverClass resolveReceiverClass(AstExpr* recv)
     {
         for (;;)
         {
@@ -2038,26 +2082,47 @@ struct Compiler
         }
 
         if (AstStatClass* inlined = inlineProvenSelfClass(recv))
-            return inlined;
+            return {inlined, /* proven= */ true};
 
         if (AstExprLocal* local = recv->as<AstExprLocal>())
         {
-            // the enclosing method's own `self` is an instance of the method's owning class
+            // the enclosing method's own `self` is an instance of the method's owning class -- proven
+            // when the prologue's check still stands (provenSelfClass), and merely the class this method
+            // belongs to once something reassigns `self`
             if (currentFunction && currentFunction->args.size > 0 && local->local == currentFunction->args.data[0])
             {
+                if (AstStatClass* proven = provenSelfClass(recv))
+                    return {proven, /* proven= */ true};
+
                 if (AstStatClass** owner = classMethodOwner.find(currentFunction))
-                    return *owner;
+                    return {*owner, /* proven= */ false};
             }
 
-            return classFromType(local->local->annotation);
+            // a `class.isinstance` branch proves the receiver's exact class at runtime, so it outranks
+            // whatever the local was annotated or initialized as
+            if (AstStatClass* proven = provenIsinstanceClass(recv))
+                return {proven, /* proven= */ true};
+
+            // construction before the annotation: when both say the same class the proof is the better
+            // evidence (no check to emit), and when they disagree the constructor is the one telling the
+            // truth about what this local holds
+            if (AstStatClass* constructed = classFromConstruction(local->local))
+                return {constructed, /* proven= */ true};
+
+            if (AstStatClass* annotated = classFromType(local->local->annotation))
+                return {annotated, /* proven= */ false};
+
+            return {};
         }
         else if (AstExprIndexName* idx = recv->as<AstExprIndexName>())
         {
-            if (AstStatClass* baseClass = resolveReceiverClass(idx->expr))
-                return classFromType(findClassFieldType(baseClass, idx->index));
+            // a declared field type is an annotation, however well the base it was read from is known:
+            // nothing checks what a field actually holds
+            if (ReceiverClass base = resolveReceiverClass(idx->expr))
+                return {classFromType(findClassFieldType(base.cls, idx->index)), /* proven= */ false};
         }
 
-        return nullptr;
+        return {};
     }
 
     // Luwu Classes (rfcs/classes.md): resolve an `obj:method()` call to a method of the object's class so it
@@ -2076,9 +2141,11 @@ struct Compiler
         if (!idx)
             return nullptr;
 
-        AstStatClass* recvClass = resolveReceiverClass(idx->expr);
-        if (!recvClass)
+        ReceiverClass receiver = resolveReceiverClass(idx->expr);
+        if (!receiver)
             return nullptr;
+
+        AstStatClass* recvClass = receiver.cls;
 
         AstExprFunction* method = findInstanceMethod(recvClass, idx->index);
         if (!method)
