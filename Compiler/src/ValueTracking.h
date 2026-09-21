@@ -26,6 +26,18 @@ struct Variable
     AstExpr* init = nullptr; // initial value of the variable; filled by trackValues
     bool written = false;    // is the variable ever assigned to? filled by trackValues
     bool constant = false;   // is the variable's value a compile-time constant? filled by constantFold
+
+    // Is the variable ever assigned to from a function nested inside the one that declares it?
+    // Filled by trackValues.
+    //
+    // `written` says only that a write exists somewhere in the module. This says where it can run.
+    // A write in the declaring function has a location in the source, so a region of that function
+    // containing no write to the variable still holds whatever was true when it was entered.
+    // A write from a nested function runs whenever that function is called, which no region rules out.
+    //
+    // Luwu Classes (rfcs/classes.md) uses this to keep a `class.isinstance` proof alive across writes
+    // that cannot reach it (see Compiler::matchIsinstanceProvenLocal).
+    bool writtenByNestedFunction = false;
 };
 
 void assignMutable(DenseHashMap<AstName, Global>& globals, const AstNameTable& names, const char* const* mutableGlobals);

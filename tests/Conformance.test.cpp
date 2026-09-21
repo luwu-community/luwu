@@ -73,6 +73,7 @@ LUAU_FASTFLAG(LuauYieldIter2)
 LUAU_FASTFLAG(LuauCustomYieldablePcalls)
 LUAU_FASTFLAG(DebugLuauUserDefinedClassesRuntime)
 LUAU_FASTFLAG(LuwuBetterUserDefinedClasses)
+LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportedClassIsNilWorkaround)
 LUAU_FASTFLAG(LuauAutoStack)
@@ -4714,6 +4715,9 @@ TEST_CASE("ClassesInlining")
         {FFlag::DebugLuauUserDefinedClasses, true},
         {FFlag::DebugLuauUserDefinedClassesRuntime, true},
         {FFlag::LuwuBetterUserDefinedClasses, true},
+        // this file covers both receiver tiers, and the trusted one (a declared parameter, local or field
+        // type) only inlines when the compiler is allowed to act on annotations
+        {FFlag::DebugLuwuCompilerTrustsTypeAnnotations, true},
     };
 
     // Method inlining only runs at O2, and the conformance default is O1 -- at O1 every case in this

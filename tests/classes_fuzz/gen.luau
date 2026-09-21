@@ -536,13 +536,142 @@ local function generate(seed: number): (string, string)
             elseif kind == "isinstance" then
                 local pub = publicFields(c)
                 local read = if #pub > 0 then `x.{pub[1].name}` else "true"
-                local form = rng.pick({ "fused", "alias", "upvalue", "badclass" })
+                local form = rng.pick({
+                    "fused",
+                    "alias",
+                    "upvalue",
+                    "badclass",
+                    "rebind_in",
+                    "rebind_after",
+                    "rebind_before",
+                    "rebind_closure",
+                    "assert",
+                    "assert_msg",
+                    "assert_rebind",
+                    "assert_closure",
+                })
                 if form == "fused" then
                     op("isa", { `local x = pick({make}, {r2}.make())`, `if class.isinstance(x, {r}) then`, `    return {read}`, "end", "return false" })
                 elseif form == "alias" then
                     op("isa_alias", { `local K = {r}`, `local x = pick({make}, 3)`, "if class.isinstance(x, K) then", `    return {read}`, "end", "return 0" })
                 elseif form == "upvalue" then
                     op("isa_up", { `local x = pick({make}, tbl)`, "return isaUp(x)" })
+                elseif form == "rebind_in" or form == "rebind_after" or form == "rebind_before" or form == "rebind_closure" then
+                    -- A `class.isinstance` branch proves its local's class and the compiler drops the
+                    -- inline site's self check, so a write that can reach a use inside the branch must
+                    -- unprove it. These four place a write in each position the rule distinguishes: the
+                    -- ones that can reach the use must dispatch (or raise) exactly as at O0.
+                    local m = rng.pick(instanceMethods(c, true))
+                    local use = if m then `x:{m.name}()` else read
+
+                    -- The point of these is that a stale proof would run `c`'s body against whatever the
+                    -- local now holds, so the new value must be something *other* than a `c`: another
+                    -- class when the module has one, else a non-object. Rebinding to another `c` (which
+                    -- `r2` may well be) would run the right body anyway and prove nothing.
+                    -- Another class is the valuable target: a stale proof then runs the wrong *body* and
+                    -- returns a wrong value, which the runner compares against -O0. A non-object usually
+                    -- just errors at every level, and the runner only compares statuses when both fail.
+                    local elsewhere = filter(classes, function(o)
+                        return o ~= c
+                    end)
+                    local other = if #elsewhere > 0 and rng.chance(0.75)
+                        then `{ref(rng.pick(elsewhere), c)}.make()`
+                        else rng.pick({ "tbl", "nil", "legacy" })
+
+                    if form == "rebind_in" then
+                        op("isa_rebind_in", {
+                            `local x = pick({make}, {r2}.make())`,
+                            `if class.isinstance(x, {r}) then`,
+                            `    x = {other}`,
+                            `    local got = {use}`,
+                            "    return got",
+                            "end",
+                            "return -1",
+                        })
+                    elseif form == "rebind_after" then
+                        op("isa_rebind_after", {
+                            `local x = pick({make}, {r2}.make())`,
+                            "local out = -1",
+                            `if class.isinstance(x, {r}) then`,
+                            `    local got = {use}`,
+                            "    out = got",
+                            "end",
+                            `x = {other}`,
+                            "return out",
+                        })
+                    elseif form == "rebind_before" then
+                        op("isa_rebind_before", {
+                            `local x = pick({make}, tbl)`,
+                            `x = pick({make}, {r2}.make())`,
+                            `if class.isinstance(x, {r}) then`,
+                            `    local got = {use}`,
+                            "    return got",
+                            "end",
+                            "return -1",
+                        })
+                    else
+                        -- the closure is declared outside the branch, so its write is not in the region:
+                        -- only "this local is written by a nested function" rules the proof out
+                        op("isa_rebind_closure", {
+                            `local x = pick({make}, {r2}.make())`,
+                            "local swap = function()",
+                            `    x = {other}`,
+                            "end",
+                            `if class.isinstance(x, {r}) then`,
+                            "    swap()",
+                            `    local got = {use}`,
+                            "    return got",
+                            "end",
+                            "return -1",
+                        })
+                    end
+                elseif form == "assert" or form == "assert_msg" or form == "assert_rebind" or form == "assert_closure" then
+                    -- `assert(class.isinstance(x, C))` proves x for the rest of the block, so the same
+                    -- writes that unprove a branch's local must unprove this one. The asserts that fail
+                    -- must raise, not run proven code against the wrong value.
+                    local m = rng.pick(instanceMethods(c, true))
+                    local use = if m then `x:{m.name}()` else read
+                    local elsewhere = filter(classes, function(o)
+                        return o ~= c
+                    end)
+                    local other = if #elsewhere > 0 and rng.chance(0.75)
+                        then `{ref(rng.pick(elsewhere), c)}.make()`
+                        else rng.pick({ "tbl", "nil", "legacy" })
+
+                    if form == "assert" then
+                        op("isa_assert", {
+                            `local x = pick({make}, {r2}.make())`,
+                            `assert(class.isinstance(x, {r}))`,
+                            `local got = {use}`,
+                            "return got",
+                        })
+                    elseif form == "assert_msg" then
+                        op("isa_assert_msg", {
+                            `local x = pick({make}, {r2}.make())`,
+                            `assert(class.isinstance(x, {r}), "not a {c.name}")`,
+                            `local got = {use}`,
+                            "return got",
+                        })
+                    elseif form == "assert_rebind" then
+                        op("isa_assert_rebind", {
+                            `local x = pick({make}, {r2}.make())`,
+                            `assert(class.isinstance(x, {r}))`,
+                            `x = {other}`,
+                            `local got = {use}`,
+                            "return got",
+                        })
+                    else
+                        op("isa_assert_closure", {
+                            `local x = pick({make}, {r2}.make())`,
+                            "local swap = function()",
+                            `    x = {other}`,
+                            "end",
+                            `assert(class.isinstance(x, {r}))`,
+                            "swap()",
+                            `local got = {use}`,
+                            "return got",
+                        })
+                    end
                 else
                     op("isa_bad", { `local x = {make}`, "return class.isinstance(x, pick(tbl, 5))" })
                 end

@@ -515,4 +515,251 @@ expectpass("a trusted receiver keeps the check that makes a lying annotation rai
     assert(string.find(err, "Tier", 1, true), err)
 end)
 
+-- 17. the `class.isinstance` proof is bounded by the branch it guards, not by whether the local is ever
+-- written. A write the proof cannot see coming -- inside the branch, or from a closure -- must unprove it;
+-- a write that cannot reach a use inside the branch must not cost the optimization. Since a proven
+-- receiver inlines with no CHECKSELFCLASS, getting this wrong reads constant field offsets off whatever
+-- the local now holds, so every case here checks the *answer*, not just that it ran.
+class Meower(public sound: string)
+    public function speak(self): string
+        return self.sound
+    end
+end
+
+class OtherMeower(public sound: string)
+    public function speak(self): string
+        return "other:" .. self.sound
+    end
+end
+
+-- write after the branch: the proof stands inside it
+local function writeAfter(c): string
+    local out = "none"
+    if class.isinstance(c, Meower) then
+        out = c:speak() .. "/" .. c.sound
+    end
+    c = nil
+    return out
+end
+
+-- write before the branch: the check tests whatever the local holds by then
+local function writeBefore(c, replacement): string
+    c = replacement
+    if class.isinstance(c, Meower) then
+        local r = c:speak()
+        return r
+    end
+    return "none"
+end
+
+-- the write is outside the branch but inside a loop, so the check re-runs every iteration
+local function writeInEnclosingLoop(a, b): string
+    local c = a
+    local out = ""
+    for _ = 1, 4 do
+        if class.isinstance(c, Meower) then
+            local r = c:speak()
+            out ..= r
+        else
+            out ..= "-"
+        end
+        c = if c == a then b else a
+    end
+    return out
+end
+
+-- the write is inside the branch, so the second iteration must dispatch to the new value's class
+local function writeInsideBranch(c, other): string
+    if class.isinstance(c, Meower) then
+        local out = ""
+        for _ = 1, 2 do
+            local r = c:speak()
+            out ..= r
+            c = other
+        end
+        return out
+    end
+    return "none"
+end
+
+-- a closure can run at any point, so a local it writes is never proven
+local function writeFromClosure(c, other): string
+    if class.isinstance(c, Meower) then
+        local swap = function()
+            c = other
+        end
+        swap()
+        local r = c:speak()
+        return r
+    end
+    return "none"
+end
+
+-- the same, but the closure is declared *outside* the branch, so its write is not in the region and only
+-- the "written by a nested function" fact rules it out. Compiled without that fact this fails an assert.
+local function writeFromOuterClosure(c, other): string
+    local swap = function()
+        c = other
+    end
+    if class.isinstance(c, Meower) then
+        swap()
+        local r = c:speak()
+        return r
+    end
+    return "none"
+end
+
+expectpass("a write that cannot reach the branch does not cost the proof", function()
+    assert(writeAfter(Meower("mew")) == "mew/mew", writeAfter(Meower("mew")))
+    assert(writeAfter(OtherMeower("mew")) == "none")
+    assert(writeAfter(nil) == "none")
+
+    assert(writeBefore(Meower("a"), Meower("b")) == "b")
+    assert(writeBefore(Meower("a"), OtherMeower("b")) == "none")
+    assert(writeBefore(Meower("a"), nil) == "none")
+
+    assert(writeInEnclosingLoop(Meower("x"), OtherMeower("y")) == "x-x-", writeInEnclosingLoop(Meower("x"), OtherMeower("y")))
+    assert(writeInEnclosingLoop(OtherMeower("y"), Meower("x")) == "-x-x")
+    assert(writeInEnclosingLoop(Meower("x"), nil) == "x-x-")
+end)
+
+expectpass("a write the proof cannot see coming unproves the receiver", function()
+    -- the second iteration must reach OtherMeower's body, not Meower's at a constant offset
+    assert(writeInsideBranch(Meower("a"), OtherMeower("b")) == "aother:b", writeInsideBranch(Meower("a"), OtherMeower("b")))
+
+    local ok = pcall(writeInsideBranch, Meower("a"), nil)
+    assert(not ok, "a nil assigned inside the branch was called as if still proven")
+
+    assert(writeFromClosure(Meower("a"), OtherMeower("b")) == "other:b", writeFromClosure(Meower("a"), OtherMeower("b")))
+
+    local closureOk = pcall(writeFromClosure, Meower("a"), nil)
+    assert(not closureOk, "a nil assigned by a closure was called as if still proven")
+
+    assert(writeFromOuterClosure(Meower("a"), OtherMeower("b")) == "other:b", writeFromOuterClosure(Meower("a"), OtherMeower("b")))
+
+    local outerOk = pcall(writeFromOuterClosure, Meower("a"), nil)
+    assert(not outerOk, "a nil assigned by a closure declared outside the branch was called as if still proven")
+end)
+
+-- 18. `assert(class.isinstance(c, C))` proves `c` for the rest of the block, with or without a message:
+-- assert raises on a falsy condition, so the statements after it run only when the same check a branch
+-- performs passed. The receiver is proven, so it inlines with no self check -- and the same two kinds of
+-- write must take that away.
+class Asserted(public tone: string)
+    public function speak(self): string
+        return self.tone
+    end
+end
+
+class AssertedOther(public tone: string)
+    public function speak(self): string
+        return "other:" .. self.tone
+    end
+end
+
+local function afterAssert(c): string
+    assert(class.isinstance(c, Asserted))
+    local r = c:speak()
+    return r .. "/" .. c.tone
+end
+
+local function afterAssertWithMessage(c): string
+    assert(class.isinstance(c, Asserted), "expected an Asserted")
+    local r = c:speak()
+    return r
+end
+
+local function writeAfterAssert(c, other): string
+    assert(class.isinstance(c, Asserted))
+    c = other
+    local r = c:speak()
+    return r
+end
+
+local function writeFromClosureAfterAssert(c, other): string
+    local swap = function()
+        c = other
+    end
+    assert(class.isinstance(c, Asserted))
+    swap()
+    local r = c:speak()
+    return r
+end
+
+local function assertInsideIf(c, flag): string
+    if flag then
+        assert(class.isinstance(c, Asserted))
+        local r = c:speak()
+        return r
+    end
+    local r = c:speak()
+    return r
+end
+
+expectpass("assert(class.isinstance(...)) proves the receiver for the rest of the block", function()
+    assert(afterAssert(Asserted("mew")) == "mew/mew", afterAssert(Asserted("mew")))
+    assert(afterAssertWithMessage(Asserted("mew")) == "mew")
+
+    -- a value that fails the check never reaches the proven code
+    local ok, err = pcall(afterAssert, AssertedOther("mew"))
+    assert(not ok and string.find(err, "assertion failed", 1, true), tostring(err))
+    assert(not (pcall(afterAssert, nil)))
+    assert(not (pcall(afterAssert, 5)))
+
+    local msgOk, msgErr = pcall(afterAssertWithMessage, AssertedOther("mew"))
+    assert(not msgOk and string.find(msgErr, "expected an Asserted", 1, true), tostring(msgErr))
+end)
+
+expectpass("a fused assert raises exactly as the call it replaces would", function()
+    -- the check compiles to a JUMPXISA over the assert call, so the failure path is the original call:
+    -- same message, same custom message, and the arguments must survive being read twice
+    local ok, err = pcall(function()
+        local c = 5
+        assert(class.isinstance(c, Asserted))
+        return "unreachable"
+    end)
+    assert(not ok and string.find(err, "assertion failed", 1, true), tostring(err))
+
+    local msgOk, msgErr = pcall(function()
+        local c = nil
+        assert(class.isinstance(c, Asserted), "custom message")
+        return "unreachable"
+    end)
+    assert(not msgOk and string.find(msgErr, "custom message", 1, true), tostring(msgErr))
+
+    -- an operand with side effects is evaluated exactly once, pass or fail
+    local calls = 0
+    local function counted(v)
+        calls += 1
+        return v
+    end
+
+    assert(pcall(function()
+        assert(class.isinstance(counted(Asserted("x")), Asserted))
+    end))
+    assert(calls == 1, `evaluated {calls} times on success`)
+
+    calls = 0
+    assert(not (pcall(function()
+        assert(class.isinstance(counted(5), Asserted))
+    end)))
+    assert(calls == 1, `evaluated {calls} times on failure`)
+end)
+
+expectpass("a write after the assert takes the proof away again", function()
+    assert(writeAfterAssert(Asserted("a"), AssertedOther("b")) == "other:b", writeAfterAssert(Asserted("a"), AssertedOther("b")))
+    assert(not (pcall(writeAfterAssert, Asserted("a"), nil)))
+
+    assert(
+        writeFromClosureAfterAssert(Asserted("a"), AssertedOther("b")) == "other:b",
+        writeFromClosureAfterAssert(Asserted("a"), AssertedOther("b"))
+    )
+    assert(not (pcall(writeFromClosureAfterAssert, Asserted("a"), nil)))
+
+    -- the proof ends with the block the assert is in
+    assert(assertInsideIf(Asserted("a"), true) == "a")
+    assert(assertInsideIf(AssertedOther("a"), false) == "other:a")
+    assert(not (pcall(assertInsideIf, AssertedOther("a"), true)))
+end)
+
 return 'OK'

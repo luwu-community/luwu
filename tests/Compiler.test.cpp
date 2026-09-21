@@ -35,6 +35,7 @@ LUAU_FASTFLAG(LuauEmitCallFeedback)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuBetterUserDefinedClasses)
 LUAU_FASTFLAG(LuwuGenericNominals)
+LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 
 using namespace Luau;
 
@@ -11206,6 +11207,8 @@ TEST_CASE("ClassGenericAnnotationResolvesReceiverForInlining")
     ScopedFastFlag classes{FFlag::DebugLuauUserDefinedClasses, true};
     ScopedFastFlag betterClasses{FFlag::LuwuBetterUserDefinedClasses, true};
     ScopedFastFlag genericNominals{FFlag::LuwuGenericNominals, true};
+    // this test is about receivers the compiler knows only from an annotation
+    ScopedFastFlag trustAnnotations{FFlag::DebugLuwuCompilerTrustsTypeAnnotations, true};
 
     // Type arguments are erased at runtime, so `Box<number>` names the same class as `Box` for resolving a
     // method call's receiver. The inlined body keeps its CHECKSELFCLASS, so a lying annotation still can't run
@@ -11291,6 +11294,8 @@ TEST_CASE("ClassReceiverTrustTiersDecideSelfCheck")
 {
     ScopedFastFlag classes{FFlag::DebugLuauUserDefinedClasses, true};
     ScopedFastFlag betterClasses{FFlag::LuwuBetterUserDefinedClasses, true};
+    // this test is about receivers the compiler knows only from an annotation
+    ScopedFastFlag trustAnnotations{FFlag::DebugLuwuCompilerTrustsTypeAnnotations, true};
 
     // rfcs/classes.md: every receiver resolution is either *proven* (a runtime check on this path
     // establishes the exact class) or *trusted* (an annotation says so). Both inline; only proven ones
@@ -11357,6 +11362,8 @@ TEST_CASE("ClassIsinstanceProvenReceiverInlinesWithoutSelfCheck")
 {
     ScopedFastFlag classes{FFlag::DebugLuauUserDefinedClasses, true};
     ScopedFastFlag betterClasses{FFlag::LuwuBetterUserDefinedClasses, true};
+    // this test is about receivers the compiler knows only from an annotation
+    ScopedFastFlag trustAnnotations{FFlag::DebugLuwuCompilerTrustsTypeAnnotations, true};
 
     // Inside `if class.isinstance(p, Path)`, JUMPXISA has checked the exact class on this path and the
     // local can't have been reassigned, so the method call inlines with no CHECKSELFCLASS of its own --
@@ -11418,16 +11425,18 @@ end
     CHECK(annotated.find("CHECKSELFCLASS") != std::string::npos);
 }
 
-TEST_CASE("ClassIsinstanceProofIsLostWhenTheLocalIsWritten")
+TEST_CASE("ClassIsinstanceProofIsBoundedByTheBranchItGuards")
 {
     ScopedFastFlag classes{FFlag::DebugLuauUserDefinedClasses, true};
     ScopedFastFlag betterClasses{FFlag::LuwuBetterUserDefinedClasses, true};
 
-    // The isinstance proof elides the inline site's CHECKSELFCLASS, so a write that could outlive the
-    // JUMPXISA would leave an inlined body reading a constant field offset off the wrong value.
-    // matchIsinstanceProvenLocal refuses to prove a local that is written *anywhere* in the module --
-    // flow-insensitively, so a write after the branch or inside a nested closure kills it too. Every
-    // function here must keep its NAMECALL except the clean one.
+    // The isinstance proof elides the inline site's CHECKSELFCLASS, so a write that could reach a use
+    // inside the branch would leave an inlined body reading constant field offsets off the wrong value.
+    // The proof lives exactly as long as the then-body it guards, so what has to be excluded is a write
+    // the proof cannot see coming: one inside that body, or one from a nested function (which runs
+    // whenever the closure is called). Writes elsewhere in the enclosing function cannot invalidate it --
+    // one before the branch happened before JUMPXISA tested the current value, and one after cannot
+    // reach a use inside.
     const char* source = R"(
 class Cat(public name: string)
     public function meow(self): string
@@ -11435,7 +11444,7 @@ class Cat(public name: string)
     end
 end
 
-function nilInBranch(c: Cat?): string
+function writeInBranch(c: Cat?): string
     if class.isinstance(c, Cat) then
         c = nil
         local r = c:meow()
@@ -11444,30 +11453,36 @@ function nilInBranch(c: Cat?): string
     return ""
 end
 
-function castInBranch(c: Cat?, other): string
+function writeInBranchLoop(c: Cat?, other): string
     if class.isinstance(c, Cat) then
-        c = other :: Cat?
+        local out = ""
+        for i = 1, 2 do
+            local r = c:meow()
+            out ..= r
+            c = other
+        end
+        return out
+    end
+    return ""
+end
+
+function writeFromClosure(c: Cat?): string
+    if class.isinstance(c, Cat) then
+        local clear = function()
+            c = nil
+        end
+        clear()
         local r = c:meow()
         return r
     end
     return ""
 end
 
-function writtenLater(c: Cat?): string
-    local out = ""
-    if class.isinstance(c, Cat) then
-        local r = c:meow()
-        out = r
+function writeFromOuterClosure(c: Cat?): string
+    local clear = function()
+        c = nil
     end
-    c = nil
-    return out
-end
-
-function writtenByClosure(c: Cat?): string
     if class.isinstance(c, Cat) then
-        local clear = function()
-            c = nil
-        end
         clear()
         local r = c:meow()
         return r
@@ -11484,12 +11499,36 @@ function copiedToOptional(c: Cat?): string
     return ""
 end
 
-function clean(c: Cat?): string
+function writeAfterBranch(c: Cat?): string
+    local out = ""
+    if class.isinstance(c, Cat) then
+        local r = c:meow()
+        out = r .. c.name
+    end
+    c = nil
+    return out
+end
+
+function writeBeforeBranch(c: Cat?, replacement): string
+    c = replacement
     if class.isinstance(c, Cat) then
         local r = c:meow()
         return r
     end
     return ""
+end
+
+function writeInEnclosingLoop(a, b): string
+    local c = a
+    local out = ""
+    for i = 1, 4 do
+        if class.isinstance(c, Cat) then
+            local r = c:meow()
+            out ..= r
+        end
+        c = if c == a then b else a
+    end
+    return out
 end
 )";
 
@@ -11501,18 +11540,298 @@ end
 
     Luau::compileOrThrow(bcb, source, options);
 
-    // 0 is meow; 1-3 are nilInBranch, castInBranch, writtenLater; 4 is writtenByClosure's nested closure
-    // (protos are emitted innermost first) and 5 is writtenByClosure itself; 6 is copiedToOptional
-    for (int f : {1, 2, 3, 5, 6})
-        CHECK_MESSAGE(
-            bcb.dumpFunction(f).find("NAMECALL") != std::string::npos, "function " << f << " inlined a receiver a write should have unproven"
-        );
+    // 0 is meow; 3 and 5 are the two nested closures (protos are emitted innermost first), so 4 is
+    // writeFromClosure and 6 writeFromOuterClosure.
+    //
+    // Writes the proof cannot see coming: inside the branch (1), inside a loop in the branch whose second
+    // iteration would see it (2), from a closure declared in the branch (4), from one declared *outside*
+    // it and called inside (6) -- only Variable::writtenByNestedFunction rules that one out, since the
+    // assignment is not in the region -- and a copy into a local carrying only a `Cat?` annotation, which
+    // is not evidence of anything (7).
+    for (int f : {1, 2, 4, 6, 7})
+        CHECK_MESSAGE(bcb.dumpFunction(f).find("NAMECALL") != std::string::npos, "function " << f << " inlined past a write it cannot see");
 
-    // and the untouched local still inlines with no check of its own
-    std::string clean = bcb.dumpFunction(7);
-    CHECK(clean.find("NAMECALL") == std::string::npos);
-    CHECK(clean.find("CHECKSELFCLASS") == std::string::npos);
-    CHECK(clean.find("GETOBJECTMEMBER") != std::string::npos);
+    // Writes that cannot reach a use inside the branch: after it (8), before it (9), and outside the
+    // branch but inside an enclosing loop (10) -- there the check re-runs on every iteration. All inline
+    // with no check of their own, and 8 reads a field at a constant offset too.
+    for (int f : {8, 9, 10})
+    {
+        std::string code = bcb.dumpFunction(f);
+
+        CHECK_MESSAGE(code.find("NAMECALL") == std::string::npos, "function " << f << " did not inline");
+        CHECK_MESSAGE(code.find("CHECKSELFCLASS") == std::string::npos, "function " << f << " kept a check a proven receiver does not need");
+        CHECK_MESSAGE(code.find("GETOBJECTMEMBER") != std::string::npos, "function " << f << " did not reach the object path");
+    }
+}
+
+TEST_CASE("ClassAssertIsinstanceProvesTheRestOfTheBlock")
+{
+    ScopedFastFlag classes{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag betterClasses{FFlag::LuwuBetterUserDefinedClasses, true};
+
+    // `assert(class.isinstance(c, C))` raises on a falsy condition, so every path that reaches the
+    // following statements passed the same runtime check JUMPXISA performs -- it proves `c` for the rest
+    // of the block just as a branch proves it for its body, elided CHECKSELFCLASS included. The region is
+    // the statements after the assert, so the same two kinds of write refuse it.
+    const char* source = R"(
+class Cat(public name: string)
+    public function meow(self): string
+        return self.name
+    end
+end
+
+function plain(c): string
+    assert(class.isinstance(c, Cat))
+    local r = c:meow()
+    return r .. c.name
+end
+
+function withMessage(c): string
+    assert(class.isinstance(c, Cat), "expected a Cat")
+    local r = c:meow()
+    return r
+end
+
+function unionReceiver(c: Cat | string): string
+    assert(class.isinstance(c, Cat))
+    local r = c:meow()
+    return r
+end
+
+function nestedBlock(c): string
+    assert(class.isinstance(c, Cat))
+    do
+        local r = c:meow()
+        return r
+    end
+end
+
+function writeAfterAssert(c, other): string
+    assert(class.isinstance(c, Cat))
+    c = other
+    local r = c:meow()
+    return r
+end
+
+function writeFromClosure(c, other): string
+    local swap = function()
+        c = other
+    end
+    assert(class.isinstance(c, Cat))
+    swap()
+    local r = c:meow()
+    return r
+end
+
+function assertInsideIf(c, flag): string
+    if flag then
+        assert(class.isinstance(c, Cat))
+        local r = c:meow()
+        return r
+    end
+    local r = c:meow()
+    return r
+end
+
+function notAnAssert(c): string
+    local ok = class.isinstance(c, Cat)
+    local r = c:meow()
+    return r
+end
+)";
+
+    Luau::BytecodeBuilder bcb;
+    bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code);
+
+    Luau::CompileOptions options;
+    options.optimizationLevel = 2;
+
+    Luau::compileOrThrow(bcb, source, options);
+
+    // proven for the rest of the block: a bare assert (1, whose `c.name` also reads at a constant
+    // offset), one carrying a message (2), a receiver whose annotation alone proves nothing (3), and a
+    // nested block inside the region (4)
+    for (int f : {1, 2, 3, 4})
+    {
+        std::string code = bcb.dumpFunction(f);
+
+        CHECK_MESSAGE(code.find("NAMECALL") == std::string::npos, "function " << f << " did not inline after the assert");
+        CHECK_MESSAGE(code.find("CHECKSELFCLASS") == std::string::npos, "function " << f << " kept a check a proven receiver does not need");
+        CHECK_MESSAGE(code.find("GETOBJECTMEMBER") != std::string::npos, "function " << f << " did not reach the object path");
+    }
+
+    // 6 is writeFromClosure's nested closure. A write in the region (5) or from a closure (7) refuses the
+    // proof, and `class.isinstance` on its own without an assert (9) never established one.
+    for (int f : {5, 7, 9})
+        CHECK_MESSAGE(bcb.dumpFunction(f).find("NAMECALL") != std::string::npos, "function " << f << " inlined without a proof");
+
+    // the proof reaches the end of the block the assert is in, and no further
+    std::string insideIf = bcb.dumpFunction(8);
+    CHECK(insideIf.find("GETOBJECTMEMBER") != std::string::npos);
+    CHECK_EQ(insideIf.find("NAMECALL"), insideIf.rfind("NAMECALL"));
+    CHECK(insideIf.find("NAMECALL") != std::string::npos);
+}
+
+TEST_CASE("ClassAnnotationReceiversNeedTheTrustFlag")
+{
+    ScopedFastFlag classes{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag betterClasses{FFlag::LuwuBetterUserDefinedClasses, true};
+
+    // rfcs/classes.md: by default the compiler acts only on receivers a runtime check on this path
+    // proves. A class known from a declared parameter, local or field type compiles to an ordinary
+    // NAMECALL, so a value that does not match its annotation behaves as it does at O0/O1 instead of
+    // raising at an inline site. DebugLuwuCompilerTrustsTypeAnnotations opts into the faster, stricter
+    // reading. Field reads through a *proven* receiver (`self.v` here) are unaffected either way.
+    const char* source = R"(
+class Vec(public x: number)
+    public function get(self): number
+        return self.x
+    end
+end
+
+class Holder(public v: Vec)
+    public function viaField(self): number
+        local r = self.v:get()
+        return r
+    end
+end
+
+function viaParameter(v: Vec): number
+    local r = v:get()
+    return r
+end
+
+function viaLocal(): number
+    local v: Vec = Vec(1) :: any
+    local r = v:get()
+    return r
+end
+
+function viaConstruction(n: number): number
+    local v = Vec(n)
+    local r = v:get()
+    return r
+end
+
+function viaIsinstance(p): number
+    if class.isinstance(p, Vec) then
+        local r = p:get()
+        return r
+    end
+    return 0
+end
+
+function viaAssert(p): number
+    assert(class.isinstance(p, Vec))
+    local r = p:get()
+    return r
+end
+)";
+
+    Luau::CompileOptions options;
+    options.optimizationLevel = 2;
+
+    // the three annotation-known receivers keep their call; the three proven ones inline regardless
+    {
+        Luau::BytecodeBuilder bcb;
+        bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code);
+        Luau::compileOrThrow(bcb, source, options);
+
+        for (int f : {1, 2, 3})
+            CHECK_MESSAGE(bcb.dumpFunction(f).find("NAMECALL") != std::string::npos, "function " << f << " inlined on an annotation alone");
+
+        // ... and the field read through `self`, which is proven, still reads at a constant offset
+        CHECK(bcb.dumpFunction(1).find("GETOBJECTMEMBER") != std::string::npos);
+
+        for (int f : {4, 5, 6})
+        {
+            std::string code = bcb.dumpFunction(f);
+
+            CHECK_MESSAGE(code.find("NAMECALL") == std::string::npos, "function " << f << " stopped inlining a proven receiver");
+            CHECK_MESSAGE(code.find("CHECKSELFCLASS") == std::string::npos, "function " << f << " kept a check a proven receiver does not need");
+        }
+    }
+
+    // with the flag on, the annotation-known receivers inline too, each keeping the check that turns a
+    // wrong annotation into an error
+    {
+        ScopedFastFlag trustAnnotations{FFlag::DebugLuwuCompilerTrustsTypeAnnotations, true};
+
+        Luau::BytecodeBuilder bcb;
+        bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code);
+        Luau::compileOrThrow(bcb, source, options);
+
+        for (int f : {1, 2, 3})
+        {
+            std::string code = bcb.dumpFunction(f);
+
+            CHECK_MESSAGE(code.find("NAMECALL") == std::string::npos, "function " << f << " did not inline with the trust flag on");
+            CHECK_MESSAGE(code.find("SELF") != std::string::npos, "function " << f << " inlined a trusted receiver without a check");
+        }
+    }
+}
+
+TEST_CASE("ClassAssertIsinstanceFusesIntoJumpxisa")
+{
+    ScopedFastFlag classes{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag betterClasses{FFlag::LuwuBetterUserDefinedClasses, true};
+
+    // `assert(class.isinstance(x, C))` is how code opts into the proven receiver tier, so it lands in hot
+    // paths and must cost what the `if` form costs: a JUMPXISA over the assert, not two builtin call
+    // sequences. The call stays behind the jump so a failure raises exactly as written -- assert's own
+    // message, a custom one, and the right line -- which is also why the operands have to be safe to read
+    // twice.
+    const char* source = R"(
+class Vec(public x: number)
+    public function get(self): number
+        return self.x
+    end
+end
+
+local function sideEffect(v)
+    return v
+end
+
+function fused(p): number
+    assert(class.isinstance(p, Vec))
+    local r = p:get()
+    return r
+end
+
+function fusedWithMessage(p): number
+    assert(class.isinstance(p, Vec), "expected a Vec")
+    local r = p:get()
+    return r
+end
+
+function notFused(v): number
+    assert(class.isinstance(sideEffect(v), Vec))
+    return 1
+end
+)";
+
+    Luau::BytecodeBuilder bcb;
+    bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code);
+
+    Luau::CompileOptions options;
+    options.optimizationLevel = 2;
+
+    Luau::compileOrThrow(bcb, source, options);
+
+    // 0 is get, 1 is sideEffect
+    for (int f : {2, 3})
+    {
+        std::string code = bcb.dumpFunction(f);
+
+        CHECK_MESSAGE(code.find("JUMPXISA") != std::string::npos, "function " << f << " did not fuse the assert");
+        // the call is still there, behind the jump, so the failure path is unchanged
+        CHECK_MESSAGE(code.find("[assert]") != std::string::npos, "function " << f << " lost the raising path");
+    }
+
+    // an operand that cannot be read a second time keeps the ordinary two-call sequence
+    std::string notFused = bcb.dumpFunction(4);
+    CHECK(notFused.find("JUMPXISA") == std::string::npos);
+    CHECK(notFused.find("[assert]") != std::string::npos);
 }
 
 TEST_CASE("ClassIsinstanceProofDoesNotInlinePrivateMethods")
@@ -11783,6 +12102,8 @@ TEST_CASE("ClassMethodInlineSelfCheck")
     // see ClassDeclWithMethod: pin the feedback-vector opcode off so the in-method `error(...)`
     // stays a plain CALL in this dump
     ScopedFastFlag noCallFb{FFlag::LuauEmitCallFeedback, false};
+    // this test is about receivers the compiler knows only from an annotation
+    ScopedFastFlag trustAnnotations{FFlag::DebugLuwuCompilerTrustsTypeAnnotations, true};
 
     // Runtime checking of `self` for methods (rfcs/classes.md) must survive method inlining at -O2:
     // the inlined copy of the body never runs the callee's prologue, so compileInlinedCall re-emits

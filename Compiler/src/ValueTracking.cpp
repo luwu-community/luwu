@@ -25,7 +25,13 @@ struct ValueVisitor : AstVisitor
     {
         if (AstExprLocal* lv = var->as<AstExprLocal>())
         {
-            variables[lv->local].written = true;
+            Variable& variable = variables[lv->local];
+            variable.written = true;
+
+            // an upvalue reference is a write from a function nested inside the declaring one, which can
+            // run whenever that function is called -- no region of the declaring function excludes it
+            if (lv->upvalue)
+                variable.writtenByNestedFunction = true;
         }
         else if (AstExprGlobal* gv = var->as<AstExprGlobal>())
         {

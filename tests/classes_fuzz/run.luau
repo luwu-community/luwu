@@ -40,6 +40,9 @@ const FLAGS = "--fflags="
         "LuwuDefaultArguments=true",
         "LuwuNonePrimitive=true",
     }, ",")
+-- Acting on a receiver's declared type is opt-in (see Compiler.cpp). It only changes O2, where inlining
+-- runs, so it is a variant of the O2 configs rather than a second copy of the whole matrix.
+const TRUST_ANNOTATIONS_FLAG = ",DebugLuwuCompilerTrustsTypeAnnotations=true"
 const RUN_TIMEOUT_SECONDS = 60
 const OUTPUT_TAIL_BYTES = 800
 
@@ -50,6 +53,7 @@ type ProblemKind = "CRASH" | "TIMEOUT" | "EXIT" | "INVALID" | "INCOMPLETE" | "VA
 type Config = {
     opt: number,
     mode: "" | "--codegen" | "--codegen-cold",
+    trustAnnotations: boolean,
     tag: string,
 }
 
@@ -96,10 +100,14 @@ const keepAll = parsed.flags["keep"] == true
 
 const configs: { Config } = {}
 for opt = 0, 2 do
-    table.insert(configs, { opt = opt, mode = "", tag = `O{opt}` })
-    table.insert(configs, { opt = opt, mode = "--codegen", tag = `O{opt}cg` })
-    table.insert(configs, { opt = opt, mode = "--codegen-cold", tag = `O{opt}cgcold` })
+    table.insert(configs, { opt = opt, mode = "", trustAnnotations = false, tag = `O{opt}` })
+    table.insert(configs, { opt = opt, mode = "--codegen", trustAnnotations = false, tag = `O{opt}cg` })
+    table.insert(configs, { opt = opt, mode = "--codegen-cold", trustAnnotations = false, tag = `O{opt}cgcold` })
 end
+-- annotation-driven inlining only exists at O2
+table.insert(configs, { opt = 2, mode = "", trustAnnotations = true, tag = "O2trust" })
+table.insert(configs, { opt = 2, mode = "--codegen", trustAnnotations = true, tag = "O2trustcg" })
+table.insert(configs, { opt = 2, mode = "--codegen-cold", trustAnnotations = true, tag = "O2trustcgcold" })
 
 local function contains(haystack: string, needle: string): boolean
     return string.find(haystack, needle, 1, true) ~= nil
@@ -118,7 +126,7 @@ local function mainFile(config: Config): string
 end
 
 local function luauArgs(config: Config): { string }
-    local list = { `-O{config.opt}`, FLAGS }
+    local list = { `-O{config.opt}`, if config.trustAnnotations then FLAGS .. TRUST_ANNOTATIONS_FLAG else FLAGS }
     if config.mode ~= "" then
         table.insert(list, config.mode)
     end

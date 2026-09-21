@@ -41,6 +41,25 @@ LUAU_FASTFLAGVARIABLE(LuauEmitCallFeedback)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAGVARIABLE(LuauExportedClassIsNilWorkaround)
 
+// Luwu Classes (rfcs/classes.md): may the compiler act on a type annotation it cannot verify?
+//
+// Off (the default), only a *proven* receiver inlines. A receiver is proven when a runtime check on the
+// path reaching it establishes its class. There are four:
+//
+//   - a method's own `self`, checked by the method's prologue
+//   - a local guarded by `if class.isinstance(x, C) then`
+//   - a local guarded by `assert(class.isinstance(x, C))`
+//   - a local holding an object this code constructed
+//
+// A receiver whose class is known only from a declared type -- `function f(p: Path)`, or a class field
+// declared `v: Vec` -- is not proven. It compiles to an ordinary NAMECALL and cached member access, so a
+// value that does not match its annotation behaves as it does at O0/O1 instead of raising.
+//
+// On, those annotations pick the method to inline, and the inline site's CHECKSELFCLASS turns a wrong
+// annotation into a runtime error rather than a wrong body. That is a real speedup on annotation-heavy
+// code, and a real behavior change. Hence a flag, and hence off by default.
+LUAU_FASTFLAGVARIABLE(DebugLuwuCompilerTrustsTypeAnnotations)
+
 namespace Luau
 {
 
@@ -561,6 +580,8 @@ struct Compiler
         if (FFlag::DebugLuauUserDefinedClasses && atTopLevel())
             preallocateHoistedClasses(stat);
 
+        std::vector<AssertProof> assertProofs;
+
         for (size_t i = 0; i < stat->body.size; ++i)
         {
             AstStat* bodyStat = stat->body.data[i];
@@ -571,7 +592,11 @@ struct Compiler
                 terminatesEarly = true;
                 break;
             }
+
+            noteAssertProof(bodyStat, stat->body, i, assertProofs);
         }
+
+        restoreAssertProofs(assertProofs);
 
         // valid function bytecode must always end with RETURN
         // we elide this if we're guaranteed to hit a RETURN statement regardless of the control flow
@@ -1444,9 +1469,15 @@ struct Compiler
             keeps = false;
         }
 
+        // A body that indexes with a runtime key (`self.inner[k]`) normally refuses to inline, because
+        // the key could name a private member. A declared table type on the indexed value rules that
+        // out: a table is not an object, so it has no private members to reach.
+        //
+        // Nothing verifies that declaration, so this is annotation trust like any other. With trust off
+        // it answers no, and such a body keeps its call.
         bool isTableTyped(AstType* ty)
         {
-            return ty && ty->is<AstTypeTable>();
+            return FFlag::DebugLuwuCompilerTrustsTypeAnnotations && ty && ty->is<AstTypeTable>();
         }
 
         bool isKnownNonObject(AstExpr* expr, int depth = 0)
@@ -2144,6 +2175,14 @@ struct Compiler
         ReceiverClass receiver = resolveReceiverClass(idx->expr);
         if (!receiver)
             return nullptr;
+
+        // A receiver known only from an annotation is acted on only when the compiler is allowed to trust
+        // annotations; otherwise this stays a NAMECALL, which dispatches on the object's real class.
+        if (!receiver.proven && !FFlag::DebugLuwuCompilerTrustsTypeAnnotations)
+        {
+            bytecode.addDebugRemark("inlining failed: %s's class is only known from an annotation", idx->index.value);
+            return nullptr;
+        }
 
         AstStatClass* recvClass = receiver.cls;
 
@@ -3477,6 +3516,54 @@ struct Compiler
     // Returns false (so the caller falls back to the ordinary builtin path) when the call isn't the
     // builtin. `onlyTruth` selects the branch polarity, matching the generic JUMPIF/JUMPIFNOT emitted by
     // compileConditionValue below.
+    // Luwu Classes (rfcs/classes.md): `assert(class.isinstance(x, C))` as a statement says the same thing
+    // `if class.isinstance(x, C) then` does -- and, since this is how code opts into the proven receiver
+    // tier (matchAssertIsinstanceProof), it sits in hot paths. Without this it costs two builtin call
+    // sequences where the `if` costs one fused JUMPXISA.
+    //
+    // So: jump over the assert when the value *is* an instance, and otherwise fall into the ordinary call
+    // the caller emits next. The check is repeated there, which costs nothing that matters -- that path
+    // raises -- and keeps the failure behaviour exactly as written, including `assert`'s own message, a
+    // custom second argument, and the line it blames.
+    //
+    // Returns true when the jump was emitted, leaving its label in `skipJump` for the caller to patch to
+    // the instruction after the call.
+    bool tryCompileStatAssertIsinstance(AstExprCall* call, std::vector<size_t>& skipJump)
+    {
+        if (!FFlag::DebugLuauUserDefinedClasses)
+            return false;
+
+        const int* bfid = builtins.find(call);
+        if (!bfid || *bfid != LBF_ASSERT || call->args.size == 0)
+            return false;
+
+        AstExpr* condition = call->args.data[0];
+        while (AstExprGroup* group = condition->as<AstExprGroup>())
+            condition = group->expr;
+
+        AstExprCall* isinstance = condition->as<AstExprCall>();
+        if (!isinstance || isinstance->args.size != 2)
+            return false;
+
+        // Both arguments are evaluated twice when the check fails -- once here, once in the call that
+        // raises -- so this only fuses ones that can be read again with no consequence. That is the shape
+        // the idiom has anyway: the proof needs a local (matchIsinstanceCall), and the class operand is a
+        // class binding, which is a local or an upvalue rather than an environment lookup.
+        auto isRereadable = [&](AstExpr* arg)
+        {
+            while (AstExprGroup* group = arg->as<AstExprGroup>())
+                arg = group->expr;
+
+            return arg->is<AstExprLocal>() || arg->is<AstExprConstantNil>() || arg->is<AstExprConstantBool>() ||
+                   arg->is<AstExprConstantNumber>() || arg->is<AstExprConstantString>() || isKnownClassExpr(arg);
+        };
+
+        if (!isRereadable(isinstance->args.data[0]) || !isRereadable(isinstance->args.data[1]))
+            return false;
+
+        return tryCompileConditionIsinstance(isinstance, /* target= */ nullptr, skipJump, /* onlyTruth= */ true);
+    }
+
     bool tryCompileConditionIsinstance(AstExprCall* call, const uint8_t* target, std::vector<size_t>& skipJump, bool onlyTruth)
     {
         if (!FFlag::DebugLuauUserDefinedClasses)
@@ -3509,15 +3596,103 @@ struct Compiler
     // Luwu Classes (rfcs/classes.md): if `condition` is exactly `class.isinstance(x, C)` in the form
     // tryCompileConditionIsinstance fuses into JUMPXISA -- `x` a local of this function that is never
     // reassigned, `C` a class declared in this module -- returns C's declaration and sets `local` to `x`.
-    AstStatClass* matchIsinstanceProvenLocal(AstExpr* condition, AstLocal*& local)
+    // Luwu Classes (rfcs/classes.md): does `region` contain an assignment to `local`? Used to bound a
+    // `class.isinstance` proof to a region no same-frame write can cross (see matchIsinstanceProvenLocal).
+    // Assignments from a nested function are *not* this question's business -- they can run whenever that
+    // function is called, so they are ruled out separately by Variable::writtenByNestedFunction.
+    struct LocalWriteVisitor : AstVisitor
+    {
+        AstLocal* local;
+        bool found = false;
+
+        explicit LocalWriteVisitor(AstLocal* local)
+            : local(local)
+        {
+        }
+
+        void note(AstExpr* var)
+        {
+            if (AstExprLocal* le = var->as<AstExprLocal>(); le && le->local == local)
+                found = true;
+        }
+
+        bool visit(AstStatAssign* node) override
+        {
+            for (AstExpr* var : node->vars)
+                note(var);
+
+            return !found;
+        }
+
+        bool visit(AstStatCompoundAssign* node) override
+        {
+            note(node->var);
+
+            return !found;
+        }
+    };
+
+    bool regionWritesLocal(AstStat* region, AstLocal* local)
+    {
+        LocalWriteVisitor visitor(local);
+        region->visit(&visitor);
+
+        return visitor.found;
+    }
+
+    // A proof established by an `assert` statement, and the entry it displaced. Statement lists collect
+    // these as they go and put the previous entries back when the list ends, so the proof reaches exactly
+    // the statements that follow the assert within that block (nested blocks included).
+    struct AssertProof
+    {
+        AstLocal* local = nullptr;
+        AstStatClass* previous = nullptr;
+    };
+
+    void noteAssertProof(AstStat* stat, const AstArray<AstStat*>& body, size_t index, std::vector<AssertProof>& proofs)
+    {
+        AstLocal* local = nullptr;
+
+        if (AstStatClass* decl = matchAssertIsinstanceProof(stat, body, index, local))
+        {
+            AstStatClass** existing = isinstanceProvenLocals.find(local);
+            proofs.push_back({local, existing ? *existing : nullptr});
+            isinstanceProvenLocals[local] = decl;
+        }
+    }
+
+    void restoreAssertProofs(std::vector<AssertProof>& proofs)
+    {
+        // DenseHashMap has no erase; a null entry means "not proven"
+        for (size_t i = proofs.size(); i > 0; --i)
+            isinstanceProvenLocals[proofs[i - 1].local] = proofs[i - 1].previous;
+
+        proofs.clear();
+    }
+
+    // the same question for the tail of a statement list, which is the region an `assert` proves
+    bool bodyWritesLocal(const AstArray<AstStat*>& body, size_t start, AstLocal* local)
+    {
+        LocalWriteVisitor visitor(local);
+
+        for (size_t i = start; i < body.size && !visitor.found; ++i)
+            body.data[i]->visit(&visitor);
+
+        return visitor.found;
+    }
+
+    // Luwu Classes (rfcs/classes.md): the class `expr` tests a local against, when it is exactly
+    // `class.isinstance(<local of this frame>, <class declared in this module>)`. Establishing a proof
+    // from it additionally requires a region no write can cross -- see the two callers.
+    AstStatClass* matchIsinstanceCall(AstExpr* expr, AstLocal*& local)
     {
         if (!FFlag::DebugLuauUserDefinedClasses || !currentFunction)
             return nullptr;
 
-        while (AstExprGroup* group = condition->as<AstExprGroup>())
-            condition = group->expr;
+        while (AstExprGroup* group = expr->as<AstExprGroup>())
+            expr = group->expr;
 
-        AstExprCall* call = condition->as<AstExprCall>();
+        AstExprCall* call = expr->as<AstExprCall>();
         if (!call || call->args.size != 2)
             return nullptr;
 
@@ -3533,7 +3708,15 @@ struct Compiler
         if (!le || le->upvalue || le->local->functionDepth != currentFunction->functionDepth)
             return nullptr;
 
-        if (Variable* v = variables.find(le->local); v && v->written)
+        // A write from a function nested inside this one runs whenever that closure is called, so no
+        // region of this function excludes it and no proof about this local can stand. (A write in this
+        // frame is the caller's problem: it can be located, so a region that contains none of them is
+        // safe -- see the callers.)
+        //
+        // Getting this wrong is not a missed optimization: the inline site skips CHECKSELFCLASS for a
+        // proven receiver, so a stale proof would read constant field offsets off whatever the local now
+        // holds.
+        if (Variable* v = variables.find(le->local); v && v->writtenByNestedFunction)
             return nullptr;
 
         AstExpr* classExpr = call->args.data[1];
@@ -3546,6 +3729,53 @@ struct Compiler
 
         local = le->local;
         return *decl;
+    }
+
+    // The class an `if class.isinstance(c, C) then` condition proves its local to be for the branch it
+    // guards. The proof is JUMPXISA's runtime check and lives exactly as long as the then-body
+    // (compileStatIf restores the previous entry after compiling it), so writes outside that body cannot
+    // invalidate it: one before the branch happened before the check tested the current value, and one
+    // after cannot reach a use inside. A write *in* the body can, including one that only a later loop
+    // iteration would see.
+    AstStatClass* matchIsinstanceProvenLocal(AstExpr* condition, AstStat* thenBody, AstLocal*& local)
+    {
+        AstStatClass* decl = matchIsinstanceCall(condition, local);
+
+        if (!decl || regionWritesLocal(thenBody, local))
+            return nullptr;
+
+        return decl;
+    }
+
+    // Luwu Classes (rfcs/classes.md): `assert(class.isinstance(c, C))` as a statement proves `c` for the
+    // rest of the block, exactly as an `if class.isinstance(c, C) then` branch proves it for its body --
+    // `assert` raises on a falsy condition, so every path that reaches the following statements passed the
+    // same runtime check that JUMPXISA performs. An optional message argument is fine; it does not change
+    // when assert raises. The region is therefore the statements after this one, and a write in any of
+    // them (`bodyWritesLocal`) refuses the proof the same way a write inside a then-body does.
+    AstStatClass* matchAssertIsinstanceProof(AstStat* stat, const AstArray<AstStat*>& body, size_t index, AstLocal*& local)
+    {
+        if (!FFlag::DebugLuauUserDefinedClasses)
+            return nullptr;
+
+        AstStatExpr* statExpr = stat->as<AstStatExpr>();
+        if (!statExpr)
+            return nullptr;
+
+        AstExprCall* call = statExpr->expr->as<AstExprCall>();
+        if (!call || call->args.size == 0)
+            return nullptr;
+
+        const int* bfid = builtins.find(call);
+        if (!bfid || *bfid != LBF_ASSERT)
+            return nullptr;
+
+        AstStatClass* decl = matchIsinstanceCall(call->args.data[0], local);
+
+        if (!decl || bodyWritesLocal(body, index + 1, local))
+            return nullptr;
+
+        return decl;
     }
 
     size_t compileCompareJump(AstExprBinary* expr, bool not_ = false)
@@ -5343,7 +5573,7 @@ struct Compiler
         AstLocal* provenLocal = nullptr;
         AstStatClass* previousProvenClass = nullptr;
 
-        if (AstStatClass* decl = matchIsinstanceProvenLocal(stat->condition, provenLocal))
+        if (AstStatClass* decl = matchIsinstanceProvenLocal(stat->condition, stat->thenbody, provenLocal))
         {
             AstStatClass** existing = isinstanceProvenLocals.find(provenLocal);
             previousProvenClass = existing ? *existing : nullptr;
@@ -6265,6 +6495,8 @@ struct Compiler
             if (FFlag::LuauExportValueSyntax)
                 blockDepth++;
 
+            std::vector<AssertProof> assertProofs;
+
             for (size_t i = 0; i < stat->body.size; ++i)
             {
                 AstStat* bodyStat = stat->body.data[i];
@@ -6272,7 +6504,11 @@ struct Compiler
 
                 if (alwaysTerminates(bodyStat))
                     break;
+
+                noteAssertProof(bodyStat, stat->body, i, assertProofs);
             }
+
+            restoreAssertProofs(assertProofs);
 
             if (FFlag::LuauExportValueSyntax)
                 blockDepth--;
@@ -6339,7 +6575,15 @@ struct Compiler
             {
                 uint8_t target = uint8_t(regTop);
 
+                // Luwu Classes (rfcs/classes.md): `assert(class.isinstance(x, C))` is a class check, and
+                // compiles to one, rather than to two builtin calls -- see compileStatAssertIsinstance.
+                std::vector<size_t> assertSkip;
+                bool fusedAssert = tryCompileStatAssertIsinstance(expr, assertSkip);
+
                 compileExprCall(expr, target, /* targetCount= */ 0);
+
+                if (fusedAssert)
+                    patchJumps(stat, assertSkip, bytecode.emitLabel());
             }
             else
             {
