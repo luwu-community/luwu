@@ -165,6 +165,7 @@ Specifically:
     - A field parameter list with access specifiers, like `(public x: T, private const y = default)`.
 - After the class header starts the class body.
 - The class body contains zero or more class member (fields and functions) declarations (see below),
+- The contextual keywords `extends` and `implements` *may not* be fields or function names.
 - The class body ends with the `end` keyword.
 
 Class definitions are a block construct like `for` loops, and do not evaluate to a value.
@@ -234,6 +235,14 @@ We introduce two specific flavors of keywords to help introduce class members: a
 We reuse the `const` keyword to mean "this field is set at class definition evaluation time and may not be modified".
 
 A previous version of this RFC introduced a `static` modifier. We choose to not introduce a static modifier because both static fields and methods can be handled with existing syntax. Static functions are just functions on classes without a `self` parameter. Static fields can be emulated via module-level upvalue (`const`, `local`, and/or exported). We believe the advantage of having a `private` `static` variable (the only functionality not addressed by not adding `static`) is not substantial enough motivation to add a whole keyword to the language; users can just make a module to hold their class with a `local` or `const` static value if they absolutely don't want code unrelated to that class to touch it. Additionally, `static` is a weird (nonobvious) word and would lead to even further keyword soup than we are already introducing with this RFC.
+
+Class members may not be named `class`, `private`, `public`, `const`, `extends`, or `implements`; doing so is a syntax error.
+This is to reduce confusion, ambiguity, and to allow future keywords to be used in the class header/body position without breaking existing code.
+
+- When encountered in an unambiguously field/function shaped position, these error messages should read `Fields/functions are not allowed to be named <keyword>`.
+- When the `class` keyword is encountered and classes-related FFlags are not enabled, the syntax error should inform users that the classes feature is currently disabled.
+- When `extends` is encountered in the class header, the syntax error should inform users that inheritance is not supported in Luwu.
+- When `implements` is encountered in the class header, the syntax error should state that the `implements` keyword has not yet been implemented.
 
 ```luau
 -- user.luau
@@ -1018,4 +1027,49 @@ const cat = Cat("Taz", 12)
 
 ## Future work
 
-- Add composition, interfaces, inheritance if we want to.
+- Add the planned traits system to allow code reuse between classes:
+
+```luau
+trait Animal
+    declare species: string
+    declare function is_mammal(self)
+end
+
+trait ToJson
+    --- you should override this otherwise it just serializes class.fields!!
+    function to_json(self)
+        return json.encode((class.fields(self)))
+    end
+end
+
+class Header(level) implements ToJson
+    level: "h1" | "h2" | "h3"
+end
+
+trait Rectangle(position: vector, size: vector) end
+trait Frame(color: Color, border: Border?) requires Rectangle end
+trait Interactible
+    declare enabled: boolean
+    declare function on_click?(self)
+    declare function on_hover?(self)
+end
+
+class TextBox(
+    public placeholder_text = "",
+    public color = Color("White"),
+    public size = vector.create(600, 400),
+    public position: vector?
+) implements Frame(color), Rectangle(position, size), Interactible
+    public text = ""
+    public enabled = false
+    private is_editing = false
+
+    public function on_click(self)
+        -- ...
+    end
+end
+```
+
+## Implementation details
+
+See the [dedicated file](/rfcs/classes/implementation.md).

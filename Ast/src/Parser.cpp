@@ -45,6 +45,37 @@ bool luau_telemetry_parsed_return_type_variadic_with_type_suffix = false;
 namespace Luau
 {
 
+namespace
+{
+
+// Luwu Classes (rfcs/classes.md): `class` is a contextual keyword, so with the classes flags off a
+// class declaration parses as a nonsense expression statement and reports something about assignments.
+// Users have read that as "my Luwu build is broken", so say what is actually wrong.
+const char* const kClassesDisabledError =
+    "Classes are currently disabled; enable the 'DebugLuauUserDefinedClasses', 'DebugLuauUserDefinedClassesRuntime' and "
+    "'LuwuBetterUserDefinedClasses' fast flags to use 'class'";
+
+// Luwu Classes (rfcs/classes.md): class members may not be named after the keywords that appear in the
+// class header or in front of a member. This keeps those positions unambiguous, and leaves room to give
+// these words meaning there later without breaking existing code.
+const std::unordered_set<std::string> DISALLOWED_CLASS_MEMBER_NAMES{
+    "class",
+    "public",
+    "private",
+    "const",
+    "extends",
+    "implements",
+};
+
+// Only ask this from a position that is unambiguously a field or a function, so the caller's message
+// can say which one it is.
+bool isDisallowedClassMemberName(const AstName& name)
+{
+    return name.value != nullptr && DISALLOWED_CLASS_MEMBER_NAMES.count(name.value) > 0;
+}
+
+} // namespace
+
 using AttributeArgumentsValidator = std::function<std::vector<std::pair<Location, std::string>>(Location, const AstArray<AstExpr*>&)>;
 
 struct AttributeEntry
@@ -498,8 +529,16 @@ AstStat* Parser::parseStat()
     if (ident == "type")
         return parseTypeAlias(expr->location, /* exported= */ false, expr->location.begin, expr->location);
 
-    if (FFlag::DebugLuauUserDefinedClasses && ident == "class")
-        return parseClassStat(start, /*exported*/ false, start);
+    if (ident == "class")
+    {
+        if (FFlag::DebugLuauUserDefinedClasses)
+            return parseClassStat(start, /*exported*/ false, start);
+
+        // Without the feature, `class` is an ordinary identifier, so only diagnose the shape a class
+        // declaration actually has (`class Name`); anything else is someone's variable named `class`.
+        if (lexer.current().type == Lexeme::Name)
+            return reportStatError(expr->location, copy({expr}), {}, "%s", kClassesDisabledError);
+    }
 
     if (ident == "export")
     {
@@ -509,8 +548,10 @@ AstStat* Parser::parseStat()
 
             if (current.type == Lexeme::ReservedLocal || current.type == Lexeme::ReservedFunction ||
                 (current.type == Lexeme::Name && AstName(current.name) == "const") ||
-                ((FFlag::DebugLuauUserDefinedClasses && current.type == Lexeme::Name) && AstName(current.name) == "class"))
+                (current.type == Lexeme::Name && AstName(current.name) == "class"))
             {
+                // `export class` routes here with the classes feature off too, so that it reports the
+                // feature being disabled rather than 'export' wanting an identifier.
                 return parseExportValue(expr->location, expr->location.begin, AstArray<AstAttr*>({nullptr, 0}));
             }
             else if (current.type == Lexeme::Name && AstName(current.name) == "type")
@@ -522,8 +563,11 @@ AstStat* Parser::parseStat()
             }
         }
         // TODO: remove with LuauExportValueSyntax
-        else if (FFlag::DebugLuauUserDefinedClasses && AstName(lexer.current().name) == "class")
+        else if (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "class")
         {
+            if (!FFlag::DebugLuauUserDefinedClasses)
+                return reportStatError(expr->location, copy({expr}), {}, "%s", kClassesDisabledError);
+
             Location classKeywordLocation = lexer.current().location;
             nextLexeme();
             return parseClassStat(start, /*exported*/ true, classKeywordLocation);
@@ -1630,8 +1674,8 @@ LUAU_NOINLINE AstClassPrimaryConstructor* Parser::parseClassPrimaryConstructor(
             // Luwu Classes (rfcs/classes.md): a parameter may carry the access specifier and the
             // `const` modifier of the field it declares, Kotlin-style: `class SshKey private (public
             // const public_key: string, private const private_key: string)`. A qualifier is only a
-            // qualifier when another name follows it, so a parameter may still be *named* `public`,
-            // `private` or `const`.
+            // qualifier when another name follows it, so a parameter written as one of those keywords
+            // alone reads as a parameter name -- and is then rejected as a keyword field name below.
             AstClassPrimaryConstructorParamQualifiers qualifiers;
 
             // `const public x` is the wrong order; the modifier follows the access specifier.
@@ -1665,6 +1709,11 @@ LUAU_NOINLINE AstClassPrimaryConstructor* Parser::parseClassPrimaryConstructor(
             // a primary constructor's parameters are function parameters that happen to belong to a
             // class, so their defaults ride on the same flag function parameter defaults do
             Binding binding = parseBinding(/* isConst= */ false, /* allowDefault= */ FFlag::LuwuDefaultArguments);
+
+            // Every parameter declares a field, so the keywords banned from field names are banned here
+            // too (rfcs/classes.md).
+            if (isDisallowedClassMemberName(binding.name.name))
+                report(binding.name.location, "Fields are not allowed to be named '%s'", binding.name.name.value);
 
             if (argNames.contains(binding.name.name))
                 report(binding.name.location, "Duplicate primary constructor parameter '%s'", binding.name.name.value);
@@ -1808,7 +1857,32 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
         );
     };
 
+    // Luwu Classes (rfcs/classes.md): `implements` is reserved in the class header for the traits work,
+    // and like `extends` would otherwise parse as a pile of bare fields. Consume the whole interface
+    // list so only one error comes out of it.
+    auto rejectImplements = [&]()
+    {
+        if (!FFlag::LuwuBetterUserDefinedClasses || lexer.current().type != Lexeme::Name || AstName(lexer.current().name) != "implements" ||
+            lexer.lookahead().type != Lexeme::Name)
+            return;
+
+        Location implementsLocation = lexer.current().location;
+        nextLexeme();
+        Location lastLocation = lexer.current().location;
+        nextLexeme();
+
+        while (lexer.current().type == ',' && lexer.lookahead().type == Lexeme::Name)
+        {
+            nextLexeme();
+            lastLocation = lexer.current().location;
+            nextLexeme();
+        }
+
+        report(Location(implementsLocation, lastLocation), "The 'implements' keyword has not yet been implemented");
+    };
+
     rejectExtends();
+    rejectImplements();
 
     AstClassPrimaryConstructor* primaryConstructor = nullptr;
 
@@ -1816,7 +1890,10 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
         primaryConstructor = parseClassPrimaryConstructor(ctorQualifierLocation, ctorVisibility);
 
     if (primaryConstructor)
+    {
         rejectExtends();
+        rejectImplements();
+    }
 
     // Every parameter implicitly declares a field of the same name, so a *method* named after one
     // collides with it. A *property* named after one does not: that's how the RFC spells applying an
@@ -1945,14 +2022,27 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
             }
         }
 
-        if (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "public")
+        // An access specifier is only an access specifier when a member follows it; `public: number` is
+        // a member *named* `public`, which the RFC disallows -- but saying so beats reporting a missing
+        // field name (rfcs/classes.md).
+        auto qualifierIntroducesMember = [&]()
+        {
+            if (!FFlag::LuwuBetterUserDefinedClasses)
+                return true;
+
+            Lexeme::Type next = lexer.lookahead().type;
+            return next == Lexeme::Name || next == Lexeme::ReservedFunction;
+        };
+
+        if (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "public" && qualifierIntroducesMember())
         {
             qualifierLocation = lexer.current().location;
             if (FFlag::LuwuBetterUserDefinedClasses)
                 explicitPublicQualifierLocations.push_back(*qualifierLocation);
             nextLexeme();
         }
-        else if (FFlag::LuwuBetterUserDefinedClasses && lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "private")
+        else if (FFlag::LuwuBetterUserDefinedClasses && lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "private" &&
+                 qualifierIntroducesMember())
         {
             qualifierLocation = lexer.current().location;
             visibility = AstClassMemberVisibility::Private;
@@ -1972,7 +2062,10 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
         {
             std::optional<Location> constLocation;
             bool isConst = false;
-            if (FFlag::LuwuBetterUserDefinedClasses && lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "const")
+            // As with the access specifiers above, `const` is only the modifier when a field name
+            // follows it; `const = 1` declares a field named `const`.
+            if (FFlag::LuwuBetterUserDefinedClasses && lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "const" &&
+                lexer.lookahead().type == Lexeme::Name)
             {
                 constLocation = lexer.current().location;
                 isConst = true;
@@ -1986,6 +2079,9 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
                     nextLexeme(); // skip the unexpected token to avoid an infinite loop
                 continue;
             }
+
+            if (FFlag::LuwuBetterUserDefinedClasses && isDisallowedClassMemberName(propName->name))
+                report(propName->location, "Fields are not allowed to be named '%s'", propName->name.value);
 
             if (FFlag::LuwuBetterUserDefinedClasses && !qualifierLocation)
                 unqualifiedMemberLocations.push_back({propName->location, /* isFunction */ false});
@@ -2127,6 +2223,9 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
             auto [body, _] = parseFunctionBody(false, matchFunction, name.name, nullptr, {});
 
             matchRecoveryStopOnToken[Lexeme::ReservedEnd]--;
+
+            if (FFlag::LuwuBetterUserDefinedClasses && isDisallowedClassMemberName(name.name))
+                report(name.location, "Functions are not allowed to be named '%s'", name.name.value);
 
             if (body->args.size > 0 && body->args.data[0]->name == "self" && body->args.data[0]->annotation != nullptr)
                 report(body->args.data[0]->annotation->location, "The 'self' parameter cannot have a type annotation");
@@ -2845,8 +2944,11 @@ AstStat* Parser::parseExportValue(
 
         return exportLocalStat(parseLocal(start, constKeywordLocation.begin, {nullptr, 0}, true), constKeywordLocation);
     }
-    else if (FFlag::DebugLuauUserDefinedClasses && lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "class")
+    else if (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "class")
     {
+        if (!FFlag::DebugLuauUserDefinedClasses)
+            return reportStatError(start, {}, {}, "%s", kClassesDisabledError);
+
         Location classKeywordLocation = lexer.current().location;
         nextLexeme();
         auto stat = parseClassStat(start, /*exported*/ true, classKeywordLocation);

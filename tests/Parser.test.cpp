@@ -4786,13 +4786,111 @@ TEST_CASE_FIXTURE(Fixture, "class_extends_is_rejected")
     CHECK_EQ(result.errors[0].getLocation().begin.line, 2);
     CHECK_EQ(result.errors[1].getLocation().begin.line, 3);
 
-    // a field that happens to be named `extends` is still a field
+    // and a field named `extends` is rejected as a keyword member name, not accepted as a field
     ParseResult field = tryParse(R"(
         class Options
             extends = 1
         end
     )");
-    CHECK(field.errors.empty());
+    CHECK_EQ(field.errors.size(), 1);
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_implements_is_rejected")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
+    };
+
+    // `implements` is reserved for traits; one error for the whole interface list
+    ParseResult result = tryParse(R"(
+        class A implements Show end
+        class B(x: number) implements Show, Eq end
+    )");
+
+    REQUIRE_EQ(result.errors.size(), 2);
+    CHECK_EQ(result.errors[0].getLocation().begin.line, 1);
+    CHECK_EQ(result.errors[1].getLocation().begin.line, 2);
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_members_may_not_be_named_after_keywords")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
+    };
+
+    // rfcs/classes.md: `class`, `public`, `private`, `const`, `extends` and `implements` are not
+    // allowed as member names, in any of the positions a member can be declared in.
+    for (const char* keyword : {"class", "public", "private", "const", "extends", "implements"})
+    {
+        std::string field = "class C\n    " + std::string(keyword) + ": number\nend";
+        CHECK_MESSAGE(tryParse(field).errors.size() == 1, "field named '" << std::string(keyword) << "': " << field);
+
+        std::string defaulted = "class C\n    " + std::string(keyword) + " = 1\nend";
+        CHECK_MESSAGE(tryParse(defaulted).errors.size() == 1, "field with default named '" << std::string(keyword) << "': " << defaulted);
+
+        std::string qualified = "class C\n    public " + std::string(keyword) + ": number\nend";
+        CHECK_MESSAGE(tryParse(qualified).errors.size() == 1, "public field named '" << std::string(keyword) << "': " << qualified);
+
+        std::string constField = "class C\n    public const " + std::string(keyword) + " = 1\nend";
+        CHECK_MESSAGE(tryParse(constField).errors.size() == 1, "const field named '" << std::string(keyword) << "': " << constField);
+
+        std::string method = "class C\n    function " + std::string(keyword) + "(self) end\nend";
+        CHECK_MESSAGE(tryParse(method).errors.size() == 1, "method named '" << std::string(keyword) << "': " << method);
+
+        std::string param = "class C(" + std::string(keyword) + ": number) end";
+        CHECK_MESSAGE(tryParse(param).errors.size() == 1, "primary constructor parameter named '" << std::string(keyword) << "': " << param);
+
+        std::string qualifiedParam = "class C(public " + std::string(keyword) + ": number) end";
+        CHECK_MESSAGE(tryParse(qualifiedParam).errors.size() == 1, "qualified parameter named '" << std::string(keyword) << "': " << qualifiedParam);
+    }
+
+    // the keywords themselves still work in the positions they belong in
+    ParseResult ok = tryParse(R"(
+        class C(private const x: number)
+            public y: number = 2
+            private function f(self) end
+        end
+    )");
+    CHECK(ok.errors.empty());
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_without_feature_flag_says_classes_are_disabled")
+{
+    ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, false};
+
+    ParseResult result = tryParse(R"(
+        class Point
+            x: number
+        end
+    )");
+
+    REQUIRE(!result.errors.empty());
+    CHECK_MESSAGE(
+        result.errors[0].getMessage().find("DebugLuauUserDefinedClasses") != std::string::npos,
+        "expected the flag names, got: " << result.errors[0].getMessage()
+    );
+
+    ParseResult exported = tryParse(R"(
+        export class Point
+            x: number
+        end
+    )");
+
+    REQUIRE(!exported.errors.empty());
+    CHECK_MESSAGE(
+        exported.errors[0].getMessage().find("DebugLuauUserDefinedClasses") != std::string::npos,
+        "expected the flag names, got: " << exported.errors[0].getMessage()
+    );
+
+    // `class` is still an ordinary identifier without the feature
+    ParseResult identifier = tryParse(R"(
+        local class = {}
+        class.x = 1
+        class = nil
+    )");
+    CHECK(identifier.errors.empty());
 }
 
 TEST_CASE_FIXTURE(Fixture, "class_const_function_is_rejected")
@@ -5098,10 +5196,15 @@ TEST_CASE_FIXTURE(Fixture, "classes_can_be_shadowed_by_locals")
     CHECK(result.errors.empty());
 }
 
-TEST_CASE_FIXTURE(Fixture, "classes_can_have_members_named_public")
+TEST_CASE_FIXTURE(Fixture, "classes_cannot_have_members_named_public")
 {
-    ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuwuBetterUserDefinedClasses, true},
+    };
 
+    // rfcs/classes.md: a member named after an access specifier is rejected, both where it reads as a
+    // member name outright and where a qualifier precedes it.
     ParseResult result = tryParse(R"(
         class Foobar
             function public() end
@@ -5112,7 +5215,7 @@ TEST_CASE_FIXTURE(Fixture, "classes_can_have_members_named_public")
         end
     )");
 
-    CHECK(result.errors.empty());
+    CHECK_EQ(result.errors.size(), 2);
 }
 
 TEST_CASE_FIXTURE(Fixture, "classes_nested_and_repeated")

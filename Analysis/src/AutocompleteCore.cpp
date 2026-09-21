@@ -406,7 +406,9 @@ static void autocompleteProps(
         {
             // We are walking up the class hierarchy, so if we encounter a property that we have
             // already populated, it takes precedence over the property we found just now.
-            if (result.count(name) == 0 && name != kParseNameError)
+            // `__init` is callable (see classes.md's `reset` example) but deliberately hidden from
+            // completion so it isn't casually discovered/misused; explicit typing still resolves it.
+            if (result.count(name) == 0 && name != kParseNameError && name != "__init")
             {
                 // Private members are only visible for autocomplete from within their own
                 // class's definition block.
