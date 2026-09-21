@@ -2474,18 +2474,22 @@ TEST_CASE_FIXTURE(Fixture, "WrongComment")
 --! no more lint
 --!strict here
 --!native on
+--!trust
+--!trust me
 do end
 --!nolint
 )");
 
-    REQUIRE(7 == result.warnings.size());
+    REQUIRE(8 == result.warnings.size());
     CHECK_EQ(result.warnings[0].text, "Unknown comment directive 'struct'; did you mean 'strict'?");
     CHECK_EQ(result.warnings[1].text, "Unknown comment directive 'nolintGlobal'");
     CHECK_EQ(result.warnings[2].text, "nolint directive refers to unknown lint rule 'Global'");
     CHECK_EQ(result.warnings[3].text, "nolint directive refers to unknown lint rule 'KnownGlobal'; did you mean 'UnknownGlobal'?");
     CHECK_EQ(result.warnings[4].text, "Comment directive with the type checking mode has extra symbols at the end of the line");
     CHECK_EQ(result.warnings[5].text, "native directive has extra symbols at the end of the line");
-    CHECK_EQ(result.warnings[6].text, "Comment directive is ignored because it is placed after the first non-comment token");
+    // `--!trust` on its own is a known directive and warns about nothing
+    CHECK_EQ(result.warnings[6].text, "trust directive has extra symbols at the end of the line");
+    CHECK_EQ(result.warnings[7].text, "Comment directive is ignored because it is placed after the first non-comment token");
 }
 
 TEST_CASE_FIXTURE(Fixture, "WrongCommentMuteSelf")

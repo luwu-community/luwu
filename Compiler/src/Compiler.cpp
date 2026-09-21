@@ -41,7 +41,10 @@ LUAU_FASTFLAGVARIABLE(LuauEmitCallFeedback)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAGVARIABLE(LuauExportedClassIsNilWorkaround)
 
-// Luwu Classes (rfcs/classes.md): may the compiler act on a type annotation it cannot verify?
+// May the compiler act on a type annotation it cannot verify? The same question the `--!trust` directive
+// answers per file (Compiler::trustsTypeAnnotations); this flag answers it for a whole embedder.
+//
+// Everything it currently changes is about class receivers, so the rest of this comment is.
 //
 // Off (the default), only a *proven* receiver inlines. A receiver is proven when a runtime check on the
 // path reaching it establishes its class. There are four:
@@ -966,6 +969,19 @@ struct Compiler
         }
     }
 
+    void reportInlineTooExpensive(AstExprFunction* func, int inlinedCost, int inlineProfit)
+    {
+        const char* owner = nullptr;
+        const char* name = describeInlineTarget(func, owner);
+
+        if (owner)
+            bytecode.addDebugRemark(
+                "inlining failed: %s:%s is too expensive (cost %d, profit %.2fx)", owner, name, inlinedCost, double(inlineProfit) / 100
+            );
+        else
+            bytecode.addDebugRemark("inlining failed: %s is too expensive (cost %d, profit %.2fx)", name, inlinedCost, double(inlineProfit) / 100);
+    }
+
     bool tryCompileInlinedCall(
         AstExprCall* expr,
         AstExprFunction* func,
@@ -1078,7 +1094,7 @@ struct Compiler
 
             if (inlinedCost > threshold && !isIife)
             {
-                bytecode.addDebugRemark("inlining failed: too expensive (cost %d, profit %.2fx)", inlinedCost, double(inlineProfit) / 100);
+                reportInlineTooExpensive(func, inlinedCost, inlineProfit);
                 return false;
             }
         }
@@ -1086,14 +1102,31 @@ struct Compiler
         {
             if (inlinedCost > threshold)
             {
-                bytecode.addDebugRemark("inlining failed: too expensive (cost %d, profit %.2fx)", inlinedCost, double(inlineProfit) / 100);
+                reportInlineTooExpensive(func, inlinedCost, inlineProfit);
                 return false;
             }
         }
 
-        bytecode.addDebugRemark(
-            "inlining succeeded (cost %d, profit %.2fx, depth %d)", inlinedCost, double(inlineProfit) / 100, int(inlineFrames.size())
-        );
+        const char* inlinedOwner = nullptr;
+        const char* inlinedName = describeInlineTarget(func, inlinedOwner);
+
+        if (inlinedOwner)
+            bytecode.addDebugRemark(
+                "inlining succeeded: %s:%s (cost %d, profit %.2fx, depth %d)",
+                inlinedOwner,
+                inlinedName,
+                inlinedCost,
+                double(inlineProfit) / 100,
+                int(inlineFrames.size())
+            );
+        else
+            bytecode.addDebugRemark(
+                "inlining succeeded: %s (cost %d, profit %.2fx, depth %d)",
+                inlinedName,
+                inlinedCost,
+                double(inlineProfit) / 100,
+                int(inlineFrames.size())
+            );
 
         compileInlinedCall(expr, func, target, targetCount, selfExpr);
         return true;
@@ -1364,6 +1397,36 @@ struct Compiler
         return false;
     }
 
+    // How to name an inlined function in a debug remark. A class method is named `Class:method`, since
+    // its own debug name is just `method` and several classes usually have one of those. Returns the
+    // owning class name through `owner`, or leaves it null for a plain function.
+    //
+    // Cheap enough to call unconditionally: remarks are dropped unless Dump_Remarks is set, but the
+    // arguments are still evaluated, so this does lookups rather than building a string.
+    const char* describeInlineTarget(AstExprFunction* func, const char*& owner)
+    {
+        owner = nullptr;
+
+        if (FFlag::DebugLuauUserDefinedClasses)
+            if (AstStatClass** cls = classMethodOwner.find(func); cls && *cls)
+                owner = (*cls)->name->name.value;
+
+        return func->debugname.value ? func->debugname.value : "<anonymous>";
+    }
+
+    // May this compilation act on a type annotation nothing verified? Either the file said so with
+    // `--!trust` or the embedder said so for everything it compiles.
+    //
+    // The per-file half is a member rather than a CompileOptions field because that struct is memcpy'd
+    // from its C counterpart and the two are asserted to be the same size (lcode.cpp). Which suits the
+    // feature: the promise is about the annotations in one file, so the file is what makes it.
+    bool trustTypeAnnotations = false;
+
+    bool trustsTypeAnnotations() const
+    {
+        return trustTypeAnnotations || FFlag::DebugLuwuCompilerTrustsTypeAnnotations;
+    }
+
     AstStatClass* lexicalClassOf(AstExprFunction* func)
     {
         AstStatClass** owner = func ? classLexicalOwner.find(func) : nullptr;
@@ -1477,7 +1540,7 @@ struct Compiler
         // it answers no, and such a body keeps its call.
         bool isTableTyped(AstType* ty)
         {
-            return FFlag::DebugLuwuCompilerTrustsTypeAnnotations && ty && ty->is<AstTypeTable>();
+            return self->trustsTypeAnnotations() && ty && ty->is<AstTypeTable>();
         }
 
         bool isKnownNonObject(AstExpr* expr, int depth = 0)
@@ -2178,7 +2241,7 @@ struct Compiler
 
         // A receiver known only from an annotation is acted on only when the compiler is allowed to trust
         // annotations; otherwise this stays a NAMECALL, which dispatches on the object's real class.
-        if (!receiver.proven && !FFlag::DebugLuwuCompilerTrustsTypeAnnotations)
+        if (!receiver.proven && !trustsTypeAnnotations())
         {
             bytecode.addDebugRemark("inlining failed: %s's class is only known from an annotation", idx->index.value);
             return nullptr;
@@ -7724,6 +7787,7 @@ void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, A
 
     CompileOptions options = inputOptions;
     uint8_t mainFlags = 0;
+    bool trustTypeAnnotations = false;
 
     for (const HotComment& hc : parseResult.hotcomments)
     {
@@ -7735,6 +7799,11 @@ void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, A
             mainFlags |= LPF_NATIVE_MODULE;
             setCompileOptionsForNativeCompilation(options);
         }
+
+        // `--!trust`: this file's author vouches for its type annotations, so the compiler may act on
+        // them. See Compiler::trustsTypeAnnotations.
+        if (hc.header && hc.content == "trust")
+            trustTypeAnnotations = true;
     }
 
     AstStatBlock* root = parseResult.root;
@@ -7749,6 +7818,7 @@ void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, A
         setCompileOptionsForNativeCompilation(options);
 
     Compiler compiler(bytecode, options, names);
+    compiler.trustTypeAnnotations = trustTypeAnnotations;
 
     // Backing storage for AstExprFunction/AstStatBlock/AstStatReturn/AstStatAssign nodes synthesized
     // by ClassInitDefaultsVisitor (POD classes' `__defaults` functions, and the `__init` a primary

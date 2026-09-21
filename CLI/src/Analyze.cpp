@@ -139,7 +139,8 @@ static void displayHelp(const char* argv0)
     printf("Available options:\n");
     printf("  --formatter=plain: report analysis errors in Luacheck-compatible format\n");
     printf("  --formatter=gnu: report analysis errors in GNU-compatible format\n");
-    printf("  --mode=strict: default to strict mode when typechecking\n");
+    printf("  --mode=nonstrict: default to nonstrict mode when typechecking (Luwu defaults to strict)\n");
+    printf("  --mode=strict: default to strict mode when typechecking (the default)\n");
     printf("  --solver={new|old}: selects which typechecker to use (defaults to the new solver)");
     printf("  --timetrace: record compiler time tracing information into trace.json\n");
 }
@@ -404,7 +405,8 @@ int main(int argc, char** argv)
     }
 
     ReportFormat format = ReportFormat::Default;
-    Luau::Mode mode = Luau::Mode::Nonstrict;
+    // matches Config::mode: Luwu checks strictly unless a file, a .luaurc or `--mode=` says otherwise
+    Luau::Mode mode = Luau::Mode::Strict;
     bool annotate = false;
     int threadCount = 0;
     std::string basePath = "";
@@ -421,6 +423,8 @@ int main(int argc, char** argv)
             format = ReportFormat::Gnu;
         else if (strcmp(argv[i], "--mode=strict") == 0)
             mode = Luau::Mode::Strict;
+        else if (strcmp(argv[i], "--mode=nonstrict") == 0)
+            mode = Luau::Mode::Nonstrict;
         else if (strcmp(argv[i], "--annotate") == 0)
             annotate = true;
         else if (strcmp(argv[i], "--timetrace") == 0)

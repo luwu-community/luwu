@@ -999,8 +999,8 @@ expectpass("repro: full sequence like the reported failure", function()
     assert(cat:meow("hehe") == "Taz hehe")
 end)
 
--- OptimizeConstProp: object member access CSE / store-to-load forwarding / invalidation
--- (see OBJECT_CONSTPROP.CLAUDE.md). These must stay correct with native codegen's field caching.
+-- OptimizeConstProp: object member access CSE / store-to-load forwarding / invalidation.
+-- These must stay correct with native codegen's field caching.
 class ConstPropBox
     v: number
     const c: number = 42

@@ -26,7 +26,10 @@ struct Config
     Config(Config&& other) = default;
     Config& operator=(Config&& other) = default;
 
-    Mode mode = Mode::Nonstrict;
+    // Luwu uses *strict* mode by default unlike upstream Luau. This is because most Luwu code
+    // is greenfield and the nonstrict type checker is practically useless. It's only useful
+    // for upstream because their platform has tons of untyped code that they need to infer
+    Mode mode = Mode::Strict;
 
     ParseOptions parseOptions;
 

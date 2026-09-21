@@ -3952,7 +3952,7 @@ local function foo(x)
 end
 
 -- remark: builtin assert/1
--- remark: inlining succeeded (cost 2, profit 2.50x, depth 0)
+-- remark: inlining succeeded: foo (cost 2, profit 2.50x, depth 0)
 return foo(a) + foo(assert(b))
 )"
     );
@@ -3974,7 +3974,7 @@ local function foo()
     return value
 end
 
--- remark: inlining succeeded (cost 0, profit 3.00x, depth 0)
+-- remark: inlining succeeded: foo (cost 0, profit 3.00x, depth 0)
 return foo()
 )"
     );
@@ -3996,7 +3996,7 @@ local function foo()
     return not value
 end
 
--- remark: inlining succeeded (cost 0, profit 3.00x, depth 0)
+-- remark: inlining succeeded: foo (cost 0, profit 3.00x, depth 0)
 return foo()
 )"
     );
@@ -4019,7 +4019,7 @@ local function foo()
     return s
 end
 
--- remark: inlining failed: too expensive (cost 127, profit 1.02x)
+-- remark: inlining failed: foo is too expensive (cost 127, profit 1.02x)
 return foo()
 )"
     );
@@ -4042,7 +4042,7 @@ local function foo()
     return s
 end
 
--- remark: inlining failed: too expensive (cost 127, profit 1.02x)
+-- remark: inlining failed: foo is too expensive (cost 127, profit 1.02x)
 return foo()
 )"
     );
@@ -4091,9 +4091,9 @@ local function test(a)
     until a > 10
     return a
 end
--- remark: inlining failed: too expensive (cost 76, profit 1.03x)
+-- remark: inlining failed: test is too expensive (cost 76, profit 1.03x)
 local a = test(x)
--- remark: inlining failed: too expensive (cost 73, profit 1.08x)
+-- remark: inlining failed: test is too expensive (cost 73, profit 1.08x)
 local b = test(2)
 )"
     );
@@ -4134,7 +4134,7 @@ local function writeMany(buf, offset, x, y, z, w, u, v)
     buffer.writef32(buf, offset + 20, v)
 end
 
--- remark: inlining succeeded (cost 12, profit 1.66x, depth 0)
+-- remark: inlining succeeded: writeMany (cost 12, profit 1.66x, depth 0)
 writeMany(b, 0, x, y, z, w, u, v)
 return b
 )"
@@ -11834,6 +11834,51 @@ end
     CHECK(notFused.find("[assert]") != std::string::npos);
 }
 
+TEST_CASE("TrustDirectiveEnablesAnnotationTrust")
+{
+    ScopedFastFlag classes{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag betterClasses{FFlag::LuwuBetterUserDefinedClasses, true};
+
+    // `--!trust` is the file saying its annotations are true, so the compiler may act on them. Without
+    // it the receiver's class is known only from a declaration nothing verified, and the call stays a
+    // NAMECALL. The fast flag answers the same question for a whole embedder; the directive answers it
+    // for one file.
+    const char* body = R"(
+class Vec(public x: number)
+    public function get(self): number
+        return self.x
+    end
+end
+
+function viaParameter(v: Vec): number
+    local r = v:get()
+    return r
+end
+)";
+
+    Luau::CompileOptions options;
+    options.optimizationLevel = 2;
+
+    auto compiled = [&](const std::string& source)
+    {
+        Luau::BytecodeBuilder bcb;
+        bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code);
+        Luau::compileOrThrow(bcb, source, options);
+        return bcb.dumpFunction(1);
+    };
+
+    std::string without = compiled(body);
+    CHECK(without.find("NAMECALL") != std::string::npos);
+
+    std::string with = compiled("--!trust\n" + std::string(body));
+    CHECK(with.find("NAMECALL") == std::string::npos);
+    CHECK(with.find("CHECKSELFCLASS") != std::string::npos);
+
+    // it is a header directive like `--!native`, so it does nothing further down the file
+    std::string late = compiled(std::string(body) + "\n--!trust\n");
+    CHECK(late.find("NAMECALL") != std::string::npos);
+}
+
 TEST_CASE("ClassIsinstanceProofDoesNotInlinePrivateMethods")
 {
     ScopedFastFlag classes{FFlag::DebugLuauUserDefinedClasses, true};
@@ -12223,7 +12268,7 @@ class Ping
         if n <= 0 then
             return 0
         end
-        -- remark: inlining succeeded (cost 7, profit 1.42x, depth 0)
+        -- remark: inlining succeeded: Ping:ping (cost 7, profit 1.42x, depth 0)
         local v = self:ping(n - 1)
         return v
     end

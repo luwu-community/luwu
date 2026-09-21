@@ -3606,6 +3606,13 @@ static void lintComments(LintContext& context, const std::vector<HotComment>& ho
                         context, LintWarning::Code_CommentDirective, hc.location, "native directive has extra symbols at the end of the line"
                     );
             }
+            else if (first == "trust")
+            {
+                if (space != std::string::npos)
+                    emitWarning(
+                        context, LintWarning::Code_CommentDirective, hc.location, "trust directive has extra symbols at the end of the line"
+                    );
+            }
             else
             {
                 static const char* kHotComments[] = {
@@ -3615,6 +3622,7 @@ static void lintComments(LintContext& context, const std::vector<HotComment>& ho
                     "strict",
                     "optimize",
                     "native",
+                    "trust",
                 };
 
                 if (const char* suggestion = fuzzyMatch(first, kHotComments, std::size(kHotComments)))
