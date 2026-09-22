@@ -1374,6 +1374,9 @@ void TypeChecker2::visit(AstStatClass* stat)
             if (param->annotation)
                 visit(param->annotation);
 
+            if (paramDefault)
+                visit(paramDefault, ValueContext::RValue);
+
             if (paramDefault && param->annotation)
                 testIsSubtype(lookupType(paramDefault), lookupAnnotation(param->annotation), paramDefault->location);
         }
@@ -1547,6 +1550,9 @@ void TypeChecker2::visit(AstStatClass* stat)
         {
             if (prop->ty)
                 visit(prop->ty);
+
+            if (prop->defaultValue)
+                visit(prop->defaultValue, ValueContext::RValue);
 
             // If there's no annotation, the property's type was already inferred from the default
             // value itself (see ConstraintGenerator), so there's nothing to compare against here.
@@ -2404,6 +2410,12 @@ void TypeChecker2::visit(AstExprFunction* fn)
     auto StackPusher = pushStack(fn);
 
     visitGenerics(fn->generics, fn->genericPacks);
+
+    // a default value is an ordinary expression, so it needs the same checks as any other (unknown
+    // globals, bad calls), not just the subtype test against its parameter's annotation below
+    for (AstExpr* argDefault : fn->argsDefaults)
+        if (argDefault)
+            visit(argDefault, ValueContext::RValue);
 
     TypeId inferredFnTy = lookupType(fn);
     functionDeclStack.push_back(inferredFnTy);

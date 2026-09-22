@@ -325,6 +325,31 @@ end
     CHECK(get<TypeMismatch>(result.errors[0]));
 }
 
+TEST_CASE_FIXTURE(ClassesFixture, "class_default_value_expressions_are_typechecked")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuBetterUserDefinedClasses, true},
+        {FFlag::LuwuDefaultArguments, true},
+    };
+
+    // field defaults and primary constructor parameter defaults are ordinary expressions, not just a
+    // type to compare against an annotation
+    auto result = check(R"(
+--!strict
+class Item(public name: string = make_name())
+    private const id = next_id()
+    public price: number = compute_price()
+
+    public function describe(self) return self.id end
+end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
+    CHECK_EQ("make_name", get<UnknownSymbol>(result.errors[0])->name);
+    CHECK_EQ("next_id", get<UnknownSymbol>(result.errors[1])->name);
+    CHECK_EQ("compute_price", get<UnknownSymbol>(result.errors[2])->name);
+}
+
 TEST_CASE_FIXTURE(ClassesFixture, "class_pod_constructor_argument_optional_when_all_properties_have_defaults")
 {
     ScopedFastFlag sff_LuwuBetterUserDefinedClasses{FFlag::LuwuBetterUserDefinedClasses, true};
