@@ -1070,7 +1070,12 @@ TEST_CASE_FIXTURE(Fixture, "fuzzer_self_referential_class_definition")
         end
     )");
 
-    LUAU_REQUIRE_NO_ERRORS(result);
+    // The input is a fuzzer repro and is kept verbatim; `typeof(l0)` now suggests `class<l0>`.
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    auto err = get<GenericError>(result.errors[0]);
+    REQUIRE(err);
+    CHECK_EQ("Use 'class<l0>' instead of 'typeof(l0)' to get the class of 'l0'", err->message);
+
     TypeId l0 = requireType("l0");
     CHECK(is<ExternType>(l0));
 }
@@ -1118,10 +1123,14 @@ end
 )"
     );
 
-    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    // The input is a fuzzer repro and is kept verbatim; `typeof(Animal)` now suggests `class<Animal>`.
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
     auto err = get<SyntaxError>(result.errors[0]);
     REQUIRE(err);
     CHECK_EQ("'Animal' refers to a class and cannot be used as a variable name (defined on line 2)", err->message);
+    auto err2 = get<GenericError>(result.errors[1]);
+    REQUIRE(err2);
+    CHECK_EQ("Use 'class<Animal>' instead of 'typeof(Animal)' to get the class of 'Animal'", err2->message);
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "class_that_shadows_a_type_alias")

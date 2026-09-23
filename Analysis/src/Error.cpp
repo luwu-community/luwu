@@ -115,6 +115,26 @@ static const char* externTypeNoun(TypeId t)
     return "external type";
 }
 
+// A class declaration produces two extern types that both stringify as the bare class name, so a
+// mismatch between them otherwise reads "Expected this to be 'Item', but got 'Item'". `class<Item>`
+// is the language's own spelling for the class value, so say that instead of inventing a gloss.
+static std::optional<std::string> nominalDisplayName(TypeId t)
+{
+    const ExternType* etv = get<ExternType>(follow(t));
+    if (!etv || !etv->root || !etv->relation)
+        return std::nullopt;
+
+    const ExternType* rootEtv = get<ExternType>(follow(*etv->root));
+    if (!rootEtv || rootEtv->name != "class")
+        return std::nullopt;
+
+    // Only a class value carries an `Obj` relation; an object carries a `Klass` one.
+    if (!etv->relation->get_if<Obj>())
+        return std::nullopt;
+
+    return "class<" + etv->name + ">";
+}
+
 struct ErrorConverter
 {
     FileResolver* fileResolver = nullptr;
@@ -138,13 +158,15 @@ struct ErrorConverter
         // context from a wordy explanation below.
         std::string preamble = tm.contextVerb ? ("Expected " + *tm.contextVerb) : "Expected this to be";
 
+        // A qualifier is rendered already formatted (" from 'a.luau'", " defined on line 3") because
+        // the two kinds of qualifier don't read the same way after the type name.
         auto constructErrorMessage = [&](std::string givenType,
                                          std::string wantedType,
-                                         std::optional<std::string> givenModule,
-                                         std::optional<std::string> wantedModule) -> std::string
+                                         std::optional<std::string> givenQualifier,
+                                         std::optional<std::string> wantedQualifier) -> std::string
         {
-            std::string given = givenModule ? quote(givenType) + " from " + quote(*givenModule) : quote(givenType);
-            std::string wanted = wantedModule ? quote(wantedType) + " from " + quote(*wantedModule) : quote(wantedType);
+            std::string given = givenQualifier ? quote(givenType) + *givenQualifier : quote(givenType);
+            std::string wanted = wantedQualifier ? quote(wantedType) + *wantedQualifier : quote(wantedType);
             size_t luauIndentTypeMismatchMaxTypeLength = size_t(FInt::LuauIndentTypeMismatchMaxTypeLength);
             if (get<NeverType>(follow(tm.wantedType)))
             {
@@ -165,21 +187,43 @@ struct ErrorConverter
             return preamble + "\n\t" + wanted + "\nbut got\n\t" + given;
         };
 
+        // Two types that stringify identically need something appended to tell them apart, but only
+        // something that actually differs: qualifying both sides with the same module produced the
+        // long-standing "Expected this to be 'X' from 'a.luau', but got 'X' from 'a.luau'". Try each
+        // distinguishing fact in turn and, if none of them separates the two, say nothing extra
+        // rather than repeating the same qualifier twice.
         if (givenTypeName == wantedTypeName)
         {
-            if (auto givenDefinitionModule = getDefinitionModuleName(tm.givenType))
+            // A class value against one of its own objects: re-spell the class side as `class<X>`.
+            std::optional<std::string> givenDisplay = nominalDisplayName(tm.givenType);
+            std::optional<std::string> wantedDisplay = nominalDisplayName(tm.wantedType);
+
+            if (givenDisplay.has_value() != wantedDisplay.has_value())
             {
-                if (auto wantedDefinitionModule = getDefinitionModuleName(tm.wantedType))
+                result = constructErrorMessage(
+                    givenDisplay.value_or(givenTypeName), wantedDisplay.value_or(wantedTypeName), std::nullopt, std::nullopt
+                );
+            }
+
+            if (result.empty())
+            {
+                if (auto givenDefinitionModule = getDefinitionModuleName(tm.givenType))
                 {
-                    if (fileResolver != nullptr)
+                    if (auto wantedDefinitionModule = getDefinitionModuleName(tm.wantedType))
                     {
-                        std::string givenModuleName = fileResolver->getHumanReadableModuleName(*givenDefinitionModule);
-                        std::string wantedModuleName = fileResolver->getHumanReadableModuleName(*wantedDefinitionModule);
-                        result = constructErrorMessage(givenTypeName, wantedTypeName, givenModuleName, wantedModuleName);
-                    }
-                    else
-                    {
-                        result = constructErrorMessage(givenTypeName, wantedTypeName, *givenDefinitionModule, *wantedDefinitionModule);
+                        std::string givenModuleName = *givenDefinitionModule;
+                        std::string wantedModuleName = *wantedDefinitionModule;
+
+                        if (fileResolver != nullptr)
+                        {
+                            givenModuleName = fileResolver->getHumanReadableModuleName(*givenDefinitionModule);
+                            wantedModuleName = fileResolver->getHumanReadableModuleName(*wantedDefinitionModule);
+                        }
+
+                        if (givenModuleName != wantedModuleName)
+                            result = constructErrorMessage(
+                                givenTypeName, wantedTypeName, " from " + quote(givenModuleName), " from " + quote(wantedModuleName)
+                            );
                     }
                 }
             }
@@ -787,6 +831,15 @@ struct ErrorConverter
         }
 
         // miscellaneous
+
+        if ("class" == tfit->function->name)
+        {
+            if (tfit->typeArguments.size() == 1 && tfit->packArguments.empty())
+                return "Type '" + toString(tfit->typeArguments[0]) +
+                       "' is not the object type of a class, so '" + Luau::toString(e.ty) + "' is invalid";
+            else
+                return "Type function instance " + Luau::toString(e.ty) + " is ill-formed, and thus invalid";
+        }
 
         if ("keyof" == tfit->function->name || "rawkeyof" == tfit->function->name)
         {

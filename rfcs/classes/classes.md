@@ -6,6 +6,7 @@ FFlags:
 - DebugLuauUserDefinedClasses
 - DebugLuauUserDefinedClassesRuntime
 - LuwuGenericNominals (classes with generic parameters share the same type system mechanisms as extern types)
+- DebugLuwuCompilerTrustsTypeAnnotations (or `--!trust` directive in code: enables compiler inlining of class methods based on type annotations being correct)
 
 ## Summary
 
@@ -899,7 +900,7 @@ class Cat end
 const cats: { Cat } = {}
 ```
 
-Each class is a singleton instance of an unnamed type. If you want to use the class's type instead of the object type, use `typeof(Class)` instead.
+Each class is a singleton instance of an unnamed type. If you want to use the class's type instead of the object type, use `class<Class>` instead.
 
 The `class.isinstance` function participates in refinement:
 
@@ -934,6 +935,8 @@ Classes with generic type parameters should be handled like extern types with ge
 of this RFC without full type system support may be merged before handling this perfectly.
 
 The type function for `class.fields` will be implemented as a magic function overriding what the type system actually says returns `({ [string]: unknown }, boolean)`
+
+The type function `class<T>` is implemented as a magic type function only when parameterized. Using `class` by itself refers to the top `class` type named `class`.
 
 We raise a TypeError if the user attempts to modify a `const` field outside the class's `__init` constructor since doing so is always a hard error at runtime.
 

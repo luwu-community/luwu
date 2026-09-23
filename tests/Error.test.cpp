@@ -16,6 +16,32 @@ TEST_CASE("TypeError_code_should_return_nonzero_code")
     CHECK_GE(e.code(), 1000);
 }
 
+TEST_CASE_FIXTURE(Fixture, "identical_type_names_from_one_module_are_not_qualified_twice")
+{
+    // Two same-named extern types from the same module stringify identically. Qualifying both sides
+    // with that one module produced "Expected this to be 'Widget' from 'game.luau', but got
+    // 'Widget' from 'game.luau'", which tells the reader nothing. With nothing that separates them,
+    // the qualifier is dropped rather than repeated.
+    TypeArena arena;
+
+    TypeId a = arena.addType(ExternType{"Widget", {}, std::nullopt, std::nullopt, {}, nullptr, "game.luau", Location{{0, 0}, {0, 1}}});
+    TypeId b = arena.addType(ExternType{"Widget", {}, std::nullopt, std::nullopt, {}, nullptr, "game.luau", Location{{9, 0}, {9, 1}}});
+
+    TypeError e{Location{{0, 0}, {0, 1}}, TypeMismatch{a, b}};
+    CHECK_EQ("Expected this to be 'Widget', but got 'Widget'", toString(e));
+}
+
+TEST_CASE_FIXTURE(Fixture, "identical_type_names_from_different_modules_are_qualified")
+{
+    TypeArena arena;
+
+    TypeId a = arena.addType(ExternType{"Widget", {}, std::nullopt, std::nullopt, {}, nullptr, "a.luau", Location{{0, 0}, {0, 1}}});
+    TypeId b = arena.addType(ExternType{"Widget", {}, std::nullopt, std::nullopt, {}, nullptr, "b.luau", Location{{0, 0}, {0, 1}}});
+
+    TypeError e{Location{{0, 0}, {0, 1}}, TypeMismatch{a, b}};
+    CHECK_EQ("Expected this to be 'Widget' from 'a.luau', but got 'Widget' from 'b.luau'", toString(e));
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "metatable_names_show_instead_of_tables")
 {
     getFrontend().options.retainFullTypeGraphs = false;

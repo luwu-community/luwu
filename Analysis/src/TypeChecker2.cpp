@@ -3203,6 +3203,21 @@ void TypeChecker2::visit(AstTypeReference* ty)
     if (FFlag::DebugLuauMagicTypes && (ty->name == kLuauPrint || ty->name == kLuauForceConstraintSolvingIncomplete || ty->name == kLuauBlockedType))
         return;
 
+    // `class<T>` is routed to a type function by ConstraintGenerator rather than resolved through
+    // the `class` alias, which is the zero-parameter top type; checking its arity against that
+    // alias would always report a spurious mismatch.
+    if (FFlag::DebugLuauUserDefinedClasses && !ty->prefix.has_value() && ty->name == "class" && ty->hasParameterList)
+    {
+        for (const AstTypeOrPack& param : ty->parameters)
+        {
+            if (param.type)
+                visit(param.type);
+            else
+                visit(param.typePack);
+        }
+        return;
+    }
+
     for (const AstTypeOrPack& param : ty->parameters)
     {
         if (param.type)
@@ -3360,6 +3375,24 @@ void TypeChecker2::visit(AstTypeFunction* ty)
 void TypeChecker2::visit(AstTypeTypeof* ty)
 {
     visit(ty->expr, ValueContext::RValue);
+
+    // `typeof(Cat)` and `class<Cat>` name the same type, but only the latter says so at a glance:
+    // an ExternType stringifies as its bare name, so `typeof(Cat)` reads as the object type in
+    // every hover and error message. Steer users to the spelling that doesn't.
+    if (FFlag::DebugLuauUserDefinedClasses)
+    {
+        if (auto resolved = module->astResolvedTypes.find(ty))
+        {
+            if (auto klass = get<ExternType>(follow(*resolved)); klass && klass->root == builtinTypes->classType && klass->relation)
+            {
+                if (klass->relation->get_if<Obj>())
+                    reportError(
+                        GenericError{"Use 'class<" + klass->name + ">' instead of 'typeof(" + klass->name + ")' to get the class of '" + klass->name + "'"},
+                        ty->location
+                    );
+            }
+        }
+    }
 }
 
 void TypeChecker2::visit(AstTypeUnion* ty)

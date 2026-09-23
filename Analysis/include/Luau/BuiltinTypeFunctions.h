@@ -48,6 +48,7 @@ struct BuiltinTypeFunctions
     TypeFunction getmetatableFunc;
 
     TypeFunction objectofFunc;
+    TypeFunction classFunc;
 
     TypeFunction weakoptionalFunc;
 

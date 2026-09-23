@@ -1194,7 +1194,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "class_name_collapses_a_class_and_its_objects_
 class Cat end
 class Dog end
 
-local function nameOf(x: Cat | typeof(Cat) | Dog)
+local function nameOf(x: Cat | class<Cat> | Dog)
     return class.name(x)
 end
 
@@ -2045,6 +2045,264 @@ local fine = Path(Comp("x"))
         CHECK_EQ("Comp", toString(get<TypeMismatch>(result.errors[i])->wantedType));
         CHECK_EQ("Other", toString(get<TypeMismatch>(result.errors[i])->givenType));
     }
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_value_type_and_object_type_are_not_interchangeable")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuBetterUserDefinedClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+    };
+
+    // A class declaration builds two extern types from the same AstStatClass, so they share name,
+    // definition module and definition location; only their nominal root tells them apart. Without
+    // that check the nominal comparison in Type.cpp treats them as the same type.
+    CheckResult result = check(R"(
+class Cat
+    name: string
+end
+
+local inst = Cat { name = "a" }
+local objIntoClass: class<Cat> = inst
+local classIntoObj: Cat = Cat
+)");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK(get<TypeMismatch>(result.errors[0]));
+    CHECK(get<TypeMismatch>(result.errors[1]));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_type_function_names_the_class_value")
+{
+    ScopedFastFlag sff_LuwuBetterUserDefinedClasses{FFlag::LuwuBetterUserDefinedClasses, true};
+
+    CheckResult result = check(R"(
+class Cat
+    name: string
+    function make(n: string): Cat
+        return Cat { name = n }
+    end
+end
+
+local C: class<Cat> = Cat
+local made = C.make("x")
+)");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("Cat", toString(requireType("made")));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "bare_class_is_still_the_top_type_of_all_classes")
+{
+    ScopedFastFlag sff_LuwuBetterUserDefinedClasses{FFlag::LuwuBetterUserDefinedClasses, true};
+
+    // Adding the applied form `class<T>` must not disturb the zero-parameter `class` binding.
+    CheckResult result = check(R"(
+class Cat end
+class Dog end
+
+local a: class = Cat
+local b: class = Dog
+local c: class<Cat> = Cat
+local d: class = c
+)");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_type_function_rejects_a_non_class_argument")
+{
+    ScopedFastFlag sff_LuwuBetterUserDefinedClasses{FFlag::LuwuBetterUserDefinedClasses, true};
+
+    CheckResult result = check(R"(
+type NotAClass = { x: number }
+local a: class<number>
+local b: class<NotAClass>
+)");
+
+    REQUIRE(!result.errors.empty());
+    CHECK_EQ(
+        "Type 'number' is not the object type of a class, so 'class<number>' is invalid",
+        toString(result.errors[0])
+    );
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_type_function_works_on_a_generic_class")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuBetterUserDefinedClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+    };
+
+    CheckResult result = check(R"(
+class List<T>
+    inner: { T }
+end
+
+local L: class<List<number>> = List
+)");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "typeof_of_a_class_suggests_the_class_type_function")
+{
+    ScopedFastFlag sff_LuwuBetterUserDefinedClasses{FFlag::LuwuBetterUserDefinedClasses, true};
+
+    CheckResult result = check(R"(
+class Cat
+    name: string
+end
+
+local c: typeof(Cat) = Cat
+)");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    auto err = get<GenericError>(result.errors[0]);
+    REQUIRE(err);
+    CHECK_EQ("Use 'class<Cat>' instead of 'typeof(Cat)' to get the class of 'Cat'", err->message);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "typeof_of_an_object_is_still_allowed")
+{
+    ScopedFastFlag sff_LuwuBetterUserDefinedClasses{FFlag::LuwuBetterUserDefinedClasses, true};
+
+    // Only a class value earns the suggestion; `typeof` of an instance is an ordinary object type.
+    CheckResult result = check(R"(
+class Cat
+    name: string
+end
+
+local inst = Cat { name = "a" }
+local same: typeof(inst) = inst
+)");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("Cat", toString(requireType("same")));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_of_the_object_top_type_is_the_class_top_type")
+{
+    ScopedFastFlag sff_LuwuBetterUserDefinedClasses{FFlag::LuwuBetterUserDefinedClasses, true};
+
+    // `object` is the top of the object lattice, so the class that produced such a value could be
+    // any class: the top of the class lattice.
+    CheckResult result = check(R"(
+class Cat end
+class Dog end
+
+local a: class<object> = Cat
+local b: class<object> = Dog
+)");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_of_the_object_top_type_still_rejects_an_object")
+{
+    ScopedFastFlag sff_LuwuBetterUserDefinedClasses{FFlag::LuwuBetterUserDefinedClasses, true};
+
+    CheckResult result = check(R"(
+class Cat
+    name: string
+end
+
+local inst = Cat { name = "a" }
+local a: class<object> = inst
+)");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    auto err = get<TypeMismatch>(result.errors[0]);
+    REQUIRE(err);
+    CHECK_EQ("class", toString(err->wantedType));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_distributes_over_a_union")
+{
+    ScopedFastFlag sff_LuwuBetterUserDefinedClasses{FFlag::LuwuBetterUserDefinedClasses, true};
+
+    CheckResult result = check(R"(
+class Cat end
+class Dog end
+class Walrus end
+
+local ok: class<Cat | Dog> = Cat
+local bad: class<Cat | Dog> = Walrus
+)");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    auto err = get<TypeMismatch>(result.errors[0]);
+    REQUIRE(err);
+    CHECK_EQ("Cat | Dog", toString(err->wantedType));
+    CHECK_EQ("Walrus", toString(err->givenType));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_of_an_uninhabited_object_type_is_never")
+{
+    ScopedFastFlag sff_LuwuBetterUserDefinedClasses{FFlag::LuwuBetterUserDefinedClasses, true};
+
+    CheckResult result = check(R"(
+class Item end
+
+local a: class<never> = nil :: any
+local bad: class<never> = Item
+)");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    auto err = get<TypeMismatch>(result.errors[0]);
+    REQUIRE(err);
+    CHECK_EQ("never", toString(err->wantedType));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_still_rejects_unknown")
+{
+    ScopedFastFlag sff_LuwuBetterUserDefinedClasses{FFlag::LuwuBetterUserDefinedClasses, true};
+
+    // `unknown` is not an object type, so it stays a user error rather than reducing to the top.
+    CheckResult result = check(R"(
+local a: class<unknown>
+)");
+
+    REQUIRE(!result.errors.empty());
+    CHECK_EQ(
+        "Type 'unknown' is not the object type of a class, so 'class<unknown>' is invalid",
+        toString(result.errors[0])
+    );
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_object_mismatch_says_which_side_is_the_class")
+{
+    ScopedFastFlag sff_LuwuBetterUserDefinedClasses{FFlag::LuwuBetterUserDefinedClasses, true};
+
+    // Both extern types stringify as the bare name, which used to produce the long-standing
+    // "Expected this to be 'Item' from '<file>', but got 'Item' from '<file>'".
+    CheckResult result = check(R"(
+class Item
+    name: string
+end
+
+local inst = Item { name = "a" }
+local a: class<Item> = inst
+)");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ("Expected this to be 'class<Item>', but got 'Item'", toString(result.errors[0]));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "object_class_mismatch_says_which_side_is_the_class")
+{
+    ScopedFastFlag sff_LuwuBetterUserDefinedClasses{FFlag::LuwuBetterUserDefinedClasses, true};
+
+    CheckResult result = check(R"(
+class Item
+    name: string
+end
+
+local a: Item = Item
+)");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ("Expected this to be 'Item', but got 'class<Item>'", toString(result.errors[0]));
 }
 
 TEST_SUITE_END();

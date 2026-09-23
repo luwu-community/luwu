@@ -1181,7 +1181,9 @@ TEST_CASE_FIXTURE(Fixture, "cli_50041_committing_txnlog_in_apollo_client_error")
 
         LUAU_REQUIRE_ERROR_COUNT(1, result);
         const std::string expected =
-            "Expected this to be exactly 'Policies' from 'MainModule', but got 'Policies' from 'MainModule'"
+            // Both sides are the same alias from the same module, so there is nothing to qualify
+            // them with; naming that one module twice told the reader nothing.
+            "Expected this to be exactly 'Policies', but got 'Policies'"
             "\ncaused by:\n"
             "  Property 'getStoreFieldName' is not compatible.\n"
             "Expected this to be exactly\n\t"

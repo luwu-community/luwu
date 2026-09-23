@@ -2548,6 +2548,83 @@ TypeFunctionReductionResult<TypeId> objectofTypeFunction(
     return {ctx->builtins->errorType, Reduction::MaybeOk, {}, {}};
 }
 
+// The mirror of objectof: maps an object type to the class value it was declared by. Only an object
+// type (a type rooted at `object`) has one; `relation` carries the link back.
+//
+// Distributes over unions. Intersections are deliberately left to error for now: with no inheritance
+// an `A & B` of two classes is uninhabited, but pinning that down properly is normalization work
+// that belongs with traits.
+static TypeFunctionReductionResult<TypeId> classValueHelper(TypeId targetTy, NotNull<TypeFunctionContext> ctx)
+{
+    targetTy = follow(targetTy);
+
+    if (isPending(targetTy, ctx->solver))
+        return {std::nullopt, Reduction::MaybeOk, {targetTy}, {}};
+
+    // An uninhabited object type was produced by no class, so `class<never>` is vacuously never.
+    if (is<NeverType>(targetTy))
+        return {ctx->builtins->neverType, Reduction::MaybeOk, {}, {}};
+
+    // `object` is the top of the object lattice, so the class that produced such a value could be
+    // any class at all -- which is exactly `class`, the top of the class lattice.
+    if (targetTy == ctx->builtins->objectType)
+        return {ctx->builtins->classType, Reduction::MaybeOk, {}, {}};
+
+    if (auto obj = get<ExternType>(targetTy); obj && obj->root == ctx->builtins->objectType && obj->relation)
+    {
+        if (auto klass = obj->relation->get_if<Klass>())
+            return {klass->ty, Reduction::MaybeOk, {}, {}};
+    }
+
+    if (auto ut = get<UnionType>(targetTy))
+    {
+        std::vector<TypeId> options{};
+        options.reserve(ut->options.size());
+
+        for (TypeId option : ut->options)
+        {
+            TypeFunctionReductionResult<TypeId> result = classValueHelper(option, ctx);
+
+            // Propagates a blocked argument as well as a bad one.
+            if (!result.result)
+                return result;
+
+            // An uninhabited option contributes nothing to the union.
+            if (!is<NeverType>(follow(*result.result)))
+                options.push_back(*result.result);
+        }
+
+        if (options.empty())
+            return {ctx->builtins->neverType, Reduction::MaybeOk, {}, {}};
+
+        if (options.size() == 1)
+            return {options.front(), Reduction::MaybeOk, {}, {}};
+
+        return {ctx->arena->addType(UnionType{std::move(options)}), Reduction::MaybeOk, {}, {}};
+    }
+
+    // Unlike objectof, which is only ever minted internally by isinstance refinements, `class<T>` is
+    // written by hand, so a bad argument is a user error rather than a silently uninhabited type.
+    return {std::nullopt, Reduction::Erroneous, {}, {}};
+}
+
+TypeFunctionReductionResult<TypeId> classTypeFunction(
+    TypeId instance,
+    const std::vector<TypeId>& typeParams,
+    const std::vector<TypePackId>& packParams,
+    NotNull<TypeFunctionContext> ctx
+)
+{
+    LUAU_ASSERT(FFlag::DebugLuauUserDefinedClasses);
+    if (typeParams.size() != 1 || !packParams.empty())
+    {
+        ctx->ice->ice("class type function: encountered a type function instance without the required argument structure");
+        LUAU_ASSERT(false);
+    }
+
+    return classValueHelper(typeParams.at(0), ctx);
+}
+
 TypeFunctionReductionResult<TypeId> weakoptionalTypeFunc(
     TypeId instance,
     const std::vector<TypeId>& typeParams,
@@ -2609,6 +2686,7 @@ BuiltinTypeFunctions::BuiltinTypeFunctions()
     , setmetatableFunc{"setmetatable", setmetatableTypeFunction}
     , getmetatableFunc{"getmetatable", getmetatableTypeFunction}
     , objectofFunc{"objectof", objectofTypeFunction}
+    , classFunc{"class", classTypeFunction}
     , weakoptionalFunc{"weakoptional", weakoptionalTypeFunc}
 {
 }

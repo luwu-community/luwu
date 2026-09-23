@@ -1168,6 +1168,13 @@ static bool isSameGenericNominalInstantiation(const ExternType* a, const ExternT
     if (a->name != b->name || a->definitionModuleName != b->definitionModuleName || a->definitionLocation != b->definitionLocation)
         return false;
 
+    // A class declaration produces two extern types -- the class value and its object type -- from
+    // the same AstStatClass, so they share name, module and location. `root` is what tells them
+    // apart (`class` vs `object`); without this, `local c: class<Cat> = someCat` and
+    // `local o: Cat = Cat` both typecheck.
+    if (a->root != b->root)
+        return false;
+
     if (a->instantiatedTypeParams.size() != b->instantiatedTypeParams.size())
         return false;
 
@@ -1198,6 +1205,11 @@ static bool isSameGenericNominalInstantiation(const ExternType* a, const ExternT
 static bool isBareGenericNominalRoot(const ExternType* cls, const ExternType* parent)
 {
     if (cls->name != parent->name || cls->definitionModuleName != parent->definitionModuleName || cls->definitionLocation != parent->definitionLocation)
+        return false;
+
+    // See isSameGenericNominalInstantiation: the class value and its object type are otherwise
+    // indistinguishable here.
+    if (cls->root != parent->root)
         return false;
 
     for (TypeId param : parent->instantiatedTypeParams)

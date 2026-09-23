@@ -4827,6 +4827,27 @@ TypeId ConstraintGenerator::resolveReferenceType(
         }
     }
 
+    // `class` is bound as the zero-parameter top type of all classes (GlobalTypes.cpp), so the
+    // applied form `class<Cat>` can't be registered as an ordinary builtin type function without
+    // clobbering that binding. Route it to the type function here and leave bare `class` alone.
+    if (FFlag::DebugLuauUserDefinedClasses && !ref->prefix.has_value() && ref->name == "class" && ref->hasParameterList)
+    {
+        if (ref->parameters.size != 1 || !ref->parameters.data[0].type)
+        {
+            reportError(ty->location, GenericError{"class<T> requires exactly one type argument, the object type of a class"});
+            module->astResolvedTypes[ty] = builtinTypes->errorType;
+            return builtinTypes->errorType;
+        }
+
+        // Resolved outside a type-argument context on purpose: the argument may itself be a generic
+        // alias (`class<List<number>>`), and only the non-type-argument path queues the
+        // TypeAliasExpansionConstraint that turns its PendingExpansionType into a real type. Without
+        // that, the reducer below is handed a pending type nothing will ever expand.
+        TypeId objectTy = resolveType_(scope, ref->parameters.data[0].type, /*inTypeArguments*/ false);
+        // createTypeFunctionInstance already queues the ReduceConstraint.
+        return createTypeFunctionInstance(builtinTypes->typeFunctions->classFunc, {objectTy}, {}, scope, ty->location);
+    }
+
     std::optional<TypeFun> alias;
 
     if (ref->prefix.has_value())
