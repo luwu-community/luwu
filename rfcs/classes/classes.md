@@ -1118,13 +1118,29 @@ const pathy = Path("./src/main.luwu")
 
 ## Prior art
 
-Classes take huge inspiration from Kotlin, Rust, upstream Luau, as well as classical OOP languages like C++, C#, Java, etc. The decision to go with hard enforced `private` access specifiers comes from lessons learned in the Roblox ecosystem with the embedder (and OSS library authors) forced to keep private implementation details stable because games would break if they changed. This is a legitimate concern in a public-only language with no way to properly do encapsulation. `const` fields were primarily inspired by the fact that Luau gave us the `const` keyword and having a way to protect immutable field invariants is very useful. We chose to keep `const` completely unenforced in `__init` for an easier implementation (a constructor can reassign to it multiple times, but only within the constructor), a decision backed up by Java and C# which do the same thing for fields with their `final` and `readonly` modifiers.
+### Overall influences
+
+Classes take huge inspiration from Kotlin, Rust, upstream Luau, as well as classical OOP languages like C++, C#, Java, etc.
+
+We also acknowledge the similarity to TypeScript classes in syntax though TypeScript surprisingly wasn't a direct source for this RFC; note ours and TypeScript/JavaScript's implementation differ significantly.
+
+### Why not metatable OOP or records
+
+Prototype-based OOP (Lua metatables, Luau typed metatable OOP, JS and TS OOP, etc.) is something we've tried and not succeeded with. Even if classes were a wrapper feature that mostly desugared to metatable OOP, we'd not be able to fix the really hard type system/Analysis components to classes without nominalness. Hovers around metatable OOP (including different ways to represent metatable OOP in the type system) can easily become genuinely horrific and will scare away anybody interested in this language. We felt that the language would be even more amazing than it was before with highly performant, nominally typed classes to accompany the already quite good structural type system so we could be the best of both worlds. Lighter weight alternatives to classes such as Arseny's records were decided against because everyone was going to end up asking for access specifiers, behavior reuse, and users just needed more features than records could provide.
+
+### Access specifiers and encapsulation
+
+The decision to go with hard enforced `private` access specifiers comes from lessons learned in the Roblox ecosystem with the embedder (and OSS library authors) forced to keep private implementation details stable because games would break if they changed. This is a legitimate concern in a public-only language with no way to properly do encapsulation.
+
+Note that like upstream, we use JavaScript's `#private` variables as influence that we actually *need* real, runtime-enforced encapsulation.
 
 This RFC's access specifiers, and specifically how to describe and talk about them, is credited to [Noctua](https://github.com/TenebrisNoctua), who was influenced by his experience in maintaining a Luau classes library [Class++](https://github.com/TenebrisNoctua/ClassPP) and classical OOP usecases found in C++ and C#.
 
-We also acknowledge the similarity to TypeScript classes in syntax though TypeScript surprisingly wasn't a direct source for this RFC; note ours and TypeScript/JavaScript's implementation differ significantly. Note that like upstream, we use JavaScript's `#private` variables as influence that we actually *need* real, runtime-enforced encapsulation. We take inspiration from Luau's `typeof`, Python's `isinstance`, and TypeScript for a refining `class.isinstance`. We take inspiration from `is` and `is not` from Python for a future `is` keyword that unites all sorts of refinements that are completely different functions in Luau and Luwu today. Our implementation heavily references V8 and Python `__slots__` optimizations for compiling classes with fields in specific offsets.
+### `const` fields
 
-Prototype-based OOP (Lua metatables, Luau typed metatable OOP, JS and TS OOP, etc.) is something we've tried and not succeeded with. Even if classes were a wrapper feature that mostly desugared to metatable OOP, we'd not be able to fix the really hard type system/Analysis components to classes without nominalness. Hovers around metatable OOP (including different ways to represent metatable OOP in the type system) can easily become genuinely horrific and will scare away anybody interested in this language. We felt that the language would be even more amazing than it was before with highly performant, nominally typed classes to accompany the already quite good structural type system so we could be the best of both worlds. Lighter weight alternatives to classes such as Arseny's records were decided against because everyone was going to end up asking for access specifiers, behavior reuse, and users just needed more features than records could provide.
+`const` fields were primarily inspired by the fact that Luau gave us the `const` keyword and having a way to protect immutable field invariants is very useful. We chose to keep `const` completely unenforced in `__init` for an easier implementation (a constructor can reassign to it multiple times, but only within the constructor), a decision backed up by Java and C# which do the same thing for fields with their `final` and `readonly` modifiers.
+
+### Constructor syntax and field defaults
 
 Class field parameters and public/private access specifiers in front of the class field parameter list are inspired by the equivalent syntax in Kotlin for its similarity and synergy with function parameters as well as the obvious "this is how you create one" parallels between the class declaration syntax and class initialization syntax.
 
@@ -1132,11 +1148,27 @@ The name `__init` is influenced by Python where function call syntax also create
 
 The default POD constructor was inspired by upstream as well as by Rust's struct construction syntax.
 
-The decision to go for traits that are allowed to declare state instead of classical inheritance was inspired by Rust, Go (I really wish we could do functions with class receivers but nope we're way too dynamic at runtime for that), Swift (protocols, protocol extensions), Scala 3 (trait parameters), and PHP (which first popularized the concept of stateful traits in dynamic languages), and the concepts of mixins in other languages. We were also inspired by Kotlin here as a modern way to do inheritance (closed by default, more opportunities to do composition instead, class/interface delegation), but we decided that inheritance inherently complicates anything around constructors and `private` ownership.
+### Ruby, monkey patching, and constructor naming
 
 We took Ruby's class sigil syntax as something we *shouldn't* do because it leads to significant new/infrequent user confusion of what is a static field vs instance field. We also want to keep classes `const` to prevent any sort of monkey patching like is possible in Ruby and Python because doing so would break our optimizations and the type system. Same reasoning behind not having a separate `def initialize` that gets called as `Classy.new`. Similarly, the Luau team planned on having their class constructor named `__init` but called as `Class.new()` for months but relented after OSS community backlash and considering the confusion of the design.
 
+### Traits instead of inheritance
+
+The decision to go for traits that are allowed to declare state instead of classical inheritance was inspired by Rust, Go (I really wish we could do functions with class receivers but nope we're way too dynamic at runtime for that), Swift (protocols, protocol extensions), Scala 3 (trait parameters), and PHP (which first popularized the concept of stateful traits in dynamic languages), and the concepts of mixins in other languages. We were also inspired by Kotlin here as a modern way to do inheritance (closed by default, more opportunities to do composition instead, class/interface delegation), but we decided that inheritance inherently complicates anything around constructors and `private` ownership.
+
+### Refinement and a future `is` keyword
+
+We take inspiration from Luau's `typeof`, Python's `isinstance`, and TypeScript for a refining `class.isinstance`. We take inspiration from `is` and `is not` from Python for a future `is` keyword that unites all sorts of refinements that are completely different functions in Luau and Luwu today.
+
+### Reflection
+
 The reflection function `class.fields` was inspired by our realization that we need a way to quickly turn possibly-opaque objects into JSON (only serializable through tables). OOP languages in our space like Ruby and Python (`__dict__`) have easy ways to obtain fields and metadata about classes, so there's no reason for us not to. Similarly, `class.name` was inspired by the fact that we already leak class names in error messages; if we don't have a way to get the class's name at runtime people are just going to `pcall(function() return object["i cannot exist"] end)`. We feel that the likelihood that users will use `class.name` for class identity comparison (upstream's motivation for hiding class name including in error messages) is not sufficient motivation to prevent users from easily serializing objects of their classes to strings for their `__tostring` functions (or `Display`-like traits that do so for multiple classes).
+
+### Field layout and performance
+
+Our implementation heavily references V8 and Python `__slots__` optimizations for compiling classes with fields in specific offsets.
+
+### Runtime `self` checking
 
 We choose to enforce that methods were called on objects of the correct class (`self` is actually the right `self`) at runtime because we choose not to support Is-A relationship style inheritance, because it is obviously wrong to call a method of `self` on an object or table or completely unrelated value, and crucially because it opens up in-module method inlining. Method inlining provided our classes implementation its most significant victory over metatable OOP in terms of in-module speedup in O2, even with a mix of `public`, `private`, and `const` fields. We realize Python 2 originally checked this like us and backtracked in Python 3, but we don't have inheritance like Python does and we'd really like to keep this invariant for performance reasons.
 
