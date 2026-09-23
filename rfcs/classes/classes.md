@@ -5,12 +5,13 @@ FFlags:
 - LuwuBetterUserDefinedClasses
 - DebugLuauUserDefinedClasses
 - DebugLuauUserDefinedClassesRuntime
+- LuwuGenericNominals (classes with generic parameters share the same type system mechanisms as extern types)
 
 ## Summary
 
 Add user-defined classes with new primitives `class` (the class definition) and `object` (instances of a class).
 
-```luau
+```luwu
 class Cat
     name: string
     age: number = 0
@@ -76,7 +77,7 @@ Classes are an incredibly common way to encapsulate data structures and behavior
 
 As of today, the upstream Luau team has partly implemented classes, but its implementation is not finished and has both runtime and static analysis bugs we need to fix. Completeness aside, the Luau team's recent decisions around class-related RFCs feel strange and seem locked to a particular design without considering other possibilities for the feature. We would prefer a different design with semantics that would be more beneficial towards the community.
 
-Nonetheless, we should mention some of their original "Classes!" RFC's motivations, since they hold equally true today:
+Nonetheless, we should mention some of their original ["Classes!!" RFC's motivations](https://github.com/luau-lang/rfcs/blob/c41aae5f0a9a8ad2aa9d37e7c35cca94a7c7c1d9/docs/syntax-classes.md), since they hold equally true today:
 
 > - People write object-oriented code. We should afford it in a polished way.
 > - Accurate type inference of `setmetatable` has proven to be very difficult to get right. Because of this, the quality of our autocomplete isn't what it could be.
@@ -87,7 +88,7 @@ Nonetheless, we should mention some of their original "Classes!" RFC's motivatio
 >   - Since every instance of a class has the same set of properties, we can split the hash table: The set of fields can be associated with the class and instances only need to carry the values of those fields.  We think this can improve performance by improving cache locality.
 > - Encapsulation at its current state cannot be truly achieved, tables cannot truly be locked-down, and most workarounds for it are too complex for what it's trying to achieve.
 
-In this RFC, we'll be focusing on a base design for classes that allows us to later implement a way implement reusable logic shared between classes.
+In this RFC, we'll be focusing on a base design for classes that allows us to implement reusable logic shared between classes in the future.
 
 ## Design
 
@@ -103,7 +104,7 @@ The other main usecase is "heavy", when the user opts into encapsulation (`priva
 
 Classes are created with a new class definition syntax:
 
-```luau
+```luwu
 class ClassName end
 
 class Cat
@@ -187,7 +188,7 @@ Similarly, attempting to access a field present on objects of this class (but no
 
 Taking references to class methods via `ClassName.method` syntax is allowed so that classes can easily compose with existing APIs:
 
-```luau
+```luwu
 local n = pcall(SomeClass.getName, someClassObject)
 ```
 
@@ -205,7 +206,7 @@ We introduce a new top type for instances of a class: `object`. The builtin `typ
 
 We chose this over having them return the class name because class names do not have to be globally unique (they must only unique within a single module) and because we do not want to make it possible for classes to impersonate embedder-provided types.
 
-```luau
+```luwu
 class Cls end
 local inst = Cls()
 
@@ -244,7 +245,7 @@ This is to reduce confusion, ambiguity, and to allow future keywords to be used 
 - When `extends` is encountered in the class header, the syntax error should inform users that inheritance is not supported in Luwu.
 - When `implements` is encountered in the class header, the syntax error should state that the `implements` keyword has not yet been implemented.
 
-```luau
+```luwu
 -- user.luau
 --- I am basically a static field!!
 local last_id = 0
@@ -289,7 +290,7 @@ Due to existing prior art in Luau of everything being public (tables), and to fa
 
 This means, if all fields on a class are public, the user can omit the `public` keyword in front of the field definitions:
 
-```luau
+```luwu
 class Vector3
    x: number -- public keyword can be omitted here, all fields are public.
    y: number
@@ -301,7 +302,7 @@ We acknowledge that omitting type annotations here can look pretty bad, but we f
 
 An example of a badly formatted (and unannotated) but valid class definition:
 
-```luau
+```luwu
 class Employee id
     name
     age location
@@ -310,7 +311,7 @@ end
 
 To reduce ambiguity, if a class defines a field with any access specifier, then the class must specify access specifiers for **all** members:
 
-```luau
+```luwu
 class Vector4
     x: number -- SyntaxError: This class contains non-public members; add the `public` keyword here to prevent ambiguity
     y: number
@@ -336,7 +337,7 @@ Functions within classes may only access `private` fields on their own class, an
 Attempting to access a `private` member from outside its class definition block results in a runtime error.
 This includes functions outside the class that were called from a function within its class definition block.
 
-```luau
+```luwu
 class User
     public first_name: string
     public last_name: string
@@ -363,7 +364,7 @@ const user = User { -- The default constructor can initialize private fields.
 
 If a class only has `private` fields and no functions, we raise a type error because such a class will not be usable.
 
-```luau
+```luwu
 class UseMe -- TypeError: this class cannot be used because it only has private fields
     private please: string
     private uses: number
@@ -374,7 +375,7 @@ end
 
 The `const` modifier may only be applied to fields (all functions/methods are always `const`), and should be placed after an access specifier.
 
-A `const` field must be initialized with a value, by the class's constructor. As noted below, `const` fields are not enforced as being const during class construction, to allow the class constructor to modify the fields explicitly, pass them to functions that do, etc.
+A `const` field must be initialized with a value, by the class's constructor. We raise a runtime error upon attempts to modify a `const` field at runtime. As noted below, `const` fields are not enforced as being const during class construction, to allow the class constructor to modify the fields explicitly, pass them to functions that do, etc.
 
 ### Default field values
 
@@ -388,7 +389,7 @@ We chose this behavior to prevent stale default arguments and to limit footguns 
 
 This means:
 
-```luau
+```luwu
 const function somecounter()
     return math.random(1, 1000)
 end
@@ -452,7 +453,7 @@ Since class and object metatables are supposed to be fully locked-down, `getmeta
 
 We introduce a new global library `class`. Its contents are:
 
-```luau
+```luwu
 local class: {
     isinstance: (o: unknown, C: class) -> boolean,
     of: (o: unknown) -> class?,
@@ -491,7 +492,7 @@ As with default function parameter values, default primary constructor values ar
 
 Primary constructor parameters are only visible to field initializations within the class body (same place as default field values) and are not accessible to functions within the class. If the class body defines fields of the same name as parameter names, we assume the field references or otherwise modifies the parameter and do not count such fields as duplicates.
 
-```luau
+```luwu
 class UDim(scale: vector, offset: vector) end
 const dimmy = UDim(vector.create(1, 2), vector.create(0, 0))
 print(dimmy.scale) -- vector<1, 2, 0>
@@ -500,7 +501,7 @@ print(dimmy.offset) -- vector<0, 0, 0>
 
 If the parameter list does not contain fields with access specifiers, all fields introduced by the class field parameters are `public` unless specified otherwise in the class body.
 
-```luau
+```luwu
 class Vector4(x, y, z, w) end -- x, y, z, w are public
 class Employee(name: string, pay: number)
     private id = nextid()
@@ -513,7 +514,7 @@ Alternatively, fields may be qualified with access specifiers and/or modifiers d
 
 If *any* class field parameter uses an access specifier, *all* other parameters and all class members *must* also specify an access specifier to prevent ambiguity:
 
-```luau
+```luwu
 class SshKey private (
     public const public_key: string,
     private const private_key: string
@@ -532,7 +533,7 @@ class Box(
 
 To prevent confusion, uses of qualified field parameters in the class body must match their declarations in class field parameters:
 
-```luau
+```luwu
 class TextBox(
     public name: string,
     public text: string,
@@ -551,7 +552,7 @@ end
 
 It is possible a class may have multiple class field parameters used in the class body. To prevent users from needing to restate access specifiers and modifiers between the parameter list and class body, users may use the class field parameter list without access specifiers as long as all fields are given access specifiers in the class body:
 
-```luau
+```luwu
 class Frame(name, position, size, rounding = Rounding.default())
     public name: string
     public const id = nextid()
@@ -569,7 +570,7 @@ end
 
 To declare a `private` primary constructor, put the `private` keyword between the class name and the parameters. If the only part of a class that's private is its primary constructor, the user is *not* required to mark all other fields/functions on the class with an access specifier!
 
-```luau
+```luwu
 class PositiveNumber private (
     const inner: number
 )
@@ -593,7 +594,7 @@ end
 
 Calling a private primary constructor from outside the lexical scope of its class results in a runtime error. Although the parser could generate a syntax error for this, doing so would be inconsistent with calling private `__init` constructors as well as any private class constructors from classes imported from another module.
 
-```luau
+```luwu
 class Account private (
     public holder: User,
     private balance = Money(0)
@@ -626,14 +627,14 @@ end
 
 An explicit `public` access specifier may be declared in front of the primary constructor parameters list. If any fields or functions on the class are `private`, the user *may* explicitly specify the access specifier of the primary constructor, but they aren't required to.
 
-```luau
+```luwu
 class Seal public (name: string)
 end
 ```
 
-Primary constructor parameters are visible in default field value assignment.
+Primary constructor parameters are visible in default field value assignment to allow for transformations upon fields without needing a whole `__init` constructor.
 
-```luau
+```luwu
 const function not_negative(name: string, v: vector): vector
     return if v.x >= 0 and v.y >= 0 then v else error(`{name} should be positive`)
 end
@@ -646,7 +647,7 @@ end
 Note that fields from the primary constructor will still be included even if they're only used to derive a value;
 if the user wants to prevent those fields from being included they should use an `__init` constructor instead:
 
-```luau
+```luwu
 -- this class actually has 3 fields: current, total, and value!
 class Percentage(current: number, total: number = 100)
     value = string.format("%.2f%%", current / total * 100)
@@ -663,7 +664,7 @@ Calling the primary constructor with the wrong number of arguments will result i
 
 Any fields that would implicitly be initialized to `nil` by the primary constructor in a way that doesn't match the field's type annotation should raise a `TypeError` in static analysis:
 
-```luau
+```luwu
 class Bottle()
     brand = "Coke"
     top: Instance -- TypeError: this field will always be initialized to `nil` but is not marked as optional; consider providing a default field value, adding a class parameter of the same name, or marking the field as optional with `?`
@@ -674,7 +675,7 @@ Like the default table constructor, primary constructors also implicitly define 
 
 Any calls to the primary constructor that do not match the constructor's type signature should obviously raise a TypeError in static analysis:
 
-```luau
+```luwu
 class Package(owner: User, contents: { Item }) end
 
 const packy = Package {
@@ -707,7 +708,7 @@ To facilitate POD-like behavior, the default `__init` implementation will accept
 
 If a class does not explicitly define a constructor, it is given a default constructor. The default constructor takes a mapping from field name to value and initializes the newly-created object with those fields.
 
-```luau
+```luwu
 class Point
     x: number
     y: number
@@ -718,7 +719,7 @@ local p = Point { x = 3, y = 4 }
 
 With default values:
 
-```luau
+```luwu
 class Point
     x = 0
     y = 0
@@ -737,7 +738,7 @@ redefining its semantics.
 
 The default constructor is a real function just like any other and so it can be explicitly invoked if desired.
 
-```luau
+```luwu
 class Point
     x: number
     y: number
@@ -753,7 +754,7 @@ end
 
 Users can define the `__init` constructor as `public` or `private`.
 
-```luau
+```luwu
 class User
     public first_name: string
     public last_name: string
@@ -787,7 +788,7 @@ be instantiated otherwise.
 
 If a class has a `private` constructor, but no function in the class instantiates an object from that `private` constructor, a type error is raised:
 
-```luau
+```luwu
 -- TypeError: this class can never be instantiated because its `__init` constructor is private and is never called; did you mean to return an instance of this class from a `public function` instead? Call the constructor to silence.
 class User
     public first_name: string
@@ -815,7 +816,7 @@ end
 
 Equivalently, with primary constructor syntax instead of an explicit `__init` constructor:
 
-```luau
+```luwu
 -- TypeError: this class can never be instantiated because its constructor is private and is never called; did you mean to return an instance of this class from a `public function` instead? Call the constructor to silence.
 class User private (
     public first_name: string,
@@ -840,7 +841,7 @@ Attempting to initialize an object of a class with a `private` constructor outsi
 By restricting the constructor, a class can require its users to construct it with factory functions that respect the class's
 specific invariants.
 
-```luau
+```luwu
 -- Cannot be directly accessed using User() outside this class scope
 class User private (
     public id: string,
@@ -892,7 +893,7 @@ This is fine because users will likely either provide type annotations in this p
 When a user uses the class's identifier name to annotate a variable, we annotate the variable as an `object` of the class, not the class
 itself.
 
-```luau
+```luwu
 class Cat end
 -- cats is an array-like table of Cat objects, not an array-like table of multiple copies of the Cat class
 const cats: { Cat } = {}
@@ -902,7 +903,7 @@ Each class is a singleton instance of an unnamed type. If you want to use the cl
 
 The `class.isinstance` function participates in refinement:
 
-```luau
+```luwu
 function foo(p: unknown)
     if class.isinstance(p, Point) then
         return {p.x, p.y} -- no error here
@@ -912,7 +913,7 @@ end
 
 Attempting to access a private member from outside the class raises a TypeError:
 
-```luau
+```luwu
 class User
     private do_not_use_this_or_i_get_fired: unknown
     -- ...
@@ -934,7 +935,7 @@ of this RFC without full type system support may be merged before handling this 
 
 The type function for `class.fields` will be implemented as a magic function overriding what the type system actually says returns `({ [string]: unknown }, boolean)`
 
-Attempting to modify a `const` field should raise a type error.
+We raise a TypeError if the user attempts to modify a `const` field outside the class's `__init` constructor since doing so is always a hard error at runtime.
 
 ## C API
 
@@ -985,17 +986,42 @@ Returns the constness of `membername` on the `class` or `object` at `idx`. Retur
 
 Returns the class name (the name of the identifier the class binding was declared with) of the class or object at `idx`. If the value at `idx` is an `object`, follows the class pointer to find the class that object is an instance of. The returned string is valid for the lifetime of the class--users should clone it immediately if they plan on keeping it around for a while.
 
+## Compatibility
+
+Classes are backwards compatible with Luau 0.730 and all previous versions of Luwu. Classes are not forward compatible with upstream Luau's own implementation of the classes feature, but there is a narrow subset of classes that would be valid in both languages:
+
+```luau
+class Cat
+    public name: string
+    public age: number
+
+    public function meow(self)
+        print(`{self.name} meowed!`)
+    end
+end
+const taz = Cat { name = "Taz", age = 12 }
+taz:meow()
+```
+
+We are allowing `Cat.__init` to be called outside even though doing so is not very useful in Luwu, to match upstream. Upstream is adding classical inheritance, which we don't want to do at all. We feel our implementation of classes without classical 'extends' style inheritance is simpler (we're adding traits next), is a better paradigm for dynamic and gradually-typed languages, and because it unlocks easier optimization opportunities for us. Unlike upstream, we feel that getting classes out there with full encapsulation is incredibly important.
+
+Private fields are not required to be prefixed with an underscore like in upstream's proposed RFC, where `_` does what `#` does in JavaScript. This is because making `._` and `:_` actually *operators* only in class methods is a horrible and extremely cursed idea that breaks a fundamental expectation of accessing fields on tables everywhere else in the language. Any advantage this could have recouped has already been recouped; private field access is as fast as public field access in our implementation and is significantly faster than tables on read and write.
+
+We are interested in offering a tool to convert Luwu code to Luau code, including translating classes. This will be done through our first class `ast` library with tools written in Luwu.
+
+Unlike in upstream, calls to methods of a class always check that `self` is actually an instance of the class it's supposed to be. We choose to treat classes as an opt-in, more *staticy* feature than tables, so checking `self` and protecting this invariant allows us to take advantage of method inlining for huge performance wins impossible with metatable based OOP.
+
 ## Drawbacks
 
-- Implementing classes in a different way from upstream Roblox's Luau may lead to inconsistencies between future code written for upstream Luau vs our Luau. We feel the less complex semantics and implementation of our version of classes is a better long-term goal for the language.
+- Implementing classes in a different way from upstream Roblox's Luau may lead to inconsistencies between future code written for upstream Luau vs Luwu. We feel the less complex semantics and implementation of our version of classes is a better long-term goal for the language.
+- Allowing multiple ways to declare fields (POD table constructor, class parameters with implicit access specifiers, class parameters with explicit access specifiers, `__init` constructor, default values) can be confusing, especially around classes with class parameters with only implicit public access specifiers. Such classes could make fields introduced by them seem more like function parameters that can be used in the class body instead of fields that can also be used/mutated in the class body. We feel the expressiveness of the syntax is worth it; tooling shows all fields on hover and it's something that can be easily learned.
 - Extreme complexity of this feature when simpler implementations (only POD), sugar around metatable OOP, etc. could exist
-- Private fields throwing a runtime error on access violation imposes performance drawbacks that will need to be worked around in the compiler and VM.
 
 ## Alternatives
 
-- We could remove the half-implemented classes from Luau
+- We could remove the half-implemented classes from Luwu
 - Remove `public` keyword and have everything public (no access specifiers, no `const`)
-- Add a `static` keyword for fields and methods (instead of requiring users use upvalues for static and `self` meaning method)
+- Add a `static` (or `shared`) modifier for fields and methods (instead of requiring users use upvalues for static and `self` meaning method)
 - We could remove the half-implemented classes feature and instead add syntactical sugar for the canonical metatable OOP pattern
 - We could opt for the old [records proposal by Arseny](https://github.com/luau-lang/luau/pull/205/changes) instead
 - Private fields can be enforced only in typechecking and not raise runtime errors
@@ -1004,10 +1030,11 @@ Returns the class name (the name of the identifier the class binding was declare
 - We could instead have "structs" and "implementations" instead of classes and keep things simpler.
 - Omit `__init`, and just increase performance of POD table constructor without reserving `new`
 - Implement classes exactly as upstream Luau does to maintain compatibility, at the price of choosing a more confusing feature design for no real benefit.
+- Wait for traits to release classes.
 
 An example of an alternative design of structs and impls instead of classes:
 
-```luau
+```rs
 struct Cat (
     name: string,
     age: number
@@ -1019,9 +1046,9 @@ struct Cat (
 
 struct Dog(name, age, puppies)
 
--- constructor not a table for performance reasons, 
--- argument order chosen by struct field order which is known because this is new syntax 
--- and only the stuff after implements can be an actual table
+// constructor not a table for performance reasons, 
+// argument order chosen by struct field order which is known because this is new syntax 
+// and only the stuff after implements can be an actual table
 const cat = Cat("Taz", 12)
 ```
 
@@ -1029,16 +1056,17 @@ const cat = Cat("Taz", 12)
 
 - Add the planned traits system to allow code reuse between classes:
 
-```luau
+```luwu
 trait Animal
-    declare species: string
-    declare function is_mammal(self)
+    expect species: string
+    expect function is_mammal(self)
 end
 
 trait ToJson
     --- you should override this otherwise it just serializes class.fields!!
     function to_json(self)
-        return json.encode((class.fields(self)))
+        const fields = class.fields(self)
+        return json.encode(fields)
     end
 end
 
@@ -1047,11 +1075,11 @@ class Header(level) implements ToJson
 end
 
 trait Rectangle(position: vector, size: vector) end
-trait Frame(color: Color, border: Border?) requires Rectangle end
+trait Frame(color: Color, border: Border?) needs Rectangle end
 trait Interactible
-    declare enabled: boolean
-    declare function on_click?(self)
-    declare function on_hover?(self)
+    expect enabled: boolean
+    expect function on_click?(self)
+    expect function on_hover?(self)
 end
 
 class TextBox(
@@ -1069,6 +1097,48 @@ class TextBox(
     end
 end
 ```
+
+- Allow embedders and users to declare classes where they should exist but don't have a physical body.
+
+```luwu
+declare export class Path
+    components: { PathComponent }
+    function __init(self, from: string | { PathComponent })
+    function components(self): { PathComponent }
+    function is_absolute(self): boolean
+    function is_relative(self): boolean
+    function is_windows_absolute(self): boolean
+end
+
+const Path: class<Path> = luwu.eval(fs.readfile(path_to_list)) :: any
+const pathy = Path("./src/main.luwu")
+```
+
+- An `is` keyword. Right now we have `typeof`, `type`, `class.isinstance`, and `sometable.discriminantfield == "whatever"` all as ways to refine on identity. The first 3 can be collected into a *real* `is` keyword that figures out which opcodes to use under the hood at runtime and works seamlessly in static analysis.
+
+## Prior art
+
+Classes take huge inspiration from Kotlin, Rust, upstream Luau, as well as classical OOP languages like C++, C#, Java, etc. The decision to go with hard enforced `private` access specifiers comes from lessons learned in the Roblox ecosystem with the embedder (and OSS library authors) forced to keep private implementation details stable because games would break if they changed. This is a legitimate concern in a public-only language with no way to properly do encapsulation. `const` fields were primarily inspired by the fact that Luau gave us the `const` keyword and having a way to protect immutable field invariants is very useful. We chose to keep `const` completely unenforced in `__init` for an easier implementation (a constructor can reassign to it multiple times, but only within the constructor), a decision backed up by Java and C# which do the same thing for fields with their `final` and `readonly` modifiers.
+
+This RFC's access specifiers, and specifically how to describe and talk about them, is credited to [Noctua](https://github.com/TenebrisNoctua), who was influenced by his experience in maintaining a Luau classes library [Class++](https://github.com/TenebrisNoctua/ClassPP) and classical OOP usecases found in C++ and C#.
+
+We also acknowledge the similarity to TypeScript classes in syntax though TypeScript surprisingly wasn't a direct source for this RFC; note ours and TypeScript/JavaScript's implementation differ significantly. Note that like upstream, we use JavaScript's `#private` variables as influence that we actually *need* real, runtime-enforced encapsulation. We take inspiration from Luau's `typeof`, Python's `isinstance`, and TypeScript for a refining `class.isinstance`. We take inspiration from `is` and `is not` from Python for a future `is` keyword that unites all sorts of refinements that are completely different functions in Luau and Luwu today. Our implementation heavily references V8 and Python `__slots__` optimizations for compiling classes with fields in specific offsets.
+
+Prototype-based OOP (Lua metatables, Luau typed metatable OOP, JS and TS OOP, etc.) is something we've tried and not succeeded with. Even if classes were a wrapper feature that mostly desugared to metatable OOP, we'd not be able to fix the really hard type system/Analysis components to classes without nominalness. Hovers around metatable OOP (including different ways to represent metatable OOP in the type system) can easily become genuinely horrific and will scare away anybody interested in this language. We felt that the language would be even more amazing than it was before with highly performant, nominally typed classes to accompany the already quite good structural type system so we could be the best of both worlds. Lighter weight alternatives to classes such as Arseny's records were decided against because everyone was going to end up asking for access specifiers, behavior reuse, and users just needed more features than records could provide.
+
+Class field parameters and public/private access specifiers in front of the class field parameter list are inspired by the equivalent syntax in Kotlin for its similarity and synergy with function parameters as well as the obvious "this is how you create one" parallels between the class declaration syntax and class initialization syntax.
+
+The name `__init` is influenced by Python where function call syntax also creates an instance of a class. Default field parameters are also inspired by Python default arguments and similar syntax in Kotlin, as well as our preexisting default (function) parameter values in Luwu. Notably, we choose to avoid the default parameter footgun from Python in both class field parameter defaults as well as function defaults.
+
+The default POD constructor was inspired by upstream as well as by Rust's struct construction syntax.
+
+The decision to go for traits that are allowed to declare state instead of classical inheritance was inspired by Rust, Go (I really wish we could do functions with class receivers but nope we're way too dynamic at runtime for that), Swift (protocols, protocol extensions), Scala 3 (trait parameters), and PHP (which first popularized the concept of stateful traits in dynamic languages), and the concepts of mixins in other languages. We were also inspired by Kotlin here as a modern way to do inheritance (closed by default, more opportunities to do composition instead, class/interface delegation), but we decided that inheritance inherently complicates anything around constructors and `private` ownership.
+
+We took Ruby's class sigil syntax as something we *shouldn't* do because it leads to significant new/infrequent user confusion of what is a static field vs instance field. We also want to keep classes `const` to prevent any sort of monkey patching like is possible in Ruby and Python because doing so would break our optimizations and the type system. Same reasoning behind not having a separate `def initialize` that gets called as `Classy.new`. Similarly, the Luau team planned on having their class constructor named `__init` but called as `Class.new()` for months but relented after OSS community backlash and considering the confusion of the design.
+
+The reflection function `class.fields` was inspired by our realization that we need a way to quickly turn possibly-opaque objects into JSON (only serializable through tables). OOP languages in our space like Ruby and Python (`__dict__`) have easy ways to obtain fields and metadata about classes, so there's no reason for us not to. Similarly, `class.name` was inspired by the fact that we already leak class names in error messages; if we don't have a way to get the class's name at runtime people are just going to `pcall(function() return object["i cannot exist"] end)`. We feel that the likelihood that users will use `class.name` for class identity comparison (upstream's motivation for hiding class name including in error messages) is not sufficient motivation to prevent users from easily serializing objects of their classes to strings for their `__tostring` functions (or `Display`-like traits that do so for multiple classes).
+
+We choose to enforce that methods were called on objects of the correct class (`self` is actually the right `self`) at runtime because we choose not to support Is-A relationship style inheritance, because it is obviously wrong to call a method of `self` on an object or table or completely unrelated value, and crucially because it opens up in-module method inlining. Method inlining provided our classes implementation its most significant victory over metatable OOP in terms of in-module speedup in O2, even with a mix of `public`, `private`, and `const` fields. We realize Python 2 originally checked this like us and backtracked in Python 3, but we don't have inheritance like Python does and we'd really like to keep this invariant for performance reasons.
 
 ## Implementation details
 
