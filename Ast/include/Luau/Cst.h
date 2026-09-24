@@ -207,6 +207,9 @@ public:
         Position equalsPosition;       // only if Kind != List
         Separator separator;           // may be missing for last Item
         Position separatorPosition;
+
+        // `@[...]` groups written above this entry, needed to print them back as they were written.
+        AstArray<CstAttrList*> attrLists{nullptr, 0};
     };
 
     explicit CstExprTable(const AstArray<Item>& items);
@@ -305,7 +308,14 @@ public:
     LUAU_CST_RTTI(CstStatLocal)
 
     CstStatLocal(AstArray<Position> varsAnnotationColonPositions, AstArray<Position> varsCommaPositions, AstArray<Position> valuesCommaPositions);
+    CstStatLocal(
+        AstArray<CstAttrList*> attrLists,
+        AstArray<Position> varsAnnotationColonPositions,
+        AstArray<Position> varsCommaPositions,
+        AstArray<Position> valuesCommaPositions
+    );
 
+    AstArray<CstAttrList*> attrLists;
     AstArray<Position> varsAnnotationColonPositions;
     AstArray<Position> varsCommaPositions;
     AstArray<Position> valuesCommaPositions;
@@ -476,6 +486,10 @@ public:
 
         CstExprConstantString* stringInfo = nullptr; // only if Kind == StringProperty
         Position stringPosition{0, 0};               // only if Kind == StringProperty
+
+        // `@[...]` groups written above this entry, needed to print them back as they were written.
+        // Assigned after construction so the positional initializers above don't all have to grow.
+        AstArray<CstAttrList*> attrLists{nullptr, 0};
     };
 
     CstTypeTable(AstArray<Item> items, bool isArray);

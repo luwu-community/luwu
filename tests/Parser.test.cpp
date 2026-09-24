@@ -18,9 +18,10 @@ LUAU_FASTINT(LuauTypeLengthLimit)
 LUAU_FASTINT(LuauParseErrorLimit)
 LUAU_DYNAMIC_FASTFLAG(DebugLuauReportReturnTypeVariadicWithTypeSuffix)
 LUAU_FASTFLAG(LuauExportValueSyntax)
-LUAU_FASTFLAG(DebugLuauNoInline)
+LUAU_FASTFLAG(LuwuNoinlineAttribute)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(DebugLuwuBetterAttributes)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAG(LuauTrackPrefixLocal)
 LUAU_FASTFLAG(LuwuDefaultArguments)
@@ -4141,9 +4142,48 @@ TEST_CASE_FIXTURE(Fixture, "class_method_attributes")
     CHECK(cls->members.data[1].get_if<AstClassMethod>()->visibility == AstClassMemberVisibility::Private);
 }
 
-TEST_CASE_FIXTURE(Fixture, "class_field_cannot_have_attributes")
+TEST_CASE_FIXTURE(Fixture, "class_field_attributes")
 {
-    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::DebugLuwuBetterAttributes, true},
+    };
+
+    AstStatBlock* stat = parse(R"(
+        class Foo
+            @deprecated
+            public x: number
+
+            private @deprecated y: string
+        end
+    )");
+
+    REQUIRE_EQ(stat->body.size, 1);
+    const AstStatClass* cls = stat->body.data[0]->as<AstStatClass>();
+    REQUIRE(cls);
+    REQUIRE_EQ(cls->members.size, 2);
+
+    // Written above the access specifier, and after it: both reach the field.
+    const AstClassProperty* x = cls->members.data[0].get_if<AstClassProperty>();
+    REQUIRE(x);
+    CHECK(x->name == "x");
+    REQUIRE_EQ(x->attributes.size, 1);
+    CHECK(x->attributes.data[0]->type == AstAttr::Type::Deprecated);
+
+    const AstClassProperty* y = cls->members.data[1].get_if<AstClassProperty>();
+    REQUIRE(y);
+    CHECK(y->name == "y");
+    REQUIRE_EQ(y->attributes.size, 1);
+    CHECK(y->attributes.data[0]->type == AstAttr::Type::Deprecated);
+    CHECK(y->visibility == AstClassMemberVisibility::Private);
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_field_cannot_have_a_function_only_attribute")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::DebugLuwuBetterAttributes, true},
+    };
 
     ParseResult result = tryParse(R"(
         class Foo
@@ -4152,8 +4192,9 @@ TEST_CASE_FIXTURE(Fixture, "class_field_cannot_have_attributes")
         end
     )");
 
+    // `@native` describes how a function is compiled, so the attribute registry refuses it here.
     REQUIRE(!result.errors.empty());
-    CHECK_EQ(result.errors[0].getMessage(), "Expected 'function' after attribute, but got 'x' instead");
+    CHECK_EQ(result.errors[0].getMessage(), "Attribute '@native' cannot be applied to a class field");
 
     // The field itself still parses, so the rest of the class is not reported against.
     REQUIRE_EQ(result.root->body.size, 1);
@@ -6525,11 +6566,11 @@ end)");
     checkAttribute(attributes.data[0], AstAttr::Type::Checked, Location(Position(1, 0), Position(1, 8)));
 }
 
-TEST_CASE_FIXTURE(Fixture, "parse_debugnoinline_on_local_function")
+TEST_CASE_FIXTURE(Fixture, "parse_noinline_on_local_function")
 {
-    ScopedFastFlag noInline{FFlag::DebugLuauNoInline, true};
+    ScopedFastFlag noInline{FFlag::LuwuNoinlineAttribute, true};
     AstStatBlock* stat = parse(R"(
-    @debugnoinline
+    @noinline
 local function hello(x, y)
     return x + y
 end)");
@@ -6543,18 +6584,111 @@ end)");
 
     CHECK_EQ(attributes.size, 1);
 
-    checkAttribute(attributes.data[0], AstAttr::Type::DebugNoinline, Location(Position(1, 4), Position(1, 18)));
+    checkAttribute(attributes.data[0], AstAttr::Type::Noinline, Location(Position(1, 4), Position(1, 13)));
 }
 
-TEST_CASE_FIXTURE(Fixture, "debugnoinline_not_allowed_without_flag")
+TEST_CASE_FIXTURE(Fixture, "noinline_not_allowed_without_flag")
 {
+    // Pinned off explicitly: LuwuNoinlineAttribute is not Debug-prefixed, so it is on in the
+    // all-flags test configuration.
+    ScopedFastFlag noInline{FFlag::LuwuNoinlineAttribute, false};
+
     ParseResult result = tryParse(R"(
-@debugnoinline
+@noinline
 local function hello(x, y)
     return x + y
 end)");
 
-    checkFirstErrorForAttributes(result.errors, 1, Location(Position(1, 0), Position(1, 14)), "Invalid attribute '@debugnoinline'");
+    checkFirstErrorForAttributes(result.errors, 1, Location(Position(1, 0), Position(1, 9)), "Invalid attribute '@noinline'");
+}
+
+TEST_CASE_FIXTURE(Fixture, "noinline_is_only_allowed_where_inlining_can_happen")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuNoinlineAttribute, true},
+        {FFlag::LuwuClasses, true},
+    };
+
+    // A local function, a const function, a function expression and a class method are all resolved
+    // at their call sites, so all four are places the compiler can inline and `@noinline` means
+    // something.
+    {
+        ParseResult result = tryParse(R"(
+@noinline
+local function a() end
+
+@noinline
+const function b() end
+
+local c = @noinline function() end
+
+class D
+    @noinline
+    public function e(self) end
+end
+)");
+
+        CHECK(result.errors.empty());
+    }
+
+    // A global function is never resolved statically, so it is never inlined and the attribute would
+    // silently do nothing.
+    {
+        ParseResult result = tryParse(R"(
+@noinline
+function f() end
+)");
+
+        REQUIRE(!result.errors.empty());
+        CHECK_EQ(
+            result.errors[0].getMessage(),
+            "Attribute '@noinline' can only be applied to a local function, a const function, a class method or a function expression"
+        );
+    }
+
+    // `function t.m()` and `function t:m()` are the same case: the target is a field of a global, so
+    // the call is never resolved statically. The `:` form additionally binds `self`, which the
+    // compiler refuses to inline regardless.
+    {
+        ParseResult result = tryParse(R"(
+local cat = {}
+@noinline
+function cat.meow() end
+)");
+
+        REQUIRE(!result.errors.empty());
+        CHECK_EQ(
+            result.errors[0].getMessage(),
+            "Attribute '@noinline' can only be applied to a local function, a const function, a class method or a function expression"
+        );
+    }
+
+    {
+        ParseResult result = tryParse(R"(
+local cat = {}
+@noinline
+function cat:meow() end
+)");
+
+        REQUIRE(!result.errors.empty());
+        CHECK_EQ(
+            result.errors[0].getMessage(),
+            "Attribute '@noinline' can only be applied to a local function, a const function, a class method or a function expression"
+        );
+    }
+
+    // Neither a declared function nor a function type has a body to inline.
+    {
+        ParseOptions opts;
+        opts.allowDeclarationSyntax = true;
+
+        ParseResult result = tryParse("@noinline declare function g(): number", opts);
+        REQUIRE(!result.errors.empty());
+        CHECK_EQ(
+            result.errors[0].getMessage(),
+            "Attribute '@noinline' can only be applied to a local function, a const function, a class method or a function expression"
+        );
+    }
 }
 
 TEST_CASE_FIXTURE(Fixture, "empty_attribute_name_is_not_allowed")
@@ -6828,6 +6962,226 @@ function hello(x, y)
 end)");
 
     checkFirstErrorForAttributes(result.errors, 1, Location(Position(2, 4), Position(2, 19)), "Invalid attribute '@cool_attribute'");
+}
+
+TEST_CASE_FIXTURE(Fixture, "parse_attributes_beyond_functions")
+{
+    ScopedFastFlag betterAttributes{FFlag::DebugLuwuBetterAttributes, true};
+
+    AstStatBlock* stat = parse(R"(
+@deprecated
+type Puppy = string
+
+@deprecated
+local puppy = "whimper"
+
+local pet_sounds = {
+    @deprecated cat = "meow",
+    dog = "woof",
+}
+
+type PetSounds = {
+    @deprecated puppy: string,
+    dog: string,
+    @deprecated [string]: number,
+}
+
+local function speak(@deprecated old: string, new: string)
+    return old .. new
+end
+
+local m = {}
+@deprecated m.dog = "woof"
+)");
+
+    REQUIRE_EQ(stat->body.size, 7);
+
+    const AstStatTypeAlias* alias = stat->body.data[0]->as<AstStatTypeAlias>();
+    REQUIRE(alias);
+    REQUIRE_EQ(alias->attributes.size, 1);
+    checkAttribute(alias->attributes.data[0], AstAttr::Type::Deprecated, Location{{1, 0}, {1, 11}});
+
+    const AstStatLocal* local = stat->body.data[1]->as<AstStatLocal>();
+    REQUIRE(local);
+    REQUIRE_EQ(local->attributes.size, 1);
+    checkAttribute(local->attributes.data[0], AstAttr::Type::Deprecated, Location{{4, 0}, {4, 11}});
+
+    // A table constructor entry carries its own attributes; the entries without any stay empty.
+    const AstStatLocal* soundsLocal = stat->body.data[2]->as<AstStatLocal>();
+    REQUIRE(soundsLocal);
+    const AstExprTable* sounds = soundsLocal->values.data[0]->as<AstExprTable>();
+    REQUIRE(sounds);
+    REQUIRE_EQ(sounds->items.size, 2);
+    REQUIRE_EQ(sounds->items.data[0].attributes.size, 1);
+    CHECK(sounds->items.data[0].attributes.data[0]->type == AstAttr::Type::Deprecated);
+    CHECK_EQ(sounds->items.data[1].attributes.size, 0);
+
+    // A table type's fields and its indexer each carry theirs.
+    const AstStatTypeAlias* petSounds = stat->body.data[3]->as<AstStatTypeAlias>();
+    REQUIRE(petSounds);
+    const AstTypeTable* petSoundsTy = petSounds->type->as<AstTypeTable>();
+    REQUIRE(petSoundsTy);
+    REQUIRE_EQ(petSoundsTy->props.size, 2);
+    REQUIRE_EQ(petSoundsTy->props.data[0].attributes.size, 1);
+    CHECK(petSoundsTy->props.data[0].attributes.data[0]->type == AstAttr::Type::Deprecated);
+    CHECK_EQ(petSoundsTy->props.data[1].attributes.size, 0);
+    REQUIRE(petSoundsTy->indexer);
+    REQUIRE_EQ(petSoundsTy->indexer->attributes.size, 1);
+    CHECK(petSoundsTy->indexer->attributes.data[0]->type == AstAttr::Type::Deprecated);
+
+    // A parameter's attributes ride on its AstLocal.
+    const AstStatLocalFunction* speak = stat->body.data[4]->as<AstStatLocalFunction>();
+    REQUIRE(speak);
+    REQUIRE_EQ(speak->func->args.size, 2);
+    REQUIRE_EQ(speak->func->args.data[0]->attributes.size, 1);
+    CHECK(speak->func->args.data[0]->attributes.data[0]->type == AstAttr::Type::Deprecated);
+    CHECK_EQ(speak->func->args.data[1]->attributes.size, 0);
+
+    const AstStatAssign* assign = stat->body.data[6]->as<AstStatAssign>();
+    REQUIRE(assign);
+    REQUIRE_EQ(assign->attributes.size, 1);
+    CHECK(assign->attributes.data[0]->type == AstAttr::Type::Deprecated);
+}
+
+TEST_CASE_FIXTURE(Fixture, "bare_attribute_arguments_are_diagnosed_precisely")
+{
+    ScopedFastFlag betterAttributes{FFlag::DebugLuwuBetterAttributes, true};
+
+    // Writing the arguments bare is the likeliest mistake, since that is how other languages spell
+    // it. Without a dedicated diagnostic it surfaced as whatever the next token failed to be, which
+    // said nothing about attributes.
+    {
+        ParseResult result = tryParse(R"(
+@deprecated { use = "dog" }
+local puppy = "whimper"
+)");
+
+        REQUIRE(!result.errors.empty());
+        CHECK_EQ(
+            result.errors[0].getMessage(),
+            "Attribute arguments must be written as '@[deprecated ...]'; a bare '@deprecated' cannot take arguments"
+        );
+
+        // Recovered: the arguments are still attached, so this is the only error and the attribute
+        // means what was intended.
+        REQUIRE_EQ(result.root->body.size, 1);
+        const AstStatLocal* local = result.root->body.data[0]->as<AstStatLocal>();
+        REQUIRE(local);
+        REQUIRE_EQ(local->attributes.size, 1);
+        AstAttr::DeprecatedInfo info = local->attributes.data[0]->deprecatedInfo();
+        REQUIRE(info.use.has_value());
+        CHECK_EQ(*info.use, "dog");
+        CHECK_EQ(result.errors.size(), 1);
+    }
+
+    // A string argument written bare is the same mistake.
+    {
+        ParseResult result = tryParse(R"(
+@deprecated "some reason"
+local q = 1
+)");
+
+        REQUIRE(!result.errors.empty());
+        CHECK_EQ(
+            result.errors[0].getMessage(),
+            "Attribute arguments must be written as '@[deprecated ...]'; a bare '@deprecated' cannot take arguments"
+        );
+    }
+
+    // But inside a table -- value or type -- an entry may legitimately *be* a table or a string, so
+    // these are attributed entries and not arguments written the wrong way.
+    {
+        ParseResult result = tryParse("local t = { @deprecated {1, 2} }");
+        CHECK(result.errors.empty());
+    }
+
+    {
+        ParseResult result = tryParse("type T = { @deprecated {string} }");
+        CHECK(result.errors.empty());
+    }
+
+    // `(` is never treated as arguments: an attributed function type is existing syntax and the two
+    // would be ambiguous, which is the whole reason arguments are bracketed.
+    {
+        ParseOptions opts;
+        opts.allowDeclarationSyntax = true;
+
+        ParseResult result = tryParse(
+            R"(
+declare bit32: {
+    band: @checked (...number) -> number
+})",
+            opts
+        );
+        CHECK_EQ(result.errors.size(), 0);
+    }
+}
+
+TEST_CASE_FIXTURE(Fixture, "attributes_are_rejected_in_positions_they_do_not_allow")
+{
+    ScopedFastFlag betterAttributes{FFlag::DebugLuwuBetterAttributes, true};
+
+    // `@native` registers itself as function-only, so every other position refuses it -- and says
+    // which position it was written on. Nothing here is a hand-written check per position; they all
+    // come from the one registry entry.
+    auto checkRejected = [](const ParseResult& result, const char* message)
+    {
+        REQUIRE(!result.errors.empty());
+        CHECK_EQ(result.errors[0].getMessage(), message);
+    };
+
+    checkRejected(tryParse("@native type X = number"), "Attribute '@native' cannot be applied to a type alias");
+    checkRejected(tryParse("@native local x = 1"), "Attribute '@native' cannot be applied to a local variable");
+    checkRejected(tryParse("local t = { @native a = 1 }"), "Attribute '@native' cannot be applied to a table field");
+    checkRejected(tryParse("type T = { @native a: number }"), "Attribute '@native' cannot be applied to a table type field");
+    checkRejected(tryParse("type T = { @native [string]: number }"), "Attribute '@native' cannot be applied to a table indexer");
+    checkRejected(tryParse("local function f(@native a) return a end"), "Attribute '@native' cannot be applied to a parameter");
+    checkRejected(tryParse("local m = {} @native m.x = 1"), "Attribute '@native' cannot be applied to an assignment");
+
+    // An array-like table type desugars to an indexer, so that is what it is reported as.
+    checkRejected(tryParse("type T = { @native number }"), "Attribute '@native' cannot be applied to a table indexer");
+
+    // Exactly one error, not one from the parse and another from pinning the position down.
+    ParseResult result = tryParse("@native type X = number");
+    CHECK_EQ(result.errors.size(), 1);
+}
+
+TEST_CASE_FIXTURE(Fixture, "table_type_field_attributes_are_distinct_from_its_type_s_attributes")
+{
+    ScopedFastFlag betterAttributes{FFlag::DebugLuwuBetterAttributes, true};
+
+    ParseOptions opts;
+    opts.allowDeclarationSyntax = true;
+
+    // Before the name the attribute belongs to the field; after the colon it belongs to the
+    // function type. `@checked (...number) -> number` is also why parametrized attributes are
+    // bracketed: if a bare attribute took arguments, `(...number)` would be ambiguous between the
+    // attribute's arguments and the function type's parameter list.
+    ParseResult pr = tryParse(
+        R"(
+declare bit32: {
+    @deprecated band: @checked (...number) -> number
+})",
+        opts
+    );
+    CHECK_EQ(pr.errors.size(), 0);
+
+    REQUIRE_EQ(pr.root->body.size, 1);
+    AstStatDeclareGlobal* glob = pr.root->body.data[0]->as<AstStatDeclareGlobal>();
+    REQUIRE(glob);
+
+    AstTypeTable* tbl = glob->type->as<AstTypeTable>();
+    REQUIRE(tbl);
+    REQUIRE_EQ(tbl->props.size, 1);
+
+    const AstTableProp& prop = tbl->props.data[0];
+    REQUIRE_EQ(prop.attributes.size, 1);
+    CHECK(prop.attributes.data[0]->type == AstAttr::Type::Deprecated);
+
+    AstTypeFunction* func = prop.type->as<AstTypeFunction>();
+    REQUIRE(func);
+    REQUIRE_EQ(func->attributes.size, 1);
+    CHECK(func->attributes.data[0]->type == AstAttr::Type::Checked);
 }
 
 TEST_CASE_FIXTURE(Fixture, "can_parse_leading_bar_unions_successfully")

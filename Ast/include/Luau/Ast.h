@@ -10,6 +10,7 @@
 #include <functional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <string.h>
 #include <stdint.h>
@@ -71,39 +72,6 @@ class AstTypePack;
 class AstAttr;
 class AstExprTable;
 
-struct AstLocal
-{
-    AstName name;
-    Location location;
-    AstLocal* shadow;
-    size_t functionDepth;
-    size_t loopDepth;
-    bool isConst;
-    // exported is only a property set after construction
-    bool isExported = false;
-
-    AstType* annotation;
-
-    AstLocal(
-        const AstName& name,
-        const Location& location,
-        AstLocal* shadow,
-        size_t functionDepth,
-        size_t loopDepth,
-        AstType* annotation,
-        bool isConst = false
-    )
-        : name(name)
-        , location(location)
-        , shadow(shadow)
-        , functionDepth(functionDepth)
-        , loopDepth(loopDepth)
-        , isConst(isConst)
-        , annotation(annotation)
-    {
-    }
-};
-
 template<typename T>
 struct AstArray
 {
@@ -128,6 +96,43 @@ struct AstArray
     std::reverse_iterator<const T*> rend() const
     {
         return std::make_reverse_iterator(begin());
+    }
+};
+
+struct AstLocal
+{
+    AstName name;
+    Location location;
+    AstLocal* shadow;
+    size_t functionDepth;
+    size_t loopDepth;
+    bool isConst;
+    // exported is only a property set after construction
+    bool isExported = false;
+
+    AstType* annotation;
+
+    // Attributes written above this binding, e.g. `function f(@deprecated a)`. Only a function
+    // parameter can carry them today; every other binding leaves this empty.
+    AstArray<AstAttr*> attributes{nullptr, 0};
+
+    AstLocal(
+        const AstName& name,
+        const Location& location,
+        AstLocal* shadow,
+        size_t functionDepth,
+        size_t loopDepth,
+        AstType* annotation,
+        bool isConst = false
+    )
+        : name(name)
+        , location(location)
+        , shadow(shadow)
+        , functionDepth(functionDepth)
+        , loopDepth(loopDepth)
+        , isConst(isConst)
+        , annotation(annotation)
+    {
     }
 };
 
@@ -227,9 +232,65 @@ public:
         Checked,
         Native,
         Deprecated,
-        DebugNoinline,
+        Noinline,
         Unknown
     };
+
+    // The syntactic positions an attribute may be written on. These are bit flags so that an
+    // attribute's registration can name the whole set it allows as one value, while parsing one
+    // particular position passes a single flag. Adding an attribute is then a row in the parser's
+    // registry table rather than a check written out at each position that has to be kept in sync.
+    enum class Context : unsigned
+    {
+        None = 0,
+        Function = 1 << 0,
+        Local = 1 << 1,
+        TypeAlias = 1 << 2,
+        TableField = 1 << 3,
+        TableTypeField = 1 << 4,
+        TableIndexer = 1 << 5,
+        Class = 1 << 6,
+        ClassField = 1 << 7,
+        Parameter = 1 << 8,
+        Assignment = 1 << 9,
+        // A function the compiler can resolve at a call site and therefore inline: a local or const
+        // function, a class method, or a function expression bound to one of those. A global
+        // `function f()` is not one -- a global is never resolved statically -- and neither is a
+        // declared function or a function type, which have no body at all.
+        InlinableFunction = 1 << 10,
+
+        AnyFunction = Function | InlinableFunction,
+
+        // A class member's attributes are parsed before its `function` keyword or field name, so
+        // they are checked against both and pinned down once the member kind is known.
+        ClassMember = InlinableFunction | ClassField,
+
+        // Likewise for a table type's entries: `{ @deprecated x: T }` and `{ @deprecated [K]: V }`
+        // are told apart only after the attributes have been consumed.
+        TableTypeMember = TableTypeField | TableIndexer,
+
+        // Every position a statement-level attribute could still turn out to be. Attributes are
+        // parsed before the statement that follows them is known, so they are checked against this
+        // set first and against the exact position once the statement has been identified.
+        Statement = AnyFunction | Local | TypeAlias | Class | Assignment,
+
+        Any = AnyFunction | Local | TypeAlias | TableField | TableTypeField | TableIndexer | Class | ClassField | Parameter | Assignment,
+    };
+
+    // Is `one` (a single position) a member of `set` (an attribute's allowed positions)?
+    static constexpr bool contextAllows(Context set, Context one)
+    {
+        return (static_cast<unsigned>(set) & static_cast<unsigned>(one)) != 0;
+    }
+
+    // True for exactly one position, false for None and for a set like Statement. A set means the
+    // position isn't settled yet, so it is checked where it gets pinned down rather than at parse
+    // time -- otherwise the diagnostic has no single position to name, and would be reported twice.
+    static constexpr bool isSingleContext(Context context)
+    {
+        unsigned bits = static_cast<unsigned>(context);
+        return bits != 0 && (bits & (bits - 1)) == 0;
+    }
 
     struct DeprecatedInfo
     {
@@ -254,6 +315,27 @@ public:
     AstArray<AstExpr*> args;
     AstName name;
 };
+
+// Attribute lookup over any carrier's attribute array. Every position that can hold attributes has
+// an `attributes` field of this shape, so a consumer works the same way whatever it is reading.
+AstAttr* findAttribute(const AstArray<AstAttr*>& attributes, AstAttr::Type type);
+bool hasAttribute(const AstArray<AstAttr*>& attributes, AstAttr::Type type);
+
+// The `@deprecated` attribute's payload, or nullopt when the array has no `@deprecated`.
+std::optional<AstAttr::DeprecatedInfo> findDeprecatedInfo(const AstArray<AstAttr*>& attributes);
+
+// One attribute as the parser knows it. Defined next to the parser's registry, which is the single
+// place an attribute is declared, so anything that needs to enumerate attributes -- autocomplete
+// above all -- stays correct when one is added.
+struct AttributeInfo
+{
+    const char* name;
+    AstAttr::Type type;
+    AstAttr::Context allowedContexts;
+};
+
+// Every attribute this build accepts, including flag-gated ones whose flag is currently on.
+std::vector<AttributeInfo> getKnownAttributes();
 
 class AstExpr : public AstNode
 {
@@ -585,6 +667,9 @@ public:
 
         AstExpr* key; // can be nullptr!
         AstExpr* value;
+
+        // Attributes written above the entry, e.g. `{ @deprecated cat = "meow" }`.
+        AstArray<AstAttr*> attributes{nullptr, 0};
     };
 
     AstExprTable(const Location& location, const AstArray<Item>& items);
@@ -914,6 +999,10 @@ public:
     // Location of the leading `const` or `local` keyword token only.
     std::optional<Location> keywordLocation;
     std::optional<Location> equalsSignLocation;
+
+    // Attributes written above this declaration, e.g. `@deprecated`. Empty when there are none.
+    // Filled in by the parser after allocation so that no existing construction site has to change.
+    AstArray<AstAttr*> attributes{nullptr, 0};
 };
 
 class AstStatFor : public AstStat
@@ -992,6 +1081,10 @@ public:
 
     AstArray<AstExpr*> vars;
     AstArray<AstExpr*> values;
+
+    // Attributes written above this declaration, e.g. `@deprecated`. Empty when there are none.
+    // Filled in by the parser after allocation so that no existing construction site has to change.
+    AstArray<AstAttr*> attributes{nullptr, 0};
 };
 
 class AstStatCompoundAssign : public AstStat
@@ -1080,6 +1173,10 @@ public:
 
     // Location of the leading 'type' keyword token only.
     Location typeLocation;
+
+    // Attributes written above this declaration, e.g. `@deprecated`. Empty when there are none.
+    // Filled in by the parser after allocation so that no existing construction site has to change.
+    AstArray<AstAttr*> attributes{nullptr, 0};
 };
 
 class AstStatTypeFunction : public AstStat
@@ -1229,6 +1326,9 @@ struct AstClassProperty
     // Location of the `=` token; nullopt when defaultValue is nullptr.
     std::optional<Location> equalsLocation = std::nullopt;
     AstExpr* defaultValue = nullptr;
+    // Attributes written above the field, e.g. `@deprecated`. A method's attributes live on its
+    // AstExprFunction instead, since that is where a function's attributes already are.
+    AstArray<AstAttr*> attributes{nullptr, 0};
 };
 
 struct AstClassMethod
@@ -1310,6 +1410,10 @@ public:
 
     // Location of the leading 'class' keyword token only (not 'export').
     Location keywordLocation;
+
+    // Attributes written above this declaration, e.g. `@deprecated`. Empty when there are none.
+    // Filled in by the parser after allocation so that no existing construction site has to change.
+    AstArray<AstAttr*> attributes{nullptr, 0};
 };
 
 struct AstTableIndexer
@@ -1320,6 +1424,9 @@ struct AstTableIndexer
 
     AstTableAccess access = AstTableAccess::ReadWrite;
     std::optional<Location> accessLocation;
+    // Attributes written above the indexer, e.g. `{ @deprecated [string]: number }`. An array-like
+    // table type `{T}` desugars to an indexer, so its attributes land here too.
+    AstArray<AstAttr*> attributes{nullptr, 0};
 };
 
 class AstStatDeclareExternType : public AstStat
@@ -1407,6 +1514,9 @@ struct AstTableProp
     AstType* type;
     AstTableAccess access = AstTableAccess::ReadWrite;
     std::optional<Location> accessLocation;
+    // Attributes written above the field, e.g. `{ @deprecated x: number }`. Note that TypeAttach
+    // raw-allocates these structs and assigns field by field, so it has to assign this one too.
+    AstArray<AstAttr*> attributes{nullptr, 0};
 };
 
 class AstTypeTable : public AstType

@@ -15,6 +15,15 @@ Dates are when each RFC was merged into luau-lang/rfcs. RFCs from before that re
 | [Classes](https://github.com/luau-lang/rfcs/blob/c03475e9e3ca53ceb3449296882a4edb75a7ca38/docs/syntax-classes.md) | 2026-04-27 | Luwu builds upon this original `Classes!` RFC but significantly diverges from upstream's planned implementation that includes inheritance and inheritance constructor semantics. Our classes RFC lives at [classes.md](./classes.md). |
 | [An official mascot for Luau](https://github.com/luau-lang/rfcs/blob/c03475e9e3ca53ceb3449296882a4edb75a7ca38/docs/luau-mascot.md) | 2024-06-04 | Luwu's mascot is Nyla; her design will be proposed in a future RFC. |
 
+## Adapted from unmerged upstream proposals (1)
+
+RFCs still open at luau-lang/rfcs that we adopted and amended. Per [README.md](./README.md), an
+unmerged upstream PR implemented here gets its own Luwu RFC recording the original author.
+
+| RFC | Proposed | Notes |
+| --- | --- | --- |
+| [Allow attributes to be used on types, variables, fields, and classes](https://github.com/luau-lang/rfcs/pull/147) | Open | By [@gaymeowing](https://github.com/gaymeowing) (quaywinn), used and adapted with her permission. Our version lives at [attributes-for-types-variables-fields-classes.md](./attributes-for-types-variables-fields-classes.md): it keeps parameterized attributes in the bracketed `@[...]` form (the bare form the draft uses is ambiguous), adds attributes on function and primary-constructor parameters, and specifies the per-position registry the upstream draft leaves open. Behind `DebugLuwuBetterAttributes`. |
+
 ## To be replaced in Luwu (4)
 
 We plan on improving, adapting, or superseding these RFCs with our own design.

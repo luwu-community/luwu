@@ -9,10 +9,11 @@
 #include "doctest.h"
 
 LUAU_FASTFLAG(LuauExportValueSyntax)
-LUAU_FASTFLAG(DebugLuauNoInline)
+LUAU_FASTFLAG(LuwuNoinlineAttribute)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuauTableEntriesDontNeedToMatchIndent)
 LUAU_FASTFLAG(LuauCstAttr)
+LUAU_FASTFLAG(DebugLuwuBetterAttributes)
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuGenericNominals)
@@ -2264,6 +2265,90 @@ end
     CHECK_EQ(expected, prettyPrint(code, {}, false).code);
 }
 
+TEST_CASE("prettyPrint_attributes_beyond_functions")
+{
+    ScopedFastFlag fflags[] = {{FFlag::LuauCstAttr, true}, {FFlag::DebugLuwuBetterAttributes, true}};
+
+    // Type alias.
+    std::string code = R"(
+        @deprecated
+        type Puppy = string
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+
+    // Local variable.
+    code = R"(
+        @deprecated
+        local puppy = "whimper"
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+
+    // Assignment.
+    code = R"(
+        local m = {}
+        @deprecated m.dog = "woof"
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+
+    // Table constructor entries, of all three kinds.
+    code = R"(
+        local pet_sounds = {
+            @deprecated cat = "meow",
+            @deprecated ["dog"] = "woof",
+            @deprecated "parrot",
+        }
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+
+    // Table type fields and indexers.
+    code = R"(
+        type PetSounds = {
+            @deprecated puppy: string,
+            dog: string,
+            @deprecated [string]: number,
+        }
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+
+    // Function parameters.
+    code = R"(
+        local function speak(@deprecated old: string, new: string)
+            return old .. new
+        end
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+
+    // The parametrized form round-trips in the new positions too.
+    code = R"(
+        @[deprecated { use = "dog" }]
+        type Puppy = string
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+}
+
+TEST_CASE("prettyPrint_class_attributes_beyond_methods")
+{
+    ScopedFastFlag fflags[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuauCstAttr, true},
+        {FFlag::DebugLuwuBetterAttributes, true},
+    };
+
+    // On the class itself, and on fields either side of the access specifier.
+    std::string code = R"(
+@deprecated
+class Puppy
+    @deprecated
+    public sound: string
+    private @deprecated age: number
+    public function speak(self)
+        return self.sound
+    end
+end
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+}
+
 TEST_CASE("prettyPrint_function_attributes")
 {
     ScopedFastFlag fflags[] = {{FFlag::LuauCstAttr, true}, {FFlag::LuauExportValueSyntax, true}};
@@ -2308,9 +2393,9 @@ TEST_CASE("prettyPrint_function_attributes")
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
 
     {
-        ScopedFastFlag noInline{FFlag::DebugLuauNoInline, true};
+        ScopedFastFlag noInline{FFlag::LuwuNoinlineAttribute, true};
         code = R"(
-        @debugnoinline
+        @noinline
         local function t() end
         )";
         CHECK_EQ(code, prettyPrint(code, {}, true).code);

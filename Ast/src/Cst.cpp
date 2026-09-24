@@ -145,10 +145,26 @@ CstStatLocal::CstStatLocal(
     AstArray<Position> valuesCommaPositions
 )
     : CstNode(CstClassIndex())
+    , attrLists({})
     , varsAnnotationColonPositions(varsAnnotationColonPositions)
     , varsCommaPositions(varsCommaPositions)
     , valuesCommaPositions(valuesCommaPositions)
 {
+}
+
+CstStatLocal::CstStatLocal(
+    AstArray<CstAttrList*> attrLists,
+    AstArray<Position> varsAnnotationColonPositions,
+    AstArray<Position> varsCommaPositions,
+    AstArray<Position> valuesCommaPositions
+)
+    : CstNode(CstClassIndex())
+    , attrLists(attrLists)
+    , varsAnnotationColonPositions(varsAnnotationColonPositions)
+    , varsCommaPositions(varsCommaPositions)
+    , valuesCommaPositions(valuesCommaPositions)
+{
+    LUAU_ASSERT(FFlag::LuauCstAttr);
 }
 
 CstStatFor::CstStatFor(Position annotationColonPosition, Position equalsPosition, Position endCommaPosition, Position stepCommaPosition)

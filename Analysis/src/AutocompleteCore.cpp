@@ -47,10 +47,116 @@ static constexpr std::array<std::string_view, 14> kStatementStartingKeywords_EXP
 
 static constexpr std::array<std::string_view, 6> kHotComments = {"nolint", "nocheck", "nonstrict", "strict", "optimize", "native"};
 
-static const std::string kKnownAttributes[] = {"checked", "deprecated", "native"};
-
 namespace Luau
 {
+
+// Attributes are deliberately not part of the visited AST, so they never show up in the ancestry --
+// the enclosing node has to be asked for its own attribute arrays. Returns the position the cursor is
+// writing an attribute for, when it sits inside one that is not a known attribute yet.
+static std::optional<AstAttr::Context> findIncompleteAttributeContext(const std::vector<AstNode*>& ancestry, Position position)
+{
+    auto isIncomplete = [&position](const AstArray<AstAttr*>& attributes)
+    {
+        for (AstAttr* attr : attributes)
+        {
+            if (attr->location.begin <= position && position <= attr->location.end && attr->type == AstAttr::Type::Unknown)
+                return true;
+        }
+
+        return false;
+    };
+
+    for (auto it = ancestry.rbegin(); it != ancestry.rend(); ++it)
+    {
+        AstNode* node = *it;
+
+        if (AstExprFunction* fn = node->as<AstExprFunction>())
+        {
+            if (isIncomplete(fn->attributes))
+                return AstAttr::Context::Function;
+
+            for (AstLocal* arg : fn->args)
+            {
+                if (isIncomplete(arg->attributes))
+                    return AstAttr::Context::Parameter;
+            }
+        }
+        else if (AstStatLocal* local = node->as<AstStatLocal>())
+        {
+            if (isIncomplete(local->attributes))
+                return AstAttr::Context::Local;
+        }
+        else if (AstStatTypeAlias* alias = node->as<AstStatTypeAlias>())
+        {
+            if (isIncomplete(alias->attributes))
+                return AstAttr::Context::TypeAlias;
+        }
+        else if (AstStatAssign* assign = node->as<AstStatAssign>())
+        {
+            if (isIncomplete(assign->attributes))
+                return AstAttr::Context::Assignment;
+        }
+        else if (AstExprTable* table = node->as<AstExprTable>())
+        {
+            for (const AstExprTable::Item& item : table->items)
+            {
+                if (isIncomplete(item.attributes))
+                    return AstAttr::Context::TableField;
+            }
+        }
+        else if (AstTypeTable* tableTy = node->as<AstTypeTable>())
+        {
+            for (const AstTableProp& prop : tableTy->props)
+            {
+                if (isIncomplete(prop.attributes))
+                    return AstAttr::Context::TableTypeField;
+            }
+
+            if (tableTy->indexer && isIncomplete(tableTy->indexer->attributes))
+                return AstAttr::Context::TableIndexer;
+        }
+        else if (AstStatClass* cls = node->as<AstStatClass>())
+        {
+            if (isIncomplete(cls->attributes))
+                return AstAttr::Context::Class;
+
+            for (const AstClassMember& member : cls->members)
+            {
+                if (const AstClassProperty* prop = member.get_if<AstClassProperty>())
+                {
+                    if (isIncomplete(prop->attributes))
+                        return AstAttr::Context::ClassField;
+                }
+                else if (const AstClassMethod* method = member.get_if<AstClassMethod>())
+                {
+                    if (method->function && isIncomplete(method->function->attributes))
+                        return AstAttr::Context::Function;
+                }
+            }
+
+            if (cls->primaryConstructor)
+            {
+                for (AstLocal* arg : cls->primaryConstructor->args)
+                {
+                    if (isIncomplete(arg->attributes))
+                        return AstAttr::Context::Parameter;
+                }
+            }
+        }
+        else if (AstStatDeclareFunction* declared = node->as<AstStatDeclareFunction>())
+        {
+            if (isIncomplete(declared->attributes))
+                return AstAttr::Context::Function;
+        }
+        else if (AstTypeFunction* fnTy = node->as<AstTypeFunction>())
+        {
+            if (isIncomplete(fnTy->attributes))
+                return AstAttr::Context::Function;
+        }
+    }
+
+    return std::nullopt;
+}
 
 static bool alreadyHasParens(const std::vector<AstNode*>& nodes)
 {
@@ -2061,6 +2167,23 @@ AutocompleteResult autocomplete_(
 {
     LUAU_TIMETRACE_SCOPE("Luau::autocomplete_", "AutocompleteCore");
 
+    // Checked before anything else: the cursor sitting inside an unfinished attribute is unambiguous,
+    // and the statement- and expression-shaped branches below would otherwise claim it first (an
+    // attribute above a `local` looked like "completing a local declaration"). Only the attributes
+    // legal in that position are offered, straight from the parser's registry, so a newly added
+    // attribute is suggested exactly where it declares itself valid with no list here to keep in step.
+    if (std::optional<AstAttr::Context> attributeContext = findIncompleteAttributeContext(ancestry, position))
+    {
+        AutocompleteEntryMap ret;
+        for (const AttributeInfo& info : getKnownAttributes())
+        {
+            if (AstAttr::contextAllows(info.allowedContexts, *attributeContext))
+                ret[info.name] = {AutocompleteEntryKind::Keyword};
+        }
+
+        return {std::move(ret), ancestry, AutocompleteContext::Keyword};
+    }
+
     if (isInHotComment)
     {
         AutocompleteEntryMap result;
@@ -2224,10 +2347,14 @@ AutocompleteResult autocomplete_(
     else if (AstExprTable* exprTable = parent->as<AstExprTable>();
              exprTable && (node->is<AstExprGlobal>() || node->is<AstExprConstantString>() || node->is<AstExprInterpString>()))
     {
-        for (const auto& [kind, key, value] : exprTable->items)
+        // Not a structured binding: AstExprTable::Item gains fields over time (attributes, most
+        // recently), and a binding has to name every one of them.
+        for (const AstExprTable::Item& item : exprTable->items)
         {
+            AstExpr* key = item.key;
+
             // If item doesn't have a key, maybe the value is actually the key
-            if (key ? key == node : node->is<AstExprGlobal>() && value == node)
+            if (key ? key == node : node->is<AstExprGlobal>() && item.value == node)
             {
                 if (auto it = module->astExpectedTypes.find(exprTable))
                 {
@@ -2341,19 +2468,6 @@ AutocompleteResult autocomplete_(
         // can't know what to format to
         AutocompleteEntryMap map;
         return {std::move(map), ancestry, AutocompleteContext::String};
-    }
-    else if (AstExprFunction* func = node->as<AstExprFunction>())
-    {
-        for (AstAttr* attr : func->attributes)
-        {
-            if (attr->location.begin <= position && position <= attr->location.end && attr->type == AstAttr::Type::Unknown)
-            {
-                AutocompleteEntryMap ret;
-                for (const auto& attr : kKnownAttributes)
-                    ret[attr.c_str()] = {AutocompleteEntryKind::Keyword};
-                return {std::move(ret), std::move(ancestry), AutocompleteContext::Keyword};
-            }
-        }
     }
 
     if (node->is<AstExprConstantNumber>())

@@ -19,6 +19,7 @@ LUAU_DYNAMIC_FASTINT(LuauSubtypingRecursionLimit)
 
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(DebugLuwuBetterAttributes)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
 LUAU_FASTFLAG(LuauAutocompleteFunctionArglistSuggestion)
@@ -5200,6 +5201,74 @@ TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_deprecated_attribute")
     CHECK_EQ(ac.entryMap.count("deprecated"), 1);
     CHECK_EQ(ac.entryMap.count("checked"), 1);
     CHECK_EQ(ac.entryMap.count("native"), 1);
+}
+
+TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_attribute_beyond_functions")
+{
+    ScopedFastFlag betterAttributes{FFlag::DebugLuwuBetterAttributes, true};
+
+    // A local: only the attributes that allow this position are offered, so the function-only ones
+    // are absent rather than suggested and then rejected by the parser.
+    check(R"(
+        \@dep@1
+        local x = 1
+    )");
+
+    auto ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("deprecated"), 1);
+    CHECK_EQ(ac.entryMap.count("native"), 0);
+    CHECK_EQ(ac.entryMap.count("checked"), 0);
+
+    // A type alias.
+    check(R"(
+        \@dep@1
+        type X = number
+    )");
+
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("deprecated"), 1);
+    CHECK_EQ(ac.entryMap.count("native"), 0);
+
+    // A field of a table type.
+    check(R"(
+        type X = {
+            \@dep@1 foo: number,
+        }
+    )");
+
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("deprecated"), 1);
+    CHECK_EQ(ac.entryMap.count("native"), 0);
+
+    // An entry of a table constructor.
+    check(R"(
+        local t = {
+            \@dep@1 foo = 1,
+        }
+    )");
+
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("deprecated"), 1);
+
+    // A function parameter.
+    check(R"(
+        local function f(\@dep@1 a) return a end
+    )");
+
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("deprecated"), 1);
+    CHECK_EQ(ac.entryMap.count("native"), 0);
+
+    // A function still offers the function-only attributes.
+    check(R"(
+        \@dep@1
+        local function f() end
+    )");
+
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("deprecated"), 1);
+    CHECK_EQ(ac.entryMap.count("native"), 1);
+    CHECK_EQ(ac.entryMap.count("checked"), 1);
 }
 
 TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_empty_braced_attribute")

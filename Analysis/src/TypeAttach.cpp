@@ -229,6 +229,8 @@ public:
                 props.data[idx].type = Luau::visit(*this, (*prop.readTy)->ty);
                 props.data[idx].access = AstTableAccess::ReadWrite;
                 props.data[idx].location = Location();
+                props.data[idx].accessLocation = std::nullopt;
+                props.data[idx].attributes = {nullptr, 0};
                 idx++;
             }
             else
@@ -239,6 +241,8 @@ public:
                     props.data[idx].type = Luau::visit(*this, (*prop.readTy)->ty);
                     props.data[idx].access = AstTableAccess::Read;
                     props.data[idx].location = Location();
+                    props.data[idx].accessLocation = std::nullopt;
+                    props.data[idx].attributes = {nullptr, 0};
                     idx++;
                 }
 
@@ -248,6 +252,8 @@ public:
                     props.data[idx].type = Luau::visit(*this, (*prop.writeTy)->ty);
                     props.data[idx].access = AstTableAccess::Write;
                     props.data[idx].location = Location();
+                    props.data[idx].accessLocation = std::nullopt;
+                    props.data[idx].attributes = {nullptr, 0};
                     idx++;
                 }
             }
@@ -324,6 +330,8 @@ public:
                 props.data[idx].type = Luau::visit(*this, (*prop.readTy)->ty);
                 props.data[idx].access = AstTableAccess::ReadWrite;
                 props.data[idx].location = Location();
+                props.data[idx].accessLocation = std::nullopt;
+                props.data[idx].attributes = {nullptr, 0};
                 idx++;
             }
             else
@@ -334,6 +342,8 @@ public:
                     props.data[idx].type = Luau::visit(*this, (*prop.readTy)->ty);
                     props.data[idx].access = AstTableAccess::Read;
                     props.data[idx].location = Location();
+                    props.data[idx].accessLocation = std::nullopt;
+                    props.data[idx].attributes = {nullptr, 0};
                     idx++;
                 }
 
@@ -343,6 +353,8 @@ public:
                     props.data[idx].type = Luau::visit(*this, (*prop.writeTy)->ty);
                     props.data[idx].access = AstTableAccess::Write;
                     props.data[idx].location = Location();
+                    props.data[idx].accessLocation = std::nullopt;
+                    props.data[idx].attributes = {nullptr, 0};
                     idx++;
                 }
             }

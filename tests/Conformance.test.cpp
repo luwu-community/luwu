@@ -83,6 +83,7 @@ LUAU_FASTFLAG(LuauCodegenFixBufferLenCheck)
 LUAU_FASTFLAG(LuauYieldIter2)
 LUAU_FASTFLAG(LuauCustomYieldablePcalls)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(DebugLuwuBetterAttributes)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuwuExportedClassIsNilWorkaround)
@@ -4666,6 +4667,8 @@ TEST_CASE("Classes")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
+        // class fields and primary constructor parameters carry attributes
+        {FFlag::DebugLuwuBetterAttributes, true},
         // a primary constructor's parameter defaults are function parameter defaults
         {FFlag::LuwuDefaultArguments, true},
         {FFlag::LuwuNonePrimitive, true},

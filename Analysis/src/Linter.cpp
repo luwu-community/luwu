@@ -2383,6 +2383,12 @@ public:
     LUAU_NOINLINE static void process(LintContext& context)
     {
         LintDeprecatedApi pass{&context};
+
+        // Declarations are collected first because a name can be used above the line that deprecates
+        // it -- a type alias most of all, since aliases are visible throughout their scope.
+        AttributeCollector collector{&pass};
+        context.root->visit(&collector);
+
         context.root->visit(&pass);
     }
 
@@ -2394,8 +2400,73 @@ private:
     {
     }
 
+    // A deprecation declared by an attribute rather than inferred from a type. `noun` is what the
+    // warning calls the thing, so one report path serves variables, classes and types.
+    struct AttributeDeprecation
+    {
+        AstAttr::DeprecatedInfo info;
+        const char* noun = "Variable";
+    };
+
+    // Keyed by the binding itself, so shadowing is handled for free.
+    DenseHashMap<AstLocal*, AttributeDeprecation> deprecatedLocals{nullptr};
+    // Keyed by the interned name, since a type reference names an alias rather than pointing at it.
+    DenseHashMap<const char*, AttributeDeprecation> deprecatedAliases{nullptr};
+    // A class's name is deliberately not pushed as a local (that is what makes classes hoist), so a
+    // use of it resolves as a global and has to be matched by name.
+    DenseHashMap<const char*, AttributeDeprecation> deprecatedGlobals{nullptr};
+
+    // A deprecated class still refers to itself inside its own body, the same way a deprecated
+    // function recurses; those uses are not what the warning is for.
+    std::vector<AstLocal*> classScopeStack;
+
+    struct AttributeCollector : AstVisitor
+    {
+        LintDeprecatedApi* outer;
+
+        explicit AttributeCollector(LintDeprecatedApi* outer)
+            : outer(outer)
+        {
+        }
+
+        bool visit(AstStatLocal* node) override
+        {
+            if (std::optional<AstAttr::DeprecatedInfo> info = findDeprecatedInfo(node->attributes))
+            {
+                for (AstLocal* var : node->vars)
+                    outer->deprecatedLocals[var] = AttributeDeprecation{*info, "Variable"};
+            }
+
+            return true;
+        }
+
+        bool visit(AstStatTypeAlias* node) override
+        {
+            if (std::optional<AstAttr::DeprecatedInfo> info = findDeprecatedInfo(node->attributes))
+                outer->deprecatedAliases[node->name.value] = AttributeDeprecation{*info, "Type"};
+
+            return true;
+        }
+
+        bool visit(AstStatClass* node) override
+        {
+            if (std::optional<AstAttr::DeprecatedInfo> info = findDeprecatedInfo(node->attributes))
+            {
+                // A class is a value and a type under the same name, and its value use resolves as
+                // a global rather than a local.
+                outer->deprecatedGlobals[node->name->name.value] = AttributeDeprecation{*info, "Class"};
+                outer->deprecatedAliases[node->name->name.value] = AttributeDeprecation{*info, "Class"};
+            }
+
+            return true;
+        }
+    };
+
     bool visit(AstExprLocal* node) override
     {
+        if (const AttributeDeprecation* deprecation = deprecatedLocals.find(node->local); deprecation && !inClassScope(node->local))
+            reportAttributeDeprecation(node->location, deprecation->noun, node->local->name.value, deprecation->info);
+
         const FunctionType* fty = getFunctionType(node);
         bool shouldReport = fty && fty->isDeprecatedFunction && !inScope(fty);
 
@@ -2416,6 +2487,10 @@ private:
 
     bool visit(AstExprGlobal* node) override
     {
+        if (const AttributeDeprecation* deprecation = deprecatedGlobals.find(node->name.value);
+            deprecation && !inClassScopeNamed(node->name.value))
+            reportAttributeDeprecation(node->location, deprecation->noun, node->name.value, deprecation->info);
+
         const FunctionType* fty = getFunctionType(node);
         bool shouldReport = fty && fty->isDeprecatedFunction && !inScope(fty);
 
@@ -2432,6 +2507,82 @@ private:
         }
 
         return true;
+    }
+
+    bool visit(AstTypeReference* node) override
+    {
+        // A prefixed reference names another module's type; the attribute there is that module's.
+        if (!node->prefix)
+        {
+            if (const AttributeDeprecation* deprecation = deprecatedAliases.find(node->name.value);
+                deprecation && !inClassScopeNamed(node->name.value))
+                reportAttributeDeprecation(node->location, deprecation->noun, node->name.value, deprecation->info);
+        }
+
+        return true;
+    }
+
+    bool visit(AstExprTable* node) override
+    {
+        for (const AstExprTable::Item& item : node->items)
+        {
+            if (item.key)
+                item.key->visit(this);
+
+            // An attribute on the entry replaces whatever the value carries (the RFC: "the attributes
+            // on the field having priority over the attributes on the value"), so binding an
+            // already-deprecated value into a deprecated field is not itself worth reporting. Only a
+            // bare reference is skipped; anything larger is still walked.
+            const bool valueIsBareReference = item.value->is<AstExprLocal>() || item.value->is<AstExprGlobal>();
+            if (valueIsBareReference && hasAttribute(item.attributes, AstAttr::Type::Deprecated))
+                continue;
+
+            item.value->visit(this);
+        }
+
+        return false;
+    }
+
+    bool visit(AstStatClass* node) override
+    {
+        classScopeStack.push_back(node->name);
+
+        for (const AstClassMember& member : node->members)
+        {
+            if (const AstClassMethod* method = member.get_if<AstClassMethod>())
+                check(method->function);
+            else if (const AstClassProperty* prop = member.get_if<AstClassProperty>())
+            {
+                if (prop->ty)
+                    prop->ty->visit(this);
+                if (prop->defaultValue)
+                    prop->defaultValue->visit(this);
+            }
+        }
+
+        classScopeStack.pop_back();
+        return false;
+    }
+
+    bool inClassScope(AstLocal* local) const
+    {
+        return std::find(classScopeStack.begin(), classScopeStack.end(), local) != classScopeStack.end();
+    }
+
+    // A class that still uses its own deprecated member internally is the normal state of affairs
+    // during a deprecation, the same way a deprecated function's recursive calls are.
+    bool inClassScopeNamed(const char* name) const
+    {
+        if (!name)
+            return false;
+
+        for (AstLocal* cls : classScopeStack)
+        {
+            if (strcmp(cls->name.value, name) == 0)
+                return true;
+        }
+
+        return false;
     }
 
     bool visit(AstStatLocalFunction* node) override
@@ -2595,6 +2746,9 @@ private:
 
     void report(const Location& location, const Property& prop, const char* container, const char* field)
     {
+        if (inClassScopeNamed(container))
+            return;
+
         std::string suggestion = prop.deprecatedSuggestion.empty() ? "" : format(", use '%s' instead", prop.deprecatedSuggestion.c_str());
 
         if (container)
@@ -2641,6 +2795,15 @@ private:
     void report(const Location& location, const char* functionName)
     {
         emitWarning(*context, LintWarning::Code_DeprecatedApi, location, "Function '%s' is deprecated", functionName);
+    }
+
+    void reportAttributeDeprecation(const Location& location, const char* noun, const char* name, const AstAttr::DeprecatedInfo& info)
+    {
+        std::string usePart = info.use ? format(", use '%s' instead", info.use->c_str()) : "";
+        std::string reasonPart = info.reason ? format(". %s", info.reason->c_str()) : "";
+        emitWarning(
+            *context, LintWarning::Code_DeprecatedApi, location, "%s '%s' is deprecated%s%s", noun, name, usePart.c_str(), reasonPart.c_str()
+        );
     }
 
     void report(const Location& location, const char* functionName, const AstAttr::DeprecatedInfo& info)
