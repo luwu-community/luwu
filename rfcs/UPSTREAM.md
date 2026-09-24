@@ -61,7 +61,7 @@ RFCs Luau accepted and later withdrew. We may replace some of these with our own
 
 | RFC | Accepted | Notes |
 | --- | --- | --- |
-| [No support for user inlining (yet)](https://github.com/luau-lang/rfcs/blob/c03475e9e3ca53ceb3449296882a4edb75a7ca38/docs/function-inlining.md) | 2024-08-06 | Decision *not* to support user-controlled inlining. |
+| [No support for user inlining (yet)](https://github.com/luau-lang/rfcs/blob/c03475e9e3ca53ceb3449296882a4edb75a7ca38/docs/function-inlining.md) | 2024-08-06 | Decision *not* to support user-controlled inlining. We keep that for `@inline`, but do allow turning inlining *off*: see [noinline-attribute.md](./noinline-attribute.md). |
 | [Reserve dollar sign (`$`) to be forever unused](https://github.com/luau-lang/rfcs/blob/c03475e9e3ca53ceb3449296882a4edb75a7ca38/docs/reserve-dollar-sign.md) | 2024-06-25 | Reserves `$`; nothing to implement. |
 | [Disallow `name T` and `name(T)` in future syntactic extensions for type annotations](https://github.com/luau-lang/rfcs/blob/c03475e9e3ca53ceb3449296882a4edb75a7ca38/docs/disallow-proposals-leading-to-ambiguity-in-grammar.md) | 2022-07-28 | Grammar policy for future syntax. |
 | [Lower Bounds Calculation](https://github.com/luau-lang/rfcs/blob/c03475e9e3ca53ceb3449296882a4edb75a7ca38/docs/lower-bounds-calculation.md) | 2022-03-29 | Marked upstream as abandoned in favor of local type inference. |

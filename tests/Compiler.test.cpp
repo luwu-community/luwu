@@ -30,7 +30,7 @@ LUAU_FASTFLAG(LuauIntegerBufferFastcalls)
 LUAU_FASTFLAG(LuauCompileStringInterpTargetTop)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuwuExportedClassIsNilWorkaround)
-LUAU_FASTFLAG(DebugLuauNoInline)
+LUAU_FASTFLAG(LuwuNoinlineAttribute)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuClasses)
@@ -13112,12 +13112,12 @@ RETURN R0 1
 
 TEST_CASE("DebugNoInline")
 {
-    ScopedFastFlag noInline{FFlag::DebugLuauNoInline, true};
+    ScopedFastFlag noInline{FFlag::LuwuNoinlineAttribute, true};
 
     CHECK_EQ(
         "\n" + compileFunction(
                    R"(
-@debugnoinline
+@noinline
 local function foo()
     return 42
 end
@@ -13139,7 +13139,7 @@ RETURN R1 1
     CHECK_EQ(
         "\n" + compileFunction(
                    R"(
-@debugnoinline
+@noinline
 local function foo(a, b, c)
     if a then
         return b
