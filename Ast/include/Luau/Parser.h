@@ -182,11 +182,17 @@ private:
     // the position isn't known until after the attributes are consumed, i.e. statements.
     void validateAttributeContexts(const AstArray<AstAttr*>& attributes, AstAttr::Context context);
 
-    // True if an attribute begins at the current lexeme, i.e. a member/field/parameter is attributed.
-    bool attributesFollow() const;
+    // "Attribute '@x' can only be applied to ..." / "... cannot be applied to ...".
+    void reportAttributeNotAllowed(const Location& location, const char* attributeName, const char* allowedPositionsHint, AstAttr::Context context);
+
+    // Attribute arguments must be literals.
+    void reportNonLiteralAttributeArgs(const AstArray<AstExpr*>& args, const Location& argsLocation);
 
     // `first` followed by `second`, for attributes written on both sides of an access specifier.
     AstArray<AstAttr*> concatAttributes(const AstArray<AstAttr*>& first, const AstArray<AstAttr*>& second);
+
+    // True if an attribute begins at the current lexeme, i.e. a member/field/parameter is attributed.
+    bool attributesFollow() const;
 
     // attributes local function Name funcbody
     // attributes function funcname funcbody
@@ -198,7 +204,7 @@ private:
     // local namelist [`=' explist]
     AstStat* parseLocal(
         const Location start,
-        const Position keywordPosition,
+        const Location& keywordLocation,
         const AstArray<AstAttr*>& attributes,
         bool isConst,
         TempVector<CstAttrList*>* cstAttrLists = nullptr
@@ -220,7 +226,7 @@ private:
         const Location& start,
         bool exported,
         const Location& classKeywordLocation,
-        const AstArray<AstAttr*>& attributes = {nullptr, 0}
+        const AstArray<AstAttr*>& classAttributes = {nullptr, 0}
     );
 
     // True when the class body is looking at something that reads as a statement rather than a class
@@ -251,7 +257,7 @@ private:
 
     AstStat* parseExportValue(
         const Location& start,
-        const Position keywordPosition,
+        const Location& keywordLocation,
         const AstArray<AstAttr*>& attributes,
         TempVector<CstAttrList*>* cstAttrLists = nullptr
     );
@@ -648,6 +654,15 @@ private:
     std::string scratchData;
 
     CstNodeMap cstNodeMap;
+
+    // Luwu (attributes): attributes a table entry parsed in front of `function`, which belong to the
+    // function expression parseSimpleExpr parses next rather than to the entry.
+    struct PendingFunctionAttributes
+    {
+        AstArray<AstAttr*> attributes;
+        TempVector<CstAttrList*>* cstAttrLists;
+    };
+    std::optional<PendingFunctionAttributes> pendingFunctionAttributes;
 };
 
 } // namespace Luau

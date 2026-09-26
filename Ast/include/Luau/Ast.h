@@ -232,6 +232,7 @@ public:
         Checked,
         Native,
         Deprecated,
+        // Luwu (@noinline): upstream's `DebugNoinline` (`@debugnoinline`), shipped as `@noinline`.
         Noinline,
         Unknown
     };
@@ -268,6 +269,10 @@ public:
         // Likewise for a table type's entries: `{ @deprecated x: T }` and `{ @deprecated [K]: V }`
         // are told apart only after the attributes have been consumed.
         TableTypeMember = TableTypeField | TableIndexer,
+
+        // A table constructor's entry: `{ @deprecated x = 1 }` attributes the entry, but in a list
+        // entry `{ @native function() end }` they belong to the function.
+        TableEntry = TableField | InlinableFunction,
 
         // Every position a statement-level attribute could still turn out to be. Attributes are
         // parsed before the statement that follows them is known, so they are checked against this
@@ -315,11 +320,6 @@ public:
     AstArray<AstExpr*> args;
     AstName name;
 };
-
-// Attribute lookup over any carrier's attribute array. Every position that can hold attributes has
-// an `attributes` field of this shape, so a consumer works the same way whatever it is reading.
-AstAttr* findAttribute(const AstArray<AstAttr*>& attributes, AstAttr::Type type);
-bool hasAttribute(const AstArray<AstAttr*>& attributes, AstAttr::Type type);
 
 // The `@deprecated` attribute's payload, or nullopt when the array has no `@deprecated`.
 std::optional<AstAttr::DeprecatedInfo> findDeprecatedInfo(const AstArray<AstAttr*>& attributes);
@@ -1001,7 +1001,6 @@ public:
     std::optional<Location> equalsSignLocation;
 
     // Attributes written above this declaration, e.g. `@deprecated`. Empty when there are none.
-    // Filled in by the parser after allocation so that no existing construction site has to change.
     AstArray<AstAttr*> attributes{nullptr, 0};
 };
 
@@ -1083,7 +1082,6 @@ public:
     AstArray<AstExpr*> values;
 
     // Attributes written above this declaration, e.g. `@deprecated`. Empty when there are none.
-    // Filled in by the parser after allocation so that no existing construction site has to change.
     AstArray<AstAttr*> attributes{nullptr, 0};
 };
 
@@ -1175,7 +1173,6 @@ public:
     Location typeLocation;
 
     // Attributes written above this declaration, e.g. `@deprecated`. Empty when there are none.
-    // Filled in by the parser after allocation so that no existing construction site has to change.
     AstArray<AstAttr*> attributes{nullptr, 0};
 };
 
@@ -1412,7 +1409,6 @@ public:
     Location keywordLocation;
 
     // Attributes written above this declaration, e.g. `@deprecated`. Empty when there are none.
-    // Filled in by the parser after allocation so that no existing construction site has to change.
     AstArray<AstAttr*> attributes{nullptr, 0};
 };
 
@@ -1514,8 +1510,8 @@ struct AstTableProp
     AstType* type;
     AstTableAccess access = AstTableAccess::ReadWrite;
     std::optional<Location> accessLocation;
-    // Attributes written above the field, e.g. `{ @deprecated x: number }`. Note that TypeAttach
-    // raw-allocates these structs and assigns field by field, so it has to assign this one too.
+    // Attributes written above the field, e.g. `{ @deprecated x: number }`. A raw allocation of
+    // AstTableProp entries (TypeAttach makes one) must construct each entry in place.
     AstArray<AstAttr*> attributes{nullptr, 0};
 };
 

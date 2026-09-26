@@ -9,8 +9,9 @@
 
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
-LUAU_FASTFLAG(DebugLuwuBetterAttributes)
+LUAU_FASTFLAG(LuwuBetterAttributes)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuauDeprecatedAttributeOnAnonymousFunctions)
 LUAU_FASTFLAG(LuauFunctionUnusedRecursiveLinting)
 LUAU_FASTFLAG(LuwuTableRemoveFootgunLint)
@@ -1739,7 +1740,7 @@ TEST_CASE_FIXTURE(Fixture, "DeprecatedAttributeBeyondFunctions")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauForceOldSolver, false},
-        {FFlag::DebugLuwuBetterAttributes, true},
+        {FFlag::LuwuBetterAttributes, true},
     };
 
     // A deprecated local reports at each use, not at its declaration.
@@ -1787,7 +1788,7 @@ print(puppy)
         );
     }
 
-    // A field of a table type, reached through the Property the lint already reports on.
+    // A deprecated field of a table type reports where it is read through a value of that type.
     {
         LintResult result = lint(R"(
 type PetSounds = {
@@ -1829,12 +1830,11 @@ TEST_CASE_FIXTURE(Fixture, "DeprecatedAttributeFieldOverridesValue")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauForceOldSolver, false},
-        {FFlag::DebugLuwuBetterAttributes, true},
+        {FFlag::LuwuBetterAttributes, true},
     };
 
-    // This is the RFC's "Table Fields" example verbatim in behaviour: an attribute on the entry
-    // takes priority over one on the value bound to it, both where the value is bound and where the
-    // member is later read.
+    // The RFC's "Table Fields" example: an attribute on the entry takes priority over one on the
+    // value bound to it, both where the value is bound and where the member is later read.
     LintResult result = lint(R"(
 @[deprecated { reason = "cat is a more modern API" }]
 local function get_cat_sound()
@@ -1874,7 +1874,7 @@ TEST_CASE_FIXTURE(Fixture, "DeprecatedAttributeOnClasses")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauForceOldSolver, false},
-        {FFlag::DebugLuwuBetterAttributes, true},
+        {FFlag::LuwuBetterAttributes, true},
         {FFlag::LuwuClasses, true},
     };
 
@@ -1898,6 +1898,140 @@ print(p.sound)
     REQUIRE_EQ(2, result.warnings.size());
     checkDeprecatedWarning(result.warnings[0], Position(11, 10), Position(11, 15), "Class 'Puppy' is deprecated, use 'Dog' instead");
     checkDeprecatedWarning(result.warnings[1], Position(12, 6), Position(12, 13), "Member 'Puppy.sound' is deprecated, use 'bark' instead");
+}
+
+TEST_CASE_FIXTURE(Fixture, "DeprecatedAttributeInsideTypeDefinitions")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuwuBetterAttributes, true},
+    };
+
+    // A deprecated type is reported wherever its name is written, inside other types included --
+    // except as the type of a field that is itself deprecated, and inside its own definition.
+    LintResult result = lint(R"(
+@deprecated
+type Puppy = "whimper"
+
+type CanineSounds = {
+    puppy: Puppy,
+    dog: "woof",
+}
+
+type PetSounds = {
+    @[deprecated { use = "dog" }] puppy: Puppy,
+    dog: "bark",
+}
+
+local litter: { Puppy } = {}
+
+@deprecated
+type Node = { next: Node? }
+
+return litter
+)");
+
+    REQUIRE_EQ(2, result.warnings.size());
+    checkDeprecatedWarning(result.warnings[0], Position(5, 11), Position(5, 16), "Type 'Puppy' is deprecated");
+    checkDeprecatedWarning(result.warnings[1], Position(14, 16), Position(14, 21), "Type 'Puppy' is deprecated");
+}
+
+TEST_CASE_FIXTURE(Fixture, "DeprecatedAttributeOnALibraryTypeField")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuwuBetterAttributes, true},
+    };
+
+    // How a library's type marks one function deprecated: the field reports where it is used through
+    // a value, never at the definition.
+    LintResult result = lint(R"(
+type FsLib = {
+    @[deprecated { use = "readfile" }] read: (path: string) -> string,
+    readfile: (path: string) -> string,
+}
+
+local fs = {} :: FsLib
+fs.read("config.toml")
+fs.readfile("config.toml")
+return fs
+)");
+
+    REQUIRE_EQ(1, result.warnings.size());
+    checkDeprecatedWarning(result.warnings[0], Position(7, 0), Position(7, 7), "Member 'FsLib.read' is deprecated, use 'readfile' instead");
+}
+
+TEST_CASE_FIXTURE(Fixture, "DeprecatedTypeAliasIsScoped")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuwuBetterAttributes, true},
+    };
+
+    // A deprecated alias only reaches the block it is declared in, and a nearer alias or a generic
+    // parameter with the same name shadows it.
+    LintResult result = lint(R"(
+local function a()
+    local x: Foo = 1
+    @deprecated
+    type Foo = number
+    return x
+end
+
+local function b()
+    type Foo = string
+    local y: Foo = "y"
+    return y
+end
+
+local function c<Foo>(z: Foo): Foo
+    return z
+end
+
+@deprecated
+type Bar = number
+type Box<Bar> = { value: Bar }
+
+local function d()
+    local w: Bar = 1
+    return w
+end
+
+return a, b, c, d
+)");
+
+    REQUIRE_EQ(2, result.warnings.size());
+    // Aliases are visible throughout their block, above the declaration included.
+    checkDeprecatedWarning(result.warnings[0], Position(2, 13), Position(2, 16), "Type 'Foo' is deprecated");
+    checkDeprecatedWarning(result.warnings[1], Position(23, 13), Position(23, 16), "Type 'Bar' is deprecated");
+}
+
+TEST_CASE_FIXTURE(Fixture, "DeprecatedAttributeInPrimaryConstructorParameters")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuwuBetterAttributes, true},
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuDefaultArguments, true},
+    };
+
+    LintResult result = lint(R"(
+@deprecated
+type Puppy = string
+
+@deprecated
+local whimper = "whimper"
+
+class Dog(public sound: Puppy = whimper, @deprecated public old: Puppy)
+end
+
+return Dog
+)");
+
+    // The deprecated `old` parameter declares a deprecated field, so its own type is not reported.
+    REQUIRE_EQ(2, result.warnings.size());
+    checkDeprecatedWarning(result.warnings[0], Position(7, 24), Position(7, 29), "Type 'Puppy' is deprecated");
+    checkDeprecatedWarning(result.warnings[1], Position(7, 32), Position(7, 39), "Variable 'whimper' is deprecated");
 }
 
 TEST_CASE_FIXTURE(Fixture, "DeprecatedAttribute")

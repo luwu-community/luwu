@@ -11,6 +11,7 @@
 #include "Luau/Type.h"
 #include "Luau/TypeFunction.h"
 
+#include <new>
 #include <set>
 #include <string>
 
@@ -36,6 +37,18 @@ using SyntheticNames = std::unordered_map<const void*, char*>;
 
 namespace Luau
 {
+
+// The props arrays below are raw allocations, so each entry is constructed in place: AstTableProp has
+// fields beyond the ones set here (the access keyword's location, attributes) that must not be left
+// uninitialized.
+static void constructProp(AstTableProp* slot, AstName name, AstType* type, AstTableAccess access)
+{
+    AstTableProp* prop = new (slot) AstTableProp{};
+    prop->name = name;
+    prop->location = Location();
+    prop->type = type;
+    prop->access = access;
+}
 
 // How many AstTableProp entries `props` attaches as: one for a property whose read and write types
 // are the same, otherwise one for each of its read and write types.
@@ -225,36 +238,18 @@ public:
 
             if (prop.isShared())
             {
-                props.data[idx].name = AstName(name);
-                props.data[idx].type = Luau::visit(*this, (*prop.readTy)->ty);
-                props.data[idx].access = AstTableAccess::ReadWrite;
-                props.data[idx].location = Location();
-                props.data[idx].accessLocation = std::nullopt;
-                props.data[idx].attributes = {nullptr, 0};
-                idx++;
+                constructProp(&props.data[idx++], AstName(name), Luau::visit(*this, (*prop.readTy)->ty), AstTableAccess::ReadWrite);
             }
             else
             {
                 if (prop.readTy)
                 {
-                    props.data[idx].name = AstName(name);
-                    props.data[idx].type = Luau::visit(*this, (*prop.readTy)->ty);
-                    props.data[idx].access = AstTableAccess::Read;
-                    props.data[idx].location = Location();
-                    props.data[idx].accessLocation = std::nullopt;
-                    props.data[idx].attributes = {nullptr, 0};
-                    idx++;
+                    constructProp(&props.data[idx++], AstName(name), Luau::visit(*this, (*prop.readTy)->ty), AstTableAccess::Read);
                 }
 
                 if (prop.writeTy)
                 {
-                    props.data[idx].name = AstName(name);
-                    props.data[idx].type = Luau::visit(*this, (*prop.writeTy)->ty);
-                    props.data[idx].access = AstTableAccess::Write;
-                    props.data[idx].location = Location();
-                    props.data[idx].accessLocation = std::nullopt;
-                    props.data[idx].attributes = {nullptr, 0};
-                    idx++;
+                    constructProp(&props.data[idx++], AstName(name), Luau::visit(*this, (*prop.writeTy)->ty), AstTableAccess::Write);
                 }
             }
         }
@@ -326,36 +321,18 @@ public:
 
             if (prop.isShared())
             {
-                props.data[idx].name = AstName(name);
-                props.data[idx].type = Luau::visit(*this, (*prop.readTy)->ty);
-                props.data[idx].access = AstTableAccess::ReadWrite;
-                props.data[idx].location = Location();
-                props.data[idx].accessLocation = std::nullopt;
-                props.data[idx].attributes = {nullptr, 0};
-                idx++;
+                constructProp(&props.data[idx++], AstName(name), Luau::visit(*this, (*prop.readTy)->ty), AstTableAccess::ReadWrite);
             }
             else
             {
                 if (prop.readTy)
                 {
-                    props.data[idx].name = AstName(name);
-                    props.data[idx].type = Luau::visit(*this, (*prop.readTy)->ty);
-                    props.data[idx].access = AstTableAccess::Read;
-                    props.data[idx].location = Location();
-                    props.data[idx].accessLocation = std::nullopt;
-                    props.data[idx].attributes = {nullptr, 0};
-                    idx++;
+                    constructProp(&props.data[idx++], AstName(name), Luau::visit(*this, (*prop.readTy)->ty), AstTableAccess::Read);
                 }
 
                 if (prop.writeTy)
                 {
-                    props.data[idx].name = AstName(name);
-                    props.data[idx].type = Luau::visit(*this, (*prop.writeTy)->ty);
-                    props.data[idx].access = AstTableAccess::Write;
-                    props.data[idx].location = Location();
-                    props.data[idx].accessLocation = std::nullopt;
-                    props.data[idx].attributes = {nullptr, 0};
-                    idx++;
+                    constructProp(&props.data[idx++], AstName(name), Luau::visit(*this, (*prop.writeTy)->ty), AstTableAccess::Write);
                 }
             }
         }

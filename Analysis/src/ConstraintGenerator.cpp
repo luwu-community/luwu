@@ -1112,12 +1112,7 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
                             p = Property::rw(propertyType);
                             p.location = classProp.nameLocation;
 
-                            if (std::optional<AstAttr::DeprecatedInfo> info = findDeprecatedInfo(classProp.attributes))
-                            {
-                                p.deprecated = true;
-                                if (info->use)
-                                    p.deprecatedSuggestion = *info->use;
-                            }
+                            applyDeprecatedAttribute(p, classProp.attributes);
                             if (FFlag::LuwuClasses)
                             {
                                 p.isPrivate = classProp.visibility == AstClassMemberVisibility::Private;
@@ -4464,10 +4459,8 @@ Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprTable* expr, 
                 // `@deprecated` on the entry. The lint checks a Property's own deprecation before it
                 // looks at the value's type, which is what gives the RFC's rule that an attribute on
                 // the field wins over one on the value bound to it.
-                std::optional<AstAttr::DeprecatedInfo> info = findDeprecatedInfo(item.attributes);
-                ttv->props[propName] = {
-                    itemTy, /*deprecated*/ info.has_value(), info && info->use ? *info->use : std::string{}, key->location
-                };
+                ttv->props[propName] = {itemTy, /*deprecated*/ false, {}, key->location};
+                applyDeprecatedAttribute(ttv->props[propName], item.attributes);
             }
             else
             {
@@ -5016,12 +5009,7 @@ TypeId ConstraintGenerator::resolveTableType(const ScopePtr& scope, AstType* ty,
 
         // `@deprecated` on a field of a table type: the DeprecatedApi lint already reports on a
         // Property marked this way, so the attribute only has to reach it.
-        if (std::optional<AstAttr::DeprecatedInfo> info = findDeprecatedInfo(prop.attributes))
-        {
-            propRef.deprecated = true;
-            if (info->use)
-                propRef.deprecatedSuggestion = *info->use;
-        }
+        applyDeprecatedAttribute(propRef, prop.attributes);
 
         switch (prop.access)
         {

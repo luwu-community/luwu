@@ -672,8 +672,7 @@ struct Printer
                         writer.symbol(",");
                 }
 
-                if (FFlag::LuauCstAttr && item.attributes.size > 0)
-                    visualizeAttributes(item.attributes, cstItem ? &cstItem->attrLists : nullptr);
+                visualizeAttributesOf(item.attributes, nullptr);
 
                 switch (item.kind)
                 {
@@ -996,12 +995,12 @@ struct Printer
         {
             const auto cstNode = lookupCstNode<CstStatLocal>(a);
 
-            if (FFlag::LuauCstAttr && a->attributes.size > 0)
+            if (a->attributes.size > 0)
             {
-                visualizeAttributes(a->attributes, cstNode ? &cstNode->attrLists : nullptr);
+                visualizeAttributesOf(a->attributes, nullptr);
 
-                // The statement now starts at its attributes, so the `local`/`const` keyword has to
-                // be advanced to rather than written where we happen to be.
+                // The statement starts at its attributes, so the `local`/`const` keyword has to be
+                // advanced to rather than written where we happen to be.
                 if (a->keywordLocation.has_value())
                     advance(a->keywordLocation->begin);
             }
@@ -1129,8 +1128,7 @@ struct Printer
         {
             const auto cstNode = lookupCstNode<CstStatAssign>(a);
 
-            if (FFlag::LuauCstAttr && a->attributes.size > 0)
-                visualizeAttributes(a->attributes, nullptr);
+            visualizeAttributesOf(a->attributes, nullptr);
 
             CommaSeparatorInserter varComma(writer, cstNode ? cstNode->varsCommaPositions.begin() : nullptr);
             for (const auto& var : a->vars)
@@ -1278,8 +1276,7 @@ struct Printer
             {
                 const auto* cstNode = lookupCstNode<CstStatTypeAlias>(a);
 
-                if (FFlag::LuauCstAttr && a->attributes.size > 0)
-                    visualizeAttributes(a->attributes, nullptr);
+                visualizeAttributesOf(a->attributes, nullptr);
 
                 if (a->exported)
                     writer.keyword("export");
@@ -1407,13 +1404,12 @@ struct Printer
         }
         else if (const auto& c = program.as<AstStatClass>(); c && FFlag::LuwuClasses)
         {
-            if (FFlag::LuauCstAttr && c->attributes.size > 0)
-                visualizeAttributes(c->attributes, nullptr);
+            visualizeAttributesOf(c->attributes, nullptr);
 
             if (c->exported)
                 writer.keyword("export");
 
-            // The statement starts at its attributes rather than at `class`, so advance to the
+            // With attributes the statement starts at them rather than at `class`, so advance to the
             // keyword instead of assuming we are already sitting on it.
             writer.advance(c->keywordLocation.begin);
             writer.keyword("class");
@@ -1502,18 +1498,8 @@ struct Printer
                             // them into the keyword.
                             auto visualizeMethodAttributes = [&]()
                             {
-                                if (FFlag::LuauCstAttr)
-                                {
-                                    if (const CstExprFunction* cstNode = lookupCstNode<CstExprFunction>(method.function))
-                                        visualizeAttributes(method.function->attributes, &cstNode->attrLists);
-                                    else
-                                        visualizeAttributes(method.function->attributes, nullptr);
-                                }
-                                else
-                                {
-                                    for (const auto& attribute : method.function->attributes)
-                                        visualizeAttribute(*attribute);
-                                }
+                                const CstExprFunction* cstNode = lookupCstNode<CstExprFunction>(method.function);
+                                visualizeAttributesOf(method.function->attributes, cstNode ? &cstNode->attrLists : nullptr);
                             };
 
                             const bool attributesPrecedeQualifier = method.function->attributes.size > 0 && method.qualifierLocation &&
@@ -1599,15 +1585,7 @@ struct Printer
             if (next == first)
                 return;
 
-            AstArray<AstAttr*> slice{attributes.data + first, next - first};
-
-            if (FFlag::LuauCstAttr)
-                visualizeAttributes(slice, nullptr);
-            else
-            {
-                for (AstAttr* attribute : slice)
-                    visualizeAttribute(*attribute);
-            }
+            visualizeAttributesOf(AstArray<AstAttr*>{attributes.data + first, next - first}, nullptr);
         };
 
         if (qualifierLocation)
@@ -1735,8 +1713,7 @@ struct Printer
 
             comma();
 
-            if (FFlag::LuauCstAttr && local->attributes.size > 0)
-                visualizeAttributes(local->attributes, nullptr);
+            visualizeAttributesOf(local->attributes, nullptr);
 
             advance(local->location.begin);
             writer.identifier(local->name.value);
@@ -1889,6 +1866,11 @@ struct Printer
                 if (cstNode->hasAt)
                     writer.symbol("@");
                 writer.identifier(attribute.name.value);
+
+                // Luwu (attributes): arguments written after a bare `@name`, which the parser reports
+                // but keeps.
+                for (AstExpr* arg : attribute.args)
+                    visualize(*arg);
             }
             else if (const CstParametrizedAttr* cstParamNode = lookupCstNode<CstParametrizedAttr>(&attribute))
             {
@@ -1920,47 +1902,39 @@ struct Printer
         }
     }
 
+    // Luwu (attributes): prints the attributes of any position, under either setting of LuauCstAttr.
+    // `attrLists` is the position's own record of its `@[...]` lists, for a position that keeps one.
+    void visualizeAttributesOf(const AstArray<AstAttr*>& attributes, const AstArray<CstAttrList*>* attrLists)
+    {
+        if (FFlag::LuauCstAttr)
+            visualizeAttributes(attributes, attrLists);
+        else
+        {
+            for (const auto& attribute : attributes)
+                visualizeAttribute(*attribute);
+        }
+    }
+
     void visualizeAttributes(const AstArray<AstAttr*>& attributes, const AstArray<CstAttrList*>* attrLists)
     {
         LUAU_ASSERT(FFlag::LuauCstAttr);
 
+        // Luwu (attributes): a position that keeps no list of its own finds each `@[...]` through the
+        // attribute that opens it. Without CST there are no lists to find, and every attribute prints
+        // with its own `@`.
         if (attrLists == nullptr)
         {
-            // Without the CST's record of where each `@[...]` opened and closed, the grouping is
-            // reconstructed from the attributes themselves: one written inside a list has hasAt
-            // false (it has no `@` of its own), so a run of them is exactly one list. Two adjacent
-            // lists come back out as one, which parses to the same attributes in the same order.
-            bool inList = false;
-
-            for (const auto& attribute : attributes)
+            std::vector<CstAttrList*> openedLists;
+            for (AstAttr* attribute : attributes)
             {
-                const CstAttr* cstAttr = lookupCstNode<CstAttr>(attribute);
-                // A parametrized attribute has no `@` of its own either -- arguments can only be
-                // written inside a list -- so it is always part of one.
-                const bool belongsToList =
-                    (cstAttr && !cstAttr->hasAt) || (!cstAttr && lookupCstNode<CstParametrizedAttr>(attribute) != nullptr);
-
-                if (belongsToList && !inList)
-                {
-                    writer.symbol("@[");
-                    inList = true;
-                }
-                else if (!belongsToList && inList)
-                {
-                    writer.symbol("]");
-                    inList = false;
-                }
-                else if (belongsToList)
-                {
-                    writer.symbol(",");
-                }
-
-                visualizeAttribute(*attribute);
+                if (const CstAttr* cstAttr = lookupCstNode<CstAttr>(attribute); cstAttr && cstAttr->openedList)
+                    openedLists.push_back(cstAttr->openedList);
+                else if (const CstParametrizedAttr* cstParam = lookupCstNode<CstParametrizedAttr>(attribute); cstParam && cstParam->openedList)
+                    openedLists.push_back(cstParam->openedList);
             }
 
-            if (inList)
-                writer.symbol("]");
-
+            AstArray<CstAttrList*> anchored{openedLists.data(), openedLists.size()};
+            visualizeAttributes(attributes, &anchored);
             return;
         }
 
@@ -2112,10 +2086,7 @@ struct Printer
                 if (cstNode->isArray)
                 {
                     LUAU_ASSERT(a->props.size == 0 && indexType && indexType->name == "number");
-                    if (FFlag::LuauCstAttr && a->indexer->attributes.size > 0)
-                        visualizeAttributes(
-                            a->indexer->attributes, cstNode->items.size > 0 ? &cstNode->items.data[0].attrLists : nullptr
-                        );
+                    visualizeAttributesOf(a->indexer->attributes, nullptr);
                     if (a->indexer->accessLocation)
                     {
                         LUAU_ASSERT(a->indexer->access != AstTableAccess::ReadWrite);
@@ -2135,8 +2106,7 @@ struct Printer
                         {
                             LUAU_ASSERT(a->indexer);
 
-                            if (FFlag::LuauCstAttr && a->indexer->attributes.size > 0)
-                                visualizeAttributes(a->indexer->attributes, &item.attrLists);
+                            visualizeAttributesOf(a->indexer->attributes, nullptr);
 
                             if (a->indexer->accessLocation)
                             {
@@ -2164,8 +2134,7 @@ struct Printer
                         }
                         else
                         {
-                            if (FFlag::LuauCstAttr && prop->attributes.size > 0)
-                                visualizeAttributes(prop->attributes, &item.attrLists);
+                            visualizeAttributesOf(prop->attributes, nullptr);
 
                             if (prop->accessLocation)
                             {
@@ -2222,8 +2191,7 @@ struct Printer
                     for (size_t i = 0; i < a->props.size; ++i)
                     {
                         comma();
-                        if (FFlag::LuauCstAttr && a->props.data[i].attributes.size > 0)
-                            visualizeAttributes(a->props.data[i].attributes, nullptr);
+                        visualizeAttributesOf(a->props.data[i].attributes, nullptr);
                         advance(a->props.data[i].location.begin);
                         writer.identifier(a->props.data[i].name.value);
                         if (a->props.data[i].type)
@@ -2235,8 +2203,7 @@ struct Printer
                     if (a->indexer)
                     {
                         comma();
-                        if (FFlag::LuauCstAttr && a->indexer->attributes.size > 0)
-                            visualizeAttributes(a->indexer->attributes, nullptr);
+                        visualizeAttributesOf(a->indexer->attributes, nullptr);
                         writer.symbol("[");
                         visualizeTypeAnnotation(*a->indexer->indexType);
                         writer.symbol("]");

@@ -2,7 +2,7 @@
 
 Status: Implemented (Flagged)
 
-FFlag: DebugLuwuBetterAttributes
+FFlag: LuwuBetterAttributes
 
 > Adapted, with permission, from [luau-lang/rfcs#147](https://github.com/luau-lang/rfcs/pull/147) by
 > [@gaymeowing](https://github.com/gaymeowing) (quaywinn). Her text is kept as written except where
@@ -10,10 +10,11 @@ FFlag: DebugLuwuBetterAttributes
 > unmerged, so per [rfcs/README.md](./README.md) this document records that we implemented it and who
 > wrote it.
 >
-> **Implementation status.** Implemented behind `DebugLuwuBetterAttributes`: the syntax, the
+> **Implementation status.** Implemented behind `LuwuBetterAttributes`: the syntax, the
 > per-position rules, the parse-time diagnostics, and the `DeprecatedApi` lint for variables, type
 > aliases, classes, class fields, table type fields and table constructor entries -- including the
-> rule that a field's attribute takes priority over the value's.
+> rule that a field's attribute takes priority over the value's, and deprecated types written inside
+> other types' definitions.
 >
 > Two positions parse and store their attributes but are not linted yet. An attribute on a
 > **parameter** has no agreed meaning to report on: deprecating a parameter is a message for callers,
@@ -160,6 +161,11 @@ local module = table.freeze({
 module.get_cat_sound()
 ```
 
+*(Amendment: in a list entry, attributes directly in front of `function` belong to that function, as
+they do wherever else a function expression is written: `{ @native function() end }` compiles the
+function natively, and `{ @deprecated function() end }` deprecates the function. Neither entry has
+attributes of its own.)*
+
 ### Types
 
 Types work similarly to [Variables](#variables) and [Tables](#tables), except being types.
@@ -183,6 +189,39 @@ type PetSounds = {
     cat: "mrrp",
 }
 ```
+
+*(Amendment: `@deprecated` on a type and on a type's field are two separate things.*
+
+- *A deprecated **type** (`@deprecated type Puppy`) is reported wherever its name is written: in an
+  annotation, and inside another type's definition, as `CanineSounds` above shows.*
+- *A deprecated **field** of a table type is reported where the field is used through a value of that
+  type, never at the definition. This is how a library's type marks one function deprecated without
+  rewriting its definitions as stub functions:*
+
+  ```luau
+  type FsLib = {
+      @[deprecated { use = "readfile" }] read: (path: string) -> string,
+      readfile: (path: string) -> string,
+  }
+
+  local fs = {} :: FsLib
+  -- DeprecatedApi: Member 'FsLib.read' is deprecated, use 'readfile' instead Luwu(22)
+  fs.read("config.toml")
+  ```
+
+- *They meet in one place: a deprecated type written as the type of a field that is itself
+  `@deprecated` is not reported, because the field already says it is kept only for compatibility.
+  That is the `PetSounds` example; anyone using `puppy` still gets the field's warning. The same holds
+  for a class field and a primary constructor parameter.*
+
+*A deprecated type alias is scoped like the alias itself: it is reported throughout the block that
+declares it (above the declaration too, since aliases are visible there), a generic parameter or a
+nearer alias with the same name shadows it, and a reference inside its own definition
+(`@deprecated type Node = { next: Node? }`) is not reported.)*
+
+*(Amendment: a `type function` takes no attributes. `@deprecated type function f(t) ... end` is a
+parse error, "Attributes cannot be applied to a type function", rather than an attribute that is
+silently dropped: a type function has nowhere to keep them, and no attribute has a meaning there yet.)*
 
 *(Amendment: an attribute written before a table type's entry attaches to that entry, and comes before
 a `read`/`write` modifier, so it reads in the order it is written. An indexer takes them too, and
@@ -234,8 +273,8 @@ print(sounds.puppy)
 ```
 
 *(Amendment: an attribute goes on the line above the member it annotates, which is how they are written
-everywhere else in the language. When one is written inline it goes in front of the access specifier,
-not after it -- an attribute is not a modifier keyword and should not be dressed up as one.)*
+everywhere else in the language. Written inline, the preferred place is in front of the access
+specifier, since an attribute is not a modifier keyword; after it is accepted too, as described below.)*
 
 ```luau
 class PetSounds
@@ -280,9 +319,10 @@ Parameters in function *types* (`(@deprecated a: number) -> ()`) are not covered
 *(New in Luwu: the mechanism the upstream RFC calls for but leaves unspecified.)*
 
 Each attribute declares the set of positions it may be written on, in one place -- the parser's
-attribute registry. `@checked`, `@native` and `@debugnoinline` describe how a function is compiled or
-typechecked, so they allow only functions; `@deprecated` marks an API callers should stop using, which
-every position can have. Writing one somewhere it does not allow is a parse error naming the position:
+attribute registry. `@checked` and `@native` describe how a function is compiled or typechecked, so
+they allow only functions. `@noinline` ([its own RFC](./noinline-attribute.md)) allows only the
+functions the compiler could inline: a local function, a const function, a class method or a function
+expression. `@deprecated` marks an API callers should stop using, which every position can have. Writing one somewhere it does not allow is a parse error naming the position:
 
 ```luau
 -- Attribute '@native' cannot be applied to a type alias
@@ -299,7 +339,7 @@ position.
 
 This is purely additive: `@` in each of these positions is a parse error in Luau 0.730 and in Luwu
 today, so no program that is valid without the feature changes meaning with it. With
-`DebugLuwuBetterAttributes` off, parsing and every diagnostic are byte-identical to before.
+`LuwuBetterAttributes` off, parsing and every diagnostic are byte-identical to before.
 
 Attributes in the new positions have no runtime representation and are not serialized into bytecode, so
 this needs no bytecode version bump and does not affect bytecode compatibility.
@@ -344,6 +384,8 @@ attributes already express.
 - **Parameters in function types**, `(@deprecated a: number) -> ()`. Deferred because a function type's
   parameter names are stored as a bare pair with nowhere to hang attributes, and the list has a
   sparse-fill invariant that any parallel array has to respect.
+- **Attributes on a `type function`**, `@deprecated` above all, which would report where the type
+  function is called.
 - **Attributes after a type alias's `=`.** The upstream draft gestures at this ("type declarations can
   also have attributes directly after the `=`") without specifying it; it is not implemented here, and
   would need its own rules about how it relates to an attribute on the alias itself.

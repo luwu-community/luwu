@@ -13110,7 +13110,7 @@ RETURN R0 1
 )");
 }
 
-TEST_CASE("DebugNoInline")
+TEST_CASE("NoinlineAttribute")
 {
     ScopedFastFlag noInline{FFlag::LuwuNoinlineAttribute, true};
 
@@ -13165,6 +13165,39 @@ CALL R1 -1 1
 RETURN R1 1
 )"
     );
+}
+
+TEST_CASE("NoinlineAttributeIsNotMarkedInlinable")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuNoinlineAttribute, true}, {FFlag::LuauEmitCallFeedback, true}};
+
+    Luau::BytecodeBuilder bcb;
+    Luau::CompileOptions options;
+    options.optimizationLevel = 2;
+    Luau::compileOrThrow(
+        bcb,
+        R"(
+local function plain(x) return x end
+
+@noinline
+local function kept(x) return x end
+
+return plain(1) + kept(2)
+)",
+        options
+    );
+
+    // A function's serialized header is maxstacksize, numparams, numupvalues and isvararg, then its
+    // proto flags.
+    constexpr size_t kProtoFlagsOffset = 4;
+
+    std::string plain = bcb.getFunctionData(0);
+    std::string kept = bcb.getFunctionData(1);
+    REQUIRE(plain.size() > kProtoFlagsOffset);
+    REQUIRE(kept.size() > kProtoFlagsOffset);
+
+    CHECK((uint8_t(plain[kProtoFlagsOffset]) & LPF_INLINABLE) != 0);
+    CHECK((uint8_t(kept[kProtoFlagsOffset]) & LPF_INLINABLE) == 0);
 }
 
 TEST_CASE("FoldConstTableProps")

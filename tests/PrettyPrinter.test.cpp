@@ -13,10 +13,10 @@ LUAU_FASTFLAG(LuwuNoinlineAttribute)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuauTableEntriesDontNeedToMatchIndent)
 LUAU_FASTFLAG(LuauCstAttr)
-LUAU_FASTFLAG(DebugLuwuBetterAttributes)
-LUAU_FASTFLAG(DebugLuauForceOldSolver)
+LUAU_FASTFLAG(LuwuBetterAttributes)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuGenericNominals)
+LUAU_FASTFLAG(DebugLuauForceOldSolver)
 
 using namespace Luau;
 
@@ -2267,7 +2267,7 @@ end
 
 TEST_CASE("prettyPrint_attributes_beyond_functions")
 {
-    ScopedFastFlag fflags[] = {{FFlag::LuauCstAttr, true}, {FFlag::DebugLuwuBetterAttributes, true}};
+    ScopedFastFlag fflags[] = {{FFlag::LuauCstAttr, true}, {FFlag::LuwuBetterAttributes, true}};
 
     // Type alias.
     std::string code = R"(
@@ -2331,7 +2331,7 @@ TEST_CASE("prettyPrint_class_attributes_beyond_methods")
     ScopedFastFlag fflags[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::LuauCstAttr, true},
-        {FFlag::DebugLuwuBetterAttributes, true},
+        {FFlag::LuwuBetterAttributes, true},
     };
 
     // On the class itself, and on fields either side of the access specifier.
@@ -2344,6 +2344,133 @@ class Puppy
     public function speak(self)
         return self.sound
     end
+end
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+}
+
+TEST_CASE_FIXTURE(Fixture, "attach_types_to_a_property_with_different_read_and_write_types")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+
+    // `x` attaches as two entries, one for its read type and one for its write type.
+    std::string code = R"(
+        local function f(t: { read x: number, write x: string })
+            local u = t
+            return u
+        end
+    )";
+
+    // The printer only writes `read`/`write` where the source had them, so the attached entries print
+    // bare; what matters is that both are there.
+    std::string decorated = decorateWithTypes(code);
+    CHECK(decorated.find("local u:{x:number,x:string}=t") != std::string::npos);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "attach_types_to_a_function_whose_generics_are_bound")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+
+    // Luwu: taken from upstream 0.736 (after our last sync at 0.731). Generalization can leave a
+    // function's generic list holding a bound type, and reading it without `follow` asserted, or read a
+    // bound type as a generic and crashed in release builds.
+    std::string code = R"(--!strict
+        local Account = {}
+        Account.__index = Account
+        function Account.new(balance)
+            local self = setmetatable({}, Account)
+            self.balance = balance
+            self.owner = "x"
+            return self
+        end
+        function Account:deposit(n)
+            self.balance = self.balance + n
+        end
+        function Account:withdraw(n)
+            if n > self.balance then error("no") end
+            self.balance -= n
+        end
+        local a = Account.new(10)
+        a:deposit(5)
+        a:withdraw(3)
+        print(a.balance, a.owner)
+    )";
+
+    std::string decorated = decorateWithTypes(code);
+    CHECK(decorated.find("local a:") != std::string::npos);
+}
+
+TEST_CASE("prettyPrint_attribute_lists_keep_their_positions")
+{
+    ScopedFastFlag fflags[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuauCstAttr, true},
+        {FFlag::LuwuBetterAttributes, true},
+    };
+
+    // `@[...]` lists in every position that keeps no list of its own, with the spacing inside and
+    // around them preserved.
+    std::string code = R"(
+        local function speak(x, @[deprecated] y, @[ deprecated { use = "x" } ] z) end
+        @[ deprecated ]
+        type Puppy = string
+        @[deprecated]  local puppy = "whimper"
+        local m = {}
+        @[ deprecated ] m.dog = "woof"
+        local t = { @[ deprecated ] a = 1, @[deprecated] "b" }
+        type T = { @[ deprecated ] a: number, @[deprecated] [string]: number }
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+
+    code = R"(
+@[ deprecated ]
+class Puppy(@[deprecated] public x: number, public @[ deprecated ] y: number, private @deprecated const z: number, public const @deprecated w: number)
+    @[deprecated]
+    public sound: string
+    private @[ deprecated ] age: number
+end
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+}
+
+TEST_CASE("prettyPrint_bare_attribute_arguments_are_kept")
+{
+    ScopedFastFlag fflags[] = {{FFlag::LuauCstAttr, true}, {FFlag::LuwuBetterAttributes, true}};
+
+    // Invalid, and reported by the parser, but printing must not drop the arguments.
+    std::string code = R"(
+        @deprecated { use = "dog" }
+        local puppy = "whimper"
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true, /* ignoreParseErrors= */ true).code);
+}
+
+TEST_CASE("prettyPrint_attributes_beyond_functions_without_cst_attr")
+{
+    ScopedFastFlag fflags[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuauCstAttr, false},
+        {FFlag::LuwuBetterAttributes, true},
+    };
+
+    // Without LuauCstAttr every position prints its attributes the way functions do.
+    std::string code = R"(
+        @deprecated
+        type Puppy = string
+        @deprecated
+        local puppy = "whimper"
+        local function speak(@deprecated old: string) end
+        local t = { @deprecated a = 1 }
+        type T = { @deprecated a: number }
+        local m = {}
+        @deprecated m.dog = "woof"
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+
+    code = R"(
+@deprecated
+class Dog(@deprecated public x: number)
+    @deprecated public sound: string
 end
     )";
     CHECK_EQ(code, prettyPrint(code, {}, true).code);

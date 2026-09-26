@@ -24,16 +24,6 @@ static bool hasAttributeInArray(const AstArray<AstAttr*> attributes, AstAttr::Ty
     return findAttributeInArray(attributes, attributeType) != nullptr;
 }
 
-AstAttr* findAttribute(const AstArray<AstAttr*>& attributes, AstAttr::Type type)
-{
-    return findAttributeInArray(attributes, type);
-}
-
-bool hasAttribute(const AstArray<AstAttr*>& attributes, AstAttr::Type type)
-{
-    return hasAttributeInArray(attributes, type);
-}
-
 std::optional<AstAttr::DeprecatedInfo> findDeprecatedInfo(const AstArray<AstAttr*>& attributes)
 {
     if (const AstAttr* attr = findAttributeInArray(attributes, AstAttr::Type::Deprecated))

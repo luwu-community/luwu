@@ -21,7 +21,7 @@ LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuwuNoinlineAttribute)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuwuClasses)
-LUAU_FASTFLAG(DebugLuwuBetterAttributes)
+LUAU_FASTFLAG(LuwuBetterAttributes)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAG(LuauTrackPrefixLocal)
 LUAU_FASTFLAG(LuwuDefaultArguments)
@@ -4146,7 +4146,7 @@ TEST_CASE_FIXTURE(Fixture, "class_field_attributes")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
-        {FFlag::DebugLuwuBetterAttributes, true},
+        {FFlag::LuwuBetterAttributes, true},
     };
 
     AstStatBlock* stat = parse(R"(
@@ -4182,7 +4182,7 @@ TEST_CASE_FIXTURE(Fixture, "class_field_cannot_have_a_function_only_attribute")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
-        {FFlag::DebugLuwuBetterAttributes, true},
+        {FFlag::LuwuBetterAttributes, true},
     };
 
     ParseResult result = tryParse(R"(
@@ -4194,7 +4194,7 @@ TEST_CASE_FIXTURE(Fixture, "class_field_cannot_have_a_function_only_attribute")
 
     // `@native` describes how a function is compiled, so the attribute registry refuses it here.
     REQUIRE(!result.errors.empty());
-    CHECK_EQ(result.errors[0].getMessage(), "Attribute '@native' cannot be applied to a class field");
+    CHECK_EQ(result.errors[0].getMessage(), "Attribute '@native' can only be applied to functions");
 
     // The field itself still parses, so the rest of the class is not reported against.
     REQUIRE_EQ(result.root->body.size, 1);
@@ -4220,7 +4220,9 @@ TEST_CASE_FIXTURE(Fixture, "class_attribute_with_no_member_does_not_swallow_end"
 
     // One error, and the class still closes at its own `end`: the statement after it parses.
     REQUIRE_EQ(result.errors.size(), 1);
-    CHECK_EQ(result.errors[0].getMessage(), "Expected 'function' after attribute, but got 'end' instead");
+    const char* expected = FFlag::LuwuBetterAttributes ? "Expected 'function' or a field name after attribute, but got 'end' instead"
+                                                            : "Expected 'function' after attribute, but got 'end' instead";
+    CHECK_EQ(result.errors[0].getMessage(), expected);
 
     REQUIRE_EQ(result.root->body.size, 2);
     CHECK(result.root->body.data[0]->is<AstStatClass>());
@@ -6354,7 +6356,7 @@ void checkFirstErrorForAttributes(const std::vector<ParseError>& errors, const s
 {
     LUAU_ASSERT(minSize >= 1);
 
-    CHECK_GE(errors.size(), minSize);
+    REQUIRE_GE(errors.size(), minSize);
     CHECK_EQ(errors[0].getLocation(), location);
     CHECK_EQ(errors[0].getMessage(), message);
 }
@@ -6646,8 +6648,8 @@ function f() end
         );
     }
 
-    // `function t.m()` and `function t:m()` are the same case: the target is a field of a global, so
-    // the call is never resolved statically. The `:` form additionally binds `self`, which the
+    // `function t.m()` and `function t:m()` are the same case: the target is a table field, so the
+    // call is never resolved statically. The `:` form additionally binds `self`, which the
     // compiler refuses to inline regardless.
     {
         ParseResult result = tryParse(R"(
@@ -6704,6 +6706,13 @@ end)");
 
 TEST_CASE_FIXTURE(Fixture, "dont_parse_attributes_on_non_function_stat")
 {
+    // Luwu: with LuwuBetterAttributes, attributes are also allowed before `type`, `class` and assignments,
+    // and the error lists them.
+    const std::string expectedAfterAttribute = FFlag::LuwuBetterAttributes
+        ? "Expected 'function', 'local function', 'const function', 'declare function', 'type', 'class', an assignment or a function type "
+          "declaration after attribute, but got "
+        : "Expected 'function', 'local function', 'const function', 'declare function' or a function type declaration after attribute, but got ";
+
     ParseResult pr1 = tryParse(R"(
 @checked
 if a<0 then a = 0 end)");
@@ -6711,8 +6720,7 @@ if a<0 then a = 0 end)");
         pr1.errors,
         1,
         Location(Position(2, 0), Position(2, 2)),
-        "Expected 'function', 'local function', 'const function', 'declare function' or a function type declaration after attribute, but got "
-        "'if' instead"
+        expectedAfterAttribute + "'if' instead"
     );
 
     ParseResult pr2 = tryParse(R"(
@@ -6726,8 +6734,7 @@ end)");
         pr2.errors,
         1,
         Location(Position(3, 0), Position(3, 5)),
-        "Expected 'function', 'local function', 'const function', 'declare function' or a function type declaration after attribute, but got "
-        "'while' instead"
+        expectedAfterAttribute + "'while' instead"
     );
 
     ParseResult pr3 = tryParse(R"(
@@ -6742,8 +6749,7 @@ end)");
         pr3.errors,
         1,
         Location(Position(2, 0), Position(2, 2)),
-        "Expected 'function', 'local function', 'const function', 'declare function' or a function type declaration after attribute, but got "
-        "'do' instead"
+        expectedAfterAttribute + "'do' instead"
     );
 
     ParseResult pr4 = tryParse(R"(
@@ -6754,8 +6760,7 @@ for i=1,10 do print(i) end
         pr4.errors,
         1,
         Location(Position(2, 0), Position(2, 3)),
-        "Expected 'function', 'local function', 'const function', 'declare function' or a function type declaration after attribute, but got "
-        "'for' instead"
+        expectedAfterAttribute + "'for' instead"
     );
 
     ParseResult pr5 = tryParse(R"(
@@ -6768,8 +6773,7 @@ until line ~= ""
         pr5.errors,
         1,
         Location(Position(2, 0), Position(2, 6)),
-        "Expected 'function', 'local function', 'const function', 'declare function' or a function type declaration after attribute, but got "
-        "'repeat' instead"
+        expectedAfterAttribute + "'repeat' instead"
     );
 
 
@@ -6777,9 +6781,16 @@ until line ~= ""
 @checked
 local x = 10
 )");
-    checkFirstErrorForAttributes(
-        pr6.errors, 1, Location(Position(2, 6), Position(2, 7)), "Expected 'function' after local declaration with attribute, but got 'x' instead"
-    );
+    // Luwu: with LuwuBetterAttributes, a local can take attributes, so the error is that `@checked`
+    // doesn't allow that position, reported on the attribute.
+    if (FFlag::LuwuBetterAttributes)
+        checkFirstErrorForAttributes(
+            pr6.errors, 1, Location(Position(1, 0), Position(1, 8)), "Attribute '@checked' can only be applied to functions"
+        );
+    else
+        checkFirstErrorForAttributes(
+            pr6.errors, 1, Location(Position(2, 6), Position(2, 7)), "Expected 'function' after local declaration with attribute, but got 'x' instead"
+        );
 
     ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}};
 
@@ -6805,8 +6816,7 @@ end
         pr8.errors,
         1,
         Location(Position(3, 31), Position(3, 36)),
-        "Expected 'function', 'local function', 'const function', 'declare function' or a function type declaration after attribute, but got "
-        "'break' instead"
+        expectedAfterAttribute + "'break' instead"
     );
 
 
@@ -6817,8 +6827,7 @@ function foo1 () @checked return 'a' end
         pr9.errors,
         1,
         Location(Position(1, 26), Position(1, 32)),
-        "Expected 'function', 'local function', 'const function', 'declare function' or a function type declaration after attribute, but got "
-        "'return' instead"
+        expectedAfterAttribute + "'return' instead"
     );
 }
 
@@ -6966,7 +6975,7 @@ end)");
 
 TEST_CASE_FIXTURE(Fixture, "parse_attributes_beyond_functions")
 {
-    ScopedFastFlag betterAttributes{FFlag::DebugLuwuBetterAttributes, true};
+    ScopedFastFlag betterAttributes{FFlag::LuwuBetterAttributes, true};
 
     AstStatBlock* stat = parse(R"(
 @deprecated
@@ -7009,6 +7018,7 @@ local m = {}
     // A table constructor entry carries its own attributes; the entries without any stay empty.
     const AstStatLocal* soundsLocal = stat->body.data[2]->as<AstStatLocal>();
     REQUIRE(soundsLocal);
+    REQUIRE_EQ(soundsLocal->values.size, 1);
     const AstExprTable* sounds = soundsLocal->values.data[0]->as<AstExprTable>();
     REQUIRE(sounds);
     REQUIRE_EQ(sounds->items.size, 2);
@@ -7045,11 +7055,10 @@ local m = {}
 
 TEST_CASE_FIXTURE(Fixture, "bare_attribute_arguments_are_diagnosed_precisely")
 {
-    ScopedFastFlag betterAttributes{FFlag::DebugLuwuBetterAttributes, true};
+    ScopedFastFlag betterAttributes{FFlag::LuwuBetterAttributes, true};
 
     // Writing the arguments bare is the likeliest mistake, since that is how other languages spell
-    // it. Without a dedicated diagnostic it surfaced as whatever the next token failed to be, which
-    // said nothing about attributes.
+    // it, so it gets a diagnostic that talks about attributes rather than about the next token.
     {
         ParseResult result = tryParse(R"(
 @deprecated { use = "dog" }
@@ -7117,9 +7126,85 @@ declare bit32: {
     }
 }
 
+TEST_CASE_FIXTURE(Fixture, "bare_attribute_arguments_are_upstream_errors_without_the_flag")
+{
+    ScopedFastFlag betterAttributes{FFlag::LuwuBetterAttributes, false};
+
+    // Without the feature, `{` after a bare attribute is just the token after the attribute.
+    ParseResult result = tryParse(R"(
+@checked { use = "dog" }
+local function f() end
+)");
+
+    REQUIRE(!result.errors.empty());
+    CHECK_EQ(
+        result.errors[0].getMessage(),
+        "Expected 'function', 'local function', 'const function', 'declare function' or a function type declaration after attribute, but got "
+        "'{' instead"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "attributes_before_function_in_a_table_list_entry_belong_to_the_function")
+{
+    ScopedFastFlag betterAttributes{FFlag::LuwuBetterAttributes, true};
+
+    ParseResult result = tryParse(R"(
+local t = {
+    @native function() return 1 end,
+    @deprecated function() end,
+    @deprecated key = function() end,
+}
+)");
+    REQUIRE_EQ(result.errors.size(), 0);
+
+    REQUIRE_EQ(result.root->body.size, 1);
+    const AstStatLocal* local = result.root->body.data[0]->as<AstStatLocal>();
+    REQUIRE(local);
+    REQUIRE_EQ(local->values.size, 1);
+    const AstExprTable* table = local->values.data[0]->as<AstExprTable>();
+    REQUIRE(table);
+    REQUIRE_EQ(table->items.size, 3);
+
+    for (size_t i = 0; i < 2; ++i)
+    {
+        const AstExprTable::Item& item = table->items.data[i];
+        CHECK_EQ(item.attributes.size, 0);
+        const AstExprFunction* function = item.value->as<AstExprFunction>();
+        REQUIRE(function);
+        REQUIRE_EQ(function->attributes.size, 1);
+    }
+
+    CHECK(table->items.data[0].value->as<AstExprFunction>()->hasNativeAttribute());
+    CHECK(table->items.data[1].value->as<AstExprFunction>()->hasAttribute(AstAttr::Type::Deprecated));
+
+    // A keyed entry's attributes stay on the entry.
+    const AstExprTable::Item& keyed = table->items.data[2];
+    REQUIRE_EQ(keyed.attributes.size, 1);
+    CHECK(keyed.attributes.data[0]->type == AstAttr::Type::Deprecated);
+    const AstExprFunction* keyedFunction = keyed.value->as<AstExprFunction>();
+    REQUIRE(keyedFunction);
+    CHECK_EQ(keyedFunction->attributes.size, 0);
+}
+
+TEST_CASE_FIXTURE(Fixture, "attributes_on_a_type_function_are_an_error")
+{
+    ScopedFastFlag betterAttributes{FFlag::LuwuBetterAttributes, true};
+
+    ParseResult result = tryParse(R"(
+@deprecated
+type function f(t)
+    return t
+end
+)");
+
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "Attributes cannot be applied to a type function");
+    CHECK_EQ(result.errors[0].getLocation(), Location{{1, 0}, {2, 4}});
+}
+
 TEST_CASE_FIXTURE(Fixture, "attributes_are_rejected_in_positions_they_do_not_allow")
 {
-    ScopedFastFlag betterAttributes{FFlag::DebugLuwuBetterAttributes, true};
+    ScopedFastFlag betterAttributes{FFlag::LuwuBetterAttributes, true};
 
     // `@native` registers itself as function-only, so every other position refuses it -- and says
     // which position it was written on. Nothing here is a hand-written check per position; they all
@@ -7130,16 +7215,16 @@ TEST_CASE_FIXTURE(Fixture, "attributes_are_rejected_in_positions_they_do_not_all
         CHECK_EQ(result.errors[0].getMessage(), message);
     };
 
-    checkRejected(tryParse("@native type X = number"), "Attribute '@native' cannot be applied to a type alias");
-    checkRejected(tryParse("@native local x = 1"), "Attribute '@native' cannot be applied to a local variable");
-    checkRejected(tryParse("local t = { @native a = 1 }"), "Attribute '@native' cannot be applied to a table field");
-    checkRejected(tryParse("type T = { @native a: number }"), "Attribute '@native' cannot be applied to a table type field");
-    checkRejected(tryParse("type T = { @native [string]: number }"), "Attribute '@native' cannot be applied to a table indexer");
-    checkRejected(tryParse("local function f(@native a) return a end"), "Attribute '@native' cannot be applied to a parameter");
-    checkRejected(tryParse("local m = {} @native m.x = 1"), "Attribute '@native' cannot be applied to an assignment");
+    checkRejected(tryParse("@native type X = number"), "Attribute '@native' can only be applied to functions");
+    checkRejected(tryParse("@native local x = 1"), "Attribute '@native' can only be applied to functions");
+    checkRejected(tryParse("local t = { @native a = 1 }"), "Attribute '@native' can only be applied to functions");
+    checkRejected(tryParse("type T = { @native a: number }"), "Attribute '@native' can only be applied to functions");
+    checkRejected(tryParse("type T = { @native [string]: number }"), "Attribute '@native' can only be applied to functions");
+    checkRejected(tryParse("local function f(@native a) return a end"), "Attribute '@native' can only be applied to functions");
+    checkRejected(tryParse("local m = {} @native m.x = 1"), "Attribute '@native' can only be applied to functions");
 
     // An array-like table type desugars to an indexer, so that is what it is reported as.
-    checkRejected(tryParse("type T = { @native number }"), "Attribute '@native' cannot be applied to a table indexer");
+    checkRejected(tryParse("type T = { @native number }"), "Attribute '@native' can only be applied to functions");
 
     // Exactly one error, not one from the parse and another from pinning the position down.
     ParseResult result = tryParse("@native type X = number");
@@ -7148,7 +7233,7 @@ TEST_CASE_FIXTURE(Fixture, "attributes_are_rejected_in_positions_they_do_not_all
 
 TEST_CASE_FIXTURE(Fixture, "table_type_field_attributes_are_distinct_from_its_type_s_attributes")
 {
-    ScopedFastFlag betterAttributes{FFlag::DebugLuwuBetterAttributes, true};
+    ScopedFastFlag betterAttributes{FFlag::LuwuBetterAttributes, true};
 
     ParseOptions opts;
     opts.allowDeclarationSyntax = true;

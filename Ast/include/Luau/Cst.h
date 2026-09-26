@@ -51,6 +51,8 @@ public:
     const int classIndex;
 };
 
+struct CstAttrList;
+
 class CstAttr : public CstNode
 {
 public:
@@ -59,6 +61,11 @@ public:
     explicit CstAttr(bool hasAt);
 
     bool hasAt; // false when inside an attribute list, ie @[native checked]
+
+    // Luwu (attributes): the `@[...]` list this attribute is the first entry of, if any. Positions
+    // that keep no list of their own (upstream only has attributes on functions, which do) print
+    // each list through the attribute that opens it.
+    CstAttrList* openedList = nullptr;
 };
 
 class CstParametrizedAttr : public CstNode
@@ -73,6 +80,9 @@ public:
 
     // Commas inside the `(a, b, c)` arg list
     AstArray<Position> argsCommaPositions;
+
+    // Luwu (attributes): as CstAttr::openedList.
+    CstAttrList* openedList = nullptr;
 };
 
 struct CstAttrList
@@ -207,9 +217,6 @@ public:
         Position equalsPosition;       // only if Kind != List
         Separator separator;           // may be missing for last Item
         Position separatorPosition;
-
-        // `@[...]` groups written above this entry, needed to print them back as they were written.
-        AstArray<CstAttrList*> attrLists{nullptr, 0};
     };
 
     explicit CstExprTable(const AstArray<Item>& items);
@@ -308,14 +315,7 @@ public:
     LUAU_CST_RTTI(CstStatLocal)
 
     CstStatLocal(AstArray<Position> varsAnnotationColonPositions, AstArray<Position> varsCommaPositions, AstArray<Position> valuesCommaPositions);
-    CstStatLocal(
-        AstArray<CstAttrList*> attrLists,
-        AstArray<Position> varsAnnotationColonPositions,
-        AstArray<Position> varsCommaPositions,
-        AstArray<Position> valuesCommaPositions
-    );
 
-    AstArray<CstAttrList*> attrLists;
     AstArray<Position> varsAnnotationColonPositions;
     AstArray<Position> varsCommaPositions;
     AstArray<Position> valuesCommaPositions;
@@ -486,10 +486,6 @@ public:
 
         CstExprConstantString* stringInfo = nullptr; // only if Kind == StringProperty
         Position stringPosition{0, 0};               // only if Kind == StringProperty
-
-        // `@[...]` groups written above this entry, needed to print them back as they were written.
-        // Assigned after construction so the positional initializers above don't all have to grow.
-        AstArray<CstAttrList*> attrLists{nullptr, 0};
     };
 
     CstTypeTable(AstArray<Item> items, bool isArray);

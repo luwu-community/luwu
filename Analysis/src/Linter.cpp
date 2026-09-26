@@ -990,7 +990,7 @@ private:
         return true;
     }
 
-    bool visit(AstType* node) override
+    bool visit(AstType*) override
     {
         return true;
     }
@@ -2071,7 +2071,7 @@ private:
         return true;
     }
 
-    bool visit(AstType* node) override
+    bool visit(AstType*) override
     {
         return true;
     }
@@ -2384,8 +2384,8 @@ public:
     {
         LintDeprecatedApi pass{&context};
 
-        // Declarations are collected first because a name can be used above the line that deprecates
-        // it -- a type alias most of all, since aliases are visible throughout their scope.
+        // Variables and classes are collected first because a class can be used above the line that
+        // declares it. Type names are scoped per block instead; see visit(AstStatBlock*).
         AttributeCollector collector{&pass};
         context.root->visit(&collector);
 
@@ -2410,15 +2410,28 @@ private:
 
     // Keyed by the binding itself, so shadowing is handled for free.
     DenseHashMap<AstLocal*, AttributeDeprecation> deprecatedLocals{nullptr};
-    // Keyed by the interned name, since a type reference names an alias rather than pointing at it.
-    DenseHashMap<const char*, AttributeDeprecation> deprecatedAliases{nullptr};
     // A class's name is deliberately not pushed as a local (that is what makes classes hoist), so a
     // use of it resolves as a global and has to be matched by name.
     DenseHashMap<const char*, AttributeDeprecation> deprecatedGlobals{nullptr};
 
+    // A type name in scope. A type reference names an alias rather than pointing at it, so type names
+    // are resolved against this stack, innermost last: an alias is visible throughout its block, and
+    // a generic parameter or a nearer alias with the same name shadows it.
+    struct TypeName
+    {
+        AstName name;
+        // Empty for a name that is not deprecated.
+        std::optional<AttributeDeprecation> deprecation;
+    };
+    std::vector<TypeName> typeNames;
+    // No type name is tracked at all unless the file deprecates one.
+    bool anyDeprecatedTypeName = false;
+    // The node whose children visitWithTypeNames is currently visiting; see there.
+    AstNode* expandingNode = nullptr;
+
     // A deprecated class still refers to itself inside its own body, the same way a deprecated
     // function recurses; those uses are not what the warning is for.
-    std::vector<AstLocal*> classScopeStack;
+    std::vector<AstStatClass*> classScopeStack;
 
     struct AttributeCollector : AstVisitor
     {
@@ -2442,29 +2455,153 @@ private:
 
         bool visit(AstStatTypeAlias* node) override
         {
-            if (std::optional<AstAttr::DeprecatedInfo> info = findDeprecatedInfo(node->attributes))
-                outer->deprecatedAliases[node->name.value] = AttributeDeprecation{*info, "Type"};
+            if (findDeprecatedInfo(node->attributes))
+                outer->anyDeprecatedTypeName = true;
 
             return true;
         }
 
         bool visit(AstStatClass* node) override
         {
+            // A class is a value and a type under the same name, and its value use resolves as a
+            // global rather than a local. Its type name is scoped like an alias's.
             if (std::optional<AstAttr::DeprecatedInfo> info = findDeprecatedInfo(node->attributes))
             {
-                // A class is a value and a type under the same name, and its value use resolves as
-                // a global rather than a local.
                 outer->deprecatedGlobals[node->name->name.value] = AttributeDeprecation{*info, "Class"};
-                outer->deprecatedAliases[node->name->name.value] = AttributeDeprecation{*info, "Class"};
+                outer->anyDeprecatedTypeName = true;
             }
 
             return true;
         }
     };
 
+    static std::optional<AttributeDeprecation> declaredDeprecation(const AstArray<AstAttr*>& attributes, const char* noun)
+    {
+        if (std::optional<AstAttr::DeprecatedInfo> info = findDeprecatedInfo(attributes))
+            return AttributeDeprecation{*info, noun};
+
+        return std::nullopt;
+    }
+
+    const AttributeDeprecation* lookupTypeName(AstName name) const
+    {
+        for (auto it = typeNames.rbegin(); it != typeNames.rend(); ++it)
+        {
+            if (it->name == name)
+                return it->deprecation ? &*it->deprecation : nullptr;
+        }
+
+        return nullptr;
+    }
+
+    // Visits `node`'s children with `generics` (and `self`, a name that must not report inside its
+    // own definition) in scope as type names. The AST has no post-visit hook to pop them at, so this
+    // visits `node` again itself: that re-entrant visit sees `expandingNode` and lets the default
+    // traversal walk the children.
+    template<typename Node>
+    bool visitWithTypeNames(Node* node, const AstArray<AstGenericType*>& generics, std::optional<AstName> self = std::nullopt)
+    {
+        const bool nothingToScope = !anyDeprecatedTypeName || (generics.size == 0 && !self);
+        if (nothingToScope || node == expandingNode)
+            return true;
+
+        size_t mark = typeNames.size();
+        if (self)
+            typeNames.push_back(TypeName{*self, std::nullopt});
+        for (AstGenericType* generic : generics)
+            typeNames.push_back(TypeName{generic->name, std::nullopt});
+
+        AstNode* outer = expandingNode;
+        expandingNode = node;
+        node->visit(this);
+        expandingNode = outer;
+
+        typeNames.resize(mark);
+        return false;
+    }
+
+    // Type aliases and classes are visible throughout the block that declares them, above the
+    // declaration included.
+    bool visit(AstStatBlock* node) override
+    {
+        if (!anyDeprecatedTypeName)
+            return true;
+
+        size_t mark = typeNames.size();
+        for (AstStat* stat : node->body)
+        {
+            if (AstStatTypeAlias* alias = stat->as<AstStatTypeAlias>())
+                typeNames.push_back(TypeName{alias->name, declaredDeprecation(alias->attributes, "Type")});
+            else if (AstStatTypeFunction* function = stat->as<AstStatTypeFunction>())
+                typeNames.push_back(TypeName{function->name, std::nullopt});
+            else if (AstStatClass* cls = stat->as<AstStatClass>())
+                typeNames.push_back(TypeName{cls->name->name, declaredDeprecation(cls->attributes, "Class")});
+        }
+
+        if (typeNames.size() == mark)
+            return true;
+
+        for (AstStat* stat : node->body)
+            stat->visit(this);
+
+        typeNames.resize(mark);
+        return false;
+    }
+
+    bool visit(AstStatTypeAlias* node) override
+    {
+        return visitWithTypeNames(node, node->generics, node->name);
+    }
+
+    bool visit(AstExprFunction* node) override
+    {
+        return visitWithTypeNames(node, node->generics);
+    }
+
+    bool visit(AstTypeFunction* node) override
+    {
+        return visitWithTypeNames(node, node->generics);
+    }
+
+    bool visit(AstStatDeclareFunction* node) override
+    {
+        return visitWithTypeNames(node, node->generics);
+    }
+
+    // Types are not walked by default; a deprecated type can be nested anywhere inside one.
+    bool visit(AstType*) override
+    {
+        return true;
+    }
+
+    bool visit(AstTypePack*) override
+    {
+        return true;
+    }
+
+    // A field that is itself `@deprecated` already says it is only kept for compatibility, so the
+    // deprecated type it is declared with is not reported again.
+    bool visit(AstTypeTable* node) override
+    {
+        for (const AstTableProp& prop : node->props)
+        {
+            if (!findDeprecatedInfo(prop.attributes))
+                prop.type->visit(this);
+        }
+
+        if (node->indexer)
+        {
+            node->indexer->indexType->visit(this);
+            if (!findDeprecatedInfo(node->indexer->attributes))
+                node->indexer->resultType->visit(this);
+        }
+
+        return false;
+    }
+
     bool visit(AstExprLocal* node) override
     {
-        if (const AttributeDeprecation* deprecation = deprecatedLocals.find(node->local); deprecation && !inClassScope(node->local))
+        if (const AttributeDeprecation* deprecation = deprecatedLocals.find(node->local))
             reportAttributeDeprecation(node->location, deprecation->noun, node->local->name.value, deprecation->info);
 
         const FunctionType* fty = getFunctionType(node);
@@ -2514,8 +2651,7 @@ private:
         // A prefixed reference names another module's type; the attribute there is that module's.
         if (!node->prefix)
         {
-            if (const AttributeDeprecation* deprecation = deprecatedAliases.find(node->name.value);
-                deprecation && !inClassScopeNamed(node->name.value))
+            if (const AttributeDeprecation* deprecation = lookupTypeName(node->name); deprecation && !inClassScopeNamed(node->name.value))
                 reportAttributeDeprecation(node->location, deprecation->noun, node->name.value, deprecation->info);
         }
 
@@ -2529,12 +2665,11 @@ private:
             if (item.key)
                 item.key->visit(this);
 
-            // An attribute on the entry replaces whatever the value carries (the RFC: "the attributes
-            // on the field having priority over the attributes on the value"), so binding an
-            // already-deprecated value into a deprecated field is not itself worth reporting. Only a
-            // bare reference is skipped; anything larger is still walked.
+            // An attribute on the entry replaces whatever the value carries, so binding an
+            // already-deprecated value into a deprecated entry is not reported. Only a bare
+            // reference is skipped; anything larger is still walked.
             const bool valueIsBareReference = item.value->is<AstExprLocal>() || item.value->is<AstExprGlobal>();
-            if (valueIsBareReference && hasAttribute(item.attributes, AstAttr::Type::Deprecated))
+            if (valueIsBareReference && findDeprecatedInfo(item.attributes))
                 continue;
 
             item.value->visit(this);
@@ -2545,28 +2680,45 @@ private:
 
     bool visit(AstStatClass* node) override
     {
-        classScopeStack.push_back(node->name);
+        classScopeStack.push_back(node);
+
+        size_t mark = typeNames.size();
+        if (anyDeprecatedTypeName)
+        {
+            for (AstGenericType* generic : node->generics)
+                typeNames.push_back(TypeName{generic->name, std::nullopt});
+        }
+
+        // A deprecated field's own type is not reported, as in a table type.
+        auto visitField = [&](const AstArray<AstAttr*>& attributes, AstType* type, AstExpr* defaultValue)
+        {
+            if (type && !findDeprecatedInfo(attributes))
+                type->visit(this);
+            if (defaultValue)
+                defaultValue->visit(this);
+        };
+
+        if (const AstClassPrimaryConstructor* primaryConstructor = node->primaryConstructor)
+        {
+            for (size_t i = 0; i < primaryConstructor->args.size; ++i)
+            {
+                AstLocal* arg = primaryConstructor->args.data[i];
+                AstExpr* defaultValue = i < primaryConstructor->argsDefaults.size ? primaryConstructor->argsDefaults.data[i] : nullptr;
+                visitField(arg->attributes, arg->annotation, defaultValue);
+            }
+        }
 
         for (const AstClassMember& member : node->members)
         {
             if (const AstClassMethod* method = member.get_if<AstClassMethod>())
                 check(method->function);
             else if (const AstClassProperty* prop = member.get_if<AstClassProperty>())
-            {
-                if (prop->ty)
-                    prop->ty->visit(this);
-                if (prop->defaultValue)
-                    prop->defaultValue->visit(this);
-            }
+                visitField(prop->attributes, prop->ty, prop->defaultValue);
         }
 
+        typeNames.resize(mark);
         classScopeStack.pop_back();
         return false;
-    }
-
-    bool inClassScope(AstLocal* local) const
-    {
-        return std::find(classScopeStack.begin(), classScopeStack.end(), local) != classScopeStack.end();
     }
 
     // A class that still uses its own deprecated member internally is the normal state of affairs
@@ -2576,9 +2728,26 @@ private:
         if (!name)
             return false;
 
-        for (AstLocal* cls : classScopeStack)
+        for (AstStatClass* cls : classScopeStack)
         {
-            if (strcmp(cls->name.value, name) == 0)
+            if (strcmp(cls->name->name.value, name) == 0)
+                return true;
+        }
+
+        return false;
+    }
+
+    // Whether `object` is the instance type of a class whose body is being visited. Matched by where
+    // the type was declared, so another type that happens to share the class's name is still reported.
+    bool inOwnClass(const ExternType* object) const
+    {
+        const bool declaredHere = !context->module || object->definitionModuleName == context->module->name;
+        if (!declaredHere || !object->definitionLocation)
+            return false;
+
+        for (AstStatClass* cls : classScopeStack)
+        {
+            if (cls->location == *object->definitionLocation)
                 return true;
         }
 
@@ -2642,7 +2811,8 @@ private:
             {
                 if (prop->deprecated)
                 {
-                    report(node->location, *prop, cty->name.c_str(), node->index.value);
+                    if (!inOwnClass(cty))
+                        report(node->location, *prop, cty->name.c_str(), node->index.value);
                 }
                 else if (std::optional<TypeId> ty = prop->readTy)
                 {
@@ -2746,9 +2916,6 @@ private:
 
     void report(const Location& location, const Property& prop, const char* container, const char* field)
     {
-        if (inClassScopeNamed(container))
-            return;
-
         std::string suggestion = prop.deprecatedSuggestion.empty() ? "" : format(", use '%s' instead", prop.deprecatedSuggestion.c_str());
 
         if (container)

@@ -19,12 +19,12 @@ your code until the cost model gives up:
 - **Stack traces and `debug.info`.** An inlined call has no frame, so it doesn't appear in a
   traceback. When you're chasing a bug through a hot path this is exactly the frame you wanted.
 - **Measuring.** Benchmarking a small function is awkward when the thing you're measuring gets
-  inlined into the loop you're measuring it from. We hit this repeatedly while benchmarking classes.
+  inlined into the loop you're measuring it from.
 - **Cost model disagreements.** The inline threshold is a heuristic. A function called from many
   sites can grow all of them, and occasionally you know better than the heuristic does.
 
-We already had this as `@debugnoinline` behind `DebugLuauNoInline`, where nobody could use it. This
-RFC promotes it to a real attribute with a real name.
+Upstream Luau has this as `@debugnoinline`, behind a `Debug` flag that is off in every shipping build.
+This RFC makes it a real attribute with a real name.
 
 ## Design
 
@@ -76,7 +76,7 @@ special case in the implementation; there is simply nothing to turn off.
 is inlined, the other whether the function is natively compiled.
 
 `function t.m()` and `function t:m()` are rejected for the same reason a plain global is: the target
-is a field of a global, so the call is never resolved statically. The `:` form also binds `self`,
+is a table field, and a call through a table field is never resolved statically. The `:` form also binds `self`,
 which the compiler declines to inline regardless.
 
 There are functions that can't be inlined for other reasons — variadics, functions using
@@ -95,9 +95,8 @@ b = function(x) return x + 1 end
 still correctly describes the intent, and a function can stop being variadic — or a local stop being
 reassigned — later.
 
-That second form is worth knowing about on its own: `local b; b = function ... end` is the shape that
-already prevented inlining before this RFC, and it still does. `local a = function ... end` does not,
-and never did.
+The second form is worth knowing on its own: a function assigned to a local after the local is
+declared is never inlined, with or without `@noinline`, while `local a = function ... end` is.
 
 ### Type system
 
@@ -142,7 +141,9 @@ model refuses. This works and is what we did before, but it's a silly thing to a
 decided against user-controlled inlining, and most of that reasoning is about being *told to inline*
 — an `@inline` is a promise the compiler may not be able to keep, and it invites people to sprinkle
 it around. Turning inlining off is different: it's always possible, always honoured, and its effect
-is easy to describe.
+is easy to describe. "Always honoured" includes native code: a `@noinline` function is not marked
+`LPF_INLINABLE`, the bytecode flag upstream added for a native-code inliner to read, so that inliner
+won't undo it when it lands.
 
 ## Prior art
 

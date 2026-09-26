@@ -19,7 +19,7 @@ LUAU_DYNAMIC_FASTINT(LuauSubtypingRecursionLimit)
 
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAG(LuwuClasses)
-LUAU_FASTFLAG(DebugLuwuBetterAttributes)
+LUAU_FASTFLAG(LuwuBetterAttributes)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
 LUAU_FASTFLAG(LuauAutocompleteFunctionArglistSuggestion)
@@ -5205,7 +5205,7 @@ TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_deprecated_attribute")
 
 TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_attribute_beyond_functions")
 {
-    ScopedFastFlag betterAttributes{FFlag::DebugLuwuBetterAttributes, true};
+    ScopedFastFlag betterAttributes{FFlag::LuwuBetterAttributes, true};
 
     // A local: only the attributes that allow this position are offered, so the function-only ones
     // are absent rather than suggested and then rejected by the parser.

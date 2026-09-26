@@ -2167,11 +2167,11 @@ AutocompleteResult autocomplete_(
 {
     LUAU_TIMETRACE_SCOPE("Luau::autocomplete_", "AutocompleteCore");
 
-    // Checked before anything else: the cursor sitting inside an unfinished attribute is unambiguous,
-    // and the statement- and expression-shaped branches below would otherwise claim it first (an
-    // attribute above a `local` looked like "completing a local declaration"). Only the attributes
-    // legal in that position are offered, straight from the parser's registry, so a newly added
-    // attribute is suggested exactly where it declares itself valid with no list here to keep in step.
+    // Checked before anything else: a cursor inside an unfinished attribute is unambiguous, and the
+    // statement- and expression-shaped branches below would otherwise claim it (an attribute above a
+    // `local` would be read as completing a local declaration). Only the attributes legal in that
+    // position are offered, taken from the parser's registry, so each attribute is suggested exactly
+    // where it declares itself valid.
     if (std::optional<AstAttr::Context> attributeContext = findIncompleteAttributeContext(ancestry, position))
     {
         AutocompleteEntryMap ret;
@@ -2347,8 +2347,7 @@ AutocompleteResult autocomplete_(
     else if (AstExprTable* exprTable = parent->as<AstExprTable>();
              exprTable && (node->is<AstExprGlobal>() || node->is<AstExprConstantString>() || node->is<AstExprInterpString>()))
     {
-        // Not a structured binding: AstExprTable::Item gains fields over time (attributes, most
-        // recently), and a binding has to name every one of them.
+        // Not a structured binding, which would have to name every Item field.
         for (const AstExprTable::Item& item : exprTable->items)
         {
             AstExpr* key = item.key;
