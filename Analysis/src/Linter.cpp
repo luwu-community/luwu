@@ -4,6 +4,7 @@
 #include "Luau/AstQuery.h"
 #include "Luau/LinterConfig.h"
 #include "Luau/Module.h"
+#include "Luau/PrettyPrinter.h"
 #include "Luau/Scope.h"
 #include "Luau/TypeInfer.h"
 #include "Luau/StringUtils.h"
@@ -17,6 +18,8 @@ LUAU_FASTINTVARIABLE(LuauSuggestionDistance, 4)
 LUAU_FASTFLAGVARIABLE(LuauFunctionUnusedRecursiveLinting)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 LUAU_FASTFLAGVARIABLE(LuwuTableRemoveFootgunLint)
+// Defined by the VM, which introduces `none`; without it there is nothing to mix up with `nil`.
+LUAU_FASTFLAG(LuwuNonePrimitive)
 
 namespace Luau
 {
@@ -4044,6 +4047,309 @@ static bool hasNativeCommentDirective(const std::vector<HotComment>& hotcomments
     return false;
 }
 
+// A short name for a value in a lint message (`x`, `t.value`, `obj:method`), or nullopt when it has none.
+static std::optional<std::string> shortExprName(AstExpr* expr)
+{
+    if (AstExprLocal* local = expr->as<AstExprLocal>())
+        return std::string(local->local->name.value);
+    if (AstExprGlobal* global = expr->as<AstExprGlobal>())
+        return std::string(global->name.value);
+    if (AstExprIndexName* index = expr->as<AstExprIndexName>())
+    {
+        if (std::optional<std::string> base = shortExprName(index->expr))
+            return *base + index->op + index->index.value;
+    }
+    return std::nullopt;
+}
+
+// Luwu: `x ~= nil` where `x` can be `none` but never `nil` is always true, and almost certainly meant
+// `x ~= none`; likewise `x ~= none` where `x` can be `nil` but never `none`. Both are falsy, so the two
+// are easy to mix up, and the comparison silently lets the other one through.
+class LintNilNoneComparison : AstVisitor
+{
+public:
+    LUAU_NOINLINE static void process(LintContext& context)
+    {
+        LintNilNoneComparison pass;
+        pass.context = &context;
+
+        context.root->visit(&pass);
+    }
+
+private:
+    LintContext* context;
+
+    struct Nullish
+    {
+        bool nil = false;
+        bool none = false;
+        // Whether it can also be `false`, which decides whether `if x then` means the same as the fix.
+        bool canBeFalse = false;
+    };
+
+    // `if`/`while` conditions, and the keyword that introduces each, so the fix can also be offered as
+    // a plain truthiness test.
+    DenseHashMap<AstExpr*, const char*> conditions{nullptr};
+
+    static AstExpr* unparenthesized(AstExpr* expr)
+    {
+        while (AstExprGroup* group = expr->as<AstExprGroup>())
+            expr = group->expr;
+        return expr;
+    }
+
+    bool visit(AstStatIf* node) override
+    {
+        conditions[unparenthesized(node->condition)] = "if";
+        return true;
+    }
+
+    bool visit(AstStatWhile* node) override
+    {
+        conditions[unparenthesized(node->condition)] = "while";
+        return true;
+    }
+
+    // Which of `nil` and `none` a value of `ty` can be. False when the type can't say (`any`,
+    // `unknown`, generics, anything unsolved), since then neither comparison is known to be useless.
+    static bool collect(TypeId ty, Nullish& out)
+    {
+        ty = follow(ty);
+
+        // The iterator flattens nested unions and skips cycles, so no option is itself a union.
+        if (const UnionType* u = get<UnionType>(ty))
+        {
+            for (TypeId option : u)
+            {
+                if (!collect(option, out))
+                    return false;
+            }
+            return true;
+        }
+
+        if (const PrimitiveType* primitive = get<PrimitiveType>(ty))
+        {
+            if (primitive->type == PrimitiveType::NilType)
+                out.nil = true;
+            else if (primitive->type == PrimitiveType::NoneType)
+                out.none = true;
+            else if (primitive->type == PrimitiveType::Boolean)
+                out.canBeFalse = true;
+            return true;
+        }
+
+        if (const SingletonType* singleton = get<SingletonType>(ty))
+        {
+            if (const BooleanSingleton* b = get<BooleanSingleton>(singleton); b && !b->value)
+                out.canBeFalse = true;
+            return true;
+        }
+
+        return get<TableType>(ty) || get<MetatableType>(ty) || get<FunctionType>(ty) || get<ExternType>(ty);
+    }
+
+    static bool isNoneGlobal(AstExpr* expr)
+    {
+        AstExprGlobal* global = expr->as<AstExprGlobal>();
+        return global && global->name == "none";
+    }
+
+    bool visit(AstExprBinary* node) override
+    {
+        if (node->op != AstExprBinary::CompareNe && node->op != AstExprBinary::CompareEq)
+            return true;
+
+        AstExpr* value = node->left;
+        AstExpr* sentinel = node->right;
+        if (value->is<AstExprConstantNil>() || isNoneGlobal(value))
+            std::swap(value, sentinel);
+
+        bool comparesNil = sentinel->is<AstExprConstantNil>();
+        bool comparesNone = isNoneGlobal(sentinel);
+        if (!comparesNil && !comparesNone)
+            return true;
+
+        std::optional<TypeId> ty = context->getType(value);
+        Nullish nullish;
+        if (!ty || !collect(*ty, nullish))
+            return true;
+
+        // Only the mix-up: a value that can be neither is a different (and less likely) mistake.
+        const char* compared = comparesNil ? "nil" : "none";
+        const char* instead = comparesNil ? "none" : "nil";
+        bool mixedUp = comparesNil ? (!nullish.nil && nullish.none) : (!nullish.none && nullish.nil);
+        if (!mixedUp)
+            return true;
+
+        bool notEqual = node->op == AstExprBinary::CompareNe;
+        const char* op = notEqual ? "~=" : "==";
+        const char* always = notEqual ? "true" : "false";
+        std::optional<std::string> name = shortExprName(value);
+
+        // In a condition, testing the value itself is the other fix, when `false` can't slip through it.
+        std::string truthiness;
+        const char* const* keyword = conditions.find(node);
+        const bool canSuggestTruthiness = keyword && name && !nullish.canBeFalse;
+        if (canSuggestTruthiness)
+        {
+            const char* negation = notEqual ? "" : "not ";
+            const char* bodyKeyword = strcmp(*keyword, "if") == 0 ? "then" : "do";
+            truthiness = format(" or '%s %s%s %s'", *keyword, negation, name->c_str(), bodyKeyword);
+        }
+
+        if (name)
+            emitWarning(
+                *context,
+                LintWarning::Code_NilNoneComparison,
+                node->location,
+                "'%s' can be '%s' but never '%s', so this is always %s; did you mean '%s %s %s'%s?",
+                name->c_str(),
+                instead,
+                compared,
+                always,
+                name->c_str(),
+                op,
+                instead,
+                truthiness.c_str()
+            );
+        else
+            emitWarning(
+                *context,
+                LintWarning::Code_NilNoneComparison,
+                node->location,
+                "This value can be '%s' but never '%s', so this is always %s; did you mean to compare with '%s'?",
+                instead,
+                compared,
+                always,
+                instead
+            );
+
+        return true;
+    }
+};
+
+// Luwu: a type assertion is a single expression, so `f(... :: number)` passes only the first of the
+// values, exactly like `f((...))`, while looking like it only changes their type. Only reported where the
+// values would otherwise all be used (the end of an argument, return, table or assignment list); wrapping
+// the cast in parentheses says the truncation is intended.
+class LintVarargCast : AstVisitor
+{
+public:
+    LUAU_NOINLINE static void process(LintContext& context)
+    {
+        LintVarargCast pass;
+        pass.context = &context;
+
+        context.root->visit(&pass);
+    }
+
+private:
+    LintContext* context;
+
+    // Whether the call's type says it can produce more than one value. A call that produces one
+    // (`require(x) :: any`, `tostring(x) :: string`) loses nothing to the cast, and without type
+    // information nothing is known, so neither is reported.
+    bool returnsSeveralValues(AstExprCall* call)
+    {
+        const FunctionType* function = nullptr;
+        if (std::optional<TypeId> ty = context->getType(call->func))
+            function = get<FunctionType>(follow(*ty));
+
+        // An overloaded function's type is an intersection; the solver records the overload it chose.
+        if (!function && context->module)
+        {
+            if (const TypeId* chosen = context->module->astOverloadResolvedTypes.find(call))
+                function = get<FunctionType>(follow(*chosen));
+        }
+
+        if (!function)
+            return false;
+
+        auto [head, tail] = flatten(function->retTypes);
+        if (head.size() > 1)
+            return true;
+
+        if (!tail)
+            return false;
+
+        TypePackId rest = follow(*tail);
+        return get<VariadicTypePack>(rest) || get<GenericTypePack>(rest);
+    }
+
+    void check(AstExpr* expr)
+    {
+        AstExprTypeAssertion* cast = expr->as<AstExprTypeAssertion>();
+        if (!cast)
+            return;
+
+        // `... :: any :: number` is one cast as far as the values are concerned.
+        AstExpr* operand = cast->expr;
+        while (AstExprTypeAssertion* inner = operand->as<AstExprTypeAssertion>())
+            operand = inner->expr;
+
+        std::string what;
+        const char* unit = "value";
+        if (operand->is<AstExprVarargs>())
+            what = "'...'";
+        else if (AstExprCall* call = operand->as<AstExprCall>(); call && returnsSeveralValues(call))
+        {
+            std::optional<std::string> name = shortExprName(call->func);
+            what = name ? "'" + *name + "()'" : std::string("this call");
+            unit = "result";
+        }
+        else
+            return;
+
+        emitWarning(
+            *context,
+            LintWarning::Code_VarargCast,
+            cast->location,
+            "This type cast silently truncates %s to its first %s at runtime; use a helper function to convert these %ss to '...%s', or wrap "
+            "this in parentheses to silence",
+            what.c_str(),
+            unit,
+            unit,
+            toString(cast->annotation).c_str()
+        );
+    }
+
+    bool visit(AstExprCall* node) override
+    {
+        if (node->args.size > 0)
+            check(node->args.data[node->args.size - 1]);
+        return true;
+    }
+
+    bool visit(AstStatReturn* node) override
+    {
+        if (node->list.size > 0)
+            check(node->list.data[node->list.size - 1]);
+        return true;
+    }
+
+    bool visit(AstExprTable* node) override
+    {
+        if (node->items.size > 0 && node->items.data[node->items.size - 1].kind == AstExprTable::Item::Kind::List)
+            check(node->items.data[node->items.size - 1].value);
+        return true;
+    }
+
+    // With no more names than values, the last value only ever supplies one, cast or not.
+    bool visit(AstStatLocal* node) override
+    {
+        if (node->values.size > 0 && node->vars.size > node->values.size)
+            check(node->values.data[node->values.size - 1]);
+        return true;
+    }
+
+    bool visit(AstStatAssign* node) override
+    {
+        if (node->values.size > 0 && node->vars.size > node->values.size)
+            check(node->values.data[node->values.size - 1]);
+        return true;
+    }
+};
+
 struct LintRedundantNativeAttribute : AstVisitor
 {
 public:
@@ -4170,6 +4476,13 @@ std::vector<LintWarning> lint(
 
     if (context.warningEnabled(LintWarning::Code_ComparisonPrecedence))
         LintComparisonPrecedence::process(context);
+
+    if (FFlag::LuwuNonePrimitive && context.warningEnabled(LintWarning::Code_NilNoneComparison))
+        LintNilNoneComparison::process(context);
+
+    // Luwu: deliberately unflagged. A cast truncating a call's values is a footgun in plain Luau code too.
+    if (context.warningEnabled(LintWarning::Code_VarargCast))
+        LintVarargCast::process(context);
 
     if (context.warningEnabled(LintWarning::Code_RedundantNativeAttribute))
     {

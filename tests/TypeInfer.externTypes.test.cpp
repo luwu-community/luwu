@@ -366,9 +366,15 @@ TEST_CASE_FIXTURE(ExternTypeFixture, "table_properties_are_invariant")
         g(t2) -- line 13.  Breaks soundness
     )");
 
-    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    // `f(t)` also gets a help at `f`'s parameter, where marking `foo` as `read` would accept it. `g(t2)`
+    // doesn't: reading a `BaseClass` as a `ChildClass` fails too.
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
     CHECK_EQ(6, result.errors.at(0).location.begin.line);
-    CHECK_EQ(13, result.errors[1].location.begin.line);
+    const GenericError* help = get<GenericError>(result.errors[1]);
+    REQUIRE(help);
+    CHECK_EQ("Help[read/write mismatch]: consider marking 'foo' as 'read' if the function 'f' only reads from it.", help->message);
+    CHECK_EQ(Location{{1, 23}, {1, 26}}, result.errors[1].location);
+    CHECK_EQ(13, result.errors[2].location.begin.line);
 }
 
 TEST_CASE_FIXTURE(ExternTypeFixture, "table_indexers_are_invariant")
@@ -389,9 +395,15 @@ TEST_CASE_FIXTURE(ExternTypeFixture, "table_indexers_are_invariant")
         g(t2) -- line 13.  Breaks soundness
     )");
 
-    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    // `f(t)` also gets a help at `f`'s parameter, where marking the indexer as `read` would accept it.
+    // `g(t2)` doesn't: reading a `BaseClass` as a `ChildClass` fails too.
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
     CHECK_EQ(6, result.errors.at(0).location.begin.line);
-    CHECK_EQ(13, result.errors[1].location.begin.line);
+    const GenericError* help = get<GenericError>(result.errors[1]);
+    REQUIRE(help);
+    CHECK_EQ("Help[read/write mismatch]: consider marking this as 'read' if the function 'f' only reads from the array.", help->message);
+    CHECK_EQ(Location{{1, 23}, {1, 42}}, result.errors[1].location);
+    CHECK_EQ(13, result.errors[2].location.begin.line);
 }
 
 TEST_CASE_FIXTURE(ExternTypeFixture, "table_class_unification_reports_sane_errors_for_missing_properties")
@@ -467,7 +479,7 @@ b(a)
 
     if (!FFlag::DebugLuauForceOldSolver)
     {
-        const std::string expected = "Expected this to be '{ read X: unknown, read Y: string }', but got 'Vector2'; \n"
+        const std::string expected = "Expected this to be '{ read X: unknown, read Y: string }', but got 'Vector2'\n"
                                      "accessing `Y` results in `number` in the latter type and `string` in the former type, "
                                      "and `number` is not a subtype of `string`";
         CHECK_EQ(expected, toString(result.errors.at(0)));
@@ -559,10 +571,14 @@ local b: B = a
 
     if (!FFlag::DebugLuauForceOldSolver)
     {
-        CHECK(
-            "Expected this to be 'B', but got 'A'; \n"
-            "accessing `x` results in `ChildClass` in the latter type and `BaseClass` in the former type, and `ChildClass` is not "
-            "exactly `BaseClass`" == toString(result.errors.at(0))
+        CHECK_EQ(
+            "Expected property 'x' to allow reading and writing as 'BaseClass', but in 'A' it is a 'ChildClass', which can only "
+            "be read as 'BaseClass'. Because 'x' can be read and written, it could silently be replaced with a value of a "
+            "smaller type, causing data loss.\n\n"
+            "Help[read/write mismatch]:\n"
+            "- if nothing writes to 'x', mark it as 'read x: BaseClass' in 'B'\n"
+            "- if it reads and writes, make a 'BaseClass' version of your data or mark the additional fields as optional",
+            toString(result.errors.at(0))
         );
     }
     else
@@ -614,6 +630,7 @@ TEST_CASE_FIXTURE(ExternTypeFixture, "callable_extern_types")
 
 TEST_CASE_FIXTURE(ExternTypeFixture, "indexable_extern_types")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag _{FFlag::LuauDropUnionSubtypeReasoning, true};
     // Test reading from an index
     {
@@ -1805,6 +1822,7 @@ TEST_CASE_FIXTURE(Fixture, "extern_type_generics_inferred_from_union_argument_me
 
 TEST_CASE_FIXTURE(Fixture, "extern_type_generics_mismatch_reasoning_is_terse_and_context_aware")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     // Regression test for a confusing TypeMismatch explanation. The mismatch is entirely about the
     // function's return type, so the explanation is one short, plain-English line: a context-aware
     // preamble ("Expected this function to return") instead of the generic "Expected this to be",
@@ -1842,11 +1860,13 @@ TEST_CASE_FIXTURE(Fixture, "extern_type_generics_mismatch_reasoning_is_terse_and
     REQUIRE_EQ(1, result.errors.size());
     std::string message = toString(result.errors[0]);
 
+    // The preamble names the return type, so it prints the return type rather than the whole function
+    // type.
     CHECK_EQ(
         "Expected this function to return\n"
-        "\t'(string) -> Exception<string> | number'\n"
+        "    'Exception<string> | number'\n"
         "but got\n"
-        "\t'(string) -> Exception<Wrapped> | number'; \n"
+        "    'Exception<Wrapped> | number'\n"
         "`Exception<Wrapped>` is not a subtype of `Exception<string> | number`",
         message
     );

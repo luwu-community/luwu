@@ -902,6 +902,7 @@ TEST_CASE_FIXTURE(Fixture, "tostring_unsee_ttv_if_array")
 
 TEST_CASE_FIXTURE(Fixture, "tostring_error_mismatch")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         --!strict
         function f1(t: {a : number, b: string, c: {d: string}}) : {a : number, b : string, c : { d : number}}
@@ -911,22 +912,22 @@ TEST_CASE_FIXTURE(Fixture, "tostring_error_mismatch")
 
     std::string expected;
     if (!FFlag::DebugLuauForceOldSolver)
-        expected = "Expected this to be\n\t"
+        expected = "Expected this to be\n    "
                    "'{ a: number, b: string, c: { d: number } }'\n"
-                   "but got\n\t"
-                   "'{ a: number, b: string, c: { d: string } }'; \n"
+                   "but got\n    "
+                   "'{ a: number, b: string, c: { d: string } }'\n"
                    "accessing `c.d` results in `string` in the latter type and `number` in the former "
                    "type, and `string` is not exactly `number`";
     else
-        expected = "Expected this to be exactly\n\t"
+        expected = "Expected this to be exactly\n    "
                    "'{ a: number, b: string, c: { d: number } }'\n"
-                   "but got\n\t"
+                   "but got\n    "
                    "'{ a: number, b: string, c: { d: string } }'\n"
                    "caused by:\n  "
                    "Property 'c' is not compatible.\n"
-                   "Expected this to be exactly\n\t"
+                   "Expected this to be exactly\n    "
                    "'{ d: number }'\n"
-                   "but got\n\t"
+                   "but got\n    "
                    "'{ d: string }'\n"
                    "caused by:\n  "
                    "Property 'd' is not compatible.\n"

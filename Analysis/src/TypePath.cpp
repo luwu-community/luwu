@@ -885,7 +885,9 @@ std::string toStringHuman(const TypePath::Path& path)
             case TypePath::PackField::Arguments:
                 if (state == State::Initial)
                     result << "it" << ' ';
-                else if (state == State::PendingIs)
+                // A property was named just before this, so without a subject the sentence reads
+                // "accessing `fn`, takes ...".
+                else if (state == State::PendingIs || state == State::Property)
                     result << "the function" << ' ';
 
                 result << "takes";
@@ -893,7 +895,7 @@ std::string toStringHuman(const TypePath::Path& path)
             case TypePath::PackField::Returns:
                 if (state == State::Initial)
                     result << "it" << ' ';
-                else if (state == State::PendingIs)
+                else if (state == State::PendingIs || state == State::Property)
                     result << "the function" << ' ';
 
                 result << "returns";

@@ -3192,23 +3192,26 @@ TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_on_string_singletons")
 
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_string_singletons_in_literal")
 {
-    if (!FFlag::DebugLuauForceOldSolver)
-        return;
-
-    // CLI-116814: Under the new solver, we fail to properly apply the expected
-    // type to `tag` as we fail to recognize that we can "break apart" unions
-    // when trying to apply an expected type.
-
+    // Upstream returns early here under the new solver (CLI-116814: the expected type isn't applied to
+    // `tag`, because the union isn't broken apart). Luwu's ExpectedTypeVisitor expects each field of a
+    // literal that matches no member yet to be whatever some member allows for it, so this runs under
+    // both solvers.
     check(R"(
         type tagged = {tag:"cat", fieldx:number} | {tag:"dog", fieldy:number}
         local x: tagged = {tag="@1"}
+        local y: tagged? = {tag="@2"}
+        local z: { pet: tagged } = { pet = {tag="@3"} }
     )");
 
-    auto ac = autocomplete('1');
+    for (char marker : {'1', '2', '3'})
+    {
+        CAPTURE(marker);
+        auto ac = autocomplete(marker);
 
-    CHECK(ac.entryMap.count("cat"));
-    CHECK(ac.entryMap.count("dog"));
-    CHECK_EQ(ac.context, AutocompleteContext::String);
+        CHECK(ac.entryMap.count("cat"));
+        CHECK(ac.entryMap.count("dog"));
+        CHECK_EQ(ac.context, AutocompleteContext::String);
+    }
 }
 
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_string_singletons")

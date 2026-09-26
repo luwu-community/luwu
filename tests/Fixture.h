@@ -32,6 +32,7 @@ LUAU_FASTFLAG(DebugLuauForceAllOldSolverTests)
 LUAU_FASTFLAG(DebugLuauAlwaysShowConstraintSolvingIncomplete);
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(LuauDisallowExternClassInTypeDefinitions)
+LUAU_FASTFLAG(LuwuHelpfulSubtypingErrors)
 
 #define DOES_NOT_PASS_NEW_SOLVER_GUARD_IMPL(line) ScopedFastFlag sff_##line{FFlag::DebugLuauForceOldSolver, !FFlag::DebugLuauForceAllNewSolverTests};
 
@@ -40,6 +41,9 @@ LUAU_FASTFLAG(LuauDisallowExternClassInTypeDefinitions)
 #define DOES_NOT_PASS_OLD_SOLVER_GUARD_IMPL(line) ScopedFastFlag sff_##line{FFlag::DebugLuauForceOldSolver, FFlag::DebugLuauForceAllOldSolverTests};
 
 #define DOES_NOT_PASS_OLD_SOLVER_GUARD() DOES_NOT_PASS_OLD_SOLVER_GUARD_IMPL(__LINE__)
+
+// Luwu (helpful subtyping errors): the test checks the wording used when LuwuHelpfulSubtypingErrors is off.
+#define CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS() ScopedFastFlag luwuHelpfulSubtypingErrorsOff{FFlag::LuwuHelpfulSubtypingErrors, false};
 
 
 

@@ -80,6 +80,7 @@ TEST_CASE_FIXTURE(Fixture, "as_stmt_correct")
 
 TEST_CASE_FIXTURE(Fixture, "as_stmt_incorrect")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag _{FFlag::LuauDropUnionSubtypeReasoning, true};
 
     SUBCASE_BOTH_SOLVERS()

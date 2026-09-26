@@ -368,9 +368,9 @@ TEST_CASE_FIXTURE(Fixture, "table_intersection_write_sealed_indirect")
     }
     else
     {
-        const std::string expected = "Expected this to be\n\t"
+        const std::string expected = "Expected this to be\n    "
                                      "'(string) -> string'"
-                                     "\nbut got\n\t"
+                                     "\nbut got\n    "
                                      "'(string, number) -> string'"
                                      "\ncaused by:\n"
                                      "  Argument count mismatch. Function expects 2 arguments, but only 1 is specified";
@@ -399,9 +399,9 @@ TEST_CASE_FIXTURE(Fixture, "table_write_sealed_indirect")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(4, result);
-    const std::string expected = "Expected this to be\n\t"
+    const std::string expected = "Expected this to be\n    "
                                  "'(string) -> string'"
-                                 "\nbut got\n\t"
+                                 "\nbut got\n    "
                                  "'(string, number) -> string'"
                                  "\ncaused by:\n"
                                  "  Argument count mismatch. Function expects 2 arguments, but only 1 is specified";
@@ -425,6 +425,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "table_intersection_setmetatable")
 
 TEST_CASE_FIXTURE(Fixture, "error_detailed_intersection_part")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
 type X = { x: number }
 type Y = { y: number }
@@ -437,11 +438,11 @@ local a: XYZ = 3
 
     if (!FFlag::DebugLuauForceOldSolver)
     {
-        const std::string expected = "Expected this to be 'X & Y & Z', but got 'number'; \n"
-                                     "this is because \n\t"
-                                     " * `number` is not a subtype of `X`\n\t"
-                                     " * `number` is not a subtype of `Y`\n\t"
-                                     " * `number` is not a subtype of `Z`";
+        const std::string expected = "Expected this to be 'X & Y & Z', but got 'number'\n"
+                                     "this is because\n    * "
+                                     "`number` is not a subtype of `X`\n    * "
+                                     "`number` is not a subtype of `Y`\n    * "
+                                     "`number` is not a subtype of `Z`";
 
         CHECK_EQ(expected, toString(result.errors[0]));
     }
@@ -458,6 +459,7 @@ Expected this to be 'X', but got 'number')";
 
 TEST_CASE_FIXTURE(Fixture, "error_detailed_intersection_all")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
 type X = { x: number }
 type Y = { y: number }
@@ -473,11 +475,11 @@ end
 
     if (!FFlag::DebugLuauForceOldSolver)
     {
-        const std::string expected = "Expected this to be 'number', but got 'X & Y & Z'; \n"
-                                     "this is because \n\t"
-                                     " * `X` is not a subtype of `number`\n\t"
-                                     " * `Y` is not a subtype of `number`\n\t"
-                                     " * `Z` is not a subtype of `number`";
+        const std::string expected = "Expected this to be 'number', but got 'X & Y & Z'\n"
+                                     "this is because\n    * "
+                                     "`X` is not a subtype of `number`\n    * "
+                                     "`Y` is not a subtype of `number`\n    * "
+                                     "`Z` is not a subtype of `number`";
         CHECK_EQ(expected, toString(result.errors[0]));
     }
     else
@@ -514,6 +516,7 @@ TEST_CASE_FIXTURE(Fixture, "no_stack_overflow_from_flattenintersection")
 
 TEST_CASE_FIXTURE(Fixture, "intersect_bool_and_false")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         function f(x: boolean & false)
             local y : false = x -- OK
@@ -525,10 +528,10 @@ TEST_CASE_FIXTURE(Fixture, "intersect_bool_and_false")
 
     if (!FFlag::DebugLuauForceOldSolver)
     {
-        const std::string expected = "Expected this to be 'true', but got 'boolean & false'; \n"
-                                     "this is because \n\t"
-                                     " * `boolean` is not a subtype of `true`\n\t"
-                                     " * `false` is not a subtype of `true`";
+        const std::string expected = "Expected this to be 'true', but got 'boolean & false'\n"
+                                     "this is because\n    * "
+                                     "`boolean` is not a subtype of `true`\n    * "
+                                     "`false` is not a subtype of `true`";
         CHECK_EQ(expected, toString(result.errors[0]));
     }
     else
@@ -537,6 +540,7 @@ TEST_CASE_FIXTURE(Fixture, "intersect_bool_and_false")
 
 TEST_CASE_FIXTURE(Fixture, "intersect_false_and_bool_and_false")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         function f(x: false & (boolean & false))
             local y : false = x -- OK
@@ -549,10 +553,10 @@ TEST_CASE_FIXTURE(Fixture, "intersect_false_and_bool_and_false")
     // TODO: odd stringification of `false & (boolean & false)`.)
     if (!FFlag::DebugLuauForceOldSolver)
     {
-        const std::string expected = "Expected this to be 'true', but got 'boolean & false & false'; \n"
-                                     "this is because \n\t"
-                                     " * `boolean` is not a subtype of `true`\n\t"
-                                     " * `false` is not a subtype of `true`";
+        const std::string expected = "Expected this to be 'true', but got 'boolean & false & false'\n"
+                                     "this is because\n    * "
+                                     "`boolean` is not a subtype of `true`\n    * "
+                                     "`false` is not a subtype of `true`";
         CHECK_EQ(expected, toString(result.errors[0]));
     }
     else
@@ -563,6 +567,7 @@ TEST_CASE_FIXTURE(Fixture, "intersect_false_and_bool_and_false")
 
 TEST_CASE_FIXTURE(Fixture, "intersect_saturate_overloaded_functions")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag _{FFlag::LuauDropUnionSubtypeReasoning, true};
 
     CheckResult result = check(R"(
@@ -577,23 +582,23 @@ TEST_CASE_FIXTURE(Fixture, "intersect_saturate_overloaded_functions")
         // clang-format off
         const std::string expected1 =
             "Expected this to be\n"
-            "\t'(nil) -> nil'\n"
+            "    '(nil) -> nil'\n"
             "but got\n"
-            "\t'((number?) -> number?) & ((string?) -> string?)'; \n"
-            "this is because \n"
-            "\t * it returns `number` in the latter type and `nil` in the former type, and `number` is not a subtype of `nil`\n"
-            "\t * it returns `string` in the latter type and `nil` in the former type, and `string` is not a subtype of `nil`"
+            "    '((number?) -> number?) & ((string?) -> string?)'\n"
+            "this is because\n"
+            "    * it returns `number` in the latter type and `nil` in the former type, and `number` is not a subtype of `nil`\n"
+            "    * it returns `string` in the latter type and `nil` in the former type, and `string` is not a subtype of `nil`"
         ;
         const std::string expected2 =
             "Expected this to be\n"
-            "	'(number) -> number'\n"
+            "    '(number) -> number'\n"
             "but got\n"
-            "	'((number?) -> number?) & ((string?) -> string?)'; \n"
-            "this is because \n"
-            "	 * it returns `number?` in the latter type and `number` in the former type, and `number?` could be `nil`\n"
-            "	 * it returns `string?` in the latter type and `number` in the former type, and `string?` could be `nil`\n"
-            "	 * it returns `string` in the latter type and `number` in the former type, and `string` is not a subtype of `number`\n"
-            "	 * it takes `string?` in the latter type and `number` in the former type, and `string?` is not a supertype of `number`"
+            "    '((number?) -> number?) & ((string?) -> string?)'\n"
+            "this is because\n"
+            "    * it returns `number?` in the latter type and `number` in the former type, and `number?` could be `nil`\n"
+            "    * it returns `string?` in the latter type and `number` in the former type, and `string?` could be `nil`\n"
+            "    * it returns `string` in the latter type and `number` in the former type, and `string` is not a subtype of `number`\n"
+            "    * it takes `string?` in the latter type and `number` in the former type, and `string?` is not a supertype of `number`"
         ;
         // clang-format on
 
@@ -625,9 +630,9 @@ TEST_CASE_FIXTURE(Fixture, "union_saturate_overloaded_functions")
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
 
-    const std::string expected = "Expected this to be\n\t"
+    const std::string expected = "Expected this to be\n    "
                                  "'(boolean | number) -> boolean | number'"
-                                 "\nbut got\n\t"
+                                 "\nbut got\n    "
                                  "'((number) -> number) & ((string) -> string)'"
                                  "; none of the intersection parts are compatible";
     CHECK_EQ(expected, toString(result.errors[0]));
@@ -635,6 +640,7 @@ TEST_CASE_FIXTURE(Fixture, "union_saturate_overloaded_functions")
 
 TEST_CASE_FIXTURE(Fixture, "intersection_of_tables")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         function f(x: { p : number?, q : string? } & { p : number?, q : number?, r : number? })
             local y : { p : number?, q : nil, r : number? } = x -- OK
@@ -647,7 +653,7 @@ TEST_CASE_FIXTURE(Fixture, "intersection_of_tables")
     if (!FFlag::DebugLuauForceOldSolver)
     {
         const std::string expected = "Expected this to be '{ p: nil }', but got '{ p: number?, q: number?, r: number? } & { p: number?, q: string? }'"
-                                     "; \naccessing `p` results in `number` in the latter type and `nil` in the former type, and "
+                                     "\naccessing `p` results in `number` in the latter type and `nil` in the former type, and "
                                      "`number` is not exactly `nil`";
         CHECK_EQ(expected, toString(result.errors[0]));
     }
@@ -661,6 +667,7 @@ TEST_CASE_FIXTURE(Fixture, "intersection_of_tables")
 
 TEST_CASE_FIXTURE(Fixture, "intersection_of_tables_with_top_properties")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag _{FFlag::LuauDropUnionSubtypeReasoning, true};
 
     CheckResult result = check(R"(
@@ -675,16 +682,16 @@ TEST_CASE_FIXTURE(Fixture, "intersection_of_tables_with_top_properties")
         // clang-format off
         const std::string expected =
             "Expected this to be\n"
-            "\t'{ p: string?, q: number? }'\n"
+            "    '{ p: string?, q: number? }'\n"
             "but got\n"
-            "\t'{ p: number?, q: any } & { p: unknown, q: string? }'; \n"
-            "this is because \n"
-            "\t* accessing `p` results in `number?` in the latter type and `string` in the former type, and `number?` is not exactly `string`\n"
-            "\t* accessing `p` results in `number` in the latter type and `string?` in the former type, and `number` is not exactly `string?`\n"
-            "\t* accessing `p` results in `unknown` in the latter type and `string?` in the former type, and `unknown` is not exactly `string?`\n"
-            "\t* accessing `q` results in `any` in the latter type and `number?` in the former type, and `any` is not exactly `number?`\n"
-            "\t* accessing `q` results in `string?` in the latter type and `number` in the former type, and `string?` is not exactly `number`\n"
-            "\t* accessing `q` results in `string` in the latter type and `number?` in the former type, and `string` is not exactly `number?`"
+            "    '{ p: number?, q: any } & { p: unknown, q: string? }'\n"
+            "this is because\n"
+            "    * accessing `p` results in `number?` in the latter type and `string` in the former type, and `number?` is not exactly `string`\n"
+            "    * accessing `p` results in `number` in the latter type and `string?` in the former type, and `number` is not exactly `string?`\n"
+            "    * accessing `p` results in `unknown` in the latter type and `string?` in the former type, and `unknown` is not exactly `string?`\n"
+            "    * accessing `q` results in `any` in the latter type and `number?` in the former type, and `any` is not exactly `number?`\n"
+            "    * accessing `q` results in `string?` in the latter type and `number` in the former type, and `string?` is not exactly `number`\n"
+            "    * accessing `q` results in `string` in the latter type and `number?` in the former type, and `string` is not exactly `number?`"
         ;
         // clang-format on
 
@@ -715,6 +722,7 @@ TEST_CASE_FIXTURE(Fixture, "intersection_of_tables_with_never_properties")
 
 TEST_CASE_FIXTURE(Fixture, "overloaded_functions_returning_intersections")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag _{FFlag::LuauDropUnionSubtypeReasoning, true};
 
     CheckResult result = check(R"(
@@ -730,24 +738,24 @@ TEST_CASE_FIXTURE(Fixture, "overloaded_functions_returning_intersections")
         // clang-format off
         const std::string expected1 =
             "Expected this to be\n"
-            "	'(nil) -> { p: number, q: number, r: number }'\n"
+            "    '(nil) -> { p: number, q: number, r: number }'\n"
             "but got\n"
-            "	'((number?) -> { p: number } & { q: number }) & ((string?) -> { p: number } & { r: number })'; \n"
-            "this is because \n"
-            "	 * it returns `{ p: number }` in the latter type and `{ p: number, q: number, r: number }` in the former type, and `{ p: number }` is not a subtype of `{ p: number, q: number, r: number }`\n"
-            "	 * it returns `{ q: number }` in the latter type and `{ p: number, q: number, r: number }` in the former type, and `{ q: number }` is not a subtype of `{ p: number, q: number, r: number }`\n"
-            "	 * it returns `{ r: number }` in the latter type and `{ p: number, q: number, r: number }` in the former type, and `{ r: number }` is not a subtype of `{ p: number, q: number, r: number }`"
+            "    '((number?) -> { p: number } & { q: number }) & ((string?) -> { p: number } & { r: number })'\n"
+            "this is because\n"
+            "    * it returns `{ p: number }` in the latter type and `{ p: number, q: number, r: number }` in the former type, and `{ p: number }` is not a subtype of `{ p: number, q: number, r: number }`\n"
+            "    * it returns `{ q: number }` in the latter type and `{ p: number, q: number, r: number }` in the former type, and `{ q: number }` is not a subtype of `{ p: number, q: number, r: number }`\n"
+            "    * it returns `{ r: number }` in the latter type and `{ p: number, q: number, r: number }` in the former type, and `{ r: number }` is not a subtype of `{ p: number, q: number, r: number }`"
         ;
         const std::string expected2 =
             "Expected this to be\n"
-            "\t'(number?) -> { p: number, q: number, r: number }'\n"
+            "    '(number?) -> { p: number, q: number, r: number }'\n"
             "but got\n"
-            "\t'((number?) -> { p: number } & { q: number }) & ((string?) -> { p: number } & { r: number })'; \n"
-            "this is because \n"
-            "\t* it returns `{ p: number }` in the latter type and `{ p: number, q: number, r: number }` in the former type, and `{ p: number }` is not a subtype of `{ p: number, q: number, r: number }`\n"
-            "\t* it returns `{ q: number }` in the latter type and `{ p: number, q: number, r: number }` in the former type, and `{ q: number }` is not a subtype of `{ p: number, q: number, r: number }`\n"
-            "\t* it returns `{ r: number }` in the latter type and `{ p: number, q: number, r: number }` in the former type, and `{ r: number }` is not a subtype of `{ p: number, q: number, r: number }`\n"
-            "\t* it takes `string?` in the latter type and `number` in the former type, and `string?` is not a supertype of `number`"
+            "    '((number?) -> { p: number } & { q: number }) & ((string?) -> { p: number } & { r: number })'\n"
+            "this is because\n"
+            "    * it returns `{ p: number }` in the latter type and `{ p: number, q: number, r: number }` in the former type, and `{ p: number }` is not a subtype of `{ p: number, q: number, r: number }`\n"
+            "    * it returns `{ q: number }` in the latter type and `{ p: number, q: number, r: number }` in the former type, and `{ q: number }` is not a subtype of `{ p: number, q: number, r: number }`\n"
+            "    * it returns `{ r: number }` in the latter type and `{ p: number, q: number, r: number }` in the former type, and `{ r: number }` is not a subtype of `{ p: number, q: number, r: number }`\n"
+            "    * it takes `string?` in the latter type and `number` in the former type, and `string?` is not a supertype of `number`"
         ;
         // clang-format on
 
@@ -821,6 +829,7 @@ but got
 
 TEST_CASE_FIXTURE(Fixture, "overloaded_functions_mentioning_generic_packs")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         function f<a...,b...>()
             function g(x : ((number?, a...) -> (number?, b...)) & ((string?, a...) -> (string?, b...)))
@@ -843,24 +852,24 @@ TEST_CASE_FIXTURE(Fixture, "overloaded_functions_mentioning_generic_packs")
         CHECK_EQ(toString(tm2->givenType), "((number?, a...) -> (number?, b...)) & ((string?, a...) -> (string?, b...))");
 
         const std::string expected1 =
-            "Expected this to be\n\t"
+            "Expected this to be\n    "
             "'(nil, a...) -> (nil, b...)'"
-            "\nbut got\n\t"
+            "\nbut got\n    "
             "'((number?, a...) -> (number?, b...)) & ((string?, a...) -> (string?, b...))'"
-            "; \nthis is because \n\t"
-            " * it returns `number` in the latter type and `nil` in the former type, and `number` is not a subtype of `nil`\n\t"
-            " * it returns `string` in the latter type and `nil` in the former type, and `string` is not a subtype of `nil`";
+            "\nthis is because\n    * "
+            "it returns `number` in the latter type and `nil` in the former type, and `number` is not a subtype of `nil`\n    * "
+            "it returns `string` in the latter type and `nil` in the former type, and `string` is not a subtype of `nil`";
 
         const std::string expected2 =
-            "Expected this to be\n\t"
+            "Expected this to be\n    "
             "'(nil, b...) -> (nil, a...)'"
-            "\nbut got\n\t"
+            "\nbut got\n    "
             "'((number?, a...) -> (number?, b...)) & ((string?, a...) -> (string?, b...))'"
-            "; \nthis is because \n\t"
-            " * it returns `number` in the latter type and `nil` in the former type, and `number` is not a subtype of `nil`\n\t"
-            " * it returns `string` in the latter type and `nil` in the former type, and `string` is not a subtype of `nil`\n\t"
-            " * it returns a tail of `b...` in the latter type and `a...` in the former type, and `b...` is not a subtype of `a...`\n\t"
-            " * it takes a tail of `a...` in the latter type and `b...` in the former type, and `a...` is not a supertype of `b...`";
+            "\nthis is because\n    * "
+            "it returns `number` in the latter type and `nil` in the former type, and `number` is not a subtype of `nil`\n    * "
+            "it returns `string` in the latter type and `nil` in the former type, and `string` is not a subtype of `nil`\n    * "
+            "it returns a tail of `b...` in the latter type and `a...` in the former type, and `b...` is not a subtype of `a...`\n    * "
+            "it takes a tail of `a...` in the latter type and `b...` in the former type, and `a...` is not a supertype of `b...`";
 
         CHECK_EQ(expected1, toString(result.errors[0]));
         CHECK_EQ(expected2, toString(result.errors[1]));
@@ -892,9 +901,9 @@ TEST_CASE_FIXTURE(Fixture, "overloadeded_functions_with_unknown_result")
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
 
-    const std::string expected = "Expected this to be\n\t"
+    const std::string expected = "Expected this to be\n    "
                                  "'(number?) -> number?'"
-                                 "\nbut got\n\t"
+                                 "\nbut got\n    "
                                  "'((nil) -> unknown) & ((number) -> number)'"
                                  "; none of the intersection parts are compatible";
     CHECK_EQ(expected, toString(result.errors[0]));
@@ -916,9 +925,9 @@ TEST_CASE_FIXTURE(Fixture, "overloadeded_functions_with_unknown_arguments")
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
 
-    const std::string expected = "Expected this to be\n\t"
+    const std::string expected = "Expected this to be\n    "
                                  "'(number?) -> nil'"
-                                 "\nbut got\n\t"
+                                 "\nbut got\n    "
                                  "'((number) -> number?) & ((unknown) -> string?)'"
                                  "; none of the intersection parts are compatible";
     CHECK_EQ(expected, toString(result.errors[0]));
@@ -926,6 +935,7 @@ TEST_CASE_FIXTURE(Fixture, "overloadeded_functions_with_unknown_arguments")
 
 TEST_CASE_FIXTURE(Fixture, "overloadeded_functions_with_never_result")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
     function f<a...,b...>()
         function g(x : ((number) -> number) & ((nil) -> never))
@@ -938,23 +948,23 @@ TEST_CASE_FIXTURE(Fixture, "overloadeded_functions_with_never_result")
     if (!FFlag::DebugLuauForceOldSolver)
     {
         const std::string expected1 =
-            "Expected this to be\n\t"
+            "Expected this to be\n    "
             "'(number?) -> number'"
-            "\nbut got\n\t"
+            "\nbut got\n    "
             "'((nil) -> never) & ((number) -> number)'"
-            "; \nthis is because \n\t"
-            " * it takes `nil` in the latter type and `number` in the former type, and `nil` is not a supertype of `number`\n\t"
-            " * it takes `number` in the latter type and `nil` in the former type, and `number` is not a supertype of `nil`";
+            "\nthis is because\n    * "
+            "it takes `nil` in the latter type and `number` in the former type, and `nil` is not a supertype of `number`\n    * "
+            "it takes `number` in the latter type and `nil` in the former type, and `number` is not a supertype of `nil`";
 
         const std::string expected2 =
-            "Expected this to be\n\t"
+            "Expected this to be\n    "
             "'(number?) -> never'"
-            "\nbut got\n\t"
+            "\nbut got\n    "
             "'((nil) -> never) & ((number) -> number)'"
-            "; \nthis is because \n\t"
-            " * it returns `number` in the latter type and `never` in the former type, and `number` is not a subtype of `never`\n\t"
-            " * it takes `nil` in the latter type and `number` in the former type, and `nil` is not a supertype of `number`\n\t"
-            " * it takes `number` in the latter type and `nil` in the former type, and `number` is not a supertype of `nil`";
+            "\nthis is because\n    * "
+            "it returns `number` in the latter type and `never` in the former type, and `number` is not a subtype of `never`\n    * "
+            "it takes `nil` in the latter type and `number` in the former type, and `nil` is not a supertype of `number`\n    * "
+            "it takes `number` in the latter type and `nil` in the former type, and `number` is not a supertype of `nil`";
 
         CHECK_EQ(expected1, toString(result.errors[0]));
         CHECK_EQ(expected2, toString(result.errors[1]));
@@ -972,6 +982,7 @@ but got
 
 TEST_CASE_FIXTURE(Fixture, "overloadeded_functions_with_never_arguments")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         function f<a...,b...>()
             function g(x : ((number) -> number?) & ((never) -> string?))
@@ -984,25 +995,25 @@ TEST_CASE_FIXTURE(Fixture, "overloadeded_functions_with_never_arguments")
     if (!FFlag::DebugLuauForceOldSolver)
     {
         const std::string expected1 =
-            "Expected this to be\n\t"
+            "Expected this to be\n    "
             "'(never) -> nil'"
-            "\nbut got\n\t"
+            "\nbut got\n    "
             "'((never) -> string?) & ((number) -> number?)'"
-            "; \nthis is because \n\t"
-            " * it returns `number` in the latter type and `nil` in the former type, and `number` is not a subtype of `nil`\n\t"
-            " * it returns `string` in the latter type and `nil` in the former type, and `string` is not a subtype of `nil`";
+            "\nthis is because\n    * "
+            "it returns `number` in the latter type and `nil` in the former type, and `number` is not a subtype of `nil`\n    * "
+            "it returns `string` in the latter type and `nil` in the former type, and `string` is not a subtype of `nil`";
 
         const std::string expected2 =
-            "Expected this to be\n\t"
+            "Expected this to be\n    "
             "'(number?) -> nil'"
-            "\nbut got\n\t"
+            "\nbut got\n    "
             "'((never) -> string?) & ((number) -> number?)'"
-            "; \nthis is because \n\t"
-            " * it returns `number` in the latter type and `nil` in the former type, and `number` is not a subtype of `nil`\n\t"
-            " * it returns `string` in the latter type and `nil` in the former type, and `string` is not a subtype of `nil`\n\t"
-            " * it takes `never` in the latter type and `nil` in the former type, and `never` is not a supertype of `nil`\n\t"
-            " * it takes `never` in the latter type and `number` in the former type, and `never` is not a supertype of `number`\n\t"
-            " * it takes `number` in the latter type and `nil` in the former type, and `number` is not a supertype of `nil`";
+            "\nthis is because\n    * "
+            "it returns `number` in the latter type and `nil` in the former type, and `number` is not a subtype of `nil`\n    * "
+            "it returns `string` in the latter type and `nil` in the former type, and `string` is not a subtype of `nil`\n    * "
+            "it takes `never` in the latter type and `nil` in the former type, and `never` is not a supertype of `nil`\n    * "
+            "it takes `never` in the latter type and `number` in the former type, and `never` is not a supertype of `number`\n    * "
+            "it takes `number` in the latter type and `nil` in the former type, and `number` is not a supertype of `nil`";
 
         CHECK_EQ(expected1, toString(result.errors[0]));
         CHECK_EQ(expected2, toString(result.errors[1]));
@@ -1032,9 +1043,9 @@ TEST_CASE_FIXTURE(Fixture, "overloadeded_functions_with_overlapping_results_and_
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
 
-    const std::string expected = "Expected this to be\n\t"
+    const std::string expected = "Expected this to be\n    "
                                  "'(number | string) -> (number, number?)'"
-                                 "\nbut got\n\t"
+                                 "\nbut got\n    "
                                  "'((number?) -> (...number)) & ((string?) -> number | string)'"
                                  "; none of the intersection parts are compatible";
     CHECK(expected == toString(result.errors[0]));
@@ -1126,6 +1137,7 @@ but got
 
 TEST_CASE_FIXTURE(Fixture, "overloadeded_functions_with_weird_typepacks_4")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         function f<a...>()
             function g(x : ((a...) -> ()) & ((number,a...) -> number))
@@ -1144,16 +1156,16 @@ TEST_CASE_FIXTURE(Fixture, "overloadeded_functions_with_weird_typepacks_4")
         CHECK_EQ(toString(tm->wantedType), "(number?) -> ()");
         CHECK_EQ(toString(tm->givenType), "((a...) -> ()) & ((number, a...) -> number)");
         const std::string expected =
-            "Expected this to be\n\t"
+            "Expected this to be\n    "
             "'(number?) -> ()'"
-            "\nbut got\n\t"
+            "\nbut got\n    "
             "'((a...) -> ()) & ((number, a...) -> number)'"
-            "; \nthis is because \n\t"
-            " * it returns `number` in the latter type and `()` in the former type, and `number` is not a subtype of `()`\n\t"
-            " * it takes `number` in the latter type and `nil` in the former type, and `number` is not a supertype of `nil`\n\t"
-            " * it takes a tail of `a...` and it takes the portion of the type pack starting at index 0 to the end`number?`, and `a...` is not "
-            "a supertype of `number?`\n\t"
-            " * it takes a tail of `a...`, which is not a supertype of `number?`";
+            "\nthis is because\n    * "
+            "it returns `number` in the latter type and `()` in the former type, and `number` is not a subtype of `()`\n    * "
+            "it takes `number` in the latter type and `nil` in the former type, and `number` is not a supertype of `nil`\n    * "
+            "it takes a tail of `a...` and it takes the portion of the type pack starting at index 0 to the end`number?`, and `a...` is not "
+            "a supertype of `number?`\n    * "
+            "it takes a tail of `a...`, which is not a supertype of `number?`";
         CHECK(expected == toString(result.errors[0]));
     }
     else
