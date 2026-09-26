@@ -606,6 +606,7 @@ local oh : boolean = t.y
 
 TEST_CASE_FIXTURE(Fixture, "error_detailed_union_part")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag sff{FFlag::LuauBetterMissingPropertiesTypeError, true};
 
     CheckResult result = check(R"(
@@ -626,11 +627,11 @@ end
     {
         CHECK_EQ(
             toString(result.errors[0]),
-            "Expected this to be '{ w: number }', but got 'X | Y | Z'; \n"
-            "this is because \n\t"
-            " * `X` is not a subtype of `{ w: number }`\n\t"
-            " * `Y` is not a subtype of `{ w: number }`\n\t"
-            " * `Z` is not a subtype of `{ w: number }`"
+            "Expected this to be '{ w: number }', but got 'X | Y | Z'\n"
+            "this is because\n    * "
+            "`X` is not a subtype of `{ w: number }`\n    * "
+            "`Y` is not a subtype of `{ w: number }`\n    * "
+            "`Z` is not a subtype of `{ w: number }`"
         );
     }
     else
@@ -647,6 +648,7 @@ expected type:
 
 TEST_CASE_FIXTURE(Fixture, "error_detailed_union_all")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag _{FFlag::LuauDropUnionSubtypeReasoning, true};
 
     CheckResult result = check(R"(
@@ -668,6 +670,7 @@ TEST_CASE_FIXTURE(Fixture, "error_detailed_union_all")
 
 TEST_CASE_FIXTURE(Fixture, "error_detailed_optional")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag sff{FFlag::LuauBetterMissingPropertiesTypeError, true};
 
     CheckResult result = check(R"(
@@ -769,9 +772,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "table_union_write_indirect")
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     // NOTE: union normalization will improve this message
 
-    const std::string expected = "Expected this to be\n\t"
+    const std::string expected = "Expected this to be\n    "
                                  "'((number) -> string) | ((number) -> string)'"
-                                 "\nbut got\n\t"
+                                 "\nbut got\n    "
                                  "'(string) -> number'"
                                  "; none of the union options are compatible";
     CHECK_EQ(expected, toString(result.errors[0]));
@@ -861,9 +864,9 @@ TEST_CASE_FIXTURE(Fixture, "union_of_functions_mentioning_generic_typepacks")
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
 
-    const std::string expected = "Expected this to be\n\t"
+    const std::string expected = "Expected this to be\n    "
                                  "'((number) -> number) | ((number?, a...) -> (number?, a...))'"
-                                 "\nbut got\n\t"
+                                 "\nbut got\n    "
                                  "'(number, a...) -> (number?, a...)'"
                                  "; none of the union options are compatible";
     CHECK_EQ(expected, toString(result.errors[0]));
@@ -882,9 +885,9 @@ TEST_CASE_FIXTURE(Fixture, "union_of_functions_with_mismatching_arg_arities")
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
 
-    const std::string expected = "Expected this to be\n\t"
+    const std::string expected = "Expected this to be\n    "
                                  "'((number) -> nil) | ((number, string?) -> number)'"
-                                 "\nbut got\n\t"
+                                 "\nbut got\n    "
                                  "'(number) -> number?'"
                                  "; none of the union options are compatible";
     CHECK_EQ(expected, toString(result.errors[0]));
@@ -903,9 +906,9 @@ TEST_CASE_FIXTURE(Fixture, "union_of_functions_with_mismatching_result_arities")
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
 
-    const std::string expected = "Expected this to be\n\t"
+    const std::string expected = "Expected this to be\n    "
                                  "'(() -> (string, string)) | (() -> number)'"
-                                 "\nbut got\n\t"
+                                 "\nbut got\n    "
                                  "'() -> number | string'"
                                  "; none of the union options are compatible";
     CHECK_EQ(expected, toString(result.errors[0]));
@@ -924,9 +927,9 @@ TEST_CASE_FIXTURE(Fixture, "union_of_functions_with_variadics")
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
 
-    const std::string expected = "Expected this to be\n\t"
+    const std::string expected = "Expected this to be\n    "
                                  "'((...string?) -> (...number)) | ((...string?) -> nil)'"
-                                 "\nbut got\n\t"
+                                 "\nbut got\n    "
                                  "'(...nil) -> (...number?)'"
                                  "; none of the union options are compatible";
     CHECK_EQ(expected, toString(result.errors[0]));
@@ -934,6 +937,7 @@ TEST_CASE_FIXTURE(Fixture, "union_of_functions_with_variadics")
 
 TEST_CASE_FIXTURE(Fixture, "union_of_functions_with_mismatching_arg_variadics")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag _{FFlag::LuauDropUnionSubtypeReasoning, true};
 
     CheckResult result = check(R"(
@@ -949,9 +953,9 @@ TEST_CASE_FIXTURE(Fixture, "union_of_functions_with_mismatching_arg_variadics")
         // clang-format off
         const std::string expected =
             "Expected this to be\n"
-            "\t'((...number?) -> ()) | ((number?) -> ())'\n"
+            "    '((...number?) -> ()) | ((number?) -> ())'\n"
             "but got\n"
-            "\t'(number) -> ()'\n";
+            "    '(number) -> ()'\n";
         ;
         // clang-format on
         CHECK_LONG_STRINGS_EQ(expected, toString(result.errors[0]));
@@ -979,9 +983,9 @@ TEST_CASE_FIXTURE(Fixture, "union_of_functions_with_mismatching_result_variadics
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
 
-    const std::string expected = "Expected this to be\n\t"
+    const std::string expected = "Expected this to be\n    "
                                  "'(() -> (...number)) | (() -> number)'"
-                                 "\nbut got\n\t"
+                                 "\nbut got\n    "
                                  "'() -> (number?, ...number)'"
                                  "; none of the union options are compatible";
     CHECK_EQ(expected, toString(result.errors[0]));
@@ -1219,6 +1223,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "oss_2025")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "optional_mismatch_reasoning_names_the_optional_type")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     // The subtyping test fails on the `nil` member of the union, but naming that member makes the
     // reader work backwards to figure out which type it came from. Name the optional instead.
     CheckResult result = check(R"(
@@ -1233,14 +1238,14 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "optional_mismatch_reasoning_names_the_option
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(3, result);
-    CHECK_EQ("Expected this to be 'number', but got 'number?'; \n`number?` could be `nil`", toString(result.errors[0]));
+    CHECK_EQ("Expected this to be 'number', but got 'number?'\n`number?` could be `nil`", toString(result.errors[0]));
     CHECK_EQ(
-        "Expected this to be\n\t'{ n: number }'\nbut got\n\t'{ n: number? }'; \naccessing `n` results in `number?` in the latter type and "
+        "Expected this to be\n    '{ n: number }'\nbut got\n    '{ n: number? }'\naccessing `n` results in `number?` in the latter type and "
         "`number` in the former type, and `number?` could be `nil`",
         toString(result.errors[1])
     );
     CHECK_EQ(
-        "Expected this to be '{number}', but got '{number?}'; \nthe result of indexing is `number?` in the latter type and `number` in the former "
+        "Expected this to be '{number}', but got '{number?}'\nthe result of indexing is `number?` in the latter type and `number` in the former "
         "type, and `number?` could be `nil`",
         toString(result.errors[2])
     );

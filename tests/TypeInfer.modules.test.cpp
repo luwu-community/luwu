@@ -249,6 +249,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "warn_if_you_try_to_require_a_non_modulescrip
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "general_require_call_expression")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     fileResolver.source["game/A"] = R"(
 --!strict
 return { def = 4 }
@@ -268,6 +269,7 @@ a = tbl.abc.def
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "general_require_type_mismatch")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     fileResolver.source["game/A"] = R"(
 return { def = 4 }
     )";
@@ -442,6 +444,7 @@ type Table = typeof(tbl)
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "module_type_conflict")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     fileResolver.source["game/A"] = R"(
 export type T = { x: number }
 return {}
@@ -464,7 +467,7 @@ local b: B.T = a
 
     if (!FFlag::DebugLuauForceOldSolver)
     {
-        const std::string expected = "Expected this to be 'T' from 'game/B', but got 'T' from 'game/A'; \n"
+        const std::string expected = "Expected this to be 'T' from 'game/B', but got 'T' from 'game/A'\n"
                                      "accessing `x` results in `number` in the latter type and `string` in the former type, and "
                                      "`number` is not exactly `string`";
         CHECK(expected == toString(result.errors[0]));
@@ -481,6 +484,7 @@ Expected this to be exactly 'string', but got 'number')";
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "module_type_conflict_instantiated")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     fileResolver.source["game/A"] = R"(
 export type Wrap<T> = { x: T }
 return {}
@@ -510,7 +514,7 @@ local b: B.T = a
 
     if (!FFlag::DebugLuauForceOldSolver)
     {
-        const std::string expected = "Expected this to be 'T' from 'game/C', but got 'T' from 'game/B'; \n"
+        const std::string expected = "Expected this to be 'T' from 'game/C', but got 'T' from 'game/B'\n"
                                      "accessing `x` results in `number` in the latter type and `string` in the former type, and "
                                      "`number` is not exactly `string`";
         CHECK(expected == toString(result.errors[0]));

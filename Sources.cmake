@@ -247,6 +247,8 @@ target_sources(Luau.Analysis PRIVATE
     Analysis/include/Luau/Module.h
     Analysis/include/Luau/ModuleResolver.h
     Analysis/include/Luau/NonStrictTypeChecker.h
+    Analysis/include/Luau/MismatchExplanation.h
+    Analysis/include/Luau/MismatchWording.h
     Analysis/include/Luau/Normalize.h
     Analysis/include/Luau/OverloadResolver.h
     Analysis/include/Luau/Polarity.h
@@ -337,6 +339,8 @@ target_sources(Luau.Analysis PRIVATE
     Analysis/src/LValue.cpp
     Analysis/src/Module.cpp
     Analysis/src/NonStrictTypeChecker.cpp
+    Analysis/src/MismatchExplanation.cpp
+    Analysis/src/MismatchWording.cpp
     Analysis/src/Normalize.cpp
     Analysis/src/OverloadResolver.cpp
     Analysis/src/Quantify.cpp
@@ -535,6 +539,7 @@ if(TARGET Luau.UnitTest)
         tests/Lexer.test.cpp
         tests/Linter.test.cpp
         tests/LValue.test.cpp
+        tests/MismatchExplanation.test.cpp
         tests/Module.test.cpp
         tests/NonstrictMode.test.cpp
         tests/NonStrictTypeChecker.test.cpp

@@ -12,6 +12,7 @@ LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 LUAU_FASTFLAG(LuwuBetterAttributes)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuDefaultArguments)
+LUAU_FASTFLAG(LuwuNonePrimitive)
 LUAU_FASTFLAG(LuauDeprecatedAttributeOnAnonymousFunctions)
 LUAU_FASTFLAG(LuauFunctionUnusedRecursiveLinting)
 LUAU_FASTFLAG(LuwuTableRemoveFootgunLint)
@@ -3051,6 +3052,166 @@ a<<"hi">>("hi")
 )");
 
     REQUIRE(0 == result.warnings.size());
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "NilNoneComparison")
+{
+    ScopedFastFlag nonePrimitive{FFlag::LuwuNonePrimitive, true};
+
+    LintResult result = lint(R"(
+local function getNumber(x: string | number): number | none
+    if type(x) == "number" then
+        return x
+    end
+    return none
+end
+
+local function find(t: { string }, s: string): number?
+    return table.find(t, s)
+end
+
+local x = getNumber("4")
+if x ~= nil then end
+if nil == x then end
+if x ~= none then end -- ok
+if x then end -- ok
+
+local i = find({}, "a")
+while i ~= none do end
+
+local t = { value = getNumber(1) }
+local _hasValue = t.value ~= nil
+
+local flag: boolean | none = none
+if flag ~= nil then end
+
+local both: number | nil | none = nil
+if both ~= nil then end -- ok: can be either
+if both ~= none then end -- ok
+
+local neither = 5
+if neither ~= nil then end -- ok: a different mistake, not this one
+
+local function _untyped(u) return u ~= nil end -- ok: unknown
+local a: any = nil
+if a ~= none then end -- ok
+)");
+
+    REQUIRE_EQ(5, result.warnings.size());
+    CHECK_EQ(result.warnings[0].text, "'x' can be 'none' but never 'nil', so this is always true; did you mean 'x ~= none' or 'if x then'?");
+    CHECK_EQ(result.warnings[0].location, Location(Position(13, 3), Position(13, 11)));
+    CHECK_EQ(result.warnings[1].text, "'x' can be 'none' but never 'nil', so this is always false; did you mean 'x == none' or 'if not x then'?");
+    CHECK_EQ(result.warnings[2].text, "'i' can be 'nil' but never 'none', so this is always true; did you mean 'i ~= nil' or 'while i do'?");
+    // Not a condition: `t.value` on its own isn't a boolean.
+    CHECK_EQ(result.warnings[3].text, "'t.value' can be 'none' but never 'nil', so this is always true; did you mean 't.value ~= none'?");
+    // `if flag then` would also skip `false`.
+    CHECK_EQ(result.warnings[4].text, "'flag' can be 'none' but never 'nil', so this is always true; did you mean 'flag ~= none'?");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "NilNoneComparisonNeedsTheNonePrimitive")
+{
+    ScopedFastFlag nonePrimitive{FFlag::LuwuNonePrimitive, false};
+
+    // Without the `none` runtime there is nothing to mix up with `nil`, so the lint doesn't run.
+    LintResult result = lint(R"(
+local x: number | none = none
+if x ~= nil then end
+)");
+
+    for (const LintWarning& w : result.warnings)
+        CHECK(w.code != LintWarning::Code_NilNoneComparison);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "VarargCastIgnoresCallsThatReturnOneValue")
+{
+    // A cast on a call only truncates when the call can return more than one value; these are
+    // ordinary idioms that lose nothing.
+    LintResult result = lint(R"(
+local function one(): number return 1 end
+local function pair(): (number, number) return 1, 2 end
+local function many(...: number): ...number return ... end
+
+local function ok(x: any)
+    print(tostring(x) :: string)
+    local t = { tostring(x) :: string, one() :: any }
+    print(t)
+    return require(x) :: any
+end
+
+local function bad()
+    print(pair() :: number)
+    print(many(1, 2) :: number)
+end
+
+return ok, bad
+)");
+
+    std::vector<LintWarning> warnings;
+    for (const LintWarning& w : result.warnings)
+    {
+        if (w.code == LintWarning::Code_VarargCast)
+            warnings.push_back(w);
+    }
+
+    REQUIRE_EQ(2, warnings.size());
+    CHECK(warnings[0].text.find("'pair()'") != std::string::npos);
+    CHECK_EQ(warnings[0].location.begin.line, 13);
+    CHECK(warnings[1].text.find("'many()'") != std::string::npos);
+    CHECK_EQ(warnings[1].location.begin.line, 14);
+}
+
+TEST_CASE_FIXTURE(Fixture, "VarargCast")
+{
+    LintResult result = lint(R"(
+local function count(...: number) return select("#", ...) end
+local function pair(): (number, number) return 1, 2 end
+local lib = { pair = pair }
+
+local function f(...: string | number)
+    count(... :: number)
+    count(1, pair() :: number)
+    local t = { ... :: number }
+    local a, b = lib.pair() :: number
+    count(... :: any :: number)
+    return ... :: number
+end
+
+local function ok(...: string | number)
+    count((... :: number)) -- ok: parenthesized
+    count(... :: number, 1) -- ok: not last, one value either way
+    local x = ... :: number -- ok: one name
+    local t = { (... :: number), n = ... :: number } -- ok
+    count(((...)) :: number) -- ok: the parentheses truncated it already
+    return count(...)
+end
+
+return f, ok
+)");
+
+    // `local a, b = ...` also reports UnbalancedAssignment; only VarargCast is under test here.
+    std::vector<LintWarning> warnings;
+    for (const LintWarning& w : result.warnings)
+    {
+        if (w.code == LintWarning::Code_VarargCast)
+            warnings.push_back(w);
+    }
+
+    REQUIRE_EQ(6, warnings.size());
+    CHECK_EQ(
+        warnings[0].text,
+        "This type cast silently truncates '...' to its first value at runtime; use a helper function to convert these values to '...number', "
+        "or wrap this in parentheses to silence"
+    );
+    CHECK_EQ(warnings[0].location, Location(Position(6, 10), Position(6, 23)));
+    CHECK_EQ(
+        warnings[1].text,
+        "This type cast silently truncates 'pair()' to its first result at runtime; use a helper function to convert these results to "
+        "'...number', or wrap this in parentheses to silence"
+    );
+    CHECK_EQ(warnings[2].location.begin.line, 8);
+    CHECK(warnings[3].text.find("'lib.pair()'") != std::string::npos);
+    CHECK(warnings[4].text.find("'...'") != std::string::npos);
+    CHECK_EQ(warnings[5].location.begin.line, 11);
 }
 
 TEST_SUITE_END();

@@ -8,6 +8,8 @@
 #include "Luau/TypeUtils.h"
 #include "Luau/VisitType.h"
 
+#include <algorithm>
+
 LUAU_FASTFLAGVARIABLE(LuauBidirectionalInferenceSimplifyTables)
 
 namespace Luau
@@ -269,6 +271,44 @@ void ExpectedTypeVisitor::applyExpectedType(TypeId expectedType, const AstExpr* 
                             return;
                         }
                     }
+                }
+
+                // Luwu (helpful subtyping errors): no member matches yet, which is the usual state of a
+                // literal being written (`{ kind = "" }` against a tagged union). Each field can still be
+                // anything some member allows for it, so that's what it's expected to be, and completion
+                // can offer `"join"`, `"leave"`, ... inside the quotes. Upstream stops here with no
+                // expected type for the fields, so under the new solver it offers nothing (CLI-116814).
+                // Iterating the union also yields the members of any union nested in it.
+                std::vector<const TableType*> members;
+                for (TypeId option : utv)
+                {
+                    if (const TableType* member = get<TableType>(option))
+                        members.push_back(member);
+                }
+
+                for (const AstExprTable::Item& item : exprTable->items)
+                {
+                    if (!isRecord(item))
+                        continue;
+
+                    const AstArray<char>& s = item.key->as<AstExprConstantString>()->value;
+                    std::string keyStr{s.data, s.data + s.size};
+
+                    std::vector<TypeId> options;
+                    for (const TableType* member : members)
+                    {
+                        if (auto it = member->props.find(keyStr); it != member->props.end() && it->second.readTy)
+                        {
+                            TypeId ty = follow(*it->second.readTy);
+                            if (std::find(options.begin(), options.end(), ty) == options.end())
+                                options.push_back(ty);
+                        }
+                    }
+
+                    if (options.size() == 1)
+                        applyExpectedType(options[0], item.value);
+                    else if (options.size() > 1)
+                        applyExpectedType(arena->addType(UnionType{std::move(options)}), item.value);
                 }
             }
             return;

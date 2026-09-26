@@ -432,7 +432,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_union_methods_work")
             local ty = types.unionof(types.string, types.number, types.boolean)
             if ty:is("union") then
                 -- creating a copy of `ty`
-                local arr = {}
+                -- Annotated: inside a type function, `table.unpack` of an unannotated array filled
+                -- in a loop infers as `...unknown`, which isn't a `...type`.
+                local arr: { type } = {}
                 for _, value in ty:components() do
                     table.insert(arr, value)
                 end
@@ -598,7 +600,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_intersection_methods_work")
             local ty = types.intersectionof(tbl1, tbl2)
             if ty:is("intersection") then
                 -- creating a copy of `ty`
-                local arr = {}
+                -- Annotated: inside a type function, `table.unpack` of an unannotated array filled
+                -- in a loop infers as `...unknown`, which isn't a `...type`.
+                local arr: { type } = {}
                 for index, value in ty:components() do
                     table.insert(arr, value)
                 end
@@ -1473,6 +1477,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "tag_field")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "metatable_serialization")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
 
     CheckResult result = check(R"(
