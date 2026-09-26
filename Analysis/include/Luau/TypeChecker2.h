@@ -11,6 +11,8 @@
 #include "Luau/TypeFwd.h"
 #include "Luau/TypeUtils.h"
 
+#include <memory>
+
 namespace Luau
 {
 
@@ -41,6 +43,14 @@ struct Reasonings
     // originate from a recognized one.
     std::optional<std::string> contextVerb;
 
+    // Luwu (helpful subtyping errors): when `contextVerb` is set, the preamble promises a specific part of
+    // the type ("Expected this function to return"), but the enclosing TypeMismatch still holds the
+    // *root* types, so it would go on to print the whole function type after that promise. These carry
+    // the stringified types at the end of the shared context path instead, so the message names what it
+    // claims to.
+    std::optional<std::string> contextWantedDisplay;
+    std::optional<std::string> contextGivenDisplay;
+
     std::string toString()
     {
         if (reasons.empty())
@@ -57,11 +67,11 @@ struct Reasonings
         // same line twice is just noise, so collapse them.
         reasons.erase(std::unique(reasons.begin(), reasons.end()), reasons.end());
 
-        std::string allReasons = reasons.size() < 2 ? "\n" : "\nthis is because ";
+        std::string allReasons = reasons.size() < 2 ? "\n" : "\nthis is because";
         for (const std::string& reason : reasons)
         {
             if (reasons.size() > 1)
-                allReasons += "\n\t * ";
+                allReasons += "\n    * ";
 
             allReasons += reason;
         }
@@ -117,6 +127,43 @@ struct TypeChecker2
     void reportError(TypeErrorData data, const Location& location);
     Reasonings explainReasonings(TypeId subTy, TypeId superTy, Location location, const SubtypingResult& r);
     Reasonings explainReasonings(TypePackId subTp, TypePackId superTp, Location location, const SubtypingResult& r);
+
+    // Luwu (helpful subtyping errors): set while checking the packs of a `return` statement, so a pack
+    // mismatch reported from there can phrase itself as being about what the function returns. The same
+    // test runs for argument packs and assignments, where that phrasing would be wrong.
+    bool checkingReturnStatement = false;
+
+    // Luwu (helpful subtyping errors): set while checking one argument of a call, so a mismatch reported from
+    // there can name the function being called and point a second diagnostic at the parameter it came
+    // from. The same mismatch also arises from assignments and returns, which have neither. Holds only
+    // what the clean path already has at hand: the callee's name and its parameter's annotation are
+    // looked up from these once there is an error to explain.
+    struct ArgumentContext
+    {
+        AstExpr* callee = nullptr;
+        const FunctionType* calleeType = nullptr;
+        size_t parameterIndex = 0;
+    };
+
+    std::optional<ArgumentContext> argumentContext;
+
+    // Luwu (helpful subtyping errors): a table literal checked against the one member of a union it was
+    // narrowed to, and that union, so missing fields are reported as being for `GameEvent` rather than
+    // for an unnamed member. Only for that exact expression, not the literals inside it.
+    struct NarrowedLiteral
+    {
+        const AstExpr* literal = nullptr;
+        const UnionType* narrowedFrom = nullptr;
+    };
+
+    std::optional<NarrowedLiteral> narrowedLiteralUnion;
+
+    // Luwu (helpful subtyping errors): the module's functions by location and type aliases by name, so an
+    // explanation can find what the user wrote without walking the AST per lookup. Built by
+    // `getDeclarationIndex` the first time an error needs it, never on the clean path.
+    struct DeclarationIndex;
+    std::shared_ptr<DeclarationIndex> declarationIndex;
+    const DeclarationIndex& getDeclarationIndex();
 
     bool testIsSubtype(TypeId subTy, TypeId superTy, Location location);
     bool testIsSubtype(TypePackId subTy, TypePackId superTy, Location location);

@@ -290,6 +290,54 @@ static std::optional<size_t> getArgumentIndex(const Path& path, TypeId fnTy)
     return std::nullopt;
 }
 
+// Where to report an error that belongs to no single argument: the last argument passed, or the call itself
+// when there are none.
+static Location lastArgumentLocation(const std::vector<AstExpr*>& argExprs, Location fnLocation)
+{
+    return argExprs.empty() ? fnLocation : argExprs.back()->location;
+}
+
+// The argument-side type and the parameter-side type an argument's reasoning failed on. The reasoning's
+// `superPath` starts at the function type's `Arguments` field, which the argument pack itself doesn't have,
+// so that first step is dropped before walking the pack.
+struct ArgumentMismatchSides
+{
+    std::optional<TypeOrPack> given;
+    std::optional<TypeOrPack> wanted;
+};
+
+static Path argumentPackPath(const SubtypingReasoning& reason)
+{
+    Path path = reason.superPath;
+    if (!path.components.empty())
+        path.components.erase(path.components.begin());
+    return path;
+}
+
+static ArgumentMismatchSides traverseArgumentMismatch(
+    const SubtypingReasoning& reason,
+    TypeId fnTy,
+    TypePackId argPack,
+    NotNull<BuiltinTypes> builtinTypes,
+    NotNull<TypeArena> arena
+)
+{
+    return {traverse(argPack, argumentPackPath(reason), builtinTypes, arena), traverse(fnTy, reason.subPath, builtinTypes, arena)};
+}
+
+// Luwu (helpful subtyping errors): the path up to a variadic's element (`tail().variadic()`), when there is one.
+// The path can go on past the element into it, e.g. a union member that doesn't fit.
+static std::optional<Path> pathUpToVariadic(const Path& path)
+{
+    for (size_t i = 0; i < path.components.size(); ++i)
+    {
+        const TypePath::TypeField* field = get_if<TypePath::TypeField>(&path.components[i]);
+        if (field && *field == TypePath::TypeField::Variadic)
+            return Path{std::vector<TypePath::Component>(path.components.begin(), path.components.begin() + i)};
+    }
+    return std::nullopt;
+}
+
 void OverloadResolver::reportErrors(
     ErrorVec& errors,
     TypeId fnTy,
@@ -423,14 +471,63 @@ void OverloadResolver::reportErrors(
 
         // The first path component should always be PackField::Arguments
         LUAU_ASSERT(reason.subPath.components.size() > 1);
-        Path superPathTail = reason.superPath;
-        superPathTail.components.erase(superPathTail.components.begin());
+        ArgumentMismatchSides sides = traverseArgumentMismatch(reason, fnTy, argPack, builtinTypes, arena);
 
-        std::optional<TypeOrPack> failedSub = traverse(argPack, superPathTail, builtinTypes, arena);
-        std::optional<TypeOrPack> failedSuper = traverse(fnTy, reason.subPath, builtinTypes, arena);
-
-        maybeEmplaceError(&errors, argLocation, moduleName, &reason, failedSuper, failedSub);
+        maybeEmplaceError(&errors, argLocation, moduleName, &reason, sides.wanted, sides.given);
         return;
+    }
+
+    // Luwu (helpful subtyping errors): a variadic argument tail passed to a variadic parameter (`f(...)`,
+    // `...: string` into `...: number`) fails on the element type, so the path ends at `tail().variadic()`.
+    // Upstream falls through every case here without reporting anything, since that path is neither an
+    // argument index nor a pack, and the call is accepted. Luwu reports it: the call is wrong, and the
+    // same mismatch through a `return ...` is already an error.
+    if (!failedSubPack && !failedSuperPack && !reason.superPath.components.empty())
+    {
+        Location location = lastArgumentLocation(argExprs, fnLocation);
+
+        // Said about the two variadics, `...number` and `...string | number`, as a mismatched `return ...` is.
+        std::optional<Path> givenTailPath = pathUpToVariadic(argumentPackPath(reason));
+        std::optional<Path> wantedTailPath = pathUpToVariadic(reason.subPath);
+        if (givenTailPath && wantedTailPath)
+        {
+            std::optional<TypePackId> given = traverseForPack(argPack, *givenTailPath, builtinTypes, arena);
+            std::optional<TypePackId> wanted = traverseForPack(fnTy, *wantedTailPath, builtinTypes, arena);
+            if (given && wanted)
+            {
+                switch (shouldSuppressErrors(normalizer, *given).orElse(shouldSuppressErrors(normalizer, *wanted)))
+                {
+                case ErrorSuppression::Suppress:
+                    return;
+                case ErrorSuppression::NormalizationFailed:
+                    errors.emplace_back(location, moduleName, NormalizationTooComplex{});
+                    return;
+                case ErrorSuppression::DoNotSuppress:
+                    break;
+                }
+
+                // Each union member that doesn't fit is a reasoning of its own, but it's one mismatch
+                // between the two packs.
+                for (const TypeError& existing : errors)
+                {
+                    const TypePackMismatch* reported = get<TypePackMismatch>(existing);
+                    const bool isSameMismatch = reported && existing.location == location && follow(reported->wantedTp) == follow(*wanted) &&
+                                                follow(reported->givenTp) == follow(*given);
+                    if (isSameMismatch)
+                        return;
+                }
+
+                errors.emplace_back(location, moduleName, TypePackMismatch{*wanted, *given});
+                return;
+            }
+        }
+
+        ArgumentMismatchSides sides = traverseArgumentMismatch(reason, fnTy, argPack, builtinTypes, arena);
+        if (sides.given && sides.wanted)
+        {
+            maybeEmplaceError(&errors, location, moduleName, &reason, sides.wanted, sides.given);
+            return;
+        }
     }
 
     if (failedSubPack && !failedSuperPack && get<GenericTypePack>(*failedSubPack))
@@ -443,10 +540,7 @@ void OverloadResolver::reportErrors(
         // If a bug in type inference occurs, we may have a mismatch in the return packs.
         // This happens when inference incorrectly leaves the result type of a function free.
         // If this happens, we don't want to explode, so we'll use the function's location.
-        if (argExprs.empty())
-            argLocation = fnLocation;
-        else
-            argLocation = argExprs.at(argExprs.size() - 1)->location;
+        argLocation = lastArgumentLocation(argExprs, fnLocation);
 
         auto errorSuppression = shouldSuppressErrors(normalizer, *failedSubPack).orElse(shouldSuppressErrors(normalizer, *failedSuperPack));
         if (errorSuppression == ErrorSuppression::Suppress)

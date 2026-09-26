@@ -61,6 +61,10 @@ struct ToStringOptions
     // as a hover over a variable. There, printing the alias's own name back (`const fs: fs.fs`) tells
     // the reader nothing.
     bool alwaysExpandRootAlias = false;
+    // Luwu (helpful subtyping errors): if false, union and intersection members print in the order the type
+    // holds them (the order they were written in, for an annotation) instead of sorted. Mismatch
+    // explanations number union members (`Drop#2`), and the number has to match what the reader sees.
+    bool sortUnionMembers = true;
     size_t maxTableLength = size_t(FInt::LuauTableTypeMaximumStringifierLength); // Only applied to TableTypes
     size_t maxTypeLength = size_t(FInt::LuauTypeMaximumStringifierLength);
     size_t compositeTypesSingleLineLimit = 5; // The number of type elements permitted on a single line when printing type unions/intersections
