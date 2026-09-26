@@ -1600,6 +1600,9 @@ AstStat* Parser::parseAttributeStat()
                 "Expected 'function', 'local function', 'const function', 'declare function', 'type', 'class' or an assignment after attribute"
             );
         }
+
+        // Without DebugLuwuBetterAttributes, any other name is reported by the default case.
+        LUAU_FALLTHROUGH;
     }
     default:
         return reportStatError(
