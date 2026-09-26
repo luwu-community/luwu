@@ -18,6 +18,27 @@ struct FileResolver;
 struct TypeArena;
 struct TypeError;
 
+// Luwu (helpful subtyping errors): path notation a mismatch explanation can use. Kept as bits on the error so
+// whatever shows several errors together (an editor hover, the CLI's output) can print one legend for
+// all of them.
+enum MismatchNotation : uint8_t
+{
+    MismatchNotationUnionMember = 1 << 0,  // `Drop#2`
+    MismatchNotationIndexer = 1 << 1,      // `[string]`, a value in a map
+    MismatchNotationExpectedRoot = 1 << 2, // a path starting at `expected`
+    MismatchNotationGotRoot = 1 << 3,      // a path starting at `given`
+    MismatchNotationOverload = 1 << 4,     // `Lookup#2`, one overload of a function
+    MismatchNotationArrayElement = 1 << 5, // `[i]`, an element of an array
+};
+
+// The legend for `notation`, or an empty string when it uses none of the notation.
+std::string mismatchNotationLegend(uint8_t notation);
+
+// Luwu (helpful subtyping errors): the `TypeMismatch::contextVerb` phrases for a mismatch in a function's
+// parameters and in its return values. The renderer words the rest of the message by which one it is.
+inline constexpr const char* mismatchContextFunctionTakes = "this function to take";
+inline constexpr const char* mismatchContextFunctionReturns = "this function to return";
+
 struct TypeMismatch
 {
     enum Context
@@ -47,6 +68,34 @@ struct TypeMismatch
     // return 'X' but got 'Y'" instead of leaving the reader to infer context from the reason
     // text alone. Not part of any constructor; set directly on the constructed value.
     std::optional<std::string> contextVerb;
+
+    // Luwu (helpful subtyping errors): when `contextVerb` is set, the preamble names a specific part of
+    // the type, so printing the root `wantedType`/`givenType` after it would contradict what the preamble
+    // just promised ("Expected this function to return '() -> Widget'"). These hold the stringified types
+    // at the end of that shared context path, and are printed in their place when set.
+    std::optional<std::string> contextWantedDisplay;
+    std::optional<std::string> contextGivenDisplay;
+
+    // Luwu (helpful subtyping errors): a bespoke explanation, printed verbatim in place of the whole
+    // "Expected this to be 'X', but got 'Y'" rendering. Some mismatches are far better explained by a
+    // sentence written for that one case, but they are still type mismatches: keeping them as one preserves
+    // `wantedType` and `givenType` for everything downstream that reads them rather than the message.
+    std::optional<std::string> overrideMessage;
+
+    // Luwu (helpful subtyping errors): printed in place of a type that has a name the reader wrote, with an
+    // optional `= ...` expansion on the line below (an aliased union has no name of its own to print).
+    std::optional<std::string> wantedName;
+    std::optional<std::string> givenName;
+    std::optional<std::string> wantedExpansion;
+    std::optional<std::string> givenExpansion;
+
+    // Luwu (helpful subtyping errors): explained by `explainMismatch`. Such a message prints union members in the
+    // order they were written, not sorted, because the reason numbers them (`Drop#2`) and the numbers have
+    // to match what is printed; and it says "but was given", matching the `given` its paths are rooted at.
+    bool luwuExplanation = false;
+
+    // Luwu (helpful subtyping errors): `MismatchNotation` bits used by `reason`.
+    uint8_t notation = 0;
 
     bool operator==(const TypeMismatch& rhs) const;
 };
@@ -245,6 +294,13 @@ struct ModuleHasCyclicDependency
 struct FunctionExitsWithoutReturning
 {
     TypePackId expectedReturnType;
+
+    // Luwu (helpful subtyping errors): see TypeMismatch::overrideMessage. A function with no return
+    // statement at all is not a case of "not all code paths", and when the declared type is `nil` the
+    // distinction it is failing on -- returning the value `nil` versus returning nothing -- is worth
+    // spelling out.
+    std::optional<std::string> overrideMessage;
+
     bool operator==(const FunctionExitsWithoutReturning& rhs) const;
 };
 
@@ -267,6 +323,14 @@ struct MissingProperties
     TypeId subType;
     std::vector<Name> properties;
     Context context = Missing;
+
+    // Luwu (helpful subtyping errors): render in the same style as an explained `TypeMismatch`, naming the
+    // table by `givenName` (what it's being assigned to) when it has one.
+    bool luwuExplanation = false;
+    std::optional<std::string> givenName;
+    // The name of the type the table is for, which can be a union the literal was narrowed to one member
+    // of (`GameEvent`), so the message doesn't name a member the reader never wrote.
+    std::optional<std::string> wantedName;
 
     bool operator==(const MissingProperties& rhs) const;
 };
@@ -345,6 +409,9 @@ struct TypePackMismatch
     TypePackId wantedTp;
     TypePackId givenTp;
     std::string reason;
+
+    // Luwu (helpful subtyping errors): see TypeMismatch::overrideMessage.
+    std::optional<std::string> overrideMessage;
 
     bool operator==(const TypePackMismatch& rhs) const;
 };

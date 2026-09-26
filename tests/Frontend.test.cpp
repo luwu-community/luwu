@@ -925,6 +925,7 @@ TEST_CASE_FIXTURE(FrontendFixture, "discard_type_graphs")
 
 TEST_CASE_FIXTURE(FrontendFixture, "it_should_be_safe_to_stringify_errors_when_full_type_graph_is_discarded")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag sff{FFlag::LuauBetterMissingPropertiesTypeError, true};
 
     Frontend fe{!FFlag::DebugLuauForceOldSolver ? SolverMode::New : SolverMode::Old, &fileResolver, &configResolver, {false}};
@@ -946,6 +947,28 @@ TEST_CASE_FIXTURE(FrontendFixture, "it_should_be_safe_to_stringify_errors_when_f
     }
     else
         REQUIRE_EQ("required field 'Count' not found in type\n  'a'\nexpected type:\n  '{ Count: number }'", toString(result.errors[0]));
+}
+
+TEST_CASE_FIXTURE(FrontendFixture, "it_should_be_safe_to_stringify_explained_errors_when_full_type_graph_is_discarded")
+{
+    ScopedFastFlag helpfulErrors{FFlag::LuwuHelpfulSubtypingErrors, true};
+    ScopedFastFlag sff{FFlag::LuauBetterMissingPropertiesTypeError, true};
+
+    Frontend fe{!FFlag::DebugLuauForceOldSolver ? SolverMode::New : SolverMode::Old, &fileResolver, &configResolver, {false}};
+    fileResolver.source["Module/A"] = R"(
+        --!strict
+        local a: {Count: number} = {count='five'}
+    )";
+
+    CheckResult result = fe.check("Module/A");
+
+    REQUIRE_EQ(1, result.errors.size());
+
+    // As above: stringifying reads the error's TypeIds, which must outlive the discarded type graph.
+    if (!FFlag::DebugLuauForceOldSolver)
+        CHECK_EQ("'a' is missing a field:\n  • 'Count: number'", toString(result.errors[0]));
+    else
+        CHECK_EQ("required field 'Count' not found in type\n  'a'\nexpected type:\n  '{ Count: number }'", toString(result.errors[0]));
 }
 
 TEST_CASE_FIXTURE(FrontendFixture, "trace_requires_in_nonstrict_mode")
@@ -1275,6 +1298,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "module_scope_check")
 
 TEST_CASE_FIXTURE(FrontendFixture, "parse_only")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     fileResolver.source["game/Gui/Modules/A"] = R"(
         local a: number = 'oh no a type error'
         return {a=a}

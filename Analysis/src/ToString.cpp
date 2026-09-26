@@ -1361,7 +1361,7 @@ struct TypeStringifier
 
         state.unsee(&uv);
 
-        if (!lengthLimitHit && !FFlag::DebugLuauToStringNoLexicalSort)
+        if (!lengthLimitHit && !FFlag::DebugLuauToStringNoLexicalSort && state.opts.sortUnionMembers)
             std::sort(
                 results.begin(),
                 results.end(),
@@ -1523,7 +1523,7 @@ struct TypeStringifier
 
         state.unsee(&uv);
 
-        if (!lengthLimitHit && !FFlag::DebugLuauToStringNoLexicalSort)
+        if (!lengthLimitHit && !FFlag::DebugLuauToStringNoLexicalSort && state.opts.sortUnionMembers)
             std::sort(
                 results.begin(),
                 results.end(),

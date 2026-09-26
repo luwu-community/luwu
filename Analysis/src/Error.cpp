@@ -145,14 +145,73 @@ static bool isClassValueAgainstItsObject(TypeId given, TypeId wanted)
     return nominalDisplayName(given).has_value() != nominalDisplayName(wanted).has_value();
 }
 
+std::string mismatchNotationLegend(uint8_t notation)
+{
+    std::vector<std::string> parts;
+    if (notation & MismatchNotationUnionMember)
+        parts.push_back("'#2' is the 2nd member of a union, counting in the order printed");
+    if (notation & MismatchNotationOverload)
+        parts.push_back("'#2' is the 2nd overload of a function, counting in the order printed");
+    if (notation & MismatchNotationIndexer)
+        parts.push_back("'[string]' is any value in a map with string keys");
+    if (notation & MismatchNotationArrayElement)
+        parts.push_back("'[i]' is any element of an array");
+
+    bool expectedRoot = (notation & MismatchNotationExpectedRoot) != 0;
+    bool gotRoot = (notation & MismatchNotationGotRoot) != 0;
+    if (expectedRoot && gotRoot)
+        parts.push_back("'expected' is the type we expected, and 'given' is the type we were given");
+    else if (expectedRoot)
+        parts.push_back("'expected' is the type we expected");
+    else if (gotRoot)
+        parts.push_back("'given' is the type we were given");
+
+    if (parts.empty())
+        return "";
+
+    std::string legend = "Help: in the paths above,";
+    for (const std::string& part : parts)
+        legend += "\n  • " + part;
+    return legend;
+}
+
+// A reason that starts on its own line joins the message as a line, not as a clause: `"; "` before a line
+// break is punctuation attached to nothing.
+static void appendReason(std::string& message, const std::string& reason)
+{
+    if (reason.empty())
+        return;
+
+    if (reason.front() == '\n')
+        message += reason;
+    else
+        message += "; " + reason;
+}
+
 struct ErrorConverter
 {
     FileResolver* fileResolver = nullptr;
 
     std::string operator()(const Luau::TypeMismatch& tm) const
     {
-        std::string givenTypeName = Luau::toString(tm.givenType);
-        std::string wantedTypeName = Luau::toString(tm.wantedType);
+        if (tm.overrideMessage)
+            return *tm.overrideMessage;
+
+        ToStringOptions typeOptions;
+        typeOptions.sortUnionMembers = !tm.luwuExplanation;
+
+        std::string givenTypeName = tm.givenName ? *tm.givenName : Luau::toString(tm.givenType, typeOptions);
+        std::string wantedTypeName = tm.wantedName ? *tm.wantedName : Luau::toString(tm.wantedType, typeOptions);
+
+        // When the preamble names a part of the type, print that part rather than the root, or the
+        // message promises one thing and shows another. The disambiguation below is skipped with
+        // it: it compares TypeIds, which are the roots these strings deliberately aren't.
+        const bool hasContextDisplay = tm.contextWantedDisplay.has_value() && tm.contextGivenDisplay.has_value();
+        if (hasContextDisplay)
+        {
+            givenTypeName = *tm.contextGivenDisplay;
+            wantedTypeName = *tm.contextWantedDisplay;
+        }
 
         std::string result;
 
@@ -168,6 +227,17 @@ struct ErrorConverter
         // context from a wordy explanation below.
         std::string preamble = tm.contextVerb ? ("Expected " + *tm.contextVerb) : "Expected this to be";
 
+        // An explained mismatch roots its paths at `given` (or the variable's name), so it says it was given.
+        // Except about a function's parameters or returns, where "was given 'Stack, number'" reads as
+        // being called with them: there it says what the function it got takes or returns.
+        const bool aboutParameters = tm.contextVerb && *tm.contextVerb == mismatchContextFunctionTakes;
+        const bool aboutReturns = tm.contextVerb && *tm.contextVerb == mismatchContextFunctionReturns;
+        std::string butGot = tm.luwuExplanation ? "but was given" : "but got";
+        if (tm.luwuExplanation && aboutParameters)
+            butGot = "but it takes";
+        else if (tm.luwuExplanation && aboutReturns)
+            butGot = "but it returns";
+
         // A qualifier is rendered already formatted (" from 'a.luau'", " defined on line 3") because
         // the two kinds of qualifier don't read the same way after the type name.
         auto constructErrorMessage = [&](std::string givenType,
@@ -178,23 +248,60 @@ struct ErrorConverter
             std::string given = givenQualifier ? quote(givenType) + *givenQualifier : quote(givenType);
             std::string wanted = wantedQualifier ? quote(wantedType) + *wantedQualifier : quote(wantedType);
             size_t luauIndentTypeMismatchMaxTypeLength = size_t(FInt::LuauIndentTypeMismatchMaxTypeLength);
+
+            // An aliased union is printed as its declaration, `type Drop = A | B`, so its members are
+            // there to count; a long one goes on the line below its name.
+            if (tm.givenExpansion || tm.wantedExpansion)
+            {
+                constexpr size_t maxDeclarationLineLength = 80;
+                auto declaration = [](const std::string& name, const std::string& expansion)
+                {
+                    // A summarized expansion ("a union of 37 members, including:" then one member per line)
+                    // keeps its first line after the `=` and indents the rest under it.
+                    if (size_t firstBreak = expansion.find('\n'); firstBreak != std::string::npos)
+                    {
+                        std::string result = "type " + name + " = " + expansion.substr(0, firstBreak);
+                        size_t lineStart = firstBreak + 1;
+                        while (lineStart <= expansion.size())
+                        {
+                            size_t lineEnd = expansion.find('\n', lineStart);
+                            if (lineEnd == std::string::npos)
+                                lineEnd = expansion.size();
+                            result += "\n        " + expansion.substr(lineStart, lineEnd - lineStart);
+                            lineStart = lineEnd + 1;
+                        }
+                        return result;
+                    }
+
+                    std::string oneLine = "type " + name + " = " + expansion;
+                    if (oneLine.size() <= maxDeclarationLineLength)
+                        return oneLine;
+                    return "type " + name + " =\n        " + expansion;
+                };
+                if (tm.wantedExpansion)
+                    wanted = declaration(wantedType, *tm.wantedExpansion);
+                if (tm.givenExpansion)
+                    given = declaration(givenType, *tm.givenExpansion);
+                return preamble + "\n    " + wanted + "\n" + butGot + "\n    " + given;
+            }
+
             if (get<NeverType>(follow(tm.wantedType)))
             {
                 if (givenType.length() <= luauIndentTypeMismatchMaxTypeLength)
-                    return "Expected this to be unreachable, but got " + given;
-                return "Expected this to be unreachable, but got\n\t" + given;
+                    return "Expected this to be unreachable, " + butGot + " " + given;
+                return "Expected this to be unreachable, " + butGot + "\n    " + given;
             }
 
             if (tm.context == TypeMismatch::InvariantContext)
             {
                 if (givenType.length() <= luauIndentTypeMismatchMaxTypeLength || wantedType.length() <= luauIndentTypeMismatchMaxTypeLength)
-                    return "Expected this to be exactly " + wanted + ", but got " + given;
-                return "Expected this to be exactly\n\t" + wanted + "\nbut got\n\t" + given;
+                    return "Expected this to be exactly " + wanted + ", " + butGot + " " + given;
+                return "Expected this to be exactly\n    " + wanted + "\n" + butGot + "\n    " + given;
             }
 
             if (givenType.length() <= luauIndentTypeMismatchMaxTypeLength || wantedType.length() <= luauIndentTypeMismatchMaxTypeLength)
-                return preamble + " " + wanted + ", but got " + given;
-            return preamble + "\n\t" + wanted + "\nbut got\n\t" + given;
+                return preamble + " " + wanted + ", " + butGot + " " + given;
+            return preamble + "\n    " + wanted + "\n" + butGot + "\n    " + given;
         };
 
         // Two types that stringify identically need something appended to tell them apart. Only
@@ -204,10 +311,12 @@ struct ErrorConverter
         // come from the same module, which reads "Expected this to be 'X' from 'a.luau', but got 'X'
         // from 'a.luau'".
         //
+        // Nothing is appended when the message prints a part of the type (hasContextDisplay).
+        //
         // First case: a class value against one of its own objects. Spell the class side as
         // `class<X>`. This applies even when the two strings differ, because an object of a generic
         // class prints its type arguments (`Box<number>`) and the class value doesn't.
-        if (isClassValueAgainstItsObject(tm.givenType, tm.wantedType))
+        if (!hasContextDisplay && isClassValueAgainstItsObject(tm.givenType, tm.wantedType))
         {
             std::optional<std::string> givenDisplay = nominalDisplayName(tm.givenType);
             std::optional<std::string> wantedDisplay = nominalDisplayName(tm.wantedType);
@@ -215,7 +324,8 @@ struct ErrorConverter
                 constructErrorMessage(givenDisplay.value_or(givenTypeName), wantedDisplay.value_or(wantedTypeName), std::nullopt, std::nullopt);
         }
 
-        if (result.empty() && givenTypeName == wantedTypeName)
+        const bool disambiguateByModule = result.empty() && !hasContextDisplay && givenTypeName == wantedTypeName;
+        if (disambiguateByModule)
         {
             if (auto givenDefinitionModule = getDefinitionModuleName(tm.givenType))
             {
@@ -251,10 +361,8 @@ struct ErrorConverter
 
             result += Luau::toString(*tm.error, TypeErrorToStringOptions{fileResolver});
         }
-        else if (!tm.reason.empty())
-        {
-            result += "; " + tm.reason;
-        }
+        else
+            appendReason(result, tm.reason);
 
         return result;
     }
@@ -571,7 +679,12 @@ struct ErrorConverter
 
     std::string operator()(const Luau::FunctionExitsWithoutReturning& e) const
     {
-        return "Not all codepaths in this function return '" + toString(e.expectedReturnType) + "'.";
+        if (e.overrideMessage)
+            return *e.overrideMessage;
+
+        // Luwu (helpful subtyping errors): upstream says "Not all codepaths in this function return 'T'.". This
+        // error sits beside a second one on the escaping code path, so "in this function" is dropped.
+        return "Not all code paths return '" + toString(e.expectedReturnType) + "'.";
     }
 
     std::string operator()(const Luau::IllegalRequire& e) const
@@ -581,6 +694,40 @@ struct ErrorConverter
 
     std::string operator()(const Luau::MissingProperties& e) const
     {
+        // Luwu (helpful subtyping errors): the squiggle is already on the table literal, and the missing fields are
+        // all that's wrong with it, so neither type is printed: name the literal and what it's for, then
+        // list each missing field with the type it should have.
+        if (e.luwuExplanation && e.context == MissingProperties::Missing)
+        {
+            ToStringOptions typeOptions;
+            typeOptions.sortUnionMembers = false;
+
+            // A name longer than this is an expression the reader has to parse, not a name.
+            constexpr size_t maxSubjectNameLength = 30;
+            const bool nameIsShort = e.givenName && e.givenName->size() <= maxSubjectNameLength;
+            std::string subject = nameIsShort ? "'" + *e.givenName + "'" : "The given table";
+            std::string s = subject + " is missing " + (e.properties.size() == 1 ? std::string("a field") : std::to_string(e.properties.size()) + " fields");
+            if (e.wantedName)
+                s += " for '" + *e.wantedName + "'";
+            s += ":";
+
+            const TableType* expectedTable = get<TableType>(follow(e.superType));
+            if (const MetatableType* metatable = get<MetatableType>(follow(e.superType)))
+                expectedTable = get<TableType>(follow(metatable->table));
+
+            for (const Name& name : e.properties)
+            {
+                std::string field = name;
+                if (expectedTable)
+                {
+                    if (auto it = expectedTable->props.find(name); it != expectedTable->props.end() && it->second.readTy)
+                        field += ": " + Luau::toString(*it->second.readTy, typeOptions);
+                }
+                s += "\n  • '" + field + "'";
+            }
+            return s;
+        }
+
         if (!FFlag::LuauBetterMissingPropertiesTypeError)
         {
             std::string s = "Table type '" + toString(e.subType) + "' not compatible with type '" + toString(e.superType) + "' because the former";
@@ -731,10 +878,12 @@ struct ErrorConverter
 
     std::string operator()(const TypePackMismatch& e) const
     {
+        if (e.overrideMessage)
+            return *e.overrideMessage;
+
         std::string ss = "Expected this to be '" + toString(e.wantedTp) + "', but got '" + toString(e.givenTp) + "'";
 
-        if (!e.reason.empty())
-            ss += "; " + e.reason;
+        appendReason(ss, e.reason);
 
         return ss;
     }
@@ -1094,7 +1243,7 @@ struct ErrorConverter
         }
 
         return "No valid instantiation could be inferred for generic type parameter " + std::string{e.genericName} +
-               ". It was expected to be at least:\n\t" + lowerBounds + "\nand at most:\n\t" + upperBounds +
+               ". It was expected to be at least:\n    " + lowerBounds + "\nand at most:\n    " + upperBounds +
                "\nbut these types are not compatible with one another.";
     }
 
@@ -1264,7 +1413,18 @@ bool TypeMismatch::operator==(const TypeMismatch& rhs) const
     if (error && !(*error == *rhs.error))
         return false;
 
-    return *wantedType == *rhs.wantedType && *givenType == *rhs.givenType && reason == rhs.reason && context == rhs.context;
+    // Luwu (helpful subtyping errors): errors are deduplicated with ==, so everything that changes what the
+    // message says takes part. `luwuExplanation` doesn't, here or on MissingProperties: it only selects the
+    // rendering style ("but was given" for "but got", union members in written order, the missing-fields
+    // layout), so two errors that agree on everything else say the same thing and keeping one loses nothing.
+    const bool sameContext =
+        contextVerb == rhs.contextVerb && contextWantedDisplay == rhs.contextWantedDisplay && contextGivenDisplay == rhs.contextGivenDisplay;
+    const bool sameNames =
+        wantedName == rhs.wantedName && givenName == rhs.givenName && wantedExpansion == rhs.wantedExpansion && givenExpansion == rhs.givenExpansion;
+    const bool sameLuwuRendering = sameContext && sameNames && overrideMessage == rhs.overrideMessage && notation == rhs.notation;
+
+    return *wantedType == *rhs.wantedType && *givenType == *rhs.givenType && reason == rhs.reason && context == rhs.context &&
+           sameLuwuRendering;
 }
 
 bool UnknownSymbol::operator==(const UnknownSymbol& rhs) const
@@ -1449,7 +1609,7 @@ bool DeprecatedApiUsed::operator==(const DeprecatedApiUsed& rhs) const
 
 bool FunctionExitsWithoutReturning::operator==(const FunctionExitsWithoutReturning& rhs) const
 {
-    return expectedReturnType == rhs.expectedReturnType;
+    return expectedReturnType == rhs.expectedReturnType && overrideMessage == rhs.overrideMessage;
 }
 
 int TypeError::code() const
@@ -1485,7 +1645,8 @@ bool IllegalRequire::operator==(const IllegalRequire& rhs) const
 bool MissingProperties::operator==(const MissingProperties& rhs) const
 {
     return *superType == *rhs.superType && *subType == *rhs.subType && properties.size() == rhs.properties.size() &&
-           std::equal(properties.begin(), properties.end(), rhs.properties.begin()) && context == rhs.context;
+           std::equal(properties.begin(), properties.end(), rhs.properties.begin()) && context == rhs.context &&
+           givenName == rhs.givenName && wantedName == rhs.wantedName;
 }
 
 bool DuplicateGenericParameter::operator==(const DuplicateGenericParameter& rhs) const
@@ -1529,7 +1690,7 @@ bool TypesAreUnrelated::operator==(const TypesAreUnrelated& rhs) const
 
 bool TypePackMismatch::operator==(const TypePackMismatch& rhs) const
 {
-    return *wantedTp == *rhs.wantedTp && *givenTp == *rhs.givenTp;
+    return *wantedTp == *rhs.wantedTp && *givenTp == *rhs.givenTp && overrideMessage == rhs.overrideMessage;
 }
 
 bool DynamicPropertyLookupOnExternTypesUnsafe::operator==(const DynamicPropertyLookupOnExternTypesUnsafe& rhs) const

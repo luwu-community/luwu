@@ -63,6 +63,7 @@ TEST_CASE_FIXTURE(Fixture, "string_singleton_function_call")
 
 TEST_CASE_FIXTURE(Fixture, "bool_singletons_mismatch")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         local a: true = false
     )");
@@ -73,6 +74,7 @@ TEST_CASE_FIXTURE(Fixture, "bool_singletons_mismatch")
 
 TEST_CASE_FIXTURE(Fixture, "string_singletons_mismatch")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         local a: "foo" = "bar"
     )");
@@ -83,6 +85,7 @@ TEST_CASE_FIXTURE(Fixture, "string_singletons_mismatch")
 
 TEST_CASE_FIXTURE(Fixture, "string_singletons_escape_chars")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         local a: "\n" = "\000\r"
     )");
@@ -133,6 +136,7 @@ TEST_CASE_FIXTURE(Fixture, "function_call_with_singletons")
 
 TEST_CASE_FIXTURE(Fixture, "function_call_with_singletons_mismatch")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         function f(a: true, b: "foo") end
         f(true, "bar")
@@ -208,6 +212,7 @@ TEST_CASE_FIXTURE(Fixture, "enums_using_singletons")
 
 TEST_CASE_FIXTURE(Fixture, "enums_using_singletons_mismatch")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag _{FFlag::LuauDropUnionSubtypeReasoning, true};
 
     CheckResult result = check(R"(
@@ -329,6 +334,7 @@ TEST_CASE_FIXTURE(Fixture, "table_properties_singleton_strings")
 }
 TEST_CASE_FIXTURE(Fixture, "table_properties_singleton_strings_mismatch")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         --!strict
         type T = {
@@ -382,6 +388,7 @@ TEST_CASE_FIXTURE(Fixture, "indexer_can_be_union_of_singletons")
 
 TEST_CASE_FIXTURE(Fixture, "table_properties_type_error_escapes")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag sffs[]{
         {FFlag::DebugLuauForceOldSolver, false},
         {FFlag::LuauBetterMissingPropertiesTypeError, true},
@@ -404,6 +411,7 @@ expected type:
 
 TEST_CASE_FIXTURE(Fixture, "error_detailed_tagged_union_mismatch_string")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag sff{FFlag::LuauBetterMissingPropertiesTypeError, true};
 
     CheckResult result = check(R"(
@@ -437,6 +445,7 @@ expected type:
 
 TEST_CASE_FIXTURE(Fixture, "error_detailed_tagged_union_mismatch_bool")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag sff{FFlag::LuauBetterMissingPropertiesTypeError, true};
 
     CheckResult result = check(R"(
@@ -469,6 +478,7 @@ expected type:
 
 TEST_CASE_FIXTURE(Fixture, "parametric_tagged_union_alias")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag _{FFlag::DebugLuauForceOldSolver, false};
     ScopedFastFlag sff{FFlag::LuauBetterMissingPropertiesTypeError, true};
 
