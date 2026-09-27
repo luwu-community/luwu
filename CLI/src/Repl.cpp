@@ -584,6 +584,11 @@ static std::string getFilePath(const char* name)
 
     std::string base = name;
 
+    // Luwu: `.luwu` files are tried first.
+    std::string luwuPath = base + ".luwu";
+    if (isFile(luwuPath))
+        return luwuPath;
+
     std::string luauPath = base + ".luau";
     if (isFile(luauPath))
         return luauPath;

@@ -16,15 +16,15 @@ For RFCs and changes to the language, please see the [RFCs folder](/rfcs/). To p
 
 ## Usage
 
-Luwu is an embeddable programming language, but it also comes with two command-line tools by default, `luau` and `luau-analyze`.
+Luwu is an embeddable programming language, but it also comes with two command-line tools by default, `luwu` and `luwu-analyze`.
 
 `luau` is a command-line REPL and can also run input files. Note that REPL runs in a sandboxed environment and as such doesn't have access to the underlying file system except for ability to `require` modules.
 
-`luau-analyze` is a command-line type checker and linter; given a set of input files, it produces errors/warnings according to the file configuration, which can be customized by using `--!` comments in the files or [`.luaurc`](https://rfcs.luau.org/config-luaurc) files. For details, please refer to our [type checking](https://luau.org/typecheck) and [linting](https://luau.org/lint) documentation. Our community maintains a language server frontend for `luau-analyze` called [luau-lsp](https://github.com/JohnnyMorganz/luau-lsp) for use with text editors.
+`luwu-analyze` is a command-line type checker and linter; given a set of input files, it produces errors/warnings according to the file configuration, which can be customized by using `--!` comments in the files or [`.luaurc`](https://rfcs.luau.org/config-luaurc) files. For details, please refer to our [type checking](https://luau.org/typecheck) and [linting](https://luau.org/lint) documentation. Our community maintains a language server frontend for `luwu-analyze` called [luau-lsp](https://github.com/JohnnyMorganz/luau-lsp) for use with text editors.
 
 ## Installation
 
-<!-- You can install and run Luwu by downloading the compiled binaries from [a recent release](https://github.com/mluau/luwu/releases); note that `luau` and `luau-analyze` binaries from the archives will need to be added to PATH or copied to a directory like `/usr/local/bin` on Linux/macOS.
+<!-- You can install and run Luwu by downloading the compiled binaries from [a recent release](https://github.com/mluau/luwu/releases); note that `luwu` and `luwu-analyze` binaries from the archives will need to be added to PATH or copied to a directory like `/usr/local/bin` on Linux/macOS.
 
 Alternatively, upstream Luau is available from the packaged distributions below. These packages are not maintained by the Luwu development team and may not match Luwu's Luau 0.730 compatibility baseline:
 
@@ -53,7 +53,7 @@ cmake --build . --target Luau.Analyze.CLI --config RelWithDebInfo
 Alternatively, on Linux and macOS, you can also use `make`:
 
 ```sh
-make config=release luau luau-analyze
+make config=release luwu luwu-analyze
 ```
 
 To integrate Luwu into your CMake application projects as a library, at the minimum, you'll need to depend on the `Luau.Compiler` and `Luau.VM` projects. From there you need to create a new state (using a Lua 5.x API such as `lua_newstate`), compile source to bytecode, and load it into the VM like this:

@@ -4,7 +4,7 @@
 -- another class from it, could see the exported class as nil because of the order exports are hoisted in.
 --
 -- How the test is set up: `export` statements make the module's implicit return the (frozen) export
--- table, which conflicts with an explicit top-level `return`. So, as in exportclasses.luau, the exported
+-- table, which conflicts with an explicit top-level `return`. So, as in exportclasses.luwu, the exported
 -- class under test lives in its own chunk, loaded and run with loadstring. This outer chunk has no
 -- exports, so it can `return 'OK'`. The inner chunk can't `return` its result either, so it stores the
 -- result in a global.

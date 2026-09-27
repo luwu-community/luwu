@@ -1,6 +1,6 @@
 --!nocheck
 -- Native codegen coverage for classes. This lives in its own file
--- rather than in classes.luau because that file contains `@native` functions, and a module with any
+-- rather than in classes.luwu because that file contains `@native` functions, and a module with any
 -- `@native` function natively compiles only those (gatherFunctionsHelper in CodeGenLower.h): the rest of
 -- its protos stay interpreted even under --codegen, so it cannot catch a lowering bug in them. Don't add
 -- `@native` here.

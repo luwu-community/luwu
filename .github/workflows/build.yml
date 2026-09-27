@@ -61,25 +61,25 @@ jobs:
         "$dir/seal" --version
     - name: make tests
       run: |
-        CC=${{matrix.compiler.cc}} CXX=${{matrix.compiler.cxx}} make -j2 config=sanitize werror=1 native=1 luau-tests
+        CC=${{matrix.compiler.cc}} CXX=${{matrix.compiler.cxx}} make -j2 config=sanitize werror=1 native=1 luwu-tests
     - name: run tests
       run: |
-        ./luau-tests
-        ./luau-tests --fflags=true
+        ./luwu-tests
+        ./luwu-tests --fflags=true
     - name: run extra conformance tests
       run: |
-        ./luau-tests -ts=Conformance -O2
-        ./luau-tests -ts=Conformance -O2 --fflags=true
-        ./luau-tests -ts=Conformance --codegen
-        ./luau-tests -ts=Conformance --codegen --fflags=true
-        ./luau-tests -ts=Conformance --codegen -O2
-        ./luau-tests -ts=Conformance --codegen -O2 --fflags=true
+        ./luwu-tests -ts=Conformance -O2
+        ./luwu-tests -ts=Conformance -O2 --fflags=true
+        ./luwu-tests -ts=Conformance --codegen
+        ./luwu-tests -ts=Conformance --codegen --fflags=true
+        ./luwu-tests -ts=Conformance --codegen -O2
+        ./luwu-tests -ts=Conformance --codegen -O2 --fflags=true
     - name: make cli
       run: |
-         make -j2 config=sanitize werror=1 luau luau-analyze luau-compile # match config with tests to improve build time
-         ./luau tests/conformance/assert.luau
-         ./luau-analyze tests/conformance/assert.luau
-         ./luau-compile tests/conformance/assert.luau
+         make -j2 config=sanitize werror=1 luwu luwu-analyze luwu-compile # match config with tests to improve build time
+         ./luwu tests/conformance/assert.luau
+         ./luwu-analyze tests/conformance/assert.luau
+         ./luwu-compile tests/conformance/assert.luau
 
   windows:
     runs-on: windows-latest
@@ -133,14 +133,14 @@ jobs:
       shell: bash # necessary for fail-fast
       run: |
         cmake --build . --target Luau.Repl.CLI Luau.Analyze.CLI Luau.Compile.CLI --config Debug # match config with tests to improve build time
-        Debug/luau tests/conformance/assert.luau
-        Debug/luau-analyze tests/conformance/assert.luau
-        Debug/luau-compile tests/conformance/assert.luau
+        Debug/luwu tests/conformance/assert.luau
+        Debug/luwu-analyze tests/conformance/assert.luau
+        Debug/luwu-compile tests/conformance/assert.luau
 
   coverage:
     runs-on: ubuntu-22.04
     env:
-      # the classes fuzzer runs in the unix and windows jobs; its luau processes wouldn't count toward coverage
+      # the classes fuzzer runs in the unix and windows jobs; its luwu processes wouldn't count toward coverage
       LUWU_SKIP_CLASSES_FUZZ: 1
     steps:
     - uses: actions/checkout@v2

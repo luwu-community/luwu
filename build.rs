@@ -9,8 +9,8 @@
 // rather than a repo-root `build/` directory. `cargo clean` is a builtin
 // that can't be hooked or aliased, but it does wipe `target/` unconditionally
 // -- so by building inside OUT_DIR, `cargo clean` genuinely deletes the C++
-// build artifacts too, for free. On Linux/macOS the Makefile's own `luau`/
-// `luau-analyze` targets then symlink those OUT_DIR binaries to the repo
+// build artifacts too, for free. On Linux/macOS the Makefile's own `luwu`/
+// `luwu-analyze` targets then symlink those OUT_DIR binaries to the repo
 // root (`ln -fs`), so they stay easy to find; on Windows we do the same
 // manually since CMake has no equivalent alias rule. Those symlinks go
 // stale (dangling) after `cargo clean` until the next build recreates them.
@@ -62,8 +62,8 @@ fn count_make_compile_steps(manifest_dir: &str, build_dir: &Path, jobs: &str) ->
         .arg(format!("-j{jobs}"))
         .arg(format!("BUILD={}", build_dir.display()))
         .arg("werror=1")
-        .arg("luau")
-        .arg("luau-analyze")
+        .arg("luwu")
+        .arg("luwu-analyze")
         .output();
     match output {
         Ok(out) => String::from_utf8_lossy(&out.stdout)
@@ -164,9 +164,9 @@ fn main() {
 
         let out_bin_dir = build_dir.join(build_type);
         let root = Path::new(&manifest_dir);
-        refresh_symlink(&root.join("luau.exe"), &out_bin_dir.join("Luau.Repl.CLI.exe"));
-        refresh_symlink(&root.join("luau-analyze.exe"), &out_bin_dir.join("Luau.Analyze.CLI.exe"));
-        eprintln!("\nLuau CLI binaries: {}\\luau.exe, {0}\\luau-analyze.exe\n", root.display());
+        refresh_symlink(&root.join("luwu.exe"), &out_bin_dir.join("luwu.exe"));
+        refresh_symlink(&root.join("luwu-analyze.exe"), &out_bin_dir.join("luwu-analyze.exe"));
+        eprintln!("\nLuwu CLI binaries: {}\\luwu.exe, {0}\\luwu-analyze.exe\n", root.display());
     } else {
         let build_dir = out_dir.join("build");
         let total = count_make_compile_steps(&manifest_dir, &build_dir, &jobs);
@@ -178,8 +178,8 @@ fn main() {
             // Warnings are errors, as in CI. This has to match tests/luwu.rs: both share one build
             // directory and make won't recompile an object just because the flags changed.
             .arg("werror=1")
-            .arg("luau")
-            .arg("luau-analyze")
+            .arg("luwu")
+            .arg("luwu-analyze")
             .stdout(Stdio::piped())
             .spawn()
             .expect("failed to invoke make");
@@ -190,8 +190,8 @@ fn main() {
         progress.finish(if status.success() { "Build finished" } else { "Build failed" });
         assert!(status.success(), "make build failed");
 
-        // `make ... luau luau-analyze` already symlinks these to the repo
-        // root itself (see the Makefile's `luau`/`luau-analyze` targets).
-        eprintln!("\nLuau CLI binaries: {}/luau, {0}/luau-analyze\n", manifest_dir);
+        // `make ... luwu luwu-analyze` already symlinks these to the repo
+        // root itself (see the Makefile's `luwu`/`luwu-analyze` targets).
+        eprintln!("\nLuwu CLI binaries: {}/luwu, {0}/luwu-analyze\n", manifest_dir);
     }
 }

@@ -28,7 +28,7 @@ except ModuleNotFoundError:
     stats = None
 
 scriptdir = os.path.dirname(os.path.realpath(__file__))
-defaultVm = 'luau.exe' if os.name == "nt" else './luau'
+defaultVm = 'luwu.exe' if os.name == "nt" else './luwu'
 
 argumentParser = argparse.ArgumentParser(description='Benchmark Lua script execution with an option to compare different VMs')
 

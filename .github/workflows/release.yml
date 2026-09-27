@@ -26,14 +26,14 @@ jobs:
     - uses: actions/upload-artifact@v4
       if: matrix.os.name != 'windows'
       with:
-        name: luau-${{matrix.os.name}}
-        path: luau*
+        name: luwu-${{matrix.os.name}}
+        path: luwu*
         overwrite: true
     - uses: actions/upload-artifact@v4
       if: matrix.os.name == 'windows'
       with:
-        name: luau-${{matrix.os.name}}
-        path: Release\luau*.exe
+        name: luwu-${{matrix.os.name}}
+        path: Release\luwu*.exe
         overwrite: true
   web:
     runs-on: ubuntu-latest

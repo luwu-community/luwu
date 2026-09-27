@@ -8529,7 +8529,7 @@ TEST_CASE_FIXTURE(LoweringFixture, "ClassProvenSelfMemberAccess")
     // `self.field` inside a method compiles to GETOBJECTMEMBER/SETOBJECTMEMBER, which lower to a
     // constant-offset address with no slot cache, no class-side bounds check, no name compare and no
     // authorization -- the prologue's CHECKSELFCLASS already proved the class. Note this test has to
-    // live here: tests/conformance/classes.luau has `@native` functions, so only those are natively
+    // live here: tests/conformance/classes.luwu has `@native` functions, so only those are natively
     // compiled and it could not catch a lowering bug in the rest.
     //
     // The repeated `self.x` is also the CSE case: the address is computed once and the second read

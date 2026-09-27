@@ -1491,7 +1491,7 @@ expectpass("an annotation that lies about a receiver's class never runs the othe
     -- The call dispatches dynamically to InlinePoint3D's own body. Only an O2 compile with
     -- DebugLuwuCompilerTrustsTypeAnnotations inlines it, and then the spliced CHECKSELFCLASS rejects the
     -- mismatched receiver; the Classes test case doesn't set that flag, so the inlined branch is covered by
-    -- classes_inlining.luau (cases 8 and 16) instead. Running InlinePoint2D's body against an InlinePoint3D
+    -- classes_inlining.luwu (cases 8 and 16) instead. Running InlinePoint2D's body against an InlinePoint3D
     -- (res == 3) is the bug, and is never allowed.
     if ok then
         assert(res == 300, `method call dispatched to the wrong class's body, got {res}`)

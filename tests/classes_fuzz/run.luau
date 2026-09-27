@@ -2,7 +2,7 @@
     Differential and crash fuzzer for Luwu classes. Requires seal 0.8.x at >= 0.8.1 (ChildProcess:status);
     seal 0.9.0 breaks the std APIs used here.
 
-        seal tests/classes_fuzz/run.luau --luau build-assert/luau [--start 1] [--count 100] [--jobs 16] [--work DIR] [--keep] [--no-codegen]
+        seal tests/classes_fuzz/run.luau --luau build-assert/luwu [--start 1] [--count 100] [--jobs 16] [--work DIR] [--keep] [--no-codegen]
 
     For every seed, gen.luau writes a random class program (a main module plus a required module) and this script
     runs it with the given `luau` CLI at -O0/-O1/-O2, each interpreted, with --codegen and with --codegen-cold. Use an

@@ -4660,7 +4660,7 @@ TEST_CASE("ClassesExportHoistingRepro")
         {FFlag::LuwuExportedClassIsNilWorkaround, true},
     };
 
-    runConformance("classes_export_hoisting.luau");
+    runConformance("classes_export_hoisting.luwu");
 }
 
 TEST_CASE("Classes")
@@ -4676,10 +4676,10 @@ TEST_CASE("Classes")
     };
 
     runConformance(
-        "classes.luau",
+        "classes.luwu",
         [](lua_State* L)
         {
-            // yielding C functions (via lua_yield with continuations) so classes.luau can verify that
+            // yielding C functions (via lua_yield with continuations) so classes.luwu can verify that
             // a class method calling a yielding C function still suspends/resumes correctly, including
             // when that method is inlined -- see rfcs/classes
             lua_pushcclosurek(L, singleYield, "singleYield", 0, singleYieldContinuation);
@@ -4724,7 +4724,7 @@ TEST_CASE("ClassesInlining")
     ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
 
     // Method inlining only runs at O2, and the conformance default is O1 -- at O1 every case in this
-    // file passes vacuously. See tests/conformance/classes_inlining.luau.
+    // file passes vacuously. See tests/conformance/classes_inlining.luwu.
     lua_CompileOptions copts = defaultOptions();
     copts.optimizationLevel = 2;
 
@@ -4737,7 +4737,7 @@ TEST_CASE("ClassesInlining")
         ScopedFastFlag trustFlag{FFlag::DebugLuwuCompilerTrustsTypeAnnotations, trust};
 
         runConformance(
-            "classes_inlining.luau",
+            "classes_inlining.luwu",
             [](lua_State* L)
             {
                 lua_pushboolean(L, FFlag::DebugLuwuCompilerTrustsTypeAnnotations);
@@ -4754,10 +4754,10 @@ TEST_CASE("ClassesNativeCodegen")
 {
     ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
 
-    // Deliberately a separate file from classes.luau: that one contains `@native` functions, and a module
+    // Deliberately a separate file from classes.luwu: that one contains `@native` functions, and a module
     // with any `@native` function natively compiles only those, so the rest of its protos stay interpreted
-    // and can't exercise the lowering of the class opcodes. See tests/conformance/classes_ncg.luau.
-    runConformance("classes_ncg.luau");
+    // and can't exercise the lowering of the class opcodes. See tests/conformance/classes_ncg.luwu.
+    runConformance("classes_ncg.luwu");
 }
 
 // Luwu Classes (rfcs/classes): regressions for review fixes, one file per area. Each runs at every
@@ -4784,19 +4784,19 @@ static void runClassesFixesConformance(const char* name)
 
 TEST_CASE("ClassesFixesVm")
 {
-    runClassesFixesConformance("classes_fixes_vm.luau");
+    runClassesFixesConformance("classes_fixes_vm.luwu");
 }
 
 TEST_CASE("ClassesFixesCompiler")
 {
-    runClassesFixesConformance("classes_fixes_compiler.luau");
+    runClassesFixesConformance("classes_fixes_compiler.luwu");
 }
 
-// Kept apart from the other two files for the same reason as classes_ncg.luau: no `@native` functions, so the
+// Kept apart from the other two files for the same reason as classes_ncg.luwu: no `@native` functions, so the
 // --codegen run compiles every proto natively.
 TEST_CASE("ClassesFixesNativeCodegen")
 {
-    runClassesFixesConformance("classes_fixes_ncg.luau");
+    runClassesFixesConformance("classes_fixes_ncg.luwu");
 }
 
 // Luwu Classes (rfcs/classes): the C API for classes, called the way an embedder calls it: from C, with no
@@ -5581,7 +5581,7 @@ TEST_CASE("ClassesFuzz")
     std::string cli = LUWU_REPL_CLI_PATH;
     struct stat st;
     if (stat(cli.c_str(), &st) != 0)
-        FAIL("luau CLI not found at " << cli << "; build it (the Makefile's luau-tests and CMake's Luau.Conformance already do)");
+        FAIL("luwu CLI not found at " << cli << "; build it (the Makefile's luwu-tests and CMake's Luau.Conformance already do)");
 
     const char* sealEnv = std::getenv("LUWU_SEAL");
     std::string seal = sealEnv && *sealEnv ? sealEnv : "seal";
@@ -5714,7 +5714,7 @@ TEST_CASE("ExportedClasses")
         {FFlag::LuwuExportedClassIsNilWorkaround, true},
     };
 
-    runConformance("exportclasses.luau");
+    runConformance("exportclasses.luwu");
 }
 
 [[nodiscard]] static std::string makeHugeFunctionSource()
@@ -6246,14 +6246,14 @@ TEST_CASE("DefaultArguments")
 {
     ScopedFastFlag sff{FFlag::LuwuDefaultArguments, true};
 
-    runConformance("defaultarg.luau");
+    runConformance("defaultarg.luwu");
 }
 
 TEST_CASE("None")
 {
     ScopedFastFlag sff{FFlag::LuwuNonePrimitive, true};
 
-    runConformance("none.luau");
+    runConformance("none.luwu");
 }
 
 TEST_CASE("lua_findunuseduserdatatag")
