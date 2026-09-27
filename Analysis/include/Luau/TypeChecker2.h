@@ -106,6 +106,9 @@ struct TypeChecker2
     std::vector<TypeId> functionDeclStack;
     // The function expressions being visited, innermost last.
     std::vector<const AstExprFunction*> enclosingFunctions;
+    // Luwu Classes (rfcs/classes): per class `__init`, the locals that always hold its `self` (see
+    // isInitWritingItsSelf). Filled only when a `const` write would otherwise be reported.
+    mutable DenseHashMap<const AstExprFunction*, DenseHashSet<const AstLocal*>> initSelfAliases{nullptr};
 
     DenseHashSet<TypeId> seenTypeFunctionInstances{nullptr};
 
