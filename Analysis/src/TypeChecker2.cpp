@@ -2651,10 +2651,69 @@ bool TypeChecker2::checkConstructorReadByName(TypeId tableTy, const std::string&
     return true;
 }
 
+namespace
+{
+
+// Luwu Classes (rfcs/classes): the locals of `init` that always hold `self`. A local counts when it is
+// initialized from `self` or from another such local, and nothing in `init` assigns to it, closures
+// included: a reassigned one may hold another object when the write runs.
+struct SelfAliasCollector : AstVisitor
+{
+    DenseHashSet<const AstLocal*> aliases{nullptr};
+    DenseHashSet<const AstLocal*> written{nullptr};
+
+    explicit SelfAliasCollector(const AstLocal* self)
+    {
+        aliases.insert(self);
+    }
+
+    void markWritten(AstExpr* target)
+    {
+        if (AstExprLocal* local = target->as<AstExprLocal>())
+            written.insert(local->local);
+    }
+
+    bool visit(AstStatLocal* node) override
+    {
+        // statements are visited in source order, so an alias of an alias is already known here
+        for (size_t i = 0; i < node->vars.size && i < node->values.size; ++i)
+        {
+            AstExprLocal* value = node->values.data[i]->as<AstExprLocal>();
+            if (value && aliases.contains(value->local))
+                aliases.insert(node->vars.data[i]);
+        }
+
+        return true;
+    }
+
+    bool visit(AstStatAssign* node) override
+    {
+        for (AstExpr* target : node->vars)
+            markWritten(target);
+
+        return true;
+    }
+
+    bool visit(AstStatCompoundAssign* node) override
+    {
+        markWritten(node->var);
+        return true;
+    }
+
+    bool visit(AstStatFunction* node) override
+    {
+        markWritten(node->name);
+        return true;
+    }
+};
+
+} // namespace
+
 bool TypeChecker2::isInitWritingItsSelf(const ExternType* cls, const AstExpr* objectExpr) const
 {
     // Mirrors the runtime rule: the running closure is the class's `__init` itself (a function nested
-    // in it is not), and the object is the one it is constructing, in its `self` parameter.
+    // in it is not), and the object is the one it is constructing, in its `self` parameter. The object
+    // may be named through a local that always holds `self` (SelfAliasCollector).
     if (enclosingFunctions.empty() || !cls->initLocation || cls->definitionModuleName != module->name)
         return false;
 
@@ -2664,7 +2723,29 @@ bool TypeChecker2::isInitWritingItsSelf(const ExternType* cls, const AstExpr* ob
 
     const AstLocal* self = fn->self ? fn->self : (fn->args.size > 0 ? fn->args.data[0] : nullptr);
     const AstExprLocal* object = objectExpr->as<AstExprLocal>();
-    return self && object && object->local == self;
+    if (!self || !object)
+        return false;
+
+    if (object->local == self)
+        return true;
+
+    DenseHashSet<const AstLocal*>* aliases = initSelfAliases.find(fn);
+    if (!aliases)
+    {
+        SelfAliasCollector collector(self);
+        const_cast<AstExprFunction*>(fn)->body->visit(&collector);
+
+        DenseHashSet<const AstLocal*> stable{nullptr};
+        for (const AstLocal* local : collector.aliases)
+        {
+            if (!collector.written.contains(local))
+                stable.insert(local);
+        }
+
+        aliases = &initSelfAliases.try_insert(fn, std::move(stable)).first;
+    }
+
+    return aliases->contains(object->local);
 }
 
 void TypeChecker2::checkConstPropertyAssignment(
