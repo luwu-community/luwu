@@ -25,6 +25,7 @@ LUAU_FASTINT(LuauParseErrorLimit)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAG(LuauAutocompleteMetatableInheritance)
 LUAU_FASTFLAG(LuauAutocompleteSkipErrorTypeInUnion)
@@ -5590,6 +5591,34 @@ type M = {
             REQUIRE(result.result);
             CHECK_EQ(result.result->acResults.entryMap.count("use"), 1);
             CHECK_EQ(result.result->acResults.entryMap.count("reason"), 1);
+TEST_CASE_FIXTURE(FragmentAutocompleteFixture, "destructuring_keys_complete_in_a_fragment")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    // The declaration desugars to statements that start inside the pattern; the fragment has to start at the
+    // declaration, or it reparses from the middle of `.{...}` and completes an expression (and suggests imports)
+    const std::string source = R"(
+local value = { alpha = 1, beta = "b" }
+local .{alpha} = value
+)";
+    const std::string updated = R"(
+local value = { alpha = 1, beta = "b" }
+local .{alpha, @1} = value
+)";
+
+    autocompleteFragmentInBothSolvers(
+        source,
+        updated,
+        '1',
+        [](FragmentAutocompleteStatusResult& fragment)
+        {
+            REQUIRE(fragment.result);
+            auto acResults = fragment.result->acResults;
+
+            CHECK_EQ(AutocompleteContext::Property, acResults.context);
+            CHECK(acResults.entryMap.count("beta"));
+            CHECK(!acResults.entryMap.count("alpha"));
+            CHECK(!acResults.entryMap.count("value"));
         }
     );
 }

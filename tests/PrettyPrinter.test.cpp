@@ -11,6 +11,7 @@
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuwuNoinlineAttribute)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuauTableEntriesDontNeedToMatchIndent)
 LUAU_FASTFLAG(LuauCstAttr)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
@@ -2322,6 +2323,20 @@ TEST_CASE("prettyPrint_attributes_beyond_functions")
     code = R"(
         @[deprecated { use = "dog" }]
         type Puppy = string
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+}
+
+TEST_CASE("prettyPrint_destructuring")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    // Printed from the source form the parser keeps, not from the statements it desugars to
+    std::string code = R"(
+local .{x, y, z} = v
+const fs.{readfile as rf, path}: FsLib = require("@std/fs")
+const archive.{zip, tar as .{gz as targz}, lib.{a}} = require("@std/archive"); print(zip)
+local .{x: number, y as py: string, pos.{a}: Vec2, tar as .{gz}: Archive}: Whole = t
     )";
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
 }

@@ -99,6 +99,10 @@ struct AstArray
     }
 };
 
+// Luwu Destructuring (rfcs/destructuring.md): the name of the hidden local an unnamed pattern (`local .{x} = v`)
+// binds its value to. Code can't spell it, so nothing can refer to it.
+constexpr const char* kDestructuredLocalName = "(destructured)";
+
 struct AstLocal
 {
     AstName name;
@@ -979,6 +983,30 @@ public:
     AstExpr* expr;
 };
 
+// Luwu Destructuring (rfcs/destructuring.md): the source form of a destructuring declaration, kept on the first
+// statement it desugars to so tools can print it back. The desugared statements are what everything else reads.
+struct AstDestructureField;
+struct AstDestructurePattern
+{
+    // The local the value is bound to. Unnamed, it is a hidden local named kDestructuredLocalName.
+    AstLocal* local = nullptr;
+    // From the `.` to the `}`, when the value is destructured further; unset for a plain binding.
+    std::optional<Location> location;
+    // False when the `}` is missing, as it is while a pattern is being written: `location` then ends where the
+    // pattern stopped, and a cursor there is still inside it.
+    bool closed = true;
+    AstArray<AstDestructureField> fields{nullptr, 0};
+};
+
+struct AstDestructureField
+{
+    AstName key;
+    Location keyLocation;
+    // The `as` keyword, when the field is bound under another name or only destructured.
+    std::optional<Location> asLocation;
+    AstDestructurePattern target;
+};
+
 class AstStatLocal : public AstStat
 {
 public:
@@ -1006,6 +1034,12 @@ public:
 
     // Attributes written above this declaration, e.g. `@deprecated`. Empty when there are none.
     AstArray<AstAttr*> attributes{nullptr, 0};
+
+    // Luwu Destructuring (rfcs/destructuring.md): a destructuring declaration desugars to several `local`s (see
+    // Parser::parseDestructuring). The first spans the whole declaration and holds its source form in
+    // `destructure`; every one after it points to the first through `destructuredFrom`.
+    AstDestructurePattern* destructure = nullptr;
+    AstStatLocal* destructuredFrom = nullptr;
 };
 
 class AstStatFor : public AstStat

@@ -210,6 +210,31 @@ private:
         TempVector<CstAttrList*>* cstAttrLists = nullptr
     );
 
+    // Luwu Destructuring (rfcs/destructuring.md):
+    // destructuring ::= (`local' | `const') [Name] `.' `{' fieldlist `}' [`:' Type] `=' exp
+    // fieldlist ::= field {`,' field} [`,']
+    // field ::= Name [`.' `{' fieldlist `}'] [`:' Type] | Name `as' target
+    // target ::= Name [`.' `{' fieldlist `}'] [`:' Type] | `.' `{' fieldlist `}' [`:' Type]
+    // An annotation follows the binding it types; after a pattern, it types the value the pattern destructures.
+    struct DestructureTarget;
+
+    bool destructuringFollows();
+    bool destructurePatternFollows();
+    AstStat* parseDestructuring(const Location& start, const Location& keywordLocation, bool isConst, std::optional<Name> name = {});
+    void parseDestructurePattern(DestructureTarget& target);
+    struct DestructureField;
+    DestructureField parseDestructureField();
+    void reportDestructureKeyError();
+    void skipDestructureField();
+    AstDestructurePattern desugarDestructuring(
+        const DestructureTarget& target,
+        AstExpr* value,
+        const Location& location,
+        const Location& equalsLocation,
+        bool isConst,
+        std::vector<AstStat*>& out
+    );
+
     // return [explist]
     AstStat* parseReturn();
 
@@ -592,6 +617,25 @@ private:
         }
     };
 
+    // Luwu Destructuring (rfcs/destructuring.md): a parsed `.{ ... }` pattern, see parseDestructuring.
+    struct DestructureTarget
+    {
+        // The local the value is bound to. Unnamed, the value goes to a hidden local.
+        std::optional<Name> name;
+        // Where the `.{ ... }` is, when the value is destructured further.
+        std::optional<Location> patternLocation;
+        // `: Type` after the binding, typing the local it binds.
+        AstType* annotation = nullptr;
+        bool closed = true;
+        std::vector<DestructureField> fields;
+    };
+    struct DestructureField
+    {
+        Name key;
+        std::optional<Location> asLocation;
+        DestructureTarget target;
+    };
+
     ParseOptions options;
 
     Lexer lexer;
@@ -607,6 +651,8 @@ private:
     AstName nameSelf;
     AstName nameNumber;
     AstName nameError;
+    // Luwu Destructuring (rfcs/destructuring.md): the hidden local an unnamed pattern binds its value to.
+    AstName nameDestructured;
     AstName nameNil;
 
     MatchLexeme endMismatchSuspect;
@@ -651,9 +697,14 @@ private:
     std::vector<Position> scratchPosition;
     std::vector<Position> scratchPosition2;
     std::vector<CstAttrList*> scratchCstAttrList;
+    std::vector<AstDestructureField> scratchDestructureField;
     std::string scratchData;
 
     CstNodeMap cstNodeMap;
+
+    // Luwu Destructuring (rfcs/destructuring.md): a destructuring declaration desugars to several
+    // statements. parseStat returns the first, and parseBlockNoScope appends these right after it.
+    std::vector<AstStat*> pendingStatements;
 
     // Luwu Attributes (rfcs/attributes-for-types-variables-fields-classes.md): attributes a table entry parsed
     // in front of `function`, which belong to the function expression parseSimpleExpr parses next rather than to
