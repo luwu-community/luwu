@@ -10,6 +10,7 @@
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuauDeprecatedAttributeOnAnonymousFunctions)
 LUAU_FASTFLAG(LuauFunctionUnusedRecursiveLinting)
 LUAU_FASTFLAG(LuwuTableRemoveFootgunLint)
@@ -2771,6 +2772,25 @@ a<<"hi">>("hi")
 )");
 
     REQUIRE(0 == result.warnings.size());
+}
+
+TEST_CASE_FIXTURE(Fixture, "destructuring_lints_like_the_names_it_binds")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    // The declaration desugars to several statements on one line, and each unnamed pattern has a hidden local
+    // of the same name; neither is visible in the source, so neither warns. An unused destructured name does.
+    LintResult result = lint(R"(
+local function f(t)
+    local .{a, unused} = t
+    local .{b} = t; print(a, b)
+end
+f({})
+)");
+
+    REQUIRE_EQ(result.warnings.size(), 1);
+    CHECK_EQ(result.warnings[0].code, LintWarning::Code_LocalUnused);
+    CHECK_EQ(result.warnings[0].text, "Variable 'unused' is never used; prefix with '_' to silence");
 }
 
 TEST_SUITE_END();

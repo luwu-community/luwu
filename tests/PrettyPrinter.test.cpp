@@ -11,6 +11,7 @@
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(DebugLuauNoInline)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuauTableEntriesDontNeedToMatchIndent)
 LUAU_FASTFLAG(LuauCstAttr)
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
@@ -2262,6 +2263,20 @@ class Box   (a)
 end
     )";
     CHECK_EQ(expected, prettyPrint(code, {}, false).code);
+}
+
+TEST_CASE("prettyPrint_destructuring")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    // Printed from the source form the parser keeps, not from the statements it desugars to
+    std::string code = R"(
+local .{x, y, z} = v
+const fs.{readfile as rf, path}: FsLib = require("@std/fs")
+const archive.{zip, tar as .{gz as targz}, lib.{a}} = require("@std/archive"); print(zip)
+local .{x: number, y as py: string, pos.{a}: Vec2, tar as .{gz}: Archive}: Whole = t
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
 }
 
 TEST_CASE("prettyPrint_function_attributes")

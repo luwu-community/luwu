@@ -19,6 +19,7 @@
 using namespace Luau;
 
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
+LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuauTruthyFalsy)
 
 LUAU_FASTFLAG(LuauInstantiateInSubtyping)
@@ -7437,6 +7438,42 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "normalization_always_intersects_table")
             end
         end
     )"));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "destructuring_binds_the_types_of_the_fields")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        local point = { x = 1, y = "two" }
+        local .{x, y} = point
+        const p.{y as why} = point
+        local .{missing} = point
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(toString(result.errors[0]), "Key 'missing' not found in table 'point'");
+    CHECK_EQ("number", toString(requireType("x")));
+    CHECK_EQ("string", toString(requireType("y")));
+    CHECK_EQ("string", toString(requireType("why")));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "destructuring_field_annotations_are_checked")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        local point = { x = 1, y = "two" }
+        local .{x: number, y as label: number} = point
+    )");
+
+    // `y` is a string, annotated number; `x` matches
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 3);
+    CHECK_EQ("number", toString(requireType("x")));
+    CHECK_EQ("number", toString(requireType("label")));
 }
 
 TEST_SUITE_END();
