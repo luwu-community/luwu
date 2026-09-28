@@ -1,0 +1,115 @@
+-- This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+print("testing destructuring")
+
+-- the value is evaluated once, and each field is read from it
+do
+    local evaluations = 0
+    local function make()
+        evaluations += 1
+        return { x = 1, y = 2, z = 3 }
+    end
+
+    local .{x, y, z} = make()
+    assert(x == 1 and y == 2 and z == 3)
+    assert(evaluations == 1)
+end
+
+-- `name.{...}` also binds the whole value
+do
+    const serde.{json, base64} = { json = "json", base64 = "base64" }
+    assert(serde.json == "json" and json == "json" and base64 == "base64")
+end
+
+-- `as` renames; nesting binds the inner names, and `name.{...}` inside also binds the name
+do
+    const archive.{zip, tar as .{gz as targz}} = { zip = "zip", tar = { gz = "gz" } }
+    assert(archive.zip == "zip" and zip == "zip" and targz == "gz")
+
+    const .{tar.{gz, xz}, zip as z} = { zip = "zip", tar = { gz = "gz", xz = "xz" } }
+    assert(tar.gz == "gz" and gz == "gz" and xz == "xz" and z == "zip")
+end
+
+-- fields are read left to right, depth first
+do
+    local reads = {}
+    local function tracked(name, value)
+        return setmetatable({}, {
+            __index = function(_, key)
+                table.insert(reads, `{name}.{key}`)
+                return value[key]
+            end,
+        })
+    end
+
+    local .{a as .{b}, c} = tracked("v", { a = tracked("a", { b = 1 }), c = 2 })
+    assert(b == 1 and c == 2)
+    assert(table.concat(reads, " ") == "v.a a.b v.c")
+end
+
+-- a missing field reads as whatever indexing gives: nil for a table
+do
+    local .{missing} = {}
+    assert(missing == nil)
+end
+
+-- any indexable value destructures: vectors, strings through their metatable
+do
+    local .{x as vx, z as vz} = vector.create(1, 2, 3)
+    assert(vx == 1 and vz == 3)
+
+    local .{upper} = "text"
+    assert(upper == string.upper)
+end
+
+-- an object's missing member raises, like any read of it
+class Cat(public name: string, public age: number) end
+
+do
+    const .{name, age} = Cat("Taz", 12)
+    assert(name == "Taz" and age == 12)
+
+    local ok, err = pcall(function()
+        const .{nope} = Cat("Taz", 12)
+        return nope
+    end)
+    assert(not ok and string.find(err, "do not have a field named 'nope'", 1, true))
+end
+
+-- const bindings stay const
+do
+    local ok = loadstring("const .{x} = { x = 1 }; x = 2")
+    assert(ok == nil)
+end
+
+-- the name binds before its fields, so a field can shadow it
+do
+    local t = { t = "inner" }
+    local t.{t} = t
+    assert(t == "inner")
+end
+
+-- `const.x` is still an index into a global named `const`
+do
+    const = { x = 1 }
+    assert(const.x == 1)
+    const = nil
+end
+
+-- declarations work in nested functions, loops and with a trailing `;`
+do
+    local sum = 0
+    for i = 1, 3 do
+        local .{v} = { v = i }; sum += v
+    end
+    assert(sum == 6)
+
+    local function f(p)
+        const .{x, y} = p
+        return function()
+            return x + y
+        end
+    end
+    assert(f({ x = 1, y = 2 })() == 3)
+end
+
+return "OK"

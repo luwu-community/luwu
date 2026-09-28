@@ -328,6 +328,66 @@ struct Printer
             writer.write(s);
     }
 
+    // Luwu Destructuring (rfcs/destructuring.md): `[name].{field: T, key as name: T, key as [name].{...}: T}: T`,
+    // from the source form the parser kept.
+    void visualizeDestructuring(const AstDestructurePattern& pattern)
+    {
+        if (pattern.local->name != kDestructuredLocalName)
+        {
+            advance(pattern.local->location.begin);
+            writer.identifier(pattern.local->name.value);
+        }
+
+        visualizeDestructurePattern(pattern);
+    }
+
+    // The `.{...}` of a pattern, if any, then the annotation on the local it binds.
+    void visualizeDestructurePattern(const AstDestructurePattern& pattern)
+    {
+        visualizeDestructureFields(pattern);
+
+        if (writeTypes && pattern.local->annotation)
+        {
+            writer.symbol(":");
+            visualizeTypeAnnotation(*pattern.local->annotation);
+        }
+    }
+
+    void visualizeDestructureFields(const AstDestructurePattern& pattern)
+    {
+        if (!pattern.location)
+            return;
+
+        advance(pattern.location->begin);
+        writer.symbol(".");
+        writer.symbol("{");
+
+        CommaSeparatorInserter comma(writer, nullptr);
+        for (const AstDestructureField& field : pattern.fields)
+        {
+            comma();
+            advance(field.keyLocation.begin);
+            writer.identifier(field.key.value);
+
+            if (field.asLocation)
+            {
+                advance(field.asLocation->begin);
+                writer.keyword("as");
+
+                if (field.target.local->name != kDestructuredLocalName)
+                {
+                    advance(field.target.local->location.begin);
+                    writer.identifier(field.target.local->name.value);
+                }
+            }
+
+            visualizeDestructurePattern(field.target);
+        }
+
+        advanceBefore(pattern.location->end, 1);
+        writer.symbol("}");
+    }
+
     void visualize(const AstLocal& local, Position colonPosition)
     {
         advance(local.location.begin);
@@ -917,6 +977,18 @@ struct Printer
 
     void visualize(AstStat& program)
     {
+        // Luwu Destructuring (rfcs/destructuring.md): the first statement a destructuring declaration desugars to
+        // prints the whole declaration, so the rest print nothing but a trailing `;`.
+        if (const auto& local = program.as<AstStatLocal>(); local && local->destructuredFrom)
+        {
+            if (program.hasSemicolon)
+            {
+                advanceBefore(program.location.end, 1);
+                writer.symbol(";");
+            }
+            return;
+        }
+
         advance(program.location.begin);
 
         if (const auto& block = program.as<AstStatBlock>())
@@ -1023,17 +1095,24 @@ struct Printer
                 writer.keyword("local");
             }
 
-            CommaSeparatorInserter varComma(writer, cstNode ? cstNode->varsCommaPositions.begin() : nullptr);
-            for (size_t i = 0; i < a->vars.size; i++)
+            if (a->destructure)
             {
-                varComma();
-                if (cstNode)
+                visualizeDestructuring(*a->destructure);
+            }
+            else
+            {
+                CommaSeparatorInserter varComma(writer, cstNode ? cstNode->varsCommaPositions.begin() : nullptr);
+                for (size_t i = 0; i < a->vars.size; i++)
                 {
-                    LUAU_ASSERT(cstNode->varsAnnotationColonPositions.size > i);
-                    visualize(*a->vars.data[i], cstNode->varsAnnotationColonPositions.data[i]);
+                    varComma();
+                    if (cstNode)
+                    {
+                        LUAU_ASSERT(cstNode->varsAnnotationColonPositions.size > i);
+                        visualize(*a->vars.data[i], cstNode->varsAnnotationColonPositions.data[i]);
+                    }
+                    else
+                        visualize(*a->vars.data[i], Position{0, 0});
                 }
-                else
-                    visualize(*a->vars.data[i], Position{0, 0});
             }
 
             if (a->equalsSignLocation)

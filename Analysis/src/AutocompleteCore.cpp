@@ -1448,6 +1448,10 @@ T* extractStat(const std::vector<AstNode*>& ancestry)
 
 static bool isBindingLegalAtCurrentPosition(const Symbol& symbol, const Binding& binding, Position pos)
 {
+    // Luwu Destructuring (rfcs/destructuring.md): the hidden local of an unnamed pattern can't be written.
+    if (symbol.local && symbol.local->name == kDestructuredLocalName)
+        return false;
+
     if (symbol.local)
         return binding.location.end < pos;
 
@@ -2152,6 +2156,117 @@ static std::optional<AutocompleteEntry> makeAnonymousAutofilled(
     return std::make_optional(std::move(entry));
 }
 
+// Luwu Destructuring (rfcs/destructuring.md): where in a destructuring pattern the cursor is.
+struct DestructureCursor
+{
+    enum Kind
+    {
+        // Where a field's key goes: complete the properties of the value at `level`
+        Key,
+        // The name after `as`, which declares a new local: nothing to complete
+        BindingName,
+    };
+
+    Kind kind;
+    const AstDestructurePattern* level;
+
+    // The statements the declaration desugared to: `block->body[first]` and the ones after it that point back to it
+    const AstStatBlock* block = nullptr;
+    size_t first = 0;
+};
+
+static std::optional<DestructureCursor> findDestructureCursorInPattern(const AstDestructurePattern& pattern, Position position)
+{
+    if (!pattern.location)
+        return std::nullopt;
+
+    // Right after a `}` is outside the pattern; at the end of an unclosed one is where the next field goes
+    bool inside = pattern.closed ? pattern.location->contains(position) : pattern.location->containsClosed(position);
+    if (!inside)
+        return std::nullopt;
+
+    for (const AstDestructureField& field : pattern.fields)
+    {
+        const AstDestructurePattern& target = field.target;
+
+        if (std::optional<DestructureCursor> inner = findDestructureCursorInPattern(target, position))
+            return inner;
+
+        // An annotation is a type position; the ordinary type completion handles it
+        if (target.local->annotation && target.local->annotation->location.containsClosed(position))
+            return std::nullopt;
+
+        bool namedAfterAs = field.asLocation && target.local->name != kDestructuredLocalName;
+        if (namedAfterAs && target.local->location.containsClosed(position))
+            return DestructureCursor{DestructureCursor::BindingName, &pattern};
+    }
+
+    return DestructureCursor{DestructureCursor::Key, &pattern};
+}
+
+// The destructuring declaration in `ancestry`'s blocks whose pattern holds `position`, if any. The cursor is
+// often on no node at all (`.{|}`), so this searches the enclosing blocks' statements rather than the ancestry.
+static std::optional<DestructureCursor> findDestructureCursor(const std::vector<AstNode*>& ancestry, Position position)
+{
+    for (auto it = ancestry.rbegin(); it != ancestry.rend(); ++it)
+    {
+        const AstStatBlock* block = (*it)->as<AstStatBlock>();
+        if (!block)
+            continue;
+
+        for (size_t i = 0; i < block->body.size; ++i)
+        {
+            const AstStatLocal* local = block->body.data[i]->as<AstStatLocal>();
+            if (!local || !local->destructure || !local->location.containsClosed(position))
+                continue;
+
+            if (std::optional<DestructureCursor> cursor = findDestructureCursorInPattern(*local->destructure, position))
+            {
+                cursor->block = block;
+                cursor->first = i;
+                return cursor;
+            }
+        }
+    }
+
+    return std::nullopt;
+}
+
+// The type of the value a pattern level destructures: its annotation's, or else its desugared statement's value's.
+static std::optional<TypeId> destructuredValueType(const Module& module, const DestructureCursor& cursor)
+{
+    const AstDestructurePattern& level = *cursor.level;
+
+    if (level.local->annotation)
+    {
+        if (const TypeId* annotated = module.astResolvedTypes.find(level.local->annotation))
+            return follow(*annotated);
+    }
+
+    // The level's local is declared by the first statement or by one of the statements that point back to it
+    const AstStatLocal* first = cursor.block->body.data[cursor.first]->as<AstStatLocal>();
+    const AstStatLocal* declaring = nullptr;
+
+    for (size_t i = cursor.first; i < cursor.block->body.size && !declaring; ++i)
+    {
+        const AstStatLocal* candidate = cursor.block->body.data[i]->as<AstStatLocal>();
+        bool partOfDeclaration = candidate && (candidate == first || candidate->destructuredFrom == first);
+        if (!partOfDeclaration)
+            break;
+
+        if (candidate->vars.size == 1 && candidate->vars.data[0] == level.local)
+            declaring = candidate;
+    }
+
+    if (!declaring || declaring->values.size == 0)
+        return std::nullopt;
+
+    if (const TypeId* valueType = module.astTypes.find(declaring->values.data[0]))
+        return follow(*valueType);
+
+    return std::nullopt;
+}
+
 AutocompleteResult autocomplete_(
     const ModulePtr& module,
     NotNull<BuiltinTypes> builtinTypes,
@@ -2191,6 +2306,27 @@ AutocompleteResult autocomplete_(
         for (const std::string_view hc : kHotComments)
             result.emplace(hc, AutocompleteEntry{AutocompleteEntryKind::HotComment});
         return {std::move(result), ancestry, AutocompleteContext::HotComment};
+    }
+
+    // Luwu Destructuring (rfcs/destructuring.md): a field key in a pattern takes the properties of the value the
+    // pattern destructures, and nothing else (no locals, keywords or imports). A name after `as` declares a local.
+    if (std::optional<DestructureCursor> cursor = findDestructureCursor(ancestry, position))
+    {
+        if (cursor->kind == DestructureCursor::BindingName)
+            return {{}, ancestry, AutocompleteContext::Unknown};
+
+        AutocompleteEntryMap props;
+        if (std::optional<TypeId> valueType = destructuredValueType(*module, *cursor))
+            props = autocompleteProps(*module, typeArena, builtinTypes, *valueType, PropIndexType::Point, ancestry);
+
+        // Keys already in the pattern, except the one being written
+        for (const AstDestructureField& field : cursor->level->fields)
+        {
+            if (!field.keyLocation.containsClosed(position))
+                props.erase(field.key.value);
+        }
+
+        return {std::move(props), ancestry, AutocompleteContext::Property};
     }
 
     AstNode* node = ancestry.back();

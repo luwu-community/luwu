@@ -19,6 +19,7 @@ LUAU_DYNAMIC_FASTINT(LuauSubtypingRecursionLimit)
 
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuwuBetterAttributes)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
@@ -5852,6 +5853,70 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_on_nonexistent_table")
 
     auto ac = autocomplete('1');
     CHECK(ac.entryMap.count("Animator"));
+}
+
+TEST_CASE_FIXTURE(ACFixture, "destructuring_keys_complete_the_properties_of_the_value")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    check(R"(
+        local value = { alpha = 1, beta = "b", inner = { deep = true } }
+        local .{@1} = value
+        local .{alpha, @2} = value
+        local .{inner as .{@3}} = value
+        local .{@4}: { annotated: number } = value
+        local .{alpha as @5} = value
+        local .{@6}
+    )");
+
+    // An empty slot: the value's properties, and nothing else
+    AutocompleteResult ac = autocomplete('1');
+    CHECK_EQ(ac.context, AutocompleteContext::Property);
+    CHECK(ac.entryMap.count("alpha"));
+    CHECK(ac.entryMap.count("beta"));
+    CHECK(ac.entryMap.count("inner"));
+    CHECK(!ac.entryMap.count("value"));
+    CHECK(!ac.entryMap.count("local"));
+
+    // Keys already written aren't offered again
+    ac = autocomplete('2');
+    CHECK_EQ(ac.context, AutocompleteContext::Property);
+    CHECK(!ac.entryMap.count("alpha"));
+    CHECK(ac.entryMap.count("beta"));
+
+    // A nested pattern completes the field it destructures
+    ac = autocomplete('3');
+    CHECK_EQ(ac.context, AutocompleteContext::Property);
+    CHECK(ac.entryMap.count("deep"));
+    CHECK(!ac.entryMap.count("alpha"));
+
+    // An annotated value completes from the annotation
+    ac = autocomplete('4');
+    CHECK(ac.entryMap.count("annotated"));
+
+    // The name after `as` declares a local
+    ac = autocomplete('5');
+    CHECK(ac.entryMap.empty());
+    CHECK_EQ(ac.context, AutocompleteContext::Unknown);
+
+    // With no value yet there is nothing to offer, and still no locals or keywords
+    ac = autocomplete('6');
+    CHECK(ac.entryMap.empty());
+    CHECK_EQ(ac.context, AutocompleteContext::Property);
+}
+
+TEST_CASE_FIXTURE(ACFixture, "destructuring_hidden_local_is_not_suggested")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    check(R"(
+        local .{alpha} = { alpha = 1 }
+        local _ = @1
+    )");
+
+    auto ac = autocomplete('1');
+    CHECK(ac.entryMap.count("alpha"));
+    CHECK(!ac.entryMap.count(kDestructuredLocalName));
 }
 
 TEST_SUITE_END();

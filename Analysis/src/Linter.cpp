@@ -606,6 +606,11 @@ private:
             if (node->body.data[i - 1]->hasSemicolon)
                 continue;
 
+            // Luwu Destructuring (rfcs/destructuring.md): the statements a destructuring declaration desugars to
+            // are one statement in the source.
+            if (AstStatLocal* local = node->body.data[i]->as<AstStatLocal>(); local && local->destructuredFrom)
+                continue;
+
             emitWarning(
                 *context,
                 LintWarning::Code_SameLineStatement,
