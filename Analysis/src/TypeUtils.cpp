@@ -1146,4 +1146,15 @@ bool isInsideClassDeclaration(const ExternType* cls, const ModuleName& moduleNam
     return cls->definitionLocation && cls->definitionModuleName == moduleName && cls->definitionLocation->encloses(location);
 }
 
+void applyDeprecatedAttribute(Property& prop, const AstArray<AstAttr*>& attributes)
+{
+    std::optional<AstAttr::DeprecatedInfo> info = findDeprecatedInfo(attributes);
+    if (!info)
+        return;
+
+    prop.deprecated = true;
+    if (info->use)
+        prop.deprecatedSuggestion = *info->use;
+}
+
 } // namespace Luau
