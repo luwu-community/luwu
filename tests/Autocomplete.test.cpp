@@ -19,6 +19,7 @@ LUAU_DYNAMIC_FASTINT(LuauSubtypingRecursionLimit)
 
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
 LUAU_FASTFLAG(LuauAutocompleteFunctionArglistSuggestion)
@@ -5200,6 +5201,143 @@ TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_deprecated_attribute")
     CHECK_EQ(ac.entryMap.count("deprecated"), 1);
     CHECK_EQ(ac.entryMap.count("checked"), 1);
     CHECK_EQ(ac.entryMap.count("native"), 1);
+}
+
+TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_attribute_beyond_functions")
+{
+    ScopedFastFlag betterAttributes{FFlag::LuwuAttributesEverywhere, true};
+
+    // A local: only the attributes that allow this position are offered, so the function-only ones
+    // are absent rather than suggested and then rejected by the parser.
+    check(R"(
+        \@dep@1
+        local x = 1
+    )");
+
+    auto ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("deprecated"), 1);
+    CHECK_EQ(ac.entryMap.count("native"), 0);
+    CHECK_EQ(ac.entryMap.count("checked"), 0);
+
+    // A type alias.
+    check(R"(
+        \@dep@1
+        type X = number
+    )");
+
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("deprecated"), 1);
+    CHECK_EQ(ac.entryMap.count("native"), 0);
+
+    // A field of a table type.
+    check(R"(
+        type X = {
+            \@dep@1 foo: number,
+        }
+    )");
+
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("deprecated"), 1);
+    CHECK_EQ(ac.entryMap.count("native"), 0);
+
+    // An entry of a table constructor.
+    check(R"(
+        local t = {
+            \@dep@1 foo = 1,
+        }
+    )");
+
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("deprecated"), 1);
+
+    // A function parameter.
+    check(R"(
+        local function f(\@dep@1 a) return a end
+    )");
+
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("deprecated"), 1);
+    CHECK_EQ(ac.entryMap.count("native"), 0);
+
+    // A function still offers the function-only attributes.
+    check(R"(
+        \@dep@1
+        local function f() end
+    )");
+
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("deprecated"), 1);
+    CHECK_EQ(ac.entryMap.count("native"), 1);
+    CHECK_EQ(ac.entryMap.count("checked"), 1);
+}
+
+TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_attribute_argument_fields")
+{
+    // Inside the braces, the fields @deprecated takes.
+    check(R"(
+        \@[deprecated { @1 }]
+        function foo() end
+    )");
+
+    auto ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("use"), 1);
+    CHECK_EQ(ac.entryMap.count("reason"), 1);
+    CHECK_EQ(ac.entryMap.count("local"), 0);
+    CHECK_EQ(ac.context, AutocompleteContext::Property);
+
+    // A field name part of the way written.
+    check(R"(
+        \@[deprecated { us@1 }]
+        function foo() end
+    )");
+
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("use"), 1);
+    CHECK_EQ(ac.entryMap.count("reason"), 1);
+
+    // A field already written is not offered again.
+    check(R"(
+        \@[deprecated { use = "bar", @1 }]
+        function foo() end
+    )");
+
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("use"), 0);
+    CHECK_EQ(ac.entryMap.count("reason"), 1);
+
+    // Inside a field's value there is nothing to offer, rather than the statement completions of the
+    // function the attribute is on.
+    check(R"(
+        \@[deprecated { use = "ba@1" }]
+        function foo() end
+    )");
+
+    ac = autocomplete('1');
+    CHECK(ac.entryMap.empty());
+}
+
+TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_attribute_argument_fields_beyond_functions")
+{
+    ScopedFastFlag attributesEverywhere{FFlag::LuwuAttributesEverywhere, true};
+
+    check(R"(
+        \@[deprecated { @1 }]
+        local x = 1
+    )");
+
+    auto ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("use"), 1);
+    CHECK_EQ(ac.entryMap.count("reason"), 1);
+
+    check(R"(
+        local t = {
+            \@[deprecated { @1 }] foo = 1,
+        }
+    )");
+
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("use"), 1);
+    CHECK_EQ(ac.entryMap.count("reason"), 1);
 }
 
 TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_empty_braced_attribute")

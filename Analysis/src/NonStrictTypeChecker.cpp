@@ -810,11 +810,11 @@ struct NonStrictTypeChecker
                 return {};
         }
 
-        for (auto [_, key, value] : table->items)
+        for (const AstExprTable::Item& item : table->items)
         {
-            if (key)
-                visit(key, ValueContext::RValue);
-            visit(value, ValueContext::RValue);
+            if (item.key)
+                visit(item.key, ValueContext::RValue);
+            visit(item.value, ValueContext::RValue);
         }
 
         return {};

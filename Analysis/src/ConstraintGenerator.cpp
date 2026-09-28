@@ -1111,6 +1111,8 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
                             // we'll ICE or misbehave.
                             p = Property::rw(propertyType);
                             p.location = classProp.nameLocation;
+
+                            applyDeprecatedAttribute(p, classProp.attributes);
                             if (FFlag::LuwuClasses)
                             {
                                 p.isPrivate = classProp.visibility == AstClassMemberVisibility::Private;
@@ -4454,7 +4456,11 @@ Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprTable* expr, 
             if (AstExprConstantString* key = item.key->as<AstExprConstantString>())
             {
                 std::string propName{key->value.data, key->value.size};
+                // `@deprecated` on the entry. The lint checks a Property's own deprecation before it
+                // looks at the value's type, which is what gives the RFC's rule that an attribute on
+                // the field wins over one on the value bound to it.
                 ttv->props[propName] = {itemTy, /*deprecated*/ false, {}, key->location};
+                applyDeprecatedAttribute(ttv->props[propName], item.attributes);
             }
             else
             {
@@ -5000,6 +5006,10 @@ TypeId ConstraintGenerator::resolveTableType(const ScopePtr& scope, AstType* ty,
         TypeId propTy = resolveType_(scope, prop.type, inTypeArguments);
 
         propRef.typeLocation = prop.location;
+
+        // `@deprecated` on a field of a table type: the DeprecatedApi lint already reports on a
+        // Property marked this way, so the attribute only has to reach it.
+        applyDeprecatedAttribute(propRef, prop.attributes);
 
         switch (prop.access)
         {
