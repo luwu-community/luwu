@@ -36,7 +36,7 @@ LUAU_FASTFLAGVARIABLE(LuauCompileIifeInline)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAGVARIABLE(LuauCompileStringInterpTargetTop)
-LUAU_FASTFLAG(DebugLuauNoInline)
+LUAU_FASTFLAG(LuwuNoinlineAttribute)
 LUAU_FASTFLAGVARIABLE(LuauEmitCallFeedback)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAGVARIABLE(LuwuExportedClassIsNilWorkaround)
@@ -686,7 +686,11 @@ struct Compiler
         if (func->hasNativeAttribute())
             protoflags |= LPF_NATIVE_FUNCTION;
 
-        bool isInlinable = !hasMultiRet && !getfenvUsed && !setfenvUsed;
+        // Luwu @noinline (rfcs/noinline-attribute.md): upstream marks every function without multret or fenv use
+        // LPF_INLINABLE, for a native-code inliner to read. A `@noinline` function is left unmarked so that
+        // inliner honors the attribute too.
+        const bool isNoinline = FFlag::LuwuNoinlineAttribute && func->hasAttribute(AstAttr::Type::Noinline);
+        bool isInlinable = !hasMultiRet && !getfenvUsed && !setfenvUsed && !isNoinline;
         uint64_t costModel = 0;
         if (FFlag::LuauEmitCallFeedback && isInlinable && upvals.empty())
         {
@@ -703,14 +707,7 @@ struct Compiler
         // record information for inlining
         if (options.optimizationLevel >= 2 && !func->vararg && !func->self && !getfenvUsed && !setfenvUsed)
         {
-            if (FFlag::DebugLuauNoInline && func->hasAttribute(AstAttr::Type::DebugNoinline))
-            {
-                f.canInline = false;
-            }
-            else
-            {
-                f.canInline = true;
-            }
+            f.canInline = !isNoinline;
             f.stackSize = stackSize;
             f.costModel = costModel == 0 ? modelCost(func->body, func->args.data, func->args.size, builtins, constants) : costModel;
 
