@@ -22,6 +22,7 @@ using namespace Luau;
 
 LUAU_FASTINT(LuauParseErrorLimit)
 
+LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
@@ -5523,6 +5524,72 @@ TEST_CASE_FIXTURE(FragmentAutocompleteFixture, "fragment_ac_on_nonexistent_table
         {
             REQUIRE(frag.result);
             CHECK(frag.result->acResults.entryMap.count("Animator"));
+        }
+    );
+}
+
+TEST_CASE_FIXTURE(FragmentAutocompleteBuiltinsFixture, "fragment_autocomplete_attribute_names_and_argument_fields")
+{
+    // Editors use fragment autocomplete while a file is being edited, so completion inside an attribute has to
+    // survive the fragment being reparsed on its own.
+    const std::string source = R"(
+function foo() end
+)";
+
+    autocompleteFragmentInNewSolver(
+        source,
+        R"(
+\@dep@1
+function foo() end
+)",
+        '1',
+        [](FragmentAutocompleteStatusResult& result)
+        {
+            REQUIRE(result.result);
+            CHECK_EQ(result.result->acResults.entryMap.count("deprecated"), 1);
+        }
+    );
+
+    autocompleteFragmentInNewSolver(
+        source,
+        R"(
+\@[deprecated { @1 }]
+function foo() end
+)",
+        '1',
+        [](FragmentAutocompleteStatusResult& result)
+        {
+            REQUIRE(result.result);
+            CHECK_EQ(result.result->acResults.entryMap.count("use"), 1);
+            CHECK_EQ(result.result->acResults.entryMap.count("reason"), 1);
+        }
+    );
+}
+
+TEST_CASE_FIXTURE(FragmentAutocompleteBuiltinsFixture, "fragment_autocomplete_attribute_argument_fields_in_table_type")
+{
+    ScopedFastFlag attributesEverywhere{FFlag::LuwuAttributesEverywhere, true};
+
+    const std::string source = R"(
+type M = {
+    bark: () -> (),
+}
+)";
+
+    autocompleteFragmentInNewSolver(
+        source,
+        R"(
+type M = {
+    \@[deprecated { @1 }]
+    bark: () -> (),
+}
+)",
+        '1',
+        [](FragmentAutocompleteStatusResult& result)
+        {
+            REQUIRE(result.result);
+            CHECK_EQ(result.result->acResults.entryMap.count("use"), 1);
+            CHECK_EQ(result.result->acResults.entryMap.count("reason"), 1);
         }
     );
 }

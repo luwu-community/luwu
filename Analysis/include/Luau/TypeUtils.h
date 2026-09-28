@@ -465,4 +465,11 @@ std::optional<std::string> describeOptionalOperands(TypeId left, std::optional<T
  */
 bool isInsideClassDeclaration(const ExternType* cls, const ModuleName& moduleName, const Location& location);
 
+/**
+ * Luwu Attributes (rfcs/attributes-for-types-variables-fields-classes.md): marks `prop` deprecated when the
+ * field it was declared from carries `@deprecated`, with the attribute's `use` as its suggestion. Leaves `prop`
+ * alone otherwise.
+ */
+void applyDeprecatedAttribute(Property& prop, const AstArray<AstAttr*>& attributes);
+
 } // namespace Luau
