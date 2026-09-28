@@ -83,6 +83,7 @@ LUAU_FASTFLAG(LuauCodegenFixBufferLenCheck)
 LUAU_FASTFLAG(LuauYieldIter2)
 LUAU_FASTFLAG(LuauCustomYieldablePcalls)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuwuExportedClassIsNilWorkaround)
@@ -6244,6 +6245,16 @@ TEST_CASE("DefaultArguments")
     ScopedFastFlag sff{FFlag::LuwuDefaultArguments, true};
 
     runConformance("defaultarg.luwu");
+}
+
+TEST_CASE("Destructuring")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuDestructuring, true},
+        {FFlag::LuwuClasses, true},
+    };
+
+    runConformance("destructuring.luwu");
 }
 
 TEST_CASE("None")

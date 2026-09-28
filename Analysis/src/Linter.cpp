@@ -635,6 +635,11 @@ private:
             if (node->body.data[i - 1]->hasSemicolon)
                 continue;
 
+            // Luwu Destructuring (rfcs/destructuring.md): the statements a destructuring declaration desugars to
+            // are one statement in the source.
+            if (AstStatLocal* local = node->body.data[i]->as<AstStatLocal>(); local && local->destructuredFrom)
+                continue;
+
             // Luwu: a half-typed statement (`local t =`) ends on the next statement's line because the parser gave up
             // there. Upstream reports the untouched next line.
             if (containsParseError(node->body.data[i - 1]))
