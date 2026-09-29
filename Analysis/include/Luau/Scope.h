@@ -67,6 +67,9 @@ struct Scope
 
     std::optional<TypeFun> lookupType(const Name& name) const;
     std::optional<TypeFun> lookupImportedType(const Name& moduleAlias, const Name& name) const;
+    // Luwu Traits (rfcs/classes/traits.md): the type an `implements` or `needs` entry names (`Trait` or `mod.Trait`), which
+    // need not be a trait
+    std::optional<TypeFun> lookupTraitRef(const AstClassTraitRef& ref) const;
 
     std::unordered_map<Name, TypePackId> privateTypePackBindings;
     std::optional<TypePackId> lookupPack(const Name& name) const;

@@ -4,6 +4,7 @@
 
 #include "Luau/BuiltinDefinitions.h"
 #include "Luau/Error.h"
+#include "Luau/StringUtils.h"
 #include "ScopedFlags.h"
 #include "doctest.h"
 
@@ -17,6 +18,7 @@ LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
 LUAU_FASTFLAG(LuwuDeclareStatements)
+LUAU_FASTFLAG(LuwuTraits)
 
 namespace
 {
@@ -35,6 +37,7 @@ end
 
 declare class: {
     isinstance: @checked (o: unknown, c: class) -> boolean,
+    implements: @checked (o: unknown, t: class) -> boolean,
     of: @checked (o: unknown) -> class?,
     name: @checked (o: class | object) -> string,
     fields: @checked (o: class | object) -> ({ [string]: unknown }, boolean)
@@ -2977,6 +2980,651 @@ TEST_CASE_FIXTURE(ClassesFixture, "class_of_a_generic_class_without_type_argumen
     LUAU_REQUIRE_NO_ERRORS(result);
     CHECK_EQ(toString(requireType("b")), "Box<string>");
     CHECK_EQ(toString(requireType("s")), "string");
+}
+
+// Luwu Traits (rfcs/classes/traits.md)
+
+TEST_CASE_FIXTURE(ClassesFixture, "trait_members_are_the_implementing_class_members")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait Greeter
+            expect name: string
+            greeting = "hello"
+            function greet(self): string
+                return self.greeting .. ", " .. self.name
+            end
+        end
+
+        class Cat implements Greeter
+            name = "whiskers"
+        end
+
+        local function welcome(g: Greeter): string
+            return g:greet()
+        end
+
+        local c = Cat()
+        local a = c:greet()
+        local b = c.greeting
+        local w = welcome(c)
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("string", toString(requireType("a")));
+    CHECK_EQ("string", toString(requireType("b")));
+    CHECK_EQ("string", toString(requireType("w")));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "trait_needs_are_implied_and_private_members_stay_private")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuTraits, true}, {FFlag::LuwuDefaultArguments, true}};
+
+    CheckResult result = check(R"(
+        trait Item(category: string, count = 0)
+            expect name: string
+            function is_weapon(self): boolean
+                return self.category == "Weapon"
+            end
+        end
+
+        trait Tool needs Item
+            expect private model: string
+            expect public function equipped?(self)
+            private is_equipped = false
+            public function toggle(self): boolean
+                self.is_equipped = not self.is_equipped
+                if self.equipped then
+                    self:equipped()
+                end
+                return self.is_equipped
+            end
+        end
+
+        trait Gun needs Tool
+            expect public const beamtype: "Las" | "Particle"
+        end
+
+        class Rifle implements Gun, Item("Weapon", 1)
+            public name = "rifle"
+            private model: string = "m"
+            public const beamtype = "Particle"
+            public function peek(self): boolean
+                return self.is_equipped
+            end
+        end
+
+        local r = Rifle()
+        local w = r:is_weapon()
+        local t = r:toggle()
+        local e = r.equipped
+        local hidden = r.is_equipped
+    )");
+
+    // the only error is reading the trait's private field from outside the class
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<PrivatePropertyAccess>(result.errors[0]));
+    CHECK_EQ("boolean", toString(requireType("w")));
+    CHECK_EQ("boolean", toString(requireType("t")));
+    // an optional expected function keeps the trait's signature, `self` included
+    CHECK_EQ("((Tool) -> ())?", toString(requireType("e")));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "trait_function_overrides_keep_their_access")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait T
+            public function shown(self) end
+            private function hidden(self) end
+            public function make() end
+            public function kept(self) end
+        end
+
+        class A implements T
+            private function shown(self) end
+            public function hidden(self) end
+            private function make() end
+            public function kept(self) end
+        end
+    )");
+
+    // each on the trait in the `implements` list, then on the class's own function
+    LUAU_REQUIRE_ERROR_COUNT(6, result);
+    CHECK_EQ("'hidden' must be private for 'A' to implement 'T'", toString(result.errors[0]));
+    CHECK_EQ("'hidden' must be private for 'A' to implement 'T'", toString(result.errors[1]));
+    CHECK_EQ(result.errors[0].location.begin.line, 8);
+    CHECK_EQ(result.errors[1].location.begin.line, 10);
+    CHECK_EQ("'make' must be public for 'A' to implement 'T'", toString(result.errors[2]));
+    CHECK_EQ(result.errors[3].location.begin.line, 11);
+    CHECK_EQ("'shown' must be public for 'A' to implement 'T'", toString(result.errors[4]));
+    CHECK_EQ(result.errors[5].location.begin.line, 9);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "trait_final_fields_are_never_assigned")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait Tagged
+            final tag = "tagged"
+        end
+
+        class Owned implements Tagged
+            n: number
+            function __init(self)
+                self.n = 1
+                self.tag = "mine"
+            end
+        end
+
+        local o = Owned()
+        local t: string = o.tag
+        o.tag = "x"
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ("'tag' is a final field of 'Owned' and can't be assigned", toString(result.errors[0]));
+    CHECK_EQ("'tag' is a final field of 'Owned' and can't be assigned", toString(result.errors[1]));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "trait_arguments_are_checked")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+    ScopedFastFlag defaultArguments{FFlag::LuwuDefaultArguments, true};
+
+    CheckResult result = check(R"(
+        trait Item(category: "Weapon" | "Tool" | "Currency", max = 10)
+            expect name: string
+        end
+
+        class Package(contents: { Item }) implements Item
+        end
+
+        class TooMany implements Item("Tool", 1, 2)
+            name = "many"
+        end
+
+        class WrongType implements Item("Food")
+            name = "food"
+        end
+
+        class Fine(n: number) implements Item("Weapon", n)
+            name = "fine"
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(4, result);
+    CHECK_EQ("This trait must be called: 'Item(category, max)'", toString(result.errors[0]));
+    CHECK_EQ("Trait 'Item' takes 1 to 2 arguments, but 3 were given", toString(result.errors[1]));
+    CHECK_EQ("Missing field 'name: string' required for 'Package' to implement 'Item'", toString(result.errors[2]));
+    CHECK(get<TypeMismatch>(result.errors[3]));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "trait_expectations_are_checked")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait T
+            expect public x: number
+            expect private y: number
+            expect public function f(self): number
+            public final function h(self) end
+        end
+
+        class A implements T
+            public x = "no"
+            public y = 1
+            public function h(self) end
+        end
+    )");
+
+    // a member-level error is on the trait in the `implements` list, and on the class's own member
+    LUAU_REQUIRE_ERROR_COUNT(6, result);
+    CHECK_EQ("'h' is final in trait 'T' and can't be overridden", toString(result.errors[0]));
+    CHECK_EQ("'h' is final in trait 'T' and can't be overridden", toString(result.errors[1]));
+    CHECK_EQ(result.errors[1].location.begin.line, 11);
+    CHECK_EQ("'y' must be private for 'A' to implement 'T'", toString(result.errors[2]));
+    CHECK_EQ(result.errors[3].location.begin.line, 10);
+    CHECK_EQ("Missing function 'f(self: T): number' required for 'A' to implement 'T'", toString(result.errors[4]));
+    CHECK(get<TypeMismatch>(result.errors[5]));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "traits_may_expect_the_same_member")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait A
+            expect name: string
+            expect function speak(self): string
+            function a(self): string return self:speak() end
+        end
+
+        trait B
+            expect name: string
+            expect function speak(self): string
+            function b(self): string return self.name end
+        end
+
+        class C implements A, B
+            name = "c"
+            function speak(self): string return "hi" end
+        end
+
+        local c = C()
+        local x = c:a() .. c:b()
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "traits_expecting_one_field_with_different_types")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait A
+            expect x: number
+        end
+
+        trait B
+            expect x: string
+        end
+
+        class C implements A, B
+            x = 1
+        end
+    )");
+
+    // no field is both a number and a string
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<TypeMismatch>(result.errors[0]));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "trait_member_clashes")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait A
+            shared = 1
+            function f(self) end
+        end
+
+        trait B
+            function f(self) end
+        end
+
+        class C implements A, B
+            shared = 2
+        end
+
+        class D implements A, B
+            function f(self) end
+        end
+    )");
+
+    // D settles the clash of `f` by defining it
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
+    CHECK_EQ("'shared' is already provided by trait 'A'", toString(result.errors[0]));
+    CHECK_EQ("'shared' is already provided by trait 'A'", toString(result.errors[1]));
+    CHECK_EQ(result.errors[1].location.begin.line, 11);
+    CHECK_EQ("Traits 'A' and 'B' both provide 'f'", toString(result.errors[2]));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "traits_that_need_each_other")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait A needs B end
+        trait B needs A end
+        trait Base end
+        trait Left needs Base end
+        trait Right needs Base end
+    )");
+
+    // the diamond through Base is fine
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ("Traits 'A' and 'B' need each other; combine them into one trait", toString(result.errors[0]));
+    CHECK_EQ("Traits 'B' and 'A' need each other; combine them into one trait", toString(result.errors[1]));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_implements_refines")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait Greeter
+            expect name: string
+            function greet(self): string return "hi " .. self.name end
+        end
+        trait Other
+            function other(self): number return 1 end
+        end
+        class Cat implements Greeter
+            name = "c"
+        end
+        class Dog implements Other end
+
+        local function f(x: unknown)
+            if class.implements(x, Greeter) then
+                local s = x:greet()
+                local refined = x
+            end
+        end
+
+        local function g(x: Cat | Dog)
+            if class.implements(x, Greeter) then
+                local yes = x
+            else
+                local no = x
+            end
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("Greeter", toString(requireTypeAtPosition({16, 32})));
+    CHECK_EQ("Cat", toString(requireTypeAtPosition({22, 28})));
+    CHECK_EQ("Dog", toString(requireTypeAtPosition({24, 27})));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "trait_functions_through_the_trait")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait Greeter
+            expect name: string
+            expect function speak(self): string
+            function greet(self): string return self.name end
+            function make(): number return 1 end
+        end
+        class Cat implements Greeter
+            name = "c"
+            function speak(self): string return "meow" end
+        end
+        class Unrelated end
+        local a: string = Greeter.greet(Cat())
+        local b: number = Greeter.make()
+        local c = Greeter.greet(Unrelated())
+        local d = Greeter.speak
+    )");
+
+    // a method's `self` must implement the trait, and an expected function isn't part of the trait's value
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK(get<TypeMismatch>(result.errors[0]));
+    CHECK(get<UnknownProperty>(result.errors[1]));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "trait_factory")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait Path
+            expect raw: string
+            function __create(raw: string)
+                if raw == "@" then
+                    return RequirePath(raw)
+                end
+                return RelativePath(raw)
+            end
+        end
+
+        class RelativePath private (public raw: string) implements Path end
+        class RequirePath private (public raw: string) implements Path end
+
+        trait Parsed
+            function __create(n: number): string?
+                return nil
+            end
+        end
+
+        trait Plain end
+
+        local p = Path("./x")
+        local s = Parsed(1)
+        local bad = Plain()
+        local direct = RelativePath("y")
+    )");
+
+    // calling a trait without `__create`, and a private constructor outside the class and its traits
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK(toString(result.errors[0]).find("Cannot call a value of type Plain") != std::string::npos);
+    CHECK(get<PrivateConstructorAccess>(result.errors[1]));
+    CHECK_EQ("Path", toString(requireType("p")));
+    CHECK_EQ("string?", toString(requireType("s")));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "unannotated_trait_factory_returns_the_trait")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait T
+            function __create()
+                return 1
+            end
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<TypeMismatch>(result.errors[0]));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "trait_expected_constructor_and_class_of_trait")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        type Props = { text: string }
+
+        const registry: { [string]: class<Element> } = {}
+
+        trait Element
+            expect function __init(self, props: Props)
+            expect function render(self): string
+            function __create(kind: string, props: Props)
+                return registry[kind](props)
+            end
+        end
+
+        class Button private (private props: Props) implements Element
+            public function render(self): string return self.props.text end
+        end
+
+        class Heading(props: Props, level: number?) implements Element
+            function render(self): string return "" end
+        end
+
+        registry.button = Button
+        registry.h1 = Heading
+
+        local made = Element("button", { text = "ok" })
+        local cls: class<Element> = Heading
+        local fromCls = cls({ text = "x" })
+        local traitValue: trait<Element> = Element
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("Element", toString(requireType("made")));
+    CHECK_EQ("Element", toString(requireType("fromCls")));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "trait_expected_constructor_errors")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        type Props = { text: string }
+        trait Element
+            expect function __init(self, props: Props)
+        end
+        class Pod implements Element end
+        class WrongType(n: number) implements Element end
+        class Extra(props: Props, required: number) implements Element end
+        class NotAnElement end
+        local a: class<Element> = NotAnElement
+        local b: trait<NotAnElement> = nil :: any
+    )");
+
+    // Pod has no constructor; WrongType's takes a number; Extra needs an argument the trait doesn't pass;
+    // NotAnElement is no class<Element>; trait<> needs a trait
+    LUAU_REQUIRE_ERROR_COUNT(5, result);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "intersection_of_traits_is_inhabited")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait Mid function mid(self): string return "m" end end
+        trait Other function other(self): number return 1 end end
+        class A implements Mid, Other end
+        class B implements Other end
+
+        local z: Mid & Other = A()
+        local m: string = z:mid()
+        local o: number = z:other()
+        local n: never = z
+        local bad: Mid & Other = B()
+    )");
+
+    // `z` isn't never; B implements only Other
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK(get<TypeMismatch>(result.errors[0]));
+    CHECK(get<TypeMismatch>(result.errors[1]));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "implements_refinements_intersect")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait Mid function mid(self): string return "m" end end
+        trait Other function other(self): number return 1 end end
+        trait Base end
+        trait Needy needs Base end
+        class A implements Mid, Other end
+        class B implements Other end
+
+        local function f(x: unknown)
+            if class.implements(x, Mid) and class.implements(x, Other) then
+                local both = x
+            end
+            if class.implements(x, Mid) then
+                if class.implements(x, Other) then
+                    local nested = x
+                end
+            end
+            if class.implements(x, Needy) and class.implements(x, Base) then
+                local needy = x
+            end
+        end
+
+        local function g(x: A | B)
+            if class.implements(x, Mid) and class.implements(x, Other) then
+                local a = x
+            elseif class.implements(x, Other) then
+                local b = x
+            end
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("Mid & Other", toString(requireTypeAtPosition({10, 29})));
+    CHECK_EQ("Mid & Other", toString(requireTypeAtPosition({14, 35})));
+    CHECK_EQ("Needy", toString(requireTypeAtPosition({18, 30})));
+    CHECK_EQ("A", toString(requireTypeAtPosition({24, 26})));
+    CHECK_EQ("B", toString(requireTypeAtPosition({26, 26})));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "trait_values_have_their_needed_traits_members")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait Base
+            expect name: string
+            function hello(self): string return "hi " .. self.name end
+        end
+        trait Needy needs Base
+            function twice(self): string return self:hello() .. self:hello() end
+        end
+        class Good implements Needy
+            name = "g"
+        end
+        class Missing implements Needy end
+        local function f(n: Needy): string
+            return n:hello() .. n.name .. n:twice()
+        end
+    )");
+
+    // Base's expectation is still Base's: Missing is told, Good isn't accused of redeclaring `name`
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ("Missing field 'name: string' required for 'Missing' to implement 'Base'", toString(result.errors[0]));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "trait_needs_graph_is_walked_once")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    // 30 levels of diamonds, about 2^30 paths from the top to the bottom; each trait has to be visited once
+    std::string source;
+    constexpr int kLevels = 30;
+    for (int i = 0; i < kLevels; ++i)
+    {
+        if (i + 1 < kLevels)
+        {
+            source += format("trait L%d needs L%d, R%d end\n", i, i + 1, i + 1);
+            source += format("trait R%d needs L%d, R%d end\n", i, i + 1, i + 1);
+        }
+        else
+        {
+            source += format("trait L%d function bottom(self): string return '' end end\n", i);
+            source += format("trait R%d end\n", i);
+        }
+    }
+    source += "class Top implements L0 end\n";
+    source += "local function f(v: L0): string return v:bottom() end\n";
+    source += "local s: string = f(Top())\n";
+    source += "local r: R29 = Top()\n";
+
+    CheckResult result = check(source);
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "trait_from_another_module")
+{
+    ScopedFastFlag _[3]{{FFlag::LuauExportValueSyntax, true}, {FFlag::LuauExportValueTypecheck, true}, {FFlag::LuwuTraits, true}};
+
+    fileResolver.source["game/A"] = R"(
+        export trait Named
+            expect name: string
+            function hello(self): string
+                return "hi " .. self.name
+            end
+        end
+    )";
+
+    fileResolver.source["game/B"] = R"(
+        local A = require(game.A)
+
+        class Dog(name: string) implements A.Named
+        end
+
+        local h = Dog("rex"):hello()
+        local n: A.Named = Dog("rex")
+    )";
+
+    CheckResult modB = getFrontend().check("game/B");
+    LUAU_REQUIRE_NO_ERRORS(modB);
+    CHECK_EQ("string", toString(requireType("game/B", "h")));
 }
 
 TEST_SUITE_END();

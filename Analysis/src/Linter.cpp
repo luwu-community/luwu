@@ -4327,6 +4327,8 @@ private:
                 result += " private";
             if (prop.isConst)
                 result += " const";
+            if (prop.isFinal)
+                result += " final";
             if (prop.readTy)
                 result += " read " + toString(*prop.readTy, exact);
             if (prop.writeTy)

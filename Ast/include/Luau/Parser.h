@@ -248,13 +248,18 @@ private:
     );
 
     // `declared` parses the shape of a `declare class` (see AstStatDeclareClass) and returns the AstStatClass for it.
+    // Luwu Traits (rfcs/classes/traits.md): `isTrait` parses `trait Name ... end`, which is a class with trait members.
     AstStat* parseClassStat(
         const Location& start,
         bool exported,
         const Location& classKeywordLocation,
         const AstArray<AstAttr*>& classAttributes = {nullptr, 0},
-        bool declared = false
+        bool declared = false,
+        bool isTrait = false
     );
+
+    // Luwu Traits (rfcs/classes/traits.md): the entries of an `implements` or `needs` list, after the keyword.
+    AstArray<AstClassTraitRef> parseClassTraitRefs(bool allowArgs, AstClassPrimaryConstructor* primaryConstructor);
 
     // True when the class body is looking at something that reads as a statement rather than a class
     // member, which means the class was never closed. See its definition.
@@ -286,6 +291,9 @@ private:
     void checkDuplicateDeclaration(const Name& name);
     void checkTypeName(const Name& name, bool declared);
     bool declaresClass();
+
+    // Luwu Traits (rfcs/classes/traits.md): whether `trait` declarations parse.
+    bool traitsEnabled() const;
     bool legacyDeclareClass();
     void skipClassOnlyExternTypeKeywords();
     AstType* untypedDeclarationType(const Location& location);
@@ -538,6 +546,8 @@ private:
     AstArray<char> copy(const std::string& data);
 
     void incrementRecursionCounter(const char* context);
+
+    void checkTraitsDeclaredBeforeUse(AstStatBlock* chunk);
 
     void report(const Location& location, const char* format, va_list args);
     void report(const Location& location, const char* format, ...) LUAU_PRINTF_ATTR(3, 4);

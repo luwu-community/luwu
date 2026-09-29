@@ -4,7 +4,7 @@
 
         seal tests/classes_fuzz/run.luau --luau build-assert/luwu [--start 1] [--count 100] [--jobs 16] [--work DIR] [--keep] [--no-codegen]
 
-    For every seed, gen.luau writes a random class program (a main module plus a required module) and this script
+    For every seed, gen.luau writes a random class program (a main module plus a required module, both .luwu) and this script
     runs it with the given `luau` CLI at -O0/-O1/-O2, each interpreted, with --codegen and with --codegen-cold. Use an
     assert-enabled build (build-assert/) so internal invariants are checked too. Pass --no-codegen on a platform
     without native code generation (e.g. 32-bit Windows) to run only the interpreted configs.
@@ -17,6 +17,7 @@
       INCOMPLETE   the program exited cleanly without printing its final marker
       VACUOUS      no operation succeeded at -O0 (a generator bug; nothing was really compared)
       DIVERGE      an operation's result differs from the -O0 interpreter
+      WRONG        a fact the generator knows (say, which classes implement a trait) didn't hold; see gen.luau
     Seeds with problems keep their files under the work directory, and the report prints how to rerun each.
 
     Exits 1 if any seed had a problem, 0 otherwise.
@@ -38,6 +39,7 @@ const FLAGS = "--fflags="
         "LuwuExportedClassIsNilWorkaround=true",
         "LuwuDefaultArguments=true",
         "LuwuNonePrimitive=true",
+        "LuwuTraits=true",
     }, ",")
 -- Acting on a receiver's declared type is opt-in (see Compiler.cpp): every generated file says `--!trust`,
 -- and this flag decides whether that directive counts. It only changes O2, where inlining runs, so it is a
@@ -48,7 +50,7 @@ const OUTPUT_TAIL_BYTES = 800
 
 type DateTime = typeof(time.datetime.now())
 
-type ProblemKind = "CRASH" | "TIMEOUT" | "EXIT" | "INVALID" | "INCOMPLETE" | "VACUOUS" | "DIVERGE"
+type ProblemKind = "CRASH" | "TIMEOUT" | "EXIT" | "INVALID" | "INCOMPLETE" | "VACUOUS" | "DIVERGE" | "WRONG"
 
 type Config = {
     opt: number,
@@ -128,7 +130,7 @@ local function seedDir(seed: number): string
 end
 
 local function mainFile(config: Config): string
-    return `main_{config.tag}.luau`
+    return `main_{config.tag}.luwu`
 end
 
 local function luauArgs(config: Config): { string }
@@ -166,7 +168,7 @@ for seed = firstSeed, firstSeed + seedCount - 1 do
     for _, config in configs do
         local modName = `mod_{config.tag}`
         local opt = tostring(config.opt)
-        fs.writefile(fs.path.join(dir, modName .. ".luau"), str.replace(mod, "OPTLEVEL", opt))
+        fs.writefile(fs.path.join(dir, modName .. ".luwu"), str.replace(mod, "OPTLEVEL", opt))
         fs.writefile(fs.path.join(dir, mainFile(config)), str.replace(str.replace(main, "OPTLEVEL", opt), "MODNAME", modName))
         table.insert(pending, { seed = seed, config = config })
     end
@@ -268,7 +270,7 @@ local function parseOps(stdout: string): OpResults
     local results: OpResults = {}
     for _, line in str.splitlines(stdout) do
         local label, result = table.unpack(str.splitfront(line, "\t", 1))
-        if result and label ~= "__done" then
+        if result and label ~= "__done" and label ~= "__wrong" then
             results[label] = result
         end
     end
@@ -300,6 +302,13 @@ local function findProblems(seed: number): { Problem }
         const outcome = byTag[config.tag]
         if not outcome.ok then
             table.insert(problems, { config = config, kind = outcome.kind, detail = outcome.detail })
+        else
+            -- a failed check, in whichever configuration it failed
+            for _, line in str.splitlines(outcome.stdout) do
+                if str.startswith(line, "__wrong\t") then
+                    table.insert(problems, { config = config, kind = "WRONG", detail = string.sub(line, 9) })
+                end
+            end
         end
     end
 
@@ -309,6 +318,19 @@ local function findProblems(seed: number): { Problem }
     end
 
     const expected = parseOps(reference.stdout)
+
+    -- a `!` operation is built to succeed (see gen.luau)
+    for _, config in configs do
+        const outcome = byTag[config.tag]
+        if outcome.ok then
+            for label, result in parseOps(outcome.stdout) do
+                if str.startswith(label, "!") and not succeeded(result) then
+                    table.insert(problems, { config = config, kind = "WRONG", detail = `{label} raised` })
+                end
+            end
+        end
+    end
+
     local anySucceeded = false
     for _, result in expected do
         anySucceeded = anySucceeded or succeeded(result)

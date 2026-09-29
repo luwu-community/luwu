@@ -19,6 +19,7 @@ LUAU_DYNAMIC_FASTINT(LuauSubtypingRecursionLimit)
 
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(LuauExportValueSyntax)
@@ -3241,6 +3242,26 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_string_singletons")
 
     CHECK(ac.entryMap.count("cat"));
     CHECK(ac.entryMap.count("dog"));
+    CHECK_EQ(ac.context, AutocompleteContext::String);
+}
+
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_string_singletons_in_trait_arguments")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag luwuTraits{FFlag::LuwuTraits, true};
+
+    check(R"(
+        trait Item(category: "Weapon" | "Tool" | "Currency", max = 10)
+        end
+        class Sword implements Item("@1")
+        end
+    )");
+
+    auto ac = autocomplete('1');
+
+    CHECK(ac.entryMap.count("Weapon"));
+    CHECK(ac.entryMap.count("Tool"));
+    CHECK(ac.entryMap.count("Currency"));
     CHECK_EQ(ac.context, AutocompleteContext::String);
 }
 

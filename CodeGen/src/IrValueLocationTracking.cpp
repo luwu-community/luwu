@@ -182,6 +182,7 @@ void IrValueLocationTracking::beforeInstLowering(IrInst& inst)
     case IrCmd::FALLBACK_PREPVARARGS:
     case IrCmd::ADJUST_STACK_TO_TOP:
     case IrCmd::GET_TYPEOF:
+    case IrCmd::GET_TYPE:
     case IrCmd::NEWCLOSURE:
     case IrCmd::FINDUPVAL:
         break;

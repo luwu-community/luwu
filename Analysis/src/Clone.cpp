@@ -350,6 +350,15 @@ private:
         if (t->parent)
             t->parent = shallowClone(*t->parent);
 
+        for (TypeId& trait : t->implementedTraits)
+            trait = shallowClone(trait);
+
+        if (t->traitInfo && t->traitInfo->implementorClass)
+            t->traitInfo->implementorClass = shallowClone(*t->traitInfo->implementorClass);
+
+        for (TypeId& trait : t->traitIntersection)
+            trait = shallowClone(trait);
+
         if (t->metatable)
             t->metatable = shallowClone(*t->metatable);
 

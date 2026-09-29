@@ -107,6 +107,11 @@ static void emitClassMemberAuthX64(
         build.test(byteReg(flag.reg), int8_t(LBC_CLASSMEMBER_CONST));
         build.jcc(ConditionX64::Zero, authorized);
 
+        // Luwu Traits (rfcs/classes/traits.md): a final field is written only by a trait initializer, which the interpreter
+        // authorizes (luaR_checkconstassign)
+        build.test(byteReg(flag.reg), int8_t(LBC_CLASSMEMBER_FINAL));
+        build.jcc(ConditionX64::NotZero, mismatch);
+
         build.cmp(byte[owner.reg + offsetof(LuauClass, hascustominit)], 0);
         build.jcc(ConditionX64::Equal, mismatch); // no custom __init -> const is never writable
 
@@ -3489,6 +3494,10 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
     }
     case IrCmd::GET_TYPE:
     {
+        // Luwu Traits (rfcs/classes/traits.md): a class value whose class is a trait has the type "trait", which its tag can't tell
+        bool mayBeTrait = HAS_OP_B(inst) && OP_B(inst).kind == IrOpKind::VmReg &&
+                          (OP_A(inst).kind == IrOpKind::Inst || tagOp(OP_A(inst)) == LUA_TCLASS);
+
         inst.regX64 = regs.allocReg(SizeX64::qword, index);
 
         build.mov(inst.regX64, qword[rState + offsetof(lua_State, global)]);
@@ -3499,6 +3508,27 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             build.mov(inst.regX64, qword[inst.regX64 + tagOp(OP_A(inst)) * sizeof(TString*) + offsetof(global_State, ttypename)]);
         else
             CODEGEN_ASSERT(!"Unsupported instruction form");
+
+        if (mayBeTrait)
+        {
+            Label notTrait;
+
+            if (OP_A(inst).kind == IrOpKind::Inst)
+            {
+                build.cmp(regOp(OP_A(inst)), LUA_TCLASS);
+                build.jcc(ConditionX64::NotEqual, notTrait);
+            }
+
+            ScopedRegX64 tmp{regs, SizeX64::qword};
+            build.mov(tmp.reg, luauRegValue(vmRegOp(OP_B(inst))));
+            build.cmp(byte[tmp.reg + offsetof(LuauClass, istrait)], 0);
+            build.jcc(ConditionX64::Equal, notTrait);
+
+            build.mov(inst.regX64, qword[rState + offsetof(lua_State, global)]);
+            build.mov(inst.regX64, qword[inst.regX64 + offsetof(global_State, traittypename)]);
+
+            build.setLabel(notTrait);
+        }
         break;
     }
     case IrCmd::GET_TYPEOF:

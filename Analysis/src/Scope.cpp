@@ -128,6 +128,23 @@ std::optional<TypeFun> Scope::lookupType(const Name& name) const
     }
 }
 
+std::optional<TypeFun> Scope::lookupTraitRef(const AstClassTraitRef& ref) const
+{
+    if (AstExprGlobal* global = ref.trait->as<AstExprGlobal>())
+        return lookupType(global->name.value);
+
+    AstExprIndexName* index = ref.trait->as<AstExprIndexName>();
+    if (!index)
+        return std::nullopt;
+
+    if (AstExprLocal* moduleLocal = index->expr->as<AstExprLocal>())
+        return lookupImportedType(moduleLocal->local->name.value, index->index.value);
+    if (AstExprGlobal* moduleGlobal = index->expr->as<AstExprGlobal>())
+        return lookupImportedType(moduleGlobal->name.value, index->index.value);
+
+    return std::nullopt;
+}
+
 std::optional<TypeFun> Scope::lookupImportedType(const Name& moduleAlias, const Name& name) const
 {
     const Scope* scope = this;

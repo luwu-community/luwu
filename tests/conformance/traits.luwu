@@ -1,0 +1,639 @@
+-- This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
+-- Luwu Traits (rfcs/classes/traits.md): traits at runtime.
+--!nocheck
+print("testing traits")
+
+local function expectfail(s, expected, f, ...)
+    local ok, err = pcall(f, ...)
+    assert(not ok, `{s}: succeeded`)
+    assert(type(err) == "string", `{s}: error is a {type(err)}`)
+    assert(string.find(err, expected, 1, true), `{s} expected:\n\t{expected}\nActual:\n\t{err}`)
+    return err
+end
+
+-- Compiles and runs `src` as its own chunk, so the traits and classes in it are created by the VM rather than known to
+-- the compiler of the code that uses them.
+local function chunk(src, ...)
+    local f, err = loadstring(src)
+    assert(f, err)
+    return f(...)
+end
+
+-- a provided field, an expected field and a default function
+trait Greeter
+    expect name: string
+    greeting = "hello"
+    function greet(self)
+        return `{self.greeting}, {self.name}`
+    end
+end
+
+class Cat implements Greeter
+    name = "whiskers"
+end
+
+do
+    local c = Cat()
+    assert(c:greet() == "hello, whiskers")
+    assert(c.greeting == "hello")
+    c.greeting = "hi"
+    assert(c:greet() == "hi, whiskers")
+    assert(Cat().greeting == "hello")
+    assert(class.implements(c, Greeter))
+    assert(not class.implements(Cat, Greeter))
+    assert(not class.implements({}, Greeter))
+end
+
+-- a trait is a class value whose type is "trait"
+assert(type(Greeter) == "trait")
+
+do
+    local t = Greeter
+    assert(type(t) == "trait")
+end
+
+-- native code tells a trait apart from its class tag (GET_TYPE reads the value's class)
+@native
+local function typeOf(v)
+    return type(v)
+end
+
+@native
+local function isTrait(v)
+    return type(v) == "trait"
+end
+
+for _, v in { Greeter, Cat, 1, "s", {} } do
+    local expected = if v == Greeter then "trait" elseif v == Cat then "class" else nil
+    assert(expected == nil or typeOf(v) == expected)
+    assert(isTrait(v) == (v == Greeter))
+end
+
+assert(typeof(Greeter) == "trait")
+assert(type(Cat) == "class")
+assert(class.name(Greeter) == "Greeter")
+
+-- a trait can't be constructed, and only its own functions can be read through it
+expectfail("read a trait's field", "cannot read field 'greeting' of trait 'Greeter'", function() return Greeter.greeting end)
+expectfail("read an expected function", "cannot read 'speak' of trait 'Expects': it is expected, not defined", function()
+    return chunk([[trait Expects expect function speak(self) end return Expects.speak]])
+end)
+-- `Trait.method(obj)` calls obj's class's implementation, once it checks the class implements the trait
+class Unrelated end
+
+do
+    local c = Cat()
+    assert(Greeter.greet(c) == c:greet())
+    assert(Greeter.greet == Greeter.greet)
+
+    local greet = Greeter.greet
+    assert(greet(c) == "hello, whiskers")
+
+    expectfail("trait method on an unrelated object", "'Greeter.greet' expects an object implementing 'Greeter', got object", function()
+        return Greeter.greet(Unrelated())
+    end)
+    expectfail("trait method on a table", "got table", function() return Greeter.greet({}) end)
+    expectfail("trait method without self", "got no value", function() return Greeter.greet() end)
+end
+
+-- nothing is an instance of a trait; only class.implements knows about them
+assert(not class.isinstance(Cat(), Greeter))
+expectfail("implements with a class", "class.implements expects a trait", function() return class.implements(Cat(), Cat) end)
+
+-- trait parameters, a `needs` chain, optional expected functions, private members on both sides
+trait Item(category: string, item_max_count = 0)
+    expect name: string
+    function is_weapon(self)
+        return self.category == "Weapon"
+    end
+end
+
+trait Tool needs Item
+    expect private model: string
+    expect public function equipped?(self)
+    expect public function unequipped?(self)
+    private is_equipped = false
+    public function selection_changed(self)
+        self.is_equipped = not self.is_equipped
+        if self.is_equipped and self.equipped then
+            self:equipped()
+        elseif not self.is_equipped and self.unequipped then
+            self:unequipped()
+        end
+        return self.is_equipped
+    end
+end
+
+trait Weapon needs Tool
+    expect damage: number
+end
+
+trait Gun needs Weapon
+    expect public const beamtype: string
+    expect private function fire(self)
+    private teamkill = false
+    public function shoot(self)
+        return self:fire()
+    end
+end
+
+class Rifle implements Gun, Item("Weapon", 1)
+    public name = "rifle"
+    public damage = 12
+    public const beamtype = "Particle"
+    private model: string = "model"
+    public log = {}
+
+    public function equipped(self)
+        table.insert(self.log, "equipped")
+    end
+
+    private function fire(self)
+        -- the class's own method reads the trait's private field
+        return `pew {self.damage} {self.teamkill} {self.item_max_count}`
+    end
+end
+
+do
+    local r = Rifle()
+    assert(r:is_weapon())
+    assert(r.category == "Weapon" and r.item_max_count == 1)
+    assert(r:selection_changed() == true)
+    assert(r:selection_changed() == false)
+    assert(#r.log == 1)
+    assert(r.unequipped == nil)
+    assert(r:shoot() == "pew 12 false 1")
+
+    -- implied traits count as implemented
+    assert(class.implements(r, Gun) and class.implements(r, Weapon) and class.implements(r, Tool) and class.implements(r, Item))
+
+    expectfail("trait private field from outside", "'teamkill' is a private member of 'Rifle'", function() return r.teamkill end)
+    expectfail("private expected function from outside", "'fire' is a private member of 'Rifle'", function() return r:fire() end)
+end
+
+-- trait arguments are evaluated per construction, from the primary constructor's parameters and their defaults
+class Coin(amount: number, bonus = 1) implements Item("Currency", amount * 2 + bonus)
+    name = "coin"
+end
+
+do
+    local a, b = Coin(5), Coin(7, 0)
+    assert(a.item_max_count == 11 and b.item_max_count == 14)
+    assert(a.category == "Currency" and not a:is_weapon())
+end
+
+-- a trait parameter's default
+class Stick implements Item("Tool")
+    name = "stick"
+end
+
+assert(Stick().item_max_count == 0)
+
+-- non-constant defaults are fresh per object; metamethods, statics and closures in defaults
+trait Show
+    items = {}
+    function __tostring(self)
+        return "Show(" .. #self.items .. ")"
+    end
+    function make()
+        return "static"
+    end
+    function adder(self)
+        return function(v)
+            table.insert(self.items, v)
+        end
+    end
+end
+
+class Shown implements Show end
+
+do
+    local a, b = Shown(), Shown()
+    a:adder()(1)
+    assert(tostring(a) == "Show(1)" and tostring(b) == "Show(0)")
+    assert(a.items ~= b.items)
+    assert(Shown.make() == "static")
+    -- a static is called through the trait as itself
+    assert(Show.make() == "static")
+    -- metamethods dispatch like methods
+    assert(Show.__tostring(a) == "Show(1)")
+end
+
+-- each implementing class gets its own copy of a default, checked against that class
+trait Counter
+    count = 0
+    function bump(self)
+        self.count += 1
+        return self.count
+    end
+end
+
+class CounterA implements Counter
+    a = 1
+end
+
+class CounterB implements Counter
+    b1 = 1
+    b2 = 2
+    b3 = 3
+end
+
+do
+    local a, b = CounterA(), CounterB()
+    -- alternating receivers exercise both copies' slot caches
+    for i = 1, 10 do
+        assert(a:bump() == i and b:bump() == i)
+    end
+    assert(CounterA.bump ~= CounterB.bump)
+    expectfail("default with another class's self", "with 'self' of class 'CounterB'", function() return CounterA.bump(b) end)
+end
+
+-- a class's own function overrides a default, unchecked
+trait Speaker
+    function speak(self)
+        return "..."
+    end
+end
+
+class Dog implements Speaker
+    function speak(self)
+        return "woof"
+    end
+end
+
+assert(Dog():speak() == "woof")
+-- through the trait, the class's own override runs
+assert(Speaker.speak(Dog()) == "woof")
+
+-- the class's `__init` may write a trait's const field; a default can't
+trait Secret
+    private const secret = 1
+    public function reset(self)
+        self.secret = 5
+    end
+end
+
+class Vault implements Secret
+    private x = 0
+    public function __init(self)
+        self.secret = 42
+    end
+    public function get(self)
+        return self.secret
+    end
+end
+
+do
+    local v = Vault()
+    assert(v:get() == 42)
+    expectfail("const trait field outside __init", "'secret' is a const member of 'Vault'", function() v:reset() end)
+end
+
+-- a trait's private function can't be read from outside the trait
+expectfail("private trait function", "'hidden' is a private member of 'Priv'", function()
+    return chunk([[
+        trait Priv
+            private function hidden(self) end
+            public function open(self) end
+        end
+        return Priv.hidden
+    ]])
+end)
+
+-- a dispatched call can yield
+trait Yields
+    function wait(self)
+        return coroutine.yield(1) + 1
+    end
+end
+
+class Waiter implements Yields end
+
+do
+    local co = coroutine.create(function()
+        return Yields.wait(Waiter())
+    end)
+
+    local _, first = coroutine.resume(co)
+    local _, second = coroutine.resume(co, 41)
+    assert(first == 1 and second == 42)
+end
+
+-- a default reads the implementing class's private field
+trait Peek
+    function peek(self)
+        return self.hidden
+    end
+end
+
+class Hides implements Peek
+    private hidden = "h"
+end
+
+assert(Hides():peek() == "h")
+
+-- `needs` is resolved when a class implementing the trait is created, so it can name a trait declared later
+trait NeedsLater needs DeclaredLater
+    function a(self)
+        return self:b()
+    end
+end
+
+trait DeclaredLater
+    function b(self)
+        return "b"
+    end
+end
+
+class Both implements NeedsLater end
+
+assert(Both():a() == "b")
+assert(class.implements(Both(), DeclaredLater))
+
+-- a trait from another chunk, with an upvalue
+do
+    local Named = chunk([[
+        local prefix = "hi "
+        trait Named(greeting = prefix)
+            expect name: string
+            count = 0
+            function hello(self)
+                self.count += 1
+                return self.greeting .. self.name .. " " .. self.count
+            end
+        end
+        return Named
+    ]])
+
+    local Pup, Hound = chunk(
+        [[
+        local Named = ...
+        class Pup implements Named
+            name = "pup"
+        end
+        class Hound(name: string) implements Named("woof ")
+        end
+        return Pup, Hound
+    ]],
+        Named
+    )
+
+    local p, h = Pup(), Hound("rex")
+    assert(p:hello() == "hi pup 1" and p:hello() == "hi pup 2")
+    assert(h:hello() == "woof rex 1")
+    assert(class.implements(h, Named))
+end
+
+-- a trait's fields come after the class's own, so the class's methods keep their compile-time offsets
+trait Tail
+    t1 = "t1"
+    t2 = "t2"
+end
+
+class Head(h1: string) implements Tail
+    h2 = "h2"
+    function all(self)
+        return self.h1 .. self.h2 .. self.t1 .. self.t2
+    end
+end
+
+assert(Head("h1"):all() == "h1h2t1t2")
+
+do
+    local fields = class.fields(Head("x"))
+    assert(fields.h1 == "x" and fields.h2 == "h2" and fields.t1 == "t1" and fields.t2 == "t2")
+end
+
+-- construction through the POD table constructor can set a trait's public fields
+class Pod implements Tail
+    own = 1
+end
+
+do
+    local p = Pod { own = 2, t1 = "set" }
+    assert(p.own == 2 and p.t1 == "set" and p.t2 == "t2")
+end
+
+-- errors at class creation
+expectfail("missing expected field", "missing field 'x' required for 'C' to implement 'T'", function()
+    chunk([[trait T expect x: number end class C implements T end]])
+end)
+expectfail("missing expected function", "missing function 'f' required for 'C' to implement 'T'", function()
+    chunk([[trait T expect function f(self) end class C implements T end]])
+end)
+expectfail("expected privacy", "'x' must be private for 'C' to implement 'T'", function()
+    chunk([[trait T expect private x: number end class C implements T public x = 1 end]])
+end)
+expectfail("expected const", "'x' must be const for 'C' to implement 'T'", function()
+    chunk([[trait T expect const x: number end class C implements T x = 1 end]])
+end)
+expectfail("expected kind", "'x' must be a field for 'C' to implement 'T'", function()
+    chunk([[trait T expect x: number end class C implements T function x(self) end end]])
+end)
+expectfail("two traits, one field", "traits 'A' and 'B' both provide 'y'", function()
+    chunk([[trait A y = 1 end trait B y = 2 end class C implements A, B end]])
+end)
+expectfail("two traits, one function", "traits 'A' and 'B' both provide 'f'", function()
+    chunk([[trait A function f(self) end end trait B function f(self) end end class C implements A, B end]])
+end)
+expectfail("class field and trait field", "class 'C' can't declare 'y': trait 'A' already provides it", function()
+    chunk([[trait A y = 1 end class C implements A y = 2 end]])
+end)
+expectfail("final", "'f' is final in trait 'A' and can't be overridden", function()
+    chunk([[trait A final function f(self) end end class C implements A function f(self) end end]])
+end)
+expectfail("implementing a class", "class 'C' can only implement traits, but entry 1 of its 'implements' list is class 'D'", function()
+    chunk([[class D end class C implements D end]])
+end)
+expectfail("implementing nil", "class 'C' implements global 'Nope', which is nil, not a trait", function()
+    chunk([[class C implements Nope end]])
+end)
+expectfail("implementing a nil field", "class 'C' implements global 'string.Nope', which is nil", function()
+    chunk([[class C implements string.Nope end]])
+end)
+expectfail("implementing a table", "entry 1 of its 'implements' list is a table", function()
+    chunk([[local t = {} class C implements t end]])
+end)
+expectfail("listed twice", "class 'C' lists trait 'A' more than once", function()
+    chunk([[trait A end class C implements A, A end]])
+end)
+expectfail("needing a class", "trait 'A' needs a class, which is not a trait", function()
+    chunk([[class D end trait A needs D end class C implements A end]])
+end)
+
+-- traits that need each other are always implemented together, so they should be one trait
+expectfail("two traits needing each other", "traits 'A' and 'B' need each other; combine them into one trait", function()
+    chunk([[trait A needs B end trait B needs A end class C implements A end]])
+end)
+expectfail("a trait needing itself", "trait 'A' needs itself", function()
+    chunk([[trait A needs A end class C implements A end]])
+end)
+expectfail("a cycle of needs", "trait 'A' needs itself through 'C'", function()
+    chunk([[trait A needs B end trait B needs C end trait C needs A end class D implements A end]])
+end)
+
+-- a diamond is not a cycle
+assert(chunk([[
+    trait Base function base(self) return "base" end end
+    trait Left needs Base end
+    trait Right needs Base end
+    class D implements Left, Right end
+    return D():base()
+]]) == "base")
+
+-- two traits may expect the same member; one declaration meets both
+assert(chunk([[
+    trait A expect name: string expect function speak(self) function a(self) return self:speak() end end
+    trait B expect name: string expect function speak(self) function b(self) return self.name end end
+    trait O expect function maybe?(self) end
+    trait P expect function maybe?(self) end
+    class C implements A, B, O, P
+        name = "c"
+        function speak(self) return "hi" end
+    end
+    local c = C()
+    return c:a() .. c:b() .. tostring(c.maybe)
+]]) == "hicnil")
+
+-- one trait's expectation can be met by another trait's member
+assert(chunk([[
+    trait Needs expect function helper(self) function run(self) return self:helper() end end
+    trait Gives function helper(self) return "given" end end
+    class C implements Needs, Gives end
+    return C():run()
+]]) == "given")
+
+-- the class's own function settles a clash between two traits' defaults
+assert(chunk([[
+    trait A function f(self) return 1 end end
+    trait B function f(self) return 2 end end
+    class C implements A, B
+        function f(self) return 3 end
+    end
+    return C():f()
+]]) == 3)
+
+-- a final function is copied like a default
+assert(chunk([[trait A final function f(self) return "final" end end class C implements A end return C():f()]]) == "final")
+
+-- a trait with `__create` is a factory: calling it calls `__create`, which may construct the implementing classes
+-- even through their private constructors
+trait Path
+    expect raw: string
+    function __create(raw: string)
+        if string.sub(raw, 1, 1) == "@" then
+            return RequirePath(raw)
+        end
+        return RelativePath(raw)
+    end
+    function parse(raw: string): Path?
+        if raw == "" then
+            return nil
+        end
+        return RelativePath(raw)
+    end
+    function describe(self): string
+        return `{class.name(self)}({self.raw})`
+    end
+end
+
+class RelativePath private (public raw: string) implements Path end
+class RequirePath private (public raw: string) implements Path end
+
+do
+    local relative, required = Path("./src/main.luwu"), Path("@std/str")
+    assert(class.isinstance(relative, RelativePath) and class.isinstance(required, RequirePath))
+    assert(required:describe() == "RequirePath(@std/str)")
+    assert(Path.parse("") == nil and Path.parse("x"):describe() == "RelativePath(x)")
+    expectfail("private constructor outside the factory", "the constructor of 'RelativePath' is private", function()
+        return RelativePath("nope")
+    end)
+end
+
+-- `__create` returns whatever it returns, and is never copied into implementing classes
+trait Fallible
+    function __create(n: number): number?
+        if n > 0 then
+            return n
+        end
+        return nil
+    end
+end
+
+class Implementer implements Fallible end
+
+assert(Fallible(1) == 1 and Fallible(-1) == nil)
+expectfail("__create through a class", "'__create'", function() return Implementer.__create end)
+expectfail("trait without __create", "trait 'Greeter' can't be called: it has no '__create'", function() return Greeter() end)
+
+do
+    local co = coroutine.wrap(function()
+        return Fallible(coroutine.yield(1))
+    end)
+    assert(co() == 1 and co(5) == 5)
+end
+
+-- a trait that expects `__init` can construct any implementing class through a registry of class values, private
+-- constructors included
+const element_classes: { [string]: any } = {}
+
+trait Element
+    expect function __init(self, props: { text: string })
+    expect function render(self): string
+    function __create(kind: string, props: { text: string })
+        return element_classes[kind](props)
+    end
+    function register(kind: string, cls: any)
+        element_classes[kind] = cls
+    end
+end
+
+class Button private (private props: { text: string }) implements Element
+    public function render(self): string
+        return `<button>{self.props.text}</button>`
+    end
+end
+
+class Heading(public props: { text: string }) implements Element
+    public function render(self): string
+        return `<h1>{self.props.text}</h1>`
+    end
+end
+
+Element.register("button", Button)
+Element.register("h1", Heading)
+
+assert(Element("button", { text = "ok" }):render() == "<button>ok</button>")
+assert(Element("h1", { text = "title" }):render() == "<h1>title</h1>")
+expectfail("private constructor outside the trait", "the constructor of 'Button' is private", function()
+    return Button({ text = "no" })
+end)
+expectfail("expected constructor", "missing constructor required for 'Pod' to implement 'Element'", function()
+    chunk([[trait Element expect function __init(self, x) end class Pod implements Element end]])
+end)
+
+-- the collector runs while trait fields are initialized
+trait Heavy
+    a = {}
+    b = {}
+    c = {}
+end
+
+class HeavyUser(n: number) implements Heavy
+end
+
+do
+    local objects = {}
+    for i = 1, 200 do
+        objects[i] = HeavyUser(i)
+        if i % 50 == 0 then
+            collectgarbage()
+        end
+    end
+
+    for i = 1, 200 do
+        assert(objects[i].n == i and type(objects[i].a) == "table")
+    end
+end
+
+return 'OK'

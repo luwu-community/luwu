@@ -2709,12 +2709,20 @@ AutocompleteResult autocomplete_(
     // sub-locations, which would have matched a more specific branch above): offer the
     // qualifiers and the `function` keyword, rather than the generic statement keyword list
     // (most of which -- if/local/for/etc -- aren't valid class members).
-    if (node->is<AstStatClass>())
+    if (AstStatClass* classStat = node->as<AstStatClass>())
     {
         AutocompleteEntryMap ret;
         ret["public"] = {AutocompleteEntryKind::Keyword};
         ret["private"] = {AutocompleteEntryKind::Keyword};
         ret["function"] = {AutocompleteEntryKind::Keyword};
+
+        // Luwu Traits (rfcs/classes/traits.md): a trait's members may be expected or final
+        if (classStat->isTrait)
+        {
+            ret["expect"] = {AutocompleteEntryKind::Keyword};
+            ret["final"] = {AutocompleteEntryKind::Keyword};
+        }
+
         return {std::move(ret), ancestry, AutocompleteContext::Keyword};
     }
 

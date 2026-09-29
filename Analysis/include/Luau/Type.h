@@ -462,6 +462,10 @@ struct Property
     // Const members may only be assigned to from within the class's own `__init` constructor.
     bool isConst = false;
 
+    // Luwu Traits (rfcs/classes/traits.md): a trait's `final` field, which is also const. Only the trait sets it, from its
+    // default, so not even an implementing class's `__init` may assign it.
+    bool isFinal = false;
+
     // If this property was inferred from an expression, this field will be
     // populated with the source location of the corresponding table property.
     std::optional<Location> location = std::nullopt;
@@ -636,6 +640,44 @@ struct ExternType
         we can go between class and object easily, given just the extern type
      */
     std::optional<NominalRelation> relation;
+
+    // Luwu Traits (rfcs/classes/traits.md): the object types of the traits a class implements (listed, and implied through
+    // `needs`), or of the traits a trait's `needs` list names. An object whose class implements a trait is a subtype
+    // of it (isSubclass follows these), which is what lets a trait's function take `self` of every implementing class.
+    std::vector<TypeId> implementedTraits;
+
+    // Luwu Traits (rfcs/classes/traits.md): set on the object type of a trait. A trait is modeled as a class whose object
+    // type implementing classes are subtypes of.
+    struct TraitInfo
+    {
+        // The members the trait expects implementing classes to declare, and whether each is an optional function.
+        std::map<Name, bool> expectations;
+        // Whether the trait takes parameters, which keeps `needs` from implying it.
+        bool hasParameters = false;
+        // The trait's parameters in order, and whether each has a default. Each is also a field of the trait, whose
+        // type is what an `implements` argument for it is checked against.
+        struct Parameter
+        {
+            Name name;
+            bool hasDefault = false;
+        };
+        std::vector<Parameter> parameters;
+        // The trait's `final` functions, which implementing classes can't define.
+        std::set<Name> finals;
+        // The members `props` has from the traits this one needs (directly or not): every implementing class implements
+        // those too, so a trait-typed value has their members. They stay those traits' members everywhere else.
+        std::set<Name> fromNeeds;
+        // `class<Trait>`: the class value of any class implementing the trait. Callable when the trait expects `__init`,
+        // and carrying the trait's functions, expected ones included. Implementing classes' values are subtypes of it.
+        std::optional<TypeId> implementorClass;
+    };
+    std::optional<TraitInfo> traitInfo;
+
+    // Luwu Traits (rfcs/classes/traits.md): set on the type the normalizer makes for an intersection of traits (`A & B`), to its traits. One class
+    // can implement several traits, so unlike two unrelated classes, two traits intersect to something inhabited: the
+    // objects of classes implementing all of them. Such a type is a subtype of each trait (it lists them in
+    // `implementedTraits`), has all their members, and a type is a subtype of it when it is a subtype of every one.
+    std::vector<TypeId> traitIntersection;
 
     // True if this ExternType is a generic nominal type instantiation (see LuwuGenericNominals)
     // that still contains an unresolved generic somewhere inside it. Substitution visitors use
@@ -1135,6 +1177,10 @@ const Property* lookupExternTypeProp(const ExternType* cls, const Name& name);
 
 // Whether `cls` is a subclass of `parent`
 bool isSubclass(const ExternType* cls, const ExternType* parent);
+
+// Luwu Traits (rfcs/classes/traits.md): a trait, or an intersection of traits. Two of these may share instances even when neither is a subtype
+// of the other, unlike two classes, which are final.
+bool isTraitLike(const ExternType* ty);
 
 Type* asMutable(TypeId ty);
 

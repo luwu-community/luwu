@@ -795,6 +795,7 @@ static int loadsafe(
                 uint32_t numProperties = readVarInt(data, size, offset);
                 uint32_t numMethods = readVarInt(data, size, offset);
                 uint32_t numMembers = numMethods + numProperties;
+                uint32_t shapeFlags = readVarInt(data, size, offset);
 
                 TString* initName = luaS_newlstr(L, "__init", 6);
                 bool hasCustomInit = false;
@@ -821,6 +822,9 @@ static int loadsafe(
 
                 // The class owns its shape buffers from here on, so nothing leaks if a later allocation fails.
                 LuauClass* lco = luaR_newclass(L, tsvalue(classname), numProperties, numStaticWithInit, hasConstDefaults);
+                // Luwu Traits (rfcs/classes/traits.md): read by luaR_sealclassshape below
+                lco->istrait = (shapeFlags & LBC_CLASSSHAPE_TRAIT) != 0;
+                lco->traitspending = (shapeFlags & LBC_CLASSSHAPE_IMPLEMENTS) != 0;
 
                 // Members are written properties-first, so index idx here is exactly the member's runtime
                 // offset.

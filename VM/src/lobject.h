@@ -685,6 +685,38 @@ typedef struct LuauClass
     // class object; freed in luaR_freeclass and marked in traverseclass.
     TValue* memberdefaults;
 
+    // Luwu Traits (rfcs/classes/traits.md): this class value is a trait. A trait is never constructed, and none of its members
+    // can be read through it (the VM sets LBC_CLASSMEMBER_INITBLOCKED on all of them): implementing classes get copies.
+    bool istrait;
+
+    // Luwu Traits (rfcs/classes/traits.md): the class has an `implements` list that luaR_implementtraits hasn't finished implementing.
+    // Implementing grows the layout, so an object made before then would be too small for it: construction refuses.
+    // Code can reach the class that early -- its binding is set when its statement starts, and the statement runs user
+    // code before implementing (an `__index` in an `implements` expression, a trait's `needs`). A class whose
+    // implementing failed stays pending, so it never makes an object; one that succeeded is never implemented again.
+    bool traitspending;
+
+    // Luwu Traits (rfcs/classes/traits.md): the number of instance members the class itself declares. The fields of the
+    // traits it implements come after them (see luaR_implementtraits); the class's `__defaults` returns only its own.
+    uint32_t numberofownmembers;
+
+    // Luwu Traits (rfcs/classes/traits.md): every trait this class implements, listed or implied through `needs`, in the
+    // order luaR_implementtraits attached them. NULL when there are none. Owned by this class; marked in traverseclass.
+    struct LuauClass** traits;
+    uint32_t numtraits;
+
+    // Luwu Traits (rfcs/classes/traits.md): what construction calls to initialize the fields of the implemented traits
+    // (see luaR_inittraitfields). NULL when no trait has a field that needs computing. Owned by this class; marked in
+    // traverseclass.
+    // - The first `numdirecttraitinits` are this class's copies of the `__traitinit` of each trait that takes no
+    //   arguments, called with the object alone.
+    // - When there are more, the next is the class's `__inittraits`, and the rest are the copies it calls, one per
+    //   `implements` entry that passes arguments, in list order. It is called with the object, those copies, and the
+    //   constructor's arguments.
+    TValue* traitinits;
+    uint32_t numtraitinits;
+    uint32_t numdirecttraitinits;
+
 } LuauClass;
 
 typedef struct LuauObject

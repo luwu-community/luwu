@@ -83,6 +83,7 @@ LUAU_FASTFLAG(LuauCodegenFixBufferLenCheck)
 LUAU_FASTFLAG(LuauYieldIter2)
 LUAU_FASTFLAG(LuauCustomYieldablePcalls)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
@@ -4648,6 +4649,36 @@ TEST_CASE("UserdataDirectAccess")
             }
         }
     );
+}
+
+// Luwu Traits (rfcs/classes/traits.md)
+TEST_CASE("Traits")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+        // trait and primary constructor parameter defaults are function parameter defaults
+        {FFlag::LuwuDefaultArguments, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuGenericNominals, true},
+    };
+
+    runConformance("traits.luwu");
+}
+
+// Luwu Traits (rfcs/classes/traits.md): reloading traits, passing them off as classes, odd member order, traits as
+// values, and classes implementing a trait from chunks the trait's own code loads
+TEST_CASE("CursedClasses")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+        {FFlag::LuwuDefaultArguments, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuGenericNominals, true},
+    };
+
+    runConformance("cursed_classes.luwu");
 }
 
 TEST_CASE("ClassesExportHoistingRepro")

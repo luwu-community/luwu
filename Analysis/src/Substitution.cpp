@@ -145,6 +145,10 @@ static TypeId shallowClone(TypeId ty, TypeArena& dest, const TxnLog* log)
                 clone.relation = a.relation;
                 clone.initLocation = a.initLocation;
             }
+            // Luwu Traits (rfcs/classes/traits.md)
+            clone.implementedTraits = a.implementedTraits;
+            clone.traitInfo = a.traitInfo;
+            clone.traitIntersection = a.traitIntersection;
             if (FFlag::LuwuGenericNominals)
             {
                 clone.hasUnresolvedGenerics = a.hasUnresolvedGenerics;
@@ -271,6 +275,15 @@ void Tarjan::visitChildren(TypeId ty, int index)
 
         if (etv->parent)
             visitChild(*etv->parent);
+
+        for (TypeId trait : etv->implementedTraits)
+            visitChild(trait);
+
+        if (etv->traitInfo && etv->traitInfo->implementorClass)
+            visitChild(*etv->traitInfo->implementorClass);
+
+        for (TypeId trait : etv->traitIntersection)
+            visitChild(trait);
 
         if (etv->metatable)
             visitChild(*etv->metatable);
@@ -881,6 +894,15 @@ void Substitution::replaceChildren(TypeId ty)
 
         if (etv->parent)
             etv->parent = replace(*etv->parent);
+
+        for (TypeId& trait : etv->implementedTraits)
+            trait = replace(trait);
+
+        if (etv->traitInfo && etv->traitInfo->implementorClass)
+            etv->traitInfo->implementorClass = replace(*etv->traitInfo->implementorClass);
+
+        for (TypeId& trait : etv->traitIntersection)
+            trait = replace(trait);
 
         if (etv->metatable)
             etv->metatable = replace(*etv->metatable);

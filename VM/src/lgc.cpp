@@ -477,6 +477,11 @@ static void traverseclass(global_State* g, LuauClass* classdef)
     markobject(g, classdef->metatable);
     if (classdef->instancemetatable)
         markobject(g, classdef->instancemetatable);
+    for (uint32_t i = 0; i < classdef->numtraits; i++)
+        markobject(g, classdef->traits[i]);
+
+    for (uint32_t i = 0; i < classdef->numtraitinits; i++)
+        markvalue(g, &classdef->traitinits[i]);
 }
 
 static void traverseobject(global_State* g, LuauObject* object)

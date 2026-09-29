@@ -213,6 +213,18 @@ private:
     void visit(AstStatDeclareGlobal* stat);
     void visit(AstStatDeclareExternType* stat);
     void visit(AstStatClass* stat);
+    // Luwu Traits (rfcs/classes/traits.md): the class's fields against the types of the fields its traits expect
+    void checkTraitFieldExpectations(AstStatClass* stat);
+    // Luwu Traits (rfcs/classes/traits.md): the class's constructor against the trait's expected `__init`
+    void checkTraitConstructorExpectation(AstStatClass* stat, const ExternType* classType, const ExternType* traitType);
+    void checkTraitArguments(AstStatClass* stat);
+    void reportMissingTraitMember(
+        AstStatClass* stat,
+        const ExternType* classType,
+        const ExternType* traitType,
+        const Name& name,
+        bool isField
+    );
     void visit(AstStatDeclareClass* stat);
     void visit(AstStatError* stat);
     void visit(AstExpr* expr, ValueContext context);

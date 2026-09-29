@@ -668,6 +668,10 @@ Relation relate(TypeId left, TypeId right, SimplifierSeenSet& seen)
             if (isSubclass(rct, ct))
                 return Relation::Superset;
 
+            // Luwu Traits (rfcs/classes/traits.md): one class may implement both traits
+            if (isTraitLike(ct) && isTraitLike(rct))
+                return Relation::Intersects;
+
             return Relation::Disjoint;
         }
 
