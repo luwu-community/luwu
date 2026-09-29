@@ -174,6 +174,14 @@ static bool isConstantClassDefault(AstExpr* expr)
     return false;
 }
 
+// Luwu Traits (rfcs/classes/traits.md): a field a trait provides with a constant default. The default goes in the trait's
+// shape, and implementing classes copy it into their own, so `__traitinit` doesn't compute it. A default wins over a
+// trait parameter restating the field (see ClassInitDefaultsVisitor::visitTrait).
+static bool isTraitConstantField(const AstClassProperty& prop)
+{
+    return !prop.expectLocation && prop.defaultValue && isConstantClassDefault(prop.defaultValue);
+}
+
 struct Compiler
 {
     struct RegScope;
@@ -199,6 +207,9 @@ struct Compiler
         , classInitFieldDefaults(nullptr)
         , classPodDefaultsFn(nullptr)
         , classPrimaryInitFn(nullptr)
+        , traitInitFn(nullptr)
+        , traitNeedsFn(nullptr)
+        , classInitTraitsFn(nullptr)
         , classPrimaryInitCost(nullptr)
         , classPodConstDefaults(nullptr)
         , classMethodSelfChecks(nullptr)
@@ -1506,7 +1517,9 @@ struct Compiler
             }
         }
 
-        return false;
+        // Luwu Traits (rfcs/classes/traits.md): any other name may be a member the class gets from a trait, which may be
+        // private; only the runtime knows (a trait can come from another module). Traits never provide `__init`.
+        return cls->implements.size > 0 && name != "__init";
     }
 
     // Luwu Classes (rfcs/classes): whether the instance field `name` of `cls` is `const`, from the class body or a
@@ -3192,6 +3205,11 @@ struct Compiler
         if (classPodDefaultsFn.contains(*decl))
             return false;
 
+        // Luwu Traits (rfcs/classes/traits.md): the fields of the traits a class implements are only laid out when the class
+        // is created, and initialized by their traits' `__traitinit`, which only the generic constructor calls.
+        if ((*decl)->implements.size > 0)
+            return false;
+
         const AstClassMethod* init = findClassInit(*decl);
 
         // A primary constructor compiles to a synthesized `__init` that isn't a member of the AST
@@ -3709,6 +3727,8 @@ struct Compiler
         BytecodeBuilder::ClassShape shape;
         shape.className = bytecode.addConstantString(sref(decl->name->name));
         checkConstant(shape.className, decl->name->location);
+        shape.isTrait = decl->isTrait;
+        shape.implementsTraits = decl->implements.size > 0;
 
         // non-null when this class's field defaults are all compile-time constants (see below)
         const std::vector<AstExpr*>* podConstDefaults = classPodConstDefaults.find(decl);
@@ -3738,13 +3758,20 @@ struct Compiler
                             flags |= LBC_CLASSMEMBER_CONST;
                         if (prop.defaultValue)
                             flags |= LBC_CLASSMEMBER_HASDEFAULT;
+                        if (prop.expectLocation)
+                            flags |= LBC_CLASSMEMBER_EXPECTED;
+                        // Luwu Traits (rfcs/classes/traits.md): a final field is const, and only the trait's own initializer writes it
+                        if (decl->isTrait && prop.finalLocation)
+                            flags |= LBC_CLASSMEMBER_FINAL | LBC_CLASSMEMBER_CONST;
 
                         // A POD class whose defaults are all constants carries them in its own shape
                         // (see classPodConstDefaults), so the VM copies them into each instance rather
                         // than calling a `__defaults` closure once per construction.
                         int32_t defaultCid = -1;
 
-                        if (podConstDefaults && prop.defaultValue)
+                        bool constantDefault = decl->isTrait ? isTraitConstantField(prop) : podConstDefaults && prop.defaultValue;
+
+                        if (constantDefault)
                         {
                             defaultCid = addClassDefaultConstant(prop.defaultValue);
                             checkConstant(defaultCid, prop.nameLocation);
@@ -3756,6 +3783,23 @@ struct Compiler
                     },
                     [&](const AstClassMethod& method)
                     {
+                        // Luwu Traits (rfcs/classes/traits.md): an expected function has a slot in the trait's shape, so
+                        // the VM knows what implementing classes must define, but no value.
+                        if (method.expectLocation)
+                        {
+                            int methodNameCid = bytecode.addConstantString(sref(method.functionName));
+                            checkConstant(methodNameCid, method.nameLocation);
+                            shape.methodNames.emplace_back(methodNameCid);
+
+                            uint8_t flags = LBC_CLASSMEMBER_EXPECTED;
+                            if (method.visibility == AstClassMemberVisibility::Private)
+                                flags |= LBC_CLASSMEMBER_PRIVATE;
+                            if (method.isOptional)
+                                flags |= LBC_CLASSMEMBER_OPTIONAL;
+                            shape.methodFlags.emplace_back(flags);
+                            return;
+                        }
+
                         // For a method:
                         //
                         //  function foobar(a, b, c)
@@ -3773,6 +3817,12 @@ struct Compiler
                         uint8_t flags = 0;
                         if (method.visibility == AstClassMemberVisibility::Private)
                             flags |= LBC_CLASSMEMBER_PRIVATE;
+                        if (method.finalLocation)
+                            flags |= LBC_CLASSMEMBER_FINAL;
+
+                        bool takesSelf = method.function->args.size > 0 && method.function->args.data[0]->name == "self";
+                        if (decl->isTrait && takesSelf)
+                            flags |= LBC_CLASSMEMBER_TAKESSELF;
                         shape.methodFlags.emplace_back(flags);
 
                         bytecode.emitABC(LOP_NEWCLASSMEMBER, dest, 0, temp);
@@ -3855,6 +3905,49 @@ struct Compiler
 
             bytecode.emitABC(LOP_NEWCLASSMEMBER, dest, 0, temp);
             bytecode.emitAux(defaultsNameCid);
+        }
+
+        // Luwu Traits (rfcs/classes/traits.md): the synthesized functions the VM calls by name, private like `__defaults`
+        auto registerSynthesizedMember = [&](DenseHashMap<AstStatClass*, AstExprFunction*>& fns, const char* memberName)
+        {
+            AstExprFunction* const* fn = fns.find(decl);
+            if (!fn)
+                return;
+
+            compileExprFunction(*fn, temp);
+
+            int nameCid = bytecode.addConstantString(sref(names.getOrAdd(memberName)));
+            checkConstant(nameCid, decl->location);
+            shape.methodNames.emplace_back(nameCid);
+            shape.methodFlags.emplace_back(LBC_CLASSMEMBER_PRIVATE);
+
+            bytecode.emitABC(LOP_NEWCLASSMEMBER, dest, 0, temp);
+            bytecode.emitAux(nameCid);
+        };
+
+        registerSynthesizedMember(traitInitFn, "__traitinit");
+        registerSynthesizedMember(traitNeedsFn, "__needs");
+        registerSynthesizedMember(classInitTraitsFn, "__inittraits");
+
+        // Luwu Traits (rfcs/classes/traits.md): implementing the listed traits is the last step of creating the class, since
+        // it checks what the class defines. The traits go in consecutive registers, followed by how many arguments
+        // each entry passes (see LBC_NEWCLASSMEMBER_IMPLEMENTS).
+        if (decl->implements.size > 0)
+        {
+            size_t count = decl->implements.size;
+            // checked by the parser's limit on an expression list long before this
+            LUAU_ASSERT(count <= 255);
+
+            uint8_t traitRegs = allocReg(decl, unsigned(count * 2));
+
+            for (size_t i = 0; i < count; ++i)
+                compileExprTemp(decl->implements.data[i].trait, uint8_t(traitRegs + i));
+
+            for (size_t i = 0; i < count; ++i)
+                bytecode.emitAD(LOP_LOADN, uint8_t(traitRegs + count + i), int16_t(decl->implements.data[i].args.size));
+
+            bytecode.emitABC(LOP_NEWCLASSMEMBER, dest, LBC_NEWCLASSMEMBER_IMPLEMENTS, traitRegs);
+            bytecode.emitAux(uint32_t(count));
         }
 
         // Finally, we create the class constant and patch the AUX slot
@@ -7726,6 +7819,9 @@ struct Compiler
         DenseHashMap<AstExprFunction*, std::vector<ClassFieldDefault>>& initDefaults;
         DenseHashMap<AstStatClass*, AstExprFunction*>& podDefaultsFn;
         DenseHashMap<AstStatClass*, AstExprFunction*>& primaryInitFn;
+        DenseHashMap<AstStatClass*, AstExprFunction*>& traitInitFn;
+        DenseHashMap<AstStatClass*, AstExprFunction*>& traitNeedsFn;
+        DenseHashMap<AstStatClass*, AstExprFunction*>& classInitTraitsFn;
         DenseHashMap<AstStatClass*, std::vector<AstExpr*>>& podConstDefaults;
         DenseHashMap<AstExprFunction*, SelfClassCheck>& methodSelfChecks;
         DenseHashMap<AstExprFunction*, AstStatClass*>& methodOwner;
@@ -7739,6 +7835,9 @@ struct Compiler
             DenseHashMap<AstExprFunction*, std::vector<ClassFieldDefault>>& initDefaults,
             DenseHashMap<AstStatClass*, AstExprFunction*>& podDefaultsFn,
             DenseHashMap<AstStatClass*, AstExprFunction*>& primaryInitFn,
+            DenseHashMap<AstStatClass*, AstExprFunction*>& traitInitFn,
+            DenseHashMap<AstStatClass*, AstExprFunction*>& traitNeedsFn,
+            DenseHashMap<AstStatClass*, AstExprFunction*>& classInitTraitsFn,
             DenseHashMap<AstStatClass*, std::vector<AstExpr*>>& podConstDefaults,
             DenseHashMap<AstExprFunction*, SelfClassCheck>& methodSelfChecks,
             DenseHashMap<AstExprFunction*, AstStatClass*>& methodOwner,
@@ -7751,6 +7850,9 @@ struct Compiler
             , initDefaults(initDefaults)
             , podDefaultsFn(podDefaultsFn)
             , primaryInitFn(primaryInitFn)
+            , traitInitFn(traitInitFn)
+            , traitNeedsFn(traitNeedsFn)
+            , classInitTraitsFn(classInitTraitsFn)
             , podConstDefaults(podConstDefaults)
             , methodSelfChecks(methodSelfChecks)
             , methodOwner(methodOwner)
@@ -7830,28 +7932,13 @@ struct Compiler
             Location loc = primaryConstructor->argLocation;
             size_t functionDepth = node->name->functionDepth + 1;
 
-            AstLocal* self = allocator.alloc<AstLocal>(
-                names.getOrAdd("self"), loc, /* shadow= */ nullptr, functionDepth, /* loopDepth= */ 0, /* annotation= */ nullptr, /* isConst= */ true
-            );
+            AstLocal* self = buildSynthesizedLocal("self", loc, functionDepth);
 
             std::vector<AstStat*> body;
 
             auto pushAssign = [&](const AstName& name, const Location& nameLocation, AstExpr* value)
             {
-                AstExpr* selfExpr = allocator.alloc<AstExprLocal>(nameLocation, self, /* upvalue= */ false);
-                AstExpr* target = allocator.alloc<AstExprIndexName>(nameLocation, selfExpr, name, nameLocation, nameLocation.begin, '.');
-
-                AstExpr** vars = static_cast<AstExpr**>(allocator.allocate(sizeof(AstExpr*)));
-                vars[0] = target;
-
-                AstExpr** values = static_cast<AstExpr**>(allocator.allocate(sizeof(AstExpr*)));
-                values[0] = value;
-
-                body.push_back(
-                    allocator.alloc<AstStatAssign>(
-                        Location(nameLocation, value->location), AstArray<AstExpr*>{vars, 1}, AstArray<AstExpr*>{values, 1}
-                    )
-                );
+                body.push_back(buildFieldAssign(self, name, nameLocation, value));
             };
 
             DenseHashSet<AstName> restated{AstName()};
@@ -7933,8 +8020,231 @@ struct Compiler
             );
         }
 
+        // A parameter or local of a synthesized function, `functionDepth` deep
+        AstLocal* buildSynthesizedLocal(const char* name, const Location& loc, size_t functionDepth)
+        {
+            return allocator.alloc<AstLocal>(
+                names.getOrAdd(name), loc, /* shadow= */ nullptr, functionDepth, /* loopDepth= */ 0, /* annotation= */ nullptr, /* isConst= */ true
+            );
+        }
+
+        // `self.name = value`
+        AstStat* buildFieldAssign(AstLocal* self, const AstName& name, const Location& nameLocation, AstExpr* value)
+        {
+            AstExpr* selfExpr = allocator.alloc<AstExprLocal>(nameLocation, self, /* upvalue= */ false);
+            AstExpr* target = allocator.alloc<AstExprIndexName>(nameLocation, selfExpr, name, nameLocation, nameLocation.begin, '.');
+
+            AstExpr** vars = static_cast<AstExpr**>(allocator.allocate(sizeof(AstExpr*)));
+            vars[0] = target;
+
+            AstExpr** values = static_cast<AstExpr**>(allocator.allocate(sizeof(AstExpr*)));
+            values[0] = value;
+
+            return allocator.alloc<AstStatAssign>(Location(nameLocation, value->location), AstArray<AstExpr*>{vars, 1}, AstArray<AstExpr*>{values, 1});
+        }
+
+        template<typename T>
+        AstArray<T> copyToAst(const std::vector<T>& items)
+        {
+            if (items.empty())
+                return {nullptr, 0};
+
+            T* data = static_cast<T*>(allocator.allocate(sizeof(T) * items.size()));
+            for (size_t i = 0; i < items.size(); ++i)
+                data[i] = items[i];
+
+            return {data, items.size()};
+        }
+
+        // Luwu Traits (rfcs/classes/traits.md): a function synthesized one function scope below the class or trait `node`,
+        // which is the depth its parameters and expressions were parsed at
+        AstExprFunction* buildSynthesizedFunction(
+            AstStatClass* node,
+            const Location& loc,
+            const AstArray<AstLocal*>& args,
+            const AstArray<AstExpr*>& argsDefaults,
+            const std::vector<AstStat*>& body,
+            const char* debugName
+        )
+        {
+            AstStatBlock* block = allocator.alloc<AstStatBlock>(loc, copyToAst(body), /* hasEnd= */ true);
+
+            return allocator.alloc<AstExprFunction>(
+                loc,
+                AstArray<AstAttr*>(),
+                AstArray<AstGenericType*>(),
+                AstArray<AstGenericTypePack*>(),
+                /* self= */ nullptr,
+                args,
+                argsDefaults,
+                /* vararg= */ false,
+                Location(),
+                block,
+                node->name->functionDepth + 1,
+                names.getOrAdd(debugName),
+                /* returnAnnotation= */ nullptr
+            );
+        }
+
+        // Luwu Traits (rfcs/classes/traits.md): `function() return values end`
+        AstExprFunction* buildReturningFunction(AstStatClass* node, const Location& loc, const std::vector<AstExpr*>& values, const char* debugName)
+        {
+            AstStat* ret = allocator.alloc<AstStatReturn>(loc, copyToAst(values), loc);
+            return buildSynthesizedFunction(node, loc, {nullptr, 0}, {nullptr, 0}, {ret}, debugName);
+        }
+
+        // Luwu Traits (rfcs/classes/traits.md): a trait's `__traitinit(self, params...)` assigns every field of `self` the
+        // trait provides that isn't a constant (those are in the trait's shape, see isTraitConstantField): a default, or
+        // the parameter a field restates, then the parameters the body doesn't restate. It writes by name, and the VM
+        // only ever runs an implementing class's copy of it, so its slot caches learn that class's layout. The VM calls a
+        // class's copy on every construction, with the arguments of the class's `implements` entry.
+        void visitTrait(AstStatClass* node)
+        {
+            AstClassPrimaryConstructor* params = node->primaryConstructor;
+            size_t functionDepth = node->name->functionDepth + 1;
+            AstLocal* self = buildSynthesizedLocal("self", node->location, functionDepth);
+            std::vector<AstStat*> body;
+            DenseHashSet<AstName> restated{AstName()};
+
+            for (const AstClassMember& member : node->members)
+            {
+                if (const AstClassProperty* prop = member.get_if<AstClassProperty>())
+                {
+                    AstLocal* param = params ? findPrimaryConstructorParam(params, prop->name) : nullptr;
+
+                    if (param)
+                        restated.insert(prop->name);
+
+                    if (prop->expectLocation || isTraitConstantField(*prop))
+                        continue;
+
+                    AstExpr* value = prop->defaultValue;
+                    if (!value && param)
+                        value = allocator.alloc<AstExprLocal>(prop->nameLocation, param, /* upvalue= */ false);
+
+                    // a field with neither starts out nil, as every member does
+                    if (value)
+                        body.push_back(buildFieldAssign(self, prop->name, prop->nameLocation, value));
+                }
+                else if (const AstClassMethod* method = member.get_if<AstClassMethod>())
+                {
+                    // A default is checked against the class it is copied into (see luaR_implementtraits), which is
+                    // why it gets a prologue check but no owner: its `self` has a different layout in every class.
+                    bool isInstanceMethod = method->function->args.size > 0 && method->function->args.data[0]->name == "self";
+
+                    if (!method->expectLocation && isInstanceMethod)
+                        methodSelfChecks[method->function] = buildSelfCheckStat(node, *method);
+                }
+            }
+
+            if (params)
+            {
+                for (AstLocal* arg : params->args)
+                    if (!restated.contains(arg->name))
+                        body.push_back(buildFieldAssign(self, arg->name, arg->location, allocator.alloc<AstExprLocal>(arg->location, arg, false)));
+            }
+
+            if (!body.empty())
+            {
+                std::vector<AstLocal*> args{self};
+                std::vector<AstExpr*> argsDefaults{nullptr};
+
+                if (params)
+                {
+                    for (size_t i = 0; i < params->args.size; ++i)
+                    {
+                        args.push_back(params->args.data[i]);
+                        argsDefaults.push_back(params->argsDefaults.data[i]);
+                    }
+                }
+
+                AstExprFunction* fn = buildSynthesizedFunction(node, node->location, copyToAst(args), copyToAst(argsDefaults), body, "__traitinit");
+
+                traitInitFn[node] = fn;
+                functionsToCompile.push_back(fn);
+            }
+
+            // `needs` is resolved when a class implementing the trait is created, not when the trait is, so a trait
+            // can need one declared after it.
+            if (node->needs.size > 0)
+            {
+                std::vector<AstExpr*> needed;
+                for (const AstClassTraitRef& ref : node->needs)
+                    needed.push_back(allocator.alloc<AstExprGroup>(ref.location, ref.trait));
+
+                AstExprFunction* fn = buildReturningFunction(node, node->location, needed, "__needs");
+
+                traitNeedsFn[node] = fn;
+                functionsToCompile.push_back(fn);
+            }
+        }
+
+        // Luwu Traits (rfcs/classes/traits.md): a class whose `implements` list passes trait arguments gets
+        // `__inittraits(self, init1, ..., initN, params...)`: one trait initializer per entry that passes arguments, in list
+        // order (the VM passes the class's copies of those traits' `__traitinit`), then the primary constructor's
+        // parameters. It calls each initializer with `self` and the entry's arguments, so the arguments are evaluated
+        // right where they are used. The VM calls it on every construction.
+        void visitImplements(AstStatClass* node)
+        {
+            size_t functionDepth = node->name->functionDepth + 1;
+            AstLocal* self = buildSynthesizedLocal("self", node->location, functionDepth);
+            std::vector<AstLocal*> args{self};
+            std::vector<AstExpr*> argsDefaults{nullptr};
+            std::vector<AstStat*> body;
+
+            for (const AstClassTraitRef& ref : node->implements)
+            {
+                if (ref.args.size == 0)
+                    continue;
+
+                AstLocal* init = buildSynthesizedLocal("init", ref.location, functionDepth);
+                args.push_back(init);
+                argsDefaults.push_back(nullptr);
+
+                std::vector<AstExpr*> callArgs{allocator.alloc<AstExprLocal>(ref.location, self, /* upvalue= */ false)};
+                // one value each, as a trait parameter takes: a call's extra results don't spill into the next one
+                for (AstExpr* arg : ref.args)
+                    callArgs.push_back(allocator.alloc<AstExprGroup>(arg->location, arg));
+
+                AstExpr* func = allocator.alloc<AstExprLocal>(ref.location, init, /* upvalue= */ false);
+                AstExprCall* call = allocator.alloc<AstExprCall>(ref.location, func, copyToAst(callArgs), /* self= */ false, AstArray<AstTypeOrPack>(), ref.location);
+                body.push_back(allocator.alloc<AstStatExpr>(ref.location, call));
+            }
+
+            if (body.empty())
+                return;
+
+            if (AstClassPrimaryConstructor* ctor = node->primaryConstructor)
+            {
+                for (size_t i = 0; i < ctor->args.size; ++i)
+                {
+                    args.push_back(ctor->args.data[i]);
+                    argsDefaults.push_back(ctor->argsDefaults.data[i]);
+                }
+            }
+
+            AstExprFunction* fn = buildSynthesizedFunction(node, node->location, copyToAst(args), copyToAst(argsDefaults), body, "__inittraits");
+
+            classInitTraitsFn[node] = fn;
+            functionsToCompile.push_back(fn);
+        }
+
         bool visit(AstStatClass* node) override
         {
+            // Luwu Traits (rfcs/classes/traits.md): a trait is never constructed and its members are copied into classes at
+            // runtime, so none of the class paths below apply, and it is not a class for construction or isinstance.
+            if (node->isTrait)
+            {
+                visitTrait(node);
+                return true;
+            }
+
+            visitImplements(node);
+
+            // Luwu Traits (rfcs/classes/traits.md): the traits may bring private members (see classMemberIsPrivate)
+            if (node->implements.size > 0)
+                classesWithPrivateMembers.insert(node);
+
             std::vector<ClassFieldDefault> defaults;
             std::vector<AstExpr*> propertyDefaultsInOrder; // parallel to property declaration order
             AstExprFunction* init = nullptr;
@@ -8278,6 +8588,13 @@ struct Compiler
     // Populated by ClassInitDefaultsVisitor; maps a class with a primary constructor to the `__init`
     // synthesized from it. See ClassInitDefaultsVisitor::buildPrimaryConstructorInit.
     DenseHashMap<AstStatClass*, AstExprFunction*> classPrimaryInitFn;
+    // Luwu Traits (rfcs/classes/traits.md): populated by ClassInitDefaultsVisitor. A trait with a field or parameter to
+    // compute per construction maps to its synthesized `__traitinit`, a trait with a `needs` list to its `__needs`, and
+    // a class whose `implements` list passes trait arguments to its `__inittraits`. See
+    // ClassInitDefaultsVisitor::visitTrait and visitImplements.
+    DenseHashMap<AstStatClass*, AstExprFunction*> traitInitFn;
+    DenseHashMap<AstStatClass*, AstExprFunction*> traitNeedsFn;
+    DenseHashMap<AstStatClass*, AstExprFunction*> classInitTraitsFn;
     // Cost of each primary constructor's `__init` body, computed on first use by
     // tryCompileNewObjectFieldParameters and reused by every other construction site of that class.
     DenseHashMap<AstStatClass*, int> classPrimaryInitCost;
@@ -8455,6 +8772,9 @@ void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, A
             compiler.classInitFieldDefaults,
             compiler.classPodDefaultsFn,
             compiler.classPrimaryInitFn,
+            compiler.traitInitFn,
+            compiler.traitNeedsFn,
+            compiler.classInitTraitsFn,
             compiler.classPodConstDefaults,
             compiler.classMethodSelfChecks,
             compiler.classMethodOwner,
@@ -8472,6 +8792,15 @@ void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, A
             compiler.classLexicalOwner[fn] = decl;
 
         for (auto [decl, fn] : compiler.classPodDefaultsFn)
+            compiler.classLexicalOwner[fn] = decl;
+
+        for (auto [decl, fn] : compiler.traitInitFn)
+            compiler.classLexicalOwner[fn] = decl;
+
+        for (auto [decl, fn] : compiler.traitNeedsFn)
+            compiler.classLexicalOwner[fn] = decl;
+
+        for (auto [decl, fn] : compiler.classInitTraitsFn)
             compiler.classLexicalOwner[fn] = decl;
 
         // a class named by an annotation matters only when annotations are acted on

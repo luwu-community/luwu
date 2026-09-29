@@ -218,6 +218,7 @@ typedef struct global_State
     struct LuaTable* mt[LUA_T_COUNT]; // metatables for basic types
     TString* ttname[LUA_T_COUNT]; // names for basic types, as returned by tostring()/error messages (LUA_TSYMNONE reports as "none")
     TString* ttypename[LUA_T_COUNT]; // names for basic types, as returned by type() (matches luaT_typenames verbatim)
+    TString* traittypename;          // Luwu Traits (rfcs/classes/traits.md): "trait", which type() and typeof() give for a trait
     TString* tmname[TM_N]; // array with tag-method names
 
     TValue pseudotemp; // storage for temporary values used in pseudo2addr

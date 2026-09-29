@@ -967,6 +967,21 @@ void DataFlowGraphBuilder::visitClassShape(AstStatClass* d)
             member
         );
     }
+
+    // Luwu Traits (rfcs/classes/traits.md): trait arguments see the primary constructor's parameters, like field initializers
+    for (const AstClassTraitRef& ref : d->implements)
+    {
+        for (AstExpr* arg : ref.args)
+        {
+            if (primaryConstructorScope)
+            {
+                PushScope ps{scopeStack, primaryConstructorScope};
+                visitExpr(arg);
+            }
+            else
+                visitExpr(arg);
+        }
+    }
 }
 
 ControlFlow DataFlowGraphBuilder::visit(AstStatError* error)

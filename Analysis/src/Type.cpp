@@ -1228,7 +1228,8 @@ static bool isBareGenericNominalRoot(const ExternType* cls, const ExternType* pa
     return true;
 }
 
-bool isSubclass(const ExternType* cls, const ExternType* parent)
+// The extern type hierarchy walk: `cls` or one of its parents is `parent`, or the same generic nominal type
+static bool isNominalSubclass(const ExternType* cls, const ExternType* parent)
 {
     while (cls)
     {
@@ -1247,6 +1248,81 @@ bool isSubclass(const ExternType* cls, const ExternType* parent)
 
     return false;
 }
+
+// Luwu Traits (rfcs/classes/traits.md): whether `cls` implements (or, for a trait, needs) `trait`, directly or through
+// the traits those need. This is not inheritance -- nothing is inherited, and a class's parent is untouched -- but it
+// is the same question for subtyping: an object is a subtype of every trait its class implements, and a trait of every
+// trait it needs. `needs` forms a graph that may have diamonds (and, in erroneous code, cycles), so each trait is
+// visited once.
+static bool implementsTrait(const ExternType* cls, const ExternType* trait)
+{
+    std::vector<const ExternType*> pending;
+    DenseHashSet<const ExternType*> visited{nullptr};
+
+    auto push = [&](const ExternType* from)
+    {
+        for (TypeId implemented : from->implementedTraits)
+        {
+            const ExternType* implementedCls = get<ExternType>(follow(implemented));
+            if (implementedCls && !visited.contains(implementedCls))
+            {
+                visited.insert(implementedCls);
+                pending.push_back(implementedCls);
+            }
+        }
+    };
+
+    push(cls);
+
+    while (!pending.empty())
+    {
+        const ExternType* current = pending.back();
+        pending.pop_back();
+
+        if (isNominalSubclass(current, trait))
+            return true;
+
+        push(current);
+    }
+
+    return false;
+}
+
+static bool isSubclassOrImplements(const ExternType* cls, const ExternType* parent)
+{
+    if (isNominalSubclass(cls, parent))
+        return true;
+
+    // only types that implement or need traits have anything more to search
+    return !cls->implementedTraits.empty() && implementsTrait(cls, parent);
+}
+
+// Luwu Traits (rfcs/classes/traits.md): upstream's name. With traits this answers "is `cls` a nominal subtype of `parent`",
+// by extern type inheritance or by implementing a trait (see implementsTrait).
+bool isSubclass(const ExternType* cls, const ExternType* parent)
+{
+    // Luwu Traits (rfcs/classes/traits.md): a subtype of an intersection of traits is a subtype of every one of them.
+    // Its parts are traits, never intersections themselves (Normalizer::intersectTraits flattens them).
+    if (!parent->traitIntersection.empty() && cls != parent)
+    {
+        for (TypeId trait : parent->traitIntersection)
+        {
+            const ExternType* traitCls = get<ExternType>(follow(trait));
+            if (!traitCls || !isSubclassOrImplements(cls, traitCls))
+                return false;
+        }
+
+        return true;
+    }
+
+    return isSubclassOrImplements(cls, parent);
+}
+
+bool isTraitLike(const ExternType* ty)
+{
+    return ty->traitInfo.has_value() || !ty->traitIntersection.empty();
+}
+
 
 const std::vector<TypeId>& getTypes(const UnionType* utv)
 {

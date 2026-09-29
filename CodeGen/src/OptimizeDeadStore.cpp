@@ -53,6 +53,7 @@ static bool isUnsafeToSink(IrCmd cmd)
 
     // Reads VM register: STORE_TAG/STORE_TVALUE/etc. to the same VM register
     case IrCmd::GET_TYPEOF:
+    case IrCmd::GET_TYPE:
 
     // Mutates table array part, invalidating reads
     case IrCmd::TABLE_SETNUM:
