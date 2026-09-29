@@ -361,6 +361,11 @@ static void emitClassMemberAuthA64(
         build.tst(flagw, uint32_t(LBC_CLASSMEMBER_CONST));
         build.b(ConditionA64::Equal, authorized); // private but not const: authorized
 
+        // Luwu Traits (rfcs/classes/traits.md): a final field is written only by a trait initializer, which the interpreter
+        // authorizes (luaR_checkconstassign)
+        build.tst(flagw, uint32_t(LBC_CLASSMEMBER_FINAL));
+        build.b(ConditionA64::NotEqual, mismatch);
+
         // the flag and the mask are dead from here on, so they hold the index arithmetic
         RegisterA64 tempw = maskw;
         build.ldrb(tempw, mem(owner, offsetof(LuauClass, hascustominit)));
@@ -3966,10 +3971,19 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
     }
     case IrCmd::GET_TYPE:
     {
+        // Luwu Traits (rfcs/classes/traits.md): a class value whose class is a trait has the type "trait", which its tag can't tell
+        bool mayBeTrait = HAS_OP_B(inst) && OP_B(inst).kind == IrOpKind::VmReg &&
+                          (OP_A(inst).kind == IrOpKind::Inst || tagOp(OP_A(inst)) == LUA_TCLASS);
+
+        // compared before the result register is written, so the tag is intact whichever register the allocator picks
+        if (mayBeTrait && OP_A(inst).kind == IrOpKind::Inst)
+            build.cmp(regOp(OP_A(inst)), uint16_t(LUA_TCLASS));
+
         inst.regA64 = regs.allocReg(KindA64::x, index);
 
         CODEGEN_ASSERT(sizeof(TString*) == 8);
 
+        // neither instruction below touches the flags
         if (OP_A(inst).kind == IrOpKind::Inst)
             build.add(inst.regA64, rGlobalState, regOp(OP_A(inst)), 3); // implicit uxtw
         else if (OP_A(inst).kind == IrOpKind::Constant)
@@ -3978,6 +3992,23 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             CODEGEN_ASSERT(!"Unsupported instruction form");
 
         build.ldr(inst.regA64, mem(inst.regA64, offsetof(global_State, ttypename)));
+
+        if (mayBeTrait)
+        {
+            Label notTrait;
+
+            if (OP_A(inst).kind == IrOpKind::Inst)
+                build.b(ConditionA64::NotEqual, notTrait);
+
+            RegisterA64 temp = regs.allocTemp(KindA64::x);
+            build.ldr(temp, mem(rBase, vmRegOp(OP_B(inst)) * sizeof(TValue) + offsetof(TValue, value)));
+            build.ldrb(castReg(KindA64::w, temp), mem(temp, offsetof(LuauClass, istrait)));
+            build.cbz(castReg(KindA64::w, temp), notTrait);
+
+            build.ldr(inst.regA64, mem(rGlobalState, offsetof(global_State, traittypename)));
+
+            build.setLabel(notTrait);
+        }
         break;
     }
     case IrCmd::GET_TYPEOF:

@@ -60,6 +60,10 @@ public:
         // Parallel to propertyNames: for a member flagged LBC_CLASSMEMBER_CONSTDEFAULT, the proto
         // constant index of its default value; -1 for every other member.
         std::vector<int32_t> propertyDefaults;
+        // Luwu Traits (rfcs/classes/traits.md): the shape is a trait's (LBC_CLASSSHAPE_TRAIT), or a class's with an
+        // `implements` list (LBC_CLASSSHAPE_IMPLEMENTS)
+        bool isTrait = false;
+        bool implementsTraits = false;
     };
 
     BytecodeBuilder(BytecodeEncoder* encoder = 0);

@@ -1150,6 +1150,28 @@ void AstStatClass::visit(AstVisitor* visitor)
             }
         }
 
+        auto visitTraitRefs = [&](const AstArray<AstClassTraitRef>& refs)
+        {
+            for (const AstClassTraitRef& ref : refs)
+            {
+                ref.trait->visit(visitor);
+
+                for (const AstTypeOrPack& param : ref.typeArguments)
+                {
+                    if (param.type)
+                        param.type->visit(visitor);
+                    else if (param.typePack)
+                        param.typePack->visit(visitor);
+                }
+
+                for (AstExpr* arg : ref.args)
+                    arg->visit(visitor);
+            }
+        };
+
+        visitTraitRefs(needs);
+        visitTraitRefs(implements);
+
         for (const auto& member : members)
         {
             Luau::visit(

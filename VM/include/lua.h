@@ -544,6 +544,8 @@ enum lua_MemberAccess
 };
 
 LUA_API void lua_newobject(lua_State* L, int idx);
+// Luwu Traits (rfcs/classes/traits.md): whether the value at `idx` is a trait. A trait's lua_type is LUA_TCLASS.
+LUA_API int lua_istrait(lua_State* L, int idx);
 LUA_API int lua_getmemberaccess(lua_State* L, int idx, const char* membername);
 LUA_API int lua_ismemberconst(lua_State* L, int idx, const char* membername);
 LUA_API const char* lua_getclassname(lua_State* L, int idx);

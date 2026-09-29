@@ -988,6 +988,8 @@ enum class IrCmd : uint8_t
     // A: unsigned int (bytecode instruction index)
     // B: Rn (class)
     // C: Rn (member value)
+    // D: int (registers read from C on: 1, or twice the entry count of Luwu Traits' IMPLEMENTS form, see
+    //    LBC_NEWCLASSMEMBER_IMPLEMENTS)
     FALLBACK_NEWCLASSMEMBER,
 
     // Instruction that passes value through, it is produced by constant folding and users substitute it with the value
@@ -1073,6 +1075,8 @@ enum class IrCmd : uint8_t
 
     // Returns the string name of a type based on tag, alternative for type(x)
     // A: tag
+    // B: Rn (optional; Luwu Traits (rfcs/classes/traits.md): the value itself, read only when A is the class tag, since a trait is a class
+    //    value whose type is "trait")
     GET_TYPE,
 
     // Returns the string name of a type either from a __type metatable field or just based on the tag, alternative for typeof(x)

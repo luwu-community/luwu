@@ -178,6 +178,9 @@ std::optional<CompTimeBcFunction> fromFunctionBytecode(std::string bytecode, std
             shape.className = readVarInt(data, offset);
             uint32_t propertyCount = readVarInt(data, offset);
             uint32_t methodCount = readVarInt(data, offset);
+            uint32_t shapeFlags = readVarInt(data, offset);
+            shape.isTrait = (shapeFlags & LBC_CLASSSHAPE_TRAIT) != 0;
+            shape.implementsTraits = (shapeFlags & LBC_CLASSSHAPE_IMPLEMENTS) != 0;
 
             for (uint32_t j = 0; j < propertyCount; ++j)
             {

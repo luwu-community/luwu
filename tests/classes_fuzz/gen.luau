@@ -12,6 +12,13 @@
     For those only values are compared, and only when both sides succeed.
 
     Programs contain two placeholders the runner fills in per configuration: OPTLEVEL and MODNAME.
+
+    Programs also declare traits (TRAITS.CLAUDE.md) that classes implement, and the generator knows what must be true
+    of them: which classes implement which traits, what a call dispatched through a trait returns, which reads must
+    fail. Such an operation calls `check(cond, what)`, which prints `__wrong\t<what>` when the fact doesn't hold. The
+    runner reports those lines as WRONG in whichever configuration printed them, since a runtime rule that is wrong at
+    every optimization level would never diverge. Operations on traits are built to succeed and are labeled `!`: an
+    error from one is WRONG too, for the same reason.
 ]]
 
 local str = require("@std/str")
@@ -97,6 +104,47 @@ type Cls = {
     generic: boolean,
     primaryParams: { Field },
     metamethods: { Metamethod },
+    -- the traits the class lists after `implements`, with the trait arguments it passes (nil: no argument list)
+    implements: { { trait: Trait, args: string? } },
+    -- every trait it implements: the listed ones and the ones their `needs` imply
+    traitSet: { Trait },
+    -- trait defaults the class defines itself
+    overrides: { string },
+    definesMaybe: boolean,
+}
+
+-- A trait's own members are named after it (`t2_f1`, `t2_m3`), so the traits a class implements never clash with each
+-- other or with the class; clashes are covered by the conformance tests. What traits *expect* uses the class-side names
+-- (`hp`, `get`), with one access specifier and constness per name for the whole program, so every expectation of a
+-- name can be met at once.
+type TraitFn = {
+    name: string,
+    private: boolean,
+    static: boolean,
+    final: boolean,
+    params: { string },
+    body: { string },
+    -- the value a call returns for an object, if the generator knows it without running anything
+    constant: string?,
+}
+
+type Trait = {
+    name: string,
+    index: number,
+    module: boolean,
+    -- trait parameters, each a provided field of the trait
+    params: { { name: string, default: string? } },
+    fields: { { name: string, private: boolean, const: boolean, default: string } },
+    expectFields: { string },
+    expectFns: { string },
+    expectsMaybe: boolean,
+    expectsInit: boolean,
+    fns: { TraitFn },
+    needs: { Trait },
+    rank: number,
+    create: boolean,
+    tostring: boolean,
+    implementors: { Cls },
 }
 
 const FIELD_NAMES = { "a", "b", "c", "d", "count", "total", "name", "items", "tag", "hp" }
@@ -219,6 +267,10 @@ local function generate(seed: number): (string, string)
             generic = false,
             primaryParams = {},
             metamethods = {},
+            implements = {},
+            traitSet = {},
+            overrides = {},
+            definesMaybe = false,
         }
         c.ctorPrivate = c.ctor ~= "pod" and rng.chance(0.4)
         c.generic = c.ctor == "primary" and rng.chance(0.2)
@@ -410,6 +462,17 @@ local function generate(seed: number): (string, string)
             end
             head ..= (if c.ctorPrivate then " private " else " ") .. "(" .. table.concat(params, ", ") .. ")"
         end
+        if #c.implements > 0 then
+            local entries = {}
+            for _, use in c.implements do
+                local entry = if use.trait.module and not c.module then `mod.{use.trait.name}` else use.trait.name
+                if use.args then
+                    entry ..= `({use.args})`
+                end
+                table.insert(entries, entry)
+            end
+            head ..= " implements " .. table.concat(entries, ", ")
+        end
         table.insert(out, head)
         for _, f in c.fields do
             if not (c.ctor == "primary" and contains(c.primaryParams, f)) then
@@ -491,9 +554,12 @@ local function generate(seed: number): (string, string)
         return table.concat(args, ", ")
     end
 
-    local function op(kind: string, lines: { string }, divergent: boolean?)
+    -- `divergent`: may raise at some levels only (label `~`). `mustSucceed`: raising at all is wrong (label `!`), for
+    -- operations built to succeed, where an error would otherwise look the same at every level and go unnoticed.
+    local function op(kind: string, lines: { string }, divergent: boolean?, mustSucceed: boolean?)
         opCount += 1
-        table.insert(ops, { label = `{if divergent then "~" else ""}{opCount}_{kind}`, lines = lines })
+        local prefix = if divergent then "~" elseif mustSucceed then "!" else ""
+        table.insert(ops, { label = `{prefix}{opCount}_{kind}`, lines = lines })
     end
 
     local function genOps()
@@ -793,6 +859,543 @@ local function generate(seed: number): (string, string)
         end
     end
 
+    -- traits ------------------------------------------------------------------------------------------------------
+
+    local traits: { Trait } = {}
+    -- one access specifier and constness per expected field name, shared by every trait expecting it
+    local expectFlags: { [string]: { private: boolean, const: boolean } } = {}
+
+    local function traitRef(t: Trait, fromModule: boolean): string
+        if t.module and not fromModule then
+            return `mod.{t.name}`
+        end
+        return t.name
+    end
+
+    local function fieldKind(name: string): FieldKind
+        return if name == "name" or name == "tag" then "string" elseif name == "items" then "table" else "number"
+    end
+
+    local function traitFn(t: Trait, name: string): TraitFn?
+        for _, fn in t.fns do
+            if fn.name == name then
+                return fn
+            end
+        end
+        return nil
+    end
+
+    local function publicInstanceFns(t: Trait): { TraitFn }
+        return filter(t.fns, function(fn)
+            return not fn.static and not fn.private
+        end)
+    end
+
+    local function implementsTrait(c: Cls, t: Trait): boolean
+        return contains(c.traitSet, t)
+    end
+
+    local function makeTraits()
+        if not rng.chance(0.85) then
+            return
+        end
+
+        for i = 0, rng.int(1, 5) - 1 do
+            local module = rng.chance(0.3)
+            local t: Trait = {
+                name = (if module then "U" else "T") .. i,
+                index = i,
+                module = module,
+                params = {},
+                fields = {},
+                expectFields = {},
+                expectFns = {},
+                expectsMaybe = rng.chance(0.3),
+                expectsInit = false,
+                fns = {},
+                needs = {},
+                rank = rng.int(1, 1000),
+                create = false,
+                tostring = rng.chance(0.2),
+                implementors = {},
+            }
+
+            if rng.chance(0.3) then
+                for k = 1, rng.int(1, 2) do
+                    table.insert(t.params, { name = `t{i}_p{k}`, default = if rng.chance(0.6) then lit(rng, "number") else nil })
+                end
+            end
+
+            for k = 1, rng.int(0, 3) do
+                table.insert(t.fields, {
+                    name = `t{i}_f{k}`,
+                    private = rng.chance(0.35),
+                    const = rng.chance(0.25),
+                    default = rng.pick({ lit(rng, "number"), "{}", "nextId()", '"s"' }),
+                })
+            end
+
+            for _, name in rng.sample(FIELD_NAMES, rng.int(0, 2)) do
+                if not expectFlags[name] then
+                    expectFlags[name] = { private = rng.chance(0.4), const = rng.chance(0.3) }
+                end
+                table.insert(t.expectFields, name)
+            end
+
+            t.expectFns = rng.sample({ "get", "describe", "secret" }, rng.int(0, 2))
+            t.create = #t.params == 0 and rng.chance(0.35)
+            table.insert(traits, t)
+        end
+
+        -- `needs` follows a random order unrelated to declaration order, so a trait may need one declared after it.
+        -- Only traits without parameters are needed: a needed trait with parameters would have to be listed by every
+        -- implementing class. A trait in the required module can't name one in main.
+        for _, t in traits do
+            local candidates = filter(traits, function(o)
+                return o ~= t and o.rank < t.rank and #o.params == 0 and (not t.module or o.module)
+            end)
+            t.needs = rng.sample(candidates, rng.int(0, 2))
+        end
+    end
+
+    -- a trait's functions; after `needs` is known, since a default may call a needed trait's
+    local function makeTraitFns(t: Trait)
+        local i = t.index
+        local own = table.clone(t.fields)
+        for _, p in t.params do
+            table.insert(own, { name = p.name, private = false, const = false, default = p.default or "nil" })
+        end
+        local mutable = filter(own, function(f)
+            return not f.const
+        end)
+
+        -- m1 returns a constant, so what dispatch returns is known
+        table.insert(t.fns, { name = `t{i}_m1`, private = false, static = false, final = rng.chance(0.2), params = {}, body = { `return "t{i}m1"` }, constant = `"t{i}m1"` })
+        table.insert(t.fns, { name = `t{i}_s1`, private = false, static = true, final = false, params = { "x" }, body = { `return (x or 0) + {i}` } })
+        if rng.chance(0.4) then
+            table.insert(t.fns, { name = `t{i}_pm`, private = true, static = false, final = false, params = {}, body = { `return "private{i}"` } })
+        end
+
+        for k = 2, rng.int(2, 6) do
+            local name = `t{i}_m{k}`
+            local shape = rng.pick({
+                "field", "bump", "expectfield", "expectfn", "maybe", "own", "needed", "closure", "static", "implements",
+                "yield", "private", "upvalue", "selfname",
+            })
+            local body: { string }? = nil
+            if shape == "field" and #own > 0 then
+                body = { `return self.{rng.pick(own).name}` }
+            elseif shape == "bump" and #mutable > 0 then
+                local f = rng.pick(mutable).name
+                body = { `self.{f} = (tonumber(self.{f}) or 0) + 1`, `return self.{f}` }
+            elseif shape == "expectfield" and #t.expectFields > 0 then
+                body = { `return tostring(self.{rng.pick(t.expectFields)})` }
+            elseif shape == "expectfn" and #t.expectFns > 0 then
+                body = { `return tostring(self:{rng.pick(t.expectFns)}())` }
+            elseif shape == "maybe" and t.expectsMaybe then
+                body = { "if self.maybe then", "    return self:maybe()", "end", 'return "nomaybe"' }
+            elseif shape == "own" then
+                body = { `return "own:" .. tostring(self:t{i}_m1())` }
+            elseif shape == "needed" and #t.needs > 0 then
+                local needed = rng.pick(t.needs)
+                body = { `return "need:" .. tostring(self:t{needed.index}_m1())` }
+            elseif shape == "closure" and #own > 0 then
+                body = { `local f = function() return self.{rng.pick(own).name} end`, "return f()" }
+            elseif shape == "static" then
+                body = { `return {t.name}.t{i}_s1(2)` }
+            elseif shape == "implements" then
+                body = { `return class.implements(self, {t.name})` }
+            elseif shape == "yield" then
+                body = {
+                    "if coroutine.running() ~= shared.mainThread then",
+                    `    coroutine.yield(self:t{i}_m1())`,
+                    "end",
+                    "return 6",
+                }
+            elseif shape == "private" and traitFn(t, `t{i}_pm`) then
+                body = { `return self:t{i}_pm()` }
+            elseif shape == "upvalue" then
+                body = { "return nextId() > 0" }
+            elseif shape == "selfname" then
+                body = { "return class.name(self)" }
+            end
+
+            if body then
+                table.insert(t.fns, { name = name, private = rng.chance(0.15), static = false, final = rng.chance(0.2), params = {}, body = body })
+            end
+        end
+    end
+
+    -- which traits a class implements; before addMethods, since meeting an expectation can change a field's flags
+    local function implementTraits(c: Cls)
+        local candidates = filter(traits, function(t)
+            return not c.module or t.module
+        end)
+        if #candidates == 0 then
+            return
+        end
+
+        for _ = 1, 4 do
+            local listed = rng.sample(candidates, rng.int(0, 3))
+
+            -- the listed traits and the ones their `needs` imply, each once
+            local set: { Trait } = {}
+            local queue = table.clone(listed)
+            while #queue > 0 do
+                local t = table.remove(queue, 1) :: Trait
+                if not contains(set, t) then
+                    table.insert(set, t)
+                    for _, needed in t.needs do
+                        table.insert(queue, needed)
+                    end
+                end
+            end
+
+            -- two traits providing `__tostring` would clash; clashes are the conformance tests' job
+            local withTostring = filter(set, function(t)
+                return t.tostring
+            end)
+            if #withTostring <= 1 then
+                for _, t in listed do
+                    local args: string? = nil
+                    if #t.params > 0 then
+                        local form = rng.pick({ "none", "empty", "constants", "params" })
+                        if form == "empty" then
+                            args = ""
+                        elseif form == "constants" or (form == "params" and c.ctor ~= "primary") then
+                            local values = {}
+                            for _ in t.params do
+                                table.insert(values, rng.pick({ lit(rng, "number"), "nextId()" }))
+                            end
+                            args = table.concat(values, ", ")
+                        elseif form == "params" then
+                            local values = {}
+                            for _ in t.params do
+                                table.insert(values, `(tonumber({rng.pick(c.primaryParams).name}) or 0) + 1`)
+                            end
+                            args = table.concat(values, ", ")
+                        end
+                    end
+                    table.insert(c.implements, { trait = t, args = args })
+                end
+                c.traitSet = set
+                break
+            end
+        end
+
+        for _, t in c.traitSet do
+            table.insert(t.implementors, c)
+
+            for _, name in t.expectFields do
+                local flags = expectFlags[name]
+                local found: Field? = nil
+                for _, f in c.fields do
+                    if f.name == name then
+                        found = f
+                    end
+                end
+                if found then
+                    found.private = flags.private
+                    found.const = flags.const
+                else
+                    found = { name = name, private = flags.private, const = flags.const, kind = fieldKind(name), default = if rng.chance(0.5) then lit(rng, fieldKind(name)) else nil }
+                    table.insert(c.fields, found :: Field)
+                end
+                local f = found :: Field
+                if f.const and c.ctor == "pod" and f.default == nil then
+                    f.default = lit(rng, f.kind)
+                end
+            end
+
+            if t.expectsMaybe and rng.chance(0.5) then
+                c.definesMaybe = true
+            end
+        end
+    end
+
+    -- what implementing adds to a class besides fields: expected functions, and overrides of trait defaults
+    local function addTraitMembers(c: Cls)
+        local function has(name: string): boolean
+            return #filter(c.methods, function(m)
+                return m.name == name
+            end) > 0
+        end
+
+        local needsSecret = false
+        for _, t in c.traitSet do
+            if contains(t.expectFns, "secret") then
+                needsSecret = true
+            end
+        end
+        if needsSecret and not has("secret") then
+            table.insert(c.methods, method("secret", true, false, { `return "secret:{c.name}"` }))
+        end
+        if c.definesMaybe and not has("maybe") then
+            table.insert(c.methods, method("maybe", false, false, { `return "maybe:{c.name}"` }))
+        end
+
+        for _, t in c.traitSet do
+            for _, fn in t.fns do
+                local overridable = not fn.static and not fn.final and not fn.private
+                if overridable and rng.chance(0.15) and not has(fn.name) then
+                    table.insert(c.methods, method(fn.name, false, false, { `return "override:{c.name}"` }))
+                    table.insert(c.overrides, fn.name)
+                end
+            end
+        end
+    end
+
+    local function emitTrait(t: Trait): { string }
+        local out = {}
+        local head = `trait {t.name}`
+        if #t.params > 0 then
+            local params = {}
+            for _, p in t.params do
+                table.insert(params, `public {p.name}` .. (if p.default then ` = {p.default}` else ""))
+            end
+            head ..= "(" .. table.concat(params, ", ") .. ")"
+        end
+        if #t.needs > 0 then
+            local names = {}
+            for _, needed in t.needs do
+                table.insert(names, traitRef(needed, t.module))
+            end
+            head ..= " needs " .. table.concat(names, ", ")
+        end
+        table.insert(out, head)
+
+        for _, name in t.expectFields do
+            local flags = expectFlags[name]
+            table.insert(out, `    expect {if flags.private then "private" else "public"} {if flags.const then "const " else ""}{name}`)
+        end
+        for _, name in t.expectFns do
+            table.insert(out, `    expect {if name == "secret" then "private" else "public"} function {name}(self)`)
+        end
+        if t.expectsMaybe then
+            table.insert(out, "    expect public function maybe?(self)")
+        end
+        for _, f in t.fields do
+            table.insert(out, `    {if f.private then "private" else "public"} {if f.const then "const " else ""}{f.name} = {f.default}`)
+        end
+        for _, fn in t.fns do
+            local params = table.clone(fn.params)
+            if not fn.static then
+                table.insert(params, 1, "self")
+            end
+            table.insert(out, `    {if fn.private then "private" else "public"} {if fn.final then "final " else ""}function {fn.name}({table.concat(params, ", ")})`)
+            for _, line in fn.body do
+                table.insert(out, "        " .. line)
+            end
+            table.insert(out, "    end")
+        end
+        if t.tostring then
+            table.insert(out, `    public function __tostring(self)`)
+            table.insert(out, `        return "<{t.name}>"`)
+            table.insert(out, "    end")
+        end
+        if t.create then
+            -- a factory: constructs its implementing classes, through their private constructors too
+            local makeable = filter(t.implementors, function(c)
+                return not t.module or c.module
+            end)
+            table.insert(out, "    public function __create(n)")
+            for index, c in makeable do
+                table.insert(out, `        if n == {index} then`)
+                table.insert(out, `            return {ctorCall(c, ({ module = t.module } :: any) :: Cls)}`)
+                table.insert(out, "        end")
+            end
+            table.insert(out, "        return nil")
+            table.insert(out, "    end")
+        end
+        table.insert(out, "end")
+        return out
+    end
+
+    -- operations on traits; `check` states what the generator knows must hold
+    local function genTraitOps()
+        if #traits == 0 then
+            return
+        end
+
+        for _ = 1, rng.int(10, 30) do
+            local t = rng.pick(traits)
+            local T = traitRef(t, false)
+            local c = rng.pick(classes)
+            local C = ref(c)
+            local implements = implementsTrait(c, t)
+            local fns = publicInstanceFns(t)
+            local kind = rng.pick({
+                "call", "dispatch", "dispatch_wrong", "implements", "refine", "type", "blocked", "ctor", "field",
+                "maybe", "isolated", "gc", "coroutine", "static", "tostring", "fields", "annotated", "private_fn",
+            })
+
+            if kind == "call" and implements then
+                local fn = rng.pick(fns)
+                op("t_call", { `local o = {C}.make()`, `local r = o:{fn.name}()`, "return r" }, false, true)
+            elseif kind == "dispatch" and implements then
+                -- through the trait, the class's own override runs, and a default gives what a method call gives
+                local fn = rng.pick(fns)
+                local lines = { `local o = {C}.make()`, `local viaTrait = {T}.{fn.name}(o)` }
+                if contains(c.overrides, fn.name) then
+                    table.insert(lines, `check(viaTrait == "override:{c.name}", "{T}.{fn.name} on {c.name} ran the default over the override")`)
+                elseif fn.constant then
+                    table.insert(lines, `check(viaTrait == {fn.constant}, "{T}.{fn.name} on {c.name} returned " .. tostring(viaTrait))`)
+                end
+                table.insert(lines, "return viaTrait")
+                op("t_dispatch", lines, false, true)
+            elseif kind == "dispatch_wrong" and #fns > 0 then
+                local fn = rng.pick(fns)
+                local receiver = if implements then rng.pick({ "tbl", "nil", "5", "legacy" }) else `{C}.make()`
+                op("t_dispatch_wrong", {
+                    `local ok = pcall({T}.{fn.name}, {receiver})`,
+                    `check(not ok, "{T}.{fn.name} accepted a receiver that doesn't implement {t.name}")`,
+                    "return ok",
+                }, false, true)
+            elseif kind == "implements" then
+                op("t_implements", {
+                    `local o = {C}.make()`,
+                    `local got = class.implements(o, {T})`,
+                    `check(got == {tostring(implements)}, "class.implements({c.name}, {t.name}) is " .. tostring(got))`,
+                    `check(class.isinstance(o, {T}) == false, "class.isinstance with a trait was true")`,
+                    "return got",
+                }, false, true)
+            elseif kind == "refine" and #fns > 0 then
+                local c2 = rng.pick(classes)
+                local fn = rng.pick(fns)
+                op("t_refine", {
+                    `local x = pick({C}.make(), {ref(c2)}.make())`,
+                    `if class.implements(x, {T}) then`,
+                    `    local r = x:{fn.name}()`,
+                    "    return r",
+                    "end",
+                    'return "no"',
+                }, false, true)
+            elseif kind == "type" then
+                op("t_type", {
+                    `local t = {T}`,
+                    `check(type(t) == "trait" and typeof(t) == "trait", "type of trait {t.name} is " .. type(t))`,
+                    `check(type({C}) == "class", "type of class {c.name} is " .. type({C}))`,
+                    `check(class.name(t) == "{t.name}", "class.name of trait {t.name}")`,
+                    "return type(t)",
+                }, false, true)
+            elseif kind == "blocked" then
+                local lines = {}
+                for _, f in t.fields do
+                    table.insert(lines, `check(not pcall(function() return {T}.{f.name} end), "read field {f.name} through {t.name}")`)
+                end
+                for _, name in t.expectFns do
+                    table.insert(lines, `check(not pcall(function() return {T}.{name} end), "read expected {name} through {t.name}")`)
+                end
+                table.insert(lines, `check({T}.t{t.index}_s1(2) == {2 + t.index}, "static through {t.name}")`)
+                table.insert(lines, `return {T}.t{t.index}_s1(2)`)
+                op("t_blocked", lines, false, true)
+            elseif kind == "ctor" then
+                if t.create then
+                    local makeable = filter(t.implementors, function(o)
+                        return not t.module or o.module
+                    end)
+                    op("t_ctor", {
+                        `local r = {T}({rng.int(1, #makeable + 1)})`,
+                        `check(r == nil or class.implements(r, {T}), "{t.name}'s factory made something that doesn't implement it")`,
+                        "return if r == nil then 'nil' else class.name(r)",
+                    }, false, true)
+                else
+                    op("t_ctor_none", { `local ok = pcall({T})`, `check(not ok, "called {t.name}, which has no __create")`, "return ok" }, false, true)
+                end
+            elseif kind == "field" and implements and #t.fields > 0 then
+                local f = rng.pick(t.fields)
+                if f.private then
+                    op("t_field_private", { `local o = {C}.make()`, `check(not pcall(function() return o.{f.name} end), "read private trait field {f.name} from outside")`, "return 1" }, false, true)
+                elseif f.const then
+                    op("t_field_const", { `local o = {C}.make()`, `check(not pcall(function() o.{f.name} = 1 end), "wrote const trait field {f.name} from outside")`, `return o.{f.name}` }, false, true)
+                else
+                    op("t_field", { `local o = {C}.make()`, `o.{f.name} = 42`, `check(o.{f.name} == 42, "trait field {f.name} didn't keep a write")`, `return o.{f.name}` }, false, true)
+                end
+            elseif kind == "maybe" and implements and t.expectsMaybe then
+                op("t_maybe", {
+                    `local o = {C}.make()`,
+                    `check((o.maybe ~= nil) == {tostring(c.definesMaybe)}, "optional maybe on {c.name}")`,
+                    "return o.maybe ~= nil",
+                }, false, true)
+            elseif kind == "isolated" and implements and #t.fields > 0 then
+                -- trait state lives in each object: a table default is fresh per object, and a write stays in its object
+                local f = rng.pick(t.fields)
+                local lines = { `local a, b = {C}.make(), {C}.make()` }
+                if not f.private and f.default == "{}" then
+                    table.insert(lines, `check(a.{f.name} ~= b.{f.name}, "objects share trait table field {f.name}")`)
+                end
+                if not f.private and not f.const then
+                    table.insert(lines, `local before = b.{f.name}`)
+                    table.insert(lines, `a.{f.name} = "changed"`)
+                    table.insert(lines, `check(b.{f.name} == before, "a write to one object's trait field reached another")`)
+                end
+                table.insert(lines, "return true")
+                op("t_isolated", lines, false, true)
+            elseif kind == "gc" and implements then
+                op("t_gc", {
+                    "local keep = {}",
+                    "for i = 1, 2000 do",
+                    `    keep[i % 40 + 1] = {C}.make()`,
+                    "    local junk = { i }",
+                    "end",
+                    "local s = ''",
+                    "for _, o in keep do",
+                    `    s ..= tostring(o:t{t.index}_m1())`,
+                    "end",
+                    "return #s",
+                }, false, true)
+            elseif kind == "coroutine" and implements and #fns > 0 then
+                local fn = rng.pick(fns)
+                op("t_coroutine", {
+                    `local o = {C}.make()`,
+                    "local co = coroutine.wrap(function()",
+                    `    local ok, r = pcall({T}.{fn.name}, o)`,
+                    "    coroutine.yield(ok)",
+                    "    return if ok then r else 'err'",
+                    "end)",
+                    "local a = co()",
+                    "local b = co()",
+                    "return a, b",
+                }, false, true)
+            elseif kind == "static" and implements then
+                op("t_static", {
+                    `local viaClass = {C}.t{t.index}_s1(2)`,
+                    `check(viaClass == {T}.t{t.index}_s1(2), "a trait static differs through {c.name}")`,
+                    "return viaClass",
+                }, false, true)
+            elseif kind == "tostring" and implements and t.tostring then
+                local ownTostring = #filter(c.metamethods, function(mm)
+                    return mm.name == "__tostring"
+                end) > 0
+                local lines = { `local o = {C}.make()`, "local s = tostring(o)" }
+                if not ownTostring then
+                    table.insert(lines, `check(s == "<{t.name}>", "{t.name}'s __tostring on {c.name} gave " .. s)`)
+                end
+                table.insert(lines, "return s")
+                op("t_tostring", lines, false, true)
+            elseif kind == "fields" and implements then
+                local lines = { `local fields = class.fields({C}.make())` }
+                -- a public trait field is one of the object's fields (a nil one is listed as `none`)
+                for _, f in t.fields do
+                    if not f.private then
+                        table.insert(lines, `check(fields.{f.name} ~= nil, "class.fields of {c.name} lacks trait field {f.name}")`)
+                    end
+                end
+                table.insert(lines, "return sortedKeys(fields)")
+                op("t_fields", lines, false, true)
+            elseif kind == "annotated" and implements and #fns > 0 then
+                local fn = rng.pick(fns)
+                op("t_annotated", { `local o: {T} = {C}.make()`, `local r = o:{fn.name}()`, "return r" }, false, true)
+            elseif kind == "private_fn" and implements and traitFn(t, `t{t.index}_pm`) then
+                op("t_private_fn", {
+                    `local o = {C}.make()`,
+                    `check(not pcall(function() return o:t{t.index}_pm() end), "called private trait function from outside")`,
+                    "return 1",
+                }, false, true)
+            end
+        end
+    end
+
     local modClasses: { Cls } = {}
     for i = 0, rng.int(0, 3) - 1 do
         local c = makeClass(i, true)
@@ -802,10 +1405,21 @@ local function generate(seed: number): (string, string)
     for i = 0, rng.int(2, 6) - 1 do
         table.insert(classes, makeClass(i, false))
     end
+    makeTraits()
+    for _, t in traits do
+        makeTraitFns(t)
+    end
+    for _, c in classes do
+        implementTraits(c)
+    end
     for _, c in classes do
         addMethods(c)
     end
+    for _, c in classes do
+        addTraitMembers(c)
+    end
     genOps()
+    genTraitOps()
 
     const prelude = {
         "local shared = {}",
@@ -823,6 +1437,13 @@ local function generate(seed: number): (string, string)
     local mod = { "--!nocheck", "--!optimize OPTLEVEL", "--!trust" }
     table.move(prelude, 1, #prelude, #mod + 1, mod)
     local exports = {}
+    for _, t in traits do
+        if t.module then
+            local lines = emitTrait(t)
+            table.move(lines, 1, #lines, #mod + 1, mod)
+            table.insert(exports, `{t.name} = {t.name}`)
+        end
+    end
     for _, c in modClasses do
         local lines = emitClass(c)
         table.move(lines, 1, #lines, #mod + 1, mod)
@@ -849,10 +1470,15 @@ local function generate(seed: number): (string, string)
         "        return tostring(v)",
         "    elseif t == 'object' then",
         "        return 'object:' .. class.name(v)",
-        "    elseif t == 'class' then",
-        "        return 'class:' .. class.name(v)",
+        "    elseif t == 'class' or t == 'trait' then",
+        "        return t .. ':' .. class.name(v)",
         "    end",
         "    return t",
+        "end",
+        "local function check(cond, what)",
+        "    if not cond then",
+        "        print('__wrong', what)",
+        "    end",
         "end",
         "local function run(label, fn)",
         "    local r = table.pack(pcall(fn))",
@@ -886,6 +1512,12 @@ local function generate(seed: number): (string, string)
         "end",
     } do
         table.insert(main, line)
+    end
+    for _, t in traits do
+        if not t.module then
+            local lines = emitTrait(t)
+            table.move(lines, 1, #lines, #main + 1, main)
+        end
     end
     for _, c in classes do
         if not c.module then

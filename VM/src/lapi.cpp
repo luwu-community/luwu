@@ -1733,6 +1733,12 @@ static const TValue* findclassmember(lua_State* L, int idx, const char* memberna
     return luaH_getstr((*classdef)->memberstooffset, luaS_new(L, membername));
 }
 
+int lua_istrait(lua_State* L, int idx)
+{
+    const TValue* o = index2addr(L, idx);
+    return ttisclass(o) && classvalue(o)->istrait;
+}
+
 void lua_newobject(lua_State* L, int idx)
 {
     StkId cls = index2addr(L, idx);
@@ -1747,6 +1753,16 @@ void lua_newobject(lua_State* L, int idx)
 
     LuauClass* classdef = classvalue(cls);
 
+    luaR_checktraitsimplemented(L, classdef);
+
+    // Luwu Traits (rfcs/classes/traits.md): constructing a trait calls its `__create`, which replaces the trait in its slot with its result
+    if (classdef->istrait)
+    {
+        setobj2s(L, cls, luaR_traitcreate(L, classdef));
+        lua_call(L, nargs, 1);
+        return;
+    }
+
     // Construction runs here instead of through the class's `__call`. Doing it here skips the private
     // constructor check, because the embedder is trusted. It also reads `__init` by offset rather than
     // as a member, since `__init` is never readable by name. The object replaces the class in its stack
@@ -1755,6 +1771,13 @@ void lua_newobject(lua_State* L, int idx)
     ptrdiff_t objectslot = savestack(L, cls);
     LuauObject* object = luaR_newobject(L, classdef);
     setobjectvalue(L, cls, object);
+
+    // Luwu Traits (rfcs/classes/traits.md): trait fields are initialized before the class's own defaults and `__init`
+    if (classdef->traitinits)
+    {
+        luaR_inittraitfields(L, classdef, object, cls + 1, nargs);
+        cls = restorestack(L, objectslot);
+    }
 
     if (!classdef->hascustominit)
     {

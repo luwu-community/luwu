@@ -30,6 +30,7 @@ end
 
 declare class: {
     isinstance: @checked (o: unknown, c: class) -> boolean,
+    implements: @checked (o: unknown, t: class) -> boolean,
     of: @checked (o: unknown) -> class?,
     name: @checked (o: class | object) -> string,
     fields: @checked (o: class | object) -> ({ [string]: unknown }, boolean)

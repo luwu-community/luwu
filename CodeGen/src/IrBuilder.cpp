@@ -691,8 +691,13 @@ void IrBuilder::translateInst(LuauOpcode op, const Instruction* pc, int i)
     // rather than handing it to the interpreter at the first construction. (CHECKSELFCLASS does have a
     // real lowering; see translateInstCheckSelfClass.)
     case LOP_NEWCLASSMEMBER:
-        inst(IrCmd::FALLBACK_NEWCLASSMEMBER, constUint(i), vmReg(LUAU_INSN_A(*pc)), vmReg(LUAU_INSN_C(*pc)));
+    {
+        // Luwu Traits (rfcs/classes/traits.md): the IMPLEMENTS form reads the traits and their argument counts
+        bool implements = LUAU_INSN_B(*pc) == LBC_NEWCLASSMEMBER_IMPLEMENTS;
+        int regCount = implements ? int(pc[1]) * 2 : 1;
+        inst(IrCmd::FALLBACK_NEWCLASSMEMBER, constUint(i), vmReg(LUAU_INSN_A(*pc)), vmReg(LUAU_INSN_C(*pc)), constInt(regCount));
         break;
+    }
 
     case LOP_NEWOBJECT:
         translateInstNewObject(*this, pc, i);

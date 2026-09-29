@@ -71,6 +71,8 @@
 //   Luwu Classes: CHECKSELFCLASS, JUMPXISA, NEWOBJECT, GETOBJECTMEMBER and SETOBJECTMEMBER, per-member flags
 //   and constant field defaults in LBC_CONSTANT_CLASS_SHAPE, LBC_TYPE_CLASS/LBC_TYPE_OBJECT and
 //   LBF_CLASS_ISINSTANCE.
+//   Luwu Traits (rfcs/classes/traits.md): the shape flags varint in LBC_CONSTANT_CLASS_SHAPE (LBC_CLASSSHAPE_TRAIT,
+//   LBC_CLASSSHAPE_IMPLEMENTS), the EXPECTED, OPTIONAL and FINAL member flags, and NEWCLASSMEMBER's IMPLEMENTS form.
 
 // # Bytecode type information history
 // Version 1: (from bytecode version 4) Type information for function signature. Currently supported.
@@ -459,6 +461,9 @@ enum LuauOpcode
     // (LBC_CONSTANT_CLASS_SHAPE). Besides the declared methods, the compiler registers the synthesized `__init`
     // of a primary constructor and the `__defaults` closure for non-constant field defaults this way. Upstream
     // encodes it the same; its class shapes differ (see LBC_CONSTANT_CLASS_SHAPE).
+    // Luwu Traits (rfcs/classes/traits.md): B is LBC_NEWCLASSMEMBER_IMPLEMENTS for a class's `implements` list, emitted once,
+    // after every member of the class is registered. AUX is the number of entries N; registers C..C+N-1 hold the
+    // listed trait values, and C+N..C+2N-1 how many trait arguments each entry passes, as numbers.
     LOP_NEWCLASSMEMBER,
 
     // CALLFB: call specified function with collecting runtime stats in a feedback slot
@@ -662,6 +667,9 @@ enum LuwuBytecodeTag
 #define LBC_CLASSMEMBER_CONST (1 << 1)
 // Set on properties that have a default value expression (see AstClassProperty::defaultValue).
 #define LBC_CLASSMEMBER_HASDEFAULT (1 << 2)
+// Luwu Traits (rfcs/classes/traits.md): set on a trait's function that takes `self`, which reading it through the trait dispatches to the
+// receiver's class (luaR_traitmethod). Shares its bit with LBC_CLASSMEMBER_HASDEFAULT, which only fields carry.
+#define LBC_CLASSMEMBER_TAKESSELF (1 << 2)
 // Set on an instance member whose default value is a compile-time constant: the value is serialized
 // inline in LBC_CONSTANT_CLASS_SHAPE (a constant table index follows the flags byte) and copied
 // straight into each new instance, instead of being produced by the synthesized `__defaults` closure.
@@ -672,11 +680,32 @@ enum LuwuBytecodeTag
 // instance positionally (LOP_NEWOBJECT's FIELDS form) instead of calling it: the VM checks this bit
 // before honoring that form on a class that has a custom `__init`.
 #define LBC_CLASSMEMBER_PRIMARYINIT (1 << 4)
+// Luwu Traits (rfcs/classes/traits.md): set on a trait's expected function that implementing classes may leave out
+// (`expect function name?(self)`). Shares its bit with LBC_CLASSMEMBER_PRIMARYINIT, which is only ever set on a class's
+// `__init`: a trait has no `__init`, and a class no expected members.
+#define LBC_CLASSMEMBER_OPTIONAL (1 << 4)
+// Luwu Traits (rfcs/classes/traits.md): set on a trait's expected members (`expect name: T`, `expect function name(self)`),
+// which implementing classes must declare themselves. An expected function's static member is nil.
+#define LBC_CLASSMEMBER_EXPECTED (1 << 5)
+// Luwu Traits (rfcs/classes/traits.md): set on a trait's `final` functions, which implementing classes can't define.
+#define LBC_CLASSMEMBER_FINAL (1 << 6)
 // Never serialized: the VM sets this on every class's `__init` when it builds the class. Reading `__init`
 // as a member raises, since calling it on a constructed object would re-run construction, which may
 // reassign its `const` fields. Construction never reads `__init` by name, so it is unaffected. Lives
 // here so no compiler-emitted bit can collide with it.
 #define LBC_CLASSMEMBER_INITBLOCKED (1 << 7)
+
+// Luwu Traits (rfcs/classes/traits.md): operand B of LOP_NEWCLASSMEMBER for a class's `implements` list
+#define LBC_NEWCLASSMEMBER_IMPLEMENTS 1
+
+// Luwu Traits (rfcs/classes/traits.md): bits of the shape flags varint of LBC_CONSTANT_CLASS_SHAPE, written after the member
+// counts.
+// - TRAIT: the shape is a trait's rather than a class's.
+// - IMPLEMENTS: the class has an `implements` list. It can't be constructed until its class statement has implemented
+//   its traits, which grows its layout (see luaR_implementtraits), and code the statement runs before then may already
+//   reach the class.
+#define LBC_CLASSSHAPE_TRAIT (1 << 0)
+#define LBC_CLASSSHAPE_IMPLEMENTS (1 << 1)
 
 // Luwu Classes (rfcs/classes): operand B of LOP_CHECKSELFCLASS. Instead of naming a register
 // holding the class, take the class from the executing closure's `Proto::ownerclass`.
