@@ -375,7 +375,8 @@ ControlFlow TypeChecker::check(const ScopePtr& scope, const AstStat& program)
         return check(scope, *typefunction);
     else if (auto global = program.as<AstStatDeclareGlobal>())
     {
-        TypeId globalType = resolveType(scope, *global->type);
+        // Luwu Declare Statements (rfcs/declare-statements.md): the new solver gives `declare name` the environment's type
+        TypeId globalType = global->type ? resolveType(scope, *global->type) : anyType;
         Name globalName(global->name.value);
 
         currentModule->declaredGlobals[globalName] = globalType;
@@ -406,6 +407,11 @@ ControlFlow TypeChecker::check(const ScopePtr& scope, const AstStat& program)
     else if (FFlag::LuwuClasses && program.is<AstStatClass>())
     {
         reportError(program.as<AstStatClass>()->name->location, GenericError{"class keyword is illegal here"});
+        return ControlFlow::None;
+    }
+    else if (program.is<AstStatDeclareClass>())
+    {
+        // Luwu Declare Statements (rfcs/declare-statements.md): classes are only checked by the new solver
         return ControlFlow::None;
     }
     else
@@ -1704,7 +1710,7 @@ void TypeChecker::prototype(const ScopePtr& scope, const AstStatDeclareExternTyp
         {
             reportError(
                 declaredExternType.location,
-                GenericError{format("Cannot use non-class type '%s' as a superclass of class '%s'", superName.c_str(), declaredExternType.name.value)}
+                GenericError{format("Cannot use non-extern type '%s' as the supertype of extern type '%s'", superName.c_str(), declaredExternType.name.value)}
             );
             incorrectExternTypeDefinitions.insert(&declaredExternType);
             return;

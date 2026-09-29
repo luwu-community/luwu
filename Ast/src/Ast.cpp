@@ -1060,7 +1060,7 @@ AstStatDeclareGlobal::AstStatDeclareGlobal(
 
 void AstStatDeclareGlobal::visit(AstVisitor* visitor)
 {
-    if (visitor->visit(this))
+    if (visitor->visit(this) && type)
         type->visit(visitor);
 }
 
@@ -1304,6 +1304,67 @@ void AstStatDeclareExternType::visit(AstVisitor* visitor)
     {
         for (const AstDeclaredExternTypeProperty& prop : props)
             prop.ty->visit(visitor);
+    }
+}
+
+AstStatDeclareClass::AstStatDeclareClass(const Location& location, AstStatClass* shape, const Location& declareLocation)
+    : AstStat(ClassIndex(), location)
+    , shape(shape)
+    , declareLocation(declareLocation)
+{
+    luwuOnly = true;
+}
+
+// Only the declared class's type annotations: its functions have no bodies, and its name is not a local.
+void AstStatDeclareClass::visit(AstVisitor* visitor)
+{
+    if (!visitor->visit(this))
+        return;
+
+    for (AstGenericType* generic : shape->generics)
+        generic->visit(visitor);
+
+    for (AstGenericTypePack* genericPack : shape->genericPacks)
+        genericPack->visit(visitor);
+
+    if (shape->primaryConstructor)
+    {
+        for (AstLocal* arg : shape->primaryConstructor->args)
+        {
+            if (arg->annotation)
+                arg->annotation->visit(visitor);
+        }
+    }
+
+    for (const AstClassMember& member : shape->members)
+    {
+        if (const AstClassProperty* prop = member.get_if<AstClassProperty>())
+        {
+            if (prop->ty)
+                prop->ty->visit(visitor);
+        }
+        else if (const AstClassMethod* method = member.get_if<AstClassMethod>())
+        {
+            AstExprFunction* function = method->function;
+
+            for (AstGenericType* generic : function->generics)
+                generic->visit(visitor);
+
+            for (AstGenericTypePack* genericPack : function->genericPacks)
+                genericPack->visit(visitor);
+
+            for (AstLocal* arg : function->args)
+            {
+                if (arg->annotation)
+                    arg->annotation->visit(visitor);
+            }
+
+            if (function->varargAnnotation)
+                function->varargAnnotation->visit(visitor);
+
+            if (function->returnAnnotation)
+                function->returnAnnotation->visit(visitor);
+        }
     }
 }
 

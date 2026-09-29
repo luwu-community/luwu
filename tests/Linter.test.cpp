@@ -12,6 +12,8 @@ LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuDestructuring)
+LUAU_FASTFLAG(LuwuDeclareStatements)
+LUAU_FASTFLAG(LuauSolverV2)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuNonePrimitive)
 LUAU_FASTFLAG(LuauDeprecatedAttributeOnAnonymousFunctions)
@@ -3232,6 +3234,117 @@ f({})
     REQUIRE_EQ(result.warnings.size(), 1);
     CHECK_EQ(result.warnings[0].code, LintWarning::Code_LocalUnused);
     CHECK_EQ(result.warnings[0].text, "Variable 'unused' is never used; prefix with '_' to silence");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "declared_globals_are_known")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuauSolverV2, true}, {FFlag::LuwuDeclareStatements, true}};
+
+    // UnknownGlobal only runs in nocheck files; the writes would otherwise suggest a local
+    LintResult result = lint(R"(
+--!nocheck
+print(early)
+local function f()
+    counter = counter + 1
+end
+f()
+declare early: number
+declare counter: number
+)");
+
+    REQUIRE(0 == result.warnings.size());
+}
+
+TEST_CASE_FIXTURE(Fixture, "DeclareMismatch")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuauSolverV2, true}, {FFlag::LuwuDeclareStatements, true}};
+
+    loadDefinition(R"(
+        export type Path = { path: string }
+        declare script: Path
+        declare version: string
+        declare function exit(code: number): never
+    )");
+
+    // The same declaration as the loaded definitions, spelled with or without the alias, is silent
+    LintResult same = lint(R"(
+declare script: Path
+declare version: string
+declare function exit(code: number): never
+)");
+    CHECK(0 == same.warnings.size());
+
+    LintResult different = lint(R"(
+declare version: number
+declare function exit(code: string): never
+declare unrelated: number
+)");
+    REQUIRE(2 == different.warnings.size());
+    CHECK_EQ(different.warnings[0].code, LintWarning::Code_DeclareMismatch);
+    CHECK_EQ(
+        different.warnings[0].text,
+        "'version' is declared here as 'number', but the loaded definitions declare it as 'string'; add '--!nolint "
+        "DeclareMismatch' if this is intended"
+    );
+    CHECK_EQ(different.warnings[0].location.begin.line, 1);
+    CHECK_EQ(different.warnings[1].code, LintWarning::Code_DeclareMismatch);
+    CHECK_EQ(different.warnings[1].location.begin.line, 2);
+
+    LintResult silenced = lint(R"(
+--!nolint DeclareMismatch
+declare version: number
+)");
+    CHECK(0 == silenced.warnings.size());
+}
+
+TEST_CASE_FIXTURE(Fixture, "DeclareMismatchOnTypes")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuauSolverV2, true}, {FFlag::LuwuDeclareStatements, true}};
+
+    loadDefinition(R"(
+        declare extern type Path with
+            raw: string
+            function join(self, other: string): Path
+        end
+    )");
+
+    // The same declaration, with or without `with`, is silent
+    LintResult same = lint(R"(
+export declare extern type Path
+    raw: string
+    function join(self, other: string): Path
+end
+)");
+    CHECK(0 == same.warnings.size());
+
+    LintResult different = lint(R"(
+declare extern type Path
+    raw: number
+    function join(self, other: string): Path
+end
+)");
+    REQUIRE(1 == different.warnings.size());
+    CHECK_EQ(different.warnings[0].code, LintWarning::Code_DeclareMismatch);
+    CHECK_EQ(
+        different.warnings[0].text,
+        "Type 'Path' is declared here differently from the loaded definitions; add '--!nolint DeclareMismatch' if this is intended"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "DeclareMismatchIgnoresUntypedDeclarations")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuauSolverV2, true}, {FFlag::LuwuDeclareStatements, true}};
+
+    loadDefinition(R"(
+        declare version: string
+    )");
+
+    // `declare version` takes the environment's type, so there is nothing to disagree about
+    LintResult result = lint(R"(
+declare version
+return version
+)");
+    CHECK(0 == result.warnings.size());
 }
 
 TEST_SUITE_END();

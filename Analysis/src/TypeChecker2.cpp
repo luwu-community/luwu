@@ -806,6 +806,8 @@ void TypeChecker2::visit(AstStat* stat)
         return visit(s);
     else if (auto s = stat->as<AstStatDeclareExternType>())
         return visit(s);
+    else if (auto s = stat->as<AstStatDeclareClass>())
+        return visit(s);
     else if (auto s = stat->as<AstStatClass>())
         return visit(s);
     else if (auto s = stat->as<AstStatError>())
@@ -1621,7 +1623,8 @@ void TypeChecker2::visit(AstStatDeclareFunction* stat)
 
 void TypeChecker2::visit(AstStatDeclareGlobal* stat)
 {
-    visit(stat->type);
+    if (stat->type)
+        visit(stat->type);
 }
 
 void TypeChecker2::visit(AstStatDeclareExternType* stat)
@@ -1630,6 +1633,49 @@ void TypeChecker2::visit(AstStatDeclareExternType* stat)
 
     for (const AstDeclaredExternTypeProperty& prop : stat->props)
         visit(prop.ty);
+}
+
+// Luwu Declare Statements (rfcs/declare-statements.md): a declared class is only its types; there are no bodies or
+// default values to check.
+void TypeChecker2::visit(AstStatDeclareClass* stat)
+{
+    AstStatClass* shape = stat->shape;
+    visitGenerics(shape->generics, shape->genericPacks);
+
+    if (shape->primaryConstructor)
+    {
+        for (AstLocal* arg : shape->primaryConstructor->args)
+        {
+            if (arg->annotation)
+                visit(arg->annotation);
+        }
+    }
+
+    for (const AstClassMember& member : shape->members)
+    {
+        if (const AstClassProperty* prop = member.get_if<AstClassProperty>())
+        {
+            if (prop->ty)
+                visit(prop->ty);
+        }
+        else if (const AstClassMethod* method = member.get_if<AstClassMethod>())
+        {
+            AstExprFunction* function = method->function;
+            visitGenerics(function->generics, function->genericPacks);
+
+            for (AstLocal* arg : function->args)
+            {
+                if (arg->annotation)
+                    visit(arg->annotation);
+            }
+
+            if (function->varargAnnotation)
+                visit(function->varargAnnotation);
+
+            if (function->returnAnnotation)
+                visit(function->returnAnnotation);
+        }
+    }
 }
 
 void TypeChecker2::visit(AstStatClass* stat)
@@ -3751,8 +3797,16 @@ void TypeChecker2::visit(AstTypeReference* ty)
     // alias would always report a spurious mismatch.
     if (FFlag::LuwuClasses && !ty->prefix.has_value() && ty->name == "class" && ty->hasParameterList)
     {
+        Scope* scope = findInnermostScope(ty->location);
+        LUAU_ASSERT(scope);
+
         for (const AstTypeOrPack& param : ty->parameters)
         {
+            // `class<List>` names a generic class without its type arguments on purpose: it is the generic class
+            bool namesGenericClass = scope && param.type && genericClassValueType(*scope, param.type);
+            if (namesGenericClass)
+                continue;
+
             if (param.type)
                 visit(param.type);
             else

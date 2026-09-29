@@ -8,6 +8,7 @@
 #include "Luau/Scope.h"
 #include "Luau/TypeInfer.h"
 #include "Luau/StringUtils.h"
+#include "Luau/ToString.h"
 #include "Luau/Common.h"
 
 #include <algorithm>
@@ -254,6 +255,7 @@ private:
 
         bool assigned = false;
         bool builtin = false;
+        bool declared = false;
         bool definedInModuleScope = false;
         bool definedAsFunction = false;
         bool readBeforeWritten = false;
@@ -279,7 +281,7 @@ private:
             AstExprGlobal* gv = globalRefs[i];
             Global* g = globals.find(gv->name);
 
-            if (!g || (!g->assigned && !g->builtin))
+            if (!g || (!g->assigned && !g->builtin && !g->declared))
                 emitWarning(
                     *context, LintWarning::Code_UnknownGlobal, gv->location, "Unknown global '%s'; consider assigning to it first", gv->name.value
                 );
@@ -302,6 +304,10 @@ private:
         for (auto& global : globals)
         {
             const Global& g = global.second;
+
+            // A declared global exists at runtime whoever writes it, so writing it isn't a sign it should be a local.
+            if (g.declared)
+                continue;
 
             if (g.functionRef.size() && g.assigned && g.firstRef->name != context->placeholder)
             {
@@ -375,6 +381,19 @@ private:
             );
 
         return true;
+    }
+
+    // Luwu Declare Statements (rfcs/declare-statements.md): a declaration says the global exists for the whole file.
+    bool visit(AstStatDeclareGlobal* node) override
+    {
+        globals[node->name].declared = true;
+        return false;
+    }
+
+    bool visit(AstStatDeclareFunction* node) override
+    {
+        globals[node->name].declared = true;
+        return false;
     }
 
     bool visit(AstStatAssign* node) override
@@ -4233,6 +4252,158 @@ private:
     }
 };
 
+// Luwu Declare Statements (rfcs/declare-statements.md): a file may declare a global that the loaded definitions
+// already declare, for code that also runs where those definitions aren't loaded. Declaring it with the same type is
+// silent; a different type is reported, since the file then disagrees with its environment about that global.
+class LintDeclareMismatch : AstVisitor
+{
+public:
+    LUAU_NOINLINE static void process(LintContext& context)
+    {
+        if (!context.module)
+            return;
+
+        LintDeclareMismatch pass;
+        pass.context = &context;
+        pass.moduleScope = context.module->getModuleScope();
+        if (!pass.moduleScope)
+            return;
+
+        context.root->visit(&pass);
+    }
+
+private:
+    LintContext* context;
+    ScopePtr moduleScope;
+
+    void check(AstName name, const Location& location)
+    {
+        const LintContext::Global* global = context->builtinGlobals.find(name);
+        if (!global || !global->type)
+            return;
+
+        auto binding = moduleScope->bindings.find(Symbol(name));
+        if (binding == moduleScope->bindings.end())
+            return;
+
+        // A declared type that didn't resolve is already reported as an error
+        if (get<ErrorType>(follow(binding->second.typeId)))
+            return;
+
+        ToStringOptions exact{/* exhaustive= */ true};
+        if (toString(binding->second.typeId, exact) == toString(global->type, exact))
+            return;
+
+        emitWarning(
+            *context,
+            LintWarning::Code_DeclareMismatch,
+            location,
+            "'%s' is declared here as '%s', but the loaded definitions declare it as '%s'; add '--!nolint DeclareMismatch' if "
+            "this is intended",
+            name.value,
+            toString(binding->second.typeId).c_str(),
+            toString(global->type).c_str()
+        );
+    }
+
+    // What a declared type says, in a form two declarations of it can be compared by: an extern type or a class prints
+    // only its name, so its members, parent, indexer and metamethods are written out, and a class's class value too.
+    static std::string describeType(TypeId ty, bool describeClassValue)
+    {
+        ToStringOptions exact{/* exhaustive= */ true};
+
+        const ExternType* externType = get<ExternType>(follow(ty));
+        if (!externType)
+            return toString(ty, exact);
+
+        std::string result = externType->name;
+        if (externType->parent)
+            result += " extends " + toString(*externType->parent, exact);
+
+        for (const auto& [name, prop] : externType->props)
+        {
+            result += "; " + name;
+            if (prop.isPrivate)
+                result += " private";
+            if (prop.isConst)
+                result += " const";
+            if (prop.readTy)
+                result += " read " + toString(*prop.readTy, exact);
+            if (prop.writeTy)
+                result += " write " + toString(*prop.writeTy, exact);
+        }
+
+        if (externType->indexer)
+            result += "; [" + toString(externType->indexer->indexType, exact) + "]: " + toString(externType->indexer->indexResultType, exact);
+
+        if (externType->metatable)
+            result += "; metatable " + toString(*externType->metatable, exact);
+
+        if (describeClassValue && externType->relation)
+        {
+            if (const Klass* klass = externType->relation->get_if<Klass>())
+                result += "; class " + describeType(klass->ty, /* describeClassValue= */ false);
+        }
+
+        return result;
+    }
+
+    void checkType(AstName name, const Location& location)
+    {
+        std::optional<TypeFun> environmentType = context->scope->lookupType(name.value);
+        if (!environmentType)
+            return;
+
+        std::optional<TypeFun> declaredType = moduleScope->lookupType(name.value);
+        if (!declaredType || declaredType->type == environmentType->type)
+            return;
+
+        bool sameParams = declaredType->typeParams.size() == environmentType->typeParams.size() &&
+                          declaredType->typePackParams.size() == environmentType->typePackParams.size();
+        if (sameParams && describeType(declaredType->type, true) == describeType(environmentType->type, true))
+            return;
+
+        emitWarning(
+            *context,
+            LintWarning::Code_DeclareMismatch,
+            location,
+            "Type '%s' is declared here differently from the loaded definitions; add '--!nolint DeclareMismatch' if this is intended",
+            name.value
+        );
+    }
+
+    bool visit(AstStatDeclareGlobal* node) override
+    {
+        // `declare name` takes the environment's type, so it can't disagree with it
+        if (node->type)
+            check(node->name, node->nameLocation);
+        return false;
+    }
+
+    bool visit(AstStatDeclareFunction* node) override
+    {
+        check(node->name, node->nameLocation);
+        return false;
+    }
+
+    bool visit(AstStatDeclareExternType* node) override
+    {
+        checkType(node->name, node->location);
+        return false;
+    }
+
+    bool visit(AstStatDeclareClass* node) override
+    {
+        checkType(node->shape->name->name, node->shape->name->location);
+        return false;
+    }
+
+    bool visit(AstExprFunction* node) override
+    {
+        return false;
+    }
+};
+
 // Luwu: a type assertion is a single expression, so `f(... :: number)` passes only the first of the
 // values, exactly like `f((...))`, while looking like it only changes their type. Only reported where the
 // values would otherwise all be used (the end of an argument, return, table or assignment list); wrapping
@@ -4488,6 +4659,9 @@ std::vector<LintWarning> lint(
     // Luwu: deliberately unflagged. A cast truncating a call's values is a footgun in plain Luau code too.
     if (context.warningEnabled(LintWarning::Code_VarargCast))
         LintVarargCast::process(context);
+
+    if (context.warningEnabled(LintWarning::Code_DeclareMismatch))
+        LintDeclareMismatch::process(context);
 
     if (context.warningEnabled(LintWarning::Code_RedundantNativeAttribute))
     {

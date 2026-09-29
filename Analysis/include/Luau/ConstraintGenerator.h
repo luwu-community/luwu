@@ -148,6 +148,11 @@ struct ConstraintGenerator
     // global: see the comment there.
     DenseHashSet<AstName> classGlobalNames{AstName{}};
 
+    // Luwu Declare Statements (rfcs/declare-statements.md): the placeholder type of each global a non-definition
+    // module declares. The whole file sees a declaration, so hoistDeclarations binds these before any code is
+    // visited, and the declaration's visit binds its placeholder to the declared type.
+    DenseHashMap<AstName, TypeId> hoistedDeclarations{AstName{}};
+
     NotNull<const DataFlowGraph> dfg;
     RefinementArena refinementArena;
 
@@ -319,6 +324,12 @@ private:
     void applyRefinements(const ScopePtr& scope, Location location, RefinementId refinement);
 
     LUAU_NOINLINE void prototypeTypeDefinitions(const ScopePtr& scope, AstStatBlock* block);
+    void prototypeClass(
+        const ScopePtr& scope,
+        AstStatClass* classDecl,
+        DenseHashMap<Name, Location>& typeNameLocations,
+        bool declared
+    );
 
     ControlFlow visitBlockWithoutChildScope(const ScopePtr& scope, AstStatBlock* block);
 
@@ -338,6 +349,8 @@ private:
     ControlFlow visit(const ScopePtr& scope, AstStatTypeAlias* alias);
     ControlFlow visit(const ScopePtr& scope, AstStatTypeFunction* function);
     ControlFlow visit(const ScopePtr& scope, AstStatDeclareGlobal* declareGlobal);
+    ControlFlow visit(const ScopePtr& scope, AstStatDeclareClass* declaredClass);
+    void visitClass(const ScopePtr& scope, AstStatClass* statClass, bool declared);
     ControlFlow visit(const ScopePtr& scope, AstStatDeclareExternType* declaredExternType);
     ControlFlow visit(const ScopePtr& scope, AstStatDeclareFunction* global);
     ControlFlow visit(const ScopePtr& scope, AstStatClass* statClass);
@@ -563,6 +576,12 @@ private:
      * initial scan of the AST and note what globals are defined.
      */
     void prepopulateGlobalScope(const ScopePtr& globalScope, AstStatBlock* program);
+
+    bool declaresFileGlobals() const;
+    void hoistDeclarations(AstStatBlock* block);
+    void bindDeclaration(AstName name, TypeId declaredTy);
+    void collectNestedTypeDeclarations(AstStatBlock* block, std::vector<AstStat*>& out);
+    std::unordered_map<Name, TypeFun>& externTypeBindings(Scope& scope, const AstStatDeclareExternType* declaration);
 
     bool recordPropertyAssignment(TypeId ty);
 

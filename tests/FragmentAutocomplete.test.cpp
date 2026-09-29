@@ -5591,6 +5591,10 @@ type M = {
             REQUIRE(result.result);
             CHECK_EQ(result.result->acResults.entryMap.count("use"), 1);
             CHECK_EQ(result.result->acResults.entryMap.count("reason"), 1);
+        }
+    );
+}
+
 TEST_CASE_FIXTURE(FragmentAutocompleteFixture, "destructuring_keys_complete_in_a_fragment")
 {
     ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};

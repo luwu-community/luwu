@@ -28,6 +28,7 @@ LUAU_FASTFLAG(LuauIntegerFastcalls)
 LUAU_FASTFLAG(LuauCompileIifeInline)
 LUAU_FASTFLAG(LuauIntegerBufferFastcalls)
 LUAU_FASTFLAG(LuauCompileStringInterpTargetTop)
+LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuwuExportedClassIsNilWorkaround)
 LUAU_FASTFLAG(LuwuNoinlineAttribute)
@@ -14068,6 +14069,24 @@ RETURN R3 1
     );
 }
 
+TEST_CASE("DeclaredClassesCompileToNothing")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    CHECK_EQ("\n" + compileFunction0Coverage(R"(
+declare class type Path(raw: string)
+    function join(self, other: string): Path
+end
+print(Path)
+)", 2), "\n" + compileFunction0Coverage(R"(
+
+
+
+print(Path)
+)", 2));
+}
+
 TEST_SUITE_END();
 
 // Compiler B (classes review) begin
@@ -14234,6 +14253,26 @@ R0: object [argument]
 R1: class [argument]
 )");
     }
+}
+
+TEST_CASE("DeclareStatementsCompileToNothing")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+
+    // Coverage level 2 would give each statement its own COVERAGE instruction
+    CHECK_EQ("\n" + compileFunction0Coverage(R"(
+declare x: number
+do
+    declare function f(n: number): string
+end
+print(f(x))
+)", 2), "\n" + compileFunction0Coverage(R"(
+
+
+
+
+print(f(x))
+)", 2));
 }
 
 // Compiler B (classes review) end

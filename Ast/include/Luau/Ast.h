@@ -1254,6 +1254,8 @@ public:
 
     AstName name;
     Location nameLocation;
+    // Luwu Declare Statements (rfcs/declare-statements.md): null for `declare name`, which takes its type from the
+    // environment. Upstream requires one.
     AstType* type;
 
     // Location of the leading 'declare' keyword token only.
@@ -1358,7 +1360,8 @@ struct AstClassProperty
     bool isConst = false;
     // Location of the `const` keyword; nullopt when isConst is false.
     std::optional<Location> constLocation = std::nullopt;
-    // Location of the `=` token; nullopt when defaultValue is nullptr.
+    // Location of the `=` token; nullopt when defaultValue is nullptr, except in a declared class, where
+    // `name = T` has one and no defaultValue (see AstStatDeclareClass).
     std::optional<Location> equalsLocation = std::nullopt;
     AstExpr* defaultValue = nullptr;
     // Attributes written above the field, e.g. `@deprecated`. A method's attributes live on its
@@ -1390,6 +1393,9 @@ struct AstClassPrimaryConstructorParamQualifiers
     // Location of the `const` modifier; nullopt when the parameter's field is not const.
     std::optional<Location> constLocation = std::nullopt;
     bool isConst = false;
+    // Luwu Declare Statements (rfcs/declare-statements.md): the `=` of `name = T` in a declared class's primary
+    // constructor, where the parameter's type is its annotation and it has a default.
+    std::optional<Location> declaredDefaultLocation = std::nullopt;
 };
 
 // Luwu Classes (rfcs/classes): the primary constructor of a class, `class Cat(name: string, age = 0)`.
@@ -1450,6 +1456,26 @@ public:
     AstArray<AstAttr*> attributes{nullptr, 0};
 };
 
+// Luwu Declare Statements (rfcs/declare-statements.md): `declare [export] class`, a class that exists at runtime but
+// whose implementation the type checker doesn't see (an embedder's class compiled into its binary, say). Its shape is
+// parsed with the class grammar, minus implementations: methods are signatures and `name = T` is a field or primary
+// constructor parameter of type T that has a default. The shape is never a statement of its own, and this node's
+// visit only walks its type annotations, so nothing treats a declared class as a class it can compile or run.
+class AstStatDeclareClass : public AstStat
+{
+public:
+    LUAU_RTTI(AstStatDeclareClass)
+
+    AstStatDeclareClass(const Location& location, AstStatClass* shape, const Location& declareLocation);
+
+    void visit(AstVisitor* visitor) override;
+
+    AstStatClass* shape;
+
+    // Location of the leading 'declare' keyword token only.
+    Location declareLocation;
+};
+
 struct AstTableIndexer
 {
     AstType* indexType;
@@ -1498,6 +1524,16 @@ public:
     Location classLocation;
     // Location of the 'extends' keyword token only; nullopt when there's no superclass clause.
     std::optional<Location> extendsLocation;
+
+    // Luwu Declare Statements (rfcs/declare-statements.md): `export declare extern type`. Outside definition files
+    // an extern type is scoped like a type alias, so only an exported one is visible to a module that requires this
+    // one. The `export` and `with` keywords' locations; `with` is optional there.
+    std::optional<Location> exportLocation;
+    std::optional<Location> withLocation;
+    // Luwu: the type's name, which the statement's location no longer starts at, and the supertype's name, which an
+    // error about the supertype underlines instead of the whole declaration.
+    Location nameLocation;
+    std::optional<Location> superNameLocation;
 };
 
 class AstType : public AstNode
@@ -1979,6 +2015,10 @@ public:
         return visit(static_cast<AstStat*>(node));
     }
     virtual bool visit(class AstStatDeclareExternType* node)
+    {
+        return visit(static_cast<AstStat*>(node));
+    }
+    virtual bool visit(class AstStatDeclareClass* node)
     {
         return visit(static_cast<AstStat*>(node));
     }

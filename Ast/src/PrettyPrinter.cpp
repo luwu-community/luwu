@@ -1478,8 +1478,11 @@ struct Printer
             writer.advance(a->nameLocation.begin);
             writer.identifier(a->name.value);
 
-            writer.symbol(":");
-            visualizeTypeAnnotation(*a->type);
+            if (a->type)
+            {
+                writer.symbol(":");
+                visualizeTypeAnnotation(*a->type);
+            }
         }
         else if (const auto& c = program.as<AstStatClass>(); c && FFlag::LuwuClasses)
         {

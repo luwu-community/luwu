@@ -43,6 +43,7 @@ LUAU_FASTINTVARIABLE(LuauPrimitiveInferenceInTableLimit, 500)
 LUAU_FASTFLAGVARIABLE(LuauDisallowRedefiningBuiltinTypes)
 LUAU_FASTFLAG(LuauTypeFunctionStructuredErrors)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAGVARIABLE(LuauTidyTypePrototyping)
 LUAU_FASTFLAGVARIABLE(LuauDoNotEmplaceAnnotatedType)
 LUAU_FASTFLAGVARIABLE(LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier)
@@ -346,7 +347,15 @@ void ConstraintGenerator::visitModuleRoot(AstStatBlock* block)
     rootScope->returnType = freshTypePack(scope, Polarity::Positive);
     TypeId moduleFnTy = arena->addType(FunctionType{TypeLevel{}, builtinTypes->anyTypePack, rootScope->returnType});
 
+    if (declaresFileGlobals())
+        hoistDeclarations(block);
+
     prepopulateGlobalScope(scope, block);
+
+    // A declared global has its declared type, so an assignment to it must not become its type the way an
+    // assignment to an undeclared global does.
+    for (const auto& [name, _] : hoistedDeclarations)
+        uninitializedGlobals.erase(name);
 
     Checkpoint start = checkpoint(this);
 
@@ -864,6 +873,371 @@ void ConstraintGenerator::applyRefinements(const ScopePtr& scope, Location locat
  * This function implements the early prototyping pass.  The main execution flow
  * of ConstraintGenerator handles the second pass.
  */
+// Luwu Classes (rfcs/classes): the types of a class, created before any statement of its block is checked so that code
+// above the class can refer to it. `declared` is a `declare class` (rfcs/declare-statements.md), which gets the same
+// types and no value.
+void ConstraintGenerator::prototypeClass(
+    const ScopePtr& scope,
+    AstStatClass* classDecl,
+    DenseHashMap<Name, Location>& typeNameLocations,
+    bool declared
+)
+{
+    LUAU_ASSERT(FFlag::LuwuClasses);
+
+    Name declName = classDecl->name->name.value;
+
+    if (Location* loc = typeNameLocations.find(declName))
+    {
+        reportError(classDecl->location, DuplicateTypeDefinition{declName, *loc});
+        if (!declared)
+        {
+            scope->bindings[classDecl->name->name] = Binding{builtinTypes->errorType, classDecl->location};
+            scope->lvalueTypes[dfg->getDef(classDecl->name)] = builtinTypes->errorType;
+        }
+        return;
+    }
+    typeNameLocations[declName] = classDecl->location;
+
+    // Luwu Declare Statements (rfcs/declare-statements.md): a declared class is a type and nothing else; its class
+    // value is reached through `class<T>` (a cast, or a module's type).
+    TypeId theTy = nullptr;
+    if (!declared)
+    {
+        theTy = arena->addType(BlockedType{});
+        scope->bindings[classDecl->name->name] = Binding{theTy, classDecl->name->location};
+        scope->lvalueTypes[dfg->getDef(classDecl->name)] = theTy;
+        classGlobalNames.insert(classDecl->name->name);
+    }
+
+    // Under LuwuGenericNominals, property and method type annotations are resolved
+    // against the class's own definition scope, so that references to the class's own
+    // generics (e.g. the `T` in `class Box<T> ... end`) resolve correctly. See the
+    // equivalent handling for `declare extern type` above.
+    ScopePtr defnScope = scope;
+    if (FFlag::LuwuGenericNominals)
+    {
+        defnScope = childScope(classDecl, scope);
+        astClassDefiningScopes[classDecl] = defnScope;
+    }
+
+    // Objects are ExternTypes, where the metatable field represents the metamethods associated with the instance, ** not ** the class itself.
+    // Class: ExternType { props, parent: top class type, metatable: {__call -- this lets it be called as a constructor } }
+    // Object: ExternType { props, parent: top object type for now, metatable: instance metamethods }
+    // TODO: we should add a direct reference to the `class` on the `object` type (probably useful for class.of)
+    TableType::Props staticProps;
+    ExternType::Props props;
+    TableType::Props instanceMetatableProps;
+    DenseHashMap<AstName, TypeId> memberTypes{AstName{""}};
+    DenseHashMap<AstName, TypeId> classValueMethodTypes{AstName{""}};
+    const bool isGenericClass = FFlag::LuwuGenericNominals &&
+                                (classDecl->generics.size != 0 || classDecl->genericPacks.size != 0);
+    // Names of `props` entries that are actual fields (AstClassProperty), not methods.
+    // See ClassFieldUserData's doc comment for why this needs tracking separately.
+    std::set<Name> instanceFieldNames;
+
+    TypeId ctorArgTy = arena->addType(TableType{TableType::Props{}, std::nullopt, TypeLevel{}, scope.get(), TableState::Sealed});
+    TableType* ctorArgTable = getMutable<TableType>(ctorArgTy);
+    LUAU_ASSERT(ctorArgTable);
+
+    // Whether the whole constructor argument table can be omitted (`Class()`), i.e. every
+    // property either has a default value or there are no properties at all.
+    bool anyRequiredCtorArg = false;
+
+    // Luwu Classes (rfcs/classes): a primary constructor's parameters each declare a field
+    // (public and mutable unless qualified), unless the class body restates the parameter -- in which case the restatement is
+    // the declaration, and carries the access specifier and modifiers. The constructor's own
+    // type is built from the parameters in the second pass, once their annotations can be
+    // resolved; see visit(AstStatClass*).
+    auto restatedInBody = [&](const AstName& name)
+    {
+        for (const AstClassMember& member : classDecl->members)
+            if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && prop->name == name)
+                return true;
+
+        return false;
+    };
+
+    for (const auto& member : classDecl->members)
+    {
+        Luau::visit(
+            overloaded{
+                [&](const AstClassProperty& classProp)
+                {
+                    if (memberTypes.contains(classProp.name))
+                        return;
+
+                    auto [propertyType, _] = memberTypes.try_insert(classProp.name, arena->addType(BlockedType{}));
+                    auto& p = props[classProp.name.value];
+                    instanceFieldNames.insert(classProp.name.value);
+
+                    // This needs to be blocked initially: if this
+                    // type refers to a type that contains a typeof
+                    // or an alias that we have yet to define, then
+                    // we'll ICE or misbehave.
+                    p = Property::rw(propertyType);
+                    p.location = classProp.nameLocation;
+
+                    applyDeprecatedAttribute(p, classProp.attributes);
+                    if (FFlag::LuwuClasses)
+                    {
+                        p.isPrivate = classProp.visibility == AstClassMemberVisibility::Private;
+                        p.isConst = classProp.isConst;
+                    }
+
+                    // We make the constructor take read-only args.
+                    // This is true, in that we do not write to the
+                    // table you pass for constructing an object.
+                    //
+                    // A property with a default value doesn't need to be provided by the
+                    // caller (the default fills it in), so its key in the constructor's
+                    // argument table is optional.
+                    // A declared class's `name = T` has an `=` and no defaultValue.
+                    if (classProp.defaultValue || classProp.equalsLocation)
+                        ctorArgTable->props[classProp.name.value] =
+                            Property::readonly(makeOption(builtinTypes, *arena, propertyType));
+                    else
+                    {
+                        anyRequiredCtorArg = true;
+                        ctorArgTable->props[classProp.name.value] = Property::readonly(propertyType);
+                    }
+                },
+                [&](const AstClassMethod& method)
+                {
+                    if (memberTypes.contains(method.functionName))
+                        return;
+
+                    auto [propertyType, _] = memberTypes.try_insert(method.functionName, arena->addType(BlockedType{}));
+
+                    auto prop = Property::readonly(propertyType);
+                    prop.location = method.nameLocation;
+                    if (FFlag::LuwuClasses)
+                        prop.isPrivate = method.visibility == AstClassMemberVisibility::Private;
+                    // Luwu Classes (rfcs/classes): an instance method is also readable through the
+                    // class value, with the same type (`self` is the object type): `Cls.method(obj)`
+                    // and `Cls.method` as a value are how it is called without method-call syntax.
+                    // A metamethod stays on the instance metatable only.
+                    const bool takesSelf = method.function->args.size >= 1 && method.function->args.data[0]->name == "self";
+                    const bool isMetamethod = isValidClassMetamethod(method.functionName.value);
+                    const bool readableThroughClass = !takesSelf || method.functionName == "__init" || !isMetamethod;
+                    const bool needsOwnClassValueType = readableThroughClass && takesSelf && isGenericClass && method.functionName != "__init";
+                    if (needsOwnClassValueType)
+                    {
+                        Property classValueProp = prop;
+                        TypeId classValueTy = arena->addType(BlockedType{});
+                        classValueProp.readTy = classValueTy;
+                        classValueMethodTypes[method.functionName] = classValueTy;
+                        staticProps[method.functionName.value] = classValueProp;
+                    }
+                    else if (readableThroughClass)
+                        staticProps[method.functionName.value] = prop;
+                    // The parser will report an error for classes that define disallowed metamethods.
+                    // The RFC also requires that it is a syntax error for methods to have __ in their name whos name is not in the
+                    // validClassMetamethod set.
+                    if (isMetamethod)
+                        instanceMetatableProps[method.functionName.value] = prop;
+                    else
+                        props[method.functionName.value] = prop;
+                }
+            },
+            member
+        );
+    }
+
+    if (classDecl->primaryConstructor)
+    {
+        for (size_t i = 0; i < classDecl->primaryConstructor->args.size; ++i)
+        {
+            AstLocal* param = classDecl->primaryConstructor->args.data[i];
+
+            if (memberTypes.contains(param->name) || restatedInBody(param->name))
+                continue;
+
+            auto [propertyType, _] = memberTypes.try_insert(param->name, arena->addType(BlockedType{}));
+            instanceFieldNames.insert(param->name.value);
+
+            // a parameter's field is public and non-const unless the parameter says otherwise
+            // (`class SshKey(private const key: string)`); restating it in the class body is
+            // the other way to say the same thing
+            auto& p = props[param->name.value];
+            p = Property::rw(propertyType);
+            p.location = param->location;
+
+            if (FFlag::LuwuClasses &&
+                classDecl->primaryConstructor->argsQualifiers.size == classDecl->primaryConstructor->args.size)
+            {
+                const AstClassPrimaryConstructorParamQualifiers& qualifiers = classDecl->primaryConstructor->argsQualifiers.data[i];
+                p.isPrivate = qualifiers.visibility == AstClassMemberVisibility::Private;
+                p.isConst = qualifiers.isConst;
+            }
+        }
+    }
+
+    TypeId instanceMetatable = arena->addType(TableType{instanceMetatableProps, std::nullopt, TypeLevel{}, scope.get(), TableState::Sealed});
+
+    auto classFieldUserData = std::make_shared<ClassFieldUserData>();
+    classFieldUserData->fieldNames = std::move(instanceFieldNames);
+
+    TypeId classInstanceTy = arena->addType(
+        ExternType{
+            declName,
+            std::move(props),
+            builtinTypes->objectType,
+            instanceMetatable,
+            Tags{},
+            std::move(classFieldUserData),
+            module->name,
+            classDecl->location
+        }
+    );
+
+    std::vector<GenericTypeDefinition> classTypeParams;
+    std::vector<GenericTypePackDefinition> classTypePackParams;
+    if (FFlag::LuwuGenericNominals)
+    {
+        for (const auto& [name, gen] : createGenerics(defnScope, classDecl->generics, /* useCache */ true, /* addTypes */ false))
+            classTypeParams.push_back(gen);
+        for (const auto& [name, genPack] : createGenericPacks(defnScope, classDecl->genericPacks, /* useCache */ true, /* addTypes */ false))
+            classTypePackParams.push_back(genPack);
+
+        // Methods implicitly take `self`, typed as the bare object type
+        // (classInstanceTy). For a generic class, `self` needs to be `Box<T>` (applied to
+        // the class's own generics), not the bare, unparameterized `Box` -- otherwise
+        // calling a method on `Box<number>` fails to match against `self`, since neither
+        // side would look like the other nominally. See the equivalent handling for
+        // `declare extern type` above.
+        ExternType* classInstanceEtv = getMutable<ExternType>(classInstanceTy);
+        for (const GenericTypeDefinition& param : classTypeParams)
+            classInstanceEtv->instantiatedTypeParams.push_back(param.ty);
+        for (const GenericTypePackDefinition& param : classTypePackParams)
+            classInstanceEtv->instantiatedTypePackParams.push_back(param.tp);
+        classInstanceEtv->hasUnresolvedGenerics =
+            !classInstanceEtv->instantiatedTypeParams.empty() || !classInstanceEtv->instantiatedTypePackParams.empty();
+    }
+
+    // A primary constructor counts here too: its `__init` is synthesized from the parameter
+    // list, so neither it nor the constructor is the POD table constructor below.
+    bool hasCustomInit = classDecl->primaryConstructor != nullptr;
+    for (const auto& member : classDecl->members)
+    {
+        if (const auto* method = member.get_if<AstClassMethod>(); method && method->functionName == "__init")
+        {
+            hasCustomInit = true;
+            break;
+        }
+    }
+
+    // Blocked alongside ctorTy, and filled in with it once the parameters resolve.
+    TypeId primaryInitTy = nullptr;
+
+    if (classDecl->primaryConstructor)
+    {
+        primaryInitTy = arena->addType(BlockedType{});
+
+        Property initProp = Property::readonly(primaryInitTy);
+        initProp.location = classDecl->primaryConstructor->argLocation;
+        initProp.isPrivate = classDecl->primaryConstructor->visibility == AstClassMemberVisibility::Private;
+
+        if (ExternType* classInstanceEtv = getMutable<ExternType>(classInstanceTy))
+            classInstanceEtv->props["__init"] = initProp;
+        staticProps["__init"] = initProp;
+    }
+
+    // If the class defines a custom `__init` or a primary constructor,
+    // the constructor's real signature isn't known until `__init`'s
+    // signature or the parameters' annotations have been resolved (see
+    // visit(AstStatClass*)), so we leave this blocked for now.
+    TypeId ctorTy;
+    if (hasCustomInit)
+    {
+        ctorTy = arena->addType(BlockedType{});
+    }
+    else
+    {
+        std::vector<TypeId> podCtorGenerics;
+        std::vector<TypePackId> podCtorGenericPacks;
+        for (const GenericTypeDefinition& param : classTypeParams)
+            podCtorGenerics.push_back(param.ty);
+        for (const GenericTypePackDefinition& param : classTypePackParams)
+            podCtorGenericPacks.push_back(param.tp);
+
+        // Classes with no members, or where every property has a default value, can be
+        // constructed either with no arguments (`Empty()`) or with an argument table
+        // (`Empty {}`); make the argument optional so both call shapes typecheck.
+        TypeId ctorArgTyForCall = !anyRequiredCtorArg ? makeOption(builtinTypes, *arena, ctorArgTy) : ctorArgTy;
+        TypePackId ctorArgsPack = arena->addTypePack({builtinTypes->unknownType, ctorArgTyForCall});
+
+        ctorTy = arena->addType(FunctionType{
+            podCtorGenerics,
+            podCtorGenericPacks,
+            ctorArgsPack,
+            arena->addTypePack({classInstanceTy}),
+            /* defn */ std::nullopt,
+            /* hasSelf */ true
+        });
+
+        // The default POD constructor is a real function like any other, so it should be
+        // directly callable as `object:__init(...)`/`Class.__init(...)`, just like a
+        // user-defined `__init` is.
+        TypeId initTy = arena->addType(FunctionType{
+            std::move(podCtorGenerics),
+            std::move(podCtorGenericPacks),
+            arena->addTypePack({classInstanceTy, ctorArgTyForCall}),
+            arena->addTypePack({}),
+            /* defn */ std::nullopt,
+            /* hasSelf */ true
+        });
+        Property initProp = Property::readonly(initTy);
+        initProp.location = classDecl->location;
+        if (ExternType* classInstanceEtv = getMutable<ExternType>(classInstanceTy))
+            classInstanceEtv->props["__init"] = initProp;
+        staticProps["__init"] = initProp;
+    }
+
+    TypeId metatableTy = arena->addType(
+        TableType{TableType::Props{{"__call", Property::readonly(ctorTy)}}, std::nullopt, TypeLevel{}, scope.get(), TableState::Sealed}
+    );
+
+    TypeId externTy = arena->addType(
+        ExternType{declName, staticProps, builtinTypes->classType, metatableTy, Tags{}, nullptr, module->name, classDecl->location}
+    );
+
+    // Setup a bidirectional relationship between classes and objects
+    getMutable<ExternType>(externTy)->relation.emplace(Obj{classInstanceTy});
+    getMutable<ExternType>(classInstanceTy)->relation.emplace(Klass{externTy});
+
+    if (theTy)
+    {
+        LUAU_ASSERT(!is<BoundType>(theTy));
+        [[maybe_unused]] const BlockedType* bt = get<BlockedType>(theTy);
+        LUAU_ASSERT(bt);
+        LUAU_ASSERT(bt->getOwner() == nullptr);
+
+        emplaceType<BoundType>(asMutable(theTy), externTy);
+    }
+
+    // A class in a definition file is a global type, like everything else declared there.
+    bool exported = classDecl->exported || (declared && !declaresFileGlobals());
+    if (exported)
+        scope->exportedTypeBindings[classDecl->name->name.value] =
+            TypeFun{classTypeParams, classTypePackParams, classInstanceTy, classDecl->location};
+    else
+        scope->privateTypeBindings[classDecl->name->name.value] =
+            TypeFun{classTypeParams, classTypePackParams, classInstanceTy, classDecl->location};
+
+    classDeclRecords[classDecl->name] = std::make_unique<ClassDeclRecord>(
+        ClassDeclRecord{
+            classInstanceTy,
+            std::move(memberTypes),
+            ctorTy,
+            primaryInitTy,
+            std::move(classTypeParams),
+            std::move(classTypePackParams),
+            std::move(classValueMethodTypes)
+        }
+    );
+}
+
 void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstStatBlock* block)
 {
     DenseHashMap<Name, Location> typeNameLocations{Name{}};
@@ -871,10 +1245,25 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
     bool hasTypeFunction = false;
     ScopePtr typeFunctionEnvScope;
 
+    // Luwu Declare Statements (rfcs/declare-statements.md): an extern type or class declared in a `do` block applies to
+    // the whole file, like every declaration, so the file's own block prototypes them too.
+    AstArray<AstStat*> statements = block->body;
+    std::vector<AstStat*> withNestedDeclarations;
+    if (declaresFileGlobals() && scope.get() == rootScope)
+    {
+        withNestedDeclarations.assign(block->body.begin(), block->body.end());
+        for (AstStat* stat : block->body)
+        {
+            if (AstStatBlock* inner = stat->as<AstStatBlock>())
+                collectNestedTypeDeclarations(inner, withNestedDeclarations);
+        }
+        statements = AstArray<AstStat*>{withNestedDeclarations.data(), withNestedDeclarations.size()};
+    }
+
     // In order to enable mutually-recursive type aliases, we need to
     // populate the type bindings before we actually check any of the
     // alias statements.
-    for (AstStat* stat : block->body)
+    for (AstStat* stat : statements)
     {
         if (auto alias = stat->as<AstStatTypeAlias>())
         {
@@ -994,9 +1383,14 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
             if (classDeclaration->name == kParseNameError)
                 continue;
 
+            // Luwu Declare Statements (rfcs/declare-statements.md): the file's own block has prototyped it already.
+            if (declaresFileGlobals() && scope.get() != rootScope)
+                continue;
+
             if (const Location* loc = typeNameLocations.find(classDeclaration->name.value))
             {
-                reportError(classDeclaration->location, DuplicateTypeDefinition{classDeclaration->name.value, *loc});
+                // Luwu: at the name; the declaration spans its whole body
+                reportError(classDeclaration->nameLocation, DuplicateTypeDefinition{classDeclaration->name.value, *loc});
                 continue;
             }
 
@@ -1019,351 +1413,21 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
                     initialFun.typePackParams.push_back(genPack);
             }
 
-            scope->exportedTypeBindings[classDeclaration->name.value] = std::move(initialFun);
+            externTypeBindings(*scope, classDeclaration)[classDeclaration->name.value] = std::move(initialFun);
 
             typeNameLocations[classDeclaration->name.value] = classDeclaration->location;
         }
         else if (auto classDecl = stat->as<AstStatClass>())
         {
-            LUAU_ASSERT(FFlag::LuwuClasses);
-
-            Name declName = classDecl->name->name.value;
-            DefId theDef = dfg->getDef(classDecl->name);
-
-            if (Location* loc = typeNameLocations.find(declName))
-            {
-                reportError(classDecl->location, DuplicateTypeDefinition{declName, *loc});
-                scope->bindings[classDecl->name->name] = Binding{builtinTypes->errorType, classDecl->location};
-                scope->lvalueTypes[theDef] = builtinTypes->errorType;
+            prototypeClass(scope, classDecl, typeNameLocations, /* declared= */ false);
+        }
+        else if (auto declaredClass = stat->as<AstStatDeclareClass>())
+        {
+            // Luwu Declare Statements (rfcs/declare-statements.md): the file's own block has prototyped it already.
+            if (declaresFileGlobals() && scope.get() != rootScope)
                 continue;
-            }
-            typeNameLocations[declName] = classDecl->location;
 
-            TypeId theTy = arena->addType(BlockedType{});
-            scope->bindings[classDecl->name->name] = Binding{theTy, classDecl->name->location};
-            scope->lvalueTypes[theDef] = theTy;
-            classGlobalNames.insert(classDecl->name->name);
-
-            // Under LuwuGenericNominals, property and method type annotations are resolved
-            // against the class's own definition scope, so that references to the class's own
-            // generics (e.g. the `T` in `class Box<T> ... end`) resolve correctly. See the
-            // equivalent handling for `declare extern type` above.
-            ScopePtr defnScope = scope;
-            if (FFlag::LuwuGenericNominals)
-            {
-                defnScope = childScope(classDecl, scope);
-                astClassDefiningScopes[classDecl] = defnScope;
-            }
-
-            // Objects are ExternTypes, where the metatable field represents the metamethods associated with the instance, ** not ** the class itself.
-            // Class: ExternType { props, parent: top class type, metatable: {__call -- this lets it be called as a constructor } }
-            // Object: ExternType { props, parent: top object type for now, metatable: instance metamethods }
-            // TODO: we should add a direct reference to the `class` on the `object` type (probably useful for class.of)
-            TableType::Props staticProps;
-            ExternType::Props props;
-            TableType::Props instanceMetatableProps;
-            DenseHashMap<AstName, TypeId> memberTypes{AstName{""}};
-            DenseHashMap<AstName, TypeId> classValueMethodTypes{AstName{""}};
-            const bool isGenericClass = FFlag::LuwuGenericNominals &&
-                                        (classDecl->generics.size != 0 || classDecl->genericPacks.size != 0);
-            // Names of `props` entries that are actual fields (AstClassProperty), not methods.
-            // See ClassFieldUserData's doc comment for why this needs tracking separately.
-            std::set<Name> instanceFieldNames;
-
-            TypeId ctorArgTy = arena->addType(TableType{TableType::Props{}, std::nullopt, TypeLevel{}, scope.get(), TableState::Sealed});
-            TableType* ctorArgTable = getMutable<TableType>(ctorArgTy);
-            LUAU_ASSERT(ctorArgTable);
-
-            // Whether the whole constructor argument table can be omitted (`Class()`), i.e. every
-            // property either has a default value or there are no properties at all.
-            bool anyRequiredCtorArg = false;
-
-            // Luwu Classes (rfcs/classes): a primary constructor's parameters each declare a field
-            // (public and mutable unless qualified), unless the class body restates the parameter -- in which case the restatement is
-            // the declaration, and carries the access specifier and modifiers. The constructor's own
-            // type is built from the parameters in the second pass, once their annotations can be
-            // resolved; see visit(AstStatClass*).
-            auto restatedInBody = [&](const AstName& name)
-            {
-                for (const AstClassMember& member : classDecl->members)
-                    if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && prop->name == name)
-                        return true;
-
-                return false;
-            };
-
-            for (const auto& member : classDecl->members)
-            {
-                Luau::visit(
-                    overloaded{
-                        [&](const AstClassProperty& classProp)
-                        {
-                            if (memberTypes.contains(classProp.name))
-                                return;
-
-                            auto [propertyType, _] = memberTypes.try_insert(classProp.name, arena->addType(BlockedType{}));
-                            auto& p = props[classProp.name.value];
-                            instanceFieldNames.insert(classProp.name.value);
-
-                            // This needs to be blocked initially: if this
-                            // type refers to a type that contains a typeof
-                            // or an alias that we have yet to define, then
-                            // we'll ICE or misbehave.
-                            p = Property::rw(propertyType);
-                            p.location = classProp.nameLocation;
-
-                            applyDeprecatedAttribute(p, classProp.attributes);
-                            if (FFlag::LuwuClasses)
-                            {
-                                p.isPrivate = classProp.visibility == AstClassMemberVisibility::Private;
-                                p.isConst = classProp.isConst;
-                            }
-
-                            // We make the constructor take read-only args.
-                            // This is true, in that we do not write to the
-                            // table you pass for constructing an object.
-                            //
-                            // A property with a default value doesn't need to be provided by the
-                            // caller (the default fills it in), so its key in the constructor's
-                            // argument table is optional.
-                            if (classProp.defaultValue)
-                                ctorArgTable->props[classProp.name.value] =
-                                    Property::readonly(makeOption(builtinTypes, *arena, propertyType));
-                            else
-                            {
-                                anyRequiredCtorArg = true;
-                                ctorArgTable->props[classProp.name.value] = Property::readonly(propertyType);
-                            }
-                        },
-                        [&](const AstClassMethod& method)
-                        {
-                            if (memberTypes.contains(method.functionName))
-                                return;
-
-                            auto [propertyType, _] = memberTypes.try_insert(method.functionName, arena->addType(BlockedType{}));
-
-                            auto prop = Property::readonly(propertyType);
-                            prop.location = method.nameLocation;
-                            if (FFlag::LuwuClasses)
-                                prop.isPrivate = method.visibility == AstClassMemberVisibility::Private;
-                            // Luwu Classes (rfcs/classes): an instance method is also readable through the
-                            // class value, with the same type (`self` is the object type): `Cls.method(obj)`
-                            // and `Cls.method` as a value are how it is called without method-call syntax.
-                            // A metamethod stays on the instance metatable only.
-                            const bool takesSelf = method.function->args.size >= 1 && method.function->args.data[0]->name == "self";
-                            const bool isMetamethod = isValidClassMetamethod(method.functionName.value);
-                            const bool readableThroughClass = !takesSelf || method.functionName == "__init" || !isMetamethod;
-                            const bool needsOwnClassValueType = readableThroughClass && takesSelf && isGenericClass && method.functionName != "__init";
-                            if (needsOwnClassValueType)
-                            {
-                                Property classValueProp = prop;
-                                TypeId classValueTy = arena->addType(BlockedType{});
-                                classValueProp.readTy = classValueTy;
-                                classValueMethodTypes[method.functionName] = classValueTy;
-                                staticProps[method.functionName.value] = classValueProp;
-                            }
-                            else if (readableThroughClass)
-                                staticProps[method.functionName.value] = prop;
-                            // The parser will report an error for classes that define disallowed metamethods.
-                            // The RFC also requires that it is a syntax error for methods to have __ in their name whos name is not in the
-                            // validClassMetamethod set.
-                            if (isMetamethod)
-                                instanceMetatableProps[method.functionName.value] = prop;
-                            else
-                                props[method.functionName.value] = prop;
-                        }
-                    },
-                    member
-                );
-            }
-
-            if (classDecl->primaryConstructor)
-            {
-                for (size_t i = 0; i < classDecl->primaryConstructor->args.size; ++i)
-                {
-                    AstLocal* param = classDecl->primaryConstructor->args.data[i];
-
-                    if (memberTypes.contains(param->name) || restatedInBody(param->name))
-                        continue;
-
-                    auto [propertyType, _] = memberTypes.try_insert(param->name, arena->addType(BlockedType{}));
-                    instanceFieldNames.insert(param->name.value);
-
-                    // a parameter's field is public and non-const unless the parameter says otherwise
-                    // (`class SshKey(private const key: string)`); restating it in the class body is
-                    // the other way to say the same thing
-                    auto& p = props[param->name.value];
-                    p = Property::rw(propertyType);
-                    p.location = param->location;
-
-                    if (FFlag::LuwuClasses &&
-                        classDecl->primaryConstructor->argsQualifiers.size == classDecl->primaryConstructor->args.size)
-                    {
-                        const AstClassPrimaryConstructorParamQualifiers& qualifiers = classDecl->primaryConstructor->argsQualifiers.data[i];
-                        p.isPrivate = qualifiers.visibility == AstClassMemberVisibility::Private;
-                        p.isConst = qualifiers.isConst;
-                    }
-                }
-            }
-
-            TypeId instanceMetatable = arena->addType(TableType{instanceMetatableProps, std::nullopt, TypeLevel{}, scope.get(), TableState::Sealed});
-
-            auto classFieldUserData = std::make_shared<ClassFieldUserData>();
-            classFieldUserData->fieldNames = std::move(instanceFieldNames);
-
-            TypeId classInstanceTy = arena->addType(
-                ExternType{
-                    declName,
-                    std::move(props),
-                    builtinTypes->objectType,
-                    instanceMetatable,
-                    Tags{},
-                    std::move(classFieldUserData),
-                    module->name,
-                    classDecl->location
-                }
-            );
-
-            std::vector<GenericTypeDefinition> classTypeParams;
-            std::vector<GenericTypePackDefinition> classTypePackParams;
-            if (FFlag::LuwuGenericNominals)
-            {
-                for (const auto& [name, gen] : createGenerics(defnScope, classDecl->generics, /* useCache */ true, /* addTypes */ false))
-                    classTypeParams.push_back(gen);
-                for (const auto& [name, genPack] : createGenericPacks(defnScope, classDecl->genericPacks, /* useCache */ true, /* addTypes */ false))
-                    classTypePackParams.push_back(genPack);
-
-                // Methods implicitly take `self`, typed as the bare object type
-                // (classInstanceTy). For a generic class, `self` needs to be `Box<T>` (applied to
-                // the class's own generics), not the bare, unparameterized `Box` -- otherwise
-                // calling a method on `Box<number>` fails to match against `self`, since neither
-                // side would look like the other nominally. See the equivalent handling for
-                // `declare extern type` above.
-                ExternType* classInstanceEtv = getMutable<ExternType>(classInstanceTy);
-                for (const GenericTypeDefinition& param : classTypeParams)
-                    classInstanceEtv->instantiatedTypeParams.push_back(param.ty);
-                for (const GenericTypePackDefinition& param : classTypePackParams)
-                    classInstanceEtv->instantiatedTypePackParams.push_back(param.tp);
-                classInstanceEtv->hasUnresolvedGenerics =
-                    !classInstanceEtv->instantiatedTypeParams.empty() || !classInstanceEtv->instantiatedTypePackParams.empty();
-            }
-
-            // A primary constructor counts here too: its `__init` is synthesized from the parameter
-            // list, so neither it nor the constructor is the POD table constructor below.
-            bool hasCustomInit = classDecl->primaryConstructor != nullptr;
-            for (const auto& member : classDecl->members)
-            {
-                if (const auto* method = member.get_if<AstClassMethod>(); method && method->functionName == "__init")
-                {
-                    hasCustomInit = true;
-                    break;
-                }
-            }
-
-            // Blocked alongside ctorTy, and filled in with it once the parameters resolve.
-            TypeId primaryInitTy = nullptr;
-
-            if (classDecl->primaryConstructor)
-            {
-                primaryInitTy = arena->addType(BlockedType{});
-
-                Property initProp = Property::readonly(primaryInitTy);
-                initProp.location = classDecl->primaryConstructor->argLocation;
-                initProp.isPrivate = classDecl->primaryConstructor->visibility == AstClassMemberVisibility::Private;
-
-                if (ExternType* classInstanceEtv = getMutable<ExternType>(classInstanceTy))
-                    classInstanceEtv->props["__init"] = initProp;
-                staticProps["__init"] = initProp;
-            }
-
-            // If the class defines a custom `__init` or a primary constructor,
-            // the constructor's real signature isn't known until `__init`'s
-            // signature or the parameters' annotations have been resolved (see
-            // visit(AstStatClass*)), so we leave this blocked for now.
-            TypeId ctorTy;
-            if (hasCustomInit)
-            {
-                ctorTy = arena->addType(BlockedType{});
-            }
-            else
-            {
-                std::vector<TypeId> podCtorGenerics;
-                std::vector<TypePackId> podCtorGenericPacks;
-                for (const GenericTypeDefinition& param : classTypeParams)
-                    podCtorGenerics.push_back(param.ty);
-                for (const GenericTypePackDefinition& param : classTypePackParams)
-                    podCtorGenericPacks.push_back(param.tp);
-
-                // Classes with no members, or where every property has a default value, can be
-                // constructed either with no arguments (`Empty()`) or with an argument table
-                // (`Empty {}`); make the argument optional so both call shapes typecheck.
-                TypeId ctorArgTyForCall = !anyRequiredCtorArg ? makeOption(builtinTypes, *arena, ctorArgTy) : ctorArgTy;
-                TypePackId ctorArgsPack = arena->addTypePack({builtinTypes->unknownType, ctorArgTyForCall});
-
-                ctorTy = arena->addType(FunctionType{
-                    podCtorGenerics,
-                    podCtorGenericPacks,
-                    ctorArgsPack,
-                    arena->addTypePack({classInstanceTy}),
-                    /* defn */ std::nullopt,
-                    /* hasSelf */ true
-                });
-
-                // The default POD constructor is a real function like any other, so it should be
-                // directly callable as `object:__init(...)`/`Class.__init(...)`, just like a
-                // user-defined `__init` is.
-                TypeId initTy = arena->addType(FunctionType{
-                    std::move(podCtorGenerics),
-                    std::move(podCtorGenericPacks),
-                    arena->addTypePack({classInstanceTy, ctorArgTyForCall}),
-                    arena->addTypePack({}),
-                    /* defn */ std::nullopt,
-                    /* hasSelf */ true
-                });
-                Property initProp = Property::readonly(initTy);
-                initProp.location = classDecl->location;
-                if (ExternType* classInstanceEtv = getMutable<ExternType>(classInstanceTy))
-                    classInstanceEtv->props["__init"] = initProp;
-                staticProps["__init"] = initProp;
-            }
-
-            TypeId metatableTy = arena->addType(
-                TableType{TableType::Props{{"__call", Property::readonly(ctorTy)}}, std::nullopt, TypeLevel{}, scope.get(), TableState::Sealed}
-            );
-
-            TypeId externTy = arena->addType(
-                ExternType{declName, staticProps, builtinTypes->classType, metatableTy, Tags{}, nullptr, module->name, classDecl->location}
-            );
-
-            // Setup a bidirectional relationship between classes and objects
-            getMutable<ExternType>(externTy)->relation.emplace(Obj{classInstanceTy});
-            getMutable<ExternType>(classInstanceTy)->relation.emplace(Klass{externTy});
-
-            LUAU_ASSERT(!is<BoundType>(theTy));
-            [[maybe_unused]] const BlockedType* bt = get<BlockedType>(theTy);
-            LUAU_ASSERT(bt);
-            LUAU_ASSERT(bt->getOwner() == nullptr);
-
-            emplaceType<BoundType>(asMutable(theTy), externTy);
-
-            if (classDecl->exported)
-                scope->exportedTypeBindings[classDecl->name->name.value] =
-                    TypeFun{classTypeParams, classTypePackParams, classInstanceTy, classDecl->location};
-            else
-                scope->privateTypeBindings[classDecl->name->name.value] =
-                    TypeFun{classTypeParams, classTypePackParams, classInstanceTy, classDecl->location};
-
-            classDeclRecords[classDecl->name] = std::make_unique<ClassDeclRecord>(
-                ClassDeclRecord{
-                    classInstanceTy,
-                    std::move(memberTypes),
-                    ctorTy,
-                    primaryInitTy,
-                    std::move(classTypeParams),
-                    std::move(classTypePackParams),
-                    std::move(classValueMethodTypes)
-                }
-            );
+            prototypeClass(scope, declaredClass->shape, typeNameLocations, /* declared= */ true);
         }
     }
 
@@ -1566,6 +1630,8 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStat* stat)
     else if (auto s = stat->as<AstStatDeclareFunction>())
         return visit(scope, s);
     else if (auto s = stat->as<AstStatDeclareExternType>())
+        return visit(scope, s);
+    else if (auto s = stat->as<AstStatDeclareClass>())
         return visit(scope, s);
     else if (auto s = stat->as<AstStatClass>())
     {
@@ -2380,12 +2446,20 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatTypeFunctio
 
 ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatDeclareGlobal* global)
 {
-    LUAU_ASSERT(global->type);
-
-    TypeId globalTy = resolveType(scope, global->type, /* inTypeArguments */ false);
+    // Luwu Declare Statements (rfcs/declare-statements.md): `declare name` says the global exists and keeps the type
+    // the environment gives it, or `any` where the environment doesn't declare it. A script can then declare what its
+    // host's definitions already describe without losing their types where they are loaded.
+    TypeId globalTy = builtinTypes->anyType;
+    if (global->type)
+        globalTy = resolveType(scope, global->type, /* inTypeArguments */ false);
+    else if (std::optional<TypeId> environmentTy = rootScope->parent ? rootScope->parent->lookup(Symbol{global->name}) : std::nullopt)
+        globalTy = *environmentTy;
     Name globalName(global->name.value);
 
-    module->declaredGlobals[globalName] = globalTy;
+    if (declaresFileGlobals())
+        bindDeclaration(global->name, globalTy);
+    else
+        module->declaredGlobals[globalName] = globalTy;
     rootScope->bindings[global->name] = Binding{globalTy, global->location};
 
     DefId def = dfg->getDef(global);
@@ -2406,19 +2480,24 @@ static bool isMetamethod(const Name& name)
 ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatDeclareExternType* declaredExternType)
 {
     // If a class with the same name was already defined, we skip over
-    auto bindingIt = scope->exportedTypeBindings.find(declaredExternType->name.value);
-    if (bindingIt == scope->exportedTypeBindings.end())
+    // Luwu Declare Statements (rfcs/declare-statements.md): outside definition files, the file's own scope holds it.
+    Scope& bindingScope = declaresFileGlobals() ? *rootScope : *scope;
+    std::unordered_map<Name, TypeFun>& bindings = externTypeBindings(bindingScope, declaredExternType);
+    auto bindingIt = bindings.find(declaredExternType->name.value);
+    if (bindingIt == bindings.end())
         return ControlFlow::None;
 
     std::optional<TypeId> superTy = std::make_optional(builtinTypes->externType);
     if (declaredExternType->superName)
     {
+        // Luwu: an error about the supertype underlines its name; upstream underlines the whole declaration.
+        Location superNameLocation = declaredExternType->superNameLocation.value_or(declaredExternType->location);
         Name superName = Name(declaredExternType->superName->value);
         std::optional<TypeFun> lookupType = scope->lookupType(superName);
 
         if (!lookupType)
         {
-            reportError(declaredExternType->location, UnknownSymbol{std::move(superName), UnknownSymbol::Type});
+            reportError(superNameLocation, UnknownSymbol{std::move(superName), UnknownSymbol::Type});
             return ControlFlow::None;
         }
 
@@ -2428,8 +2507,8 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatDeclareExte
             // arguments after a supertype name -- so the only way to reach this is a generic
             // supertype referenced without any arguments, which we don't allow.
             reportError(
-                declaredExternType->location,
-                GenericError{format("Generic extern type '%s' cannot be used as a superclass without type arguments", superName.c_str())}
+                superNameLocation,
+                GenericError{format("Generic extern type '%s' cannot be used as a supertype without type arguments", superName.c_str())}
             );
 
             emplaceType<BoundType>(asMutable(bindingIt->second.type), builtinTypes->errorType);
@@ -2447,9 +2526,11 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatDeclareExte
         if (!get<ExternType>(follow(*superTy)))
         {
             reportError(
-                declaredExternType->location,
+                superNameLocation,
                 GenericError{
-                    format("Cannot use non-class type '%s' as a superclass of class '%s'", superName.c_str(), declaredExternType->name.value)
+                    // Luwu: upstream calls these classes, from the legacy `declare class` spelling; Luwu classes have no
+                    // superclasses, so the message says extern type
+                    format("Cannot use non-extern type '%s' as the supertype of extern type '%s'", superName.c_str(), declaredExternType->name.value)
                 }
             );
 
@@ -2626,7 +2707,7 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatDeclareExte
                 }
                 else
                     reportError(
-                        declaredExternType->location,
+                        externProp.location,
                         GenericError{format("Cannot overload read type of non-function extern type member '%s'", propName.c_str())}
                     );
             }
@@ -2653,7 +2734,7 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatDeclareExte
                     prop.readTy = propTy;
                 else
                     reportError(
-                        declaredExternType->location,
+                        externProp.location,
                         GenericError{format("Cannot overload write type of non-function extern type member '%s'", propName.c_str())}
                     );
             }
@@ -2716,8 +2797,16 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatDeclareFunc
         ftv->argNames.emplace_back(FunctionArgument{el.first.value, el.second});
     Name fnName(global->name.value);
 
-    module->declaredGlobals[fnName] = fnType;
-    scope->bindings[global->name] = Binding{fnType, global->location};
+    if (declaresFileGlobals())
+    {
+        bindDeclaration(global->name, fnType);
+        rootScope->bindings[global->name] = Binding{fnType, global->location};
+    }
+    else
+    {
+        module->declaredGlobals[fnName] = fnType;
+        scope->bindings[global->name] = Binding{fnType, global->location};
+    }
 
     DefId def = dfg->getDef(global);
     rootScope->lvalueTypes[def] = fnType;
@@ -2729,11 +2818,24 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatDeclareFunc
 ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatClass* statClass)
 {
     LUAU_ASSERT(FFlag::LuwuClasses);
+    visitClass(scope, statClass, /* declared= */ false);
+    return ControlFlow::None;
+}
 
+// Luwu Declare Statements (rfcs/declare-statements.md): a declared class's members get the types a class's would, from
+// its annotations alone.
+ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatDeclareClass* declaredClass)
+{
+    visitClass(scope, declaredClass->shape, /* declared= */ true);
+    return ControlFlow::None;
+}
+
+void ConstraintGenerator::visitClass(const ScopePtr& scope, AstStatClass* statClass, bool declared)
+{
     auto* classDeclRecordPtr = classDeclRecords.find(statClass->name);
     // TODO CLI-199124: This is unpopulated in fragment autocomplete.
     if (classDeclRecordPtr == nullptr)
-        return ControlFlow::None;
+        return;
 
     auto classDeclRecord = classDeclRecordPtr->get();
 
@@ -2890,7 +2992,9 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatClass* stat
                     );
 
                     Checkpoint start = checkpoint(this);
-                    checkFunctionBody(sig.bodyScope, method.function);
+                    // a declared method is only its signature
+                    if (!declared)
+                        checkFunctionBody(sig.bodyScope, method.function);
                     Checkpoint end = checkpoint(this);
 
                     if (method.functionName == "__init")
@@ -2994,7 +3098,11 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatClass* stat
             // An argument for a parameter with a default may be left out; what the field ends up with
             // is the default rather than nil, so only the *signature* is optional here, not the type
             // the parameter has inside the class.
-            TypeId argTy = primaryConstructor->argsDefaults.data[i] ? makeOption(builtinTypes, *arena, paramTy) : paramTy;
+            // A declared class writes a default as `name = T`: no expression, just the `=`.
+            bool declaredDefault = primaryConstructor->argsQualifiers.size == primaryConstructor->args.size &&
+                                   primaryConstructor->argsQualifiers.data[i].declaredDefaultLocation;
+            bool hasDefault = primaryConstructor->argsDefaults.data[i] || declaredDefault;
+            TypeId argTy = hasDefault ? makeOption(builtinTypes, *arena, paramTy) : paramTy;
 
             ctorArgs.push_back(argTy);
             initArgs.push_back(argTy);
@@ -3051,8 +3159,6 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatClass* stat
         if (ExternType* classInstanceEtv = getMutable<ExternType>(follow(classDeclRecord->ty)))
             classInstanceEtv->initLocation = primaryConstructor->argLocation;
     }
-
-    return ControlFlow::None;
 }
 
 ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatError* error)
@@ -4886,6 +4992,15 @@ TypeId ConstraintGenerator::resolveReferenceType(
             return builtinTypes->errorType;
         }
 
+        // Luwu Classes (rfcs/classes): `class<List>` for a generic class `List` is the generic class itself, the type
+        // `List`'s own class value has, whose constructor infers `T`. `List` without its type arguments is no object
+        // type, so the type function below can't produce it.
+        if (std::optional<TypeId> genericClass = genericClassValueType(*scope, ref->parameters.data[0].type))
+        {
+            module->astResolvedTypes[ty] = *genericClass;
+            return *genericClass;
+        }
+
         // Resolved outside a type-argument context on purpose: the argument may itself be a generic
         // alias (`class<List<number>>`), and only the non-type-argument path queues the
         // TypeAliasExpansionConstraint that turns its PendingExpansionType into a real type. Without
@@ -5569,6 +5684,90 @@ void ConstraintGenerator::prepopulateGlobalScope(const ScopePtr& globalScope, As
 
     for (auto name : tfgp.uninitializedGlobals)
         uninitializedGlobals.insert(name);
+}
+
+// Luwu Declare Statements (rfcs/declare-statements.md): a declaration outside a definition file declares a global for
+// its own file only. Upstream only has definition files, whose declarations become globals for every module
+// (`declaredGlobals`, persisted by the Frontend).
+bool ConstraintGenerator::declaresFileGlobals() const
+{
+    return FFlag::LuwuDeclareStatements && module->mode != Mode::Definition;
+}
+
+// A declaration applies to the whole file, including code above it, so its name is bound before anything is visited.
+// Its type isn't resolved yet (a type alias it names may come later in the file), so it starts as a placeholder that
+// bindDeclaration fills in. The parser only accepts declarations at the top level and in `do` blocks there.
+void ConstraintGenerator::hoistDeclarations(AstStatBlock* block)
+{
+    for (AstStat* stat : block->body)
+    {
+        if (AstStatBlock* inner = stat->as<AstStatBlock>())
+        {
+            hoistDeclarations(inner);
+            continue;
+        }
+
+        AstName name;
+        Location location;
+        if (AstStatDeclareGlobal* global = stat->as<AstStatDeclareGlobal>())
+        {
+            name = global->name;
+            location = global->location;
+        }
+        else if (AstStatDeclareFunction* function = stat->as<AstStatDeclareFunction>())
+        {
+            name = function->name;
+            location = function->location;
+        }
+        else
+            continue;
+
+        // A second declaration of a name is a parse error; the first one keeps the placeholder.
+        if (hoistedDeclarations.contains(name))
+            continue;
+
+        TypeId placeholder = arena->addType(BlockedType{});
+        hoistedDeclarations[name] = placeholder;
+        rootScope->bindings[name] = Binding{placeholder, location};
+    }
+}
+
+void ConstraintGenerator::collectNestedTypeDeclarations(AstStatBlock* block, std::vector<AstStat*>& out)
+{
+    for (AstStat* stat : block->body)
+    {
+        if (AstStatBlock* inner = stat->as<AstStatBlock>())
+            collectNestedTypeDeclarations(inner, out);
+        else if (stat->is<AstStatDeclareExternType>() || stat->is<AstStatDeclareClass>())
+            out.push_back(stat);
+    }
+}
+
+// Upstream binds every extern type as exported: a definition file's exported types become global types. Outside
+// definition files an extern type is scoped like a type alias, private unless it is declared `export`.
+std::unordered_map<Name, TypeFun>& ConstraintGenerator::externTypeBindings(Scope& scope, const AstStatDeclareExternType* declaration)
+{
+    if (declaresFileGlobals() && !declaration->exportLocation)
+        return scope.privateTypeBindings;
+
+    return scope.exportedTypeBindings;
+}
+
+void ConstraintGenerator::bindDeclaration(AstName name, TypeId declaredTy)
+{
+    TypeId* placeholder = hoistedDeclarations.find(name);
+    if (!placeholder)
+        return;
+
+    auto blocked = get<BlockedType>(*placeholder);
+    if (!blocked || blocked->getOwner())
+        return;
+
+    // `declare x: typeof(x)` resolves to the placeholder itself.
+    if (follow(declaredTy) == *placeholder)
+        declaredTy = builtinTypes->errorType;
+
+    emplaceType<BoundType>(asMutable(*placeholder), declaredTy);
 }
 
 bool ConstraintGenerator::recordPropertyAssignment(TypeId ty)

@@ -52,6 +52,7 @@ struct LintWarning
         Code_RedundantNativeAttribute = 29,
         Code_NilNoneComparison = 30, // Luwu: comparing with nil where only none is possible, or the reverse
         Code_VarargCast = 31,        // Luwu: `f(... :: T)` passes only the first value
+        Code_DeclareMismatch = 32,   // Luwu: `declare x: T` gives a global from the loaded definitions a different type
 
         Code__Count
     };
@@ -121,6 +122,7 @@ inline constexpr const char* kWarningNames[] = {
     "RedundantNativeAttribute",
     "NilNoneComparison",
     "VarargCast",
+    "DeclareMismatch",
 };
 // clang-format on
 

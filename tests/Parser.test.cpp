@@ -22,6 +22,7 @@ LUAU_FASTFLAG(LuwuNoinlineAttribute)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuDestructuring)
+LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAG(LuauTrackPrefixLocal)
@@ -2201,8 +2202,12 @@ TEST_CASE_FIXTURE(Fixture, "parse_declarations")
     CHECK(varFunc->vararg);
     CHECK(varFunc->varargLocation == Location({3, 29}, {3, 32}));
 
-    matchParseError("declare function foo(x)", "All declaration parameters must be annotated");
-    matchParseError("declare foo", "Expected ':' when parsing global variable declaration, got <eof>");
+    {
+        // Luwu Declare Statements (rfcs/declare-statements.md) lets a declared value leave its types out
+        ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, false};
+        matchParseError("declare function foo(x)", "All declaration parameters must be annotated");
+        matchParseError("declare foo", "Expected ':' when parsing global variable declaration, got <eof>");
+    }
 }
 
 TEST_CASE_FIXTURE(Fixture, "default_arguments_are_gated")
@@ -2240,6 +2245,9 @@ TEST_CASE_FIXTURE(Fixture, "default_arguments_are_luwu_only")
 
 TEST_CASE_FIXTURE(Fixture, "default_arguments_are_not_allowed_in_declarations")
 {
+    // Luwu Declare Statements (rfcs/declare-statements.md) writes a declared default as its type, `x = number`
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, false};
+
     ScopedFastFlag sff{FFlag::LuwuDefaultArguments, true};
 
     matchParseError("declare function foo(x: number = 1)", "Expected ')' (to close '(' at column 21), got '='");
@@ -2392,6 +2400,9 @@ TEST_CASE_FIXTURE(Fixture, "parse_extern_type_declarations")
 
 TEST_CASE_FIXTURE(Fixture, "parse_extern_type_declarations_missing_with")
 {
+    // Luwu Declare Statements (rfcs/declare-statements.md) makes `with` optional; this is upstream's rule
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, false};
+
     ParseResult result = tryParse(R"(
         declare extern type Foo
             prop: number
@@ -2497,6 +2508,9 @@ TEST_CASE_FIXTURE(Fixture, "parse_extern_type_declarations")
 
 TEST_CASE_FIXTURE(Fixture, "parse_extern_type_declarations_missing_with")
 {
+    // Luwu Declare Statements (rfcs/declare-statements.md) makes `with` optional; this is upstream's rule
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, false};
+
     ParseResult result = tryParse(R"(
         declare extern type Foo
             prop: number
@@ -2552,17 +2566,29 @@ TEST_CASE_FIXTURE(Fixture, "parse_extern_type_declarations_missing_with")
 
 TEST_CASE_FIXTURE(Fixture, "deprecated_declare_class_syntax_is_rejected")
 {
-    // With LuauDisallowExternClassInTypeDefinitions on (default for tests via Fixture),
-    // `class` is no longer recognized as an extern-type keyword and is parsed as a global
-    // variable name, so the parser then expects `:` for the type annotation.
-    matchParseError(
-        R"(
+    // Luwu Declare Statements (rfcs/declare-statements.md) reads `declare class Foo` as a declared class missing `type`
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, false};
+
+    const char* source = R"(
         declare class Foo
             prop: number
         end
-        )",
-        "Expected ':' when parsing global variable declaration, got 'Foo'"
-    );
+        )";
+
+    // Luwu: upstream reports "Expected ':' when parsing global variable declaration, got 'Foo'" here, or with
+    // LuauDisallowExternClassInTypeDefinitions off declares an extern type. Luwu names the fix, either way.
+    for (bool disallowExternClass : {true, false})
+    {
+        ScopedFastFlag sff{FFlag::LuauDisallowExternClassInTypeDefinitions, disallowExternClass};
+
+        ParseResult result = tryParse(source);
+        REQUIRE_EQ(result.errors.size(), 1);
+        CHECK_EQ(result.errors[0].getMessage(), "In Luwu, 'declare class' does not declare an extern type; write 'declare extern type' instead");
+        REQUIRE_EQ(result.root->body.size, 1);
+        AstStatDeclareExternType* declaration = result.root->body.data[0]->as<AstStatDeclareExternType>();
+        REQUIRE(declaration);
+        CHECK_EQ(declaration->props.size, 1);
+    }
 }
 
 TEST_CASE_FIXTURE(Fixture, "class_method_properties")
@@ -2698,7 +2724,11 @@ TEST_CASE_FIXTURE(Fixture, "variadic_definition_parsing")
 
     REQUIRE(stat != nullptr);
 
-    matchParseError("declare function foo(...)", "All declaration parameters must be annotated");
+    {
+        // Luwu Declare Statements (rfcs/declare-statements.md) lets a declared value leave its types out
+        ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, false};
+        matchParseError("declare function foo(...)", "All declaration parameters must be annotated");
+    }
     matchParseError("declare extern type Foo with function a(self, ...) end", "All declaration parameters aside from 'self' must be annotated");
 }
 
@@ -2836,14 +2866,22 @@ TEST_CASE_FIXTURE(Fixture, "extern_type_generics_are_gated")
 {
     ScopedFastFlag sff{FFlag::LuwuGenericNominals, false};
 
-    matchParseError(
-        R"(
+    const char* source = R"(
         declare extern type Box<T> with
             value: T
         end
-        )",
-        "Expected `with` keyword before listing properties of the external type, but got (null) instead"
-    );
+        )";
+
+    {
+        ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, false};
+        matchParseError(source, "Expected `with` keyword before listing properties of the external type, but got (null) instead");
+    }
+
+    {
+        // Luwu Declare Statements (rfcs/declare-statements.md) makes `with` optional, so the `<` is read as the body
+        ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+        matchParseError(source, "Expected identifier when parsing property name, got '<'");
+    }
 }
 
 TEST_CASE_FIXTURE(Fixture, "extern_type_generics")
@@ -8117,6 +8155,456 @@ TEST_CASE_FIXTURE(Fixture, "destructuring_without_the_flag_says_how_to_enable_it
 
     matchParseError("local .{x} = t", "Destructuring is a Luwu feature; enable the 'LuwuDestructuring' fast flag to use it");
     matchParseError("const .{x} = t", "Destructuring is a Luwu feature; enable the 'LuwuDestructuring' fast flag to use it");
+}
+
+// Parses as ordinary source, the way the compiler and the Frontend do, rather than as a definition file.
+static ParseResult parseSource(Allocator& allocator, AstNameTable& names, const std::string& source)
+{
+    return Parser::parse(source.c_str(), source.size(), names, allocator, ParseOptions{});
+}
+
+static std::vector<std::string> sourceParseErrors(const std::string& source)
+{
+    Allocator allocator;
+    AstNameTable names(allocator);
+    std::vector<std::string> messages;
+    for (const ParseError& error : parseSource(allocator, names, source).errors)
+        messages.push_back(error.getMessage());
+    return messages;
+}
+
+TEST_CASE_FIXTURE(Fixture, "declare_statements_in_source")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+
+    Allocator allocator;
+    AstNameTable names(allocator);
+    ParseResult result = parseSource(allocator, names, R"(
+declare script: { path: string }
+declare function exit(code: number): never
+do
+    declare shared: number
+    do
+        declare nested: string
+    end
+end
+)");
+
+    REQUIRE(result.errors.empty());
+    REQUIRE_EQ(result.root->body.size, 3);
+    CHECK(result.root->body.data[0]->is<AstStatDeclareGlobal>());
+    CHECK(result.root->body.data[1]->is<AstStatDeclareFunction>());
+    // Ends at its return type, not at the next statement
+    CHECK_EQ(result.root->body.data[1]->location.end, Position{2, 42});
+    AstStatBlock* block = result.root->body.data[2]->as<AstStatBlock>();
+    REQUIRE(block);
+    REQUIRE_EQ(block->body.size, 2);
+    CHECK(block->body.data[0]->is<AstStatDeclareGlobal>());
+}
+
+TEST_CASE_FIXTURE(Fixture, "declare_statements_need_the_flag_outside_definition_files")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, false};
+
+    std::vector<std::string> errors = sourceParseErrors("declare x: number");
+    REQUIRE_FALSE(errors.empty());
+    CHECK_EQ(errors[0], "Incomplete statement: expected assignment or a function call");
+}
+
+TEST_CASE_FIXTURE(Fixture, "declare_statements_only_where_the_whole_file_sees_them")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+
+    const std::string placement =
+        "'declare' applies to the whole file, so it must be at the top level of the file or in a 'do' block there";
+
+    for (const char* source : {
+             "local function f()\n    declare x: number\nend",
+             "if true then\n    declare x: number\nend",
+             "while true do\n    declare x: number\nend",
+             "for i = 1, 2 do\n    declare function f(): ()\nend",
+             "repeat\n    declare x: number\nuntil true",
+             "local function f()\n    do\n        declare x: number\n    end\nend",
+         })
+    {
+        INFO(source);
+        std::vector<std::string> errors = sourceParseErrors(source);
+        REQUIRE_EQ(errors.size(), 1);
+        CHECK_EQ(errors[0], placement);
+    }
+
+    // Definition files keep upstream's rules
+    ParseResult result = tryParse("local function f()\n    declare x: number\nend");
+    CHECK(result.errors.empty());
+}
+
+TEST_CASE_FIXTURE(Fixture, "declare_statements_declare_each_global_once")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+
+    std::vector<std::string> errors = sourceParseErrors("declare x: number\ndo\n    declare function x(): ()\nend");
+    REQUIRE_EQ(errors.size(), 1);
+    CHECK_EQ(errors[0], "'x' is already declared on line 1");
+
+    errors = sourceParseErrors("declare x: number\ndeclare x: number");
+    REQUIRE_EQ(errors.size(), 1);
+    CHECK_EQ(errors[0], "'x' is already declared on line 1");
+
+    // Definition files keep upstream's rules
+    ParseResult result = tryParse("declare x: number\ndeclare x: number");
+    CHECK(result.errors.empty());
+}
+
+TEST_CASE_FIXTURE(Fixture, "declare_is_still_an_ordinary_name")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+
+    for (const char* source : {"declare(x)", "declare = 1", "declare.x = 1", "declare, x = 1, 2", "declare 'x'", "declare { x = 1 }", "declare:x()"})
+    {
+        INFO(source);
+        CHECK(sourceParseErrors(source).empty());
+    }
+}
+
+TEST_CASE_FIXTURE(Fixture, "export_declare_extern_type")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+
+    Allocator allocator;
+    AstNameTable names(allocator);
+    ParseResult result = parseSource(allocator, names, R"(
+export declare extern type Path
+    function exists(self): boolean
+end
+declare extern type Hidden with
+    name: string
+end
+declare export: number
+)");
+
+    REQUIRE(result.errors.empty());
+    REQUIRE_EQ(result.root->body.size, 3);
+
+    AstStatDeclareExternType* path = result.root->body.data[0]->as<AstStatDeclareExternType>();
+    REQUIRE(path);
+    CHECK(path->exportLocation);
+    CHECK_FALSE(path->withLocation);
+    REQUIRE_EQ(path->props.size, 1);
+
+    AstStatDeclareExternType* hidden = result.root->body.data[1]->as<AstStatDeclareExternType>();
+    REQUIRE(hidden);
+    CHECK_FALSE(hidden->exportLocation);
+    CHECK(hidden->withLocation);
+
+    // `export` followed by `:` is the name of a global
+    AstStatDeclareGlobal* global = result.root->body.data[2]->as<AstStatDeclareGlobal>();
+    REQUIRE(global);
+    CHECK_EQ(std::string(global->name.value), "export");
+}
+
+TEST_CASE_FIXTURE(Fixture, "export_declare_is_for_types_only")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+
+    // One error each, and the declaration after `export` still parses
+    for (const char* source : {"export declare x: number", "export declare function f(): ()"})
+    {
+        INFO(source);
+        Allocator allocator;
+        AstNameTable names(allocator);
+        ParseResult result = parseSource(allocator, names, source);
+
+        REQUIRE_EQ(result.errors.size(), 1);
+        CHECK_EQ(
+            result.errors[0].getMessage(),
+            "Only types can be exported with 'export declare'; to declare a global for several files, use a definitions file"
+        );
+        REQUIRE_EQ(result.root->body.size, 1);
+        bool declaresValue = result.root->body.data[0]->is<AstStatDeclareGlobal>() || result.root->body.data[0]->is<AstStatDeclareFunction>();
+        CHECK(declaresValue);
+    }
+}
+
+TEST_CASE_FIXTURE(Fixture, "declare_extern_type_property_named_with")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+
+    for (const char* source : {"declare extern type A\n    with: number\nend", "declare extern type A with\n    with: number\nend"})
+    {
+        INFO(source);
+        Allocator allocator;
+        AstNameTable names(allocator);
+        ParseResult result = parseSource(allocator, names, source);
+
+        REQUIRE(result.errors.empty());
+        REQUIRE_EQ(result.root->body.size, 1);
+        AstStatDeclareExternType* declaration = result.root->body.data[0]->as<AstStatDeclareExternType>();
+        REQUIRE(declaration);
+        REQUIRE_EQ(declaration->props.size, 1);
+        CHECK_EQ(std::string(declaration->props.data[0].name.value), "with");
+    }
+}
+
+TEST_CASE_FIXTURE(Fixture, "declare_extern_type_needs_with_without_the_flag")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, false};
+
+    matchParseError(
+        "declare extern type Path\n    name: string\nend", "Expected `with` keyword before listing properties of the external type, but got name instead"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "declare_class")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuDeclareStatements, true}, {FFlag::LuwuClasses, true}};
+
+    Allocator allocator;
+    AstNameTable names(allocator);
+    ParseResult result = parseSource(allocator, names, R"(
+export declare class type Path(public raw: string, public sep = string)
+    public const drive: string?
+    private cache = { string }
+    public function join(self, other: string): Path
+    public function cwd(): Path
+    public function __tostring(self): string
+end
+declare class type Counter
+    function __init(self, start: number)
+    function bump(self)
+end
+declare class: number
+)");
+
+    REQUIRE(result.errors.empty());
+    REQUIRE_EQ(result.root->body.size, 3);
+
+    AstStatDeclareClass* path = result.root->body.data[0]->as<AstStatDeclareClass>();
+    REQUIRE(path);
+    AstStatClass* shape = path->shape;
+    CHECK(shape->exported);
+    CHECK_EQ(std::string(shape->name->name.value), "Path");
+    REQUIRE(shape->primaryConstructor);
+    REQUIRE_EQ(shape->primaryConstructor->args.size, 2);
+    CHECK_FALSE(shape->primaryConstructor->argsQualifiers.data[0].declaredDefaultLocation);
+    CHECK(shape->primaryConstructor->argsQualifiers.data[1].declaredDefaultLocation);
+    REQUIRE(shape->primaryConstructor->args.data[1]->annotation);
+
+    REQUIRE_EQ(shape->members.size, 5);
+    const AstClassProperty* cache = shape->members.data[1].get_if<AstClassProperty>();
+    REQUIRE(cache);
+    CHECK(cache->ty);
+    CHECK(cache->equalsLocation);
+    CHECK_FALSE(cache->defaultValue);
+    const AstClassMethod* join = shape->members.data[2].get_if<AstClassMethod>();
+    REQUIRE(join);
+    CHECK_EQ(join->function->body->body.size, 0);
+    CHECK(join->function->returnAnnotation);
+
+    AstStatDeclareClass* counter = result.root->body.data[1]->as<AstStatDeclareClass>();
+    REQUIRE(counter);
+    CHECK_FALSE(counter->shape->exported);
+    REQUIRE_EQ(counter->shape->members.size, 2);
+
+    // `class` followed by `:` is the name of a global
+    CHECK(result.root->body.data[2]->is<AstStatDeclareGlobal>());
+}
+
+TEST_CASE_FIXTURE(Fixture, "declare_class_mistakes")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuDeclareStatements, true}, {FFlag::LuwuClasses, true}};
+
+    auto onlyError = [](const char* source, const std::string& message)
+    {
+        INFO(std::string(source));
+        std::vector<std::string> errors = sourceParseErrors(source);
+        REQUIRE_EQ(errors.size(), 1);
+        CHECK_EQ(errors[0], message);
+    };
+
+    onlyError("declare class type A\n    x: number = 1\nend", "In a declaration, a default is written as its type: 'name = T'");
+    onlyError("declare class type A\n    x: number = {}\n    y: string\nend", "In a declaration, a default is written as its type: 'name = T'");
+    onlyError("declare class type A(x: number = string)\nend", "In a declaration, a default is written as its type: 'name = T'");
+    onlyError("declare class type A\n    function f(self, x)\nend", "All declaration parameters must be annotated");
+    onlyError("declare class type A(x)\nend", "All declaration parameters must be annotated");
+    onlyError("declare class type A\n    function f(self, ...)\nend", "All declaration parameters must be annotated");
+}
+
+TEST_CASE_FIXTURE(Fixture, "declared_parameter_defaults_are_types")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuDeclareStatements, true}, {FFlag::LuwuClasses, true}};
+
+    Allocator allocator;
+    AstNameTable names(allocator);
+    ParseResult result = parseSource(allocator, names, R"(
+declare function split(s: string, sep = string): { string }
+declare extern type File
+    function read(self, count = number): string
+end
+declare class type Path
+    function join(self, other = string): Path
+end
+)");
+
+    REQUIRE(result.errors.empty());
+    AstStatDeclareFunction* split = result.root->body.data[0]->as<AstStatDeclareFunction>();
+    REQUIRE(split);
+    REQUIRE_EQ(split->params.types.size, 2);
+    // `sep = string` is a `string?` parameter
+    AstTypeUnion* sep = split->params.types.data[1]->as<AstTypeUnion>();
+    REQUIRE(sep);
+    REQUIRE_EQ(sep->types.size, 2);
+    CHECK(sep->types.data[0]->is<AstTypeReference>());
+    CHECK(sep->types.data[1]->is<AstTypeOptional>());
+
+    // A value written after an annotation gets one error, and parsing carries on
+    std::vector<std::string> errors = sourceParseErrors("declare function f(x: number = 1, y: string): ()\nlocal z = 1");
+    REQUIRE_EQ(errors.size(), 1);
+    CHECK_EQ(errors[0], "In a declaration, a default is written as its type: 'name = T'");
+}
+
+TEST_CASE_FIXTURE(Fixture, "declare_export_is_written_export_declare")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuDeclareStatements, true}, {FFlag::LuwuClasses, true}};
+
+    for (const char* source : {"declare export extern type Path\nend", "declare export class type Path\nend"})
+    {
+        INFO(std::string(source));
+        Allocator allocator;
+        AstNameTable names(allocator);
+        ParseResult result = parseSource(allocator, names, source);
+
+        // One error, and the declaration is still exported
+        REQUIRE_EQ(result.errors.size(), 1);
+        CHECK_EQ(result.errors[0].getMessage(), "'export' goes before 'declare': write 'export declare'");
+        REQUIRE_EQ(result.root->body.size, 1);
+        AstStat* stat = result.root->body.data[0];
+        if (AstStatDeclareExternType* externType = stat->as<AstStatDeclareExternType>())
+            CHECK(externType->exportLocation);
+        else
+        {
+            AstStatDeclareClass* declaredClass = stat->as<AstStatDeclareClass>();
+            REQUIRE(declaredClass);
+            CHECK(declaredClass->shape->exported);
+        }
+    }
+
+    // The statement starts at `export`
+    Allocator allocator;
+    AstNameTable names(allocator);
+    ParseResult result = parseSource(allocator, names, "export declare class type Path\nend");
+    REQUIRE(result.errors.empty());
+    REQUIRE_EQ(result.root->body.size, 1);
+    CHECK_EQ(result.root->body.data[0]->location.begin, Position{0, 0});
+}
+
+TEST_CASE_FIXTURE(Fixture, "declared_types_are_written_out_and_never_shadowed")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuDeclareStatements, true}, {FFlag::LuwuClasses, true}};
+
+    auto onlyError = [](const char* source, const std::string& message)
+    {
+        INFO(std::string(source));
+        std::vector<std::string> errors = sourceParseErrors(source);
+        REQUIRE_EQ(errors.size(), 1);
+        CHECK_EQ(errors[0], message);
+    };
+
+    onlyError(
+        "declare class Path\nend", "A declared class is written 'declare class type Name'; to declare an extern type, write 'declare extern type Name'"
+    );
+    onlyError("declare class type A\n    c\nend", "Declared class field 'c' needs a type: 'name: T', or 'name = T' if it has a default");
+
+    const std::string declaredOnLine1 = "Type 'A' is declared on line 1, and a declared type can't be shadowed";
+    onlyError("declare extern type A\nend\ndeclare class type A\nend", declaredOnLine1);
+    onlyError("declare extern type A\nend\nlocal function f()\n    type A = number\nend", declaredOnLine1);
+    onlyError("declare class type A\nend\nclass A\nend", declaredOnLine1);
+    onlyError("declare extern type A\nend\ntype function A()\n    return types.number\nend", declaredOnLine1);
+    onlyError("type A = number\ndeclare extern type A\nend", "Type 'A' is already defined on line 1, and a declared type can't shadow it");
+
+    // Different names, and two aliases, are fine
+    CHECK(sourceParseErrors("declare extern type A\nend\ntype B = A\ndo\n    type B = number\nend").empty());
+}
+
+TEST_CASE_FIXTURE(Fixture, "value_declarations_may_leave_types_out")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuDeclareStatements, true}, {FFlag::LuwuClasses, true}};
+
+    Allocator allocator;
+    AstNameTable names(allocator);
+    ParseResult result = parseSource(allocator, names, R"(
+declare bundled
+declare function helper(a, b: number, ...)
+declare typed: number
+)");
+
+    REQUIRE(result.errors.empty());
+    REQUIRE_EQ(result.root->body.size, 3);
+
+    AstStatDeclareGlobal* bundled = result.root->body.data[0]->as<AstStatDeclareGlobal>();
+    REQUIRE(bundled);
+    CHECK_FALSE(bundled->type);
+    // Ends at its name, so the next line is its own statement
+    CHECK_EQ(bundled->location.end, Position{1, 15});
+
+    // An untyped parameter is `any`, an untyped `...` is `...any`
+    AstStatDeclareFunction* helper = result.root->body.data[1]->as<AstStatDeclareFunction>();
+    REQUIRE(helper);
+    REQUIRE_EQ(helper->params.types.size, 2);
+    AstTypeReference* a = helper->params.types.data[0]->as<AstTypeReference>();
+    REQUIRE(a);
+    CHECK_EQ(std::string(a->name.value), "any");
+    REQUIRE(helper->params.tailType);
+    CHECK(helper->params.tailType->is<AstTypePackVariadic>());
+
+    // Type declarations still write their types
+    std::vector<std::string> errors = sourceParseErrors("declare extern type A\n    function f(self, x)\nend");
+    REQUIRE_FALSE(errors.empty());
+    errors = sourceParseErrors("declare class type A\n    function f(self, x)\nend");
+    REQUIRE_EQ(errors.size(), 1);
+    CHECK_EQ(errors[0], "All declaration parameters must be annotated");
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_and_trait_keywords_in_an_extern_type")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+
+    auto onlyError = [](const char* source, const std::string& message)
+    {
+        INFO(std::string(source));
+        std::vector<std::string> errors = sourceParseErrors(source);
+        REQUIRE_EQ(errors.size(), 1);
+        CHECK_EQ(errors[0], message);
+    };
+
+    const std::string accessSpecifier = "Extern types have no access specifiers; every member is public. To declare a class, use 'declare class type'";
+    onlyError("declare extern type Cat\n    public function meow(self)\nend", accessSpecifier);
+    onlyError("declare extern type Cat\n    private name: string\nend", accessSpecifier);
+    onlyError("declare extern type Cat\n    const name: string\nend", "Extern types have no 'const'; write 'read' for a read-only property");
+    onlyError("declare extern type Cat\n    expect function meow(self)\nend", "'expect' belongs in a trait, not an extern type");
+    onlyError("declare extern type Cat\n    age = number\nend", "Extern type properties have no defaults; write 'name: T'");
+
+    // Names that happen to be those keywords are still properties
+    CHECK(sourceParseErrors("declare extern type Cat\n    public: number\n    const: string\nend").empty());
+}
+
+TEST_CASE_FIXTURE(Fixture, "declarations_have_no_value")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+
+    const std::string message = "declare may only be used to initialize globals; assign to 'cat' on a new line to assign to the global variable";
+    for (const char* source : {"declare cat = 2\nprint(cat)", "declare cat: number = 2\nprint(cat)"})
+    {
+        INFO(std::string(source));
+        Allocator allocator;
+        AstNameTable names(allocator);
+        ParseResult result = parseSource(allocator, names, source);
+
+        // One error, and both the declaration and the next statement are intact
+        REQUIRE_EQ(result.errors.size(), 1);
+        CHECK_EQ(result.errors[0].getMessage(), message);
+        REQUIRE_EQ(result.root->body.size, 2);
+        CHECK(result.root->body.data[0]->is<AstStatDeclareGlobal>());
+    }
 }
 
 TEST_SUITE_END();

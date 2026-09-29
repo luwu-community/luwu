@@ -247,11 +247,13 @@ private:
         const AstArray<AstAttr*>& attributes = {nullptr, 0}
     );
 
+    // `declared` parses the shape of a `declare class` (see AstStatDeclareClass) and returns the AstStatClass for it.
     AstStat* parseClassStat(
         const Location& start,
         bool exported,
         const Location& classKeywordLocation,
-        const AstArray<AstAttr*>& classAttributes = {nullptr, 0}
+        const AstArray<AstAttr*>& classAttributes = {nullptr, 0},
+        bool declared = false
     );
 
     // True when the class body is looking at something that reads as a statement rather than a class
@@ -260,7 +262,11 @@ private:
 
     // Luwu Classes (rfcs/classes): parse a class's primary constructor parameter list, e.g. the
     // `(name: string, age = 0)` of `class Cat(name: string, age = 0)`.
-    AstClassPrimaryConstructor* parseClassPrimaryConstructor(const std::optional<Location>& qualifierLocation, AstClassMemberVisibility visibility);
+    AstClassPrimaryConstructor* parseClassPrimaryConstructor(
+        const std::optional<Location>& qualifierLocation,
+        AstClassMemberVisibility visibility,
+        bool declared
+    );
 
     // Brings a primary constructor's parameters into scope; the caller takes a saveLocals() offset
     // first and passes it to restoreLocals once the expression that needed them has been parsed.
@@ -275,7 +281,16 @@ private:
 
     // `declare global' Name: Type |
     // `declare function' Name`(' [parlist] `)' [`:` Type]
-    AstStat* parseDeclaration(const Location& start, const AstArray<AstAttr*>& attributes);
+    AstStat* parseDeclaration(const Location& start, const AstArray<AstAttr*>& attributes, std::optional<Location> exportKeywordLocation = std::nullopt);
+    bool declarationsAllowed() const;
+    void checkDuplicateDeclaration(const Name& name);
+    void checkTypeName(const Name& name, bool declared);
+    bool declaresClass();
+    bool legacyDeclareClass();
+    void skipClassOnlyExternTypeKeywords();
+    AstType* untypedDeclarationType(const Location& location);
+    Binding parseDeclaredClassBinding(std::optional<Location>& declaredDefaultLocation);
+    void checkDeclaredClassMethod(AstExprFunction* function);
 
     // varlist `=' explist
     AstStat* parseAssignment(AstExpr* initial);
@@ -311,7 +326,10 @@ private:
         const Lexeme* endMatchLexeme = nullptr,
         // Luwu Classes (rfcs/classes): set for a class function, whose first parameter, when named
         // `self`, is bound const.
-        bool isClassFunction = false
+        bool isClassFunction = false,
+        // Luwu Declare Statements (rfcs/declare-statements.md): a declared class's method is a signature with no body
+        // and no `end`.
+        bool signatureOnly = false
     );
 
     // explist ::= {exp `,'} exp
@@ -650,6 +668,7 @@ private:
 
     AstName nameSelf;
     AstName nameNumber;
+    AstName nameAny;
     AstName nameError;
     // Luwu Destructuring (rfcs/destructuring.md): the hidden local an unnamed pattern binds its value to.
     AstName nameDestructured;
@@ -705,6 +724,28 @@ private:
     // Luwu Destructuring (rfcs/destructuring.md): a destructuring declaration desugars to several
     // statements. parseStat returns the first, and parseBlockNoScope appends these right after it.
     std::vector<AstStat*> pendingStatements;
+
+    // Luwu Declare Statements (rfcs/declare-statements.md): whether the block being parsed may contain `declare`
+    // (the top level, or a `do` block there), and what the next block parseBlockNoScope starts should allow.
+    // fileDeclarations holds each global this file declares, so a second declaration of it is an error.
+    bool blockAllowsDeclarations = false;
+    bool nextBlockAllowsDeclarations = false;
+    DenseHashMap<AstName, Location> fileDeclarations{AstName()};
+    // The types this file declares, and the ones it defines (aliases, type functions, classes), for checkTypeName.
+    DenseHashMap<AstName, Location> fileTypeDeclarations{AstName()};
+    DenseHashMap<AstName, Location> fileTypeNames{AstName()};
+
+    // Set while parsing the parameters of a declared function or method, where `name = T` is a parameter of type T that
+    // may be left out: its type is `T?`. See DeclaredParameters.
+    bool parsingDeclaredParameters = false;
+    struct DeclaredParameters
+    {
+        explicit DeclaredParameters(Parser& parser);
+        ~DeclaredParameters();
+
+        Parser& parser;
+        bool outer;
+    };
 
     // Luwu Attributes (rfcs/attributes-for-types-variables-fields-classes.md): attributes a table entry parsed
     // in front of `function`, which belong to the function expression parseSimpleExpr parses next rather than to

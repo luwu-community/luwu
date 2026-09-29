@@ -472,4 +472,10 @@ bool isInsideClassDeclaration(const ExternType* cls, const ModuleName& moduleNam
  */
 void applyDeprecatedAttribute(Property& prop, const AstArray<AstAttr*>& attributes);
 
+/**
+ * Luwu Classes (rfcs/classes): the class value type of a generic class named without type arguments, as `List` is in
+ * `class<List>`, or nothing when `argument` is anything else.
+ */
+std::optional<TypeId> genericClassValueType(const Scope& scope, const AstType* argument);
+
 } // namespace Luau
