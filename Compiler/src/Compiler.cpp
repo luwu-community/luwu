@@ -7229,6 +7229,11 @@ struct Compiler
         {
             // do nothing
         }
+        else if (isDeclaration(node))
+        {
+            // Luwu Declare Statements (rfcs/declare-statements.md): a declaration only tells the type checker what
+            // exists at runtime.
+        }
         else if (FFlag::LuwuClasses && node->is<AstStatClass>())
         {
             compileClassDeclaration(node->as<AstStatClass>());
@@ -7470,9 +7475,17 @@ struct Compiler
             bytecode.setDebugLine(node->location.end.line + 1);
     }
 
+    static bool isDeclaration(AstNode* node)
+    {
+        return node->is<AstStatDeclareGlobal>() || node->is<AstStatDeclareFunction>() || node->is<AstStatDeclareExternType>() ||
+               node->is<AstStatDeclareClass>();
+    }
+
     bool needsCoverage(AstNode* node)
     {
-        return !node->is<AstStatBlock>() && !node->is<AstStatTypeAlias>();
+        // Luwu Declare Statements (rfcs/declare-statements.md): a declaration compiles to nothing, so there is nothing
+        // to cover.
+        return !node->is<AstStatBlock>() && !node->is<AstStatTypeAlias>() && !isDeclaration(node);
     }
 
     void hintTemporaryRegType(AstExpr* expr, int reg, LuauBytecodeType expectedType, int instLength)

@@ -213,6 +213,7 @@ private:
     void visit(AstStatDeclareGlobal* stat);
     void visit(AstStatDeclareExternType* stat);
     void visit(AstStatClass* stat);
+    void visit(AstStatDeclareClass* stat);
     void visit(AstStatError* stat);
     void visit(AstExpr* expr, ValueContext context);
     void visit(AstExprGroup* expr, ValueContext context);

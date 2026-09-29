@@ -462,6 +462,8 @@ ControlFlow DataFlowGraphBuilder::visit(AstStat* s)
         return visit(d);
     else if (auto d = s->as<AstStatDeclareExternType>())
         return visit(d);
+    else if (auto d = s->as<AstStatDeclareClass>())
+        return visit(d);
     else if (auto d = s->as<AstStatClass>())
     {
         LUAU_ASSERT(FFlag::LuwuClasses);
@@ -844,7 +846,8 @@ ControlFlow DataFlowGraphBuilder::visit(AstStatDeclareGlobal* d)
     currentScope()->bindings[d->name] = def;
     captures[d->name].allVersions.push_back(def);
 
-    visitType(d->type);
+    if (d->type)
+        visitType(d->type);
 
     return ControlFlow::None;
 }
@@ -890,6 +893,25 @@ ControlFlow DataFlowGraphBuilder::visit(AstStatClass* d)
     currentScope()->bindings[d->name->name] = def;
     captures[d->name->name].allVersions.push_back(def);
 
+    visitClassShape(d);
+
+    return ControlFlow::None;
+}
+
+// Luwu Declare Statements (rfcs/declare-statements.md): a declared class has no value, so its name gets no def. Its
+// primary constructor parameters and method parameters still need defs, for the type checker to bind their types to.
+ControlFlow DataFlowGraphBuilder::visit(AstStatDeclareClass* d)
+{
+    DfgScope* unreachable = makeChildScope();
+    PushScope ps{scopeStack, unreachable};
+
+    visitClassShape(d->shape);
+
+    return ControlFlow::None;
+}
+
+void DataFlowGraphBuilder::visitClassShape(AstStatClass* d)
+{
     // Luwu Classes (rfcs/classes): a primary constructor's parameters are visible to the class's
     // field initializer expressions and to nothing else, so they get a scope of their own that the
     // class's methods are visited outside of. They are compiled into the synthesized `__init`, hence
@@ -945,9 +967,6 @@ ControlFlow DataFlowGraphBuilder::visit(AstStatClass* d)
             member
         );
     }
-
-
-    return ControlFlow::None;
 }
 
 ControlFlow DataFlowGraphBuilder::visit(AstStatError* error)
