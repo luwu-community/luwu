@@ -1157,4 +1157,30 @@ void applyDeprecatedAttribute(Property& prop, const AstArray<AstAttr*>& attribut
         prop.deprecatedSuggestion = *info->use;
 }
 
+std::optional<TypeId> genericClassValueType(const Scope& scope, const AstType* argument)
+{
+    const AstTypeReference* ref = argument->as<AstTypeReference>();
+    if (!ref || ref->hasParameterList)
+        return std::nullopt;
+
+    std::optional<TypeFun> alias;
+    if (ref->prefix)
+        alias = scope.lookupImportedType(ref->prefix->value, ref->name.value);
+    else
+        alias = scope.lookupType(ref->name.value);
+
+    if (!alias || (alias->typeParams.empty() && alias->typePackParams.empty()))
+        return std::nullopt;
+
+    const ExternType* object = get<ExternType>(follow(alias->type));
+    if (!object || !object->relation)
+        return std::nullopt;
+
+    const Klass* klass = object->relation->get_if<Klass>();
+    if (!klass)
+        return std::nullopt;
+
+    return klass->ty;
+}
+
 } // namespace Luau
