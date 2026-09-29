@@ -1170,7 +1170,7 @@ end
 bb_bytecode_0:
   implicit CHECK_SAFE_ENV exit(0)
   %1 = LOAD_TAG R0
-  %2 = GET_TYPE %1
+  %2 = GET_TYPE %1, R0
   STORE_POINTER R3, %2
   STORE_TAG R3, tstring
   %9 = CMP_TAG %1, tnumber, eq
@@ -5103,7 +5103,7 @@ end
 bb_bytecode_0:
   implicit CHECK_SAFE_ENV exit(0)
   %1 = LOAD_TAG R1
-  %2 = GET_TYPE %1
+  %2 = GET_TYPE %1, R1
   STORE_POINTER R2, %2
   STORE_TAG R2, tstring
   %6 = LOAD_TAG R0
@@ -5120,7 +5120,7 @@ bb_bytecode_0:
 bb_bytecode_2:
   implicit CHECK_SAFE_ENV exit(10)
   %21 = LOAD_TAG R1
-  %22 = GET_TYPE %21
+  %22 = GET_TYPE %21, R1
   STORE_POINTER R4, %22
   STORE_TAG R4, tstring
   INTERRUPT 15u
@@ -8965,7 +8965,7 @@ static std::string lowerClassFallbackWithLiveValueA64(Luau::CodeGen::IrCmd fallb
     if (fallback == IrCmd::FALLBACK_NEWOBJECT)
         build.inst(IrCmd::FALLBACK_NEWOBJECT, build.constUint(0), build.vmReg(2), build.vmReg(3), build.constInt(0), build.constInt(0));
     else
-        build.inst(IrCmd::FALLBACK_NEWCLASSMEMBER, build.constUint(0), build.vmReg(2), build.vmReg(3));
+        build.inst(IrCmd::FALLBACK_NEWCLASSMEMBER, build.constUint(0), build.vmReg(2), build.vmReg(3), build.constInt(1));
 
     build.inst(IrCmd::STORE_DOUBLE, build.vmReg(0), sum);
     build.inst(IrCmd::RETURN, build.vmReg(0), build.constInt(1));

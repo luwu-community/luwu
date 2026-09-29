@@ -86,9 +86,14 @@ LUAI_FUNC void luaR_initpodobject(lua_State* L, LuauClass* classdef, LuauObject*
 
 /**
  * Returns true if `cl` is `classdef`'s own `__init` closure specifically (stricter than
- * luaR_closureownsprivateaccess, which accepts any method of the class).
+ * luaR_closureownsprivateaccess, which accepts any method of the class), or one of its trait initializers
+ * (luaR_closureistraitinit).
  */
 LUAI_FUNC bool luaR_closureisinit(const LuauClass* classdef, const Closure* cl);
+
+// Luwu Traits (rfcs/classes/traits.md): true if `cl` is one of `classdef`'s copies of its traits' `__traitinit`, the only
+// closures that may write a final field (luaR_closureisinit accepts them too, for const fields)
+LUAI_FUNC bool luaR_closureistraitinit(const LuauClass* classdef, const Closure* cl);
 
 /**
  * Returns true if `cl` is one of `classdef`'s own method closures (including `__init`), or a
@@ -184,6 +189,43 @@ LUAI_FUNC void luaR_freeclass(lua_State* L, LuauClass* classdef, lua_Page* page)
 LUAI_FUNC int luaR_createobject(lua_State* L);
 
 LUAI_FUNC void luaR_freeobject(lua_State* L, LuauObject* object, lua_Page* page);
+
+// Luwu Traits (rfcs/classes/traits.md): raises when `classdef` hasn't finished implementing its traits (traitspending).
+// Every construction path checks it.
+LUAI_FUNC void luaR_checktraitsimplemented(lua_State* L, const LuauClass* classdef);
+
+// Luwu Traits (rfcs/classes/traits.md): raised by every attempt to construct a trait.
+LUAI_FUNC l_noret luaR_traitconstructionerror(lua_State* L, const LuauClass* trait);
+
+// Luwu Traits (rfcs/classes/traits.md): the `__create` that calling `trait` calls; raises when it has none.
+LUAI_FUNC const TValue* luaR_traitcreate(lua_State* L, const LuauClass* trait);
+
+/**
+ * Luwu Traits (rfcs/classes/traits.md): makes `classdef` implement the `n` traits at `listed`, which are followed on the
+ * stack by how many trait arguments each `implements` entry passes (LBC_NEWCLASSMEMBER_IMPLEMENTS). Runs once, when
+ * the class statement finishes, before any object of the class exists:
+ *  - attaches the listed traits and every trait without parameters their `needs` lists imply;
+ *  - appends the traits' provided fields after the class's own and gives the class a copy of every trait function it
+ *    doesn't define (luaR_addclassmember stamps the copy as the class's method);
+ *  - raises when a member is provided twice, a final function is redefined, or an expectation isn't met by the
+ *    finished class (presence, field or function, access specifier, `const`);
+ *  - copies the traits' constant field defaults into the class's, and gives the class a copy of each trait's
+ *    `__traitinit` for the fields that have to be computed per construction (luaR_inittraitfields).
+ * May call the traits' `__needs` functions.
+ */
+LUAI_FUNC void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint32_t n);
+
+/**
+ * Luwu Traits (rfcs/classes/traits.md): computes the fields `object` gets from the traits its class implements that
+ * don't have a constant default (those are already in place, see luaR_newobject). Calls the class's copy of each
+ * argument-less trait's `__traitinit` with the object, then the class's `__inittraits`, which evaluates the
+ * `implements` arguments from the `nargs` constructor arguments at `args` and calls the remaining copies with them.
+ * The calls can't yield. `object` must be anchored where the collector can see it.
+ */
+LUAI_FUNC void luaR_inittraitfields(lua_State* L, LuauClass* classdef, LuauObject* object, StkId args, int nargs);
+
+// Luwu Traits (rfcs/classes/traits.md): whether `classdef` implements `trait`, listed or implied through `needs`.
+LUAI_FUNC bool luaR_implements(const LuauClass* classdef, const LuauClass* trait);
 
 // A member's offset is cached in its instruction's 8-bit C operand (the slot the fast paths check). A
 // larger offset doesn't fit: it is never cached, and that member is looked up by name every time.

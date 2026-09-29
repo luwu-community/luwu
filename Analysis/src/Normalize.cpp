@@ -2277,6 +2277,23 @@ TypeId Normalizer::intersectionOfBools(TypeId here, TypeId there)
         return there;
 }
 
+// Luwu Traits (rfcs/classes/traits.md): the negations that still describe part of `ty`. A normalized extern type only
+// negates subtypes of the type it negates them from; dropping the others only widens the type.
+static TypeIds keepNegationsOf(TypeId ty, const TypeIds& negations)
+{
+    const ExternType* et = get<ExternType>(ty);
+    TypeIds kept;
+
+    for (TypeId negation : negations)
+    {
+        const ExternType* negationType = get<ExternType>(negation);
+        if (et && negationType && isSubclass(negationType, et))
+            kept.insert(negation);
+    }
+
+    return kept;
+}
+
 void Normalizer::intersectExternTypes(NormalizedExternType& heres, const NormalizedExternType& theres)
 {
     consumeFuel();
@@ -2395,6 +2412,19 @@ void Normalizer::intersectExternTypes(NormalizedExternType& heres, const Normali
                 unionExternTypes(hereNegations, thereNegations);
                 break;
             }
+            // Luwu Traits (rfcs/classes/traits.md): two unrelated traits intersect to the objects of classes
+            // implementing both (see intersectExternTypesWithExternType)
+            else if (isTraitLike(get<ExternType>(hereTy)) && isTraitLike(get<ExternType>(thereTy)))
+            {
+                TypeId both = intersectTraits(hereTy, thereTy);
+                TypeIds negations = keepNegationsOf(both, hereNegations);
+                unionExternTypes(negations, keepNegationsOf(both, thereNegations));
+
+                it = heres.ordering.erase(it);
+                heres.externTypes.erase(hereTy);
+                heres.pushPair(both, std::move(negations));
+                break;
+            }
             else
             {
                 it = heres.ordering.erase(it);
@@ -2402,6 +2432,89 @@ void Normalizer::intersectExternTypes(NormalizedExternType& heres, const Normali
             }
         }
     }
+}
+
+TypeId Normalizer::intersectTraits(TypeId here, TypeId there)
+{
+    std::vector<TypeId> traits;
+    auto addTraits = [&](TypeId ty)
+    {
+        const ExternType* et = get<ExternType>(ty);
+        LUAU_ASSERT(et);
+
+        if (et->traitIntersection.empty())
+            traits.push_back(ty);
+        else
+            for (TypeId trait : et->traitIntersection)
+                traits.push_back(follow(trait));
+    };
+
+    addTraits(here);
+    addTraits(there);
+
+    std::sort(traits.begin(), traits.end());
+    traits.erase(std::unique(traits.begin(), traits.end()), traits.end());
+
+    // A trait another one in the list needs is implied by it (`Renderable & Element` is `Renderable`); of two traits
+    // that need each other, the first one stays
+    std::vector<TypeId> minimal;
+    for (size_t i = 0; i < traits.size(); ++i)
+    {
+        bool implied = false;
+        for (size_t j = 0; j < traits.size() && !implied; ++j)
+        {
+            if (i == j || !isSubclass(traits[j], traits[i]))
+                continue;
+
+            bool mutual = isSubclass(traits[i], traits[j]);
+            implied = !mutual || j < i;
+        }
+
+        if (!implied)
+            minimal.push_back(traits[i]);
+    }
+
+    LUAU_ASSERT(!minimal.empty());
+    if (minimal.size() == 1)
+        return minimal[0];
+
+    if (TypeId* cached = &cachedTraitIntersections[minimal]; *cached)
+        return *cached;
+
+    // printed in name order, whichever order the refinements came in
+    std::vector<TypeId> named = minimal;
+    std::sort(
+        named.begin(),
+        named.end(),
+        [](TypeId a, TypeId b)
+        {
+            return get<ExternType>(a)->name < get<ExternType>(b)->name;
+        }
+    );
+
+    std::string name;
+    ExternType::Props props;
+    for (TypeId trait : named)
+    {
+        const ExternType* traitType = get<ExternType>(trait);
+
+        if (!name.empty())
+            name += " & ";
+        name += traitType->name;
+
+        for (const auto& [propName, prop] : traitType->props)
+            props.try_emplace(propName, prop);
+    }
+
+    TypeId intersection =
+        arena->addType(ExternType{name, std::move(props), builtinTypes->objectType, std::nullopt, Tags{}, nullptr, ModuleName{}, std::nullopt});
+
+    ExternType* intersectionType = getMutable<ExternType>(intersection);
+    intersectionType->implementedTraits = named;
+    intersectionType->traitIntersection = named;
+
+    cachedTraitIntersections[minimal] = intersection;
+    return intersection;
 }
 
 void Normalizer::intersectExternTypesWithExternType(NormalizedExternType& heres, TypeId there)
@@ -2466,6 +2579,18 @@ void Normalizer::intersectExternTypesWithExternType(NormalizedExternType& heres,
         else if (isSubclass(hereTy, there))
         {
             return;
+        }
+        // Luwu Traits (rfcs/classes/traits.md): two unrelated traits still share the objects of classes implementing
+        // both, so they make an intersection of traits rather than nothing
+        else if (isTraitLike(get<ExternType>(hereTy)) && isTraitLike(get<ExternType>(there)))
+        {
+            TypeId both = intersectTraits(hereTy, there);
+            TypeIds negations = keepNegationsOf(both, hereNegations);
+
+            it = heres.ordering.erase(it);
+            heres.externTypes.erase(hereTy);
+            heres.pushPair(both, std::move(negations));
+            break;
         }
         // If the incoming class is completely unrelated to the current class,
         // we drop the current class from the map.

@@ -324,6 +324,18 @@ private:
     void applyRefinements(const ScopePtr& scope, Location location, RefinementId refinement);
 
     LUAU_NOINLINE void prototypeTypeDefinitions(const ScopePtr& scope, AstStatBlock* block);
+    // Luwu Traits (rfcs/classes/traits.md): after the traits of a block are prototyped, record the traits each one needs.
+    void linkTraitNeeds(const ScopePtr& scope, const AstArray<AstStat*>& statements);
+    // Luwu Traits (rfcs/classes/traits.md): the trait an `implements`/`needs` entry names, as its object type, or nullptr.
+    TypeId resolveTraitRef(const ScopePtr& scope, const AstClassTraitRef& ref);
+    // Luwu Traits (rfcs/classes/traits.md): type calling `class<Trait>` from the trait's expected `__init` signature.
+    void bindTraitImplementorConstructor(ClassDeclRecord* traitRecord, TypeId initSignature);
+    // Luwu Traits (rfcs/classes/traits.md): record the traits a class implements and give it the members they provide.
+    // Returns the types of the fields the traits expect, by name.
+    std::map<Name, TypeId> implementTraits(const ScopePtr& scope, AstStatClass* cls, ClassDeclRecord* record);
+    // Luwu Traits (rfcs/classes/traits.md): checks the arguments of each `implements` entry against its trait's parameters,
+    // in the scope the class's field initializers are checked in
+    void checkTraitArguments(const ScopePtr& initializerScope, AstStatClass* cls);
     void prototypeClass(
         const ScopePtr& scope,
         AstStatClass* classDecl,

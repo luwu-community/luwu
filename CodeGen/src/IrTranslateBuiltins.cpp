@@ -440,7 +440,7 @@ static BuiltinImplResult translateBuiltinType(IrBuilder& build, int nparams, int
         return {BuiltinImplType::None, -1};
 
     IrOp tag = build.inst(IrCmd::LOAD_TAG, build.vmReg(arg));
-    IrOp name = build.inst(IrCmd::GET_TYPE, tag);
+    IrOp name = build.inst(IrCmd::GET_TYPE, tag, build.vmReg(arg));
 
     build.inst(IrCmd::STORE_POINTER, build.vmReg(ra), name);
     build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TSTRING));

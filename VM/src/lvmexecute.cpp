@@ -3765,10 +3765,18 @@ reentry:
                 VM_CASE_INSTRUCTION insn = *pc++;
                 uint32_t aux = *pc++;
                 VM_CASE_STKID ra = VM_REG(LUAU_INSN_A(insn));
+                VM_CASE_STKID rc = VM_REG(LUAU_INSN_C(insn));
+
+                // Luwu Traits (rfcs/classes/traits.md): the class's `implements` list
+                if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_IMPLEMENTS)
+                {
+                    VM_PROTECT(luaR_implementtraits(L, classvalue(ra), rc, aux));
+                    VM_NEXT();
+                }
+
                 TValue* membername = VM_KV(aux);
                 LUAU_ASSERT(ttisstring(membername));
                 LUAU_ASSERT(LUAU_INSN_B(insn) == 0);
-                VM_CASE_STKID rc = VM_REG(LUAU_INSN_C(insn));
                 VM_PROTECT_PC();
                 luaR_addclassmember(L, classvalue(ra), tsvalue(membername), rc);
                 VM_NEXT();
@@ -3864,6 +3872,9 @@ reentry:
                                : classvalue(classReg)->hascustominit == custominit
                 );
                 LUAU_ASSERT(custominit || !classvalue(classReg)->haspoddefaultsfn);
+                // Luwu Traits (rfcs/classes/traits.md): the compiler never constructs a trait, or a class that implements any, this way
+                LUAU_ASSERT(!classvalue(classReg)->istrait && classvalue(classReg)->numtraits == 0);
+                LUAU_ASSERT(!classvalue(classReg)->traitspending);
                 LUAU_ASSERT(!fieldsform || classvalue(classReg)->numberofinstancemembers == aux);
                 // the POD form takes at most one argument; more compile to a call, which raises
                 LUAU_ASSERT(form != LBC_NEWOBJECT_DEFAULT || aux <= 1);

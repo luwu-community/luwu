@@ -1076,10 +1076,18 @@ const Instruction* executeNEWCLASSMEMBER(lua_State* L, const Instruction* pc, St
     Instruction insn = *pc++;
     uint32_t aux = *pc++;
     StkId ra = VM_REG(LUAU_INSN_A(insn));
+    StkId rc = VM_REG(LUAU_INSN_C(insn));
+
+    // Luwu Traits (rfcs/classes/traits.md): the class's `implements` list
+    if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_IMPLEMENTS)
+    {
+        VM_PROTECT(luaR_implementtraits(L, classvalue(ra), rc, aux));
+        return pc;
+    }
+
     TValue* membername = VM_KV(aux);
     LUAU_ASSERT(ttisstring(membername));
     LUAU_ASSERT(LUAU_INSN_B(insn) == 0);
-    StkId rc = VM_REG(LUAU_INSN_C(insn));
 
     VM_PROTECT_PC();
     luaR_addclassmember(L, classvalue(ra), tsvalue(membername), rc);
