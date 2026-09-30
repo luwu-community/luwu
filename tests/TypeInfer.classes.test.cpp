@@ -8,6 +8,8 @@
 #include "ScopedFlags.h"
 #include "doctest.h"
 
+#include <algorithm>
+
 using namespace Luau;
 
 LUAU_FASTFLAG(LuwuClasses)
@@ -43,6 +45,16 @@ declare class: {
     fields: @checked (o: class | object) -> ({ [string]: unknown }, boolean)
 }
 )LUAU_SRC";
+    // the `class` library as the embedded definitions declare it with traits on, where `trait` is a type
+    const std::string traitDefinitions = R"LUAU_SRC(
+declare class: {
+    isinstance: @checked (o: unknown, c: class) -> boolean,
+    implements: @checked (o: unknown, t: trait) -> boolean,
+    of: @checked (o: unknown) -> class?,
+    name: @checked (o: class | object | trait) -> string,
+    fields: @checked (o: class | object | trait) -> ({ [string]: unknown }, boolean)
+}
+)LUAU_SRC";
     Frontend& getFrontend() override
     {
         if (frontend)
@@ -52,6 +64,8 @@ declare class: {
         Luau::unfreeze(f.globals.globalTypes);
 
         f.loadDefinitionFile(f.globals, f.globals.globalScope, definitions, "@test", false);
+        if (FFlag::LuwuTraits)
+            f.loadDefinitionFile(f.globals, f.globals.globalScope, traitDefinitions, "@test", false);
         AstName reqName = f.globals.globalNames.names->getOrAdd("require");
         auto it = f.globals.globalScope->bindings.find(reqName);
         LUAU_ASSERT(it != f.globals.globalScope->bindings.end());
@@ -70,6 +84,10 @@ declare class: {
             auto nameIt = ctv->props.find("name");
             LUAU_ASSERT(nameIt != ctv->props.end() && nameIt->second.readTy);
             attachMagicFunction(*nameIt->second.readTy, std::make_shared<MagicClassName>());
+
+            auto ofIt = ctv->props.find("of");
+            LUAU_ASSERT(ofIt != ctv->props.end() && ofIt->second.readTy);
+            attachMagicFunction(*ofIt->second.readTy, std::make_shared<MagicClassOf>());
         }
 
         registerTestTypes();
@@ -3625,6 +3643,302 @@ TEST_CASE_FIXTURE(ClassesFixture, "trait_from_another_module")
     CheckResult modB = getFrontend().check("game/B");
     LUAU_REQUIRE_NO_ERRORS(modB);
     CHECK_EQ("string", toString(requireType("game/B", "h")));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "trait_values_are_traits_not_classes")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait T
+            function f(self): number return 1 end
+        end
+        class C implements T end
+
+        local o = C()
+        local a = class.isinstance(o, T)
+        local b = class.implements(o, C)
+        local c = class.implements(o, T)
+        local n = class.name(T)
+        local t: trait = T
+        local k: class = C
+    )");
+
+    // `class.isinstance` never matches a trait, and `class.implements` takes only traits
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 7);
+    CHECK_EQ(result.errors[1].location.begin.line, 8);
+    CHECK_EQ("\"T\"", toString(requireType("n")));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "type_guards_refine_class_object_and_trait")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait T end
+        class C end
+
+        local function f(x: class | trait, o: object | number)
+            if typeof(x) == "trait" then
+                local _t: trait = x
+            else
+                local _c: class = x
+            end
+
+            -- parentheses around the call keep it a type guard
+            if (typeof(x)) == "class" then
+                local _c: class = x
+            end
+
+            if typeof(o) == "object" then
+                local _o: object = o
+            end
+        end
+
+        f(T, 1)
+        f(C, C())
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_of_narrows_to_the_class")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait T
+            function again(self): T
+                local Cls = class.of(self)
+                return Cls()
+            end
+            expect function __init(self)
+        end
+        class A() implements T end
+        class B() end
+
+        local cond: boolean = true
+        local a = class.of(A())
+        local ab = class.of(if cond then A() else B())
+        local u = class.of(1 :: unknown)
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    // a class value prints as its bare name
+    CHECK_EQ(follow(requireType("a")), follow(requireType("A")));
+    CHECK_EQ("A | B", toString(requireType("ab")));
+    CHECK_EQ("class?", toString(requireType("u")));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "trait_values_have_their_needed_traits_metamethods")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait Base
+            function __div(self, other: string): Base return self end
+        end
+        trait Fs needs Base end
+        class P implements Fs end
+
+        local function f(p: Base)
+            if class.implements(p, Fs) then
+                local q = p / "x"
+            end
+        end
+        f(P())
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "implementing_a_generic_trait_with_type_arguments")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+    ScopedFastFlag generics{FFlag::LuwuGenericNominals, true};
+    ScopedFastFlag defaultArguments{FFlag::LuwuDefaultArguments, true};
+
+    CheckResult result = check(R"(
+        trait Listable<T>
+            expect public inner: { T }
+            public function last(self): T
+                return self.inner[#self.inner]
+            end
+            public function push(self, item: T)
+                self.inner[#self.inner + 1] = item
+            end
+        end
+
+        class Names(inner: { string } = {}) implements Listable<string> end
+
+        class Gen<T = string>(inner: { T } = {}) implements Listable<T> end
+
+        local n = Names()
+        n:push("x")
+        local s = n:last()
+        local l: Listable<string> = n
+
+        local g = Gen()
+        g:push("y")
+        local gs = g:last()
+        local gl: Listable<string> = g
+        local gn: Listable<number> = Gen<<number>>({ 1 })
+
+        n:push(1)
+    )");
+
+    // only the last push, of a number where the trait's `T` is a string
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 26);
+    CHECK_EQ("string", toString(requireType("s")));
+    CHECK_EQ("string", toString(requireType("gs")));
+    CHECK_EQ("Gen<string>", toString(requireType("g")));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_type_argument_defaults_fill_unconstrained_arguments")
+{
+    ScopedFastFlag generics{FFlag::LuwuGenericNominals, true};
+    ScopedFastFlag defaultArguments{FFlag::LuwuDefaultArguments, true};
+
+    CheckResult result = check(R"(
+        class Box<T = string>(value: T? = nil) end
+
+        local a = Box()
+        local b = Box(1)
+        local c: Box<boolean> = Box()
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("Box<string>", toString(requireType("a")));
+    CHECK_EQ("Box<number>", toString(requireType("b")));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "explicit_type_arguments_on_a_class_or_trait_call")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+    ScopedFastFlag generics{FFlag::LuwuGenericNominals, true};
+
+    CheckResult result = check(R"(
+        trait Shape
+            function __create<T>(n: number): T
+                return (nil :: any)
+            end
+        end
+        class Box<T>(v: T) end
+
+        local s = Shape<<number>>(1)
+        local b = Box<<string>>("x")
+        local bad = Box<<string>>(5)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 10);
+    CHECK_EQ("number", toString(requireType("s")));
+    CHECK_EQ("Box<string>", toString(requireType("b")));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "trait_expectation_mismatches_are_reported_on_the_member")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait Named
+            expect public name: string
+            expect public function __init(self, n: string)
+            expect public function greet(self, other: string): string
+        end
+        class A implements Named
+            public name: number = 1
+            public function __init(self, n: number)
+            end
+            public function greet(self, other: number): number
+                return other
+            end
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
+    // `__init`, `greet` and `name`, each on its own declaration rather than on the class's name
+    std::vector<unsigned> lines;
+    for (const TypeError& error : result.errors)
+    {
+        CHECK(get<TypeMismatch>(error));
+        lines.push_back(error.location.begin.line);
+    }
+    std::sort(lines.begin(), lines.end());
+    CHECK_EQ(lines, std::vector<unsigned>{7, 8, 10});
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "expected_function_signatures_are_checked_where_they_are_written")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+    ScopedFastFlag generics{FFlag::LuwuGenericNominals, true};
+
+    CheckResult result = check(R"(
+        trait Listable<T>
+            expect public inner: { T }
+            expect public function clone(self): Listable
+        end
+
+        class List<T>(inner: { T }) implements Listable<T>
+            public inner
+            public function clone(self): List<T>
+                return List(self.inner)
+            end
+        end
+    )");
+
+    // only the missing type argument, where it is written: an implementation isn't compared with a broken signature
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 3);
+    CHECK_EQ("Generic type 'Listable<T>' expects 1 type argument, but none are specified", toString(result.errors[0]));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "a_class_with_private_fields_is_usable_through_its_traits")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait Shape
+            expect private sides: number
+            public function describe(self): string
+                return `{self.sides} sides`
+            end
+        end
+        class Tri implements Shape
+            private sides: number = 3
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "trait_members_are_named_after_the_trait_in_errors")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait P
+            expect private secret: number
+            expect public const k: number
+        end
+        class A implements P
+            private secret: number = 1
+            public const k: number = 2
+        end
+        local function f(p: P)
+            local _ = p.secret
+            p.k = 3
+        end
+        f(A())
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ("Field 'secret' of trait 'P' is private; accessing it here will raise a runtime error", toString(result.errors[0]));
+    CHECK_EQ(
+        "Field 'k' of trait 'P' is constant; assigning to it outside of '__init' will raise a runtime error", toString(result.errors[1])
+    );
 }
 
 TEST_SUITE_END();

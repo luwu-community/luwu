@@ -1829,6 +1829,51 @@ static void patchUnconstrainedGenericsFromExpectedType(TypeId overloadFn, TypeId
     }
 }
 
+// Luwu Generic Nominals (rfcs/generics-on-extern-types.md): a type argument of the nominal a call returns that nothing
+// constrains takes the default its declaration gives it: `Box()` for `class Box<T = string>(value: T? = nil)` is a
+// `Box<string>`, not a `Box<unknown>`. Runs after patchUnconstrainedGenericsFromExpectedType, so an expected type wins.
+static void patchUnconstrainedGenericsFromDefaults(TypeId overloadFn, NotNull<Scope> scope, DenseHashMap<TypeId, TypeId>& genericSubstitutions)
+{
+    const FunctionType* ftv = get<FunctionType>(overloadFn);
+    if (!ftv)
+        return;
+
+    TypePackId retPack = follow(ftv->retTypes);
+    auto it = begin(retPack);
+    if (it == end(retPack))
+        return;
+
+    const ExternType* retEt = get<ExternType>(follow(*it));
+    if (!retEt || retEt->instantiatedTypeParams.empty())
+        return;
+
+    // the declaration's own type parameters, which carry the defaults, found by the name it is declared under
+    std::optional<TypeFun> declaration = scope->lookupType(retEt->name);
+    const ExternType* declared = declaration ? get<ExternType>(follow(declaration->type)) : nullptr;
+    bool sameDeclaration = declared && declared->definitionModuleName == retEt->definitionModuleName &&
+                           declared->definitionLocation == retEt->definitionLocation && declared->root == retEt->root;
+    if (!sameDeclaration || declaration->typeParams.size() != retEt->instantiatedTypeParams.size())
+        return;
+
+    for (size_t i = 0; i < retEt->instantiatedTypeParams.size(); ++i)
+    {
+        const std::optional<TypeId>& defaultValue = declaration->typeParams[i].defaultValue;
+        TypeId param = follow(retEt->instantiatedTypeParams[i]);
+        // a default naming another parameter (`U = T`) means that parameter's argument, which this doesn't resolve
+        if (!defaultValue || get<GenericType>(follow(*defaultValue)) || !get<GenericType>(param))
+            continue;
+
+        TypeId* subst = genericSubstitutions.find(param);
+        FreeType* ft = subst ? getMutable<FreeType>(follow(*subst)) : nullptr;
+        if (!ft || !is<NeverType>(follow(ft->lowerBound)) || !is<UnknownType>(follow(ft->upperBound)))
+            continue;
+
+        // pinned rather than replaced, for the reason patchUnconstrainedGenericsFromExpectedType gives
+        ft->lowerBound = *defaultValue;
+        ft->upperBound = *defaultValue;
+    }
+}
+
 static std::optional<TypeId> selectExpectedNominal(const FunctionType* ftv, TypeId expectedType);
 
 bool ConstraintSolver::tryDispatch(const FunctionCallConstraint& c, NotNull<const Constraint> constraint, bool force)
@@ -1995,6 +2040,9 @@ bool ConstraintSolver::tryDispatch(const FunctionCallConstraint& c, NotNull<cons
 
     if (FFlag::LuwuGenericNominals && c.expectedType)
         patchUnconstrainedGenericsFromExpectedType(overloadToUse, follow(*c.expectedType), u2.genericSubstitutions);
+
+    if (FFlag::LuwuGenericNominals)
+        patchUnconstrainedGenericsFromDefaults(overloadToUse, constraint->scope, u2.genericSubstitutions);
 
     if (!u2.genericSubstitutions.empty() || !u2.genericPackSubstitutions.empty())
     {
@@ -3429,6 +3477,18 @@ bool ConstraintSolver::tryDispatch(const InstantiateNominalPropConstraint& c, No
         return true;
     }
 
+    // Luwu Traits (rfcs/classes/traits.md): a class implementing a generic trait (`implements Listable<string>`) gets
+    // the trait's members through this constraint before the solver has expanded the instantiation
+    TypeId instantiatedType = follow(c.instantiatedType);
+    if (isBlocked(instantiatedType))
+    {
+        if (!force)
+            return block(instantiatedType, constraint);
+
+        bind(constraint, c.target, builtinTypes->errorType);
+        return true;
+    }
+
     ApplyTypeFunction applyTypeFunction{arena};
 
     for (size_t i = 0; i < c.typeParams.size() && i < c.typeArguments.size(); ++i)
@@ -3441,8 +3501,8 @@ bool ConstraintSolver::tryDispatch(const InstantiateNominalPropConstraint& c, No
     // land on the instantiation we are filling in, not on a fresh copy of the template. Mapping the
     // template onto the instantiation does that; `dontTraverseInto` keeps the substitution from
     // then rewriting the instantiation's own children out from under us.
-    applyTypeFunction.typeArguments[follow(c.templateType)] = c.instantiatedType;
-    applyTypeFunction.dontTraverseInto(c.instantiatedType);
+    applyTypeFunction.typeArguments[follow(c.templateType)] = instantiatedType;
+    applyTypeFunction.dontTraverseInto(instantiatedType);
 
     std::optional<TypeId> substituted = applyTypeFunction.substitute(templateProp);
 
@@ -3461,6 +3521,19 @@ bool ConstraintSolver::tryDispatch(const TypeInstantiationConstraint& c, NotNull
 {
     if (isBlocked(c.functionType))
         return block(c.functionType, constraint);
+
+    // Luwu Classes (rfcs/classes): `Box<<string>>` is the constructor (a trait's `__create`) with its type arguments
+    // given, so `Box<<string>>(x)` is a `Box<string>`. Its `__call` takes the class value first, which the call won't pass.
+    std::optional<TypeId> classCall = FFlag::LuwuClasses ? classValueCallType(builtinTypes, c.functionType) : std::nullopt;
+    if (classCall)
+    {
+        if (isBlocked(*classCall))
+            return block(*classCall, constraint);
+
+        TypeId instantiated = instantiateFunctionType(*classCall, c.typeArguments, c.typePackArguments, constraint->scope, constraint->location);
+        bind(constraint, c.placeholderType, withoutFirstParameter(*arena, instantiated));
+        return true;
+    }
 
     bind(
         constraint,

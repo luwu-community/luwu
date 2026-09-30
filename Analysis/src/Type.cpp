@@ -30,6 +30,8 @@ LUAU_FASTINTVARIABLE(LuauTableTypeMaximumStringifierLength, 0)
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAG(LuauInstantiateInSubtyping)
 LUAU_FASTFLAG(LuwuGenericNominals)
+LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuTraits)
 
 namespace Luau
 {
@@ -862,6 +864,7 @@ BuiltinTypes::BuiltinTypes()
     , externType(arena->addType(Type{ExternType{"userdata", {}, std::nullopt, std::nullopt, {}, {}, {}, {}}, /*persistent*/ true}))
     , objectType(arena->addType(Type{ExternType{"object", {}, std::nullopt, std::nullopt, {}, {}, {}, {}}, /*persistent*/ true}))
     , classType(arena->addType(Type{ExternType{"class", {}, std::nullopt, std::nullopt, {}, {}, {}, {}}, /*persistent*/ true}))
+    , traitType(arena->addType(Type{ExternType{"trait", {}, std::nullopt, std::nullopt, {}, {}, {}, {}}, /*persistent*/ true}))
     , vectorType(arena->addType(Type{ExternType{"vector", {}, std::nullopt, std::nullopt, {}, {}, {}, {}}, /*persistent*/ true}))
     , tableType(arena->addType(Type{PrimitiveType{PrimitiveType::Table}, /*persistent*/ true}))
     , emptyTableType(arena->addType(Type{TableType{TableState::Sealed, TypeLevel{}, nullptr}, /*persistent*/ true}))
@@ -909,9 +912,11 @@ TypePackId BuiltinTypes::errorRecoveryTypePack(TypePackId guess) const
     return guess;
 }
 
-std::array<TypeId, 4> BuiltinTypes::nominalRoots() const
+BuiltinTypes::NominalRoots BuiltinTypes::nominalRoots() const
 {
-    return {externType, classType, objectType, vectorType};
+    // Luwu Traits (rfcs/classes/traits.md): no value is a trait without traits, so `trait` stays out of the top
+    size_t count = FFlag::LuwuClasses && FFlag::LuwuTraits ? 5 : 4;
+    return {{externType, classType, objectType, vectorType, traitType}, count};
 }
 
 // A nominal type's root is its parent's root (or the parent itself, if the

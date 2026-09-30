@@ -1249,9 +1249,10 @@ void ConstraintGenerator::prototypeClass(
     TypeId metatableTy =
         arena->addType(TableType{std::move(classValueMetatableProps), std::nullopt, TypeLevel{}, scope.get(), TableState::Sealed});
 
-    TypeId externTy = arena->addType(
-        ExternType{declName, staticProps, builtinTypes->classType, metatableTy, Tags{}, nullptr, module->name, classDecl->location}
-    );
+    // Luwu Traits (rfcs/classes/traits.md): a trait's value is a `trait`, not a `class`
+    TypeId valueRoot = classDecl->isTrait ? builtinTypes->traitType : builtinTypes->classType;
+    TypeId externTy =
+        arena->addType(ExternType{declName, staticProps, valueRoot, metatableTy, Tags{}, nullptr, module->name, classDecl->location});
 
     // Setup a bidirectional relationship between classes and objects
     getMutable<ExternType>(externTy)->relation.emplace(Obj{classInstanceTy});
@@ -1350,6 +1351,58 @@ void ConstraintGenerator::prototypeClass(
 // A trait named by an `implements` or `needs` entry, through the type it declares: `Trait` in this module, or
 // `mod.Trait` from a module this one requires. Returns the trait's object type, or nullptr when the entry names
 // nothing known to be a trait.
+std::optional<ConstraintGenerator::TraitInstantiation> ConstraintGenerator::instantiateTraitRef(const ScopePtr& scope, const AstClassTraitRef& ref)
+{
+    if (!FFlag::LuwuGenericNominals || ref.typeArguments.size == 0)
+        return std::nullopt;
+
+    std::optional<TypeFun> traitFun = scope->lookupTraitRef(ref);
+    if (!traitFun || traitFun->typeParams.empty())
+        return std::nullopt;
+
+    // the type reference `ref` spells, as `resolveType` would read it
+    std::optional<AstName> prefix;
+    AstName name;
+    if (AstExprGlobal* global = ref.trait->as<AstExprGlobal>())
+        name = global->name;
+    else if (AstExprIndexName* index = ref.trait->as<AstExprIndexName>())
+    {
+        name = index->index;
+        if (AstExprLocal* moduleLocal = index->expr->as<AstExprLocal>())
+            prefix = moduleLocal->local->name;
+        else if (AstExprGlobal* moduleGlobal = index->expr->as<AstExprGlobal>())
+            prefix = moduleGlobal->name;
+        else
+            return std::nullopt;
+    }
+    else
+        return std::nullopt;
+
+    TraitInstantiation result;
+    for (const AstTypeOrPack& arg : ref.typeArguments)
+    {
+        if (!arg.type)
+            return std::nullopt;
+
+        result.args.push_back(resolveType_(scope, arg.type, /* inTypeArguments */ true));
+    }
+
+    // missing arguments take the trait's defaults
+    for (size_t i = 0; i < traitFun->typeParams.size(); ++i)
+    {
+        result.params.push_back(traitFun->typeParams[i].ty);
+
+        if (i >= result.args.size())
+            result.args.push_back(traitFun->typeParams[i].defaultValue.value_or(builtinTypes->unknownType));
+    }
+
+    result.args.resize(result.params.size());
+
+    result.instantiated = arena->addType(PendingExpansionType{prefix, name, result.args, {}});
+    addConstraint(scope, ref.location, TypeAliasExpansionConstraint{/* target */ result.instantiated});
+    return result;
+}
+
 TypeId ConstraintGenerator::resolveTraitRef(const ScopePtr& scope, const AstClassTraitRef& ref)
 {
     std::optional<TypeFun> traitFun = scope->lookupTraitRef(ref);
@@ -1381,8 +1434,8 @@ void ConstraintGenerator::linkTraitNeeds(const ScopePtr& scope, const AstArray<A
         }
     }
 
-    // A trait-typed value has the members of the traits it needs, which every implementing class implements too. Each
-    // needed trait is visited once, however the `needs` graph branches or loops.
+    // A trait-typed value has the members of the traits it needs, metamethods included, which every implementing class
+    // implements too. Each needed trait is visited once, however the `needs` graph branches or loops.
     for (AstStat* stat : statements)
     {
         AstStatClass* trait = stat->as<AstStatClass>();
@@ -1390,6 +1443,8 @@ void ConstraintGenerator::linkTraitNeeds(const ScopePtr& scope, const AstArray<A
         ExternType* traitType = record ? getMutable<ExternType>(follow((*record)->ty)) : nullptr;
         if (!traitType || !traitType->traitInfo || traitType->implementedTraits.empty())
             continue;
+
+        TableType* traitMetatable = traitType->metatable ? getMutable<TableType>(follow(*traitType->metatable)) : nullptr;
 
         std::vector<const ExternType*> pending;
         DenseHashSet<const ExternType*> visited{nullptr};
@@ -1421,6 +1476,19 @@ void ConstraintGenerator::linkTraitNeeds(const ScopePtr& scope, const AstArray<A
                 if (copyable)
                 {
                     traitType->props[name] = prop;
+                    traitType->traitInfo->fromNeeds.insert(name);
+                }
+            }
+
+            const TableType* neededMetatable = needed->metatable ? get<TableType>(follow(*needed->metatable)) : nullptr;
+            if (traitMetatable && neededMetatable)
+            {
+                for (const auto& [name, prop] : neededMetatable->props)
+                {
+                    if (traitMetatable->props.count(name))
+                        continue;
+
+                    traitMetatable->props[name] = prop;
                     traitType->traitInfo->fromNeeds.insert(name);
                 }
             }
@@ -1609,15 +1677,59 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
     std::vector<std::pair<TypeId, Location>> traits;
     DenseHashSet<TypeId> seen{nullptr};
 
+    // A generic trait listed with type arguments (`implements Listable<string>`): the class implements that
+    // instantiation, and what it gets from the trait has the arguments substituted for the trait's generics
+    std::map<TypeId, TraitInstantiation> instantiations;
+
     for (const AstClassTraitRef& ref : cls->implements)
     {
         TypeId trait = resolveTraitRef(scope, ref);
-        if (trait && !seen.contains(trait))
-        {
-            seen.insert(trait);
-            traits.emplace_back(trait, ref.trait->location);
-        }
+        if (!trait || seen.contains(trait))
+            continue;
+
+        seen.insert(trait);
+        traits.emplace_back(trait, ref.trait->location);
+
+        if (std::optional<TraitInstantiation> instantiation = instantiateTraitRef(scope, ref))
+            instantiations.emplace(trait, std::move(*instantiation));
     }
+
+    // `ty`, a type from `trait`'s declaration, as the class sees it
+    auto instantiateMember = [&](TypeId trait, TypeId ty, Location location) -> TypeId
+    {
+        auto it = instantiations.find(trait);
+        if (it == instantiations.end())
+            return ty;
+
+        TypeId placeholder = arena->addType(BlockedType{});
+        NotNull<Constraint> constraint = addConstraint(
+            scope,
+            location,
+            InstantiateNominalPropConstraint{ty, placeholder, trait, it->second.instantiated, it->second.params, it->second.args, {}, {}}
+        );
+        getMutable<BlockedType>(placeholder)->setOwner(constraint);
+        return placeholder;
+    };
+
+    auto instantiateProperty = [&](TypeId trait, const Property& prop, Location location)
+    {
+        if (!instantiations.count(trait))
+            return prop;
+
+        Property result = prop;
+        if (prop.isShared())
+        {
+            result.readTy = instantiateMember(trait, *prop.readTy, location);
+            result.writeTy = result.readTy;
+            return result;
+        }
+
+        if (prop.readTy)
+            result.readTy = instantiateMember(trait, *prop.readTy, location);
+        if (prop.writeTy)
+            result.writeTy = instantiateMember(trait, *prop.writeTy, location);
+        return result;
+    };
 
     for (size_t i = 0; i < traits.size(); ++i)
     {
@@ -1761,7 +1873,9 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
         TypeId trait = traitEntry.first;
         // a named local rather than a structured binding: the lambdas below capture it (C++17)
         Location location = traitEntry.second;
-        classType->implementedTraits.push_back(trait);
+
+        auto instantiation = instantiations.find(trait);
+        classType->implementedTraits.push_back(instantiation != instantiations.end() ? instantiation->second.instantiated : trait);
 
         const ExternType* traitType = get<ExternType>(trait);
         const ExternType::TraitInfo& info = *traitType->traitInfo;
@@ -1814,7 +1928,7 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
             if (!provide(name, prop))
                 continue;
 
-            classType->props[name] = prop;
+            classType->props[name] = instantiateProperty(trait, prop, location);
 
             if (classFields && isTraitField(name))
                 classFields->insert(name);
@@ -1832,7 +1946,7 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
                     checkOverrideAccess(name, prop, own != classValueType->props.end() ? &own->second : nullptr, traitType, location);
                 }
                 else if (provided && !classValueType->props.count(name))
-                    classValueType->props[name] = prop;
+                    classValueType->props[name] = instantiateProperty(trait, prop, location);
             }
         }
 
@@ -1842,7 +1956,7 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
             for (const auto& [name, prop] : traitMetatable->props)
             {
                 if (provide(name, prop))
-                    classMetatable->props[name] = prop;
+                    classMetatable->props[name] = instantiateProperty(trait, prop, location);
             }
         }
     }
@@ -1875,8 +1989,8 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
                 // an optional function the class leaves out reads as nil
                 if (optional && expectedProp != traitType->props.end() && expectedProp->second.readTy)
                 {
-                    Property nilable = expectedProp->second;
-                    nilable.readTy = makeOption(builtinTypes, *arena, *expectedProp->second.readTy);
+                    Property nilable = instantiateProperty(trait, expectedProp->second, location);
+                    nilable.readTy = makeOption(builtinTypes, *arena, *nilable.readTy);
                     classType->props[name] = nilable;
                     continue;
                 }
@@ -1896,7 +2010,7 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
             // default is inferred against it, so `const kind = "Bolt"` fits `expect const kind: "Las" | "Bolt"`.
             std::set<Name>* traitFields = fieldNamesOf(traitType);
             if (traitFields && traitFields->count(name) && expectedProp->second.readTy)
-                expectedFieldTypes.try_emplace(name, *expectedProp->second.readTy);
+                expectedFieldTypes.try_emplace(name, instantiateMember(trait, *expectedProp->second.readTy, location));
         }
     }
 
@@ -3526,7 +3640,7 @@ void ConstraintGenerator::visitClass(const ScopePtr& scope, AstStatClass* statCl
     // from a required module is resolvable now, which it isn't while prototyping.
     std::map<Name, TypeId> traitFieldTypes;
     if (FFlag::LuwuTraits && statClass->implements.size > 0)
-        traitFieldTypes = implementTraits(scope, statClass, classDeclRecord);
+        traitFieldTypes = implementTraits(bodyScope, statClass, classDeclRecord);
 
     // Luwu Classes (rfcs/classes): a primary constructor's parameters are in scope for the class's
     // field initializer expressions and nowhere else, so they are bound in a scope of their own that
@@ -5021,6 +5135,13 @@ std::tuple<TypeId, TypeId, RefinementId> ConstraintGenerator::checkBinary(
             // For now, we don't really care about being accurate with userdata if the typeguard was using typeof.
             discriminantTy = builtinTypes->externType;
         }
+        // Luwu Classes (rfcs/classes): `type` and `typeof` both answer "class", "object" and "trait" (for a trait's value)
+        else if (FFlag::LuwuClasses && typeguard->type == "class")
+            discriminantTy = builtinTypes->classType;
+        else if (FFlag::LuwuClasses && typeguard->type == "object")
+            discriminantTy = builtinTypes->objectType;
+        else if (FFlag::LuwuClasses && FFlag::LuwuTraits && typeguard->type == "trait")
+            discriminantTy = builtinTypes->traitType;
         else if (typeguard->type == "vector" && !typeguard->isTypeof)
         {
             // `vector` is defined in EmbeddedBuiltinDefinitions, not as an actual built-in type

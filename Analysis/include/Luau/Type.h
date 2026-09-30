@@ -1112,8 +1112,26 @@ struct BuiltinTypes
 
     // Every nominal-type root, for logic that reasons about the whole extern
     // lattice rather than one type (e.g. the normalizer's top/unknown checks).
-    // These are the parentless extern-type tops: userdata/class/object/vector.
-    std::array<TypeId, 4> nominalRoots() const;
+    // These are the parentless extern-type tops: userdata/class/object/vector, and trait with traits enabled.
+    struct NominalRoots
+    {
+        std::array<TypeId, 5> roots;
+        size_t count;
+
+        const TypeId* begin() const
+        {
+            return roots.data();
+        }
+        const TypeId* end() const
+        {
+            return roots.data() + count;
+        }
+        size_t size() const
+        {
+            return count;
+        }
+    };
+    NominalRoots nominalRoots() const;
 
     friend TypeId makeStringMetatable(NotNull<BuiltinTypes> builtinTypes, SolverMode mode);
     friend void makeVectorMetatable(NotNull<BuiltinTypes> builtinTypes);
@@ -1137,6 +1155,9 @@ public:
     const TypeId externType;
     const TypeId objectType;
     const TypeId classType;
+    // Luwu Traits (rfcs/classes/traits.md): the top of trait values (`trait Name` binds one). It is its own root, not a
+    // `class`: a trait can't be constructed or passed to `class.isinstance`.
+    const TypeId traitType;
     // `vector` is a language primitive that reuses the ExternType representation (fields x/y/z + a
     // metatable). It is its own nominal root (parent/root nullopt); its props/metatable are filled
     // in by makeVectorMetatable during global setup.

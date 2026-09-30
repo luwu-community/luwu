@@ -482,6 +482,8 @@ static void traverseclass(global_State* g, LuauClass* classdef)
 
     for (uint32_t i = 0; i < classdef->numtraitinits; i++)
         markvalue(g, &classdef->traitinits[i]);
+    if (classdef->traitdefaults)
+        markobject(g, classdef->traitdefaults);
 }
 
 static void traverseobject(global_State* g, LuauObject* object)

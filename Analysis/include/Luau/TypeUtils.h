@@ -478,4 +478,22 @@ void applyDeprecatedAttribute(Property& prop, const AstArray<AstAttr*>& attribut
  */
 std::optional<TypeId> genericClassValueType(const Scope& scope, const AstType* argument);
 
+/**
+ * Luwu Classes (rfcs/classes): what calling the class or trait value `ty` calls -- the class's constructor, or a trait's
+ * `__create` -- as its `__call` metamethod, taking the value itself first. Nothing for any other type.
+ */
+std::optional<TypeId> classValueCallType(NotNull<BuiltinTypes> builtinTypes, TypeId ty);
+
+/**
+ * Luwu Classes (rfcs/classes): the function type `fnTy` without its first parameter (a method's `self`, or the class value
+ * a constructor's `__call` takes), or `fnTy` itself when it isn't a function taking one.
+ */
+TypeId withoutFirstParameter(TypeArena& arena, TypeId fnTy);
+
+/**
+ * Luwu Traits (rfcs/classes/traits.md): whether an error type appears anywhere in `ty`, e.g. from a generic type named
+ * without its arguments in an annotation, whose error was already reported where it is written.
+ */
+bool containsErrorType(TypeId ty);
+
 } // namespace Luau

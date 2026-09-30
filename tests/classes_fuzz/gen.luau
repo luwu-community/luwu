@@ -1233,12 +1233,13 @@ local function generate(seed: number): (string, string)
                 local fn = rng.pick(fns)
                 op("t_call", { `local o = {C}.make()`, `local r = o:{fn.name}()`, "return r" }, false, true)
             elseif kind == "dispatch" and implements then
-                -- through the trait, the class's own override runs, and a default gives what a method call gives
+                -- through the trait, the trait's default runs even when the class overrides it
                 local fn = rng.pick(fns)
                 local lines = { `local o = {C}.make()`, `local viaTrait = {T}.{fn.name}(o)` }
                 if contains(c.overrides, fn.name) then
-                    table.insert(lines, `check(viaTrait == "override:{c.name}", "{T}.{fn.name} on {c.name} ran the default over the override")`)
-                elseif fn.constant then
+                    table.insert(lines, `check(viaTrait ~= "override:{c.name}", "{T}.{fn.name} on {c.name} ran the override over the default")`)
+                end
+                if fn.constant then
                     table.insert(lines, `check(viaTrait == {fn.constant}, "{T}.{fn.name} on {c.name} returned " .. tostring(viaTrait))`)
                 end
                 table.insert(lines, "return viaTrait")

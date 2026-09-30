@@ -376,14 +376,15 @@ declare class: {
 }
 )CLASS_SRC";
 
-// Luwu Traits (rfcs/classes/traits.md): a trait's value is typed as a class value until traits get types of their own
+// Luwu Traits (rfcs/classes/traits.md): a trait's value is a `trait`. `class.isinstance` never matches one, so it
+// doesn't take one either.
 static const char* kBuiltinDefinitionClassTraitsSrc = R"CLASS_SRC(
 declare class: {
     isinstance: @checked (o: unknown, c: class) -> boolean,
-    implements: @checked (o: unknown, t: class) -> boolean,
+    implements: @checked (o: unknown, t: trait) -> boolean,
     of: @checked (o: unknown) -> class?,
-    name: @checked (o: class | object) -> string,
-    fields: @checked (o: class | object) -> ({ [string]: unknown }, boolean)
+    name: @checked (o: class | object | trait) -> string,
+    fields: @checked (o: class | object | trait) -> ({ [string]: unknown }, boolean)
 }
 )CLASS_SRC";
 

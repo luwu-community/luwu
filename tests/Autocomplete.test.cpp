@@ -3265,6 +3265,27 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_string_singletons_in_trait_arguments"
     CHECK_EQ(ac.context, AutocompleteContext::String);
 }
 
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_implements_and_needs_on_the_declaration_line")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag luwuTraits{FFlag::LuwuTraits, true};
+
+    check(R"(
+        trait T @1
+        end
+        class C(x: number) @2
+            @3
+        end
+    )");
+
+    CHECK_EQ(autocomplete('1').entryMap.count("needs"), 1);
+    CHECK_EQ(autocomplete('1').entryMap.count("implements"), 0);
+    CHECK_EQ(autocomplete('2').entryMap.count("implements"), 1);
+    CHECK_EQ(autocomplete('2').entryMap.count("needs"), 0);
+    // a member's position, on its own line
+    CHECK_EQ(autocomplete('3').entryMap.count("implements"), 0);
+}
+
 TEST_CASE_FIXTURE(ACFixture, "string_singleton_as_table_key_iso")
 {
     check(R"(

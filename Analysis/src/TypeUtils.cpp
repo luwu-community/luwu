@@ -10,6 +10,7 @@
 #include "Luau/Type.h"
 #include "Luau/TypeInfer.h"
 #include "Luau/TypePack.h"
+#include "Luau/VisitType.h"
 
 #include <algorithm>
 
@@ -1181,6 +1182,90 @@ std::optional<TypeId> genericClassValueType(const Scope& scope, const AstType* a
         return std::nullopt;
 
     return klass->ty;
+}
+
+std::optional<TypeId> classValueCallType(NotNull<BuiltinTypes> builtinTypes, TypeId ty)
+{
+    const ExternType* etv = get<ExternType>(follow(ty));
+    bool isClassOrTraitValue = etv && (etv->root == builtinTypes->classType || etv->root == builtinTypes->traitType);
+    if (!isClassOrTraitValue || !etv->metatable)
+        return std::nullopt;
+
+    const TableType* metatable = get<TableType>(follow(*etv->metatable));
+    auto call = metatable ? metatable->props.find("__call") : TableType::Props::const_iterator{};
+    if (!metatable || call == metatable->props.end() || !call->second.readTy)
+        return std::nullopt;
+
+    return *call->second.readTy;
+}
+
+TypeId withoutFirstParameter(TypeArena& arena, TypeId fnTy)
+{
+    const FunctionType* fn = get<FunctionType>(follow(fnTy));
+    if (!fn)
+        return fnTy;
+
+    auto [args, tail] = flatten(fn->argTypes);
+    if (args.empty())
+        return fnTy;
+
+    args.erase(args.begin());
+    FunctionType copy = *fn;
+    copy.argTypes = arena.addTypePack(TypePack{std::move(args), tail});
+    if (!copy.argNames.empty())
+        copy.argNames.erase(copy.argNames.begin());
+    copy.hasSelf = false;
+    return arena.addType(std::move(copy));
+}
+
+bool containsErrorType(TypeId ty)
+{
+    // TypeOnceVisitor visits each type once, so a cyclic type ends
+    struct ErrorTypeFinder : TypeOnceVisitor
+    {
+        bool found = false;
+
+        ErrorTypeFinder()
+            : TypeOnceVisitor("ErrorTypeFinder", /* skipBoundTypes */ true)
+        {
+        }
+
+        bool visit(TypeId ty) override
+        {
+            return !found;
+        }
+
+        bool visit(TypeId ty, const ErrorType&) override
+        {
+            found = true;
+            return false;
+        }
+
+        // A nominal type's members were checked where it is declared; only its type arguments are part of `ty`
+        bool visit(TypeId ty, const ExternType& etv) override
+        {
+            for (TypeId arg : etv.instantiatedTypeParams)
+                traverse(arg);
+            for (TypePackId arg : etv.instantiatedTypePackParams)
+                traverse(arg);
+            return false;
+        }
+
+        bool visit(TypePackId tp) override
+        {
+            return !found;
+        }
+
+        bool visit(TypePackId tp, const ErrorTypePack&) override
+        {
+            found = true;
+            return false;
+        }
+    };
+
+    ErrorTypeFinder finder;
+    finder.traverse(ty);
+    return finder.found;
 }
 
 } // namespace Luau

@@ -19,6 +19,8 @@ LUAU_FASTINTVARIABLE(LuauSuggestionDistance, 4)
 LUAU_FASTFLAGVARIABLE(LuauFunctionUnusedRecursiveLinting)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 LUAU_FASTFLAGVARIABLE(LuwuTableRemoveFootgunLint)
+LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuTraits)
 // Defined by the VM, which introduces `none`; without it there is nothing to mix up with `nil`.
 LUAU_FASTFLAG(LuwuNonePrimitive)
 
@@ -841,8 +843,9 @@ private:
             *context,
             LintWarning::Code_LocalShadow,
             local->location,
-            "Variable '%s' shadows class '%s' declared at line %d",
+            "Variable '%s' shadows %s '%s' declared at line %d",
             local->name.value,
+            (*cls)->isTrait ? "trait" : "class",
             (*cls)->name->name.value,
             (*cls)->name->location.begin.line + 1
         );
@@ -1319,6 +1322,12 @@ private:
             return Kind_Primitive;
 
         if (name == "vector")
+            return Kind_Primitive;
+
+        // Luwu Classes (rfcs/classes): `type` and `typeof` answer "class" and "object", and "trait" for a trait's value
+        if (FFlag::LuwuClasses && (name == "class" || name == "object"))
+            return Kind_Primitive;
+        if (FFlag::LuwuClasses && FFlag::LuwuTraits && name == "trait")
             return Kind_Primitive;
 
         if (std::optional<TypeFun> maybeTy = context->scope->lookupType(name))

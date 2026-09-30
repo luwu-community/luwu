@@ -2378,10 +2378,13 @@ const std::unordered_set<std::string> EXPLICITLY_DISALLOWED_METAMETHODS{
 LUAU_NOINLINE AstClassPrimaryConstructor* Parser::parseClassPrimaryConstructor(
     const std::optional<Location>& qualifierLocation,
     AstClassMemberVisibility visibility,
-    bool declared
+    bool declared,
+    bool isTrait
 )
 {
     LUAU_ASSERT(FFlag::LuwuClasses);
+    // Luwu Traits (rfcs/classes/traits.md): a trait's parameter list is parsed by this function too
+    const char* listName = isTrait ? "A trait's parameter list" : "A class's primary constructor";
 
     Lexeme matchParen = lexer.current();
     Location start = lexer.current().location;
@@ -2402,7 +2405,7 @@ LUAU_NOINLINE AstClassPrimaryConstructor* Parser::parseClassPrimaryConstructor(
     {
         if (lexer.current().type == Lexeme::Dot3)
         {
-            report(lexer.current().location, "A class's primary constructor cannot be variadic");
+            report(lexer.current().location, "%s cannot be variadic", listName);
             nextLexeme();
         }
         else
@@ -2515,7 +2518,7 @@ LUAU_NOINLINE AstClassPrimaryConstructor* Parser::parseClassPrimaryConstructor(
         // comma either -- but say so, rather than reporting a missing parameter name.
         if (lexer.current().type == ')')
         {
-            report(commaLocation, "A class's primary constructor cannot have a trailing comma");
+            report(commaLocation, "%s cannot have a trailing comma", listName);
             break;
         }
     }
@@ -2551,15 +2554,15 @@ LUAU_NOINLINE AstClassPrimaryConstructor* Parser::parseClassPrimaryConstructor(
     return primaryConstructor;
 }
 
-// Luwu Classes (rfcs/classes): does the current token in a class body start a statement rather than
-// a member? A member is `name`, `name: T`, `name = expr` or a `function`. A statement keyword, or a name
-// followed by a call, index or comma, means the class was never closed and we are now eating the code
-// that follows it.
 bool Parser::traitsEnabled() const
 {
     return FFlag::LuwuTraits && FFlag::LuwuClasses;
 }
 
+// Luwu Classes (rfcs/classes): does the current token in a class body start a statement rather than
+// a member? A member is `name`, `name: T`, `name = expr` or a `function`. A statement keyword, a name
+// followed by a call, index or comma, or a declaration (`class Name`, `trait Name`, `export ...`,
+// `type Name`) means the class was never closed and we are now eating the code that follows it.
 bool Parser::classBodyLooksLikeStatement()
 {
     if (lexer.current().type == '(')
@@ -2584,7 +2587,17 @@ bool Parser::classBodyLooksLikeStatement()
     // `print(...)`, `t.field = x` and `a, b = 1, 2` can't be class members. `name:` is not in this
     // list on purpose: it starts a member's type annotation.
     Lexeme::Type next = lexer.lookahead().type;
-    return next == '(' || next == '.' || next == ',' || next == '[';
+    if (next == '(' || next == '.' || next == ',' || next == '[')
+        return true;
+
+    // Two names on one line are never a member: a field named `trait` followed by another member would be on the
+    // next line. Nested declarations aren't allowed, so `trait Name` here is the next statement.
+    bool nameFollowsOnSameLine = next == Lexeme::Name && lexer.lookahead().location.begin.line == lexer.current().location.begin.line;
+    if (!nameFollowsOnSameLine)
+        return false;
+
+    AstName ident(lexer.current().name);
+    return ident == "class" || ident == "export" || ident == "type" || (ident == "trait" && traitsEnabled());
 }
 
 // Luwu Classes (rfcs/classes): the grammar is also in the RFC's "Class definition syntax" section.
@@ -2704,7 +2717,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
     AstClassPrimaryConstructor* primaryConstructor = nullptr;
 
     if (lexer.current().type == '(')
-        primaryConstructor = parseClassPrimaryConstructor(ctorQualifierLocation, ctorVisibility, declared);
+        primaryConstructor = parseClassPrimaryConstructor(ctorQualifierLocation, ctorVisibility, declared, isTrait);
 
     if (primaryConstructor)
     {
@@ -2908,7 +2921,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
             if (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "const" &&
                 lexer.lookahead().type == Lexeme::ReservedFunction)
             {
-                report(lexer.current().location, "Functions in a class are always const; remove 'const' here");
+                report(lexer.current().location, "Functions in a %s are always const; remove 'const' here", kind);
                 nextLexeme();
             }
         };
@@ -2956,7 +2969,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
         {
             if (attributes.size > 0)
             {
-                report(lexer.current().location, "Attributes on a class member must all be written on the same side of the access specifier");
+                report(lexer.current().location, "Attributes on a %s member must all be written on the same side of the access specifier", kind);
 
                 // Report and keep going: both lists are still kept on the function, so the member
                 // behaves as written and the CST has an entry for every attribute it prints.
@@ -3142,7 +3155,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
             }
 
             if (strncmp(propName->name.value, "__", 2) == 0)
-                report(propName->location, "Class fields cannot start with '__'");
+                report(propName->location, "%s fields cannot start with '__'", isTrait ? "Trait" : "Class");
 
             if (expectLocation && defaultValue)
                 report(*equalsLocation, "Expected fields can't have default values");
@@ -3181,7 +3194,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
 
             if (classMemberNamespace.contains(propName->name))
             {
-                report(propName->location, "Duplicate class member '%s'", propName->name.value);
+                report(propName->location, "Duplicate %s member '%s'", kind, propName->name.value);
             }
             else
             {
@@ -3311,7 +3324,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                         report(name.location, "'__init' must take 'self' as its first parameter");
                 }
                 else if (EXPLICITLY_DISALLOWED_METAMETHODS.count(name.name.value) > 0)
-                    report(name.location, "Classes cannot define '%s' as a metamethod", name.name.value);
+                    report(name.location, "%s cannot define '%s' as a metamethod", isTrait ? "Traits" : "Classes", name.name.value);
                 else if (ALLOWED_METAMETHODS.count(name.name.value) == 0)
                     report(name.location, "Cannot use '%s' as a method name: names starting with '__' are reserved", name.name.value);
             }
@@ -3326,7 +3339,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
 
             if (classMemberNamespace.contains(name.name) || primaryConstructorParams.contains(name.name))
             {
-                report(name.location, "Duplicate class member '%s'", name.name.value);
+                report(name.location, "Duplicate %s member '%s'", kind, name.name.value);
             }
             else
             {

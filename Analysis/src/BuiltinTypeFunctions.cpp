@@ -2538,8 +2538,11 @@ TypeFunctionReductionResult<TypeId> objectofTypeFunction(
         return {std::nullopt, Reduction::MaybeOk, {targetTy}, {}};
 
     // objectof maps a class value to its instance type; only a class value (a type rooted at
-    // `class`) has one. `root` is the classifier; `relation` carries the link to the object type.
-    if (auto klass = get<ExternType>(targetTy); klass && klass->root == ctx->builtins->classType && klass->relation)
+    // `class`) or a trait (rooted at `trait`, refined by `class.implements`) has one. `root` is the
+    // classifier; `relation` carries the link to the object type.
+    const ExternType* klass = get<ExternType>(targetTy);
+    const bool hasObjectType = klass && (klass->root == ctx->builtins->classType || klass->root == ctx->builtins->traitType);
+    if (hasObjectType && klass->relation)
     {
         if (auto obj = klass->relation->get_if<Obj>())
             return {obj->ty, Reduction::MaybeOk, {}, {}};
@@ -2569,6 +2572,10 @@ static TypeFunctionReductionResult<TypeId> classValueHelper(TypeId targetTy, Not
     // any class at all -- which is exactly `class`, the top of the class lattice.
     if (targetTy == ctx->builtins->objectType)
         return {ctx->builtins->classType, Reduction::MaybeOk, {}, {}};
+
+    // Luwu Traits (rfcs/classes/traits.md): an object known only by a trait was made by some class implementing it
+    if (auto obj = get<ExternType>(targetTy); obj && obj->traitInfo && obj->traitInfo->implementorClass)
+        return {*obj->traitInfo->implementorClass, Reduction::MaybeOk, {}, {}};
 
     if (auto obj = get<ExternType>(targetTy); obj && obj->root == ctx->builtins->objectType && obj->relation)
     {

@@ -312,7 +312,8 @@ private:
     // definition block, report an error.
     void checkPrivateConstructorAccess(TypeId classTy, const Location& location);
     // Luwu Classes (rfcs/classes): steers `typeof(Cat)` to `class<Cat>`.
-    void reportClassTypeofSpelling(AstTypeTypeof* ty, const std::string& className, TypeId objectTy);
+    TypeId withoutSelfParameter(TypeId fnTy);
+    void reportClassTypeofSpelling(AstTypeTypeof* ty, const std::string& className, TypeId objectTy, const char* valueKind);
     // Luwu Classes (rfcs/classes): reports reading `__init` from a class or object; true if it did.
     bool checkConstructorReadByName(TypeId tableTy, const std::string& prop, ValueContext context, const Location& location);
     PropertyType hasIndexTypeFromType(

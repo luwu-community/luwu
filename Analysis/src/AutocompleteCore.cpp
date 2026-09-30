@@ -27,6 +27,7 @@
 LUAU_FASTINT(LuauTypeInferIterationLimit)
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAGVARIABLE(DebugLuauMagicVariableNames)
 LUAU_FASTFLAGVARIABLE(LuauAutocompleteConst)
 LUAU_FASTFLAGVARIABLE(LuauAutocompleteExport)
@@ -2722,6 +2723,18 @@ AutocompleteResult autocomplete_(
             ret["expect"] = {AutocompleteEntryKind::Keyword};
             ret["final"] = {AutocompleteEntryKind::Keyword};
         }
+
+        // Luwu Traits (rfcs/classes/traits.md): on the declaration's own line, before its first member, the next word may
+        // start its `implements` (a class) or `needs` (a trait) list
+        unsigned headerLine = classStat->name->location.end.line;
+        if (classStat->primaryConstructor)
+            headerLine = classStat->primaryConstructor->argLocation.end.line;
+
+        bool onHeaderLine = position.line == headerLine;
+        if (FFlag::LuwuTraits && onHeaderLine && classStat->isTrait && classStat->needs.size == 0)
+            ret["needs"] = {AutocompleteEntryKind::Keyword};
+        else if (FFlag::LuwuTraits && onHeaderLine && !classStat->isTrait && classStat->implements.size == 0)
+            ret["implements"] = {AutocompleteEntryKind::Keyword};
 
         return {std::move(ret), ancestry, AutocompleteContext::Keyword};
     }

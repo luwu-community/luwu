@@ -111,6 +111,8 @@ static const char* externTypeNoun(TypeId t)
         return "class";
     if (rootEtv->name == "object")
         return "object";
+    if (rootEtv->name == "trait")
+        return "trait";
 
     return "external type";
 }
@@ -118,6 +120,7 @@ static const char* externTypeNoun(TypeId t)
 // A class declaration produces two extern types that both stringify as the bare class name, so a
 // mismatch between them otherwise reads "Expected this to be 'Item', but got 'Item'". `class<Item>`
 // is the language's own spelling for the class value, so say that instead of inventing a gloss.
+// A trait's value is `trait<Item>` the same way.
 static std::optional<std::string> nominalDisplayName(TypeId t)
 {
     const ExternType* etv = get<ExternType>(follow(t));
@@ -125,14 +128,27 @@ static std::optional<std::string> nominalDisplayName(TypeId t)
         return std::nullopt;
 
     const ExternType* rootEtv = get<ExternType>(follow(*etv->root));
-    if (!rootEtv || rootEtv->name != "class")
+    if (!rootEtv || (rootEtv->name != "class" && rootEtv->name != "trait"))
         return std::nullopt;
 
     // Only a class value carries an `Obj` relation; an object carries a `Klass` one.
     if (!etv->relation->get_if<Obj>())
         return std::nullopt;
 
-    return "class<" + etv->name + ">";
+    return rootEtv->name + "<" + etv->name + ">";
+}
+
+// Luwu Traits (rfcs/classes/traits.md): what to call the declaration `t` (a class or trait value, or an object) comes
+// from in a message about one of its members
+static const char* declarationKind(TypeId t)
+{
+    const ExternType* etv = get<ExternType>(follow(t));
+    if (!etv)
+        return "class";
+
+    const ExternType* rootEtv = etv->root ? get<ExternType>(follow(*etv->root)) : nullptr;
+    bool isTrait = etv->traitInfo || !etv->traitIntersection.empty() || (rootEtv && rootEtv->name == "trait");
+    return isTrait ? "trait" : "class";
 }
 
 static bool isClassValueAgainstItsObject(TypeId given, TypeId wanted)
@@ -1100,7 +1116,7 @@ struct ErrorConverter
 
     std::string operator()(const PrivatePropertyAccess& e) const
     {
-        const std::string member = "'" + e.key + "' of class '" + e.className + "' is private; ";
+        const std::string member = "'" + e.key + "' of " + declarationKind(e.table) + " '" + e.className + "' is private; ";
         if (e.isFunction)
             return "Function " + member + "calling it here will raise a runtime error";
         return "Field " + member + "accessing it here will raise a runtime error";
@@ -1108,7 +1124,8 @@ struct ErrorConverter
 
     std::string operator()(const ConstPropertyAssignment& e) const
     {
-        return "Field '" + e.key + "' of class '" + e.className + "' is constant; assigning to it outside of '__init' will raise a runtime error";
+        return "Field '" + e.key + "' of " + declarationKind(e.table) + " '" + e.className +
+               "' is constant; assigning to it outside of '__init' will raise a runtime error";
     }
 
     std::string operator()(const UnusableClass& e) const

@@ -198,12 +198,12 @@ TypeId TypeStateMap::getDiscriminantOf(const Refine& refine)
         TypeId ty = follow(typeFun->type);
 
         // Only accept a type `typeof` can name: a userdata datatype root (a
-        // direct child of the `userdata` root), or the `object`/`class` roots
-        // themselves (an individual class's typeof is "object", not its name).
+        // direct child of the `userdata` root), or the `object`/`class`/`trait`
+        // roots themselves (an individual class's typeof is "object", not its name).
         // Anything else stays `never` and produces an empty refinement.
         if (auto etv = get<ExternType>(ty); etv &&
             (etv->parent == builtinTypes->externType || ty == builtinTypes->objectType || ty == builtinTypes->classType ||
-             hasTag(ty, kTypeofRootTag)))
+             ty == builtinTypes->traitType || hasTag(ty, kTypeofRootTag)))
             discriminantTy = ty;
     }
 

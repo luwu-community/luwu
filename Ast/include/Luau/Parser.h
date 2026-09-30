@@ -270,7 +270,8 @@ private:
     AstClassPrimaryConstructor* parseClassPrimaryConstructor(
         const std::optional<Location>& qualifierLocation,
         AstClassMemberVisibility visibility,
-        bool declared
+        bool declared,
+        bool isTrait
     );
 
     // Brings a primary constructor's parameters into scope; the caller takes a saveLocals() offset

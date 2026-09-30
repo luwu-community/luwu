@@ -11,6 +11,7 @@ LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuauSolverV2)
@@ -764,6 +765,21 @@ local _o03 = typeof(game) == "Part"
     CHECK_EQ(result.warnings[0].text, "Unknown type 'Part' (expected primitive type)");
     CHECK_EQ(result.warnings[1].location.begin.line, 3);
     CHECK_EQ(result.warnings[1].text, "Unknown type 'Bar'");
+}
+
+TEST_CASE_FIXTURE(Fixture, "UnknownTypeKnowsClassesAndTraits")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    LintResult result = lint(R"(
+local x = ...
+local _a = type(x) == "class"
+local _b = type(x) == "object"
+local _c = type(x) == "trait"
+local _d = typeof(x) == "trait"
+)");
+
+    REQUIRE(0 == result.warnings.size());
 }
 
 TEST_CASE_FIXTURE(Fixture, "ForRangeTable")
