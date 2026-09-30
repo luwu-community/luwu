@@ -333,6 +333,17 @@ private:
     // Luwu Traits (rfcs/classes/traits.md): record the traits a class implements and give it the members they provide.
     // Returns the types of the fields the traits expect, by name.
     std::map<Name, TypeId> implementTraits(const ScopePtr& scope, AstStatClass* cls, ClassDeclRecord* record);
+
+    // Luwu Traits (rfcs/classes/traits.md): a generic trait instantiated by an `implements` entry's type arguments
+    struct TraitInstantiation
+    {
+        // the instantiated trait, expanded by the solver
+        TypeId instantiated;
+        // the trait's generics, and the type each one stands for here
+        std::vector<TypeId> params;
+        std::vector<TypeId> args;
+    };
+    std::optional<TraitInstantiation> instantiateTraitRef(const ScopePtr& scope, const AstClassTraitRef& ref);
     // Luwu Traits (rfcs/classes/traits.md): checks the arguments of each `implements` entry against its trait's parameters,
     // in the scope the class's field initializers are checked in
     void checkTraitArguments(const ScopePtr& initializerScope, AstStatClass* cls);
