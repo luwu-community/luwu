@@ -5419,6 +5419,38 @@ TEST_CASE_FIXTURE(Fixture, "trait_syntax_errors")
     CHECK_EQ(parse("trait T expect function __init(self, x: number) end")->body.size, 1);
 }
 
+TEST_CASE_FIXTURE(Fixture, "an_unterminated_trait_ends_at_the_next_declaration")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    ParseResult result = tryParse(R"(
+trait Started
+trait Next
+    function f(self) end
+end
+export class C implements Next
+end
+)");
+
+    // only the missing `end`: `Next` and `C` parse as declarations of their own, not as members of `Started`
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "Expected 'end' (to close 'trait' at line 2), got 'trait'");
+    REQUIRE_EQ(result.root->body.size, 3);
+    AstStatClass* next = result.root->body.data[1]->as<AstStatClass>();
+    REQUIRE(next);
+    CHECK_EQ(next->members.size, 1);
+}
+
+TEST_CASE_FIXTURE(Fixture, "trait_parse_errors_say_trait")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    matchParseError("trait T(...) end", "A trait's parameter list cannot be variadic");
+    matchParseError("trait T x = 1 x = 2 end", "Duplicate trait member 'x'");
+    matchParseError("trait T __x = 1 end", "Trait fields cannot start with '__'");
+    matchParseError("trait T const function f(self) end end", "Functions in a trait are always const; remove 'const' here");
+}
+
 // `trait` stays an ordinary name outside a declaration
 TEST_CASE_FIXTURE(Fixture, "trait_is_a_contextual_keyword")
 {

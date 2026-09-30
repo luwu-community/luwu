@@ -623,8 +623,9 @@ expectfail("public static made private", "'make' must be public for 'S' to imple
     end
 ]]))
 
--- Calling through the trait reads the class's method with the caller's rights, and the trait's own code may call a
--- private function it declares, as it may construct a class with a private constructor.
+-- Calling through the trait checks access with the caller's rights, and the trait's own code may call a private
+-- function it declares, as it may construct a class with a private constructor. It runs the trait's default, which
+-- the class overrides here.
 do
     local Keeps, Secretive = compile([[
         trait Secretive
@@ -640,7 +641,7 @@ do
     local k = Keeps()
     expectfail("private function directly", "'whisper' is a private member of 'Keeps'", function() return k:whisper() end)
     expectfail("private function through the trait", "is a private member", function() return Secretive.whisper(k) end)
-    assert(Secretive.viaTrait(k) == "s3cret")
+    assert(Secretive.viaTrait(k) == "default")
 end
 
 -- Trait fields and trait arguments are computed while the constructor is filling the object, so they can't yield

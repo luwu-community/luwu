@@ -64,6 +64,7 @@ LuauClass* luaR_newclass(
     classdef->traitinits = NULL;
     classdef->numtraitinits = 0;
     classdef->numdirecttraitinits = 0;
+    classdef->traitdefaults = NULL;
 
     classdef->offsettomember = luaM_newarray(L, classdef->numberofallmembers, TString*, classdef->memcat);
     for (uint32_t i = 0; i < classdef->numberofallmembers; i++)
@@ -355,8 +356,8 @@ static void luaR_stampownerclass(lua_State* L, Proto* p, LuauClass* classdef)
 }
 
 // Luwu Traits (rfcs/classes/traits.md): the function `Trait.method` reads as. Its upvalues are the trait, the method's name and the trait's
-// own closure (which luaR_implementtraits copies into implementing classes). It calls the receiver's class's
-// implementation of the method: the class's own override, or its copy of the trait's default.
+// own closure (which luaR_implementtraits copies into implementing classes). It calls the receiver's class's copy of
+// the trait's method, even when the class overrides it: `Trait.method(obj)` is how an override reaches the default.
 static int luaR_traitmethod(lua_State* L)
 {
     Closure* dispatcher = clvalue(L->ci->func);
@@ -396,7 +397,14 @@ static int luaR_traitmethod(lua_State* L)
         luaR_checkprivateaccess(L, &key, cls, caller, memberoffset);
     }
 
+    // The class's slot holds its copy of the default, unless the class overrides it: then the copy is in traitdefaults
     const TValue* fn = &cls->staticmembers[memberoffset - cls->numberofinstancemembers];
+    if (cls->traitdefaults)
+    {
+        const TValue* overridden = luaH_get(cls->traitdefaults, &dispatcher->c.upvals[2]);
+        if (!ttisnil(overridden))
+            fn = overridden;
+    }
 
     luaL_checkstack(L, 1, "trait method call");
     luaC_threadbarrier(L);
@@ -1606,6 +1614,49 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
             setclvalue(L, L->top, luaR_copytraitfunction(L, clvalue(fn)));
             L->top++;
             luaR_addclassmember(L, classdef, name, L->top - 1);
+            L->top--;
+        }
+    }
+
+    // A default the class overrides still gets a copy stamped with the class, for `Trait.method(obj)` to run
+    for (int i = 0; i < numtraits; i++)
+    {
+        LuauClass* trait = traitat(i);
+
+        for (uint32_t off = trait->numberofinstancemembers; off < trait->numberofallmembers; off++)
+        {
+            TString* name = trait->offsettomember[off];
+            if (!name || (trait->memberflags[off] & LBC_CLASSMEMBER_EXPECTED))
+                continue;
+
+            // only a method reads as a dispatcher; a static is called as itself
+            const TValue* fn = &trait->staticmembers[off - trait->numberofinstancemembers];
+            if (!ttisfunction(fn) || !clvalue(fn)->isC)
+                continue;
+
+            // pass 1 credits the trait with every default the class doesn't define itself
+            const TValue* provider = luaH_getstr(added, name);
+            if (ttisclass(provider) && classvalue(provider) == trait)
+                continue;
+
+            const TValue* traitfn = &clvalue(fn)->c.upvals[2];
+            LUAU_ASSERT(ttisfunction(traitfn) && !clvalue(traitfn)->isC);
+
+            if (!classdef->traitdefaults)
+            {
+                classdef->traitdefaults = luaH_new(L, 0, 1);
+                luaC_objbarrier(L, classdef, classdef->traitdefaults);
+            }
+
+            Closure* copy = luaR_copytraitfunction(L, clvalue(traitfn));
+            luaD_checkstack(L, 1);
+            setclvalue(L, L->top, copy);
+            L->top++;
+            luaR_stampownerclass(L, copy->l.p, classdef);
+
+            TValue* slot = luaH_set(L, classdef->traitdefaults, traitfn);
+            setclvalue(L, slot, copy);
+            luaC_barriert(L, classdef->traitdefaults, L->top - 1);
             L->top--;
         }
     }

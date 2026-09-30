@@ -58,6 +58,19 @@ struct MagicClassName final : MagicFunction
     bool infer(const MagicFunctionCallContext& context) override;
 };
 
+// Luwu Classes (rfcs/classes): narrows `class.of`'s declared `class?` to the class of an object type, `class<Trait>` for
+// an object known by a trait, and a union of them for a union. Exposed for the same reason as MagicClassFields.
+struct MagicClassOf final : MagicFunction
+{
+    std::optional<WithPredicate<TypePackId>> handleOldSolver(
+        struct TypeChecker&,
+        const std::shared_ptr<struct Scope>&,
+        const class AstExprCall&,
+        WithPredicate<TypePackId>
+    ) override;
+    bool infer(const MagicFunctionCallContext& context) override;
+};
+
 void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeCheckForAutocomplete = false);
 TypeId makeUnion(TypeArena& arena, std::vector<TypeId>&& types);
 TypeId makeIntersection(TypeArena& arena, std::vector<TypeId>&& types);

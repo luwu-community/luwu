@@ -19,6 +19,8 @@ LUAU_FASTINT(LuauTypeInferIterationLimit)
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTINT(LuauTypeInferTypePackLoopLimit)
 LUAU_FASTFLAG(LuauIntegerType2)
+LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuauImproveUniqueTableWidthSubtyping)
 LUAU_FASTFLAG(LuauRemoveConstraintSolverEmplace)
 
@@ -60,13 +62,16 @@ TEST_CASE_FIXTURE(Fixture, "typeguard_inference_incomplete")
         end
     )";
 
+    // Luwu Traits (rfcs/classes/traits.md): `trait` is a nominal root with traits on
+    const std::string traitRoot = FFlag::LuwuClasses && FFlag::LuwuTraits ? "trait|" : "";
+
     const std::string expectedWithNewSolver =
         R"(
         function f(a:{fn:()->(unknown,...unknown)}): ()
             if type(a) == 'boolean' then
                 local a1:{fn:()->(unknown,...unknown)}&boolean=a
             elseif a.fn() then
-                local a2:{fn:()->(unknown,...unknown)}&(userdata|class|object|vector|function|nil|number|integer|string|thread|buffer|none|table)=a
+                local a2:{fn:()->(unknown,...unknown)}&(userdata|class|object|vector|)" + traitRoot + R"(function|nil|number|integer|string|thread|buffer|none|table)=a
             end
         end
     )";
@@ -77,7 +82,7 @@ TEST_CASE_FIXTURE(Fixture, "typeguard_inference_incomplete")
             if type(a) == 'boolean' then
                 local a1:{fn:()->(unknown,...unknown)}&boolean=a
             elseif a.fn() then
-                local a2:{fn:()->(unknown,...unknown)}&(userdata|class|object|vector|function|nil|number|string|thread|buffer|none|table)=a
+                local a2:{fn:()->(unknown,...unknown)}&(userdata|class|object|vector|)" + traitRoot + R"(function|nil|number|string|thread|buffer|none|table)=a
             end
         end
     )";
