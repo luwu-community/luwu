@@ -12,6 +12,18 @@ std::optional<TypeGuard> matchTypeGuard(AstExprBinary::Op op, AstExpr* left, Ast
     if (op != AstExprBinary::CompareEq && op != AstExprBinary::CompareNe)
         return std::nullopt;
 
+    // Luwu: `(type(x)) == "string"` is a type guard too. Upstream matches only the bare call, so parentheses silently
+    // drop the refinement.
+    auto unwrapGroups = [](AstExpr* expr)
+    {
+        while (AstExprGroup* group = expr->as<AstExprGroup>())
+            expr = group->expr;
+        return expr;
+    };
+
+    left = unwrapGroups(left);
+    right = unwrapGroups(right);
+
     if (right->is<AstExprCall>())
         std::swap(left, right);
 

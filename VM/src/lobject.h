@@ -717,6 +717,11 @@ typedef struct LuauClass
     uint32_t numtraitinits;
     uint32_t numdirecttraitinits;
 
+    // Luwu Traits (rfcs/classes/traits.md): the class's copies of the trait defaults it overrides, keyed by the trait's
+    // own closure, for `Trait.method(obj)`, which runs the trait's default (luaR_traitmethod). NULL when the class
+    // overrides none. Marked in traverseclass.
+    struct LuaTable* traitdefaults;
+
 } LuauClass;
 
 typedef struct LuauObject

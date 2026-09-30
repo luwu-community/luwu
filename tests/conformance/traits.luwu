@@ -262,8 +262,41 @@ class Dog implements Speaker
 end
 
 assert(Dog():speak() == "woof")
--- through the trait, the class's own override runs
-assert(Speaker.speak(Dog()) == "woof")
+-- through the trait, the trait's default runs even when the class overrides it
+assert(Speaker.speak(Dog()) == "...")
+
+-- an override reaches the default through the trait; the default runs as the class's, with its private access
+trait Shape
+    expect private sides: number
+    public function describe(self)
+        return `{self.sides} sides`
+    end
+    public function name(self)
+        return "shape"
+    end
+end
+
+class Square implements Shape
+    private sides: number = 4
+    public function describe(self)
+        return "square with " .. Shape.describe(self)
+    end
+end
+
+class Tri implements Shape
+    private sides: number = 3
+end
+
+do
+    local sq = Square()
+    assert(sq:describe() == "square with 4 sides")
+    assert(Shape.describe(sq) == "4 sides")
+    assert(Shape.describe(Tri()) == "3 sides")
+    assert(Shape.name(sq) == "shape")
+    -- the class keeps its copy of the overridden default alive
+    collectgarbage()
+    assert(Shape.describe(Square()) == "4 sides")
+end
 
 -- the class's `__init` may write a trait's const field; a default can't
 trait Secret
