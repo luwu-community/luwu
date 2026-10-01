@@ -3975,6 +3975,10 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         bool mayBeTrait = HAS_OP_B(inst) && OP_B(inst).kind == IrOpKind::VmReg &&
                           (OP_A(inst).kind == IrOpKind::Inst || tagOp(OP_A(inst)) == LUA_TCLASS);
 
+        // Taken before the branch below: taking a register may spill another value, which both paths have to see. Taken
+        // before the compare too, so no spill lands between it and the branch.
+        RegisterA64 temp = mayBeTrait ? regs.allocTemp(KindA64::x) : noreg;
+
         // compared before the result register is written, so the tag is intact whichever register the allocator picks
         if (mayBeTrait && OP_A(inst).kind == IrOpKind::Inst)
             build.cmp(regOp(OP_A(inst)), uint16_t(LUA_TCLASS));
@@ -4000,7 +4004,6 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             if (OP_A(inst).kind == IrOpKind::Inst)
                 build.b(ConditionA64::NotEqual, notTrait);
 
-            RegisterA64 temp = regs.allocTemp(KindA64::x);
             build.ldr(temp, mem(rBase, vmRegOp(OP_B(inst)) * sizeof(TValue) + offsetof(TValue, value)));
             build.ldrb(castReg(KindA64::w, temp), mem(temp, offsetof(LuauClass, istrait)));
             build.cbz(castReg(KindA64::w, temp), notTrait);

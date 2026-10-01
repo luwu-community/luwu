@@ -315,6 +315,11 @@ struct MagicRefinementContext
     NotNull<Scope> scope;
     const class AstExprCall* callSite;
     std::vector<std::optional<TypeId>> discriminantTypes;
+
+    // Luwu: upstream's context has only the three above. A refinement that depends on another argument's type
+    // (`class.isinstance(x, C)` refines `x` by `C`) needs the arguments, and the solver for its builtin types.
+    NotNull<struct ConstraintSolver> solver;
+    TypePackId arguments;
 };
 
 struct MagicFunctionTypeCheckContext

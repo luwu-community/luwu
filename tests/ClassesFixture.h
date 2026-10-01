@@ -24,6 +24,7 @@ declare function sqrt(n: number): number
 declare function tostring<T>(value: T): string
 declare function typeof<T>(value: T): string
 declare function print(...: any): ()
+declare none: none
 
 declare extern type Duration with
     read seconds: number
@@ -80,6 +81,14 @@ declare class: {
             auto ofIt = ctv->props.find("of");
             LUAU_ASSERT(ofIt != ctv->props.end() && ofIt->second.readTy);
             attachMagicFunction(*ofIt->second.readTy, std::make_shared<MagicClassOf>());
+
+            // the checks refine their first argument (see MagicClassInstanceCheck)
+            for (const char* check : {"isinstance", "implements"})
+            {
+                auto checkIt = ctv->props.find(check);
+                LUAU_ASSERT(checkIt != ctv->props.end() && checkIt->second.readTy);
+                attachMagicFunction(*checkIt->second.readTy, std::make_shared<MagicClassInstanceCheck>());
+            }
         }
 
         registerTestTypes();

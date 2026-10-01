@@ -3935,8 +3935,9 @@ struct Compiler
         if (decl->implements.size > 0)
         {
             size_t count = decl->implements.size;
-            // checked by the parser's limit on an expression list long before this
-            LUAU_ASSERT(count <= 255);
+            // each entry takes two registers (the trait and its argument count), and the parser doesn't limit the list
+            if (count * 2 > kMaxRegisterCount)
+                CompileError::raise(decl->location, "Class '%s' implements more than %d traits", decl->name->name.value, int(kMaxRegisterCount / 2));
 
             uint8_t traitRegs = allocReg(decl, unsigned(count * 2));
 

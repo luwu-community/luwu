@@ -2537,18 +2537,25 @@ TypeFunctionReductionResult<TypeId> objectofTypeFunction(
     if (isPending(targetTy, ctx->solver))
         return {std::nullopt, Reduction::MaybeOk, {targetTy}, {}};
 
-    // objectof maps a class value to its instance type; only a class value (a type rooted at
-    // `class`) or a trait (rooted at `trait`, refined by `class.implements`) has one. `root` is the
-    // classifier; `relation` carries the link to the object type.
-    const ExternType* klass = get<ExternType>(targetTy);
-    const bool hasObjectType = klass && (klass->root == ctx->builtins->classType || klass->root == ctx->builtins->traitType);
-    if (hasObjectType && klass->relation)
-    {
-        if (auto obj = klass->relation->get_if<Obj>())
-            return {obj->ty, Reduction::MaybeOk, {}, {}};
-    }
+    if (std::optional<TypeId> objectType = objectTypeOfClassValue(ctx->builtins, targetTy))
+        return {*objectType, Reduction::MaybeOk, {}, {}};
 
     return {ctx->builtins->errorType, Reduction::MaybeOk, {}, {}};
+}
+
+std::optional<TypeId> objectTypeOfClassValue(NotNull<BuiltinTypes> builtinTypes, TypeId classValue)
+{
+    // only a class value (a type rooted at `class`) or a trait (rooted at `trait`, refined by `class.implements`) has an
+    // object type. `root` is the classifier; `relation` carries the link to the object type.
+    const ExternType* klass = get<ExternType>(follow(classValue));
+    const bool hasObjectType = klass && (klass->root == builtinTypes->classType || klass->root == builtinTypes->traitType);
+    if (!hasObjectType || !klass->relation)
+        return std::nullopt;
+
+    if (const Obj* obj = klass->relation->get_if<Obj>())
+        return obj->ty;
+
+    return std::nullopt;
 }
 
 // The mirror of objectof: maps an object type to the class value it was declared by. Only an object

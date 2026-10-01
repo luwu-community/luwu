@@ -226,6 +226,8 @@ bar(foo())
     CHECK_EQ("number", toString(*expectedOty));
 }
 
+// Luwu Destructuring (rfcs/destructuring.md): what's under the cursor in a pattern is what's written there, never the
+// pattern's hidden local
 TEST_CASE_FIXTURE(Fixture, "ast_ancestry_at_eof")
 {
     check(R"(
