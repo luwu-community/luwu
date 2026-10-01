@@ -57,4 +57,7 @@ struct BuiltinTypeFunctions
 
 const BuiltinTypeFunctions& builtinTypeFunctions_DEPRECATED();
 
+// Luwu Classes (rfcs/classes): the object type of a class or trait value (`objectof`), or nullopt for any other type
+std::optional<TypeId> objectTypeOfClassValue(NotNull<BuiltinTypes> builtinTypes, TypeId classValue);
+
 } // namespace Luau
