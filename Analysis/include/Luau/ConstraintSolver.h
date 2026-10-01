@@ -432,7 +432,13 @@ public:
 
     NotNull<Subtyping> subtyping;
 
-    void fillInDiscriminantTypes(NotNull<const Constraint> constraint, const std::vector<std::optional<TypeId>>& discriminantTypes);
+    TypeId instantiateTruthyRefinement(const FunctionType& fn, TypePackId arguments);
+    TypeId reduceTruthyRefinement(TypeId target, NotNull<const Constraint> constraint);
+    void fillInDiscriminantTypes(
+        NotNull<const Constraint> constraint,
+        const FunctionCallConstraint& call,
+        std::optional<size_t> oneWayArgument = std::nullopt
+    );
 };
 
 /** Borrow a vector of pointers from a vector of owning pointers to constraints.

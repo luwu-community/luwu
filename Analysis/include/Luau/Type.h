@@ -412,6 +412,15 @@ struct FunctionType
     bool isNodiscard = false;
     std::string nodiscardReason;
 
+    // Luwu user-defined refinements: from `@[truthy(param, Type)]`. A call that returns a truthy value refines its
+    // argument for parameter `argIndex` (counting `self`) to `type`.
+    struct TruthyRefinement
+    {
+        size_t argIndex;
+        TypeId type;
+    };
+    std::optional<TruthyRefinement> truthyRefinement;
+
     // Set when this function type is the target of a `type X = (...) -> ...` alias. See TableType::name/syntheticName.
     std::optional<std::string> name;
     std::optional<std::string> syntheticName;
