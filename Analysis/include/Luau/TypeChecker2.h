@@ -219,6 +219,7 @@ private:
     void checkTraitConstructorExpectation(AstStatClass* stat, const ExternType* classType, const ExternType* traitType);
     void checkTraitArguments(AstStatClass* stat);
     void checkTraitRefs(AstStatClass* stat, const AstArray<AstClassTraitRef>& refs);
+    void checkTraitOverrides(AstStatClass* stat);
     void reportMissingTraitMember(
         AstStatClass* stat,
         const ExternType* classType,

@@ -118,6 +118,10 @@ struct FunctionCallConstraint
     // annotation or a `return` in a function with a declared return type). Used to resolve
     // generics that argument matching alone leaves unconstrained.
     std::optional<TypeId> expectedType;
+
+    // Luwu user-defined refinements: parallel to `discriminantTypes`, each argument's refinement when the call is falsy
+    // (Proposition::negativeDiscriminantTy). Empty with the flag off.
+    std::vector<std::optional<TypeId>> negativeDiscriminantTypes;
 };
 
 // function_check fn argsPack

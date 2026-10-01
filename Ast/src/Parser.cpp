@@ -29,6 +29,7 @@ LUAU_FLAGVERSION(LuauExportValueSyntax, 3)
 // inlining, no LPF_INLINABLE). Upstream spells this `@debugnoinline` behind the Debug flag `DebugLuauNoInline`;
 // Luwu ships it as `@noinline` and drops the debug spelling.
 LUAU_FASTFLAGVARIABLE(LuwuNoinlineAttribute)
+LUAU_FASTFLAGVARIABLE(DebugLuwuUserDefinedRefinements)
 // Luwu Attributes (rfcs/attributes-for-types-variables-fields-classes.md): attributes on variables, type
 // aliases, table fields, classes, class fields, parameters and assignments, where upstream only allows them on
 // functions.
@@ -227,6 +228,8 @@ std::pair<AttributeEntry, Luau::FValue<bool>&> kFlaggedAttributeEntries[] = {
       nullptr,
       {}},
      FFlag::LuwuNoinlineAttribute},
+    // Luwu user-defined refinements: parsed by parseTruthyAttribute, since its second argument is a type
+    {{"truthy", AstAttr::Type::Truthy, AstAttr::Context::AnyFunction, "functions", nullptr, {}}, FFlag::DebugLuwuUserDefinedRefinements},
 };
 
 std::vector<AttributeInfo> getKnownAttributes()
@@ -1262,6 +1265,42 @@ std::optional<AstAttr::Type> Parser::validateAttribute(
     return type;
 }
 
+// Luwu user-defined refinements:
+// truthyattr = 'truthy' '(' Name ',' Type ')'
+AstAttr* Parser::parseTruthyAttribute(const TempVector<AstAttr*>& attributes, const Name& name, AstAttr::Context context)
+{
+    AstArray<AstExpr*> empty;
+    validateAttribute(name.location, name.name.value, attributes, empty, context);
+
+    Location end = name.location;
+    AstAttr* node = allocator.alloc<AstAttr>(name.location, AstAttr::Type::Truthy, empty, name.name);
+
+    if (lexer.current().type != '(')
+    {
+        report(name.location, "'truthy' needs a parameter and the type it has when the function returns a truthy value: truthy(param, Type)");
+        return node;
+    }
+
+    Lexeme open = lexer.current();
+    nextLexeme();
+
+    Name param = parseName("parameter name");
+    node->refinedParam = param.name;
+    node->refinedParamLocation = param.location;
+
+    expectAndConsume(',', "truthy attribute");
+    node->refinedType = parseType();
+
+    end = lexer.current().location;
+    expectMatchAndConsume(')', open);
+
+    node->location = Location(name.location, end);
+    if (options.storeCstData)
+        cstNodeMap[node] = allocator.alloc<CstAttr>(/* hasAt */ false);
+
+    return node;
+}
+
 // attrlist = '@[' parattr {',' parattr} ']'
 void Parser::parseAttrList(TempVector<AstAttr*>& attributes, TempVector<CstAttrList*>* cstAttrLists, AstAttr::Context context)
 {
@@ -1289,7 +1328,11 @@ void Parser::parseAttrList(TempVector<AstAttr*>& attributes, TempVector<CstAttrL
             Lexeme argOpen = lexer.current();
             Lexeme::Type argOpenType = argOpen.type;
 
-            if (argOpenType == Lexeme::RawString || argOpenType == Lexeme::QuotedString || argOpenType == '{' || argOpenType == '(')
+            if (FFlag::DebugLuwuUserDefinedRefinements && strcmp(attrName, "truthy") == 0)
+            {
+                attributes.push_back(parseTruthyAttribute(attributes, name, context));
+            }
+            else if (argOpenType == Lexeme::RawString || argOpenType == Lexeme::QuotedString || argOpenType == '{' || argOpenType == '(')
             {
                 Position openParenPosition = argOpenType == '(' ? argOpen.location.begin : Position::missing();
                 TempVector<Position> argCommaPositions(scratchPosition2);
@@ -1440,7 +1483,12 @@ void Parser::parseAttribute_DEPRECATED(TempVector<AstAttr*>& attributes, AstAttr
                 Location nameLoc = name.location;
                 const char* attrName = name.name.value;
 
-                if (lexer.current().type == Lexeme::RawString || lexer.current().type == Lexeme::QuotedString || lexer.current().type == '{' ||
+                // Luwu user-defined refinements: as in parseAttrList, so the attribute doesn't depend on LuauCstAttr
+                if (FFlag::DebugLuwuUserDefinedRefinements && strcmp(attrName, "truthy") == 0)
+                {
+                    attributes.push_back(parseTruthyAttribute(attributes, name, context));
+                }
+                else if (lexer.current().type == Lexeme::RawString || lexer.current().type == Lexeme::QuotedString || lexer.current().type == '{' ||
                     lexer.current().type == '(')
                 {
 
@@ -1507,6 +1555,10 @@ void Parser::parseAttribute(TempVector<AstAttr*>& attributes, AstAttr::Context c
     const bool argumentsFollowBare = parseMisplacedBareAttributeArgs(name, context, args, argsLocation);
 
     std::optional<AstAttr::Type> type = validateAttribute(loc, name, attributes, args, context);
+
+    // Luwu user-defined refinements: its arguments are a name and a type, which only the list form parses
+    if (type == AstAttr::Type::Truthy)
+        report(loc, "'truthy' takes a parameter and a type: write it as @[truthy(param, Type)]");
 
     AstAttr* node = allocator.alloc<AstAttr>(
         argumentsFollowBare ? Location(loc, argsLocation) : loc, type.value_or(AstAttr::Type::Unknown), args, AstName(name)

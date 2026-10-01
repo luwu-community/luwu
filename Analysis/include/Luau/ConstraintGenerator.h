@@ -478,6 +478,7 @@ private:
      * @param fn the function expression to check.
      */
     void checkFunctionBody(const ScopePtr& scope, AstExprFunction* fn);
+    std::optional<FunctionType::TruthyRefinement> resolveTruthyRefinement(const ScopePtr& signatureScope, AstExprFunction* fn);
 
     // Specializations of 'resolveType' below
     TypeId resolveReferenceType(const ScopePtr& scope, AstType* ty, AstTypeReference* ref, bool inTypeArguments, bool replaceErrorWithFresh);

@@ -40,6 +40,7 @@ LUAU_FASTINTVARIABLE(LuauSolverConstraintLimit, 1000)
 LUAU_FASTINTVARIABLE(LuauSolverRecursionLimit, 500)
 
 LUAU_FASTFLAGVARIABLE(DebugLuauAssertOnForcedConstraint)
+LUAU_FASTFLAG(DebugLuwuUserDefinedRefinements)
 LUAU_FASTFLAGVARIABLE(DebugLuauLogSolver)
 LUAU_FASTFLAGVARIABLE(DebugLuauLogBindings)
 LUAU_FASTFLAGVARIABLE(LuauFixPropReadsOnMetatableTypes)
@@ -1746,9 +1747,56 @@ bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNul
     return true;
 }
 
-void ConstraintSolver::fillInDiscriminantTypes(NotNull<const Constraint> constraint, const std::vector<std::optional<TypeId>>& discriminantTypes)
+// Luwu user-defined refinements: a generic function's refinement target with each of its generics that annotates a
+// parameter replaced by that argument's type. `@[truthy(p, AsFile<T>)] function f<T>(p: T)` is how a type function gets
+// to see the argument.
+TypeId ConstraintSolver::instantiateTruthyRefinement(const FunctionType& fn, TypePackId arguments)
 {
-    for (std::optional<TypeId> ty : discriminantTypes)
+    TypeId target = fn.truthyRefinement->type;
+    if (fn.generics.empty())
+        return target;
+
+    const auto& [params, paramsTail] = flatten(fn.argTypes);
+    const auto& [args, argsTail] = flatten(arguments);
+
+    ApplyTypeFunction applyTypeFunction{arena};
+    for (size_t i = 0; i < params.size() && i < args.size(); ++i)
+    {
+        TypeId param = follow(params[i]);
+        bool isOwnGeneric = get<GenericType>(param) && std::find(fn.generics.begin(), fn.generics.end(), param) != fn.generics.end();
+        if (isOwnGeneric)
+            applyTypeFunction.typeArguments[param] = args[i];
+    }
+
+    if (applyTypeFunction.typeArguments.empty())
+        return target;
+
+    return applyTypeFunction.substitute(target).value_or(target);
+}
+
+// Luwu user-defined refinements: the type a `@[truthy(param, Type)]` refines to, with its type functions reduced now. A
+// refinement bound to a type function that is still unreduced is lost, so the call's own solving reduces it: its inputs
+// are as solved as the call's arguments by then.
+TypeId ConstraintSolver::reduceTruthyRefinement(TypeId target, NotNull<const Constraint> constraint)
+{
+    TypeFunctionContext context{NotNull{this}, constraint->scope, constraint, subtyping};
+    FunctionGraphReductionResult result = reduceTypeFunctions(target, constraint->location, NotNull{&context}, /* force */ false);
+
+    for (TypeId reduced : result.reducedTypes)
+        unblock(reduced, constraint->location);
+    for (TypePackId reduced : result.reducedPacks)
+        unblock(reduced, constraint->location);
+
+    return follow(target);
+}
+
+void ConstraintSolver::fillInDiscriminantTypes(
+    NotNull<const Constraint> constraint,
+    const FunctionCallConstraint& call,
+    std::optional<size_t> oneWayArgument
+)
+{
+    for (std::optional<TypeId> ty : call.discriminantTypes)
     {
         if (!ty)
             continue;
@@ -1760,6 +1808,27 @@ void ConstraintSolver::fillInDiscriminantTypes(NotNull<const Constraint> constra
         // We also need to unconditionally unblock these types, otherwise
         // you end up with funky looking "Blocked on *no-refine*."
         unblock(*ty, constraint->location);
+    }
+
+    // Luwu user-defined refinements: a falsy call refines each argument to the negation of its discriminant, as
+    // upstream does, except the argument `@[truthy]` refines: a falsy result says nothing about it.
+    for (size_t i = 0; i < call.negativeDiscriminantTypes.size(); ++i)
+    {
+        std::optional<TypeId> negative = call.negativeDiscriminantTypes[i];
+        if (!negative)
+            continue;
+
+        if (isBlocked(*negative))
+        {
+            std::optional<TypeId> positive = i < call.discriminantTypes.size() ? call.discriminantTypes[i] : std::nullopt;
+            TypeId refined = builtinTypes->noRefineType;
+            if (positive && oneWayArgument != i)
+                refined = arena->addType(NegationType{*positive});
+
+            emplaceType<BoundType>(asMutable(follow(*negative)), refined);
+        }
+
+        unblock(*negative, constraint->location);
     }
 }
 
@@ -1889,7 +1958,7 @@ bool ConstraintSolver::tryDispatch(const FunctionCallConstraint& c, NotNull<cons
     {
         emplaceTypePack<BoundTypePack>(asMutable(c.result), builtinTypes->anyTypePack);
         unblock(c.result, constraint->location);
-        fillInDiscriminantTypes(constraint, c.discriminantTypes);
+        fillInDiscriminantTypes(constraint, c);
         return true;
     }
 
@@ -1897,14 +1966,14 @@ bool ConstraintSolver::tryDispatch(const FunctionCallConstraint& c, NotNull<cons
     if (get<ErrorType>(fn))
     {
         bind(constraint, c.result, builtinTypes->errorTypePack);
-        fillInDiscriminantTypes(constraint, c.discriminantTypes);
+        fillInDiscriminantTypes(constraint, c);
         return true;
     }
 
     if (get<NeverType>(fn))
     {
         bind(constraint, c.result, builtinTypes->neverTypePack);
-        fillInDiscriminantTypes(constraint, c.discriminantTypes);
+        fillInDiscriminantTypes(constraint, c);
         return true;
     }
 
@@ -1955,6 +2024,8 @@ bool ConstraintSolver::tryDispatch(const FunctionCallConstraint& c, NotNull<cons
         fn = collapse(it).value_or(fn);
 
     bool usedMagic = false;
+    // Luwu user-defined refinements: the argument `@[truthy]` refines, if any
+    std::optional<size_t> oneWayArgument;
 
     const FunctionType* ftv = get<FunctionType>(fn);
     if (ftv)
@@ -1964,6 +2035,22 @@ bool ConstraintSolver::tryDispatch(const FunctionCallConstraint& c, NotNull<cons
             usedMagic = ftv->magic->infer(MagicFunctionCallContext{NotNull{this}, constraint, NotNull{c.callSite}, c.argsPack, result});
             ftv->magic->refine(MagicRefinementContext{constraint->scope, c.callSite, c.discriminantTypes, NotNull{this}, argsPack});
         }
+
+        // Luwu user-defined refinements: `@[truthy(param, Type)]` refines the argument for `param` when the call
+        // returns a truthy value. `self` counts as a parameter, and a method call's receiver is its first discriminant,
+        // so the index lines up for `obj:m()` and `Cls.m(obj)` alike.
+        bool refinesArgument = FFlag::DebugLuwuUserDefinedRefinements && ftv->truthyRefinement &&
+                               ftv->truthyRefinement->argIndex < c.discriminantTypes.size();
+        if (refinesArgument)
+        {
+            std::optional<TypeId> discriminant = c.discriminantTypes[ftv->truthyRefinement->argIndex];
+            oneWayArgument = ftv->truthyRefinement->argIndex;
+            if (discriminant && isBlocked(*discriminant))
+            {
+                TypeId target = instantiateTruthyRefinement(*ftv, argsPack);
+                emplaceType<BoundType>(asMutable(follow(*discriminant)), reduceTruthyRefinement(target, constraint));
+            }
+        }
     }
 
     if (!c.typeArguments.empty() || !c.typePackArguments.empty())
@@ -1971,7 +2058,7 @@ bool ConstraintSolver::tryDispatch(const FunctionCallConstraint& c, NotNull<cons
         fn = instantiateFunctionType(c.fn, c.typeArguments, c.typePackArguments, constraint->scope, constraint->location);
     }
 
-    fillInDiscriminantTypes(constraint, c.discriminantTypes);
+    fillInDiscriminantTypes(constraint, c, oneWayArgument);
 
     OverloadResolver resolver{
         builtinTypes,

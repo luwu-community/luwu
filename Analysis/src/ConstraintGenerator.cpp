@@ -55,6 +55,7 @@ LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAGVARIABLE(LuwuExternTypeUseDefinitionScope)
 LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FASTFLAG(DebugLuauCyclicRequireTypeInference)
+LUAU_FASTFLAG(DebugLuwuUserDefinedRefinements)
 
 namespace Luau
 {
@@ -652,7 +653,12 @@ void ConstraintGenerator::computeRefinement(
         TypeId discriminantTy = proposition->discriminantTy;
 
         // if we have a negative sense, then we need to negate the discriminant
-        if (!sense)
+        if (!sense && proposition->negativeDiscriminantTy)
+        {
+            // Luwu user-defined refinements: the solver decides it (see Proposition)
+            discriminantTy = proposition->negativeDiscriminantTy;
+        }
+        else if (!sense)
         {
             if (auto nt = get<NegationType>(follow(discriminantTy)))
                 discriminantTy = nt->ty;
@@ -1794,8 +1800,6 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
             own.insert(name);
     }
 
-    std::map<Name, std::string> providers;
-
     // The class's own member `name`, as it declares it
     auto ownProperty = [&](const Name& name) -> const Property*
     {
@@ -1883,6 +1887,87 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
             hasConstructor = true;
     }
 
+    // Every trait that provides each name the class doesn't define itself
+    std::map<Name, std::vector<const ExternType*>> providers;
+    for (const auto& traitEntry : traits)
+    {
+        const ExternType* traitType = get<ExternType>(traitEntry.first);
+        const ExternType::TraitInfo& info = *traitType->traitInfo;
+
+        // A static (on the trait's value) is overridden by the class's own static, an instance member by its own member
+        auto addProvider = [&](const Name& name, bool isStatic)
+        {
+            bool provided = name != "__init" && name != "__create" && !info.expectations.count(name) && !info.fromNeeds.count(name);
+            bool classDefines = isStatic ? ownStatics.count(name) > 0 : own.count(name) > 0;
+            if (!provided || classDefines)
+                return;
+
+            std::vector<const ExternType*>& list = providers[name];
+            if (std::find(list.begin(), list.end(), traitType) == list.end())
+                list.push_back(traitType);
+        };
+
+        for (const auto& [name, _] : traitType->props)
+            addProvider(name, /* isStatic */ false);
+
+        const TableType* traitMetatable = traitType->metatable ? get<TableType>(follow(*traitType->metatable)) : nullptr;
+        if (traitMetatable)
+        {
+            for (const auto& [name, _] : traitMetatable->props)
+                addProvider(name, /* isStatic */ false);
+        }
+
+        if (const ExternType* traitValueType = classValueTypeOf(traitType))
+        {
+            for (const auto& [name, _] : traitValueType->props)
+                addProvider(name, /* isStatic */ true);
+        }
+    }
+
+    // The trait whose member the class gets for each name: a trait's function overrides the function of a trait it
+    // needs, so the provider that needs every other one wins (luaR_overridingtrait's rule). Absent when none does.
+    std::map<Name, const ExternType*> winners;
+    for (const auto& [name, list] : providers)
+    {
+        for (const ExternType* candidate : list)
+        {
+            bool needsAll = std::all_of(
+                list.begin(),
+                list.end(),
+                [&](const ExternType* other)
+                {
+                    return other == candidate || isSubclass(candidate, other);
+                }
+            );
+
+            if (needsAll)
+            {
+                winners[name] = candidate;
+                break;
+            }
+        }
+    }
+
+    // For a name no provider wins, the first two providers neither of which needs the other, as the runtime reports them.
+    // A name can be both a property and a metamethod of one trait, so each clash is reported once.
+    std::map<Name, std::pair<const ExternType*, const ExternType*>> clashes;
+    std::set<Name> clashReported;
+    for (const auto& [name, list] : providers)
+    {
+        if (winners.count(name))
+            continue;
+
+        for (size_t i = 0; i < list.size() && !clashes.count(name); ++i)
+        {
+            for (size_t j = i + 1; j < list.size() && !clashes.count(name); ++j)
+            {
+                bool related = isSubclass(list[i], list[j]) || isSubclass(list[j], list[i]);
+                if (!related)
+                    clashes[name] = {list[i], list[j]};
+            }
+        }
+    }
+
     for (const auto& traitEntry : traits)
     {
         TypeId trait = traitEntry.first;
@@ -1925,17 +2010,22 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
                 return false;
             }
 
-            auto [provider, inserted] = providers.try_emplace(name, traitType->name);
-            if (!inserted && provider->second != traitType->name)
-            {
-                reportError(
-                    location,
-                    GenericError{format("Traits '%s' and '%s' both provide '%s'", provider->second.c_str(), traitType->name.c_str(), name.c_str())}
-                );
-                return false;
-            }
+            if (auto winner = winners.find(name); winner != winners.end())
+                return winner->second == traitType;
 
-            return true;
+            // No provider needs every other one: reported once, on the entry of the second of the clashing pair
+            auto clash = clashes.find(name);
+            bool reportsHere = clash != clashes.end() && clash->second.second == traitType;
+            if (!reportsHere || !clashReported.insert(name).second)
+                return false;
+
+            const ExternType* first = clash->second.first;
+            std::string message = format("Traits '%s' and '%s' both provide '%s'", first->name.c_str(), traitType->name.c_str(), name.c_str());
+            if (!isTraitField(name))
+                message += format(" and neither needs the other; define '%s' in class '%s' to choose", name.c_str(), className.c_str());
+
+            reportError(location, GenericError{std::move(message)});
+            return false;
         };
 
         for (const auto& [name, prop] : traitType->props)
@@ -1959,8 +2049,13 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
                 {
                     auto own = classValueType->props.find(name);
                     checkOverrideAccess(name, prop, own != classValueType->props.end() ? &own->second : nullptr, traitType, location);
+                    continue;
                 }
-                else if (provided && !classValueType->props.count(name))
+
+                // the winning provider's static (a method is on the value too; its winner is the same)
+                auto winner = winners.find(name);
+                bool isWinner = winner == winners.end() || winner->second == traitType;
+                if (provided && isWinner && !classValueType->props.count(name))
                     classValueType->props[name] = instantiateProperty(trait, prop, location);
             }
         }
@@ -4168,6 +4263,28 @@ InferencePack ConstraintGenerator::checkExprCall(
 
     std::vector<RefinementId> returnRefinements;
     std::vector<std::optional<TypeId>> discriminantTypes;
+    std::vector<std::optional<TypeId>> negativeDiscriminantTypes;
+
+    // Each argument the call could refine gets a discriminant the solver binds once it knows the function.
+    // Luwu user-defined refinements: and, with DebugLuwuUserDefinedRefinements on, one for when the call is falsy.
+    auto addArgument = [&](AstExpr* arg)
+    {
+        exprArgs.push_back(arg);
+
+        const RefinementKey* key = dfg->getRefinementKey(arg);
+        if (!key)
+        {
+            discriminantTypes.emplace_back(std::nullopt);
+            negativeDiscriminantTypes.emplace_back(std::nullopt);
+            return;
+        }
+
+        TypeId discriminantTy = arena->addType(BlockedType{});
+        TypeId negativeDiscriminantTy = FFlag::DebugLuwuUserDefinedRefinements ? arena->addType(BlockedType{}) : nullptr;
+        returnRefinements.push_back(refinementArena.implicitProposition(key, discriminantTy, negativeDiscriminantTy));
+        discriminantTypes.emplace_back(discriminantTy);
+        negativeDiscriminantTypes.emplace_back(negativeDiscriminantTy ? std::optional<TypeId>{negativeDiscriminantTy} : std::nullopt);
+    };
 
     if (call->self)
     {
@@ -4175,31 +4292,11 @@ InferencePack ConstraintGenerator::checkExprCall(
         if (!indexExpr)
             ice->ice("method call expression has no 'self'");
 
-        exprArgs.push_back(indexExpr->expr);
-
-        if (auto key = dfg->getRefinementKey(indexExpr->expr))
-        {
-            TypeId discriminantTy = arena->addType(BlockedType{});
-            returnRefinements.push_back(refinementArena.implicitProposition(key, discriminantTy));
-            discriminantTypes.emplace_back(discriminantTy);
-        }
-        else
-            discriminantTypes.emplace_back(std::nullopt);
+        addArgument(indexExpr->expr);
     }
 
     for (AstExpr* arg : call->args)
-    {
-        exprArgs.push_back(arg);
-
-        if (auto key = dfg->getRefinementKey(arg))
-        {
-            TypeId discriminantTy = arena->addType(BlockedType{});
-            returnRefinements.push_back(refinementArena.implicitProposition(key, discriminantTy));
-            discriminantTypes.emplace_back(discriminantTy);
-        }
-        else
-            discriminantTypes.emplace_back(std::nullopt);
-    }
+        addArgument(arg);
 
     std::vector<std::optional<TypeId>> expectedTypesForCall = getExpectedCallTypesForFunctionOverloads(fnType);
 
@@ -4453,21 +4550,21 @@ InferencePack ConstraintGenerator::checkExprCall(
 
     addAllAsDependencies(funcBeginCheckpoint, funcEndCheckpoint, this, checkConstraint);
 
-    NotNull<Constraint> callConstraint = addConstraint(
-        scope,
-        call->func->location,
-        FunctionCallConstraint{
-            fnType,
-            argPack,
-            rets,
-            call,
-            std::move(discriminantTypes),
-            std::move(explicitTypeIds),
-            std::move(explicitTypePackIds),
-            &module->astOverloadResolvedTypes,
-            FFlag::LuwuGenericNominals ? expectedType : std::nullopt,
-        }
-    );
+    FunctionCallConstraint callConstraintData{
+        fnType,
+        argPack,
+        rets,
+        call,
+        std::move(discriminantTypes),
+        std::move(explicitTypeIds),
+        std::move(explicitTypePackIds),
+        &module->astOverloadResolvedTypes,
+        FFlag::LuwuGenericNominals ? expectedType : std::nullopt,
+    };
+    if (FFlag::DebugLuwuUserDefinedRefinements)
+        callConstraintData.negativeDiscriminantTypes = std::move(negativeDiscriminantTypes);
+
+    NotNull<Constraint> callConstraint = addConstraint(scope, call->func->location, std::move(callConstraintData));
 
     getMutable<BlockedTypePack>(rets)->owner = callConstraint.get();
 
@@ -5770,6 +5867,9 @@ ConstraintGenerator::FunctionSignature ConstraintGenerator::checkFunctionSignatu
     defn.originalNameLocation = originalName.value_or(Location(fn->location.begin, 0));
     actualFunction.definition = defn;
 
+    if (FFlag::DebugLuwuUserDefinedRefinements)
+        actualFunction.truthyRefinement = resolveTruthyRefinement(signatureScope, fn);
+
     TypeId actualFunctionType = arena->addType(std::move(actualFunction));
     LUAU_ASSERT(actualFunctionType);
     module->astTypes[fn] = actualFunctionType;
@@ -5787,6 +5887,39 @@ ConstraintGenerator::FunctionSignature ConstraintGenerator::checkFunctionSignatu
         /* signatureScope */ std::move(signatureScope),
         /* bodyScope */ std::move(bodyScope),
     };
+}
+
+// Luwu user-defined refinements: `@[truthy(param, Type)]` on `fn`, as the index of
+// `param` among the function's parameters (`self` first when it has one) and the resolved `Type`
+std::optional<FunctionType::TruthyRefinement> ConstraintGenerator::resolveTruthyRefinement(const ScopePtr& signatureScope, AstExprFunction* fn)
+{
+    AstAttr* truthy = fn->getAttribute(AstAttr::Type::Truthy);
+    if (!truthy || !truthy->refinedType)
+        return std::nullopt;
+
+    // resolved even when the parameter is wrong, so the type's own errors are reported and it has a resolved type
+    TypeId refined = resolveType(signatureScope, truthy->refinedType, /* inTypeArguments */ false);
+
+    std::optional<size_t> argIndex;
+    size_t selfOffset = fn->self ? 1 : 0;
+    if (fn->self && truthy->refinedParam == fn->self->name)
+        argIndex = 0;
+
+    for (size_t i = 0; i < fn->args.size && !argIndex; ++i)
+    {
+        if (fn->args.data[i]->name == truthy->refinedParam)
+            argIndex = selfOffset + i;
+    }
+
+    if (!argIndex)
+    {
+        reportError(
+            truthy->refinedParamLocation, GenericError{format("'%s' is not a parameter of this function", truthy->refinedParam.value)}
+        );
+        return std::nullopt;
+    }
+
+    return FunctionType::TruthyRefinement{*argIndex, refined};
 }
 
 void ConstraintGenerator::checkFunctionBody(const ScopePtr& scope, AstExprFunction* fn)

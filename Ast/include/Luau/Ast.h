@@ -240,6 +240,8 @@ public:
         // Luwu @noinline (rfcs/noinline-attribute.md): upstream's `DebugNoinline` (`@debugnoinline`), shipped as
         // `@noinline`.
         Noinline,
+        // Luwu user-defined refinements: `@[truthy(param, Type)]`
+        Truthy,
         Unknown
     };
 
@@ -325,6 +327,13 @@ public:
     Type type;
     AstArray<AstExpr*> args;
     AstName name;
+
+    // Luwu user-defined refinements: `@[truthy(param, Type)]` (behind DebugLuwuUserDefinedRefinements) says that when
+    // the function returns a truthy value, the argument for its parameter `param` is a `Type`. Only a `Truthy`
+    // attribute has them; its `args` stay empty, since `Type` is a type, not an expression.
+    AstName refinedParam;
+    Location refinedParamLocation;
+    AstType* refinedType = nullptr;
 };
 
 // The `@deprecated` attribute's payload, or nullopt when the array has no `@deprecated`.

@@ -21,6 +21,8 @@ LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuwuTraits)
+LUAU_FASTFLAG(DebugLuwuUserDefinedRefinements)
+LUAU_FASTFLAG(LuauCstAttr)
 
 namespace
 {
@@ -3300,7 +3302,53 @@ TEST_CASE_FIXTURE(ClassesFixture, "trait_member_clashes")
     CHECK_EQ("'shared' is already provided by trait 'A'", toString(result.errors[0]));
     CHECK_EQ("'shared' is already provided by trait 'A'", toString(result.errors[1]));
     CHECK_EQ(result.errors[1].location.begin.line, 11);
-    CHECK_EQ("Traits 'A' and 'B' both provide 'f'", toString(result.errors[2]));
+    CHECK_EQ("Traits 'A' and 'B' both provide 'f' and neither needs the other; define 'f' in class 'C' to choose", toString(result.errors[2]));
+}
+
+// A trait's function overrides the function of a trait it needs: the provider that needs every other one wins, and
+// the override is checked where it is written
+TEST_CASE_FIXTURE(ClassesFixture, "a_trait_overrides_a_function_of_a_trait_it_needs")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait Path
+            function join(self, s: string): Path return self end
+            final function locked(self) return 1 end
+            function narrow(self): string return "" end
+            y = 1
+        end
+        trait FilesystemPath needs Path
+            function join(self, s: string): FilesystemPath return self end
+            function exists(self): boolean return true end
+            function locked(self) return 2 end
+            function narrow(self): number return 0 end
+            function y(self) end
+        end
+        class FilePath implements FilesystemPath end
+        local exists: boolean = FilePath():join("x"):exists()
+
+        trait Base function g(self) return 0 end end
+        trait Left needs Base function g(self) return 1 end end
+        trait Right needs Base function g(self) return 2 end end
+        trait Both needs Left, Right function g(self) return 3 end end
+        class Diamond implements Left, Right end
+        class Settled implements Left, Right function g(self) return 4 end end
+        class Resolved implements Both end
+    )");
+
+    // the clash comes from constraint generation, the trait-level checks after it; the narrowed signature is fine
+    LUAU_REQUIRE_ERROR_COUNT(4, result);
+    CHECK_EQ(
+        "Traits 'Left' and 'Right' both provide 'g' and neither needs the other; define 'g' in class 'Diamond' to choose",
+        toString(result.errors[0])
+    );
+    CHECK_EQ("'locked' is final in trait 'Path' and can't be overridden", toString(result.errors[1]));
+    CHECK_EQ(result.errors[1].location.begin.line, 10);
+    // `narrow` returns a number where Path's returns a string
+    CHECK_EQ(result.errors[2].location.begin.line, 11);
+    CHECK_EQ("Trait 'FilesystemPath' can't redefine 'y': fields of trait 'Path' can't be overridden", toString(result.errors[3]));
+    CHECK_EQ(result.errors[3].location.begin.line, 12);
 }
 
 TEST_CASE_FIXTURE(ClassesFixture, "traits_that_need_each_other")
@@ -4113,6 +4161,130 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "aliased_class_checks_refine_with_the_builtin
         local function g(x: unknown)
             assert(is(x, Cat))
             local asserted: number = x.lives
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+// Luwu user-defined refinements
+
+TEST_CASE_FIXTURE(ClassesFixture, "truthy_attribute_refines_its_parameter_when_the_call_is_truthy")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+    ScopedFastFlag refinements{FFlag::DebugLuwuUserDefinedRefinements, true};
+    ScopedFastFlag cstAttr{FFlag::LuauCstAttr, true};
+
+    CheckResult result = check(R"(
+        trait Path
+            expect public kind: string
+            @[truthy(self, FilePath)]
+            public function is_file(self): boolean
+                return self.kind == "file"
+            end
+        end
+        class FilePath(public kind: string) implements Path
+            public function read(self): string return "" end
+        end
+
+        @[truthy(p, FilePath)]
+        local function isFile(p: Path): boolean
+            return p.kind == "file"
+        end
+
+        local function use(pathy: Path)
+            if pathy:is_file() then
+                local a: string = pathy:read()
+            end
+            if isFile(pathy) then
+                local b: string = pathy:read()
+            end
+            if Path.is_file(pathy) then
+                local c: string = pathy:read()
+            end
+            if not pathy:is_file() then
+                local e: string = pathy:read()
+                return
+            end
+            local d: string = pathy:read()
+        end
+    )");
+
+    // a falsy result says nothing, so inside `if not ...` it is still a Path; past the guard it was truthy
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 28);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "truthy_attribute_targets_can_be_type_functions_of_the_argument")
+{
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+    ScopedFastFlag classGlobal{FFlag::LuauAllowGlobalDeclarationToBeCalledClass, true};
+    ScopedFastFlag refinements{FFlag::DebugLuwuUserDefinedRefinements, true};
+    ScopedFastFlag cstAttr{FFlag::LuauCstAttr, true};
+
+    CheckResult result = check(R"(
+        class FilePath(public kind: string)
+            public function read(self): string return "" end
+        end
+        class DirPath(public kind: string) end
+
+        type function narrowTo(given, target)
+            return types.intersectionof(given, target)
+        end
+
+        -- a generic that annotates a parameter is the argument's type at each call
+        @[truthy(p, narrowTo<T, FilePath>)]
+        local function isFile<T>(p: T): boolean
+            return true
+        end
+
+        local function use(pathy: FilePath | DirPath)
+            if isFile(pathy) then
+                local s: string = pathy:read()
+            end
+            local either: FilePath | DirPath = pathy
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "truthy_attribute_errors")
+{
+    ScopedFastFlag refinements{FFlag::DebugLuwuUserDefinedRefinements, true};
+    ScopedFastFlag cstAttr{FFlag::LuauCstAttr, true};
+
+    CheckResult result = check(R"(
+        class FilePath end
+        @[truthy(q, FilePath)]
+        local function isFile(p: unknown): boolean
+            return true
+        end
+        @truthy
+        local function bare(p: unknown): boolean
+            return true
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ("'truthy' takes a parameter and a type: write it as @[truthy(param, Type)]", toString(result.errors[0]));
+    CHECK_EQ("'q' is not a parameter of this function", toString(result.errors[1]));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "exact_checks_still_refine_when_false_with_user_defined_refinements_on")
+{
+    ScopedFastFlag refinements{FFlag::DebugLuwuUserDefinedRefinements, true};
+    ScopedFastFlag cstAttr{FFlag::LuauCstAttr, true};
+
+    CheckResult result = check(R"(
+        class Cat(public lives: number) end
+        class Dog(public bark: string) end
+        local function f(x: Cat | Dog)
+            if not class.isinstance(x, Cat) then
+                local d: string = x.bark
+                return
+            end
+            local lives: number = x.lives
         end
     )");
 

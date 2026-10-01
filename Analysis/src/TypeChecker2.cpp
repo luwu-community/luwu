@@ -1983,6 +1983,86 @@ void TypeChecker2::checkTraitRefs(AstStatClass* stat, const AstArray<AstClassTra
     }
 }
 
+// Luwu Traits (rfcs/classes/traits.md): a trait's function overrides the function of the same name in a trait it needs
+// (directly or through others) for the classes implementing both. Checked where the override is written: it can't
+// override a field or a `final` function, has the overridden function's access, and fits its signature, so code
+// holding the needed trait is typed right whichever runs. The runtime checks the first three again
+// (luaR_overridingtrait).
+void TypeChecker2::checkTraitOverrides(AstStatClass* stat)
+{
+    NotNull<Scope> scope{findInnermostScope(stat->location)};
+    std::optional<TypeFun> traitFun = scope->lookupType(stat->name->name.value);
+    const ExternType* traitType = traitFun ? get<ExternType>(follow(traitFun->type)) : nullptr;
+    if (!traitType || !traitType->traitInfo)
+        return;
+
+    // every trait this one needs, once each however the `needs` graph branches
+    std::vector<const ExternType*> needed;
+    std::vector<TypeId> pending{traitType->implementedTraits.begin(), traitType->implementedTraits.end()};
+    DenseHashSet<const ExternType*> visited{nullptr};
+    while (!pending.empty())
+    {
+        const ExternType* current = get<ExternType>(follow(pending.back()));
+        pending.pop_back();
+        if (!current || !current->traitInfo || visited.contains(current) || current == traitType)
+            continue;
+
+        visited.insert(current);
+        needed.push_back(current);
+        pending.insert(pending.end(), current->implementedTraits.begin(), current->implementedTraits.end());
+    }
+
+    for (const AstClassMember& member : stat->members)
+    {
+        const AstClassProperty* prop = member.get_if<AstClassProperty>();
+        const AstClassMethod* method = member.get_if<AstClassMethod>();
+        bool expected = (prop && prop->expectLocation) || (method && method->expectLocation);
+        if ((!prop && !method) || expected)
+            continue;
+
+        Name name = prop ? prop->name.value : method->functionName.value;
+        Location location = prop ? prop->nameLocation : method->nameLocation;
+        const Property* mine = findClassMember(traitType, name);
+
+        for (const ExternType* other : needed)
+        {
+            // only where the member is written: an expectation, or a member the other trait has from its own needs
+            const ExternType::TraitInfo& info = *other->traitInfo;
+            if (info.expectations.count(name) || info.fromNeeds.count(name))
+                continue;
+
+            const Property* theirs = findClassMember(other, name);
+            if (!theirs)
+                continue;
+
+            const ClassFieldUserData* otherFields = dynamic_cast<const ClassFieldUserData*>(other->userData.get());
+            bool theirsIsField = otherFields && otherFields->fieldNames.count(name);
+
+            if (prop || theirsIsField)
+                reportError(
+                    GenericError{format(
+                        "Trait '%s' can't redefine '%s': fields of trait '%s' can't be overridden",
+                        traitType->name.c_str(),
+                        name.c_str(),
+                        other->name.c_str()
+                    )},
+                    location
+                );
+            else if (info.finals.count(name))
+                reportError(GenericError{format("'%s' is final in trait '%s' and can't be overridden", name.c_str(), other->name.c_str())}, location);
+            else if (mine && mine->isPrivate != theirs->isPrivate)
+                reportError(
+                    GenericError{format(
+                        "'%s' must be %s to override it from trait '%s'", name.c_str(), theirs->isPrivate ? "private" : "public", other->name.c_str()
+                    )},
+                    location
+                );
+            else if (mine && mine->readTy && theirs->readTy && !containsErrorType(*theirs->readTy))
+                testIsSubtype(withoutSelfParameter(*mine->readTy), withoutSelfParameter(*theirs->readTy), location);
+        }
+    }
+}
+
 void TypeChecker2::reportMissingTraitMember(
     AstStatClass* stat,
     const ExternType* classType,
@@ -2265,6 +2345,9 @@ void TypeChecker2::visit(AstStatClass* stat)
     {
         checkTraitRefs(stat, stat->implements);
         checkTraitRefs(stat, stat->needs);
+
+        if (stat->isTrait && stat->needs.size > 0)
+            checkTraitOverrides(stat);
     }
 
     // Luwu Traits (rfcs/classes/traits.md): a member a trait expects has to fit the type the trait's functions assume. A
