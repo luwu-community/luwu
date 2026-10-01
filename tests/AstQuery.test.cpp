@@ -9,6 +9,7 @@
 using namespace Luau;
 
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
+LUAU_FASTFLAG(LuwuDestructuring)
 
 struct DocumentationSymbolFixture : BuiltinsFixture
 {
@@ -224,6 +225,35 @@ bar(foo())
     auto expectedOty = findExpectedTypeAtPosition(Position(3, 7));
     REQUIRE(expectedOty);
     CHECK_EQ("number", toString(*expectedOty));
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): what's under the cursor in a pattern is what's written there, never the
+// pattern's hidden local
+TEST_CASE_FIXTURE(Fixture, "expr_or_local_in_a_destructuring_pattern")
+{
+    ScopedFastFlag destructuring{FFlag::LuwuDestructuring, true};
+
+    check(R"(
+local value = { alpha = 1, beta = 2 }
+local .{alpha, beta as b} = value
+    )");
+
+    // a shorthand binding: the local it declares
+    ExprOrLocal onShorthand = findExprOrLocalAtPosition(*getMainSourceModule(), Position(2, 9));
+    REQUIRE(onShorthand.getLocal());
+    CHECK_EQ(std::string("alpha"), onShorthand.getLocal()->name.value);
+
+    // the key of a renamed field: the field it reads
+    ExprOrLocal onKey = findExprOrLocalAtPosition(*getMainSourceModule(), Position(2, 16));
+    REQUIRE(onKey.getExpr());
+    AstExprIndexName* read = onKey.getExpr()->as<AstExprIndexName>();
+    REQUIRE(read);
+    CHECK_EQ(std::string("beta"), read->index.value);
+
+    // the name after `as`: the local it declares
+    ExprOrLocal onName = findExprOrLocalAtPosition(*getMainSourceModule(), Position(2, 23));
+    REQUIRE(onName.getLocal());
+    CHECK_EQ(std::string("b"), onName.getLocal()->name.value);
 }
 
 TEST_CASE_FIXTURE(Fixture, "ast_ancestry_at_eof")

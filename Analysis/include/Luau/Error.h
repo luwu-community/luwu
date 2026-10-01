@@ -309,6 +309,18 @@ struct IllegalRequire
     std::string moduleName;
     std::string reason;
 
+    // Luwu: a module whose returns can't be required gets its own message and help, which `reason` isn't used for
+    enum class Returns
+    {
+        Other,
+        Nothing,
+        TooMany,
+    };
+    Returns returns = Returns::Other;
+    // with TooMany: how many values the module returns, a minimum when the last one is a call or `...`
+    size_t returnCount = 0;
+    bool returnCountIsMinimum = false;
+
     bool operator==(const IllegalRequire& rhs) const;
 };
 

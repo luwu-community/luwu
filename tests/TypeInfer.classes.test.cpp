@@ -32,6 +32,7 @@ struct ClassesFixture : Fixture
 declare function sqrt(n: number): number
 declare function tostring<T>(value: T): string
 declare function typeof<T>(value: T): string
+declare none: none
 
 declare extern type Duration with
     read seconds: number
@@ -88,6 +89,14 @@ declare class: {
             auto ofIt = ctv->props.find("of");
             LUAU_ASSERT(ofIt != ctv->props.end() && ofIt->second.readTy);
             attachMagicFunction(*ofIt->second.readTy, std::make_shared<MagicClassOf>());
+
+            // the checks refine their first argument (see MagicClassInstanceCheck)
+            for (const char* check : {"isinstance", "implements"})
+            {
+                auto checkIt = ctv->props.find(check);
+                LUAU_ASSERT(checkIt != ctv->props.end() && checkIt->second.readTy);
+                attachMagicFunction(*checkIt->second.readTy, std::make_shared<MagicClassInstanceCheck>());
+            }
         }
 
         registerTestTypes();
@@ -3304,12 +3313,40 @@ TEST_CASE_FIXTURE(ClassesFixture, "traits_that_need_each_other")
         trait Base end
         trait Left needs Base end
         trait Right needs Base end
+        trait X needs Y end
+        trait Y needs Z end
+        trait Z needs X end
+        trait Me needs Me end
     )");
 
-    // the diamond through Base is fine
-    LUAU_REQUIRE_ERROR_COUNT(2, result);
-    CHECK_EQ("Traits 'A' and 'B' need each other; combine them into one trait", toString(result.errors[0]));
-    CHECK_EQ("Traits 'B' and 'A' need each other; combine them into one trait", toString(result.errors[1]));
+    // the diamond through Base is fine; each trait in a cycle reports it from its own `needs` entry, starting with itself
+    LUAU_REQUIRE_ERROR_COUNT(6, result);
+    CHECK_EQ(
+        "Traits 'A' and 'B' are codependent. This is an unhealthy relationship; consider merging these traits or factoring out "
+        "common members into a new trait",
+        toString(result.errors[0])
+    );
+    CHECK_EQ(
+        "Traits 'B' and 'A' are codependent. This is an unhealthy relationship; consider merging these traits or factoring out "
+        "common members into a new trait",
+        toString(result.errors[1])
+    );
+    CHECK_EQ(
+        "Traits 'X', 'Y' and 'Z' are codependent. This is an unhealthy relationship; consider merging these traits or factoring out "
+        "common members into a new trait",
+        toString(result.errors[2])
+    );
+    CHECK_EQ(
+        "Traits 'Y', 'Z' and 'X' are codependent. This is an unhealthy relationship; consider merging these traits or factoring out "
+        "common members into a new trait",
+        toString(result.errors[3])
+    );
+    CHECK_EQ(
+        "Traits 'Z', 'X' and 'Y' are codependent. This is an unhealthy relationship; consider merging these traits or factoring out "
+        "common members into a new trait",
+        toString(result.errors[4])
+    );
+    CHECK_EQ("Trait 'Me' needs itself", toString(result.errors[5]));
 }
 
 TEST_CASE_FIXTURE(ClassesFixture, "class_implements_refines")
@@ -3893,6 +3930,193 @@ TEST_CASE_FIXTURE(ClassesFixture, "expected_function_signatures_are_checked_wher
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK_EQ(result.errors[0].location.begin.line, 3);
     CHECK_EQ("Generic type 'Listable<T>' expects 1 type argument, but none are specified", toString(result.errors[0]));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "a_generic_trait_expected_field_is_compared_with_the_class_type_arguments")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+    ScopedFastFlag generics{FFlag::LuwuGenericNominals, true};
+
+    CheckResult result = check(R"(
+        trait Holder<T>
+            expect value: T?
+            function get(self): T? return self.value end
+        end
+        class Box<T> implements Holder<T>
+            value: T?
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "generic_classes_sharing_a_parameter_name_get_their_own_generics")
+{
+    ScopedFastFlag generics{FFlag::LuwuGenericNominals, true};
+
+    CheckResult result = check(R"(
+        class A<T>
+            public value: T?
+        end
+        class B<T>
+            public value: T?
+            public function f(self, x: T): T?
+                local y: T? = x
+                return y
+            end
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "a_missing_member_of_a_needed_trait_is_reported_on_the_implements_entry")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait Named
+            expect name: string
+        end
+        trait Greeter needs Named
+            function greet(self): string return self.name end
+        end
+        class Cat implements Greeter
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location, Location{{7, 29}, {7, 36}});
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "implements_and_needs_entries_that_are_not_traits_are_reported")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait Known
+            function a(self) return 1 end
+        end
+        class Cls end
+        trait T needs Nope, Known
+        end
+        trait V needs Cls
+        end
+        class C implements Nope2
+        end
+        class D implements Known, Cls
+        end
+        trait W needs none
+        end
+        class E implements none
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(6, result);
+    CHECK_EQ("Expected this to be a trait, but got 'nil'", toString(result.errors[0]));
+    CHECK_EQ(result.errors[0].location, Location{{5, 22}, {5, 26}});
+    CHECK_EQ("This is a class, traits are not allowed to depend on classes (only other traits)", toString(result.errors[1]));
+    CHECK_EQ("Expected this to be a trait, but got 'nil'", toString(result.errors[2]));
+    CHECK_EQ("This is a class, classes can only implement traits (not other classes)", toString(result.errors[3]));
+    CHECK_EQ("Expected this to be a trait, but got 'none'", toString(result.errors[4]));
+    CHECK_EQ("Expected this to be a trait, but got 'none'", toString(result.errors[5]));
+}
+
+// Every expression in an `implements` or `needs` entry needs a def in the data flow graph: the name, an expression in a
+// type argument, and a trait argument
+TEST_CASE_FIXTURE(ClassesFixture, "expressions_anywhere_in_trait_entries_are_checked")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+    ScopedFastFlag generics{FFlag::LuwuGenericNominals, true};
+
+    CheckResult result = check(R"(
+        trait Box<T>
+            function f(self) return 1 end
+        end
+        local v = 1
+        class A implements Box<typeof(v)> end
+        class B implements Box<typeof(sqrt)> end
+        trait N needs Box(sqrt) end
+    )");
+
+    // `needs` takes no arguments; the parse error is the only one
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "a_trait_where_a_class_is_expected_and_the_other_way_round")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait Walker end
+        class Cat implements Walker end
+        local c = Cat()
+        local a = class.isinstance(c, Walker)
+        local b = class.implements(c, Cat)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ("Expected this to be a class, got trait 'Walker'", toString(result.errors[0]));
+    CHECK_EQ("Expected this to be a trait, got class 'Cat'", toString(result.errors[1]));
+}
+
+// The checks refine by the callee's type, not its spelling (MagicClassInstanceCheck), so an alias refines like the
+// original, as it compiles like it
+TEST_CASE_FIXTURE(ClassesFixture, "aliased_class_checks_refine")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait Named
+            expect name: string
+        end
+        class Cat(public name: string, public lives: number) implements Named end
+
+        const is = class.isinstance
+        local implements = class.implements
+
+        local function f(x: unknown, check: typeof(class.isinstance))
+            if is(x, Cat) then
+                local lives: number = x.lives
+            end
+            if implements(x, Named) then
+                local name: string = x.name
+            end
+            if not is(x, Cat) then
+                return
+            end
+            local afterGuard: number = x.lives
+        end
+
+        local function h(x: unknown, check: typeof(class.isinstance))
+            -- a parameter typed as the function refines too: it's the same function type
+            if check(x, Cat) then
+                local viaParameter: number = x.lives
+            end
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+// The same through the real builtin definitions, where registerBuiltinGlobals attaches the refinement
+TEST_CASE_FIXTURE(BuiltinsFixture, "aliased_class_checks_refine_with_the_builtin_class_library")
+{
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+    ScopedFastFlag classGlobal{FFlag::LuauAllowGlobalDeclarationToBeCalledClass, true};
+
+    CheckResult result = check(R"(
+        class Cat(public lives: number) end
+        const is = class.isinstance
+
+        local function g(x: unknown)
+            assert(is(x, Cat))
+            local asserted: number = x.lives
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
 }
 
 TEST_CASE_FIXTURE(ClassesFixture, "a_class_with_private_fields_is_usable_through_its_traits")

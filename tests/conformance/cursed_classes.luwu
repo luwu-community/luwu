@@ -152,7 +152,7 @@ do
     expectfail("implement a class", "class 'K' can only implement traits, but entry 1 of its 'implements' list is class 'Plain'", function()
         compile([[local Plain = ... class K implements Plain end]])(Plain)
     end)
-    expectfail("need a class", "needs a class, which is not a trait", function()
+    expectfail("need a class", "trait 'N' can't need class 'Plain': traits can only need other traits", function()
         compile([[local Plain = ... trait N needs Plain end class K implements N end]])(Plain)
     end)
 

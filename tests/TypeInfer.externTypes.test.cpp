@@ -372,7 +372,7 @@ TEST_CASE_FIXTURE(ExternTypeFixture, "table_properties_are_invariant")
     CHECK_EQ(6, result.errors.at(0).location.begin.line);
     const GenericError* help = get<GenericError>(result.errors[1]);
     REQUIRE(help);
-    CHECK_EQ("Help[read/write mismatch]: consider marking 'foo' as 'read' if the function 'f' only reads from it.", help->message);
+    CHECK_EQ("Help (read/write mismatch): consider marking 'foo' as 'read' if the function 'f' only reads from it.", help->message);
     CHECK_EQ(Location{{1, 23}, {1, 26}}, result.errors[1].location);
     CHECK_EQ(13, result.errors[2].location.begin.line);
 }
@@ -401,7 +401,7 @@ TEST_CASE_FIXTURE(ExternTypeFixture, "table_indexers_are_invariant")
     CHECK_EQ(6, result.errors.at(0).location.begin.line);
     const GenericError* help = get<GenericError>(result.errors[1]);
     REQUIRE(help);
-    CHECK_EQ("Help[read/write mismatch]: consider marking this as 'read' if the function 'f' only reads from the array.", help->message);
+    CHECK_EQ("Help (read/write mismatch): consider marking this as 'read' if the function 'f' only reads from the array.", help->message);
     CHECK_EQ(Location{{1, 23}, {1, 42}}, result.errors[1].location);
     CHECK_EQ(13, result.errors[2].location.begin.line);
 }
@@ -575,9 +575,9 @@ local b: B = a
             "Expected property 'x' to allow reading and writing as 'BaseClass', but in 'A' it is a 'ChildClass', which can only "
             "be read as 'BaseClass'. Because 'x' can be read and written, it could silently be replaced with a value of a "
             "smaller type, causing data loss.\n\n"
-            "Help[read/write mismatch]:\n"
-            "- if nothing writes to 'x', mark it as 'read x: BaseClass' in 'B'\n"
-            "- if it reads and writes, make a 'BaseClass' version of your data or mark the additional fields as optional",
+            "Help (read/write mismatch):\n"
+            "  - if nothing writes to 'x', mark it as 'read x: BaseClass' in 'B'\n"
+            "  - if it reads and writes, make a 'BaseClass' version of your data or mark the additional fields as optional",
             toString(result.errors.at(0))
         );
     }

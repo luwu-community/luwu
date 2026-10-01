@@ -2350,8 +2350,17 @@ static std::optional<TypeId> destructuredValueType(const Module& module, const D
     if (!declaring || declaring->values.size == 0)
         return std::nullopt;
 
-    if (const TypeId* valueType = module.astTypes.find(declaring->values.data[0]))
+    AstExpr* value = declaring->values.data[0];
+    if (const TypeId* valueType = module.astTypes.find(value))
         return follow(*valueType);
+
+    // A call (`require(...)`, `f()`) is the declaration's last value, so it was checked as a pack: the pattern takes
+    // its first value
+    if (const TypePackId* valuePack = module.astTypePacks.find(value))
+    {
+        if (std::optional<TypeId> firstValue = Luau::first(*valuePack))
+            return follow(*firstValue);
+    }
 
     return std::nullopt;
 }

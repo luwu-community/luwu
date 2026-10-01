@@ -32,6 +32,7 @@
 #include "Luau/Unifier2.h"
 #include "Luau/VisitType.h"
 
+#include <algorithm>
 #include <memory>
 
 LUAU_DYNAMIC_FASTINTVARIABLE(LuauConstraintGeneratorRecursionLimit, 300)
@@ -85,27 +86,6 @@ static std::optional<AstExpr*> matchRequire(const AstExprCall& call)
     return call.args.data[0];
 }
 
-
-// Luwu Traits (rfcs/classes/traits.md): `class.implements(x, Trait)` refines the same way, to the trait's object type:
-// a trait's value is typed as a class value, and an object implementing a trait is a subtype of it.
-static const RefinementKey* matchIsInstanceGuard(const AstExprCall& call, NotNull<const DataFlowGraph> dfg)
-{
-    AstExprIndexName* index = call.func->as<AstExprIndexName>();
-    if (!index || index->op != '.')
-        return nullptr;
-
-    bool refines = index->index == "isinstance" || (FFlag::LuwuTraits && index->index == "implements");
-    if (!refines)
-        return nullptr;
-
-    if (!index->expr->is<AstExprGlobal>())
-        return nullptr;
-
-    if (call.args.size < 1)
-        return nullptr;
-
-    return dfg->getRefinementKey(call.args.data[0]);
-}
 
 namespace
 {
@@ -1125,9 +1105,12 @@ void ConstraintGenerator::prototypeClass(
     std::vector<GenericTypePackDefinition> classTypePackParams;
     if (FFlag::LuwuGenericNominals)
     {
-        for (const auto& [name, gen] : createGenerics(defnScope, classDecl->generics, /* useCache */ true, /* addTypes */ false))
+        // Not from the cache: it is keyed by name in the enclosing scope, so `class Box<T>` would get the `T` of an earlier
+        // `trait Holder<T>` or `class List<T>`. That `T`'s scope is the other declaration's, and subtyping only treats a
+        // generic as itself inside its own scope, so `T <: T?` would fail in Box's body.
+        for (const auto& [name, gen] : createGenerics(defnScope, classDecl->generics, /* useCache */ false, /* addTypes */ false))
             classTypeParams.push_back(gen);
-        for (const auto& [name, genPack] : createGenericPacks(defnScope, classDecl->genericPacks, /* useCache */ true, /* addTypes */ false))
+        for (const auto& [name, genPack] : createGenericPacks(defnScope, classDecl->genericPacks, /* useCache */ false, /* addTypes */ false))
             classTypePackParams.push_back(genPack);
 
         // Methods implicitly take `self`, typed as the bare object type
@@ -1414,6 +1397,29 @@ TypeId ConstraintGenerator::resolveTraitRef(const ScopePtr& scope, const AstClas
     return traitType && traitType->traitInfo ? traitTy : nullptr;
 }
 
+// Luwu Traits (rfcs/classes/traits.md): "Traits 'A', 'B' and 'C' are codependent. ..." for traits that need each
+// other, in the order the cycle goes. luaR_checkneedscycles words the runtime's error the same way.
+static std::string codependentTraitsMessage(const std::vector<TypeId>& cycle)
+{
+    std::string names;
+    for (size_t i = 0; i < cycle.size(); ++i)
+    {
+        if (i + 1 == cycle.size())
+            names += " and ";
+        else if (i > 0)
+            names += ", ";
+
+        // only traits are linked by `needs` (linkTraitNeeds)
+        const ExternType* traitType = get<ExternType>(follow(cycle[i]));
+        LUAU_ASSERT(traitType);
+        names += "'" + traitType->name + "'";
+    }
+
+    return "Traits " + names +
+           " are codependent. This is an unhealthy relationship; consider merging these traits or factoring out common members "
+           "into a new trait";
+}
+
 void ConstraintGenerator::linkTraitNeeds(const ScopePtr& scope, const AstArray<AstStat*>& statements)
 {
     for (AstStat* stat : statements)
@@ -1497,30 +1503,46 @@ void ConstraintGenerator::linkTraitNeeds(const ScopePtr& scope, const AstArray<A
         }
     }
 
-    // Traits that need each other are always implemented together, so they should be one trait (the runtime raises too)
-    auto reaches = [](TypeId from, TypeId target)
+    // Traits that need each other are always implemented together, so they should be one trait (the runtime raises too).
+    // The traits on the shortest path of `needs` from `from` to `target`, both included; empty when there is none. A
+    // breadth-first search with a visited set, so cycles elsewhere in the graph end it.
+    auto needsPath = [](TypeId from, TypeId target)
     {
-        std::vector<TypeId> stack{from};
+        // each trait reached, with the index of the trait it was reached from
+        const size_t noParent = ~size_t(0);
+        std::vector<std::pair<TypeId, size_t>> reached{{follow(from), noParent}};
         DenseHashSet<TypeId> visited{nullptr};
+        visited.insert(follow(from));
 
-        while (!stack.empty())
+        for (size_t i = 0; i < reached.size(); ++i)
         {
-            TypeId current = follow(stack.back());
-            stack.pop_back();
+            TypeId current = reached[i].first;
 
             if (current == target)
-                return true;
+            {
+                std::vector<TypeId> path;
+                for (size_t at = i; at != noParent; at = reached[at].second)
+                    path.push_back(reached[at].first);
+                std::reverse(path.begin(), path.end());
+                return path;
+            }
 
-            if (visited.contains(current))
+            const ExternType* currentType = get<ExternType>(current);
+            if (!currentType)
                 continue;
 
-            visited.insert(current);
+            for (TypeId next : currentType->implementedTraits)
+            {
+                next = follow(next);
+                if (visited.contains(next))
+                    continue;
 
-            if (const ExternType* currentType = get<ExternType>(current))
-                stack.insert(stack.end(), currentType->implementedTraits.begin(), currentType->implementedTraits.end());
+                visited.insert(next);
+                reached.emplace_back(next, i);
+            }
         }
 
-        return false;
+        return std::vector<TypeId>{};
     };
 
     for (AstStat* stat : statements)
@@ -1534,35 +1556,28 @@ void ConstraintGenerator::linkTraitNeeds(const ScopePtr& scope, const AstArray<A
             continue;
 
         TypeId traitTy = follow((*record)->ty);
-        const char* traitName = trait->name->name.value;
 
         for (const AstClassTraitRef& ref : trait->needs)
         {
             TypeId needed = resolveTraitRef(scope, ref);
-            if (!needed || !reaches(needed, traitTy))
+            if (!needed)
                 continue;
 
-            const ExternType* neededType = get<ExternType>(needed);
-            LUAU_ASSERT(neededType);
-
-            bool direct = std::any_of(
-                neededType->implementedTraits.begin(),
-                neededType->implementedTraits.end(),
-                [&](TypeId t)
-                {
-                    return follow(t) == traitTy;
-                }
-            );
-
-            std::string message;
             if (needed == traitTy)
-                message = format("Trait '%s' needs itself", traitName);
-            else if (direct)
-                message = format("Traits '%s' and '%s' need each other; combine them into one trait", traitName, neededType->name.c_str());
-            else
-                message = format("Trait '%s' needs itself through '%s'; combine them into one trait", traitName, neededType->name.c_str());
+            {
+                reportError(ref.trait->location, GenericError{format("Trait '%s' needs itself", trait->name->name.value)});
+                continue;
+            }
 
-            reportError(ref.trait->location, GenericError{std::move(message)});
+            // this trait, then the traits from `needed` back around to it
+            std::vector<TypeId> cycle = needsPath(needed, traitTy);
+            if (cycle.empty())
+                continue;
+
+            cycle.pop_back();
+            cycle.insert(cycle.begin(), traitTy);
+
+            reportError(ref.trait->location, GenericError{codependentTraitsMessage(cycle)});
         }
     }
 }
@@ -4312,20 +4327,9 @@ InferencePack ConstraintGenerator::checkExprCall(
 
     Checkpoint argEndCheckpoint = checkpoint(this);
 
-    if (FFlag::LuwuClasses)
-    {
-        if (auto instanceGuard = matchIsInstanceGuard(*call, dfg))
-        {
-            if (args.size() >= 2)
-            {
-                // The class type may not be solved yet (e.g. `A.Point` from a
-                // required module).
-                TypeId objectofInst = createTypeFunctionInstance(builtinTypes->typeFunctions->objectofFunc, {args[1]}, {}, scope, call->location);
-                returnRefinements.emplace_back(refinementArena.implicitProposition(instanceGuard, objectofInst));
-            }
-        }
-    }
-
+    // Luwu: upstream refines `x` in `class.isinstance(x, C)` here, matching the call by its spelling (a global's
+    // `.isinstance`). Luwu does it in MagicClassInstanceCheck::refine, by the callee's type, so an alias (`const is =
+    // class.isinstance`) refines like the original, as it already compiled like it.
     if (matchSetMetatable(*call))
     {
         TypePack argTailPack;

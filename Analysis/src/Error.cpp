@@ -151,6 +151,31 @@ static const char* declarationKind(TypeId t)
     return isTrait ? "trait" : "class";
 }
 
+// Luwu Traits (rfcs/classes/traits.md): a trait's value where any class is expected (`class.isinstance(x, Trait)`), or a
+// class's value where any trait is: "Expected this to be a class, got trait 'Item'". Both are extern types, so the
+// ordinary message would print the bare declaration name against 'class'.
+static std::optional<std::string> classTraitValueMismatch(TypeId given, TypeId wanted)
+{
+    // the root itself, `class` or `trait`, which has no root or relation of its own
+    const ExternType* wantedEtv = get<ExternType>(follow(wanted));
+    bool wantsRoot = wantedEtv && !wantedEtv->root && !wantedEtv->relation && (wantedEtv->name == "class" || wantedEtv->name == "trait");
+    if (!wantsRoot)
+        return std::nullopt;
+
+    // a class or trait value: under one of those roots, with an `Obj` relation (an object has a `Klass` one)
+    const ExternType* givenEtv = get<ExternType>(follow(given));
+    const ExternType* givenRoot = givenEtv && givenEtv->root ? get<ExternType>(follow(*givenEtv->root)) : nullptr;
+    bool givenIsValue = givenRoot && givenEtv->relation && givenEtv->relation->get_if<Obj>();
+    if (!givenIsValue)
+        return std::nullopt;
+
+    bool otherRoot = (givenRoot->name == "class" || givenRoot->name == "trait") && givenRoot->name != wantedEtv->name;
+    if (!otherRoot)
+        return std::nullopt;
+
+    return format("Expected this to be a %s, got %s '%s'", wantedEtv->name.c_str(), givenRoot->name.c_str(), givenEtv->name.c_str());
+}
+
 static bool isClassValueAgainstItsObject(TypeId given, TypeId wanted)
 {
     const ExternType* givenEtv = get<ExternType>(follow(given));
@@ -212,6 +237,9 @@ struct ErrorConverter
     {
         if (tm.overrideMessage)
             return *tm.overrideMessage;
+
+        if (std::optional<std::string> message = classTraitValueMismatch(tm.givenType, tm.wantedType))
+            return *message;
 
         ToStringOptions typeOptions;
         typeOptions.sortUnionMembers = !tm.luwuExplanation;
@@ -705,7 +733,28 @@ struct ErrorConverter
 
     std::string operator()(const Luau::IllegalRequire& e) const
     {
-        return "Cannot require module " + e.moduleName + ": " + e.reason;
+        // Luwu: upstream reads "Cannot require module <path>: <reason>", which buries the reason behind a long absolute
+        // path. Luwu says why first and puts the path on a line of its own.
+        const std::string path = "\nModule at path: " + e.moduleName;
+
+        switch (e.returns)
+        {
+        case IllegalRequire::Returns::Nothing:
+            return "Cannot require this module because it doesn't evaluate to a value" + path +
+                   "\n\nHelp (requiring modules):"
+                   "\n  - You probably forgot to return a value"
+                   "\n  - A required module may return exactly one value or export one or more values"
+                   "\n  - If you don't need to return any values, return 'nil'";
+        case IllegalRequire::Returns::TooMany:
+            return format("This module returns too many values (%s%zu)", e.returnCountIsMinimum ? "at least " : "", e.returnCount) + path +
+                   "\n\nHelp (requiring modules):"
+                   "\n  - Luwu expects modules to return exactly one value"
+                   "\n  - Not all runtimes support returning multiple values";
+        case IllegalRequire::Returns::Other:
+            break;
+        }
+
+        return "Cannot require this module because " + e.reason + path;
     }
 
     std::string operator()(const Luau::MissingProperties& e) const
@@ -1656,7 +1705,8 @@ bool ModuleHasCyclicDependency::operator==(const ModuleHasCyclicDependency& rhs)
 
 bool IllegalRequire::operator==(const IllegalRequire& rhs) const
 {
-    return moduleName == rhs.moduleName && reason == rhs.reason;
+    return moduleName == rhs.moduleName && reason == rhs.reason && returns == rhs.returns && returnCount == rhs.returnCount &&
+           returnCountIsMinimum == rhs.returnCountIsMinimum;
 }
 
 bool MissingProperties::operator==(const MissingProperties& rhs) const

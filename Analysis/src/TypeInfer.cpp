@@ -5152,7 +5152,7 @@ TypeId TypeChecker::checkRequire(const ScopePtr& scope, const ModuleInfo& module
 
     if (module->type != SourceCode::Module)
     {
-        reportError(location, IllegalRequire{module->humanReadableName, "Module is not a ModuleScript.  It cannot be required."});
+        reportError(location, IllegalRequire{module->humanReadableName, "it isn't a ModuleScript"});
         return errorRecoveryType(scope);
     }
 
@@ -5164,7 +5164,7 @@ TypeId TypeChecker::checkRequire(const ScopePtr& scope, const ModuleInfo& module
     std::optional<TypeId> moduleType = first(modulePack);
     if (!moduleType)
     {
-        reportError(location, IllegalRequire{module->humanReadableName, "Module does not return exactly 1 value.  It cannot be required."});
+        reportError(location, IllegalRequire{module->humanReadableName, {}, IllegalRequire::Returns::Nothing});
         return errorRecoveryType(scope);
     }
 

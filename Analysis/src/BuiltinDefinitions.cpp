@@ -550,6 +550,10 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
                 attachMagicFunction(*it->second.readTy, std::make_shared<MagicClassName>());
             if (auto it = ctv->props.find("of"); it != ctv->props.end() && it->second.readTy)
                 attachMagicFunction(*it->second.readTy, std::make_shared<MagicClassOf>());
+            if (auto it = ctv->props.find("isinstance"); it != ctv->props.end() && it->second.readTy)
+                attachMagicFunction(*it->second.readTy, std::make_shared<MagicClassInstanceCheck>());
+            if (auto it = ctv->props.find("implements"); it != ctv->props.end() && it->second.readTy)
+                attachMagicFunction(*it->second.readTy, std::make_shared<MagicClassInstanceCheck>());
         }
     }
 
@@ -2037,6 +2041,44 @@ bool MagicClassOf::infer(const MagicFunctionCallContext& context)
     asMutable(context.result)->ty.emplace<BoundTypePack>(arena->addTypePack({resultTy}));
 
     return true;
+}
+
+std::optional<WithPredicate<TypePackId>> MagicClassInstanceCheck::handleOldSolver(
+    struct TypeChecker&,
+    const std::shared_ptr<struct Scope>&,
+    const class AstExprCall&,
+    WithPredicate<TypePackId>
+)
+{
+    return std::nullopt;
+}
+
+bool MagicClassInstanceCheck::infer(const MagicFunctionCallContext&)
+{
+    // the declared signature types the call; this function only refines
+    return false;
+}
+
+void MagicClassInstanceCheck::refine(const MagicRefinementContext& context)
+{
+    // The value checked is the first argument. A method call (`lib:isinstance(c)`) puts `lib` there, which is not what
+    // the check is about.
+    if (context.callSite->self || context.discriminantTypes.empty() || !context.discriminantTypes[0])
+        return;
+
+    const auto& [argTypes, argTail] = flatten(context.arguments);
+    if (argTypes.size() < 2)
+        return;
+
+    // The objects that pass the check, as `objectof` names them. The solver has the arguments' types by now (it
+    // blocks the call on them), so this reads the class value directly. A value that isn't a class or trait gives
+    // the error type, as `objectof` does.
+    NotNull<BuiltinTypes> builtinTypes = context.solver->builtinTypes;
+    TypeId passed = objectTypeOfClassValue(builtinTypes, argTypes[1]).value_or(builtinTypes->errorType);
+
+    TypeId discriminant = follow(*context.discriminantTypes[0]);
+    LUAU_ASSERT(get<BlockedType>(discriminant));
+    emplaceType<BoundType>(asMutable(discriminant), passed);
 }
 
 static bool checkRequirePath(TypeChecker& typechecker, AstExpr* expr)

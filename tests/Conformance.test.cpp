@@ -4666,6 +4666,61 @@ TEST_CASE("Traits")
     runConformance("traits.luwu");
 }
 
+// Luwu Traits (rfcs/classes/traits.md): a class's copy of a trait method keeps the breakpoints set in the original
+TEST_CASE("TraitsDebugger")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+        {FFlag::LuwuDefaultArguments, true},
+        {FFlag::LuwuGenericNominals, true},
+    };
+
+    static int breakhits = 0;
+    breakhits = 0;
+
+    lua_CompileOptions copts = defaultOptions();
+    copts.debugLevel = 2;
+    copts.optimizationLevel = 0;
+
+    runConformance(
+        "traits_debugger.luwu",
+        [](lua_State* L)
+        {
+            // every hit just continues
+            lua_callbacks(L)->debugbreak = [](lua_State* L, lua_Debug* ar)
+            {
+                breakhits++;
+            };
+
+            lua_pushcclosurek(
+                L,
+                [](lua_State* L) -> int
+                {
+                    int line = luaL_checkinteger(L, 1);
+
+                    lua_Debug ar = {};
+                    lua_getinfo(L, lua_stackdepth(L) - 1, "f", &ar);
+
+                    lua_breakpoint(L, -1, line, true);
+                    return 0;
+                },
+                "breakpoint",
+                0,
+                nullptr
+            );
+            lua_setglobal(L, "breakpoint");
+        },
+        nullptr,
+        nullptr,
+        &copts,
+        /* skipCodegen */ true
+    );
+
+    // Cat's copy, Dog's copy, and Cat's again through the trait
+    CHECK(breakhits == 3);
+}
+
 // Luwu Traits (rfcs/classes/traits.md): reloading traits, passing them off as classes, odd member order, traits as
 // values, and classes implementing a trait from chunks the trait's own code loads
 TEST_CASE("CursedClasses")

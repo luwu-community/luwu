@@ -1678,8 +1678,6 @@ void TypeChecker2::visit(AstStatDeclareClass* stat)
     }
 }
 
-// Luwu Traits (rfcs/classes/traits.md): the class's constructor has to accept what the trait's expected `__init` takes
-// after `self`, since the trait's code constructs it with those; parameters beyond them must accept nil.
 // Luwu Traits (rfcs/classes/traits.md): where `stat` declares its member `name` (`__init` included: the method, or the
 // primary constructor), so an error about how it meets a trait's expectation goes on it
 static std::optional<Location> classMemberLocation(AstStatClass* stat, const Name& name)
@@ -1705,6 +1703,39 @@ static std::optional<Location> classMemberLocation(AstStatClass* stat, const Nam
     return std::nullopt;
 }
 
+// Luwu Traits (rfcs/classes/traits.md): where to report something about `trait` in `stat`: its `implements` entry, or for
+// a trait implied through another one's `needs`, the entry that implies it. Never the class's name: the class header is
+// not where a trait's requirement is broken.
+static Location traitRefLocation(NotNull<Scope> scope, AstStatClass* stat, const ExternType* trait)
+{
+    LUAU_ASSERT(stat->implements.size > 0);
+
+    for (const AstClassTraitRef& ref : stat->implements)
+    {
+        AstName name;
+        if (AstExprGlobal* global = ref.trait->as<AstExprGlobal>())
+            name = global->name;
+        else if (AstExprIndexName* index = ref.trait->as<AstExprIndexName>())
+            name = index->index;
+
+        if (name.value && trait->name == name.value)
+            return ref.trait->location;
+    }
+
+    for (const AstClassTraitRef& ref : stat->implements)
+    {
+        std::optional<TypeFun> listed = scope->lookupTraitRef(ref);
+        const ExternType* listedType = listed ? get<ExternType>(follow(listed->type)) : nullptr;
+        if (listedType && isSubclass(listedType, trait))
+            return ref.trait->location;
+    }
+
+    // a trait none of the entries resolves to or needs (an instantiation of a generic one) still goes on the list
+    return stat->implements.data[0].trait->location;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): the class's constructor has to accept what the trait's expected `__init` takes
+// after `self`, since the trait's code constructs it with those; parameters beyond them must accept nil.
 void TypeChecker2::checkTraitConstructorExpectation(AstStatClass* stat, const ExternType* classType, const ExternType* traitType)
 {
     auto expectedInit = traitType->props.find("__init");
@@ -1724,7 +1755,8 @@ void TypeChecker2::checkTraitConstructorExpectation(AstStatClass* stat, const Ex
     // `__init(self, ...)` against the constructor `(class, ...) -> Class`: position 0 is `self` and the class respectively
     auto [expectedArgs, expectedTail] = flatten(expected->argTypes);
     auto [ctorArgs, ctorTail] = flatten(ctor->argTypes);
-    Location location = classMemberLocation(stat, "__init").value_or(stat->name->location);
+    NotNull<Scope> scope{findInnermostScope(stat->location)};
+    Location location = classMemberLocation(stat, "__init").value_or(traitRefLocation(scope, stat, traitType));
 
     for (size_t i = 1; i < ctorArgs.size(); ++i)
     {
@@ -1761,25 +1793,6 @@ static const Property* findClassMember(const ExternType* type, const Name& name)
     return nullptr;
 }
 
-// Luwu Traits (rfcs/classes/traits.md): where to report something about `trait` in `stat`: its `implements` entry, or the
-// class's name when the trait is implied by another one's `needs`
-static Location traitRefLocation(AstStatClass* stat, const ExternType* trait)
-{
-    for (const AstClassTraitRef& ref : stat->implements)
-    {
-        AstName name;
-        if (AstExprGlobal* global = ref.trait->as<AstExprGlobal>())
-            name = global->name;
-        else if (AstExprIndexName* index = ref.trait->as<AstExprIndexName>())
-            name = index->index;
-
-        if (name.value && trait->name == name.value)
-            return ref.trait->location;
-    }
-
-    return stat->name->location;
-}
-
 void TypeChecker2::checkTraitFieldExpectations(AstStatClass* stat)
 {
     NotNull<Scope> scope{findInnermostScope(stat->location)};
@@ -1809,7 +1822,7 @@ void TypeChecker2::checkTraitFieldExpectations(AstStatClass* stat)
             if (name == "__init" || !expected || !found || !expected->readTy || !found->readTy)
                 continue;
 
-            Location location = classMemberLocation(stat, name).value_or(traitRefLocation(stat, traitType));
+            Location location = classMemberLocation(stat, name).value_or(traitRefLocation(scope, stat, traitType));
 
             if (traitFields->fieldNames.count(name))
             {
@@ -1854,6 +1867,122 @@ void TypeChecker2::checkTraitArguments(AstStatClass* stat)
     }
 }
 
+// Luwu Traits (rfcs/classes/traits.md): what a value of type `ty` is, for "expected this to be a trait, but got '...'",
+// named like the runtime's luaR_describenontrait without its article: 'nil', 'none', 'true', 'table'. Nullopt when the
+// type doesn't say (`any`, a union, an extern type, ...).
+static std::optional<std::string> describeNonTraitValue(TypeId ty)
+{
+    ty = follow(ty);
+
+    if (const SingletonType* singleton = get<SingletonType>(ty))
+    {
+        if (const BooleanSingleton* boolean = get<BooleanSingleton>(singleton))
+            return boolean->value ? "true" : "false";
+        return "string";
+    }
+
+    if (get<TableType>(ty) || get<MetatableType>(ty))
+        return "table";
+    if (get<FunctionType>(ty))
+        return "function";
+
+    const PrimitiveType* primitive = get<PrimitiveType>(ty);
+    if (!primitive)
+        return std::nullopt;
+
+    switch (primitive->type)
+    {
+    case PrimitiveType::NilType:
+        return "nil";
+    case PrimitiveType::NoneType:
+        return "none";
+    case PrimitiveType::Boolean:
+        return "boolean";
+    case PrimitiveType::Number:
+        return "number";
+    case PrimitiveType::Integer:
+        return "integer";
+    case PrimitiveType::String:
+        return "string";
+    case PrimitiveType::Thread:
+        return "thread";
+    case PrimitiveType::Function:
+        return "function";
+    case PrimitiveType::Table:
+        return "table";
+    case PrimitiveType::Buffer:
+        return "buffer";
+    }
+
+    return std::nullopt;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): an entry of `implements` or `needs` that names no trait. Analysis skips such an
+// entry everywhere else, so without this the class or trait checks as if the entry weren't there; the runtime raises.
+void TypeChecker2::checkTraitRefs(AstStatClass* stat, const AstArray<AstClassTraitRef>& refs)
+{
+    NotNull<Scope> scope{findInnermostScope(stat->location)};
+
+    for (const AstClassTraitRef& ref : refs)
+    {
+        // A global's value decides first: `none` is also the name of a type, but `implements none` reads the value.
+        AstExprGlobal* global = ref.trait->as<AstExprGlobal>();
+        std::optional<TypeId> globalValue = global ? scope->lookup(global->name) : std::nullopt;
+
+        bool isClass = false;
+        // what the entry is instead, when it is neither a trait nor a class
+        std::optional<std::string> got;
+
+        const ExternType* valueType = globalValue ? get<ExternType>(follow(*globalValue)) : nullptr;
+        bool isTraitValue = valueType && valueType->root == builtinTypes->traitType;
+        bool isClassValue = valueType && valueType->root == builtinTypes->classType;
+
+        if (isTraitValue)
+            continue;
+        else if (isClassValue)
+            isClass = true;
+        else if (globalValue)
+            got = describeNonTraitValue(*globalValue);
+
+        bool undecided = !isClass && !got;
+        if (undecided)
+        {
+            if (std::optional<TypeFun> found = scope->lookupTraitRef(ref))
+            {
+                const ExternType* foundType = get<ExternType>(follow(found->type));
+                if (foundType && foundType->traitInfo)
+                    continue;
+
+                isClass = foundType && foundType->relation && get_if<Klass>(&*foundType->relation);
+                // a type of that name with no value of it, which the runtime reads as nil
+                if (!isClass && global && !globalValue)
+                    got = "nil";
+            }
+            else if (global && !globalValue)
+                got = "nil";
+            else if (AstExprIndexName* index = ref.trait->as<AstExprIndexName>())
+            {
+                // `mod.Trait`, where `mod` is a required module that has no such type. Any other expression is only
+                // known at runtime.
+                AstExprLocal* moduleLocal = index->expr->as<AstExprLocal>();
+                bool isModule = false;
+                for (const Scope* s = scope.get(); moduleLocal && s && !isModule; s = s->parent.get())
+                    isModule = s->importedTypeBindings.count(moduleLocal->local->name.value) > 0;
+
+                if (isModule)
+                    got = "nil";
+            }
+        }
+
+        if (isClass && stat->isTrait)
+            reportError(GenericError{"This is a class, traits are not allowed to depend on classes (only other traits)"}, ref.trait->location);
+        else if (isClass)
+            reportError(GenericError{"This is a class, classes can only implement traits (not other classes)"}, ref.trait->location);
+        else if (got)
+            reportError(GenericError{format("Expected this to be a trait, but got '%s'", got->c_str())}, ref.trait->location);
+    }
+}
+
 void TypeChecker2::reportMissingTraitMember(
     AstStatClass* stat,
     const ExternType* classType,
@@ -1881,7 +2010,7 @@ void TypeChecker2::reportMissingTraitMember(
             classType->name.c_str(),
             traitType->name.c_str()
         )},
-        traitRefLocation(stat, traitType)
+        traitRefLocation(NotNull{findInnermostScope(stat->location)}, stat, traitType)
     );
 }
 
@@ -2131,9 +2260,16 @@ void TypeChecker2::visit(AstStatClass* stat)
         }
     }
 
-    // Luwu Traits (rfcs/classes/traits.md): a field a trait expects has to fit the type the trait's functions assume. A
-    // function's `self` differs by design (the trait's object type there, the class's here), so functions aren't
-    // compared yet.
+    // Luwu Traits (rfcs/classes/traits.md): every `implements` and `needs` entry has to name a trait
+    if (FFlag::LuwuTraits)
+    {
+        checkTraitRefs(stat, stat->implements);
+        checkTraitRefs(stat, stat->needs);
+    }
+
+    // Luwu Traits (rfcs/classes/traits.md): a member a trait expects has to fit the type the trait's functions assume. A
+    // function's `self` differs by design (the trait's object type there, the class's here), so functions are compared
+    // without it (withoutSelfParameter).
     if (stat->implements.size > 0)
     {
         checkTraitFieldExpectations(stat);
@@ -5130,8 +5266,8 @@ static ReadWriteExplanation wordReadWriteMismatch(const ReadWriteMismatch& misma
     // call argument, so the reader is always the callee.
     const std::string reader = hasFunction ? function : "the function";
     std::string parameterHelp = isProperty
-                                    ? "Help[read/write mismatch]: consider marking " + property + " as 'read' if " + reader + " only reads from it."
-                                    : "Help[read/write mismatch]: consider marking this as 'read' if " + reader + " only reads from the " + noun + ".";
+                                    ? "Help (read/write mismatch): consider marking " + property + " as 'read' if " + reader + " only reads from it."
+                                    : "Help (read/write mismatch): consider marking this as 'read' if " + reader + " only reads from the " + noun + ".";
 
     // A union member the given type never admitted -- `nil` most often, but any of them. Nothing is lost,
     // one disallowed value could simply be written in, so the help is to mark it `read` or cast.
@@ -5161,8 +5297,8 @@ static ReadWriteExplanation wordReadWriteMismatch(const ReadWriteMismatch& misma
                           " are allowed; doing so would allow 'nil' to be written into it.";
         }
 
-        message += "\n\nHelp[read/write mismatch]:\n- annotate " + (isProperty ? property : std::string("the expected indexer")) +
-                   " as 'read' if nothing writes to it\n- cast this " + (isProperty ? std::string() : noun + " ") + "to " + wantedContainer +
+        message += "\n\nHelp (read/write mismatch):\n  - annotate " + (isProperty ? property : std::string("the expected indexer")) +
+                   " as 'read' if nothing writes to it\n  - cast this " + (isProperty ? std::string() : noun + " ") + "to " + wantedContainer +
                    " if you know " + writtenValue + " will not be written to it";
 
         return ReadWriteExplanation{std::move(message), std::move(parameterHelp), mismatch.parameterHelpPath};
@@ -5184,8 +5320,8 @@ static ReadWriteExplanation wordReadWriteMismatch(const ReadWriteMismatch& misma
         message = "Expected property " + property + " to allow reading and writing as " + wanted + ", but in " + givenContainer + " it is a " +
                   given + ", which can only be read as " + wanted + ". Because " + canReadWrite + ", " + replaced +
                   " a value of a smaller type, causing data loss.\n\n"
-                  "Help[read/write mismatch]:\n- if " +
-                  nothingWrites + ", mark it as " + annotation + " in " + wantedContainer + "\n- if it reads and writes, make a " + wanted +
+                  "Help (read/write mismatch):\n  - if " +
+                  nothingWrites + ", mark it as " + annotation + " in " + wantedContainer + "\n  - if it reads and writes, make a " + wanted +
                   " version of your data" + passTail + " or mark the additional fields as optional";
     }
     else
@@ -5200,8 +5336,8 @@ static ReadWriteExplanation wordReadWriteMismatch(const ReadWriteMismatch& misma
                   givenContainer + ", " + article + noun + " that is only allowed to read " + wanted + " through its " + given + " " + plural +
                   ". Because " + canReadWrite + ", it can silently replace its " + plural +
                   " with those of a smaller type, causing data loss.\n\n"
-                  "Help[read/write mismatch]:\n- if " +
-                  nothingWrites + ", annotate " + annotated + " as " + annotation + "\n- if it reads and writes, make " + wanted +
+                  "Help (read/write mismatch):\n  - if " +
+                  nothingWrites + ", annotate " + annotated + " as " + annotation + "\n  - if it reads and writes, make " + wanted +
                   " versions of your data" + passTail + " or mark the additional fields as optional";
     }
 

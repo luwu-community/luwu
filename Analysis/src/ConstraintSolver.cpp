@@ -1962,7 +1962,7 @@ bool ConstraintSolver::tryDispatch(const FunctionCallConstraint& c, NotNull<cons
         if (ftv->magic && c.callSite)
         {
             usedMagic = ftv->magic->infer(MagicFunctionCallContext{NotNull{this}, constraint, NotNull{c.callSite}, c.argsPack, result});
-            ftv->magic->refine(MagicRefinementContext{constraint->scope, c.callSite, c.discriminantTypes});
+            ftv->magic->refine(MagicRefinementContext{constraint->scope, c.callSite, c.discriminantTypes, NotNull{this}, argsPack});
         }
     }
 
@@ -4464,7 +4464,7 @@ TypeId ConstraintSolver::resolveModule(const ModuleInfo& info, const Location& l
 
     if (module->type != SourceCode::Type::Module)
     {
-        reportError(IllegalRequire{module->humanReadableName, "Module is not a ModuleScript. It cannot be required."}, location);
+        reportError(IllegalRequire{module->humanReadableName, "it isn't a ModuleScript"}, location);
         return builtinTypes->errorType;
     }
 
@@ -4475,8 +4475,19 @@ TypeId ConstraintSolver::resolveModule(const ModuleInfo& info, const Location& l
     std::optional<TypeId> moduleType = first(modulePack);
     if (!moduleType)
     {
-        reportError(IllegalRequire{module->humanReadableName, "Module does not return exactly 1 value. It cannot be required."}, location);
+        reportError(IllegalRequire{module->humanReadableName, {}, IllegalRequire::Returns::Nothing}, location);
         return builtinTypes->errorType;
+    }
+
+    // Luwu: upstream lets `require` take the first of several returned values. Luwu reports the rest, which not every
+    // runtime supports, and still types the require as the first value.
+    auto [returned, returnedTail] = flatten(modulePack);
+    if (returned.size() > 1)
+    {
+        IllegalRequire tooMany{module->humanReadableName, {}, IllegalRequire::Returns::TooMany};
+        tooMany.returnCount = returned.size();
+        tooMany.returnCountIsMinimum = returnedTail.has_value();
+        reportError(std::move(tooMany), location);
     }
 
     return *moduleType;

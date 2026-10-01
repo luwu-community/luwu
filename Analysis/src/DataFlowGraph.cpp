@@ -968,20 +968,39 @@ void DataFlowGraphBuilder::visitClassShape(AstStatClass* d)
         );
     }
 
-    // Luwu Traits (rfcs/classes/traits.md): trait arguments see the primary constructor's parameters, like field initializers
-    for (const AstClassTraitRef& ref : d->implements)
+    // Luwu Traits (rfcs/classes/traits.md): every part of an `implements` or `needs` entry AstStatClass::visitChildren
+    // visits gets a def here: the name, the type arguments (`Box<typeof(v)>`) and the trait arguments. Trait arguments
+    // see the primary constructor's parameters, like field initializers. A `needs` entry with arguments is a parse
+    // error, but analysis still runs on it.
+    auto visitTraitRefs = [&](const AstArray<AstClassTraitRef>& refs)
     {
-        for (AstExpr* arg : ref.args)
+        for (const AstClassTraitRef& ref : refs)
         {
-            if (primaryConstructorScope)
+            visitExpr(ref.trait);
+
+            for (const AstTypeOrPack& param : ref.typeArguments)
             {
-                PushScope ps{scopeStack, primaryConstructorScope};
-                visitExpr(arg);
+                if (param.type)
+                    visitType(param.type);
+                else if (param.typePack)
+                    visitTypePack(param.typePack);
             }
-            else
-                visitExpr(arg);
+
+            for (AstExpr* arg : ref.args)
+            {
+                if (primaryConstructorScope)
+                {
+                    PushScope ps{scopeStack, primaryConstructorScope};
+                    visitExpr(arg);
+                }
+                else
+                    visitExpr(arg);
+            }
         }
-    }
+    };
+
+    visitTraitRefs(d->needs);
+    visitTraitRefs(d->implements);
 }
 
 ControlFlow DataFlowGraphBuilder::visit(AstStatError* error)

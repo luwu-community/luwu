@@ -71,6 +71,22 @@ struct MagicClassOf final : MagicFunction
     bool infer(const MagicFunctionCallContext& context) override;
 };
 
+// Luwu Classes (rfcs/classes): `class.isinstance(x, C)` and `class.implements(x, Trait)` refine `x` to the object type of
+// their second argument. It's done by the function's type rather than by spelling, so an alias refines too (`const is =
+// class.isinstance`), as it fuses in the compiler (getBuiltin follows the local). Exposed for the same reason as
+// MagicClassFields.
+struct MagicClassInstanceCheck final : MagicFunction
+{
+    std::optional<WithPredicate<TypePackId>> handleOldSolver(
+        struct TypeChecker&,
+        const std::shared_ptr<struct Scope>&,
+        const class AstExprCall&,
+        WithPredicate<TypePackId>
+    ) override;
+    bool infer(const MagicFunctionCallContext& context) override;
+    void refine(const MagicRefinementContext& context) override;
+};
+
 void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeCheckForAutocomplete = false);
 TypeId makeUnion(TypeArena& arena, std::vector<TypeId>&& types);
 TypeId makeIntersection(TypeArena& arena, std::vector<TypeId>&& types);

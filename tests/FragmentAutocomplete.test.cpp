@@ -26,6 +26,9 @@ LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuDestructuring)
+LUAU_FASTFLAG(LuwuTraits)
+LUAU_FASTFLAG(LuauExportValueTypecheck)
+LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAG(LuauAutocompleteMetatableInheritance)
 LUAU_FASTFLAG(LuauAutocompleteSkipErrorTypeInUnion)
@@ -5593,6 +5596,53 @@ type M = {
             CHECK_EQ(result.result->acResults.entryMap.count("reason"), 1);
         }
     );
+}
+
+TEST_CASE_FIXTURE(FragmentAutocompleteBuiltinsFixture, "destructuring_keys_complete_a_required_modules_exports")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuDestructuring, true},
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+        {FFlag::LuauExportValueSyntax, true},
+        {FFlag::LuauExportValueTypecheck, true},
+    };
+
+    fileResolver.source["MainModule/A"] = R"(
+export trait Path end
+export class FilePath implements Path end
+export class DirectoryPath implements Path end
+export const PathSeparator = "/"
+)";
+
+    const std::vector<std::pair<std::string, std::string>> edits = {
+        {"local .{} = require(script.A)\n", "local .{Pa@1} = require(script.A)\n"},
+        {"local .{Pa} = require(script.A)\n", "local .{Pa@1} = require(script.A)\n"},
+        {"local .{Path} = require(script.A)\n", "local .{Pa@1} = require(script.A)\n"},
+        {"local .{} = require(script.A)\n", "local .{@1} = require(script.A)\n"},
+    };
+
+    for (const std::pair<std::string, std::string>& edit : edits)
+    {
+        const std::string& source = edit.first;
+        const std::string& updated = edit.second;
+        fileResolver.source["MainModule"] = source;
+        autocompleteFragmentInBothSolvers(
+            source,
+            updated,
+            '1',
+            [&](FragmentAutocompleteStatusResult& fragment)
+            {
+                REQUIRE(fragment.result);
+                const AutocompleteResult& ac = fragment.result->acResults;
+                INFO(updated);
+                CHECK_EQ(AutocompleteContext::Property, ac.context);
+                CHECK(ac.entryMap.count("Path"));
+                CHECK(ac.entryMap.count("FilePath"));
+                CHECK(ac.entryMap.count("PathSeparator"));
+            }
+        );
+    }
 }
 
 TEST_CASE_FIXTURE(FragmentAutocompleteFixture, "destructuring_keys_complete_in_a_fragment")

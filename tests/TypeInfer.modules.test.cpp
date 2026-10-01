@@ -247,6 +247,59 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "warn_if_you_try_to_require_a_non_modulescrip
     CHECK(get<IllegalRequire>(result.errors[0]));
 }
 
+// Luwu: the reason comes before the module's path, which is often a long absolute one
+TEST_CASE_FIXTURE(BuiltinsFixture, "requiring_a_module_that_returns_nothing_says_why_before_the_path")
+{
+    fileResolver.source["Modules/A"] = "local x = 1";
+
+    fileResolver.source["Modules/B"] = R"(
+        local M = require(script.Parent.A)
+    )";
+
+    CheckResult result = getFrontend().check("Modules/B");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        "Cannot require this module because it doesn't evaluate to a value\n"
+        "Module at path: Modules.A\n"
+        "\n"
+        "Help (requiring modules):\n"
+        "  - You probably forgot to return a value\n"
+        "  - A required module may return exactly one value or export one or more values\n"
+        "  - If you don't need to return any values, return 'nil'",
+        toString(result.errors[0])
+    );
+}
+
+// Luwu: upstream takes the first of several returned values without a word
+TEST_CASE_FIXTURE(BuiltinsFixture, "requiring_a_module_that_returns_several_values_is_an_error")
+{
+    fileResolver.source["Modules/A"] = "return 1, 'two'";
+    fileResolver.source["Modules/C"] = "return 1, 2, ...";
+
+    fileResolver.source["Modules/B"] = R"(
+        local a = require(script.Parent.A)
+        local c = require(script.Parent.C)
+    )";
+
+    CheckResult result = getFrontend().check("Modules/B");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ(
+        "This module returns too many values (2)\n"
+        "Module at path: Modules.A\n"
+        "\n"
+        "Help (requiring modules):\n"
+        "  - Luwu expects modules to return exactly one value\n"
+        "  - Not all runtimes support returning multiple values",
+        toString(result.errors[0])
+    );
+    CHECK(toString(result.errors[1]).find("This module returns too many values (at least 2)\n") == 0);
+
+    // the require is still typed as the first value
+    CHECK_EQ("number", toString(requireType("Modules/B", "a")));
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "general_require_call_expression")
 {
     CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()

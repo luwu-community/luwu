@@ -6016,6 +6016,40 @@ TEST_CASE_FIXTURE(ACFixture, "destructuring_keys_complete_the_properties_of_the_
     CHECK_EQ(ac.context, AutocompleteContext::Property);
 }
 
+// The value is a call, so its type is a pack (astTypePacks), not a single type
+TEST_CASE_FIXTURE(ACBuiltinsFixture, "destructuring_keys_complete_a_required_modules_exports")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuDestructuring, true},
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+        {FFlag::LuauExportValueSyntax, true},
+        {FFlag::LuauExportValueTypecheck, true},
+    };
+
+    fileResolver.source["Module/A"] = R"(
+export trait Path end
+export class FilePath implements Path end
+export const PathSeparator = "/"
+)";
+    getFrontend().check("Module/A");
+
+    fileResolver.source["Module/B"] = R"(
+local .{Pa} = require(script.Parent.A)
+local .{} = require(script.Parent.A)
+)";
+
+    // after `Pa`, and in the empty pattern
+    for (Position position : {Position{1, 10}, Position{2, 8}})
+    {
+        AutocompleteResult ac = autocomplete("Module/B", position);
+        CHECK_EQ(ac.context, AutocompleteContext::Property);
+        CHECK(ac.entryMap.count("Path"));
+        CHECK(ac.entryMap.count("FilePath"));
+        CHECK(ac.entryMap.count("PathSeparator"));
+    }
+}
+
 TEST_CASE_FIXTURE(ACFixture, "destructuring_hidden_local_is_not_suggested")
 {
     ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};

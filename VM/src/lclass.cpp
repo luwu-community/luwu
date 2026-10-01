@@ -20,6 +20,8 @@
 #include <stdio.h>
 #include <string.h>
 
+LUAU_FASTFLAG(LuauCIProto)
+
 // Continuation for luaR_createobject: runs after a custom __init returns (possibly across a yield),
 // leaving the freshly-constructed object as the constructor's single result. See luaR_createobject.
 static int luaR_createobjectcont(lua_State* L, int status);
@@ -865,6 +867,14 @@ static Proto* luaR_copyproto(lua_State* L, Proto* p)
     c->sizecode = p->sizecode;
     c->codeentry = c->code;
 
+    // A breakpoint replaces its instruction with LOP_BREAK, which reads the original opcode back from `debuginsn`. The
+    // code was copied with any breakpoints in it, so the copy needs the original opcodes too.
+    if (p->debuginsn)
+    {
+        c->debuginsn = luaM_newarray(L, p->sizecode, uint8_t, c->memcat);
+        memcpy(c->debuginsn, p->debuginsn, p->sizecode);
+    }
+
     c->k = luaM_newarray(L, p->sizek, TValue, c->memcat);
     for (int i = 0; i < p->sizek; i++)
         setnilvalue(&c->k[i]);
@@ -978,12 +988,38 @@ static const char* luaR_visibilityname(uint8_t flags)
 static const double LUAR_NEEDS_VISITING = 1;
 static const double LUAR_NEEDS_DONE = 2;
 
+// Raises for traits that need each other, naming every trait in the cycle in the order it goes: "traits 'A', 'B' and
+// 'C' are codependent. ..." Analysis words its error the same way (codependentTraitsMessage).
+static l_noret luaR_codependenterror(lua_State* L, LuauClass* const* cycle, int count)
+{
+    char names[512] = {0};
+    for (int i = 0; i < count; i++)
+    {
+        size_t used = strlen(names);
+        const char* separator = "";
+        if (i + 1 == count)
+            separator = " and ";
+        else if (i > 0)
+            separator = ", ";
+
+        snprintf(names + used, sizeof(names) - used, "%s'%s'", separator, getstr(cycle[i]->name));
+    }
+
+    luaG_runerror(
+        L,
+        "traits %s are codependent. This is an unhealthy relationship; consider merging these traits or factoring out common "
+        "members into a new trait",
+        names
+    );
+}
+
 // Raises when `trait` is part of a cycle of `needs`. Traits that need each other are always implemented together, so
 // they should be one trait. `edges` maps each trait to an array of the traits it needs; `state` marks the traits the
-// search is inside of (LUAR_NEEDS_VISITING) and the ones already cleared (LUAR_NEEDS_DONE).
-static void luaR_checkneedscycles(lua_State* L, LuaTable* edges, LuaTable* state, LuauClass* trait, LuauClass* parent, int depth)
+// search is inside of (LUAR_NEEDS_VISITING) and the ones already cleared (LUAR_NEEDS_DONE). `path` holds the traits the
+// search is inside of, `trait` at `depth`, so a cycle can be named in full.
+static void luaR_checkneedscycles(lua_State* L, LuaTable* edges, LuaTable* state, LuauClass* trait, LuauClass** path, int depth)
 {
-    if (depth > LUAR_MAX_NEEDS_DEPTH)
+    if (depth >= LUAR_MAX_NEEDS_DEPTH)
         luaG_runerror(L, "trait '%s' needs traits nested more than %d deep", getstr(trait->name), LUAR_MAX_NEEDS_DEPTH);
 
     TValue key;
@@ -993,6 +1029,7 @@ static void luaR_checkneedscycles(lua_State* L, LuaTable* edges, LuaTable* state
     if (!ttistable(list))
         return;
 
+    path[depth] = trait;
     setnvalue(luaH_set(L, state, &key), LUAR_NEEDS_VISITING);
 
     for (int i = 1; i <= luaH_getn(hvalue(list)); i++)
@@ -1011,20 +1048,39 @@ static void luaR_checkneedscycles(lua_State* L, LuaTable* edges, LuaTable* state
             if (needed == trait)
                 luaG_runerror(L, "trait '%s' needs itself", getstr(trait->name));
 
-            if (needed == parent)
-                luaG_runerror(
-                    L, "traits '%s' and '%s' need each other; combine them into one trait", getstr(needed->name), getstr(trait->name)
-                );
+            // `needed` is on the path, since the search is inside of it: the cycle runs from there to here
+            int start = depth;
+            while (start > 0 && path[start] != needed)
+                start--;
 
-            luaG_runerror(
-                L, "trait '%s' needs itself through '%s'; combine them into one trait", getstr(needed->name), getstr(trait->name)
-            );
+            luaR_codependenterror(L, path + start, depth - start + 1);
         }
 
-        luaR_checkneedscycles(L, edges, state, needed, trait, depth + 1);
+        luaR_checkneedscycles(L, edges, state, needed, path, depth + 1);
     }
 
     setnvalue(luaH_set(L, state, &key), LUAR_NEEDS_DONE);
+}
+
+// What a value that should be a trait is instead, for an error: "nil", "none", "true", "class 'Foo'", "a table",
+// "an object". The single-valued types are named by their value, with no article.
+static void luaR_describenontrait(lua_State* L, const TValue* t, char* buf, size_t size)
+{
+    if (ttisnil(t))
+        snprintf(buf, size, "nil");
+    else if (ttissymnone(t))
+        snprintf(buf, size, "none");
+    else if (ttisboolean(t))
+        snprintf(buf, size, "%s", bvalue(t) ? "true" : "false");
+    else if (ttisclass(t))
+        snprintf(buf, size, "class '%s'", getstr(classvalue(t)->name));
+    else
+    {
+        const char* name = luaT_objtypename(L, t);
+        // strchr also finds the terminator, so an empty name is checked first
+        bool startsWithVowel = name[0] != 0 && strchr("aeiouAEIOU", name[0]) != nullptr;
+        snprintf(buf, size, "%s %s", startsWithVowel ? "an" : "a", name);
+    }
 }
 
 // The name entry `i` of the running class statement's `implements` list was read from ("global 'Item'",
@@ -1038,10 +1094,12 @@ static bool luaR_implementsentryname(lua_State* L, uint32_t i, char* buf, size_t
     if (!isLua(L->ci))
         return false;
 
-    Proto* p = clvalue(L->ci->func)->l.p;
+    // the proto the frame is running, which `savedpc` points into: the closure's may have been promoted since it started
+    Proto* p = FFlag::LuauCIProto ? L->ci->p : clvalue(L->ci->func)->l.p;
     const Instruction* implements = L->ci->savedpc - 2;
 
-    if (implements < p->code || LUAU_INSN_OP(*implements) != LOP_NEWCLASSMEMBER || LUAU_INSN_B(*implements) != LBC_NEWCLASSMEMBER_IMPLEMENTS)
+    bool inside = implements >= p->code && implements < p->code + p->sizecode;
+    if (!inside || LUAU_INSN_OP(*implements) != LOP_NEWCLASSMEMBER || LUAU_INSN_B(*implements) != LBC_NEWCLASSMEMBER_IMPLEMENTS)
         return false;
 
     uint32_t reg = LUAU_INSN_C(*implements) + i;
@@ -1133,14 +1191,8 @@ static int luaR_collecttraits(lua_State* L, LuauClass* classdef, ptrdiff_t liste
 
         if (!ttisclass(t) || !classvalue(t)->istrait)
         {
-            // what the entry is: "nil", "class 'Foo'", "a table"
             char what[160];
-            if (ttisnil(t))
-                snprintf(what, sizeof(what), "nil");
-            else if (ttisclass(t))
-                snprintf(what, sizeof(what), "class '%s'", getstr(classvalue(t)->name));
-            else
-                snprintf(what, sizeof(what), "a %s", luaT_objtypename(L, t));
+            luaR_describenontrait(L, t, what, sizeof(what));
 
             char entry[320];
             if (luaR_implementsentryname(L, i, entry, sizeof(entry)))
@@ -1190,13 +1242,20 @@ static int luaR_collecttraits(lua_State* L, LuauClass* classdef, ptrdiff_t liste
             const TValue* needed = L->base + r;
             seen = hvalue(L->base + first - 1);
 
-            if (!ttisclass(needed) || !classvalue(needed)->istrait)
+            if (ttisclass(needed) && !classvalue(needed)->istrait)
                 luaG_runerror(
                     L,
-                    "trait '%s' needs a %s, which is not a trait",
+                    "trait '%s' can't need class '%s': traits can only need other traits",
                     getstr(classvalue(L->base + cur)->name),
-                    ttisclass(needed) ? "class" : luaT_objtypename(L, needed)
+                    getstr(classvalue(needed)->name)
                 );
+
+            if (!ttisclass(needed))
+            {
+                char what[160];
+                luaR_describenontrait(L, needed, what, sizeof(what));
+                luaG_runerror(L, "trait '%s' needs %s, which is not a trait", getstr(classvalue(L->base + cur)->name), what);
+            }
 
             setobj2t(L, luaH_setnum(L, neededlist, r - resultsbase + 1), needed);
 
@@ -1223,8 +1282,9 @@ static int luaR_collecttraits(lua_State* L, LuauClass* classdef, ptrdiff_t liste
     sethvalue(L, L->top, state);
     L->top++;
 
+    LuauClass* path[LUAR_MAX_NEEDS_DEPTH];
     for (int i = 0; i < numtraits; i++)
-        luaR_checkneedscycles(L, hvalue(L->base + first - 2), state, classvalue(L->base + first + i), NULL, 0);
+        luaR_checkneedscycles(L, hvalue(L->base + first - 2), state, classvalue(L->base + first + i), path, 0);
 
     L->top--;
     return numtraits;
