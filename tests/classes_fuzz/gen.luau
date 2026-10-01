@@ -114,7 +114,9 @@ type Cls = {
 }
 
 -- A trait's own members are named after it (`t2_f1`, `t2_m3`), so the traits a class implements never clash with each
--- other or with the class; clashes are covered by the conformance tests. What traits *expect* uses the class-side names
+-- other or with the class; clashes are covered by the conformance tests. The exception is an override: a trait may
+-- redefine its needed trait's `m1`, which it wins for every class implementing it (each `m1` is overridden by at most one
+-- trait per program, so no class meets two). What traits *expect* uses the class-side names
 -- (`hp`, `get`), with one access specifier and constness per name for the whole program, so every expectation of a
 -- name can be met at once.
 type TraitFn = {
@@ -141,6 +143,8 @@ type Trait = {
     expectsInit: boolean,
     fns: { TraitFn },
     needs: { Trait },
+    -- the needed traits' functions this trait overrides, by name, with the value its override returns
+    overrides: { [string]: string },
     rank: number,
     create: boolean,
     tostring: boolean,
@@ -914,6 +918,7 @@ local function generate(seed: number): (string, string)
                 expectsInit = false,
                 fns = {},
                 needs = {},
+                overrides = {},
                 rank = rng.int(1, 1000),
                 create = false,
                 tostring = rng.chance(0.2),
@@ -958,6 +963,9 @@ local function generate(seed: number): (string, string)
         end
     end
 
+    -- the functions some trait already overrides; each is overridden at most once per program
+    local overriddenFns: { [string]: boolean } = {}
+
     -- a trait's functions; after `needs` is known, since a default may call a needed trait's
     local function makeTraitFns(t: Trait)
         local i = t.index
@@ -971,6 +979,17 @@ local function generate(seed: number): (string, string)
 
         -- m1 returns a constant, so what dispatch returns is known
         table.insert(t.fns, { name = `t{i}_m1`, private = false, static = false, final = rng.chance(0.2), params = {}, body = { `return "t{i}m1"` }, constant = `"t{i}m1"` })
+
+        -- an override of a needed trait's m1, which classes implementing this trait run instead
+        for _, needed in t.needs do
+            local base = traitFn(needed, `t{needed.index}_m1`)
+            if base and not base.final and not overriddenFns[base.name] and rng.chance(0.4) then
+                overriddenFns[base.name] = true
+                local value = `"ov{i}:{base.name}"`
+                table.insert(t.fns, { name = base.name, private = false, static = false, final = false, params = {}, body = { `return {value}` }, constant = value })
+                t.overrides[base.name] = value
+            end
+        end
         table.insert(t.fns, { name = `t{i}_s1`, private = false, static = true, final = false, params = { "x" }, body = { `return (x or 0) + {i}` } })
         if rng.chance(0.4) then
             table.insert(t.fns, { name = `t{i}_pm`, private = true, static = false, final = false, params = {}, body = { `return "private{i}"` } })
@@ -1226,10 +1245,33 @@ local function generate(seed: number): (string, string)
             local fns = publicInstanceFns(t)
             local kind = rng.pick({
                 "call", "dispatch", "dispatch_wrong", "implements", "refine", "type", "blocked", "ctor", "field",
-                "maybe", "isolated", "gc", "coroutine", "static", "tostring", "fields", "annotated", "private_fn",
+                "maybe", "isolated", "gc", "coroutine", "static", "tostring", "fields", "annotated", "private_fn", "overridden",
             })
 
-            if kind == "call" and implements then
+            if kind == "overridden" then
+                -- a class implementing a trait that overrides a needed trait's function runs the override, unless it
+                -- defines the function itself
+                local overriding = filter(c.traitSet, function(o)
+                    return next(o.overrides) ~= nil
+                end)
+                if #overriding > 0 then
+                    local ov = rng.pick(overriding)
+                    local names = {}
+                    for name in ov.overrides do
+                        table.insert(names, name)
+                    end
+                    table.sort(names)
+                    local name = rng.pick(names)
+                    if not contains(c.overrides, name) then
+                        op("t_overridden", {
+                            `local o = {C}.make()`,
+                            `local r = o:{name}()`,
+                            `check(r == {ov.overrides[name]}, "{c.name}:{name}() returned " .. tostring(r) .. " instead of {ov.name}'s override")`,
+                            "return r",
+                        }, false, true)
+                    end
+                end
+            elseif kind == "call" and implements then
                 local fn = rng.pick(fns)
                 op("t_call", { `local o = {C}.make()`, `local r = o:{fn.name}()`, "return r" }, false, true)
             elseif kind == "dispatch" and implements then
@@ -1407,7 +1449,12 @@ local function generate(seed: number): (string, string)
         table.insert(classes, makeClass(i, false))
     end
     makeTraits()
-    for _, t in traits do
+    -- a needed trait has the lower rank, so its functions exist by the time a trait needing it overrides one
+    local byRank = table.clone(traits)
+    table.sort(byRank, function(a, b)
+        return a.rank < b.rank
+    end)
+    for _, t in byRank do
         makeTraitFns(t)
     end
     for _, c in classes do

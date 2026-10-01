@@ -316,6 +316,10 @@ private:
 
         t->argTypes = shallowClone(t->argTypes);
         t->retTypes = shallowClone(t->retTypes);
+
+        // Luwu user-defined refinements
+        if (t->truthyRefinement)
+            t->truthyRefinement->type = shallowClone(t->truthyRefinement->type);
     }
 
     void cloneChildren(TableType* t)
