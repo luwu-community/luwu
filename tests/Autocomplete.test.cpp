@@ -6043,4 +6043,5 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_on_nonexistent_table")
     CHECK(ac.entryMap.count("Animator"));
 }
 
+// The value is a call, so its type is a pack (astTypePacks), not a single type
 TEST_SUITE_END();

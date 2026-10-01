@@ -494,10 +494,12 @@ struct FindExprOrLocal : public AstVisitor
 
     bool visit(AstStatLocal* al) override
     {
+        bool matchedVar = false;
         for (size_t i = 0; i < al->vars.size; ++i)
         {
-            visitLocal(al->vars.data[i]);
+            matchedVar |= visitLocal(al->vars.data[i]);
         }
+
         return true;
     }
 
