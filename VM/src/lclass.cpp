@@ -1290,6 +1290,127 @@ static int luaR_collecttraits(lua_State* L, LuauClass* classdef, ptrdiff_t liste
     return numtraits;
 }
 
+// The offset of `trait`'s member `name`, which it has
+static uint32_t luaR_traitmemberoffset(const LuauClass* trait, TString* name)
+{
+    const TValue* offset = luaH_getstr(trait->memberstooffset, name);
+    LUAU_ASSERT(ttisnumber(offset));
+    return uint32_t(nvalue(offset));
+}
+
+// Whether `from` needs `to`, directly or through the traits it needs. `edges` maps each trait to an array of the traits
+// it needs (luaR_collecttraits, which refused cycles and chains deeper than LUAR_MAX_NEEDS_DEPTH, so this ends at that
+// depth). `visited` holds the traits already searched, so a graph with many diamonds is walked once.
+static bool luaR_traitneeds(lua_State* L, LuaTable* edges, LuaTable* visited, LuauClass* from, LuauClass* to)
+{
+    TValue key;
+    setclassvalue(L, &key, from);
+    setbvalue(luaH_set(L, visited, &key), 1);
+
+    const TValue* list = luaH_get(edges, &key);
+    if (!ttistable(list))
+        return false;
+
+    for (int i = 1; i <= luaH_getn(hvalue(list)); i++)
+    {
+        LuauClass* needed = classvalue(luaH_getnum(hvalue(list), i));
+        if (needed == to)
+            return true;
+
+        TValue neededkey;
+        setclassvalue(L, &neededkey, needed);
+        if (ttisnil(luaH_get(visited, &neededkey)) && luaR_traitneeds(L, edges, visited, needed, to))
+            return true;
+    }
+
+    return false;
+}
+
+// Of the traits in `providers` (an array, in the order the class attaches them) that all provide `name`, the one whose
+// member the class gets: the one that needs every other. Raises when there is none, when a field would be overridden,
+// or when an override breaks what the overridden trait promised (it is `final`, or public where the override isn't).
+static LuauClass* luaR_overridingtrait(lua_State* L, LuaTable* edges, LuaTable* providers, const LuauClass* classdef, TString* name)
+{
+    int count = luaH_getn(providers);
+    auto providerat = [&](int i)
+    {
+        return classvalue(luaH_getnum(providers, i));
+    };
+
+    LuauClass* winner = NULL;
+    for (int i = 1; i <= count && !winner; i++)
+    {
+        bool needsall = true;
+        for (int j = 1; j <= count && needsall; j++)
+            needsall = i == j || luaR_traitneeds(L, edges, luaH_new(L, 0, 0), providerat(i), providerat(j));
+
+        if (needsall)
+            winner = providerat(i);
+    }
+
+    // the clash reported names the first two providers neither of which needs the other
+    if (!winner)
+    {
+        for (int i = 1; i <= count; i++)
+        {
+            for (int j = i + 1; j <= count; j++)
+            {
+                bool related = luaR_traitneeds(L, edges, luaH_new(L, 0, 0), providerat(i), providerat(j)) ||
+                               luaR_traitneeds(L, edges, luaH_new(L, 0, 0), providerat(j), providerat(i));
+                if (related)
+                    continue;
+
+                const LuauClass* a = providerat(i);
+                const LuauClass* b = providerat(j);
+                if (luaR_traitmemberoffset(a, name) < a->numberofinstancemembers)
+                    luaG_runerror(L, "traits '%s' and '%s' both provide '%s'", getstr(a->name), getstr(b->name), getstr(name));
+
+                luaG_runerror(
+                    L,
+                    "traits '%s' and '%s' both provide '%s' and neither needs the other; define '%s' in class '%s' to choose",
+                    getstr(a->name),
+                    getstr(b->name),
+                    getstr(name),
+                    getstr(name),
+                    getstr(classdef->name)
+                );
+            }
+        }
+    }
+
+    LUAU_ASSERT(winner);
+    uint32_t winneroff = luaR_traitmemberoffset(winner, name);
+    uint8_t winnerflags = winner->memberflags[winneroff];
+
+    for (int i = 1; i <= count; i++)
+    {
+        const LuauClass* overridden = providerat(i);
+        if (overridden == winner)
+            continue;
+
+        uint32_t off = luaR_traitmemberoffset(overridden, name);
+        uint8_t flags = overridden->memberflags[off];
+
+        if (off < overridden->numberofinstancemembers || winneroff < winner->numberofinstancemembers)
+            luaG_runerror(L, "trait '%s' can't redefine '%s': fields of trait '%s' can't be overridden", getstr(winner->name), getstr(name), getstr(overridden->name));
+
+        if (flags & LBC_CLASSMEMBER_FINAL)
+            luaG_runerror(L, "'%s' is final in trait '%s' and can't be overridden", getstr(name), getstr(overridden->name));
+
+        if ((flags ^ winnerflags) & LBC_CLASSMEMBER_PRIVATE)
+            luaG_runerror(
+                L,
+                "'%s' must be %s in trait '%s' to override it from trait '%s'",
+                getstr(name),
+                luaR_visibilityname(flags),
+                getstr(winner->name),
+                getstr(overridden->name)
+            );
+    }
+
+    return winner;
+}
+
 // "missing field 'x' required for 'C' to implement 'T'"; `name` is NULL for a constructor
 static l_noret luaR_traitmissingerror(
     lua_State* L,
@@ -1430,7 +1551,12 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
     uint32_t newfields = 0;
     uint32_t newstatics = 0;
 
-    // Pass 1: the provided fields and the defined functions of every trait
+    // Every trait that provides each name, for choosing the one whose member the class gets
+    LuaTable* providers = luaH_new(L, 0, 8);
+    sethvalue(L, L->top, providers);
+    L->top++;
+
+    // Pass 1: the provided fields and the defined functions of every trait, by name
     for (int i = 0; i < numtraits; i++)
     {
         LuauClass* trait = traitat(i);
@@ -1468,13 +1594,36 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
                 continue;
             }
 
-            const TValue* previous = luaH_getstr(added, name);
-            if (!ttisnil(previous))
-                luaG_runerror(
-                    L, "traits '%s' and '%s' both provide '%s'", getstr(classvalue(previous)->name), getstr(trait->name), getstr(name)
-                );
+            TValue* list = luaH_setstr(L, providers, name);
+            if (!ttistable(list))
+                sethvalue(L, list, luaH_new(L, 2, 0));
 
-            setclassvalue(L, luaH_setstr(L, added, name), trait);
+            LuaTable* names = hvalue(list);
+            setclassvalue(L, luaH_setnum(L, names, luaH_getn(names) + 1), trait);
+        }
+    }
+
+    // Pass 1b: which trait's member the class gets for each name. A trait's function overrides the function of a trait
+    // it needs, so the provider that needs every other provider wins; with none, the class has to choose by defining
+    // the function itself. Fields are never overridden.
+    LuaTable* edges = hvalue(L->base + first - 2);
+
+    for (int i = 0; i < numtraits; i++)
+    {
+        LuauClass* trait = traitat(i);
+
+        for (uint32_t off = 0; off < trait->numberofallmembers; off++)
+        {
+            TString* name = trait->offsettomember[off];
+            const TValue* list = name ? luaH_getstr(providers, name) : luaO_nilobject;
+            bool undecided = ttistable(list) && ttisnil(luaH_getstr(added, name));
+            if (!undecided)
+                continue;
+
+            LuauClass* winner = luaR_overridingtrait(L, edges, hvalue(list), classdef, name);
+            bool isfield = luaR_traitmemberoffset(winner, name) < winner->numberofinstancemembers;
+
+            setclassvalue(L, luaH_setstr(L, added, name), winner);
 
             if (isfield)
                 newfields++;

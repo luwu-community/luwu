@@ -54,6 +54,11 @@ struct Proposition
     const RefinementKey* key;
     TypeId discriminantTy;
     bool implicitFromCall;
+
+    // Luwu user-defined refinements: what a call argument is refined to when the call is falsy, decided by the solver
+    // like `discriminantTy`. Upstream always negates `discriminantTy`, which is only right for an exact check:
+    // `@[truthy]` says nothing about a falsy result. Null means negate.
+    TypeId negativeDiscriminantTy = nullptr;
 };
 
 template<typename T>
@@ -70,7 +75,7 @@ struct RefinementArena
     RefinementId disjunction(RefinementId lhs, RefinementId rhs);
     RefinementId equivalence(RefinementId lhs, RefinementId rhs);
     RefinementId proposition(const RefinementKey* key, TypeId discriminantTy);
-    RefinementId implicitProposition(const RefinementKey* key, TypeId discriminantTy);
+    RefinementId implicitProposition(const RefinementKey* key, TypeId discriminantTy, TypeId negativeDiscriminantTy = nullptr);
 
 private:
     TypedAllocator<Refinement> allocator;

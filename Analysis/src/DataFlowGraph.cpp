@@ -1244,6 +1244,14 @@ DataFlowResult DataFlowGraphBuilder::visitFunction(AstExprFunction* f, NotNull<D
     if (f->returnAnnotation)
         visitTypePack(f->returnAnnotation);
 
+    // Luwu user-defined refinements: `@[truthy(param, Type)]`'s type is resolved in the signature like the return
+    // annotation, and an expression in it (a `typeof(...)`) needs a def like one there
+    for (AstAttr* attr : f->attributes)
+    {
+        if (attr->refinedType)
+            visitType(attr->refinedType);
+    }
+
     if (FFlag::LuwuDefaultArguments)
     {
         for (AstExpr* paramDefault : f->argsDefaults)

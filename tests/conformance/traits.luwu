@@ -684,4 +684,60 @@ do
     end
 end
 
+-- A trait's function overrides the function of a trait it needs: the trait further down the `needs` chain wins, and a
+-- clash with no such order is an error the class settles by defining the function itself
+trait OvBase
+    function name(self) return "base" end
+    function describe(self) return "I am " .. self:name() end
+end
+trait OvSpecial needs OvBase
+    function name(self) return "special" end
+end
+class OvListed implements OvBase, OvSpecial end
+class OvImplied implements OvSpecial end
+-- the order traits are listed in never decides
+class OvReversed implements OvSpecial, OvBase end
+
+for _, obj in { OvListed(), OvImplied(), OvReversed() } do
+    assert(obj:name() == "special")
+    -- the needed trait's own code dispatches to the override
+    assert(obj:describe() == "I am special")
+    -- calling through a trait runs that trait's version
+    assert(OvBase.name(obj) == "base")
+    assert(OvSpecial.name(obj) == "special")
+end
+
+-- a trait that needs two traits overrides both
+trait OvLeft function f(self) return "left" end end
+trait OvRight function f(self) return "right" end end
+trait OvBoth needs OvLeft, OvRight function f(self) return "both" end end
+class OvUsesBoth implements OvLeft, OvRight, OvBoth end
+assert(OvUsesBoth():f() == "both")
+
+expectfail("a diamond with two overrides", "traits 'L' and 'R' both provide 'f' and neither needs the other; define 'f' in class 'C' to choose", function()
+    chunk([[trait B function f(self) return 0 end end
+        trait L needs B function f(self) return 1 end end
+        trait R needs B function f(self) return 2 end end
+        class C implements L, R end]])
+end)
+do
+    -- the class settles it
+    local resolved = chunk([[trait B function f(self) return 0 end end
+        trait L needs B function f(self) return 1 end end
+        trait R needs B function f(self) return 2 end end
+        class C implements L, R function f(self) return 3 end end
+        return C]])
+    assert(resolved():f() == 3)
+end
+expectfail("overriding a final function", "'f' is final in trait 'B' and can't be overridden", function()
+    chunk([[trait B final function f(self) return 0 end end trait S needs B function f(self) return 1 end end class C implements S end]])
+end)
+expectfail("overriding with other access", "'f' must be public in trait 'S' to override it from trait 'B'", function()
+    chunk([[trait B public function f(self) return 0 end end trait S needs B private function f(self) return 1 end end
+        class C implements S end]])
+end)
+expectfail("redefining a field", "trait 'S' can't redefine 'y': fields of trait 'B' can't be overridden", function()
+    chunk([[trait B y = 1 end trait S needs B y = 2 end class C implements S end]])
+end)
+
 return 'OK'

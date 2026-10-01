@@ -75,6 +75,9 @@ void AstAttr::visit(AstVisitor* visitor)
     {
         for (AstExpr* arg : args)
             arg->visit(visitor);
+
+        if (refinedType)
+            refinedType->visit(visitor);
     }
 }
 

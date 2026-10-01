@@ -98,6 +98,8 @@ static TypeId shallowClone(TypeId ty, TypeArena& dest, const TxnLog* log)
             // Luwu: `@nodiscard`
             clone.isNodiscard = a.isNodiscard;
             clone.nodiscardReason = a.nodiscardReason;
+            // Luwu user-defined refinements
+            clone.truthyRefinement = a.truthyRefinement;
             clone.name = a.name;
             clone.syntheticName = a.syntheticName;
             return dest.addType(std::move(clone));
@@ -830,6 +832,10 @@ void Substitution::replaceChildren(TypeId ty)
 
         ftv->argTypes = replace(ftv->argTypes);
         ftv->retTypes = replace(ftv->retTypes);
+
+        // Luwu user-defined refinements: a generic target is instantiated with the call
+        if (ftv->truthyRefinement)
+            ftv->truthyRefinement->type = replace(ftv->truthyRefinement->type);
     }
     else if (TableType* ttv = getMutable<TableType>(ty))
     {
