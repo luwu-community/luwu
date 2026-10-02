@@ -740,4 +740,46 @@ expectfail("redefining a field", "trait 'S' can't redefine 'y': fields of trait 
     chunk([[trait B y = 1 end trait S needs B y = 2 end class C implements S end]])
 end)
 
+-- The compiler copies the functions of a trait declared in the same file into each implementing class, closures created
+-- inside them included. Each class's closures belong to that class, so they read its private fields, and creating one
+-- class's doesn't change whose the other class's are.
+trait SecretKeeper
+    expect private secret: string
+    public function reveal(self)
+        return function()
+            return self.secret
+        end
+    end
+end
+
+class KeeperA(secret: string) implements SecretKeeper
+    private secret
+end
+
+class KeeperB(secret: string) implements SecretKeeper
+    private secret
+end
+
+do
+    local revealA = KeeperA("a"):reveal()
+    local revealB = KeeperB("b"):reveal()
+    assert(revealA() == "a" and revealB() == "b")
+    assert(KeeperA("a2"):reveal()() == "a2")
+end
+
+-- An error in a class's copy of a default is reported at the line in the trait that raised it
+local failingLine = debug.info(1, "l") + 4
+trait Failing
+    expect name: string
+    function fail(self)
+        error(`{self.name} failed`)
+    end
+end
+
+class Failer(name: string) implements Failing end
+
+expectfail("an error in a copied default", `:{failingLine}: f failed`, function()
+    Failer("f"):fail()
+end)
+
 return 'OK'

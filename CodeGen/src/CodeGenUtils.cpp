@@ -919,8 +919,23 @@ const Instruction* executeFORGPREP(lua_State* L, const Instruction* pc, StkId ba
     else
     {
         LuaTable* mt = ttistable(ra) ? hvalue(ra)->metatable : ttisuserdata(ra) ? uvalue(ra)->metatable : cast_to(LuaTable*, NULL);
+        const TValue* fn = fasttm(L, mt, TM_ITER);
 
-        if (const TValue* fn = fasttm(L, mt, TM_ITER))
+        // Luwu Classes (rfcs/classes): an object's __iter lives on its class's instance metatable. Native code
+        // runs every generic for loop's prep through here, so this has to match VM_CASE(LOP_FORGPREP) in
+        // lvmexecute.cpp.
+        if (FFlag::LuwuClasses && LUAU_UNLIKELY(fn == NULL && ttisobject(ra)))
+        {
+            fn = luaT_gettmbyobj(L, ra, TM_ITER);
+            // if the metamethod is not present, error.
+            if (ttisnil(fn))
+            {
+                VM_PROTECT_PC();
+                luaG_typeerror(L, ra, "iterate over");
+            }
+        }
+
+        if (fn)
         {
             setobj2s(L, ra + 1, ra);
             setobj2s(L, ra, fn);
@@ -1082,6 +1097,16 @@ const Instruction* executeNEWCLASSMEMBER(lua_State* L, const Instruction* pc, St
     if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_IMPLEMENTS)
     {
         VM_PROTECT(luaR_implementtraits(L, classvalue(ra), rc, aux));
+        return pc;
+    }
+
+    // Luwu Traits (rfcs/classes/traits.md): the class's compiled copy of a trait's function
+    if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_TRAITCOPY)
+    {
+        TValue* name = VM_KV(aux);
+        LUAU_ASSERT(ttisstring(name) && ttisclass(rc + 1));
+        VM_PROTECT_PC();
+        luaR_addcompiledtraitcopy(L, classvalue(ra), classvalue(rc + 1), tsvalue(name), rc);
         return pc;
     }
 

@@ -3774,6 +3774,16 @@ reentry:
                     VM_NEXT();
                 }
 
+                // Luwu Traits (rfcs/classes/traits.md): the class's compiled copy of a trait's function
+                if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_TRAITCOPY)
+                {
+                    TValue* name = VM_KV(aux);
+                    LUAU_ASSERT(ttisstring(name) && ttisclass(rc + 1));
+                    VM_PROTECT_PC();
+                    luaR_addcompiledtraitcopy(L, classvalue(ra), classvalue(rc + 1), tsvalue(name), rc);
+                    VM_NEXT();
+                }
+
                 TValue* membername = VM_KV(aux);
                 LUAU_ASSERT(ttisstring(membername));
                 LUAU_ASSERT(LUAU_INSN_B(insn) == 0);

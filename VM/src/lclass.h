@@ -206,7 +206,8 @@ LUAI_FUNC const TValue* luaR_traitcreate(lua_State* L, const LuauClass* trait);
  * the class statement finishes, before any object of the class exists:
  *  - attaches the listed traits and every trait without parameters their `needs` lists imply;
  *  - appends the traits' provided fields after the class's own and gives the class a copy of every trait function it
- *    doesn't define (luaR_addclassmember stamps the copy as the class's method);
+ *    doesn't define (luaR_addclassmember stamps the copy as the class's method). The copy is the compiler's when it
+ *    made one (luaR_addcompiledtraitcopy);
  *  - raises when a member is provided twice, a final function is redefined, or an expectation isn't met by the
  *    finished class (presence, field or function, access specifier, `const`);
  *  - copies the traits' constant field defaults into the class's, and gives the class a copy of each trait's
@@ -214,6 +215,14 @@ LUAI_FUNC const TValue* luaR_traitcreate(lua_State* L, const LuauClass* trait);
  * May call the traits' `__needs` functions.
  */
 LUAI_FUNC void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint32_t n);
+
+/**
+ * Luwu Traits (rfcs/classes/traits.md): records `copy` as `classdef`'s copy of `trait`'s function `name`
+ * (LBC_NEWCLASSMEMBER_TRAITCOPY). The compiler made it from the trait's source, which is in the same file, so
+ * luaR_implementtraits uses it instead of copying the trait's function at runtime. Ignored once the class has
+ * implemented its traits.
+ */
+LUAI_FUNC void luaR_addcompiledtraitcopy(lua_State* L, LuauClass* classdef, const LuauClass* trait, TString* name, const TValue* copy);
 
 /**
  * Luwu Traits (rfcs/classes/traits.md): computes the fields `object` gets from the traits its class implements that

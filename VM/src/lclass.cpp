@@ -67,6 +67,7 @@ LuauClass* luaR_newclass(
     classdef->numtraitinits = 0;
     classdef->numdirecttraitinits = 0;
     classdef->traitdefaults = NULL;
+    classdef->compiledtraitcopies = NULL;
 
     classdef->offsettomember = luaM_newarray(L, classdef->numberofallmembers, TString*, classdef->memcat);
     for (uint32_t i = 0; i < classdef->numberofallmembers; i++)
@@ -964,6 +965,36 @@ static Closure* luaR_copytraitfunction(lua_State* L, const Closure* cl)
     return copy;
 }
 
+// The function a trait's function member at `off` holds. A method's slot holds its dispatcher (see luaR_addclassmember),
+// which holds the trait's own closure.
+static const TValue* luaR_traitownfunction(const LuauClass* trait, uint32_t off)
+{
+    LUAU_ASSERT(off >= trait->numberofinstancemembers && off < trait->numberofallmembers);
+
+    const TValue* fn = &trait->staticmembers[off - trait->numberofinstancemembers];
+    LUAU_ASSERT(ttisfunction(fn));
+    if (clvalue(fn)->isC)
+        fn = &clvalue(fn)->c.upvals[2];
+
+    LUAU_ASSERT(ttisfunction(fn) && !clvalue(fn)->isC);
+    return fn;
+}
+
+// `classdef`'s copy of the trait function `fn`, the trait's own closure: the copy the compiler made when the trait is
+// declared in the same file (luaR_addcompiledtraitcopy), and otherwise a copy made now. Either way the caller stamps it
+// with the class.
+static Closure* luaR_classtraitfunction(lua_State* L, LuauClass* classdef, const TValue* fn)
+{
+    if (classdef->compiledtraitcopies)
+    {
+        const TValue* compiled = luaH_get(classdef->compiledtraitcopies, fn);
+        if (!ttisnil(compiled))
+            return clvalue(compiled);
+    }
+
+    return luaR_copytraitfunction(L, clvalue(fn));
+}
+
 // Members of a trait that implementing classes don't get: the functions the VM calls itself (the trait's `__init` slot
 // has no name at all, see luaR_sealclassshape).
 static bool luaR_istraitinternal(lua_State* L, TString* name)
@@ -1512,6 +1543,32 @@ static void luaR_checktraitexpectations(lua_State* L, LuauClass* classdef, StkId
     }
 }
 
+void luaR_addcompiledtraitcopy(lua_State* L, LuauClass* classdef, const LuauClass* trait, TString* name, const TValue* copy)
+{
+    // the compiler only emits copies for a trait it resolved to its declaration, and of that trait's own functions
+    LUAU_ASSERT(!classdef->istrait && trait->istrait);
+    LUAU_ASSERT(ttisfunction(copy) && !clvalue(copy)->isC);
+
+    // The chunk that declares the class ran again. The class constant is shared, and already implements its traits.
+    if (!classdef->traitspending)
+        return;
+
+    uint32_t off = luaR_traitmemberoffset(trait, name);
+    LUAU_ASSERT(!(trait->memberflags[off] & LBC_CLASSMEMBER_EXPECTED));
+    const TValue* fn = luaR_traitownfunction(trait, off);
+
+    if (!classdef->compiledtraitcopies)
+    {
+        classdef->compiledtraitcopies = luaH_new(L, 0, 4);
+        luaC_objbarrier(L, classdef, classdef->compiledtraitcopies);
+    }
+
+    LuaTable* copies = classdef->compiledtraitcopies;
+    setobj2t(L, luaH_set(L, copies, fn), copy);
+    luaC_barriert(L, copies, fn);
+    luaC_barriert(L, copies, copy);
+}
+
 void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint32_t n)
 {
     LUAU_ASSERT(!classdef->istrait);
@@ -1812,15 +1869,8 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
             if (!ttisclass(provider) || classvalue(provider) != trait)
                 continue;
 
-            // a method's slot holds its dispatcher (see luaR_addclassmember), which holds the trait's closure
-            const TValue* fn = &trait->staticmembers[off - trait->numberofinstancemembers];
-            LUAU_ASSERT(ttisfunction(fn));
-            if (clvalue(fn)->isC)
-                fn = &clvalue(fn)->c.upvals[2];
-            LUAU_ASSERT(ttisfunction(fn) && !clvalue(fn)->isC);
-
             luaD_checkstack(L, 1);
-            setclvalue(L, L->top, luaR_copytraitfunction(L, clvalue(fn)));
+            setclvalue(L, L->top, luaR_classtraitfunction(L, classdef, luaR_traitownfunction(trait, off)));
             L->top++;
             luaR_addclassmember(L, classdef, name, L->top - 1);
             L->top--;
@@ -1848,8 +1898,7 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
             if (ttisclass(provider) && classvalue(provider) == trait)
                 continue;
 
-            const TValue* traitfn = &clvalue(fn)->c.upvals[2];
-            LUAU_ASSERT(ttisfunction(traitfn) && !clvalue(traitfn)->isC);
+            const TValue* traitfn = luaR_traitownfunction(trait, off);
 
             if (!classdef->traitdefaults)
             {
@@ -1857,7 +1906,7 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
                 luaC_objbarrier(L, classdef, classdef->traitdefaults);
             }
 
-            Closure* copy = luaR_copytraitfunction(L, clvalue(traitfn));
+            Closure* copy = luaR_classtraitfunction(L, classdef, traitfn);
             luaD_checkstack(L, 1);
             setclvalue(L, L->top, copy);
             L->top++;
@@ -1903,7 +1952,7 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
                 continue;
 
             LUAU_ASSERT(ttisfunction(init) && !clvalue(init)->isC);
-            Closure* copy = luaR_copytraitfunction(L, clvalue(init));
+            Closure* copy = luaR_classtraitfunction(L, classdef, init);
 
             luaD_checkstack(L, 1);
             setclvalue(L, L->top, copy);
@@ -1953,6 +2002,8 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
 
     classdef->memberstooffset->readonly = true;
     classdef->traitspending = false;
+    // every compiled copy the class uses is a member, a trait default or a trait initializer by now
+    classdef->compiledtraitcopies = NULL;
 
     L->top = restorestack(L, oldtop);
 }

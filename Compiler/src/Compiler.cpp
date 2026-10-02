@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <bitset>
 #include <cstring>
+#include <memory>
 #include <optional>
 #include <string>
 
@@ -199,6 +200,14 @@ struct Compiler
         AstName methodName;
     };
 
+    // Luwu Traits (rfcs/classes/traits.md): a class's copy of one of its traits' functions, compiled as the class's own
+    // method and handed to the VM with LBC_NEWCLASSMEMBER_TRAITCOPY. See buildTraitFunctionCopies.
+    struct TraitFunctionCopy
+    {
+        AstStatClass* trait;
+        AstName name;
+        AstExprFunction* function;
+    };
 
     Compiler(BytecodeBuilder& bytecode, const CompileOptions& options, AstNameTable& names)
         : bytecode(bytecode)
@@ -516,6 +525,10 @@ struct Compiler
         if (FFlag::LuauExportValueSyntax)
             currentFunction = func;
 
+        // Luwu Traits (rfcs/classes/traits.md): a function of a trait function copy creates closures from the copies
+        const FunctionCopies* const* copies = functionCopiesOf.find(func);
+        activeFunctionCopies = copies ? *copies : nullptr;
+
         RegScope rs(this);
 
         bool self = func->self != 0;
@@ -739,6 +752,7 @@ struct Compiler
         hasLoops = false;
         hasMultiRet = false;
         currentFunction = nullptr;
+        activeFunctionCopies = nullptr;
 
         return fid;
     }
@@ -3598,6 +3612,10 @@ struct Compiler
     {
         RegScope rs(this);
 
+        if (activeFunctionCopies)
+            if (AstExprFunction* const* copy = activeFunctionCopies->find(expr))
+                expr = *copy;
+
         const Function* f = functions.find(expr);
         LUAU_ASSERT(f);
 
@@ -3675,6 +3693,156 @@ struct Compiler
         for (const Capture& c : captures)
         {
             bytecode.emitABC(LOP_CAPTURE, uint8_t(c.type), c.data, 0);
+        }
+    }
+
+    // Luwu Traits (rfcs/classes/traits.md): if `expr` (an `implements` or `needs` entry) names a trait declared earlier
+    // in this file, returns that trait's declaration; otherwise nullptr. Trait names parse as globals but compile to
+    // reads of the declaration's const binding (classLocals), so a name bound to the trait always evaluates to it.
+    AstStatClass* sameFileTrait(AstExpr* expr)
+    {
+        AstExprGlobal* global = expr->as<AstExprGlobal>();
+        AstStatClass* const* trait = global ? traitByName.find(global->name) : nullptr;
+        if (!trait)
+            return nullptr;
+
+        AstLocal* const* binding = classLocals.find(global->name);
+        bool namesTheTrait = binding && *binding == (*trait)->name;
+
+        return namesTheTrait ? *trait : nullptr;
+    }
+
+    // Luwu Traits (rfcs/classes/traits.md): the same-file traits `cls` implements, in the order luaR_collecttraits
+    // attaches them at runtime: the traits in `cls`'s `implements` list first, then the traits they need, breadth
+    // first, without duplicates.
+    // - A needed trait with parameters is skipped: only the class's own `implements` entry can pass its arguments.
+    // - Traits from other modules are skipped, and so are the traits they need, since their `needs` lists aren't
+    //   visible here.
+    std::vector<AstStatClass*> sameFileTraits(AstStatClass* cls)
+    {
+        std::vector<AstStatClass*> traits;
+        DenseHashSet<AstStatClass*> seen{nullptr};
+
+        for (const AstClassTraitRef& ref : cls->implements)
+        {
+            AstStatClass* trait = sameFileTrait(ref.trait);
+
+            if (trait && !seen.contains(trait))
+            {
+                seen.insert(trait);
+                traits.push_back(trait);
+            }
+        }
+
+        for (size_t i = 0; i < traits.size(); ++i)
+        {
+            for (const AstClassTraitRef& ref : traits[i]->needs)
+            {
+                AstStatClass* needed = sameFileTrait(ref.trait);
+                bool hasParameters = needed && needed->primaryConstructor && needed->primaryConstructor->args.size > 0;
+
+                if (needed && !hasParameters && !seen.contains(needed))
+                {
+                    seen.insert(needed);
+                    traits.push_back(needed);
+                }
+            }
+        }
+
+        return traits;
+    }
+
+    // Luwu Traits (rfcs/classes/traits.md): `cls`'s copy of the trait function `method`.
+    // - The copy is a second AstExprFunction over the same body. Every analysis of the body applies to it unchanged,
+    //   and its line info points into the trait, where the code is written, so errors and breakpoints do too.
+    // - It compiles as a method of `cls`, which is what it is at runtime: the VM stamps it with the class
+    //   (luaR_addclassmember). Its `self` check is against the class, and the fields the class declares itself are at
+    //   offsets the compiler knows.
+    // - The functions nested in it are copied as well (see FunctionCopies). The copies go in `functionsToCompile` in
+    //   the order FunctionVisitor gives, nested functions first.
+    AstExprFunction* copyTraitFunction(
+        AstStatClass* cls,
+        const AstClassMethod& method,
+        Allocator& allocator,
+        std::vector<AstExprFunction*>& functionsToCompile
+    )
+    {
+        std::vector<AstExprFunction*> originals;
+        FunctionVisitor visitor(originals);
+        method.function->visit(&visitor);
+
+        functionCopySets.push_back(std::make_unique<FunctionCopies>(nullptr));
+        FunctionCopies& copies = *functionCopySets.back();
+
+        for (AstExprFunction* original : originals)
+        {
+            AstExprFunction* copy = allocator.alloc<AstExprFunction>(*original);
+
+            copies[original] = copy;
+            functionCopiesOf[copy] = &copies;
+            copiedFunctionOriginal[copy] = original;
+            classLexicalOwner[copy] = cls;
+            functionsToCompile.push_back(copy);
+        }
+
+        AstExprFunction* copy = copies[method.function];
+
+        if (const SelfClassCheck* check = classMethodSelfChecks.find(method.function))
+        {
+            // read before inserting, which may move the entry `check` points to
+            AstName methodName = check->methodName;
+            AstExpr* classExpr = allocator.alloc<AstExprLocal>(method.nameLocation, cls->name, /* upvalue= */ true);
+
+            classMethodSelfChecks[copy] = SelfClassCheck{classExpr, methodName};
+            classMethodOwner[copy] = cls;
+        }
+
+        return copy;
+    }
+
+    // Luwu Traits (rfcs/classes/traits.md): gives each class its own compiled copy (TraitFunctionCopy) of the functions of
+    // the traits it implements that are declared earlier in this file. The copies are ordinary protos of the module, so
+    // native code compiles them with the rest. The copies the VM makes for other traits are never natively compiled.
+    // - Everything a trait defines is copied, overridden defaults included, because `Trait.method(obj)` runs the class's
+    //   copy of the trait's version. Expected functions have no body, and a factory's `__create` belongs to the trait.
+    // - The VM still decides which copy goes where, so overriding, `final` and clashes work exactly as they do for a
+    //   trait from another module.
+    // - Classes and traits are only declared at the top level, so this only looks there.
+    void buildTraitFunctionCopies(AstStatBlock* root, Allocator& allocator, std::vector<AstExprFunction*>& functionsToCompile)
+    {
+        for (AstStat* stat : root->body)
+        {
+            AstStatClass* decl = stat->as<AstStatClass>();
+
+            if (!decl)
+                continue;
+
+            if (decl->isTrait)
+            {
+                traitByName[decl->name->name] = decl;
+                continue;
+            }
+
+            if (decl->implements.size == 0)
+                continue;
+
+            std::vector<TraitFunctionCopy> copies;
+
+            for (AstStatClass* trait : sameFileTraits(decl))
+            {
+                for (const AstClassMember& member : trait->members)
+                {
+                    const AstClassMethod* method = member.get_if<AstClassMethod>();
+
+                    if (!method || method->expectLocation || method->functionName == "__create")
+                        continue;
+
+                    copies.push_back({trait, method->functionName, copyTraitFunction(decl, *method, allocator, functionsToCompile)});
+                }
+            }
+
+            if (!copies.empty())
+                classTraitCopies[decl] = std::move(copies);
         }
     }
 
@@ -3928,6 +4096,29 @@ struct Compiler
         registerSynthesizedMember(traitInitFn, "__traitinit");
         registerSynthesizedMember(traitNeedsFn, "__needs");
         registerSynthesizedMember(classInitTraitsFn, "__inittraits");
+
+        // Luwu Traits (rfcs/classes/traits.md): the class's copies of the functions of its same-file traits, which
+        // implementing uses instead of copying those functions at runtime
+        if (const std::vector<TraitFunctionCopy>* copies = classTraitCopies.find(decl))
+        {
+            RegScope rsCopies(this);
+            uint8_t copyRegs = allocReg(decl, 2u);
+
+            for (const TraitFunctionCopy& copy : *copies)
+            {
+                int traitReg = getLocalReg(copy.trait->name);
+                LUAU_ASSERT(traitReg >= 0);
+
+                compileExprFunction(copy.function, copyRegs);
+                bytecode.emitABC(LOP_MOVE, uint8_t(copyRegs + 1), uint8_t(traitReg), 0);
+
+                int nameCid = bytecode.addConstantString(sref(copy.name));
+                checkConstant(nameCid, copy.function->location);
+
+                bytecode.emitABC(LOP_NEWCLASSMEMBER, dest, LBC_NEWCLASSMEMBER_TRAITCOPY, copyRegs);
+                bytecode.emitAux(nameCid);
+            }
+        }
 
         // Luwu Traits (rfcs/classes/traits.md): implementing the listed traits is the last step of creating the class, since
         // it checks what the class defines. The traits go in consecutive registers, followed by how many arguments
@@ -8617,6 +8808,22 @@ struct Compiler
     // The class whose `Proto::ownerclass` stamp each function gets at runtime: every function lexically inside a
     // class (methods, statics, synthesized `__init`/`__defaults`, and anything nested in them; innermost class wins).
     DenseHashMap<AstExprFunction*, AstStatClass*> classLexicalOwner{nullptr};
+
+    // Luwu Traits (rfcs/classes/traits.md): every trait declared so far, by name, while buildTraitFunctionCopies runs
+    DenseHashMap<AstName, AstStatClass*> traitByName{AstName()};
+    // Luwu Traits (rfcs/classes/traits.md): each class's copies of its same-file traits' functions
+    DenseHashMap<AstStatClass*, std::vector<TraitFunctionCopy>> classTraitCopies{nullptr};
+
+    // Luwu Traits (rfcs/classes/traits.md): a copy shares the trait function's body, so every function nested in it is copied too: otherwise the class's copy
+    // would create closures from the trait's own protos, and luaR_stampownerclass would stamp those with the class. Each
+    // function of a copy maps to the full set of copies made for it, by original, and compileExprFunction compiles the
+    // copy in place of the original while one of them is being compiled (activeFunctionCopies).
+    typedef DenseHashMap<AstExprFunction*, AstExprFunction*> FunctionCopies;
+    std::vector<std::unique_ptr<FunctionCopies>> functionCopySets;
+    DenseHashMap<AstExprFunction*, const FunctionCopies*> functionCopiesOf{nullptr};
+    const FunctionCopies* activeFunctionCopies = nullptr;
+    // Each copy's original, for the analyses keyed by function that only see the parsed tree (buildTypeMap)
+    DenseHashMap<AstExprFunction*, AstExprFunction*> copiedFunctionOriginal{nullptr};
     // tryResolveMethodCall's cache of classInlinedBodyKeepsPrivateAccess, per method and class whose private
     // members it was checked against
     struct InlineAccessKey
@@ -8818,6 +9025,10 @@ void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, A
     // this pass analyzes mutability of locals/globals and associates locals with their initial values
     trackValues(compiler.globals, compiler.variables, compiler.classLocals, root);
 
+    // Luwu Traits (rfcs/classes/traits.md): needs classLocals, from trackValues
+    if (FFlag::LuwuClasses)
+        compiler.buildTraitFunctionCopies(root, classSynthesisAllocator, functions);
+
     // this visitor tracks calls to getfenv/setfenv and disables some optimizations when they are found
     if (options.optimizationLevel >= 1 && (names.get("getfenv").value || names.get("setfenv").value))
     {
@@ -8903,6 +9114,16 @@ void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, A
             &compiler.variables,
             compiler.trustsTypeAnnotations()
         );
+
+    // Luwu Traits (rfcs/classes/traits.md): a trait function's copy has its original's signature (see copyTraitFunction)
+    for (auto [copy, original] : compiler.copiedFunctionOriginal)
+    {
+        if (const std::string* type = compiler.functionTypes.find(original))
+        {
+            std::string copied = *type;
+            compiler.functionTypes[copy] = std::move(copied);
+        }
+    }
 
     for (AstExprFunction* expr : functions)
     {
