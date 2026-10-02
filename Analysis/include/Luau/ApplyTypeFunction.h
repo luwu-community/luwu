@@ -45,6 +45,9 @@ struct ApplyTypeFunction : Substitution
     bool isDirty(TypePackId tp) override;
     TypeId clean(TypeId ty) override;
     TypePackId clean(TypePackId tp) override;
+
+private:
+    bool mentionsSubstitutedType(const ExternType& etv) const;
 };
 
 } // namespace Luau

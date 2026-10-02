@@ -335,7 +335,10 @@ struct InstantiationQueuer : IterativeTypeVisitor
 
     bool visit(TypeId ty, const PendingExpansionType& petv) override
     {
-        solver->pushConstraint(scope, location, TypeAliasExpansionConstraint{ty});
+        if (FFlag::LuwuGenericNominals)
+            solver->queueExpansion(ty, scope, location);
+        else
+            solver->pushConstraint(scope, location, TypeAliasExpansionConstraint{ty});
         return false;
     }
 
@@ -359,6 +362,21 @@ struct InstantiationQueuer : IterativeTypeVisitor
             return true;
 
         return false;
+    }
+};
+
+// Also expands a table's display arguments, which InstantiationQueuer doesn't visit.
+struct MemberExpansionQueuer : InstantiationQueuer
+{
+    using InstantiationQueuer::InstantiationQueuer;
+    using InstantiationQueuer::visit;
+
+    bool visit(TypeId ty, const TableType& ttv) override
+    {
+        for (TypeId arg : ttv.instantiatedTypeParams)
+            traverse(arg);
+
+        return true;
     }
 };
 
@@ -1580,6 +1598,9 @@ bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNul
     // Note that ApplyTypeFunction::encounteredForwardedType is never set in
     // DCR, because we do not use free types for forward-declared generic
     // aliases.
+
+    if (FFlag::LuwuGenericNominals && maybeInstantiated)
+        queueCopiedPendingExpansions(applyTypeFunction, constraint);
 
     if (!maybeInstantiated.has_value())
     {
@@ -3600,6 +3621,8 @@ bool ConstraintSolver::tryDispatch(const InstantiateNominalPropConstraint& c, No
         return true;
     }
 
+    queueCopiedPendingExpansions(applyTypeFunction, constraint);
+
     bind(constraint, c.target, *substituted);
     return true;
 }
@@ -3853,8 +3876,11 @@ bool ConstraintSolver::tryDispatchIterableTable(TypeId iteratorTy, const Iterabl
         {
             std::vector<TypeId> expectedVariables;
             // Add an intersection ReduceConstraint for the indexer result type to denote it can't be nil
+            // Luwu: `refine`, not `intersect`, from upstream 0.734 (`LuauIterableConstraintMutatesIterator`). `intersect` can't
+            // reduce over a generic, so iterating a `{ T }` left the value as an unreduced `intersect<T, ~nil>`, and
+            // `table.insert(t, value)` reported a generic bounds mismatch with an empty lower bound.
             const TypeId intersectionWithNotNil = arena->addTypeFunction(
-                builtinTypes->typeFunctions->intersectFunc, {iteratorTable->indexer->indexResultType, builtinTypes->notNilType}
+                builtinTypes->typeFunctions->refineFunc, {iteratorTable->indexer->indexResultType, builtinTypes->notNilType}
             );
 
             pushConstraint(constraint->scope, constraint->location, ReduceConstraint{intersectionWithNotNil});
@@ -4592,20 +4618,91 @@ void ConstraintSolver::reportError(TypeError e)
     errors.back().moduleName = module->name;
 }
 
-// Also expands a table's display arguments, which InstantiationQueuer doesn't visit.
-struct MemberExpansionQueuer : InstantiationQueuer
+void ConstraintSolver::queueExpansion(TypeId pendingExpansion, NotNull<Scope> scope, const Location& location)
 {
-    using InstantiationQueuer::InstantiationQueuer;
-    using InstantiationQueuer::visit;
+    TypeId target = follow(pendingExpansion);
+    if (!get<PendingExpansionType>(target) || queuedExpansions.contains(target))
+        return;
 
-    bool visit(TypeId ty, const TableType& ttv) override
+    queuedExpansions.insert(target);
+    if (!bindCachedExpansion(target, scope, location))
+        pushConstraint(scope, location, TypeAliasExpansionConstraint{target});
+}
+
+void ConstraintSolver::queueCopiedPendingExpansions(const ApplyTypeFunction& substitution, NotNull<const Constraint> constraint)
+{
+    // Substitution copies a reference the template hasn't expanded yet (a trait method returning `List<T>`, with `List`
+    // declared below the trait) into a new PendingExpansionType that nothing expands. The copies can sit anywhere, also
+    // inside another instantiation the substitution cloned, so take them from the substitution's own record.
+    for (const auto& [original, copy] : substitution.newTypes)
     {
-        for (TypeId arg : ttv.instantiatedTypeParams)
-            traverse(arg);
-
-        return true;
+        if (get<PendingExpansionType>(copy))
+            queueExpansion(copy, constraint->scope, constraint->location);
     }
-};
+}
+
+bool ConstraintSolver::bindCachedExpansion(TypeId pendingExpansion, NotNull<Scope> scope, const Location& location)
+{
+    TypeId target = follow(pendingExpansion);
+    const PendingExpansionType* petv = get<PendingExpansionType>(target);
+    if (!petv)
+        return false;
+
+    std::optional<TypeFun> tf;
+    if (petv->prefix)
+        tf = scope->lookupImportedType(petv->prefix->value, petv->name.value);
+    else
+        tf = scope->lookupType(petv->name.value);
+
+    if (!tf)
+        return false;
+
+    const bool isGeneric = !tf->typeParams.empty() || !tf->typePackParams.empty();
+    if (!isGeneric)
+        return false;
+
+    // A type alias's expansion does more than look up the cache (a table instantiation is cloned and relabeled)
+    if (!get<ExternType>(follow(tf->type)))
+        return false;
+
+    auto [typeArguments, packArguments] = saturateArguments(arena, builtinTypes, *tf, petv->typeArguments, petv->packArguments);
+
+    // The class's own generics as arguments (`List<T>` inside `List<T>`) name the template itself, which
+    // tryDispatch(TypeAliasExpansionConstraint) binds to without caching
+    bool sameTypes = std::equal(
+        typeArguments.begin(),
+        typeArguments.end(),
+        tf->typeParams.begin(),
+        tf->typeParams.end(),
+        [](TypeId argument, const GenericTypeDefinition& param)
+        {
+            return follow(argument) == follow(param.ty);
+        }
+    );
+    bool samePacks = std::equal(
+        packArguments.begin(),
+        packArguments.end(),
+        tf->typePackParams.begin(),
+        tf->typePackParams.end(),
+        [](TypePackId argument, const GenericTypePackDefinition& param)
+        {
+            return follow(argument) == follow(param.tp);
+        }
+    );
+
+    TypeId instantiation = nullptr;
+    if (sameTypes && samePacks)
+        instantiation = tf->type;
+    else if (TypeId* cached = instantiatedAliases.find(InstantiationSignature{*tf, typeArguments, packArguments}))
+        instantiation = *cached;
+
+    if (!instantiation || follow(instantiation) == target)
+        return false;
+
+    emplaceType<BoundType>(asMutable(target), instantiation);
+    unblock(target, location);
+    return true;
+}
 
 void ConstraintSolver::queuePendingMemberExpansions(TypeId memberTy, NotNull<const Constraint> constraint)
 {

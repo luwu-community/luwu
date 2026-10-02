@@ -1087,7 +1087,7 @@ struct ErrorConverter
         if (kUnreachableTypeFunctions.count(tfit->function->name))
         {
             return "Type function instance " + Luau::toString(e.ty) + " is uninhabited\n" +
-                   "This is likely to be a bug, please report it at https://github.com/luau-lang/luau/issues";
+                   "This is likely to be a bug, please report it at https://github.com/luwu-community/luwu/issues";
         }
 
         // Everything should be specialized above to report a more descriptive error that hopefully does not mention "type functions" explicitly.
@@ -1293,24 +1293,52 @@ struct ErrorConverter
 
     std::string operator()(const GenericBoundsMismatch& e) const
     {
-        std::string lowerBounds;
-        for (size_t i = 0; i < e.lowerBounds.size(); ++i)
+        // Luwu: upstream reads "No valid instantiation could be inferred for generic type parameter T. It was expected
+        // to be at least: <lower> and at most: <upper>", the solver's vocabulary for the bounds. Luwu says what each
+        // bound means in the call, and an empty bound gets no line of its own instead of an empty one.
+        const std::string name = "'" + std::string{e.genericName} + "'";
+        const std::string given = joinBounds(e.lowerBounds, " | ");
+        const std::string usedAs = joinBounds(e.upperBounds, " & ");
+
+        std::string message = "This call has no valid type for " + name + " that fits every place " + name + " is used.";
+        if (!given.empty())
+            message += "\n  " + name + " is given:   " + given;
+        if (!usedAs.empty())
+            message += "\n  " + name + " is used as: " + usedAs;
+
+        // With nothing given, the uses conflict among themselves: no value is all of them at once
+        const bool usesConflict = given.empty() && e.upperBounds.size() > 1;
+
+        message += "\n\nHelp (impossible generic parameter instantiation):"
+                   "\n  - A call picks one type for " + name + " and uses it everywhere " + name + " appears in the function's signature";
+        if (usesConflict)
         {
-            if (i > 0)
-                lowerBounds += " | ";
-            lowerBounds += Luau::toString(e.lowerBounds[i]);
+            message += "\n  - The arguments provided force " + name + " to be '" + usedAs + "' to fit"
+                       "\n  - No value can be '" + usedAs + "', so this " + name + " is impossible"
+                       "\n  - To fix this, pass arguments that agree on one valid type for " + name +
+                       "\n  - Consider adding another type parameter to the function's signature if the types are meant to differ";
         }
-        std::string upperBounds;
-        for (size_t i = 0; i < e.upperBounds.size(); ++i)
+        else
         {
-            if (i > 0)
-                upperBounds += " & ";
-            upperBounds += Luau::toString(e.upperBounds[i]);
+            message += "\n  - What " + name + " is given has to fit everywhere " + name + " is used";
+            if (!given.empty() && !usedAs.empty())
+                message += "\n  - To fix this, pass a value that fits '" + usedAs + "', or make the code that uses " + name +
+                           " accept '" + given + "'";
         }
 
-        return "No valid instantiation could be inferred for generic type parameter " + std::string{e.genericName} +
-               ". It was expected to be at least:\n    " + lowerBounds + "\nand at most:\n    " + upperBounds +
-               "\nbut these types are not compatible with one another.";
+        return message;
+    }
+
+    static std::string joinBounds(const std::vector<TypeId>& bounds, const char* separator)
+    {
+        std::string joined;
+        for (TypeId bound : bounds)
+        {
+            if (!joined.empty())
+                joined += separator;
+            joined += Luau::toString(bound);
+        }
+        return joined;
     }
 
     std::string operator()(const InstantiateGenericsOnNonFunction& e) const

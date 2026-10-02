@@ -348,7 +348,7 @@ void Module::clonePublicInterface(NotNull<BuiltinTypes> builtinTypes, InternalEr
             Location{}, // Not amazing but the best we can do.
             name,
             InternalError{"An internal type is escaping this module; please report this bug at "
-                          "https://github.com/luau-lang/luau/issues"}
+                          "https://github.com/luwu-community/luwu/issues"}
         );
     }
 

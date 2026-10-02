@@ -2798,8 +2798,9 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatForIn* forI
     const DefId keyDef = dfg->getDef(keyVar);
     const TypeId loopVar = loopScope->lvalueTypes[keyDef];
 
+    // Luwu: `refine` rather than `intersect`, like the value in ConstraintSolver::tryDispatchIterableTable (from upstream 0.734)
     const TypeId intersectionTy =
-        createTypeFunctionInstance(builtinTypes->typeFunctions->intersectFunc, {loopVar, builtinTypes->notNilType}, {}, loopScope, keyVar->location);
+        createTypeFunctionInstance(builtinTypes->typeFunctions->refineFunc, {loopVar, builtinTypes->notNilType}, {}, loopScope, keyVar->location);
 
     loopScope->bindings[keyVar] = Binding{intersectionTy, keyVar->location};
     loopScope->lvalueTypes[keyDef] = intersectionTy;

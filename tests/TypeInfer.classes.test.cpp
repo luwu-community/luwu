@@ -21,6 +21,8 @@ LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuwuTraits)
+LUAU_FASTINT(LuauSolverConstraintLimit)
+LUAU_FASTINT(LuauTarjanChildLimit)
 LUAU_FASTFLAG(DebugLuwuUserDefinedRefinements)
 LUAU_FASTFLAG(LuauCstAttr)
 
@@ -4334,6 +4336,97 @@ TEST_CASE_FIXTURE(ClassesFixture, "trait_members_are_named_after_the_trait_in_er
     CHECK_EQ("Field 'secret' of trait 'P' is private; accessing it here will raise a runtime error", toString(result.errors[0]));
     CHECK_EQ(
         "Field 'k' of trait 'P' is constant; assigning to it outside of '__init' will raise a runtime error", toString(result.errors[1])
+    );
+}
+
+
+TEST_CASE_FIXTURE(ClassesFixture, "a_generic_trait_can_return_a_generic_class_declared_below_it")
+{
+    ScopedFastFlag _[4]{
+        {FFlag::LuwuTraits, true},
+        {FFlag::LuwuDefaultArguments, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::LuauExportValueSyntax, true},
+    };
+    // A class implementing a generic trait copies every `List<...>` its members mention. Each copy used to take a
+    // constraint of its own, and the user's 60-member list went past the default limit of 1000. This one needs well
+    // under 100.
+    ScopedFastInt constraintLimit{FInt::LuauSolverConstraintLimit, 100};
+
+    // The trait's `List<T>` is written before `List` exists, so instantiating the trait's members into `List` copied it
+    // unexpanded, and the copy escaped the module.
+    CheckResult result = check(R"(
+        export trait Listable<T>
+            expect public inner: { T }
+            public function derive<U>(self, inner: { U }): List<U>
+                return List(inner)
+            end
+            public function map<U>(self, mapper: (T) -> U): List<U>
+                const mapped = {}
+                for index, value in self.inner do
+                    mapped[index] = mapper(value)
+                end
+                return self:derive(mapped)
+            end
+            public function filter(self, predicate: (T) -> boolean): List<T>
+                const kept = {}
+                for _, value in self.inner do
+                    if predicate(value) then
+                        kept[#kept + 1] = value
+                    end
+                end
+                return self:derive(kept)
+            end
+            public function first(self): T?
+                return self.inner[1]
+            end
+        end
+
+        export class List<T>(
+            inner: { T } = {}
+        ) implements Listable<T>
+            public inner
+        end
+
+        local lengths = List({ "a", "bb" }):map(function(s: string) return #s end)
+        local long = lengths:filter(function(n: number) return n > 1 end)
+        local n = long:first()
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("number?", toString(requireType("n")));
+}
+
+
+TEST_CASE_FIXTURE(ClassesFixture, "implementing_a_trait_that_failed_to_export_is_reported_at_the_entry")
+{
+    ScopedFastFlag _[3]{{FFlag::LuwuTraits, true}, {FFlag::LuauExportValueSyntax, true}, {FFlag::LuauExportValueTypecheck, true}};
+    // Loads the builtins first, which the limit below is too small for
+    getFrontend();
+    // Too small for the trait to be exported, so `A.Shown` is the error type in B
+    ScopedFastInt childLimit{FInt::LuauTarjanChildLimit, 2};
+
+    fileResolver.source["game/A"] = R"(
+        export trait Shown
+            public function show(self): string
+                return "shown"
+            end
+        end
+    )";
+
+    fileResolver.source["game/B"] = R"(
+        local A = require(game.A)
+        class Thing implements A.Shown
+        end
+    )";
+
+    getFrontend().check("game/A");
+    CheckResult result = getFrontend().check("game/B");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        "This trait failed to typecheck, so class 'Thing' gets none of its members; check the errors where it is defined",
+        toString(result.errors[0])
     );
 }
 

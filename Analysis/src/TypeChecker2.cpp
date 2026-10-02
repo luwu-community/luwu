@@ -1932,6 +1932,8 @@ void TypeChecker2::checkTraitRefs(AstStatClass* stat, const AstArray<AstClassTra
         bool isClass = false;
         // what the entry is instead, when it is neither a trait nor a class
         std::optional<std::string> got;
+        // the entry names a trait whose type failed to check, e.g. one exported from a module that failed to export
+        bool isBrokenTrait = false;
 
         const ExternType* valueType = globalValue ? get<ExternType>(follow(*globalValue)) : nullptr;
         bool isTraitValue = valueType && valueType->root == builtinTypes->traitType;
@@ -1952,6 +1954,8 @@ void TypeChecker2::checkTraitRefs(AstStatClass* stat, const AstArray<AstClassTra
                 const ExternType* foundType = get<ExternType>(follow(found->type));
                 if (foundType && foundType->traitInfo)
                     continue;
+
+                isBrokenTrait = get<ErrorType>(follow(found->type)) != nullptr;
 
                 isClass = foundType && foundType->relation && get_if<Klass>(&*foundType->relation);
                 // a type of that name with no value of it, which the runtime reads as nil
@@ -1974,7 +1978,19 @@ void TypeChecker2::checkTraitRefs(AstStatClass* stat, const AstArray<AstClassTra
             }
         }
 
-        if (isClass && stat->isTrait)
+        if (isBrokenTrait)
+        {
+            const char* kind = stat->isTrait ? "trait" : "class";
+            reportError(
+                GenericError{format(
+                    "This trait failed to typecheck, so %s '%s' gets none of its members; check the errors where it is defined",
+                    kind,
+                    stat->name->name.value
+                )},
+                ref.trait->location
+            );
+        }
+        else if (isClass && stat->isTrait)
             reportError(GenericError{"This is a class, traits are not allowed to depend on classes (only other traits)"}, ref.trait->location);
         else if (isClass)
             reportError(GenericError{"This is a class, classes can only implement traits (not other classes)"}, ref.trait->location);
