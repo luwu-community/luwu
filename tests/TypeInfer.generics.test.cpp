@@ -2227,4 +2227,30 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "generic_pack_and_variadic_mismatch_error")
     CHECK_EQ(toString(res.errors[4]), "Generic pack 'FT...' is used like a generic type; consider changing it to 'FT' in the generic argument list or using it as 'FT...'");
 }
 
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "generic_bounds_mismatch_says_what_the_generic_is_used_as")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    CheckResult result = check(R"(
+        local function both<T>(f: (T) -> (), g: (T) -> ()) end
+        both(function(s: string) end, function(n: number) end)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    REQUIRE(get<GenericBoundsMismatch>(result.errors[0]));
+    CHECK_EQ(
+        "This call has no valid type for 'T' that fits every place 'T' is used.\n"
+        "  'T' is used as: string & number\n"
+        "\n"
+        "Help (impossible generic parameter instantiation):\n"
+        "  - A call picks one type for 'T' and uses it everywhere 'T' appears in the function's signature\n"
+        "  - The arguments provided force 'T' to be 'string & number' to fit\n"
+        "  - No value can be 'string & number', so this 'T' is impossible\n"
+        "  - To fix this, pass arguments that agree on one valid type for 'T'\n"
+        "  - Consider adding another type parameter to the function's signature if the types are meant to differ",
+        toString(result.errors[0])
+    );
+}
+
 TEST_SUITE_END();

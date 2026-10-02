@@ -28,6 +28,7 @@ namespace Luau
 
 enum class ValueContext;
 
+struct ApplyTypeFunction;
 struct DcrLogger;
 
 class AstExpr;
@@ -117,6 +118,8 @@ struct ConstraintSolver
 
     // Memoized instantiations of type aliases.
     DenseHashMap<InstantiationSignature, TypeId, HashInstantiationSignature> instantiatedAliases{{}};
+    // Luwu Classes (rfcs/classes): pending expansions already bound or given a constraint by queueExpansion
+    DenseHashSet<TypeId> queuedExpansions{nullptr};
     // Breadcrumbs for where a free type's upper bound was expanded. We use
     // these to provide more helpful error messages when a free type is solved
     // as never unexpectedly.
@@ -357,6 +360,15 @@ public:
     //    inside `class A<T>`, where `type R<T> = { R<T> }` never uses `T`.
     // A member that is itself a pending expansion is not handled here; the caller defers it.
     void queuePendingMemberExpansions(TypeId memberTy, NotNull<const Constraint> constraint);
+    // Luwu Classes (rfcs/classes): binds a pending expansion whose instantiation the solver already made, so
+    // queueing it needs no constraint. Instantiating a generic class copies every reference to another instantiation
+    // in its members, and most copies name one that exists. Returns false when there is none yet.
+    bool bindCachedExpansion(TypeId pendingExpansion, NotNull<Scope> scope, const Location& location);
+    // Luwu Classes (rfcs/classes): expands a pending expansion once, through the cache when possible
+    void queueExpansion(TypeId pendingExpansion, NotNull<Scope> scope, const Location& location);
+    // Luwu Classes (rfcs/classes): queues every pending expansion `substitution` copied while instantiating a generic
+    // class or one of its members
+    void queueCopiedPendingExpansions(const ApplyTypeFunction& substitution, NotNull<const Constraint> constraint);
     // Luwu Classes (rfcs/classes): a generic class's method as read through the class value. Nothing
     // instantiates the class's generics there, so the method is made generic over them itself.
     TypeId quantifyOverClassGenerics(TypeId methodTy, const GeneralizationConstraint& c);
