@@ -4839,7 +4839,10 @@ TEST_CASE("ClassesInlining")
 
 TEST_CASE("ClassesNativeCodegen")
 {
-    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+    };
 
     // Deliberately a separate file from classes.luwu: that one contains `@native` functions, and a module
     // with any `@native` function natively compiles only those, so the rest of its protos stay interpreted
@@ -5791,6 +5794,76 @@ counter = Counter { a = 1, b = 2 }
     }
 
     CHECK(namecalls == 1);
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a class's copy of a default from a trait in the same file is compiled with the
+// module, so native code compiles it too. A copy the VM makes when the class implements the trait never would be, which
+// no behavioral test can see, so check the copy's proto itself.
+TEST_CASE("TraitsSameFileDefaultsCompileNatively")
+{
+    if (!luau_codegen_supported())
+        return;
+
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+    };
+
+    StateRef globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+    luau_codegen_create(L);
+
+    const char* source = R"(
+trait Summing
+    expect public items: { number }
+    public function sum(self): number
+        local total = 0
+        for _, v in self.items do
+            total += v
+        end
+        return total
+    end
+end
+
+class Bag(items: { number }) implements Summing
+    public items
+end
+
+bag = Bag({ 1, 2, 3 })
+traitSum = Summing.sum
+bagSum = Bag.sum
+)";
+
+    lua_CompileOptions compileOptions = {};
+    compileOptions.optimizationLevel = 2;
+    size_t bytecodeSize = 0;
+    char* bytecode = luau_compile(source, strlen(source), &compileOptions, &bytecodeSize);
+    int loadResult = luau_load(L, "=TraitsSameFileDefaultsCompileNatively", bytecode, bytecodeSize, 0);
+    free(bytecode);
+    REQUIRE(loadResult == 0);
+
+    Luau::CodeGen::CompilationResult nativeResult = Luau::CodeGen::compile(L, -1, defaultCodegenOptions());
+    REQUIRE(nativeResult.result == Luau::CodeGen::CodeGenCompilationResult::Success);
+    REQUIRE(lua_pcall(L, 0, 0, 0) == LUA_OK);
+
+    lua_getglobal(L, "bagSum");
+    const Closure* copy = static_cast<const Closure*>(lua_topointer(L, -1));
+    REQUIRE(copy);
+    REQUIRE(!copy->isC);
+    CHECK(copy->l.p->execdata != nullptr);
+
+    lua_getglobal(L, "bag");
+    CHECK(copy->l.p->ownerclass == static_cast<const LuauObject*>(lua_topointer(L, -1))->lclass);
+
+    // a method read through its trait is the trait's dispatcher, a C function
+    lua_getglobal(L, "traitSum");
+    CHECK(lua_iscfunction(L, -1));
+
+    lua_getglobal(L, "bagSum");
+    lua_getglobal(L, "bag");
+    REQUIRE(lua_pcall(L, 1, 1, 0) == LUA_OK);
+    CHECK(lua_tonumber(L, -1) == 6);
 }
 
 TEST_CASE("ExportedClasses")

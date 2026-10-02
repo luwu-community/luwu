@@ -1944,6 +1944,11 @@ void BytecodeBuilder::validateInstructions() const
             {
                 VREGRANGE(LUAU_INSN_C(insn), int(insns[i + 1]) * 2);
             }
+            else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_TRAITCOPY)
+            {
+                VREGRANGE(LUAU_INSN_C(insn), 2);
+                VCONST(insns[i + 1], String);
+            }
             else
             {
                 LUAU_ASSERT(LUAU_INSN_B(insn) == 0);
@@ -2771,6 +2776,12 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
         if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_IMPLEMENTS)
         {
             formatAppend(result, "NEWCLASSMEMBER R%d IMPLEMENTS R%d %d\n", LUAU_INSN_A(insn), LUAU_INSN_C(insn), int(*code));
+        }
+        else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_TRAITCOPY)
+        {
+            formatAppend(result, "NEWCLASSMEMBER R%d TRAITCOPY R%d R%d [", LUAU_INSN_A(insn), LUAU_INSN_C(insn), LUAU_INSN_C(insn) + 1);
+            dumpConstant(result, *code, false);
+            result.append("]\n");
         }
         else
         {

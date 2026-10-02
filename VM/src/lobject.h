@@ -722,6 +722,11 @@ typedef struct LuauClass
     // overrides none. Marked in traverseclass.
     struct LuaTable* traitdefaults;
 
+    // Luwu Traits (rfcs/classes/traits.md): the copies of trait functions the compiler made for this class
+    // (LBC_NEWCLASSMEMBER_TRAITCOPY), keyed by the trait's own closure, for luaR_implementtraits to use instead of copying
+    // those functions. Only set while the class statement runs: implementing drops it. Marked in traverseclass.
+    struct LuaTable* compiledtraitcopies;
+
 } LuauClass;
 
 typedef struct LuauObject
