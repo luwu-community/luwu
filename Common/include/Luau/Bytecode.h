@@ -464,6 +464,10 @@ enum LuauOpcode
     // Luwu Traits (rfcs/classes/traits.md): B is LBC_NEWCLASSMEMBER_IMPLEMENTS for a class's `implements` list, emitted once,
     // after every member of the class is registered. AUX is the number of entries N; registers C..C+N-1 hold the
     // listed trait values, and C+N..C+2N-1 how many trait arguments each entry passes, as numbers.
+    // Luwu Traits (rfcs/classes/traits.md): B is LBC_NEWCLASSMEMBER_TRAITCOPY for the class's own copy of a trait's
+    // function, which the compiler made because the trait is declared in the same file. C holds the copy, C+1 the trait,
+    // and AUX names the trait's function as a constant string. Emitted before the IMPLEMENTS form, which uses the copy
+    // wherever it would otherwise copy that function itself (see luaR_classtraitfunction).
     LOP_NEWCLASSMEMBER,
 
     // CALLFB: call specified function with collecting runtime stats in a feedback slot
@@ -697,6 +701,8 @@ enum LuwuBytecodeTag
 
 // Luwu Traits (rfcs/classes/traits.md): operand B of LOP_NEWCLASSMEMBER for a class's `implements` list
 #define LBC_NEWCLASSMEMBER_IMPLEMENTS 1
+// Luwu Traits (rfcs/classes/traits.md): operand B of LOP_NEWCLASSMEMBER for a class's compiled copy of a trait's function
+#define LBC_NEWCLASSMEMBER_TRAITCOPY 2
 
 // Luwu Traits (rfcs/classes/traits.md): bits of the shape flags varint of LBC_CONSTANT_CLASS_SHAPE, written after the member
 // counts.

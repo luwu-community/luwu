@@ -634,4 +634,65 @@ expectpass("a method call site alternating tables and objects resolves every cal
     end
 end)
 
+-- Natively, a generic for loop's prep runs through executeFORGPREP, which has its own copy of the
+-- interpreter's object branch for __iter.
+class NcgBag(items: { number })
+    public items
+    public function __iter(self)
+        return coroutine.wrap(function()
+            for i, v in self.items do
+                coroutine.yield(i, v)
+            end
+            return nil, nil
+        end)
+    end
+end
+
+class NcgNotIterable(x: number)
+    public x
+end
+
+expectpass("objects with __iter can be iterated natively", function()
+    local sum, count = 0, 0
+    for i, v in NcgBag({ 10, 20, 30 }) do
+        sum += v
+        count = i
+    end
+    assert(sum == 60 and count == 3)
+
+    local ok, err = pcall(function()
+        for _ in NcgNotIterable(1) do
+        end
+    end)
+    assert(not ok and string.find(err, "attempt to iterate over a object value", 1, true), err)
+end)
+
+-- A trait declared in the same file has its defaults compiled into each implementing class, so they run natively too
+trait NcgIterable
+    expect public items: { number }
+    public function __iter(self)
+        return next, self.items
+    end
+    public function total(self)
+        local sum = 0
+        for _, v in self do
+            sum += v
+        end
+        return sum
+    end
+end
+
+class NcgStack(items: { number }) implements NcgIterable
+    public items
+end
+
+expectpass("trait defaults iterate objects natively", function()
+    local stack = NcgStack({ 1, 2, 3 })
+    local sum = 0
+    for _, v in stack do
+        sum += v
+    end
+    assert(sum == 6 and stack:total() == 6)
+end)
+
 return 'OK'
