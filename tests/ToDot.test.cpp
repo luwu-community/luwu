@@ -22,13 +22,13 @@ struct ToDotClassFixture : Fixture
         TypeId baseClassMetaType = arena.addType(TableType{});
 
         TypeId baseClassInstanceType = arena.addType(ExternType{"BaseClass", {}, std::nullopt, baseClassMetaType, {}, {}, "Test", {}});
-        getMutable<ExternType>(baseClassInstanceType)->props = {
+        getMutable<ExternType>(baseClassInstanceType)->props() = {
             {"BaseField", {getBuiltins()->numberType}},
         };
         getFrontend().globals.globalScope->exportedTypeBindings["BaseClass"] = TypeFun{{}, baseClassInstanceType};
 
         TypeId childClassInstanceType = arena.addType(ExternType{"ChildClass", {}, baseClassInstanceType, std::nullopt, {}, {}, "Test", {}});
-        getMutable<ExternType>(childClassInstanceType)->props = {
+        getMutable<ExternType>(childClassInstanceType)->props() = {
             {"ChildField", {getBuiltins()->stringType}},
         };
         getFrontend().globals.globalScope->exportedTypeBindings["ChildClass"] = TypeFun{{}, childClassInstanceType};

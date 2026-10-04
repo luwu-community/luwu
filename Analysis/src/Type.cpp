@@ -958,7 +958,7 @@ ExternType::ExternType(
     std::optional<Location> definitionLocation
 )
     : name(std::move(name))
-    , props(std::move(props))
+    , memberStorage(std::move(props))
     , parent(parent)
     , root(deriveNominalRoot(parent))
     , metatable(metatable)
@@ -981,7 +981,7 @@ ExternType::ExternType(
     std::optional<TableIndexer> indexer
 )
     : name(std::move(name))
-    , props(std::move(props))
+    , memberStorage(std::move(props))
     , parent(parent)
     , root(deriveNominalRoot(parent))
     , metatable(metatable)
@@ -991,6 +991,20 @@ ExternType::ExternType(
     , definitionLocation(definitionLocation)
     , indexer(indexer)
 {
+}
+
+ExternType::Props& ExternType::props()
+{
+    if (hasUnbuiltMembers())
+        buildNominalMembers(*this);
+    return memberStorage;
+}
+
+const ExternType::Props& ExternType::props() const
+{
+    if (hasUnbuiltMembers())
+        buildNominalMembers(*this);
+    return memberStorage;
 }
 
 void persist(TypeId ty)
@@ -1034,7 +1048,7 @@ void persist(TypeId ty)
         }
         else if (auto etv = get<ExternType>(t))
         {
-            for (const auto& [_name, prop] : etv->props)
+            for (const auto& [_name, prop] : etv->props())
             {
 
                 if (prop.readTy)
@@ -1144,8 +1158,8 @@ const Property* lookupExternTypeProp(const ExternType* cls, const Name& name)
 {
     while (cls)
     {
-        auto it = cls->props.find(name);
-        if (it != cls->props.end())
+        auto it = cls->props().find(name);
+        if (it != cls->props().end())
             return &it->second;
 
         if (cls->parent)

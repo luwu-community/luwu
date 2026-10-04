@@ -1,6 +1,8 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/Clone.h"
 
+#include "Luau/ApplyTypeFunction.h"
+
 #include "Luau/Ast.h"
 #include "Luau/Common.h"
 #include "Luau/NotNull.h"
@@ -20,6 +22,14 @@ LUAU_FASTFLAG(LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier)
 
 namespace Luau
 {
+
+// Luwu Generic Nominals (rfcs/generics-on-extern-types.md): an instantiation's members are rebuilt from the clone's
+// template and arguments, which cloneChildren clones
+static void resetClonedInstantiation(TypeId clone, TypeArena* arena)
+{
+    if (const ExternType* etv = get<ExternType>(clone); etv && etv->genericTemplate)
+        resetNominalMembers(clone, arena, /* sharedArena */ nullptr);
+}
 
 namespace
 {
@@ -169,6 +179,8 @@ public:
 
         TypeId target = arena->addType(ty->ty);
         asMutable(target)->documentationSymbol = ty->documentationSymbol;
+
+        resetClonedInstantiation(target, arena.get());
 
         if (auto generic = getMutable<GenericType>(target))
             generic->scope = nullptr;
@@ -348,8 +360,15 @@ private:
 
     void cloneChildren(ExternType* t)
     {
-        for (auto& [_, p] : t->props)
-            p = shallowClone(p);
+        // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): an instantiation's members are built from its template and arguments, which are
+        // cloned instead (see shallowClone)
+        if (t->genericTemplate)
+            t->genericTemplate = shallowClone(*t->genericTemplate);
+        else
+        {
+            for (auto& [_, p] : t->props())
+                p = shallowClone(p);
+        }
 
         if (t->parent)
             t->parent = shallowClone(*t->parent);
@@ -359,6 +378,16 @@ private:
 
         if (t->traitInfo && t->traitInfo->implementorClass)
             t->traitInfo->implementorClass = shallowClone(*t->traitInfo->implementorClass);
+
+        if (t->traitInfo)
+        {
+            for (auto& [trait, arguments] : t->traitInfo->neededTypeArguments)
+            {
+                trait = shallowClone(trait);
+                for (TypeId& argument : arguments)
+                    argument = shallowClone(argument);
+            }
+        }
 
         for (TypeId& trait : t->traitIntersection)
             trait = shallowClone(trait);
@@ -533,6 +562,8 @@ public:
 
         TypeId target = arena->addType(ty->ty);
         asMutable(target)->documentationSymbol = ty->documentationSymbol;
+
+        resetClonedInstantiation(target, arena.get());
 
         if (auto generic = getMutable<GenericType>(target))
             generic->scope = nullptr;

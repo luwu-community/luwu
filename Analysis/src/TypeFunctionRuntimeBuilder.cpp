@@ -467,8 +467,18 @@ private:
 
     void serializeChildren(const ExternType* c1, TypeFunctionExternType* c2)
     {
-        for (const auto& [k, p] : c1->props)
+        // Luwu Classes (rfcs/classes): a type function sees a class's or trait's members as code outside it does. Private
+        // members are left out, and so is the constructor (`__init`, a trait's `__create`): it isn't part of the type,
+        // and a generic class's `__init` is generic over the class's generics, which the type it would make has lost.
+        const NotNull<BuiltinTypes> builtins = state->ctx->builtins;
+        const bool isUserNominal = c1->root == builtins->objectType || c1->root == builtins->classType || c1->root == builtins->traitType;
+
+        for (const auto& [k, p] : c1->props())
         {
+            const bool hiddenFromOutside = p.isPrivate || k == "__init" || k == "__create";
+            if (isUserNominal && hiddenFromOutside)
+                continue;
+
             std::optional<TypeFunctionTypeId> readTy = std::nullopt;
             if (p.readTy)
                 readTy = shallowSerialize(*p.readTy);
