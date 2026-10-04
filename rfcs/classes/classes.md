@@ -1004,7 +1004,7 @@ Returns the class name (the name of the identifier the class binding was declare
 
 ## Compatibility
 
-Classes are backwards compatible with Luau 0.730 and all previous versions of Luwu. Classes are not forward compatible with upstream Luau's own implementation of the classes feature, but there is a narrow subset of classes that would be valid in both languages:
+The addition of classes does not break existing code in Luau 0.730 and previous versions of Luwu. Classes are not forward compatible with upstream Luau's own implementation of the classes feature, but there is a narrow subset of classes that would be valid in both languages:
 
 ```luau
 class Cat
