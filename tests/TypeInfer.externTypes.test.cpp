@@ -815,7 +815,7 @@ TEST_CASE_FIXTURE(Fixture, "read_write_class_properties")
     unfreeze(arena);
 
     TypeId instanceType = arena.addType(ExternType{"Instance", {}, nullopt, nullopt, {}, {}, "Test", {}});
-    getMutable<ExternType>(instanceType)->props = {{"Parent", Property::rw(instanceType)}};
+    getMutable<ExternType>(instanceType)->props() = {{"Parent", Property::rw(instanceType)}};
 
     //
 
@@ -837,7 +837,7 @@ TEST_CASE_FIXTURE(Fixture, "read_write_class_properties")
         }
     );
 
-    getMutable<ExternType>(workspaceType)->props = {{"Script", Property::readonly(scriptType)}, {"Part", Property::readonly(partType)}};
+    getMutable<ExternType>(workspaceType)->props() = {{"Script", Property::readonly(scriptType)}, {"Part", Property::readonly(partType)}};
 
     getFrontend().globals.globalScope->bindings[getFrontend().globals.globalNames.names->getOrAdd("script")] = Binding{scriptType};
 

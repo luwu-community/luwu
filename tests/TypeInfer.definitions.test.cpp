@@ -350,8 +350,8 @@ TEST_CASE_FIXTURE(Fixture, "definitions_documentation_symbols")
 
     ExternType* barClass = getMutable<ExternType>(barTy->type);
     REQUIRE(bool(barClass));
-    REQUIRE_EQ(barClass->props.count("prop"), 1);
-    CHECK_EQ(barClass->props["prop"].documentationSymbol, "@test/globaltype/Bar.prop");
+    REQUIRE_EQ(barClass->props().count("prop"), 1);
+    CHECK_EQ(barClass->props()["prop"].documentationSymbol, "@test/globaltype/Bar.prop");
 
     std::optional<Binding> yBinding = getFrontend().globals.globalScope->linearSearchForBinding("y");
     REQUIRE(bool(yBinding));
@@ -379,9 +379,9 @@ TEST_CASE_FIXTURE(Fixture, "definitions_symbols_are_generated_for_recursively_re
 
     ExternType* cls = getMutable<ExternType>(myClassTy->type);
     REQUIRE(bool(cls));
-    REQUIRE_EQ(cls->props.count("myMethod"), 1);
+    REQUIRE_EQ(cls->props().count("myMethod"), 1);
 
-    const auto& method = cls->props["myMethod"];
+    const auto& method = cls->props()["myMethod"];
     CHECK_EQ(method.documentationSymbol, "@test/globaltype/MyClass.myMethod");
 
     REQUIRE(method.readTy);

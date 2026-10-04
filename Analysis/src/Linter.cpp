@@ -4329,7 +4329,7 @@ private:
         if (externType->parent)
             result += " extends " + toString(*externType->parent, exact);
 
-        for (const auto& [name, prop] : externType->props)
+        for (const auto& [name, prop] : externType->props())
         {
             result += "; " + name;
             if (prop.isPrivate)

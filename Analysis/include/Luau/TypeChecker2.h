@@ -218,6 +218,9 @@ private:
     // Luwu Traits (rfcs/classes/traits.md): the class's constructor against the trait's expected `__init`
     void checkTraitConstructorExpectation(AstStatClass* stat, const ExternType* classType, const ExternType* traitType);
     void checkTraitArguments(AstStatClass* stat);
+    // Luwu Traits (rfcs/classes/traits.md): the class implements the instantiation of each trait its traits need with
+    // the type arguments their `needs` entries give it
+    void checkNeededTraitArguments(AstStatClass* stat);
     void checkTraitRefs(AstStatClass* stat, const AstArray<AstClassTraitRef>& refs);
     void checkTraitOverrides(AstStatClass* stat);
     void reportMissingTraitMember(

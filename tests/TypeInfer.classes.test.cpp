@@ -244,7 +244,7 @@ local p = Point
     CHECK(et->parent == builtinTypes->classType);
     REQUIRE(et->metatable);
 
-    CHECK(et->props.find("zero") != et->props.end());
+    CHECK(et->props().find("zero") != et->props().end());
 
     auto cobjmeta = get<TableType>(*et->metatable);
     REQUIRE(cobjmeta);
@@ -3883,6 +3883,120 @@ TEST_CASE_FIXTURE(ClassesFixture, "implementing_a_generic_trait_with_type_argume
     CHECK_EQ("Gen<string>", toString(requireType("g")));
 }
 
+TEST_CASE_FIXTURE(ClassesFixture, "generic_trait_needs_pass_their_type_arguments_on")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+    ScopedFastFlag generics{FFlag::LuwuGenericNominals, true};
+
+    CheckResult result = check(R"(
+        trait Root<T>
+            expect public inner: { T }
+            public function root(self): T?
+                return self.inner[1]
+            end
+        end
+        trait Base<T> needs Root<T>
+            public function first(self): T?
+                return self.inner[1]
+            end
+        end
+        trait Mut<T> needs Base<T>
+            public function push(self, item: T)
+                self.inner[#self.inner + 1] = item
+            end
+        end
+        trait Wrapped<T> needs Root<{ T }> end
+        trait Concrete needs Root<string> end
+
+        class Strs(inner: { string }) implements Mut<string> public inner end
+        class Gen<T>(inner: { T }) implements Mut<T> public inner end
+        class W(inner: { { number } }) implements Wrapped<number> public inner end
+        class C(inner: { string }) implements Concrete public inner end
+
+        local s = Strs({ "a" })
+        local r = s:root()
+        local g = Gen({ 1 })
+        local gf = g:first()
+        local function viaTrait(m: Mut<string>)
+            return m:root()
+        end
+        local m: Mut<string> = s
+        local b: Base<string> = m
+        local o: Root<string> = m
+
+        s:push(1)
+    )");
+
+    // only the push of a number onto strings
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 36);
+    CHECK_EQ("string?", toString(requireType("r")));
+    CHECK_EQ("number?", toString(requireType("gf")));
+    CHECK_EQ("(Mut<string>) -> string?", toString(requireType("viaTrait")));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "generic_trait_needs_must_agree_with_the_implemented_instantiation")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+    ScopedFastFlag generics{FFlag::LuwuGenericNominals, true};
+
+    CheckResult result = check(R"(
+        trait Root<T>
+            expect public inner: { T }
+        end
+        trait Base<T> needs Root<T> end
+        trait Mut<T> needs Base<T> end
+
+        class Listed(inner: { string }) implements Base<string>, Mut<number> public inner end
+        class Transitive(inner: { string }) implements Root<string>, Mut<number> public inner end
+        class Agrees(inner: { string }) implements Base<string>, Mut<string> public inner end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ("'Listed' implements 'Base<string>', but 'Mut<number>' needs 'Base<number>'", toString(result.errors[0]));
+    CHECK_EQ(result.errors[0].location.begin.line, 7);
+    CHECK_EQ("'Transitive' implements 'Root<string>', but 'Base<number>' needs 'Root<number>'", toString(result.errors[1]));
+    CHECK_EQ(result.errors[1].location.begin.line, 8);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "generic_trait_needs_across_modules")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuTraits, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::LuauExportValueSyntax, true},
+        {FFlag::LuauExportValueTypecheck, true},
+    };
+
+    fileResolver.source["game/A"] = R"(
+        export trait Root<T>
+            expect public inner: { T }
+            public function root(self): T?
+                return self.inner[1]
+            end
+        end
+        export trait Base<T> needs Root<T> end
+        export trait Mut<T> needs Base<T> end
+    )";
+
+    fileResolver.source["game/B"] = R"(
+        local t = require(game.A)
+        class Strs(inner: { string }) implements t.Mut<string> public inner end
+        class Mismatch(inner: { string }) implements t.Root<string>, t.Mut<number> public inner end
+        local r = Strs({ "a" }):root()
+    )";
+
+    CheckResult result = getFrontend().check("game/B");
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ("'Mismatch' implements 'Root<string>', but 'Base<number>' needs 'Root<number>'", toString(result.errors[0]));
+
+    ModulePtr module = getFrontend().moduleResolver.getModule("game/B");
+    REQUIRE(module);
+    std::optional<TypeId> r = lookupName(module->getModuleScope(), "r");
+    REQUIRE(r);
+    CHECK_EQ("string?", toString(*r));
+}
+
 TEST_CASE_FIXTURE(ClassesFixture, "class_type_argument_defaults_fill_unconstrained_arguments")
 {
     ScopedFastFlag generics{FFlag::LuwuGenericNominals, true};
@@ -4428,6 +4542,201 @@ TEST_CASE_FIXTURE(ClassesFixture, "implementing_a_trait_that_failed_to_export_is
         "This trait failed to typecheck, so class 'Thing' gets none of its members; check the errors where it is defined",
         toString(result.errors[0])
     );
+}
+
+
+TEST_CASE_FIXTURE(ClassesFixture, "a_generic_class_with_many_generic_methods_checks_in_linear_time")
+{
+    ScopedFastFlag _[3]{{FFlag::LuwuDefaultArguments, true}, {FFlag::LuwuGenericNominals, true}, {FFlag::LuauExportValueSyntax, true}};
+
+    // Each `m<U>(): List<U>` names its own instantiation of `List`. Building every instantiation's members up front made
+    // n instantiations of n members each, which reported "too complex" when the module was exported at about 70 methods,
+    // and walking them took time n^4.
+    std::string source = "export class List<T>(inner: { T } = {})\n    public inner\n";
+    for (int i = 0; i < 300; ++i)
+        source += format("    public function m%d<U>(self, f: (T) -> U): List<U>\n        return List({})\n    end\n", i);
+    source += "end\nlocal lengths = List({ \"a\" }):m0(function(s: string) return #s end)\nlocal n = lengths.inner\n";
+
+    CheckResult result = check(source);
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("{number}", toString(requireType("n")));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "a_class_implements_a_large_generic_trait_from_another_module")
+{
+    ScopedFastFlag _[5]{
+        {FFlag::LuwuTraits, true},
+        {FFlag::LuwuDefaultArguments, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::LuauExportValueSyntax, true},
+        {FFlag::LuauExportValueTypecheck, true},
+    };
+
+    // The trait's module used to fail to export (see above), so `A.Listable` was the error type in B and `Components`
+    // got none of its members
+    std::string library = "export trait Listable<T>\n    expect public inner: { T }\n";
+    for (int i = 0; i < 80; ++i)
+        library += format("    public function m%d<U>(self, f: (T) -> U): List<U>\n        return List({})\n    end\n", i);
+    library += R"(
+    public function push_back(self, item: T)
+        table.insert(self.inner, item)
+        return self
+    end
+end
+
+export class List<T>(inner: { T } = {}) implements Listable<T>
+    public inner
+end
+)";
+    fileResolver.source["game/A"] = library;
+
+    fileResolver.source["game/B"] = R"(
+        local A = require(game.A)
+        class Components(inner: { string } = {}) implements A.Listable<string>
+            public inner
+        end
+        local c = Components():push_back("a")
+        local first = c.inner[1]
+    )";
+
+    getFrontend().check("game/A");
+    CheckResult result = getFrontend().check("game/B");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("string", toString(requireType("game/B", "first")));
+}
+
+
+TEST_CASE_FIXTURE(ClassesFixture, "a_table_literal_argument_takes_the_expected_type_argument")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuDefaultArguments, true}, {FFlag::LuwuGenericNominals, true}};
+
+    // The literal's own type is `{ kind: "NotFound", path: string }`, and type arguments are invariant, so `T` has to be
+    // `Data` for the call to produce the annotated type. A literal that doesn't fit `Data` keeps its own type.
+    CheckResult result = check(R"(
+        type Data = { kind: "NotFound" | "Denied", path: string }
+
+        class Pod<T>
+            public data: T
+        end
+        class WithInit<T>
+            public data: T
+            public function __init(self, data: T)
+                self.data = data
+            end
+        end
+        class Primary<T>(public data: T)
+        end
+
+        local a: Pod<Data> = Pod { data = { kind = "NotFound", path = "/a" } }
+        local b: WithInit<Data> = WithInit({ kind = "Denied", path = "/b" })
+        local c: Primary<Data> = Primary({ kind = "NotFound", path = "/c" })
+        local function fail(): Primary<Data>
+            return Primary({ kind = "Denied", path = "/d" })
+        end
+        local wrong: Primary<Data> = Primary({ kind = "Nope", path = "/e" })
+    )");
+
+    // the last line: "Nope" is not a kind
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    REQUIRE(get<TypeMismatch>(result.errors[0]));
+    CHECK_EQ(21, result.errors[0].location.begin.line);
+}
+
+
+TEST_CASE_FIXTURE(ClassesFixture, "a_generic_class_static_is_generic_over_the_class_generics")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuDefaultArguments, true}, {FFlag::LuwuGenericNominals, true}};
+
+    // Nothing instantiates `T` when a static is read through the class value, however the class value was reached
+    CheckResult result = check(R"(
+        class Box<T>(public value: T)
+            public function make(v: T): Box<T>
+                return Box(v)
+            end
+        end
+        local direct = Box.make("str")
+        local b: Box<number> = Box(5)
+        local viaOf = class.of(b).make("str")
+        local typed: class<Box<number>> = Box
+        local viaAnnotation = typed.make("str")
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("Box<string>", toString(requireType("direct")));
+    CHECK_EQ("Box<string>", toString(requireType("viaOf")));
+    CHECK_EQ("Box<string>", toString(requireType("viaAnnotation")));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "an_alias_of_class_of_a_generic_class_is_not_an_unapplied_type_function")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuDefaultArguments, true}, {FFlag::LuwuGenericNominals, true}};
+
+    CheckResult result = check(R"(
+        class Box<T>(public value: T)
+        end
+        type BoxClass = class<Box<number>>
+        local c: BoxClass = Box
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "type_functions_take_classes_and_traits_as_types")
+{
+    ScopedFastFlag _[4]{
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+        {FFlag::LuwuDefaultArguments, true},
+        {FFlag::LuwuGenericNominals, true},
+    };
+
+    // A type function sees a class's members as code outside the class does: no private members, no constructor. A
+    // generic class's `__init` is generic over the class's generics, so passing `List<number>` used to fail to read it
+    // back ("Encountered unexpected generic").
+    CheckResult result = check(R"(
+        class Account(public owner: string, private balance: number)
+            public function deposit(self, n: number)
+                self.balance += n
+            end
+        end
+        class List<T>(public inner: { T })
+            public function map<U>(self, f: (T) -> U): List<U>
+                return List({})
+            end
+        end
+        trait Named
+            expect public name: string
+        end
+        class Dog(public name: string) implements Named
+        end
+
+        type function keysOf(t)
+            local names = {}
+            for k in t:properties() do
+                table.insert(names, k)
+            end
+            return types.unionof(table.unpack(names))
+        end
+        type function boxed(t)
+            return types.newtable({ [types.singleton("item")] = { read = t, write = t } })
+        end
+
+        local deposit: keysOf<Account> = "deposit"
+        local balance: keysOf<Account> = "balance"
+        local map: keysOf<List<number>> = "map"
+        local name: keysOf<Named> = "name"
+        local item: boxed<List<string>> = { item = List({ "a" }) }
+        local wrongItem: boxed<List<string>> = { item = List({ 1 }) }
+        local named: boxed<Named> = { item = Dog("rex") }
+    )");
+
+    // `balance` is private, and a `List<number>` is not a `List<string>`
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ(29, result.errors[0].location.begin.line);
+    CHECK_EQ(33, result.errors[1].location.begin.line);
 }
 
 TEST_SUITE_END();

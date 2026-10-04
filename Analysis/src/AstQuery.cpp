@@ -648,7 +648,7 @@ std::optional<DocumentationSymbol> getDocumentationSymbolAtPosition(const Source
                 {
                     while (etv)
                     {
-                        if (auto propIt = etv->props.find(indexName->index.value); propIt != etv->props.end())
+                        if (auto propIt = etv->props().find(indexName->index.value); propIt != etv->props().end())
                         {
 
                             if (auto ty = propIt->second.readTy)

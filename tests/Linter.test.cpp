@@ -1656,7 +1656,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "DeprecatedApiTyped")
     persist(instanceType);
     getFrontend().globals.globalScope->exportedTypeBindings["Instance"] = TypeFun{{}, instanceType};
 
-    getMutable<ExternType>(instanceType)->props = {
+    getMutable<ExternType>(instanceType)->props() = {
         {"Name", {getBuiltins()->stringType}},
         {"DataCost", {getBuiltins()->numberType, /* deprecated= */ true}},
         {"Wait", {getBuiltins()->anyType, /* deprecated= */ true}},

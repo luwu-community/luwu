@@ -4655,6 +4655,33 @@ TEST_CASE_FIXTURE(Fixture, "return_count_mismatch_without_nil_gets_no_advice")
     CHECK_EQ("Expected this function to return 'number, string', but it returns nothing at all.", toString(returnsTooLittle.errors[0]));
 }
 
+TEST_CASE_FIXTURE(Fixture, "return_length_mismatch_counts_the_values")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    // Upstream prints both lists ("Expected this to be 'number', but got 'number, string'"). With a function-typed value
+    // the two sides are near-identical walls of text that differ by one type at the end.
+    CheckResult tooMany = check(R"(
+        local function f(): number return 1, "two" end
+    )");
+    LUAU_REQUIRE_ERROR_COUNT(1, tooMany);
+    CHECK_EQ(
+        "Expected this function to return 1 value, but it returns 2 values.\n"
+        "Consider annotating every value it returns (e.g. ': (A, B)'), or removing the extra ones.",
+        toString(tooMany.errors[0])
+    );
+
+    CheckResult tooFew = check(R"(
+        local function g(): (number, string) return 1 end
+    )");
+    LUAU_REQUIRE_ERROR_COUNT(1, tooFew);
+    CHECK_EQ(
+        "Expected this function to return 2 values, but it returns 1 value.\n"
+        "Consider returning every value the annotation lists, or removing the ones it doesn't from the annotation.",
+        toString(tooFew.errors[0])
+    );
+}
+
 TEST_CASE_FIXTURE(Fixture, "a_genuine_partial_return_still_reports_codepaths")
 {
     ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};

@@ -1,6 +1,7 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/ConstraintGenerator.h"
 
+#include "Luau/ApplyTypeFunction.h"
 #include "Luau/Ast.h"
 #include "Luau/AstUtils.h"
 #include "Luau/BuiltinDefinitions.h"
@@ -33,6 +34,7 @@
 #include "Luau/VisitType.h"
 
 #include <algorithm>
+#include <functional>
 #include <memory>
 
 LUAU_DYNAMIC_FASTINTVARIABLE(LuauConstraintGeneratorRecursionLimit, 300)
@@ -1011,7 +1013,10 @@ void ConstraintGenerator::prototypeClass(
                     const bool isMetamethod = isValidClassMetamethod(method.functionName.value);
                     // Luwu Traits (rfcs/classes/traits.md): a trait's expected function only exists in implementing classes
                     const bool readableThroughClass = (!takesSelf || method.functionName == "__init" || !isMetamethod) && !method.expectLocation;
-                    const bool needsOwnClassValueType = readableThroughClass && takesSelf && isGenericClass && method.functionName != "__init";
+                    // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): nothing instantiates a generic class's generics
+                    // when a method is read through the class value, so it gets a type of its own that is generic over them
+                    // (quantifyOverClassGenerics). A static (`function make(v: T): Box<T>`) needs it as much as a method does.
+                    const bool needsOwnClassValueType = readableThroughClass && isGenericClass && method.functionName != "__init";
                     if (needsOwnClassValueType)
                     {
                         Property classValueProp = prop;
@@ -1159,7 +1164,7 @@ void ConstraintGenerator::prototypeClass(
         initProp.isPrivate = classDecl->primaryConstructor->visibility == AstClassMemberVisibility::Private;
 
         if (ExternType* classInstanceEtv = getMutable<ExternType>(classInstanceTy))
-            classInstanceEtv->props["__init"] = initProp;
+            classInstanceEtv->props()["__init"] = initProp;
         staticProps["__init"] = initProp;
     }
 
@@ -1227,7 +1232,7 @@ void ConstraintGenerator::prototypeClass(
         Property initProp = Property::readonly(initTy);
         initProp.location = classDecl->location;
         if (ExternType* classInstanceEtv = getMutable<ExternType>(classInstanceTy))
-            classInstanceEtv->props["__init"] = initProp;
+            classInstanceEtv->props()["__init"] = initProp;
         staticProps["__init"] = initProp;
     }
 
@@ -1392,6 +1397,69 @@ std::optional<ConstraintGenerator::TraitInstantiation> ConstraintGenerator::inst
     return result;
 }
 
+ConstraintGenerator::TraitInstantiation ConstraintGenerator::instantiateImpliedTrait(
+    const ScopePtr& scope,
+    Location location,
+    TypeId trait,
+    std::vector<TypeId> args,
+    std::vector<TypeId> copiedReferences
+)
+{
+    const ExternType* traitType = get<ExternType>(follow(trait));
+    LUAU_ASSERT(traitType);
+
+    TraitInstantiation result;
+    result.params = traitType->instantiatedTypeParams;
+    result.args = args;
+    result.instantiated = instantiateGenericNominal(arena, trait, std::move(args), {}, copiedReferences);
+
+    for (TypeId reference : copiedReferences)
+        addConstraint(scope, location, TypeAliasExpansionConstraint{reference});
+
+    return result;
+}
+
+TypeId ConstraintGenerator::instantiateTraitMember(
+    const ScopePtr& scope,
+    Location location,
+    TypeId trait,
+    const TraitInstantiation& instantiation,
+    TypeId ty
+)
+{
+    TypeId placeholder = arena->addType(BlockedType{});
+    NotNull<Constraint> constraint = addConstraint(
+        scope,
+        location,
+        InstantiateNominalPropConstraint{ty, placeholder, trait, instantiation.instantiated, instantiation.params, instantiation.args, {}, {}}
+    );
+    getMutable<BlockedType>(placeholder)->setOwner(constraint);
+    return placeholder;
+}
+
+Property ConstraintGenerator::instantiateTraitProperty(
+    const ScopePtr& scope,
+    Location location,
+    TypeId trait,
+    const TraitInstantiation& instantiation,
+    const Property& prop
+)
+{
+    Property result = prop;
+    if (prop.isShared())
+    {
+        result.readTy = instantiateTraitMember(scope, location, trait, instantiation, *prop.readTy);
+        result.writeTy = result.readTy;
+        return result;
+    }
+
+    if (prop.readTy)
+        result.readTy = instantiateTraitMember(scope, location, trait, instantiation, *prop.readTy);
+    if (prop.writeTy)
+        result.writeTy = instantiateTraitMember(scope, location, trait, instantiation, *prop.writeTy);
+    return result;
+}
+
 TypeId ConstraintGenerator::resolveTraitRef(const ScopePtr& scope, const AstClassTraitRef& ref)
 {
     std::optional<TypeFun> traitFun = scope->lookupTraitRef(ref);
@@ -1426,6 +1494,38 @@ static std::string codependentTraitsMessage(const std::vector<TypeId>& cycle)
            "into a new trait";
 }
 
+void ConstraintGenerator::recordNeededTypeArguments(
+    AstStatClass* trait,
+    const AstClassTraitRef& ref,
+    TypeId needed,
+    ExternType* traitType
+)
+{
+    std::unique_ptr<ClassDeclRecord>* record = classDeclRecords.find(trait->name);
+    ScopePtr* defnScope = astClassDefiningScopes.find(trait);
+    if (!record || !defnScope)
+        return;
+
+    // The type arguments are written in the trait's own generics. The trait's body binds those only after resolving their
+    // defaults, so this scope binds them for the entry alone. It is registered under the entry's location, so it encloses
+    // nothing else.
+    ScopePtr refScope = std::make_shared<Scope>(*defnScope);
+    refScope->location = ref.location;
+    scopes.emplace_back(ref.location, refScope);
+    (*defnScope)->children.emplace_back(refScope.get());
+
+    const std::vector<GenericTypeDefinition>& typeParams = (*record)->typeParams;
+    for (size_t i = 0; i < trait->generics.size && i < typeParams.size(); ++i)
+        refScope->privateTypeBindings[trait->generics.data[i]->name.value] = TypeFun{typeParams[i].ty};
+
+    const std::vector<GenericTypePackDefinition>& typePackParams = (*record)->typePackParams;
+    for (size_t i = 0; i < trait->genericPacks.size && i < typePackParams.size(); ++i)
+        refScope->privateTypePackBindings[trait->genericPacks.data[i]->name.value] = typePackParams[i].tp;
+
+    if (std::optional<TraitInstantiation> instantiation = instantiateTraitRef(refScope, ref))
+        traitType->traitInfo->neededTypeArguments.emplace_back(needed, std::move(instantiation->args));
+}
+
 void ConstraintGenerator::linkTraitNeeds(const ScopePtr& scope, const AstArray<AstStat*>& statements)
 {
     for (AstStat* stat : statements)
@@ -1441,9 +1541,59 @@ void ConstraintGenerator::linkTraitNeeds(const ScopePtr& scope, const AstArray<A
 
         for (const AstClassTraitRef& ref : trait->needs)
         {
-            if (TypeId needed = resolveTraitRef(scope, ref))
-                traitType->implementedTraits.push_back(needed);
+            TypeId needed = resolveTraitRef(scope, ref);
+            if (!needed)
+                continue;
+
+            traitType->implementedTraits.push_back(needed);
+
+            if (traitType->traitInfo && ref.typeArguments.size > 0)
+                recordNeededTypeArguments(trait, ref, needed, traitType);
         }
+    }
+
+    // A trait lists a trait it needs with type arguments as an instantiation in its own generics (`Base<T>` for
+    // `needs Base<T>`), so its own instantiations are subtypes of the needed trait's (`Mut<string>` of `Base<string>`). An
+    // instantiation copies its template's list when it is made, so a needed trait's list is instantiated before the list
+    // of a trait needing it. Traits from elsewhere were linked when their own block was.
+    DenseHashMap<const ExternType*, AstStatClass*> traitDecls{nullptr};
+    for (AstStat* stat : statements)
+    {
+        AstStatClass* trait = stat->as<AstStatClass>();
+        std::unique_ptr<ClassDeclRecord>* record = trait && trait->isTrait ? classDeclRecords.find(trait->name) : nullptr;
+        if (const ExternType* traitType = record ? get<ExternType>(follow((*record)->ty)) : nullptr)
+            traitDecls[traitType] = trait;
+    }
+
+    DenseHashSet<const ExternType*> needsInstantiated{nullptr};
+    std::function<void(ExternType*)> instantiateNeeds = [&](ExternType* traitType)
+    {
+        AstStatClass** trait = traitType ? traitDecls.find(traitType) : nullptr;
+        if (!trait || needsInstantiated.contains(traitType))
+            return;
+
+        needsInstantiated.insert(traitType);
+
+        for (TypeId& needed : traitType->implementedTraits)
+        {
+            instantiateNeeds(getMutable<ExternType>(follow(needed)));
+
+            std::vector<TypeId> copiedReferences;
+            std::optional<std::vector<TypeId>> args = neededTraitTypeArguments(arena, *traitType, needed, {}, copiedReferences);
+            if (args)
+            {
+                Location location = (*trait)->name->location;
+                needed = instantiateImpliedTrait(scope, location, needed, std::move(*args), std::move(copiedReferences)).instantiated;
+            }
+        }
+    };
+
+    for (AstStat* stat : statements)
+    {
+        AstStatClass* trait = stat->as<AstStatClass>();
+        std::unique_ptr<ClassDeclRecord>* record = trait && trait->isTrait ? classDeclRecords.find(trait->name) : nullptr;
+        if (record)
+            instantiateNeeds(getMutable<ExternType>(follow((*record)->ty)));
     }
 
     // A trait-typed value has the members of the traits it needs, metamethods included, which every implementing class
@@ -1457,42 +1607,69 @@ void ConstraintGenerator::linkTraitNeeds(const ScopePtr& scope, const AstArray<A
             continue;
 
         TableType* traitMetatable = traitType->metatable ? getMutable<TableType>(follow(*traitType->metatable)) : nullptr;
+        Location location = trait->name->location;
 
-        std::vector<const ExternType*> pending;
+        // A needed trait, with the type arguments its `needs` entry gives it, in this trait's generics (`needs Base<T>`)
+        struct Needed
+        {
+            TypeId ty;
+            std::optional<std::vector<TypeId>> args;
+            std::vector<TypeId> copiedReferences;
+        };
+
+        std::vector<Needed> pending;
         DenseHashSet<const ExternType*> visited{nullptr};
         visited.insert(traitType);
 
-        auto pushNeeds = [&](const ExternType* from)
+        // `from`'s needs. `fromArgs` are `from`'s own type arguments in this trait's generics, substituted into its entries.
+        auto pushNeeds = [&](const ExternType* from, const std::optional<std::vector<TypeId>>& fromArgs)
         {
-            for (TypeId needed : from->implementedTraits)
+            for (TypeId listed : from->implementedTraits)
             {
-                const ExternType* neededType = get<ExternType>(follow(needed));
-                if (neededType && !visited.contains(neededType))
-                {
-                    visited.insert(neededType);
-                    pending.push_back(neededType);
-                }
+                TypeId neededTy = traitTemplateOf(listed);
+                const ExternType* neededType = get<ExternType>(neededTy);
+                if (!neededType || visited.contains(neededType))
+                    continue;
+
+                visited.insert(neededType);
+
+                Needed needed{neededTy, std::nullopt, {}};
+                needed.args = neededTraitTypeArguments(arena, *from, neededTy, fromArgs.value_or(std::vector<TypeId>{}), needed.copiedReferences);
+                pending.push_back(std::move(needed));
             }
         };
 
-        pushNeeds(traitType);
+        pushNeeds(traitType, std::nullopt);
 
         while (!pending.empty())
         {
-            const ExternType* needed = pending.back();
+            Needed needed = std::move(pending.back());
             pending.pop_back();
 
-            for (const auto& [name, prop] : needed->props)
+            const ExternType* neededType = get<ExternType>(needed.ty);
+            LUAU_ASSERT(neededType);
+
+            // `trait Mut<T> needs Base<T>`: Mut's copy of Base's `first(self): T?` returns Mut's `T`
+            std::optional<TraitInstantiation> instantiation;
+            if (needed.args)
+                instantiation = instantiateImpliedTrait(scope, location, needed.ty, *needed.args, std::move(needed.copiedReferences));
+
+            auto asSeenHere = [&](const Property& prop)
             {
-                bool copyable = name != "__init" && name != "__create" && !traitType->props.count(name);
+                return instantiation ? instantiateTraitProperty(scope, location, needed.ty, *instantiation, prop) : prop;
+            };
+
+            for (const auto& [name, prop] : neededType->props())
+            {
+                bool copyable = name != "__init" && name != "__create" && !traitType->props().count(name);
                 if (copyable)
                 {
-                    traitType->props[name] = prop;
+                    traitType->props()[name] = asSeenHere(prop);
                     traitType->traitInfo->fromNeeds.insert(name);
                 }
             }
 
-            const TableType* neededMetatable = needed->metatable ? get<TableType>(follow(*needed->metatable)) : nullptr;
+            const TableType* neededMetatable = neededType->metatable ? get<TableType>(follow(*neededType->metatable)) : nullptr;
             if (traitMetatable && neededMetatable)
             {
                 for (const auto& [name, prop] : neededMetatable->props)
@@ -1500,12 +1677,12 @@ void ConstraintGenerator::linkTraitNeeds(const ScopePtr& scope, const AstArray<A
                     if (traitMetatable->props.count(name))
                         continue;
 
-                    traitMetatable->props[name] = prop;
+                    traitMetatable->props[name] = asSeenHere(prop);
                     traitType->traitInfo->fromNeeds.insert(name);
                 }
             }
 
-            pushNeeds(needed);
+            pushNeeds(neededType, needed.args);
         }
     }
 
@@ -1537,9 +1714,9 @@ void ConstraintGenerator::linkTraitNeeds(const ScopePtr& scope, const AstArray<A
             if (!currentType)
                 continue;
 
-            for (TypeId next : currentType->implementedTraits)
+            for (TypeId listed : currentType->implementedTraits)
             {
-                next = follow(next);
+                TypeId next = traitTemplateOf(listed);
                 if (visited.contains(next))
                     continue;
 
@@ -1674,8 +1851,8 @@ void ConstraintGenerator::checkTraitArguments(const ScopePtr& initializerScope, 
         for (size_t i = 0; i < ref.args.size; ++i)
         {
             AstExpr* arg = ref.args.data[i];
-            auto field = i < params.size() && !isGeneric ? traitType->props.find(params[i].name) : traitType->props.end();
-            std::optional<TypeId> expectedType = field != traitType->props.end() ? field->second.readTy : std::nullopt;
+            auto field = i < params.size() && !isGeneric ? traitType->props().find(params[i].name) : traitType->props().end();
+            std::optional<TypeId> expectedType = field != traitType->props().end() ? field->second.readTy : std::nullopt;
 
             Inference found = check(initializerScope, arg, expectedType);
             if (expectedType)
@@ -1722,34 +1899,16 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
         if (it == instantiations.end())
             return ty;
 
-        TypeId placeholder = arena->addType(BlockedType{});
-        NotNull<Constraint> constraint = addConstraint(
-            scope,
-            location,
-            InstantiateNominalPropConstraint{ty, placeholder, trait, it->second.instantiated, it->second.params, it->second.args, {}, {}}
-        );
-        getMutable<BlockedType>(placeholder)->setOwner(constraint);
-        return placeholder;
+        return instantiateTraitMember(scope, location, trait, it->second, ty);
     };
 
     auto instantiateProperty = [&](TypeId trait, const Property& prop, Location location)
     {
-        if (!instantiations.count(trait))
+        auto it = instantiations.find(trait);
+        if (it == instantiations.end())
             return prop;
 
-        Property result = prop;
-        if (prop.isShared())
-        {
-            result.readTy = instantiateMember(trait, *prop.readTy, location);
-            result.writeTy = result.readTy;
-            return result;
-        }
-
-        if (prop.readTy)
-            result.readTy = instantiateMember(trait, *prop.readTy, location);
-        if (prop.writeTy)
-            result.writeTy = instantiateMember(trait, *prop.writeTy, location);
-        return result;
+        return instantiateTraitProperty(scope, location, trait, it->second, prop);
     };
 
     for (size_t i = 0; i < traits.size(); ++i)
@@ -1757,17 +1916,30 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
         const ExternType* traitType = get<ExternType>(traits[i].first);
         LUAU_ASSERT(traitType);
 
-        for (TypeId needed : traitType->implementedTraits)
+        for (TypeId listed : traitType->implementedTraits)
         {
-            needed = follow(needed);
+            TypeId needed = traitTemplateOf(listed);
             const ExternType* neededType = get<ExternType>(needed);
             bool implied = neededType && neededType->traitInfo && !neededType->traitInfo->hasParameters;
 
-            if (implied && !seen.contains(needed))
-            {
-                seen.insert(needed);
-                traits.emplace_back(needed, traits[i].second);
-            }
+            if (!implied || seen.contains(needed))
+                continue;
+
+            seen.insert(needed);
+            traits.emplace_back(needed, traits[i].second);
+
+            // `implements Mut<string>`, where `Mut<T>` needs `Base<T>`, implements `Base<string>`. A mismatch with a
+            // listed `Base<...>` is reported by TypeChecker2, once the arguments are solved.
+            auto needing = instantiations.find(traits[i].first);
+            std::vector<TypeId> needingArguments = needing != instantiations.end() ? needing->second.args : std::vector<TypeId>{};
+            std::vector<TypeId> copiedReferences;
+            std::optional<std::vector<TypeId>> arguments =
+                neededTraitTypeArguments(arena, *traitType, needed, needingArguments, copiedReferences);
+            if (!arguments)
+                continue;
+
+            Location location = traits[i].second;
+            instantiations.emplace(needed, instantiateImpliedTrait(scope, location, needed, std::move(*arguments), std::move(copiedReferences)));
         }
     }
 
@@ -1792,7 +1964,7 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
 
     // What the class declares itself, before any trait adds to it, and which trait added each name since
     std::set<Name> own;
-    for (const auto& [name, _] : classType->props)
+    for (const auto& [name, _] : classType->props())
         own.insert(name);
     if (classMetatable)
     {
@@ -1803,7 +1975,7 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
     // The class's own member `name`, as it declares it
     auto ownProperty = [&](const Name& name) -> const Property*
     {
-        if (auto it = classType->props.find(name); it != classType->props.end())
+        if (auto it = classType->props().find(name); it != classType->props().end())
             return &it->second;
         if (classMetatable)
         {
@@ -1817,7 +1989,7 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
     std::set<Name> ownStatics;
     if (classValueType)
     {
-        for (const auto& [name, _] : classValueType->props)
+        for (const auto& [name, _] : classValueType->props())
             ownStatics.insert(name);
     }
 
@@ -1907,7 +2079,7 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
                 list.push_back(traitType);
         };
 
-        for (const auto& [name, _] : traitType->props)
+        for (const auto& [name, _] : traitType->props())
             addProvider(name, /* isStatic */ false);
 
         const TableType* traitMetatable = traitType->metatable ? get<TableType>(follow(*traitType->metatable)) : nullptr;
@@ -1919,7 +2091,7 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
 
         if (const ExternType* traitValueType = classValueTypeOf(traitType))
         {
-            for (const auto& [name, _] : traitValueType->props)
+            for (const auto& [name, _] : traitValueType->props())
                 addProvider(name, /* isStatic */ true);
         }
     }
@@ -2028,12 +2200,12 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
             return false;
         };
 
-        for (const auto& [name, prop] : traitType->props)
+        for (const auto& [name, prop] : traitType->props())
         {
             if (!provide(name, prop))
                 continue;
 
-            classType->props[name] = instantiateProperty(trait, prop, location);
+            classType->props()[name] = instantiateProperty(trait, prop, location);
 
             if (classFields && isTraitField(name))
                 classFields->insert(name);
@@ -2042,21 +2214,21 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
         ExternType* traitValueType = classValueTypeOf(traitType);
         if (traitValueType && classValueType)
         {
-            for (const auto& [name, prop] : traitValueType->props)
+            for (const auto& [name, prop] : traitValueType->props())
             {
                 bool provided = name != "__init" && name != "__create" && info.expectations.count(name) == 0;
                 if (provided && ownStatics.count(name))
                 {
-                    auto own = classValueType->props.find(name);
-                    checkOverrideAccess(name, prop, own != classValueType->props.end() ? &own->second : nullptr, traitType, location);
+                    auto own = classValueType->props().find(name);
+                    checkOverrideAccess(name, prop, own != classValueType->props().end() ? &own->second : nullptr, traitType, location);
                     continue;
                 }
 
                 // the winning provider's static (a method is on the value too; its winner is the same)
                 auto winner = winners.find(name);
                 bool isWinner = winner == winners.end() || winner->second == traitType;
-                if (provided && isWinner && !classValueType->props.count(name))
-                    classValueType->props[name] = instantiateProperty(trait, prop, location);
+                if (provided && isWinner && !classValueType->props().count(name))
+                    classValueType->props()[name] = instantiateProperty(trait, prop, location);
             }
         }
 
@@ -2090,18 +2262,18 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
                 continue;
             }
 
-            auto expectedProp = traitType->props.find(name);
-            auto found = classType->props.find(name);
+            auto expectedProp = traitType->props().find(name);
+            auto found = classType->props().find(name);
             bool inMetatable = classMetatable && classMetatable->props.count(name);
 
-            if (found == classType->props.end() && !inMetatable)
+            if (found == classType->props().end() && !inMetatable)
             {
                 // an optional function the class leaves out reads as nil
-                if (optional && expectedProp != traitType->props.end() && expectedProp->second.readTy)
+                if (optional && expectedProp != traitType->props().end() && expectedProp->second.readTy)
                 {
                     Property nilable = instantiateProperty(trait, expectedProp->second, location);
                     nilable.readTy = makeOption(builtinTypes, *arena, *nilable.readTy);
-                    classType->props[name] = nilable;
+                    classType->props()[name] = nilable;
                     continue;
                 }
 
@@ -2109,7 +2281,7 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
                 continue;
             }
 
-            if (found == classType->props.end() || expectedProp == traitType->props.end())
+            if (found == classType->props().end() || expectedProp == traitType->props().end())
                 continue;
 
             if (found->second.isPrivate != expectedProp->second.isPrivate)
@@ -3553,7 +3725,7 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatDeclareExte
             }
         }
 
-        TableType::Props& props = assignToMetatable ? metatable->props : etv->props;
+        TableType::Props& props = assignToMetatable ? metatable->props : etv->props();
 
         if (props.count(propName) == 0)
         {
@@ -6088,9 +6260,16 @@ TypeId ConstraintGenerator::resolveReferenceType(
             result = freshType(scope, Polarity::Mixed);
     }
 
-    if (is<TypeFunctionInstanceType>(follow(result)))
+    // Luwu: only a reference that names a type function itself is unapplied (`local a: create_table` for `type function
+    // create_table()`). Upstream reports any reference that resolves to an instance, which includes an alias of an applied
+    // one: `type C = class<Box<number>>` then `local d: C`. Upstream's own type functions never reach that, because
+    // `keyof<X>` and friends are expanded through a pending alias reference, while `class<X>` is an instance from the start.
+    const TypeFunctionInstanceType* tfit = get<TypeFunctionInstanceType>(follow(result));
+    if (tfit)
     {
-        reportError(ty->location, UnappliedTypeFunction{});
+        const bool namesTypeFunction = tfit->userFuncName && *tfit->userFuncName == ref->name;
+        if (namesTypeFunction)
+            reportError(ty->location, UnappliedTypeFunction{});
         addConstraint(scope, ty->location, ReduceConstraint{result});
     }
 

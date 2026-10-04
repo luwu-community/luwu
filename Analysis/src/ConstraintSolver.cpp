@@ -290,35 +290,6 @@ size_t HashInstantiationSignature::operator()(const InstantiationSignature& sign
     return hash;
 }
 
-// Like GenericTypeFinder, but also treats an unresolved PendingExpansionType (e.g. a nested
-// generic nominal instantiation like `Box<Box<T>>` where the inner `Box<T>` hasn't been expanded
-// yet) as something that still needs to be found and resolved. See ExternType::hasUnresolvedGenerics.
-struct UnresolvedGenericNominalFinder : GenericTypeFinder
-{
-    using GenericTypeFinder::visit;
-
-    bool visit(TypeId ty, const PendingExpansionType&) override
-    {
-        found = true;
-        return false;
-    }
-
-    // A method with its own generics (e.g. `To` in `function map<To>(self): Option<To>`) doesn't
-    // mean the enclosing extern type still has an unresolved reference to its own generic -- but
-    // the base class's check treats it as "found" regardless, which would permanently mark every
-    // instantiation of the enclosing type as unresolved. Skip such methods instead.
-    bool visit(TypeId ty, const Luau::FunctionType& ftv) override
-    {
-        if (ftv.hasNoFreeOrGenericTypes)
-            return false;
-
-        if (!ftv.generics.empty() || !ftv.genericPacks.empty())
-            return false;
-
-        return !found;
-    }
-};
-
 struct InstantiationQueuer : IterativeTypeVisitor
 {
     ConstraintSolver* solver;
@@ -358,25 +329,12 @@ struct InstantiationQueuer : IterativeTypeVisitor
 
     bool visit(TypeId ty, const ExternType& etv) override
     {
-        if (FFlag::LuwuGenericNominals && etv.hasUnresolvedGenerics)
+        // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): an instantiation is walked through its type arguments, where a pending alias
+        // reference can be. A class's template is not: its own references were queued when it was declared.
+        if (FFlag::LuwuGenericNominals && etv.genericTemplate && etv.hasUnresolvedGenerics)
             return true;
 
         return false;
-    }
-};
-
-// Also expands a table's display arguments, which InstantiationQueuer doesn't visit.
-struct MemberExpansionQueuer : InstantiationQueuer
-{
-    using InstantiationQueuer::InstantiationQueuer;
-    using InstantiationQueuer::visit;
-
-    bool visit(TypeId ty, const TableType& ttv) override
-    {
-        for (TypeId arg : ttv.instantiatedTypeParams)
-            traverse(arg);
-
-        return true;
     }
 };
 
@@ -1113,9 +1071,11 @@ TypeId ConstraintSolver::quantifyOverClassGenerics(TypeId methodTy, const Genera
     if (!ftv)
         return methodTy;
 
+    // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): after the method's own, so explicit type arguments
+    // (`Box.with<<number>>(1)` for `function with<N>(v: N)`) still go to the generics written in its signature
     FunctionType quantified = *ftv;
-    quantified.generics.insert(quantified.generics.begin(), c.classGenerics.begin(), c.classGenerics.end());
-    quantified.genericPacks.insert(quantified.genericPacks.begin(), c.classGenericPacks.begin(), c.classGenericPacks.end());
+    quantified.generics.insert(quantified.generics.end(), c.classGenerics.begin(), c.classGenerics.end());
+    quantified.genericPacks.insert(quantified.genericPacks.end(), c.classGenericPacks.begin(), c.classGenericPacks.end());
     return arena->addType(std::move(quantified));
 }
 
@@ -1471,72 +1431,14 @@ bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNul
 
     auto [typeArguments, packArguments] = saturateArguments(arena, builtinTypes, *tf, petv->typeArguments, petv->packArguments);
 
-    bool sameTypes = std::equal(
-        typeArguments.begin(),
-        typeArguments.end(),
-        tf->typeParams.begin(),
-        tf->typeParams.end(),
-        [](auto&& itp, auto&& p)
-        {
-            return itp == p.ty;
-        }
-    );
-
-    bool samePacks = std::equal(
-        packArguments.begin(),
-        packArguments.end(),
-        tf->typePackParams.begin(),
-        tf->typePackParams.end(),
-        [](auto&& itp, auto&& p)
-        {
-            return itp == p.tp;
-        }
-    );
-
     // If we're instantiating the type with its generic saturatedTypeArguments we are
     // performing the identity substitution. We can just short-circuit and bind
     // to the TypeFun's type.
-    if (sameTypes && samePacks)
+    // Luwu: the check is shared with bindCachedExpansion, and follows the arguments where upstream compares them as is
+    if (isIdentityInstantiation(*tf, typeArguments, packArguments))
     {
         bindResult(tf->type);
         return true;
-    }
-
-    // A generic class can reach this point before its own body is solved. This always happens for a
-    // reference to the class from inside itself, and for a forward reference to a class declared
-    // later in the file. The class's members are then still BlockedTypes. Instantiating would share
-    // them instead of substituting into them, so `Box<number>:get()` would return `T`. So wait for
-    // the members first.
-    //
-    // Waiting cannot deadlock. The class's own annotations became PendingExpansionTypes during
-    // constraint generation, so its members can be solved without this expansion running first.
-    //
-    // On a forced dispatch there is nothing left to wait for. The substitution below then defers each
-    // member that is still blocked (see InstantiateNominalPropConstraint).
-    if (FFlag::LuwuGenericNominals && !force)
-    {
-        if (const ExternType* templateEtv = get<ExternType>(follow(tf->type)))
-        {
-            bool anyBlocked = false;
-
-            for (const auto& [_, prop] : templateEtv->props)
-            {
-                if (prop.readTy && isBlocked(follow(*prop.readTy)))
-                {
-                    block(follow(*prop.readTy), constraint);
-                    anyBlocked = true;
-                }
-
-                if (prop.writeTy && !prop.isShared() && isBlocked(follow(*prop.writeTy)))
-                {
-                    block(follow(*prop.writeTy), constraint);
-                    anyBlocked = true;
-                }
-            }
-
-            if (anyBlocked)
-                return false;
-        }
     }
 
     InstantiationSignature signature{
@@ -1577,13 +1479,33 @@ bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNul
         return true;
     }
 
+    // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): an instantiation of a generic class is its template plus these arguments. Its members
+    // are built on first read, so nothing here copies them or waits for the template's to be solved: a read of a member
+    // the template hasn't finished waits for that member alone (see lookupTableProp).
+    if (FFlag::LuwuGenericNominals && get<ExternType>(follow(tf->type)))
+    {
+        std::vector<TypeId> copiedReferences;
+        TypeId instantiation = instantiateGenericNominal(arena, tf->type, typeArguments, packArguments, copiedReferences);
+        for (TypeId reference : copiedReferences)
+            queueExpansion(reference, constraint->scope, constraint->location);
+
+        // A type argument is resolved without being expanded (`Box<Box<string>>`'s `Box<string>`)
+        InstantiationQueuer queuer{constraint->scope, constraint->location, this};
+        for (TypeId argument : typeArguments)
+            queuer.run(argument);
+        for (TypePackId argument : packArguments)
+            queuer.run(argument);
+
+        instantiatedAliases[signature] = instantiation;
+        bindResult(instantiation);
+        return true;
+    }
+
     // FIXME: this does not actually implement instantiation properly, it puts
     // the values into the _binders_ as well, which is a mess.
     // e.g. `<T...>(T...) -> T...` instantiated with `any` for `T...` becomes
     // `<any>(any) -> any`, where none of these things are _generics_.
     ApplyTypeFunction applyTypeFunction{arena};
-    if (FFlag::LuwuGenericNominals)
-        applyTypeFunction.genericNominalRoot = follow(tf->type);
     for (size_t i = 0; i < typeArguments.size(); ++i)
     {
         applyTypeFunction.typeArguments[tf->typeParams[i].ty] = typeArguments[i];
@@ -1599,9 +1521,6 @@ bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNul
     // DCR, because we do not use free types for forward-declared generic
     // aliases.
 
-    if (FFlag::LuwuGenericNominals && maybeInstantiated)
-        queueCopiedPendingExpansions(applyTypeFunction, constraint);
-
     if (!maybeInstantiated.has_value())
     {
         // TODO (CLI-56761): Report an error unconditionally, not just under this flag.
@@ -1613,95 +1532,6 @@ bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNul
 
     TypeId instantiated = *maybeInstantiated;
     TypeId target = follow(instantiated);
-
-    // Record whether this freshly-instantiated generic nominal type still contains an
-    // unresolved generic anywhere inside it. See ExternType::hasUnresolvedGenerics.
-    if (FFlag::LuwuGenericNominals && get<ExternType>(follow(tf->type)))
-    {
-        // If none of the type arguments were actually used in the template body, substitution
-        // hands back tf->type unchanged (no clone). We still want a distinct object per
-        // instantiation so that e.g. `type SpecificResult = Result<SpecificType>` can display
-        // `Result<SpecificType>` rather than losing that argument -- so clone it here, the same
-        // way the TableType case below does for the analogous "generic saturatedTypeArguments go
-        // unused" situation.
-        if (target == follow(tf->type) && (!tf->typeParams.empty() || !tf->typePackParams.empty()))
-        {
-            CloneState cloneState{builtinTypes};
-            instantiated = shallowClone(target, *arena.get(), cloneState, true);
-            target = follow(instantiated);
-        }
-
-        if (ExternType* targetExternType = getMutable<ExternType>(target); targetExternType && !target->persistent)
-        {
-            // Must run before the marker traversal below, since it inspects instantiatedTypeParams.
-            targetExternType->instantiatedTypeParams = typeArguments;
-            targetExternType->instantiatedTypePackParams = packArguments;
-
-            UnresolvedGenericNominalFinder marker;
-            marker.root = target;
-            marker.traverse(target);
-            targetExternType->hasUnresolvedGenerics = marker.found;
-
-            // On a forced dispatch a member of the template can still be blocked (see the wait
-            // above). Such a member is still a BlockedType here, and the
-            // substitution above copied it by reference, so binding it later would hand this
-            // instantiation the member *without* the type arguments applied. Stand a fresh blocked
-            // type in its place and substitute it once the template's member is known.
-            std::vector<TypeId> templateTypeParams;
-            templateTypeParams.reserve(tf->typeParams.size());
-            for (const GenericTypeDefinition& param : tf->typeParams)
-                templateTypeParams.push_back(param.ty);
-
-            std::vector<TypePackId> templateTypePackParams;
-            templateTypePackParams.reserve(tf->typePackParams.size());
-            for (const GenericTypePackDefinition& param : tf->typePackParams)
-                templateTypePackParams.push_back(param.tp);
-
-            // Structured bindings can't be captured by lambdas before C++20 (older clang rejects it).
-            const std::vector<TypeId>& typeArgumentsRef = typeArguments;
-            const std::vector<TypePackId>& packArgumentsRef = packArguments;
-
-            auto deferProp = [&](TypeId blockedProp)
-            {
-                TypeId placeholder = arena->addType(BlockedType{});
-                NotNull<Constraint> propConstraint = pushConstraint(
-                    constraint->scope,
-                    constraint->location,
-                    InstantiateNominalPropConstraint{
-                        blockedProp,
-                        placeholder,
-                        follow(tf->type),
-                        target,
-                        templateTypeParams,
-                        typeArgumentsRef,
-                        templateTypePackParams,
-                        packArgumentsRef
-                    }
-                );
-                getMutable<BlockedType>(placeholder)->setOwner(propConstraint);
-                return placeholder;
-            };
-
-            for (auto& [_, prop] : targetExternType->props)
-            {
-                const bool shared = prop.isShared();
-
-                if (prop.readTy && isBlocked(follow(*prop.readTy)))
-                {
-                    TypeId placeholder = deferProp(follow(*prop.readTy));
-                    prop.readTy = placeholder;
-                    if (shared)
-                        prop.writeTy = placeholder;
-                }
-
-                if (!shared && prop.writeTy && isBlocked(follow(*prop.writeTy)))
-                    prop.writeTy = deferProp(follow(*prop.writeTy));
-
-                if (prop.readTy)
-                    queuePendingMemberExpansions(*prop.readTy, constraint);
-            }
-        }
-    }
 
     // The application is not recursive, so we need to queue up application of
     // any child type function instantiations within the result in order for it
@@ -1759,6 +1589,15 @@ bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNul
 
         ttv->instantiatedTypeParams = typeArguments;
         ttv->instantiatedTypePackParams = packArguments;
+
+        // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): the type arguments a table keeps for display are resolved without being expanded,
+        // and a class member that holds one (`r: R<A<T>>`, where `type R<T> = { R<T> }` never uses `T`) is built only
+        // once they are (see buildNominalMembers). Upstream leaves them unexpanded: nothing reads them but ToString.
+        if (FFlag::LuwuGenericNominals)
+        {
+            for (TypeId argument : typeArguments)
+                queuer.run(argument);
+        }
     }
 
     bindResult(target);
@@ -1853,6 +1692,80 @@ void ConstraintSolver::fillInDiscriminantTypes(
     }
 }
 
+// Luwu Generic Nominals (rfcs/generics-on-extern-types.md): the nominal a function returns first, if it returns one
+static const ExternType* returnedNominal(const FunctionType* ftv)
+{
+    if (!ftv)
+        return nullptr;
+
+    TypePackId retPack = follow(ftv->retTypes);
+    auto it = begin(retPack);
+    if (it == end(retPack))
+        return nullptr;
+
+    return get<ExternType>(follow(*it));
+}
+
+// Luwu Generic Nominals (rfcs/generics-on-extern-types.md): whether two nominals are the same generic class or extern type,
+// whatever their type arguments: the same declaration (name and definition site) and arity
+static bool namesSameNominal(const ExternType* a, const ExternType* b)
+{
+    return a && b && a->name == b->name && a->definitionModuleName == b->definitionModuleName &&
+           a->definitionLocation == b->definitionLocation && a->instantiatedTypeParams.size() == b->instantiatedTypeParams.size() &&
+           a->instantiatedTypePackParams.size() == b->instantiatedTypePackParams.size();
+}
+
+// Luwu Generic Nominals (rfcs/generics-on-extern-types.md): whether `sub` fits in `super` for patchUnconstrainedGenericsFromExpectedType. A table
+// literal's type is unsealed and its fields are read-write, which subtyping compares invariantly: `{ kind = "NotFound" }`
+// would not fit `{ kind: "NotFound" | "Denied" }`. Nothing else refers to a fresh literal, so its fields are compared as
+// read-only, nested literals included.
+static bool fitsExpectedType(NotNull<Subtyping> subtyping, NotNull<Scope> scope, TypeId sub, TypeId super, int depth = 0)
+{
+    // A literal nested this deep is checked by plain subtyping, which only gets stricter
+    constexpr int kMaxLiteralDepth = 16;
+
+    sub = follow(sub);
+    super = follow(super);
+
+    const TableType* literal = get<TableType>(sub);
+    const TableType* expected = get<TableType>(super);
+    const bool isFreshLiteral = literal && literal->state == TableState::Unsealed && expected && depth < kMaxLiteralDepth;
+    if (!isFreshLiteral)
+        return subtyping->isSubtype(sub, super, scope).isSubtype;
+
+    for (const auto& [name, prop] : literal->props)
+    {
+        auto expectedProp = expected->props.find(name);
+        if (expectedProp == expected->props.end() || !prop.readTy || !expectedProp->second.readTy)
+            return false;
+
+        if (!fitsExpectedType(subtyping, scope, *prop.readTy, *expectedProp->second.readTy, depth + 1))
+            return false;
+    }
+
+    // A field the literal leaves out must accept nil
+    for (const auto& [name, expectedProp] : expected->props)
+    {
+        const bool missing = literal->props.find(name) == literal->props.end();
+        if (missing && expectedProp.readTy && !subtyping->isSubtype(subtyping->builtinTypes->nilType, *expectedProp.readTy, scope).isSubtype)
+            return false;
+    }
+
+    if (literal->indexer)
+    {
+        if (!expected->indexer)
+            return false;
+
+        if (!subtyping->isSubtype(literal->indexer->indexType, expected->indexer->indexType, scope).isSubtype)
+            return false;
+
+        if (!fitsExpectedType(subtyping, scope, literal->indexer->indexResultType, expected->indexer->indexResultType, depth + 1))
+            return false;
+    }
+
+    return true;
+}
+
 // Argument matching alone often leaves a generic nominal type's type argument totally
 // unconstrained (e.g. `E` in `function ok<T, E>(value: T): Result<T, E>` -- nothing about the
 // call site's arguments says anything about `E`). Left alone, that generic defaults to
@@ -1862,27 +1775,17 @@ void ConstraintSolver::fillInDiscriminantTypes(
 // prefer binding it directly to the expected type's corresponding argument instead of
 // defaulting it -- this is the return-type-directed half of bidirectional inference that
 // already exists for lambda arguments and table literals, extended to generic nominal types.
-static void patchUnconstrainedGenericsFromExpectedType(TypeId overloadFn, TypeId expectedType, DenseHashMap<TypeId, TypeId>& genericSubstitutions)
+static void patchUnconstrainedGenericsFromExpectedType(
+    TypeId overloadFn,
+    TypeId expectedType,
+    DenseHashMap<TypeId, TypeId>& genericSubstitutions,
+    NotNull<Subtyping> subtyping,
+    NotNull<Scope> scope
+)
 {
-    const FunctionType* ftv = get<FunctionType>(overloadFn);
-    if (!ftv)
-        return;
-
-    TypePackId retPack = follow(ftv->retTypes);
-    auto it = begin(retPack);
-    if (it == end(retPack))
-        return;
-
-    const ExternType* retEt = get<ExternType>(follow(*it));
+    const ExternType* retEt = returnedNominal(get<FunctionType>(overloadFn));
     const ExternType* expectedEt = get<ExternType>(follow(expectedType));
-    if (!retEt || !expectedEt)
-        return;
-
-    if (retEt->name != expectedEt->name || retEt->definitionModuleName != expectedEt->definitionModuleName ||
-        retEt->definitionLocation != expectedEt->definitionLocation)
-        return;
-
-    if (retEt->instantiatedTypeParams.size() != expectedEt->instantiatedTypeParams.size())
+    if (!namesSameNominal(retEt, expectedEt))
         return;
 
     for (size_t i = 0; i < retEt->instantiatedTypeParams.size(); ++i)
@@ -1910,10 +1813,22 @@ static void patchUnconstrainedGenericsFromExpectedType(TypeId overloadFn, TypeId
         // already run against the old bound by this point, so overriding it discards that check --
         // `Exception("hello")` against an annotated `Exception<number>` stops erroring entirely.
         // Making the expected type win has to happen before arguments are matched, not here.
-        if (!is<NeverType>(follow(ft->lowerBound)) || !is<UnknownType>(follow(ft->upperBound)))
-            continue;
-
+        //
+        // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): a bound the arguments did pin still takes the expected type when it fits inside
+        // it, which keeps the check. `Exception({ kind = "NotFound" })` against `Exception<Data>` pins `T` to the
+        // literal's type, and a nominal's type arguments are invariant, so without this the call can never produce the
+        // `Exception<Data>` the literal was written to make. A literal that doesn't fit `Data` keeps its own type
+        // and is reported against the annotation.
         TypeId expectedArg = expectedEt->instantiatedTypeParams[i];
+        const bool unconstrained = is<NeverType>(follow(ft->lowerBound)) && is<UnknownType>(follow(ft->upperBound));
+        if (!unconstrained)
+        {
+            const bool fitsBelow = fitsExpectedType(subtyping, scope, ft->lowerBound, expectedArg);
+            const bool fitsAbove = subtyping->isSubtype(expectedArg, ft->upperBound, scope).isSubtype;
+            if (!fitsBelow || !fitsAbove)
+                continue;
+        }
+
         ft->lowerBound = expectedArg;
         ft->upperBound = expectedArg;
     }
@@ -1924,16 +1839,7 @@ static void patchUnconstrainedGenericsFromExpectedType(TypeId overloadFn, TypeId
 // `Box<string>`, not a `Box<unknown>`. Runs after patchUnconstrainedGenericsFromExpectedType, so an expected type wins.
 static void patchUnconstrainedGenericsFromDefaults(TypeId overloadFn, NotNull<Scope> scope, DenseHashMap<TypeId, TypeId>& genericSubstitutions)
 {
-    const FunctionType* ftv = get<FunctionType>(overloadFn);
-    if (!ftv)
-        return;
-
-    TypePackId retPack = follow(ftv->retTypes);
-    auto it = begin(retPack);
-    if (it == end(retPack))
-        return;
-
-    const ExternType* retEt = get<ExternType>(follow(*it));
+    const ExternType* retEt = returnedNominal(get<FunctionType>(overloadFn));
     if (!retEt || retEt->instantiatedTypeParams.empty())
         return;
 
@@ -2147,7 +2053,7 @@ bool ConstraintSolver::tryDispatch(const FunctionCallConstraint& c, NotNull<cons
         trackInteriorFreeTypePack(constraint->scope, freeTp);
 
     if (FFlag::LuwuGenericNominals && c.expectedType)
-        patchUnconstrainedGenericsFromExpectedType(overloadToUse, follow(*c.expectedType), u2.genericSubstitutions);
+        patchUnconstrainedGenericsFromExpectedType(overloadToUse, follow(*c.expectedType), u2.genericSubstitutions, subtyping, constraint->scope);
 
     if (FFlag::LuwuGenericNominals)
         patchUnconstrainedGenericsFromDefaults(overloadToUse, constraint->scope, u2.genericSubstitutions);
@@ -2281,29 +2187,14 @@ bool ConstraintSolver::tryDispatch(const FunctionCallConstraint& c, NotNull<cons
 // unrelated nominals would be exactly the confusion nominality exists to prevent.
 static std::optional<TypeId> selectExpectedNominal(const FunctionType* ftv, TypeId expectedType)
 {
-    if (!ftv)
-        return std::nullopt;
-
-    TypePackId retPack = follow(ftv->retTypes);
-    auto it = begin(retPack);
-    if (it == end(retPack))
-        return std::nullopt;
-
-    const ExternType* retEt = get<ExternType>(follow(*it));
+    const ExternType* retEt = returnedNominal(ftv);
     if (!retEt)
         return std::nullopt;
 
-    auto namesSameClass = [&](const ExternType* other)
-    {
-        return other && retEt->name == other->name && retEt->definitionModuleName == other->definitionModuleName &&
-               retEt->definitionLocation == other->definitionLocation &&
-               retEt->instantiatedTypeParams.size() == other->instantiatedTypeParams.size() &&
-               retEt->instantiatedTypePackParams.size() == other->instantiatedTypePackParams.size();
-    };
 
     expectedType = follow(expectedType);
 
-    if (namesSameClass(get<ExternType>(expectedType)))
+    if (namesSameNominal(retEt, get<ExternType>(expectedType)))
         return expectedType;
 
     if (const UnionType* utv = get<UnionType>(expectedType))
@@ -2312,7 +2203,7 @@ static std::optional<TypeId> selectExpectedNominal(const FunctionType* ftv, Type
         for (TypeId option : utv)
         {
             option = follow(option);
-            if (!namesSameClass(get<ExternType>(option)))
+            if (!namesSameNominal(retEt, get<ExternType>(option)))
                 continue;
 
             if (found)
@@ -2334,7 +2225,7 @@ static void collectNominalGenericBindings(const FunctionType* ftv, TypeId expect
     if (!expected)
         return;
 
-    const ExternType* retEt = get<ExternType>(follow(*begin(follow(ftv->retTypes))));
+    const ExternType* retEt = returnedNominal(ftv);
     const ExternType* expectedEt = get<ExternType>(*expected);
     LUAU_ASSERT(retEt && expectedEt);
 
@@ -4164,6 +4055,9 @@ TablePropLookupResult ConstraintSolver::lookupTableProp(
     }
     else if (auto ct = get<ExternType>(subjectType))
     {
+        if (std::optional<TypeId> pending = pendingNominalMember(*ct, propName))
+            return {{*pending}, std::nullopt};
+
         if (auto p = lookupExternTypeProp(ct, propName))
             return {{}, context == ValueContext::RValue ? p->readTy : p->writeTy};
 
@@ -4634,11 +4528,8 @@ void ConstraintSolver::queueCopiedPendingExpansions(const ApplyTypeFunction& sub
     // Substitution copies a reference the template hasn't expanded yet (a trait method returning `List<T>`, with `List`
     // declared below the trait) into a new PendingExpansionType that nothing expands. The copies can sit anywhere, also
     // inside another instantiation the substitution cloned, so take them from the substitution's own record.
-    for (const auto& [original, copy] : substitution.newTypes)
-    {
-        if (get<PendingExpansionType>(copy))
-            queueExpansion(copy, constraint->scope, constraint->location);
-    }
+    for (TypeId copy : copiedPendingExpansions(substitution))
+        queueExpansion(copy, constraint->scope, constraint->location);
 }
 
 bool ConstraintSolver::bindCachedExpansion(TypeId pendingExpansion, NotNull<Scope> scope, const Location& location)
@@ -4667,31 +4558,10 @@ bool ConstraintSolver::bindCachedExpansion(TypeId pendingExpansion, NotNull<Scop
 
     auto [typeArguments, packArguments] = saturateArguments(arena, builtinTypes, *tf, petv->typeArguments, petv->packArguments);
 
-    // The class's own generics as arguments (`List<T>` inside `List<T>`) name the template itself, which
-    // tryDispatch(TypeAliasExpansionConstraint) binds to without caching
-    bool sameTypes = std::equal(
-        typeArguments.begin(),
-        typeArguments.end(),
-        tf->typeParams.begin(),
-        tf->typeParams.end(),
-        [](TypeId argument, const GenericTypeDefinition& param)
-        {
-            return follow(argument) == follow(param.ty);
-        }
-    );
-    bool samePacks = std::equal(
-        packArguments.begin(),
-        packArguments.end(),
-        tf->typePackParams.begin(),
-        tf->typePackParams.end(),
-        [](TypePackId argument, const GenericTypePackDefinition& param)
-        {
-            return follow(argument) == follow(param.tp);
-        }
-    );
-
+    // The class's own generics as arguments name the template itself, which tryDispatch(TypeAliasExpansionConstraint)
+    // binds to without caching
     TypeId instantiation = nullptr;
-    if (sameTypes && samePacks)
+    if (isIdentityInstantiation(*tf, typeArguments, packArguments))
         instantiation = tf->type;
     else if (TypeId* cached = instantiatedAliases.find(InstantiationSignature{*tf, typeArguments, packArguments}))
         instantiation = *cached;
@@ -4702,16 +4572,6 @@ bool ConstraintSolver::bindCachedExpansion(TypeId pendingExpansion, NotNull<Scop
     emplaceType<BoundType>(asMutable(target), instantiation);
     unblock(target, location);
     return true;
-}
-
-void ConstraintSolver::queuePendingMemberExpansions(TypeId memberTy, NotNull<const Constraint> constraint)
-{
-    // A member that is itself pending is deferred by the caller instead.
-    if (get<PendingExpansionType>(follow(memberTy)))
-        return;
-
-    MemberExpansionQueuer queuer{constraint->scope, constraint->location, this};
-    queuer.run(memberTy);
 }
 
 void ConstraintSolver::reportInfiniteSelfReference(TypeId reference, TypeId classTemplate, const Location& expansionLocation)

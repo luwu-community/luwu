@@ -1,6 +1,7 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/TypeChecker2.h"
 
+#include "Luau/ApplyTypeFunction.h"
 #include "Luau/Ast.h"
 #include "Luau/AstUtils.h"
 #include "Luau/AstQuery.h"
@@ -961,13 +962,43 @@ static bool returnsOnlyNil(TypePackId tp)
 // value that is nil. Lua hides the difference in the common case -- `local x = f()` gives nil either way --
 // and upstream reports it as "Expected this to be 'nil', but got '()'", which doesn't say the two differ.
 // Returns the whole message, or nullopt when the mismatch isn't between something and nothing.
+static std::string valueCount(size_t count)
+{
+    if (count == 1)
+        return "1 value";
+    return std::to_string(count) + " values";
+}
+
+// Luwu (helpful subtyping errors): two return lists of different lengths. Upstream prints both lists in full ("Expected
+// this to be 'number', but got 'number, string'"), which hides the count among the types: a function-typed value makes
+// the two sides near-identical walls of text that differ by a `, {T}` at the end.
+static std::optional<std::string> explainReturnLengthMismatch(TypePackId givenTp, TypePackId wantedTp)
+{
+    // A variadic list, or one ending in a call or `...`, can make up the difference
+    if (!finite(givenTp) || !finite(wantedTp))
+        return std::nullopt;
+
+    const size_t wanted = size(wantedTp);
+    const size_t given = size(givenTp);
+    if (wanted == given)
+        return std::nullopt;
+
+    std::string message = "Expected this function to return " + valueCount(wanted) + ", but it returns " + valueCount(given) + ".\n";
+    if (given > wanted)
+        message += "Consider annotating every value it returns (e.g. ': (A, B)'), or removing the extra ones.";
+    else
+        message += "Consider returning every value the annotation lists, or removing the ones it doesn't from the annotation.";
+
+    return message;
+}
+
 static std::optional<std::string> explainReturnCountMismatch(TypePackId givenTp, TypePackId wantedTp)
 {
     const bool wantsNothing = returnsNoValues(wantedTp);
     const bool givesNothing = returnsNoValues(givenTp);
 
     if (wantsNothing == givesNothing)
-        return std::nullopt;
+        return explainReturnLengthMismatch(givenTp, wantedTp);
 
     if (wantsNothing)
     {
@@ -1738,8 +1769,8 @@ static Location traitRefLocation(NotNull<Scope> scope, AstStatClass* stat, const
 // after `self`, since the trait's code constructs it with those; parameters beyond them must accept nil.
 void TypeChecker2::checkTraitConstructorExpectation(AstStatClass* stat, const ExternType* classType, const ExternType* traitType)
 {
-    auto expectedInit = traitType->props.find("__init");
-    bool expectsInit = traitType->traitInfo->expectations.count("__init") && expectedInit != traitType->props.end() && expectedInit->second.readTy;
+    auto expectedInit = traitType->props().find("__init");
+    bool expectsInit = traitType->traitInfo->expectations.count("__init") && expectedInit != traitType->props().end() && expectedInit->second.readTy;
     const FunctionType* expected = expectsInit ? get<FunctionType>(follow(*expectedInit->second.readTy)) : nullptr;
 
     const Klass* klass = classType->relation ? get_if<Klass>(&*classType->relation) : nullptr;
@@ -1780,7 +1811,7 @@ TypeId TypeChecker2::withoutSelfParameter(TypeId fnTy)
 // Luwu Traits (rfcs/classes/traits.md): a member of a class or trait type, on the type itself or, for a method, in its metatable
 static const Property* findClassMember(const ExternType* type, const Name& name)
 {
-    if (auto it = type->props.find(name); it != type->props.end())
+    if (auto it = type->props().find(name); it != type->props().end())
         return &it->second;
 
     const TableType* metatable = type->metatable ? get<TableType>(follow(*type->metatable)) : nullptr;
@@ -1839,6 +1870,97 @@ void TypeChecker2::checkTraitFieldExpectations(AstStatClass* stat)
     }
 }
 
+// Luwu Traits (rfcs/classes/traits.md): "'C' implements 'Base<string>', but 'Mut<number>' needs 'Base<number>'"
+static std::string neededTraitMismatchMessage(
+    const std::string& className,
+    TypeId implemented,
+    TypeId needing,
+    const std::string& neededName,
+    const std::vector<TypeId>& neededArguments
+)
+{
+    std::string needed = neededName + "<";
+    for (size_t i = 0; i < neededArguments.size(); ++i)
+        needed += (i > 0 ? ", " : "") + toString(neededArguments[i]);
+    needed += ">";
+
+    return format(
+        "'%s' implements '%s', but '%s' needs '%s'",
+        className.c_str(),
+        toString(implemented).c_str(),
+        toString(needing).c_str(),
+        needed.c_str()
+    );
+}
+
+void TypeChecker2::checkNeededTraitArguments(AstStatClass* stat)
+{
+    NotNull<Scope> scope{findInnermostScope(stat->location)};
+    std::optional<TypeFun> classTypeFun = scope->lookupType(stat->name->name.value);
+    const ExternType* classType = classTypeFun ? get<ExternType>(follow(classTypeFun->type)) : nullptr;
+    if (!classType)
+        return;
+
+    // The class's instantiation of the generic trait `traitTemplate`, or nullptr when it implements none
+    auto implementedInstantiation = [&](TypeId traitTemplate) -> TypeId
+    {
+        for (TypeId trait : classType->implementedTraits)
+        {
+            const ExternType* traitType = get<ExternType>(follow(trait));
+            if (traitType && traitType->genericTemplate && traitTemplateOf(trait) == traitTemplate)
+                return follow(trait);
+        }
+
+        return nullptr;
+    };
+
+    for (TypeId trait : classType->implementedTraits)
+    {
+        trait = follow(trait);
+        const ExternType* traitType = get<ExternType>(trait);
+        if (!traitType || !traitType->traitInfo)
+            continue;
+
+        const ExternType* traitTemplate = get<ExternType>(traitTemplateOf(trait));
+        if (!traitTemplate)
+            continue;
+
+        for (const auto& [neededTrait, _] : traitType->traitInfo->neededTypeArguments)
+        {
+            TypeId needed = follow(neededTrait);
+            TypeId implemented = implementedInstantiation(needed);
+            const ExternType* implementedType = implemented ? get<ExternType>(implemented) : nullptr;
+            const ExternType* neededType = get<ExternType>(needed);
+            if (!implementedType || !neededType)
+                continue;
+
+            std::vector<TypeId> copiedReferences;
+            std::optional<std::vector<TypeId>> arguments = neededTraitTypeArguments(
+                module->internalTypes.get(), *traitTemplate, needed, traitType->instantiatedTypeParams, copiedReferences
+            );
+            if (!arguments || arguments->size() != implementedType->instantiatedTypeParams.size())
+                continue;
+
+            // a nominal's type parameters are invariant, so each argument has to be equivalent
+            bool matches = true;
+            for (size_t i = 0; i < arguments->size() && matches; ++i)
+            {
+                TypeId expected = (*arguments)[i];
+                TypeId found = implementedType->instantiatedTypeParams[i];
+                bool narrower = subtyping->isSubtype(expected, found, scope).isSubtype;
+                bool wider = subtyping->isSubtype(found, expected, scope).isSubtype;
+                matches = narrower && wider;
+            }
+
+            if (!matches)
+            {
+                std::string message = neededTraitMismatchMessage(stat->name->name.value, implemented, trait, neededType->name, *arguments);
+                reportError(GenericError{message}, traitRefLocation(scope, stat, traitType));
+            }
+        }
+    }
+}
+
 void TypeChecker2::checkTraitArguments(AstStatClass* stat)
 {
     NotNull<Scope> scope{findInnermostScope(stat->location)};
@@ -1860,8 +1982,8 @@ void TypeChecker2::checkTraitArguments(AstStatClass* stat)
 
         for (size_t i = 0; i < ref.args.size && i < params.size(); ++i)
         {
-            auto field = traitType->props.find(params[i].name);
-            if (field != traitType->props.end() && field->second.readTy)
+            auto field = traitType->props().find(params[i].name);
+            if (field != traitType->props().end() && field->second.readTy)
                 testIsSubtype(lookupType(ref.args.data[i]), *field->second.readTy, ref.args.data[i]->location);
         }
     }
@@ -2019,11 +2141,14 @@ void TypeChecker2::checkTraitOverrides(AstStatClass* stat)
     while (!pending.empty())
     {
         const ExternType* current = get<ExternType>(follow(pending.back()));
+        // a trait needed with type arguments is listed as an instantiation (`Base<T>`), once per trait listing it
+        const ExternType* currentTrait = get<ExternType>(traitTemplateOf(pending.back()));
         pending.pop_back();
-        if (!current || !current->traitInfo || visited.contains(current) || current == traitType)
+
+        if (!current || !current->traitInfo || visited.contains(currentTrait) || currentTrait == traitType)
             continue;
 
-        visited.insert(current);
+        visited.insert(currentTrait);
         needed.push_back(current);
         pending.insert(pending.end(), current->implementedTraits.begin(), current->implementedTraits.end());
     }
@@ -2244,7 +2369,7 @@ void TypeChecker2::visit(AstStatClass* stat)
         bool traitsAddMembers = false;
         if (objectType && !objectType->implementedTraits.empty())
         {
-            for (const auto& [_, prop] : objectType->props)
+            for (const auto& [_, prop] : objectType->props())
                 traitsAddMembers |= !prop.isPrivate;
 
             const TableType* metatable = objectType->metatable ? get<TableType>(follow(*objectType->metatable)) : nullptr;
@@ -2373,6 +2498,7 @@ void TypeChecker2::visit(AstStatClass* stat)
     {
         checkTraitFieldExpectations(stat);
         checkTraitArguments(stat);
+        checkNeededTraitArguments(stat);
     }
 
     for (const auto& member : stat->members)
@@ -3198,8 +3324,8 @@ void TypeChecker2::checkPrivatePropertyAccess(TypeId tableTy, const std::string&
     const ExternType* cls = get<ExternType>(follow(tableTy));
     while (cls)
     {
-        auto it = cls->props.find(prop);
-        if (it != cls->props.end())
+        auto it = cls->props().find(prop);
+        if (it != cls->props().end())
         {
             // a class's functions are its only read-only members; its fields are always read-write,
             // even `const` ones (see ConstraintGenerator)
@@ -3344,8 +3470,8 @@ void TypeChecker2::checkConstPropertyAssignment(
     const ExternType* cls = get<ExternType>(follow(tableTy));
     while (cls)
     {
-        auto it = cls->props.find(prop);
-        if (it != cls->props.end())
+        auto it = cls->props().find(prop);
+        if (it != cls->props().end())
         {
             if (it->second.isFinal)
                 reportError(GenericError{format("'%s' is a final field of '%s' and can't be assigned", prop.c_str(), cls->name.c_str())}, location);
@@ -3375,8 +3501,8 @@ void TypeChecker2::checkPrivateConstructorAccess(TypeId classTy, const Location&
     if (!instanceCls)
         return;
 
-    auto it = instanceCls->props.find("__init");
-    if (it == instanceCls->props.end())
+    auto it = instanceCls->props().find("__init");
+    if (it == instanceCls->props().end())
         return;
 
     // Luwu Traits (rfcs/classes/traits.md): the code of a trait the class implements may construct it too, which is what
@@ -6661,7 +6787,7 @@ void TypeChecker2::diagnoseMissingTableKey(UnknownProperty* utk, TypeErrorData& 
     {
         while (etv)
         {
-            accumulate(etv->props);
+            accumulate(etv->props());
 
             if (!etv->parent)
                 break;

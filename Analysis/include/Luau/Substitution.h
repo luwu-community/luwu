@@ -174,6 +174,21 @@ struct Tarjan
     virtual bool ignoreChildrenVisit(TypeId ty);
     virtual bool ignoreChildrenVisit(TypePackId ty);
 
+    // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): whether an instantiation of a generic class (`List<number>`) brings its template and
+    // class value along as children. Only a copy into another arena needs them: everything else changes an
+    // instantiation through its type arguments alone.
+    virtual bool substitutesGenericTemplates() const
+    {
+        return false;
+    }
+
+    // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): where a copied instantiation builds its members, when
+    // that isn't the arena of the copy: one other modules import is read from their threads (see SharedNominalArena)
+    virtual std::shared_ptr<SharedNominalArena> sharedNominalArena()
+    {
+        return nullptr;
+    }
+
     // Subclasses should say which vertices are dirty,
     // and what to do with dirty vertices.
     virtual bool isDirty(TypeId ty) = 0;

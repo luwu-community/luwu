@@ -30,7 +30,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "lib_documentation_symbols")
         }
         else if (const ExternType* etv = get<ExternType>(binding.typeId))
         {
-            props = &etv->props;
+            props = &etv->props();
         }
 
         if (props)

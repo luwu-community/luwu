@@ -2502,7 +2502,7 @@ TypeId Normalizer::intersectTraits(TypeId here, TypeId there)
             name += " & ";
         name += traitType->name;
 
-        for (const auto& [propName, prop] : traitType->props)
+        for (const auto& [propName, prop] : traitType->props())
             props.try_emplace(propName, prop);
     }
 
@@ -2629,9 +2629,9 @@ void Normalizer::intersectExternTypesWithShape(NormalizedExternType& heres, Type
             TypeId hereTy = *it;
             ExternType* externTy = getMutable<ExternType>(hereTy);
 
-            auto found = externTy->props.find(name);
+            auto found = externTy->props().find(name);
             // if the property isn't present, we can move onto the next property since it's a fine extension.
-            if (found == externTy->props.end())
+            if (found == externTy->props().end())
             {
                 isCoincident = false;
                 continue;

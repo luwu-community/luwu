@@ -987,9 +987,9 @@ void createSomeExternTypes(Frontend& frontend)
     TypeId parentType = arena.addType(ExternType{"Parent", {}, frontend.builtinTypes->externType, std::nullopt, {}, nullptr, "Test", {}});
 
     ExternType* parentExternType = getMutable<ExternType>(parentType);
-    parentExternType->props["method"] = {makeFunction(arena, parentType, {}, {})};
+    parentExternType->props()["method"] = {makeFunction(arena, parentType, {}, {})};
 
-    parentExternType->props["virtual_method"] = {makeFunction(arena, parentType, {}, {})};
+    parentExternType->props()["virtual_method"] = {makeFunction(arena, parentType, {}, {})};
 
     addGlobalBinding(globals, "Parent", {parentType});
     moduleScope->exportedTypeBindings["Parent"] = TypeFun{{}, parentType};

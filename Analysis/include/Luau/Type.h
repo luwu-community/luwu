@@ -18,6 +18,7 @@
 #include <atomic>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <string>
@@ -603,6 +604,29 @@ struct Klass
 
 using NominalRelation = Variant<Obj, Klass>;
 
+struct SharedNominalArena;
+
+// Luwu Generic Nominals (rfcs/generics-on-extern-types.md): what an instantiation of a generic class (`List<number>`) needs to build its members
+// from its template. Set while the members haven't been built. See ExternType::props.
+struct LazyNominalMembers
+{
+    // The instantiation the members belong to; the template maps onto it, so `self: List<T>` becomes `List<number>`
+    TypeId instantiation = nullptr;
+    // Where the members are allocated: the module's own arena while it is checked, or for an instantiation it exports,
+    // an arena all of them share, which the modules that import them build into from their own threads
+    TypeArena* arena = nullptr;
+    std::shared_ptr<SharedNominalArena> sharedArena;
+    // The members built so far. One the solver hasn't finished in the template is built on a later read.
+    std::set<Name> builtNames;
+    // Set once every member is built, after which they never change. Modules that import an instantiation read it from
+    // different threads: the members are written under `mutex` and published by this.
+    std::atomic<bool> built{false};
+    std::mutex mutex;
+};
+
+// Luwu Generic Nominals (rfcs/generics-on-extern-types.md): builds the members of an instantiation of a generic class (see ExternType::props)
+void buildNominalMembers(const ExternType& etv);
+
 /** The type of an external userdata exposed to Luau.
  *
  * Extern types behave like tables in many ways, but there are some important differences:
@@ -616,7 +640,46 @@ struct ExternType
     using Props = TableType::Props;
 
     Name name;
-    Props props;
+
+    // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): the members. An instantiation of a generic class (`List<number>`) is its template and
+    // its type arguments; its members are substituted from the template's on first read and kept. Every `List<U>` in a
+    // signature (`map<U>(...): List<U>`) is an instantiation, so building them eagerly would copy all of List's members
+    // once per generic method: n instantiations of n members each, almost none of them ever read.
+    Props& props();
+    const Props& props() const;
+    // The members without building them: empty for an instantiation nothing has read yet. For code that walks types
+    // (visitors, substitution), which reach an instantiation's contents through its type arguments instead.
+    const Props& builtProps() const
+    {
+        return memberStorage;
+    }
+
+    // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): set on an instantiation of a generic class, to the class's template
+    std::optional<TypeId> genericTemplate;
+
+    // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): whether the members still have to be built (see props)
+    bool hasUnbuiltMembers() const
+    {
+        return lazyMembers && !lazyMembers->built.load(std::memory_order_acquire);
+    }
+
+    // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): the template of a generic class or extern type (`Box`, written `Box<T>` in its own
+    // members), whose type arguments are its own generics
+    bool isGenericTemplate() const
+    {
+        return !genericTemplate && (!instantiatedTypeParams.empty() || !instantiatedTypePackParams.empty());
+    }
+
+    // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): an instantiation or a template, either of which changes
+    // through its type arguments when substituted into
+    bool isGenericNominal() const
+    {
+        return genericTemplate || isGenericTemplate();
+    }
+    // Written only while the instantiation is made or copied, before anything else can read it
+    std::shared_ptr<LazyNominalMembers> lazyMembers;
+    mutable Props memberStorage;
+
     std::optional<TypeId> parent;
 
     // The root of this type's nominal hierarchy: `userdata` for an embedder
@@ -681,6 +744,9 @@ struct ExternType
         // The members `props` has from the traits this one needs (directly or not): every implementing class implements
         // those too, so a trait-typed value has their members. They stay those traits' members everywhere else.
         std::set<Name> fromNeeds;
+        // The type arguments each `needs` entry gives its trait (`needs Base<T>`), written in this trait's own generics.
+        // A class implementing this trait with type arguments substitutes them in, to get the instantiation it implements.
+        std::vector<std::pair<TypeId, std::vector<TypeId>>> neededTypeArguments;
         // `class<Trait>`: the class value of any class implementing the trait. Callable when the trait expects `__init`,
         // and carrying the trait's functions, expected ones included. Implementing classes' values are subtypes of it.
         std::optional<TypeId> implementorClass;

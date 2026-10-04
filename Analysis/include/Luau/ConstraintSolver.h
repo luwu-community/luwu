@@ -118,7 +118,7 @@ struct ConstraintSolver
 
     // Memoized instantiations of type aliases.
     DenseHashMap<InstantiationSignature, TypeId, HashInstantiationSignature> instantiatedAliases{{}};
-    // Luwu Classes (rfcs/classes): pending expansions already bound or given a constraint by queueExpansion
+    // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): pending expansions already bound or given a constraint by queueExpansion
     DenseHashSet<TypeId> queuedExpansions{nullptr};
     // Breadcrumbs for where a free type's upper bound was expanded. We use
     // these to provide more helpful error messages when a free type is solved
@@ -349,24 +349,13 @@ public:
 
     void reportError(TypeErrorData&& data, const Location& location);
     void reportError(TypeError e);
-    // Luwu Classes (rfcs/classes): queues expansion of the pending aliases inside a generic class's
-    // member that instantiating the class copied and that nothing else will expand.
-    //
-    // Instantiating a generic class substitutes the type arguments into each member. A member can
-    // still contain a pending (unexpanded) alias at that point. The substitution copies that alias with
-    // the new arguments, and nothing else queues an expansion for the copy. Two shapes hit this:
-    //  - an optional reference to the class itself (`sw: S<U, T>?`);
-    //  - the type arguments a table records for display (`instantiatedTypeParams`), e.g. `r: R<A<T>>`
-    //    inside `class A<T>`, where `type R<T> = { R<T> }` never uses `T`.
-    // A member that is itself a pending expansion is not handled here; the caller defers it.
-    void queuePendingMemberExpansions(TypeId memberTy, NotNull<const Constraint> constraint);
-    // Luwu Classes (rfcs/classes): binds a pending expansion whose instantiation the solver already made, so
+    // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): binds a pending expansion whose instantiation the solver already made, so
     // queueing it needs no constraint. Instantiating a generic class copies every reference to another instantiation
     // in its members, and most copies name one that exists. Returns false when there is none yet.
     bool bindCachedExpansion(TypeId pendingExpansion, NotNull<Scope> scope, const Location& location);
-    // Luwu Classes (rfcs/classes): expands a pending expansion once, through the cache when possible
+    // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): expands a pending expansion once, through the cache when possible
     void queueExpansion(TypeId pendingExpansion, NotNull<Scope> scope, const Location& location);
-    // Luwu Classes (rfcs/classes): queues every pending expansion `substitution` copied while instantiating a generic
+    // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): queues every pending expansion `substitution` copied while instantiating a generic
     // class or one of its members
     void queueCopiedPendingExpansions(const ApplyTypeFunction& substitution, NotNull<const Constraint> constraint);
     // Luwu Classes (rfcs/classes): a generic class's method as read through the class value. Nothing
