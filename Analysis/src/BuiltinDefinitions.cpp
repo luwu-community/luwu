@@ -363,9 +363,9 @@ void makeVectorMetatable(NotNull<BuiltinTypes> builtinTypes)
     if (vectorCls->metatable)
         return;
 
-    vectorCls->props["x"] = Property::readonly(numberType);
-    vectorCls->props["y"] = Property::readonly(numberType);
-    vectorCls->props["z"] = Property::readonly(numberType);
+    vectorCls->props()["x"] = Property::readonly(numberType);
+    vectorCls->props()["y"] = Property::readonly(numberType);
+    vectorCls->props()["z"] = Property::readonly(numberType);
 
     vectorCls->metatable = arena->addType(TableType{{}, std::nullopt, TypeLevel{}, TableState::Sealed});
     TableType* metatableTy = getMutable<TableType>(*vectorCls->metatable);
@@ -1881,7 +1881,7 @@ bool MagicClassFields::infer(const MagicFunctionCallContext& context)
     TableType::Props resultProps;
     bool complete = true;
 
-    for (const auto& [name, prop] : instanceEtv->props)
+    for (const auto& [name, prop] : instanceEtv->props())
     {
         if (fieldUserData->fieldNames.count(name) == 0)
             continue;

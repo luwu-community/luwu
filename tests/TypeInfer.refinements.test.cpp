@@ -96,7 +96,7 @@ struct RefinementExternTypeFixture : BuiltinsFixture
 
         unfreeze(arena);
         TypeId vec3 = arena.addType(ExternType{"Vector3", {}, rootSuper, std::nullopt, {}, nullptr, "Test", {}});
-        getMutable<ExternType>(vec3)->props = {
+        getMutable<ExternType>(vec3)->props() = {
             {"X", Property{f.builtinTypes->numberType}},
             {"Y", Property{f.builtinTypes->numberType}},
             {"Z", Property{f.builtinTypes->numberType}},
@@ -109,7 +109,7 @@ struct RefinementExternTypeFixture : BuiltinsFixture
         TypeId isA = arena.addType(FunctionType{isAParams, isARets});
         getMutable<FunctionType>(isA)->magic = std::make_shared<MagicInstanceIsA>();
 
-        getMutable<ExternType>(inst)->props = {
+        getMutable<ExternType>(inst)->props() = {
             {"Name", Property{f.builtinTypes->stringType}},
             {"IsA", Property{isA}},
         };
@@ -117,20 +117,20 @@ struct RefinementExternTypeFixture : BuiltinsFixture
         TypeId scriptConnection = arena.addType(ExternType("ExternScriptConnection", {}, inst, std::nullopt, {}, nullptr, "Test", {}));
         TypePackId disconnectArgs = arena.addTypePack({scriptConnection});
         TypeId disconnect = arena.addType(FunctionType{disconnectArgs, f.builtinTypes->emptyTypePack});
-        getMutable<ExternType>(scriptConnection)->props = {
+        getMutable<ExternType>(scriptConnection)->props() = {
             {"Disconnect", Property{disconnect}},
         };
 
         TypeId folder = f.globals.globalTypes.addType(ExternType{"Folder", {}, inst, std::nullopt, {}, nullptr, "Test", {}});
         TypeId part = f.globals.globalTypes.addType(ExternType{"Part", {}, inst, std::nullopt, {}, nullptr, "Test", {}});
-        getMutable<ExternType>(part)->props = {
+        getMutable<ExternType>(part)->props() = {
             {"Position", Property{vec3}},
         };
 
         TypeId optionalPart = arena.addType(UnionType{{part, f.builtinTypes->nilType}});
         TypeId weldConstraint =
             getFrontend().globals.globalTypes.addType(ExternType{"WeldConstraint", {}, inst, std::nullopt, {}, nullptr, "Test", {}});
-        getMutable<ExternType>(weldConstraint)->props = {
+        getMutable<ExternType>(weldConstraint)->props() = {
             {"Part0", Property{optionalPart}},
             {"Part1", Property{optionalPart}},
         };

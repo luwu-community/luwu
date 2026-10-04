@@ -326,6 +326,9 @@ private:
     LUAU_NOINLINE void prototypeTypeDefinitions(const ScopePtr& scope, AstStatBlock* block);
     // Luwu Traits (rfcs/classes/traits.md): after the traits of a block are prototyped, record the traits each one needs.
     void linkTraitNeeds(const ScopePtr& scope, const AstArray<AstStat*>& statements);
+    // Luwu Traits (rfcs/classes/traits.md): record the type arguments `trait`'s `needs` entry `ref` gives the trait it
+    // names (`needs Base<T>`), on `traitType`
+    void recordNeededTypeArguments(AstStatClass* trait, const AstClassTraitRef& ref, TypeId needed, ExternType* traitType);
     // Luwu Traits (rfcs/classes/traits.md): the trait an `implements`/`needs` entry names, as its object type, or nullptr.
     TypeId resolveTraitRef(const ScopePtr& scope, const AstClassTraitRef& ref);
     // Luwu Traits (rfcs/classes/traits.md): type calling `class<Trait>` from the trait's expected `__init` signature.
@@ -344,6 +347,30 @@ private:
         std::vector<TypeId> args;
     };
     std::optional<TraitInstantiation> instantiateTraitRef(const ScopePtr& scope, const AstClassTraitRef& ref);
+    // Luwu Traits (rfcs/classes/traits.md): `trait` instantiated with `args`, for a trait implied through `needs`.
+    // `copiedReferences` are alias references substituting the arguments copied, which this expands with the rest.
+    TraitInstantiation instantiateImpliedTrait(
+        const ScopePtr& scope,
+        Location location,
+        TypeId trait,
+        std::vector<TypeId> args,
+        std::vector<TypeId> copiedReferences
+    );
+    // Luwu Traits (rfcs/classes/traits.md): `ty`, a type from `trait`'s declaration, as `instantiation` of it sees it
+    TypeId instantiateTraitMember(
+        const ScopePtr& scope,
+        Location location,
+        TypeId trait,
+        const TraitInstantiation& instantiation,
+        TypeId ty
+    );
+    Property instantiateTraitProperty(
+        const ScopePtr& scope,
+        Location location,
+        TypeId trait,
+        const TraitInstantiation& instantiation,
+        const Property& prop
+    );
     // Luwu Traits (rfcs/classes/traits.md): checks the arguments of each `implements` entry against its trait's parameters,
     // in the scope the class's field initializers are checked in
     void checkTraitArguments(const ScopePtr& initializerScope, AstStatClass* cls);

@@ -1,6 +1,7 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/Module.h"
 
+#include "Luau/ApplyTypeFunction.h"
 #include "Luau/Clone.h"
 #include "Luau/Common.h"
 #include "Luau/ConstraintGenerator.h"
@@ -159,6 +160,22 @@ struct ClonePublicInterface : Substitution
     {
         return ty->owningArena != module->internalTypes.get();
     }
+
+    // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): an exported instantiation needs its template and class
+    // value in the interface too, and builds its members for whichever importing module reads them first
+    bool substitutesGenericTemplates() const override
+    {
+        return true;
+    }
+
+    std::shared_ptr<SharedNominalArena> sharedNominalArena() override
+    {
+        if (!nominalArena)
+            nominalArena = std::make_shared<SharedNominalArena>();
+        return nominalArena;
+    }
+
+    std::shared_ptr<SharedNominalArena> nominalArena;
 
     bool ignoreChildrenVisit(TypePackId tp) override
     {
