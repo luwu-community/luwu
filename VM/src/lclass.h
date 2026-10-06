@@ -227,7 +227,7 @@ LUAI_FUNC void luaR_addcompiledtraitcopy(lua_State* L, LuauClass* classdef, cons
 /**
  * Luwu Traits (rfcs/classes/traits.md): computes the fields `object` gets from the traits its class implements that
  * don't have a constant default (those are already in place, see luaR_newobject). Calls the class's copy of each
- * argument-less trait's `__traitinit` with the object, then the class's `__inittraits`, which evaluates the
+ * argument-less trait's `__traitinit` with the object, then the class's `__implements`, which evaluates the
  * `implements` arguments from the `nargs` constructor arguments at `args` and calls the remaining copies with them.
  * The calls can't yield. `object` must be anchored where the collector can see it.
  */

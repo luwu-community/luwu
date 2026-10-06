@@ -218,7 +218,7 @@ struct Compiler
         , classPrimaryInitFn(nullptr)
         , traitInitFn(nullptr)
         , traitNeedsFn(nullptr)
-        , classInitTraitsFn(nullptr)
+        , classImplementsFn(nullptr)
         , classPrimaryInitCost(nullptr)
         , classPodConstDefaults(nullptr)
         , classMethodSelfChecks(nullptr)
@@ -3800,14 +3800,17 @@ struct Compiler
         return copy;
     }
 
-    // Luwu Traits (rfcs/classes/traits.md): gives each class its own compiled copy (TraitFunctionCopy) of the functions of
-    // the traits it implements that are declared earlier in this file. The copies are ordinary protos of the module, so
-    // native code compiles them with the rest. The copies the VM makes for other traits are never natively compiled.
-    // - Everything a trait defines is copied, overridden defaults included, because `Trait.method(obj)` runs the class's
-    //   copy of the trait's version. Expected functions have no body, and a factory's `__create` belongs to the trait.
-    // - The VM still decides which copy goes where, so overriding, `final` and clashes work exactly as they do for a
-    //   trait from another module.
-    // - Classes and traits are only declared at the top level, so this only looks there.
+    // Luwu Traits (rfcs/classes/traits.md): for each class, creates its copy of every function it gets from a trait declared
+    // earlier in this file (classTraitCopies), so those copies are compiled ahead of time and can run natively.
+    // - Why: each class implementing a trait runs its own copy of the trait's functions, as a method of that class. Without
+    //   this, the VM makes those copies at runtime (luaR_copytraitfunction), and a VM-made copy is never natively compiled.
+    //   A copy made here is an ordinary proto of this module, compiled as a method of its class: `self` is checked against
+    //   that class, and the class's own fields are at offsets the compiler knows.
+    // - The VM still decides which member each copy becomes (LBC_NEWCLASSMEMBER_TRAITCOPY), so overriding, `final` and
+    //   name clashes behave exactly as they do for a trait from another module.
+    // - Copies every function with a body, including defaults the class overrides: an override can still call the trait's
+    //   version with `Trait.method(self)`, and that runs the trait's code through this copy. Skips `expect` functions
+    //   (no body) and a factory's `__create`, which belongs to the trait, not the class.
     void buildTraitFunctionCopies(AstStatBlock* root, Allocator& allocator, std::vector<AstExprFunction*>& functionsToCompile)
     {
         for (AstStat* stat : root->body)
@@ -4095,7 +4098,7 @@ struct Compiler
 
         registerSynthesizedMember(traitInitFn, "__traitinit");
         registerSynthesizedMember(traitNeedsFn, "__needs");
-        registerSynthesizedMember(classInitTraitsFn, "__inittraits");
+        registerSynthesizedMember(classImplementsFn, "__implements");
 
         // Luwu Traits (rfcs/classes/traits.md): the class's copies of the functions of its same-file traits, which
         // implementing uses instead of copying those functions at runtime
@@ -8013,7 +8016,7 @@ struct Compiler
         DenseHashMap<AstStatClass*, AstExprFunction*>& primaryInitFn;
         DenseHashMap<AstStatClass*, AstExprFunction*>& traitInitFn;
         DenseHashMap<AstStatClass*, AstExprFunction*>& traitNeedsFn;
-        DenseHashMap<AstStatClass*, AstExprFunction*>& classInitTraitsFn;
+        DenseHashMap<AstStatClass*, AstExprFunction*>& classImplementsFn;
         DenseHashMap<AstStatClass*, std::vector<AstExpr*>>& podConstDefaults;
         DenseHashMap<AstExprFunction*, SelfClassCheck>& methodSelfChecks;
         DenseHashMap<AstExprFunction*, AstStatClass*>& methodOwner;
@@ -8029,7 +8032,7 @@ struct Compiler
             DenseHashMap<AstStatClass*, AstExprFunction*>& primaryInitFn,
             DenseHashMap<AstStatClass*, AstExprFunction*>& traitInitFn,
             DenseHashMap<AstStatClass*, AstExprFunction*>& traitNeedsFn,
-            DenseHashMap<AstStatClass*, AstExprFunction*>& classInitTraitsFn,
+            DenseHashMap<AstStatClass*, AstExprFunction*>& classImplementsFn,
             DenseHashMap<AstStatClass*, std::vector<AstExpr*>>& podConstDefaults,
             DenseHashMap<AstExprFunction*, SelfClassCheck>& methodSelfChecks,
             DenseHashMap<AstExprFunction*, AstStatClass*>& methodOwner,
@@ -8044,7 +8047,7 @@ struct Compiler
             , primaryInitFn(primaryInitFn)
             , traitInitFn(traitInitFn)
             , traitNeedsFn(traitNeedsFn)
-            , classInitTraitsFn(classInitTraitsFn)
+            , classImplementsFn(classImplementsFn)
             , podConstDefaults(podConstDefaults)
             , methodSelfChecks(methodSelfChecks)
             , methodOwner(methodOwner)
@@ -8372,7 +8375,7 @@ struct Compiler
         }
 
         // Luwu Traits (rfcs/classes/traits.md): a class whose `implements` list passes trait arguments gets
-        // `__inittraits(self, init1, ..., initN, params...)`: one trait initializer per entry that passes arguments, in list
+        // `__implements(self, init1, ..., initN, params...)`: one trait initializer per entry that passes arguments, in list
         // order (the VM passes the class's copies of those traits' `__traitinit`), then the primary constructor's
         // parameters. It calls each initializer with `self` and the entry's arguments, so the arguments are evaluated
         // right where they are used. The VM calls it on every construction.
@@ -8415,9 +8418,9 @@ struct Compiler
                 }
             }
 
-            AstExprFunction* fn = buildSynthesizedFunction(node, node->location, copyToAst(args), copyToAst(argsDefaults), body, "__inittraits");
+            AstExprFunction* fn = buildSynthesizedFunction(node, node->location, copyToAst(args), copyToAst(argsDefaults), body, "__implements");
 
-            classInitTraitsFn[node] = fn;
+            classImplementsFn[node] = fn;
             functionsToCompile.push_back(fn);
         }
 
@@ -8782,11 +8785,11 @@ struct Compiler
     DenseHashMap<AstStatClass*, AstExprFunction*> classPrimaryInitFn;
     // Luwu Traits (rfcs/classes/traits.md): populated by ClassInitDefaultsVisitor. A trait with a field or parameter to
     // compute per construction maps to its synthesized `__traitinit`, a trait with a `needs` list to its `__needs`, and
-    // a class whose `implements` list passes trait arguments to its `__inittraits`. See
+    // a class whose `implements` list passes trait arguments to its `__implements`. See
     // ClassInitDefaultsVisitor::visitTrait and visitImplements.
     DenseHashMap<AstStatClass*, AstExprFunction*> traitInitFn;
     DenseHashMap<AstStatClass*, AstExprFunction*> traitNeedsFn;
-    DenseHashMap<AstStatClass*, AstExprFunction*> classInitTraitsFn;
+    DenseHashMap<AstStatClass*, AstExprFunction*> classImplementsFn;
     // Cost of each primary constructor's `__init` body, computed on first use by
     // tryCompileNewObjectFieldParameters and reused by every other construction site of that class.
     DenseHashMap<AstStatClass*, int> classPrimaryInitCost;
@@ -8982,7 +8985,7 @@ void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, A
             compiler.classPrimaryInitFn,
             compiler.traitInitFn,
             compiler.traitNeedsFn,
-            compiler.classInitTraitsFn,
+            compiler.classImplementsFn,
             compiler.classPodConstDefaults,
             compiler.classMethodSelfChecks,
             compiler.classMethodOwner,
@@ -9008,7 +9011,7 @@ void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, A
         for (auto [decl, fn] : compiler.traitNeedsFn)
             compiler.classLexicalOwner[fn] = decl;
 
-        for (auto [decl, fn] : compiler.classInitTraitsFn)
+        for (auto [decl, fn] : compiler.classImplementsFn)
             compiler.classLexicalOwner[fn] = decl;
 
         // a class named by an annotation matters only when annotations are acted on
