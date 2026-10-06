@@ -62,18 +62,20 @@ inherit from), a `protected` modifier, etc.
 This seems like quite a lot of trouble for a feature that's primarily meant to allow code reuse and polymorphism, and implementing classical
 inheritance in this way would negatively affect implementation complexity, semantic complexity, and performance.
 
-Traits are a form of behavioral inheritance that allows reusable functionality without mixing behavior with identity. Crucially, our implementation
-of traits is single-level, which means traits don't actually carry their own data nor functionality. This means that all functionality is resolved by
-the class, with any conflicts between implemented traits also resolved by the class. Additionally, traits incentivize users to break up their classes
-into smaller, reuseable pieces of functionality instead of making huge base classes they inherit from.
+Traits are a form of behavioral inheritance that allows reusable functionality without mixing behavior with identity. Crucially, our implementation of
+traits is single-level, which means traits don't actually carry their own data nor functionality. This means that all functionality is resolved by the
+class, with any conflicts between implemented traits also resolved by the class. Additionally, traits incentivize users to break up their classes into
+smaller, reuseable pieces of functionality instead of making huge base classes they inherit from.
 
 ## Design
 
-<!-- This is the bulk of the proposal. Explain the design in enough detail for somebody familiar with the language to understand, and include examples of how the feature is used.
+<!-- This is the bulk of the proposal. Explain the design in enough detail for somebody familiar with the language to understand, and include examples
+of how the feature is used.
 
 Although design should be specific, it shouldn't be so technical or theoretic that a moderately experienced Luwu user could not readily understand it.
 
-If this is a user-facing feature that needs type system (`Analysis`) and/or editor (`luwu-lsp`) support, also describe the relevant type system and editor design in subsections named `### Type system` and/or `### Editor support` or similar. -->
+If this is a user-facing feature that needs type system (`Analysis`) and/or editor (`luwu-lsp`) support, also describe the relevant type system and
+editor design in subsections named `### Type system` and/or `### Editor support` or similar. -->
 
 Traits are very similar to classes; in fact, they're classes internally. The main difference between traits and classes is that traits cannot be
 constructed and traits can define members that don't exist yet.

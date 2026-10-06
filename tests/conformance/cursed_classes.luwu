@@ -668,7 +668,7 @@ do
 end
 
 -- How construction fills trait fields: constants come from the shape with no call, computed fields from the class's copy
--- of the trait's `__traitinit`, and parameterized traits through the class's `__inittraits`, which evaluates the
+-- of the trait's `__traitinit`, and parameterized traits through the class's `__implements`, which evaluates the
 -- arguments once per construction, one value each. A needed trait with a computed field is still implied.
 do
     local calls = 0

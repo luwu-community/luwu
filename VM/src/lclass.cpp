@@ -205,11 +205,11 @@ bool luaR_closureisinit(const LuauClass* classdef, const Closure* cl)
 bool luaR_closureistraitinit(const LuauClass* classdef, const Closure* cl)
 {
     // The class's copies of its traits' `__traitinit` initialize the trait fields, const and final ones included. The
-    // class's `__inittraits`, which only calls them, doesn't count.
+    // class's `__implements`, which only calls them, doesn't count.
     for (uint32_t i = 0; i < classdef->numtraitinits; i++)
     {
-        bool isinittraits = classdef->numtraitinits > classdef->numdirecttraitinits && i == classdef->numdirecttraitinits;
-        if (!isinittraits && clvalue(&classdef->traitinits[i]) == cl)
+        bool isimplementsfn = classdef->numtraitinits > classdef->numdirecttraitinits && i == classdef->numdirecttraitinits;
+        if (!isimplementsfn && clvalue(&classdef->traitinits[i]) == cl)
             return true;
     }
 
@@ -1930,7 +1930,7 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
 
     // What construction calls for the trait fields that aren't constants (luaR_inittraitfields): the class's copy of each
     // trait's `__traitinit`. A copy writes the fields by name, so its slot caches learn this class's offsets. The
-    // copies of traits whose `implements` entry passes arguments are called by the class's `__inittraits`, which
+    // copies of traits whose `implements` entry passes arguments are called by the class's `__implements`, which
     // evaluates the arguments; the others are called directly. Each copy is anchored on the stack until it is stored.
     int directbase = cast_int(L->top - L->base);
     int numdirect = 0;
@@ -1968,7 +1968,7 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
 
     if (numdirect + numcalled > 0)
     {
-        // `__inittraits` goes between the two groups
+        // `__implements` goes between the two groups
         uint32_t total = uint32_t(numdirect + (numcalled > 0 ? 1 + numcalled : 0));
         TValue* inits = luaM_newarray(L, total, TValue, classdef->memcat);
 
@@ -1978,9 +1978,9 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
 
         if (numcalled > 0)
         {
-            const TValue* inittraits = luaR_findstaticmember(L, classdef, "__inittraits");
-            LUAU_ASSERT(inittraits && ttisfunction(inittraits));
-            setobj(L, &inits[numdirect], inittraits);
+            const TValue* implementsfn = luaR_findstaticmember(L, classdef, "__implements");
+            LUAU_ASSERT(implementsfn && ttisfunction(implementsfn));
+            setobj(L, &inits[numdirect], implementsfn);
 
             for (int i = 0; i < numcalled; i++)
                 setobj(L, &inits[numdirect + 1 + i], copies + numdirect + i);
@@ -2028,7 +2028,7 @@ void luaR_inittraitfields(lua_State* L, LuauClass* classdef, LuauObject* object,
         luaD_callny(L, fn, 0);
     }
 
-    // `__inittraits(self, copies..., constructor arguments...)`
+    // `__implements(self, copies..., constructor arguments...)`
     uint32_t numcalled = classdef->numtraitinits - numdirect;
     if (numcalled > 0)
     {

@@ -1569,6 +1569,20 @@ static bool isValidBreakContinueContext(const std::vector<AstNode*>& ancestry, P
     return false;
 }
 
+// Luwu Classes (rfcs/classes/classes.md): checks if we're in top level because
+// we want to only only offer class/trait keywords at top level of module.
+static bool isTopLevelStatementPosition(const std::vector<AstNode*>& ancestry)
+{
+    for (size_t i = 1; i < ancestry.size(); ++i)
+    {
+        AstNode* node = ancestry[i];
+        if (node->is<AstStatBlock>() || node->is<AstExprFunction>() || node->is<AstStatClass>() || node->is<AstStatDeclareClass>())
+            return false;
+    }
+
+    return true;
+}
+
 static AutocompleteEntryMap autocompleteStatement(
     const Module& module,
     const std::vector<AstNode*>& ancestry,
@@ -1640,6 +1654,15 @@ static AutocompleteEntryMap autocompleteStatement(
             if ((kw != "break" && kw != "continue") || shouldIncludeBreakAndContinue)
                 result.emplace(kw, AutocompleteEntry{AutocompleteEntryKind::Keyword});
         }
+    }
+
+    // classes and traits can only exist in top level code of a module so only
+    // suggest the class and trait keywords there
+    if (FFlag::LuwuClasses && isTopLevelStatementPosition(ancestry))
+    {
+        result.emplace("class", AutocompleteEntry{AutocompleteEntryKind::Keyword});
+        if (FFlag::LuwuTraits)
+            result.emplace("trait", AutocompleteEntry{AutocompleteEntryKind::Keyword});
     }
 
     for (auto it = ancestry.rbegin(); it != ancestry.rend(); ++it)
