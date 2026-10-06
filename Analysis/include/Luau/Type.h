@@ -402,6 +402,11 @@ struct FunctionType
     bool isDeprecatedFunction = false;
     std::shared_ptr<AstAttr::DeprecatedInfo> deprecatedInfo;
 
+    // Luwu: from `@nodiscard` / `@[nodiscard("reason")]`. A call whose result isn't used is reported (the DiscardedResult
+    // lint), with the reason when there is one.
+    bool isNodiscard = false;
+    std::string nodiscardReason;
+
     // Set when this function type is the target of a `type X = (...) -> ...` alias. See TableType::name/syntheticName.
     std::optional<std::string> name;
     std::optional<std::string> syntheticName;
