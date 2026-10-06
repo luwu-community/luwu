@@ -38,7 +38,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* Data, size_t Size)
     if (parseResult.errors.empty())
     {
         Luau::LintOptions lintOptions;
-        lintOptions.warningMask = ~0ull;
+        lintOptions.warningMask.set();
 
         Luau::lint(parseResult.root, names, frontend.globals.globalScope, nullptr, {}, lintOptions);
     }

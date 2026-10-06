@@ -3,6 +3,7 @@
 
 #include "Luau/Location.h"
 
+#include <bitset>
 #include <string>
 #include <vector>
 
@@ -12,6 +13,11 @@ namespace Luau
 {
 
 struct HotComment;
+
+// Luwu: one bit per lint, indexed by LintWarning::Code. Upstream's masks are a uint64_t, which Luwu's lints outgrew; raise
+// the bit count when the static_assert below fires.
+constexpr size_t kLintMaskBits = 128;
+using LintMask = std::bitset<kLintMaskBits>;
 
 struct LintWarning
 {
@@ -69,6 +75,18 @@ struct LintWarning
         Code_TableTruthiness = 45,         // Luwu: `if t then` on an array or map, which is truthy even when empty
         Code_DiscardedResult = 46,         // Luwu: a pure builtin or `@nodiscard` function called for nothing
         Code_ConstLocal = 47,              // Luwu: a `local` never reassigned, which could be `const`. Off by default.
+        Code_FloatIndex = 48,              // Luwu: `xs[#xs / 2]`, an index computed with `/`, which gives a float
+        Code_LuaIterators = 49,            // Luwu: Lua's iterator functions, which generalized iteration replaces
+        // Luwu: parts of LuaIterators that can be turned off on their own. Turning LuaIterators off turns these off too.
+        Code_Pairs = 50,                   // `pairs(t)`
+        Code_Ipairs = 51,                  // `ipairs(t)`
+        Code_LuaAndOr = 52,                // Luwu: `a and b or c`, which is `if a then b else c` only when `b` is truthy
+        Code_SelfAssignment = 53,          // Luwu: `x = x`, which does nothing
+        Code_DeadStore = 54,               // Luwu: a computed value overwritten before anything reads it
+        // Luwu: more parts of OptimizationHint
+        Code_MethodsNotInlined = 55,       // code that keeps the compiler from proving a class, so its methods aren't inlined
+        Code_FloorDivision = 56,           // `math.floor(a / b)`, which is `a // b`
+        Code_FenvDeoptimization = 57,      // `getfenv`/`setfenv`, which deoptimize the whole module
 
         Code__Count
     };
@@ -81,27 +99,29 @@ struct LintWarning
     static Code parseName(const char* name);
     // Luwu: `All`, which `--!nolint All` and `@[nolint(All)]` take to mean every lint, on purpose
     static bool isAllName(const char* name);
-    static uint64_t parseMask(const std::vector<HotComment>& hotcomments);
+    static LintMask parseMask(const std::vector<HotComment>& hotcomments);
     // Luwu: the lints `--!lint Name` directives turn on, for the ones that are off by default
-    static uint64_t parseEnableMask(const std::vector<HotComment>& hotcomments);
+    static LintMask parseEnableMask(const std::vector<HotComment>& hotcomments);
 };
+
+static_assert(LintWarning::Code__Count <= kLintMaskBits, "more lints than LintMask has bits; raise kLintMaskBits");
 
 struct LintOptions
 {
-    uint64_t warningMask = 0;
+    LintMask warningMask;
 
     void enableWarning(LintWarning::Code code)
     {
-        warningMask |= 1ull << code;
+        warningMask.set(code);
     }
     void disableWarning(LintWarning::Code code)
     {
-        warningMask &= ~(1ull << code);
+        warningMask.reset(code);
     }
 
     bool isEnabled(LintWarning::Code code) const
     {
-        return 0 != (warningMask & (1ull << code));
+        return warningMask.test(code);
     }
 
     void setDefaults();
@@ -158,6 +178,16 @@ inline constexpr const char* kWarningNames[] = {
     "TableTruthiness",
     "DiscardedResult",
     "ConstLocal",
+    "FloatIndex",
+    "LuaIterators",
+    "Pairs",
+    "Ipairs",
+    "LuaAndOr",
+    "SelfAssignment",
+    "DeadStore",
+    "MethodsNotInlined",
+    "FloorDivision",
+    "FenvDeoptimization",
 };
 // clang-format on
 
