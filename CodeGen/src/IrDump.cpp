@@ -399,6 +399,10 @@ const char* getCmdName(IrCmd cmd)
         return "OBJECT_MEMBER_ADDR";
     case IrCmd::CHECK_CLASS_FIELDS_CONSTRUCTIBLE:
         return "CHECK_CLASS_FIELDS_CONSTRUCTIBLE";
+    case IrCmd::CHECK_CLASS_ALLOCATABLE:
+        return "CHECK_CLASS_ALLOCATABLE";
+    case IrCmd::NEW_OBJECT_DEFAULTS:
+        return "NEW_OBJECT_DEFAULTS";
     case IrCmd::NEW_OBJECT:
         return "NEW_OBJECT";
     case IrCmd::TRY_OBJECT_NAMECALL_ADDR:
@@ -471,6 +475,8 @@ const char* getCmdName(IrCmd cmd)
         return "FALLBACK_NEWOBJECT";
     case IrCmd::FALLBACK_NEWCLASSMEMBER:
         return "FALLBACK_NEWCLASSMEMBER";
+    case IrCmd::FALLBACK_INITTRAITS:
+        return "FALLBACK_INITTRAITS";
     case IrCmd::SUBSTITUTE:
         return "SUBSTITUTE";
     case IrCmd::MARK_USED:

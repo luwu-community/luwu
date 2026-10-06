@@ -469,8 +469,8 @@ end)
 expectfail("two traits, one function", "traits 'A' and 'B' both provide 'f'", function()
     chunk([[trait A function f(self) end end trait B function f(self) end end class C implements A, B end]])
 end)
-expectfail("class field and trait field", "class 'C' can't declare 'y': trait 'A' already provides it", function()
-    chunk([[trait A y = 1 end class C implements A y = 2 end]])
+expectfail("class function and trait field", "class 'C' can't declare 'y': trait 'A' already provides it", function()
+    chunk([[trait A y = 1 end class C implements A function y(self) end end]])
 end)
 expectfail("final", "'f' is final in trait 'A' and can't be overridden", function()
     chunk([[trait A final function f(self) end end class C implements A function f(self) end end]])
@@ -736,8 +736,8 @@ expectfail("overriding with other access", "'f' must be public in trait 'S' to o
     chunk([[trait B public function f(self) return 0 end end trait S needs B private function f(self) return 1 end end
         class C implements S end]])
 end)
-expectfail("redefining a field", "trait 'S' can't redefine 'y': fields of trait 'B' can't be overridden", function()
-    chunk([[trait B y = 1 end trait S needs B y = 2 end class C implements S end]])
+expectfail("redefining a field as a function", "trait 'S' can't redefine 'y' as a function: it is a field in trait 'B'", function()
+    chunk([[trait B y = 1 end trait S needs B function y(self) end end class C implements S end]])
 end)
 
 -- The compiler copies the functions of a trait declared in the same file into each implementing class, closures created
@@ -781,5 +781,227 @@ class Failer(name: string) implements Failing end
 expectfail("an error in a copied default", `:{failingLine}: f failed`, function()
     Failer("f"):fail()
 end)
+
+-- A class (or a trait) overrides a non-final field a trait provides: it is the same field, and the overriding value is
+-- the one an object ends up with, whichever of the two is a constant and whichever is computed.
+local overrideLog = {}
+local function logged(what, value)
+    table.insert(overrideLog, what)
+    return value
+end
+
+trait Enemy
+    name = "Enemy"
+    computed = logged("trait body default", "trait")
+    function describe(self)
+        return `{self.name}/{self.computed}`
+    end
+end
+
+class Bot implements Enemy
+    name = "Bot"
+    computed = logged("class body initializer", "class")
+end
+
+class Drone(name: string) implements Enemy
+    computed = "drone"
+end
+
+class Turret implements Enemy
+    computed = "turret"
+    function __init(self, label: string)
+        self.name = label
+    end
+end
+
+trait Boss(name: string) needs Enemy
+    expect attacks: { string }
+end
+
+class Karmelita implements Boss("Karmelita")
+    attacks = { "slam" }
+end
+
+do
+    -- each construction path: the call site (NEWOBJECT), the generic constructor, and a class with its own `__init`
+    local direct = Bot()
+    local ok, generic = pcall(Bot)
+    assert(ok)
+
+    for _, b in { direct, generic } do
+        assert(b.name == "Bot" and b.computed == "class" and b:describe() == "Bot/class")
+    end
+
+    local d = Drone("d-1")
+    assert(d.name == "d-1" and d.computed == "drone")
+    assert(Turret("t-1").name == "t-1" and Turret("t-1").computed == "turret")
+
+    -- a trait overriding a field of a trait it needs: the needed trait's initializer runs first, so the override stays
+    local k = Karmelita()
+    assert(k.name == "Karmelita" and k.attacks[1] == "slam" and k:describe() == "Karmelita/trait")
+end
+
+-- The construction order: constructor arguments, class parameter defaults (once), every `implements` argument, the traits
+-- in dependency order (each one's parameter defaults, then its body defaults), then the class body.
+trait OrderBase
+    base = logged("needed trait body default", 0)
+end
+
+trait OrderA(p: number, p2 = logged("trait parameter default", 0)) needs OrderBase
+    a = logged("trait body default", 1)
+end
+
+class Ordered(x: number, y = logged("class parameter default", 7)) implements OrderA(logged("implements argument", y))
+    c = logged("class body initializer", 2)
+end
+
+do
+    local expectedOrder = table.concat({
+        "constructor argument",
+        "class parameter default",
+        "implements argument",
+        "needed trait body default",
+        "trait parameter default",
+        "trait body default",
+        "class body initializer",
+    }, ", ")
+
+    overrideLog = {}
+    local o = Ordered(logged("constructor argument", 1))
+    assert(table.concat(overrideLog, ", ") == expectedOrder, table.concat(overrideLog, ", "))
+    assert(o.p == 7 and o.base == 0 and o.a == 1 and o.c == 2)
+
+    overrideLog = {}
+    pcall(Ordered, logged("constructor argument", 1))
+    assert(table.concat(overrideLog, ", ") == expectedOrder, table.concat(overrideLog, ", "))
+end
+
+-- A class with no `__init` initializes its trait fields in a synthesized `__implements`; constructed from a table that
+-- isn't a literal, it goes through the generic constructor.
+trait Listened
+    listeners = {}
+    count = 0
+end
+
+class ListenedButton implements Listened
+    label = "ok"
+    count = 3
+end
+
+do
+    local a, b = ListenedButton(), ListenedButton()
+    assert(a.listeners ~= b.listeners and a.count == 3 and a.label == "ok")
+
+    local c = ListenedButton { label = "cancel" }
+    assert(c.label == "cancel" and c.count == 3 and c.listeners ~= a.listeners)
+
+    -- a nil in a literal keeps the field's value, as it does through the generic constructor
+    local d = ListenedButton { label = nil }
+    assert(d.label == "ok")
+
+    local fields = { count = 9 }
+    local e = ListenedButton(fields)
+    assert(e.count == 9 and e.label == "ok" and #e.listeners == 0)
+end
+
+expectfail("overriding a final field", "'kind' is final in trait 'A' and can't be overridden", function()
+    chunk([[trait A final kind = "a" end class C implements A kind = "c" end]])
+end)
+expectfail("overriding a field without a value", "class 'C' overrides 'y' of trait 'A', so it has to give 'y' a value", function()
+    chunk([[trait A y = 1 end class C implements A y: number end]])
+end)
+expectfail("overriding a field with other access", "'y' must be public for 'C' to implement 'A'", function()
+    chunk([[trait A public y = 1 end class C implements A private y = 2 end]])
+end)
+expectfail("overriding a field with other constness", "'y' must be const for 'C' to implement 'A'", function()
+    chunk([[trait A const y = 1 end class C implements A y = 2 end]])
+end)
+
+-- Overridden in a chunk the compiler of this file doesn't see, so construction takes the generic path
+do
+    local C = chunk([[trait B y = 1 z = {} end trait S needs B y = 2 end class C implements S z = "class" end return C]])
+    local c = C()
+    assert(c.y == 2 and c.z == "class")
+end
+
+-- The functions construction runs for the VM (`__implements`, `__traitinit`, `__needs`, `__defaults` and the trait
+-- initializer runner) trust that construction called them with an object of their class, so the debug library never
+-- hands them out: from every position that runs during construction, their frames give nil for "f"
+do
+    local internal = { __implements = true, __traitinit = true, __needs = true, inittraits = true }
+    local leaked, frames = {}, {}
+
+    local function walk()
+        local level = 1
+        while debug.info(level, "s") do
+            local f, name = debug.info(level, "fn")
+            frames[name] = true
+            if internal[name] and f ~= nil then
+                leaked[name] = true
+            end
+            -- and environments can't be read or replaced through them either (pcall's frame is one more level)
+            if internal[name] then
+                assert(not pcall(getfenv, level + 1) and not pcall(setfenv, level + 1, {}))
+            end
+            level += 1
+        end
+        return 1
+    end
+
+    -- `__defaults` has no debug name, so it's found by position: 1 is this function, 2 the `__defaults` calling it
+    local defaultsseen = false
+    local function defaults()
+        assert(debug.info(2, "s") and debug.info(2, "f") == nil)
+        defaultsseen = true
+        return 1
+    end
+
+    local Leaky, Pod, Init, Plain = chunk(
+        [[
+        local walk, defaults = ...
+        trait Needed
+            n = walk()
+        end
+        trait T(p = walk()) needs Needed
+            f = walk()
+            g = {}
+        end
+        class Leaky(x = walk()) implements T(walk())
+            own = walk()
+        end
+        class Pod implements T(walk())
+            own = { walk() }
+        end
+        class Init implements T
+            const c = { walk() }
+            function __init(self)
+                walk()
+            end
+        end
+        class Plain
+            own = { defaults() }
+        end
+        return Leaky, Pod, Init, Plain
+    ]],
+        walk,
+        defaults
+    )
+
+    for _ = 1, 2 do
+        Leaky()
+        Pod()
+        Init()
+        Pod({ own = 1 })
+        pcall(Pod)
+        pcall(Plain)
+        pcall(Plain, { own = 1 })
+        coroutine.wrap(function()
+            return Leaky()
+        end)()
+    end
+
+    assert(frames.__implements and frames.__traitinit and frames.inittraits and defaultsseen)
+    assert(next(leaked) == nil, `leaked {next(leaked)}`)
+end
 
 return 'OK'

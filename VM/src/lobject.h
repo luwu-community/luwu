@@ -677,6 +677,15 @@ typedef struct LuauClass
     // The offset of `__defaults` in `staticmembers`, only meaningful when haspoddefaultsfn is set.
     uint32_t poddefaultsoffset;
 
+    // Luwu Traits (rfcs/classes/traits.md): a class without an `__init` that implements traits has a synthesized
+    // `__implements(self)`. It evaluates the `implements` arguments and initializes the trait fields (LOP_INITTRAITS),
+    // and the constructor calls it before the class's own field defaults. A class with an `__init` does the same work
+    // at the top of `__init` instead, so it has none.
+    bool haspodimplementsfn;
+
+    // The offset of `__implements` in `staticmembers`, only meaningful when haspodimplementsfn is set.
+    uint32_t podimplementsoffset;
+
     // Compile-time-constant field defaults: one TValue per instance member, in the same offset order
     // as `offsettomember`, nil for a member with no default. Copied straight into a new instance by
     // the POD constructor, which is why such a class needs no `__defaults` closure at all. NULL when
@@ -705,17 +714,24 @@ typedef struct LuauClass
     struct LuauClass** traits;
     uint32_t numtraits;
 
-    // Luwu Traits (rfcs/classes/traits.md): what construction calls to initialize the fields of the implemented traits
-    // (see luaR_inittraitfields). NULL when no trait has a field that needs computing. Owned by this class; marked in
-    // traverseclass.
-    // - The first `numdirecttraitinits` are this class's copies of the `__traitinit` of each trait that takes no
-    //   arguments, called with the object alone.
-    // - When there are more, the next is the class's `__implements`, and the rest are the copies it calls, one per
-    //   `implements` entry that passes arguments, in list order. It is called with the object, those copies, and the
-    //   constructor's arguments.
+    // Luwu Traits (rfcs/classes/traits.md): how construction initializes the fields the class gets from its traits
+    // (LOP_INITTRAITS, luaR_newtraitinitrunner). NULL when no trait has a field that needs computing. Owned by this class;
+    // marked in traverseclass.
+    // - `traitinits` holds the class's copy of each trait's `__traitinit`, in dependency order: a trait's needed traits
+    //   come before it, so an overriding trait's value is the one left in the field.
+    // - `traitinitargs` says which `implements` arguments each copy takes: two entries per copy, the offset into the
+    //   class's `implements` arguments (all entries' arguments, in list order) and the count. A copy of a trait the
+    //   class didn't list, or listed without arguments, takes none.
     TValue* traitinits;
+    uint32_t* traitinitargs;
     uint32_t numtraitinits;
-    uint32_t numdirecttraitinits;
+
+    // Luwu Traits (rfcs/classes/traits.md): the offsets of the overridden fields whose overriding value is a constant
+    // default. The overridden trait's initializer writes the field by name after allocation copied the constant in, so
+    // INITTRAITS copies these constants in again once the initializers have run. NULL when there are none. Owned by
+    // this class.
+    uint32_t* overriddenconsts;
+    uint32_t numoverriddenconsts;
 
     // Luwu Traits (rfcs/classes/traits.md): the class's copies of the trait defaults it overrides, keyed by the trait's
     // own closure, for `Trait.method(obj)`, which runs the trait's default (luaR_traitmethod). NULL when the class

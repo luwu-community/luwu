@@ -1772,13 +1772,6 @@ void lua_newobject(lua_State* L, int idx)
     LuauObject* object = luaR_newobject(L, classdef);
     setobjectvalue(L, cls, object);
 
-    // Luwu Traits (rfcs/classes/traits.md): trait fields are initialized before the class's own defaults and `__init`
-    if (classdef->traitinits)
-    {
-        luaR_inittraitfields(L, classdef, object, cls + 1, nargs);
-        cls = restorestack(L, objectslot);
-    }
-
     if (!classdef->hascustominit)
     {
         // an object argument's private fields are read with the embedder's rights, like any access it makes

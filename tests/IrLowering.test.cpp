@@ -30,6 +30,7 @@ LUAU_FASTFLAG(LuauCodegenA64ExitUseCheck)
 LUAU_FASTFLAG(LuauBackedgeHeapCheck)
 LUAU_FASTFLAG(LuauCodegenConstVectorBufferRead)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 
 #define ensureVectorSize3() \
@@ -8745,6 +8746,40 @@ bb_linear_10:
   RETURN R2, 1i
 )"
     );
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a class that implements traits is constructed with NEWOBJECT's ALLOC form, which
+// is lowered natively (a guard and an allocation that copies the constant defaults) rather than run as a fallback.
+TEST_CASE_FIXTURE(LoweringFixture, "ClassWithTraitsAllocatesNatively")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag luwuTraits{FFlag::LuwuTraits, true};
+
+    std::string ir = getCodegenAssembly(
+        R"(
+trait Greets
+    function greet(self)
+        return "hi"
+    end
+end
+
+class P(x: number) implements Greets
+end
+
+local function make(a)
+    local p = P(a)
+    return p.x
+end
+)",
+        /* includeIrTypes= */ false,
+        /* debugLevel= */ 1,
+        /* optimizationLevel= */ 2,
+        /* clipToFirstReturn= */ false
+    );
+
+    INFO(ir);
+    CHECK(ir.find("CHECK_CLASS_ALLOCATABLE") != std::string::npos);
+    CHECK(ir.find("NEW_OBJECT_DEFAULTS") != std::string::npos);
 }
 
 TEST_CASE_FIXTURE(LoweringFixture, "ClassConstructionTypesItsRegister")

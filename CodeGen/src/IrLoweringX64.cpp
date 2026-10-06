@@ -2725,6 +2725,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::CHECK_CLASS_FIELDS_CONSTRUCTIBLE:
+    case IrCmd::CHECK_CLASS_ALLOCATABLE:
     {
         // The runtime conditions of executeNEWOBJECT's member-copy case (see IrData.h). The class's
         // shape is guaranteed by the compiler. A custom `__init` that reaches this check is always a
@@ -2741,7 +2742,11 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         ScopedRegX64 flags{regs, SizeX64::qword};
         ScopedRegX64 offset{regs, SizeX64::qword};
 
-        build.cmp(qword[classReg + offsetof(LuauClass, memberdefaults)], 0);
+        // Luwu Traits (rfcs/classes/traits.md): ALLOC keeps the constant defaults, but needs the traits implemented
+        if (inst.cmd == IrCmd::CHECK_CLASS_ALLOCATABLE)
+            build.cmp(byte[classReg + offsetof(LuauClass, traitspending)], 0);
+        else
+            build.cmp(qword[classReg + offsetof(LuauClass, memberdefaults)], 0);
         build.jcc(ConditionX64::NotEqual, fail);
 
         Label constructible;
@@ -2764,11 +2769,14 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::NEW_OBJECT:
+    case IrCmd::NEW_OBJECT_DEFAULTS:
     {
+        size_t allocator = inst.cmd == IrCmd::NEW_OBJECT ? offsetof(NativeContext, luaR_newobjectuninit) : offsetof(NativeContext, luaR_newobject);
+
         IrCallWrapperX64 callWrap(regs, build, index);
         callWrap.addArgument(SizeX64::qword, rState);
         callWrap.addArgument(SizeX64::qword, regOp(OP_A(inst)), OP_A(inst));
-        callWrap.call(qword[rNativeContext + offsetof(NativeContext, luaR_newobjectuninit)]);
+        callWrap.call(qword[rNativeContext + allocator]);
         inst.regX64 = regs.takeReg(rax, index);
         break;
     }
@@ -3248,6 +3256,9 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     case IrCmd::FALLBACK_NEWCLASSMEMBER:
         emitFallback(regs, build, offsetof(NativeContext, executeNEWCLASSMEMBER), uintOp(OP_A(inst)));
+        break;
+    case IrCmd::FALLBACK_INITTRAITS:
+        emitFallback(regs, build, offsetof(NativeContext, executeINITTRAITS), uintOp(OP_A(inst)));
         break;
     case IrCmd::FALLBACK_FORGPREP:
         emitFallback(regs, build, offsetof(NativeContext, executeFORGPREP), uintOp(OP_A(inst)));
