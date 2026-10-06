@@ -3276,6 +3276,60 @@ TEST_CASE_FIXTURE(ClassesFixture, "traits_expecting_one_field_with_different_typ
     CHECK(get<TypeMismatch>(result.errors[0]));
 }
 
+// A class, or a trait that needs another, may override a non-final field a trait provides: the override keeps the field's
+// type, access and constness, and a class's has to give the field a value.
+TEST_CASE_FIXTURE(ClassesFixture, "trait_field_overrides")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait Enemy
+            name = "Enemy"
+            final kind = "enemy"
+            count: number = 0
+        end
+
+        class Bot implements Enemy
+            name = "Bot"
+        end
+
+        trait Boss(name: string) needs Enemy
+        end
+
+        class Karmelita implements Boss("Karmelita")
+        end
+
+        local bot: string = Bot().name
+        local boss: string = Karmelita().name
+
+        class WrongType implements Enemy
+            name = 10
+        end
+
+        class Final implements Enemy
+            kind = "mine"
+        end
+
+        class NoValue implements Enemy
+            count: number
+        end
+
+        trait WrongBoss(name: number) needs Enemy
+        end
+    )");
+
+    // the class-level errors are reported on the `implements` entry and on the member, the type errors on the member
+    LUAU_REQUIRE_ERROR_COUNT(6, result);
+    CHECK_EQ("'kind' is final in trait 'Enemy' and can't be overridden", toString(result.errors[0]));
+    CHECK_EQ("'kind' is final in trait 'Enemy' and can't be overridden", toString(result.errors[1]));
+    CHECK_EQ("Class 'NoValue' overrides 'count' of trait 'Enemy', so it has to give 'count' a value", toString(result.errors[2]));
+    CHECK_EQ("Class 'NoValue' overrides 'count' of trait 'Enemy', so it has to give 'count' a value", toString(result.errors[3]));
+    CHECK(get<TypeMismatch>(result.errors[4]));
+    CHECK_EQ(result.errors[4].location.begin.line, 21);
+    CHECK(get<TypeMismatch>(result.errors[5]));
+    CHECK_EQ(result.errors[5].location.begin.line, 32);
+}
+
 TEST_CASE_FIXTURE(ClassesFixture, "trait_member_clashes")
 {
     ScopedFastFlag traits{FFlag::LuwuTraits, true};
@@ -3299,12 +3353,9 @@ TEST_CASE_FIXTURE(ClassesFixture, "trait_member_clashes")
         end
     )");
 
-    // D settles the clash of `f` by defining it
-    LUAU_REQUIRE_ERROR_COUNT(3, result);
-    CHECK_EQ("'shared' is already provided by trait 'A'", toString(result.errors[0]));
-    CHECK_EQ("'shared' is already provided by trait 'A'", toString(result.errors[1]));
-    CHECK_EQ(result.errors[1].location.begin.line, 11);
-    CHECK_EQ("Traits 'A' and 'B' both provide 'f' and neither needs the other; define 'f' in class 'C' to choose", toString(result.errors[2]));
+    // C overrides A's `shared`, which a class may do; D settles the clash of `f` by defining it
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ("Traits 'A' and 'B' both provide 'f' and neither needs the other; define 'f' in class 'C' to choose", toString(result.errors[0]));
 }
 
 // A trait's function overrides the function of a trait it needs: the provider that needs every other one wins, and
@@ -3349,7 +3400,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "a_trait_overrides_a_function_of_a_trait_it_ne
     CHECK_EQ(result.errors[1].location.begin.line, 10);
     // `narrow` returns a number where Path's returns a string
     CHECK_EQ(result.errors[2].location.begin.line, 11);
-    CHECK_EQ("Trait 'FilesystemPath' can't redefine 'y': fields of trait 'Path' can't be overridden", toString(result.errors[3]));
+    CHECK_EQ("Trait 'FilesystemPath' can't redefine 'y' as a function: it is a field in trait 'Path'", toString(result.errors[3]));
     CHECK_EQ(result.errors[3].location.begin.line, 12);
 }
 

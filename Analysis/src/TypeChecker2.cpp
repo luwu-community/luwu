@@ -1857,6 +1857,26 @@ void TypeChecker2::checkTraitFieldExpectations(AstStatClass* stat)
 
         checkTraitConstructorExpectation(stat, classType, traitType);
 
+        // A field the class overrides has to fit the trait's type, as an expected field does. One the class doesn't
+        // override has the trait's own type here, so comparing every trait field the class has finds the overrides. A
+        // name that is a function in the class was already reported as one.
+        const ClassFieldUserData* classFields = dynamic_cast<const ClassFieldUserData*>(classType->userData.get());
+
+        for (const Name& name : traitFields->fieldNames)
+        {
+            bool classHasField = classFields && classFields->fieldNames.count(name);
+            if (traitType->traitInfo->expectations.count(name) || !classHasField)
+                continue;
+
+            const Property* provided = findClassMember(traitType, name);
+            const Property* found = findClassMember(classType, name);
+            if (!provided || !found || !provided->readTy || !found->readTy)
+                continue;
+
+            Location location = classMemberLocation(stat, name).value_or(traitRefLocation(scope, stat, traitType));
+            testIsSubtype(*found->readTy, *provided->readTy, location);
+        }
+
         for (const auto& [name, optional] : traitType->traitInfo->expectations)
         {
             // an expected constructor is checked by checkTraitConstructorExpectation
@@ -2136,11 +2156,11 @@ void TypeChecker2::checkTraitRefs(AstStatClass* stat, const AstArray<AstClassTra
     }
 }
 
-// Luwu Traits (rfcs/classes/traits.md): a trait's function overrides the function of the same name in a trait it needs
-// (directly or through others) for the classes implementing both. Checked where the override is written: it can't
-// override a field or a `final` function, has the overridden function's access, and fits its signature, so code
-// holding the needed trait is typed right whichever runs. The runtime checks the first three again
-// (luaR_overridingtrait).
+// Luwu Traits (rfcs/classes/traits.md): a trait's field or function overrides the member of the same name in a trait it
+// needs (directly or through others) for the classes implementing both. Checked where the override is written, so code
+// holding the needed trait is typed right whichever runs: a field overrides a field and a function a function, the
+// overridden member isn't `final`, access (and a field's constness) stays the same, and the type fits. The runtime
+// checks all but the type again (luaR_overridingtrait).
 void TypeChecker2::checkTraitOverrides(AstStatClass* stat)
 {
     NotNull<Scope> scope{findInnermostScope(stat->location)};
@@ -2168,53 +2188,100 @@ void TypeChecker2::checkTraitOverrides(AstStatClass* stat)
         pending.insert(pending.end(), current->implementedTraits.begin(), current->implementedTraits.end());
     }
 
+    // What this trait writes itself: its fields and functions, and its parameters, each of which declares a field. A
+    // trait's field always has a value (the parser refuses one without), so an overriding field does too.
+    struct Declared
+    {
+        Name name;
+        Location location;
+        bool isField;
+    };
+
+    std::vector<Declared> declared;
     for (const AstClassMember& member : stat->members)
     {
-        const AstClassProperty* prop = member.get_if<AstClassProperty>();
-        const AstClassMethod* method = member.get_if<AstClassMethod>();
-        bool expected = (prop && prop->expectLocation) || (method && method->expectLocation);
-        if ((!prop && !method) || expected)
-            continue;
+        if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && !prop->expectLocation)
+            declared.push_back({prop->name.value, prop->nameLocation, /* isField */ true});
+        else if (const AstClassMethod* method = member.get_if<AstClassMethod>(); method && !method->expectLocation)
+            declared.push_back({method->functionName.value, method->nameLocation, /* isField */ false});
+    }
 
-        Name name = prop ? prop->name.value : method->functionName.value;
-        Location location = prop ? prop->nameLocation : method->nameLocation;
-        const Property* mine = findClassMember(traitType, name);
+    if (stat->primaryConstructor)
+    {
+        for (AstLocal* param : stat->primaryConstructor->args)
+        {
+            bool restated = std::any_of(
+                declared.begin(),
+                declared.end(),
+                [&](const Declared& d)
+                {
+                    return d.name == param->name.value;
+                }
+            );
+
+            if (!restated)
+                declared.push_back({param->name.value, param->location, /* isField */ true});
+        }
+    }
+
+    for (const Declared& mine : declared)
+    {
+        const Property* myProp = findClassMember(traitType, mine.name);
 
         for (const ExternType* other : needed)
         {
             // only where the member is written: an expectation, or a member the other trait has from its own needs
             const ExternType::TraitInfo& info = *other->traitInfo;
-            if (info.expectations.count(name) || info.fromNeeds.count(name))
+            if (info.expectations.count(mine.name) || info.fromNeeds.count(mine.name))
                 continue;
 
-            const Property* theirs = findClassMember(other, name);
+            const Property* theirs = findClassMember(other, mine.name);
             if (!theirs)
                 continue;
 
             const ClassFieldUserData* otherFields = dynamic_cast<const ClassFieldUserData*>(other->userData.get());
-            bool theirsIsField = otherFields && otherFields->fieldNames.count(name);
+            bool theirsIsField = otherFields && otherFields->fieldNames.count(mine.name);
 
-            if (prop || theirsIsField)
+            if (mine.isField != theirsIsField)
                 reportError(
                     GenericError{format(
-                        "Trait '%s' can't redefine '%s': fields of trait '%s' can't be overridden",
+                        "Trait '%s' can't redefine '%s' as a %s: it is a %s in trait '%s'",
                         traitType->name.c_str(),
-                        name.c_str(),
+                        mine.name.c_str(),
+                        mine.isField ? "field" : "function",
+                        theirsIsField ? "field" : "function",
                         other->name.c_str()
                     )},
-                    location
+                    mine.location
                 );
-            else if (info.finals.count(name))
-                reportError(GenericError{format("'%s' is final in trait '%s' and can't be overridden", name.c_str(), other->name.c_str())}, location);
-            else if (mine && mine->isPrivate != theirs->isPrivate)
+            else if (info.finals.count(mine.name))
+                reportError(
+                    GenericError{format("'%s' is final in trait '%s' and can't be overridden", mine.name.c_str(), other->name.c_str())}, mine.location
+                );
+            else if (myProp && myProp->isPrivate != theirs->isPrivate)
                 reportError(
                     GenericError{format(
-                        "'%s' must be %s to override it from trait '%s'", name.c_str(), theirs->isPrivate ? "private" : "public", other->name.c_str()
+                        "'%s' must be %s to override it from trait '%s'",
+                        mine.name.c_str(),
+                        theirs->isPrivate ? "private" : "public",
+                        other->name.c_str()
                     )},
-                    location
+                    mine.location
                 );
-            else if (mine && mine->readTy && theirs->readTy && !containsErrorType(*theirs->readTy))
-                testIsSubtype(withoutSelfParameter(*mine->readTy), withoutSelfParameter(*theirs->readTy), location);
+            else if (mine.isField && myProp && myProp->isConst != theirs->isConst)
+                reportError(
+                    GenericError{format(
+                        "'%s' must be %s to override it from trait '%s'",
+                        mine.name.c_str(),
+                        theirs->isConst ? "const" : "non-const",
+                        other->name.c_str()
+                    )},
+                    mine.location
+                );
+            else if (mine.isField && myProp && myProp->readTy && theirs->readTy && !containsErrorType(*theirs->readTy))
+                testIsSubtype(*myProp->readTy, *theirs->readTy, mine.location);
+            else if (!mine.isField && myProp && myProp->readTy && theirs->readTy && !containsErrorType(*theirs->readTy))
+                testIsSubtype(withoutSelfParameter(*myProp->readTy), withoutSelfParameter(*theirs->readTy), mine.location);
         }
     }
 }

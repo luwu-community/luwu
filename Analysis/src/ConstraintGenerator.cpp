@@ -1103,6 +1103,8 @@ void ConstraintGenerator::prototypeClass(
         {
             if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && prop->expectLocation)
                 info.expectations[prop->name.value] = false;
+            else if (prop && prop->finalLocation)
+                info.finals.insert(prop->name.value);
             else if (const AstClassMethod* method = member.get_if<AstClassMethod>(); method && method->expectLocation)
                 info.expectations[method->functionName.value] = method->isOptional;
             else if (method && method->finalLocation)
@@ -2051,6 +2053,55 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
         reportRequirement(name, traitProp.isPrivate ? "private" : "public", traitType, location);
     };
 
+    // Whether the class gives its own field `name` a value: a default, or the primary constructor parameter it restates
+    auto ownFieldHasValue = [&](const Name& name)
+    {
+        for (const AstClassMember& member : cls->members)
+        {
+            if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && name == prop->name.value && prop->defaultValue)
+                return true;
+        }
+
+        if (cls->primaryConstructor)
+        {
+            for (AstLocal* param : cls->primaryConstructor->args)
+                if (name == param->name.value)
+                    return true;
+        }
+
+        return false;
+    };
+
+    // A class field that overrides a trait's keeps what the trait promises about it: whether it is public, whether it
+    // is const, and its type, which TypeChecker2 compares (checkTraitFieldExpectations) and an unannotated initializer
+    // is inferred against. The class also has to give it a value: otherwise it would keep a value the trait computes,
+    // but lose a constant one (luaR_implementtraits refuses it too).
+    auto checkFieldOverride = [&](const Name& name, const Property& traitProp, TypeId trait, const ExternType* traitType, Location location)
+    {
+        const Property* ownProp = ownProperty(name);
+        checkOverrideAccess(name, traitProp, ownProp, traitType, location);
+
+        bool changesConst = ownProp && ownProp->isConst != traitProp.isConst;
+        if (changesConst && accessReported.insert(name).second)
+            reportRequirement(name, traitProp.isConst ? "const" : "non-const", traitType, location);
+
+        if (!ownFieldHasValue(name))
+            reportOnMember(
+                name,
+                location,
+                format(
+                    "Class '%s' overrides '%s' of trait '%s', so it has to give '%s' a value",
+                    className.c_str(),
+                    name.c_str(),
+                    traitType->name.c_str(),
+                    name.c_str()
+                )
+            );
+
+        if (traitProp.readTy)
+            expectedFieldTypes.try_emplace(name, instantiateMember(trait, *traitProp.readTy, location));
+    };
+
     // An expected `__init` asks for a constructor; the POD table constructor's `__init` doesn't count
     bool hasConstructor = cls->primaryConstructor != nullptr;
     for (const AstClassMember& member : cls->members)
@@ -2169,13 +2220,18 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
             if (name == "__init" || name == "__create" || info.expectations.count(name) || info.fromNeeds.count(name))
                 return false;
 
+            // The class's own member overrides the trait's, a field as well as a function, unless the trait's is final
             if (own.count(name))
             {
-                bool clashes = isTraitField(name) || (classFields && classFields->count(name));
-                if (clashes)
+                bool classDeclaresField = classFields && classFields->count(name);
+                bool overridesField = isTraitField(name) && classDeclaresField;
+
+                if (isTraitField(name) != classDeclaresField)
                     reportOnMember(name, location, format("'%s' is already provided by trait '%s'", name.c_str(), traitType->name.c_str()));
                 else if (info.finals.count(name))
                     reportOnMember(name, location, format("'%s' is final in trait '%s' and can't be overridden", name.c_str(), traitType->name.c_str()));
+                else if (overridesField)
+                    checkFieldOverride(name, traitProp, trait, traitType, location);
                 else
                     checkOverrideAccess(name, traitProp, ownProperty(name), traitType, location);
 
@@ -2192,9 +2248,14 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
                 return false;
 
             const ExternType* first = clash->second.first;
-            std::string message = format("Traits '%s' and '%s' both provide '%s'", first->name.c_str(), traitType->name.c_str(), name.c_str());
-            if (!isTraitField(name))
-                message += format(" and neither needs the other; define '%s' in class '%s' to choose", name.c_str(), className.c_str());
+            std::string message = format(
+                "Traits '%s' and '%s' both provide '%s' and neither needs the other; define '%s' in class '%s' to choose",
+                first->name.c_str(),
+                traitType->name.c_str(),
+                name.c_str(),
+                name.c_str(),
+                className.c_str()
+            );
 
             reportError(location, GenericError{std::move(message)});
             return false;

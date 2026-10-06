@@ -3583,8 +3583,9 @@ return f
                     CHECK(sv == "u42");
                 else if (tt == LUA_TPROTO)
                     CHECK((sv == "proto unnamed:1 =GCDump" || sv == "proto foo:7 =GCDump" || sv == "proto f:4 =GCDump"));
+                // Luwu Traits (rfcs/classes/traits.md): every state has the trait initializer runner (global_State::traitinitrunner)
                 else if (tt == LUA_TFUNCTION)
-                    CHECK((sv == "test" || sv == "unnamed:1 =GCDump" || sv == "foo:7 =GCDump" || sv == "f:4 =GCDump"));
+                    CHECK((sv == "test" || sv == "unnamed:1 =GCDump" || sv == "foo:7 =GCDump" || sv == "f:4 =GCDump" || sv == "inittraits"));
                 else if (tt == LUA_TTHREAD)
                     CHECK(sv == "thread at unnamed:1 =GCDump");
             }
@@ -5859,6 +5860,99 @@ bagSum = Bag.sum
     // a method read through its trait is the trait's dispatcher, a C function
     lua_getglobal(L, "traitSum");
     CHECK(lua_iscfunction(L, -1));
+
+    lua_getglobal(L, "bagSum");
+    lua_getglobal(L, "bag");
+    REQUIRE(lua_pcall(L, 1, 1, 0) == LUA_OK);
+    CHECK(lua_tonumber(L, -1) == 6);
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a class implementing a trait from another chunk gets copies the VM makes at
+// runtime, after native code compiled the trait's chunk. Native code compiles each copy when it is made
+// (lua_ExecutionCallbacks::functioncopied), but only of a function that has native code itself. Invisible to any
+// behavioral test, so check the copies' protos.
+TEST_CASE("TraitsCopiedFromAnotherChunkCompileNatively")
+{
+    if (!luau_codegen_supported())
+        return;
+
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+    };
+
+    StateRef globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+    luau_codegen_create(L);
+
+    auto run = [&](const char* name, const char* source, bool native)
+    {
+        lua_CompileOptions compileOptions = {};
+        compileOptions.optimizationLevel = 2;
+        size_t bytecodeSize = 0;
+        char* bytecode = luau_compile(source, strlen(source), &compileOptions, &bytecodeSize);
+        int loadResult = luau_load(L, name, bytecode, bytecodeSize, 0);
+        free(bytecode);
+        REQUIRE(loadResult == 0);
+
+        if (native)
+        {
+            Luau::CodeGen::CompilationResult nativeResult = Luau::CodeGen::compile(L, -1, defaultCodegenOptions());
+            REQUIRE(nativeResult.result == Luau::CodeGen::CodeGenCompilationResult::Success);
+        }
+
+        REQUIRE(lua_pcall(L, 0, 0, 0) == LUA_OK);
+    };
+
+    run("=nativeTrait", R"(
+trait Summing
+    expect public items: { number }
+    public function sum(self): number
+        local total = 0
+        for _, v in self.items do
+            total += v
+        end
+        return total
+    end
+end
+NativeSumming = Summing
+)",
+        /* native */ true);
+
+    run("=interpretedTrait", R"(
+trait Counting
+    expect public items: { number }
+    public function count(self): number
+        return #self.items
+    end
+end
+InterpretedCounting = Counting
+)",
+        /* native */ false);
+
+    // the class's chunk stays interpreted: only the hook can give its copies native code
+    run("=classes", R"(
+class Bag(items: { number }) implements NativeSumming, InterpretedCounting
+    public items
+end
+bag = Bag({ 1, 2, 3 })
+bagSum = Bag.sum
+bagCount = Bag.count
+)",
+        /* native */ false);
+
+    lua_getglobal(L, "bagSum");
+    const Closure* sum = static_cast<const Closure*>(lua_topointer(L, -1));
+    REQUIRE(sum);
+    REQUIRE(!sum->isC);
+    CHECK(sum->l.p->execdata != nullptr);
+
+    lua_getglobal(L, "bagCount");
+    const Closure* count = static_cast<const Closure*>(lua_topointer(L, -1));
+    REQUIRE(count);
+    REQUIRE(!count->isC);
+    CHECK(count->l.p->execdata == nullptr);
 
     lua_getglobal(L, "bagSum");
     lua_getglobal(L, "bag");

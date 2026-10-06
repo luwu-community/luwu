@@ -110,6 +110,9 @@ type Cls = {
     traitSet: { Trait },
     -- trait defaults the class defines itself
     overrides: { string },
+    -- trait fields the class declares itself, each with a constant value; kept out of `fields`, so no constructor argument
+    -- sets them and the generator knows the value a new object ends up with
+    fieldOverrides: { Field },
     definesMaybe: boolean,
 }
 
@@ -145,6 +148,8 @@ type Trait = {
     needs: { Trait },
     -- the needed traits' functions this trait overrides, by name, with the value its override returns
     overrides: { [string]: string },
+    -- the needed traits' fields this trait declares again, by name, with the value they end up with
+    fieldOverrides: { [string]: string },
     rank: number,
     create: boolean,
     tostring: boolean,
@@ -162,7 +167,7 @@ const METHOD_SHAPES = {
 const OP_KINDS = {
     "construct", "ctor_outside", "read", "write", "call_typed", "call_untyped", "call_dot", "wrong_self", "lying",
     "mixed_site", "isinstance", "classlib", "meta", "init_explicit", "coroutine", "gc", "dynamic_key", "raw",
-    "iterate", "private_static", "loop_calls", "fields", "alias_ctor", "table_key",
+    "iterate", "private_static", "loop_calls", "fields", "alias_ctor", "table_key", "yield_construct",
 }
 
 local function lit(rng: Rng, kind: string): string
@@ -274,6 +279,7 @@ local function generate(seed: number): (string, string)
             implements = {},
             traitSet = {},
             overrides = {},
+            fieldOverrides = {},
             definesMaybe = false,
         }
         c.ctorPrivate = c.ctor ~= "pod" and rng.chance(0.4)
@@ -289,6 +295,10 @@ local function generate(seed: number): (string, string)
             }
             if rng.chance(0.4) then
                 f.default = if kind == "number" and rng.chance(0.33) then "nextId()" else lit(rng, kind)
+                -- a default that suspends construction when it runs in a coroutine (see `pause` in the prelude)
+                if rng.chance(0.15) then
+                    f.default = `{rng.pick({ "pause", "gpause" })}({f.default})`
+                end
             end
             if f.const and c.ctor == "pod" and f.default == nil then
                 f.default = lit(rng, kind)
@@ -487,6 +497,9 @@ local function generate(seed: number): (string, string)
                 table.insert(out, line)
             end
         end
+        for _, f in c.fieldOverrides do
+            table.insert(out, `    {if f.private then "private" else "public"} {if f.const then "const " else ""}{f.name} = {f.default}`)
+        end
         if c.ctor == "init" then
             local params = {}
             for i in c.fields do
@@ -576,6 +589,22 @@ local function generate(seed: number): (string, string)
 
             if kind == "construct" then
                 op(kind, { `local o = {make}`, "return o:describe()" })
+            elseif kind == "yield_construct" then
+                -- a construction whose defaults pause (see `pause`) is suspended and resumed until it completes; how
+                -- often it pauses and what it builds are the same at every level
+                op(kind, {
+                    `local co = coroutine.create(function() return {make} end)`,
+                    "local ok, r = coroutine.resume(co)",
+                    "local pauses = 0",
+                    "while ok and coroutine.status(co) ~= 'dead' do",
+                    "    pauses += 1",
+                    "    ok, r = coroutine.resume(co)",
+                    "end",
+                    "if not ok then",
+                    "    error(r, 0)",
+                    "end",
+                    "return pauses, r:describe()",
+                })
             elseif kind == "ctor_outside" then
                 -- A local initialized by constructing a class in this module is proven to be that class, so its
                 -- method calls inline with no self check at O2. Bound to a local, since a multret return never
@@ -919,6 +948,7 @@ local function generate(seed: number): (string, string)
                 fns = {},
                 needs = {},
                 overrides = {},
+                fieldOverrides = {},
                 rank = rng.int(1, 1000),
                 create = false,
                 tostring = rng.chance(0.2),
@@ -936,7 +966,7 @@ local function generate(seed: number): (string, string)
                     name = `t{i}_f{k}`,
                     private = rng.chance(0.35),
                     const = rng.chance(0.25),
-                    default = rng.pick({ lit(rng, "number"), "{}", "nextId()", '"s"' }),
+                    default = rng.pick({ lit(rng, "number"), "{}", "nextId()", '"s"', "pause({})", "gpause(nextId())" }),
                 })
             end
 
@@ -963,12 +993,29 @@ local function generate(seed: number): (string, string)
         end
     end
 
-    -- the functions some trait already overrides; each is overridden at most once per program
+    -- the functions and fields some trait already overrides; each is overridden at most once per program, so no class
+    -- meets two traits overriding the same member without one needing the other
     local overriddenFns: { [string]: boolean } = {}
+    local overriddenFields: { [string]: boolean } = {}
 
     -- a trait's functions; after `needs` is known, since a default may call a needed trait's
     local function makeTraitFns(t: Trait)
         local i = t.index
+
+        -- a needed trait's field declared again, which classes implementing this trait get instead: as a constant, or
+        -- computed (`(n + 0)` isn't a constant default) so it also goes through the trait's initializer
+        for _, needed in t.needs do
+            for _, f in needed.fields do
+                if not overriddenFields[f.name] and rng.chance(0.3) then
+                    overriddenFields[f.name] = true
+                    local value = tostring(3000 + i * 100 + #t.fields)
+                    local default = if rng.chance(0.5) then value else `({value} + 0)`
+                    table.insert(t.fields, { name = f.name, private = f.private, const = f.const, default = default })
+                    t.fieldOverrides[f.name] = value
+                end
+            end
+        end
+
         local own = table.clone(t.fields)
         for _, p in t.params do
             table.insert(own, { name = p.name, private = false, const = false, default = p.default or "nil" })
@@ -1084,7 +1131,7 @@ local function generate(seed: number): (string, string)
                         elseif form == "constants" or (form == "params" and c.ctor ~= "primary") then
                             local values = {}
                             for _ in t.params do
-                                table.insert(values, rng.pick({ lit(rng, "number"), "nextId()" }))
+                                table.insert(values, rng.pick({ lit(rng, "number"), "nextId()", "pause(nextId())" }))
                             end
                             args = table.concat(values, ", ")
                         elseif form == "params" then
@@ -1161,7 +1208,45 @@ local function generate(seed: number): (string, string)
                     table.insert(c.overrides, fn.name)
                 end
             end
+
+            -- a trait field declared again by the class, which keeps the trait's access and constness
+            for _, f in t.fields do
+                local already = #filter(c.fieldOverrides, function(o)
+                    return o.name == f.name
+                end) > 0
+                if not already and rng.chance(0.12) then
+                    local value = tostring(5000 + #c.fieldOverrides)
+                    table.insert(c.fieldOverrides, { name = f.name, private = f.private, const = f.const, kind = "number", default = value })
+                end
+            end
         end
+    end
+
+    -- The value a new object of `c` has in the trait field `name`, when the generator knows it: the class's own value
+    -- if it declares the field again, else the value of the trait overriding it, else the providing trait's constant
+    local function knownTraitField(c: Cls, name: string): string?
+        for _, o in c.fieldOverrides do
+            if o.name == name then
+                return o.default
+            end
+        end
+
+        for _, t in c.traitSet do
+            local value = t.fieldOverrides[name]
+            if value then
+                return value
+            end
+        end
+
+        for _, t in c.traitSet do
+            for _, f in t.fields do
+                if f.name == name and tonumber(f.default) then
+                    return f.default
+                end
+            end
+        end
+
+        return nil
     end
 
     local function emitTrait(t: Trait): { string }
@@ -1246,6 +1331,7 @@ local function generate(seed: number): (string, string)
             local kind = rng.pick({
                 "call", "dispatch", "dispatch_wrong", "implements", "refine", "type", "blocked", "ctor", "field",
                 "maybe", "isolated", "gc", "coroutine", "static", "tostring", "fields", "annotated", "private_fn", "overridden",
+                "settle",
             })
 
             if kind == "overridden" then
@@ -1364,7 +1450,7 @@ local function generate(seed: number): (string, string)
                 -- trait state lives in each object: a table default is fresh per object, and a write stays in its object
                 local f = rng.pick(t.fields)
                 local lines = { `local a, b = {C}.make(), {C}.make()` }
-                if not f.private and f.default == "{}" then
+                if not f.private and f.default == "{}" and knownTraitField(c, f.name) == nil then
                     table.insert(lines, `check(a.{f.name} ~= b.{f.name}, "objects share trait table field {f.name}")`)
                 end
                 if not f.private and not f.const then
@@ -1426,6 +1512,23 @@ local function generate(seed: number): (string, string)
                 end
                 table.insert(lines, "return sortedKeys(fields)")
                 op("t_fields", lines, false, true)
+            elseif kind == "settle" and implements then
+                -- every public trait field whose value the generator knows has it in a new object: the most specific
+                -- declaration's (the class over a trait, a trait over one it needs), whatever order they're written in
+                local lines = { `local o = {C}.make()` }
+                local seen: { [string]: boolean } = {}
+                for _, owner in c.traitSet do
+                    for _, f in owner.fields do
+                        local value = knownTraitField(c, f.name)
+                        if value and not f.private and not seen[f.name] then
+                            seen[f.name] = true
+                            local message = `"{c.name}.{f.name} is " .. tostring(o.{f.name}) .. ", expected {value}"`
+                            table.insert(lines, `check(o.{f.name} == {value}, {message})`)
+                        end
+                    end
+                end
+                table.insert(lines, "return true")
+                op("t_settle", lines, false, true)
             elseif kind == "annotated" and implements and #fns > 0 then
                 local fn = rng.pick(fns)
                 op("t_annotated", { `local o: {T} = {C}.make()`, `local r = o:{fn.name}()`, "return r" }, false, true)
@@ -1478,6 +1581,19 @@ local function generate(seed: number): (string, string)
         "end",
         "local function multi()",
         "    return 1, 2, 3",
+        "end",
+        -- Yields inside a coroutine the program made, then returns `v`: a default that calls it suspends construction
+        -- partway, and the value it ends up with doesn't change. Never on the main thread (the CLI's is yieldable, and a
+        -- yield there ends the program) or while the module loads. `gpause` is the same through a global, which a
+        -- construction site can name, so trait initializers calling it can be inlined; ones calling `pause` can't.
+        "local function pause(v)",
+        "    if shared.mainThread ~= nil and coroutine.running() ~= shared.mainThread and coroutine.isyieldable() then",
+        "        coroutine.yield()",
+        "    end",
+        "    return v",
+        "end",
+        "function gpause(v)",
+        "    return pause(v)",
         "end",
     }
 

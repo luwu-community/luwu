@@ -76,11 +76,13 @@ LUAI_FUNC void luaR_applyobjectfields(lua_State* L, LuauClass* classdef, LuauObj
 LUAI_FUNC void luaR_applyobjectfieldsslow(lua_State* L, LuauClass* classdef, LuauObject* object, const TValue* arg);
 
 /**
- * The POD constructor: runs `classdef`'s `__defaults` if it has one, then applies the fields of
+ * The POD constructor for the C API (lua_newobject), where nothing it calls may yield: runs `classdef`'s
+ * `__implements` (its trait fields) and `__defaults` if it has them, then applies the fields of
  * `args[0]` (see luaR_applyobjectfields). `nargs` is the number of constructor arguments at `args`; 0,
  * or 1 that is nil, applies nothing, and more than 1 raises. Private fields of an object argument are
  * read with the access rights of `accessor`, the Lua closure constructing (NULL for native code).
  * `object` must be anchored where the collector can see it; it gets every write barrier it needs.
+ * luaR_createobject does the same work in steps that may yield.
  */
 LUAI_FUNC void luaR_initpodobject(lua_State* L, LuauClass* classdef, LuauObject* object, StkId args, int nargs, const Closure* accessor);
 
@@ -94,6 +96,11 @@ LUAI_FUNC bool luaR_closureisinit(const LuauClass* classdef, const Closure* cl);
 // Luwu Traits (rfcs/classes/traits.md): true if `cl` is one of `classdef`'s copies of its traits' `__traitinit`, the only
 // closures that may write a final field (luaR_closureisinit accepts them too, for const fields)
 LUAI_FUNC bool luaR_closureistraitinit(const LuauClass* classdef, const Closure* cl);
+
+// Luwu Classes (rfcs/classes): true if `cl` is a function only the VM calls during construction (`__defaults`, `__implements`,
+// `__traitinit`, `__needs` and the trait initializer runner). lua_getinfo never hands one out: their code trusts that
+// construction is what called them, with an object of their class.
+LUAI_FUNC bool luaR_isvminternalfunction(lua_State* L, const Closure* cl);
 
 /**
  * Returns true if `cl` is one of `classdef`'s own method closures (including `__init`), or a
@@ -183,8 +190,9 @@ LUAI_FUNC void luaR_freeclass(lua_State* L, LuauClass* classdef, lua_Page* page)
  *  - The constructor arguments (for the POD constructor, an optional indexable value)
  *
  * This function checks a private constructor, allocates a new object and then either calls a custom
- * `__init` with the arguments (yieldably) or runs the POD constructor (luaR_initpodobject). The
- * object is the single result.
+ * `__init` with the arguments or runs the POD constructor's steps (`__implements`, `__defaults`, the
+ * argument's fields). Every step may yield; the object stays on this function's stack until it's
+ * complete, and is the single result.
  */
 LUAI_FUNC int luaR_createobject(lua_State* L);
 
@@ -211,7 +219,7 @@ LUAI_FUNC const TValue* luaR_traitcreate(lua_State* L, const LuauClass* trait);
  *  - raises when a member is provided twice, a final function is redefined, or an expectation isn't met by the
  *    finished class (presence, field or function, access specifier, `const`);
  *  - copies the traits' constant field defaults into the class's, and gives the class a copy of each trait's
- *    `__traitinit` for the fields that have to be computed per construction (luaR_inittraitfields).
+ *    `__traitinit` for the fields that have to be computed per construction (luaR_newtraitinitrunner).
  * May call the traits' `__needs` functions.
  */
 LUAI_FUNC void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint32_t n);
@@ -225,13 +233,12 @@ LUAI_FUNC void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId lis
 LUAI_FUNC void luaR_addcompiledtraitcopy(lua_State* L, LuauClass* classdef, const LuauClass* trait, TString* name, const TValue* copy);
 
 /**
- * Luwu Traits (rfcs/classes/traits.md): computes the fields `object` gets from the traits its class implements that
- * don't have a constant default (those are already in place, see luaR_newobject). Calls the class's copy of each
- * argument-less trait's `__traitinit` with the object, then the class's `__implements`, which evaluates the
- * `implements` arguments from the `nargs` constructor arguments at `args` and calls the remaining copies with them.
- * The calls can't yield. `object` must be anchored where the collector can see it.
+ * Luwu Traits (rfcs/classes/traits.md): the C function LOP_INITTRAITS calls to compute the fields an object gets from its
+ * class's traits that don't have a constant default (those are already in place, see luaR_newobject). Called with the
+ * object and the class's `implements` arguments, it runs the class's copy of each trait's `__traitinit` in dependency
+ * order, and each may yield. The state makes one (global_State::traitinitrunner).
  */
-LUAI_FUNC void luaR_inittraitfields(lua_State* L, LuauClass* classdef, LuauObject* object, StkId args, int nargs);
+LUAI_FUNC Closure* luaR_newtraitinitrunner(lua_State* L);
 
 // Luwu Traits (rfcs/classes/traits.md): whether `classdef` implements `trait`, listed or implied through `needs`.
 LUAI_FUNC bool luaR_implements(const LuauClass* classdef, const LuauClass* trait);

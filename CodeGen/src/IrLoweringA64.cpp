@@ -2912,6 +2912,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::CHECK_CLASS_FIELDS_CONSTRUCTIBLE:
+    case IrCmd::CHECK_CLASS_ALLOCATABLE:
     {
         // See the X64 lowering.
         Label fresh;
@@ -2920,8 +2921,16 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         RegisterA64 tempw = regs.allocTemp(KindA64::w);
         RegisterA64 tempx = regs.allocTemp(KindA64::x);
 
-        build.ldr(tempx, mem(classReg, offsetof(LuauClass, memberdefaults)));
-        build.cbnz(tempx, fail);
+        if (inst.cmd == IrCmd::CHECK_CLASS_ALLOCATABLE)
+        {
+            build.ldrb(tempw, mem(classReg, offsetof(LuauClass, traitspending)));
+            build.cbnz(tempw, fail);
+        }
+        else
+        {
+            build.ldr(tempx, mem(classReg, offsetof(LuauClass, memberdefaults)));
+            build.cbnz(tempx, fail);
+        }
 
         Label constructible;
         build.ldrb(tempw, mem(classReg, offsetof(LuauClass, hascustominit)));
@@ -2944,12 +2953,15 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::NEW_OBJECT:
+    case IrCmd::NEW_OBJECT_DEFAULTS:
     {
+        size_t allocator = inst.cmd == IrCmd::NEW_OBJECT ? offsetof(NativeContext, luaR_newobjectuninit) : offsetof(NativeContext, luaR_newobject);
+
         RegisterA64 reg = regOp(OP_A(inst)); // note: we need to call regOp before spill so that we don't do redundant reloads
         regs.spill(index, {reg});
         build.mov(x1, reg);
         build.mov(x0, rState);
-        build.ldr(x2, mem(rNativeContext, offsetof(NativeContext, luaR_newobjectuninit)));
+        build.ldr(x2, mem(rNativeContext, int(allocator)));
         build.blr(x2);
         inst.regA64 = regs.takeReg(x0, index);
         break;
@@ -3590,6 +3602,13 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
         regs.spill(index);
         emitFallback(build, offsetof(NativeContext, executeNEWCLASSMEMBER), uintOp(OP_A(inst)));
+        break;
+    case IrCmd::FALLBACK_INITTRAITS:
+        CODEGEN_ASSERT(OP_B(inst).kind == IrOpKind::VmReg);
+        CODEGEN_ASSERT(OP_C(inst).kind == IrOpKind::VmReg);
+
+        regs.spill(index);
+        emitFallback(build, offsetof(NativeContext, executeINITTRAITS), uintOp(OP_A(inst)));
         break;
     case IrCmd::FALLBACK_FORGPREP:
         regs.spill(index);

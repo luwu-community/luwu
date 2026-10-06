@@ -411,6 +411,25 @@ void translateInstJumpxEqNil(IrBuilder& build, const Instruction* pc, int pcpos)
         build.beginBlock(next);
 }
 
+// Luwu Traits (rfcs/classes/traits.md): INITTRAITS. The fallback puts the trait initializer runner in A, or nil when the
+// object's class has no trait initializers, and the jump skips the CALL in that case.
+void translateInstInitTraits(IrBuilder& build, const Instruction* pc, int pcpos)
+{
+    int ra = LUAU_INSN_A(*pc);
+
+    IrOp target = build.blockAtInst(pcpos + 1 + LUAU_INSN_D(*pc));
+    IrOp next = build.blockAtInst(pcpos + 1);
+
+    build.inst(IrCmd::FALLBACK_INITTRAITS, build.constUint(pcpos), build.vmReg(ra), build.vmReg(ra + 1));
+
+    IrOp tag = build.inst(IrCmd::LOAD_TAG, build.vmReg(ra));
+    build.inst(IrCmd::JUMP_EQ_TAG, tag, build.constTag(LUA_TNIL), target, next);
+
+    // Fallthrough in original bytecode is implicit, so we start next internal block here
+    if (build.isInternalBlock(next))
+        build.beginBlock(next);
+}
+
 void translateInstJumpxEqNilShortcut(IrBuilder& build, const Instruction* pc, int pcpos)
 {
     int rr = LUAU_INSN_A(pc[2]);
@@ -1902,9 +1921,11 @@ void translateInstGetObjectMember(IrBuilder& build, const Instruction* pc, int p
 // constructed with every field) is lowered natively: allocate uninitialized, then copy each argument
 // register into its member. The copies are ordinary IR stores, so const prop can forward a value that is
 // still unboxed (the `self.x + o.x` computed just before) straight into the member.
+// Luwu Traits (rfcs/classes/traits.md): the ALLOC form is lowered natively too, as an allocation that copies the
+// constant defaults; the instructions after it initialize the rest.
 // In valid bytecode, B holds a class with the shape the compiler picked (VM_CASE(LOP_NEWOBJECT) asserts
 // this), so only the runtime conditions need a guard. Every other case -- the INIT form, the table form,
-// a class with constant defaults, a private constructor used from outside its class -- runs
+// a FIELDS class with constant defaults, a private constructor used from outside its class -- runs
 // executeNEWOBJECT as a fallback.
 // Nothing can collect between the allocation and the last store, and a freshly allocated object is white,
 // so no barrier is needed.
@@ -1920,7 +1941,9 @@ void translateInstNewObject(IrBuilder& build, const Instruction* pc, int pcpos)
         build.inst(IrCmd::FALLBACK_NEWOBJECT, build.constUint(pcpos), build.vmReg(ra), build.vmReg(rb), build.constInt(form), build.constInt(int(aux)));
     };
 
-    if (form != LBC_NEWOBJECT_FIELDS)
+    bool allocForm = form == LBC_NEWOBJECT_ALLOC;
+
+    if (form != LBC_NEWOBJECT_FIELDS && !allocForm)
     {
         emitFallback();
         return;
@@ -1930,10 +1953,13 @@ void translateInstNewObject(IrBuilder& build, const Instruction* pc, int pcpos)
     IrOp next = build.blockAtInst(pcpos + getOpLength(LuauOpcode(LOP_NEWOBJECT)));
 
     IrOp classPtr = build.inst(IrCmd::LOAD_POINTER, build.vmReg(rb));
-    build.inst(IrCmd::CHECK_CLASS_FIELDS_CONSTRUCTIBLE, classPtr, fallback);
+    build.inst(allocForm ? IrCmd::CHECK_CLASS_ALLOCATABLE : IrCmd::CHECK_CLASS_FIELDS_CONSTRUCTIBLE, classPtr, fallback);
 
     build.inst(IrCmd::SET_SAVEDPC, build.constUint(pcpos + getOpLength(LuauOpcode(LOP_NEWOBJECT))));
-    IrOp object = build.inst(IrCmd::NEW_OBJECT, classPtr);
+
+    // Luwu Traits (rfcs/classes/traits.md): ALLOC only allocates, with the constant defaults, and leaves the rest to the
+    // instructions after it (see LBC_NEWOBJECT_ALLOC)
+    IrOp object = build.inst(allocForm ? IrCmd::NEW_OBJECT_DEFAULTS : IrCmd::NEW_OBJECT, classPtr);
 
     for (uint32_t idx = 0; idx < aux; idx++)
     {
@@ -1952,7 +1978,8 @@ void translateInstNewObject(IrBuilder& build, const Instruction* pc, int pcpos)
     build.inst(IrCmd::JUMP, next);
 }
 
-// The write counterpart; never emitted for a `const` member, so there is no authorization here either.
+// The write counterpart. It writes a `const` member only to initialize an object the code just allocated (see
+// LOP_SETOBJECTMEMBER), so there is no authorization here either.
 void translateInstSetObjectMember(IrBuilder& build, const Instruction* pc, int pcpos)
 {
     int ra = LUAU_INSN_A(*pc);

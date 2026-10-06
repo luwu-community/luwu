@@ -446,8 +446,7 @@ do
     end
 end
 
--- trait fields are initialized by non-yieldable calls, so a default that yields raises instead of suspending half a
--- construction
+-- a trait default may yield, like everything construction runs; the construction finishes when the thread resumes
 trait YieldsInDefault
     v = coroutine.yield(1)
 end
@@ -458,8 +457,10 @@ do
     local co = coroutine.create(function()
         return YieldingDefault()
     end)
-    local ok, err = coroutine.resume(co)
-    assert(not ok and string.find(tostring(err), "yield", 1, true))
+    local ok, yielded = coroutine.resume(co)
+    assert(ok and yielded == 1)
+    local finished, object = coroutine.resume(co, "resumed")
+    assert(finished and object.v == "resumed")
 end
 
 -- a factory may yield: calling the trait is an ordinary, yieldable call of `__create`
@@ -644,27 +645,197 @@ do
     assert(Secretive.viaTrait(k) == "default")
 end
 
--- Trait fields and trait arguments are computed while the constructor is filling the object, so they can't yield
+-- Everything construction runs may yield, on every path: the construction site (NEWOBJECT), `__init`, the generic
+-- constructor (a class from another chunk, or `pcall`), and LOP_INITTRAITS's runner (a trait from another chunk). Each
+-- yield gets the value its resume passes in, and the object is only returned once it is complete.
 do
-    local TraitYieldField, TraitYieldArg = compile([[
+    local traitChunk = compile([[
         trait YieldsField
-            f = coroutine.yield("paused")
+            f = coroutine.yield("trait default")
         end
+        trait TakesArg(a, b = coroutine.yield("trait parameter default"))
+            f = a
+            g = b
+        end
+        trait OrderBase
+            base = coroutine.yield("needed trait default")
+        end
+        trait OrderTop needs OrderBase
+            top = coroutine.yield("needing trait default")
+        end
+        return YieldsField, TakesArg, OrderTop
+    ]])
+    local YieldsField, TakesArg, OrderTop = traitChunk()
+
+    local classes = compile([[
+        local YieldsField, TakesArg, OrderTop = ...
         class TraitYieldField implements YieldsField
             own = 0
         end
-        trait TakesArg(a)
-            f = a
-        end
-        class TraitYieldArg(n) implements TakesArg(coroutine.yield("paused"))
+        class TraitYieldArg(n) implements TakesArg(coroutine.yield("implements argument"))
             own = 0
         end
-        return TraitYieldField, TraitYieldArg
-    ]])()
-    for _, f in { function() return TraitYieldField() end, function() return TraitYieldArg(1) end } do
-        local ok, err = coroutine.resume(coroutine.create(f))
-        assert(not ok and string.find(err, "attempt to yield across metamethod/C-call boundary", 1, true), err)
+        class Ordered implements OrderTop
+            own = 0
+        end
+        class PodDefaults
+            x = coroutine.yield("pod default")
+        end
+        class PrimaryYield(p = coroutine.yield("class parameter default"))
+            q = coroutine.yield("class field initializer")
+        end
+        class InitYield
+            z = 0
+            function __init(self)
+                self.z = coroutine.yield("init body")
+            end
+        end
+        -- the same constructions, compiled where the classes are known
+        return {
+            TraitYieldField = TraitYieldField, TraitYieldArg = TraitYieldArg, Ordered = Ordered,
+            PodDefaults = PodDefaults, PrimaryYield = PrimaryYield, InitYield = InitYield,
+        }, {
+            TraitYieldField = function() local o = TraitYieldField() return o end,
+            TraitYieldArg = function(n) local o = TraitYieldArg(n) return o end,
+            Ordered = function() local o = Ordered() return o end,
+            PodDefaults = function() local o = PodDefaults() return o end,
+            PrimaryYield = function() local o = PrimaryYield() return o end,
+            InitYield = function() local o = InitYield() return o end,
+        }
+    ]])
+    local classValues, direct = classes(YieldsField, TakesArg, OrderTop)
+
+    -- calling a class value goes through the generic constructor
+    local generic = {}
+    for name, C in classValues do
+        generic[name] = function(...)
+            return C(...)
+        end
     end
+
+    -- runs `make` in a thread, checking it yields `expected` in order and resuming each with the matching `values`
+    local function drive(make, expected, values, ...)
+        local co = coroutine.create(make)
+        local ok, what = coroutine.resume(co, ...)
+        for i, label in expected do
+            assert(ok and what == label, `yield {i}: expected {label}, got {tostring(what)}`)
+            ok, what = coroutine.resume(co, values[i])
+        end
+        assert(ok and coroutine.status(co) == "dead", tostring(what))
+        return what
+    end
+
+    local function viaPcall(C)
+        return function(...)
+            local ok, object = pcall(C, ...)
+            assert(ok, object)
+            return object
+        end
+    end
+
+    for _, way in { generic, direct } do
+        local o = drive(way.TraitYieldField, { "trait default" }, { 7 })
+        assert(o.f == 7 and o.own == 0)
+
+        o = drive(way.TraitYieldArg, { "implements argument", "trait parameter default" }, { 5, 6 }, 1)
+        assert(o.f == 5 and o.g == 6 and o.n == 1)
+
+        o = drive(way.Ordered, { "needed trait default", "needing trait default" }, { "b", "t" })
+        assert(o.base == "b" and o.top == "t")
+
+        o = drive(way.PodDefaults, { "pod default" }, { 3 })
+        assert(o.x == 3)
+
+        o = drive(way.PrimaryYield, { "class parameter default", "class field initializer" }, { 1, 2 })
+        assert(o.p == 1 and o.q == 2)
+
+        o = drive(way.InitYield, { "init body" }, { 9 })
+        assert(o.z == 9)
+    end
+
+    local o = drive(viaPcall(classValues.TraitYieldArg), { "implements argument", "trait parameter default" }, { 5, 6 }, 1)
+    assert(o.f == 5 and o.g == 6)
+
+    -- a collection while construction is suspended keeps the half-built object and everything it holds
+    local co = coroutine.create(direct.Ordered)
+    assert(coroutine.resume(co) == true)
+    collectgarbage()
+    coroutine.resume(co, {})
+    collectgarbage()
+    local finished, ordered = coroutine.resume(co, {})
+    assert(finished and type(ordered.base) == "table" and type(ordered.top) == "table")
+end
+
+-- No half-built object is ever reachable: not while its construction is suspended, and not after it raised. The variable
+-- it is assigned to keeps its old value until construction completes, even a local another closure reads.
+do
+    local Pausing, Raising, readers = compile([[
+        trait PausesInit
+            f = coroutine.yield("paused")
+        end
+        trait RaisesInit
+            f = error("trait default failed")
+        end
+        class Pausing implements PausesInit
+            own = 0
+        end
+        class Raising implements RaisesInit
+            own = 0
+        end
+        local readers = {}
+        function readers.suspended()
+            local x = "before"
+            readers.peek = function() return x end
+            x = Pausing()
+            return x
+        end
+        function readers.raised()
+            local x = "before"
+            local ok = pcall(function() x = Raising() end)
+            return ok, x
+        end
+        return Pausing, Raising, readers
+    ]])()
+
+    local co = coroutine.create(readers.suspended)
+    assert(select(2, coroutine.resume(co)) == "paused")
+    assert(readers.peek() == "before")
+    local finished, object = coroutine.resume(co, 1)
+    assert(finished and object.f == 1 and readers.peek() == object)
+
+    local ok, x = readers.raised()
+    assert(not ok and x == "before")
+
+    expectfail("raising trait default", "trait default failed", Raising)
+end
+
+-- LOP_INITTRAITS's runner and the class's copy of `__traitinit` are on the stack while a trait initializer of another
+-- chunk runs, but the debug library doesn't hand them out
+do
+    local runner
+    local Grabbed = compile([[
+        local grab = ...
+        trait Grabs
+            g = grab()
+        end
+        return Grabs
+    ]])(function()
+        -- 1 is this function, 2 the class's copy of `__traitinit`, 3 the runner that called it
+        assert(debug.info(2, "n") == "__traitinit" and debug.info(2, "f") == nil)
+        assert(debug.info(3, "n") == "inittraits")
+        runner = debug.info(3, "f")
+        return 0
+    end)
+    local GrabsAll = compile([[
+        local Grabs = ...
+        class GrabsAll implements Grabs
+            own = 0
+        end
+        return GrabsAll
+    ]])(Grabbed)
+
+    local o = GrabsAll()
+    assert(o.g == 0 and runner == nil)
 end
 
 -- How construction fills trait fields: constants come from the shape with no call, computed fields from the class's copy
@@ -761,7 +932,7 @@ do
     expectfail("final written by a method", "'tag' is a final field of 'Owned' and can't be assigned", function() a:retag() end)
     expectfail("final written by __init", "'tag' is a final field of 'WithInit' and can't be assigned", function() return WithInit() end)
     expectfail("final set by a constructor table", "'tag' is a final field of 'Pod' and can't be assigned", function() return Pod({ tag = "x" }) end)
-    expectfail("class field named like a final field", "class 'Clash' can't declare 'tag': trait 'Tagged' already provides it", function()
+    expectfail("class field named like a final field", "'tag' is final in trait 'Tagged' and can't be overridden", function()
         compile([[local Tagged = ... class Clash implements Tagged tag = "x" end]])(Tagged)
     end)
 end

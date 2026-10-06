@@ -758,6 +758,19 @@ enum class IrCmd : uint8_t
     // A: pointer (LuauClass)
     NEW_OBJECT,
 
+    // Luwu Traits (rfcs/classes/traits.md): guard that NEWOBJECT's ALLOC form can construct this class natively. The
+    // private constructor rule is CHECK_CLASS_FIELDS_CONSTRUCTIBLE's. Constant defaults are fine, since
+    // NEW_OBJECT_DEFAULTS copies them, but the class's statement has to have implemented its traits
+    // (LuauClass::traitspending). Jumps if a check fails; the fallback then raises the error.
+    // A: pointer (LuauClass)
+    // B: block/vmexit/undef
+    CHECK_CLASS_ALLOCATABLE,
+
+    // Luwu Traits (rfcs/classes/traits.md): allocate an object of a class with its members set to their constant
+    // defaults (luaR_newobject), for NEWOBJECT's ALLOC form.
+    // A: pointer (LuauClass)
+    NEW_OBJECT_DEFAULTS,
+
     // Try to get the address of a static member on a Luwu Classes class object using the cached
     // member slot at the given bytecode position, or jump if the slot is stale (out of range for
     // static members, or doesn't name the expected member) -- see rfcs/classes
@@ -991,6 +1004,13 @@ enum class IrCmd : uint8_t
     // D: int (registers read from C on: 1, or twice the entry count of Luwu Traits' IMPLEMENTS form, see
     //    LBC_NEWCLASSMEMBER_IMPLEMENTS)
     FALLBACK_NEWCLASSMEMBER,
+
+    // Luwu Traits (rfcs/classes/traits.md): LOP_INITTRAITS's test: writes the trait initializer runner to B, or nil when
+    // the object's class has no trait initializers (a jump on B's tag follows). Runs no Luau code.
+    // A: unsigned int (bytecode instruction index)
+    // B: Rn (the runner's register, written)
+    // C: Rn (object)
+    FALLBACK_INITTRAITS,
 
     // Instruction that passes value through, it is produced by constant folding and users substitute it with the value
     // A: operand of any type

@@ -366,8 +366,8 @@ do
     end
 end
 
--- A field default, or an argument's `__index`, can't yield: they run while the constructor is filling the object. A
--- yield there would resume into a constructor that had carried on without their results. `__init` itself yields.
+-- A field default may yield, like `__init` and everything else construction runs: the constructor fills the object in
+-- steps that resume after the yield. An argument's `__index` can't, as no metamethod can.
 class YieldingDefault
     x = coroutine.yield("paused")
 end
@@ -384,10 +384,12 @@ class YieldingArg
 end
 
 do
-    local co = coroutine.create(function() return YieldingDefault() end)
-    local ok, err = coroutine.resume(co)
-    assert(not ok and string.find(err, "attempt to yield across metamethod/C-call boundary", 1, true), err)
+    local co = coroutine.create(function() return YieldingDefault().x end)
+    local paused, label = coroutine.resume(co)
+    local finished, x = coroutine.resume(co, 7)
+    assert(paused and label == "paused" and finished and x == 7)
 
+    local ok, err
     local proxy = setmetatable({}, { __index = function() return coroutine.yield("paused") end })
     co = coroutine.create(function() return YieldingArg(proxy) end)
     ok, err = coroutine.resume(co)

@@ -3119,9 +3119,11 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::DUP_TABLE:
         break;
     case IrCmd::NEW_OBJECT:
+    case IrCmd::NEW_OBJECT_DEFAULTS:
         // an allocation: reads and writes nothing the pass tracks, and runs no user code
         break;
     case IrCmd::CHECK_CLASS_FIELDS_CONSTRUCTIBLE:
+    case IrCmd::CHECK_CLASS_ALLOCATABLE:
         break;
     case IrCmd::TRY_NUM_TO_INDEX:
         for (uint32_t prevIdx : state.tryNumToIndexCache)
@@ -3667,6 +3669,10 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::FALLBACK_NEWCLASSMEMBER:
         // Adding a member can run the collector, but writes no registers.
         state.invalidateUserCall();
+        break;
+    case IrCmd::FALLBACK_INITTRAITS:
+        // writes the runner or nil, and runs nothing; the CALL after it runs the initializers
+        state.invalidate(OP_B(inst));
         break;
     case IrCmd::FALLBACK_NEWOBJECT:
         // Construction writes the instance (and, for a user __init, the frame it lays out above it),

@@ -998,19 +998,28 @@ const Instruction* executeNEWOBJECT(lua_State* L, const Instruction* pc, StkId b
     int form = LUAU_INSN_C(insn);
     bool custominit = form == LBC_NEWOBJECT_INIT;
     bool fieldsform = form == LBC_NEWOBJECT_FIELDS;
+    bool allocform = form == LBC_NEWOBJECT_ALLOC;
 
     // The compiler picked the form from the class's own declaration; asserted, as in the interpreter.
     LUAU_ASSERT(ttisclass(classReg));
-    LUAU_ASSERT(
-        fieldsform ? !(classvalue(classReg)->hascustominit && !classvalue(classReg)->hasprimaryinit)
-                   : classvalue(classReg)->hascustominit == custominit
-    );
-    LUAU_ASSERT(custominit || !classvalue(classReg)->haspoddefaultsfn);
-    LUAU_ASSERT(!fieldsform || classvalue(classReg)->numberofinstancemembers == aux);
+
+    LuauClass* classdef = classvalue(classReg);
+    bool onlyprimaryinit = !(classdef->hascustominit && !classdef->hasprimaryinit);
+    LUAU_ASSERT((fieldsform || allocform) ? onlyprimaryinit : classdef->hascustominit == custominit);
+    LUAU_ASSERT(custominit || !classdef->haspoddefaultsfn);
+    LUAU_ASSERT(!classdef->istrait);
+    LUAU_ASSERT(custominit || allocform || classdef->numtraits == 0);
+    LUAU_ASSERT(!fieldsform || classdef->numberofinstancemembers == aux);
+    LUAU_ASSERT(!allocform || aux == 0);
     // the POD form takes at most one argument; more compile to a call, which raises
     LUAU_ASSERT(form != LBC_NEWOBJECT_DEFAULT || aux <= 1);
 
-    LuauClass* classdef = classvalue(classReg);
+    // Luwu Traits (rfcs/classes/traits.md): see VM_CASE(LOP_NEWOBJECT)
+    if (LUAU_UNLIKELY(classdef->traitspending))
+    {
+        VM_PROTECT_PC();
+        luaR_checktraitsimplemented(L, classdef);
+    }
 
     // See VM_CASE(LOP_NEWOBJECT): a private constructor is only callable from inside its own class,
     // and NEWOBJECT skips the C constructor frame where luaR_createobject would enforce that. `cl` is
@@ -1116,6 +1125,29 @@ const Instruction* executeNEWCLASSMEMBER(lua_State* L, const Instruction* pc, St
 
     VM_PROTECT_PC();
     luaR_addclassmember(L, classvalue(ra), tsvalue(membername), rc);
+
+    return pc;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): the test half of LOP_INITTRAITS for native code (see FALLBACK_INITTRAITS). Kept in
+// step with VM_CASE(LOP_INITTRAITS) in lvmexecute.cpp.
+const Instruction* executeINITTRAITS(lua_State* L, const Instruction* pc, StkId base, TValue* k)
+{
+    [[maybe_unused]] Closure* cl = clvalue(L->ci->func);
+    Instruction insn = *pc++;
+    StkId ra = VM_REG(LUAU_INSN_A(insn));
+
+    LUAU_ASSERT(ttisobject(ra + 1));
+
+    // the jump after this skips the CALL on nil
+    if (objectvalue(ra + 1)->lclass->traitinits)
+    {
+        setclvalue(L, ra, L->global->traitinitrunner);
+    }
+    else
+    {
+        setnilvalue(ra);
+    }
 
     return pc;
 }

@@ -543,6 +543,15 @@ struct BytecodeGraphParser
                     addImmInput(node, static_cast<bool>(aux & LBC_JUMPXISA_CHECKCLASS));
                     break;
 
+                case LOP_INITTRAITS:
+                    // Luwu Traits (rfcs/classes/traits.md): reads the object in A + 1, jumps over the CALL after it, and
+                    // otherwise writes the runner to A
+                    addVmRegInput(node, LUAU_INSN_A(insn) + 1);
+                    addJumpInput(node, jumpTarget);
+                    func.regs[nodeOp] = LUAU_INSN_A(insn);
+                    addProducer(LUAU_INSN_A(insn), func.addProj(nodeOp, 0));
+                    break;
+
                 case LOP_JUMPIF:
                 case LOP_JUMPIFNOT:
                     addVmRegInput(node, LUAU_INSN_A(insn));
@@ -782,6 +791,7 @@ struct BytecodeGraphParser
             case LOP_JUMPXEQKN:
             case LOP_JUMPXEQKS:
             case LOP_JUMPXISA:
+            case LOP_INITTRAITS:
             case LOP_JUMPIF:
             case LOP_JUMPIFNOT:
             case LOP_JUMPIFEQ:

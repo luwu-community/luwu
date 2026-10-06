@@ -9,6 +9,7 @@
 #include "ldo.h"
 #include "lbytecode.h"
 #include "lvm.h"
+#include "lclass.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -232,7 +233,14 @@ int lua_getinfo(lua_State* L, int level, const char* what, lua_Debug* ar)
         if (Closure* fcl = auxgetinfo(L, what, ar, f, ci))
         {
             luaC_threadbarrier(L);
-            setclvalue(L, L->top, fcl);
+
+            // Luwu Classes (rfcs/classes): a function only the VM calls is never handed out; its frame still counts as
+            // a level, and the option gives nil in its place
+            if (luaR_isvminternalfunction(L, fcl))
+                setnilvalue(L->top);
+            else
+                setclvalue(L, L->top, fcl);
+
             incr_top(L);
         }
     }
