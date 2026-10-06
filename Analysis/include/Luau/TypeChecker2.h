@@ -254,6 +254,9 @@ private:
     void visit(AstExprTable* expr);
     void visit(AstExprUnary* expr);
     TypeId visit(AstExprBinary* expr, AstNode* overrideKey = nullptr);
+    // Luwu Classes (rfcs/classes): `type(x) == "table"` where `x` is an object, a class or a trait value, whose `type`
+    // is always "object", "class" or "trait"
+    void checkLuwuNominalTypeComparison(AstExprBinary* expr);
     void visit(AstExprTypeAssertion* expr);
     void visit(AstExprIfElse* expr);
     void visit(AstExprInterpString* interpString);
