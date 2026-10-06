@@ -19,6 +19,7 @@ LUAU_FASTINT(LuauParseErrorLimit)
 LUAU_DYNAMIC_FASTFLAG(DebugLuauReportReturnTypeVariadicWithTypeSuffix)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuwuNoinlineAttribute)
+LUAU_FASTFLAG(LuauCstAttr)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
@@ -8746,6 +8747,66 @@ TEST_CASE_FIXTURE(Fixture, "declarations_have_no_value")
         REQUIRE_EQ(result.root->body.size, 2);
         CHECK(result.root->body.data[0]->is<AstStatDeclareGlobal>());
     }
+}
+
+TEST_CASE_FIXTURE(Fixture, "lint_attributes_take_bare_lint_names")
+{
+    ScopedFastFlag cstAttr{FFlag::LuauCstAttr, true};
+
+    AstStatBlock* stat = parse(R"(
+@[nolint(LocalUnused, "LoopConcat")]
+local function f() end
+@[nolint]
+local function g() end
+@[lint(LocalUnused)]
+local function h() end
+)");
+    REQUIRE(stat != nullptr);
+    REQUIRE(3 == stat->body.size);
+
+    AstStatLocalFunction* f = stat->body.data[0]->as<AstStatLocalFunction>();
+    REQUIRE(f);
+    REQUIRE(1 == f->func->attributes.size);
+    CHECK(f->func->attributes.data[0]->type == AstAttr::Type::Nolint);
+    CHECK(2 == f->func->attributes.data[0]->args.size);
+
+    AstStatLocalFunction* h = stat->body.data[2]->as<AstStatLocalFunction>();
+    REQUIRE(h);
+    REQUIRE(1 == h->func->attributes.size);
+    CHECK(h->func->attributes.data[0]->type == AstAttr::Type::Lint);
+}
+
+TEST_CASE_FIXTURE(Fixture, "lint_attributes_reject_other_arguments")
+{
+    ScopedFastFlag cstAttr{FFlag::LuauCstAttr, true};
+
+    ParseResult result = tryParse(R"(
+@[nolint(1)]
+local function f() end
+@[lint]
+local function g() end
+)");
+
+    REQUIRE(2 == result.errors.size());
+    CHECK_EQ("Lint attributes take lint names, like '@[nolint(LocalUnused)]'", result.errors[0].getMessage());
+    CHECK_EQ("@lint needs the lints to turn on, like '@[lint(LocalUnused)]'", result.errors[1].getMessage());
+}
+
+TEST_CASE_FIXTURE(Fixture, "nodiscard_takes_an_optional_reason")
+{
+    ScopedFastFlag cstAttr{FFlag::LuauCstAttr, true};
+
+    ParseResult result = tryParse(R"(
+@nodiscard
+local function a() end
+@[nodiscard("use the copy")]
+local function b() end
+@[nodiscard(1)]
+local function c() end
+)");
+
+    REQUIRE(1 == result.errors.size());
+    CHECK_EQ("@nodiscard takes at most one string, the reason: '@[nodiscard(\"use the returned copy\")]'", result.errors[0].getMessage());
 }
 
 TEST_SUITE_END();

@@ -205,16 +205,64 @@ std::vector<std::pair<Location, std::string>> deprecatedArgsValidator(Location a
     return errors;
 }
 
+// Luwu: `@[nolint(...)]` and `@[lint(...)]` take lint names, written bare like `--!nolint` takes them
+// (`@[nolint(LocalUnused)]`), or as strings. The linter checks that the names exist; the parser doesn't know them.
+std::vector<std::pair<Location, std::string>> lintNamesArgsValidator(Location attrLoc, const AstArray<AstExpr*>& args)
+{
+    std::vector<std::pair<Location, std::string>> errors;
+    for (AstExpr* arg : args)
+    {
+        bool isName = arg->is<AstExprGlobal>() || arg->is<AstExprLocal>() || arg->is<AstExprConstantString>();
+        if (!isName)
+            errors.emplace_back(arg->location, "Lint attributes take lint names, like '@[nolint(LocalUnused)]'");
+    }
+    return errors;
+}
+
+// Luwu: `@nodiscard`, or `@[nodiscard("reason")]` with one string saying what to do with the result
+std::vector<std::pair<Location, std::string>> nodiscardArgsValidator(Location attrLoc, const AstArray<AstExpr*>& args)
+{
+    bool valid = args.size == 0 || (args.size == 1 && args.data[0]->is<AstExprConstantString>());
+    if (!valid)
+        return {{attrLoc, "@nodiscard takes at most one string, the reason: '@[nodiscard(\"use the returned copy\")]'"}};
+
+    return {};
+}
+
+// Luwu: `@[lint]` has to name what it turns on. "Every lint" would include the ones the type checking mode turns off
+// because the checker already reports them, such as UnknownGlobal in strict mode.
+std::vector<std::pair<Location, std::string>> lintOnArgsValidator(Location attrLoc, const AstArray<AstExpr*>& args)
+{
+    if (args.size == 0)
+        return {{attrLoc, "@lint needs the lints to turn on, like '@[lint(LocalUnused)]'"}};
+
+    return lintNamesArgsValidator(attrLoc, args);
+}
+
+// Luwu: the attributes whose arguments are names rather than literals
+static bool takesNameArguments(const char* attributeName)
+{
+    return strcmp(attributeName, "nolint") == 0 || strcmp(attributeName, "lint") == 0;
+}
+
 // @checked and @native describe how a function is compiled or typechecked, so they mean nothing
 // anywhere else. @deprecated marks an API as one callers should stop using, which every position
 // can have.
 // The fields deprecatedArgsValidator accepts.
 const char* const kDeprecatedArgumentFields[] = {"use", "reason", nullptr};
 
+// Luwu: where `@[nolint]` and `@[lint]` may be written: anything with a body whose warnings they scope
+const AstAttr::Context kLintScopeContexts = AstAttr::Context(
+    unsigned(AstAttr::Context::AnyFunction) | unsigned(AstAttr::Context::Class) | unsigned(AstAttr::Context::ClassField)
+);
+
 AttributeEntry kAttributeEntries[] = {
     {"checked", AstAttr::Type::Checked, AstAttr::Context::AnyFunction, "functions", nullptr, {}},
     {"native", AstAttr::Type::Native, AstAttr::Context::AnyFunction, "functions", nullptr, {}},
     {"deprecated", AstAttr::Type::Deprecated, AstAttr::Context::Any, nullptr, kDeprecatedArgumentFields, deprecatedArgsValidator},
+    {"nolint", AstAttr::Type::Nolint, kLintScopeContexts, "functions, classes and class fields", nullptr, lintNamesArgsValidator},
+    {"lint", AstAttr::Type::Lint, kLintScopeContexts, "functions, classes and class fields", nullptr, lintOnArgsValidator},
+    {"nodiscard", AstAttr::Type::Nodiscard, AstAttr::Context::AnyFunction, "functions", nullptr, nodiscardArgsValidator},
     {nullptr, AstAttr::Type::Checked, AstAttr::Context::None, nullptr, nullptr, {}}
 };
 
@@ -1341,7 +1389,8 @@ void Parser::parseAttrList(TempVector<AstAttr*>& attributes, TempVector<CstAttrL
                 auto [args, argsLocation, _exprLocation] =
                     options.storeCstData ? parseCallList(&argCommaPositions, &closeParenPosition) : parseCallList(nullptr, nullptr);
 
-                reportNonLiteralAttributeArgs(args, argsLocation);
+                if (!takesNameArguments(attrName))
+                    reportNonLiteralAttributeArgs(args, argsLocation);
 
                 std::optional<AstAttr::Type> type = validateAttribute(nameLoc, attrName, attributes, args, context);
 
@@ -1494,7 +1543,8 @@ void Parser::parseAttribute_DEPRECATED(TempVector<AstAttr*>& attributes, AstAttr
 
                     auto [args, argsLocation, _exprLocation] = parseCallList(nullptr);
 
-                    reportNonLiteralAttributeArgs(args, argsLocation);
+                    if (!takesNameArguments(attrName))
+                        reportNonLiteralAttributeArgs(args, argsLocation);
 
                     std::optional<AstAttr::Type> type = validateAttribute(nameLoc, attrName, attributes, args, context);
 

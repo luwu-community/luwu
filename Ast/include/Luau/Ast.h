@@ -242,6 +242,12 @@ public:
         Noinline,
         // Luwu user-defined refinements: `@[truthy(param, Type)]`
         Truthy,
+        // Luwu: `@[nolint(Name, ...)]` turns lints off inside the function, class or field it is written on, and
+        // `@[lint(Name, ...)]` turns them back on. Without names, all of them.
+        Nolint,
+        Lint,
+        // Luwu: `@nodiscard` or `@[nodiscard("reason")]` on a function: calling it without using its result is a mistake
+        Nodiscard,
         Unknown
     };
 

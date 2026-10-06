@@ -68,6 +68,9 @@ TypeId Instantiation::clean(TypeId ty)
     clone.argNames = ftv->argNames;
     clone.isDeprecatedFunction = ftv->isDeprecatedFunction;
     clone.deprecatedInfo = ftv->deprecatedInfo;
+    // Luwu: `@nodiscard`
+    clone.isNodiscard = ftv->isNodiscard;
+    clone.nodiscardReason = ftv->nodiscardReason;
     TypeId result = addType(std::move(clone));
 
     // Annoyingly, we have to do this even if there are no generics,

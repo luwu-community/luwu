@@ -3093,6 +3093,16 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatRepeat* rep
     return ControlFlow::None;
 }
 
+// Luwu: the reason `@[nodiscard("reason")]` gives, or empty
+static std::string nodiscardReasonOf(const AstAttr* attr)
+{
+    if (attr->args.size == 0)
+        return {};
+
+    const AstExprConstantString* reason = attr->args.data[0]->as<AstExprConstantString>();
+    return reason ? std::string(reason->value.data, reason->value.size) : std::string();
+}
+
 static void propagateDeprecatedAttributeToConstraint(ConstraintV& c, const AstExprFunction* func)
 {
     if (GeneralizationConstraint* genConstraint = c.get_if<GeneralizationConstraint>())
@@ -3102,6 +3112,13 @@ static void propagateDeprecatedAttributeToConstraint(ConstraintV& c, const AstEx
         if (deprecatedAttribute)
         {
             genConstraint->deprecatedInfo = deprecatedAttribute->deprecatedInfo();
+        }
+
+        // Luwu: `@nodiscard` travels the same way
+        if (AstAttr* nodiscard = func->getAttribute(AstAttr::Type::Nodiscard))
+        {
+            genConstraint->hasNodiscardAttribute = true;
+            genConstraint->nodiscardReason = nodiscardReasonOf(nodiscard);
         }
     }
 }
@@ -3916,6 +3933,13 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatDeclareFunc
     if (deprecatedAttr)
     {
         ftv->deprecatedInfo = std::make_shared<AstAttr::DeprecatedInfo>(deprecatedAttr->deprecatedInfo());
+    }
+
+    // Luwu: `@nodiscard declare function ...`
+    if (AstAttr* nodiscard = global->getAttribute(AstAttr::Type::Nodiscard))
+    {
+        ftv->isNodiscard = true;
+        ftv->nodiscardReason = nodiscardReasonOf(nodiscard);
     }
 
     ftv->argNames.reserve(global->paramNames.size);

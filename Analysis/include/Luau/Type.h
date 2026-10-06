@@ -408,6 +408,11 @@ struct FunctionType
     bool isDeprecatedFunction = false;
     std::shared_ptr<AstAttr::DeprecatedInfo> deprecatedInfo;
 
+    // Luwu: from `@nodiscard` / `@[nodiscard("reason")]`. A call whose result isn't used is reported (the DiscardedResult
+    // lint), with the reason when there is one.
+    bool isNodiscard = false;
+    std::string nodiscardReason;
+
     // Luwu user-defined refinements: from `@[truthy(param, Type)]`. A call that returns a truthy value refines its
     // argument for parameter `argIndex` (counting `self`) to `type`.
     struct TruthyRefinement

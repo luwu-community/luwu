@@ -3948,7 +3948,9 @@ static void lintComments(LintContext& context, const std::vector<HotComment>& ho
                 {
                     // disables all lints
                 }
-                else if (LintWarning::parseName(hc.content.c_str() + notspace) == LintWarning::Code_Unknown)
+                // Luwu: `All` is not a lint, but `--!nolint All` is valid
+                else if (!LintWarning::isAllName(hc.content.c_str() + notspace) &&
+                         LintWarning::parseName(hc.content.c_str() + notspace) == LintWarning::Code_Unknown)
                 {
                     const char* rule = hc.content.c_str() + notspace;
 
@@ -3965,6 +3967,43 @@ static void lintComments(LintContext& context, const std::vector<HotComment>& ho
                     else
                         emitWarning(
                             context, LintWarning::Code_CommentDirective, hc.location, "nolint directive refers to unknown lint rule '%s'", rule
+                        );
+                }
+            }
+            // Luwu: `--!lint Name` turns on a lint that's off by default
+            else if (first == "lint")
+            {
+                size_t notspace = hc.content.find_first_not_of(" \t", space);
+                const char* rule = notspace == std::string::npos ? nullptr : hc.content.c_str() + notspace;
+
+                if (space == std::string::npos || !rule)
+                    emitWarning(
+                        context,
+                        LintWarning::Code_CommentDirective,
+                        hc.location,
+                        "lint directive needs the lint to turn on, like '--!lint ConstLocal'"
+                    );
+                else if (LintWarning::isAllName(rule))
+                    emitWarning(
+                        context,
+                        LintWarning::Code_CommentDirective,
+                        hc.location,
+                        "'All' can only turn lints off; name the lint to turn on, like '--!lint ConstLocal'"
+                    );
+                else if (LintWarning::parseName(rule) == LintWarning::Code_Unknown)
+                {
+                    if (const char* suggestion = fuzzyMatch(rule, kWarningNames + 1, LintWarning::Code__Count - 1))
+                        emitWarning(
+                            context,
+                            LintWarning::Code_CommentDirective,
+                            hc.location,
+                            "lint directive refers to unknown lint rule '%s'; did you mean '%s'?",
+                            rule,
+                            suggestion
+                        );
+                    else
+                        emitWarning(
+                            context, LintWarning::Code_CommentDirective, hc.location, "lint directive refers to unknown lint rule '%s'", rule
                         );
                 }
             }
@@ -4034,6 +4073,7 @@ static void lintComments(LintContext& context, const std::vector<HotComment>& ho
             {
                 static const char* kHotComments[] = {
                     "nolint",
+                    "lint",
                     "nocheck",
                     "nonstrict",
                     "strict",
@@ -4697,6 +4737,36 @@ private:
     }
 };
 
+// Luwu: whether `a` and `b` name the same variable or field chain (`x`, `t.items`)
+static bool sameTarget(AstExpr* a, AstExpr* b)
+{
+    a = unparenthesized(a);
+    b = unparenthesized(b);
+
+    if (AstExprLocal* localA = a->as<AstExprLocal>())
+    {
+        AstExprLocal* localB = b->as<AstExprLocal>();
+        return localB && localA->local == localB->local;
+    }
+
+    if (AstExprGlobal* globalA = a->as<AstExprGlobal>())
+    {
+        AstExprGlobal* globalB = b->as<AstExprGlobal>();
+        return globalB && globalA->name == globalB->name;
+    }
+
+    AstExprIndexName* indexA = a->as<AstExprIndexName>();
+    AstExprIndexName* indexB = b->as<AstExprIndexName>();
+    return indexA && indexB && indexA->index == indexB->index && sameTarget(indexA->expr, indexB->expr);
+}
+
+// Luwu: `expr` quoted for a message, or `fallback` when it has no short name
+static std::string describe(AstExpr* expr, const char* fallback)
+{
+    std::optional<std::string> name = shortExprName(unparenthesized(expr));
+    return name ? "'" + *name + "'" : std::string(fallback);
+}
+
 // Luwu: the loop parts of OptimizationHint, each with its own code so it can be turned off alone. Each is quadratic in
 // the number of iterations: the work it repeats grows with every one.
 class LintLoopHints : AstVisitor
@@ -4792,34 +4862,6 @@ private:
     {
         AstExprLocal* local = unparenthesized(target)->as<AstExprLocal>();
         return !local || local->local->location.begin < loop->location.begin;
-    }
-
-    static bool sameTarget(AstExpr* a, AstExpr* b)
-    {
-        a = unparenthesized(a);
-        b = unparenthesized(b);
-
-        if (AstExprLocal* localA = a->as<AstExprLocal>())
-        {
-            AstExprLocal* localB = b->as<AstExprLocal>();
-            return localB && localA->local == localB->local;
-        }
-
-        if (AstExprGlobal* globalA = a->as<AstExprGlobal>())
-        {
-            AstExprGlobal* globalB = b->as<AstExprGlobal>();
-            return globalB && globalA->name == globalB->name;
-        }
-
-        AstExprIndexName* indexA = a->as<AstExprIndexName>();
-        AstExprIndexName* indexB = b->as<AstExprIndexName>();
-        return indexA && indexB && indexA->index == indexB->index && sameTarget(indexA->expr, indexB->expr);
-    }
-
-    static std::string describe(AstExpr* expr, const char* fallback)
-    {
-        std::optional<std::string> name = shortExprName(unparenthesized(expr));
-        return name ? "'" + *name + "'" : std::string(fallback);
     }
 
     void reportConcat(AstExpr* target, const Location& location)
@@ -5210,6 +5252,1460 @@ private:
     }
 };
 
+// Luwu: mistakes in loops that make them do something other than what they look like they do. Each has its own code.
+class LintLoopMistakes : AstVisitor
+{
+public:
+    struct Enabled
+    {
+        bool removeWhileIterating = false;
+        bool loopVariableWrite = false;
+        bool iteratedTableWrite = false;
+        bool foreverLoop = false;
+        bool uselessLoop = false;
+        bool stringIndexZero = false;
+    };
+
+    LUAU_NOINLINE static void process(LintContext& context, Enabled enabled)
+    {
+        LintLoopMistakes pass;
+        pass.context = &context;
+        pass.enabled = enabled;
+
+        CaptureCollector captures{&pass.captured, &pass.capturedWrites};
+        context.root->visit(&captures);
+
+        context.root->visit(&pass);
+    }
+
+private:
+    LintContext* context;
+    Enabled enabled;
+
+    // Locals some nested function reads or writes, and the ones it writes
+    DenseHashSet<AstLocal*> captured{nullptr};
+    DenseHashSet<AstLocal*> capturedWrites{nullptr};
+
+    struct CaptureCollector : AstVisitor
+    {
+        DenseHashSet<AstLocal*>* captured;
+        DenseHashSet<AstLocal*>* capturedWrites;
+
+        CaptureCollector(DenseHashSet<AstLocal*>* captured, DenseHashSet<AstLocal*>* capturedWrites)
+            : captured(captured)
+            , capturedWrites(capturedWrites)
+        {
+        }
+
+        void write(AstExpr* target)
+        {
+            AstExprLocal* local = unparenthesized(target)->as<AstExprLocal>();
+            if (local && local->upvalue)
+                capturedWrites->insert(local->local);
+        }
+
+        bool visit(AstExprLocal* node) override
+        {
+            if (node->upvalue)
+                captured->insert(node->local);
+            return true;
+        }
+
+        bool visit(AstStatAssign* node) override
+        {
+            for (AstExpr* var : node->vars)
+                write(var);
+            return true;
+        }
+
+        bool visit(AstStatCompoundAssign* node) override
+        {
+            write(node->var);
+            return true;
+        }
+    };
+
+    // `name(...)`, `lib.name(...)` or `obj:name(...)`: the last name in the callee
+    static std::optional<std::string_view> calleeName(AstExprCall* call)
+    {
+        AstExpr* func = unparenthesized(call->func);
+        if (AstExprGlobal* global = func->as<AstExprGlobal>())
+            return std::string_view(global->name.value);
+        if (AstExprLocal* local = func->as<AstExprLocal>())
+            return std::string_view(local->local->name.value);
+        if (AstExprIndexName* index = func->as<AstExprIndexName>())
+            return std::string_view(index->index.value);
+        return std::nullopt;
+    }
+
+    // A call that yields or waits: a loop around one is usually a service loop that something else ends
+    static bool isYieldingCall(AstExprCall* call)
+    {
+        std::optional<std::string_view> name = calleeName(call);
+        if (!name)
+            return false;
+
+        std::string lowered(*name);
+        std::transform(lowered.begin(), lowered.end(), lowered.begin(), ::tolower);
+        return lowered.find("yield") != std::string::npos || lowered.find("wait") != std::string::npos ||
+               lowered.find("sleep") != std::string::npos;
+    }
+
+    static bool isErrorCall(AstStat* stat)
+    {
+        AstStatExpr* expr = stat->as<AstStatExpr>();
+        AstExprCall* call = expr ? expr->expr->as<AstExprCall>() : nullptr;
+        AstExprGlobal* callee = call ? call->func->as<AstExprGlobal>() : nullptr;
+        return callee && callee->name == "error";
+    }
+
+    // Whether a loop body can end the loop or hand control elsewhere: `break` (at this loop's level), `return`,
+    // `error(...)`, or a yielding call. Nested functions run later, so they don't count.
+    struct ExitFinder : AstVisitor
+    {
+        size_t nestedLoops = 0;
+        bool found = false;
+        bool foundContinue = false;
+
+        bool visitLoopBody(AstStatBlock* body)
+        {
+            ++nestedLoops;
+            body->visit(this);
+            --nestedLoops;
+            return false;
+        }
+
+        bool visit(AstStatWhile* node) override
+        {
+            node->condition->visit(this);
+            return visitLoopBody(node->body);
+        }
+
+        bool visit(AstStatRepeat* node) override
+        {
+            node->condition->visit(this);
+            return visitLoopBody(node->body);
+        }
+
+        bool visit(AstStatFor* node) override
+        {
+            return visitLoopBody(node->body);
+        }
+
+        bool visit(AstStatForIn* node) override
+        {
+            for (AstExpr* value : node->values)
+                value->visit(this);
+            return visitLoopBody(node->body);
+        }
+
+        bool visit(AstStatBreak*) override
+        {
+            if (nestedLoops == 0)
+                found = true;
+            return false;
+        }
+
+        bool visit(AstStatContinue*) override
+        {
+            if (nestedLoops == 0)
+                foundContinue = true;
+            return false;
+        }
+
+        bool visit(AstStatReturn*) override
+        {
+            found = true;
+            return false;
+        }
+
+        bool visit(AstStatExpr* node) override
+        {
+            if (isErrorCall(node))
+                found = true;
+            return true;
+        }
+
+        bool visit(AstExprCall* node) override
+        {
+            if (isYieldingCall(node))
+                found = true;
+            return true;
+        }
+
+        bool visit(AstExprFunction*) override
+        {
+            return false;
+        }
+    };
+
+    // How every path through a loop body leaves the loop: through `break`, `return` or `error(...)`
+    enum class Leaves
+    {
+        Never,          // some path reaches the end of the body
+        Directly,       // an unconditional `break`, `return` or `error(...)`
+        ThroughBranches // every branch of an `if`/`else` leaves
+    };
+
+    static Leaves howBlockLeaves(AstStatBlock* block)
+    {
+        for (AstStat* stat : block->body)
+        {
+            if (stat->is<AstStatBreak>() || stat->is<AstStatReturn>() || isErrorCall(stat))
+                return Leaves::Directly;
+
+            if (AstStatBlock* inner = stat->as<AstStatBlock>())
+            {
+                if (Leaves leaves = howBlockLeaves(inner); leaves != Leaves::Never)
+                    return leaves;
+            }
+
+            AstStatIf* branch = stat->as<AstStatIf>();
+            bool everyBranchLeaves = branch && branch->elsebody && howBlockLeaves(branch->thenbody) != Leaves::Never &&
+                                     elseLeaves(branch->elsebody);
+            if (everyBranchLeaves)
+                return Leaves::ThroughBranches;
+        }
+        return Leaves::Never;
+    }
+
+    static bool elseLeaves(AstStat* elsebody)
+    {
+        if (AstStatBlock* block = elsebody->as<AstStatBlock>())
+            return howBlockLeaves(block) != Leaves::Never;
+        if (AstStatIf* elseif = elsebody->as<AstStatIf>())
+            return elseif->elsebody && howBlockLeaves(elseif->thenbody) != Leaves::Never && elseLeaves(elseif->elsebody);
+        return false;
+    }
+
+    // `takesFirstItem`: a `for ... in` loop, where leaving unconditionally is the idiom for taking the first item
+    // (`for k in pairs(t) do return k end`), so only leaving through every branch of an `if` is reported
+    void checkUselessLoop(AstStat* loop, AstStatBlock* body, bool takesFirstItem)
+    {
+        if (!enabled.uselessLoop)
+            return;
+
+        Leaves leaves = howBlockLeaves(body);
+        if (leaves == Leaves::Never || (takesFirstItem && leaves == Leaves::Directly))
+            return;
+
+        // `continue` on some path reaches the next iteration
+        ExitFinder finder;
+        body->visit(&finder);
+        if (finder.foundContinue)
+            return;
+
+        emitWarning(
+            *context,
+            LintWarning::Code_UselessLoop,
+            loop->location,
+            "This loop runs at most once: every path through its body leaves it on the first iteration; if a 'return' or 'break' "
+            "belongs after the loop, move it out"
+        );
+    }
+
+    // ForeverLoop: what a condition reads, when it reads only locals, constants and `#` of locals
+    struct ConditionReads
+    {
+        std::vector<AstLocal*> locals;
+        std::vector<AstLocal*> lengths; // `#t`
+    };
+
+    static bool collectConditionReads(AstExpr* expr, ConditionReads& reads)
+    {
+        expr = unparenthesized(expr);
+
+        if (AstExprLocal* local = expr->as<AstExprLocal>())
+        {
+            reads.locals.push_back(local->local);
+            return true;
+        }
+
+        if (expr->is<AstExprConstantBool>() || expr->is<AstExprConstantNil>() || expr->is<AstExprConstantNumber>() ||
+            expr->is<AstExprConstantString>())
+            return true;
+
+        if (AstExprUnary* unary = expr->as<AstExprUnary>())
+        {
+            if (unary->op == AstExprUnary::Op::Len)
+            {
+                AstExprLocal* table = unparenthesized(unary->expr)->as<AstExprLocal>();
+                if (!table)
+                    return false;
+                reads.lengths.push_back(table->local);
+                return true;
+            }
+            return collectConditionReads(unary->expr, reads);
+        }
+
+        if (AstExprBinary* binary = expr->as<AstExprBinary>())
+            return collectConditionReads(binary->left, reads) && collectConditionReads(binary->right, reads);
+
+        return false;
+    }
+
+    // Whether a loop body writes one of `locals`, or uses one of `tables` in any way but reading an element
+    struct ConditionChangeFinder : AstVisitor
+    {
+        const ConditionReads* reads;
+        bool found = false;
+
+        explicit ConditionChangeFinder(const ConditionReads* reads)
+            : reads(reads)
+        {
+        }
+
+        bool isConditionLocal(AstExpr* expr) const
+        {
+            AstExprLocal* local = unparenthesized(expr)->as<AstExprLocal>();
+            return local && std::find(reads->locals.begin(), reads->locals.end(), local->local) != reads->locals.end();
+        }
+
+        bool isLengthTable(AstLocal* local) const
+        {
+            return std::find(reads->lengths.begin(), reads->lengths.end(), local) != reads->lengths.end();
+        }
+
+        bool visit(AstStatAssign* node) override
+        {
+            for (AstExpr* var : node->vars)
+                found = found || isConditionLocal(var);
+            return true;
+        }
+
+        bool visit(AstStatCompoundAssign* node) override
+        {
+            found = found || isConditionLocal(node->var);
+            return true;
+        }
+
+        // Reading an element of a table leaves its length alone; any other use of it might not
+        bool visit(AstExprIndexExpr* node) override
+        {
+            AstExprLocal* table = unparenthesized(node->expr)->as<AstExprLocal>();
+            if (table && isLengthTable(table->local))
+            {
+                node->index->visit(this);
+                return false;
+            }
+            return true;
+        }
+
+        bool visit(AstExprLocal* node) override
+        {
+            if (isLengthTable(node->local))
+                found = true;
+            return true;
+        }
+    };
+
+    void checkForeverLoop(AstStat* loop, AstExpr* condition, AstStatBlock* body)
+    {
+        if (!enabled.foreverLoop)
+            return;
+
+        ConditionReads reads;
+        if (!collectConditionReads(condition, reads) || (reads.locals.empty() && reads.lengths.empty()))
+            return;
+
+        for (AstLocal* local : reads.locals)
+        {
+            // something else can change it, or (in `repeat ... until`) the body declares it afresh every iteration
+            bool declaredInBody = body->location.encloses(local->location);
+            if (capturedWrites.contains(local) || declaredInBody)
+                return;
+        }
+
+        for (AstLocal* table : reads.lengths)
+        {
+            if (captured.contains(table))
+                return;
+        }
+
+        ExitFinder exits;
+        body->visit(&exits);
+        if (exits.found)
+            return;
+
+        ConditionChangeFinder changes{&reads};
+        body->visit(&changes);
+        if (changes.found)
+            return;
+
+        std::string what;
+        if (!reads.locals.empty())
+            what = "'" + std::string(reads.locals.front()->name.value) + "'";
+        else
+            what = "the length of '" + std::string(reads.lengths.front()->name.value) + "'";
+
+        emitWarning(
+            *context,
+            LintWarning::Code_ForeverLoop,
+            loop->location,
+            "Nothing in this loop changes %s, so once it starts it never stops; did you forget to update it?",
+            what.c_str()
+        );
+    }
+
+    // The table a `for ... in` loop iterates, and whether it's in key order (`pairs`, `next` or the table itself) or
+    // index order (`ipairs`)
+    struct Iterated
+    {
+        AstExpr* table = nullptr;
+        bool byIndex = false;
+    };
+
+    static Iterated iteratedTable(AstStatForIn* loop)
+    {
+        if (loop->values.size == 0)
+            return {};
+
+        AstExpr* first = unparenthesized(loop->values.data[0]);
+        if (AstExprCall* call = first->as<AstExprCall>())
+        {
+            AstExprGlobal* callee = call->func->as<AstExprGlobal>();
+            if (!callee || call->args.size != 1 || loop->values.size != 1)
+                return {};
+            if (callee->name == "ipairs")
+                return {call->args.data[0], true};
+            if (callee->name == "pairs")
+                return {call->args.data[0], false};
+            return {};
+        }
+
+        // `for k, v in next, t`
+        if (AstExprGlobal* global = first->as<AstExprGlobal>(); global && global->name == "next" && loop->values.size >= 2)
+            return {loop->values.data[1], false};
+
+        if (loop->values.size == 1)
+            return {first, false};
+
+        return {};
+    }
+
+    // RemoveWhileIterating: `table.remove(t, i)` statements in a block, at the block's own level
+    struct RemoveFinder : AstVisitor
+    {
+        AstExpr* table;
+        AstLocal* index;
+        AstExprCall* found = nullptr;
+
+        RemoveFinder(AstExpr* table, AstLocal* index)
+            : table(table)
+            , index(index)
+        {
+        }
+
+        bool visit(AstExprCall* node) override
+        {
+            AstExprIndexName* function = node->func->as<AstExprIndexName>();
+            AstExprGlobal* library = function ? function->expr->as<AstExprGlobal>() : nullptr;
+            bool isRemove = library && library->name == "table" && function->index == "remove" && node->args.size == 2;
+            AstExprLocal* removed = isRemove ? unparenthesized(node->args.data[1])->as<AstExprLocal>() : nullptr;
+            if (removed && removed->local == index && sameTarget(node->args.data[0], table))
+                found = node;
+            return !found;
+        }
+
+        // the block walk visits nested blocks itself, with their own following statements
+        bool visit(AstStatBlock*) override
+        {
+            return false;
+        }
+
+        bool visit(AstExprFunction*) override
+        {
+            return false;
+        }
+    };
+
+    void checkRemovesIn(AstStatBlock* block, AstExpr* table, AstLocal* index)
+    {
+        for (size_t i = 0; i < block->body.size; ++i)
+        {
+            AstStat* stat = block->body.data[i];
+
+            RemoveFinder finder{table, index};
+            stat->visit(&finder);
+
+            if (finder.found)
+            {
+                // `table.remove(t, i)` then `break` or `return` never reaches the next element
+                AstStat* next = i + 1 < block->body.size ? block->body.data[i + 1] : nullptr;
+                bool leavesRightAfter = next && (next->is<AstStatBreak>() || next->is<AstStatReturn>() || isErrorCall(next));
+                if (!leavesRightAfter)
+                    emitWarning(
+                        *context,
+                        LintWarning::Code_RemoveWhileIterating,
+                        finder.found->location,
+                        "Removing element '%s' from %s while iterating it forwards skips the element after it, which moves into slot "
+                        "'%s'; iterate backwards ('for %s = #t, 1, -1 do') or build a new table",
+                        index->name.value,
+                        describe(table, "the table").c_str(),
+                        index->name.value,
+                        index->name.value
+                    );
+            }
+
+            // nested blocks of this statement (if/do/loops), not functions
+            NestedBlockCollector nested;
+            stat->visit(&nested);
+            for (AstStatBlock* inner : nested.blocks)
+                checkRemovesIn(inner, table, index);
+        }
+    }
+
+    // The blocks directly inside a statement: its own bodies, not the blocks nested inside those
+    struct NestedBlockCollector : AstVisitor
+    {
+        std::vector<AstStatBlock*> blocks;
+
+        bool visit(AstStatBlock* node) override
+        {
+            blocks.push_back(node);
+            return false;
+        }
+
+        bool visit(AstExprFunction*) override
+        {
+            return false;
+        }
+    };
+
+    void checkRemoveWhileIterating(AstExpr* table, AstLocal* index, AstStatBlock* body)
+    {
+        if (enabled.removeWhileIterating)
+            checkRemovesIn(body, table, index);
+    }
+
+    // LoopVariableWrite
+    struct LoopVariableWrites : AstVisitor
+    {
+        const std::vector<AstLocal*>* vars;
+        std::vector<std::pair<AstStat*, AstLocal*>> writes;
+        DenseHashSet<AstExprLocal*> writeTargets{nullptr};
+
+        explicit LoopVariableWrites(const std::vector<AstLocal*>* vars)
+            : vars(vars)
+        {
+        }
+
+        AstLocal* loopVariable(AstExpr* target)
+        {
+            AstExprLocal* local = unparenthesized(target)->as<AstExprLocal>();
+            if (!local || std::find(vars->begin(), vars->end(), local->local) == vars->end())
+                return nullptr;
+            return local->local;
+        }
+
+        bool visit(AstStatAssign* node) override
+        {
+            for (AstExpr* var : node->vars)
+            {
+                if (AstLocal* local = loopVariable(var))
+                {
+                    writes.emplace_back(node, local);
+                    writeTargets.insert(unparenthesized(var)->as<AstExprLocal>());
+                }
+            }
+            return true;
+        }
+
+        bool visit(AstStatCompoundAssign* node) override
+        {
+            if (AstLocal* local = loopVariable(node->var))
+                writes.emplace_back(node, local);
+            return true;
+        }
+    };
+
+    // Whether `local` is read after `after` ends, within `body`
+    struct ReadAfterFinder : AstVisitor
+    {
+        AstLocal* local;
+        Position after;
+        const DenseHashSet<AstExprLocal*>* writeTargets;
+        bool found = false;
+
+        ReadAfterFinder(AstLocal* local, Position after, const DenseHashSet<AstExprLocal*>* writeTargets)
+            : local(local)
+            , after(after)
+            , writeTargets(writeTargets)
+        {
+        }
+
+        bool visit(AstExprLocal* node) override
+        {
+            if (node->local == local && !writeTargets->contains(node) && after < node->location.begin)
+                found = true;
+            return !found;
+        }
+    };
+
+    void checkLoopVariableWrites(const std::vector<AstLocal*>& vars, AstStatBlock* body, bool numeric, AstStatForIn* forIn)
+    {
+        if (!enabled.loopVariableWrite)
+            return;
+
+        LoopVariableWrites writes{&vars};
+        body->visit(&writes);
+
+        for (const auto& [stat, local] : writes.writes)
+        {
+            if (numeric)
+            {
+                emitWarning(
+                    *context,
+                    LintWarning::Code_LoopVariableWrite,
+                    stat->location,
+                    "Assigning to the loop variable '%s' doesn't change which iteration runs next; use a 'while' loop to control the "
+                    "counter",
+                    local->name.value
+                );
+                continue;
+            }
+
+            // In a `for ... in` loop, reusing the variable as a scratch value is fine; a write nothing reads is the mistake
+            ReadAfterFinder reads{local, stat->location.end, &writes.writeTargets};
+            body->visit(&reads);
+            if (reads.found)
+                continue;
+
+            std::string fix = "write through the table instead";
+            Iterated iterated = iteratedTable(forIn);
+            std::optional<std::string> tableName = iterated.table ? shortExprName(unparenthesized(iterated.table)) : std::nullopt;
+            bool namedKey = forIn->vars.size >= 2 && std::string_view(forIn->vars.data[0]->name.value) != "_";
+            if (tableName && namedKey && local == forIn->vars.data[1])
+                fix = "write through the table instead ('" + *tableName + "[" + forIn->vars.data[0]->name.value + "] = ...')";
+
+            emitWarning(
+                *context,
+                LintWarning::Code_LoopVariableWrite,
+                stat->location,
+                "Assigning to '%s' only changes the loop's copy, and nothing reads it afterwards; to change the table, %s",
+                local->name.value,
+                fix.c_str()
+            );
+        }
+    }
+
+    // IteratedTableWrite
+    struct TableWriteFinder : AstVisitor
+    {
+        AstExpr* table;
+        AstLocal* key;
+        std::vector<AstStat*> writes;
+
+        TableWriteFinder(AstExpr* table, AstLocal* key)
+            : table(table)
+            , key(key)
+        {
+        }
+
+        bool writesOtherKey(AstExpr* target) const
+        {
+            target = unparenthesized(target);
+            if (AstExprIndexExpr* index = target->as<AstExprIndexExpr>())
+            {
+                AstExprLocal* indexLocal = unparenthesized(index->index)->as<AstExprLocal>();
+                bool ownKey = key && indexLocal && indexLocal->local == key;
+                return sameTarget(index->expr, table) && !ownKey;
+            }
+
+            AstExprIndexName* field = target->as<AstExprIndexName>();
+            return field && field->op == '.' && sameTarget(field->expr, table);
+        }
+
+        bool visit(AstStatAssign* node) override
+        {
+            for (AstExpr* var : node->vars)
+            {
+                if (writesOtherKey(var))
+                {
+                    writes.push_back(node);
+                    break;
+                }
+            }
+            return true;
+        }
+
+        bool visit(AstStatCompoundAssign* node) override
+        {
+            if (writesOtherKey(node->var))
+                writes.push_back(node);
+            return true;
+        }
+
+        bool visit(AstExprFunction*) override
+        {
+            return false;
+        }
+    };
+
+    // An array (`{T}`) may have its existing elements changed while it's iterated; a map may not get new keys
+    bool isArray(AstExpr* table) const
+    {
+        std::optional<TypeId> ty = context->getType(table);
+        const TableType* tt = ty ? get<TableType>(follow(*ty)) : nullptr;
+        return tt && tt->indexer && tt->props.empty() && isNumber(tt->indexer->indexType);
+    }
+
+    void checkIteratedTableWrites(AstStatForIn* loop)
+    {
+        if (!enabled.iteratedTableWrite)
+            return;
+
+        Iterated iterated = iteratedTable(loop);
+        if (!iterated.table || iterated.byIndex || isArray(iterated.table))
+            return;
+
+        AstLocal* key = loop->vars.size >= 1 ? loop->vars.data[0] : nullptr;
+        TableWriteFinder finder{iterated.table, key};
+        loop->body->visit(&finder);
+
+        for (AstStat* write : finder.writes)
+        {
+            std::string keyName = key ? "'" + std::string(key->name.value) + "'" : std::string("the loop's key");
+            emitWarning(
+                *context,
+                LintWarning::Code_IteratedTableWrite,
+                write->location,
+                "Writing a key of %s other than %s while iterating it is undefined: the loop may skip or repeat entries; collect "
+                "the changes and apply them after the loop",
+                describe(iterated.table, "the table").c_str(),
+                keyName.c_str()
+            );
+        }
+    }
+
+    // Loops
+    bool visit(AstStatFor* node) override
+    {
+        checkLoopVariableWrites({node->var}, node->body, /* numeric */ true, nullptr);
+        checkUselessLoop(node, node->body, /* takesFirstItem */ false);
+
+        // `for i = 1, #t` (counting up) is a forward pass over `t`
+        AstExprUnary* length = unparenthesized(node->to)->as<AstExprUnary>();
+        AstExprConstantNumber* step = node->step ? unparenthesized(node->step)->as<AstExprConstantNumber>() : nullptr;
+        bool countsUp = !node->step || (step && step->value > 0);
+        if (length && length->op == AstExprUnary::Op::Len && countsUp)
+            checkRemoveWhileIterating(length->expr, node->var, node->body);
+
+        return true;
+    }
+
+    bool visit(AstStatForIn* node) override
+    {
+        std::vector<AstLocal*> vars(node->vars.begin(), node->vars.end());
+        checkLoopVariableWrites(vars, node->body, /* numeric */ false, node);
+        checkUselessLoop(node, node->body, /* takesFirstItem */ true);
+        checkIteratedTableWrites(node);
+
+        Iterated iterated = iteratedTable(node);
+        if (iterated.table && node->vars.size >= 1)
+            checkRemoveWhileIterating(iterated.table, node->vars.data[0], node->body);
+
+        return true;
+    }
+
+    bool visit(AstStatWhile* node) override
+    {
+        checkForeverLoop(node, node->condition, node->body);
+        checkUselessLoop(node, node->body, /* takesFirstItem */ false);
+        return true;
+    }
+
+    bool visit(AstStatRepeat* node) override
+    {
+        checkForeverLoop(node, node->condition, node->body);
+        return true;
+    }
+
+    // StringIndexZero: strings are indexed from 1
+    bool visit(AstExprCall* node) override
+    {
+        if (!enabled.stringIndexZero)
+            return true;
+
+        AstExprIndexName* function = node->func->as<AstExprIndexName>();
+        if (!function || (function->index != "byte" && function->index != "sub"))
+            return true;
+
+        // `string.byte(s, 0)` or `s:byte(0)` on a string
+        AstExpr* start = nullptr;
+        AstExprGlobal* library = function->expr->as<AstExprGlobal>();
+        if (!node->self && library && library->name == "string" && node->args.size >= 2)
+            start = node->args.data[1];
+        else if (node->self && node->args.size >= 1)
+        {
+            std::optional<TypeId> receiver = context->getType(function->expr);
+            if (receiver && isString(*receiver))
+                start = node->args.data[0];
+        }
+
+        AstExprConstantNumber* zero = start ? unparenthesized(start)->as<AstExprConstantNumber>() : nullptr;
+        if (!zero || zero->value != 0.0)
+            return true;
+
+        if (function->index == "byte")
+            emitWarning(
+                *context,
+                LintWarning::Code_StringIndexZero,
+                start->location,
+                "Strings are indexed from 1: 'byte' at 0 is before the first character and returns nothing"
+            );
+        else
+            emitWarning(
+                *context,
+                LintWarning::Code_StringIndexZero,
+                start->location,
+                "Strings are indexed from 1: 'sub' treats a start of 0 as 1, so an end index written for 0-based indexing is one "
+                "character short"
+            );
+
+        return true;
+    }
+};
+
+// Luwu: values used in ways that can't do what they look like they do. Each has its own code.
+class LintValueMistakes : AstVisitor
+{
+public:
+    struct Enabled
+    {
+        bool newValueComparison = false;
+        bool tableTruthiness = false;
+        bool discardedResult = false;
+    };
+
+    LUAU_NOINLINE static void process(LintContext& context, Enabled enabled)
+    {
+        LintValueMistakes pass;
+        pass.context = &context;
+        pass.enabled = enabled;
+
+        if (enabled.tableTruthiness)
+        {
+            ContainerLocalCollector collector{&pass.containerLocals, &pass.assignedLocals};
+            context.root->visit(&collector);
+        }
+
+        context.root->visit(&pass);
+    }
+
+private:
+    LintContext* context;
+    Enabled enabled;
+
+    // TableTruthiness candidates: annotated parameters and locals a table literal initializes. A map read or a call
+    // result typed as a table can still be nil (a map read is typed without the nil it can give), so those aren't.
+    DenseHashSet<AstLocal*> containerLocals{nullptr};
+    DenseHashSet<AstLocal*> assignedLocals{nullptr};
+
+    struct ContainerLocalCollector : AstVisitor
+    {
+        DenseHashSet<AstLocal*>* containerLocals;
+        DenseHashSet<AstLocal*>* assignedLocals;
+
+        ContainerLocalCollector(DenseHashSet<AstLocal*>* containerLocals, DenseHashSet<AstLocal*>* assignedLocals)
+            : containerLocals(containerLocals)
+            , assignedLocals(assignedLocals)
+        {
+        }
+
+        bool visit(AstExprFunction* node) override
+        {
+            for (AstLocal* arg : node->args)
+            {
+                if (arg->annotation)
+                    containerLocals->insert(arg);
+            }
+            return true;
+        }
+
+        bool visit(AstStatLocal* node) override
+        {
+            for (size_t i = 0; i < node->vars.size && i < node->values.size; ++i)
+            {
+                if (unparenthesized(node->values.data[i])->is<AstExprTable>())
+                    containerLocals->insert(node->vars.data[i]);
+            }
+            return true;
+        }
+
+        void assigned(AstExpr* target)
+        {
+            if (AstExprLocal* local = unparenthesized(target)->as<AstExprLocal>())
+                assignedLocals->insert(local->local);
+        }
+
+        bool visit(AstStatAssign* node) override
+        {
+            for (AstExpr* var : node->vars)
+                assigned(var);
+            return true;
+        }
+
+        bool visit(AstStatCompoundAssign* node) override
+        {
+            assigned(node->var);
+            return true;
+        }
+    };
+
+    // NewValueComparison: a table or function literal makes a new value, which nothing else can be equal to
+    bool visit(AstExprBinary* node) override
+    {
+        if (!enabled.newValueComparison || (node->op != AstExprBinary::CompareEq && node->op != AstExprBinary::CompareNe))
+            return true;
+
+        AstExpr* left = unparenthesized(node->left);
+        AstExpr* right = unparenthesized(node->right);
+        bool table = left->is<AstExprTable>() || right->is<AstExprTable>();
+        bool function = left->is<AstExprFunction>() || right->is<AstExprFunction>();
+        if (!table && !function)
+            return true;
+
+        const char* always = node->op == AstExprBinary::CompareEq ? "false" : "true";
+        if (table)
+            emitWarning(
+                *context,
+                LintWarning::Code_NewValueComparison,
+                node->location,
+                "This comparison is always %s: a table literal makes a new table, which is never equal to another value; to check "
+                "whether a table is empty, use 'next(t) == nil'",
+                always
+            );
+        else
+            emitWarning(
+                *context,
+                LintWarning::Code_NewValueComparison,
+                node->location,
+                "This comparison is always %s: a function literal makes a new function, which is never equal to another value",
+                always
+            );
+
+        return true;
+    }
+
+    // TableTruthiness: an array, a map or an empty table (a table with no fields) is truthy even when it's empty, which
+    // people used to Python and JavaScript's falsy empty containers don't expect. A table with fields is left alone:
+    // testing a record that isn't optional is a defensive nil check, not this mistake.
+    bool isContainer(AstExpr* expr) const
+    {
+        AstExprLocal* local = expr->as<AstExprLocal>();
+        if (!local || !containerLocals.contains(local->local) || assignedLocals.contains(local->local))
+            return false;
+
+        std::optional<TypeId> ty = context->getType(expr);
+        const TableType* table = ty ? get<TableType>(follow(*ty)) : nullptr;
+        return table && table->props.empty();
+    }
+
+    void checkCondition(AstExpr* condition)
+    {
+        if (!enabled.tableTruthiness)
+            return;
+
+        condition = unparenthesized(condition);
+        AstExprUnary* negation = condition->as<AstExprUnary>();
+        bool negated = negation && negation->op == AstExprUnary::Op::Not;
+        AstExpr* tested = negated ? unparenthesized(negation->expr) : condition;
+        if (!isContainer(tested))
+            return;
+
+        std::string name = describe(tested, "this table");
+        if (negated)
+            emitWarning(
+                *context,
+                LintWarning::Code_TableTruthiness,
+                condition->location,
+                "'not %s' is always false: a table is truthy even when it's empty; to check whether %s is empty, use 'next(%s) == nil'",
+                shortExprName(tested).value_or("t").c_str(),
+                name.c_str(),
+                shortExprName(tested).value_or("t").c_str()
+            );
+        else
+            emitWarning(
+                *context,
+                LintWarning::Code_TableTruthiness,
+                condition->location,
+                "%s is a table, which is truthy even when it's empty; to check whether it has entries, use 'next(%s) ~= nil' (or "
+                "'#%s > 0' for an array)",
+                name.c_str(),
+                shortExprName(tested).value_or("t").c_str(),
+                shortExprName(tested).value_or("t").c_str()
+            );
+    }
+
+    bool visit(AstStatIf* node) override
+    {
+        checkCondition(node->condition);
+        return true;
+    }
+
+    bool visit(AstStatWhile* node) override
+    {
+        checkCondition(node->condition);
+        return true;
+    }
+
+    bool visit(AstStatRepeat* node) override
+    {
+        checkCondition(node->condition);
+        return true;
+    }
+
+    // DiscardedResult: builtins that only compute a result, by library (empty for globals). Ones with an effect besides
+    // their result (`math.random`, `table.freeze`, `buffer.write*`) aren't here.
+    static bool isPureBuiltin(std::string_view library, std::string_view name)
+    {
+        static const std::unordered_set<std::string> kGlobals = {
+            "tostring", "tonumber", "type", "typeof", "rawget", "rawequal", "rawlen", "select", "getmetatable", "next", "ipairs", "pairs", "unpack",
+        };
+        static const std::unordered_set<std::string> kString = {
+            "byte", "char", "find", "format", "gmatch", "gsub", "len", "lower", "match", "rep", "reverse", "sub", "upper", "split",
+            "pack", "packsize", "unpack",
+        };
+        static const std::unordered_set<std::string> kTable = {
+            "clone", "concat", "create", "find", "pack", "unpack", "maxn", "getn", "isfrozen",
+        };
+        static const std::unordered_set<std::string> kMath = {
+            "abs", "acos", "asin", "atan", "atan2", "ceil", "clamp", "cos", "cosh", "deg", "exp", "floor", "fmod", "frexp", "ldexp", "lerp",
+            "log", "log10", "map", "max", "min", "modf", "noise", "pow", "rad", "round", "sign", "sin", "sinh", "sqrt", "tan", "tanh",
+        };
+        static const std::unordered_set<std::string> kBit32 = {
+            "arshift", "band", "bnot", "bor", "btest", "bxor", "byteswap", "countlz", "countrz", "extract", "lrotate", "lshift", "replace",
+            "rrotate", "rshift",
+        };
+        static const std::unordered_set<std::string> kUtf8 = {"char", "codes", "codepoint", "len", "offset"};
+        static const std::unordered_set<std::string> kBuffer = {
+            "create", "fromstring", "tostring", "len", "readi8", "readu8", "readi16", "readu16", "readi32", "readu32", "readf32", "readf64",
+            "readstring", "readbits",
+        };
+        static const std::unordered_set<std::string> kOs = {"time", "clock", "date", "difftime"};
+
+        const std::unordered_set<std::string>* names = nullptr;
+        if (library.empty())
+            names = &kGlobals;
+        else if (library == "string")
+            names = &kString;
+        else if (library == "table")
+            names = &kTable;
+        else if (library == "math")
+            names = &kMath;
+        else if (library == "bit32")
+            names = &kBit32;
+        else if (library == "utf8")
+            names = &kUtf8;
+        else if (library == "buffer")
+            names = &kBuffer;
+        else if (library == "os")
+            names = &kOs;
+
+        return names && names->count(std::string(name)) > 0;
+    }
+
+    // `string.upper`, `tostring`, or `s:upper` on a string: which pure builtin a call is, if any
+    bool callsPureBuiltin(AstExprCall* call) const
+    {
+        if (AstExprGlobal* global = call->func->as<AstExprGlobal>())
+            return isPureBuiltin("", global->name.value);
+
+        AstExprIndexName* function = call->func->as<AstExprIndexName>();
+        if (!function)
+            return false;
+
+        if (call->self)
+        {
+            std::optional<TypeId> receiver = context->getType(function->expr);
+            return receiver && isString(*receiver) && isPureBuiltin("string", function->index.value);
+        }
+
+        AstExprGlobal* library = function->expr->as<AstExprGlobal>();
+        return library && isPureBuiltin(library->name.value, function->index.value);
+    }
+
+    bool visit(AstStatExpr* node) override
+    {
+        if (!enabled.discardedResult)
+            return true;
+
+        AstExprCall* call = node->expr->as<AstExprCall>();
+        if (!call)
+            return true;
+
+        std::string callee = describe(call->func, "this function");
+
+        // `const _ = ...` is how to discard a result on purpose
+        std::string discard = "const _ = " + shortExprName(call->func).value_or("f") + "(...)";
+
+        if (callsPureBuiltin(call))
+        {
+            // `s:upper()` on its own line: strings can't be changed in place
+            AstExprIndexName* method = call->self ? call->func->as<AstExprIndexName>() : nullptr;
+            std::optional<std::string> receiver = method ? shortExprName(unparenthesized(method->expr)) : std::nullopt;
+            if (receiver)
+                emitWarning(
+                    *context,
+                    LintWarning::Code_DiscardedResult,
+                    call->location,
+                    "%s returns a new string and doesn't change '%s', so calling it without using the result does nothing; did you "
+                    "mean '%s = %s:%s(...)'? To discard the result on purpose, write '%s'",
+                    callee.c_str(),
+                    receiver->c_str(),
+                    receiver->c_str(),
+                    receiver->c_str(),
+                    method->index.value,
+                    discard.c_str()
+                );
+            else
+                emitWarning(
+                    *context,
+                    LintWarning::Code_DiscardedResult,
+                    call->location,
+                    "%s only returns a result, so calling it without using the result does nothing; use the result, or write '%s' to "
+                    "discard it on purpose",
+                    callee.c_str(),
+                    discard.c_str()
+                );
+            return true;
+        }
+
+        std::optional<TypeId> calleeType = context->getType(call->func);
+        const FunctionType* function = calleeType ? get<FunctionType>(follow(*calleeType)) : nullptr;
+        if (!function || !function->isNodiscard)
+            return true;
+
+        std::string reason = function->nodiscardReason.empty() ? std::string() : ": " + function->nodiscardReason;
+        emitWarning(
+            *context,
+            LintWarning::Code_DiscardedResult,
+            call->location,
+            "The result of %s shouldn't be discarded%s; to discard it on purpose, write '%s'",
+            callee.c_str(),
+            reason.c_str(),
+            discard.c_str()
+        );
+
+        return true;
+    }
+};
+
+// Luwu: `local` declarations that could be `const`: every variable they declare is never reassigned. Off by default, since
+// it's about style -- the compiler already knows which locals are never reassigned -- and it would flag most existing
+// code; a module turns it on with `--!lint ConstLocal`, a codebase in its config.
+class LintConstLocal : AstVisitor
+{
+public:
+    LUAU_NOINLINE static void process(LintContext& context)
+    {
+        LintConstLocal pass;
+        pass.context = &context;
+
+        AssignmentCollector assignments{&pass.assigned};
+        context.root->visit(&assignments);
+
+        context.root->visit(&pass);
+    }
+
+private:
+    LintContext* context;
+    DenseHashSet<AstLocal*> assigned{nullptr};
+
+    struct AssignmentCollector : AstVisitor
+    {
+        DenseHashSet<AstLocal*>* assigned;
+
+        explicit AssignmentCollector(DenseHashSet<AstLocal*>* assigned)
+            : assigned(assigned)
+        {
+        }
+
+        void write(AstExpr* target)
+        {
+            if (AstExprLocal* local = unparenthesized(target)->as<AstExprLocal>())
+                assigned->insert(local->local);
+        }
+
+        bool visit(AstStatAssign* node) override
+        {
+            for (AstExpr* var : node->vars)
+                write(var);
+            return true;
+        }
+
+        bool visit(AstStatCompoundAssign* node) override
+        {
+            write(node->var);
+            return true;
+        }
+    };
+
+    bool visit(AstStatLocal* node) override
+    {
+        // A destructuring declaration desugars to several locals, and one without a value can't be `const`
+        bool candidate = !node->isConst && node->values.size > 0 && !node->destructure && !node->destructuredFrom;
+        if (!candidate)
+            return true;
+
+        std::string names;
+        for (size_t i = 0; i < node->vars.size; ++i)
+        {
+            if (assigned.contains(node->vars.data[i]))
+                return true;
+
+            if (i > 0)
+                names += i + 1 == node->vars.size ? " and " : ", ";
+            names += "'" + std::string(node->vars.data[i]->name.value) + "'";
+        }
+
+        const char* verb = node->vars.size == 1 ? "is" : "are";
+        emitWarning(
+            *context,
+            LintWarning::Code_ConstLocal,
+            node->vars.data[0]->location,
+            "%s %s never reassigned, so this can be 'const' instead of 'local'",
+            names.c_str(),
+            verb
+        );
+        return true;
+    }
+
+    bool visit(AstStatLocalFunction* node) override
+    {
+        if (node->isConst || assigned.contains(node->name))
+            return true;
+
+        emitWarning(
+            *context,
+            LintWarning::Code_ConstLocal,
+            node->name->location,
+            "'%s' is never reassigned, so this can be 'const function' instead of 'local function'",
+            node->name->name.value
+        );
+        return true;
+    }
+};
+
+// Luwu: `--!nolint` with no lint names, the way LintWarning::parseMask recognizes it
+static bool isBareNolint(const HotComment& hc)
+{
+    return hc.header && hc.content.compare(0, 6, "nolint") == 0 && hc.content.find_first_not_of(" \t", 6) == std::string::npos;
+}
+
+// Luwu: the parts of OptimizationHint, which follow it: one is on only where OptimizationHint is on too
+static bool isOptimizationHintPart(LintWarning::Code code)
+{
+    return code == LintWarning::Code_LoopConcat || code == LintWarning::Code_InefficientTableInsert ||
+           code == LintWarning::Code_InefficientTableRemove;
+}
+
+static bool lintEnabledIn(uint64_t mask, LintWarning::Code code)
+{
+    auto has = [mask](LintWarning::Code c)
+    {
+        return (mask & (1ull << c)) != 0;
+    };
+
+    return has(code) && (!isOptimizationHintPart(code) || has(LintWarning::Code_OptimizationHint));
+}
+
+// Luwu: `@[nolint(...)]` or `@[lint(...)]` on a function, class or class field: the lints it turns off or on within
+// `range`. Inner scopes apply after the ones around them.
+struct LintScope
+{
+    Location range;
+    uint64_t enable = 0;
+    uint64_t disable = 0;
+};
+
+class LintScopeCollector : AstVisitor
+{
+public:
+    // Also reports names that aren't lints, as CommentDirective does for `--!nolint`
+    static std::vector<LintScope> collect(LintContext& context)
+    {
+        LintScopeCollector collector;
+        collector.context = &context;
+        context.root->visit(&collector);
+        return std::move(collector.scopes);
+    }
+
+private:
+    LintContext* context;
+    std::vector<LintScope> scopes;
+    // Functions whose attributes a statement form already took, with the statement's wider range
+    DenseHashSet<AstExprFunction*> handled{nullptr};
+
+    static std::optional<std::string> argumentName(AstExpr* arg)
+    {
+        if (AstExprGlobal* global = arg->as<AstExprGlobal>())
+            return std::string(global->name.value);
+        if (AstExprLocal* local = arg->as<AstExprLocal>())
+            return std::string(local->local->name.value);
+        if (AstExprConstantString* string = arg->as<AstExprConstantString>())
+            return std::string(string->value.data, string->value.size);
+        return std::nullopt;
+    }
+
+    uint64_t maskOf(AstAttr* attr)
+    {
+        // Without names, every lint but BareNolint, which asks whether that was meant (`@[nolint]`; the parser makes
+        // `@[lint]` name them)
+        if (attr->args.size == 0)
+        {
+            if (context->warningEnabled(LintWarning::Code_BareNolint))
+                emitWarning(
+                    *context,
+                    LintWarning::Code_BareNolint,
+                    attr->location,
+                    "'@nolint' without lint names turns off every lint in here; did you forget to specify lints? Name them "
+                    "('@[nolint(LocalUnused)]'), or write '@[nolint(All)]' to turn them all off on purpose"
+                );
+
+            return ~(1ull << LintWarning::Code_BareNolint);
+        }
+
+        uint64_t mask = 0;
+        for (AstExpr* arg : attr->args)
+        {
+            std::optional<std::string> name = argumentName(arg);
+            if (!name)
+                continue;
+
+            // `@[lint(All)]` would also turn on the lints the type checking mode turns off because the checker already
+            // reports them (UnknownGlobal in strict mode), which is why `@[lint]` has to name what it turns on
+            if (LintWarning::isAllName(name->c_str()))
+            {
+                if (attr->type == AstAttr::Type::Nolint)
+                    mask = ~0ull;
+                else if (context->warningEnabled(LintWarning::Code_CommentDirective))
+                    emitWarning(
+                        *context,
+                        LintWarning::Code_CommentDirective,
+                        arg->location,
+                        "'All' can only turn lints off; name the lints to turn on, like '@[lint(LocalUnused)]'"
+                    );
+                continue;
+            }
+
+            LintWarning::Code code = LintWarning::parseName(name->c_str());
+            if (code != LintWarning::Code_Unknown)
+            {
+                mask |= 1ull << code;
+                continue;
+            }
+
+            if (!context->warningEnabled(LintWarning::Code_CommentDirective))
+                continue;
+
+            if (const char* suggestion = fuzzyMatch(*name, kWarningNames + 1, LintWarning::Code__Count - 1))
+                emitWarning(
+                    *context,
+                    LintWarning::Code_CommentDirective,
+                    arg->location,
+                    "%s attribute refers to unknown lint rule '%s'; did you mean '%s'?",
+                    attr->name.value,
+                    name->c_str(),
+                    suggestion
+                );
+            else
+                emitWarning(
+                    *context,
+                    LintWarning::Code_CommentDirective,
+                    arg->location,
+                    "%s attribute refers to unknown lint rule '%s'",
+                    attr->name.value,
+                    name->c_str()
+                );
+        }
+        return mask;
+    }
+
+    void addScopes(const AstArray<AstAttr*>& attributes, const Location& range)
+    {
+        for (AstAttr* attr : attributes)
+        {
+            if (attr->type == AstAttr::Type::Nolint)
+                scopes.push_back(LintScope{range, 0, maskOf(attr)});
+            else if (attr->type == AstAttr::Type::Lint)
+                scopes.push_back(LintScope{range, maskOf(attr), 0});
+        }
+    }
+
+    bool visit(AstExprFunction* node) override
+    {
+        if (!handled.contains(node))
+            addScopes(node->attributes, node->location);
+        return true;
+    }
+
+    // The statement forms also cover the function's name, where warnings about the function itself point
+    bool visit(AstStatFunction* node) override
+    {
+        addScopes(node->func->attributes, node->location);
+        handled.insert(node->func);
+        return true;
+    }
+
+    bool visit(AstStatLocalFunction* node) override
+    {
+        addScopes(node->func->attributes, node->location);
+        handled.insert(node->func);
+        return true;
+    }
+
+    bool visit(AstStatClass* node) override
+    {
+        addScopes(node->attributes, node->location);
+
+        for (const AstClassMember& member : node->members)
+        {
+            const AstClassProperty* field = member.get_if<AstClassProperty>();
+            if (!field)
+                continue;
+
+            Location range = field->nameLocation;
+            if (field->defaultValue)
+                range = Location(range, field->defaultValue->location);
+            addScopes(field->attributes, range);
+        }
+
+        return true;
+    }
+};
+
+// Drops the warnings a scope turned off, and the ones a module-level setting turned off that no scope turned back on.
+// `moduleMask` is what the module's options allow outside every scope.
+static void filterByLintScopes(std::vector<LintWarning>& warnings, std::vector<LintScope> scopes, uint64_t moduleMask)
+{
+    // Scopes nest, so the ones around a position start no later than the ones inside it
+    std::sort(
+        scopes.begin(),
+        scopes.end(),
+        [](const LintScope& a, const LintScope& b)
+        {
+            if (a.range.begin != b.range.begin)
+                return a.range.begin < b.range.begin;
+            return b.range.end < a.range.end;
+        }
+    );
+
+    auto disabledAt = [&](const LintWarning& warning)
+    {
+        uint64_t mask = moduleMask;
+        for (const LintScope& scope : scopes)
+        {
+            if (scope.range.encloses(warning.location))
+                mask = (mask | scope.enable) & ~scope.disable;
+        }
+        return !lintEnabledIn(mask, warning.code);
+    };
+
+    warnings.erase(std::remove_if(warnings.begin(), warnings.end(), disabledAt), warnings.end());
+}
+
 std::vector<LintWarning> lint(
     AstStat* root,
     const AstNameTable& names,
@@ -5229,6 +6725,28 @@ std::vector<LintWarning> lint(
     context.module = module;
 
     fillBuiltinGlobals(context, names, env);
+
+    // Luwu: a bare `--!nolint` turns off every lint but this one (see LintWarning::parseMask)
+    if (context.warningEnabled(LintWarning::Code_BareNolint))
+    {
+        for (const HotComment& hc : hotcomments)
+        {
+            if (isBareNolint(hc))
+                emitWarning(
+                    context,
+                    LintWarning::Code_BareNolint,
+                    hc.location,
+                    "'--!nolint' without lint names turns off every lint; did you forget to specify lints? Name them "
+                    "('--!nolint LocalUnused'), or write '--!nolint All' to turn them all off on purpose"
+                );
+        }
+    }
+
+    // Luwu: a lint a scope turns on has to run even where the module turns it off; filterByLintScopes then drops what
+    // isn't on where it was reported
+    std::vector<LintScope> scopes = LintScopeCollector::collect(context);
+    for (const LintScope& scope : scopes)
+        context.options.warningMask |= scope.enable;
 
     if (context.warningEnabled(LintWarning::Code_UnknownGlobal) || context.warningEnabled(LintWarning::Code_DeprecatedGlobal) ||
         context.warningEnabled(LintWarning::Code_GlobalUsedAsLocal) || context.warningEnabled(LintWarning::Code_PlaceholderRead) ||
@@ -5313,6 +6831,28 @@ std::vector<LintWarning> lint(
     if (context.warningEnabled(LintWarning::Code_DeclareMismatch))
         LintDeclareMismatch::process(context);
 
+    LintLoopMistakes::Enabled loopMistakes;
+    loopMistakes.removeWhileIterating = context.warningEnabled(LintWarning::Code_RemoveWhileIterating);
+    loopMistakes.loopVariableWrite = context.warningEnabled(LintWarning::Code_LoopVariableWrite);
+    loopMistakes.iteratedTableWrite = context.warningEnabled(LintWarning::Code_IteratedTableWrite);
+    loopMistakes.foreverLoop = context.warningEnabled(LintWarning::Code_ForeverLoop);
+    loopMistakes.uselessLoop = context.warningEnabled(LintWarning::Code_UselessLoop);
+    loopMistakes.stringIndexZero = context.warningEnabled(LintWarning::Code_StringIndexZero);
+    if (context.warningEnabled(LintWarning::Code_ConstLocal))
+        LintConstLocal::process(context);
+
+    LintValueMistakes::Enabled valueMistakes;
+    valueMistakes.newValueComparison = context.warningEnabled(LintWarning::Code_NewValueComparison);
+    valueMistakes.tableTruthiness = context.warningEnabled(LintWarning::Code_TableTruthiness);
+    valueMistakes.discardedResult = context.warningEnabled(LintWarning::Code_DiscardedResult);
+    if (valueMistakes.newValueComparison || valueMistakes.tableTruthiness || valueMistakes.discardedResult)
+        LintValueMistakes::process(context, valueMistakes);
+
+    bool anyLoopMistake = loopMistakes.removeWhileIterating || loopMistakes.loopVariableWrite || loopMistakes.iteratedTableWrite ||
+                          loopMistakes.foreverLoop || loopMistakes.uselessLoop || loopMistakes.stringIndexZero;
+    if (anyLoopMistake)
+        LintLoopMistakes::process(context, loopMistakes);
+
     // Luwu: turning OptimizationHint off also turns off its parts, which have codes of their own so each can be turned
     // off alone
     if (context.warningEnabled(LintWarning::Code_OptimizationHint))
@@ -5333,6 +6873,9 @@ std::vector<LintWarning> lint(
         if (hasNativeCommentDirective(hotcomments))
             LintRedundantNativeAttribute::process(context);
     }
+
+    if (!scopes.empty())
+        filterByLintScopes(context.result, std::move(scopes), options.warningMask);
 
     std::sort(context.result.begin(), context.result.end(), WarningComparator());
 

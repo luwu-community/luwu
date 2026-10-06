@@ -58,6 +58,17 @@ struct LintWarning
         Code_LoopConcat = 34,              // `s ..= x` in a loop
         Code_InefficientTableInsert = 35,  // `table.insert(t, 1, v)` in a loop
         Code_InefficientTableRemove = 36,  // `table.remove(t, 1)` in a loop
+        Code_BareNolint = 37,              // Luwu: `--!nolint` or `@nolint` without lint names
+        Code_RemoveWhileIterating = 38,    // Luwu: `table.remove(t, i)` in a forward loop over `t` by `i`
+        Code_LoopVariableWrite = 39,       // Luwu: assigning a loop variable, which doesn't affect the loop
+        Code_IteratedTableWrite = 40,      // Luwu: writing other keys of a table while iterating it
+        Code_ForeverLoop = 41,             // Luwu: a `while`/`repeat` whose condition nothing in the loop changes
+        Code_UselessLoop = 42,             // Luwu: a loop whose body always leaves it on the first iteration
+        Code_StringIndexZero = 43,         // Luwu: `string.byte(s, 0)` / `string.sub(s, 0, ...)`
+        Code_NewValueComparison = 44,      // Luwu: `x == {}` or `x == function() end`, which can never be equal
+        Code_TableTruthiness = 45,         // Luwu: `if t then` on an array or map, which is truthy even when empty
+        Code_DiscardedResult = 46,         // Luwu: a pure builtin or `@nodiscard` function called for nothing
+        Code_ConstLocal = 47,              // Luwu: a `local` never reassigned, which could be `const`. Off by default.
 
         Code__Count
     };
@@ -68,7 +79,11 @@ struct LintWarning
 
     static const char* getName(Code code);
     static Code parseName(const char* name);
+    // Luwu: `All`, which `--!nolint All` and `@[nolint(All)]` take to mean every lint, on purpose
+    static bool isAllName(const char* name);
     static uint64_t parseMask(const std::vector<HotComment>& hotcomments);
+    // Luwu: the lints `--!lint Name` directives turn on, for the ones that are off by default
+    static uint64_t parseEnableMask(const std::vector<HotComment>& hotcomments);
 };
 
 struct LintOptions
@@ -132,6 +147,17 @@ inline constexpr const char* kWarningNames[] = {
     "LoopConcat",
     "InefficientTableInsert",
     "InefficientTableRemove",
+    "BareNolint",
+    "RemoveWhileIterating",
+    "LoopVariableWrite",
+    "IteratedTableWrite",
+    "ForeverLoop",
+    "UselessLoop",
+    "StringIndexZero",
+    "NewValueComparison",
+    "TableTruthiness",
+    "DiscardedResult",
+    "ConstLocal",
 };
 // clang-format on
 

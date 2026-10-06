@@ -10,6 +10,7 @@
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
+LUAU_FASTFLAG(LuauCstAttr)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuDestructuring)
@@ -23,6 +24,28 @@ LUAU_FASTFLAG(LuwuTableRemoveFootgunLint)
 LUAU_FASTFLAG(LuwuTableDrop)
 
 using namespace Luau;
+
+static std::vector<LintWarning> warningsWithCode(const LintResult& result, LintWarning::Code code)
+{
+    std::vector<LintWarning> found;
+    for (const LintWarning& warning : result.warnings)
+    {
+        if (warning.code == code)
+            found.push_back(warning);
+    }
+    return found;
+}
+
+static std::vector<LintWarning> withoutCode(const LintResult& result, LintWarning::Code code)
+{
+    std::vector<LintWarning> kept;
+    for (const LintWarning& warning : result.warnings)
+    {
+        if (warning.code != code)
+            kept.push_back(warning);
+    }
+    return kept;
+}
 
 TEST_SUITE_BEGIN("Linter");
 
@@ -570,6 +593,9 @@ end
 print("hi!")
 )");
 
+    // Luwu: the loop also runs at most once, which UselessLoop reports
+    result.warnings = warningsWithCode(result, LintWarning::Code_UnreachableCode);
+
     REQUIRE(1 == result.warnings.size());
     CHECK_EQ(result.warnings[0].location.begin.line, 3);
     CHECK_EQ(result.warnings[0].text, "Unreachable code (previous statement always breaks)");
@@ -715,6 +741,9 @@ end
 
 return foo1
 )");
+
+    // Luwu: the loop also runs at most once, which UselessLoop reports
+    result.warnings = warningsWithCode(result, LintWarning::Code_UnreachableCode);
 
     REQUIRE(0 == result.warnings.size());
 }
@@ -1057,7 +1086,9 @@ TEST_CASE_FIXTURE(Fixture, "IgnoreLintAll")
 return foo
 )");
 
-    REQUIRE(0 == result.warnings.size());
+    // Luwu: a bare `--!nolint` leaves BareNolint on, which asks whether it was meant (see BareNolintAsksForLintNames)
+    REQUIRE(1 == result.warnings.size());
+    CHECK_EQ(result.warnings[0].code, LintWarning::Code_BareNolint);
 }
 
 TEST_CASE_FIXTURE(Fixture, "IgnoreLintSpecific")
@@ -1086,6 +1117,9 @@ local _ = ("%"):format()
 -- correct format strings, just to uh make sure
 string.format("hello %+10d %.02f %%", 4, 5)
 )");
+
+    // Luwu: these calls are made for their warnings, so their discarded results don't matter here
+    result.warnings = withoutCode(result, LintWarning::Code_DiscardedResult);
 
     REQUIRE(4 == result.warnings.size());
     CHECK_EQ(result.warnings[0].text, "Invalid format string: unfinished format specifier");
@@ -1126,6 +1160,9 @@ string.packsize("c99999999999999999999")
 -- correct format specifiers
 string.packsize("=!1bbbI3c42")
 )");
+
+    // Luwu: these calls are made for their warnings, so their discarded results don't matter here
+    result.warnings = withoutCode(result, LintWarning::Code_DiscardedResult);
 
     REQUIRE(11 == result.warnings.size());
     CHECK_EQ(result.warnings[0].text, "Invalid pack format: unexpected character; must be a pack specifier or space");
@@ -1171,6 +1208,9 @@ local _ = s:match("%q")
 string.match(s, "[A-Z]+(%d)%1")
 )");
 
+    // Luwu: these calls are made for their warnings, so their discarded results don't matter here
+    result.warnings = withoutCode(result, LintWarning::Code_DiscardedResult);
+
     REQUIRE(14 == result.warnings.size());
     CHECK_EQ(result.warnings[0].text, "Invalid match pattern: invalid character class, must refer to a defined class or its inverse");
     CHECK_EQ(result.warnings[1].text, "Invalid match pattern: invalid character class, must refer to a defined class or its inverse");
@@ -1202,6 +1242,9 @@ string.match(s, "((a)%1)")
 -- incorrect reference to nested pattern (index out of range)
 string.match(s, "((a)%3)")
 )~");
+
+    // Luwu: these calls are made for their warnings, so their discarded results don't matter here
+    result.warnings = withoutCode(result, LintWarning::Code_DiscardedResult);
 
     REQUIRE(2 == result.warnings.size());
     CHECK_EQ(result.warnings[0].text, "Invalid match pattern: invalid capture reference, must refer to a closed capture");
@@ -1241,6 +1284,9 @@ string.match(s, "[]|'[]")
 string.match(s, "[^]|'[]")
 )~");
 
+    // Luwu: these calls are made for their warnings, so their discarded results don't matter here
+    result.warnings = withoutCode(result, LintWarning::Code_DiscardedResult);
+
     REQUIRE(7 == result.warnings.size());
     CHECK_EQ(result.warnings[0].text, "Invalid match pattern: expected ] at the end of the string to close a set");
     CHECK_EQ(result.warnings[1].text, "Invalid match pattern: expected ] at the end of the string to close a set");
@@ -1272,6 +1318,9 @@ string.find("foo");
 ("foo"):find()
 )");
 
+    // Luwu: these calls are made for their warnings, so their discarded results don't matter here
+    result.warnings = withoutCode(result, LintWarning::Code_DiscardedResult);
+
     REQUIRE(2 == result.warnings.size());
     CHECK_EQ(result.warnings[0].text, "Invalid match pattern: invalid character class, must refer to a defined class or its inverse");
     CHECK_EQ(result.warnings[0].location.begin.line, 4);
@@ -1295,6 +1344,9 @@ string.gsub(s, '[A-Z]+(%d)', "%0%1")
 string.gsub(s, 'foo', "%0")
 )");
 
+    // Luwu: these calls are made for their warnings, so their discarded results don't matter here
+    result.warnings = withoutCode(result, LintWarning::Code_DiscardedResult);
+
     REQUIRE(4 == result.warnings.size());
     CHECK_EQ(result.warnings[0].text, "Invalid match replacement: unfinished replacement");
     CHECK_EQ(result.warnings[1].text, "Invalid match replacement: unexpected replacement character; must be a digit or %");
@@ -1316,6 +1368,9 @@ os.date("it's %c now")
 os.date("!*t")
 )");
 
+    // Luwu: these calls are made for their warnings, so their discarded results don't matter here
+    result.warnings = withoutCode(result, LintWarning::Code_DiscardedResult);
+
     REQUIRE(4 == result.warnings.size());
     CHECK_EQ(result.warnings[0].text, "Invalid date format: unfinished replacement");
     CHECK_EQ(result.warnings[1].text, "Invalid date format: unexpected replacement character; must be a date format specifier or %");
@@ -1334,6 +1389,9 @@ s:match("[]")
 -- no warning here since we don't know that it's a string
 nons:match("[]")
 )~");
+
+    // Luwu: these calls are made for their warnings, so their discarded results don't matter here
+    result.warnings = withoutCode(result, LintWarning::Code_DiscardedResult);
 
     REQUIRE(2 == result.warnings.size());
     CHECK_EQ(result.warnings[0].text, "Invalid match pattern: expected ] at the end of the string to close a set");
@@ -2605,6 +2663,9 @@ table.create(42, {})
 table.create(42, {} :: {})
 )");
 
+    // Luwu: these calls are made for their warnings, so their discarded results don't matter here
+    result.warnings = withoutCode(result, LintWarning::Code_DiscardedResult);
+
     REQUIRE(10 == result.warnings.size());
     CHECK_EQ(
         result.warnings[0].text,
@@ -2892,9 +2953,11 @@ TEST_CASE_FIXTURE(Fixture, "WrongCommentMuteSelf")
 {
     LintResult result = lint(R"(
 --!nolint
+--!nolint All
 --!struct
 )");
 
+    // Luwu: `--!nolint All` too, since a bare `--!nolint` leaves BareNolint on
     REQUIRE(0 == result.warnings.size()); // --!nolint disables WrongComment lint :)
 }
 
@@ -3573,6 +3636,508 @@ return f
     CHECK_EQ(0, countWarnings(noHints, LintWarning::Code_LoopConcat));
     CHECK_EQ(0, countWarnings(noHints, LintWarning::Code_InefficientTableInsert));
     CHECK_EQ(0, countWarnings(noHints, LintWarning::Code_InefficientTableRemove));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "LintAttributesScopeWarnings")
+{
+    ScopedFastFlag cstAttr{FFlag::LuauCstAttr, true};
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    // attributes on classes and class members
+    ScopedFastFlag attributesEverywhere{FFlag::LuwuAttributesEverywhere, true};
+
+    LintResult result = lint(R"(--!nolint LocalUnused
+local function build(names: { string }): string
+    local s = ""
+    for _, n in names do s ..= n end
+    return s
+end
+
+@[nolint(LoopConcat)]
+local function quiet(names: { string }): string
+    local s = ""
+    for _, n in names do s ..= n end
+    return s
+end
+
+@[lint(LocalUnused)]
+local function loud()
+    local unused = 1
+    @[nolint]
+    local function inner()
+        local alsoUnused = 2
+    end
+    return inner
+end
+
+class Cat(name: string)
+    @[nolint(OptimizationHint)]
+    function names(self, names: { string }): string
+        local s = ""
+        for _, n in names do s ..= n end
+        return s
+    end
+end
+
+@[nolint(LocalUnused)]
+class Quiet(n: number)
+    @[lint(LocalUnused)]
+    function loudAgain(self)
+        local unused = 1
+    end
+end
+
+@[nolint(LoopConcats)]
+local function typo() end
+
+return build, quiet, loud, Cat, Quiet, typo
+)");
+
+    // - `build`: the module turns off LocalUnused, LoopConcat stays on
+    // - `quiet`: LoopConcat turned off
+    // - `loud`: LocalUnused turned back on, then everything off again in `inner`
+    // - `Cat.names`: OptimizationHint turned off, which takes its parts with it
+    // - `Quiet.loudAgain`: on again inside a class that turns it off
+    // - `typo`: not a lint, with a suggestion
+    // - `inner`'s bare `@[nolint]` is reported by BareNolint
+    REQUIRE(5 == result.warnings.size());
+    CHECK_EQ(result.warnings[0].code, LintWarning::Code_LoopConcat);
+    CHECK_EQ(3, result.warnings[0].location.begin.line);
+    CHECK_EQ(result.warnings[1].code, LintWarning::Code_LocalUnused);
+    CHECK_EQ(16, result.warnings[1].location.begin.line);
+    CHECK_EQ(result.warnings[2].code, LintWarning::Code_BareNolint);
+    CHECK_EQ(17, result.warnings[2].location.begin.line);
+    CHECK_EQ(result.warnings[3].code, LintWarning::Code_LocalUnused);
+    CHECK_EQ(37, result.warnings[3].location.begin.line);
+    CHECK_EQ(result.warnings[4].code, LintWarning::Code_CommentDirective);
+    CHECK_EQ(result.warnings[4].text, "nolint attribute refers to unknown lint rule 'LoopConcats'; did you mean 'LoopConcat'?");
+}
+
+TEST_CASE_FIXTURE(Fixture, "BareNolintAsksForLintNames")
+{
+    ScopedFastFlag cstAttr{FFlag::LuauCstAttr, true};
+
+    LintResult bare = lint(R"(--!nolint
+local unused = 1
+@nolint
+local function f()
+    local alsoUnused = 2
+end
+@[nolint]
+local function g() end
+return f, g
+)");
+
+    // everything else is off; only the three bare `nolint`s are reported
+    REQUIRE(3 == bare.warnings.size());
+    CHECK_EQ(bare.warnings[0].code, LintWarning::Code_BareNolint);
+    CHECK_EQ(
+        bare.warnings[0].text,
+        "'--!nolint' without lint names turns off every lint; did you forget to specify lints? Name them ('--!nolint LocalUnused'), or write "
+        "'--!nolint All' to turn them all off on purpose"
+    );
+    CHECK_EQ(bare.warnings[1].code, LintWarning::Code_BareNolint);
+    CHECK_EQ(
+        bare.warnings[1].text,
+        "'@nolint' without lint names turns off every lint in here; did you forget to specify lints? Name them ('@[nolint(LocalUnused)]'), or "
+        "write '@[nolint(All)]' to turn them all off on purpose"
+    );
+    CHECK_EQ(bare.warnings[2].code, LintWarning::Code_BareNolint);
+
+    // on purpose: `--!nolint All`, before or after a bare one, turns off everything, BareNolint included
+    LintResult allowed = lint(R"(--!nolint
+--!nolint All
+@nolint
+local function f()
+    local unused = 1
+end
+return f
+)");
+    CHECK(0 == allowed.warnings.size());
+
+    // `@[nolint(All)]` does the same inside a function, and `@[lint(All)]` isn't allowed
+    LintResult scoped = lint(R"(
+local unused = 1
+@[nolint(All)]
+local function f()
+    local alsoUnused = 2
+end
+@[lint(All)]
+local function g() end
+return f, g
+)");
+    REQUIRE(2 == scoped.warnings.size());
+    CHECK_EQ(scoped.warnings[0].code, LintWarning::Code_LocalUnused);
+    CHECK_EQ(1, scoped.warnings[0].location.begin.line);
+    CHECK_EQ(scoped.warnings[1].code, LintWarning::Code_CommentDirective);
+    CHECK_EQ(scoped.warnings[1].text, "'All' can only turn lints off; name the lints to turn on, like '@[lint(LocalUnused)]'");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "RemoveWhileIterating")
+{
+    LintResult result = lint(R"(
+local function f(t: { number })
+    for i, v in ipairs(t) do
+        if v > 1 then table.remove(t, i) end
+    end
+    for i = 1, #t do
+        if t[i] == 0 then table.remove(t, i) end
+    end
+    for i, v in t do
+        table.remove(t, i)
+    end
+
+    -- leaving right after the remove, or iterating backwards, is fine
+    for i = 1, #t do
+        if t[i] == 0 then
+            table.remove(t, i)
+            break
+        end
+    end
+    for i = #t, 1, -1 do
+        if t[i] == 0 then table.remove(t, i) end
+    end
+end
+return f
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_RemoveWhileIterating);
+    REQUIRE(3 == found.size());
+    CHECK_EQ(3, found[0].location.begin.line);
+    CHECK_EQ(
+        found[0].text,
+        "Removing element 'i' from 't' while iterating it forwards skips the element after it, which moves into slot 'i'; iterate backwards "
+        "('for i = #t, 1, -1 do') or build a new table"
+    );
+    CHECK_EQ(6, found[1].location.begin.line);
+    CHECK_EQ(9, found[2].location.begin.line);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "LoopVariableWrite")
+{
+    LintResult result = lint(R"(
+local function f(xs: { number }, m: { [string]: number })
+    for i = 1, 10 do
+        if i == 2 then i = 5 end
+    end
+    for _, v in xs do
+        v += 1
+    end
+    for k, v in m do
+        v = 0
+    end
+
+    -- reusing the variable as a scratch value is fine
+    for _, line in m do
+        line = line * 2
+        print(line)
+    end
+end
+return f
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_LoopVariableWrite);
+    REQUIRE(3 == found.size());
+    CHECK_EQ(
+        found[0].text,
+        "Assigning to the loop variable 'i' doesn't change which iteration runs next; use a 'while' loop to control the counter"
+    );
+    CHECK_EQ(
+        found[1].text,
+        "Assigning to 'v' only changes the loop's copy, and nothing reads it afterwards; to change the table, write through the table instead"
+    );
+    CHECK_EQ(
+        found[2].text,
+        "Assigning to 'v' only changes the loop's copy, and nothing reads it afterwards; to change the table, write through the table instead "
+        "('m[k] = ...')"
+    );
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "IteratedTableWrite")
+{
+    LintResult result = lint(R"(
+local function f(xs: { number }, m: { [string]: number })
+    for k, v in pairs(m) do
+        m[k] = nil
+        m[k .. "x"] = v
+    end
+    for k, v in m do
+        m.extra = v
+    end
+
+    -- the loop's own key, and the existing elements of an array, are fine
+    for k, v in m do
+        m[k] = v + 1
+    end
+    for i, v in xs do
+        xs[i + 1] = v
+    end
+end
+return f
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_IteratedTableWrite);
+    REQUIRE(2 == found.size());
+    CHECK_EQ(4, found[0].location.begin.line);
+    CHECK_EQ(
+        found[0].text,
+        "Writing a key of 'm' other than 'k' while iterating it is undefined: the loop may skip or repeat entries; collect the changes and "
+        "apply them after the loop"
+    );
+    CHECK_EQ(7, found[1].location.begin.line);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "ForeverLoop")
+{
+    LintResult result = lint(R"(
+local function f(xs: { number }, n: number)
+    local i = 1
+    while i <= #xs do
+        print(xs[i])
+    end
+    local done = false
+    repeat print("x") until done
+
+    -- quiet: the counter changes, a constant condition, a closure can change it, a yield, a call changes the length
+    local j = 1
+    while j <= n do j += 1 end
+    while true do print("service") end
+    local running = true
+    local function stop() running = false end
+    while running do print("y") end
+    local k = 1
+    while k <= n do coroutine.yield() end
+    local queue = {1}
+    while #queue > 0 do table.remove(queue) end
+    repeat local line = tostring(n) until line == ""
+    return stop
+end
+return f
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_ForeverLoop);
+    REQUIRE(2 == found.size());
+    CHECK_EQ(3, found[0].location.begin.line);
+    CHECK_EQ(found[0].text, "Nothing in this loop changes 'i', so once it starts it never stops; did you forget to update it?");
+    CHECK_EQ(7, found[1].location.begin.line);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "UselessLoop")
+{
+    LintResult result = lint(R"(
+local function f(xs: { number }): number?
+    for _, x in xs do
+        if x > 1 then return x else return nil end
+    end
+    while true do
+        print("a")
+        break
+    end
+    for i = 1, #xs do
+        return xs[i]
+    end
+
+    -- quiet: taking the first item, and a path that continues
+    for _, x in xs do
+        return x
+    end
+    for _, x in xs do
+        if x > 1 then continue end
+        return x
+    end
+    return nil
+end
+return f
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_UselessLoop);
+    REQUIRE(3 == found.size());
+    CHECK_EQ(2, found[0].location.begin.line);
+    CHECK_EQ(5, found[1].location.begin.line);
+    CHECK_EQ(9, found[2].location.begin.line);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "StringIndexZero")
+{
+    LintResult result = lint(R"(
+local function f(s: string)
+    return s:byte(0), string.sub(s, 0, 3), s:sub(1, 3), string.byte(s, 1)
+end
+return f
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_StringIndexZero);
+    REQUIRE(2 == found.size());
+    CHECK_EQ(found[0].text, "Strings are indexed from 1: 'byte' at 0 is before the first character and returns nothing");
+    CHECK_EQ(
+        found[1].text,
+        "Strings are indexed from 1: 'sub' treats a start of 0 as 1, so an end index written for 0-based indexing is one character short"
+    );
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "NewValueComparison")
+{
+    LintResult result = lint(R"(
+local function f(t: { number }, g: () -> ())
+    return t == {}, t ~= {}, g == function() end, t == t
+end
+return f
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_NewValueComparison);
+    REQUIRE(3 == found.size());
+    CHECK_EQ(
+        found[0].text,
+        "This comparison is always false: a table literal makes a new table, which is never equal to another value; to check whether a "
+        "table is empty, use 'next(t) == nil'"
+    );
+    CHECK(found[1].text.find("always true") != std::string::npos);
+    CHECK_EQ(
+        found[2].text, "This comparison is always false: a function literal makes a new function, which is never equal to another value"
+    );
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "TableTruthiness")
+{
+    LintResult result = lint(R"(
+type Options = { verbose: boolean }
+
+local function f(xs: { number }, m: { [string]: number }, opts: Options, maybe: { number }?, lookup: { [string]: { number } })
+    if xs then print("a") end
+    if not m then print("b") end
+    local results = {}
+    if results then print("c") end
+
+    -- quiet: a record (a defensive check), an optional table, a map read and a local reassigned from one
+    if opts then print("d") end
+    if maybe then print("e") end
+    if lookup.x then print("f") end
+    local rows = lookup["k"]
+    if rows then print("g") end
+    local later = {}
+    later = lookup["k"]
+    if later then print("h") end
+end
+return f
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_TableTruthiness);
+    REQUIRE(3 == found.size());
+    CHECK_EQ(
+        found[0].text,
+        "'xs' is a table, which is truthy even when it's empty; to check whether it has entries, use 'next(xs) ~= nil' (or '#xs > 0' for an "
+        "array)"
+    );
+    CHECK_EQ(found[1].text, "'not m' is always false: a table is truthy even when it's empty; to check whether 'm' is empty, use 'next(m) == nil'");
+    CHECK_EQ(7, found[2].location.begin.line);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "DiscardedResult")
+{
+    LintResult result = lint(R"(
+@nodiscard
+local function copy(t: { number }): { number }
+    return table.clone(t)
+end
+
+@[nodiscard("it returns the new list")]
+local function appended(t: { number }, v: number): { number }
+    return table.clone(t)
+end
+
+local function f(xs: { number }, s: string)
+    s:upper()
+    string.gsub(s, "a", "b")
+    tostring(1)
+    copy(xs)
+    appended(xs, 1)
+
+    -- quiet: calls with an effect, results that are used, and results discarded on purpose
+    math.random(1, 2)
+    table.insert(xs, 1)
+    local kept = copy(xs)
+    const _ = copy(xs)
+    const _ = s:upper()
+    return kept
+end
+return f
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_DiscardedResult);
+    REQUIRE(5 == found.size());
+    CHECK_EQ(
+        found[0].text,
+        "'s:upper' returns a new string and doesn't change 's', so calling it without using the result does nothing; did you mean 's = "
+        "s:upper(...)'? To discard the result on purpose, write 'const _ = s:upper(...)'"
+    );
+    CHECK_EQ(
+        found[1].text,
+        "'string.gsub' only returns a result, so calling it without using the result does nothing; use the result, or write 'const _ = "
+        "string.gsub(...)' to discard it on purpose"
+    );
+    CHECK_EQ(found[3].text, "The result of 'copy' shouldn't be discarded; to discard it on purpose, write 'const _ = copy(...)'");
+    CHECK_EQ(
+        found[4].text,
+        "The result of 'appended' shouldn't be discarded: it returns the new list; to discard it on purpose, write 'const _ = appended(...)'"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "ConstLocalIsOffUntilAskedFor")
+{
+    ScopedFastFlag cstAttr{FFlag::LuauCstAttr, true};
+
+    const std::string source = R"(
+local a, b = 1, 2
+local c = 3
+c += 1
+local function f() return a + b end
+local g = function() end
+local function h() end
+h = g
+const d = 4
+return f, c, d
+)";
+
+    // off by default
+    CHECK(warningsWithCode(lint(source), LintWarning::Code_ConstLocal).empty());
+
+    // `--!lint ConstLocal`: everything never reassigned, but not `c` or `h`
+    std::vector<LintWarning> found = warningsWithCode(lint("--!lint ConstLocal" + source), LintWarning::Code_ConstLocal);
+    REQUIRE(3 == found.size());
+    CHECK_EQ(found[0].text, "'a' and 'b' are never reassigned, so this can be 'const' instead of 'local'");
+    CHECK_EQ(found[1].text, "'f' is never reassigned, so this can be 'const function' instead of 'local function'");
+    CHECK_EQ(found[2].text, "'g' is never reassigned, so this can be 'const' instead of 'local'");
+
+    // `--!nolint` wins over `--!lint`
+    CHECK(warningsWithCode(lint("--!lint ConstLocal\n--!nolint ConstLocal" + source), LintWarning::Code_ConstLocal).empty());
+
+    // a function can ask for it too, and only gets it inside
+    LintResult scoped = lint(R"(
+local x = 1
+@[lint(ConstLocal)]
+local function inner()
+    local y = 2
+    return x + y
+end
+return inner
+)");
+    std::vector<LintWarning> inScope = warningsWithCode(scoped, LintWarning::Code_ConstLocal);
+    REQUIRE(2 == inScope.size());
+    CHECK_EQ(3, inScope[0].location.begin.line);
+    CHECK_EQ(4, inScope[1].location.begin.line);
+}
+
+TEST_CASE_FIXTURE(Fixture, "LintDirectiveNeedsAKnownLint")
+{
+    LintResult result = lint(R"(--!lint
+--!lint All
+--!lint ConstLocl
+return 1
+)");
+
+    REQUIRE(3 == result.warnings.size());
+    CHECK_EQ(result.warnings[0].text, "lint directive needs the lint to turn on, like '--!lint ConstLocal'");
+    CHECK_EQ(result.warnings[1].text, "'All' can only turn lints off; name the lint to turn on, like '--!lint ConstLocal'");
+    CHECK_EQ(result.warnings[2].text, "lint directive refers to unknown lint rule 'ConstLocl'; did you mean 'ConstLocal'?");
 }
 
 TEST_SUITE_END();

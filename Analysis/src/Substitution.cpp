@@ -97,6 +97,9 @@ static TypeId shallowClone(TypeId ty, TypeArena& dest, const TxnLog* log, bool t
             clone.isCheckedFunction = a.isCheckedFunction;
             clone.isDeprecatedFunction = a.isDeprecatedFunction;
             clone.deprecatedInfo = a.deprecatedInfo;
+            // Luwu: `@nodiscard`
+            clone.isNodiscard = a.isNodiscard;
+            clone.nodiscardReason = a.nodiscardReason;
             // Luwu user-defined refinements
             clone.truthyRefinement = a.truthyRefinement;
             clone.name = a.name;

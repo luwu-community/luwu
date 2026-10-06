@@ -732,7 +732,9 @@ Frontend& Fixture::getFrontend()
     builtinTypes = f.builtinTypes;
     // Fixture::Fixture begins here
     configResolver.defaultConfig.mode = Mode::Strict;
-    configResolver.defaultConfig.enabledLint.warningMask = ~0ull;
+    // Luwu: the defaults rather than every lint, so the ones that are off by default (ConstLocal) stay off in tests that
+    // don't ask for them
+    configResolver.defaultConfig.enabledLint.setDefaults();
     configResolver.defaultConfig.parseOptions.captureComments = true;
 
     Luau::freeze(f.globals.globalTypes);
