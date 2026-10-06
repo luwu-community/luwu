@@ -1657,4 +1657,67 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "for_in_over_a_generic_array_gives_values_tha
     CHECK_EQ("<T>({T}) -> {T & ~nil}", toString(requireType("filter")));
 }
 
+// Luwu: a table filled with `table.insert` is iterated once the inserts are solved, with its element type settled on what
+// was inserted. Upstream iterates it before the call is solved (the call waits for its table argument's expected type)
+// and binds the loop's variables to the error type.
+TEST_CASE_FIXTURE(BuiltinsFixture, "iterating_a_table_filled_by_table_insert")
+{
+    CheckResult result = check(R"(
+        --!strict
+        local t = {}
+        for i = 1, 3 do
+            table.insert(t, { name = "a", id = i })
+        end
+        for k, e in t do
+            local key: number = k
+            local name: string = e.name
+        end
+
+        local single = {}
+        table.insert(single, { name = "b" })
+        for _, s in single do
+            local id: number = s.name
+        end
+    )");
+
+    // Only the real mistake, at the use: `s.name` is a string
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 14);
+    CHECK_EQ(toString(requireTypeAtPosition({8, 33})), "{ id: number, name: string }");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "iterating_a_table_filled_by_table_insert_reports_mistakes_where_they_are")
+{
+    CheckResult result = check(R"(
+        --!strict
+        local t = {}
+        table.insert(t, { name = "a" })
+        for _, e in t do
+            local n: number = e.name
+            local missing = e.nope
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 5);
+    CHECK_EQ(result.errors[1].location.begin.line, 6);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "iterating_a_table_that_the_loop_inserts_into")
+{
+    // The insert depends on the loop's variable, so the iteration can't wait for it; this must still check
+    CheckResult result = check(R"(
+        --!strict
+        local t = {}
+        table.insert(t, 1)
+        for _, v in t do
+            if v < 10 then
+                table.insert(t, v + 1)
+            end
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
 TEST_SUITE_END();

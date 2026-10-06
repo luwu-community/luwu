@@ -885,6 +885,15 @@ struct Printer
             writer.keyword("if");
             visualizeElseIfExpr(*a);
         }
+        else if (const auto& a = expr.as<AstExprDo>())
+        {
+            // Luwu Do Expressions (rfcs/do-expressions.md): the shorthand (`x or return v`) is just its statement
+            if (!a->shorthand)
+                writer.keyword("do");
+
+            for (AstStat* stat : a->body->body)
+                visualize(*stat);
+        }
         else if (const auto& a = expr.as<AstExprInterpString>())
         {
             const auto* cstNode = lookupCstNode<CstExprInterpString>(a);
@@ -1046,6 +1055,12 @@ struct Printer
             writer.keyword("break");
         else if (program.is<AstStatContinue>())
             writer.keyword("continue");
+        else if (const auto& a = program.as<AstStatGive>())
+        {
+            // Luwu Do Expressions (rfcs/do-expressions.md)
+            writer.keyword("give");
+            visualize(*a->value);
+        }
         else if (const auto& a = program.as<AstStatReturn>())
         {
             const auto cstNode = lookupCstNode<CstStatReturn>(a);
@@ -1877,9 +1892,37 @@ struct Printer
             LUAU_ASSERT(!"visualizeBlock was expecting an AstStatBlock");
     }
 
+    // Luwu If Local (rfcs/if-local.md): a `when` chain prints clause by clause. A binding prints through its
+    // declaration, which also prints a destructuring pattern back as written.
+    void visualizeIfCondition(AstExpr& condition, const AstArray<AstIfClause>& clauses)
+    {
+        if (clauses.size == 0)
+        {
+            visualize(condition);
+            return;
+        }
+
+        for (const AstIfClause& clause : clauses)
+        {
+            if (clause.declaration && clause.declaration->destructuredFrom)
+                continue;
+
+            if (clause.whenLocation)
+            {
+                advance(clause.whenLocation->begin);
+                writer.keyword("when");
+            }
+
+            if (clause.declaration)
+                visualize(static_cast<AstStat&>(*clause.declaration));
+            else
+                visualize(*clause.expr);
+        }
+    }
+
     void visualizeElseIf(AstStatIf& elseif)
     {
-        visualize(*elseif.condition);
+        visualizeIfCondition(*elseif.condition, elseif.clauses);
         if (elseif.thenLocation)
             advance(elseif.thenLocation->begin);
         writer.keyword("then");
@@ -1913,7 +1956,7 @@ struct Printer
     {
         const auto cstNode = lookupCstNode<CstExprIfElse>(&elseif);
 
-        visualize(*elseif.condition);
+        visualizeIfCondition(*elseif.condition, elseif.clauses);
         if (cstNode)
             maybeAdvanceAndWrite(cstNode->thenPosition, "then");
         else

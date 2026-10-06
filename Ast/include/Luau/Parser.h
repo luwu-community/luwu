@@ -102,7 +102,7 @@ private:
     // block ::= chunk
     AstStatBlock* parseBlock();
 
-    AstStatBlock* parseBlockNoScope();
+    AstStatBlock* parseBlockNoScope(bool doExprBody = false);
 
     // stat ::=
     // varlist `=' explist |
@@ -121,6 +121,12 @@ private:
 
     // if exp then block {elseif exp then block} [else block] end
     AstStat* parseIf();
+
+    // Luwu If Local (rfcs/if-local.md)
+    AstExpr* parseIfCondition(AstArray<AstIfClause>& clauses);
+    void parseIfBindingClause(std::vector<AstIfClause>& chain, const std::optional<Location>& whenLocation);
+    bool ifBindingFollows();
+    bool whenFollows();
 
     // while exp do block end
     AstStat* parseWhile();
@@ -223,6 +229,7 @@ private:
     bool destructuringFollows();
     bool destructurePatternFollows();
     AstStat* parseDestructuring(const Location& start, const Location& keywordLocation, bool isConst, std::optional<Name> name = {});
+    AstExpr* parseDestructuringDeclaration(const Location& start, DestructureTarget& target, Location& equalsLocation);
     void parseDestructurePattern(DestructureTarget& target);
     struct DestructureField;
     DestructureField parseDestructureField();
@@ -239,6 +246,7 @@ private:
 
     // return [explist]
     AstStat* parseReturn();
+    AstStatReturn* finishReturn(const Location& start, TempVector<AstExpr*>& list, TempVector<Position>& commaPositions);
 
     // type Name `=' Type
     AstStat* parseTypeAlias(
@@ -470,6 +478,27 @@ private:
 
     // TODO: Add grammar rules here?
     AstExpr* parseIfElseExpr();
+    // Luwu: a missing `then`/`else` in an if-else expression is reported on its keyword (see parseIfElseExpr)
+    enum class IfElseKeyword
+    {
+        Found,
+        Recovered,
+        Missing,
+    };
+    IfElseKeyword expectIfElseKeyword(Lexeme::Type type, const Location& keyword);
+    void noteStrayEnd(const char* construct, bool reported);
+    void reportLeftoverAtEndOfChunk();
+    AstExpr* missingIfElseArm();
+    // Luwu Do Expressions (rfcs/do-expressions.md)
+    AstExpr* parseDoExpr();
+    AstStat* parseGive();
+    bool orLeaveFollows();
+    bool orContinueFollows();
+    void resolveOrContinues();
+    AstExpr* parseOrLeave(const char* introducer = "or");
+    bool doExprBodyFollow(const Lexeme& l);
+    bool valueEnds(const Lexeme& l);
+    void checkDoExprKeywordAsName(const Name& name);
 
     // stringinterp ::= <INTERP_BEGIN> exp {<INTERP_MID> exp} <INTERP_END>
     AstExpr* parseInterpString();
@@ -517,6 +546,7 @@ private:
     bool expectAndConsume(Lexeme::Type type, const char* context = nullptr);
     bool expectAndConsumeFailWithLookahead(Lexeme::Type type, const char* context);
     void expectAndConsumeFail(Lexeme::Type type, const char* context);
+    void reportExpected(const Location& location, Lexeme::Type type, const char* context);
 
     struct MatchLexeme
     {
@@ -589,6 +619,13 @@ private:
     {
         bool vararg;
         unsigned int loopDepth;
+        // Luwu Do Expressions (rfcs/do-expressions.md): how many `do` expressions enclose the current position in
+        // this function. Inside one, `give` and `continue` are hard keywords.
+        unsigned int doExprDepth = 0;
+        // Luwu Do Expressions (rfcs/do-expressions.md): this frame stands for a default value (a default argument,
+        // a field default, a primary constructor parameter's default or a trait argument), which runs inside a
+        // synthesized function or the callee's prologue. A `do` expression there can't `return`.
+        bool defaultValue = false;
 
         Function()
             : vararg(false)
@@ -679,6 +716,29 @@ private:
 
     unsigned int recursionCounter;
 
+    // Luwu Do Expressions (rfcs/do-expressions.md): where the expression directly inside the innermost `(` being parsed
+    // starts, so a `do` expression can tell it is parenthesized.
+    std::optional<Position> parenthesizedExprStart;
+
+    // Luwu Do Expressions (rfcs/do-expressions.md): the statement being parsed is directly in a `do` expression's block, not
+    // in a block nested in it. A `give` there ends the expression, so a `,` after its value belongs to the list around it.
+    bool doExprTopLevel = false;
+
+    // Luwu: `end`s found right after an if-else or `do` expression (see noteStrayEnd)
+    struct StrayEnd
+    {
+        Location location;
+        const char* construct;
+        bool reported;
+    };
+    std::vector<StrayEnd> strayEnds;
+
+    // Luwu Do Expressions (rfcs/do-expressions.md): `x or continue` is the continue shorthand only in a module that never
+    // uses `continue` as a name. Name uses are counted as the module is parsed, and each shorthand keeps the slot it was
+    // stored in, so resolveOrContinues can turn it back into a variable read if the count isn't zero at the end.
+    size_t continueNameUses = 0;
+    std::vector<AstExpr**> orContinues;
+
     AstName nameSelf;
     AstName nameNumber;
     AstName nameAny;
@@ -686,6 +746,7 @@ private:
     // Luwu Destructuring (rfcs/destructuring.md): the hidden local an unnamed pattern binds its value to.
     AstName nameDestructured;
     AstName nameNil;
+    AstName nameContinue;
 
     MatchLexeme endMismatchSuspect;
 

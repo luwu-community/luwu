@@ -178,6 +178,8 @@ public:
     void nextline();
 
     Lexeme lookahead();
+    // Luwu: the lexeme after lookahead(), for the few places one token of lookahead can't decide.
+    Lexeme lookaheadSecond();
 
     const Lexeme& current() const
     {

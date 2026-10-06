@@ -778,6 +778,25 @@ public:
     AstType* annotation;
 };
 
+// Luwu If Local (rfcs/if-local.md): one clause of an `if`/`elseif` condition written as a `when` chain, in a
+// statement or an expression. The clauses run left to right, and the branch is taken only when every clause
+// passes. A binding passes when the value it binds is truthy; a plain condition passes when it is truthy.
+// A binding is visible to the clauses after it and to its branch, and nowhere else.
+class AstStatLocal;
+struct AstIfClause
+{
+    // A binding's declaration: a `local`/`const` statement with one name and one value, so passes that handle
+    // `local` handle the binding the same way. Null for a plain condition. `local .{x, y} = v` desugars to
+    // several clauses, one per declaration it desugars to (see Parser::desugarDestructuring).
+    AstStatLocal* declaration = nullptr;
+    // The declared local, or null for a plain condition.
+    AstLocal* local = nullptr;
+    // The binding's value, or the plain condition.
+    AstExpr* expr = nullptr;
+    // The `when` before this clause. Unset on the first clause.
+    std::optional<Location> whenLocation;
+};
+
 class AstExprIfElse : public AstExpr
 {
 public:
@@ -813,6 +832,17 @@ public:
     // Only set for a literal `else` token: an `elseif` clause carries its own keyword as the
     // ifLocation of the nested AstExprIfElse it parses into, and leaves this unset.
     std::optional<Location> elseLocation;
+
+    // Luwu If Local (rfcs/if-local.md): the condition's `when` chain. Empty for an ordinary condition. When
+    // it is set, `condition` is the first clause's expression, and code that evaluates or checks the
+    // condition has to go through the clauses instead.
+    AstArray<AstIfClause> clauses{nullptr, 0};
+
+    // Visits the condition: `condition`, or every clause of the `when` chain (a binding's declaration, or a
+    // plain condition).
+    void visitCondition(AstVisitor* visitor);
+    // Where the condition is written: `condition`, or the whole `when` chain from its first keyword.
+    Location conditionLocation() const;
 };
 
 class AstExprInterpString : public AstExpr
@@ -897,6 +927,17 @@ public:
 
     // Location of the leading 'if' or 'elseif' keyword token only (not the whole clause).
     Location ifLocation;
+
+    // Luwu If Local (rfcs/if-local.md): the condition's `when` chain. Empty for an ordinary condition. When
+    // it is set, `condition` is the first clause's expression, and code that evaluates or checks the
+    // condition has to go through the clauses instead.
+    AstArray<AstIfClause> clauses{nullptr, 0};
+
+    // Visits the condition: `condition`, or every clause of the `when` chain (a binding's declaration, or a
+    // plain condition).
+    void visitCondition(AstVisitor* visitor);
+    // Where the condition is written: `condition`, or the whole `when` chain from its first keyword.
+    Location conditionLocation() const;
 };
 
 class AstStatWhile : public AstStat
@@ -960,6 +1001,20 @@ public:
     AstStatBreak(const Location& location);
 
     void visit(AstVisitor* visitor) override;
+};
+
+// Luwu Do Expressions (rfcs/do-expressions.md): `give exp`, which exits the innermost `do` expression with exp as
+// its value.
+class AstStatGive : public AstStat
+{
+public:
+    LUAU_RTTI(AstStatGive)
+
+    AstStatGive(const Location& location, AstExpr* value);
+
+    void visit(AstVisitor* visitor) override;
+
+    AstExpr* value;
 };
 
 class AstStatContinue : public AstStat
@@ -1745,6 +1800,25 @@ public:
     AstArray<AstType*> types;
 };
 
+// Luwu Do Expressions (rfcs/do-expressions.md): `do block`, an expression that runs a block and evaluates to
+// what its `give` gives. The block ends in a `give`, `return`, `break` or `continue` (see Parser::parseDoExpr);
+// a `give` in a nested block exits early. There is no closing `end`.
+class AstExprDo : public AstExpr
+{
+public:
+    LUAU_RTTI(AstExprDo)
+
+    AstExprDo(const Location& location, AstStatBlock* body);
+
+    void visit(AstVisitor* visitor) override;
+
+    AstStatBlock* body;
+
+    // Written as `x or return v` or `x or break` rather than with `do`: the body is that one statement
+    // (see Parser::parseOrLeave).
+    bool shorthand = false;
+};
+
 class AstExprError : public AstExpr
 {
 public:
@@ -1974,6 +2048,10 @@ public:
     {
         return visit(static_cast<AstExpr*>(node));
     }
+    virtual bool visit(class AstExprDo* node)
+    {
+        return visit(static_cast<AstExpr*>(node));
+    }
     virtual bool visit(class AstExprInterpString* node)
     {
         return visit(static_cast<AstExpr*>(node));
@@ -2013,6 +2091,10 @@ public:
         return visit(static_cast<AstStat*>(node));
     }
     virtual bool visit(class AstStatContinue* node)
+    {
+        return visit(static_cast<AstStat*>(node));
+    }
+    virtual bool visit(class AstStatGive* node)
     {
         return visit(static_cast<AstStat*>(node));
     }

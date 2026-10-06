@@ -43,11 +43,16 @@ inline bool alwaysTerminates(const DenseHashMap<AstExpr*, Constant>& constants, 
     if (node->is<AstStatReturn>())
         return true;
 
-    if (node->is<AstStatBreak>() || node->is<AstStatContinue>())
+    // Luwu Do Expressions (rfcs/do-expressions.md): `give` leaves its block like `return`
+    if (node->is<AstStatBreak>() || node->is<AstStatContinue>() || node->is<AstStatGive>())
         return true;
 
     if (AstStatIf* stat = node->as<AstStatIf>())
     {
+        // Luwu If Local (rfcs/if-local.md): a constant first clause doesn't decide a `when` chain
+        if (stat->clauses.size != 0)
+            return stat->elsebody && alwaysTerminates(constants, stat->thenbody) && alwaysTerminates(constants, stat->elsebody);
+
         if (isConstantTrue(constants, stat->condition))
             return alwaysTerminates(constants, stat->thenbody);
 

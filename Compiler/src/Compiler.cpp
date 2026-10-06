@@ -35,6 +35,7 @@ LUAU_FASTINTVARIABLE(LuauCompileInlineThresholdMaxBoost, 300)
 LUAU_FASTINTVARIABLE(LuauCompileInlineDepth, 5)
 
 LUAU_FASTFLAGVARIABLE(LuauCompileIifeInline)
+LUAU_FASTFLAG(DebugLuwuDoExpr)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAGVARIABLE(LuauCompileStringInterpTargetTop)
@@ -5828,8 +5829,134 @@ struct Compiler
         }
     }
 
+    // Luwu If Local (rfcs/if-local.md): emits a `when` chain's clauses in order, adding a jump to `elseJumps` after
+    // each one, taken when it fails. A binding gets a register of its own and stays pushed as a local; the caller
+    // closes and pops the chain's locals (from `oldLocals`) after the branch.
+    void compileIfClauses(const AstArray<AstIfClause>& clauses, std::vector<size_t>& elseJumps)
+    {
+        for (const AstIfClause& clause : clauses)
+        {
+            if (clause.local)
+            {
+                uint8_t reg = allocReg(clause.expr, 1u);
+                uint32_t allocpc = bytecode.getDebugPC();
+
+                compileExprTemp(clause.expr, reg);
+                pushLocal(clause.local, reg, allocpc);
+
+                elseJumps.push_back(bytecode.emitLabel());
+                bytecode.emitAD(LOP_JUMPIFNOT, reg, 0);
+            }
+            else
+            {
+                compileConditionValue(clause.expr, nullptr, elseJumps, false);
+            }
+        }
+    }
+
+    // Luwu If Local (rfcs/if-local.md): the lowest register among the captured locals from `start` up, or -1. A
+    // clause can capture an earlier binding (`when run(function() x = nil end)`), and when a later clause fails the
+    // else path has to close that upvalue too, because the binding's register is reused after the chain.
+    int capturedLocalsReg(size_t start)
+    {
+        int reg = -1;
+
+        for (size_t i = start; i < localStack.size(); ++i)
+        {
+            Local* l = locals.find(localStack[i]);
+            LUAU_ASSERT(l);
+
+            if (l->captured && (reg < 0 || l->reg < reg))
+                reg = l->reg;
+        }
+
+        return reg;
+    }
+
+    // Luwu If Local (rfcs/if-local.md)
+    void compileExprIfElseClauses(AstExprIfElse* expr, uint8_t target, bool targetTemp)
+    {
+        size_t oldLocals = localStack.size();
+        std::vector<size_t> elseJump;
+        int closeReg = -1;
+
+        {
+            RegScope rs(this);
+
+            compileIfClauses(expr->clauses, elseJump);
+            compileExpr(expr->trueExpr, target, targetTemp);
+
+            closeReg = capturedLocalsReg(oldLocals);
+            closeLocals(oldLocals);
+            popLocals(oldLocals);
+        }
+
+        size_t thenLabel = bytecode.emitLabel();
+        bytecode.emitAD(LOP_JUMP, 0, 0);
+
+        size_t elseLabel = bytecode.emitLabel();
+        if (closeReg >= 0)
+            bytecode.emitABC(LOP_CLOSEUPVALS, uint8_t(closeReg), 0, 0);
+
+        compileExpr(expr->falseExpr, target, targetTemp);
+        size_t endLabel = bytecode.emitLabel();
+
+        patchJumps(expr, elseJump, elseLabel);
+        patchJump(expr, thenLabel, endLabel);
+    }
+
+    // Luwu Do Expressions (rfcs/do-expressions.md): the block runs in place, and each `give` compiles its value into
+    // `target`, closes the block's captured locals and jumps to the end, the way an inlined function's `return` does
+    // (compileInlineReturn). `return`, `break` and `continue` leave through their usual paths: they close upvalues
+    // from the local stack, which already holds the block's locals.
+    void compileExprDo(AstExprDo* expr, uint8_t target, bool targetTemp)
+    {
+        RegScope rs(this);
+
+        giveFrames.push_back({target, targetTemp, localStack.size(), {}});
+
+        // The block always ends in a `give`, `return`, `break` or `continue`, so nothing falls through it
+        LUAU_ASSERT(alwaysTerminates(expr->body));
+        compileStat(expr->body);
+
+        // The last `give`'s jump goes to the very next instruction (see the same in compileInlinedCall)
+        std::vector<size_t>& jumps = giveFrames.back().jumps;
+        if (!jumps.empty() && jumps.back() == bytecode.emitLabel() - 1)
+        {
+            bytecode.undoEmit(LOP_JUMP);
+            jumps.pop_back();
+        }
+
+        size_t endLabel = bytecode.emitLabel();
+        patchJumps(expr, giveFrames.back().jumps, endLabel);
+
+        giveFrames.pop_back();
+    }
+
+    // Luwu Do Expressions (rfcs/do-expressions.md)
+    void compileStatGive(AstStatGive* stat)
+    {
+        LUAU_ASSERT(!giveFrames.empty());
+
+        // Each `give` writes the target only once, right before it jumps out: the target can be a live local that the
+        // block still reads (`x = do ... give x + 1`), so it's never used as scratch before that
+        {
+            RegScope rs(this);
+            GiveFrame& frame = giveFrames.back();
+            compileExpr(stat->value, frame.target, frame.targetTemp);
+        }
+
+        closeLocals(giveFrames.back().localOffset);
+
+        giveFrames.back().jumps.push_back(bytecode.emitLabel());
+        bytecode.emitAD(LOP_JUMP, 0, 0);
+    }
+
     void compileExprIfElse(AstExprIfElse* expr, uint8_t target, bool targetTemp)
     {
+        if (expr->clauses.size != 0)
+            return compileExprIfElseClauses(expr, target, targetTemp);
+
         if (isConstant(expr->condition))
         {
             if (isConstantTrue(expr->condition))
@@ -6604,6 +6731,10 @@ struct Compiler
         {
             compileExprIfElse(expr, target, targetTemp);
         }
+        else if (AstExprDo* expr = node->as<AstExprDo>())
+        {
+            compileExprDo(expr, target, targetTemp);
+        }
         else if (AstExprInterpString* interpString = node->as<AstExprInterpString>())
         {
             compileExprInterpString(interpString, target, targetTemp);
@@ -6985,8 +7116,58 @@ struct Compiler
             return nullptr;
     }
 
+    // Luwu If Local (rfcs/if-local.md)
+    void compileStatIfClauses(AstStatIf* stat)
+    {
+        size_t oldLocals = localStack.size();
+        std::vector<size_t> elseJump;
+        bool thenTerminates = alwaysTerminates(stat->thenbody);
+        int closeReg = -1;
+
+        // With no else branch, the branch falls through to the else path's CLOSEUPVALS, which closes for both
+        bool thenFallsIntoElsePath = !stat->elsebody && !thenTerminates;
+
+        {
+            RegScope rs(this);
+
+            compileIfClauses(stat->clauses, elseJump);
+            compileStat(stat->thenbody);
+
+            closeReg = capturedLocalsReg(oldLocals);
+
+            if (!thenTerminates && !thenFallsIntoElsePath)
+                closeLocals(oldLocals);
+
+            popLocals(oldLocals);
+        }
+
+        size_t thenLabel = 0;
+        bool jumpOverElse = stat->elsebody && !thenTerminates;
+
+        if (jumpOverElse)
+        {
+            thenLabel = bytecode.emitLabel();
+            bytecode.emitAD(LOP_JUMP, 0, 0);
+        }
+
+        size_t elseLabel = bytecode.emitLabel();
+        if (closeReg >= 0)
+            bytecode.emitABC(LOP_CLOSEUPVALS, uint8_t(closeReg), 0, 0);
+
+        if (stat->elsebody)
+            compileStat(stat->elsebody);
+
+        patchJumps(stat, elseJump, elseLabel);
+
+        if (jumpOverElse)
+            patchJump(stat, thenLabel, bytecode.emitLabel());
+    }
+
     void compileStatIf(AstStatIf* stat)
     {
+        if (stat->clauses.size != 0)
+            return compileStatIfClauses(stat);
+
         // Optimization: condition is always false => we only need the else body
         if (isConstantFalse(stat->condition))
         {
@@ -7005,32 +7186,32 @@ struct Compiler
         }
 
         // Optimization: body is a "break" statement with no "else" => we can directly break out of the loop in "then" case
-        if (!stat->elsebody && isStatBreak(stat->thenbody) && !areLocalsCaptured(loops.back().localOffset))
+        if (!stat->elsebody && isStatBreak(stat->thenbody) && !areLocalsCaptured(loops[targetLoop()].localOffset))
         {
             // fallthrough = continue with the loop as usual
             std::vector<size_t> elseJump;
             compileConditionValue(stat->condition, nullptr, elseJump, true);
 
             for (size_t jump : elseJump)
-                loopJumps.push_back({LoopJump::Break, jump});
+                loopJumps.push_back({LoopJump::Break, jump, targetLoop()});
             return;
         }
 
         AstStatContinue* continueStatement = extractStatContinue(stat->thenbody);
 
         // Optimization: body is a "continue" statement with no "else" => we can directly continue in "then" case
-        if (!stat->elsebody && continueStatement != nullptr && !areLocalsCaptured(loops.back().localOffsetContinue))
+        if (!stat->elsebody && continueStatement != nullptr && !areLocalsCaptured(loops[targetLoop()].localOffsetContinue))
         {
             // track continue statement for repeat..until validation (validateContinueUntil)
-            if (!loops.back().continueUsed)
-                loops.back().continueUsed = continueStatement;
+            if (!loops[targetLoop()].continueUsed)
+                loops[targetLoop()].continueUsed = continueStatement;
 
             // fallthrough = proceed with the loop body as usual
             std::vector<size_t> elseJump;
             compileConditionValue(stat->condition, nullptr, elseJump, true);
 
             for (size_t jump : elseJump)
-                loopJumps.push_back({LoopJump::Continue, jump});
+                loopJumps.push_back({LoopJump::Continue, jump, targetLoop()});
             return;
         }
 
@@ -7106,7 +7287,9 @@ struct Compiler
         size_t loopLabel = bytecode.emitLabel();
 
         std::vector<size_t> elseJump;
+        loops.back().compilingHeader = true;
         compileConditionValue(stat->condition, nullptr, elseJump, false);
+        loops.back().compilingHeader = false;
 
         compileStat(stat->body);
 
@@ -7126,7 +7309,6 @@ struct Compiler
         patchJumps(stat, elseJump, endLabel);
 
         patchLoopJumps(stat, oldJumps, endLabel, contLabel);
-        loopJumps.resize(oldJumps);
 
         loops.pop_back();
     }
@@ -7203,7 +7385,9 @@ struct Compiler
         else
         {
             std::vector<size_t> skipJump;
+            loops.back().compilingHeader = true;
             compileConditionValue(stat->condition, nullptr, skipJump, true);
+            loops.back().compilingHeader = false;
 
             // we close locals *after* we compute loop conditionals because during computation of condition it's (in theory) possible that user code
             // mutates them
@@ -7229,7 +7413,6 @@ struct Compiler
         popLocals(oldLocals);
 
         patchLoopJumps(stat, oldJumps, endLabel, contLabel);
-        loopJumps.resize(oldJumps);
 
         loops.pop_back();
     }
@@ -7534,6 +7717,7 @@ struct Compiler
         if (Variable* il = variables.find(stat->var); il && il->written)
             varreg = allocReg(stat, 1u);
 
+        loops.back().compilingHeader = true;
         compileExprTemp(stat->from, uint8_t(regs + 2));
         compileExprTemp(stat->to, uint8_t(regs + 0));
 
@@ -7541,6 +7725,7 @@ struct Compiler
             compileExprTemp(stat->step, uint8_t(regs + 1));
         else
             bytecode.emitABC(LOP_LOADN, uint8_t(regs + 1), 1, 0);
+        loops.back().compilingHeader = false;
 
         size_t forLabel = bytecode.emitLabel();
 
@@ -7572,7 +7757,6 @@ struct Compiler
         patchJump(stat, backLabel, loopLabel);
 
         patchLoopJumps(stat, oldJumps, endLabel, contLabel);
-        loopJumps.resize(oldJumps);
 
         loops.pop_back();
     }
@@ -7591,7 +7775,9 @@ struct Compiler
         uint8_t regs = allocReg(stat, 3u);
 
         // this puts initial values of (generator, state, index) into the loop registers
+        loops.back().compilingHeader = true;
         compileExprListTemp(stat->values, regs, 3, /* targetTop= */ true);
+        loops.back().compilingHeader = false;
 
         // note that we reserve at least 2 variables; this allows our fast path to assume that we need 2 variables instead of 1 or 2
         uint8_t vars = allocReg(stat, std::max(unsigned(stat->vars.size), 2u));
@@ -7655,7 +7841,6 @@ struct Compiler
         patchJump(stat, backLabel, loopLabel);
 
         patchLoopJumps(stat, oldJumps, endLabel, contLabel);
-        loopJumps.resize(oldJumps);
 
         loops.pop_back();
     }
@@ -8005,34 +8190,40 @@ struct Compiler
         else if (node->is<AstStatBreak>())
         {
             LUAU_ASSERT(!loops.empty());
+            size_t loop = targetLoop();
 
             // before exiting out of the loop, we need to close all local variables that were captured in closures since loop start
             // normally they are closed by the enclosing blocks, including the loop block, but we're skipping that here
-            closeLocals(loops.back().localOffset);
+            closeLocals(loops[loop].localOffset);
 
             size_t label = bytecode.emitLabel();
 
             bytecode.emitAD(LOP_JUMP, 0, 0);
 
-            loopJumps.push_back({LoopJump::Break, label});
+            loopJumps.push_back({LoopJump::Break, label, loop});
         }
         else if (AstStatContinue* stat = node->as<AstStatContinue>())
         {
             LUAU_ASSERT(!loops.empty());
+            size_t loop = targetLoop();
 
             // track continue statement for repeat..until validation (validateContinueUntil)
-            if (!loops.back().continueUsed)
-                loops.back().continueUsed = stat;
+            if (!loops[loop].continueUsed)
+                loops[loop].continueUsed = stat;
 
             // before continuing, we need to close all local variables that were captured in closures since loop start
             // normally they are closed by the enclosing blocks, including the loop block, but we're skipping that here
-            closeLocals(loops.back().localOffsetContinue);
+            closeLocals(loops[loop].localOffsetContinue);
 
             size_t label = bytecode.emitLabel();
 
             bytecode.emitAD(LOP_JUMP, 0, 0);
 
-            loopJumps.push_back({LoopJump::Continue, label});
+            loopJumps.push_back({LoopJump::Continue, label, loop});
+        }
+        else if (AstStatGive* stat = node->as<AstStatGive>())
+        {
+            compileStatGive(stat);
         }
         else if (AstStatReturn* stat = node->as<AstStatReturn>())
         {
@@ -8332,13 +8523,28 @@ struct Compiler
             patchJump(node, l, target);
     }
 
+    // Patches the jumps the innermost loop owns, and truncates loopJumps back to `oldJumps`, keeping the jumps that
+    // belong to an enclosing loop.
     void patchLoopJumps(AstNode* node, size_t oldJumps, size_t endLabel, size_t contLabel)
     {
         LUAU_ASSERT(oldJumps <= loopJumps.size());
+        LUAU_ASSERT(!loops.empty());
+
+        size_t loop = loops.size() - 1;
+        size_t kept = oldJumps;
 
         for (size_t i = oldJumps; i < loopJumps.size(); ++i)
         {
             const LoopJump& lj = loopJumps[i];
+
+            // Luwu Do Expressions (rfcs/do-expressions.md): a `do` expression in this loop's header jumps for an
+            // enclosing loop, which patches it later
+            if (lj.loop != loop)
+            {
+                LUAU_ASSERT(lj.loop < loop);
+                loopJumps[kept++] = lj;
+                continue;
+            }
 
             switch (lj.type)
             {
@@ -8354,6 +8560,26 @@ struct Compiler
                 LUAU_ASSERT(!"Unknown loop jump type");
             }
         }
+
+        loopJumps.resize(kept);
+    }
+
+    // Luwu Do Expressions (rfcs/do-expressions.md): the loop a `break` or `continue` belongs to: the innermost loop that
+    // isn't compiling its own header (a `while` or `until` condition, `for` bounds, `for ... in` values). A header runs
+    // outside its loop's body, so the parser resolves a `break`/`continue` in a `do` expression there to the enclosing
+    // loop.
+    size_t targetLoop() const
+    {
+        LUAU_ASSERT(!loops.empty());
+        size_t loop = loops.size() - 1;
+
+        while (loops[loop].compilingHeader)
+        {
+            LUAU_ASSERT(loop > 0);
+            --loop;
+        }
+
+        return loop;
     }
 
     uint8_t allocReg(AstNode* node, unsigned int count)
@@ -9251,6 +9477,15 @@ struct Compiler
 
         bool visit(AstExpr* expr) override
         {
+            // Luwu Do Expressions (rfcs/do-expressions.md): a `do` expression can `return` from anywhere inside an
+            // expression, so every expression has to be searched. Upstream skips them: there, a `return` is only ever a
+            // statement of the function's own blocks.
+            return FFlag::DebugLuwuDoExpr;
+        }
+
+        // A nested function's returns are its own
+        bool visit(AstExprFunction* expr) override
+        {
             return false;
         }
 
@@ -9319,6 +9554,10 @@ struct Compiler
 
         Type type;
         size_t label;
+
+        // Luwu Do Expressions (rfcs/do-expressions.md): the index in `loops` of the loop this jump leaves or continues.
+        // It isn't always the innermost one: see targetLoop.
+        size_t loop;
     };
 
     struct Loop
@@ -9327,6 +9566,9 @@ struct Compiler
         size_t localOffsetContinue;
 
         AstStatContinue* continueUsed;
+
+        // Luwu Do Expressions (rfcs/do-expressions.md): set while the loop compiles its own header (see targetLoop)
+        bool compilingHeader = false;
     };
 
     struct InlineArg
@@ -9515,6 +9757,16 @@ struct Compiler
     std::vector<LoopJump> loopJumps;
     std::vector<Loop> loops;
     std::vector<InlineFrame> inlineFrames;
+
+    // Luwu Do Expressions (rfcs/do-expressions.md): the `do` expressions being compiled, innermost last
+    struct GiveFrame
+    {
+        uint8_t target;
+        bool targetTemp;
+        size_t localOffset;
+        std::vector<size_t> jumps;
+    };
+    std::vector<GiveFrame> giveFrames;
     // Luwu Classes (rfcs/classes): classes whose initializers are being compiled at a construction site
     // (tryCompileNewObjectFieldParameters), innermost last
     std::vector<AstStatClass*> fieldsExpansionStack;

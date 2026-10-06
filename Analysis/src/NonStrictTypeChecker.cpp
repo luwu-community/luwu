@@ -276,6 +276,8 @@ struct NonStrictTypeChecker
             return visit(s);
         else if (auto s = stat->as<AstStatReturn>())
             return visit(s);
+        else if (auto s = stat->as<AstStatGive>())
+            return visit(s);
         else if (auto s = stat->as<AstStatExpr>())
             return visit(s);
         else if (auto s = stat->as<AstStatLocal>())
@@ -350,9 +352,25 @@ struct NonStrictTypeChecker
         return ctx;
     }
 
+    // Luwu If Local (rfcs/if-local.md): only a `when` chain's first clause always runs, so only its context is kept.
+    // The clauses after it are still checked.
+    NonStrictContext visitIfCondition(AstExpr* condition, const AstArray<AstIfClause>& clauses)
+    {
+        for (const AstIfClause& clause : clauses)
+            if (clause.local && clause.local->annotation)
+                visit(clause.local->annotation);
+
+        NonStrictContext first = visit(condition, ValueContext::RValue);
+
+        for (size_t i = 1; i < clauses.size; ++i)
+            visit(clauses.data[i].expr, ValueContext::RValue);
+
+        return first;
+    }
+
     NonStrictContext visit(AstStatIf* ifStatement)
     {
-        NonStrictContext condB = visit(ifStatement->condition, ValueContext::RValue);
+        NonStrictContext condB = visitIfCondition(ifStatement->condition, ifStatement->clauses);
         NonStrictContext branchContext;
 
         NonStrictContext thenBody = visit(ifStatement->thenbody);
@@ -584,6 +602,8 @@ struct NonStrictTypeChecker
         else if (auto e = expr->as<AstExprError>())
             return visit(e);
         else if (auto e = expr->as<AstExprInstantiate>())
+            return visit(e);
+        else if (auto e = expr->as<AstExprDo>())
             return visit(e);
         else
         {
@@ -842,9 +862,23 @@ struct NonStrictTypeChecker
         return visit(typeAssertion->expr, ValueContext::RValue);
     }
 
+    // Luwu Do Expressions (rfcs/do-expressions.md): the block is checked, but since a `give` can leave it early, none of
+    // its context carries out of the expression
+    NonStrictContext visit(AstExprDo* doExpr)
+    {
+        visit(doExpr->body);
+        return {};
+    }
+
+    NonStrictContext visit(AstStatGive* give)
+    {
+        visit(give->value, ValueContext::RValue);
+        return {};
+    }
+
     NonStrictContext visit(AstExprIfElse* ifElse)
     {
-        NonStrictContext condB = visit(ifElse->condition, ValueContext::RValue);
+        NonStrictContext condB = visitIfCondition(ifElse->condition, ifElse->clauses);
         NonStrictContext thenB = visit(ifElse->trueExpr, ValueContext::RValue);
         NonStrictContext elseB = visit(ifElse->falseExpr, ValueContext::RValue);
         return NonStrictContext::disjunction(builtinTypes, arena, condB, NonStrictContext::conjunction(builtinTypes, arena, thenB, elseB));

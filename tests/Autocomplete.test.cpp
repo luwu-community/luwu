@@ -21,6 +21,8 @@ LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuDestructuring)
+LUAU_FASTFLAG(LuwuIfLocal)
+LUAU_FASTFLAG(DebugLuwuDoExpr)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
@@ -872,6 +874,75 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_while_middle_keywords")
     CHECK_EQ(ac5.entryMap.count("false"), 1);
 }
 
+// Luwu If Local (rfcs/if-local.md)
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_if_local_keywords")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    check(R"(
+        if   @1
+    )");
+
+    auto ac1 = autocomplete('1');
+    CHECK_EQ(ac1.entryMap.count("local"), 1);
+    CHECK_EQ(ac1.entryMap.count("const"), 1);
+
+    check(R"(
+        if x t@1
+    )");
+
+    auto ac2 = autocomplete('1');
+    CHECK_EQ(ac2.entryMap.count("then"), 1);
+    CHECK_EQ(ac2.entryMap.count("when"), 1);
+
+    // the cursor after a later clause is past the condition too, not inside it
+    check(R"(
+        if local a = f() when a > 1 t@1
+    )");
+
+    auto ac3 = autocomplete('1');
+    CHECK_EQ(ac3.entryMap.count("then"), 1);
+    CHECK_EQ(ac3.entryMap.count("when"), 1);
+    CHECK_EQ(ac3.context, AutocompleteContext::Keyword);
+
+    // a binding is visible to the clauses after it
+    check(R"(
+        local function f() return 1 end
+        if local abc = f() when ab@1
+    )");
+
+    auto ac4 = autocomplete('1');
+    CHECK_EQ(ac4.entryMap.count("abc"), 1);
+}
+
+// Luwu Do Expressions (rfcs/do-expressions.md)
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_give_inside_do_expressions")
+{
+    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+
+    check(R"(
+        local x = do
+            local a = 1
+            @1
+    )");
+    CHECK_EQ(autocomplete('1').entryMap.count("give"), 1);
+
+    check(R"(
+        local x = do
+            local f = function()
+                @1
+            end
+            give 1
+    )");
+    CHECK_EQ(autocomplete('1').entryMap.count("give"), 0);
+
+    check(R"(
+        local a = 1
+        @1
+    )");
+    CHECK_EQ(autocomplete('1').entryMap.count("give"), 0);
+}
+
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_if_middle_keywords")
 {
     check(R"(
@@ -907,10 +978,12 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_if_middle_keywords")
     )");
 
     auto ac3 = autocomplete('1');
-    CHECK_EQ(3, ac3.entryMap.size());
+    // Luwu If Local (rfcs/if-local.md): `when` can also follow a condition
+    CHECK_EQ(FFlag::LuwuIfLocal ? 4 : 3, ac3.entryMap.size());
     CHECK_EQ(ac3.entryMap.count("then"), 1);
     CHECK_EQ(ac3.entryMap.count("and"), 1);
     CHECK_EQ(ac3.entryMap.count("or"), 1);
+    CHECK_EQ(ac3.entryMap.count("when"), FFlag::LuwuIfLocal ? 1 : 0);
     CHECK_EQ(ac3.context, AutocompleteContext::Keyword);
 
     check(R"(

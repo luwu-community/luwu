@@ -24,6 +24,8 @@ LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuDestructuring)
+LUAU_FASTFLAG(LuwuIfLocal)
+LUAU_FASTFLAG(DebugLuwuDoExpr)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
@@ -8336,6 +8338,587 @@ TEST_CASE_FIXTURE(Fixture, "destructuring_without_the_flag_says_how_to_enable_it
 
     matchParseError("local .{x} = t", "Destructuring is a Luwu feature; enable the 'LuwuDestructuring' fast flag to use it");
     matchParseError("const .{x} = t", "Destructuring is a Luwu feature; enable the 'LuwuDestructuring' fast flag to use it");
+}
+
+static void matchOnlyIfLocalError(Fixture& fixture, const std::string& source, const std::string& message)
+{
+    ParseResult result = fixture.tryParse(source);
+    INFO(source);
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), message);
+}
+
+static AstExprLocal* calledWithLocal(AstStat* stat)
+{
+    AstStatExpr* expr = stat->as<AstStatExpr>();
+    REQUIRE(expr);
+    AstExprCall* call = expr->expr->as<AstExprCall>();
+    REQUIRE(call);
+    REQUIRE_EQ(call->args.size, 1);
+    AstExprLocal* local = call->args.data[0]->as<AstExprLocal>();
+    REQUIRE(local);
+    return local;
+}
+
+TEST_CASE_FIXTURE(Fixture, "if_local_parses_a_when_chain")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    AstStatBlock* block = parse(R"(
+        if local a = f() when a > 1 when const b = g(a) then
+        end
+    )");
+
+    REQUIRE_EQ(block->body.size, 1);
+    AstStatIf* stat = block->body.data[0]->as<AstStatIf>();
+    REQUIRE(stat);
+    REQUIRE_EQ(stat->clauses.size, 3);
+    CHECK(stat->luwuOnly);
+
+    const AstIfClause& a = stat->clauses.data[0];
+    REQUIRE(a.declaration);
+    CHECK_EQ(std::string(a.local->name.value), "a");
+    CHECK(!a.local->isConst);
+    CHECK(a.expr->is<AstExprCall>());
+    CHECK(!a.whenLocation);
+    CHECK_EQ(stat->condition, a.expr);
+    CHECK_EQ(a.declaration->vars.data[0], a.local);
+    CHECK_EQ(a.declaration->values.data[0], a.expr);
+
+    const AstIfClause& test = stat->clauses.data[1];
+    CHECK(!test.declaration);
+    CHECK(!test.local);
+    CHECK(test.expr->is<AstExprBinary>());
+    CHECK(test.whenLocation);
+
+    const AstIfClause& b = stat->clauses.data[2];
+    REQUIRE(b.declaration);
+    CHECK(b.local->isConst);
+    CHECK(b.declaration->isConst);
+
+    // `g(a)` reads the first clause's binding
+    AstExprCall* call = b.expr->as<AstExprCall>();
+    REQUIRE(call);
+    AstExprLocal* arg = call->args.data[0]->as<AstExprLocal>();
+    REQUIRE(arg);
+    CHECK_EQ(arg->local, a.local);
+
+    CHECK_EQ(stat->conditionLocation().begin, a.declaration->location.begin);
+    CHECK_EQ(stat->conditionLocation().end, b.expr->location.end);
+}
+
+TEST_CASE_FIXTURE(Fixture, "if_local_bindings_are_visible_only_in_their_chain_and_branch")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    AstStatBlock* block = parse(R"(
+        local a = 1
+        if local a = a then
+            print(a)
+        elseif local b = a then
+            print(a)
+        else
+            print(a)
+        end
+        print(a)
+    )");
+
+    REQUIRE_EQ(block->body.size, 3);
+    AstLocal* outer = block->body.data[0]->as<AstStatLocal>()->vars.data[0];
+    AstStatIf* stat = block->body.data[1]->as<AstStatIf>();
+    REQUIRE(stat);
+    REQUIRE_EQ(stat->clauses.size, 1);
+    AstLocal* inner = stat->clauses.data[0].local;
+
+    // The initializer can't see its own binding
+    CHECK_EQ(stat->clauses.data[0].expr->as<AstExprLocal>()->local, outer);
+    CHECK_EQ(calledWithLocal(stat->thenbody->body.data[0])->local, inner);
+
+    AstStatIf* elseif = stat->elsebody->as<AstStatIf>();
+    REQUIRE(elseif);
+    CHECK_EQ(elseif->clauses.data[0].expr->as<AstExprLocal>()->local, outer);
+    CHECK_EQ(calledWithLocal(elseif->thenbody->body.data[0])->local, outer);
+
+    AstStatBlock* elseBlock = elseif->elsebody->as<AstStatBlock>();
+    REQUIRE(elseBlock);
+    CHECK_EQ(calledWithLocal(elseBlock->body.data[0])->local, outer);
+    CHECK_EQ(calledWithLocal(block->body.data[2])->local, outer);
+}
+
+TEST_CASE_FIXTURE(Fixture, "if_local_expression")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    AstStatBlock* block = parse(R"(
+        local a = 0
+        local x = if const a = f() when a then a else a
+    )");
+
+    REQUIRE_EQ(block->body.size, 2);
+    AstLocal* outer = block->body.data[0]->as<AstStatLocal>()->vars.data[0];
+    AstExprIfElse* expr = block->body.data[1]->as<AstStatLocal>()->values.data[0]->as<AstExprIfElse>();
+    REQUIRE(expr);
+    REQUIRE_EQ(expr->clauses.size, 2);
+    CHECK(expr->luwuOnly);
+
+    AstLocal* inner = expr->clauses.data[0].local;
+    REQUIRE(inner);
+    CHECK(inner->isConst);
+    CHECK_EQ(expr->clauses.data[1].expr->as<AstExprLocal>()->local, inner);
+    CHECK_EQ(expr->trueExpr->as<AstExprLocal>()->local, inner);
+    CHECK_EQ(expr->falseExpr->as<AstExprLocal>()->local, outer);
+}
+
+TEST_CASE_FIXTURE(Fixture, "if_const_still_reads_a_variable_named_const")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    for (const char* source : {"if const then end", "if const.x then end", "if const {1} then end", "if const == 1 then end", "if const 'x' then end"})
+    {
+        INFO(source);
+        ParseResult result = tryParse(source);
+        CHECK(result.errors.empty());
+        REQUIRE_EQ(result.root->body.size, 1);
+        AstStatIf* stat = result.root->body.data[0]->as<AstStatIf>();
+        REQUIRE(stat);
+        CHECK_EQ(stat->clauses.size, 0);
+    }
+}
+
+TEST_CASE_FIXTURE(Fixture, "if_local_destructures_into_one_clause_per_name")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDestructuring, true},
+    };
+
+    AstStatBlock* block = parse(R"(
+        if const .{x, y} = p when x > y then
+        end
+    )");
+
+    AstStatIf* stat = block->body.data[0]->as<AstStatIf>();
+    REQUIRE(stat);
+    REQUIRE_EQ(stat->clauses.size, 4);
+
+    AstStatLocal* source = stat->clauses.data[0].declaration;
+    REQUIRE(source);
+    CHECK(source->destructure);
+    CHECK(source->keywordLocation);
+    CHECK_EQ(std::string(source->vars.data[0]->name.value), kDestructuredLocalName);
+
+    for (size_t i = 1; i < 3; ++i)
+    {
+        AstStatLocal* field = stat->clauses.data[i].declaration;
+        REQUIRE(field);
+        CHECK_EQ(field->destructuredFrom, source);
+        CHECK(field->vars.data[0]->isConst);
+        CHECK(!stat->clauses.data[i].whenLocation);
+    }
+
+    CHECK(!stat->clauses.data[3].declaration);
+    CHECK(stat->clauses.data[3].whenLocation);
+}
+
+TEST_CASE_FIXTURE(Fixture, "if_local_mistakes_get_one_error")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    matchOnlyIfLocalError(
+        *this,
+        "if local a, b = x(), y() then end",
+        "'if local' binds one name; bind the next one in a 'when' clause: 'if local a = x() when local b = y() then'"
+    );
+    matchOnlyIfLocalError(
+        *this,
+        "if const a, b = x() then end",
+        "'if const' binds one name; bind the next one in a 'when' clause: 'if const a = x() when const b = y() then'"
+    );
+    matchOnlyIfLocalError(*this, "if local a then end", "Expected '=' and a value after 'local a'");
+    matchOnlyIfLocalError(*this, "if local a = x(), y() then end", "'if local' takes exactly one value");
+}
+
+TEST_CASE_FIXTURE(Fixture, "if_local_without_the_flag_says_how_to_enable_it")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, false};
+
+    const char* message = "'if local' and 'when' are Luwu features; enable the 'LuwuIfLocal' fast flag to use them";
+    matchParseError("if local a = f() then end", message);
+    matchParseError("if a when b then end", message);
+    matchParseError("local x = if const a = f() then a else nil", message);
+}
+
+static AstExprDo* doExprValue(AstStatBlock* block, size_t index)
+{
+    REQUIRE(index < block->body.size);
+    AstStatLocal* local = block->body.data[index]->as<AstStatLocal>();
+    REQUIRE(local);
+    REQUIRE_EQ(local->values.size, 1);
+    AstExprDo* expr = local->values.data[0]->as<AstExprDo>();
+    REQUIRE(expr);
+    return expr;
+}
+
+TEST_CASE_FIXTURE(Fixture, "do_expression_ends_at_its_terminator")
+{
+    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+
+    AstStatBlock* block = parse(R"(
+        local x = do
+            local a = 1
+            if a then
+                give a
+            end
+            give 2
+        print(x)
+    )");
+
+    REQUIRE_EQ(block->body.size, 2);
+    AstExprDo* expr = doExprValue(block, 0);
+    CHECK(!expr->shorthand);
+    CHECK(expr->luwuOnly);
+    REQUIRE_EQ(expr->body->body.size, 3);
+    CHECK(expr->body->body.data[2]->is<AstStatGive>());
+    CHECK(block->body.data[1]->is<AstStatExpr>());
+
+    // the give's value sees the block's locals
+    AstStatGive* give = expr->body->body.data[2]->as<AstStatGive>();
+    CHECK(give->value->is<AstExprConstantNumber>());
+    AstStatIf* stat = expr->body->body.data[1]->as<AstStatIf>();
+    REQUIRE(stat);
+    AstStatGive* early = stat->thenbody->body.data[0]->as<AstStatGive>();
+    REQUIRE(early);
+    CHECK_EQ(early->value->as<AstExprLocal>()->local, expr->body->body.data[0]->as<AstStatLocal>()->vars.data[0]);
+}
+
+TEST_CASE_FIXTURE(Fixture, "do_expression_terminators")
+{
+    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+
+    for (const char* source : {
+             "local x = do give 1",
+             "local function f() local x = do return 1 end",
+             "for i = 1, 2 do local x = do break end",
+             "for i = 1, 2 do local x = do continue end",
+             "local x = 1 or (do return)",
+             "local x = f(do give 1, 2)",
+             "local x = if a then do give 1 else 2",
+         })
+    {
+        INFO(source);
+        ParseResult result = tryParse(source);
+        CHECK(result.errors.empty());
+    }
+}
+
+static void matchOnlyDoExprError(Fixture& fixture, const std::string& source, const std::string& message)
+{
+    ParseResult result = fixture.tryParse(source);
+    INFO(source);
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), message);
+}
+
+TEST_CASE_FIXTURE(Fixture, "do_expression_mistakes_get_one_error")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuDoExpr, true},
+        {FFlag::LuwuDefaultArguments, true},
+    };
+
+    const std::string mustEnd = "A 'do' expression must end with 'give <value>', 'return', 'break' or 'continue'";
+    matchOnlyDoExprError(*this, "local x = do local y = 1", mustEnd);
+    matchOnlyDoExprError(*this, "local x = f(do local y = 1)", mustEnd);
+    matchOnlyDoExprError(*this, "local x = do if a then give 1 end", mustEnd);
+    matchOnlyDoExprError(*this, "local x = do error('x')", mustEnd + "; to raise an error there, write 'give error(...)'");
+    matchOnlyDoExprError(
+        *this,
+        "local x = a or do return",
+        "A 'do' expression that ends in a bare 'return' must be parenthesized, '(do return)', so a value on the next line isn't read as "
+        "the value to return"
+    );
+    matchOnlyDoExprError(
+        *this,
+        "local x = a or return",
+        "'or return' with no value must be parenthesized, 'or (return)', so a value on the next line isn't read as the value to return"
+    );
+    matchOnlyDoExprError(*this, "local x = do if a then give 1, 2 end give 3", "'give' gives exactly one value");
+    matchOnlyDoExprError(*this, "local x = do give", "Expected a value after 'give'");
+    matchOnlyDoExprError(*this, "local x = do local give = 1 give 1", "'give' is a keyword inside a 'do' expression and can't name a variable there");
+    matchOnlyDoExprError(*this, "local x = do print(continue) give 1", "'continue' is a keyword inside a 'do' expression and can't name a variable there");
+    matchOnlyDoExprError(*this, "local function f(a = do return 1) end", "A default value can't 'return': it runs before the function's body does");
+    matchOnlyDoExprError(*this, "local function f(a = nil or return 1) end", "A default value can't 'return': it runs before the function's body does");
+    matchOnlyDoExprError(*this, "for i = 1, 2 do local function f(a = do break) end end", "break statement must be inside a loop");
+}
+
+TEST_CASE_FIXTURE(Fixture, "malformed_do_expressions_do_not_cascade")
+{
+    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+
+    const std::string mustEnd = "A 'do' expression must end with 'give <value>', 'return', 'break' or 'continue'";
+    matchOnlyDoExprError(*this, "local x = do", mustEnd);
+    matchOnlyDoExprError(*this, "local x = do\nprint(1)", mustEnd);
+    matchOnlyDoExprError(*this, "local x = do do end", mustEnd);
+    matchOnlyDoExprError(*this, "local x = do do end\nprint(1)", mustEnd);
+    matchOnlyDoExprError(*this, "print(do, 2)\nprint(3)", mustEnd);
+    matchOnlyDoExprError(*this, "local t = { do, 2 }", mustEnd);
+    matchOnlyDoExprError(*this, "if do then print(1) end", mustEnd);
+    matchOnlyDoExprError(*this, "local x = do do\nprint(1)", "Expected 'end' (to close 'do' at line 1), got <eof>");
+    matchOnlyDoExprError(*this, "local x = do do do do", "Expected 'end' (to close 'do' at column 20), got <eof>");
+
+    // a value right after `do`, or where a statement goes, was meant as the result
+    for (const char* source : {"local x = do 1", "local x = do 'x'\nprint(x)", "local x = do { 1 }", "local x = do -y", "local x = do not y"})
+        matchOnlyDoExprError(*this, source, "A 'do' expression's block holds statements; to give a value, write 'do give <value>'");
+    matchOnlyDoExprError(*this, "local x = do x + 1 * 2\nprint(x)", "Incomplete statement: to give a value from a 'do' expression, write 'give <value>'");
+    matchOnlyDoExprError(*this, "local x = do local a = 1 a .. 'b'", "Incomplete statement: to give a value from a 'do' expression, write 'give <value>'");
+}
+
+// While a do or if-else expression is still being written, only its keyword is an error, and the next statement is
+// left alone
+TEST_CASE_FIXTURE(Fixture, "incomplete_expression_errors_go_on_the_keyword")
+{
+    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+
+    ParseResult result = tryParse("local x = do\n    local a = 1\nprint(x)");
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getLocation(), Location(Position(0, 10), Position(0, 12)));
+
+    result = tryParse("local x = if a then 1\nprint(x)");
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "Expected 'else' when parsing if then else expression, got 'print'");
+    CHECK_EQ(result.errors[0].getLocation(), Location(Position(0, 10), Position(0, 12)));
+    REQUIRE_EQ(result.root->body.size, 2);
+    CHECK(result.root->body.data[1]->is<AstStatExpr>());
+
+    result = tryParse("local x = if a\nprint(x)");
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "Expected 'then' when parsing if then else expression, got 'print'");
+    REQUIRE_EQ(result.root->body.size, 2);
+    CHECK(result.root->body.data[1]->is<AstStatExpr>());
+
+    // a missing keyword with a value after it on the same line is a typo, and that value is still the arm
+    result = tryParse("local a = if true 1 else 2");
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.root->body.size, 1);
+}
+
+TEST_CASE_FIXTURE(Fixture, "an_end_after_an_expression_that_takes_none_gets_one_error")
+{
+    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+
+    const std::string ifElse = "An if-else expression doesn't end with 'end'; this 'end' closes the block around it instead";
+    const std::string doEnd = "A 'do' expression doesn't end with 'end'; this 'end' closes the block around it instead";
+
+    matchOnlyDoExprError(*this, "local x = if a then 1 else 2 end", ifElse);
+    matchOnlyDoExprError(*this, "local x = do give 1 end", doEnd);
+    matchOnlyDoExprError(*this, "while true do\n    local x = do give 1 end\nend", doEnd);
+
+    // the stray `end` closes the function early, and the function's own `end` is left over: the stray one is blamed
+    ParseResult result = tryParse("local function f()\n    local x = do\n        give 1\n    end\n    return x\nend");
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), doEnd);
+    CHECK_EQ(result.errors[0].getLocation().begin, Position(3, 4));
+
+    matchOnlyDoExprError(
+        *this, "local x = do foo() end", "A 'do' expression doesn't end with 'end'; end it with 'give <value>', 'return', 'break' or 'continue'"
+    );
+    matchOnlyDoExprError(
+        *this,
+        "local x = if a then 1 end",
+        "Expected 'else' when parsing if then else expression, got 'end'; an if-else expression doesn't end with 'end'"
+    );
+
+    // an `end` after an expression that closes the block around it is fine, however it's indented
+    for (const char* source : {
+             "local function f()\n    return if a then 1 else 2\nend",
+             "local function f()\nreturn if a then 1 else 2\nend",
+             "function f() return if a then 1 else 2 end",
+             "local function f()\nlocal x = do give 1\nend",
+         })
+    {
+        INFO(source);
+        CHECK(tryParse(source).errors.empty());
+    }
+}
+
+TEST_CASE_FIXTURE(Fixture, "give_and_continue_are_keywords_only_in_do_expression_variable_positions")
+{
+    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+
+    for (const char* source : {
+             "local x = do local t = { give = 1, continue = 2 } t.give = 3 give t:continue()",
+             "local x = do local function f() local give = 1 return give end give f()",
+             "local give = 1 local continue = 2 print(give, continue)",
+         })
+    {
+        INFO(source);
+        ParseResult result = tryParse(source);
+        CHECK(result.errors.empty());
+    }
+
+    // `give (f)(x)` is a give of `(f)(x)`, not a call to a function named give
+    AstStatBlock* block = parse("local x = do give (f)(x)");
+    AstExprDo* expr = doExprValue(block, 0);
+    AstStatGive* give = expr->body->body.data[0]->as<AstStatGive>();
+    REQUIRE(give);
+    CHECK(give->value->is<AstExprCall>());
+}
+
+TEST_CASE_FIXTURE(Fixture, "or_return_and_or_break_are_do_expressions")
+{
+    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+
+    AstStatBlock* block = parse(R"(
+        local function f()
+            local a = x or return 1
+            local b, c = x or return 2, 3
+            local d = x or (return 4, 5)
+            for i = 1, 2 do
+                local e = x or break
+            end
+        end
+    )");
+
+    AstExprFunction* func = block->body.data[0]->as<AstStatLocalFunction>()->func;
+    AstStatBlock* body = func->body;
+
+    AstExprBinary* a = body->body.data[0]->as<AstStatLocal>()->values.data[0]->as<AstExprBinary>();
+    REQUIRE(a);
+    CHECK_EQ(a->op, AstExprBinary::Or);
+    AstExprDo* aDo = a->right->as<AstExprDo>();
+    REQUIRE(aDo);
+    CHECK(aDo->shorthand);
+    REQUIRE_EQ(aDo->body->body.size, 1);
+    CHECK_EQ(aDo->body->body.data[0]->as<AstStatReturn>()->list.size, 1);
+
+    // the comma after an unparenthesized `or return` belongs to the local
+    AstStatLocal* bc = body->body.data[1]->as<AstStatLocal>();
+    REQUIRE_EQ(bc->values.size, 2);
+
+    AstExprGroup* d = body->body.data[2]->as<AstStatLocal>()->values.data[0]->as<AstExprBinary>()->right->as<AstExprGroup>();
+    REQUIRE(d);
+    CHECK_EQ(d->expr->as<AstExprDo>()->body->body.data[0]->as<AstStatReturn>()->list.size, 2);
+
+    AstStatFor* loop = body->body.data[3]->as<AstStatFor>();
+    AstExprDo* e = loop->body->body.data[0]->as<AstStatLocal>()->values.data[0]->as<AstExprBinary>()->right->as<AstExprDo>();
+    REQUIRE(e);
+    CHECK(e->body->body.data[0]->is<AstStatBreak>());
+}
+
+// `x or continue` is the shorthand in a loop of a module that never uses `continue` as a name; anywhere else it keeps
+// Luau's meaning, a read of the variable
+TEST_CASE_FIXTURE(Fixture, "or_continue_is_the_shorthand_unless_the_module_names_continue")
+{
+    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+
+    auto orRight = [](AstStatBlock* loopBody) -> AstExpr*
+    {
+        AstStatLocal* local = loopBody->body.data[0]->as<AstStatLocal>();
+        REQUIRE(local);
+        AstExprBinary* binary = local->values.data[0]->as<AstExprBinary>();
+        REQUIRE(binary);
+        return binary->right;
+    };
+
+    AstStatBlock* block = parse("for i = 1, 2 do local x = i or continue end");
+    AstExprDo* shorthand = orRight(block->body.data[0]->as<AstStatFor>()->body)->as<AstExprDo>();
+    REQUIRE(shorthand);
+    CHECK(shorthand->shorthand);
+    CHECK(shorthand->body->body.data[0]->is<AstStatContinue>());
+
+    // a use of the name anywhere, even after the loop, keeps the read
+    for (const char* source : {
+             "for i = 1, 2 do local x = i or continue end local continue = 1",
+             "for i = 1, 2 do local x = i or continue end print(continue)",
+             "continue = 5 for i = 1, 2 do local x = i or continue end",
+             "for i = 1, 2 do local x = i or continue end local function f(continue) end",
+         })
+    {
+        INFO(source);
+        ParseResult result = tryParse(source);
+        REQUIRE(result.errors.empty());
+        AstStatFor* loop = nullptr;
+        for (AstStat* stat : result.root->body)
+            if (AstStatFor* found = stat->as<AstStatFor>())
+                loop = found;
+        REQUIRE(loop);
+        AstExprGlobal* global = orRight(loop->body)->as<AstExprGlobal>();
+        REQUIRE(global);
+        CHECK_EQ(std::string(global->name.value), "continue");
+    }
+
+    // a `continue` statement isn't a use of the name
+    block = parse("for i = 1, 2 do local x = i or continue if i then continue end end");
+    CHECK(orRight(block->body.data[0]->as<AstStatFor>()->body)->is<AstExprDo>());
+
+    // outside a loop, or followed by a call or index, it is the variable
+    CHECK(parse("local x = y or continue")->body.data[0]->as<AstStatLocal>()->values.data[0]->as<AstExprBinary>()->right->is<AstExprGlobal>());
+    CHECK(orRight(parse("for i = 1, 2 do local x = i or continue() end")->body.data[0]->as<AstStatFor>()->body)->is<AstExprCall>());
+}
+
+TEST_CASE_FIXTURE(Fixture, "if_else_expression_arms_can_leave")
+{
+    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+
+    AstStatBlock* block = parse(R"(
+        local function f(x)
+            for i = 1, 2 do
+                local a = if x then break else x
+                local b = if x then x else return 1
+                local c = if x then return else continue
+                local d = if x then (return 1, 2) else x
+            end
+        end
+    )");
+
+    AstStatBlock* body = block->body.data[0]->as<AstStatLocalFunction>()->func->body->body.data[0]->as<AstStatFor>()->body;
+    auto arms = [&](size_t i) -> AstExprIfElse*
+    {
+        AstExprIfElse* expr = body->body.data[i]->as<AstStatLocal>()->values.data[0]->as<AstExprIfElse>();
+        REQUIRE(expr);
+        return expr;
+    };
+    auto leave = [](AstExpr* arm) -> AstStat*
+    {
+        AstExprDo* expr = arm->as<AstExprDo>();
+        REQUIRE(expr);
+        CHECK(expr->shorthand);
+        REQUIRE_EQ(expr->body->body.size, 1);
+        return expr->body->body.data[0];
+    };
+
+    CHECK(leave(arms(0)->trueExpr)->is<AstStatBreak>());
+    REQUIRE(leave(arms(1)->falseExpr)->is<AstStatReturn>());
+    CHECK_EQ(leave(arms(1)->falseExpr)->as<AstStatReturn>()->list.size, 1);
+    REQUIRE(leave(arms(2)->trueExpr)->is<AstStatReturn>());
+    CHECK_EQ(leave(arms(2)->trueExpr)->as<AstStatReturn>()->list.size, 0);
+    CHECK(leave(arms(2)->falseExpr)->is<AstStatContinue>());
+    AstExprGroup* group = arms(3)->trueExpr->as<AstExprGroup>();
+    REQUIRE(group);
+    REQUIRE(leave(group->expr)->is<AstStatReturn>());
+    CHECK_EQ(leave(group->expr)->as<AstStatReturn>()->list.size, 2);
+
+    // a bare `return` needs parentheses unless `else` or `elseif` follows it
+    matchOnlyDoExprError(
+        *this,
+        "local function f(x) local v = if x then x else return end",
+        "'else return' with no value must be parenthesized, 'else (return)', so a value on the next line isn't read as the value to return"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "do_expression_without_the_flag_says_how_to_enable_it")
+{
+    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, false};
+
+    matchParseError("local x = do give 1", "'do' expressions are a Luwu feature; enable the 'DebugLuwuDoExpr' fast flag to use them");
+    matchParseError(
+        "local function f() local x = y or return 1 end",
+        "'or return', 'or break' and 'or continue' are Luwu features; enable the 'DebugLuwuDoExpr' fast flag to use them"
+    );
+
+    // without the flag, `give` and `continue` outside a do expression are untouched
+    ParseResult result = tryParse("local give = 1 for i = 1, 2 do local continue = give end");
+    CHECK(result.errors.empty());
 }
 
 // Parses as ordinary source, the way the compiler and the Frontend do, rather than as a definition file.

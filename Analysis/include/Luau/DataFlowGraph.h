@@ -45,6 +45,9 @@ struct DataFlowGraph
     DefId getDef(const AstStatDeclareFunction* func) const;
 
     const RefinementKey* getRefinementKey(const AstExpr* expr) const;
+    // Luwu If Local (rfcs/if-local.md): the key that refines a `when` chain's binding to truthy in the clauses after
+    // it and in its branch. Null for any other local.
+    const RefinementKey* getRefinementKey(const AstLocal* local) const;
 
     std::optional<Symbol> getSymbolFromDef(const Def* def) const;
 
@@ -68,6 +71,7 @@ private:
     DenseHashMap<const Def*, Symbol> defToSymbol{nullptr};
 
     DenseHashMap<const AstExpr*, const RefinementKey*> astRefinementKeys{nullptr};
+    DenseHashMap<const AstLocal*, const RefinementKey*> ifBindingRefinementKeys{nullptr};
     friend struct DataFlowGraphBuilder;
 };
 
@@ -145,6 +149,15 @@ private:
 
     DfgScope* makeChildScope(DfgScope::ScopeType scopeType = DfgScope::Linear);
 
+    // Luwu Do Expressions (rfcs/do-expressions.md): the `do` expressions being visited, innermost last. `outer` is the
+    // scope around the expression; `joined` merges what each `give` so far saw, relative to `outer`.
+    struct GiveExit
+    {
+        DfgScope* outer;
+        DfgScope* joined;
+    };
+    std::vector<GiveExit> giveExits;
+
     void join(DfgScope* p, DfgScope* a, DfgScope* b);
     void joinBindings(DfgScope* p, const DfgScope& a, const DfgScope& b);
     void joinProps(DfgScope* result, const DfgScope& a, const DfgScope& b);
@@ -164,6 +177,8 @@ private:
     ControlFlow visit(AstStatReturn* r);
     ControlFlow visit(AstStatExpr* e);
     ControlFlow visit(AstStatLocal* l);
+    void visitIfClauses(const AstArray<AstIfClause>& clauses);
+    ControlFlow visit(AstStatGive* g);
     ControlFlow visit(AstStatFor* f);
     ControlFlow visit(AstStatForIn* f);
     ControlFlow visit(AstStatAssign* a);
@@ -196,6 +211,7 @@ private:
     DataFlowResult visitExpr(AstExprBinary* b);
     DataFlowResult visitExpr(AstExprTypeAssertion* t);
     DataFlowResult visitExpr(AstExprIfElse* i);
+    DataFlowResult visitExpr(AstExprDo* d);
     DataFlowResult visitExpr(AstExprInterpString* i);
     DataFlowResult visitExpr(AstExprInstantiate* i);
     DataFlowResult visitExpr(AstExprError* error);

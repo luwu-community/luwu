@@ -12,6 +12,8 @@ LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuwuNoinlineAttribute)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuDestructuring)
+LUAU_FASTFLAG(LuwuIfLocal)
+LUAU_FASTFLAG(DebugLuwuDoExpr)
 LUAU_FASTFLAG(LuauTableEntriesDontNeedToMatchIndent)
 LUAU_FASTFLAG(LuauCstAttr)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
@@ -2337,6 +2339,51 @@ local .{x, y, z} = v
 const fs.{readfile as rf, path}: FsLib = require("@std/fs")
 const archive.{zip, tar as .{gz as targz}, lib.{a}} = require("@std/archive"); print(zip)
 local .{x: number, y as py: string, pos.{a}: Vec2, tar as .{gz}: Archive}: Whole = t
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+}
+
+TEST_CASE("prettyPrint_if_local")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDestructuring, true},
+    };
+
+    std::string code = R"(
+if local a = f() when a > 1 when const b: number = g(a) then
+    print(a, b)
+elseif ready when local  c = h() then
+    print(c)
+elseif const .{x, y as py} = p when x then
+else
+end
+local v = if const a = f() then a elseif local b = g() when b then b else nil
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+}
+
+TEST_CASE("prettyPrint_do_expressions")
+{
+    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+
+    std::string code = R"(
+local x = do
+    local a = f()
+    if a then
+        give a
+    end
+    give  2
+local function g()
+    local b = x or return 1
+    local c = x or (return 1, 2)
+    local d = x or (do return)
+    for i = 1, 2 do
+        local e = x or break
+        local h = x or do continue
+    end
+    return f(do give 1, 2)
+end
     )";
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
 }

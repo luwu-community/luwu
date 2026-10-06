@@ -101,6 +101,16 @@ struct ConstraintGenerator
     // define the scope hierarchy.
     std::vector<std::pair<Location, ScopePtr>> scopes;
 
+    // Luwu Do Expressions (rfcs/do-expressions.md): the `do` expressions being checked, innermost last. `outer` is the
+    // scope the expression is checked in; `gives` collects the type of each `give` in its block.
+    struct GiveContext
+    {
+        Scope* outer;
+        std::optional<TypeId> expectedType;
+        std::vector<TypeId> gives;
+    };
+    std::vector<GiveContext> giveContexts;
+
     ModulePtr module;
     NotNull<BuiltinTypes> builtinTypes;
     const NotNull<TypeArena> arena;
@@ -409,9 +419,12 @@ private:
     ControlFlow visit(const ScopePtr& scope, AstStatLocalFunction* function);
     ControlFlow visit(const ScopePtr& scope, AstStatFunction* function);
     ControlFlow visit(const ScopePtr& scope, AstStatReturn* ret);
+    ControlFlow visit(const ScopePtr& scope, AstStatGive* give);
     ControlFlow visit(const ScopePtr& scope, AstStatAssign* assign);
     ControlFlow visit(const ScopePtr& scope, AstStatCompoundAssign* assign);
     ControlFlow visit(const ScopePtr& scope, AstStatIf* ifStatement);
+    ScopePtr ifClausesScope(const AstArray<AstIfClause>& clauses, AstNode* branch, const ScopePtr& parent);
+    RefinementId checkIfClauses(const ScopePtr& chainScope, const AstArray<AstIfClause>& clauses);
     ControlFlow visit(const ScopePtr& scope, AstStatTypeAlias* alias);
     ControlFlow visit(const ScopePtr& scope, AstStatTypeFunction* function);
     ControlFlow visit(const ScopePtr& scope, AstStatDeclareGlobal* declareGlobal);
@@ -476,6 +489,7 @@ private:
         std::optional<TypeId> expectedType
     );
     Inference check(const ScopePtr& scope, AstExprIfElse* ifElse, std::optional<TypeId> expectedType);
+    Inference check(const ScopePtr& scope, AstExprDo* doExpr, std::optional<TypeId> expectedType);
     Inference check(const ScopePtr& scope, AstExprTypeAssertion* typeAssert);
     Inference check(const ScopePtr& scope, AstExprInterpString* interpString);
     Inference check(const ScopePtr& scope, AstExprInstantiate* explicitTypeInstantiation);

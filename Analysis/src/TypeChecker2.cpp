@@ -757,6 +757,8 @@ void TypeChecker2::visit(AstStat* stat)
         return visit(s);
     else if (auto s = stat->as<AstStatReturn>())
         return visit(s);
+    else if (auto s = stat->as<AstStatGive>())
+        return visit(s);
     else if (auto s = stat->as<AstStatExpr>())
         return visit(s);
     else if (auto s = stat->as<AstStatLocal>())
@@ -801,12 +803,34 @@ void TypeChecker2::visit(AstStatBlock* block)
         visit(statement);
 }
 
-void TypeChecker2::visit(AstStatIf* ifStatement)
+// Luwu If Local (rfcs/if-local.md): a `when` chain's declarations are checked like any `local`, and its plain
+// conditions like the condition of an ordinary `if`.
+void TypeChecker2::visitIfCondition(AstExpr* condition, const AstArray<AstIfClause>& clauses)
 {
+    if (clauses.size == 0)
     {
         InConditionalContext flipper{&typeContext};
-        visit(ifStatement->condition, ValueContext::RValue);
+        visit(condition, ValueContext::RValue);
+        return;
     }
+
+    for (const AstIfClause& clause : clauses)
+    {
+        if (clause.declaration)
+        {
+            visit(clause.declaration);
+        }
+        else
+        {
+            InConditionalContext flipper{&typeContext};
+            visit(clause.expr, ValueContext::RValue);
+        }
+    }
+}
+
+void TypeChecker2::visit(AstStatIf* ifStatement)
+{
+    visitIfCondition(ifStatement->condition, ifStatement->clauses);
 
     visit(ifStatement->thenbody);
     if (ifStatement->elsebody)
@@ -2807,6 +2831,8 @@ void TypeChecker2::visit(AstExpr* expr, ValueContext context)
         return visit(e);
     else if (auto e = expr->as<AstExprIfElse>())
         return visit(e);
+    else if (auto e = expr->as<AstExprDo>())
+        return visit(e);
     else if (auto e = expr->as<AstExprInstantiate>())
         return visit(e);
     else if (auto e = expr->as<AstExprInterpString>())
@@ -4578,12 +4604,22 @@ void TypeChecker2::visit(AstExprTypeAssertion* expr)
 void TypeChecker2::visit(AstExprIfElse* expr)
 {
     InConditionalContext inContext(&typeContext, TypeContext::Default);
-    {
-        InConditionalContext inContext(&typeContext, TypeContext::Condition);
-        visit(expr->condition, ValueContext::RValue);
-    }
+    visitIfCondition(expr->condition, expr->clauses);
     visit(expr->trueExpr, ValueContext::RValue);
     visit(expr->falseExpr, ValueContext::RValue);
+}
+
+// Luwu Do Expressions (rfcs/do-expressions.md)
+void TypeChecker2::visit(AstExprDo* expr)
+{
+    InConditionalContext inContext(&typeContext, TypeContext::Default);
+    visit(expr->body);
+}
+
+// Luwu Do Expressions (rfcs/do-expressions.md)
+void TypeChecker2::visit(AstStatGive* give)
+{
+    visit(give->value, ValueContext::RValue);
 }
 
 void TypeChecker2::visit(AstExprInstantiate* explicitTypeInstantiation)

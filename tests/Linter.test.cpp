@@ -14,6 +14,8 @@ LUAU_FASTFLAG(LuauCstAttr)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuDestructuring)
+LUAU_FASTFLAG(LuwuIfLocal)
+LUAU_FASTFLAG(DebugLuwuDoExpr)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuauSolverV2)
 LUAU_FASTFLAG(LuwuDefaultArguments)
@@ -381,8 +383,10 @@ end
 return bar()
 )");
 
-    REQUIRE(1 == result.warnings.size());
-    CHECK_EQ(result.warnings[0].text, "Variable 'global' shadows a global variable used at line 3");
+    // Luwu: plus BuiltinShadow for `local math = math`
+    REQUIRE(2 == result.warnings.size());
+    CHECK_EQ(result.warnings[0].text, "'math' hides the builtin 'math' here");
+    CHECK_EQ(result.warnings[1].text, "Variable 'global' shadows a global variable used at line 3");
 }
 
 TEST_CASE_FIXTURE(Fixture, "LocalShadowArgument")
@@ -2845,6 +2849,218 @@ _ = if true then 1 elseif true then 2 else 3
     CHECK_EQ(result.warnings[7].text, "Condition has already been checked on column 8");
 }
 
+// Luwu If Local (rfcs/if-local.md): a `when` chain binds new locals, so the same value in two chains isn't a
+// repeated check
+TEST_CASE_FIXTURE(Fixture, "DuplicateConditionsSkipIfLocalChains")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    LintResult result = lint(R"(
+local function f() return nil end
+
+if local a = f() then
+    print(a)
+elseif local b = f() then
+    print(b)
+end
+
+_ = if local a = f() then a elseif local b = f() then b else nil
+
+if f() when local a = f() then
+    print(a)
+elseif f() then -- not a duplicate: the first branch also needed 'a'
+end
+)");
+
+    CHECK(warningsWithCode(result, LintWarning::Code_DuplicateCondition).empty());
+}
+
+// Luwu If Local (rfcs/if-local.md): the local lints see a `when` chain's bindings, with their usual messages
+TEST_CASE_FIXTURE(Fixture, "LocalLintsSeeIfLocalBindings")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    LintResult result = lint(R"(
+local function f() return 1 end
+local a = 1
+
+if local unused = f() then
+end
+
+if local a = f() then
+    print(a)
+end
+print(a)
+)");
+
+    std::vector<LintWarning> unused = warningsWithCode(result, LintWarning::Code_LocalUnused);
+    REQUIRE_EQ(unused.size(), 1);
+    CHECK_EQ(unused[0].text, "Variable 'unused' is never used; prefix with '_' to silence");
+
+    std::vector<LintWarning> shadow = warningsWithCode(result, LintWarning::Code_LocalShadow);
+    REQUIRE_EQ(shadow.size(), 1);
+    CHECK_EQ(shadow[0].text, "Variable 'a' shadows previous declaration at line 3");
+}
+
+// Luwu Do Expressions (rfcs/do-expressions.md)
+TEST_CASE_FIXTURE(Fixture, "ReturnOnNextLine")
+{
+    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+
+    LintResult result = lint(R"(
+local function maybe() return nil end
+local function f()
+    local a = maybe() or do return
+        maybe()
+    local b = maybe() or return
+        maybe()
+    local c = maybe() or return (
+        maybe()
+    )
+    local d = maybe() or do return maybe()
+    return
+        maybe()
+end
+return f
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_ReturnOnNextLine);
+    REQUIRE_EQ(found.size(), 2);
+    CHECK_EQ(found[0].location.begin.line, 4);
+    CHECK_EQ(
+        found[0].text,
+        "This is the value 'return' returns, since it starts on the line after it; if 'return' should have no value, write '(do return)'"
+    );
+    CHECK_EQ(found[1].location.begin.line, 6);
+    CHECK_EQ(
+        found[1].text,
+        "This is the value 'return' returns, since it starts on the line after it; if 'return' should have no value, write '(return)'"
+    );
+
+    // a statement that starts mid-line in a do expression is measured against the statement around it
+    CHECK(warningsWithCode(result, LintWarning::Code_MultiLineStatement).empty());
+}
+
+// Luwu: bindings named after contextual keywords or standard globals
+TEST_CASE_FIXTURE(BuiltinsFixture, "KeywordShadowAndBuiltinShadow")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDestructuring, true},
+    };
+
+    LintResult result = lint(R"(
+local continue = 1
+local function class() end
+function implements() end
+declare = 5
+for _, type in {} do end
+local function f(typeof, ok) return typeof, ok end
+local print = print
+if local table = {} then end
+local .{string} = { string = "s" }
+local export = 1
+local function g(const) return const end
+
+-- not bindings: fields, keys, members, type names
+local t = { continue = 1, type = 2 }
+t.class = 3
+local p = 1
+type declare_ = number
+return t, f, print, p, export, g
+)");
+
+    std::vector<LintWarning> keyword = warningsWithCode(result, LintWarning::Code_KeywordShadow);
+    REQUIRE_EQ(keyword.size(), 6);
+    CHECK_EQ(
+        keyword[0].text,
+        "'continue' is a keyword used for skipping an iteration of a loop and should not be used as an identifier; naming bindings 'continue' will "
+        "become a hard error in the future"
+    );
+    CHECK_EQ(
+        keyword[1].text,
+        "'class' is a keyword used for declaring classes and should not be used as an identifier; naming bindings 'class' will become a hard "
+        "error in the future"
+    );
+    CHECK_EQ(keyword[1].location.begin.line, 2);
+    CHECK_EQ(keyword[2].location.begin.line, 3);
+    CHECK_EQ(keyword[3].location.begin.line, 4);
+    CHECK_EQ(
+        keyword[4].text,
+        "'export' is a keyword used for exporting values and types from a module and should not be used as an identifier; naming bindings "
+        "'export' will become a hard error in the future"
+    );
+    CHECK_EQ(
+        keyword[5].text,
+        "'const' is a keyword used for declaring bindings that can't be reassigned and should not be used as an identifier; naming bindings "
+        "'const' will become a hard error in the future"
+    );
+
+    std::vector<LintWarning> builtin = warningsWithCode(result, LintWarning::Code_BuiltinShadow);
+    REQUIRE_EQ(builtin.size(), 5);
+    CHECK_EQ(builtin[0].text, "'type' hides the builtin 'type' here");
+    CHECK_EQ(builtin[1].text, "'typeof' hides the builtin 'typeof' here");
+    CHECK_EQ(builtin[2].text, "'print' hides the builtin 'print' here");
+    CHECK_EQ(builtin[3].text, "'table' hides the builtin 'table' here");
+    CHECK_EQ(builtin[4].text, "'string' hides the builtin 'string' here");
+}
+
+TEST_CASE_FIXTURE(Fixture, "OrContinue")
+{
+    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+
+    // A module that never uses `continue` as a name gets the shorthand, so there is nothing to warn about
+    LintResult shorthand = lint(R"(
+local function maybe() return nil end
+for i = 1, 3 do
+    local x = maybe() or continue
+    print(x)
+end
+)");
+    CHECK(warningsWithCode(shorthand, LintWarning::Code_OrContinue).empty());
+
+    // This one reads `continue` elsewhere, so `x or continue` keeps reading the variable: in a loop, that is probably a
+    // mistake, and outside one `or do continue` isn't a fix
+    LintResult result = lint(R"(
+local function maybe() return nil end
+print(continue)
+for i = 1, 3 do
+    local x = maybe() or continue
+    print(x)
+end
+local y = maybe() or continue
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_OrContinue);
+    REQUIRE_EQ(found.size(), 1);
+    CHECK_EQ(found[0].location.begin.line, 4);
+    CHECK_EQ(
+        found[0].text,
+        "'continue' here reads a global variable named 'continue', since this module uses that name; to continue the loop, write 'or do continue'"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "UnreachableCodeAfterGive")
+{
+    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+
+    LintResult result = lint(R"(
+local function maybe() return nil end
+local v = do
+    if maybe() then give 1 else give 2 end
+    give 3
+local w = do
+    error("nope")
+    give 1
+print(v, w)
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_UnreachableCode);
+    REQUIRE_EQ(found.size(), 1);
+    CHECK_EQ(found[0].location.begin.line, 4);
+    CHECK_EQ(found[0].text, "Unreachable code (previous statement always gives)");
+}
+
 TEST_CASE_FIXTURE(Fixture, "DuplicateConditionsExpr")
 {
     LintResult result = lint(R"(
@@ -4377,6 +4593,26 @@ return f
     );
     CHECK_EQ(found[1].text, "'not m' is always false: a table is truthy even when it's empty; to check whether 'm' is empty, use 'next(m) == nil'");
     CHECK_EQ(7, found[2].location.begin.line);
+}
+
+// Luwu If Local (rfcs/if-local.md): a binding passes when its value is truthy, so binding a table always passes
+TEST_CASE_FIXTURE(BuiltinsFixture, "TableTruthinessIfLocal")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    LintResult result = lint(R"(
+local function f(xs: { number }, maybe: { number }?)
+    if local t = xs then print(t) end
+    if local n = 1 when xs then print(n) end
+    if local m = maybe then print(m) end
+end
+return f
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_TableTruthiness);
+    REQUIRE_EQ(found.size(), 2);
+    CHECK_EQ(found[0].location.begin.line, 2);
+    CHECK_EQ(found[1].location.begin.line, 3);
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "DiscardedResult")

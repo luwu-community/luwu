@@ -3789,6 +3789,26 @@ bool ConstraintSolver::tryDispatchIterableTable(TypeId iteratorTy, const Iterabl
         if (iteratorTable->state == TableState::Free && !force)
             return block(iteratorTy, constraint);
 
+        // Luwu: the same goes for an unsealed table that another unsolved constraint can still change. `t = {}` then
+        // `table.insert(t, { ... })` gives `t` its indexer only when that call is solved, and the call waits for its
+        // argument's expected type first. Upstream iterates `t` before that and binds the loop's variables to the error
+        // type, which then hides every mistake made with them.
+        if (iteratorTable->state == TableState::Unsealed && !force && hasUnresolvedConstraints(iteratorTy))
+            return block(iteratorTy, constraint);
+
+        // Luwu: once nothing else can change it, an unsealed table whose element type is still free holds exactly what
+        // was put in it: the free type's lower bound. Settle the element type there, as `t[#t + 1] = v` does. Left free,
+        // the uses of the loop's variables become its upper bounds instead, so `for _, e in t do e.x end` decided what
+        // `t` held and reported the mismatch at the `table.insert` that put the real value in.
+        if (iteratorTable->state == TableState::Unsealed && !force && iteratorTable->indexer)
+        {
+            TypeId element = follow(iteratorTable->indexer->indexResultType);
+            const FreeType* freeElement = get<FreeType>(element);
+
+            if (freeElement && !get<NeverType>(follow(freeElement->lowerBound)))
+                bind(constraint, element, freeElement->lowerBound);
+        }
+
         if (iteratorTable->indexer)
         {
             std::vector<TypeId> expectedVariables;

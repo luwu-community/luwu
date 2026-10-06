@@ -21,7 +21,7 @@
     error from one is WRONG too, for the same reason.
 ]]
 
-local str = require("@std/str")
+const str = require("@std/str")
 
 type Rng = {
     next: () -> number,
@@ -32,13 +32,13 @@ type Rng = {
 }
 
 -- xorshift32: deterministic for a given seed regardless of the host's math.random
-local function newRng(seed: number): Rng
+const function new_rng(seed: number): Rng
     local state = (seed * 2654435761) % 4294967296
     if state == 0 then
         state = 1
     end
 
-    local rng = {} :: Rng
+    const rng = {} :: Rng
 
     function rng.next(): number
         state = bit32.bxor(state, bit32.lshift(state, 13))
@@ -60,8 +60,8 @@ local function newRng(seed: number): Rng
     end
 
     function rng.sample<T>(list: { T }, count: number): { T }
-        local copy = table.clone(list)
-        local out = {}
+        const copy = table.clone(list)
+        const out = {}
         for _ = 1, math.min(count, #copy) do
             table.insert(out, table.remove(copy, rng.int(1, #copy)))
         end
@@ -100,20 +100,20 @@ type Cls = {
     fields: { Field },
     methods: { Method },
     ctor: CtorKind,
-    ctorPrivate: boolean,
+    ctor_private: boolean,
     generic: boolean,
-    primaryParams: { Field },
+    primary_params: { Field },
     metamethods: { Metamethod },
     -- the traits the class lists after `implements`, with the trait arguments it passes (nil: no argument list)
     implements: { { trait: Trait, args: string? } },
     -- every trait it implements: the listed ones and the ones their `needs` imply
-    traitSet: { Trait },
+    trait_set: { Trait },
     -- trait defaults the class defines itself
     overrides: { string },
     -- trait fields the class declares itself, each with a constant value; kept out of `fields`, so no constructor argument
     -- sets them and the generator knows the value a new object ends up with
-    fieldOverrides: { Field },
-    definesMaybe: boolean,
+    field_overrides: { Field },
+    defines_maybe: boolean,
 }
 
 -- A trait's own members are named after it (`t2_f1`, `t2_m3`), so the traits a class implements never clash with each
@@ -140,16 +140,16 @@ type Trait = {
     -- trait parameters, each a provided field of the trait
     params: { { name: string, default: string? } },
     fields: { { name: string, private: boolean, const: boolean, default: string } },
-    expectFields: { string },
-    expectFns: { string },
-    expectsMaybe: boolean,
-    expectsInit: boolean,
+    expect_fields: { string },
+    expect_fns: { string },
+    expects_maybe: boolean,
+    expects_init: boolean,
     fns: { TraitFn },
     needs: { Trait },
     -- the needed traits' functions this trait overrides, by name, with the value its override returns
     overrides: { [string]: string },
     -- the needed traits' fields this trait declares again, by name, with the value they end up with
-    fieldOverrides: { [string]: string },
+    field_overrides: { [string]: string },
     rank: number,
     create: boolean,
     tostring: boolean,
@@ -167,28 +167,29 @@ const METHOD_SHAPES = {
 const OP_KINDS = {
     "construct", "ctor_outside", "read", "write", "call_typed", "call_untyped", "call_dot", "wrong_self", "lying",
     "mixed_site", "isinstance", "classlib", "meta", "init_explicit", "coroutine", "gc", "dynamic_key", "raw",
-    "iterate", "private_static", "loop_calls", "fields", "alias_ctor", "table_key", "yield_construct",
+    "iterate", "private_static", "loop_calls", "fields", "alias_ctor", "table_key", "yield_construct", "expressive",
+    "expressive",
 }
 
-local function lit(rng: Rng, kind: string): string
+const function lit(rng: Rng, kind: string): string
     if kind == "number" then
         return rng.pick({ "0", "1", "2", "3", "7", "-4", "10", "0.5", "100" })
     elseif kind == "string" then
         return rng.pick({ '"x"', '"hello"', '"Z"', '""' })
     end
-    local items = {}
+    const items = {}
     for _ = 1, rng.int(0, 3) do
         table.insert(items, tostring(rng.int(0, 9)))
     end
     return "{ " .. table.concat(items, ", ") .. " }"
 end
 
-local function contains<T>(list: { T }, value: T): boolean
+const function contains<T>(list: { T }, value: T): boolean
     return table.find(list, value) ~= nil
 end
 
-local function filter<T>(list: { T }, keep: (T) -> boolean): { T }
-    local out = {}
+const function filter<T>(list: { T }, keep: (T) -> boolean): { T }
+    const out = {}
     for _, v in list do
         if keep(v) then
             table.insert(out, v)
@@ -197,7 +198,7 @@ local function filter<T>(list: { T }, keep: (T) -> boolean): { T }
     return out
 end
 
-local function method(name: string, private: boolean, static: boolean, body: { string }, params: { string }?, sketchy: boolean?, calls: { string }?): Method
+const function method(name: string, private: boolean, static: boolean, body: { string }, params: { string }?, sketchy: boolean?, calls: { string }?): Method
     return {
         name = name,
         private = private,
@@ -209,45 +210,45 @@ local function method(name: string, private: boolean, static: boolean, body: { s
     }
 end
 
-local function generate(seed: number): (string, string)
-    local rng = newRng(seed)
-    local classes: { Cls } = {}
-    local ops: { { label: string, lines: { string } } } = {}
-    local opCount = 0
+const function generate(seed: number): (string, string)
+    const rng = new_rng(seed)
+    const classes: { Cls } = {}
+    const ops: { { label: string, lines: { string } } } = {}
+    local op_count = 0
 
     -- how `target` is named from code in `from` (nil: top level of main)
-    local function ref(target: Cls, from: Cls?): string
+    const function ref(target: Cls, from: Cls?): string
         if target.module and not (from and from.module) then
             return `mod.{target.name}`
         end
         return target.name
     end
 
-    local function publicFields(c: Cls): { Field }
+    const function public_fields(c: Cls): { Field }
         return filter(c.fields, function(f)
             return not f.private
         end)
     end
 
-    local function privateFields(c: Cls): { Field }
+    const function private_fields(c: Cls): { Field }
         return filter(c.fields, function(f)
             return f.private
         end)
     end
 
-    local function instanceMethods(c: Cls, publicOnly: boolean): { Method }
+    const function instance_methods(c: Cls, public_only: boolean): { Method }
         return filter(c.methods, function(m)
-            return not m.static and (not publicOnly or not m.private)
+            return not m.static and (not public_only or not m.private)
         end)
     end
 
-    local function ctorCall(c: Cls, from: Cls?): string
-        local name = ref(c, from)
+    const function ctor_call(c: Cls, from: Cls?): string
+        const name = ref(c, from)
         if c.ctor == "pod" then
             if rng.chance(0.2) then
                 return `{name}()`
             end
-            local kv = {}
+            const kv = {}
             for _, f in c.fields do
                 if rng.chance(0.8) then
                     table.insert(kv, `{f.name} = {lit(rng, f.kind)}`)
@@ -255,8 +256,8 @@ local function generate(seed: number): (string, string)
             end
             return `{name} \{ {table.concat(kv, ", ")} }`
         end
-        local args = {}
-        for _, f in if c.ctor == "primary" then c.primaryParams else c.fields do
+        const args = {}
+        for _, f in if c.ctor == "primary" then c.primary_params else c.fields do
             table.insert(args, if rng.chance(0.85) then lit(rng, f.kind) else "nil")
         end
         if c.ctor == "primary" and #args > 0 and rng.chance(0.2) then
@@ -265,28 +266,28 @@ local function generate(seed: number): (string, string)
         return `{name}({table.concat(args, ", ")})`
     end
 
-    local function makeClass(index: number, module: boolean): Cls
-        local c: Cls = {
+    const function make_class(index: number, module: boolean): Cls
+        const c: Cls = {
             name = (if module then "M" else "C") .. index,
             module = module,
             fields = {},
             methods = {},
             ctor = rng.pick(CTOR_KINDS),
-            ctorPrivate = false,
+            ctor_private = false,
             generic = false,
-            primaryParams = {},
+            primary_params = {},
             metamethods = {},
             implements = {},
-            traitSet = {},
+            trait_set = {},
             overrides = {},
-            fieldOverrides = {},
-            definesMaybe = false,
+            field_overrides = {},
+            defines_maybe = false,
         }
-        c.ctorPrivate = c.ctor ~= "pod" and rng.chance(0.4)
+        c.ctor_private = c.ctor ~= "pod" and rng.chance(0.4)
         c.generic = c.ctor == "primary" and rng.chance(0.2)
         for _, name in rng.sample(FIELD_NAMES, rng.int(1, 4)) do
-            local kind: FieldKind = if name == "name" or name == "tag" then "string" elseif name == "items" then "table" else "number"
-            local f: Field = {
+            const kind: FieldKind = if name == "name" or name == "tag" then "string" elseif name == "items" then "table" else "number"
+            const f: Field = {
                 name = name,
                 private = rng.chance(0.45),
                 const = rng.chance(0.25),
@@ -306,41 +307,41 @@ local function generate(seed: number): (string, string)
             table.insert(c.fields, f)
         end
         if c.ctor == "primary" then
-            c.primaryParams = filter(c.fields, function()
+            c.primary_params = filter(c.fields, function()
                 return rng.chance(0.8)
             end)
-            if #c.primaryParams == 0 then
-                c.primaryParams = { c.fields[1] }
+            if #c.primary_params == 0 then
+                c.primary_params = { c.fields[1] }
             end
         end
         return c
     end
 
-    local function methodBody(c: Cls, shape: string): ({ string }?, { string }?, boolean?, { string }?)
-        local others = filter(classes, function(o)
+    const function method_body(c: Cls, shape: string): ({ string }?, { string }?, boolean?, { string }?)
+        const others = filter(classes, function(o)
             return o ~= c and (not c.module or o.module)
         end)
-        local numFields = filter(c.fields, function(f)
+        const num_fields = filter(c.fields, function(f)
             return f.kind == "number"
         end)
-        local mutableNum = filter(numFields, function(f)
+        const mutable_num = filter(num_fields, function(f)
             return not f.const
         end)
-        local tables = filter(c.fields, function(f)
+        const tables = filter(c.fields, function(f)
             return f.kind == "table"
         end)
 
         if shape == "getter" then
             return { `return self.{rng.pick(c.fields).name}` }, {}, false, {}
-        elseif shape == "bump" and #mutableNum > 0 then
-            local f = rng.pick(mutableNum)
+        elseif shape == "bump" and #mutable_num > 0 then
+            const f = rng.pick(mutable_num)
             return { `self.{f.name} = (self.{f.name} or 0) + 1`, `return self.{f.name}` }, {}, false, {}
         elseif shape == "selfcall" then
             return { "local g = self:get()", "return tostring(g) .. self:describe()" }, {}, false, { "get", "describe" }
         elseif shape == "reflect" then
             return { "return self[key]" }, { "key" }, false, {}
         elseif shape == "other" then
-            local f = rng.pick(c.fields)
+            const f = rng.pick(c.fields)
             return {
                 `if class.isinstance(other, {c.name}) then`,
                 `    return other.{f.name}`,
@@ -349,27 +350,27 @@ local function generate(seed: number): (string, string)
             }, { `other: {c.name}` }, false, {}
         elseif shape == "construct" then
             -- bound to a local: a multret `return o:get()` never inlines, and this is a construction-proven receiver
-            return { `local o = {ctorCall(c, c)}`, "local g = o:get()", "return g" }, {}, false, { "get" }
+            return { `local o = {ctor_call(c, c)}`, "local g = o:get()", "return g" }, {}, false, { "get" }
         elseif shape == "closure" then
             return { `local fn = function() return self.{rng.pick(c.fields).name} end`, "return fn()" }, {}, false, {}
-        elseif shape == "loop" and #numFields > 0 then
-            local f = rng.pick(numFields)
+        elseif shape == "loop" and #num_fields > 0 then
+            const f = rng.pick(num_fields)
             return { "local s = 0", "for i = 1, 20 do", `    s += (self.{f.name} or 0) + i`, "end", "return s" }, {}, false, {}
         elseif shape == "isinstance" and #others > 0 then
-            local o = rng.pick(others)
-            local pub = publicFields(o)
-            local read = if #pub > 0 then `x.{pub[1].name}` else "1"
+            const o = rng.pick(others)
+            const pub = public_fields(o)
+            const read = if #pub > 0 then `x.{pub[1].name}` else "1"
             return { `if class.isinstance(x, {ref(o, c)}) then`, `    return {read}`, "end", "return -1" }, { "x" }, false, {}
         elseif shape == "error" then
             return { 'if n == 3 then error("boom") end', "return n" }, { "n" }, false, {}
         elseif shape == "foreign" then
             -- another class's private field: denied at O1, laundered at O2 if inlined into that class
-            local withPrivate = filter(others, function(o)
-                return #privateFields(o) > 0
+            const with_private = filter(others, function(o)
+                return #private_fields(o) > 0
             end)
-            if #withPrivate > 0 then
-                local o = rng.pick(withPrivate)
-                return { `return x.{privateFields(o)[1].name}` }, { "x" }, true, {}
+            if #with_private > 0 then
+                const o = rng.pick(with_private)
+                return { `return x.{private_fields(o)[1].name}` }, { "x" }, true, {}
             end
         elseif shape == "yield" then
             -- only yield inside a coroutine the program made: the CLI's main thread is yieldable too, and a yield
@@ -383,7 +384,7 @@ local function generate(seed: number): (string, string)
                 "return 5",
             }, {}, false, { "get" }
         elseif shape == "sumtable" and #tables > 0 then
-            local f = tables[1]
+            const f = tables[1]
             return {
                 `local t = self.{f.name}`,
                 'if type(t) ~= "table" then return 0 end',
@@ -398,26 +399,26 @@ local function generate(seed: number): (string, string)
             return { `return {c.name}.make():get()` }, {}, false, { "make", "get" }
         elseif shape == "lying" and #others > 0 then
             -- a receiver annotation that can lie: O2 inlines and raises, O1 dispatches dynamically
-            local o = rng.pick(others)
+            const o = rng.pick(others)
             return { `local y: {o.name} = x`, "local g = y:get()", "return g" }, { "x" }, true, {}
         end
         return nil, nil, nil, nil
     end
 
-    local function addMethods(c: Cls)
-        local first = c.fields[1]
+    const function add_methods(c: Cls)
+        const first = c.fields[1]
         table.insert(c.methods, method("describe", false, false, { `return "{c.name}:" .. tostring(self.{first.name})` }))
         table.insert(c.methods, method("get", false, false, { `return self.{first.name}` }))
         -- a public factory, so a private constructor is still reachable from outside
-        table.insert(c.methods, method("make", false, true, { `return {ctorCall(c, c)}` }))
+        table.insert(c.methods, method("make", false, true, { `return {ctor_call(c, c)}` }))
 
         for _ = 1, rng.int(1, 5) do
-            local name = if rng.chance(0.7) then rng.pick(SHARED_METHODS) else `m{rng.int(0, 99)}`
-            local taken = filter(c.methods, function(m)
+            const name = if rng.chance(0.7) then rng.pick(SHARED_METHODS) else `m{rng.int(0, 99)}`
+            const taken = filter(c.methods, function(m)
                 return m.name == name
             end)
             if #taken == 0 then
-                local body, params, sketchy, calls = methodBody(c, rng.pick(METHOD_SHAPES))
+                const body, params, sketchy, calls = method_body(c, rng.pick(METHOD_SHAPES))
                 if body then
                     table.insert(c.methods, method(name, rng.chance(0.3), false, body, params, sketchy, calls))
                 end
@@ -429,11 +430,11 @@ local function generate(seed: number): (string, string)
             table.insert(c.methods, method("useHelper", false, false, { `return {c.name}.helper(1)` }, {}, false, { "helper" }))
         end
 
-        local numFields = filter(c.fields, function(f)
+        const num_fields = filter(c.fields, function(f)
             return f.kind == "number"
         end)
-        if #numFields > 0 and rng.chance(0.5) then
-            local f = numFields[1].name
+        if #num_fields > 0 and rng.chance(0.5) then
+            const f = num_fields[1].name
             table.insert(c.metamethods, {
                 name = "__add",
                 params = { "other" },
@@ -451,8 +452,8 @@ local function generate(seed: number): (string, string)
         if rng.chance(0.3) then
             table.insert(c.metamethods, { name = "__len", params = {}, body = { "return 3" } })
         end
-        if #numFields > 0 and rng.chance(0.3) then
-            local f = numFields[1].name
+        if #num_fields > 0 and rng.chance(0.3) then
+            const f = num_fields[1].name
             table.insert(c.metamethods, { name = "__eq", params = { "other" }, body = { `return self.{f} == other.{f}` } })
             table.insert(c.metamethods, {
                 name = "__lt",
@@ -462,22 +463,22 @@ local function generate(seed: number): (string, string)
         end
     end
 
-    local function emitClass(c: Cls): { string }
-        local out = {}
+    const function emit_class(c: Cls): { string }
+        const out = {}
         local head = `class {c.name}` .. (if c.generic then "<T>" else "")
         if c.ctor == "primary" then
-            local params = {}
-            for _, f in c.primaryParams do
+            const params = {}
+            for _, f in c.primary_params do
                 local p = `{if f.private then "private" else "public"} {if f.const then "const " else ""}{f.name}`
                 if f.default and rng.chance(0.5) then
                     p ..= ` = {f.default}`
                 end
                 table.insert(params, p)
             end
-            head ..= (if c.ctorPrivate then " private " else " ") .. "(" .. table.concat(params, ", ") .. ")"
+            head ..= (if c.ctor_private then " private " else " ") .. "(" .. table.concat(params, ", ") .. ")"
         end
         if #c.implements > 0 then
-            local entries = {}
+            const entries = {}
             for _, use in c.implements do
                 local entry = if use.trait.module and not c.module then `mod.{use.trait.name}` else use.trait.name
                 if use.args then
@@ -489,7 +490,7 @@ local function generate(seed: number): (string, string)
         end
         table.insert(out, head)
         for _, f in c.fields do
-            if not (c.ctor == "primary" and contains(c.primaryParams, f)) then
+            if not (c.ctor == "primary" and contains(c.primary_params, f)) then
                 local line = `    {if f.private then "private" else "public"} {if f.const then "const " else ""}{f.name}`
                 if f.default then
                     line ..= ` = {f.default}`
@@ -497,21 +498,21 @@ local function generate(seed: number): (string, string)
                 table.insert(out, line)
             end
         end
-        for _, f in c.fieldOverrides do
+        for _, f in c.field_overrides do
             table.insert(out, `    {if f.private then "private" else "public"} {if f.const then "const " else ""}{f.name} = {f.default}`)
         end
         if c.ctor == "init" then
-            local params = {}
+            const params = {}
             for i in c.fields do
                 table.insert(params, `p{i}`)
             end
-            table.insert(out, `    {if c.ctorPrivate then "private" else "public"} function __init(self, {table.concat(params, ", ")})`)
+            table.insert(out, `    {if c.ctor_private then "private" else "public"} function __init(self, {table.concat(params, ", ")})`)
             for i, f in c.fields do
                 table.insert(out, `        self.{f.name} = p{i}`)
             end
             table.insert(out, "    end")
         end
-        local function emitFunction(access: string, name: string, params: { string }, body: { string })
+        const function emit_function(access: string, name: string, params: { string }, body: { string })
             table.insert(out, `    {access} function {name}({table.concat(params, ", ")})`)
             for _, line in body do
                 table.insert(out, "        " .. line)
@@ -519,23 +520,23 @@ local function generate(seed: number): (string, string)
             table.insert(out, "    end")
         end
         for _, m in c.methods do
-            local params = table.clone(m.params)
+            const params = table.clone(m.params)
             if not m.static then
                 table.insert(params, 1, "self")
             end
-            emitFunction(if m.private then "private" else "public", m.name, params, m.body)
+            emit_function(if m.private then "private" else "public", m.name, params, m.body)
         end
         for _, mm in c.metamethods do
-            local params = table.clone(mm.params)
+            const params = table.clone(mm.params)
             table.insert(params, 1, "self")
-            emitFunction("public", mm.name, params, mm.body)
+            emit_function("public", mm.name, params, mm.body)
         end
         table.insert(out, "end")
         return out
     end
 
-    local function isSketchy(c: Cls, name: string, seen: { [string]: boolean }?): boolean
-        local visited = seen or {}
+    const function is_sketchy(c: Cls, name: string, seen: { [string]: boolean }?): boolean
+        const visited = seen or {}
         if visited[name] then
             return false
         end
@@ -546,7 +547,7 @@ local function generate(seed: number): (string, string)
                     return true
                 end
                 for _, called in m.calls do
-                    if isSketchy(c, called, visited) then
+                    if is_sketchy(c, called, visited) then
                         return true
                     end
                 end
@@ -555,8 +556,8 @@ local function generate(seed: number): (string, string)
         return false
     end
 
-    local function callArgs(m: Method): string
-        local args = {}
+    const function call_args(m: Method): string
+        const args = {}
         for _, p in m.params do
             if p == "key" then
                 table.insert(args, '"' .. rng.pick(FIELD_NAMES) .. '"')
@@ -573,19 +574,19 @@ local function generate(seed: number): (string, string)
 
     -- `divergent`: may raise at some levels only (label `~`). `mustSucceed`: raising at all is wrong (label `!`), for
     -- operations built to succeed, where an error would otherwise look the same at every level and go unnoticed.
-    local function op(kind: string, lines: { string }, divergent: boolean?, mustSucceed: boolean?)
-        opCount += 1
-        local prefix = if divergent then "~" elseif mustSucceed then "!" else ""
-        table.insert(ops, { label = `{prefix}{opCount}_{kind}`, lines = lines })
+    const function op(kind: string, lines: { string }, divergent: boolean?, must_succeed: boolean?)
+        op_count += 1
+        const prefix = if divergent then "~" elseif must_succeed then "!" else ""
+        table.insert(ops, { label = `{prefix}{op_count}_{kind}`, lines = lines })
     end
 
-    local function genOps()
+    const function gen_ops()
         for _ = 1, rng.int(25, 60) do
-            local c = rng.pick(classes)
-            local c2 = rng.pick(classes)
-            local r, r2 = ref(c), ref(c2)
-            local make = `{r}.make()`
-            local kind = rng.pick(OP_KINDS)
+            const c = rng.pick(classes)
+            const c2 = rng.pick(classes)
+            const r, r2 = ref(c), ref(c2)
+            const make = `{r}.make()`
+            const kind = rng.pick(OP_KINDS)
 
             if kind == "construct" then
                 op(kind, { `local o = {make}`, "return o:describe()" })
@@ -611,24 +612,24 @@ local function generate(seed: number): (string, string)
                 -- inlines. The rebind forms write the local where the construction can no longer vouch for it:
                 -- any write, including one from a closure, must unprove it, or `c`'s body runs against the new
                 -- value unchecked.
-                local m = rng.pick(instanceMethods(c, rng.chance(0.85)))
-                local call = `o:{m.name}({callArgs(m)})`
-                local divergent = isSketchy(c, m.name)
-                local form = rng.pick({ "plain", "plain", "rebind", "rebind_closure", "rebind_after" })
-                local elsewhere = filter(classes, function(o)
+                const m = rng.pick(instance_methods(c, rng.chance(0.85)))
+                const call = `o:{m.name}({call_args(m)})`
+                const divergent = is_sketchy(c, m.name)
+                const form = rng.pick({ "plain", "plain", "rebind", "rebind_closure", "rebind_after" })
+                const elsewhere = filter(classes, function(o)
                     return o ~= c
                 end)
-                local other = if #elsewhere > 0 and rng.chance(0.75)
+                const other = if #elsewhere > 0 and rng.chance(0.75)
                     then `{ref(rng.pick(elsewhere))}.make()`
                     else rng.pick({ "tbl", "nil", "legacy" })
 
                 if form == "plain" then
-                    op(kind, { `local o = {ctorCall(c)}`, `local r = {call}`, "return r" }, divergent)
+                    op(kind, { `local o = {ctor_call(c)}`, `local r = {call}`, "return r" }, divergent)
                 elseif form == "rebind" then
-                    op("ctor_rebind", { `local o = {ctorCall(c)}`, `o = {other}`, `local r = {call}`, "return r" }, divergent)
+                    op("ctor_rebind", { `local o = {ctor_call(c)}`, `o = {other}`, `local r = {call}`, "return r" }, divergent)
                 elseif form == "rebind_closure" then
                     op("ctor_rebind_closure", {
-                        `local o = {ctorCall(c)}`,
+                        `local o = {ctor_call(c)}`,
                         "local swap = function()",
                         `    o = {other}`,
                         "end",
@@ -638,49 +639,178 @@ local function generate(seed: number): (string, string)
                     }, divergent)
                 else
                     op("ctor_rebind_after", {
-                        `local o = {ctorCall(c)}`,
+                        `local o = {ctor_call(c)}`,
                         `local r = {call}`,
                         `o = {other}`,
                         `local r2 = {call}`,
                         "return r, r2",
                     }, divergent)
                 end
+            elseif kind == "expressive" then
+                -- Luwu If Local and Do Expressions (EXPRESSIVE_CONTROL_FLOW): the same class operations, run through
+                -- `do ... give`, `x or return`, if local chains and do expressions in loop headers, where a jump out
+                -- of the middle of an expression has to leave registers, upvalues and proofs as -O0 does.
+                const m = rng.pick(instance_methods(c, true))
+                const divergent = if m then is_sketchy(c, m.name) else false
+                const fields = public_fields(c)
+                const function use(receiver: string): string
+                    if m then
+                        return `{receiver}:{m.name}({call_args(m)})`
+                    elseif #fields > 0 then
+                        return `{receiver}.{fields[1].name}`
+                    end
+                    return `{receiver}:describe()`
+                end
+                const skip_at, stop_at = rng.int(1, 5), rng.int(2, 6)
+                const form = rng.pick({
+                    "give_call", "give_loop", "or_return", "if_local", "if_local_expr", "do_receiver", "do_header",
+                    "do_closures", "do_yield", "inlined_return",
+                })
+
+                if form == "give_call" then
+                    op("do_give_call", { "local v = do", `    local o = {make}`, `    give {use("o")}`, "return v" }, divergent)
+                elseif form == "give_loop" then
+                    op("do_give_loop", {
+                        "local acc = {}",
+                        "for i = 1, 6 do",
+                        "    local v = do",
+                        `        local o = {make}`,
+                        `        if i == {skip_at} then continue end`,
+                        `        if i == {stop_at} then break end`,
+                        `        give norm({use("o")})`,
+                        "    table.insert(acc, v)",
+                        "end",
+                        "return table.concat(acc, ',')",
+                    }, divergent)
+                elseif form == "or_return" then
+                    op("do_or_return", {
+                        "local function f(o)",
+                        "    local got = o or return 'none'",
+                        `    local r = {use("got")}`,
+                        "    return r",
+                        "end",
+                        `return f(pick({make}, nil)), f(pick(nil, {r2}.make()))`,
+                    }, divergent)
+                elseif form == "if_local" then
+                    op("if_local_isa", {
+                        `if local o = pick({make}, {r2}.make()) when class.isinstance(o, {r}) when local d = o:describe() then`,
+                        `    local got = {use("o")}`,
+                        "    return got, d",
+                        "end",
+                        "return -1",
+                    }, divergent)
+                elseif form == "if_local_expr" then
+                    op("if_local_expr", {
+                        `local v = if local o = pick({make}, nil) when local d = o:describe() then d else 'none'`,
+                        `local w = if local o = pick(nil, {make}) then {use("o")} elseif local p = {r2}.make() then p:describe() else 0`,
+                        "return v, norm(w)",
+                    }, divergent)
+                elseif form == "do_receiver" then
+                    op("do_receiver", {
+                        `local a = (do give {make}):describe()`,
+                        `local b = (do local o = {make} give o):describe()`,
+                        `local got = {use(`(do give {make})`)}`,
+                        "return a .. b, got",
+                    }, divergent)
+                elseif form == "do_header" then
+                    op("do_header", {
+                        "local n = 0",
+                        `local o = {make}`,
+                        "while do n += 1 give n < 4 and o ~= nil do",
+                        `    o = if n == {skip_at} then {r2}.make() else o`,
+                        "end",
+                        "local log = {}",
+                        "for outer = 1, 3 do",
+                        "    for i = 1, do if outer == 2 then break end give 2 do",
+                        `        table.insert(log, ({make}):describe())`,
+                        "    end",
+                        "end",
+                        "return n, o:describe(), table.concat(log, '|')",
+                    })
+                elseif form == "do_closures" then
+                    op("do_closures", {
+                        "local fns = {}",
+                        "for i = 1, 4 do",
+                        "    local d = do",
+                        `        local o = {make}`,
+                        "        table.insert(fns, function() return o:describe() end)",
+                        `        if i == {skip_at} then continue end`,
+                        "        give o:describe()",
+                        "    local _ = d",
+                        "end",
+                        "local out = {}",
+                        "for _, fn in fns do table.insert(out, fn()) end",
+                        "return table.concat(out, '|')",
+                    })
+                elseif form == "do_yield" then
+                    op("do_yield", {
+                        "local co = coroutine.wrap(function()",
+                        "    local v = do",
+                        `        local o = {make}`,
+                        "        local again = coroutine.yield(o:describe())",
+                        `        if again then give {use("o")} end`,
+                        "        give 'stopped'",
+                        "    return v",
+                        "end)",
+                        "local first = co()",
+                        `local second = co({if rng.chance(0.5) then "true" else "false"})`,
+                        "return first, norm(second)",
+                    }, divergent)
+                else
+                    op("do_inlined_return", {
+                        "local function g(o)",
+                        "    return do",
+                        "        if o == nil then return 'nil' end",
+                        "        give o:describe()",
+                        "end",
+                        "local function h(o)",
+                        "    local _ = o or (do return)",
+                        "    return o:describe()",
+                        "end",
+                        "local out = {}",
+                        "for _ = 1, 3 do",
+                        `    table.insert(out, g(pick({make}, nil)))`,
+                        `    table.insert(out, tostring(select('#', h(pick(nil, {make})))))`,
+                        "end",
+                        "return table.concat(out, ',')",
+                    })
+                end
             elseif kind == "read" then
                 op(kind, { `local o = {make}`, `return o.{rng.pick(c.fields).name}` })
             elseif kind == "write" then
-                local f = rng.pick(c.fields)
+                const f = rng.pick(c.fields)
                 op(kind, { `local o = {make}`, `o.{f.name} = {lit(rng, f.kind)}`, `return o.{f.name}` })
             elseif kind == "call_typed" or kind == "call_untyped" or kind == "loop_calls" then
-                local m = rng.pick(instanceMethods(c, rng.chance(0.85)))
-                local annotation = if kind ~= "call_untyped" and not c.generic then `: {r}` else ""
-                local divergent = isSketchy(c, m.name)
+                const m = rng.pick(instance_methods(c, rng.chance(0.85)))
+                const annotation = if kind ~= "call_untyped" and not c.generic then `: {r}` else ""
+                const divergent = is_sketchy(c, m.name)
                 if kind == "loop_calls" then
                     op(kind, {
                         `local o{annotation} = {make}`,
                         "local last",
                         "for i = 1, 30 do",
-                        `    last = o:{m.name}({callArgs(m)})`,
+                        `    last = o:{m.name}({call_args(m)})`,
                         "end",
                         "return last",
                     }, divergent)
                 else
-                    op(kind, { `local o{annotation} = {make}`, `local result = o:{m.name}({callArgs(m)})`, "return result" }, divergent)
+                    op(kind, { `local o{annotation} = {make}`, `local result = o:{m.name}({call_args(m)})`, "return result" }, divergent)
                 end
             elseif kind == "call_dot" then
-                local m = rng.pick(instanceMethods(c, true))
-                local args = callArgs(m)
-                op(kind, { `return {r}.{m.name}(obj{if args ~= "" then ", " .. args else ""})` }, isSketchy(c, m.name))
+                const m = rng.pick(instance_methods(c, true))
+                const args = call_args(m)
+                op(kind, { `return {r}.{m.name}(obj{if args ~= "" then ", " .. args else ""})` }, is_sketchy(c, m.name))
             elseif kind == "wrong_self" then
-                local m = rng.pick(instanceMethods(c, true))
+                const m = rng.pick(instance_methods(c, true))
                 op(kind, { `local o = {r2}.make()`, `return {r}.{m.name}(o)` })
             elseif kind == "lying" then
                 op(kind, { `local o: {r} = {r2}.make()`, `local result = o:{rng.pick({ "get", "describe" })}()`, "return result" }, true)
             elseif kind == "mixed_site" then
                 op(kind, { `return describeAll(\{ {make}, legacy, {r2}.make(), legacy })` })
             elseif kind == "isinstance" then
-                local pub = publicFields(c)
-                local read = if #pub > 0 then `x.{pub[1].name}` else "true"
-                local form = rng.pick({
+                const pub = public_fields(c)
+                const read = if #pub > 0 then `x.{pub[1].name}` else "true"
+                const form = rng.pick({
                     "fused",
                     "alias",
                     "upvalue",
@@ -705,8 +835,8 @@ local function generate(seed: number): (string, string)
                     -- inline site's self check, so a write that can reach a use inside the branch must
                     -- unprove it. These four place a write in each position the rule distinguishes: the
                     -- ones that can reach the use must dispatch (or raise) exactly as at O0.
-                    local m = rng.pick(instanceMethods(c, true))
-                    local use = if m then `x:{m.name}()` else read
+                    const m = rng.pick(instance_methods(c, true))
+                    const use = if m then `x:{m.name}()` else read
 
                     -- A stale proof would run `c`'s body against whatever the local holds after the write.
                     -- So the new value must not be a `c`. Rebinding to another `c` (which `r2` may well be)
@@ -716,10 +846,10 @@ local function generate(seed: number): (string, string)
                     -- runs the wrong body and returns a wrong value, which the runner catches by comparing
                     -- against -O0. A non-object usually just errors at every level, and when both runs fail
                     -- the runner compares only their statuses.
-                    local elsewhere = filter(classes, function(o)
+                    const elsewhere = filter(classes, function(o)
                         return o ~= c
                     end)
-                    local other = if #elsewhere > 0 and rng.chance(0.75)
+                    const other = if #elsewhere > 0 and rng.chance(0.75)
                         then `{ref(rng.pick(elsewhere), c)}.make()`
                         else rng.pick({ "tbl", "nil", "legacy" })
 
@@ -774,12 +904,12 @@ local function generate(seed: number): (string, string)
                     -- `assert(class.isinstance(x, C))` proves x for the rest of the block, so the same
                     -- writes that unprove a branch's local must unprove this one. The asserts that fail
                     -- must raise, not run proven code against the wrong value.
-                    local m = rng.pick(instanceMethods(c, true))
-                    local use = if m then `x:{m.name}()` else read
-                    local elsewhere = filter(classes, function(o)
+                    const m = rng.pick(instance_methods(c, true))
+                    const use = if m then `x:{m.name}()` else read
+                    const elsewhere = filter(classes, function(o)
                         return o ~= c
                     end)
-                    local other = if #elsewhere > 0 and rng.chance(0.75)
+                    const other = if #elsewhere > 0 and rng.chance(0.75)
                         then `{ref(rng.pick(elsewhere), c)}.make()`
                         else rng.pick({ "tbl", "nil", "legacy" })
 
@@ -821,8 +951,8 @@ local function generate(seed: number): (string, string)
                     op("isa_bad", { `local x = {make}`, "return class.isinstance(x, pick(tbl, 5))" })
                 end
             elseif kind == "classlib" then
-                local arg = rng.pick({ make, r, "tbl", "5", "nil", "legacy" })
-                local fn = rng.pick({ "of", "name", "isinstance", "fields" })
+                const arg = rng.pick({ make, r, "tbl", "5", "nil", "legacy" })
+                const fn = rng.pick({ "of", "name", "isinstance", "fields" })
                 if fn == "of" then
                     op("class_of", { `local k = class.of({arg})`, "return k and class.name(k)" })
                 elseif fn == "name" then
@@ -833,7 +963,7 @@ local function generate(seed: number): (string, string)
                     op("class_fields", { `local t, complete = class.fields({arg})`, "return sortedKeys(t), complete" })
                 end
             elseif kind == "meta" then
-                local expr = rng.pick({
+                const expr = rng.pick({
                     "o + 1", "o + o", "#o", "o == o2", "o < o2", "tostring(o)", "-o", "o .. 'x'", "getmetatable(o)",
                     "setmetatable(o, {})", "type(o)", "typeof(o)", "o()",
                 })
@@ -850,7 +980,7 @@ local function generate(seed: number): (string, string)
                 op(kind, {
                     `local o = {make}`,
                     "local co = coroutine.wrap(function()",
-                    `    local ok, result = pcall(function() return o:{rng.pick(instanceMethods(c, true)).name}({""}) end)`,
+                    `    local ok, result = pcall(function() return o:{rng.pick(instance_methods(c, true)).name}({""}) end)`,
                     "    coroutine.yield(ok)",
                     "    return if ok then result else 'err'",
                     "end)",
@@ -872,13 +1002,13 @@ local function generate(seed: number): (string, string)
                     "return s",
                 })
             elseif kind == "dynamic_key" then
-                local key = rng.pick(c.fields).name
+                const key = rng.pick(c.fields).name
                 op(kind, { `local o = {make}`, `local k = pick("{key}", "{key}")`, "return o[k]" })
             elseif kind == "raw" then
-                local call = rng.pick({ "rawget(o, 'a')", "rawset(o, 'a', 1)", "rawlen(o)", "rawequal(o, o)", "next(o)" })
+                const call = rng.pick({ "rawget(o, 'a')", "rawset(o, 'a', 1)", "rawlen(o)", "rawequal(o, o)", "next(o)" })
                 op(kind, { `local o = {make}`, `return {call}` })
             elseif kind == "iterate" then
-                local iterable = rng.pick({ "pairs(o)", "ipairs(o)", "o" })
+                const iterable = rng.pick({ "pairs(o)", "ipairs(o)", "o" })
                 op(kind, { `local o = {make}`, "local n = 0", `for _ in {iterable} do`, "    n += 1", "    if n > 5 then break end", "end", "return n" })
             elseif kind == "private_static" then
                 op(kind, { `return {r}.helper(1)` })
@@ -894,22 +1024,22 @@ local function generate(seed: number): (string, string)
 
     -- traits ------------------------------------------------------------------------------------------------------
 
-    local traits: { Trait } = {}
+    const traits: { Trait } = {}
     -- one access specifier and constness per expected field name, shared by every trait expecting it
-    local expectFlags: { [string]: { private: boolean, const: boolean } } = {}
+    const expect_flags: { [string]: { private: boolean, const: boolean } } = {}
 
-    local function traitRef(t: Trait, fromModule: boolean): string
-        if t.module and not fromModule then
+    const function trait_ref(t: Trait, from_module: boolean): string
+        if t.module and not from_module then
             return `mod.{t.name}`
         end
         return t.name
     end
 
-    local function fieldKind(name: string): FieldKind
+    const function field_kind(name: string): FieldKind
         return if name == "name" or name == "tag" then "string" elseif name == "items" then "table" else "number"
     end
 
-    local function traitFn(t: Trait, name: string): TraitFn?
+    const function trait_fn(t: Trait, name: string): TraitFn?
         for _, fn in t.fns do
             if fn.name == name then
                 return fn
@@ -918,37 +1048,37 @@ local function generate(seed: number): (string, string)
         return nil
     end
 
-    local function publicInstanceFns(t: Trait): { TraitFn }
+    const function public_instance_fns(t: Trait): { TraitFn }
         return filter(t.fns, function(fn)
             return not fn.static and not fn.private
         end)
     end
 
-    local function implementsTrait(c: Cls, t: Trait): boolean
-        return contains(c.traitSet, t)
+    const function implements_trait(c: Cls, t: Trait): boolean
+        return contains(c.trait_set, t)
     end
 
-    local function makeTraits()
+    const function make_traits()
         if not rng.chance(0.85) then
             return
         end
 
         for i = 0, rng.int(1, 5) - 1 do
-            local module = rng.chance(0.3)
-            local t: Trait = {
+            const module = rng.chance(0.3)
+            const t: Trait = {
                 name = (if module then "U" else "T") .. i,
                 index = i,
                 module = module,
                 params = {},
                 fields = {},
-                expectFields = {},
-                expectFns = {},
-                expectsMaybe = rng.chance(0.3),
-                expectsInit = false,
+                expect_fields = {},
+                expect_fns = {},
+                expects_maybe = rng.chance(0.3),
+                expects_init = false,
                 fns = {},
                 needs = {},
                 overrides = {},
-                fieldOverrides = {},
+                field_overrides = {},
                 rank = rng.int(1, 1000),
                 create = false,
                 tostring = rng.chance(0.2),
@@ -971,13 +1101,13 @@ local function generate(seed: number): (string, string)
             end
 
             for _, name in rng.sample(FIELD_NAMES, rng.int(0, 2)) do
-                if not expectFlags[name] then
-                    expectFlags[name] = { private = rng.chance(0.4), const = rng.chance(0.3) }
+                if not expect_flags[name] then
+                    expect_flags[name] = { private = rng.chance(0.4), const = rng.chance(0.3) }
                 end
-                table.insert(t.expectFields, name)
+                table.insert(t.expect_fields, name)
             end
 
-            t.expectFns = rng.sample({ "get", "describe", "secret" }, rng.int(0, 2))
+            t.expect_fns = rng.sample({ "get", "describe", "secret" }, rng.int(0, 2))
             t.create = #t.params == 0 and rng.chance(0.35)
             table.insert(traits, t)
         end
@@ -986,7 +1116,7 @@ local function generate(seed: number): (string, string)
         -- Only traits without parameters are needed: a needed trait with parameters would have to be listed by every
         -- implementing class. A trait in the required module can't name one in main.
         for _, t in traits do
-            local candidates = filter(traits, function(o)
+            const candidates = filter(traits, function(o)
                 return o ~= t and o.rank < t.rank and #o.params == 0 and (not t.module or o.module)
             end)
             t.needs = rng.sample(candidates, rng.int(0, 2))
@@ -995,32 +1125,32 @@ local function generate(seed: number): (string, string)
 
     -- the functions and fields some trait already overrides; each is overridden at most once per program, so no class
     -- meets two traits overriding the same member without one needing the other
-    local overriddenFns: { [string]: boolean } = {}
-    local overriddenFields: { [string]: boolean } = {}
+    const overridden_fns: { [string]: boolean } = {}
+    const overridden_fields: { [string]: boolean } = {}
 
     -- a trait's functions; after `needs` is known, since a default may call a needed trait's
-    local function makeTraitFns(t: Trait)
-        local i = t.index
+    const function make_trait_fns(t: Trait)
+        const i = t.index
 
         -- a needed trait's field declared again, which classes implementing this trait get instead: as a constant, or
         -- computed (`(n + 0)` isn't a constant default) so it also goes through the trait's initializer
         for _, needed in t.needs do
             for _, f in needed.fields do
-                if not overriddenFields[f.name] and rng.chance(0.3) then
-                    overriddenFields[f.name] = true
-                    local value = tostring(3000 + i * 100 + #t.fields)
-                    local default = if rng.chance(0.5) then value else `({value} + 0)`
+                if not overridden_fields[f.name] and rng.chance(0.3) then
+                    overridden_fields[f.name] = true
+                    const value = tostring(3000 + i * 100 + #t.fields)
+                    const default = if rng.chance(0.5) then value else `({value} + 0)`
                     table.insert(t.fields, { name = f.name, private = f.private, const = f.const, default = default })
-                    t.fieldOverrides[f.name] = value
+                    t.field_overrides[f.name] = value
                 end
             end
         end
 
-        local own = table.clone(t.fields)
+        const own = table.clone(t.fields)
         for _, p in t.params do
             table.insert(own, { name = p.name, private = false, const = false, default = p.default or "nil" })
         end
-        local mutable = filter(own, function(f)
+        const mutable = filter(own, function(f)
             return not f.const
         end)
 
@@ -1029,10 +1159,10 @@ local function generate(seed: number): (string, string)
 
         -- an override of a needed trait's m1, which classes implementing this trait run instead
         for _, needed in t.needs do
-            local base = traitFn(needed, `t{needed.index}_m1`)
-            if base and not base.final and not overriddenFns[base.name] and rng.chance(0.4) then
-                overriddenFns[base.name] = true
-                local value = `"ov{i}:{base.name}"`
+            const base = trait_fn(needed, `t{needed.index}_m1`)
+            if base and not base.final and not overridden_fns[base.name] and rng.chance(0.4) then
+                overridden_fns[base.name] = true
+                const value = `"ov{i}:{base.name}"`
                 table.insert(t.fns, { name = base.name, private = false, static = false, final = false, params = {}, body = { `return {value}` }, constant = value })
                 t.overrides[base.name] = value
             end
@@ -1043,8 +1173,8 @@ local function generate(seed: number): (string, string)
         end
 
         for k = 2, rng.int(2, 6) do
-            local name = `t{i}_m{k}`
-            local shape = rng.pick({
+            const name = `t{i}_m{k}`
+            const shape = rng.pick({
                 "field", "bump", "expectfield", "expectfn", "maybe", "own", "needed", "closure", "static", "implements",
                 "yield", "private", "upvalue", "selfname",
             })
@@ -1052,18 +1182,18 @@ local function generate(seed: number): (string, string)
             if shape == "field" and #own > 0 then
                 body = { `return self.{rng.pick(own).name}` }
             elseif shape == "bump" and #mutable > 0 then
-                local f = rng.pick(mutable).name
+                const f = rng.pick(mutable).name
                 body = { `self.{f} = (tonumber(self.{f}) or 0) + 1`, `return self.{f}` }
-            elseif shape == "expectfield" and #t.expectFields > 0 then
-                body = { `return tostring(self.{rng.pick(t.expectFields)})` }
-            elseif shape == "expectfn" and #t.expectFns > 0 then
-                body = { `return tostring(self:{rng.pick(t.expectFns)}())` }
-            elseif shape == "maybe" and t.expectsMaybe then
+            elseif shape == "expectfield" and #t.expect_fields > 0 then
+                body = { `return tostring(self.{rng.pick(t.expect_fields)})` }
+            elseif shape == "expectfn" and #t.expect_fns > 0 then
+                body = { `return tostring(self:{rng.pick(t.expect_fns)}())` }
+            elseif shape == "maybe" and t.expects_maybe then
                 body = { "if self.maybe then", "    return self:maybe()", "end", 'return "nomaybe"' }
             elseif shape == "own" then
                 body = { `return "own:" .. tostring(self:t{i}_m1())` }
             elseif shape == "needed" and #t.needs > 0 then
-                local needed = rng.pick(t.needs)
+                const needed = rng.pick(t.needs)
                 body = { `return "need:" .. tostring(self:t{needed.index}_m1())` }
             elseif shape == "closure" and #own > 0 then
                 body = { `local f = function() return self.{rng.pick(own).name} end`, "return f()" }
@@ -1078,7 +1208,7 @@ local function generate(seed: number): (string, string)
                     "end",
                     "return 6",
                 }
-            elseif shape == "private" and traitFn(t, `t{i}_pm`) then
+            elseif shape == "private" and trait_fn(t, `t{i}_pm`) then
                 body = { `return self:t{i}_pm()` }
             elseif shape == "upvalue" then
                 body = { "return nextId() > 0" }
@@ -1093,8 +1223,8 @@ local function generate(seed: number): (string, string)
     end
 
     -- which traits a class implements; before addMethods, since meeting an expectation can change a field's flags
-    local function implementTraits(c: Cls)
-        local candidates = filter(traits, function(t)
+    const function implement_traits(c: Cls)
+        const candidates = filter(traits, function(t)
             return not c.module or t.module
         end)
         if #candidates == 0 then
@@ -1102,13 +1232,13 @@ local function generate(seed: number): (string, string)
         end
 
         for _ = 1, 4 do
-            local listed = rng.sample(candidates, rng.int(0, 3))
+            const listed = rng.sample(candidates, rng.int(0, 3))
 
             -- the listed traits and the ones their `needs` imply, each once
-            local set: { Trait } = {}
-            local queue = table.clone(listed)
+            const set: { Trait } = {}
+            const queue = table.clone(listed)
             while #queue > 0 do
-                local t = table.remove(queue, 1) :: Trait
+                const t = table.remove(queue, 1) :: Trait
                 if not contains(set, t) then
                     table.insert(set, t)
                     for _, needed in t.needs do
@@ -1118,42 +1248,42 @@ local function generate(seed: number): (string, string)
             end
 
             -- two traits providing `__tostring` would clash; clashes are the conformance tests' job
-            local withTostring = filter(set, function(t)
+            const with_tostring = filter(set, function(t)
                 return t.tostring
             end)
-            if #withTostring <= 1 then
+            if #with_tostring <= 1 then
                 for _, t in listed do
                     local args: string? = nil
                     if #t.params > 0 then
-                        local form = rng.pick({ "none", "empty", "constants", "params" })
+                        const form = rng.pick({ "none", "empty", "constants", "params" })
                         if form == "empty" then
                             args = ""
                         elseif form == "constants" or (form == "params" and c.ctor ~= "primary") then
-                            local values = {}
+                            const values = {}
                             for _ in t.params do
                                 table.insert(values, rng.pick({ lit(rng, "number"), "nextId()", "pause(nextId())" }))
                             end
                             args = table.concat(values, ", ")
                         elseif form == "params" then
-                            local values = {}
+                            const values = {}
                             for _ in t.params do
-                                table.insert(values, `(tonumber({rng.pick(c.primaryParams).name}) or 0) + 1`)
+                                table.insert(values, `(tonumber({rng.pick(c.primary_params).name}) or 0) + 1`)
                             end
                             args = table.concat(values, ", ")
                         end
                     end
                     table.insert(c.implements, { trait = t, args = args })
                 end
-                c.traitSet = set
+                c.trait_set = set
                 break
             end
         end
 
-        for _, t in c.traitSet do
+        for _, t in c.trait_set do
             table.insert(t.implementors, c)
 
-            for _, name in t.expectFields do
-                local flags = expectFlags[name]
+            for _, name in t.expect_fields do
+                const flags = expect_flags[name]
                 local found: Field? = nil
                 for _, f in c.fields do
                     if f.name == name then
@@ -1164,45 +1294,45 @@ local function generate(seed: number): (string, string)
                     found.private = flags.private
                     found.const = flags.const
                 else
-                    found = { name = name, private = flags.private, const = flags.const, kind = fieldKind(name), default = if rng.chance(0.5) then lit(rng, fieldKind(name)) else nil }
+                    found = { name = name, private = flags.private, const = flags.const, kind = field_kind(name), default = if rng.chance(0.5) then lit(rng, field_kind(name)) else nil }
                     table.insert(c.fields, found :: Field)
                 end
-                local f = found :: Field
+                const f = found :: Field
                 if f.const and c.ctor == "pod" and f.default == nil then
                     f.default = lit(rng, f.kind)
                 end
             end
 
-            if t.expectsMaybe and rng.chance(0.5) then
-                c.definesMaybe = true
+            if t.expects_maybe and rng.chance(0.5) then
+                c.defines_maybe = true
             end
         end
     end
 
     -- what implementing adds to a class besides fields: expected functions, and overrides of trait defaults
-    local function addTraitMembers(c: Cls)
-        local function has(name: string): boolean
+    const function add_trait_members(c: Cls)
+        const function has(name: string): boolean
             return #filter(c.methods, function(m)
                 return m.name == name
             end) > 0
         end
 
-        local needsSecret = false
-        for _, t in c.traitSet do
-            if contains(t.expectFns, "secret") then
-                needsSecret = true
+        local needs_secret = false
+        for _, t in c.trait_set do
+            if contains(t.expect_fns, "secret") then
+                needs_secret = true
             end
         end
-        if needsSecret and not has("secret") then
+        if needs_secret and not has("secret") then
             table.insert(c.methods, method("secret", true, false, { `return "secret:{c.name}"` }))
         end
-        if c.definesMaybe and not has("maybe") then
+        if c.defines_maybe and not has("maybe") then
             table.insert(c.methods, method("maybe", false, false, { `return "maybe:{c.name}"` }))
         end
 
-        for _, t in c.traitSet do
+        for _, t in c.trait_set do
             for _, fn in t.fns do
-                local overridable = not fn.static and not fn.final and not fn.private
+                const overridable = not fn.static and not fn.final and not fn.private
                 if overridable and rng.chance(0.15) and not has(fn.name) then
                     table.insert(c.methods, method(fn.name, false, false, { `return "override:{c.name}"` }))
                     table.insert(c.overrides, fn.name)
@@ -1211,12 +1341,12 @@ local function generate(seed: number): (string, string)
 
             -- a trait field declared again by the class, which keeps the trait's access and constness
             for _, f in t.fields do
-                local already = #filter(c.fieldOverrides, function(o)
+                const already = #filter(c.field_overrides, function(o)
                     return o.name == f.name
                 end) > 0
                 if not already and rng.chance(0.12) then
-                    local value = tostring(5000 + #c.fieldOverrides)
-                    table.insert(c.fieldOverrides, { name = f.name, private = f.private, const = f.const, kind = "number", default = value })
+                    const value = tostring(5000 + #c.field_overrides)
+                    table.insert(c.field_overrides, { name = f.name, private = f.private, const = f.const, kind = "number", default = value })
                 end
             end
         end
@@ -1224,21 +1354,21 @@ local function generate(seed: number): (string, string)
 
     -- The value a new object of `c` has in the trait field `name`, when the generator knows it: the class's own value
     -- if it declares the field again, else the value of the trait overriding it, else the providing trait's constant
-    local function knownTraitField(c: Cls, name: string): string?
-        for _, o in c.fieldOverrides do
+    const function known_trait_field(c: Cls, name: string): string?
+        for _, o in c.field_overrides do
             if o.name == name then
                 return o.default
             end
         end
 
-        for _, t in c.traitSet do
-            local value = t.fieldOverrides[name]
+        for _, t in c.trait_set do
+            const value = t.field_overrides[name]
             if value then
                 return value
             end
         end
 
-        for _, t in c.traitSet do
+        for _, t in c.trait_set do
             for _, f in t.fields do
                 if f.name == name and tonumber(f.default) then
                     return f.default
@@ -1249,40 +1379,40 @@ local function generate(seed: number): (string, string)
         return nil
     end
 
-    local function emitTrait(t: Trait): { string }
-        local out = {}
+    const function emit_trait(t: Trait): { string }
+        const out = {}
         local head = `trait {t.name}`
         if #t.params > 0 then
-            local params = {}
+            const params = {}
             for _, p in t.params do
                 table.insert(params, `public {p.name}` .. (if p.default then ` = {p.default}` else ""))
             end
             head ..= "(" .. table.concat(params, ", ") .. ")"
         end
         if #t.needs > 0 then
-            local names = {}
+            const names = {}
             for _, needed in t.needs do
-                table.insert(names, traitRef(needed, t.module))
+                table.insert(names, trait_ref(needed, t.module))
             end
             head ..= " needs " .. table.concat(names, ", ")
         end
         table.insert(out, head)
 
-        for _, name in t.expectFields do
-            local flags = expectFlags[name]
+        for _, name in t.expect_fields do
+            const flags = expect_flags[name]
             table.insert(out, `    expect {if flags.private then "private" else "public"} {if flags.const then "const " else ""}{name}`)
         end
-        for _, name in t.expectFns do
+        for _, name in t.expect_fns do
             table.insert(out, `    expect {if name == "secret" then "private" else "public"} function {name}(self)`)
         end
-        if t.expectsMaybe then
+        if t.expects_maybe then
             table.insert(out, "    expect public function maybe?(self)")
         end
         for _, f in t.fields do
             table.insert(out, `    {if f.private then "private" else "public"} {if f.const then "const " else ""}{f.name} = {f.default}`)
         end
         for _, fn in t.fns do
-            local params = table.clone(fn.params)
+            const params = table.clone(fn.params)
             if not fn.static then
                 table.insert(params, 1, "self")
             end
@@ -1299,13 +1429,13 @@ local function generate(seed: number): (string, string)
         end
         if t.create then
             -- a factory: constructs its implementing classes, through their private constructors too
-            local makeable = filter(t.implementors, function(c)
+            const makeable = filter(t.implementors, function(c)
                 return not t.module or c.module
             end)
             table.insert(out, "    public function __create(n)")
             for index, c in makeable do
                 table.insert(out, `        if n == {index} then`)
-                table.insert(out, `            return {ctorCall(c, ({ module = t.module } :: any) :: Cls)}`)
+                table.insert(out, `            return {ctor_call(c, ({ module = t.module } :: any) :: Cls)}`)
                 table.insert(out, "        end")
             end
             table.insert(out, "        return nil")
@@ -1316,19 +1446,19 @@ local function generate(seed: number): (string, string)
     end
 
     -- operations on traits; `check` states what the generator knows must hold
-    local function genTraitOps()
+    const function gen_trait_ops()
         if #traits == 0 then
             return
         end
 
         for _ = 1, rng.int(10, 30) do
-            local t = rng.pick(traits)
-            local T = traitRef(t, false)
-            local c = rng.pick(classes)
-            local C = ref(c)
-            local implements = implementsTrait(c, t)
-            local fns = publicInstanceFns(t)
-            local kind = rng.pick({
+            const t = rng.pick(traits)
+            const T = trait_ref(t, false)
+            const c = rng.pick(classes)
+            const C = ref(c)
+            const implements = implements_trait(c, t)
+            const fns = public_instance_fns(t)
+            const kind = rng.pick({
                 "call", "dispatch", "dispatch_wrong", "implements", "refine", "type", "blocked", "ctor", "field",
                 "maybe", "isolated", "gc", "coroutine", "static", "tostring", "fields", "annotated", "private_fn", "overridden",
                 "settle",
@@ -1337,17 +1467,17 @@ local function generate(seed: number): (string, string)
             if kind == "overridden" then
                 -- a class implementing a trait that overrides a needed trait's function runs the override, unless it
                 -- defines the function itself
-                local overriding = filter(c.traitSet, function(o)
+                const overriding = filter(c.trait_set, function(o)
                     return next(o.overrides) ~= nil
                 end)
                 if #overriding > 0 then
-                    local ov = rng.pick(overriding)
-                    local names = {}
+                    const ov = rng.pick(overriding)
+                    const names = {}
                     for name in ov.overrides do
                         table.insert(names, name)
                     end
                     table.sort(names)
-                    local name = rng.pick(names)
+                    const name = rng.pick(names)
                     if not contains(c.overrides, name) then
                         op("t_overridden", {
                             `local o = {C}.make()`,
@@ -1358,12 +1488,12 @@ local function generate(seed: number): (string, string)
                     end
                 end
             elseif kind == "call" and implements then
-                local fn = rng.pick(fns)
+                const fn = rng.pick(fns)
                 op("t_call", { `local o = {C}.make()`, `local r = o:{fn.name}()`, "return r" }, false, true)
             elseif kind == "dispatch" and implements then
                 -- through the trait, the trait's default runs even when the class overrides it
-                local fn = rng.pick(fns)
-                local lines = { `local o = {C}.make()`, `local viaTrait = {T}.{fn.name}(o)` }
+                const fn = rng.pick(fns)
+                const lines = { `local o = {C}.make()`, `local viaTrait = {T}.{fn.name}(o)` }
                 if contains(c.overrides, fn.name) then
                     table.insert(lines, `check(viaTrait ~= "override:{c.name}", "{T}.{fn.name} on {c.name} ran the override over the default")`)
                 end
@@ -1373,8 +1503,8 @@ local function generate(seed: number): (string, string)
                 table.insert(lines, "return viaTrait")
                 op("t_dispatch", lines, false, true)
             elseif kind == "dispatch_wrong" and #fns > 0 then
-                local fn = rng.pick(fns)
-                local receiver = if implements then rng.pick({ "tbl", "nil", "5", "legacy" }) else `{C}.make()`
+                const fn = rng.pick(fns)
+                const receiver = if implements then rng.pick({ "tbl", "nil", "5", "legacy" }) else `{C}.make()`
                 op("t_dispatch_wrong", {
                     `local ok = pcall({T}.{fn.name}, {receiver})`,
                     `check(not ok, "{T}.{fn.name} accepted a receiver that doesn't implement {t.name}")`,
@@ -1389,8 +1519,8 @@ local function generate(seed: number): (string, string)
                     "return got",
                 }, false, true)
             elseif kind == "refine" and #fns > 0 then
-                local c2 = rng.pick(classes)
-                local fn = rng.pick(fns)
+                const c2 = rng.pick(classes)
+                const fn = rng.pick(fns)
                 op("t_refine", {
                     `local x = pick({C}.make(), {ref(c2)}.make())`,
                     `if class.implements(x, {T}) then`,
@@ -1408,11 +1538,11 @@ local function generate(seed: number): (string, string)
                     "return type(t)",
                 }, false, true)
             elseif kind == "blocked" then
-                local lines = {}
+                const lines = {}
                 for _, f in t.fields do
                     table.insert(lines, `check(not pcall(function() return {T}.{f.name} end), "read field {f.name} through {t.name}")`)
                 end
-                for _, name in t.expectFns do
+                for _, name in t.expect_fns do
                     table.insert(lines, `check(not pcall(function() return {T}.{name} end), "read expected {name} through {t.name}")`)
                 end
                 table.insert(lines, `check({T}.t{t.index}_s1(2) == {2 + t.index}, "static through {t.name}")`)
@@ -1420,7 +1550,7 @@ local function generate(seed: number): (string, string)
                 op("t_blocked", lines, false, true)
             elseif kind == "ctor" then
                 if t.create then
-                    local makeable = filter(t.implementors, function(o)
+                    const makeable = filter(t.implementors, function(o)
                         return not t.module or o.module
                     end)
                     op("t_ctor", {
@@ -1432,7 +1562,7 @@ local function generate(seed: number): (string, string)
                     op("t_ctor_none", { `local ok = pcall({T})`, `check(not ok, "called {t.name}, which has no __create")`, "return ok" }, false, true)
                 end
             elseif kind == "field" and implements and #t.fields > 0 then
-                local f = rng.pick(t.fields)
+                const f = rng.pick(t.fields)
                 if f.private then
                     op("t_field_private", { `local o = {C}.make()`, `check(not pcall(function() return o.{f.name} end), "read private trait field {f.name} from outside")`, "return 1" }, false, true)
                 elseif f.const then
@@ -1440,17 +1570,17 @@ local function generate(seed: number): (string, string)
                 else
                     op("t_field", { `local o = {C}.make()`, `o.{f.name} = 42`, `check(o.{f.name} == 42, "trait field {f.name} didn't keep a write")`, `return o.{f.name}` }, false, true)
                 end
-            elseif kind == "maybe" and implements and t.expectsMaybe then
+            elseif kind == "maybe" and implements and t.expects_maybe then
                 op("t_maybe", {
                     `local o = {C}.make()`,
-                    `check((o.maybe ~= nil) == {tostring(c.definesMaybe)}, "optional maybe on {c.name}")`,
+                    `check((o.maybe ~= nil) == {tostring(c.defines_maybe)}, "optional maybe on {c.name}")`,
                     "return o.maybe ~= nil",
                 }, false, true)
             elseif kind == "isolated" and implements and #t.fields > 0 then
                 -- trait state lives in each object: a table default is fresh per object, and a write stays in its object
-                local f = rng.pick(t.fields)
-                local lines = { `local a, b = {C}.make(), {C}.make()` }
-                if not f.private and f.default == "{}" and knownTraitField(c, f.name) == nil then
+                const f = rng.pick(t.fields)
+                const lines = { `local a, b = {C}.make(), {C}.make()` }
+                if not f.private and f.default == "{}" and known_trait_field(c, f.name) == nil then
                     table.insert(lines, `check(a.{f.name} ~= b.{f.name}, "objects share trait table field {f.name}")`)
                 end
                 if not f.private and not f.const then
@@ -1474,7 +1604,7 @@ local function generate(seed: number): (string, string)
                     "return #s",
                 }, false, true)
             elseif kind == "coroutine" and implements and #fns > 0 then
-                local fn = rng.pick(fns)
+                const fn = rng.pick(fns)
                 op("t_coroutine", {
                     `local o = {C}.make()`,
                     "local co = coroutine.wrap(function()",
@@ -1493,17 +1623,17 @@ local function generate(seed: number): (string, string)
                     "return viaClass",
                 }, false, true)
             elseif kind == "tostring" and implements and t.tostring then
-                local ownTostring = #filter(c.metamethods, function(mm)
+                const own_tostring = #filter(c.metamethods, function(mm)
                     return mm.name == "__tostring"
                 end) > 0
-                local lines = { `local o = {C}.make()`, "local s = tostring(o)" }
-                if not ownTostring then
+                const lines = { `local o = {C}.make()`, "local s = tostring(o)" }
+                if not own_tostring then
                     table.insert(lines, `check(s == "<{t.name}>", "{t.name}'s __tostring on {c.name} gave " .. s)`)
                 end
                 table.insert(lines, "return s")
                 op("t_tostring", lines, false, true)
             elseif kind == "fields" and implements then
-                local lines = { `local fields = class.fields({C}.make())` }
+                const lines = { `local fields = class.fields({C}.make())` }
                 -- a public trait field is one of the object's fields (a nil one is listed as `none`)
                 for _, f in t.fields do
                     if not f.private then
@@ -1515,14 +1645,14 @@ local function generate(seed: number): (string, string)
             elseif kind == "settle" and implements then
                 -- every public trait field whose value the generator knows has it in a new object: the most specific
                 -- declaration's (the class over a trait, a trait over one it needs), whatever order they're written in
-                local lines = { `local o = {C}.make()` }
-                local seen: { [string]: boolean } = {}
-                for _, owner in c.traitSet do
+                const lines = { `local o = {C}.make()` }
+                const seen: { [string]: boolean } = {}
+                for _, owner in c.trait_set do
                     for _, f in owner.fields do
-                        local value = knownTraitField(c, f.name)
+                        const value = known_trait_field(c, f.name)
                         if value and not f.private and not seen[f.name] then
                             seen[f.name] = true
-                            local message = `"{c.name}.{f.name} is " .. tostring(o.{f.name}) .. ", expected {value}"`
+                            const message = `"{c.name}.{f.name} is " .. tostring(o.{f.name}) .. ", expected {value}"`
                             table.insert(lines, `check(o.{f.name} == {value}, {message})`)
                         end
                     end
@@ -1530,9 +1660,9 @@ local function generate(seed: number): (string, string)
                 table.insert(lines, "return true")
                 op("t_settle", lines, false, true)
             elseif kind == "annotated" and implements and #fns > 0 then
-                local fn = rng.pick(fns)
+                const fn = rng.pick(fns)
                 op("t_annotated", { `local o: {T} = {C}.make()`, `local r = o:{fn.name}()`, "return r" }, false, true)
-            elseif kind == "private_fn" and implements and traitFn(t, `t{t.index}_pm`) then
+            elseif kind == "private_fn" and implements and trait_fn(t, `t{t.index}_pm`) then
                 op("t_private_fn", {
                     `local o = {C}.make()`,
                     `check(not pcall(function() return o:t{t.index}_pm() end), "called private trait function from outside")`,
@@ -1542,35 +1672,35 @@ local function generate(seed: number): (string, string)
         end
     end
 
-    local modClasses: { Cls } = {}
+    const mod_classes: { Cls } = {}
     for i = 0, rng.int(0, 3) - 1 do
-        local c = makeClass(i, true)
-        table.insert(modClasses, c)
+        const c = make_class(i, true)
+        table.insert(mod_classes, c)
         table.insert(classes, c)
     end
     for i = 0, rng.int(2, 6) - 1 do
-        table.insert(classes, makeClass(i, false))
+        table.insert(classes, make_class(i, false))
     end
-    makeTraits()
+    make_traits()
     -- a needed trait has the lower rank, so its functions exist by the time a trait needing it overrides one
-    local byRank = table.clone(traits)
-    table.sort(byRank, function(a, b)
+    const by_rank = table.clone(traits)
+    table.sort(by_rank, function(a, b)
         return a.rank < b.rank
     end)
-    for _, t in byRank do
-        makeTraitFns(t)
+    for _, t in by_rank do
+        make_trait_fns(t)
     end
     for _, c in classes do
-        implementTraits(c)
+        implement_traits(c)
     end
     for _, c in classes do
-        addMethods(c)
+        add_methods(c)
     end
     for _, c in classes do
-        addTraitMembers(c)
+        add_trait_members(c)
     end
-    genOps()
-    genTraitOps()
+    gen_ops()
+    gen_trait_ops()
 
     const prelude = {
         "local shared = {}",
@@ -1598,25 +1728,25 @@ local function generate(seed: number): (string, string)
     }
 
     -- `--!trust` only takes effect in the configs that set DebugLuwuCompilerTrustsTypeAnnotations
-    local mod = { "--!nocheck", "--!optimize OPTLEVEL", "--!trust" }
+    const mod = { "--!nocheck", "--!optimize OPTLEVEL", "--!trust" }
     table.move(prelude, 1, #prelude, #mod + 1, mod)
-    local exports = {}
+    const exports = {}
     for _, t in traits do
         if t.module then
-            local lines = emitTrait(t)
+            const lines = emit_trait(t)
             table.move(lines, 1, #lines, #mod + 1, mod)
             table.insert(exports, `{t.name} = {t.name}`)
         end
     end
-    for _, c in modClasses do
-        local lines = emitClass(c)
+    for _, c in mod_classes do
+        const lines = emit_class(c)
         table.move(lines, 1, #lines, #mod + 1, mod)
         table.insert(exports, `{c.name} = {c.name}`)
     end
     table.insert(exports, "__shared = shared")
     table.insert(mod, "return { " .. table.concat(exports, ", ") .. " }")
 
-    local main = { "--!nocheck", "--!optimize OPTLEVEL", "--!trust" }
+    const main = { "--!nocheck", "--!optimize OPTLEVEL", "--!trust" }
     table.move(prelude, 1, #prelude, #main + 1, main)
     for _, line in {
         'local mod = require("./MODNAME")',
@@ -1679,17 +1809,17 @@ local function generate(seed: number): (string, string)
     end
     for _, t in traits do
         if not t.module then
-            local lines = emitTrait(t)
+            const lines = emit_trait(t)
             table.move(lines, 1, #lines, #main + 1, main)
         end
     end
     for _, c in classes do
         if not c.module then
-            local lines = emitClass(c)
+            const lines = emit_class(c)
             table.move(lines, 1, #lines, #main + 1, main)
         end
     end
-    local target = rng.pick(classes)
+    const target = rng.pick(classes)
     for _, line in {
         "local function isaUp(x)",
         `    if class.isinstance(x, {ref(target)}) then`,
@@ -1711,7 +1841,7 @@ local function generate(seed: number): (string, string)
         end
         table.insert(main, "end)")
     end
-    table.insert(main, `print("__done", {opCount})`)
+    table.insert(main, `print("__done", {op_count})`)
 
     return table.concat(main, "\n") .. "\n", table.concat(mod, "\n") .. "\n"
 end

@@ -28,6 +28,8 @@ LUAU_FASTINT(LuauTypeInferIterationLimit)
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
+LUAU_FASTFLAG(LuwuIfLocal)
+LUAU_FASTFLAG(DebugLuwuDoExpr)
 LUAU_FASTFLAGVARIABLE(DebugLuauMagicVariableNames)
 LUAU_FASTFLAGVARIABLE(LuauAutocompleteConst)
 LUAU_FASTFLAGVARIABLE(LuauAutocompleteExport)
@@ -1569,6 +1571,22 @@ static bool isValidBreakContinueContext(const std::vector<AstNode*>& ancestry, P
     return false;
 }
 
+// Luwu Do Expressions (rfcs/do-expressions.md): is the position a statement in a `do` expression's block, where `give`
+// can go? A function boundary in between means no.
+static bool isInDoExprBody(const std::vector<AstNode*>& ancestry)
+{
+    for (auto it = ancestry.rbegin(); it != ancestry.rend(); ++it)
+    {
+        if ((*it)->is<AstStatFunction>() || (*it)->is<AstStatLocalFunction>() || (*it)->is<AstExprFunction>() || (*it)->is<AstStatTypeFunction>())
+            return false;
+
+        if (AstExprDo* doExpr = (*it)->as<AstExprDo>())
+            return !doExpr->shorthand;
+    }
+
+    return false;
+}
+
 // Luwu Classes (rfcs/classes/classes.md): checks if we're in top level because
 // we want to only only offer class/trait keywords at top level of module.
 static bool isTopLevelStatementPosition(const std::vector<AstNode*>& ancestry)
@@ -1655,6 +1673,9 @@ static AutocompleteEntryMap autocompleteStatement(
                 result.emplace(kw, AutocompleteEntry{AutocompleteEntryKind::Keyword});
         }
     }
+
+    if (FFlag::DebugLuwuDoExpr && isInDoExprBody(ancestry))
+        result.emplace("give", AutocompleteEntry{AutocompleteEntryKind::Keyword});
 
     // classes and traits can only exist in top level code of a module so only
     // suggest the class and trait keywords there
@@ -1746,7 +1767,7 @@ static bool autocompleteIfElseExpression(
     }
 
     AstExprIfElse* ifElseExpr = parent->as<AstExprIfElse>();
-    if (!ifElseExpr || ifElseExpr->condition->location.containsClosed(position))
+    if (!ifElseExpr || ifElseExpr->conditionLocation().containsClosed(position))
     {
         return false;
     }
@@ -2699,18 +2720,33 @@ AutocompleteResult autocomplete_(
     else if (AstStatIf* statIf = parent->as<AstStatIf>(); statIf && node->is<AstStatBlock>())
     {
         if (statIf->condition->is<AstExprError>())
-            return autocompleteExpression(*module, builtinTypes, typeArena, ancestry, scopeAtPosition, position);
+        {
+            AutocompleteResult result = autocompleteExpression(*module, builtinTypes, typeArena, ancestry, scopeAtPosition, position);
+
+            // Luwu If Local (rfcs/if-local.md): a condition can start with a binding
+            if (FFlag::LuwuIfLocal && statIf->clauses.size == 0)
+            {
+                result.entryMap["local"] = {AutocompleteEntryKind::Keyword};
+                result.entryMap["const"] = {AutocompleteEntryKind::Keyword};
+            }
+
+            return result;
+        }
         else if (!statIf->thenLocation || statIf->thenLocation->containsClosed(position))
             return {{{"then", AutocompleteEntry{AutocompleteEntryKind::Keyword}}}, ancestry, AutocompleteContext::Keyword};
     }
     else if (AstStatIf* statIf = extractStat<AstStatIf>(ancestry); statIf &&
                                                                    (!statIf->thenLocation || statIf->thenLocation->containsClosed(position)) &&
-                                                                   (statIf->condition && !statIf->condition->location.containsClosed(position)))
+                                                                   (statIf->condition && !statIf->conditionLocation().containsClosed(position)))
     {
         AutocompleteEntryMap ret;
         ret["then"] = {AutocompleteEntryKind::Keyword};
         ret["and"] = {AutocompleteEntryKind::Keyword};
         ret["or"] = {AutocompleteEntryKind::Keyword};
+
+        // Luwu If Local (rfcs/if-local.md)
+        if (FFlag::LuwuIfLocal)
+            ret["when"] = {AutocompleteEntryKind::Keyword};
         return {std::move(ret), ancestry, AutocompleteContext::Keyword};
     }
     else if (AstStatRepeat* statRepeat = node->as<AstStatRepeat>(); statRepeat && statRepeat->condition->is<AstExprError>())
