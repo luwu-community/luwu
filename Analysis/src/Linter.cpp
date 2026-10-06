@@ -51,7 +51,7 @@ struct LintContext
 
     // Luwu: the lints `@[nolint(...)]` turns off for each binding a `local` or `const` declares, for lints about a
     // binding that report where it's used rather than where it's declared (LoopConcat on `s ..= x`)
-    DenseHashMap<AstLocal*, uint64_t> bindingNolints;
+    DenseHashMap<AstLocal*, LintMask> bindingNolints;
 
     LintContext()
         : root(nullptr)
@@ -63,7 +63,7 @@ struct LintContext
 
     bool warningEnabled(LintWarning::Code code)
     {
-        return (options.warningMask & (1ull << code)) != 0;
+        return options.warningMask.test(code);
     }
 
     std::optional<TypeId> getType(AstExpr* expr)
@@ -1413,8 +1413,58 @@ private:
         return from + floor(to - from);
     }
 
+    static std::optional<double> constantNumber(AstExpr* expr)
+    {
+        if (AstExprConstantNumber* number = expr->as<AstExprConstantNumber>())
+            return number->value;
+        if (AstExprUnary* unary = expr->as<AstExprUnary>(); unary && unary->op == AstExprUnary::Op::Minus)
+            if (AstExprConstantNumber* number = unary->expr->as<AstExprConstantNumber>())
+                return -number->value;
+        return std::nullopt;
+    }
+
+    static bool isLength(AstExpr* expr)
+    {
+        AstExprUnary* unary = expr->as<AstExprUnary>();
+        return unary && unary->op == AstExprUnary::Op::Len;
+    }
+
+    // Luwu: a step whose sign points away from the end, so the loop never runs (`for i = 1, n, -1`). `#t` counts as at
+    // least 1, which is when the loop would have anything to do.
+    void checkStepDirection(AstStatFor* node)
+    {
+        std::optional<double> step = constantNumber(node->step);
+        if (!step || *step == 0)
+            return;
+
+        std::optional<double> from = constantNumber(node->from);
+        std::optional<double> to = constantNumber(node->to);
+
+        bool upwards = (from && to && *from < *to) || (from && *from <= 1 && isLength(node->to));
+        bool downwards = (from && to && *from > *to) || (to && *to <= 1 && isLength(node->from));
+
+        Location rangeLocation(node->from->location, node->step->location);
+        if (*step < 0 && upwards)
+            emitWarning(
+                *context,
+                LintWarning::Code_ForRange,
+                rangeLocation,
+                "For loop counts down but ends above where it starts, so it never runs; did you mean to swap the bounds?"
+            );
+        else if (*step > 0 && downwards)
+            emitWarning(
+                *context,
+                LintWarning::Code_ForRange,
+                rangeLocation,
+                "For loop counts up but ends below where it starts, so it never runs; did you mean to swap the bounds, or step by -1?"
+            );
+    }
+
     bool visit(AstStatFor* node) override
     {
+        if (node->step)
+            checkStepDirection(node);
+
         // note: we silence all warnings below if *any* step is specified, assuming that the user knows best
         if (!node->step)
         {
@@ -3706,20 +3756,81 @@ private:
 
         if (and_->right->is<AstExprConstantNil>())
             alt = "nil";
+        // Luwu: `none` is falsy too
+        else if (AstExprGlobal* global = and_->right->as<AstExprGlobal>(); global && global->name == "none")
+            alt = "none";
         else if (AstExprConstantBool* c = and_->right->as<AstExprConstantBool>(); c && c->value == false)
             alt = "false";
+
+        // Luwu: the same mistake when the first alternative only might be falsy (`c and v or d` with `v: boolean?`)
+        // A literal's value is right there, and the checker can widen a `true` to `boolean`
+        const char* maybe = nullptr;
+        AstExpr* middle = and_->right;
+        bool literal = middle->is<AstExprConstantBool>() || middle->is<AstExprConstantNumber>() || middle->is<AstExprConstantString>() ||
+                       middle->is<AstExprTable>() || middle->is<AstExprFunction>() || middle->is<AstExprInterpString>();
+        if (!alt && !literal)
+        {
+            if (std::optional<TypeId> type = context->getType(and_->right))
+                maybe = canBeFalsy(*type);
+        }
 
         if (alt)
             emitWarning(
                 *context,
                 LintWarning::Code_MisleadingAndOr,
                 node->location,
-                "The and-or expression always evaluates to the second alternative because the first alternative is %s; consider using if-then-else "
-                "expression instead",
+                "this 'a and b or c' always evaluates to 'c' because 'b' is %s, use 'if a then b else c' instead",
                 alt
             );
+        else if (maybe)
+            emitWarning(
+                *context,
+                LintWarning::Code_MisleadingAndOr,
+                node->location,
+                "an 'a and b or c' expression is misleading when 'b' is falsy, use 'if a then b else c' instead"
+            );
+
+        // Luwu: `a and b or c` as a whole, which only means `if a then b else c` while `b` can't be falsy
+        emitWarning(
+            *context,
+            LintWarning::Code_LuaAndOr,
+            node->location,
+            "'a and b or c' gives 'c' whenever 'b' is falsy, not only when 'a' is; use 'if a then b else c'"
+        );
 
         return true;
+    }
+
+    // "nil" or "false" when a value of type `ty` can be that, otherwise nullptr. `any` and `unknown` say nothing.
+    static const char* canBeFalsy(TypeId ty)
+    {
+        ty = follow(ty);
+
+        if (const UnionType* options = get<UnionType>(ty))
+        {
+            for (TypeId option : options)
+                if (const char* falsy = canBeFalsy(option))
+                    return falsy;
+            return nullptr;
+        }
+
+        if (const PrimitiveType* primitive = get<PrimitiveType>(ty))
+        {
+            if (primitive->type == PrimitiveType::NilType)
+                return "nil";
+            if (primitive->type == PrimitiveType::NoneType)
+                return "none";
+            if (primitive->type == PrimitiveType::Boolean)
+                return "false";
+            return nullptr;
+        }
+
+        const SingletonType* singleton = get<SingletonType>(ty);
+        const BooleanSingleton* boolean = singleton ? get<BooleanSingleton>(singleton) : nullptr;
+        if (boolean && !boolean->value)
+            return "false";
+
+        return nullptr;
     }
 };
 
@@ -4582,7 +4693,7 @@ private:
         const char* name = narrowed->local->name.value;
         emitWarning(
             *context,
-            LintWarning::Code_OptimizationHint,
+            LintWarning::Code_MethodsNotInlined,
             node->condition->location,
             "Checking '%s' for nil doesn't prove to the compiler that it's a '%s', since type annotations are only trusted under "
             "'--!trust'; use 'if class.isinstance(%s, %s) then' so '%s' methods can be inlined here",
@@ -4623,7 +4734,7 @@ private:
             const char* name = narrowed->local->name.value;
             emitWarning(
                 *context,
-                LintWarning::Code_OptimizationHint,
+                LintWarning::Code_MethodsNotInlined,
                 call->location,
                 "Asserting '%s' isn't nil doesn't prove to the compiler that it's a '%s', since type annotations are only trusted "
                 "under '--!trust'; use 'assert(class.isinstance(%s, %s))' so '%s' methods can be inlined after it",
@@ -4657,7 +4768,7 @@ private:
 
         emitWarning(
             *context,
-            LintWarning::Code_OptimizationHint,
+            LintWarning::Code_FloorDivision,
             node->location,
             "'math.floor(a / b)' divides and then calls a function; 'a // b' gives the same result in one instruction"
         );
@@ -4674,7 +4785,7 @@ private:
 
         emitWarning(
             *context,
-            LintWarning::Code_OptimizationHint,
+            LintWarning::Code_FenvDeoptimization,
             node->location,
             "Using '%s' deoptimizes this entire module and makes your code run slower",
             callee->name.value
@@ -4723,7 +4834,7 @@ private:
                 const char* field = key.second.value;
                 emitWarning(
                     *context,
-                    LintWarning::Code_OptimizationHint,
+                    LintWarning::Code_MethodsNotInlined,
                     calls.field->location,
                     "'%s.%s' has %zu method calls here, but a field can't be proven to be a '%s' in place, so none of them can be "
                     "inlined; check it once in a local: 'local %s = %s.%s' and 'assert(class.isinstance(%s, %s))'",
@@ -4900,8 +5011,8 @@ private:
     bool silencedByBinding(AstExpr* target, LintWarning::Code code) const
     {
         AstLocal* local = rootLocal(target);
-        const uint64_t* mask = local ? context->bindingNolints.find(local) : nullptr;
-        return mask && (*mask & ((1ull << code) | (1ull << LintWarning::Code_OptimizationHint))) != 0;
+        const LintMask* mask = local ? context->bindingNolints.find(local) : nullptr;
+        return mask && (mask->test(code) || mask->test(LintWarning::Code_OptimizationHint));
     }
 
     // The last line of the help: where `@[nolint(name)]` would silence this
@@ -6587,27 +6698,418 @@ private:
     }
 };
 
+// Luwu: `xs[#xs / 2]`. `/` always gives a float, so an index computed with it reads `nil` whenever the result isn't
+// whole, which for `#xs / 2` is every odd length.
+class LintFloatIndex : AstVisitor
+{
+public:
+    LUAU_NOINLINE static void process(LintContext& context)
+    {
+        LintFloatIndex pass;
+        pass.context = &context;
+
+        context.root->visit(&pass);
+    }
+
+private:
+    LintContext* context;
+
+    // The `/` that makes `expr` a float: `expr` itself, or one inside the arithmetic around it (`#xs / 2 + 1`). A call
+    // in between (`math.floor(n / 2)`) makes its own value, so it isn't looked into.
+    static AstExprBinary* findDivision(AstExpr* expr)
+    {
+        expr = unparenthesized(expr);
+
+        if (AstExprBinary* binary = expr->as<AstExprBinary>())
+        {
+            if (binary->op == AstExprBinary::Div)
+                return binary;
+
+            bool keepsFraction = binary->op == AstExprBinary::Add || binary->op == AstExprBinary::Sub || binary->op == AstExprBinary::Mul;
+            if (!keepsFraction)
+                return nullptr;
+
+            if (AstExprBinary* division = findDivision(binary->left))
+                return division;
+            return findDivision(binary->right);
+        }
+
+        if (AstExprUnary* unary = expr->as<AstExprUnary>(); unary && unary->op == AstExprUnary::Op::Minus)
+            return findDivision(unary->expr);
+
+        return nullptr;
+    }
+
+    bool visit(AstExprIndexExpr* node) override
+    {
+        if (AstExprBinary* division = findDivision(node->index))
+            emitWarning(
+                *context,
+                LintWarning::Code_FloatIndex,
+                division->location,
+                "'/' always gives a float, so this index reads nil whenever the result isn't whole; use '//' to divide to an "
+                "integer"
+            );
+
+        return true;
+    }
+};
+
+// Luwu: `pairs` and `ipairs`, which generalized iteration (`for k, v in t`) replaces. Each is its own lint so a module
+// can keep using one without turning off DeprecatedApi or the other.
+class LintLuaIterators : AstVisitor
+{
+public:
+    LUAU_NOINLINE static void process(LintContext& context)
+    {
+        LintLuaIterators pass;
+        pass.context = &context;
+
+        context.root->visit(&pass);
+    }
+
+private:
+    LintContext* context;
+
+    bool visit(AstExprGlobal* node) override
+    {
+        if (node->name == "pairs")
+            emitWarning(
+                *context,
+                LintWarning::Code_Pairs,
+                node->location,
+                "'pairs' is deprecated; iterate the table directly: 'for key, value in t do'"
+            );
+        else if (node->name == "ipairs")
+            emitWarning(
+                *context,
+                LintWarning::Code_Ipairs,
+                node->location,
+                "'ipairs' is deprecated; iterate the array directly: 'for index, value in t do'. Unlike 'ipairs', it doesn't stop "
+                "at the first nil"
+            );
+
+        return true;
+    }
+};
+
+// Luwu: `x = x` and `t.x = t.x`, which do nothing; usually a typo for another name
+class LintSelfAssignment : AstVisitor
+{
+public:
+    LUAU_NOINLINE static void process(LintContext& context)
+    {
+        LintSelfAssignment pass;
+        pass.context = &context;
+        pass.strict = context.module && context.module->mode == Mode::Strict;
+
+        context.root->visit(&pass);
+    }
+
+private:
+    LintContext* context;
+    // Assigning a field to itself can be meant to run its `__newindex`, so only strict reports it.
+    // TODO(strictness presets): the middle preset should report it too (STRICTNESS.CLAUDE.md, S13).
+    bool strict = false;
+
+    bool visit(AstStatAssign* node) override
+    {
+        size_t pairs = std::min(node->vars.size, node->values.size);
+        for (size_t i = 0; i < pairs; ++i)
+        {
+            AstExpr* var = node->vars.data[i];
+            if (!sameTarget(var, node->values.data[i]))
+                continue;
+
+            AstExpr* target = unparenthesized(var);
+            bool isName = target->is<AstExprLocal>() || target->is<AstExprGlobal>();
+            if (!isName && !strict)
+                continue;
+
+            emitWarning(
+                *context,
+                LintWarning::Code_SelfAssignment,
+                Location(var->location, node->values.data[i]->location),
+                "Assigning %s to itself does nothing; did you mean to assign something else?",
+                describe(var, "this").c_str()
+            );
+        }
+
+        return true;
+    }
+};
+
+// Luwu: a computed value stored in a local and overwritten, in the same block, before anything reads it. The work that
+// produced it was for nothing, which usually means a use of it was forgotten. Only computed values count (calls,
+// arithmetic, ...): `local x = 0` then `x = f()` is just a default.
+class LintDeadStore : AstVisitor
+{
+public:
+    LUAU_NOINLINE static void process(LintContext& context)
+    {
+        LintDeadStore pass;
+        pass.context = &context;
+
+        // A local some closure uses can be read whenever that closure runs, which a block-by-block look can't see
+        CaptureFinder captures{&pass.captured};
+        context.root->visit(&captures);
+
+        context.root->visit(&pass);
+    }
+
+private:
+    LintContext* context;
+    DenseHashSet<AstLocal*> captured{nullptr};
+
+    struct CaptureFinder : AstVisitor
+    {
+        DenseHashSet<AstLocal*>* captured;
+
+        explicit CaptureFinder(DenseHashSet<AstLocal*>* captured)
+            : captured(captured)
+        {
+        }
+
+        bool visit(AstExprLocal* node) override
+        {
+            if (node->upvalue)
+                captured->insert(node->local);
+            return true;
+        }
+    };
+
+    // The locals a statement reads, and whether it can leave the block early (so what follows it might not run)
+    struct Effects : AstVisitor
+    {
+        DenseHashSet<AstLocal*> reads{nullptr};
+        bool leaves = false;
+        int loopDepth = 0;
+        int functionDepth = 0;
+
+        bool visit(AstExprLocal* node) override
+        {
+            reads.insert(node->local);
+            return true;
+        }
+
+        // Writing a local isn't reading it
+        bool visit(AstStatAssign* node) override
+        {
+            for (AstExpr* var : node->vars)
+                if (!unparenthesized(var)->is<AstExprLocal>())
+                    var->visit(this);
+            for (AstExpr* value : node->values)
+                value->visit(this);
+            return false;
+        }
+
+        bool visit(AstExprFunction* node) override
+        {
+            ++functionDepth;
+            node->body->visit(this);
+            --functionDepth;
+            return false;
+        }
+
+        bool visit(AstStatReturn* node) override
+        {
+            leaves |= functionDepth == 0;
+            return true;
+        }
+
+        bool visit(AstStatBreak* node) override
+        {
+            leaves |= functionDepth == 0 && loopDepth == 0;
+            return true;
+        }
+
+        bool visit(AstStatContinue* node) override
+        {
+            leaves |= functionDepth == 0 && loopDepth == 0;
+            return true;
+        }
+
+        // A `break` or `continue` inside a nested loop leaves that loop, not the block being looked at
+        bool visit(AstStatWhile* node) override
+        {
+            node->condition->visit(this);
+            ++loopDepth;
+            node->body->visit(this);
+            --loopDepth;
+            return false;
+        }
+
+        bool visit(AstStatRepeat* node) override
+        {
+            ++loopDepth;
+            node->body->visit(this);
+            --loopDepth;
+            node->condition->visit(this);
+            return false;
+        }
+
+        bool visit(AstStatFor* node) override
+        {
+            node->from->visit(this);
+            node->to->visit(this);
+            if (node->step)
+                node->step->visit(this);
+            ++loopDepth;
+            node->body->visit(this);
+            --loopDepth;
+            return false;
+        }
+
+        bool visit(AstStatForIn* node) override
+        {
+            for (AstExpr* value : node->values)
+                value->visit(this);
+            ++loopDepth;
+            node->body->visit(this);
+            --loopDepth;
+            return false;
+        }
+    };
+
+    struct Store
+    {
+        AstLocal* local;
+        Location location;
+    };
+
+    static bool isComputed(AstExpr* value)
+    {
+        value = unparenthesized(value);
+        return value->is<AstExprCall>() || value->is<AstExprBinary>() || value->is<AstExprUnary>() || value->is<AstExprIfElse>() ||
+               value->is<AstExprInterpString>();
+    }
+
+    static void forgetRead(std::vector<Store>& pending, const Effects& effects)
+    {
+        if (effects.leaves)
+        {
+            pending.clear();
+            return;
+        }
+
+        pending.erase(
+            std::remove_if(
+                pending.begin(),
+                pending.end(),
+                [&](const Store& store)
+                {
+                    return effects.reads.contains(store.local);
+                }
+            ),
+            pending.end()
+        );
+    }
+
+    void remember(std::vector<Store>& pending, AstLocal* local, AstExpr* value, const Location& location)
+    {
+        if (isComputed(value) && !captured.contains(local))
+            pending.push_back(Store{local, location});
+    }
+
+    bool visit(AstStatBlock* block) override
+    {
+        std::vector<Store> pending;
+
+        for (AstStat* stat : block->body)
+        {
+            Effects effects;
+
+            if (AstStatLocal* local = stat->as<AstStatLocal>())
+            {
+                for (AstExpr* value : local->values)
+                    value->visit(&effects);
+                forgetRead(pending, effects);
+
+                if (local->vars.size == 1 && local->values.size == 1)
+                    remember(pending, local->vars.data[0], local->values.data[0], local->vars.data[0]->location);
+                continue;
+            }
+
+            AstStatAssign* assign = stat->as<AstStatAssign>();
+            if (!assign)
+            {
+                stat->visit(&effects);
+                forgetRead(pending, effects);
+                continue;
+            }
+
+            // The values and any table being indexed are read before the locals are written
+            assign->visit(&effects);
+            forgetRead(pending, effects);
+
+            for (size_t i = 0; i < assign->vars.size; ++i)
+            {
+                AstExprLocal* target = unparenthesized(assign->vars.data[i])->as<AstExprLocal>();
+                if (!target)
+                    continue;
+
+                auto overwritten = std::find_if(
+                    pending.begin(),
+                    pending.end(),
+                    [&](const Store& store)
+                    {
+                        return store.local == target->local;
+                    }
+                );
+
+                if (overwritten != pending.end())
+                {
+                    emitWarning(
+                        *context,
+                        LintWarning::Code_DeadStore,
+                        overwritten->location,
+                        "The value stored in '%s' here is never read: line %d overwrites it first; did you forget to use it?",
+                        target->local->name.value,
+                        assign->location.begin.line + 1
+                    );
+                    pending.erase(overwritten);
+                }
+
+                if (assign->vars.size == assign->values.size)
+                    remember(pending, target->local, assign->values.data[i], assign->vars.data[i]->location);
+            }
+        }
+
+        return true;
+    }
+};
+
 // Luwu: `--!nolint` with no lint names, the way LintWarning::parseMask recognizes it
 static bool isBareNolint(const HotComment& hc)
 {
     return hc.header && hc.content.compare(0, 6, "nolint") == 0 && hc.content.find_first_not_of(" \t", 6) == std::string::npos;
 }
 
-// Luwu: the parts of OptimizationHint, which follow it: one is on only where OptimizationHint is on too
-static bool isOptimizationHintPart(LintWarning::Code code)
+// Luwu: the group a lint is part of, or Code_Unknown. A part follows its group: it's on only where the group is on too,
+// so turning the group off turns all its parts off, and each part can still be turned off alone.
+static LintWarning::Code lintGroupOf(LintWarning::Code code)
 {
-    return code == LintWarning::Code_LoopConcat || code == LintWarning::Code_InefficientTableInsert ||
-           code == LintWarning::Code_InefficientTableRemove;
+    switch (code)
+    {
+    case LintWarning::Code_LoopConcat:
+    case LintWarning::Code_InefficientTableInsert:
+    case LintWarning::Code_InefficientTableRemove:
+    case LintWarning::Code_MethodsNotInlined:
+    case LintWarning::Code_FloorDivision:
+    case LintWarning::Code_FenvDeoptimization:
+        return LintWarning::Code_OptimizationHint;
+    case LintWarning::Code_Pairs:
+    case LintWarning::Code_Ipairs:
+        return LintWarning::Code_LuaIterators;
+    default:
+        return LintWarning::Code_Unknown;
+    }
 }
 
-static bool lintEnabledIn(uint64_t mask, LintWarning::Code code)
+static bool lintEnabledIn(const LintMask& mask, LintWarning::Code code)
 {
-    auto has = [mask](LintWarning::Code c)
-    {
-        return (mask & (1ull << c)) != 0;
-    };
-
-    return has(code) && (!isOptimizationHintPart(code) || has(LintWarning::Code_OptimizationHint));
+    LintWarning::Code group = lintGroupOf(code);
+    return mask.test(code) && (group == LintWarning::Code_Unknown || mask.test(group));
 }
 
 // Luwu: `@[nolint(...)]` or `@[lint(...)]` on a function, class or class field: the lints it turns off or on within
@@ -6615,8 +7117,8 @@ static bool lintEnabledIn(uint64_t mask, LintWarning::Code code)
 struct LintScope
 {
     Location range;
-    uint64_t enable = 0;
-    uint64_t disable = 0;
+    LintMask enable;
+    LintMask disable;
 };
 
 class LintScopeCollector : AstVisitor
@@ -6648,7 +7150,7 @@ private:
         return std::nullopt;
     }
 
-    uint64_t maskOf(AstAttr* attr)
+    LintMask maskOf(AstAttr* attr)
     {
         // Without names, every lint but BareNolint, which asks whether that was meant (`@[nolint]`; the parser makes
         // `@[lint]` name them)
@@ -6663,10 +7165,10 @@ private:
                     "('@[nolint(LocalUnused)]'), or write '@[nolint(All)]' to turn them all off on purpose"
                 );
 
-            return ~(1ull << LintWarning::Code_BareNolint);
+            return LintMask().set().reset(LintWarning::Code_BareNolint);
         }
 
-        uint64_t mask = 0;
+        LintMask mask;
         for (AstExpr* arg : attr->args)
         {
             std::optional<std::string> name = argumentName(arg);
@@ -6678,7 +7180,7 @@ private:
             if (LintWarning::isAllName(name->c_str()))
             {
                 if (attr->type == AstAttr::Type::Nolint)
-                    mask = ~0ull;
+                    mask.set();
                 else if (context->warningEnabled(LintWarning::Code_CommentDirective))
                     emitWarning(
                         *context,
@@ -6692,7 +7194,7 @@ private:
             LintWarning::Code code = LintWarning::parseName(name->c_str());
             if (code != LintWarning::Code_Unknown)
             {
-                mask |= 1ull << code;
+                mask.set(code);
                 continue;
             }
 
@@ -6728,15 +7230,15 @@ private:
         {
             if (attr->type == AstAttr::Type::Nolint)
             {
-                uint64_t mask = maskOf(attr);
-                scopes.push_back(LintScope{range, 0, mask});
+                LintMask mask = maskOf(attr);
+                scopes.push_back(LintScope{range, LintMask(), mask});
 
                 if (bindings)
                     for (AstLocal* local : *bindings)
                         context->bindingNolints[local] |= mask;
             }
             else if (attr->type == AstAttr::Type::Lint)
-                scopes.push_back(LintScope{range, maskOf(attr), 0});
+                scopes.push_back(LintScope{range, maskOf(attr), LintMask()});
         }
     }
 
@@ -6792,7 +7294,7 @@ private:
 
 // Drops the warnings a scope turned off, and the ones a module-level setting turned off that no scope turned back on.
 // `moduleMask` is what the module's options allow outside every scope.
-static void filterByLintScopes(std::vector<LintWarning>& warnings, std::vector<LintScope> scopes, uint64_t moduleMask)
+static void filterByLintScopes(std::vector<LintWarning>& warnings, std::vector<LintScope> scopes, const LintMask& moduleMask)
 {
     // Scopes nest, so the ones around a position start no later than the ones inside it
     std::sort(
@@ -6808,7 +7310,7 @@ static void filterByLintScopes(std::vector<LintWarning>& warnings, std::vector<L
 
     auto disabledAt = [&](const LintWarning& warning)
     {
-        uint64_t mask = moduleMask;
+        LintMask mask = moduleMask;
         for (const LintScope& scope : scopes)
         {
             if (scope.range.encloses(warning.location))
@@ -6923,7 +7425,7 @@ std::vector<LintWarning> lint(
     if (context.warningEnabled(LintWarning::Code_DuplicateLocal))
         LintDuplicateLocal::process(context);
 
-    if (context.warningEnabled(LintWarning::Code_MisleadingAndOr))
+    if (context.warningEnabled(LintWarning::Code_MisleadingAndOr) || context.warningEnabled(LintWarning::Code_LuaAndOr))
         LintMisleadingAndOr::process(context);
 
     if (context.warningEnabled(LintWarning::Code_CommentDirective))
@@ -6955,6 +7457,20 @@ std::vector<LintWarning> lint(
     if (context.warningEnabled(LintWarning::Code_ConstLocal))
         LintConstLocal::process(context);
 
+    if (context.warningEnabled(LintWarning::Code_FloatIndex))
+        LintFloatIndex::process(context);
+
+    // Luwu: turning LuaIterators off turns off its parts
+    if (context.warningEnabled(LintWarning::Code_LuaIterators) &&
+        (context.warningEnabled(LintWarning::Code_Pairs) || context.warningEnabled(LintWarning::Code_Ipairs)))
+        LintLuaIterators::process(context);
+
+    if (context.warningEnabled(LintWarning::Code_SelfAssignment))
+        LintSelfAssignment::process(context);
+
+    if (context.warningEnabled(LintWarning::Code_DeadStore))
+        LintDeadStore::process(context);
+
     LintValueMistakes::Enabled valueMistakes;
     valueMistakes.newValueComparison = context.warningEnabled(LintWarning::Code_NewValueComparison);
     valueMistakes.tableTruthiness = context.warningEnabled(LintWarning::Code_TableTruthiness);
@@ -6973,7 +7489,10 @@ std::vector<LintWarning> lint(
     {
         // Luwu Classes (rfcs/classes): a trusted file (the flag on and `--!trust`) already acts on the annotations
         bool trustsAnnotations = FFlag::DebugLuwuCompilerTrustsTypeAnnotations && hasHeaderCommentDirective(hotcomments, "trust");
-        LintOptimizationHint::process(context, FFlag::LuwuClasses && !trustsAnnotations);
+        bool methodsNotInlined = context.warningEnabled(LintWarning::Code_MethodsNotInlined);
+        if (methodsNotInlined || context.warningEnabled(LintWarning::Code_FloorDivision) ||
+            context.warningEnabled(LintWarning::Code_FenvDeoptimization))
+            LintOptimizationHint::process(context, methodsNotInlined && FFlag::LuwuClasses && !trustsAnnotations);
 
         bool concat = context.warningEnabled(LintWarning::Code_LoopConcat);
         bool tableInsert = context.warningEnabled(LintWarning::Code_InefficientTableInsert);

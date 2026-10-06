@@ -51,7 +51,8 @@ TEST_SUITE_BEGIN("Linter");
 
 TEST_CASE_FIXTURE(Fixture, "CleanCode")
 {
-    LintResult result = lint(R"(
+    // Luwu: LuaAndOr reports every `a and b or c`, which this otherwise clean code uses
+    LintResult result = lint(R"(--!nolint LuaAndOr
 function _fib(n)
     return n < 2 and 1 or _fib(n-1) + _fib(n-2)
 end
@@ -910,7 +911,8 @@ end
 
 TEST_CASE_FIXTURE(Fixture, "ImplicitReturn")
 {
-    LintResult result = lint(R"(
+    // Luwu: LuaIterators reports the `pairs` calls, which aren't what this tests
+    LintResult result = lint(R"(--!nolint LuaIterators
 --!nonstrict
 function f1(a)
     if not a then
@@ -1557,7 +1559,8 @@ TEST_CASE_FIXTURE(Fixture, "use_all_parent_scopes_for_globals")
 
 TEST_CASE_FIXTURE(Fixture, "DeadLocalsUsed")
 {
-    LintResult result = lint(R"(
+    // Luwu: LuaIterators reports the `pairs` call, which isn't what this tests
+    LintResult result = lint(R"(--!nolint LuaIterators
 --!nolint LocalShadow
 do
     local x
@@ -2803,7 +2806,8 @@ table.remove(t, i)
 
 TEST_CASE_FIXTURE(Fixture, "DuplicateConditions")
 {
-    LintResult result = lint(R"(
+    // Luwu: LuaAndOr reports the and-or ternary below, which DuplicateConditions leaves alone on purpose
+    LintResult result = lint(R"(--!nolint LuaAndOr
 if true then
 elseif false then
 elseif true then -- duplicate
@@ -2882,7 +2886,8 @@ return foo, moo, a1, a2
 
 TEST_CASE_FIXTURE(Fixture, "MisleadingAndOr")
 {
-    LintResult result = lint(R"(
+    // Luwu: LuaAndOr reports every line here too; LuaAndOrReportsEveryAndOr covers it
+    LintResult result = lint(R"(--!nolint LuaAndOr
 _ = math.random() < 0.5 and true or 42
 _ = math.random() < 0.5 and false or 42 -- misleading
 _ = math.random() < 0.5 and nil or 42 -- misleading
@@ -2891,16 +2896,9 @@ _ = (math.random() < 0.5 and false) or 42 -- currently ignored
 )");
 
     REQUIRE(2 == result.warnings.size());
-    CHECK_EQ(
-        result.warnings[0].text,
-        "The and-or expression always evaluates to the second alternative because the first alternative is false; "
-        "consider using if-then-else expression instead"
-    );
-    CHECK_EQ(
-        result.warnings[1].text,
-        "The and-or expression always evaluates to the second alternative because the first alternative is nil; "
-        "consider using if-then-else expression instead"
-    );
+    // Luwu: shorter messages
+    CHECK_EQ(result.warnings[0].text, "this 'a and b or c' always evaluates to 'c' because 'b' is false, use 'if a then b else c' instead");
+    CHECK_EQ(result.warnings[1].text, "this 'a and b or c' always evaluates to 'c' because 'b' is nil, use 'if a then b else c' instead");
 }
 
 TEST_CASE_FIXTURE(Fixture, "WrongComment")
@@ -3440,7 +3438,10 @@ static std::vector<LintWarning> optimizationHints(const LintResult& result)
     std::vector<LintWarning> hints;
     for (const LintWarning& warning : result.warnings)
     {
-        if (warning.code == LintWarning::Code_OptimizationHint)
+        // Luwu: the hints OptimizationHint's own pass reports, each under its own part
+        bool ownHint = warning.code == LintWarning::Code_MethodsNotInlined || warning.code == LintWarning::Code_FloorDivision ||
+                       warning.code == LintWarning::Code_FenvDeoptimization;
+        if (ownHint)
             hints.push_back(warning);
     }
     return hints;
@@ -3479,6 +3480,7 @@ return a, quiet
 
     std::vector<LintWarning> hints = optimizationHints(result);
     REQUIRE(2 == hints.size());
+    CHECK_EQ(hints[0].code, LintWarning::Code_MethodsNotInlined);
     CHECK_EQ(8, hints[0].location.begin.line);
     CHECK_EQ(
         hints[0].text,
@@ -3569,7 +3571,7 @@ return guard, quietGuard
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "OptimizationHintFenvAndFloorDivision")
 {
-    LintResult result = lint(R"(
+    const std::string source = R"(
 local function f(a: number, b: number, v: vector)
     local env = getfenv(1)
     setfenv(2, env)
@@ -3577,13 +3579,23 @@ local function f(a: number, b: number, v: vector)
 end
 
 return f
-)");
+)";
 
-    std::vector<LintWarning> hints = optimizationHints(result);
+    std::vector<LintWarning> hints = optimizationHints(lint(source));
     REQUIRE(3 == hints.size());
+    CHECK_EQ(hints[0].code, LintWarning::Code_FenvDeoptimization);
     CHECK_EQ(hints[0].text, "Using 'getfenv' deoptimizes this entire module and makes your code run slower");
+    CHECK_EQ(hints[1].code, LintWarning::Code_FenvDeoptimization);
     CHECK_EQ(hints[1].text, "Using 'setfenv' deoptimizes this entire module and makes your code run slower");
+    CHECK_EQ(hints[2].code, LintWarning::Code_FloorDivision);
     CHECK_EQ(hints[2].text, "'math.floor(a / b)' divides and then calls a function; 'a // b' gives the same result in one instruction");
+
+    // each part can be turned off alone, and turning off OptimizationHint turns them all off
+    std::vector<LintWarning> noFenv = optimizationHints(lint("--!nolint FenvDeoptimization" + source));
+    REQUIRE(1 == noFenv.size());
+    CHECK_EQ(noFenv[0].code, LintWarning::Code_FloorDivision);
+
+    CHECK(optimizationHints(lint("--!nolint OptimizationHint" + source)).empty());
 }
 
 static size_t countWarnings(const LintResult& result, LintWarning::Code code)
@@ -3636,6 +3648,228 @@ return f
     CHECK_EQ(0, countWarnings(noHints, LintWarning::Code_LoopConcat));
     CHECK_EQ(0, countWarnings(noHints, LintWarning::Code_InefficientTableInsert));
     CHECK_EQ(0, countWarnings(noHints, LintWarning::Code_InefficientTableRemove));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "FloatIndexReportsDivisionInIndexArithmetic")
+{
+    LintResult result = lint(R"(
+local xs = { 1, 2, 3 }
+local a = xs[#xs / 2]
+local b = xs[#xs / 2 + 1]
+local c = xs[#xs // 2]
+local d = xs[math.floor(#xs / 2)]
+xs[-(#xs / 2)] = 0
+return a, b, c, d
+)");
+
+    std::vector<LintWarning> found;
+    for (const LintWarning& warning : result.warnings)
+        if (warning.code == LintWarning::Code_FloatIndex)
+            found.push_back(warning);
+
+    // `//` and a call around the division are fine
+    REQUIRE_EQ(found.size(), 3);
+    CHECK_EQ(
+        found[0].text,
+        "'/' always gives a float, so this index reads nil whenever the result isn't whole; use '//' to divide to an integer"
+    );
+    // the warning points at the division, not the whole index
+    CHECK_EQ(found[1].location, Location({3, 13}, {3, 20}));
+    CHECK_EQ(found[2].location.begin.line, 6);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuaIteratorsReportsPairsAndIpairsSeparately")
+{
+    const std::string source = R"(
+local t = { 1, 2 }
+for k in pairs(t) do print(k) end
+for i in ipairs(t) do print(i) end
+local next_pair = pairs
+return next_pair
+)";
+
+    LintResult all = lint(source);
+    CHECK_EQ(countWarnings(all, LintWarning::Code_Pairs), 2);
+    CHECK_EQ(countWarnings(all, LintWarning::Code_Ipairs), 1);
+
+    // each part can be turned off alone, and turning off the group turns off both
+    LintResult noPairs = lint("--!nolint Pairs\n" + source);
+    CHECK_EQ(countWarnings(noPairs, LintWarning::Code_Pairs), 0);
+    CHECK_EQ(countWarnings(noPairs, LintWarning::Code_Ipairs), 1);
+
+    LintResult noGroup = lint("--!nolint LuaIterators\n" + source);
+    CHECK_EQ(countWarnings(noGroup, LintWarning::Code_Pairs), 0);
+    CHECK_EQ(countWarnings(noGroup, LintWarning::Code_Ipairs), 0);
+
+    // a local named `pairs` is someone else's function
+    LintResult shadowed = lint("local function pairs(t) return next, t end\nfor k in pairs({}) do print(k) end\n");
+    CHECK_EQ(countWarnings(shadowed, LintWarning::Code_Pairs), 0);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "MisleadingAndOrUsesTheMiddleOperandsType")
+{
+    LintResult result = lint(R"(
+local function f(c: boolean, maybe: boolean?, count: number)
+    local a = c and maybe or true
+    local b = c and count or 0
+    return a, b
+end
+return f
+)");
+
+    std::vector<LintWarning> misleading;
+    for (const LintWarning& warning : result.warnings)
+        if (warning.code == LintWarning::Code_MisleadingAndOr)
+            misleading.push_back(warning);
+
+    // only `maybe` can be falsy; LuaAndOr reports both, at the same places
+    REQUIRE_EQ(misleading.size(), 1);
+    CHECK_EQ(misleading[0].location.begin.line, 2);
+    CHECK_EQ(misleading[0].text, "an 'a and b or c' expression is misleading when 'b' is falsy, use 'if a then b else c' instead");
+    CHECK_EQ(countWarnings(result, LintWarning::Code_LuaAndOr), 2);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "MisleadingAndOrKnowsNoneIsFalsy")
+{
+    LintResult result = lint(R"(
+local function f(c: boolean, gone: none | number)
+    local a = c and none or 1
+    local b = c and gone or 2
+    return a, b
+end
+return f
+)");
+
+    std::vector<LintWarning> misleading;
+    for (const LintWarning& warning : result.warnings)
+        if (warning.code == LintWarning::Code_MisleadingAndOr)
+            misleading.push_back(warning);
+
+    REQUIRE_EQ(misleading.size(), 2);
+    CHECK_EQ(misleading[0].text, "this 'a and b or c' always evaluates to 'c' because 'b' is none, use 'if a then b else c' instead");
+    CHECK_EQ(misleading[1].text, "an 'a and b or c' expression is misleading when 'b' is falsy, use 'if a then b else c' instead");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuaAndOrReportsEveryAndOr")
+{
+    LintResult result = lint(R"(
+local c = math.random() > 0.5
+local a = c and 1 or 2
+local b = c and false or true
+local d = (c and 1) or 2
+return a, b, d
+)");
+
+    // the parenthesized form is left alone, as MisleadingAndOr does
+    REQUIRE_EQ(countWarnings(result, LintWarning::Code_LuaAndOr), 2);
+    CHECK_EQ(countWarnings(result, LintWarning::Code_MisleadingAndOr), 1);
+
+    for (const LintWarning& warning : result.warnings)
+        if (warning.code == LintWarning::Code_LuaAndOr)
+            CHECK_EQ(warning.text, "'a and b or c' gives 'c' whenever 'b' is falsy, not only when 'a' is; use 'if a then b else c'");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "SelfAssignmentReportsFieldsOnlyInStrict")
+{
+    const std::string source = R"(
+local x = 1
+local t = { x = 1 }
+local a, b = 1, 2
+x = x
+t.x = t.x
+a, b = b, a
+a, b = a, 3
+return x, t, a, b
+)";
+
+    LintResult nonstrict = lint("--!nonstrict" + source);
+    REQUIRE_EQ(countWarnings(nonstrict, LintWarning::Code_SelfAssignment), 2);
+
+    std::vector<LintWarning> found;
+    for (const LintWarning& warning : nonstrict.warnings)
+        if (warning.code == LintWarning::Code_SelfAssignment)
+            found.push_back(warning);
+    CHECK_EQ(found[0].text, "Assigning 'x' to itself does nothing; did you mean to assign something else?");
+    CHECK_EQ(found[1].location.begin.line, 7);
+
+    // a field can be assigned to itself to run its `__newindex`, so only strict reports it
+    LintResult strict = lint("--!strict" + source);
+    CHECK_EQ(countWarnings(strict, LintWarning::Code_SelfAssignment), 3);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "DeadStoreReportsComputedValuesOverwrittenUnread")
+{
+    LintResult result = lint(R"(
+local function f(a: number, b: boolean)
+    local x = a * 2
+    x = a + 1
+
+    local y = math.random()
+    print(y)
+    y = math.random()
+
+    local z = 0
+    z = math.random()
+
+    local w = math.random()
+    if b then print(w) end
+    w = math.random()
+
+    local u = math.random()
+    local read_later = function() return u end
+    u = math.random()
+
+    local q = math.random()
+    for _ = 1, 3 do
+        if b then break end
+    end
+    q = math.random()
+
+    local r = math.random()
+    if b then return end
+    r = math.random()
+
+    return x, y, z, w, u, read_later, q, r
+end
+return f
+)");
+
+    std::vector<LintWarning> found;
+    for (const LintWarning& warning : result.warnings)
+        if (warning.code == LintWarning::Code_DeadStore)
+            found.push_back(warning);
+
+    // - `y` and `w` are read first, `z` starts as a plain default, `u` is read by a closure
+    // - `q`: the `break` leaves the inner loop, not the block, so the store is still dead
+    // - `r`: the `return` might be taken, so what follows it might not run
+    REQUIRE_EQ(found.size(), 2);
+    CHECK_EQ(found[0].text, "The value stored in 'x' here is never read: line 4 overwrites it first; did you forget to use it?");
+    CHECK_EQ(found[0].location.begin.line, 2);
+    CHECK_EQ(found[1].location.begin.line, 20);
+}
+
+TEST_CASE_FIXTURE(Fixture, "ForRangeReportsStepsAwayFromTheEnd")
+{
+    LintResult result = lint(R"(
+local t = { 1, 2, 3 }
+for i = 1, 10, -1 do print(i) end
+for i = 1, #t, -1 do print(i) end
+for i = 10, 1, 1 do print(i) end
+for i = #t, 1, 1 do print(i) end
+for i = 10, 1, -1 do print(i) end
+for i = 1, 10, 2 do print(i) end
+for i = #t, 1, -1 do print(i) end
+)");
+
+    REQUIRE_EQ(countWarnings(result, LintWarning::Code_ForRange), 4);
+    CHECK_EQ(
+        result.warnings[0].text,
+        "For loop counts down but ends above where it starts, so it never runs; did you mean to swap the bounds?"
+    );
+    CHECK_EQ(
+        result.warnings[2].text,
+        "For loop counts up but ends below where it starts, so it never runs; did you mean to swap the bounds, or step by -1?"
+    );
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "OptimizationHintLoopPartsAreSilencedOverTheBinding")

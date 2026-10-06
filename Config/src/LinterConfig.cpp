@@ -9,11 +9,11 @@ namespace Luau
 void LintOptions::setDefaults()
 {
     // By default, we enable all warnings
-    warningMask = ~0ull;
+    warningMask.set();
 
     // Luwu: except the ones a module or codebase has to ask for (`--!lint Name`, or the config), because they're about
     // style and would flag most existing code
-    warningMask &= ~(1ull << LintWarning::Code_ConstLocal);
+    warningMask.reset(LintWarning::Code_ConstLocal);
 }
 
 const char* LintWarning::getName(Code code)
@@ -37,9 +37,9 @@ bool LintWarning::isAllName(const char* name)
     return strcmp(name, "All") == 0;
 }
 
-uint64_t LintWarning::parseEnableMask(const std::vector<HotComment>& hotcomments)
+LintMask LintWarning::parseEnableMask(const std::vector<HotComment>& hotcomments)
 {
-    uint64_t result = 0;
+    LintMask result;
 
     for (const HotComment& hc : hotcomments)
     {
@@ -53,15 +53,15 @@ uint64_t LintWarning::parseEnableMask(const std::vector<HotComment>& hotcomments
 
         LintWarning::Code code = LintWarning::parseName(hc.content.c_str() + name);
         if (code != LintWarning::Code_Unknown)
-            result |= 1ull << int(code);
+            result.set(code);
     }
 
     return result;
 }
 
-uint64_t LintWarning::parseMask(const std::vector<HotComment>& hotcomments)
+LintMask LintWarning::parseMask(const std::vector<HotComment>& hotcomments)
 {
-    uint64_t result = 0;
+    LintMask result;
     bool disablesEverything = false;
 
     for (const HotComment& hc : hotcomments)
@@ -90,7 +90,7 @@ uint64_t LintWarning::parseMask(const std::vector<HotComment>& hotcomments)
         // Luwu: every lint, on purpose
         if (LintWarning::isAllName(hc.content.c_str() + name))
         {
-            result = ~0ull;
+            result.set();
             continue;
         }
 
@@ -98,11 +98,11 @@ uint64_t LintWarning::parseMask(const std::vector<HotComment>& hotcomments)
         LintWarning::Code code = LintWarning::parseName(hc.content.c_str() + name);
 
         if (code != LintWarning::Code_Unknown)
-            result |= 1ull << int(code);
+            result.set(code);
     }
 
     if (disablesEverything)
-        result |= ~(1ull << int(LintWarning::Code_BareNolint));
+        result |= LintMask().set().reset(LintWarning::Code_BareNolint);
 
     return result;
 }

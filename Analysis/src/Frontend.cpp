@@ -323,7 +323,7 @@ ErrorVec accumulateErrors(
 
 void filterLintOptions(LintOptions& lintOptions, const std::vector<HotComment>& hotcomments, Mode mode)
 {
-    uint64_t ignoreLints = LintWarning::parseMask(hotcomments);
+    LintMask ignoreLints = LintWarning::parseMask(hotcomments);
 
     // Luwu: `--!lint Name` turns on lints that are off by default; `--!nolint` still wins over it
     lintOptions.warningMask |= LintWarning::parseEnableMask(hotcomments);
