@@ -325,6 +325,9 @@ void filterLintOptions(LintOptions& lintOptions, const std::vector<HotComment>& 
 {
     uint64_t ignoreLints = LintWarning::parseMask(hotcomments);
 
+    // Luwu: `--!lint Name` turns on lints that are off by default; `--!nolint` still wins over it
+    lintOptions.warningMask |= LintWarning::parseEnableMask(hotcomments);
+
     lintOptions.warningMask &= ~ignoreLints;
 
     if (mode != Mode::NoCheck)
