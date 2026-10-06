@@ -241,7 +241,7 @@ struct FuzzConfigResolver : Luau::ConfigResolver
     FuzzConfigResolver()
     {
         defaultConfig.mode = Luau::Mode::Nonstrict;
-        defaultConfig.enabledLint.warningMask = ~0ull;
+        defaultConfig.enabledLint.warningMask.set();
         defaultConfig.parseOptions.captureComments = true;
     }
 
