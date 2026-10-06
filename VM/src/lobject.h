@@ -710,7 +710,7 @@ typedef struct LuauClass
     // traverseclass.
     // - The first `numdirecttraitinits` are this class's copies of the `__traitinit` of each trait that takes no
     //   arguments, called with the object alone.
-    // - When there are more, the next is the class's `__inittraits`, and the rest are the copies it calls, one per
+    // - When there are more, the next is the class's `__implements`, and the rest are the copies it calls, one per
     //   `implements` entry that passes arguments, in list order. It is called with the object, those copies, and the
     //   constructor's arguments.
     TValue* traitinits;
