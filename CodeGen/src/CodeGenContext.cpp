@@ -427,6 +427,24 @@ static char* getCounterData(lua_State* L, Proto* proto, size_t* count)
     return reinterpret_cast<char*>(static_cast<uint32_t*>(proto->execdata) + proto->sizecode);
 }
 
+// Defined below
+[[nodiscard]] static CompilationResult compileInternal(
+    const std::optional<ModuleId>& moduleId,
+    lua_State* L,
+    int idx,
+    const CompilationOptions& options,
+    CompilationStats* stats
+);
+
+// Luwu Traits (rfcs/classes/traits.md): a copy the VM made of a function with native code (see
+// lua_ExecutionCallbacks::functioncopied). The original was compiled, so the copy is compiled whatever its heat.
+static void onFunctionCopied(lua_State* L)
+{
+    // a copy that fails to compile still runs, in the interpreter, so the result only matters for statistics
+    CompilationResult result = compileInternal({}, L, -1, CompilationOptions{CodeGen_ColdFunctions}, nullptr);
+    (void)result;
+}
+
 static void initializeExecutionCallbacks(lua_State* L, BaseCodeGenContext* codeGenContext) noexcept
 {
     CODEGEN_ASSERT(codeGenContext != nullptr);
@@ -440,6 +458,7 @@ static void initializeExecutionCallbacks(lua_State* L, BaseCodeGenContext* codeG
     ecb->disable = onDisable;
     ecb->getmemorysize = getMemorySize;
     ecb->getcounterdata = getCounterData;
+    ecb->functioncopied = onFunctionCopied;
 }
 
 void create(lua_State* L)

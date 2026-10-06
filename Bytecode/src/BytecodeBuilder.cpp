@@ -1998,11 +1998,17 @@ void BytecodeBuilder::validateInstructions() const
             break;
 
         case LOP_NEWOBJECT:
-            LUAU_ASSERT(LUAU_INSN_C(insn) <= LBC_NEWOBJECT_FIELDS);
+            LUAU_ASSERT(LUAU_INSN_C(insn) <= LBC_NEWOBJECT_ALLOC);
             // with a user __init the instruction lays out `__init`, `self` and the arguments above A;
             // the other forms use one register per argument or per field
             VREG(LUAU_INSN_A(insn) + (LUAU_INSN_C(insn) == LBC_NEWOBJECT_INIT ? 2 : 0) + insns[i + 1]);
             VREG(LUAU_INSN_B(insn));
+            break;
+
+        case LOP_INITTRAITS:
+            // the runner goes in A and the object is in A + 1; the CALL that follows covers the arguments
+            VREG(LUAU_INSN_A(insn) + 1);
+            VJUMP(LUAU_INSN_D(insn));
             break;
 
         default:
@@ -2827,10 +2833,15 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
 
     case LOP_NEWOBJECT:
     {
-        const char* form = LUAU_INSN_C(insn) == LBC_NEWOBJECT_INIT ? " INIT" : (LUAU_INSN_C(insn) == LBC_NEWOBJECT_FIELDS ? " FIELDS" : "");
-        formatAppend(result, "NEWOBJECT R%d R%d %d%s\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn), *code++, form);
+        static const char* const kForms[] = {"", " INIT", " FIELDS", " ALLOC"};
+        LUAU_ASSERT(LUAU_INSN_C(insn) <= LBC_NEWOBJECT_ALLOC);
+        formatAppend(result, "NEWOBJECT R%d R%d %d%s\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn), *code++, kForms[LUAU_INSN_C(insn)]);
         break;
     }
+
+    case LOP_INITTRAITS:
+        formatAppend(result, "INITTRAITS R%d L%d\n", LUAU_INSN_A(insn), targetLabel);
+        break;
 
     default:
         LUAU_ASSERT(!"Unsupported opcode");
