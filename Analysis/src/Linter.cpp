@@ -49,10 +49,15 @@ struct LintContext
     ScopePtr scope;
     const Module* module;
 
+    // Luwu: the lints `@[nolint(...)]` turns off for each binding a `local` or `const` declares, for lints about a
+    // binding that report where it's used rather than where it's declared (LoopConcat on `s ..= x`)
+    DenseHashMap<AstLocal*, uint64_t> bindingNolints;
+
     LintContext()
         : root(nullptr)
         , builtinGlobals(AstName())
         , module(nullptr)
+        , bindingNolints(nullptr)
     {
     }
 
@@ -4768,7 +4773,8 @@ static std::string describe(AstExpr* expr, const char* fallback)
 }
 
 // Luwu: the loop parts of OptimizationHint, each with its own code so it can be turned off alone. Each is quadratic in
-// the number of iterations: the work it repeats grows with every one.
+// the number of iterations: the work it repeats grows with every one. The message gives the cost for the loop nest it's
+// in (see `cost`).
 class LintLoopHints : AstVisitor
 {
 public:
@@ -4789,24 +4795,34 @@ private:
     bool tableInsert = false;
     bool tableRemove = false;
 
-    // The innermost loop around the code being visited, in the function being visited
-    AstStat* loop = nullptr;
+    // The loops around the code being visited in the function being visited, outermost first
+    std::vector<AstStat*> loops;
+    // Whether the code being visited is inside a function, rather than at the top of the module
+    bool inFunction = false;
+    // Bindings declared by a `local` or `const`, which `@[nolint]` can be written over (a parameter or a loop variable
+    // can't)
+    DenseHashSet<AstLocal*> declaredLocals{nullptr};
+
+    bool visit(AstStatLocal* node) override
+    {
+        for (AstLocal* local : node->vars)
+            declaredLocals.insert(local);
+        return true;
+    }
 
     struct LoopScope
     {
         LintLoopHints* pass;
-        AstStat* previous;
 
         LoopScope(LintLoopHints* pass, AstStat* loop)
             : pass(pass)
-            , previous(pass->loop)
         {
-            pass->loop = loop;
+            pass->loops.push_back(loop);
         }
 
         ~LoopScope()
         {
-            pass->loop = previous;
+            pass->loops.pop_back();
         }
     };
 
@@ -4851,31 +4867,104 @@ private:
     // A function's body runs when it's called, not once per iteration of a loop it's written in
     bool visit(AstExprFunction* node) override
     {
-        LoopScope scope{this, nullptr};
+        std::vector<AstStat*> outer;
+        outer.swap(loops);
+        bool outerInFunction = inFunction;
+        inFunction = true;
         node->body->visit(this);
+        inFunction = outerInFunction;
+        loops.swap(outer);
         return false;
     }
 
-    // Whether `target` lives across the loop's iterations: a local declared before the loop, or anything that isn't
-    // a local
-    bool outlivesLoop(AstExpr* target) const
+    // The binding a target is reached through: `s` for `s` and `s.parts.text`
+    static AstLocal* rootLocal(AstExpr* target)
+    {
+        target = unparenthesized(target);
+        while (true)
+        {
+            if (AstExprIndexName* index = target->as<AstExprIndexName>())
+                target = unparenthesized(index->expr);
+            else if (AstExprIndexExpr* index = target->as<AstExprIndexExpr>())
+                target = unparenthesized(index->expr);
+            else
+                break;
+        }
+
+        AstExprLocal* local = target->as<AstExprLocal>();
+        return local ? local->local : nullptr;
+    }
+
+    // `@[nolint(code)]` (or `@[nolint(OptimizationHint)]`, which each of these lints is part of) over the target's
+    // `local` turns the warning off for that binding wherever it's used
+    bool silencedByBinding(AstExpr* target, LintWarning::Code code) const
+    {
+        AstLocal* local = rootLocal(target);
+        const uint64_t* mask = local ? context->bindingNolints.find(local) : nullptr;
+        return mask && (*mask & ((1ull << code) | (1ull << LintWarning::Code_OptimizationHint))) != 0;
+    }
+
+    // The last line of the help: where `@[nolint(name)]` would silence this
+    std::string silenceHint(AstExpr* target, const char* name) const
+    {
+        AstLocal* local = rootLocal(target);
+        if (local && declaredLocals.contains(local))
+            return format("  - Add '@[nolint(%s)]' over '%s' to silence", name, local->name.value);
+        if (inFunction)
+            return format("  - Add '@[nolint(%s)]' over the function to silence", name);
+        return format("  - Add '--!nolint %s' to the top of the file to silence", name);
+    }
+
+    // Whether `target` lives across `loop`'s iterations: a local declared before the loop, or anything that isn't a
+    // local
+    static bool outlives(AstExpr* target, AstStat* loop)
     {
         AstExprLocal* local = unparenthesized(target)->as<AstExprLocal>();
         return !local || local->local->location.begin < loop->location.begin;
     }
 
+    bool outlivesInnermostLoop(AstExpr* target) const
+    {
+        return !loops.empty() && outlives(target, loops.back());
+    }
+
+    // The total cost of repeating the work on `target` throughout the loop nest, as `O(n²)`. A loop that `target`
+    // outlives lets it grow across its iterations, so it adds 2 to the exponent: n more repetitions, each on something
+    // n times bigger. A loop that declares `target` inside starts it over each iteration, so it only repeats the work
+    // and adds 1. `s ..= x` is O(n²) in one loop and O(n⁴) in two, or O(n³) when `s` is declared between them.
+    std::string cost(AstExpr* target) const
+    {
+        int exponent = 0;
+        for (AstStat* loop : loops)
+            exponent += outlives(target, loop) ? 2 : 1;
+
+        static const char* const superscripts[] = {"⁰", "¹", "²", "³", "⁴", "⁵", "⁶", "⁷", "⁸", "⁹"};
+
+        std::string power;
+        if (exponent != 1)
+            for (char digit : std::to_string(exponent))
+                power += superscripts[digit - '0'];
+
+        return "O(n" + power + ")";
+    }
+
     void reportConcat(AstExpr* target, const Location& location)
     {
-        if (!concat || !loop || !outlivesLoop(target))
+        if (!concat || !outlivesInnermostLoop(target) || silencedByBinding(target, LintWarning::Code_LoopConcat))
             return;
 
         emitWarning(
             *context,
             LintWarning::Code_LoopConcat,
             location,
-            "Appending to %s in a loop copies the whole string every time, which gets slow as it grows; collect the pieces in a "
-            "table and 'table.concat' them once, or write them into a 'buffer'",
-            describe(target, "a string").c_str()
+            "Appending to %s in a loop is %s because it copies the string every iteration\n\n"
+            "Help (expensive loop concat):\n"
+            "  - Consider building an array of strings and 'table.concat' when finished\n"
+            "  - If size is known up front, use a `buffer` instead\n"
+            "%s",
+            describe(target, "a string").c_str(),
+            cost(target).c_str(),
+            silenceHint(target, "LoopConcat").c_str()
         );
     }
 
@@ -4907,7 +4996,7 @@ private:
 
     bool visit(AstExprCall* node) override
     {
-        if (!loop || node->self)
+        if (loops.empty() || node->self)
             return true;
 
         AstExprIndexName* function = node->func->as<AstExprIndexName>();
@@ -4916,26 +5005,36 @@ private:
             return true;
 
         AstExpr* target = node->args.data[0];
-        if (!outlivesLoop(target) || !isConstantOne(node->args.data[1]))
+        if (!outlivesInnermostLoop(target) || !isConstantOne(node->args.data[1]))
             return true;
 
-        if (tableInsert && function->index == "insert" && node->args.size == 3)
+        if (tableInsert && function->index == "insert" && node->args.size == 3 &&
+            !silencedByBinding(target, LintWarning::Code_InefficientTableInsert))
             emitWarning(
                 *context,
                 LintWarning::Code_InefficientTableInsert,
                 node->location,
-                "Inserting at the front of %s in a loop moves every element each time, which gets slow as it grows; append "
-                "instead and iterate it in reverse, or reverse it once afterwards",
-                describe(target, "the table").c_str()
+                "Inserting at the front of %s in a loop is %s because it moves every element every iteration\n\n"
+                "Help (expensive loop insert):\n"
+                "  - Consider appending instead and iterating in reverse, or reversing once when done\n"
+                "%s",
+                describe(target, "the table").c_str(),
+                cost(target).c_str(),
+                silenceHint(target, "InefficientTableInsert").c_str()
             );
-        else if (tableRemove && function->index == "remove" && node->args.size == 2)
+        else if (tableRemove && function->index == "remove" && node->args.size == 2 &&
+                 !silencedByBinding(target, LintWarning::Code_InefficientTableRemove))
             emitWarning(
                 *context,
                 LintWarning::Code_InefficientTableRemove,
                 node->location,
-                "Removing the first element of %s in a loop moves every other element each time, which gets slow as it grows; "
-                "read from a head index instead ('local item = queue[head]; head += 1')",
-                describe(target, "the table").c_str()
+                "Removing the first element of %s in a loop is %s because it moves every other element every iteration\n\n"
+                "Help (expensive loop remove):\n"
+                "  - Consider reading from a head index instead (`local item = queue[head]; head += 1`)\n"
+                "%s",
+                describe(target, "the table").c_str(),
+                cost(target).c_str(),
+                silenceHint(target, "InefficientTableRemove").c_str()
             );
 
         return true;
@@ -6465,7 +6564,7 @@ private:
             *context,
             LintWarning::Code_ConstLocal,
             node->vars.data[0]->location,
-            "%s %s never reassigned, so this can be 'const' instead of 'local'",
+            "%s %s immutable and can be marked 'const'",
             names.c_str(),
             verb
         );
@@ -6481,7 +6580,7 @@ private:
             *context,
             LintWarning::Code_ConstLocal,
             node->name->location,
-            "'%s' is never reassigned, so this can be 'const function' instead of 'local function'",
+            "'%s' should be a 'const function'",
             node->name->name.value
         );
         return true;
@@ -6623,15 +6722,30 @@ private:
         return mask;
     }
 
-    void addScopes(const AstArray<AstAttr*>& attributes, const Location& range)
+    void addScopes(const AstArray<AstAttr*>& attributes, const Location& range, const AstArray<AstLocal*>* bindings = nullptr)
     {
         for (AstAttr* attr : attributes)
         {
             if (attr->type == AstAttr::Type::Nolint)
-                scopes.push_back(LintScope{range, 0, maskOf(attr)});
+            {
+                uint64_t mask = maskOf(attr);
+                scopes.push_back(LintScope{range, 0, mask});
+
+                if (bindings)
+                    for (AstLocal* local : *bindings)
+                        context->bindingNolints[local] |= mask;
+            }
             else if (attr->type == AstAttr::Type::Lint)
                 scopes.push_back(LintScope{range, maskOf(attr), 0});
         }
+    }
+
+    // A `local` or `const`: the declaration itself, and the bindings wherever a lint reports their use (see
+    // LintContext::bindingNolints)
+    bool visit(AstStatLocal* node) override
+    {
+        addScopes(node->attributes, node->location, &node->vars);
+        return true;
     }
 
     bool visit(AstExprFunction* node) override

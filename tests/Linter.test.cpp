@@ -3638,6 +3638,91 @@ return f
     CHECK_EQ(0, countWarnings(noHints, LintWarning::Code_InefficientTableRemove));
 }
 
+TEST_CASE_FIXTURE(BuiltinsFixture, "OptimizationHintLoopPartsAreSilencedOverTheBinding")
+{
+    ScopedFastFlag attributes{FFlag::LuwuAttributesEverywhere, true};
+
+    LintResult result = lint(R"(
+local function f(lines: { string }, queue: { number })
+    @[nolint(LoopConcat)]
+    local quiet = ""
+    @[nolint(OptimizationHint)]
+    const state = { text = "", queue = {} }
+    local loud = ""
+    for _, line in lines do
+        quiet ..= line
+        state.text ..= line
+        table.remove(state.queue, 1)
+        loud ..= line
+    end
+    return quiet, state, loud
+end
+
+return f
+)");
+
+    // only `loud` is reported, and the help names the binding to put the attribute over
+    REQUIRE_EQ(result.warnings.size(), 1);
+    CHECK_EQ(result.warnings[0].code, LintWarning::Code_LoopConcat);
+    CHECK(result.warnings[0].text.find("'loud' in a loop is O(n²)") != std::string::npos);
+    CHECK(result.warnings[0].text.find("  - Add '@[nolint(LoopConcat)]' over 'loud' to silence") != std::string::npos);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "OptimizationHintLoopPartsGiveTheCostOfTheLoopNest")
+{
+    LintResult result = lint(R"(
+local function f(rows: { { string } }, queue: { number })
+    local all = ""
+    for _, row in rows do
+        local line = ""
+        for _, cell in row do
+            all ..= cell
+            line ..= cell
+            table.remove(queue, 1)
+        end
+        all ..= "\n"
+    end
+    for _ = 1, 10 do
+        for _ = 1, 10 do
+            for _ = 1, 10 do
+                for _ = 1, 10 do
+                    for _ = 1, 10 do
+                        all ..= "."
+                    end
+                end
+            end
+        end
+    end
+    return all
+end
+
+return f
+)");
+
+    REQUIRE_EQ(result.warnings.size(), 5);
+
+    // outlives both loops: n² cells, each copying a string n² long
+    CHECK_EQ(
+        result.warnings[0].text,
+        "Appending to 'all' in a loop is O(n⁴) because it copies the string every iteration\n\n"
+        "Help (expensive loop concat):\n"
+        "  - Consider building an array of strings and 'table.concat' when finished\n"
+        "  - If size is known up front, use a `buffer` instead\n"
+        "  - Add '@[nolint(LoopConcat)]' over 'all' to silence"
+    );
+    // declared in the outer loop, so it starts over every row
+    CHECK(result.warnings[1].text.find("'line' in a loop is O(n³)") != std::string::npos);
+    CHECK_EQ(
+        result.warnings[2].text,
+        "Removing the first element of 'queue' in a loop is O(n⁴) because it moves every other element every iteration\n\n"
+        "Help (expensive loop remove):\n"
+        "  - Consider reading from a head index instead (`local item = queue[head]; head += 1`)\n"
+        "  - Add '@[nolint(InefficientTableRemove)]' over the function to silence"
+    );
+    CHECK(result.warnings[3].text.find("'all' in a loop is O(n²)") != std::string::npos);
+    CHECK(result.warnings[4].text.find("'all' in a loop is O(n¹⁰)") != std::string::npos);
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "LintAttributesScopeWarnings")
 {
     ScopedFastFlag cstAttr{FFlag::LuauCstAttr, true};
@@ -4103,9 +4188,9 @@ return f, c, d
     // `--!lint ConstLocal`: everything never reassigned, but not `c` or `h`
     std::vector<LintWarning> found = warningsWithCode(lint("--!lint ConstLocal" + source), LintWarning::Code_ConstLocal);
     REQUIRE(3 == found.size());
-    CHECK_EQ(found[0].text, "'a' and 'b' are never reassigned, so this can be 'const' instead of 'local'");
-    CHECK_EQ(found[1].text, "'f' is never reassigned, so this can be 'const function' instead of 'local function'");
-    CHECK_EQ(found[2].text, "'g' is never reassigned, so this can be 'const' instead of 'local'");
+    CHECK_EQ(found[0].text, "'a' and 'b' are immutable and can be marked 'const'");
+    CHECK_EQ(found[1].text, "'f' should be a 'const function'");
+    CHECK_EQ(found[2].text, "'g' is immutable and can be marked 'const'");
 
     // `--!nolint` wins over `--!lint`
     CHECK(warningsWithCode(lint("--!lint ConstLocal\n--!nolint ConstLocal" + source), LintWarning::Code_ConstLocal).empty());

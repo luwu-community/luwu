@@ -251,17 +251,19 @@ static bool takesNameArguments(const char* attributeName)
 // The fields deprecatedArgsValidator accepts.
 const char* const kDeprecatedArgumentFields[] = {"use", "reason", nullptr};
 
-// Luwu: where `@[nolint]` and `@[lint]` may be written: anything with a body whose warnings they scope
+// Luwu: where `@[nolint]` and `@[lint]` may be written: anything with a body whose warnings they scope, and a `local`
+// or `const`, whose bindings they cover wherever a lint reports their use
 const AstAttr::Context kLintScopeContexts = AstAttr::Context(
-    unsigned(AstAttr::Context::AnyFunction) | unsigned(AstAttr::Context::Class) | unsigned(AstAttr::Context::ClassField)
+    unsigned(AstAttr::Context::AnyFunction) | unsigned(AstAttr::Context::Class) | unsigned(AstAttr::Context::ClassField) |
+    unsigned(AstAttr::Context::Local)
 );
 
 AttributeEntry kAttributeEntries[] = {
     {"checked", AstAttr::Type::Checked, AstAttr::Context::AnyFunction, "functions", nullptr, {}},
     {"native", AstAttr::Type::Native, AstAttr::Context::AnyFunction, "functions", nullptr, {}},
     {"deprecated", AstAttr::Type::Deprecated, AstAttr::Context::Any, nullptr, kDeprecatedArgumentFields, deprecatedArgsValidator},
-    {"nolint", AstAttr::Type::Nolint, kLintScopeContexts, "functions, classes and class fields", nullptr, lintNamesArgsValidator},
-    {"lint", AstAttr::Type::Lint, kLintScopeContexts, "functions, classes and class fields", nullptr, lintOnArgsValidator},
+    {"nolint", AstAttr::Type::Nolint, kLintScopeContexts, "functions, classes, class fields and locals", nullptr, lintNamesArgsValidator},
+    {"lint", AstAttr::Type::Lint, kLintScopeContexts, "functions, classes, class fields and locals", nullptr, lintOnArgsValidator},
     {"nodiscard", AstAttr::Type::Nodiscard, AstAttr::Context::AnyFunction, "functions", nullptr, nodiscardArgsValidator},
     {nullptr, AstAttr::Type::Checked, AstAttr::Context::None, nullptr, nullptr, {}}
 };
