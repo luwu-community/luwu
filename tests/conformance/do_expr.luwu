@@ -1,0 +1,630 @@
+-- This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
+print("testing do expressions")
+
+-- a do expression evaluates to what its give gives; a give in a nested block leaves early
+do
+    local function temp(os)
+        return do
+            if os == "Windows" then
+                give "C:/Temp"
+            end
+            give "/tmp"
+    end
+    assert(temp("Windows") == "C:/Temp")
+    assert(temp("Linux") == "/tmp")
+
+    -- the give expression sees the block's locals
+    const v = do
+        local a = 1
+        local b = a + 1
+        give a + b
+    assert(v == 3)
+
+    -- nested do expressions, and a do expression as an operand
+    const n = do
+        local a = do give 1
+        give a + do give 2
+    assert(n == 3)
+
+    -- in call arguments, table constructors, indexing, conditions and interpolation
+    local function add(a, b, c)
+        return a + b + c
+    end
+    assert(add(1, do give 2, 3) == 6)
+    local t = { 1, do give 2, x = do give "x" }
+    assert(t[2] == 2 and t.x == "x")
+    assert(({ 10, 20, 30 })[do give 2] == 20)
+    if do give false then
+        error("unreachable")
+    end
+    assert(`a{do give 1}b` == "a1b")
+
+    -- called and indexed through parentheses
+    assert((do give function() return 5 end)() == 5)
+    assert((do give { k = 7 }).k == 7)
+
+    -- `then do` in an if expression
+    const w = if v == 3 then do local y = 2 give y * 3 else 0
+    assert(w == 6)
+
+    -- give exactly one value: a second variable gets nil, and a comma after the value belongs to the list around the
+    -- expression, the same as after `x or return v`
+    local p, q = do give 1
+    assert(p == 1 and q == nil)
+    p, q = do give 1, 2
+    assert(p == 1 and q == 2)
+end
+
+-- give out of loops, with locals captured by closures closed correctly
+do
+    local fns = {}
+    const found = do
+        for i = 1, 10 do
+            local captured = i * 2
+            table.insert(fns, function()
+                return captured
+            end)
+            if i == 3 then
+                give captured
+            end
+        end
+        give -1
+    assert(found == 6)
+    assert(fns[1]() == 2 and fns[2]() == 4 and fns[3]() == 6)
+
+    -- a written local captured inside the block, then given out of a while loop
+    local counter
+    const out = do
+        local x = 0
+        counter = function()
+            x += 1
+            return x
+        end
+        while true do
+            x += 10
+            if x > 25 then
+                give x
+            end
+        end
+        -- never reached, but the block has to end in a terminator: the parser can't know the loop never finishes
+        give error("unreachable")
+    assert(out == 30)
+    assert(counter() == 31 and counter() == 32)
+end
+
+-- return from inside an expression, with any number of values
+do
+    local function f(x)
+        const thing = x or do return "early"
+        return "got " .. thing
+    end
+    assert(f(nil) == "early" and f(5) == "got 5")
+
+    local function g(x)
+        const thing = x or return "early"
+        return "got " .. thing
+    end
+    assert(g(false) == "early" and g(6) == "got 6")
+
+    local function h(x)
+        local a, b = x or (return "multi", "values")
+        return a, b
+    end
+    local a, b = h(nil)
+    assert(a == "multi" and b == "values")
+    a, b = h(7)
+    assert(a == 7 and b == nil)
+
+    local function k(x)
+        local v = x or (do return)
+        return v
+    end
+    assert(select("#", k(nil)) == 0 and k(3) == 3)
+
+    -- an unparenthesized `or return` takes one value; the comma belongs to the local
+    local function m(x)
+        local c, d = x or return "one", "two"
+        return c, d
+    end
+    assert(m(nil) == "one")
+    local c, d = m(1)
+    assert(c == 1 and d == "two")
+
+    -- return from a do expression in the middle of a call's arguments
+    local function n(x)
+        local function sum(...)
+            local s = 0
+            for _, v in { ... } do
+                s += v
+            end
+            return s
+        end
+        return sum(1, 2, do if x then return "left early" end give 3, 4)
+    end
+    assert(n(true) == "left early" and n(false) == 10)
+end
+
+-- return from a do expression inside a function that gets inlined
+do
+    local function pick(x)
+        local v = x or return "none"
+        return v * 2
+    end
+    local function pick2(x)
+        const v = do
+            if x == nil then
+                return "nil"
+            end
+            give x + 1
+        return v
+    end
+    local results = {}
+    for i = 1, 3 do
+        table.insert(results, pick(if i == 2 then nil else i))
+        table.insert(results, pick2(if i == 3 then nil else i))
+    end
+    assert(table.concat(results, ",") == "2,2,none,3,6,nil")
+end
+
+-- break and continue from inside an expression, with the side effects before them kept
+do
+    local log = {}
+    local function note(v)
+        table.insert(log, v)
+        return v
+    end
+    local function three(a, b, c)
+        return a + b + c
+    end
+
+    local sum = 0
+    for i = 1, 6 do
+        sum += three(note(i), do if i % 2 == 0 then continue end give 0, note(-i))
+        if i == 5 then
+            local _ = nil or break
+        end
+    end
+    assert(sum == 0)
+    assert(table.concat(log, ",") == "1,-1,2,3,-3,4,5,-5")
+
+    -- break out of the middle of a table constructor
+    local built
+    for i = 1, 3 do
+        built = { "a", "b", do if i == 2 then break end give "c" }
+    end
+    assert(#built == 3)
+
+    -- `x or break` and `x or do continue`
+    local seen = {}
+    for _, v in { 1, false, 3, nil, 5 } do
+        local x = v or do continue
+        if x == 5 then
+            local _ = nil or break
+        end
+        table.insert(seen, x)
+    end
+    assert(table.concat(seen, ",") == "1,3")
+end
+
+-- break and continue in a loop's header belong to the enclosing loop
+do
+    -- while condition
+    local log = {}
+    for outer = 1, 3 do
+        local n = 0
+        while do
+            n += 1
+            if outer == 2 and n == 2 then
+                break
+            end
+            give n < 4
+        do
+            table.insert(log, `{outer}:{n}`)
+        end
+    end
+    assert(table.concat(log, " ") == "1:1 1:2 1:3 2:1")
+
+    -- until condition
+    log = {}
+    for outer = 1, 3 do
+        local n = 0
+        repeat
+            n += 1
+            table.insert(log, `{outer}:{n}`)
+        until do
+            if outer == 2 then
+                continue
+            end
+            give n >= 2
+    end
+    assert(table.concat(log, " ") == "1:1 1:2 2:1 3:1 3:2")
+
+    -- numeric for bounds
+    log = {}
+    for outer = 1, 3 do
+        for i = 1, do if outer == 2 then break end give 2 do
+            table.insert(log, `{outer}:{i}`)
+        end
+    end
+    assert(table.concat(log, " ") == "1:1 1:2")
+
+    -- for-in values
+    log = {}
+    for outer = 1, 3 do
+        for _, v in do if outer == 2 then continue end give { outer } do
+            table.insert(log, v)
+        end
+    end
+    assert(table.concat(log, ",") == "1,3")
+
+    -- a loop inside a header's do expression owns its own break
+    log = {}
+    local n = 0
+    while do
+        for i = 1, 10 do
+            if i == 3 then
+                break
+            end
+            n += 1
+        end
+        give n < 6
+    do
+        table.insert(log, n)
+    end
+    assert(table.concat(log, ",") == "2,4")
+end
+
+-- the target of a give can be a local the block still reads
+do
+    local x = 10
+    x = do
+        local y = x + 1
+        give { x, y }
+    assert(x[1] == 10 and x[2] == 11)
+
+    local z = 1
+    z = do
+        if z == 1 then
+            give z + z * 10
+        end
+        give 0
+    assert(z == 11)
+
+    local s = "a"
+    s = do give s .. s .. do give s
+    assert(s == "aaa")
+end
+
+-- give error(...) raises, and pcall sees it
+do
+    local ok, err = pcall(function()
+        return do
+            if false then
+                give 1
+            end
+            give error("boom")
+    end)
+    assert(not ok and err:find("boom"))
+end
+
+-- none is a value like any other: given, and falsy for `or return`
+do
+    local function f(x)
+        local v = x or return "fell back"
+        return v
+    end
+    assert(f(none) == "fell back")
+    const n = do give none
+    assert(n == none)
+end
+
+-- if local and do expressions together
+do
+    local function find(t, v)
+        return table.find(t, v)
+    end
+    local got
+    if local i = do give find({ 1, 2, 3 }, 2) when local j = do if i < 5 then give i * 10 end give 0 then
+        got = j
+    end
+    assert(got == 20)
+
+    const r = do
+        if local k = find({ 4, 5 }, 5) then
+            give k
+        end
+        give -1
+    assert(r == 2)
+end
+
+-- default values: give works, and a loop inside the do expression owns its break and continue
+do
+    local function f(a = do
+        local s = 0
+        for i = 1, 5 do
+            if i % 2 == 0 then
+                continue
+            end
+            s += i
+        end
+        give s)
+        return a
+    end
+    assert(f() == 9 and f(1) == 1)
+end
+
+-- give and continue are only keywords where a variable would be: fields, keys and nested functions keep them
+do
+    const v = do
+        local t = { give = 1, continue = 2 }
+        t.give += 1
+        local function nested()
+            local give = 10
+            local continue = 20
+            return give + continue
+        end
+        give t.give + t.continue + nested()
+    assert(v == 34)
+
+    -- outside a do expression they are ordinary names
+    local give = 1
+    local function continue()
+        return give + 1
+    end
+    assert(continue() == 2)
+end
+
+-- `then` and `else` arms of an if-else expression can leave: `break`, `return v`, `(return a, b)`, a bare `return` right
+-- before `else`, and `continue` (as its own chunk: this file names `continue`, which keeps `continue` a variable)
+do
+    local function check(x)
+        local v = if x == nil then return "nil" else x * 2
+        local w = if x > 100 then return else x
+        local u = if x < 0 then x else (return "big", "values")
+        return v, w, u
+    end
+    assert(check(nil) == "nil")
+    assert(select("#", check(200)) == 0)
+    local a, b = check(5)
+    assert(a == "big" and b == "values")
+    local v, w, u = check(-3)
+    assert(v == -6 and w == -3 and u == -3)
+
+    local log = {}
+    for i = 1, 10 do
+        local stop = if i > 3 then break else i
+        table.insert(log, stop)
+    end
+    assert(table.concat(log, ",") == "1,2,3")
+
+    const arms = assert(loadstring([[
+        local out = {}
+        for i = 1, 6 do
+            local even = if i % 2 == 1 then continue else i
+            local small = if i < 5 then even else continue
+            table.insert(out, small)
+        end
+        return table.concat(out, ",")
+    ]]))
+    assert(arms() == "2,4")
+end
+
+-- `x or continue` is the continue shorthand in a module that never uses `continue` as a name, and a read of that
+-- variable in one that does (this file does, above, so each case is its own chunk)
+do
+    const shorthand = assert(loadstring(
+        "local out = {} for _, v in { 1, false, 3, nil, 5 } do table.insert(out, tostring(v or continue)) end return table.concat(out, ',')"
+    ))
+    assert(shorthand() == "1,3,5")
+
+    const named_later = assert(loadstring(
+        "local out = {} for _, v in { 1, false, 3 } do table.insert(out, tostring(v or continue)) end local continue = 0 return table.concat(out, ',')"
+    ))
+    assert(named_later() == "1,nil,3")
+
+    const outside_loop = assert(loadstring("local v = nil return tostring(v or continue)"))
+    assert(outside_loop() == "nil")
+end
+
+-- syntax errors are compile errors; nothing in the chunk runs
+do
+    local function compileError(source, expected)
+        local f, err = loadstring("ran = true; " .. source)
+        assert(f == nil, source)
+        assert(err:find(expected, 1, true), err)
+    end
+
+    local mustEnd = "A 'do' expression must end with 'give <value>', 'return', 'break' or 'continue'"
+    compileError("local x = do local y = 1", mustEnd)
+    compileError("local x = do local y = 1 end", "A 'do' expression doesn't end with 'end'")
+    compileError("local x = do give 1 end", "A 'do' expression doesn't end with 'end'")
+    compileError("local x = if a then 1 else 2 end", "An if-else expression doesn't end with 'end'")
+    compileError("local x = f(do local y = 1)", mustEnd)
+    compileError("local x = do if true then give 1 end", mustEnd)
+    compileError("local x = do error('x')", "write 'give error(...)'")
+    compileError("local x = 1 or do return", "must be parenthesized, '(do return)'")
+    compileError("local x = 1 or return", "must be parenthesized, 'or (return)'")
+    compileError("local x = do if true then give 1, 2 end give 3", "'give' gives exactly one value")
+    compileError("local x = do give", "Expected a value after 'give'")
+    compileError("local x = do local give = 1 give give", "'give' is a keyword inside a 'do' expression")
+    compileError("local x = do give.x = 1 give 1", "'give' is a keyword inside a 'do' expression")
+    compileError("local x = do local continue = 1 give 1", "'continue' is a keyword inside a 'do' expression")
+    compileError("local x = do continue", "continue statement must be inside a loop")
+    compileError("local x = nil or break", "break statement must be inside a loop")
+    compileError("local function f(a = do return 1) end", "A default value can't 'return'")
+    compileError("local function f(a = nil or return 1) end", "A default value can't 'return'")
+    compileError("local function f(a = do break) end", "break statement must be inside a loop")
+    compileError("for i = 1, 2 do local function f(a = do break) end end", "break statement must be inside a loop")
+    assert(ran == nil)
+end
+
+-- coroutine.yield anywhere in a do expression
+do
+    local co = coroutine.wrap(function()
+        const a = do
+            local x = coroutine.yield("first")
+            for i = 1, 3 do
+                if coroutine.yield(`loop {i}`) then
+                    give x + i
+                end
+            end
+            give -1
+        local b = coroutine.yield("before or") or return "returned"
+        return a, b
+    end)
+
+    assert(co() == "first")
+    assert(co(100) == "loop 1")
+    assert(co(false) == "loop 2")
+    assert(co(true) == "before or")
+    local r1, r2 = co(nil)
+    assert(r1 == "returned" and r2 == nil)
+
+    -- a yield inside a while condition's do expression, which breaks the enclosing loop
+    local co2 = coroutine.wrap(function()
+        local log = {}
+        for outer = 1, 3 do
+            local n = 0
+            while do
+                n += 1
+                if coroutine.yield(`{outer}:{n}`) then
+                    break
+                end
+                give n < 2
+            do
+                table.insert(log, `{outer}:{n}`)
+            end
+        end
+        return table.concat(log, " ")
+    end)
+
+    assert(co2() == "1:1")
+    assert(co2(false) == "1:2")
+    -- the break leaves the `for`, so the function returns what it logged so far
+    assert(co2(true) == "1:1")
+end
+
+-- register pressure: a do expression's locals and temporaries on top of many locals
+do
+    IFDO_ID = function(v)
+        return v
+    end
+
+    local function source(outer, inner)
+        local parts = {}
+        for i = 1, outer do
+            table.insert(parts, `local r{i} = IFDO_ID({i})`)
+        end
+        local body = {}
+        for i = 1, inner do
+            table.insert(body, `local d{i} = IFDO_ID({i})`)
+        end
+        local sum = { "0" }
+        for i = 1, inner do
+            table.insert(sum, `d{i}`)
+        end
+        -- the sum is accumulated one local at a time so the expression itself needs few registers
+        local acc = {}
+        for i = 1, inner do
+            table.insert(acc, `s += d{i}`)
+        end
+        table.insert(parts, `local v = do {table.concat(body, " ")} local s = 0 {table.concat(acc, " ")} give s`)
+        table.insert(parts, "return v")
+        return table.concat(parts, "\n")
+    end
+
+    local function sumTo(n)
+        return n * (n + 1) // 2
+    end
+
+    -- `v` becomes a local only after its initializer, so the block sees 150 locals and adds 49 plus its accumulator:
+    -- exactly the limit of 200
+    local f = assert(loadstring(source(150, 49)))
+    assert(f() == sumTo(49))
+
+    -- one more is over the local limit
+    local _, err = loadstring(source(150, 50))
+    assert(err and err:find("Out of local registers", 1, true), err)
+
+    -- deeply nested do expressions
+    local nested = "1"
+    for _ = 1, 60 do
+        nested = `do local x = {nested} give x + 1`
+    end
+    f = assert(loadstring(`return {nested}`))
+    assert(f() == 61)
+
+    -- many gives in one block
+    local gives = {}
+    for i = 1, 300 do
+        table.insert(gives, `if n == {i} then give {i * 2} end`)
+    end
+    f = assert(loadstring(`local n = ... return do {table.concat(gives, " ")} give -1`))
+    assert(f(1) == 2 and f(150) == 300 and f(300) == 600 and f(301) == -1)
+
+    IFDO_ID = nil
+end
+
+-- garbage collection: a do expression's locals are collectable once its frame is gone, captured ones once their
+-- closures are, and repeated do expressions don't leak
+do
+    local weak = setmetatable({}, { __mode = "v" })
+
+    local function useAndLeave()
+        const v = do
+            local t = { "inner" }
+            weak.t = t
+            collectgarbage("collect")
+            assert(weak.t == t)
+            give #t
+        weak.given = do give { "given" }
+        return v
+    end
+
+    assert(useAndLeave() == 1)
+    collectgarbage("collect")
+    assert(weak.t == nil and weak.given == nil)
+
+    local saved
+    local function captureAndGive()
+        return do
+            local c = { "captured" }
+            weak.c = c
+            saved = function()
+                return c
+            end
+            c = c
+            give 1
+    end
+
+    captureAndGive()
+    local _ = { "clobber" }
+    collectgarbage("collect")
+    assert(weak.c ~= nil and saved()[1] == "captured")
+    saved = nil
+    collectgarbage("collect")
+    assert(weak.c == nil)
+
+    local function churn(n)
+        local total = 0
+        for i = 1, n do
+            total += do
+                local t = table.create(16, i)
+                if i % 2 == 0 then
+                    give #t
+                end
+                give 0
+            local _ = i or do continue
+        end
+        return total
+    end
+
+    collectgarbage("collect")
+    local before = collectgarbage("count")
+    assert(churn(50000) == 25000 * 16)
+    collectgarbage("collect")
+    local after = collectgarbage("count")
+    assert(after - before < 64, `grew by {after - before}KB`)
+end
+
+return "OK"

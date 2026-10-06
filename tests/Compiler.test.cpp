@@ -23,6 +23,8 @@ LUAU_FASTINT(LuauCompileInlineThresholdMaxBoost)
 LUAU_FASTINT(LuauCompileLoopUnrollThreshold)
 LUAU_FASTINT(LuauCompileLoopUnrollThresholdMaxBoost)
 LUAU_FASTINT(LuauRecursionLimit)
+LUAU_FASTFLAG(LuwuIfLocal)
+LUAU_FASTFLAG(DebugLuwuDoExpr)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuauIntegerFastcalls)
 LUAU_FASTFLAG(LuauCompileIifeInline)
@@ -1455,6 +1457,239 @@ JUMPIF R0 L2
 L1: GETIMPORT R0 13 [Enum.Material.Sandstone]
 L2: RETURN R0 1
 )");
+}
+
+TEST_CASE("IfLocal")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    // one register and one JUMPIFNOT per binding; a plain clause is an ordinary condition
+    CHECK_EQ("\n" + compileFunction0(R"(
+if local a = f() when a > 1 when local b = g(a) then
+    h(a, b)
+end
+)"), R"(
+GETIMPORT R0 1 [f]
+CALL R0 0 1
+JUMPIFNOT R0 L0
+LOADN R1 1
+JUMPIFNOTLT R1 R0 L0
+GETIMPORT R1 3 [g]
+MOVE R2 R0
+CALL R1 1 1
+JUMPIFNOT R1 L0
+GETIMPORT R2 5 [h]
+MOVE R3 R0
+MOVE R4 R1
+CALL R2 2 0
+L0: RETURN R0 0
+)");
+
+    // the expression form
+    CHECK_EQ("\n" + compileFunction0("return if local a = f() then a else 0"), R"(
+GETIMPORT R1 1 [f]
+CALL R1 0 1
+JUMPIFNOT R1 L0
+MOVE R0 R1
+RETURN R0 1
+L0: LOADN R0 0
+RETURN R0 1
+)");
+
+    // a constant first clause doesn't decide the chain
+    CHECK_EQ("\n" + compileFunction0("return if local a = 1 when f() then a else 0"), R"(
+LOADN R1 1
+JUMPIFNOT R1 L0
+GETIMPORT R2 1 [f]
+CALL R2 0 1
+JUMPIFNOT R2 L0
+LOADN R0 1
+RETURN R0 1
+L0: LOADN R0 0
+RETURN R0 1
+)");
+
+    // a later clause captured an earlier binding that is written: the else path closes it too
+    CHECK_EQ("\n" + compileFunction(R"(
+if local a = f() when g(function() a = nil end) then
+    h(a)
+else
+    h()
+end
+)", 1), R"(
+GETIMPORT R0 1 [f]
+CALL R0 0 1
+JUMPIFNOT R0 L0
+GETIMPORT R1 3 [g]
+NEWCLOSURE R2 P0
+CAPTURE REF R0
+CALL R1 1 1
+JUMPIFNOT R1 L0
+GETIMPORT R1 5 [h]
+MOVE R2 R0
+CALL R1 1 0
+CLOSEUPVALS R0
+RETURN R0 0
+L0: CLOSEUPVALS R0
+GETIMPORT R0 5 [h]
+CALL R0 0 0
+RETURN R0 0
+)");
+
+    // with no else branch, the branch falls into the else path's CLOSEUPVALS instead of closing on its own
+    CHECK_EQ("\n" + compileFunction(R"(
+if local a = f() when g(function() a = nil end) then
+    h(a)
+end
+)", 1), R"(
+GETIMPORT R0 1 [f]
+CALL R0 0 1
+JUMPIFNOT R0 L0
+GETIMPORT R1 3 [g]
+NEWCLOSURE R2 P0
+CAPTURE REF R0
+CALL R1 1 1
+JUMPIFNOT R1 L0
+GETIMPORT R1 5 [h]
+MOVE R2 R0
+CALL R1 1 0
+L0: CLOSEUPVALS R0
+RETURN R0 0
+)");
+}
+
+TEST_CASE("DoExpression")
+{
+    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+
+    // each give compiles into the target and jumps to the end; the block's own locals are registers above it
+    CHECK_EQ("\n" + compileFunction0(R"(
+local x = do
+    local a = f()
+    if a then
+        give a
+    end
+    give 2
+g(x)
+)"), R"(
+GETIMPORT R1 1 [f]
+CALL R1 0 1
+JUMPIFNOT R1 L0
+MOVE R0 R1
+JUMP L1
+L0: LOADN R0 2
+L1: GETIMPORT R1 3 [g]
+MOVE R2 R0
+CALL R1 1 0
+RETURN R0 0
+)");
+
+    // a give out of a loop closes the captured locals first
+    CHECK_EQ("\n" + compileFunction(R"(
+local x = do
+    for i = 1, 3 do
+        local c = i
+        h(function() c = nil end)
+        if c then
+            give c
+        end
+    end
+    give 0
+g(x)
+)", 1), R"(
+LOADN R3 1
+LOADN R1 3
+LOADN R2 1
+FORNPREP R1 L2
+L0: MOVE R4 R3
+GETIMPORT R5 1 [h]
+NEWCLOSURE R6 P0
+CAPTURE REF R4
+CALL R5 1 0
+JUMPIFNOT R4 L1
+MOVE R0 R4
+CLOSEUPVALS R4
+JUMP L3
+L1: CLOSEUPVALS R4
+FORNLOOP R1 L0
+L2: LOADN R0 0
+L3: GETIMPORT R1 3 [g]
+MOVE R2 R0
+CALL R1 1 0
+RETURN R0 0
+)");
+
+    // a break in a while condition jumps out of the enclosing loop, not the while
+    CHECK_EQ("\n" + compileFunction0(R"(
+for i = 1, 2 do
+    while do if f() then break end give g() do
+        h()
+    end
+end
+)"), R"(
+LOADN R2 1
+LOADN R0 2
+LOADN R1 1
+FORNPREP R0 L2
+L0: GETIMPORT R4 1 [f]
+CALL R4 0 1
+JUMPIF R4 L2
+GETIMPORT R3 3 [g]
+CALL R3 0 1
+JUMPIFNOT R3 L1
+GETIMPORT R3 5 [h]
+CALL R3 0 0
+JUMPBACK L0
+L1: FORNLOOP R0 L0
+L2: RETURN R0 0
+)");
+}
+
+// A do expression isn't a function that gets inlined: its block always compiles in place, at every optimization level,
+// whatever its size, nesting or the register pressure around it. Nothing here may create a closure or a call.
+TEST_CASE("DoExpressionAlwaysCompilesInPlace")
+{
+    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+
+    auto compileAll = [](const std::string& source, int optimizationLevel)
+    {
+        Luau::BytecodeBuilder bcb;
+        bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code);
+        Luau::CompileOptions options;
+        options.optimizationLevel = optimizationLevel;
+        Luau::compileOrThrow(bcb, source, options);
+        return bcb.dumpEverything();
+    };
+
+    // far past any inlining cost threshold
+    std::string big = "local s = 0\nlocal x = do\n";
+    for (int i = 0; i < 300; ++i)
+        big += "    s += " + std::to_string(i) + "\n";
+    big += "    give s\nreturn x\n";
+
+    // nested deeper than inlining's depth limit
+    std::string nested = "1";
+    for (int i = 0; i < 40; ++i)
+        nested = "do local v = " + nested + " give v + 1";
+    nested = "return " + nested + "\n";
+
+    // with more registers live than inlining allows (it refuses above 128)
+    std::string pressure = "local t = {}\n";
+    for (int i = 0; i < 150; ++i)
+        pressure += "local r" + std::to_string(i) + " = t[" + std::to_string(i + 1) + "]\n";
+    pressure += "return do local a = r0 give a + r149\n";
+
+    for (const std::string& source : {big, nested, pressure})
+    {
+        for (int level = 0; level <= 2; ++level)
+        {
+            INFO(level);
+            std::string dump = compileAll(source, level);
+            CHECK(dump.find("Function 1") == std::string::npos);
+            CHECK(dump.find("CLOSURE") == std::string::npos);
+            CHECK(dump.find("CALL") == std::string::npos);
+        }
+    }
 }
 
 TEST_CASE("IfElseExpression")

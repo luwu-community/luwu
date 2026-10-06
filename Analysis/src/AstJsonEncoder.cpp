@@ -550,6 +550,20 @@ struct AstJsonEncoder : public AstVisitor
         writeRaw("}");
     }
 
+    // Luwu If Local (rfcs/if-local.md)
+    void write(const AstIfClause& clause)
+    {
+        writeRaw("{");
+        bool c = pushComma();
+        writeType("AstIfClause");
+        if (clause.declaration)
+            write("declaration", clause.declaration);
+        else
+            write("expr", clause.expr);
+        popComma(c);
+        writeRaw("}");
+    }
+
     void write(class AstExprIfElse* node)
     {
         writeNode(
@@ -558,6 +572,8 @@ struct AstJsonEncoder : public AstVisitor
             [&]()
             {
                 PROP(condition);
+                if (node->clauses.size != 0)
+                    PROP(clauses);
                 PROP(hasThen);
                 PROP(trueExpr);
                 PROP(hasElse);
@@ -731,6 +747,8 @@ struct AstJsonEncoder : public AstVisitor
             [&]()
             {
                 PROP(condition);
+                if (node->clauses.size != 0)
+                    PROP(clauses);
                 PROP(thenbody);
                 if (node->elsebody)
                     PROP(elsebody);
@@ -774,6 +792,32 @@ struct AstJsonEncoder : public AstVisitor
     void write(class AstStatContinue* node)
     {
         writeNode(node, "AstStatContinue", []() {});
+    }
+
+    // Luwu Do Expressions (rfcs/do-expressions.md)
+    void write(class AstStatGive* node)
+    {
+        writeNode(
+            node,
+            "AstStatGive",
+            [&]()
+            {
+                PROP(value);
+            }
+        );
+    }
+
+    void write(class AstExprDo* node)
+    {
+        writeNode(
+            node,
+            "AstExprDo",
+            [&]()
+            {
+                PROP(body);
+                PROP(shorthand);
+            }
+        );
     }
 
     void write(class AstStatReturn* node)
@@ -1285,6 +1329,12 @@ struct AstJsonEncoder : public AstVisitor
         return false;
     }
 
+    bool visit(class AstExprDo* node) override
+    {
+        write(node);
+        return false;
+    }
+
     bool visit(class AstExprInterpString* node) override
     {
         write(node);
@@ -1394,6 +1444,12 @@ struct AstJsonEncoder : public AstVisitor
     }
 
     bool visit(class AstStatContinue* node) override
+    {
+        write(node);
+        return false;
+    }
+
+    bool visit(class AstStatGive* node) override
     {
         write(node);
         return false;

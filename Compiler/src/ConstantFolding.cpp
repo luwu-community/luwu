@@ -1045,12 +1045,22 @@ struct ConstantVisitor : AstVisitor
         }
         else if (AstExprIfElse* expr = node->as<AstExprIfElse>())
         {
-            Constant cond = analyze(expr->condition);
-            Constant trueExpr = analyze(expr->trueExpr);
-            Constant falseExpr = analyze(expr->falseExpr);
+            // Luwu If Local (rfcs/if-local.md): a `when` chain isn't folded, even when its first clause is constant
+            if (expr->clauses.size != 0)
+            {
+                analyzeIfClauses(expr->clauses);
+                analyze(expr->trueExpr);
+                analyze(expr->falseExpr);
+            }
+            else
+            {
+                Constant cond = analyze(expr->condition);
+                Constant trueExpr = analyze(expr->trueExpr);
+                Constant falseExpr = analyze(expr->falseExpr);
 
-            if (cond.type != Constant::Type_Unknown)
-                result = cond.isTruthful() ? trueExpr : falseExpr;
+                if (cond.type != Constant::Type_Unknown)
+                    result = cond.isTruthful() ? trueExpr : falseExpr;
+            }
         }
         else if (AstExprInterpString* expr = node->as<AstExprInterpString>())
         {
@@ -1065,6 +1075,12 @@ struct ConstantVisitor : AstVisitor
         else if (AstExprInstantiate* expr = node->as<AstExprInstantiate>())
         {
             result = analyze(expr->expr);
+        }
+        else if (AstExprDo* expr = node->as<AstExprDo>())
+        {
+            // Luwu Do Expressions (rfcs/do-expressions.md): the block's statements are folded like any other, and the
+            // expression itself is never a constant
+            expr->body->visit(this);
         }
         else
         {
@@ -1135,6 +1151,19 @@ struct ConstantVisitor : AstVisitor
                 v->constant = (value.type != Constant::Type_Unknown);
                 recordConstant(locals, local, value);
             }
+        }
+    }
+
+    // Luwu If Local (rfcs/if-local.md): a `when` chain inside an expression. analyze() doesn't go through the
+    // visitor, so the declarations are visited here, which records their values the same as any `local`.
+    void analyzeIfClauses(const AstArray<AstIfClause>& clauses)
+    {
+        for (const AstIfClause& clause : clauses)
+        {
+            if (clause.declaration)
+                clause.declaration->visit(this);
+            else
+                analyze(clause.expr);
         }
     }
 

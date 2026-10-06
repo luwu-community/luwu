@@ -204,7 +204,12 @@ struct CostVisitor : AstVisitor
         }
         else if (AstExprIfElse* expr = node->as<AstExprIfElse>())
         {
-            return model(expr->condition) + model(expr->trueExpr) + model(expr->falseExpr) + 2;
+            // Luwu If Local (rfcs/if-local.md): every clause in a `when` chain is evaluated and tested
+            Cost condition = model(expr->condition);
+            for (size_t i = 1; i < expr->clauses.size; ++i)
+                condition += model(expr->clauses.data[i].expr) + 1;
+
+            return condition + model(expr->trueExpr) + model(expr->falseExpr) + 2;
         }
         else if (AstExprInterpString* expr = node->as<AstExprInterpString>())
         {
@@ -219,6 +224,17 @@ struct CostVisitor : AstVisitor
         else if (AstExprInstantiate* expr = node->as<AstExprInstantiate>())
         {
             return model(expr->expr);
+        }
+        else if (AstExprDo* expr = node->as<AstExprDo>())
+        {
+            // Luwu Do Expressions (rfcs/do-expressions.md): the cost of the block, modeled like any statements
+            Cost outer = result;
+            result = Cost();
+            expr->body->visit(this);
+
+            Cost block = result;
+            result = outer;
+            return block;
         }
         else
         {
@@ -300,6 +316,14 @@ struct CostVisitor : AstVisitor
 
     bool visit(AstStatIf* node) override
     {
+        // Luwu If Local (rfcs/if-local.md): a constant first clause doesn't decide a `when` chain. The visitor
+        // goes on to model every clause; each one adds a test.
+        if (node->clauses.size != 0)
+        {
+            result += node->clauses.size + (node->elsebody && !node->elsebody->is<AstStatIf>());
+            return true;
+        }
+
         if (isConstantFalse(constants, node->condition))
         {
             if (node->elsebody)

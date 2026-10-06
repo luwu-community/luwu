@@ -196,15 +196,16 @@ Location getFragmentLocation(AstStat* nearestStatement, const Position& cursorPo
         }
         if (auto ifS = getNearestIfToCursor(nearestStatement, cursorPosition))
         {
-            auto conditionExtents = Location{ifS->condition->location.begin, ifS->condition->location.end};
+            // Luwu If Local (rfcs/if-local.md): conditionLocation() covers a whole `when` chain
+            auto conditionExtents = ifS->conditionLocation();
             if (conditionExtents.containsClosed(cursorPosition) || !ifS->thenLocation)
             {
                 // CLI-152249 - the condition parse location can sometimes be after the body of the if
                 // statement. This is a bug that results returning locations like {3,0 - 2,0} which is
                 // wrong.
-                if (ifS->condition->location.begin > cursorPosition)
+                if (conditionExtents.begin > cursorPosition)
                     return empty;
-                return Location{ifS->condition->location.begin, cursorPosition};
+                return Location{conditionExtents.begin, cursorPosition};
             }
 
             else if (ifS->thenbody->location.containsClosed(cursorPosition))
@@ -213,9 +214,9 @@ Location getFragmentLocation(AstStat* nearestStatement, const Position& cursorPo
             {
                 if (auto elseIf = ifS->elsebody->as<AstStatIf>())
                 {
-                    auto elseIfConditionExtents = Location{elseIf->location.begin, elseIf->condition->location.end};
+                    auto elseIfConditionExtents = Location{elseIf->location.begin, elseIf->conditionLocation().end};
                     if (elseIfConditionExtents.containsClosed(cursorPosition))
-                        return {elseIf->condition->location.begin, cursorPosition};
+                        return {elseIf->conditionLocation().begin, cursorPosition};
                     if (elseIf->thenbody->hasEnd)
                         return empty;
                     else

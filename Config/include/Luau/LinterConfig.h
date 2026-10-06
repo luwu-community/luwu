@@ -99,6 +99,10 @@ struct LintWarning
         Code_DuplicateProperty = 64,       // Luwu: a property declared twice in a table type (part of TableLiteral)
         Code_DuplicateReadWrite = 65,      // Luwu: a table type property given its read or write type twice (part of TableLiteral)
         Code_ReturnSelf = 66,              // Luwu Traits: a trait method returning `self` typed as the trait, not `Self`
+        Code_ReturnOnNextLine = 67,        // Luwu: a `return` in a `do` expression whose value starts on the next line
+        Code_OrContinue = 68,              // Luwu: `x or continue`, which reads a binding named `continue`
+        Code_KeywordShadow = 69,           // Luwu: a binding named after a contextual keyword (`class`, `continue`, ...)
+        Code_BuiltinShadow = 70,           // Luwu: a binding that hides a builtin global (`type`, `typeof`, `table`, ...)
 
         Code__Count
     };
@@ -215,6 +219,10 @@ inline constexpr const char* kWarningNames[] = {
     "DuplicateProperty",
     "DuplicateReadWrite",
     "ReturnSelf",
+    "ReturnOnNextLine",
+    "OrContinue",
+    "KeywordShadow",
+    "BuiltinShadow",
 };
 // clang-format on
 

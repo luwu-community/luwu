@@ -346,6 +346,8 @@ ControlFlow TypeChecker::check(const ScopePtr& scope, const AstStat& program)
         return ControlFlow::Continues;
     else if (auto return_ = program.as<AstStatReturn>())
         return check(scope, *return_);
+    else if (auto give = program.as<AstStatGive>())
+        return check(scope, *give);
     else if (auto expr = program.as<AstStatExpr>())
     {
         checkExprPack(scope, *expr->expr);
@@ -711,8 +713,35 @@ static std::optional<Predicate> tryGetTypeGuardPredicate(const AstExprBinary& ex
     return predicate;
 }
 
+// Luwu If Local (rfcs/if-local.md): the old solver gets the minimum, so it doesn't fail on a `when` chain: each
+// binding is declared like a `local` in the branch's scope, and the plain conditions refine that scope. Nothing
+// is refined in the else branch, and the bindings aren't narrowed to truthy.
+static void checkIfClausesOldSolver(TypeChecker& checker, const ScopePtr& thenScope, const AstArray<AstIfClause>& clauses)
+{
+    for (const AstIfClause& clause : clauses)
+    {
+        if (clause.declaration)
+            checker.check(thenScope, *clause.declaration);
+        else
+            checker.resolve(checker.checkExpr(thenScope, *clause.expr).predicates, thenScope, true);
+    }
+}
+
 ControlFlow TypeChecker::check(const ScopePtr& scope, const AstStatIf& statement)
 {
+    if (statement.clauses.size != 0)
+    {
+        ScopePtr thenScope = childScope(scope, Location{statement.condition->location, statement.thenbody->location});
+        checkIfClausesOldSolver(*this, thenScope, statement.clauses);
+
+        ControlFlow thencf = check(thenScope, *statement.thenbody);
+        ControlFlow elsecf = ControlFlow::None;
+        if (statement.elsebody)
+            elsecf = check(childScope(scope, statement.elsebody->location), *statement.elsebody);
+
+        return thencf == elsecf ? thencf : ControlFlow::None;
+    }
+
     WithPredicate<TypeId> result = checkExpr(scope, *statement.condition);
 
     ScopePtr thenScope = childScope(scope, statement.thenbody->location);
@@ -1940,6 +1969,8 @@ WithPredicate<TypeId> TypeChecker::checkExpr(const ScopePtr& scope, const AstExp
         result = checkExpr(scope, *a);
     else if (auto a = expr.as<AstExprIfElse>())
         result = checkExpr(scope, *a, expectedType);
+    else if (auto a = expr.as<AstExprDo>())
+        result = checkExpr(scope, *a);
     else if (auto a = expr.as<AstExprInterpString>())
         result = checkExpr(scope, *a);
     else if (auto a = expr.as<AstExprInstantiate>())
@@ -3267,14 +3298,27 @@ WithPredicate<TypeId> TypeChecker::checkExpr(const ScopePtr& scope, const AstExp
 
 WithPredicate<TypeId> TypeChecker::checkExpr(const ScopePtr& scope, const AstExprIfElse& expr, std::optional<TypeId> expectedType)
 {
-    WithPredicate<TypeId> result = checkExpr(scope, *expr.condition);
+    ScopePtr trueScope;
+    ScopePtr falseScope;
 
-    ScopePtr trueScope = childScope(scope, expr.trueExpr->location);
-    resolve(result.predicates, trueScope, true);
+    if (expr.clauses.size != 0)
+    {
+        trueScope = childScope(scope, Location{expr.condition->location, expr.trueExpr->location});
+        checkIfClausesOldSolver(*this, trueScope, expr.clauses);
+        falseScope = childScope(scope, expr.falseExpr->location);
+    }
+    else
+    {
+        WithPredicate<TypeId> result = checkExpr(scope, *expr.condition);
+
+        trueScope = childScope(scope, expr.trueExpr->location);
+        resolve(result.predicates, trueScope, true);
+
+        falseScope = childScope(scope, expr.falseExpr->location);
+        resolve(result.predicates, falseScope, false);
+    }
+
     WithPredicate<TypeId> trueType = checkExpr(trueScope, *expr.trueExpr, expectedType);
-
-    ScopePtr falseScope = childScope(scope, expr.falseExpr->location);
-    resolve(result.predicates, falseScope, false);
     WithPredicate<TypeId> falseType = checkExpr(falseScope, *expr.falseExpr, expectedType);
 
     if (falseType.type == trueType.type)
@@ -3284,6 +3328,20 @@ WithPredicate<TypeId> TypeChecker::checkExpr(const ScopePtr& scope, const AstExp
     if (types.empty())
         return WithPredicate{neverType};
     return WithPredicate{types.size() == 1 ? types[0] : addType(UnionType{std::move(types)})};
+}
+
+// Luwu Do Expressions (rfcs/do-expressions.md): the old solver gets the minimum, so it doesn't fail on one: the block is
+// checked, and the expression is `any`.
+WithPredicate<TypeId> TypeChecker::checkExpr(const ScopePtr& scope, const AstExprDo& expr)
+{
+    check(childScope(scope, expr.body->location), *expr.body);
+    return WithPredicate{anyType};
+}
+
+ControlFlow TypeChecker::check(const ScopePtr& scope, const AstStatGive& give)
+{
+    checkExpr(scope, *give.value);
+    return ControlFlow::Returns;
 }
 
 WithPredicate<TypeId> TypeChecker::checkExpr(const ScopePtr& scope, const AstExprInterpString& expr)
