@@ -1190,6 +1190,35 @@ const char* luwuNominalKind(TypeId ty)
     return kind;
 }
 
+std::string describeLuwuNominalValue(TypeId ty)
+{
+    ty = follow(ty);
+    const ExternType* etv = get<ExternType>(ty);
+    const char* kind = etv ? luwuNominalKindOfExternType(etv) : nullptr;
+    if (!kind)
+        return "'" + toString(ty) + "'";
+
+    if (std::string_view(kind) != "object")
+        return std::string(kind) + " '" + etv->name + "'";
+
+    // An object's type points at its declaration (a class or a trait) through a `Klass` relation.
+    const Klass* klass = etv->relation ? etv->relation->get_if<Klass>() : nullptr;
+    const char* declarationKind = klass ? luwuNominalKind(klass->ty) : nullptr;
+    if (declarationKind && std::string_view(declarationKind) == "trait")
+        return "an object implementing '" + etv->name + "'";
+
+    // toString keeps a generic class's type arguments (`Box<number>`)
+    return "an object of class '" + toString(ty) + "'";
+}
+
+std::string luwuNominalCheckSuggestion(const std::string& declarationName, bool isTrait)
+{
+    if (isTrait)
+        return "to check whether a value implements '" + declarationName + "', use 'class.implements(value, " + declarationName + ")'";
+
+    return "to check whether a value is an object of class '" + declarationName + "', use 'class.isinstance(value, " + declarationName + ")'";
+}
+
 void applyDeprecatedAttribute(Property& prop, const AstArray<AstAttr*>& attributes)
 {
     std::optional<AstAttr::DeprecatedInfo> info = findDeprecatedInfo(attributes);

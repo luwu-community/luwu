@@ -2380,6 +2380,12 @@ static TypeFunctionReductionResult<TypeId> getmetatableHelper(TypeId targetTy, c
 
     if (auto clazz = get<ExternType>(targetTy))
     {
+        // Luwu Classes (rfcs/classes): an object's, class's or trait's metatable is internal. `getmetatable` returns nil
+        // for all of them at runtime without looking at `__metatable`, so the type their `metatable` field records is
+        // not what the call gives.
+        if (luwuNominalKind(targetTy))
+            return {ctx->builtins->nilType, Reduction::MaybeOk, {}, {}};
+
         result = clazz->metatable;
         erroneous = false;
     }

@@ -4649,7 +4649,8 @@ private:
 
         bool visit(AstStatClass* node) override
         {
-            classes->insert(node->name->name.value);
+            if (!node->isTrait)
+                classes->insert(node->name->name.value);
             return true;
         }
     };
