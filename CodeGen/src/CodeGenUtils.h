@@ -36,6 +36,7 @@ const Instruction* executeSETLIST(lua_State* L, const Instruction* pc, StkId bas
 const Instruction* executeFORGPREP(lua_State* L, const Instruction* pc, StkId base, TValue* k);
 const Instruction* executeNEWOBJECT(lua_State* L, const Instruction* pc, StkId base, TValue* k);
 const Instruction* executeNEWCLASSMEMBER(lua_State* L, const Instruction* pc, StkId base, TValue* k);
+const Instruction* executeINITTRAITS(lua_State* L, const Instruction* pc, StkId base, TValue* k);
 void executeGETVARARGSMultRet(lua_State* L, const Instruction* pc, StkId base, int rai);
 void executeGETVARARGSConst(lua_State* L, StkId base, int rai, int b);
 const Instruction* executeDUPCLOSURE(lua_State* L, const Instruction* pc, StkId base, TValue* k);

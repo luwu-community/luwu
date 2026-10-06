@@ -203,6 +203,10 @@ static void visitVmRegDefsUses(T& visitor, IrFunction& function, IrInst& inst)
 
         visitor.defRange(vmRegOp(OP_B(inst)), 3);
         break;
+    case IrCmd::FALLBACK_INITTRAITS:
+        visitor.use(OP_C(inst));
+        visitor.def(OP_B(inst));
+        break;
     case IrCmd::FALLBACK_NEWCLASSMEMBER:
         visitor.use(OP_B(inst));
         visitor.useRange(vmRegOp(OP_C(inst)), function.intOp(OP_D(inst)));

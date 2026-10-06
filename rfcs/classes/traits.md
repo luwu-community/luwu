@@ -262,6 +262,43 @@ trait HtmlComponent<Data>(tag: string)
 end
 ```
 
+A class (or another trait!) may override any non-final field or function provided by a trait:
+
+```luwu
+trait Enemy
+    name = "Enemy"
+    health = Hp(100)
+    function is_hostile(self)
+        return true
+    end
+end
+
+class Bot(health: Hp) implements Enemy
+    name = "Bot"
+    hostile = true
+    function is_hostile(self)
+        return self.hostile
+    end
+    function pacify(self)
+        self.hostile = false
+    end
+    function enrage(self)
+        self.hostile = true
+    end
+end
+
+trait Boss(name: string, health: Hp) needs Enemy
+    expect attacks: { Attack }
+end
+
+class Karmelita implements Boss("Karmelita", Hp(12_000))
+    attacks = create_attacks_for("BOSS: Karmelita")
+end
+```
+
+Static analysis flags any fields or functions overridden with the wrong type signature. In the example above, redefining the parameter or return types
+of `is_hostile` in `Bot` or setting `name = 10` would raise a TypeError.
+
 ### Class library
 
 A new function is added: `class.implements(object, trait)`. It returns `true` if the object implements `trait` or false if it doesn't.

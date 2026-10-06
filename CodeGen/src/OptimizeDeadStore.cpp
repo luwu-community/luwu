@@ -1218,6 +1218,7 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
         state.checkLiveIns(OP_C(inst), index, true);
         break;
     case IrCmd::CHECK_CLASS_FIELDS_CONSTRUCTIBLE:
+    case IrCmd::CHECK_CLASS_ALLOCATABLE:
         // This instruction has several jumps to the exit in the lowering and that prevents exit sync record from being generated
         state.checkLiveIns(OP_B(inst), index, false);
         break;
@@ -1284,6 +1285,7 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
     case IrCmd::FALLBACK_FORGPREP:
     case IrCmd::FALLBACK_NEWOBJECT:
     case IrCmd::FALLBACK_NEWCLASSMEMBER:
+    case IrCmd::FALLBACK_INITTRAITS:
         if (state.hasGcoToClear)
             state.flushGcoRegs();
 
@@ -1329,6 +1331,7 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
     case IrCmd::FALLBACK_FORGPREP:
     case IrCmd::FALLBACK_NEWOBJECT:
     case IrCmd::FALLBACK_NEWCLASSMEMBER:
+    case IrCmd::FALLBACK_INITTRAITS:
         // CALL directly executes a Luau function on the same native stack frame
     case IrCmd::CALL:
         // These instructions use lowering that is not aware of register allocator and demand no active values to exist

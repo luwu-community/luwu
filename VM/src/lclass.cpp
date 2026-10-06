@@ -57,6 +57,8 @@ LuauClass* luaR_newclass(
     classdef->hasconstmembers = false;
     classdef->haspoddefaultsfn = false;
     classdef->poddefaultsoffset = 0;
+    classdef->haspodimplementsfn = false;
+    classdef->podimplementsoffset = 0;
     classdef->memberdefaults = NULL;
     classdef->istrait = false;
     classdef->traitspending = false;
@@ -64,8 +66,10 @@ LuauClass* luaR_newclass(
     classdef->traits = NULL;
     classdef->numtraits = 0;
     classdef->traitinits = NULL;
+    classdef->traitinitargs = NULL;
     classdef->numtraitinits = 0;
-    classdef->numdirecttraitinits = 0;
+    classdef->overriddenconsts = NULL;
+    classdef->numoverriddenconsts = 0;
     classdef->traitdefaults = NULL;
     classdef->compiledtraitcopies = NULL;
 
@@ -184,7 +188,8 @@ size_t luaR_classsize(const LuauClass* classdef)
            // ... plus the constant field defaults, when the class carries them ...
            (classdef->memberdefaults ? classdef->numberofinstancemembers * sizeof(TValue) : 0) +
            // ... plus what it keeps about the traits it implements.
-           (classdef->numtraits * sizeof(LuauClass*)) + (classdef->numtraitinits * sizeof(TValue));
+           (classdef->numtraits * sizeof(LuauClass*)) + (classdef->numtraitinits * (sizeof(TValue) + 2 * sizeof(uint32_t))) +
+           (classdef->numoverriddenconsts * sizeof(uint32_t));
 }
 
 bool luaR_closureisinit(const LuauClass* classdef, const Closure* cl)
@@ -204,16 +209,27 @@ bool luaR_closureisinit(const LuauClass* classdef, const Closure* cl)
 
 bool luaR_closureistraitinit(const LuauClass* classdef, const Closure* cl)
 {
-    // The class's copies of its traits' `__traitinit` initialize the trait fields, const and final ones included. The
-    // class's `__implements`, which only calls them, doesn't count.
+    // The class's copies of its traits' `__traitinit` initialize the trait fields, const and final ones included
     for (uint32_t i = 0; i < classdef->numtraitinits; i++)
-    {
-        bool isimplementsfn = classdef->numtraitinits > classdef->numdirecttraitinits && i == classdef->numdirecttraitinits;
-        if (!isimplementsfn && clvalue(&classdef->traitinits[i]) == cl)
+        if (clvalue(&classdef->traitinits[i]) == cl)
             return true;
-    }
 
     return false;
+}
+
+bool luaR_isvminternalfunction(lua_State* L, const Closure* cl)
+{
+    if (cl->isC)
+        return cl == L->global->traitinitrunner;
+
+    return (cl->l.p->flags & LPF_VM_INTERNAL) != 0;
+}
+
+// The members the compiler synthesizes for the VM to call. Users can't declare them: names starting with `__` are reserved.
+static bool luaR_isvminternalname(lua_State* L, TString* name)
+{
+    return name == luaS_newliteral(L, "__defaults") || name == luaS_newliteral(L, "__implements") ||
+           name == luaS_newliteral(L, "__traitinit") || name == luaS_newliteral(L, "__needs");
 }
 
 bool luaR_closureownsprivateaccess(const LuauClass* classdef, const Closure* cl)
@@ -443,6 +459,10 @@ void luaR_addclassmember(lua_State* L, LuauClass* classdef, TString* name, TValu
     if (!mcl->isC)
         luaR_stampownerclass(L, mcl->l.p, classdef);
 
+    // Runtime copies of a trait's `__traitinit` copy the proto's flags, so they are internal too (luaR_copyproto)
+    if (!mcl->isC && luaR_isvminternalname(L, name))
+        mcl->l.p->flags |= LPF_VM_INTERNAL;
+
     // Luwu Traits (rfcs/classes/traits.md): a trait's method is read through the trait as a dispatcher to the receiver's class, which keeps
     // the trait's own closure for luaR_implementtraits to copy. A static is read as itself.
     if (classdef->istrait && (classdef->memberflags[offsetint] & LBC_CLASSMEMBER_TAKESSELF))
@@ -473,6 +493,11 @@ void luaR_addclassmember(lua_State* L, LuauClass* classdef, TString* name, TValu
     {
         classdef->haspoddefaultsfn = true;
         classdef->poddefaultsoffset = offsetint;
+    }
+    else if (name == luaS_newlstr(L, "__implements", 12))
+    {
+        classdef->haspodimplementsfn = true;
+        classdef->podimplementsoffset = offsetint;
     }
 
     // Only metamethods in the parser's allowlist are supported (see ALLOWED_METAMETHODS in Parser.cpp)
@@ -577,46 +602,30 @@ void luaR_applyobjectfieldsslow(lua_State* L, LuauClass* classdef, LuauObject* o
 // and copied by luaR_newobject, while a class with any non-constant default (`= {}`, a call, ...)
 // calls its synthesized `__defaults` closure here, since those have to be re-evaluated on every
 // construction. Only the latter pays for a `lua_call` here.
-static void luaR_initpodobjectny(lua_State* L, LuauClass* classdef, LuauObject* object, StkId args, int nargs, const Closure* accessor)
+static l_noret luaR_podargumentcounterror(lua_State* L, const LuauClass* classdef)
 {
-    if (nargs > 1)
-        luaL_error(
-            L,
-            "the default constructor for constructing a '%s' expected zero or one arguments "
-            "(table mapping field names to values or nothing if class has 0 fields), got an incorrect number of arguments",
-            getstr(classdef->name)
-        );
+    luaL_error(
+        L,
+        "the default constructor for constructing a '%s' expected zero or one arguments "
+        "(table mapping field names to values or nothing if class has 0 fields), got an incorrect number of arguments",
+        getstr(classdef->name)
+    );
+}
 
-    // `__defaults` and `__index` can reallocate the stack
-    ptrdiff_t argsslot = savestack(L, args);
+// `__defaults`'s results at `results`: the class's own fields, which come first; the trait fields after them were already
+// initialized by `__implements`
+static void luaR_storepoddefaults(lua_State* L, const LuauClass* classdef, LuauObject* object, StkId results)
+{
+    for (uint32_t idx = 0; idx < classdef->numberofownmembers; idx++)
+        setobj(L, &object->members[idx], &results[idx]);
 
-    if (classdef->haspoddefaultsfn)
-    {
-        // the fields of the traits the class implements come after its own, and were initialized by luaR_inittraitfields
-        uint32_t nresults = classdef->numberofownmembers;
-        luaL_checkstack(L, int(nresults) + 1, "class field defaults");
+    // `object` can be black by now, and the argument's __index calls after this can run the collector
+    luaC_barrierfast(L, object);
+}
 
-        setobj2s(L, L->top, &classdef->staticmembers[classdef->poddefaultsoffset - classdef->numberofinstancemembers]);
-        L->top++;
-        lua_call(L, 0, int(nresults));
-
-        StkId results = L->top - nresults;
-        for (uint32_t idx = 0; idx < nresults; idx++)
-            setobj(L, &object->members[idx], &results[idx]);
-
-        L->top -= nresults;
-
-        // `object` can be black by now, and the argument's __index calls below can run the collector
-        // before the barrier at the end.
-        luaC_barrierfast(L, object);
-    }
-
-    // assume class has 0 fields to initialize or user wants all fields to be nil (or their default)
-    if (nargs == 0)
-        return;
-
-    const TValue* arg = restorestack(L, argsslot);
-
+// The fields of the constructor's argument, over the defaults
+static void luaR_applypodargument(lua_State* L, LuauClass* classdef, LuauObject* object, const TValue* arg, const Closure* accessor)
+{
     // The argument is a plain field bag in every realistic case, so read it with a direct string
     // lookup; only a table carrying a metatable (or a non-table) needs the generic __index-aware path.
     if (ttistable(arg) && hvalue(arg)->metatable == NULL)
@@ -631,18 +640,134 @@ static void luaR_initpodobjectny(lua_State* L, LuauClass* classdef, LuauObject* 
     }
 }
 
-// Initializes the object without letting `__defaults` or an argument's `__index` yield.
+static void luaR_initpodobjectny(lua_State* L, LuauClass* classdef, LuauObject* object, StkId args, int nargs, const Closure* accessor)
+{
+    if (nargs > 1)
+        luaR_podargumentcounterror(L, classdef);
+
+    // `__implements`, `__defaults` and `__index` can reallocate the stack
+    ptrdiff_t argsslot = savestack(L, args);
+
+    // Luwu Traits (rfcs/classes/traits.md): the trait fields come before the class's own field defaults
+    if (classdef->haspodimplementsfn)
+    {
+        luaC_threadbarrier(L);
+        luaD_checkstack(L, 2);
+
+        StkId fn = L->top;
+        setobj2s(L, fn, &classdef->staticmembers[classdef->podimplementsoffset - classdef->numberofinstancemembers]);
+        setobjectvalue(L, fn + 1, object);
+        L->top = fn + 2;
+        luaD_callny(L, fn, 0);
+    }
+
+    if (classdef->haspoddefaultsfn)
+    {
+        uint32_t nresults = classdef->numberofownmembers;
+        luaL_checkstack(L, int(nresults) + 1, "class field defaults");
+
+        setobj2s(L, L->top, &classdef->staticmembers[classdef->poddefaultsoffset - classdef->numberofinstancemembers]);
+        L->top++;
+        lua_call(L, 0, int(nresults));
+
+        luaR_storepoddefaults(L, classdef, object, L->top - nresults);
+        L->top -= nresults;
+    }
+
+    // assume class has 0 fields to initialize or user wants all fields to be nil (or their default)
+    if (nargs == 0)
+        return;
+
+    luaR_applypodargument(L, classdef, object, restorestack(L, argsslot), accessor);
+}
+
+// Initializes the object without letting `__implements`, `__defaults` or an argument's `__index` yield, for the C API
+// (lua_newobject), which has no continuation to finish the object after a yield. luaR_createobject constructs in
+// yieldable steps instead (luaR_podconstructionstep).
 //
-// The constructor (luaR_createobject) has a continuation so that `__init` can yield, and that makes every call its frame
-// makes yieldable. A yield doesn't stop the C code that made the call: the call returns, and the C code carries on as if
-// it had finished, reading results out of whatever the stack then holds. Both calls here run in the middle of filling
-// the object, so they must not yield. One C call level more than the thread was resumed with makes lua_yield refuse;
-// an error unwinds that level with the rest (luaD_pcall and resume restore nCcalls).
+// A yield doesn't stop the C code that made the call: the call returns, and the C code carries on as if it had finished,
+// reading results out of whatever the stack then holds. One C call level more than the thread was resumed with makes
+// lua_yield refuse; an error unwinds that level with the rest (luaD_pcall and resume restore nCcalls).
 void luaR_initpodobject(lua_State* L, LuauClass* classdef, LuauObject* object, StkId args, int nargs, const Closure* accessor)
 {
     L->nCcalls++;
     luaR_initpodobjectny(L, classdef, object, args, nargs, accessor);
     L->nCcalls--;
+}
+
+// luaR_createobject's stack for a class without `__init`, by 1-based index: the class, the argument table (nil when there
+// is none), the object, whether there was an argument, and the next step of luaR_podconstructionstep
+static const int kPodArgument = 2;
+static const int kPodObject = 3;
+static const int kPodHasArgument = 4;
+static const int kPodStep = 5;
+
+// The generic constructor of a class without `__init` (luaR_createobject), in steps that may each yield: the class's
+// `__implements` (its trait fields, which come first), then `__defaults` (its own fields), then the argument's fields.
+// A C function can't keep going after a call that yields, so each call is the last thing a step does and the next step
+// runs from luaR_createobjectcont, which luaL_callyieldable calls right away when nothing yielded and resume calls
+// otherwise. The object stays on this frame's stack until it's complete.
+static int luaR_podconstructionstep(lua_State* L)
+{
+    LuauClass* classdef = classvalue(L->base);
+    int step = int(nvalue(L->base + kPodStep - 1));
+
+    if (step == 0)
+    {
+        setnvalue(L->base + kPodStep - 1, 1);
+
+        if (classdef->haspodimplementsfn)
+        {
+            luaL_checkstack(L, 2, "trait initialization");
+            luaC_threadbarrier(L);
+
+            StkId fn = L->top;
+            setobj2s(L, fn, &classdef->staticmembers[classdef->podimplementsoffset - classdef->numberofinstancemembers]);
+            setobj2s(L, fn + 1, L->base + kPodObject - 1);
+            L->top = fn + 2;
+
+            return luaL_callyieldable(L, 1, 0);
+        }
+    }
+
+    uint32_t nresults = classdef->numberofownmembers;
+
+    if (step <= 1)
+    {
+        setnvalue(L->base + kPodStep - 1, 2);
+
+        if (classdef->haspoddefaultsfn)
+        {
+            luaL_checkstack(L, int(nresults) + 1, "class field defaults");
+            luaC_threadbarrier(L);
+
+            setobj2s(L, L->top, &classdef->staticmembers[classdef->poddefaultsoffset - classdef->numberofinstancemembers]);
+            L->top++;
+
+            return luaL_callyieldable(L, 0, int(nresults));
+        }
+    }
+
+    LuauObject* object = objectvalue(L->base + kPodObject - 1);
+
+    // `__defaults` returned exactly one value per own field
+    if (classdef->haspoddefaultsfn)
+    {
+        LUAU_ASSERT(lua_gettop(L) == kPodStep + int(nresults));
+        luaR_storepoddefaults(L, classdef, object, L->top - nresults);
+        lua_settop(L, kPodStep);
+    }
+
+    // An argument with a metatable reads its fields through `__index`, which can't yield, as no metamethod can
+    if (bvalue(L->base + kPodHasArgument - 1))
+    {
+        L->nCcalls++;
+        luaR_applypodargument(L, classdef, object, L->base + kPodArgument - 1, luaR_callinglua(L));
+        L->nCcalls--;
+    }
+
+    lua_settop(L, kPodObject);
+    return 1;
 }
 
 LuauObject* luaR_newobjectuninit(lua_State* L, LuauClass* classdef)
@@ -697,12 +822,23 @@ int luaR_createobject(lua_State* L)
 
     luaR_checktraitsimplemented(L, classdef);
 
-    // Luwu Traits (rfcs/classes/traits.md): calling a trait calls its `__create` in place of the trait, with the same arguments, and returns
-    // its result, whatever it is
+    // Luwu Traits (rfcs/classes/traits.md): calling a trait calls its `__create` with the same arguments, and returns its
+    // result, whatever it is. The trait stays in the first slot, which is how luaR_createobjectcont tells this path apart.
     if (classdef->istrait)
     {
-        setobj2s(L, L->base, luaR_traitcreate(L, classdef));
-        return luaL_callyieldable(L, lua_gettop(L) - 1, 1);
+        const TValue* create = luaR_traitcreate(L, classdef);
+        int nargs = lua_gettop(L) - 1;
+
+        luaL_checkstack(L, nargs + 1, "trait factory arguments");
+        luaC_threadbarrier(L);
+
+        StkId frame = L->top;
+        setobj2s(L, frame, create);
+        for (int i = 0; i < nargs; i++)
+            setobj2s(L, frame + 1 + i, L->base + 1 + i);
+        L->top = frame + 1 + nargs;
+
+        return luaL_callyieldable(L, nargs, 1);
     }
 
     // Ensure a private constructor is only callable from within its own class.
@@ -717,56 +853,72 @@ int luaR_createobject(lua_State* L)
     if (luaR_hasprivateconstructor(classdef))
         luaR_checkprivateconstructor(L, classdef, constructing);
 
+    // a class without `__init` constructs in steps, from a fixed stack layout (kPodArgument and the rest)
+    if (!classdef->hascustominit)
+    {
+        int nargs = lua_gettop(L) - 1;
+        if (nargs > 1)
+            luaR_podargumentcounterror(L, classdef);
+
+        bool hasargument = nargs == 1;
+        if (!hasargument)
+            lua_pushnil(L);
+
+        LuauObject* object = luaR_newobject(L, classdef);
+        luaL_checkstack(L, 3, "class constructor");
+        setobjectvalue(L, L->top, object);
+        L->top++;
+        lua_pushboolean(L, hasargument);
+        lua_pushinteger(L, 0);
+
+        return luaR_podconstructionstep(L);
+    }
+
     LuauObject* object = luaR_newobject(L, classdef);
     int numargs = lua_gettop(L);
 
-    // Push the new object onto the stack. We do this prior to setting the
-    // fields as we may reallocate the stack as part of indexing into the
-    // second argument (if present).
+    // The object goes on the stack first: it anchors it while `__init` runs, and it's the result once `__init` returns
     setobjectvalue(L, L->top, object);
     L->top++;
     int selfidx = lua_gettop(L);
 
-    // Luwu Traits (rfcs/classes/traits.md): trait fields are initialized before the class's own defaults and `__init`
-    if (classdef->traitinits)
-        luaR_inittraitfields(L, classdef, object, L->base + 1, numargs - 1);
+    // Build __init's call frame directly. lua_pushvalue re-checks the index and the GC thread
+    // barrier on every single argument, which is most of the cost of constructing an object.
+    // __init's offset is fixed when the class is created, so it's read straight out of the class
+    // rather than interning "__init" and hash-looking it up on every construction.
+    LUAU_ASSERT(classdef->initoffset >= classdef->numberofinstancemembers);
+    luaL_checkstack(L, numargs + 1, "class constructor arguments");
+    luaC_threadbarrier(L);
 
-    if (classdef->hascustominit)
-    {
-        // Build __init's call frame directly. lua_pushvalue re-checks the index and the GC thread
-        // barrier on every single argument, which is most of the cost of constructing an object.
-        // __init's offset is fixed when the class is created, so it's read straight out of the class
-        // rather than interning "__init" and hash-looking it up on every construction.
-        LUAU_ASSERT(classdef->initoffset >= classdef->numberofinstancemembers);
-        luaL_checkstack(L, numargs + 1, "class constructor arguments");
-        luaC_threadbarrier(L);
+    // the stack may have moved, so everything below is recomputed from the current base
+    StkId frame = L->top;
+    setobj2s(L, frame, &classdef->staticmembers[classdef->initoffset - classdef->numberofinstancemembers]);
+    setobj2s(L, frame + 1, L->base + selfidx - 1);
 
-        // the stack may have moved, so everything below is recomputed from the current base
-        StkId frame = L->top;
-        setobj2s(L, frame, &classdef->staticmembers[classdef->initoffset - classdef->numberofinstancemembers]);
-        setobj2s(L, frame + 1, L->base + selfidx - 1);
+    for (int i = 1; i < numargs; i++)
+        setobj2s(L, frame + 1 + i, L->base + i);
 
-        for (int i = 1; i < numargs; i++)
-            setobj2s(L, frame + 1 + i, L->base + i);
+    L->top = frame + 1 + numargs;
 
-        L->top = frame + 1 + numargs;
-
-        // Yieldable call: __init may suspend the coroutine (via coroutine.yield or a yielding C
-        // function). On completion -- immediately or after a resume -- luaR_createobjectcont returns
-        // the object. __init takes no results, so 'self' (selfidx) is left on top of the stack.
-        return luaL_callyieldable(L, 1 + (numargs - 1), 0);
-    }
-
-    luaR_initpodobject(L, classdef, object, L->base + 1, numargs - 1, constructing);
-
-    return 1;
+    // Yieldable call: __init may suspend the coroutine (via coroutine.yield or a yielding C
+    // function). On completion -- immediately or after a resume -- luaR_createobjectcont returns
+    // the object. __init takes no results, so 'self' (selfidx) is left on top of the stack.
+    return luaL_callyieldable(L, 1 + (numargs - 1), 0);
 }
 
 static int luaR_createobjectcont(lua_State* L, int status)
 {
-    // __init was called with zero expected results, so the object we constructed is left on top of
-    // the stack (see luaR_createobject); return it as the constructor's single result.
-    return 1;
+    // a call that raised takes this frame with it, so it's never continued after one
+    LUAU_ASSERT(status == LUA_OK);
+
+    // The class (or trait) being constructed is always in the first slot. A trait's `__create` (its result is on top) and
+    // a class's `__init` (called with zero expected results, which leaves the object on top) are the constructor's last
+    // call. A class without `__init` constructs in steps.
+    LuauClass* classdef = classvalue(L->base);
+    if (classdef->istrait || classdef->hascustominit)
+        return 1;
+
+    return luaR_podconstructionstep(L);
 }
 
 void luaR_freeclass(lua_State* L, LuauClass* classdef, lua_Page* page)
@@ -778,6 +930,10 @@ void luaR_freeclass(lua_State* L, LuauClass* classdef, lua_Page* page)
         luaM_freearray(L, classdef->traits, classdef->numtraits, LuauClass*, classdef->memcat);
     if (classdef->traitinits)
         luaM_freearray(L, classdef->traitinits, classdef->numtraitinits, TValue, classdef->memcat);
+    if (classdef->traitinitargs)
+        luaM_freearray(L, classdef->traitinitargs, 2 * classdef->numtraitinits, uint32_t, classdef->memcat);
+    if (classdef->overriddenconsts)
+        luaM_freearray(L, classdef->overriddenconsts, classdef->numoverriddenconsts, uint32_t, classdef->memcat);
 
     if (classdef->staticmembers)
         luaM_freearray(L, classdef->staticmembers, numberofstaticmembers, TValue, classdef->memcat);
@@ -961,6 +1117,17 @@ static Closure* luaR_copytraitfunction(lua_State* L, const Closure* cl)
     for (int i = 0; i < cl->nupvalues; i++)
         setobj(L, &copy->l.uprefs[i], &cl->l.uprefs[i]);
     copy->preload = cl->preload;
+
+    // the copy runs natively when the function it copies does: native code compiles the copy now
+    if (L->global->ecb.functioncopied && cl->l.p->execdata)
+    {
+        luaC_threadbarrier(L);
+        luaD_checkstack(L, 1);
+        setclvalue(L, L->top, copy);
+        L->top++;
+        L->global->ecb.functioncopied(L);
+        L->top--;
+    }
 
     return copy;
 }
@@ -1358,8 +1525,9 @@ static bool luaR_traitneeds(lua_State* L, LuaTable* edges, LuaTable* visited, Lu
 }
 
 // Of the traits in `providers` (an array, in the order the class attaches them) that all provide `name`, the one whose
-// member the class gets: the one that needs every other. Raises when there is none, when a field would be overridden,
-// or when an override breaks what the overridden trait promised (it is `final`, or public where the override isn't).
+// member the class gets: the one that needs every other. Raises when there is none, or when the override breaks what the
+// overridden trait promised: the member is `final`, a field where the override is a function (or the other way around),
+// or public where the override isn't; or a field's constness differs.
 static LuauClass* luaR_overridingtrait(lua_State* L, LuaTable* edges, LuaTable* providers, const LuauClass* classdef, TString* name)
 {
     int count = luaH_getn(providers);
@@ -1393,8 +1561,6 @@ static LuauClass* luaR_overridingtrait(lua_State* L, LuaTable* edges, LuaTable* 
 
                 const LuauClass* a = providerat(i);
                 const LuauClass* b = providerat(j);
-                if (luaR_traitmemberoffset(a, name) < a->numberofinstancemembers)
-                    luaG_runerror(L, "traits '%s' and '%s' both provide '%s'", getstr(a->name), getstr(b->name), getstr(name));
 
                 luaG_runerror(
                     L,
@@ -1421,9 +1587,19 @@ static LuauClass* luaR_overridingtrait(lua_State* L, LuaTable* edges, LuaTable* 
 
         uint32_t off = luaR_traitmemberoffset(overridden, name);
         uint8_t flags = overridden->memberflags[off];
+        bool isfield = off < overridden->numberofinstancemembers;
+        bool winnerisfield = winneroff < winner->numberofinstancemembers;
 
-        if (off < overridden->numberofinstancemembers || winneroff < winner->numberofinstancemembers)
-            luaG_runerror(L, "trait '%s' can't redefine '%s': fields of trait '%s' can't be overridden", getstr(winner->name), getstr(name), getstr(overridden->name));
+        if (isfield != winnerisfield)
+            luaG_runerror(
+                L,
+                "trait '%s' can't redefine '%s' as a %s: it is a %s in trait '%s'",
+                getstr(winner->name),
+                getstr(name),
+                luaR_memberkind(winnerisfield),
+                luaR_memberkind(isfield),
+                getstr(overridden->name)
+            );
 
         if (flags & LBC_CLASSMEMBER_FINAL)
             luaG_runerror(L, "'%s' is final in trait '%s' and can't be overridden", getstr(name), getstr(overridden->name));
@@ -1437,6 +1613,20 @@ static LuauClass* luaR_overridingtrait(lua_State* L, LuaTable* edges, LuaTable* 
                 getstr(winner->name),
                 getstr(overridden->name)
             );
+
+        if (isfield && ((flags ^ winnerflags) & LBC_CLASSMEMBER_CONST))
+            luaG_runerror(
+                L,
+                "'%s' must be %s in trait '%s' to override it from trait '%s'",
+                getstr(name),
+                (flags & LBC_CLASSMEMBER_CONST) ? "const" : "non-const",
+                getstr(winner->name),
+                getstr(overridden->name)
+            );
+
+        // the parser refuses a trait field without a value, so an overriding one always has one (see the class's own
+        // override in luaR_implementtraits for why it matters)
+        LUAU_ASSERT(!isfield || (winnerflags & LBC_CLASSMEMBER_HASDEFAULT));
     }
 
     return winner;
@@ -1557,6 +1747,9 @@ void luaR_addcompiledtraitcopy(lua_State* L, LuauClass* classdef, const LuauClas
     LUAU_ASSERT(!(trait->memberflags[off] & LBC_CLASSMEMBER_EXPECTED));
     const TValue* fn = luaR_traitownfunction(trait, off);
 
+    if (luaR_isvminternalname(L, name))
+        clvalue(copy)->l.p->flags |= LPF_VM_INTERNAL;
+
     if (!classdef->compiledtraitcopies)
     {
         classdef->compiledtraitcopies = luaH_new(L, 0, 4);
@@ -1567,6 +1760,39 @@ void luaR_addcompiledtraitcopy(lua_State* L, LuauClass* classdef, const LuauClas
     setobj2t(L, luaH_set(L, copies, fn), copy);
     luaC_barriert(L, copies, fn);
     luaC_barriert(L, copies, copy);
+}
+
+// Pushes `trait` after the traits it needs that haven't been pushed yet, each before the traits that need it: the order
+// construction initializes trait fields in, so that a trait overriding a needed trait's field writes it last. `edges`
+// maps each trait to the traits it needs (luaR_collecttraits, which refused cycles and chains deeper than
+// LUAR_MAX_NEEDS_DEPTH, so the recursion ends at that depth), `implemented` holds every trait the class gets, and
+// `done` the ones already visited.
+static void luaR_pushtraitinitorder(lua_State* L, LuaTable* edges, LuaTable* done, LuaTable* implemented, LuauClass* trait)
+{
+    TValue key;
+    setclassvalue(L, &key, trait);
+    setbvalue(luaH_set(L, done, &key), 1);
+    luaC_barriert(L, done, &key);
+
+    const TValue* list = luaH_get(edges, &key);
+    if (ttistable(list))
+    {
+        LuaTable* needed = hvalue(list);
+
+        for (int i = 1; i <= luaH_getn(needed); i++)
+        {
+            const TValue* next = luaH_getnum(needed, i);
+
+            // a needed trait with parameters isn't implemented (see luaR_collecttraits)
+            bool pending = !ttisnil(luaH_get(implemented, next)) && ttisnil(luaH_get(done, next));
+            if (pending)
+                luaR_pushtraitinitorder(L, edges, done, implemented, classvalue(next));
+        }
+    }
+
+    luaD_checkstack(L, 1);
+    setclassvalue(L, L->top, trait);
+    L->top++;
 }
 
 void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint32_t n)
@@ -1613,6 +1839,13 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
     sethvalue(L, L->top, providers);
     L->top++;
 
+    // Which fields are overridden, for LuauClass::overriddenconsts: declared by the class and a trait, or by traits that
+    // need each other
+    luaD_checkstack(L, 1);
+    LuaTable* overridden = luaH_new(L, 0, 0);
+    sethvalue(L, L->top, overridden);
+    L->top++;
+
     // Pass 1: the provided fields and the defined functions of every trait, by name
     for (int i = 0; i < numtraits; i++)
     {
@@ -1629,12 +1862,15 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
             if (!provided)
                 continue;
 
+            // The class's own member overrides the trait's: the trait's copy of a function isn't added, and a field
+            // keeps the class's slot, where the class's value is written after the trait's (INITTRAITS runs first)
             const TValue* own = luaH_getstr(classdef->memberstooffset, name);
             if (!ttisnil(own))
             {
+                uint8_t ownflags = classdef->memberflags[uint32_t(nvalue(own))];
                 bool ownisfield = uint32_t(nvalue(own)) < ownninst;
 
-                if (isfield || ownisfield)
+                if (isfield != ownisfield)
                     luaG_runerror(
                         L, "class '%s' can't declare '%s': trait '%s' already provides it", getstr(classdef->name), getstr(name), getstr(trait->name)
                     );
@@ -1642,12 +1878,29 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
                 if (flags & LBC_CLASSMEMBER_FINAL)
                     luaG_runerror(L, "'%s' is final in trait '%s' and can't be overridden", getstr(name), getstr(trait->name));
 
-                // whether the function is public is part of what the trait promises about every class implementing it
-                uint8_t ownflags = classdef->memberflags[uint32_t(nvalue(own))];
+                // whether the member is public, and a field const, is part of what the trait promises about every class
+                // implementing it
                 if ((ownflags ^ flags) & LBC_CLASSMEMBER_PRIVATE)
                     luaR_traitrequirementerror(L, name, luaR_visibilityname(flags), classdef, trait);
 
-                // the class's own function overrides the trait's default
+                if (isfield && ((ownflags ^ flags) & LBC_CLASSMEMBER_CONST))
+                    luaR_traitrequirementerror(L, name, (flags & LBC_CLASSMEMBER_CONST) ? "const" : "non-const", classdef, trait);
+
+                // An overriding field has to give itself a value. Without one it would keep the trait's value when the
+                // trait computes it, but lose it when it's a constant, which depends on how the trait happens to be written.
+                if (isfield && !(ownflags & LBC_CLASSMEMBER_HASDEFAULT))
+                    luaG_runerror(
+                        L,
+                        "class '%s' overrides '%s' of trait '%s', so it has to give '%s' a value",
+                        getstr(classdef->name),
+                        getstr(name),
+                        getstr(trait->name),
+                        getstr(name)
+                    );
+
+                if (isfield)
+                    setbvalue(luaH_setstr(L, overridden, name), 1);
+
                 continue;
             }
 
@@ -1681,6 +1934,9 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
             bool isfield = luaR_traitmemberoffset(winner, name) < winner->numberofinstancemembers;
 
             setclassvalue(L, luaH_setstr(L, added, name), winner);
+
+            if (isfield && luaH_getn(hvalue(list)) > 1)
+                setbvalue(luaH_setstr(L, overridden, name), 1);
 
             if (isfield)
                 newfields++;
@@ -1822,6 +2078,27 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
 
     LUAU_ASSERT(nextfield == newninst && nextstatic == newall);
 
+    // The overridden fields whose value is a constant default (see LuauClass::overriddenconsts)
+    auto isoverriddenconst = [&](uint32_t off)
+    {
+        return newdefaults && !ttisnil(&newdefaults[off]) && !ttisnil(luaH_getstr(overridden, newnames[off]));
+    };
+
+    uint32_t numoverriddenconsts = 0;
+    for (uint32_t off = 0; off < newninst; off++)
+        numoverriddenconsts += isoverriddenconst(off) ? 1 : 0;
+
+    uint32_t* overriddenconsts = NULL;
+    if (numoverriddenconsts > 0)
+    {
+        overriddenconsts = luaM_newarray(L, numoverriddenconsts, uint32_t, classdef->memcat);
+
+        uint32_t next = 0;
+        for (uint32_t off = 0; off < newninst; off++)
+            if (isoverriddenconst(off))
+                overriddenconsts[next++] = off;
+    }
+
     LuaTable* newmap = luaH_new(L, 0, int(newall));
     TString* initname = luaS_newliteral(L, "__init");
     uint32_t newinitoffset = classdef->initoffset + newfields;
@@ -1844,6 +2121,8 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
     classdef->memberflags = newflags;
     classdef->staticmembers = newstaticmembers;
     classdef->memberdefaults = newdefaults;
+    classdef->overriddenconsts = overriddenconsts;
+    classdef->numoverriddenconsts = numoverriddenconsts;
     classdef->numberofinstancemembers = newninst;
     classdef->numberofallmembers = newall;
     classdef->memberstooffset = newmap;
@@ -1852,6 +2131,9 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
 
     if (classdef->haspoddefaultsfn)
         classdef->poddefaultsoffset += newfields;
+
+    if (classdef->haspodimplementsfn)
+        classdef->podimplementsoffset += newfields;
 
     // A default becomes the class's own method: a copy stamped with the class, so its `self` check, private access and
     // slot caches all belong to this class (luaR_addclassmember).
@@ -1928,69 +2210,96 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
         luaC_objbarrier(L, classdef, traitat(i));
     }
 
-    // What construction calls for the trait fields that aren't constants (luaR_inittraitfields): the class's copy of each
-    // trait's `__traitinit`. A copy writes the fields by name, so its slot caches learn this class's offsets. The
-    // copies of traits whose `implements` entry passes arguments are called by the class's `__implements`, which
-    // evaluates the arguments; the others are called directly. Each copy is anchored on the stack until it is stored.
-    int directbase = cast_int(L->top - L->base);
-    int numdirect = 0;
-    int numcalled = 0;
+    // What construction runs for the trait fields that aren't constants (LOP_INITTRAITS): the class's copy of each
+    // trait's `__traitinit`. They run in dependency order, so a trait that overrides a field of a trait it needs writes
+    // that field last and its value is the one that stays. A copy writes the fields by name, so its slot caches learn
+    // this class's offsets.
+    luaD_checkstack(L, 1);
+    LuaTable* done = luaH_new(L, 0, numtraits);
+    sethvalue(L, L->top, done);
+    L->top++;
 
-    for (int pass = 0; pass < 2; pass++)
+    // the traits in dependency order, pushed by luaR_pushtraitinitorder
+    int orderbase = cast_int(L->top - L->base);
+    LuaTable* implemented = hvalue(L->base + first - 1);
+
+    // only the listed traits can be roots: every other trait is needed by one of them
+    for (uint32_t i = 0; i < n; i++)
     {
-        for (int i = 0; i < numtraits; i++)
-        {
-            LuauClass* trait = traitat(i);
-
-            // only the listed traits, which come first, have arguments
-            bool hasargs = uint32_t(i) < n && nvalue(restorestack(L, listedslot) + n + i) > 0;
-            if (hasargs != (pass == 1))
-                continue;
-
-            const TValue* init = luaR_findstaticmember(L, trait, "__traitinit");
-            if (!init)
-                continue;
-
-            LUAU_ASSERT(ttisfunction(init) && !clvalue(init)->isC);
-            Closure* copy = luaR_classtraitfunction(L, classdef, init);
-
-            luaD_checkstack(L, 1);
-            setclvalue(L, L->top, copy);
-            L->top++;
-            luaR_stampownerclass(L, copy->l.p, classdef);
-
-            if (pass == 0)
-                numdirect++;
-            else
-                numcalled++;
-        }
+        TValue key;
+        setclassvalue(L, &key, traitat(int(i)));
+        if (ttisnil(luaH_get(done, &key)))
+            luaR_pushtraitinitorder(L, edges, done, implemented, traitat(int(i)));
     }
 
-    if (numdirect + numcalled > 0)
+    LUAU_ASSERT(cast_int(L->top - L->base) - orderbase == numtraits);
+
+    // Which of the class's `implements` arguments (all the entries' arguments, in list order) a trait's copy takes:
+    // its own entry's, or none for a trait the class didn't list
+    auto argsof = [&](const LuauClass* trait, uint32_t* offset, uint32_t* count)
     {
-        // `__implements` goes between the two groups
-        uint32_t total = uint32_t(numdirect + (numcalled > 0 ? 1 + numcalled : 0));
-        TValue* inits = luaM_newarray(L, total, TValue, classdef->memcat);
+        *offset = 0;
+        *count = 0;
 
-        StkId copies = L->base + directbase;
-        for (int i = 0; i < numdirect; i++)
-            setobj(L, &inits[i], copies + i);
-
-        if (numcalled > 0)
+        uint32_t entryoffset = 0;
+        for (uint32_t i = 0; i < n; i++)
         {
-            const TValue* implementsfn = luaR_findstaticmember(L, classdef, "__implements");
-            LUAU_ASSERT(implementsfn && ttisfunction(implementsfn));
-            setobj(L, &inits[numdirect], implementsfn);
+            uint32_t entrycount = uint32_t(nvalue(restorestack(L, listedslot) + n + i));
 
-            for (int i = 0; i < numcalled; i++)
-                setobj(L, &inits[numdirect + 1 + i], copies + numdirect + i);
+            if (traitat(int(i)) == trait)
+            {
+                *offset = entryoffset;
+                *count = entrycount;
+                return;
+            }
+
+            entryoffset += entrycount;
+        }
+    };
+
+    // Each copy is anchored on the stack until it is stored
+    int copiesbase = cast_int(L->top - L->base);
+    uint32_t numinits = 0;
+
+    for (int i = 0; i < numtraits; i++)
+    {
+        LuauClass* trait = classvalue(L->base + orderbase + i);
+        const TValue* init = luaR_findstaticmember(L, trait, "__traitinit");
+        if (!init)
+            continue;
+
+        LUAU_ASSERT(ttisfunction(init) && !clvalue(init)->isC);
+        Closure* copy = luaR_classtraitfunction(L, classdef, init);
+
+        luaD_checkstack(L, 1);
+        setclvalue(L, L->top, copy);
+        L->top++;
+        luaR_stampownerclass(L, copy->l.p, classdef);
+        numinits++;
+    }
+
+    if (numinits > 0)
+    {
+        TValue* inits = luaM_newarray(L, numinits, TValue, classdef->memcat);
+        uint32_t* initargs = luaM_newarray(L, 2 * numinits, uint32_t, classdef->memcat);
+
+        uint32_t next = 0;
+        for (int i = 0; i < numtraits; i++)
+        {
+            LuauClass* trait = classvalue(L->base + orderbase + i);
+            if (!luaR_findstaticmember(L, trait, "__traitinit"))
+                continue;
+
+            setobj(L, &inits[next], L->base + copiesbase + next);
+            argsof(trait, &initargs[2 * next], &initargs[2 * next + 1]);
+            next++;
         }
 
         classdef->traitinits = inits;
-        classdef->numtraitinits = total;
-        classdef->numdirecttraitinits = uint32_t(numdirect);
+        classdef->traitinitargs = initargs;
+        classdef->numtraitinits = numinits;
 
-        for (uint32_t i = 0; i < total; i++)
+        for (uint32_t i = 0; i < numinits; i++)
             luaC_barrier(L, classdef, &inits[i]);
     }
 
@@ -2008,47 +2317,83 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
     L->top = restorestack(L, oldtop);
 }
 
-void luaR_inittraitfields(lua_State* L, LuauClass* classdef, LuauObject* object, StkId args, int nargs)
+// LOP_INITTRAITS's runner: calls the class's copy of each trait's `__traitinit`, in dependency order, with that trait's own
+// `implements` arguments, so that trait initializers may yield like the rest of construction. A C function can't keep
+// going after a call that yields, so each call is the last thing a step does and the next step is this function's
+// continuation, which luaL_callyieldable calls right away when nothing yielded, and resume calls otherwise. The runner is
+// called with the object and every `implements` argument; its progress lives in two stack slots above them, the
+// argument count and the next initializer.
+static int luaR_traitinitstep(lua_State* L, int status)
 {
-    LUAU_ASSERT(classdef->traitinits);
+    // an initializer that raises takes this frame with it, so it's never resumed after one
+    LUAU_ASSERT(status == LUA_OK);
 
-    ptrdiff_t argsslot = savestack(L, args);
-    ptrdiff_t oldtop = savestack(L, L->top);
-    uint32_t numdirect = classdef->numdirecttraitinits;
+    int nargs = int(lua_tointeger(L, -2));
+    uint32_t next = uint32_t(lua_tointeger(L, -1));
+    LuauObject* object = objectvalue(L->base);
+    LuauClass* classdef = object->lclass;
 
-    luaC_threadbarrier(L);
-
-    for (uint32_t i = 0; i < numdirect; i++)
+    if (next < classdef->numtraitinits)
     {
-        luaD_checkstack(L, 2);
+        uint32_t argoffset = classdef->traitinitargs[2 * next];
+        uint32_t argcount = classdef->traitinitargs[2 * next + 1];
+
+        // the compiler passes every entry's arguments, but the runner can be reached through the debug library
+        if (argoffset + argcount > uint32_t(nargs))
+            luaL_error(L, "trait initializers of '%s' expected %d arguments, got %d", getstr(classdef->name), int(argoffset + argcount), nargs);
+
+        setnvalue(L->top - 1, double(next + 1));
+
+        luaL_checkstack(L, 2 + int(argcount), "trait initializer arguments");
+        luaC_threadbarrier(L);
+
         StkId fn = L->top;
-        setobj2s(L, fn, &classdef->traitinits[i]);
-        setobjectvalue(L, fn + 1, object);
-        L->top = fn + 2;
-        luaD_callny(L, fn, 0);
+        setobj2s(L, fn, &classdef->traitinits[next]);
+        setobj2s(L, fn + 1, L->base);
+        for (uint32_t a = 0; a < argcount; a++)
+            setobj2s(L, fn + 2 + a, L->base + 1 + argoffset + a);
+        L->top = fn + 2 + argcount;
+
+        return luaL_callyieldable(L, 1 + int(argcount), 0);
     }
 
-    // `__implements(self, copies..., constructor arguments...)`
-    uint32_t numcalled = classdef->numtraitinits - numdirect;
-    if (numcalled > 0)
+    // An overridden field's constant goes back in last: allocation copied it in, then the overridden trait's initializer
+    // wrote the field by name (see LuauClass::overriddenconsts)
+    for (uint32_t i = 0; i < classdef->numoverriddenconsts; i++)
     {
-        luaD_checkstack(L, int(numcalled) + 1 + nargs);
-        StkId fn = L->top;
-        setobj2s(L, fn, &classdef->traitinits[numdirect]);
-        setobjectvalue(L, fn + 1, object);
-
-        for (uint32_t i = 1; i < numcalled; i++)
-            setobj2s(L, fn + 1 + i, &classdef->traitinits[numdirect + i]);
-
-        StkId ctorargs = restorestack(L, argsslot);
-        for (int i = 0; i < nargs; i++)
-            setobj2s(L, fn + 1 + numcalled + i, ctorargs + i);
-
-        L->top = fn + 1 + numcalled + nargs;
-        luaD_callny(L, fn, 0);
+        uint32_t off = classdef->overriddenconsts[i];
+        setobj(L, &object->members[off], &classdef->memberdefaults[off]);
     }
 
-    L->top = restorestack(L, oldtop);
+    // the constants were already reachable from the class, but the object may have been blackened by a call above
+    luaC_barrierfast(L, object);
+
+    return 0;
+}
+
+static int luaR_traitinitrunner(lua_State* L)
+{
+    // LOP_INITTRAITS only calls it for an object whose class has trait initializers, but the debug library can call it
+    // with anything
+    const TValue* object = L->base;
+    bool hasinits = lua_gettop(L) >= 1 && ttisobject(object) && objectvalue(object)->lclass->traitinits;
+    if (!hasinits)
+        luaL_error(L, "trait initializers run during construction only");
+
+    int nargs = lua_gettop(L) - 1;
+    lua_pushinteger(L, nargs);
+    lua_pushinteger(L, 0);
+
+    return luaR_traitinitstep(L, LUA_OK);
+}
+
+Closure* luaR_newtraitinitrunner(lua_State* L)
+{
+    Closure* runner = luaF_newCclosure(L, 0, L->gt);
+    runner->c.f = luaR_traitinitrunner;
+    runner->c.cont = luaR_traitinitstep;
+    runner->c.debugname = "inittraits";
+    return runner;
 }
 
 bool luaR_implements(const LuauClass* classdef, const LuauClass* trait)
