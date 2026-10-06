@@ -84,6 +84,8 @@ LUAU_FASTFLAG(LuauYieldIter2)
 LUAU_FASTFLAG(LuauCustomYieldablePcalls)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
+LUAU_FASTFLAG(LuwuIfLocal)
+LUAU_FASTFLAG(DebugLuwuDoExpr)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 LUAU_FASTFLAG(LuauExportValueSyntax)
@@ -6500,6 +6502,39 @@ TEST_CASE("DefaultArguments")
     ScopedFastFlag sff{FFlag::LuwuDefaultArguments, true};
 
     runConformance("defaultarg.luwu");
+}
+
+TEST_CASE("IfLocal")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDestructuring, true},
+        {FFlag::LuwuNonePrimitive, true},
+    };
+
+    runConformance("if_local.luwu");
+}
+
+TEST_CASE("DoExpressions")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuDoExpr, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDefaultArguments, true},
+        {FFlag::LuwuNonePrimitive, true},
+    };
+
+    runConformance("do_expr.luwu");
+}
+
+TEST_CASE("DoExpressionsCursed")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuDoExpr, true},
+        {FFlag::LuwuIfLocal, true},
+    };
+
+    runConformance("do_expr_cursed.luwu");
 }
 
 TEST_CASE("None")

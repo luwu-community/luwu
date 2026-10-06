@@ -424,6 +424,28 @@ Lexeme Lexer::lookahead()
     return result;
 }
 
+Lexeme Lexer::lookaheadSecond()
+{
+    unsigned int currentOffset = offset;
+    unsigned int currentLine = line;
+    unsigned int currentLineOffset = lineOffset;
+    Lexeme currentLexeme = lexeme;
+    Location currentPrevLocation = prevLocation;
+    std::vector<BraceType> currentBraceStack = braceStack;
+
+    next();
+    Lexeme result = next();
+
+    offset = currentOffset;
+    line = currentLine;
+    lineOffset = currentLineOffset;
+    lexeme = currentLexeme;
+    prevLocation = currentPrevLocation;
+    braceStack = std::move(currentBraceStack);
+
+    return result;
+}
+
 bool Lexer::isReserved(const std::string& word)
 {
     for (int i = Lexeme::Reserved_BEGIN; i < Lexeme::Reserved_END; ++i)

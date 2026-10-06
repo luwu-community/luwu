@@ -1,0 +1,658 @@
+-- This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
+print("testing if local")
+
+local function find(t, v)
+    return table.find(t, v)
+end
+
+local arr = { 10, 20, 30 }
+
+-- a binding passes when its value is truthy, and is visible in its branch
+do
+    local hit = nil
+    if local i = find(arr, 20) then
+        hit = i
+    end
+    assert(hit == 2)
+
+    local ran = false
+    if local i = find(arr, 99) then
+        ran = true
+    end
+    assert(not ran)
+end
+
+-- false is falsy, not only nil
+do
+    local branch
+    if local f = false then
+        branch = "then"
+    else
+        branch = "else"
+    end
+    assert(branch == "else")
+
+    if local zero = 0 then
+        branch = "zero is truthy"
+    end
+    assert(branch == "zero is truthy")
+end
+
+-- elseif can bind, and the earlier binding isn't visible there
+do
+    local i = "outer"
+    local seen
+    if local i = find(arr, 99) then
+        seen = "if"
+    elseif local j = find(arr, 30) when j > 2 then
+        seen = `elseif {j} {i}`
+    end
+    assert(seen == "elseif 3 outer")
+    assert(i == "outer")
+end
+
+-- clauses run left to right and stop at the first one that fails
+do
+    local log = {}
+    local function step(name, value)
+        table.insert(log, name)
+        return value
+    end
+
+    if local a = step("a", 1) when step("b", false) when local c = step("c", 3) then
+        error("unreachable")
+    end
+    assert(table.concat(log, ",") == "a,b")
+
+    table.clear(log)
+    if local a = step("a", nil) when step("b", true) then
+        error("unreachable")
+    end
+    assert(table.concat(log, ",") == "a")
+
+    table.clear(log)
+    local result
+    if local a = step("a", 1) when a == 1 when local b = step("b", a + 1) then
+        result = a + b
+    end
+    assert(result == 3)
+    assert(table.concat(log, ",") == "a,b")
+end
+
+-- a chain with no binding is `and`
+do
+    local w = 5
+    local ok = false
+    if w > 3 when w < 10 then
+        ok = true
+    end
+    assert(ok)
+
+    if w > 3 when w > 10 then
+        ok = false
+    end
+    assert(ok)
+end
+
+-- a plain condition can come first
+do
+    local ready = true
+    local got
+    if ready when local v = find(arr, 10) then
+        got = v
+    end
+    assert(got == 1)
+
+    ready = false
+    got = nil
+    if ready when local v = find(arr, 10) then
+        got = v
+    end
+    assert(got == nil)
+end
+
+-- const bindings
+do
+    local got
+    if const v = find(arr, 30) then
+        got = v
+    end
+    assert(got == 3)
+end
+
+-- a global named `const` still works in a condition
+do
+    const = { x = 7 }
+    local ok = false
+    if const.x == 7 then
+        ok = true
+    end
+    assert(ok)
+    const = nil
+end
+
+-- the expression form
+do
+    const x = if const a = find(arr, 30) when const b = a * 2 then b else nil
+    assert(x == 6)
+
+    const y = if const a = find(arr, 99) then a else "none"
+    assert(y == "none")
+
+    const z = if local a = find(arr, 99) then a elseif local b = find(arr, 20) then b * 100 else 0
+    assert(z == 200)
+
+    local i = "outer"
+    const w = if local i = find(arr, 10) then i else i
+    assert(w == 1)
+    assert(i == "outer")
+end
+
+-- a closure in the branch captures that iteration's binding
+do
+    local fns = {}
+    for n = 1, 3 do
+        if local m = n when m ~= 2 then
+            m *= 10
+            table.insert(fns, function()
+                return m
+            end)
+        end
+    end
+    assert(#fns == 2)
+    assert(fns[1]() == 10 and fns[2]() == 30)
+end
+
+-- a later clause captures an earlier binding and then fails: the else branch reuses the binding's register, and
+-- the captured value must survive that
+do
+    local saved
+
+    if local v = { 1 } when (function()
+        saved = function()
+            return v
+        end
+        v = v
+        return false
+    end)() then
+        error("unreachable")
+    else
+        local clobber = { 2 }
+        assert(clobber[1] == 2)
+        assert(saved()[1] == 1)
+    end
+
+    -- the same in the expression form
+    local r = if local v = { 3 } when (function()
+        saved = function()
+            return v
+        end
+        v = v
+        return false
+    end)() then 0 else (function()
+        local clobber = { 4 }
+        return clobber[1] + saved()[1]
+    end)()
+    assert(r == 7)
+end
+
+-- a written binding captured in the branch is closed when the branch ends
+do
+    local fns = {}
+    for n = 1, 2 do
+        if local m = n then
+            table.insert(fns, function()
+                m += 1
+                return m
+            end)
+        end
+    end
+    assert(fns[1]() == 2 and fns[1]() == 3)
+    assert(fns[2]() == 3)
+end
+
+-- destructuring: every name must be truthy
+do
+    const p = { x = 1, y = 2, f = false }
+
+    local got
+    if const .{x, y} = p then
+        got = x + y
+    end
+    assert(got == 3)
+
+    got = "unset"
+    if const .{x, z} = p then
+        got = "then"
+    else
+        got = "else"
+    end
+    assert(got == "else")
+
+    got = "unset"
+    if const .{x, f} = p then
+        got = "then"
+    else
+        got = "else"
+    end
+    assert(got == "else")
+
+    if const q.{x} = p then
+        got = q.y + x
+    end
+    assert(got == 3)
+
+    -- a nil source fails the chain instead of raising
+    local missing = nil
+    got = "unset"
+    if const .{x} = missing then
+        got = "then"
+    else
+        got = "else"
+    end
+    assert(got == "else")
+end
+
+-- an annotated binding
+do
+    local got
+    if local n: number = find(arr, 20) then
+        got = n
+    end
+    assert(got == 2)
+end
+
+-- the branch can return, break and continue
+do
+    local function first(t, v)
+        if local i = find(t, v) then
+            return i
+        end
+        return nil
+    end
+    assert(first(arr, 30) == 3)
+    assert(first(arr, 31) == nil)
+
+    local seen = {}
+    for _, v in { 1, 2, 3, 4 } do
+        if local half = (v % 2 == 0) and v // 2 then
+            if half == 2 then
+                break
+            end
+            table.insert(seen, half)
+            continue
+        end
+        table.insert(seen, -v)
+    end
+    assert(table.concat(seen, ",") == "-1,1,-3")
+end
+
+-- a binding whose value has side effects runs once per evaluation of the chain
+do
+    local counter = 0
+    local function bump()
+        counter += 1
+        return counter
+    end
+
+    for _ = 1, 3 do
+        if local c = bump() when c % 2 == 1 then
+            counter += 10
+        end
+    end
+    assert(counter == 23)
+end
+
+-- syntax errors: one name per binding, one value per binding, and a binding needs a value. These are compile errors,
+-- so nothing in the chunk runs.
+do
+    local function compileError(source)
+        local f, err = loadstring(source)
+        assert(f == nil, source)
+        return err
+    end
+
+    for _, kw in { "local", "const" } do
+        local err = compileError(`ran = true; if {kw} a, b = c(), d() then end`)
+        assert(err:find(`'if {kw}' binds one name`, 1, true), err)
+
+        err = compileError(`if {kw} a, b = c() then end`)
+        assert(err:find(`'if {kw}' binds one name`, 1, true), err)
+
+        err = compileError(`local x = if {kw} a, b = c(), d() then a else b`)
+        assert(err:find(`'if {kw}' binds one name`, 1, true), err)
+
+        err = compileError(`if {kw} a = c(), d() then end`)
+        assert(err:find(`'if {kw}' takes exactly one value`, 1, true), err)
+
+        err = compileError(`if x when {kw} a, b = c(), d() then end`)
+        assert(err:find(`'if {kw}' binds one name`, 1, true), err)
+
+        err = compileError(`if {kw} a then end`)
+        assert(err:find(`Expected '=' and a value after '{kw} a'`, 1, true), err)
+    end
+
+    -- the binding isn't visible after the branch, so assigning it there is a global write; reading it is nil
+    local f = assert(loadstring("if local a = 1 then end; return a"))
+    assert(f() == nil)
+
+    -- a const binding can't be assigned, in its chain or its branch
+    assert(loadstring("if const a = 1 then a = 2 end") == nil)
+    assert(loadstring("if const a = 1 when (function() a = 2 end)() then end") == nil)
+end
+
+-- none is falsy, so a binding to none fails the chain
+do
+    local branch = "unset"
+    if local n = none then
+        branch = "then"
+    else
+        branch = "else"
+    end
+    assert(branch == "else")
+
+    local t = { k = none }
+    branch = "unset"
+    if local v = t.k then
+        branch = "then"
+    elseif local w = t.missing then
+        branch = "elseif"
+    else
+        branch = "else"
+    end
+    assert(branch == "else")
+
+    branch = "unset"
+    if local v = 1 when none then
+        branch = "then"
+    else
+        branch = "else"
+    end
+    assert(branch == "else")
+
+    branch = "unset"
+    if const .{k} = t then
+        branch = "then"
+    else
+        branch = "else"
+    end
+    assert(branch == "else")
+
+    const e = if local v = none then v else "fallback"
+    assert(e == "fallback")
+
+    -- a value that passes can still be compared against none in a later clause
+    const t2 = { k = 1 }
+    const r = if local v = t2.k when v ~= none then v + 1 else 0
+    assert(r == 2)
+end
+
+-- coroutine.yield in a binding's value, in a plain clause, in the branch and in the else branch
+do
+    local co = coroutine.wrap(function(start)
+        local out = {}
+
+        if local a = coroutine.yield("value") when coroutine.yield(`clause {a}`) when local b = a + coroutine.yield("second value") then
+            table.insert(out, `then {a} {b}`)
+            local c = coroutine.yield("in branch")
+            table.insert(out, `still {a} {b} {c}`)
+        else
+            table.insert(out, "else")
+        end
+
+        if local a = coroutine.yield("value 2") when coroutine.yield(`clause {a}`) then
+            table.insert(out, "bad")
+        else
+            local d = coroutine.yield("in else")
+            table.insert(out, `else {d}`)
+        end
+
+        return table.concat(out, ";")
+    end)
+
+    assert(co() == "value")
+    assert(co(10) == "clause 10")
+    assert(co(true) == "second value")
+    assert(co(5) == "in branch")
+    assert(co("c") == "value 2")
+    assert(co(20) == "clause 20")
+    assert(co(false) == "in else")
+    assert(co("d") == "then 10 15;still 10 15 c;else d")
+end
+
+-- coroutine.yield in the expression form, including yields in both arms
+do
+    local co = coroutine.wrap(function()
+        local x = if local a = coroutine.yield(1) when local b = coroutine.yield(a) then a + b + coroutine.yield(b) else coroutine.yield("else")
+        local y = if local a = coroutine.yield(2) then a else coroutine.yield("else 2")
+        return x, y
+    end)
+
+    assert(co() == 1)
+    assert(co(3) == 3)
+    assert(co(4) == 4)
+    assert(co(100) == 2)
+    assert(co(nil) == "else 2")
+    local x, y = co("fell through")
+    assert(x == 107 and y == "fell through")
+end
+
+-- a yield between capturing a binding and the clause that fails: the upvalue is still closed on the else path
+do
+    local co = coroutine.wrap(function()
+        local saved
+        if local v = { 1 } when (function()
+            saved = function()
+                return v
+            end
+            v = v
+            return true
+        end)() when coroutine.yield("captured") then
+            error("unreachable")
+        else
+            local clobber = { 2 }
+            return clobber[1] + saved()[1]
+        end
+    end)
+
+    assert(co() == "captured")
+    assert(co(false) == 3)
+end
+
+-- a chain that yields inside a loop keeps each iteration's binding
+do
+    local co = coroutine.wrap(function()
+        local sum = 0
+        for i = 1, 5 do
+            if local v = coroutine.yield(i) when v % 2 == 0 then
+                sum += v
+            end
+        end
+        return sum
+    end)
+
+    local value = co()
+    local result
+    while true do
+        result = co(value * 11)
+        if typeof(result) ~= "number" or result > 5 then
+            break
+        end
+        value = result
+    end
+    -- 11, 22, 33, 44, 55: only the even ones pass the `when` clause
+    assert(result == 66)
+end
+
+-- register pressure: regular locals and chain bindings together, up to the local limit (200) and the register limit
+-- (255). The branch passes every binding plus `extra` constants to a call, whose arguments go in consecutive registers
+-- above the locals, and also returns the sum of the regular locals.
+do
+    IFLOCAL_ENCODE = function(...)
+        local sum = 0
+        for i = 1, select("#", ...) do
+            sum += select(i, ...)
+        end
+        return select("#", ...) * 1000000 + sum
+    end
+
+    -- values come through a call so they aren't constants: a constant local gets no register at O1 and above
+    IFLOCAL_ID = function(v)
+        return v
+    end
+
+    local function source(regular, bindings, extra)
+        local parts = {}
+        local sumRegular = { "IFLOCAL_REGULAR = 0" }
+        for i = 1, regular do
+            table.insert(parts, `local r{i} = IFLOCAL_ID({i})`)
+            table.insert(sumRegular, `IFLOCAL_REGULAR += r{i}`)
+        end
+
+        local clauses = {}
+        local args = {}
+        for i = 1, bindings do
+            if i == 1 then
+                table.insert(clauses, "local b1 = IFLOCAL_ID(1)")
+            else
+                table.insert(clauses, `local b{i} = b{i - 1} + 1`)
+            end
+            table.insert(args, `b{i}`)
+        end
+        for i = 1, extra do
+            table.insert(args, tostring(i))
+        end
+
+        local call = `IFLOCAL_ENCODE({table.concat(args, ", ")})`
+        local branch = `{table.concat(sumRegular, "; ")}; return {call}, IFLOCAL_REGULAR`
+        table.insert(parts, `if {table.concat(clauses, " when ")} then {branch} end`)
+        table.insert(parts, "return -1")
+        return table.concat(parts, "\n")
+    end
+
+    local function sumTo(n)
+        return n * (n + 1) // 2
+    end
+
+    local function run(regular, bindings, extra)
+        local f, err = loadstring(source(regular, bindings, extra))
+        assert(f, err)
+        local encoded, regularSum = f()
+        assert(encoded == (bindings + extra) * 1000000 + sumTo(bindings) + sumTo(extra), encoded)
+        assert(regularSum == sumTo(regular), regularSum)
+    end
+
+    -- 199 locals, then add call arguments until the registers run out. How many fit depends on the optimization
+    -- level, so probe: the first chunk that doesn't fit must be an "Out of registers" compile error (not a crash), and
+    -- the last one that fits must run correctly with every register in use.
+    local extra = 0
+    while loadstring(source(150, 49, extra + 1)) do
+        extra += 1
+        assert(extra < 16, "the call should run out of registers within a few arguments")
+    end
+    assert(extra >= 4, extra)
+    run(150, 49, extra)
+
+    local _, err = loadstring(source(150, 49, extra + 1))
+    assert(err and err:find("Out of registers", 1, true), err)
+
+    -- exactly the local limit: 150 regular locals and 50 bindings
+    run(150, 50, 0)
+
+    -- one more binding is over the local limit
+    _, err = loadstring(source(151, 50, 0))
+    assert(err and err:find("Out of local registers", 1, true), err)
+
+    -- a long chain on its own, and a chain with every local a binding
+    run(0, 120, 0)
+    run(0, 100, 50)
+
+    -- the expression form at the end of a table constructor full of locals
+    local parts = {}
+    local items = {}
+    for i = 1, 190 do
+        table.insert(parts, `local r{i} = IFLOCAL_ID({i})`)
+        table.insert(items, `r{i}`)
+    end
+    table.insert(items, "if local q = IFLOCAL_ID(r190) when local p = q + r1 then p else 0")
+    table.insert(parts, `local t = \{{table.concat(items, ", ")}\}`)
+    table.insert(parts, "return #t, t[#t], t[190]")
+    local f = assert(loadstring(table.concat(parts, "\n")))
+    local n, last, before = f()
+    assert(n == 191 and last == 191 and before == 190)
+
+    IFLOCAL_ENCODE = nil
+    IFLOCAL_ID = nil
+    IFLOCAL_REGULAR = nil
+end
+
+-- garbage collection: a binding's value is collectable once its frame is gone, captured values once their closures
+-- are, and repeated chains don't leak
+do
+    local weak = setmetatable({}, { __mode = "v" })
+
+    local function bindAndLeave()
+        if local t = { "bound" } when local u = { t } then
+            weak.t = t
+            weak.u = u
+
+            -- alive while the branch runs
+            collectgarbage("collect")
+            assert(weak.t == t and weak.u == u)
+        end
+
+        if const .{inner} = { inner = { "destructured" } } then
+            weak.inner = inner
+        end
+
+        weak.expr = if local e = { "expr" } then e else nil
+    end
+
+    bindAndLeave()
+    collectgarbage("collect")
+    assert(weak.t == nil and weak.u == nil and weak.inner == nil and weak.expr == nil)
+
+    -- a closure keeps its captured binding alive, and only it
+    local saved
+    local function captureAndFail()
+        if local v = { "captured" } when (function()
+            weak.v = v
+            saved = function()
+                return v
+            end
+            v = v
+            return false
+        end)() then
+        else
+            local _ = { "clobber" }
+        end
+    end
+
+    captureAndFail()
+    collectgarbage("collect")
+    assert(weak.v ~= nil and saved()[1] == "captured")
+    saved = nil
+    collectgarbage("collect")
+    assert(weak.v == nil)
+
+    -- many chains in a loop: memory returns to where it started
+    local function churn(n)
+        local hits = 0
+        for i = 1, n do
+            if local t = table.create(16, i) when local u = { t, t } when u[1][1] % 2 == 0 then
+                hits += 1
+            end
+            local _ = if local s = { i } then s else nil
+        end
+        return hits
+    end
+
+    collectgarbage("collect")
+    local before = collectgarbage("count")
+    assert(churn(50000) == 25000)
+    collectgarbage("collect")
+    local after = collectgarbage("count")
+    assert(after - before < 64, `grew by {after - before}KB`)
+end
+
+return "OK"

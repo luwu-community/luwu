@@ -584,14 +584,64 @@ AstExprIfElse::AstExprIfElse(
 {
 }
 
+// Luwu If Local (rfcs/if-local.md)
+static void visitIfCondition(AstExpr* condition, const AstArray<AstIfClause>& clauses, AstVisitor* visitor)
+{
+    if (clauses.size == 0)
+    {
+        condition->visit(visitor);
+        return;
+    }
+
+    for (const AstIfClause& clause : clauses)
+    {
+        if (clause.declaration)
+            clause.declaration->visit(visitor);
+        else
+            clause.expr->visit(visitor);
+    }
+}
+
+static Location ifConditionLocation(AstExpr* condition, const AstArray<AstIfClause>& clauses)
+{
+    if (clauses.size == 0)
+        return condition->location;
+
+    const AstIfClause& first = clauses.data[0];
+    Position begin = first.declaration ? first.declaration->location.begin : first.expr->location.begin;
+    return Location{begin, clauses.data[clauses.size - 1].expr->location.end};
+}
+
+Location AstExprIfElse::conditionLocation() const
+{
+    return ifConditionLocation(condition, clauses);
+}
+
+void AstExprIfElse::visitCondition(AstVisitor* visitor)
+{
+    visitIfCondition(condition, clauses, visitor);
+}
+
 void AstExprIfElse::visit(AstVisitor* visitor)
 {
     if (visitor->visit(this))
     {
-        condition->visit(visitor);
+        visitCondition(visitor);
         trueExpr->visit(visitor);
         falseExpr->visit(visitor);
     }
+}
+
+AstExprDo::AstExprDo(const Location& location, AstStatBlock* body)
+    : AstExpr(ClassIndex(), location)
+    , body(body)
+{
+}
+
+void AstExprDo::visit(AstVisitor* visitor)
+{
+    if (visitor->visit(this))
+        body->visit(visitor);
 }
 
 AstExprError::AstExprError(const Location& location, const AstArray<AstExpr*>& expressions, unsigned messageIndex)
@@ -678,11 +728,21 @@ AstStatIf::AstStatIf(
 {
 }
 
+Location AstStatIf::conditionLocation() const
+{
+    return ifConditionLocation(condition, clauses);
+}
+
+void AstStatIf::visitCondition(AstVisitor* visitor)
+{
+    visitIfCondition(condition, clauses, visitor);
+}
+
 void AstStatIf::visit(AstVisitor* visitor)
 {
     if (visitor->visit(this))
     {
-        condition->visit(visitor);
+        visitCondition(visitor);
         thenbody->visit(visitor);
 
         if (elsebody)
@@ -750,6 +810,18 @@ AstStatBreak::AstStatBreak(const Location& location)
 void AstStatBreak::visit(AstVisitor* visitor)
 {
     visitor->visit(this);
+}
+
+AstStatGive::AstStatGive(const Location& location, AstExpr* value)
+    : AstStat(ClassIndex(), location)
+    , value(value)
+{
+}
+
+void AstStatGive::visit(AstVisitor* visitor)
+{
+    if (visitor->visit(this))
+        value->visit(visitor);
 }
 
 AstStatContinue::AstStatContinue(const Location& location)
