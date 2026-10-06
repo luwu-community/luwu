@@ -3710,7 +3710,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "MisleadingAndOrUsesTheMiddleOperandsType")
 {
     LintResult result = lint(R"(
 local function f(c: boolean, maybe: boolean?, count: number)
-    local a = c and maybe or true
+    local a = c and maybe or 1
     local b = c and count or 0
     return a, b
 end
@@ -3727,6 +3727,34 @@ return f
     CHECK_EQ(misleading[0].location.begin.line, 2);
     CHECK_EQ(misleading[0].text, "an 'a and b or c' expression is misleading when 'b' is falsy, use 'if a then b else c' instead");
     CHECK_EQ(countWarnings(result, LintWarning::Code_LuaAndOr), 2);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "AndOrUsedAsBooleanLogicIsNotATernary")
+{
+    LintResult result = lint(R"(
+local function f(err: string?, a: number, b: number, flag: boolean?)
+    if err and err:match("ERR") or err and err:match("PANIC") then
+        print(err)
+    end
+    local ordered = a == b and flag or a < b
+    local negated = not (flag and err or nil)
+    local ternary = a > 0 and flag or false
+    local value = a > 0 and flag or 0
+    return ordered, negated, ternary, value
+end
+return f
+)");
+
+    // only `value` is a ternary: the rest are conditions, or end in a comparison or a boolean, where falling through to
+    // the last operand when the middle one is false is the point
+    std::vector<LintWarning> found;
+    for (const LintWarning& warning : result.warnings)
+        if (warning.code == LintWarning::Code_LuaAndOr || warning.code == LintWarning::Code_MisleadingAndOr)
+            found.push_back(warning);
+
+    REQUIRE_EQ(found.size(), 2);
+    CHECK_EQ(found[0].location.begin.line, 8);
+    CHECK_EQ(found[1].location.begin.line, 8);
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "MisleadingAndOrKnowsNoneIsFalsy")
@@ -3760,8 +3788,9 @@ local d = (c and 1) or 2
 return a, b, d
 )");
 
-    // the parenthesized form is left alone, as MisleadingAndOr does
-    REQUIRE_EQ(countWarnings(result, LintWarning::Code_LuaAndOr), 2);
+    // - the parenthesized form is left alone, as MisleadingAndOr does
+    // - `c and false or true` ends in a boolean, so it's logic, not a ternary; MisleadingAndOr still reports the `false`
+    REQUIRE_EQ(countWarnings(result, LintWarning::Code_LuaAndOr), 1);
     CHECK_EQ(countWarnings(result, LintWarning::Code_MisleadingAndOr), 1);
 
     for (const LintWarning& warning : result.warnings)

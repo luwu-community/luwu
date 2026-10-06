@@ -3729,6 +3729,8 @@ private:
     }
 };
 
+static AstExpr* unparenthesized(AstExpr* expr);
+
 class LintMisleadingAndOr : AstVisitor
 {
 public:
@@ -3742,6 +3744,72 @@ public:
 
 private:
     LintContext* context;
+    // Luwu: expressions used as conditions, where `a and b or c` is boolean logic rather than a ternary
+    DenseHashSet<AstExpr*> conditions{nullptr};
+
+    void markCondition(AstExpr* expr)
+    {
+        expr = unparenthesized(expr);
+        conditions.insert(expr);
+
+        if (AstExprBinary* binary = expr->as<AstExprBinary>(); binary && (binary->op == AstExprBinary::And || binary->op == AstExprBinary::Or))
+        {
+            markCondition(binary->left);
+            markCondition(binary->right);
+        }
+        else if (AstExprUnary* unary = expr->as<AstExprUnary>(); unary && unary->op == AstExprUnary::Op::Not)
+            markCondition(unary->expr);
+    }
+
+    bool visit(AstStatIf* node) override
+    {
+        markCondition(node->condition);
+        return true;
+    }
+
+    bool visit(AstStatWhile* node) override
+    {
+        markCondition(node->condition);
+        return true;
+    }
+
+    bool visit(AstStatRepeat* node) override
+    {
+        markCondition(node->condition);
+        return true;
+    }
+
+    bool visit(AstExprIfElse* node) override
+    {
+        markCondition(node->condition);
+        return true;
+    }
+
+    bool visit(AstExprUnary* node) override
+    {
+        if (node->op == AstExprUnary::Op::Not)
+            markCondition(node->expr);
+        return true;
+    }
+
+    // Luwu: `a and b or c` meant as logic: a condition, or an `or` operand that only makes sense as a boolean. Falling
+    // through to `c` when `b` is false is then exactly right, and `if a then b else c` would change what it does.
+    bool isBooleanLogic(AstExprBinary* node)
+    {
+        if (conditions.contains(node))
+            return true;
+
+        AstExpr* last = unparenthesized(node->right);
+        if (last->is<AstExprConstantBool>())
+            return true;
+        if (AstExprUnary* unary = last->as<AstExprUnary>())
+            return unary->op == AstExprUnary::Op::Not;
+        if (AstExprBinary* binary = last->as<AstExprBinary>())
+            return binary->op == AstExprBinary::CompareEq || binary->op == AstExprBinary::CompareNe ||
+                   binary->op == AstExprBinary::CompareLt || binary->op == AstExprBinary::CompareLe ||
+                   binary->op == AstExprBinary::CompareGt || binary->op == AstExprBinary::CompareGe;
+        return false;
+    }
 
     bool visit(AstExprBinary* node) override
     {
@@ -3768,7 +3836,8 @@ private:
         AstExpr* middle = and_->right;
         bool literal = middle->is<AstExprConstantBool>() || middle->is<AstExprConstantNumber>() || middle->is<AstExprConstantString>() ||
                        middle->is<AstExprTable>() || middle->is<AstExprFunction>() || middle->is<AstExprInterpString>();
-        if (!alt && !literal)
+        bool logic = isBooleanLogic(node);
+        if (!alt && !literal && !logic)
         {
             if (std::optional<TypeId> type = context->getType(and_->right))
                 maybe = canBeFalsy(*type);
@@ -3791,12 +3860,13 @@ private:
             );
 
         // Luwu: `a and b or c` as a whole, which only means `if a then b else c` while `b` can't be falsy
-        emitWarning(
-            *context,
-            LintWarning::Code_LuaAndOr,
-            node->location,
-            "'a and b or c' gives 'c' whenever 'b' is falsy, not only when 'a' is; use 'if a then b else c'"
-        );
+        if (!logic)
+            emitWarning(
+                *context,
+                LintWarning::Code_LuaAndOr,
+                node->location,
+                "'a and b or c' gives 'c' whenever 'b' is falsy, not only when 'a' is; use 'if a then b else c'"
+            );
 
         return true;
     }
