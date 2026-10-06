@@ -99,22 +99,14 @@ static const std::unordered_set<std::string> kUnreachableTypeFunctions{"refine",
 // hierarchy root rather than telling someone that `Dog` is an external type.
 static const char* externTypeNoun(TypeId t)
 {
-    const ExternType* etv = get<ExternType>(t);
-    if (!etv || !etv->root)
-        return "external type";
+    const char* kind = get<ExternType>(t) ? luwuNominalKind(t) : nullptr;
+    return kind ? kind : "external type";
+}
 
-    const ExternType* rootEtv = get<ExternType>(follow(*etv->root));
-    if (!rootEtv)
-        return "external type";
-
-    if (rootEtv->name == "class")
-        return "class";
-    if (rootEtv->name == "object")
-        return "object";
-    if (rootEtv->name == "trait")
-        return "trait";
-
-    return "external type";
+// Luwu Classes (rfcs/classes): objects, classes and traits have fields. Tables and embedder types have keys.
+static const char* memberNoun(TypeId t)
+{
+    return luwuNominalKind(t) ? "Field" : "Key";
 }
 
 // A class declaration produces two extern types that both stringify as the bare class name, so a
@@ -186,6 +178,222 @@ static bool isClassValueAgainstItsObject(TypeId given, TypeId wanted)
     return nominalDisplayName(given).has_value() != nominalDisplayName(wanted).has_value();
 }
 
+// "a table", "a string or a table", ...: what `wanted` accepts when it only accepts tables and strings. nullopt for
+// anything else.
+static std::optional<std::string> tableOrStringNoun(TypeId wanted)
+{
+    bool acceptsTable = false;
+    bool acceptsString = false;
+
+    auto classify = [&](TypeId option) -> bool
+    {
+        option = follow(option);
+        const PrimitiveType* primitive = get<PrimitiveType>(option);
+        if (get<TableType>(option) || get<MetatableType>(option) || (primitive && primitive->type == PrimitiveType::Table))
+            acceptsTable = true;
+        else if (primitive && primitive->type == PrimitiveType::String)
+            acceptsString = true;
+        else
+            return false;
+
+        return true;
+    };
+
+    wanted = follow(wanted);
+    if (const UnionType* utv = get<UnionType>(wanted))
+    {
+        for (TypeId option : utv)
+        {
+            if (!classify(option))
+                return std::nullopt;
+        }
+    }
+    else if (!classify(wanted))
+        return std::nullopt;
+
+    if (!acceptsTable)
+        return std::nullopt;
+
+    return acceptsString ? "a string or a table" : "a table";
+}
+
+// Luwu Classes (rfcs/classes): objects, classes and traits are not tables, but a function that takes a table prints its
+// parameter as a table shape (`next` wants `{+ [K]: V +}`). Say what the value is instead of comparing it to that shape.
+static std::optional<std::string> luwuNominalWhereTableExpected(TypeId given, TypeId wanted)
+{
+    const char* kind = luwuNominalKind(given);
+    if (!kind)
+        return std::nullopt;
+
+    std::optional<std::string> wantedNoun = tableOrStringNoun(wanted);
+    if (!wantedNoun)
+        return std::nullopt;
+
+    std::string_view plural = "objects";
+    if (std::string_view(kind) == "class")
+        plural = "classes";
+    else if (std::string_view(kind) == "trait")
+        plural = "traits";
+
+    return "Expected this to be " + *wantedNoun + ", but got " + describeLuwuNominalValue(given) + "; " + std::string(plural) + " are not tables";
+}
+
+// Luwu Classes (rfcs/classes): how the object side of `obj == Cat` relates to the class or trait value it's compared with
+enum class ObjectAgainstDeclaration
+{
+    Is,        // `obj: Cat` against `Cat`
+    CouldBe,   // `obj: Cat | Dog` (or `Cat?`) against `Cat`
+    AnyObject, // `obj: object`, or a value typed by a trait, which could be an object of any class
+    Unrelated, // `obj: Dog` against `Cat`
+};
+
+// nullopt when `objectSide` isn't made of objects (and `nil`)
+static std::optional<ObjectAgainstDeclaration> classifyObjectAgainstDeclaration(TypeId objectSide, TypeId declarationValue)
+{
+    std::vector<TypeId> options;
+    objectSide = follow(objectSide);
+    if (const UnionType* utv = get<UnionType>(objectSide))
+        options.assign(begin(utv), end(utv));
+    else
+        options.push_back(objectSide);
+
+    // the type of the declaration's objects: `Cat` for `class<Cat>`
+    const ExternType* declarationEtv = get<ExternType>(follow(declarationValue));
+    const Obj* obj = declarationEtv && declarationEtv->relation ? declarationEtv->relation->get_if<Obj>() : nullptr;
+    const ExternType* declarationObject = obj ? get<ExternType>(follow(obj->ty)) : nullptr;
+
+    bool matches = false;
+    bool anyObject = false;
+    bool sawNil = false;
+    size_t objectCount = 0;
+
+    for (TypeId option : options)
+    {
+        option = follow(option);
+        if (const PrimitiveType* primitive = get<PrimitiveType>(option); primitive && primitive->type == PrimitiveType::NilType)
+        {
+            sawNil = true;
+            continue;
+        }
+
+        const char* kind = luwuNominalKind(option);
+        const ExternType* etv = get<ExternType>(option);
+        if (!etv || !kind || std::string_view(kind) != "object")
+            return std::nullopt;
+
+        ++objectCount;
+
+        // the `object` root itself has no relation
+        const Klass* klass = etv->relation ? etv->relation->get_if<Klass>() : nullptr;
+        const char* declarationKind = klass ? luwuNominalKind(klass->ty) : nullptr;
+        bool typedByTrait = declarationKind && std::string_view(declarationKind) == "trait";
+
+        // isSubclass also answers whether the object's class implements a trait, through `needs` too
+        if (declarationObject && isSubclass(etv, declarationObject))
+            matches = true;
+        else if (!klass || typedByTrait)
+            anyObject = true;
+    }
+
+    if (objectCount == 0)
+        return std::nullopt;
+
+    if (matches)
+    {
+        bool exactly = objectCount == 1 && !sawNil;
+        return exactly ? ObjectAgainstDeclaration::Is : ObjectAgainstDeclaration::CouldBe;
+    }
+
+    if (anyObject)
+        return ObjectAgainstDeclaration::AnyObject;
+
+    return ObjectAgainstDeclaration::Unrelated;
+}
+
+// Luwu Classes (rfcs/classes): comparing an object with a class or trait value (`obj == Cat`) is almost always an
+// attempt to check what the object is. Explains that, and how to narrow instead.
+static std::optional<std::string> classComparisonHelp(const CannotCompareUnrelatedTypes& e)
+{
+    bool leftIsDeclaration = nominalDisplayName(e.left).has_value();
+    bool rightIsDeclaration = nominalDisplayName(e.right).has_value();
+    if (leftIsDeclaration == rightIsDeclaration)
+        return std::nullopt;
+
+    TypeId declarationValue = leftIsDeclaration ? e.left : e.right;
+    TypeId objectSide = leftIsDeclaration ? e.right : e.left;
+    const std::optional<std::string>& declarationSpelling = leftIsDeclaration ? e.leftName : e.rightName;
+    const std::optional<std::string>& objectName = leftIsDeclaration ? e.rightName : e.leftName;
+
+    const ExternType* declarationEtv = get<ExternType>(follow(declarationValue));
+    std::optional<ObjectAgainstDeclaration> relation = classifyObjectAgainstDeclaration(objectSide, declarationValue);
+    if (!declarationEtv || !relation)
+        return std::nullopt;
+
+    const char* kind = luwuNominalKind(declarationValue);
+    bool isTrait = kind && std::string_view(kind) == "trait";
+    const std::string& name = declarationEtv->name;
+    std::string display = nominalDisplayName(declarationValue).value_or(name);
+
+    std::string checkFunction = isTrait ? "class.implements" : "class.isinstance";
+    std::string check = checkFunction + "(" + objectName.value_or("value") + ", " + declarationSpelling.value_or(name) + ")";
+    std::string subject = objectName ? "'" + *objectName + "'" : "the value";
+    std::string narrowLine = "To narrow " + subject + " into a '" + name + "', use '" + check + "'";
+
+    std::vector<std::string> lines;
+    switch (*relation)
+    {
+    case ObjectAgainstDeclaration::Unrelated:
+    {
+        const ExternType* objectEtv = get<ExternType>(follow(objectSide));
+        const Klass* klass = objectEtv && objectEtv->relation ? objectEtv->relation->get_if<Klass>() : nullptr;
+        if (klass)
+        {
+            std::string objectClass = nominalDisplayName(klass->ty).value_or(objectEtv->name);
+            lines.push_back("the type annotation '" + toString(objectSide) + "' refers to an object of '" + objectClass + "'");
+        }
+        if (isTrait)
+        {
+            lines.push_back("'" + display + "' is a trait itself, not an object that implements it");
+            lines.push_back("A '" + toString(objectSide) + "' doesn't implement '" + name + "'");
+        }
+        else
+        {
+            lines.push_back("'" + display + "' is a class itself (what you call to make '" + name + "' objects)");
+            lines.push_back("A '" + toString(objectSide) + "' cannot be a '" + name + "'");
+        }
+        break;
+    }
+    case ObjectAgainstDeclaration::AnyObject:
+        lines.push_back(isTrait ? "An object cannot be a trait" : "An object cannot be a class");
+        lines.push_back(narrowLine);
+        break;
+    case ObjectAgainstDeclaration::CouldBe:
+    case ObjectAgainstDeclaration::Is:
+    {
+        bool is = *relation == ObjectAgainstDeclaration::Is;
+        std::string object = objectName ? "the object '" + *objectName + "'" : "the object";
+
+        std::string claim = is ? " is a '" : " could be a '";
+        std::string itself = "the class itself";
+        if (isTrait)
+        {
+            claim = is ? " implements '" : " could implement '";
+            itself = "the trait itself";
+        }
+
+        lines.push_back(object + claim + name + "', but you're comparing it with " + itself + " (did you mean to narrow it instead?)");
+        lines.push_back(narrowLine);
+        break;
+    }
+    }
+
+    std::string help = std::string("Help (") + (isTrait ? "comparing trait with object" : "comparing class with object of class") + "):";
+    for (const std::string& line : lines)
+        help += "\n  - " + line;
+
+    return help;
+}
+
 std::string mismatchNotationLegend(uint8_t notation)
 {
     std::vector<std::string> parts;
@@ -239,6 +447,9 @@ struct ErrorConverter
             return *tm.overrideMessage;
 
         if (std::optional<std::string> message = classTraitValueMismatch(tm.givenType, tm.wantedType))
+            return *message;
+
+        if (std::optional<std::string> message = luwuNominalWhereTableExpected(tm.givenType, tm.wantedType))
             return *message;
 
         ToStringOptions typeOptions;
@@ -431,7 +642,7 @@ struct ErrorConverter
         if (get<TableType>(t))
             return "Key '" + e.key + "' not found in table '" + Luau::toString(t) + "'";
         else if (get<ExternType>(t))
-            return "Key '" + e.key + "' not found in " + externTypeNoun(t) + " '" + Luau::toString(t) + "'";
+            return std::string(memberNoun(t)) + " '" + e.key + "' not found in " + externTypeNoun(t) + " '" + Luau::toString(t) + "'";
         else
             return "Type '" + Luau::toString(e.table) + "' does not have key '" + e.key + "'";
     }
@@ -459,7 +670,16 @@ struct ErrorConverter
 
     std::string operator()(const Luau::CannotCompareUnrelatedTypes& e) const
     {
-        return "Cannot compare unrelated types '" + toString(e.left) + "' and '" + toString(e.right) + "' with '" + toString(e.op) + "'";
+        // Luwu Classes (rfcs/classes): a class value and its objects both print as the class name, so `obj == Cat` would read
+        // "unrelated types 'Cat' and 'Cat'". Spell the class side `class<Cat>` and point at the check that was meant.
+        std::string left = nominalDisplayName(e.left).value_or(toString(e.left));
+        std::string right = nominalDisplayName(e.right).value_or(toString(e.right));
+        std::string message = "Cannot compare unrelated types '" + left + "' and '" + right + "' with '" + toString(e.op) + "'";
+
+        if (std::optional<std::string> help = classComparisonHelp(e))
+            message += "\n\n" + *help;
+
+        return message;
     }
 
     std::string operator()(const Luau::OnlyTablesCanHaveMethods& e) const
@@ -599,9 +819,9 @@ struct ErrorConverter
             candidatesSuggestion += "'" + name + "'";
         }
 
-        std::string s = "Key '" + e.key + "' not found in ";
-
         TypeId t = follow(e.table);
+        std::string s = std::string(memberNoun(t)) + " '" + e.key + "' not found in ";
+
         if (get<ExternType>(t))
             s += externTypeNoun(t);
         else

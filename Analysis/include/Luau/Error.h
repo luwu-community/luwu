@@ -149,6 +149,11 @@ struct CannotCompareUnrelatedTypes
     TypeId right;
     AstExprBinary::Op op;
 
+    // Luwu Classes (rfcs/classes): how the source spells each operand (`o`, `a.pet`) when it is a name, for the help on
+    // comparing a class with an object
+    std::optional<std::string> leftName = std::nullopt;
+    std::optional<std::string> rightName = std::nullopt;
+
     bool operator==(const CannotCompareUnrelatedTypes& rhs) const;
 };
 

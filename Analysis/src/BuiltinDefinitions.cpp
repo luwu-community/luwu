@@ -56,6 +56,7 @@ struct MagicSetMetatable final : MagicFunction
         WithPredicate<TypePackId>
     ) override;
     bool infer(const MagicFunctionCallContext& ctx) override;
+    bool typeCheck(const MagicFunctionTypeCheckContext& ctx) override;
 };
 
 struct MagicAssert final : MagicFunction
@@ -89,6 +90,27 @@ struct MagicClone final : MagicFunction
         WithPredicate<TypePackId>
     ) override;
     bool infer(const MagicFunctionCallContext& context) override;
+    bool typeCheck(const MagicFunctionTypeCheckContext& ctx) override;
+};
+
+// Luwu Classes (rfcs/classes): `rawset` is declared to take `{[K]: V}`, which an object still satisfies, but the
+// runtime only accepts tables. This magic function only adds that check.
+struct MagicRawset final : MagicFunction
+{
+    std::optional<WithPredicate<TypePackId>> handleOldSolver(
+        struct TypeChecker&,
+        const std::shared_ptr<struct Scope>&,
+        const class AstExprCall&,
+        WithPredicate<TypePackId>
+    ) override
+    {
+        return std::nullopt;
+    }
+    bool infer(const MagicFunctionCallContext&) override
+    {
+        return false;
+    }
+    bool typeCheck(const MagicFunctionTypeCheckContext& ctx) override;
 };
 
 struct MagicFreeze final : MagicFunction
@@ -503,6 +525,7 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
     }
 
     attachMagicFunction(getGlobalBinding(globals, "setmetatable"), std::make_shared<MagicSetMetatable>());
+    attachMagicFunction(getGlobalBinding(globals, "rawset"), std::make_shared<MagicRawset>());
     attachMagicFunction(getGlobalBinding(globals, "select"), std::make_shared<MagicSelect>());
 
     if (TableType* ttv = getMutable<TableType>(getGlobalBinding(globals, "table")))
@@ -1483,6 +1506,42 @@ std::optional<WithPredicate<TypePackId>> MagicSetMetatable::handleOldSolver(
 bool MagicSetMetatable::infer(const MagicFunctionCallContext&)
 {
     return false;
+}
+
+// Luwu Classes (rfcs/classes): the table library and the raw functions raise "table expected, got object" for an
+// object, class or trait value. Several of them are declared over an unconstrained generic (`<T>(T) -> T`), so nothing
+// else rejects one. Constraining the generic to tables instead would also reject generic code that passes a `T` along.
+// Returns true when it reported an error.
+static bool reportLuwuNominalFirstArgument(const MagicFunctionTypeCheckContext& ctx)
+{
+    if (ctx.callSite->args.size == 0)
+        return false;
+
+    const auto& [paramTypes, _] = flatten(ctx.arguments);
+    if (paramTypes.empty())
+        return false;
+
+    TypeId firstArgument = follow(paramTypes[0]);
+    if (!luwuNominalKind(firstArgument))
+        return false;
+
+    ctx.typechecker->reportError(TypeMismatch{ctx.builtinTypes->tableType, firstArgument}, ctx.callSite->args.data[0]->location);
+    return true;
+}
+
+bool MagicSetMetatable::typeCheck(const MagicFunctionTypeCheckContext& ctx)
+{
+    return reportLuwuNominalFirstArgument(ctx);
+}
+
+bool MagicRawset::typeCheck(const MagicFunctionTypeCheckContext& ctx)
+{
+    return reportLuwuNominalFirstArgument(ctx);
+}
+
+bool MagicClone::typeCheck(const MagicFunctionTypeCheckContext& ctx)
+{
+    return reportLuwuNominalFirstArgument(ctx);
 }
 
 std::optional<WithPredicate<TypePackId>> MagicAssert::handleOldSolver(

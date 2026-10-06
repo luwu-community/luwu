@@ -1280,20 +1280,21 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "writes_to_class_object_properties_are_forbid
     CHECK(pav1->key == "zero");
     CHECK(pav1->context == PropertyAccessViolation::CannotWrite);
 
-    auto* pav2 = get<PropertyAccessViolation>(result.errors[2]);
-    REQUIRE(pav2);
-    CHECK(pav2->key == "one");
-    CHECK(pav2->context == PropertyAccessViolation::CannotWrite);
+    // Luwu: upstream reports a write to a member the class doesn't have (`one`, `__index`) as read-only, the way it
+    // treats an extern type. Luwu reports the member as not found, so a misspelled name isn't called read-only.
+    auto* up2 = get<UnknownProperty>(result.errors[2]);
+    REQUIRE(up2);
+    CHECK(up2->key == "one");
 
-    auto* pav3 = get<PropertyAccessViolation>(result.errors[3]);
-    REQUIRE(pav3);
-    CHECK(pav3->key == "__index");
-    CHECK(pav3->context == PropertyAccessViolation::CannotWrite);
+    auto* up3 = get<UnknownProperty>(result.errors[3]);
+    REQUIRE(up3);
+    CHECK(up3->key == "__index");
 
-    auto* pav4 = get<PropertyAccessViolation>(result.errors[4]);
-    REQUIRE(pav4);
-    CHECK(pav4->key == "__call");
-    CHECK(pav4->context == PropertyAccessViolation::CannotWrite);
+    // Luwu: `getmetatable` of a class is nil, as at runtime, so writing `__call` into it indexes nil. Upstream types it
+    // as the class's metatable and reports `__call` as read-only.
+    auto* nat4 = get<NotATable>(result.errors[4]);
+    REQUIRE(nat4);
+    CHECK_EQ("nil", toString(nat4->ty));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "writes_to_unknown_class_instance_properties_are_forbidden")
@@ -1338,15 +1339,14 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "writes_to_unknown_class_instance_properties_
     CHECK(pav1->key == "zero");
     CHECK(pav1->context == PropertyAccessViolation::CannotWrite);
 
-    auto* pav2 = get<PropertyAccessViolation>(result.errors[2]);
-    REQUIRE(pav2);
-    CHECK(pav2->key == "one");
-    CHECK(pav2->context == PropertyAccessViolation::CannotWrite);
+    // Luwu: upstream reports writing a member an object doesn't have as read-only (see the test above)
+    auto* up2 = get<UnknownProperty>(result.errors[2]);
+    REQUIRE(up2);
+    CHECK(up2->key == "one");
 
-    auto* pav3 = get<PropertyAccessViolation>(result.errors[3]);
-    REQUIRE(pav3);
-    CHECK(pav3->key == "__index");
-    CHECK(pav3->context == PropertyAccessViolation::CannotWrite);
+    auto* up3 = get<UnknownProperty>(result.errors[3]);
+    REQUIRE(up3);
+    CHECK(up3->key == "__index");
 }
 
 TEST_SUITE_END();

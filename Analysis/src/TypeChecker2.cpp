@@ -1196,6 +1196,16 @@ void TypeChecker2::visit(AstStatFor* forStatement)
     visit(forStatement->body);
 }
 
+// Luwu Classes (rfcs/classes): `for ... in x` where `x` is an object (or a class or trait value) without `__iter`.
+// `kind` is luwuNominalKind(iteratorTy).
+static std::string notIterableMessage(TypeId iteratorTy, const char* kind)
+{
+    if (std::string_view(kind) == "object")
+        return "Cannot iterate over " + describeLuwuNominalValue(iteratorTy) + ": its class doesn't define '__iter'";
+
+    return "Cannot iterate over " + describeLuwuNominalValue(iteratorTy) + " itself; only objects can be iterated, when their class defines '__iter'";
+}
+
 void TypeChecker2::visit(AstStatForIn* forInStatement)
 {
     for (AstLocal* local : forInStatement->vars)
@@ -1473,7 +1483,12 @@ void TypeChecker2::visit(AstStatForIn* forInStatement)
     }
     else if (!iteratorNorm || !iteratorNorm->shouldSuppressErrors())
     {
-        reportError(CannotCallNonFunction{iteratorTy}, forInStatement->values.data[0]->location);
+        // Luwu Classes (rfcs/classes): upstream reports any other iteratee as "Cannot call a value of type X", which
+        // for an object hides that its class just doesn't define `__iter`.
+        if (const char* kind = luwuNominalKind(iteratorTy))
+            reportError(GenericError{notIterableMessage(iteratorTy, kind)}, forInStatement->values.data[0]->location);
+        else
+            reportError(CannotCallNonFunction{iteratorTy}, forInStatement->values.data[0]->location);
     }
 }
 
@@ -3953,6 +3968,89 @@ static bool isComparisonOp(AstExprBinary::Op op)
            op == AstExprBinary::CompareLe || op == AstExprBinary::CompareLt;
 }
 
+struct TypeQuery
+{
+    std::string_view function; // "type" or "typeof"
+    AstExpr* argument;
+};
+
+// `type(x)` or `typeof(x)`, where `type`/`typeof` is the global
+static std::optional<TypeQuery> matchTypeQuery(AstExpr* expr)
+{
+    AstExprCall* call = expr->as<AstExprCall>();
+    if (!call || call->self || call->args.size != 1)
+        return std::nullopt;
+
+    AstExprGlobal* global = call->func->as<AstExprGlobal>();
+    if (!global)
+        return std::nullopt;
+
+    std::string_view name = global->name.value;
+    if (name != "type" && name != "typeof")
+        return std::nullopt;
+
+    return TypeQuery{name, call->args.data[0]};
+}
+
+// What to check instead, for a value of type `queriedTy` (an object, class or trait value): its class, or the trait its
+// declared type names.
+static std::optional<std::string> luwuNominalCheckHint(TypeId queriedTy)
+{
+    const ExternType* etv = get<ExternType>(follow(queriedTy));
+    if (!etv || !etv->relation)
+        return std::nullopt;
+
+    const Klass* klass = etv->relation->get_if<Klass>();
+    if (!klass)
+        return std::nullopt;
+
+    const char* declarationKind = luwuNominalKind(klass->ty);
+    bool isTrait = declarationKind && std::string_view(declarationKind) == "trait";
+    return luwuNominalCheckSuggestion(etv->name, isTrait);
+}
+
+static std::string luwuNominalTypeComparisonMessage(
+    std::string_view queryFunction,
+    std::string_view compared,
+    TypeId queriedTy,
+    const char* kind,
+    bool comparesEqual
+)
+{
+    std::string_view result = comparesEqual ? "false" : "true";
+    std::string message = "'" + std::string(queryFunction) + "' of " + describeLuwuNominalValue(queriedTy) + " is always \"" + kind +
+                          "\", so comparing it with \"" + std::string(compared) + "\" is always " + std::string(result);
+
+    if (std::optional<std::string> hint = luwuNominalCheckHint(queriedTy))
+        message += "; " + *hint;
+
+    return message;
+}
+
+void TypeChecker2::checkLuwuNominalTypeComparison(AstExprBinary* expr)
+{
+    std::optional<TypeQuery> query = matchTypeQuery(expr->left);
+    AstExpr* other = expr->right;
+    if (!query)
+    {
+        query = matchTypeQuery(expr->right);
+        other = expr->left;
+    }
+
+    AstExprConstantString* compared = other->as<AstExprConstantString>();
+    if (!query || !compared)
+        return;
+
+    TypeId queriedTy = lookupType(query->argument);
+    const char* kind = luwuNominalKind(queriedTy);
+    std::string_view comparedName{compared->value.data, compared->value.size};
+    if (!kind || comparedName == kind)
+        return;
+
+    bool comparesEqual = expr->op == AstExprBinary::Op::CompareEq;
+    reportError(GenericError{luwuNominalTypeComparisonMessage(query->function, comparedName, queriedTy, kind, comparesEqual)}, expr->location);
+}
+
 TypeId TypeChecker2::visit(AstExprBinary* expr, AstNode* overrideKey)
 {
     std::optional<InConditionalContext> inContext;
@@ -3972,6 +4070,9 @@ TypeId TypeChecker2::visit(AstExprBinary* expr, AstNode* overrideKey)
     bool isEquality = expr->op == AstExprBinary::Op::CompareEq || expr->op == AstExprBinary::Op::CompareNe;
     bool isComparison = isComparisonOp(expr->op);
     bool isLogical = expr->op == AstExprBinary::Op::And || expr->op == AstExprBinary::Op::Or;
+
+    if (isEquality)
+        checkLuwuNominalTypeComparison(expr);
 
     TypeId leftType = follow(lookupType(expr->left));
     TypeId rightType = follow(lookupType(expr->right));
@@ -4021,7 +4122,8 @@ TypeId TypeChecker2::visit(AstExprBinary* expr, AstNode* overrideKey)
     {
         if (!isOkToCompare(normalizer, typesHaveIntersection, normLeft, normRight))
         {
-            reportError(CannotCompareUnrelatedTypes{leftType, rightType, expr->op}, expr->location);
+            CannotCompareUnrelatedTypes error{leftType, rightType, expr->op, bindingName(expr->left), bindingName(expr->right)};
+            reportError(std::move(error), expr->location);
             return builtinTypes->errorType;
         }
 
@@ -6509,7 +6611,11 @@ void TypeChecker2::checkIndexTypeFromType(
                 reportError(NotATable{tableTy}, location);
             else if (auto et = get<ExternType>(tableTy))
             {
-                if (et->indexer)
+                // Luwu Classes (rfcs/classes): upstream calls a write to a missing property of an extern type
+                // "read-only", since an embedder's type can't grow new properties. For an object, class or trait
+                // that hides a misspelled field name, so report the field as not found.
+                bool reportAsUnknown = et->indexer || luwuNominalKind(tableTy);
+                if (reportAsUnknown)
                     reportError(UnknownProperty{tableTy, prop}, location);
                 else
                     reportError(PropertyAccessViolation{tableTy, prop, PropertyAccessViolation::CannotWrite}, location);

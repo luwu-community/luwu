@@ -4639,6 +4639,13 @@ InferencePack ConstraintGenerator::checkExprCall(
 
         target = follow(target);
 
+        // Luwu Classes (rfcs/classes): setmetatable raises on an object, class or trait value, and
+        // MagicSetMetatable::typeCheck reports it. Leave the target's binding alone, so later uses don't see a metatable
+        // wrapped around an object. A target whose type isn't known yet here (a local initialized from a call) still
+        // gets one.
+        if (luwuNominalKind(target))
+            return InferencePack{arena->addTypePack({target}), {refinementArena.variadic(returnRefinements)}};
+
         AstExpr* targetExpr = call->args.data[0];
 
         TypeId resultTy = nullptr;

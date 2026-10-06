@@ -1738,6 +1738,15 @@ setfenv(g :: number, {})
 setfenv(h :: any, {})
 )");
 
+    // Luwu: every call also gets an OptimizationHint (see OptimizationHintFenvDeoptimizesTheModule)
+    std::vector<LintWarning> deprecations;
+    for (const LintWarning& warning : result.warnings)
+    {
+        if (warning.code == LintWarning::Code_DeprecatedApi)
+            deprecations.push_back(warning);
+    }
+    result.warnings = std::move(deprecations);
+
     REQUIRE(4 == result.warnings.size());
     CHECK_EQ(result.warnings[0].text, "Function 'getfenv' is deprecated; consider using 'debug.info' instead");
     CHECK_EQ(result.warnings[0].location.begin.line + 1, 4);
@@ -3361,6 +3370,209 @@ declare version
 return version
 )");
     CHECK(0 == result.warnings.size());
+}
+
+static std::vector<LintWarning> optimizationHints(const LintResult& result)
+{
+    std::vector<LintWarning> hints;
+    for (const LintWarning& warning : result.warnings)
+    {
+        if (warning.code == LintWarning::Code_OptimizationHint)
+            hints.push_back(warning);
+    }
+    return hints;
+}
+
+TEST_CASE_FIXTURE(Fixture, "OptimizationHintSuggestsIsinstanceForNilCheckedClassObjects")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    LintResult result = lint(R"(
+class Cat(name: string)
+    function meow(self): string
+        return self.name
+    end
+end
+
+local function a(cat: Cat?, other: Cat | none)
+    if cat then
+        print(cat:meow())
+    elseif other ~= none then
+        print(other.name)
+    end
+end
+
+-- already proven, no use in the body, only a closure uses it, a non-optional annotation, not a class
+local function quiet(cat: Cat?, plain: Cat, s: string?)
+    if class.isinstance(cat, Cat) then print(cat:meow()) end
+    if cat then print("has a cat") end
+    if cat then print(function() return cat:meow() end) end
+    if plain then print(plain:meow()) end
+    if s then print(s:upper()) end
+end
+
+return a, quiet
+)");
+
+    std::vector<LintWarning> hints = optimizationHints(result);
+    REQUIRE(2 == hints.size());
+    CHECK_EQ(8, hints[0].location.begin.line);
+    CHECK_EQ(
+        hints[0].text,
+        "Checking 'cat' for nil doesn't prove to the compiler that it's a 'Cat', since type annotations are only trusted under '--!trust'; use "
+        "'if class.isinstance(cat, Cat) then' so 'Cat' methods can be inlined here"
+    );
+    CHECK_EQ(10, hints[1].location.begin.line);
+}
+
+TEST_CASE_FIXTURE(Fixture, "OptimizationHintIsSilentInTrustedFiles")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    const char* source = R"(--!trust
+class Cat(name: string) end
+
+local function a(cat: Cat?)
+    if cat then
+        print(cat.name)
+    end
+end
+
+return a
+)";
+
+    {
+        // the directive does nothing while the embedder doesn't allow it, so the hint still applies
+        ScopedFastFlag disallowTrust{FFlag::DebugLuwuCompilerTrustsTypeAnnotations, false};
+        CHECK(1 == optimizationHints(lint(source)).size());
+    }
+
+    ScopedFastFlag allowTrust{FFlag::DebugLuwuCompilerTrustsTypeAnnotations, true};
+    CHECK(optimizationHints(lint(source)).empty());
+}
+
+TEST_CASE_FIXTURE(Fixture, "OptimizationHintAssertAndFieldMethodCalls")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    LintResult result = lint(R"(
+class Vec2(x: number, y: number)
+    function add(self, o: Vec2): Vec2
+        return Vec2(self.x + o.x, self.y + o.y)
+    end
+end
+
+class Body(pos: Vec2, vel: Vec2)
+    function sum(self): Vec2
+        local moved = self.pos:add(self.vel)
+        return moved:add(self.pos:add(moved))
+    end
+
+    function step(self)
+        self.pos = self.pos:add(self.vel)
+        self.pos = self.pos:add(self.vel)
+    end
+end
+
+local function guard(v: Vec2?)
+    assert(v)
+    return v:add(v)
+end
+
+local function quietGuard(v: Vec2?)
+    assert(v)
+    return "no use after it"
+end
+
+return guard, quietGuard
+)");
+
+    // `step` assigns `self.pos` between its calls, so binding it to a local once would change what it does
+    std::vector<LintWarning> hints = optimizationHints(result);
+    REQUIRE(2 == hints.size());
+    CHECK_EQ(9, hints[0].location.begin.line);
+    CHECK_EQ(
+        hints[0].text,
+        "'self.pos' has 2 method calls here, but a field can't be proven to be a 'Vec2' in place, so none of them can be inlined; check it "
+        "once in a local: 'local pos = self.pos' and 'assert(class.isinstance(pos, Vec2))'"
+    );
+    CHECK_EQ(20, hints[1].location.begin.line);
+    CHECK_EQ(
+        hints[1].text,
+        "Asserting 'v' isn't nil doesn't prove to the compiler that it's a 'Vec2', since type annotations are only trusted under '--!trust'; "
+        "use 'assert(class.isinstance(v, Vec2))' so 'Vec2' methods can be inlined after it"
+    );
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "OptimizationHintFenvAndFloorDivision")
+{
+    LintResult result = lint(R"(
+local function f(a: number, b: number, v: vector)
+    local env = getfenv(1)
+    setfenv(2, env)
+    return math.floor(a / b), math.floor(a), math.floor(v / v)
+end
+
+return f
+)");
+
+    std::vector<LintWarning> hints = optimizationHints(result);
+    REQUIRE(3 == hints.size());
+    CHECK_EQ(hints[0].text, "Using 'getfenv' deoptimizes this entire module and makes your code run slower");
+    CHECK_EQ(hints[1].text, "Using 'setfenv' deoptimizes this entire module and makes your code run slower");
+    CHECK_EQ(hints[2].text, "'math.floor(a / b)' divides and then calls a function; 'a // b' gives the same result in one instruction");
+}
+
+static size_t countWarnings(const LintResult& result, LintWarning::Code code)
+{
+    size_t count = 0;
+    for (const LintWarning& warning : result.warnings)
+    {
+        if (warning.code == code)
+            ++count;
+    }
+    return count;
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "OptimizationHintLoopParts")
+{
+    const std::string source = R"(
+local function f(names: { string }, queue: { number })
+    local s = ""
+    for _, name in names do
+        s ..= name
+        s = s .. ","
+        local line = ""
+        line ..= name
+    end
+    while #queue > 0 do
+        local first = table.remove(queue, 1)
+        table.insert(queue, 1, first :: number)
+        table.remove(queue)
+        local inner = {}
+        table.insert(inner, 1, 0)
+    end
+    local function later() s ..= "!" end
+    return s, later
+end
+
+return f
+)";
+
+    LintResult all = lint(source);
+    CHECK_EQ(2, countWarnings(all, LintWarning::Code_LoopConcat));
+    CHECK_EQ(1, countWarnings(all, LintWarning::Code_InefficientTableInsert));
+    CHECK_EQ(1, countWarnings(all, LintWarning::Code_InefficientTableRemove));
+
+    // each part can be turned off alone, and turning off OptimizationHint turns them all off
+    LintResult noConcat = lint("--!nolint LoopConcat\n" + source);
+    CHECK_EQ(0, countWarnings(noConcat, LintWarning::Code_LoopConcat));
+    CHECK_EQ(1, countWarnings(noConcat, LintWarning::Code_InefficientTableRemove));
+
+    LintResult noHints = lint("--!nolint OptimizationHint\n" + source);
+    CHECK_EQ(0, countWarnings(noHints, LintWarning::Code_LoopConcat));
+    CHECK_EQ(0, countWarnings(noHints, LintWarning::Code_InefficientTableInsert));
+    CHECK_EQ(0, countWarnings(noHints, LintWarning::Code_InefficientTableRemove));
 }
 
 TEST_SUITE_END();

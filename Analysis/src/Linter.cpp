@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cmath>
 #include <climits>
+#include <unordered_set>
 
 LUAU_FASTINTVARIABLE(LuauSuggestionDistance, 4)
 LUAU_FASTFLAGVARIABLE(LuauFunctionUnusedRecursiveLinting)
@@ -4060,7 +4061,8 @@ static void lintComments(LintContext& context, const std::vector<HotComment>& ho
     }
 }
 
-static bool hasNativeCommentDirective(const std::vector<HotComment>& hotcomments)
+// Whether the module's header has the `--!<name>` directive
+static bool hasHeaderCommentDirective(const std::vector<HotComment>& hotcomments, std::string_view name)
 {
     for (const HotComment& hc : hotcomments)
     {
@@ -4072,12 +4074,24 @@ static bool hasNativeCommentDirective(const std::vector<HotComment>& hotcomments
             size_t space = hc.content.find_first_of(" \t");
             std::string_view first = std::string_view(hc.content).substr(0, space);
 
-            if (first == "native")
+            if (first == name)
                 return true;
         }
     }
 
     return false;
+}
+
+static bool hasNativeCommentDirective(const std::vector<HotComment>& hotcomments)
+{
+    return hasHeaderCommentDirective(hotcomments, "native");
+}
+
+static AstExpr* unparenthesized(AstExpr* expr)
+{
+    while (AstExprGroup* group = expr->as<AstExprGroup>())
+        expr = group->expr;
+    return expr;
 }
 
 // A short name for a value in a lint message (`x`, `t.value`, `obj:method`), or nullopt when it has none.
@@ -4123,13 +4137,6 @@ private:
     // `if`/`while` conditions, and the keyword that introduces each, so the fix can also be offered as
     // a plain truthiness test.
     DenseHashMap<AstExpr*, const char*> conditions{nullptr};
-
-    static AstExpr* unparenthesized(AstExpr* expr)
-    {
-        while (AstExprGroup* group = expr->as<AstExprGroup>())
-            expr = group->expr;
-        return expr;
-    }
 
     bool visit(AstStatIf* node) override
     {
@@ -4255,6 +4262,638 @@ private:
                 compared,
                 always,
                 instead
+            );
+
+        return true;
+    }
+};
+
+// Luwu: `OptimizationHint` reports code the compiler could make faster if it were written differently.
+//
+// Luwu Classes (rfcs/classes): most hints are about proving a value's class. Without `--!trust`, the compiler doesn't
+// act on type annotations, so `if cat then cat:meow() end` with `cat: Cat?` proves nothing about `cat`'s class and
+// `cat:meow()` stays an ordinary method call. `if class.isinstance(cat, Cat) then` (or `assert(...)` of it) proves it,
+// which lets the compiler inline `Cat`'s methods and read its fields at fixed offsets. These hints are only for classes
+// declared in this file, the only ones the compiler can inline.
+class LintOptimizationHint : AstVisitor
+{
+public:
+    LUAU_NOINLINE static void process(LintContext& context, bool classHints)
+    {
+        LintOptimizationHint pass;
+        pass.context = &context;
+
+        if (classHints)
+        {
+            ClassCollector collector{&pass.classes};
+            context.root->visit(&collector);
+        }
+
+        context.root->visit(&pass);
+        pass.reportFieldMethodCalls(context.root);
+    }
+
+private:
+    // Below this many method calls through the same field in one function, binding it to a local isn't worth a hint.
+    static constexpr size_t kFieldMethodCallHintThreshold = 2;
+
+    LintContext* context;
+    // The names of the classes declared in this file. Empty when class hints are off.
+    std::unordered_set<std::string> classes;
+
+    struct ClassCollector : AstVisitor
+    {
+        std::unordered_set<std::string>* classes;
+
+        explicit ClassCollector(std::unordered_set<std::string>* classes)
+            : classes(classes)
+        {
+        }
+
+        bool visit(AstStatClass* node) override
+        {
+            if (!node->isTrait)
+                classes->insert(node->name->name.value);
+            return true;
+        }
+    };
+
+    // Whether code reads a field of `local` or calls a method on it, outside nested functions: a `class.isinstance`
+    // proof doesn't reach into a closure.
+    struct LocalIndexFinder : AstVisitor
+    {
+        AstLocal* local;
+        bool found = false;
+
+        explicit LocalIndexFinder(AstLocal* local)
+            : local(local)
+        {
+        }
+
+        bool visit(AstExprIndexName* node) override
+        {
+            AstExprLocal* indexed = unparenthesized(node->expr)->as<AstExprLocal>();
+            if (indexed && indexed->local == local)
+                found = true;
+            return !found;
+        }
+
+        bool visit(AstExprFunction*) override
+        {
+            return false;
+        }
+    };
+
+    // `a.field:method(...)` calls in one function, by `a` and `field`, not counting nested functions. A field the
+    // function also assigns can't be read into a local once, so those are marked.
+    struct FieldMethodCallCounter : AstVisitor
+    {
+        struct Calls
+        {
+            AstExprIndexName* field = nullptr; // the first `a.field` called through
+            size_t count = 0;
+            bool assigned = false;
+        };
+
+        std::vector<std::pair<std::pair<AstLocal*, AstName>, Calls>> calls;
+
+        // `a.field` as a key, or nullopt when it isn't one
+        static std::optional<std::pair<AstLocal*, AstName>> keyOf(AstExpr* expr)
+        {
+            AstExprIndexName* field = unparenthesized(expr)->as<AstExprIndexName>();
+            AstExprLocal* base = field && field->op == '.' ? unparenthesized(field->expr)->as<AstExprLocal>() : nullptr;
+            if (!base)
+                return std::nullopt;
+
+            return std::pair<AstLocal*, AstName>{base->local, field->index};
+        }
+
+        Calls& entry(const std::pair<AstLocal*, AstName>& key)
+        {
+            auto it = std::find_if(
+                calls.begin(),
+                calls.end(),
+                [&](const auto& existing)
+                {
+                    return existing.first == key;
+                }
+            );
+            if (it != calls.end())
+                return it->second;
+
+            calls.push_back({key, Calls{}});
+            return calls.back().second;
+        }
+
+        void markAssigned(AstExpr* target)
+        {
+            if (std::optional<std::pair<AstLocal*, AstName>> key = keyOf(target))
+                entry(*key).assigned = true;
+        }
+
+        bool visit(AstExprCall* node) override
+        {
+            AstExprIndexName* method = node->self ? node->func->as<AstExprIndexName>() : nullptr;
+            std::optional<std::pair<AstLocal*, AstName>> key = method ? keyOf(method->expr) : std::nullopt;
+            if (!key)
+                return true;
+
+            Calls& counted = entry(*key);
+            if (!counted.field)
+                counted.field = unparenthesized(method->expr)->as<AstExprIndexName>();
+            ++counted.count;
+            return true;
+        }
+
+        bool visit(AstStatAssign* node) override
+        {
+            for (AstExpr* var : node->vars)
+                markAssigned(var);
+            return true;
+        }
+
+        bool visit(AstStatCompoundAssign* node) override
+        {
+            markAssigned(node->var);
+            return true;
+        }
+
+        bool visit(AstExprFunction*) override
+        {
+            return false;
+        }
+    };
+
+    struct FunctionCollector : AstVisitor
+    {
+        std::vector<AstStatBlock*> bodies;
+
+        bool visit(AstExprFunction* node) override
+        {
+            bodies.push_back(node->body);
+            return true;
+        }
+    };
+
+    static bool isNilOrNone(AstExpr* expr)
+    {
+        AstExprGlobal* global = expr->as<AstExprGlobal>();
+        return expr->is<AstExprConstantNil>() || (global && global->name == "none");
+    }
+
+    // The local `x`, `x ~= nil` or `x ~= none` narrows when it's true
+    static AstExprLocal* narrowedLocal(AstExpr* condition)
+    {
+        condition = unparenthesized(condition);
+        if (AstExprLocal* local = condition->as<AstExprLocal>())
+            return local;
+
+        AstExprBinary* binary = condition->as<AstExprBinary>();
+        if (!binary || binary->op != AstExprBinary::CompareNe)
+            return nullptr;
+
+        AstExpr* value = unparenthesized(binary->left);
+        AstExpr* sentinel = unparenthesized(binary->right);
+        if (isNilOrNone(value))
+            std::swap(value, sentinel);
+
+        if (!isNilOrNone(sentinel))
+            return nullptr;
+
+        return value->as<AstExprLocal>();
+    }
+
+    static bool isNilOrNoneType(AstType* type)
+    {
+        if (type->is<AstTypeOptional>())
+            return true;
+
+        AstTypeReference* reference = type->as<AstTypeReference>();
+        return reference && !reference->prefix && (reference->name == "nil" || reference->name == "none");
+    }
+
+    // `Cat?`, `Cat | nil` or `Cat | none`, where `Cat` is a class declared in this file
+    std::optional<AstName> optionalClassAnnotation(AstType* annotation) const
+    {
+        if (!annotation)
+            return std::nullopt;
+
+        while (AstTypeGroup* group = annotation->as<AstTypeGroup>())
+            annotation = group->type;
+
+        AstTypeUnion* typeUnion = annotation->as<AstTypeUnion>();
+        if (!typeUnion)
+            return std::nullopt;
+
+        std::optional<AstName> className;
+        bool optional = false;
+        for (AstType* part : typeUnion->types)
+        {
+            while (AstTypeGroup* group = part->as<AstTypeGroup>())
+                part = group->type;
+
+            if (isNilOrNoneType(part))
+            {
+                optional = true;
+                continue;
+            }
+
+            AstTypeReference* reference = part->as<AstTypeReference>();
+            bool isLocalClass = reference && !reference->prefix && classes.count(reference->name.value) > 0;
+            if (!isLocalClass || className)
+                return std::nullopt;
+
+            className = reference->name;
+        }
+
+        if (!optional)
+            return std::nullopt;
+
+        return className;
+    }
+
+    // The class a nil check on `condition` should have been a `class.isinstance` check for
+    std::optional<AstName> nilCheckedClass(AstExpr* condition, AstExprLocal*& narrowed) const
+    {
+        narrowed = narrowedLocal(condition);
+        if (!narrowed)
+            return std::nullopt;
+
+        return optionalClassAnnotation(narrowed->local->annotation);
+    }
+
+    bool visit(AstStatIf* node) override
+    {
+        AstExprLocal* narrowed = nullptr;
+        std::optional<AstName> className = nilCheckedClass(node->condition, narrowed);
+        if (!className)
+            return true;
+
+        LocalIndexFinder finder{narrowed->local};
+        node->thenbody->visit(&finder);
+        if (!finder.found)
+            return true;
+
+        const char* name = narrowed->local->name.value;
+        emitWarning(
+            *context,
+            LintWarning::Code_OptimizationHint,
+            node->condition->location,
+            "Checking '%s' for nil doesn't prove to the compiler that it's a '%s', since type annotations are only trusted under "
+            "'--!trust'; use 'if class.isinstance(%s, %s) then' so '%s' methods can be inlined here",
+            name,
+            className->value,
+            name,
+            className->value,
+            className->value
+        );
+
+        return true;
+    }
+
+    // `assert(cat)` proves nothing about `cat`'s class; `assert(class.isinstance(cat, Cat))` proves it for the rest of the
+    // block
+    bool visit(AstStatBlock* node) override
+    {
+        for (size_t i = 0; i < node->body.size; ++i)
+        {
+            AstStatExpr* statement = node->body.data[i]->as<AstStatExpr>();
+            AstExprCall* call = statement ? statement->expr->as<AstExprCall>() : nullptr;
+            AstExprGlobal* callee = call ? call->func->as<AstExprGlobal>() : nullptr;
+            if (!callee || callee->name != "assert" || call->args.size == 0)
+                continue;
+
+            AstExprLocal* narrowed = nullptr;
+            std::optional<AstName> className = nilCheckedClass(call->args.data[0], narrowed);
+            if (!className)
+                continue;
+
+            LocalIndexFinder finder{narrowed->local};
+            for (size_t j = i + 1; j < node->body.size && !finder.found; ++j)
+                node->body.data[j]->visit(&finder);
+
+            if (!finder.found)
+                continue;
+
+            const char* name = narrowed->local->name.value;
+            emitWarning(
+                *context,
+                LintWarning::Code_OptimizationHint,
+                call->location,
+                "Asserting '%s' isn't nil doesn't prove to the compiler that it's a '%s', since type annotations are only trusted "
+                "under '--!trust'; use 'assert(class.isinstance(%s, %s))' so '%s' methods can be inlined after it",
+                name,
+                className->value,
+                name,
+                className->value,
+                className->value
+            );
+        }
+
+        return true;
+    }
+
+    // `math.floor(a / b)` with numbers is `a // b`, which is a single instruction
+    void checkFloorDivision(AstExprCall* node)
+    {
+        AstExprIndexName* function = node->func->as<AstExprIndexName>();
+        AstExprGlobal* library = function ? function->expr->as<AstExprGlobal>() : nullptr;
+        if (!library || library->name != "math" || function->index != "floor" || node->args.size != 1)
+            return;
+
+        AstExprBinary* division = unparenthesized(node->args.data[0])->as<AstExprBinary>();
+        if (!division || division->op != AstExprBinary::Div)
+            return;
+
+        std::optional<TypeId> left = context->getType(division->left);
+        std::optional<TypeId> right = context->getType(division->right);
+        if (!left || !right || !isNumber(*left) || !isNumber(*right))
+            return;
+
+        emitWarning(
+            *context,
+            LintWarning::Code_OptimizationHint,
+            node->location,
+            "'math.floor(a / b)' divides and then calls a function; 'a // b' gives the same result in one instruction"
+        );
+    }
+
+    // Calling `getfenv` or `setfenv` turns off the environment's `safeenv`, which every imported global and fast builtin
+    // call in the module depends on. This is separate from their deprecation warning, which only fires for a stack
+    // level argument.
+    void checkFenv(AstExprCall* node)
+    {
+        AstExprGlobal* callee = node->self ? nullptr : node->func->as<AstExprGlobal>();
+        if (!callee || (callee->name != "getfenv" && callee->name != "setfenv"))
+            return;
+
+        emitWarning(
+            *context,
+            LintWarning::Code_OptimizationHint,
+            node->location,
+            "Using '%s' deoptimizes this entire module and makes your code run slower",
+            callee->name.value
+        );
+    }
+
+    bool visit(AstExprCall* node) override
+    {
+        checkFloorDivision(node);
+        checkFenv(node);
+        return true;
+    }
+
+    // `self.pos:add(...)` several times in one function: a field can't be proven in place, so none of the calls are
+    // inlined. A local holding the field, checked once, can be.
+    void reportFieldMethodCalls(AstStat* root)
+    {
+        if (classes.empty() || !context->module)
+            return;
+
+        FunctionCollector functions;
+        root->visit(&functions);
+
+        std::vector<AstStat*> bodies{root};
+        bodies.insert(bodies.end(), functions.bodies.begin(), functions.bodies.end());
+
+        for (AstStat* body : bodies)
+        {
+            FieldMethodCallCounter counter;
+            body->visit(&counter);
+
+            for (const auto& [key, calls] : counter.calls)
+            {
+                if (!calls.field || calls.assigned || calls.count < kFieldMethodCallHintThreshold)
+                    continue;
+
+                std::optional<TypeId> fieldType = context->getType(calls.field);
+                const ExternType* object = fieldType ? get<ExternType>(follow(*fieldType)) : nullptr;
+                const char* kind = fieldType ? luwuNominalKind(*fieldType) : nullptr;
+                bool isObject = kind && std::string_view(kind) == "object";
+                bool isLocalClassObject = object && isObject && classes.count(object->name) > 0;
+                if (!isLocalClassObject)
+                    continue;
+
+                const char* base = key.first->name.value;
+                const char* field = key.second.value;
+                emitWarning(
+                    *context,
+                    LintWarning::Code_OptimizationHint,
+                    calls.field->location,
+                    "'%s.%s' has %zu method calls here, but a field can't be proven to be a '%s' in place, so none of them can be "
+                    "inlined; check it once in a local: 'local %s = %s.%s' and 'assert(class.isinstance(%s, %s))'",
+                    base,
+                    field,
+                    calls.count,
+                    object->name.c_str(),
+                    field,
+                    base,
+                    field,
+                    field,
+                    object->name.c_str()
+                );
+            }
+        }
+    }
+};
+
+// Luwu: the loop parts of OptimizationHint, each with its own code so it can be turned off alone. Each is quadratic in
+// the number of iterations: the work it repeats grows with every one.
+class LintLoopHints : AstVisitor
+{
+public:
+    LUAU_NOINLINE static void process(LintContext& context, bool concat, bool tableInsert, bool tableRemove)
+    {
+        LintLoopHints pass;
+        pass.context = &context;
+        pass.concat = concat;
+        pass.tableInsert = tableInsert;
+        pass.tableRemove = tableRemove;
+
+        context.root->visit(&pass);
+    }
+
+private:
+    LintContext* context;
+    bool concat = false;
+    bool tableInsert = false;
+    bool tableRemove = false;
+
+    // The innermost loop around the code being visited, in the function being visited
+    AstStat* loop = nullptr;
+
+    struct LoopScope
+    {
+        LintLoopHints* pass;
+        AstStat* previous;
+
+        LoopScope(LintLoopHints* pass, AstStat* loop)
+            : pass(pass)
+            , previous(pass->loop)
+        {
+            pass->loop = loop;
+        }
+
+        ~LoopScope()
+        {
+            pass->loop = previous;
+        }
+    };
+
+    bool visit(AstStatWhile* node) override
+    {
+        node->condition->visit(this);
+        LoopScope scope{this, node};
+        node->body->visit(this);
+        return false;
+    }
+
+    bool visit(AstStatRepeat* node) override
+    {
+        LoopScope scope{this, node};
+        node->body->visit(this);
+        node->condition->visit(this);
+        return false;
+    }
+
+    bool visit(AstStatFor* node) override
+    {
+        node->from->visit(this);
+        node->to->visit(this);
+        if (node->step)
+            node->step->visit(this);
+
+        LoopScope scope{this, node};
+        node->body->visit(this);
+        return false;
+    }
+
+    bool visit(AstStatForIn* node) override
+    {
+        for (AstExpr* value : node->values)
+            value->visit(this);
+
+        LoopScope scope{this, node};
+        node->body->visit(this);
+        return false;
+    }
+
+    // A function's body runs when it's called, not once per iteration of a loop it's written in
+    bool visit(AstExprFunction* node) override
+    {
+        LoopScope scope{this, nullptr};
+        node->body->visit(this);
+        return false;
+    }
+
+    // Whether `target` lives across the loop's iterations: a local declared before the loop, or anything that isn't
+    // a local
+    bool outlivesLoop(AstExpr* target) const
+    {
+        AstExprLocal* local = unparenthesized(target)->as<AstExprLocal>();
+        return !local || local->local->location.begin < loop->location.begin;
+    }
+
+    static bool sameTarget(AstExpr* a, AstExpr* b)
+    {
+        a = unparenthesized(a);
+        b = unparenthesized(b);
+
+        if (AstExprLocal* localA = a->as<AstExprLocal>())
+        {
+            AstExprLocal* localB = b->as<AstExprLocal>();
+            return localB && localA->local == localB->local;
+        }
+
+        if (AstExprGlobal* globalA = a->as<AstExprGlobal>())
+        {
+            AstExprGlobal* globalB = b->as<AstExprGlobal>();
+            return globalB && globalA->name == globalB->name;
+        }
+
+        AstExprIndexName* indexA = a->as<AstExprIndexName>();
+        AstExprIndexName* indexB = b->as<AstExprIndexName>();
+        return indexA && indexB && indexA->index == indexB->index && sameTarget(indexA->expr, indexB->expr);
+    }
+
+    static std::string describe(AstExpr* expr, const char* fallback)
+    {
+        std::optional<std::string> name = shortExprName(unparenthesized(expr));
+        return name ? "'" + *name + "'" : std::string(fallback);
+    }
+
+    void reportConcat(AstExpr* target, const Location& location)
+    {
+        if (!concat || !loop || !outlivesLoop(target))
+            return;
+
+        emitWarning(
+            *context,
+            LintWarning::Code_LoopConcat,
+            location,
+            "Appending to %s in a loop copies the whole string every time, which gets slow as it grows; collect the pieces in a "
+            "table and 'table.concat' them once, or write them into a 'buffer'",
+            describe(target, "a string").c_str()
+        );
+    }
+
+    bool visit(AstStatCompoundAssign* node) override
+    {
+        if (node->op == AstExprBinary::Concat)
+            reportConcat(node->var, node->location);
+        return true;
+    }
+
+    // `s = s .. x` is the same as `s ..= x`
+    bool visit(AstStatAssign* node) override
+    {
+        if (node->vars.size != 1 || node->values.size != 1)
+            return true;
+
+        AstExprBinary* value = unparenthesized(node->values.data[0])->as<AstExprBinary>();
+        if (value && value->op == AstExprBinary::Concat && sameTarget(value->left, node->vars.data[0]))
+            reportConcat(node->vars.data[0], node->location);
+
+        return true;
+    }
+
+    static bool isConstantOne(AstExpr* expr)
+    {
+        AstExprConstantNumber* number = unparenthesized(expr)->as<AstExprConstantNumber>();
+        return number && number->value == 1.0;
+    }
+
+    bool visit(AstExprCall* node) override
+    {
+        if (!loop || node->self)
+            return true;
+
+        AstExprIndexName* function = node->func->as<AstExprIndexName>();
+        AstExprGlobal* library = function ? function->expr->as<AstExprGlobal>() : nullptr;
+        if (!library || library->name != "table" || node->args.size < 2)
+            return true;
+
+        AstExpr* target = node->args.data[0];
+        if (!outlivesLoop(target) || !isConstantOne(node->args.data[1]))
+            return true;
+
+        if (tableInsert && function->index == "insert" && node->args.size == 3)
+            emitWarning(
+                *context,
+                LintWarning::Code_InefficientTableInsert,
+                node->location,
+                "Inserting at the front of %s in a loop moves every element each time, which gets slow as it grows; append "
+                "instead and iterate it in reverse, or reverse it once afterwards",
+                describe(target, "the table").c_str()
+            );
+        else if (tableRemove && function->index == "remove" && node->args.size == 2)
+            emitWarning(
+                *context,
+                LintWarning::Code_InefficientTableRemove,
+                node->location,
+                "Removing the first element of %s in a loop moves every other element each time, which gets slow as it grows; "
+                "read from a head index instead ('local item = queue[head]; head += 1')",
+                describe(target, "the table").c_str()
             );
 
         return true;
@@ -4673,6 +5312,21 @@ std::vector<LintWarning> lint(
 
     if (context.warningEnabled(LintWarning::Code_DeclareMismatch))
         LintDeclareMismatch::process(context);
+
+    // Luwu: turning OptimizationHint off also turns off its parts, which have codes of their own so each can be turned
+    // off alone
+    if (context.warningEnabled(LintWarning::Code_OptimizationHint))
+    {
+        // Luwu Classes (rfcs/classes): a trusted file (the flag on and `--!trust`) already acts on the annotations
+        bool trustsAnnotations = FFlag::DebugLuwuCompilerTrustsTypeAnnotations && hasHeaderCommentDirective(hotcomments, "trust");
+        LintOptimizationHint::process(context, FFlag::LuwuClasses && !trustsAnnotations);
+
+        bool concat = context.warningEnabled(LintWarning::Code_LoopConcat);
+        bool tableInsert = context.warningEnabled(LintWarning::Code_InefficientTableInsert);
+        bool tableRemove = context.warningEnabled(LintWarning::Code_InefficientTableRemove);
+        if (concat || tableInsert || tableRemove)
+            LintLoopHints::process(context, concat, tableInsert, tableRemove);
+    }
 
     if (context.warningEnabled(LintWarning::Code_RedundantNativeAttribute))
     {

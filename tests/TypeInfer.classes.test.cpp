@@ -1916,8 +1916,8 @@ TEST_CASE_FIXTURE(ClassesFixture, "missing_key_error_names_the_class_or_object_n
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(2, result);
-    CHECK_EQ("Key 'age' not found in object 'Dog'", toString(result.errors[0]));
-    CHECK_EQ("Key 'age' not found in class 'Dog'", toString(result.errors[1]));
+    CHECK_EQ("Field 'age' not found in object 'Dog'", toString(result.errors[0]));
+    CHECK_EQ("Field 'age' not found in class 'Dog'", toString(result.errors[1]));
 }
 
 TEST_CASE_FIXTURE(ClassesFixture, "generic_class_instantiated_from_inside_its_own_body")
@@ -4737,6 +4737,210 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "type_functions_take_classes_and_traits_as_ty
     LUAU_REQUIRE_ERROR_COUNT(2, result);
     CHECK_EQ(29, result.errors[0].location.begin.line);
     CHECK_EQ(33, result.errors[1].location.begin.line);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "misspelled_field_write_reports_the_field_as_not_found")
+{
+    CheckResult result = check(R"(
+        class Cat(name: string)
+            function rename(self, n: string)
+                self.nmae = n
+            end
+        end
+
+        Cat.nmae = 1
+    )");
+
+    // not "Property nmae of type 'Cat' is read-only", which is what an extern type gets
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ("Field 'nmae' not found in object 'Cat'", toString(result.errors[0]));
+    CHECK_EQ("Field 'nmae' not found in class 'Cat'", toString(result.errors[1]));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "type_of_an_object_class_or_trait_value_compared_with_another_kind")
+{
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+    ScopedFastFlag classGlobal{FFlag::LuauAllowGlobalDeclarationToBeCalledClass, true};
+
+    CheckResult result = check(R"(
+        trait Named end
+        class Cat(name: string) end
+        class Dog(name: string) implements Named end
+
+        local function f(c: Cat, n: Named, u: Cat | Dog)
+            local a = type(c) == "table"
+            local b = typeof(c) ~= "Cat"
+            local d = type(Cat) == "table"
+            local e = typeof(n) == "Named"
+            local g = type(u) == "table"
+
+            -- the right kind, a plain table, and a local named `type` are all fine
+            local ok1 = type(c) == "object"
+            local ok2 = typeof(Cat) == "class"
+            local ok3 = type({}) == "table"
+            local type = function(_: Cat): string return "table" end
+            local ok4 = type(c) == "table"
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(5, result);
+    CHECK_EQ(
+        "'type' of an object of class 'Cat' is always \"object\", so comparing it with \"table\" is always false; to check whether a value "
+        "is an object of class 'Cat', use 'class.isinstance(value, Cat)'",
+        toString(result.errors[0])
+    );
+    CHECK_EQ(
+        "'typeof' of an object of class 'Cat' is always \"object\", so comparing it with \"Cat\" is always true; to check whether a value "
+        "is an object of class 'Cat', use 'class.isinstance(value, Cat)'",
+        toString(result.errors[1])
+    );
+    CHECK_EQ("'type' of class 'Cat' is always \"class\", so comparing it with \"table\" is always false", toString(result.errors[2]));
+    CHECK_EQ(
+        "'typeof' of an object implementing 'Named' is always \"object\", so comparing it with \"Named\" is always false; to check whether a "
+        "value implements 'Named', use 'class.implements(value, Named)'",
+        toString(result.errors[3])
+    );
+    CHECK_EQ("'type' of 'Cat | Dog' is always \"object\", so comparing it with \"table\" is always false", toString(result.errors[4]));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "comparing_an_object_with_a_class_explains_and_suggests_narrowing")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait Named end
+        class Cat(name: string) implements Named end
+        class Dog(name: string) end
+
+        local function f(d: Dog, o: object, u: Cat | Dog, n: Named)
+            local a = d == Cat
+            local b = o == Cat
+            local c = u == Cat
+            local e = n == Named
+            local g = d == Named
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(5, result);
+    CHECK_EQ(
+        "Cannot compare unrelated types 'Dog' and 'class<Cat>' with '=='\n\n"
+        "Help (comparing class with object of class):\n"
+        "  - the type annotation 'Dog' refers to an object of 'class<Dog>'\n"
+        "  - 'class<Cat>' is a class itself (what you call to make 'Cat' objects)\n"
+        "  - A 'Dog' cannot be a 'Cat'",
+        toString(result.errors[0])
+    );
+    CHECK_EQ(
+        "Cannot compare unrelated types 'object' and 'class<Cat>' with '=='\n\n"
+        "Help (comparing class with object of class):\n"
+        "  - An object cannot be a class\n"
+        "  - To narrow 'o' into a 'Cat', use 'class.isinstance(o, Cat)'",
+        toString(result.errors[1])
+    );
+    CHECK_EQ(
+        "Cannot compare unrelated types 'Cat | Dog' and 'class<Cat>' with '=='\n\n"
+        "Help (comparing class with object of class):\n"
+        "  - the object 'u' could be a 'Cat', but you're comparing it with the class itself (did you mean to narrow it instead?)\n"
+        "  - To narrow 'u' into a 'Cat', use 'class.isinstance(u, Cat)'",
+        toString(result.errors[2])
+    );
+    CHECK_EQ(
+        "Cannot compare unrelated types 'Named' and 'trait<Named>' with '=='\n\n"
+        "Help (comparing trait with object):\n"
+        "  - the object 'n' implements 'Named', but you're comparing it with the trait itself (did you mean to narrow it instead?)\n"
+        "  - To narrow 'n' into a 'Named', use 'class.implements(n, Named)'",
+        toString(result.errors[3])
+    );
+    CHECK_EQ(
+        "Cannot compare unrelated types 'Dog' and 'trait<Named>' with '=='\n\n"
+        "Help (comparing trait with object):\n"
+        "  - the type annotation 'Dog' refers to an object of 'class<Dog>'\n"
+        "  - 'trait<Named>' is a trait itself, not an object that implements it\n"
+        "  - A 'Dog' doesn't implement 'Named'",
+        toString(result.errors[4])
+    );
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "objects_passed_where_the_table_library_wants_a_table")
+{
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+    ScopedFastFlag classGlobal{FFlag::LuauAllowGlobalDeclarationToBeCalledClass, true};
+
+    CheckResult result = check(R"(
+        class Cat(name: string) end
+
+        local function f(c: Cat)
+            setmetatable(c, {})
+            local a = table.clone(c)
+            rawset(c, "name", "b")
+            local b = next(c)
+            local d = rawget(c, "name")
+            table.freeze(c)
+            return a, b, d
+        end
+
+        local function length(x: string | { number }): number
+            return #x
+        end
+        local function h(c: Cat)
+            return length(c)
+        end
+
+        -- generic code passing a `T` along is not affected
+        local function g<T>(t: T): T
+            return table.clone(t)
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(7, result);
+    const std::string expected = "Expected this to be a table, but got an object of class 'Cat'; objects are not tables";
+    // setmetatable, table.clone, rawset, next, rawget
+    for (size_t i = 0; i < 5; ++i)
+        CHECK_EQ(expected, toString(result.errors[i]));
+    // table.freeze: `setmetatable(c, {})` above left `c` an object, not a metatable wrapped around one
+    CHECK_EQ(expected, toString(result.errors[5]));
+    CHECK_EQ("Expected this to be a string or a table, but got an object of class 'Cat'; objects are not tables", toString(result.errors[6]));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "getmetatable_of_an_object_or_class_is_nil")
+{
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+    ScopedFastFlag classGlobal{FFlag::LuauAllowGlobalDeclarationToBeCalledClass, true};
+
+    CheckResult result = check(R"(
+        class Cat(name: string) end
+
+        local function f(c: Cat)
+            return getmetatable(c), getmetatable(Cat)
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("(Cat) -> (nil, nil)", toString(requireType("f")));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "iterating_an_object_without_iter_names_the_missing_metamethod")
+{
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+    ScopedFastFlag classGlobal{FFlag::LuauAllowGlobalDeclarationToBeCalledClass, true};
+    ScopedFastFlag genericNominals{FFlag::LuwuGenericNominals, true};
+
+    CheckResult result = check(R"(
+        class Bag(items: { number }) end
+        class Box<T>(item: T) end
+
+        local function f(b: Bag, x: Box<number>)
+            for k, v in b do end
+            for k, v in x do end
+            for k, v in Bag do end
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
+    CHECK_EQ("Cannot iterate over an object of class 'Bag': its class doesn't define '__iter'", toString(result.errors[0]));
+    CHECK_EQ("Cannot iterate over an object of class 'Box<number>': its class doesn't define '__iter'", toString(result.errors[1]));
+    CHECK_EQ("Cannot iterate over class 'Bag' itself; only objects can be iterated, when their class defines '__iter'", toString(result.errors[2]));
 }
 
 TEST_SUITE_END();
