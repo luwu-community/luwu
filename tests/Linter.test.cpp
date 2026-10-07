@@ -15,6 +15,7 @@ LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuIfLocal)
 LUAU_FASTFLAG(DebugLuwuDoExpr)
+LUAU_FASTFLAG(LuwuTableComprehensions)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuauSolverV2)
 LUAU_FASTFLAG(LuwuDefaultArguments)
@@ -4389,6 +4390,37 @@ return next_pair
     CHECK_EQ(countWarnings(shadowed, LintWarning::Code_Pairs), 0);
 }
 
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuaIdiomLintsSkipLuaModules")
+{
+    const std::string source = R"(
+local t = { 1, 2 }
+for k, v in pairs(t) do print(k, v) end
+for i, v in ipairs(t) do print(i, v) end
+local flag = #t > 1
+local label = flag and "many" or "one"
+return label
+)";
+
+    auto luaIdioms = [&](const ModuleName& name, Language language)
+    {
+        fileResolver.source[name] = source;
+        configResolver.configFiles[name].language = language;
+        size_t count = 0;
+        for (const LintWarning& warning : lintModule(name).warnings)
+        {
+            bool isLuaIdiom = warning.code == LintWarning::Code_Pairs || warning.code == LintWarning::Code_Ipairs ||
+                              warning.code == LintWarning::Code_LuaAndOr;
+            if (isLuaIdiom)
+                count++;
+        }
+        return count;
+    };
+
+    // A Lua module has no generalized iteration or if-expressions to use instead
+    CHECK_EQ(luaIdioms("game/a", Language::Luau), 3);
+    CHECK_EQ(luaIdioms("game/b", Language::Lua), 0);
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "MisleadingAndOrUsesTheMiddleOperandsType")
 {
     LintResult result = lint(R"(
@@ -5049,6 +5081,31 @@ return f
     CHECK_EQ(2, found[0].location.begin.line);
     CHECK_EQ(5, found[1].location.begin.line);
     CHECK_EQ(9, found[2].location.begin.line);
+}
+
+// Luwu Table Comprehensions (rfcs/table-comprehensions.md): the loop lints see a comprehension's loops
+TEST_CASE_FIXTURE(BuiltinsFixture, "LoopLintsSeeTableComprehensions")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuTableComprehensions, true},
+        {FFlag::DebugLuwuDoExpr, true},
+    };
+
+    LintResult result = lint(R"(
+local a = { for i = 1, 10 give (do break) }
+local b = { for i = 10, 1 give i }
+local c = { for i = 1, 10 give if i > 3 then (do break) else i }
+local d = { for _, v in {1, 2} give v * 2 }
+return a, b, c, d
+)");
+
+    std::vector<LintWarning> useless = warningsWithCode(result, LintWarning::Code_UselessLoop);
+    REQUIRE(1 == useless.size());
+    CHECK_EQ(1, useless[0].location.begin.line);
+
+    std::vector<LintWarning> range = warningsWithCode(result, LintWarning::Code_ForRange);
+    REQUIRE(1 == range.size());
+    CHECK_EQ(2, range[0].location.begin.line);
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "StringIndexZero")

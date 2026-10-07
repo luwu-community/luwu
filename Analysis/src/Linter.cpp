@@ -238,6 +238,8 @@ static bool similar(AstExpr* lhs, AstExpr* rhs)
     }
     // Luwu Do Expressions (rfcs/do-expressions.md): a block runs statements, so two are never the same check
     CASE(AstExprDo) return false;
+    // Luwu Table Comprehensions (rfcs/table-comprehensions.md): each evaluation builds a new table
+    CASE(AstExprTableComprehension) return false;
     else
     {
         LUAU_ASSERT(!"Unknown expression type");
@@ -6210,6 +6212,18 @@ private:
                     return leaves;
             }
 
+            // Luwu Table Comprehensions (rfcs/table-comprehensions.md): an item evaluates its key and value every time, so a
+            // `do` expression there that always leaves (`{ for i = 1, 10 do (do break) }`) leaves the iteration
+            if (AstStatComprehensionItem* item = stat->as<AstStatComprehensionItem>())
+            {
+                for (AstExpr* part : {item->key, item->value})
+                {
+                    AstExprDo* leaving = part ? unwrapGroup(part)->as<AstExprDo>() : nullptr;
+                    if (leaving && howBlockLeaves(leaving->body) != Leaves::Never)
+                        return Leaves::Directly;
+                }
+            }
+
             AstStatIf* branch = stat->as<AstStatIf>();
             bool everyBranchLeaves = branch && branch->elsebody && howBlockLeaves(branch->thenbody) != Leaves::Never &&
                                      elseLeaves(branch->elsebody);
@@ -8706,6 +8720,15 @@ std::vector<LintWarning> lint(
     std::vector<LintScope> scopes = LintScopeCollector::collect(context, hotcomments);
     for (const LintScope& scope : scopes)
         context.options.warningMask |= scope.enable;
+
+    // Luwu: these lints suggest Luau replacements for Lua idioms, which a Lua module can't use
+    if (module && module->language == Language::Lua)
+    {
+        context.options.warningMask.reset(LintWarning::Code_LuaIterators);
+        context.options.warningMask.reset(LintWarning::Code_Pairs);
+        context.options.warningMask.reset(LintWarning::Code_Ipairs);
+        context.options.warningMask.reset(LintWarning::Code_LuaAndOr);
+    }
 
     if (context.warningEnabled(LintWarning::Code_UnknownGlobal) || context.warningEnabled(LintWarning::Code_DeprecatedGlobal) ||
         context.warningEnabled(LintWarning::Code_GlobalUsedAsLocal) || context.warningEnabled(LintWarning::Code_PlaceholderRead) ||

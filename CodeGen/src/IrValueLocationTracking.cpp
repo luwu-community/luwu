@@ -157,6 +157,7 @@ void IrValueLocationTracking::beforeInstLowering(IrInst& inst)
 
         // Make sure all VmReg referencing instructions are handled explicitly (only register reads here)
     case IrCmd::FALLBACK_NEWCLASSMEMBER:
+    case IrCmd::FALLBACK_PRESIZETABLE:
     case IrCmd::LOAD_TAG:
     case IrCmd::LOAD_POINTER:
     case IrCmd::LOAD_DOUBLE:

@@ -142,7 +142,8 @@ LUAU_FLAGVERSION(LuauBackedgeHeapCheck, 2)
         VM_DISPATCH_OP(LOP_IDIVK), VM_DISPATCH_OP(LOP_GETUDATAKS), VM_DISPATCH_OP(LOP_SETUDATAKS), VM_DISPATCH_OP(LOP_NAMECALLUDATA), \
         VM_DISPATCH_OP(LOP_NEWCLASSMEMBER), VM_DISPATCH_OP(LOP_CALLFB), VM_DISPATCH_OP(LOP_CMPPROTO), VM_DISPATCH_OP(LOP_CHECKSELFCLASS), \
         VM_DISPATCH_OP(LOP_JUMPXISA), VM_DISPATCH_OP(LOP_NEWOBJECT), \
-        VM_DISPATCH_OP(LOP_GETOBJECTMEMBER), VM_DISPATCH_OP(LOP_SETOBJECTMEMBER), VM_DISPATCH_OP(LOP_INITTRAITS),
+        VM_DISPATCH_OP(LOP_GETOBJECTMEMBER), VM_DISPATCH_OP(LOP_SETOBJECTMEMBER), VM_DISPATCH_OP(LOP_INITTRAITS), \
+        VM_DISPATCH_OP(LOP_PRESIZETABLE), VM_DISPATCH_OP(LOP_APPENDTABLE),
 
 #if defined(__GNUC__) || defined(__clang__)
 #define VM_USE_CGOTO 1
@@ -4052,6 +4053,54 @@ reentry:
                 }
 
                 setclvalue(L, ra, L->global->traitinitrunner);
+                VM_NEXT();
+            }
+
+            VM_CASE(LOP_PRESIZETABLE)
+            {
+                // Luwu Table Comprehensions (rfcs/table-comprehensions.md): sizes or trims the table a comprehension builds
+                Instruction insn = *pc++;
+                StkId ra = VM_REG(LUAU_INSN_A(insn));
+                StkId rb = VM_REG(LUAU_INSN_B(insn));
+
+                LUAU_ASSERT(ttistable(ra));
+
+                VM_PROTECT(luaV_presizetable(L, hvalue(ra), rb, LUAU_INSN_C(insn)));
+                VM_NEXT();
+            }
+
+            VM_CASE(LOP_APPENDTABLE)
+            {
+                // Luwu Table Comprehensions (rfcs/table-comprehensions.md): adds a non-nil value at the next index
+                Instruction insn = *pc++;
+                StkId ra = VM_REG(LUAU_INSN_A(insn));
+                StkId rb = VM_REG(LUAU_INSN_B(insn));
+                StkId rc = VM_REG(LUAU_INSN_C(insn));
+
+                LUAU_ASSERT(ttistable(ra) && ttisnumber(rc));
+
+                if (ttisnil(rb))
+                    VM_NEXT();
+
+                LuaTable* h = hvalue(ra);
+                LUAU_ASSERT(!h->metatable && !h->readonly);
+
+                double count = nvalue(rc) + 1;
+                setnvalue(rc, count);
+                int index = int(count);
+
+                if (unsigned(index - 1) < unsigned(h->sizearray))
+                {
+                    setobj2t(L, &h->array[index - 1], rb);
+                }
+                else
+                {
+                    // grows the table, which can raise "table overflow"
+                    VM_PROTECT_PC();
+                    setobj2t(L, luaH_setnum(L, h, index), rb);
+                }
+
+                luaC_barriert(L, h, rb);
                 VM_NEXT();
             }
 

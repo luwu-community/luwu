@@ -1076,6 +1076,12 @@ struct ConstantVisitor : AstVisitor
         {
             result = analyze(expr->expr);
         }
+        else if (AstExprTableComprehension* expr = node->as<AstExprTableComprehension>())
+        {
+            // Luwu Table Comprehensions (rfcs/table-comprehensions.md): the loop's expressions are folded like any other,
+            // and the table is never a constant
+            expr->loop->visit(this);
+        }
         else if (AstExprDo* expr = node->as<AstExprDo>())
         {
             // Luwu Do Expressions (rfcs/do-expressions.md): the block's statements are folded like any other, and the

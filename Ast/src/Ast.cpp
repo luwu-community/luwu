@@ -644,6 +644,25 @@ void AstExprDo::visit(AstVisitor* visitor)
         body->visit(visitor);
 }
 
+AstExprTableComprehension::AstExprTableComprehension(
+    const Location& location,
+    AstStat* loop,
+    AstStatComprehensionItem* item,
+    unsigned clauseCount
+)
+    : AstExpr(ClassIndex(), location)
+    , loop(loop)
+    , item(item)
+    , clauseCount(clauseCount)
+{
+}
+
+void AstExprTableComprehension::visit(AstVisitor* visitor)
+{
+    if (visitor->visit(this))
+        loop->visit(visitor);
+}
+
 AstExprError::AstExprError(const Location& location, const AstArray<AstExpr*>& expressions, unsigned messageIndex)
     : AstExpr(ClassIndex(), location)
     , expressions(expressions)
@@ -822,6 +841,23 @@ void AstStatGive::visit(AstVisitor* visitor)
 {
     if (visitor->visit(this))
         value->visit(visitor);
+}
+
+AstStatComprehensionItem::AstStatComprehensionItem(const Location& location, AstExpr* key, AstExpr* value)
+    : AstStat(ClassIndex(), location)
+    , key(key)
+    , value(value)
+{
+}
+
+void AstStatComprehensionItem::visit(AstVisitor* visitor)
+{
+    if (visitor->visit(this))
+    {
+        if (key)
+            key->visit(visitor);
+        value->visit(visitor);
+    }
 }
 
 AstStatContinue::AstStatContinue(const Location& location)

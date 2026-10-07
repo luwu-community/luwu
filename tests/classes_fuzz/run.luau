@@ -42,6 +42,7 @@ const FLAGS = "--fflags="
         "LuwuTraits=true",
         "LuwuIfLocal=true",
         "DebugLuwuDoExpr=true",
+        "LuwuTableComprehensions=true",
     }, ",")
 -- Acting on a receiver's declared type is opt-in (see Compiler.cpp): every generated file says `--!trust`,
 -- and this flag decides whether that directive counts. It only changes O2, where inlining runs, so it is a

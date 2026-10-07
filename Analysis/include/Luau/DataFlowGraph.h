@@ -179,6 +179,7 @@ private:
     ControlFlow visit(AstStatLocal* l);
     void visitIfClauses(const AstArray<AstIfClause>& clauses);
     ControlFlow visit(AstStatGive* g);
+    ControlFlow visit(AstStatComprehensionItem* i);
     ControlFlow visit(AstStatFor* f);
     ControlFlow visit(AstStatForIn* f);
     ControlFlow visit(AstStatAssign* a);
@@ -212,6 +213,7 @@ private:
     DataFlowResult visitExpr(AstExprTypeAssertion* t);
     DataFlowResult visitExpr(AstExprIfElse* i);
     DataFlowResult visitExpr(AstExprDo* d);
+    DataFlowResult visitExpr(AstExprTableComprehension* c);
     DataFlowResult visitExpr(AstExprInterpString* i);
     DataFlowResult visitExpr(AstExprInstantiate* i);
     DataFlowResult visitExpr(AstExprError* error);

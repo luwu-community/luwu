@@ -25,6 +25,7 @@ LUAU_FASTINT(LuauCompileLoopUnrollThresholdMaxBoost)
 LUAU_FASTINT(LuauRecursionLimit)
 LUAU_FASTFLAG(LuwuIfLocal)
 LUAU_FASTFLAG(DebugLuwuDoExpr)
+LUAU_FASTFLAG(LuwuTableComprehensions)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuauIntegerFastcalls)
 LUAU_FASTFLAG(LuauCompileIifeInline)
@@ -1554,6 +1555,170 @@ GETIMPORT R1 5 [h]
 MOVE R2 R0
 CALL R1 1 0
 L0: CLOSEUPVALS R0
+RETURN R0 0
+)");
+}
+
+// Luwu Table Comprehensions (rfcs/table-comprehensions.md)
+TEST_CASE("TableComprehension")
+{
+    ScopedFastFlag comprehensions{FFlag::LuwuTableComprehensions, true};
+
+    // sized from the source before the loop, appended through a count register, trimmed after
+    CHECK_EQ("\n" + compileFunction0(R"(
+local t = { for _, v in src give v * 2 }
+g(t)
+)"), R"(
+NEWTABLE R0 0 0
+LOADN R1 0
+GETIMPORT R2 1 [src]
+LOADNIL R3
+LOADNIL R4
+PRESIZETABLE R0 R2 ITER_ARRAY
+FORGPREP R2 L1
+L0: MULK R7 R6 K2 [2]
+APPENDTABLE R0 R7 R1
+L1: FORGLOOP R2 L0 2
+PRESIZETABLE R0 R1 TRIM
+GETIMPORT R1 4 [g]
+MOVE R2 R0
+CALL R1 1 0
+RETURN R0 0
+)");
+
+    // a constant range is sized by NEWTABLE, a variable one at runtime
+    CHECK_EQ("\n" + compileFunction0(R"(
+local r = { for i = 1, 3 give i }
+local s = { for i = 1, n give i }
+g(r, s)
+)"), R"(
+NEWTABLE R0 0 3
+LOADN R1 0
+LOADN R4 1
+LOADN R2 3
+LOADN R3 1
+FORNPREP R2 L1
+L0: APPENDTABLE R0 R4 R1
+FORNLOOP R2 L0
+L1: PRESIZETABLE R0 R1 TRIM
+NEWTABLE R1 0 0
+LOADN R2 0
+LOADN R5 1
+GETIMPORT R3 1 [n]
+LOADN R4 1
+PRESIZETABLE R1 R3 RANGE_ARRAY
+FORNPREP R3 L3
+L2: APPENDTABLE R1 R5 R2
+FORNLOOP R3 L2
+L3: PRESIZETABLE R1 R2 TRIM
+GETIMPORT R2 3 [g]
+MOVE R3 R0
+MOVE R4 R1
+CALL R2 2 0
+RETURN R0 0
+)");
+
+    // a map sizes its hash part, skips nil values, and a `when` jumps to the next iteration
+    CHECK_EQ("\n" + compileFunction0(R"(
+local m = { for k, v in src when v give [k] = v }
+g(m)
+)"), R"(
+NEWTABLE R0 0 0
+GETIMPORT R1 1 [src]
+LOADNIL R2
+LOADNIL R3
+PRESIZETABLE R0 R1 ITER_HASH
+FORGPREP R1 L1
+L0: JUMPIFNOT R5 L1
+JUMPXEQKNIL R5 L1
+SETTABLE R5 R0 R4
+L1: FORGLOOP R1 L0 2
+GETIMPORT R1 3 [g]
+MOVE R2 R0
+CALL R1 1 0
+RETURN R0 0
+)");
+
+    // assigning to a local the comprehension reads builds in a temporary first; flattening doesn't presize
+    CHECK_EQ("\n" + compileFunction0(R"(
+local t = src
+t = { for _, row in t for _, c in row give c }
+g(t)
+)"), R"(
+GETIMPORT R0 1 [src]
+NEWTABLE R1 0 0
+LOADN R2 0
+MOVE R3 R0
+LOADNIL R4
+LOADNIL R5
+FORGPREP R3 L3
+L0: MOVE R8 R7
+LOADNIL R9
+LOADNIL R10
+FORGPREP R8 L2
+L1: APPENDTABLE R1 R12 R2
+L2: FORGLOOP R8 L1 2
+L3: FORGLOOP R3 L0 2
+MOVE R0 R1
+GETIMPORT R1 3 [g]
+MOVE R2 R0
+CALL R1 1 0
+RETURN R0 0
+)");
+}
+
+TEST_CASE("TableComprehensionLengthCountsWithoutATable")
+{
+    ScopedFastFlag comprehensions{FFlag::LuwuTableComprehensions, true};
+
+    // `#{ for ... }` is the counting loop: no NEWTABLE, and a constant item just counts
+    CHECK_EQ("\n" + compileFunction0(R"(
+local n = #{ for _, v in xs when v > 1 give true }
+g(n)
+)"), R"(
+LOADN R1 0
+GETIMPORT R2 1 [xs]
+LOADNIL R3
+LOADNIL R4
+FORGPREP R2 L1
+L0: LOADN R7 1
+JUMPIFNOTLT R7 R6 L1
+ADDK R1 R1 K2 [1]
+L1: FORGLOOP R2 L0 2
+MOVE R0 R1
+GETIMPORT R1 4 [g]
+MOVE R2 R0
+CALL R1 1 0
+RETURN R0 0
+)");
+}
+
+TEST_CASE("TableComprehensionFoldsToALiteral")
+{
+    ScopedFastFlag comprehensions{FFlag::LuwuTableComprehensions, true};
+
+    // at O2 a constant range whose item and `when` fold to constants is the literal it builds: no loop, no appends
+    CHECK_EQ("\n" + compileFunction(R"(
+local a = { for i = 1, 5 give i * 2 }
+local b = { for i = 1, 6 when i % 2 == 0 give i }
+g(a, b)
+)", 0, 2), R"(
+NEWTABLE R0 0 5
+LOADN R1 2
+LOADN R2 4
+LOADN R3 6
+LOADN R4 8
+LOADN R5 10
+SETLIST R0 R1 5 [1]
+NEWTABLE R1 0 3
+LOADN R2 2
+LOADN R3 4
+LOADN R4 6
+SETLIST R1 R2 3 [1]
+GETIMPORT R2 1 [g]
+MOVE R3 R0
+MOVE R4 R1
+CALL R2 2 0
 RETURN R0 0
 )");
 }

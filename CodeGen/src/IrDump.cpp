@@ -477,6 +477,8 @@ const char* getCmdName(IrCmd cmd)
         return "FALLBACK_NEWCLASSMEMBER";
     case IrCmd::FALLBACK_INITTRAITS:
         return "FALLBACK_INITTRAITS";
+    case IrCmd::FALLBACK_PRESIZETABLE:
+        return "FALLBACK_PRESIZETABLE";
     case IrCmd::SUBSTITUTE:
         return "SUBSTITUTE";
     case IrCmd::MARK_USED:

@@ -10,3 +10,7 @@ LUAU_FASTFLAGVARIABLE(LuwuClasses)
 
 // Luwu Traits (rfcs/classes/traits.md): enables `trait` declarations and `implements` (in progress). Needs LuwuClasses.
 LUAU_FASTFLAGVARIABLE(LuwuTraits)
+
+// Luwu Table Comprehensions (rfcs/table-comprehensions.md): `{ for ... in ... when ... give item }` (in progress). While it
+// is on, the compiler emits WIP bytecode (version 200), which has LOP_PRESIZETABLE.
+LUAU_FASTFLAGVARIABLE(LuwuTableComprehensions)

@@ -1,0 +1,415 @@
+-- This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
+print("testing table comprehensions")
+
+local function same(a, b)
+    if #a ~= #b then
+        return false
+    end
+    for i = 1, #a do
+        if a[i] ~= b[i] then
+            return false
+        end
+    end
+    return true
+end
+
+local function count(t)
+    local n = 0
+    for _ in t do
+        n += 1
+    end
+    return n
+end
+
+-- arrays, maps, ranges and filters
+do
+    local nums = { 1, 2, 3, 4, 5 }
+    assert(same({ for _, v in nums give v * 2 }, { 2, 4, 6, 8, 10 }))
+    assert(same({ for i, v in nums when v % 2 == 0 give i }, { 2, 4 }))
+    assert(same({ for i = 1, 5 give i * i }, { 1, 4, 9, 16, 25 }))
+    assert(same({ for i = 5, 1, -2 give i }, { 5, 3, 1 }))
+    assert(same({ for i = 1, 2, 0.5 give i }, { 1, 1.5, 2 }))
+    assert(#{ for i = 1, 0 give i } == 0)
+    assert(#{ for _, v in {} give v } == 0)
+
+    local m = { for i, v in nums give [tostring(v)] = i }
+    assert(count(m) == 5 and m["3"] == 3)
+
+    local inverse = { for k, v in { a = 1, b = 2 } give [v] = k }
+    assert(inverse[1] == "a" and inverse[2] == "b")
+
+    -- ipairs and pairs work like any loop
+    assert(same({ for _, v in ipairs({ 1, 2, nil, 4 }) give v }, { 1, 2 }))
+    assert(count({ for k, v in pairs({ x = 1, y = 2 }) give [k] = v }) == 2)
+end
+
+-- the bounds of a range and the values of a generic for are evaluated once, before the first element
+do
+    local calls = 0
+    local function limit()
+        calls += 1
+        return 3
+    end
+    assert(same({ for i = 1, limit() give i }, { 1, 2, 3 }) and calls == 1)
+
+    local n = 4
+    assert(#{ for i = 1, n give i } == 4)
+    assert(#{ for i = n, 1, -1 give i } == 4)
+end
+
+-- a nil item adds nothing, so arrays stay sequences; `if ... else nil` and `else continue` filter
+do
+    local function maybe(x)
+        if x % 3 == 0 then
+            return nil
+        end
+        return x
+    end
+    local r = { for i = 1, 10 give maybe(i) }
+    assert(same(r, { 1, 2, 4, 5, 7, 8, 10 }))
+    assert(#r == 7)
+
+    assert(same({ for i, j in { 10, 20, 30, 40 } give if i % 2 == 0 then j else nil }, { 20, 40 }))
+    assert(same({ for i, j in { 10, 20, 30, 40 } give if i % 2 == 0 then j else continue }, { 20, 40 }))
+    assert(same({ for _, v in { 1, 2, 3 } give v > 1 and v or nil }, { 2, 3 }))
+
+    -- false is a value
+    assert(same({ for i = 1, 3 give i == 2 }, { false, true, false }))
+
+    -- in a map a nil value adds no key
+    local m = { for i = 1, 4 give [i] = if i % 2 == 0 then i else nil }
+    assert(count(m) == 2 and m[2] == 2 and m[1] == nil)
+end
+
+-- accumulating items: `[k] op= v` combines with what the key holds; an absent key takes the value (negated for -=)
+do
+    local words = { "a", "b", "a", "c", "a", "b" }
+
+    local counts = { for _, w in words give [w] += 1 }
+    assert(counts.a == 3 and counts.b == 2 and counts.c == 1 and count(counts) == 3)
+
+    local neg = { for i, w in words give [w] -= i }
+    assert(neg.a == -9 and neg.b == -8 and neg.c == -4)
+
+    local prod = { for i = 1, 5 give [i % 2] *= i }
+    assert(prod[0] == 8 and prod[1] == 15)
+
+    -- a single value stays as it is: `c` is the number 4, not "4"
+    local cat = { for i, w in words give [w] ..= i }
+    assert(cat.a == "135" and cat.b == "26" and cat.c == 4)
+
+    -- values with arithmetic metamethods, vectors included, accumulate too
+    local v = { for i = 1, 3 give ["sum"] += vector.create(i, 0, 0) }
+    assert(v.sum == vector.create(6, 0, 0))
+
+    local Money = {}
+    Money.__add = function(a, b)
+        return setmetatable({ cents = a.cents + b.cents }, Money)
+    end
+    local spent = { for _, c in { 5, 10, 20 } give ["total"] += setmetatable({ cents = c }, Money) }
+    assert(spent.total.cents == 35)
+
+    -- a nil value adds nothing, and `when` filters as usual
+    local evens = { for i = 1, 6 give ["x"] += if i % 2 == 0 then i else nil }
+    assert(evens.x == 12)
+    local filtered = { for _, w in words when w ~= "a" give [w] += 1 }
+    assert(filtered.a == nil and filtered.b == 2)
+
+    -- the key is checked like any table key
+    local ok, err = pcall(function()
+        return { for i = 1, 2 give [nil] += 1 }
+    end)
+    assert(not ok and err:find("index is nil"))
+
+    -- an arithmetic error on the second value raises
+    ok = pcall(function()
+        return { for _, x in { 1, "x" } give ["k"] += x }
+    end)
+    assert(not ok)
+end
+
+-- `#{ for ... }` counts the items without building a table, with the same results
+do
+    local xs = { 1, 2, 3, 4, 5, 6 }
+    assert(#{ for _, v in xs when v % 2 == 0 give true } == 3)
+    assert(#{ for _, v in xs give if v > 4 then v else nil } == 2)
+    assert(#{ for _, row in { { 1, 2 }, {}, { 3 } } for _, c in row give c } == 3)
+    assert(#{ for i = 1, 10 give if i > 3 then (do break) else i } == 3)
+    assert(#{ for i = 1, 3 give nil } == 0)
+
+    -- the item still runs for its side effects
+    local calls = 0
+    assert(#{ for i = 1, 4 give do
+        calls += 1
+        give if i % 2 == 0 then i else nil } == 2)
+    assert(calls == 4)
+
+    -- the target can be read by the loop
+    local n = 10
+    n = #{ for i = 1, n when i > 3 give i }
+    assert(n == 7)
+
+    -- in parentheses it is the table's length all the same
+    assert(#({ for i = 1, 5 give i }) == 5)
+end
+
+-- `when` chains: conditions and bindings, visible to later clauses and to the item
+do
+    local people = { { name = "a", age = 20 }, { name = "b", age = 10 }, { name = "c" } }
+    local adults = { for _, p in people when const age = p.age when age > 18 give p.name }
+    assert(same(adults, { "a" }))
+
+    local named = { for _, p in people when local n = p.name when n ~= "b" give n:upper() }
+    assert(same(named, { "A", "C" }))
+
+    local exts = { for _, f in { "a.luau", "b.luwu", "c.txt" } when const dot = f:find(".", 1, true) when f:sub(dot) ~= ".txt" give [f:sub(1, dot - 1)] = f:sub(dot + 1) }
+    assert(exts.a == "luau" and exts.b == "luwu" and exts.c == nil)
+end
+
+-- several clauses flatten, each with its own filter
+do
+    local grid = { { 1, 2 }, {}, { 3 }, { 4, 5, 6 } }
+    assert(same({ for _, row in grid when #row > 0 for _, c in row when c ~= 5 give c }, { 1, 2, 3, 4, 6 }))
+    assert(same({ for i = 1, 3 for j = 1, i give i * 10 + j }, { 11, 21, 22, 31, 32, 33 }))
+    assert(#{ for _, row in grid for _, c in row for k = 1, c give k } == 21)
+end
+
+-- comprehensions nest, and are expressions anywhere
+do
+    local t = { for i = 1, 3 give { for j = 1, i give j } }
+    assert(#t == 3 and #t[3] == 3 and t[3][3] == 3)
+
+    local function sum(xs)
+        local s = 0
+        for _, x in xs do
+            s += x
+        end
+        return s
+    end
+    assert(sum({ for i = 1, 10 give i }) == 55)
+    assert(#{ for _, v in { for i = 1, 4 give i } when v > 2 give v } == 2)
+    assert(({ for i = 1, 3 give i * 2 })[2] == 4)
+    assert(`{#{ for i = 1, 3 give i }}` == "3")
+end
+
+-- every iteration has its own loop variable, so closures capture each one
+do
+    local fs = { for i = 1, 3 give function() return i end }
+    assert(fs[1]() == 1 and fs[3]() == 3)
+
+    local gs = { for _, v in { "a", "b" } when const up = v:upper() give function() return up end }
+    assert(gs[1]() == "A" and gs[2]() == "B")
+end
+
+-- an item can read and write outer locals, and the target is only written at the end
+do
+    local t = { 1, 2, 3 }
+    t = { for _, v in t give v + #t }
+    assert(same(t, { 4, 5, 6 }))
+
+    local seen = 0
+    local r = { for i = 1, 5 give do
+        seen += i
+        give seen }
+    assert(seen == 15 and same(r, { 1, 3, 6, 10, 15 }))
+end
+
+-- an item gives one value: a multret call is truncated, and `...` gives its first value
+do
+    local function two(x)
+        return x, x + 100
+    end
+    assert(same({ for i = 1, 3 give two(i) }, { 1, 2, 3 }))
+
+    local function first(...)
+        return { for _ = 1, 2 give ... }
+    end
+    assert(same(first(7, 8), { 7, 7 }))
+    assert(#first() == 0)
+end
+
+-- break, continue and return from an item, through do expressions and `or`
+do
+    assert(same({ for i = 1, 10 give if i > 3 then (do break) else i }, { 1, 2, 3 }))
+    assert(same({ for i = 1, 10 give i <= 3 and i or (do break) }, { 1, 2, 3 }))
+    assert(same({ for i = 1, 5 give if i % 2 == 0 then (do continue) else i }, { 1, 3, 5 }))
+
+    local function find(xs, x)
+        local _ = { for i, v in xs give if v == x then (do return i) else nil }
+        return nil
+    end
+    assert(find({ 5, 6, 7 }, 6) == 2 and find({ 5 }, 9) == nil)
+
+    -- break leaves the innermost clause only
+    assert(same({ for i = 1, 3 for j = 1, 10 give if j > i then (do break) else j }, { 1, 1, 2, 1, 2, 3 }))
+
+    -- continue in a `when` skips the element
+    assert(same({ for i = 1, 5 when i % 2 == 1 or (do continue) give i }, { 1, 3, 5 }))
+end
+
+-- errors: from the item, a nil or NaN key, and a non-iterable source
+do
+    local ok, err = pcall(function()
+        return { for i = 1, 3 give if i == 2 then error("boom") else i }
+    end)
+    assert(not ok and err:find("boom"))
+
+    ok, err = pcall(function()
+        return { for i = 1, 2 give [if i == 2 then nil else i] = i }
+    end)
+    assert(not ok and err:find("index is nil"))
+
+    ok, err = pcall(function()
+        return { for i = 1, 2 give [0 / 0] = i }
+    end)
+    assert(not ok and err:find("index is NaN"))
+
+    ok = pcall(function()
+        return { for _, v in 5 give v }
+    end)
+    assert(not ok)
+
+    ok = pcall(function()
+        return { for i = 1, "x" give i }
+    end)
+    assert(not ok)
+end
+
+-- the presize is only a hint: sparse arrays, map sources, __iter, non-table iterators and big ranges
+do
+    local sparse = table.create(100)
+    sparse[1] = 1
+    sparse[50] = 50
+    assert(same({ for _, v in sparse give v }, { 1, 50 }))
+
+    local mixed = { 1, 2, 3, x = 4, y = 5 }
+    assert(#{ for _, v in mixed give v } == 5)
+
+    local iterable = setmetatable({ 1, 2, 3 }, {
+        __iter = function(t)
+            local i = 0
+            return function()
+                i += 1
+                if i <= 5 then
+                    return i, i * 10
+                end
+                return nil
+            end
+        end,
+    })
+    assert(same({ for _, v in iterable give v }, { 10, 20, 30, 40, 50 }))
+
+    assert(same({ for w in ("a b c"):gmatch("%a") give w }, { "a", "b", "c" }))
+
+    local function counter(n)
+        local i = 0
+        return function()
+            i += 1
+            if i <= n then
+                return i
+            end
+            return nil
+        end
+    end
+    assert(#{ for i in counter(1000) give i } == 1000)
+
+    -- a range far larger than what it produces
+    local few = { for i = 1, 1e9 give if i > 3 then (do break) else i }
+    assert(same(few, { 1, 2, 3 }))
+    local evens = { for i = 1, 200000 when i % 50000 == 0 give i }
+    assert(same(evens, { 50000, 100000, 150000, 200000 }))
+    assert(#{ for i = 1, 100000 give i } == 100000)
+
+    -- a range whose bounds aren't integers, or are infinite or NaN
+    assert(#{ for i = 0.5, 3 give i } == 3)
+    assert(#{ for i = 1, 0 / 0 give i } == 0)
+    assert(#{ for i = 1, math.huge give if i > 2 then (do break) else i } == 2)
+
+    -- a filtered comprehension over a large source still works as a sequence after trimming
+    local big = table.create(10000, 1)
+    local one = { for i, v in big when i == 10000 give v }
+    assert(#one == 1 and one[1] == 1)
+    table.insert(one, 2)
+    assert(#one == 2)
+
+    -- the result is an ordinary table
+    local r = { for i = 1, 3 give i }
+    r[4] = 4
+    table.insert(r, 5)
+    setmetatable(r, {})
+    assert(#r == 5)
+end
+
+-- mutating the source while iterating behaves like the same loop
+do
+    local src = { 1, 2, 3 }
+    local r = { for i, v in src give do
+        if i == 1 then
+            src[3] = 30
+        end
+        give v }
+    assert(same(r, { 1, 2, 30 }))
+end
+
+-- coroutines: yielding from the item, a `when`, and the iterator
+do
+    local co = coroutine.wrap(function()
+        return { for i = 1, 3 give coroutine.yield(i) }
+    end)
+    assert(co() == 1 and co("a") == 2 and co("b") == 3)
+    assert(same(co("c"), { "a", "b", "c" }))
+
+    co = coroutine.wrap(function()
+        return { for i = 1, 4 when coroutine.yield(i) give i }
+    end)
+    co()
+    co(true)
+    co(false)
+    co(true)
+    assert(same(co(false), { 1, 3 }))
+
+    co = coroutine.wrap(function()
+        local function gen()
+            return coroutine.wrap(function()
+                for i = 1, 3 do
+                    coroutine.yield(i)
+                end
+            end)
+        end
+        return { for v in gen() give [v] = coroutine.yield(v) }
+    end)
+    assert(co() == 1 and co("x") == 2 and co("y") == 3)
+    local m = co("z")
+    assert(m[1] == "x" and m[2] == "y" and m[3] == "z")
+
+    -- a yield across a pcall inside the item
+    co = coroutine.wrap(function()
+        return { for i = 1, 2 give select(2, pcall(coroutine.yield, i)) }
+    end)
+    assert(co() == 1 and co(10) == 2)
+    assert(same(co(20), { 10, 20 }))
+end
+
+-- the collector can run at any point while a comprehension builds its table
+do
+    local r = { for i = 1, 2000 give do
+        if i % 100 == 0 then
+            collectgarbage()
+        end
+        give { i }
+    }
+    assert(#r == 2000 and r[2000][1] == 2000)
+
+    local m = { for i = 1, 500 give [tostring(i)] = { i } }
+    collectgarbage()
+    assert(m["500"][1] == 500)
+end
+
+-- many locals and registers around a comprehension
+do
+    local a1, a2, a3, a4, a5, a6, a7, a8, a9, a10 = 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
+    local r = { for i = 1, 3 give a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + i }
+    assert(same(r, { 56, 57, 58 }))
+end
+
+return "OK"

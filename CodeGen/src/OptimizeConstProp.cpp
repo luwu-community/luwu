@@ -3674,6 +3674,11 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         // writes the runner or nil, and runs nothing; the CALL after it runs the initializers
         state.invalidate(OP_B(inst));
         break;
+    case IrCmd::FALLBACK_PRESIZETABLE:
+        // writes no registers and runs no Luau code, but reallocates the table's array and hash parts
+        state.invalidateHeapTableData();
+        state.invalidateTableArraySize();
+        break;
     case IrCmd::FALLBACK_NEWOBJECT:
         // Construction writes the instance (and, for a user __init, the frame it lays out above it),
         // and applying fields can run an __index metamethod, i.e. arbitrary Lua.

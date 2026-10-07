@@ -579,6 +579,33 @@ enum LuauOpcode
     // D: jump offset (-32768..32767) past the CALL, taken when the class has no trait initializers
     LOP_INITTRAITS,
 
+    // PRESIZETABLE: Luwu Table Comprehensions (rfcs/table-comprehensions.md): sizes the table a comprehension builds from
+    // what its loop iterates, so filling it doesn't rehash, and trims it afterwards. Emitted after the loop's registers are
+    // loaded and before its FORNPREP/FORGPREP, and once more after the loop. A size is a capacity hint, never a result:
+    // the comprehension's contents don't depend on it.
+    // A: register holding the table, new and empty for every form but TRIM
+    // B: a register whose meaning depends on C
+    // C: the form:
+    //   LBC_PRESIZE_ITER_ARRAY - B and B + 1 are a generic for's generator and state. The first of the two that is a table
+    //       sizes A's array part to that table's element capacity (its array part plus its hash part). Neither being a
+    //       table leaves A as it is.
+    //   LBC_PRESIZE_ITER_HASH - the same, sizing A's hash part.
+    //   LBC_PRESIZE_RANGE_ARRAY - B, B + 1 and B + 2 are a numeric for's limit, step and index. A's array part gets the
+    //       loop's trip count, up to LBC_PRESIZE_RANGE_LIMIT.
+    //   LBC_PRESIZE_RANGE_HASH - the same, sizing A's hash part.
+    //   LBC_PRESIZE_TRIM - B holds the number of elements in A's array part. When less than half of the array part is
+    //       used, it shrinks to fit.
+    LOP_PRESIZETABLE,
+
+    // APPENDTABLE: Luwu Table Comprehensions (rfcs/table-comprehensions.md): adds one element to the array a comprehension
+    // builds: when B isn't nil, increments the count in C and stores B at that index. The table is one the comprehension
+    // allocated, and nothing else can reach it while the comprehension runs, so the VM asserts rather than checks that it
+    // has no metatable and isn't readonly, and that C holds a number (only this instruction writes it).
+    // A: register holding the table
+    // B: register holding the value
+    // C: register holding the element count so far
+    LOP_APPENDTABLE,
+
     // Enum entry for number of opcodes, not a valid opcode by itself!
     LOP__COUNT
 };
@@ -626,6 +653,16 @@ enum LuauOpcode
 #define LBC_NEWOBJECT_INIT 1
 #define LBC_NEWOBJECT_FIELDS 2
 #define LBC_NEWOBJECT_ALLOC 3
+
+// Luwu Table Comprehensions (rfcs/table-comprehensions.md): operand C of LOP_PRESIZETABLE (see LOP_PRESIZETABLE)
+#define LBC_PRESIZE_ITER_ARRAY 0
+#define LBC_PRESIZE_ITER_HASH 1
+#define LBC_PRESIZE_RANGE_ARRAY 2
+#define LBC_PRESIZE_RANGE_HASH 3
+#define LBC_PRESIZE_TRIM 4
+// The largest size a numeric range presizes to. A range's trip count is only an upper bound when the comprehension
+// filters or breaks, so `{ for i = 1, 1e9 when ... }` mustn't allocate for a billion elements up front.
+#define LBC_PRESIZE_RANGE_LIMIT (1 << 16)
 
 // Auxilary 16-bit constant index and 16-bit cachedslot
 // Used in LOP_GETUDATAKS, LOP_SETUDATAKS and LOP_NAMECALLUDATA
