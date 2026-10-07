@@ -401,6 +401,52 @@ struct GlobalNameCollector : public AstVisitor
     }
 };
 
+// Luwu: backported from upstream 0.734 (`LuauUdtfPopulateEnv`), unflagged here because it is a bug fix. A type function
+// refers to the other type functions in its block (itself included) as globals. This gives each such use the
+// function's type, so a call to one is typed rather than `*error-type*`, which would hide mistakes in what is done
+// with its result.
+struct TypeFunctionEnvGlobalBinder : AstVisitor
+{
+    NotNull<Scope> environmentScope;
+    NotNull<const DataFlowGraph> dfg;
+    // The type function whose body is being visited, and whether the visit is inside one of its `for ... in` headers.
+    AstName current;
+    bool inLoopHeader = false;
+
+    TypeFunctionEnvGlobalBinder(NotNull<Scope> environmentScope, NotNull<const DataFlowGraph> dfg)
+        : environmentScope(environmentScope)
+        , dfg(dfg)
+    {
+    }
+
+    bool visit(AstExprGlobal* global) override
+    {
+        // A type function used as its own loop's iterator (`for _, x in f(t) do`) keeps `*error-type*`. The loop waits on
+        // the call, the call on the function's type, and that type on the whole body, loop included, so binding it here
+        // leaves the solver stuck ("outstanding free or blocked type"). Upstream binds it and doesn't get stuck, but its
+        // loop variable ends up untyped all the same.
+        if (inLoopHeader && global->name == current)
+            return true;
+
+        if (auto ty = environmentScope->lookup(global->name))
+            environmentScope->lvalueTypes[dfg->getDef(global)] = *ty;
+
+        return true;
+    }
+
+    bool visit(AstStatForIn* forIn) override
+    {
+        bool wasInLoopHeader = inLoopHeader;
+        inLoopHeader = true;
+        for (AstExpr* value : forIn->values)
+            value->visit(this);
+        inLoopHeader = wasInLoopHeader;
+
+        forIn->body->visit(this);
+        return false;
+    }
+};
+
 } // namespace
 
 ConstraintGenerator::ConstraintGenerator(
@@ -498,18 +544,11 @@ void ConstraintGenerator::visitModuleRoot(AstStatBlock* block)
     Checkpoint end = checkpoint(this);
 
     TypeId result = arena->addType(BlockedType{});
-    NotNull<Constraint> genConstraint = addConstraint(
-        scope,
-        block->location,
-        GeneralizationConstraint{
-            result,
-            moduleFnTy,
-            /*interiorTypes*/ std::vector<TypeId>{},
-            /*hasDeprecatedAttribute*/ false,
-            /*deprecatedInfo*/ {},
-            /*noGenerics*/ true
-        }
-    );
+    // Luwu: `noGenerics` is set by name. Luwu's fields come before it in GeneralizationConstraint, so a positional
+    // initializer sets one of those instead, and the module's free types escape as unbound generics (`leaky_generics`).
+    GeneralizationConstraint moduleGeneralization{result, moduleFnTy};
+    moduleGeneralization.noGenerics = true;
+    NotNull<Constraint> genConstraint = addConstraint(scope, block->location, std::move(moduleGeneralization));
 
     scope->interiorFreeTypes = std::move(interiorFreeTypes.back().types);
     scope->interiorFreeTypePacks = std::move(interiorFreeTypes.back().typePacks);
@@ -2876,6 +2915,20 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
         }
     }
 
+    if (typeFunctionEnvScope)
+    {
+        TypeFunctionEnvGlobalBinder binder{NotNull{typeFunctionEnvScope.get()}, dfg};
+
+        for (AstStat* stat : block->body)
+        {
+            if (auto function = stat->as<AstStatTypeFunction>())
+            {
+                binder.current = function->name;
+                function->body->visit(&binder);
+            }
+        }
+    }
+
     // Finally, we need to include aliases from functions we might call
     for (TypeFunctionInstanceType* type : createdTypeFunctions)
     {
@@ -2951,6 +3004,8 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStat* stat)
         return visit(scope, r);
     else if (auto g = stat->as<AstStatGive>())
         return visit(scope, g);
+    else if (auto item = stat->as<AstStatComprehensionItem>())
+        return visit(scope, item);
     else if (auto e = stat->as<AstStatExpr>())
     {
         checkPack(scope, e->expr);
@@ -5246,6 +5301,8 @@ Inference ConstraintGenerator::check(const ScopePtr& scope, AstExpr* expr, std::
         result = check(scope, ifElse, expectedType);
     else if (auto doExpr = expr->as<AstExprDo>())
         result = check(scope, doExpr, expectedType);
+    else if (auto comprehension = expr->as<AstExprTableComprehension>())
+        result = check(scope, comprehension, expectedType);
     else if (auto typeAssert = expr->as<AstExprTypeAssertion>())
         result = check(scope, typeAssert);
     else if (auto interpString = expr->as<AstExprInterpString>())
@@ -5759,6 +5816,123 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatGive* give)
     }
 
     return ControlFlow::Returns;
+}
+
+// Luwu Table Comprehensions (rfcs/table-comprehensions.md): the table's indexer. An annotation decides it when there is
+// one (`local xs: {string} = { for ... }`), so the item is checked against it the way a table literal's items are;
+// otherwise it is inferred from the item. Either way a nil value adds nothing, so the value type excludes nil:
+// `{ for ... do maybe(x) }` is `{X}`.
+Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprTableComprehension* comprehension, std::optional<TypeId> expectedType)
+{
+    InConditionalContext inContext(&typeContext, TypeContext::Default);
+
+    bool isMap = comprehension->item->key != nullptr;
+
+    // The expected indexer, from an expected table type or a table member of an expected union (`{T}?`)
+    std::optional<TableIndexer> expectedIndexer;
+    if (expectedType)
+    {
+        auto tableIndexer = [](TypeId ty) -> std::optional<TableIndexer>
+        {
+            if (const TableType* ttv = get<TableType>(follow(ty)); ttv && ttv->indexer)
+                return ttv->indexer;
+            return std::nullopt;
+        };
+
+        expectedIndexer = tableIndexer(*expectedType);
+
+        if (const UnionType* ut = get<UnionType>(follow(*expectedType)); ut && !expectedIndexer)
+        {
+            for (TypeId option : ut)
+            {
+                expectedIndexer = tableIndexer(option);
+                if (expectedIndexer)
+                    break;
+            }
+        }
+    }
+
+    ComprehensionContext context;
+    if (expectedIndexer)
+    {
+        context.expectedKey = expectedIndexer->indexType;
+        context.expectedValue = expectedIndexer->indexResultType;
+    }
+
+    comprehensionContexts.push_back(context);
+
+    ScopePtr loopScope = childScope(comprehension, scope);
+    visit(loopScope, comprehension->loop);
+
+    ComprehensionContext checked = comprehensionContexts.back();
+    comprehensionContexts.pop_back();
+
+    TypeId keyType = builtinTypes->numberType;
+    TypeId valueType = builtinTypes->neverType;
+
+    if (expectedIndexer)
+    {
+        keyType = expectedIndexer->indexType;
+        valueType = expectedIndexer->indexResultType;
+    }
+    else
+    {
+        auto withoutNil = [&](TypeId ty, const Location& location)
+        {
+            TypeId refined = createTypeFunctionInstance(builtinTypes->typeFunctions->refineFunc, {ty, builtinTypes->notNilType}, {}, scope, location);
+            addConstraint(scope, location, ReduceConstraint{refined});
+            return refined;
+        };
+
+        if (isMap && checked.keyType)
+            keyType = withoutNil(*checked.keyType, comprehension->item->key->location);
+
+        if (checked.valueType)
+            valueType = withoutNil(*checked.valueType, comprehension->item->value->location);
+
+        // `[k] ..= v` stores the first value as is and strings after that
+        if (comprehension->item->accumulate == AstExprBinary::Concat)
+            valueType = makeUnion(scope, comprehension->item->value->location, valueType, builtinTypes->stringType);
+    }
+
+    TypeId ty = arena->addType(TableType{TableState::Sealed, TypeLevel{}, scope.get()});
+    TableType* ttv = getMutable<TableType>(ty);
+    LUAU_ASSERT(ttv);
+
+    ttv->definitionModuleName = module->name;
+    ttv->definitionLocation = comprehension->location;
+    ttv->indexer = TableIndexer{keyType, valueType};
+
+    return Inference{ty};
+}
+
+// Luwu Table Comprehensions (rfcs/table-comprehensions.md): checks the item against the expected element types, and
+// records its types for the table's indexer
+ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatComprehensionItem* item)
+{
+    if (comprehensionContexts.empty())
+    {
+        // The parser only makes items inside a comprehension
+        if (item->key)
+            check(scope, item->key);
+        check(scope, item->value);
+        return ControlFlow::None;
+    }
+
+    // Checking can push and pop nested contexts, so nothing holds a reference into comprehensionContexts across it
+    std::optional<TypeId> expectedKey = comprehensionContexts.back().expectedKey;
+    std::optional<TypeId> expectedValue = comprehensionContexts.back().expectedValue;
+
+    std::optional<TypeId> keyType;
+    if (item->key)
+        keyType = check(scope, item->key, expectedKey).ty;
+
+    TypeId valueType = check(scope, item->value, expectedValue).ty;
+
+    comprehensionContexts.back().keyType = keyType;
+    comprehensionContexts.back().valueType = valueType;
+
+    return ControlFlow::None;
 }
 
 Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprTypeAssertion* typeAssert)

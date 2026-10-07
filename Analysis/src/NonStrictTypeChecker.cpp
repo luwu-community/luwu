@@ -278,6 +278,8 @@ struct NonStrictTypeChecker
             return visit(s);
         else if (auto s = stat->as<AstStatGive>())
             return visit(s);
+        else if (auto s = stat->as<AstStatComprehensionItem>())
+            return visit(s);
         else if (auto s = stat->as<AstStatExpr>())
             return visit(s);
         else if (auto s = stat->as<AstStatLocal>())
@@ -605,6 +607,8 @@ struct NonStrictTypeChecker
             return visit(e);
         else if (auto e = expr->as<AstExprDo>())
             return visit(e);
+        else if (auto e = expr->as<AstExprTableComprehension>())
+            return visit(e);
         else
         {
             LUAU_ASSERT(!"NonStrictTypeChecker encountered an unknown expression type");
@@ -873,6 +877,22 @@ struct NonStrictTypeChecker
     NonStrictContext visit(AstStatGive* give)
     {
         visit(give->value, ValueContext::RValue);
+        return {};
+    }
+
+    // Luwu Table Comprehensions (rfcs/table-comprehensions.md): the loop may run zero times, so like any loop's, its
+    // context doesn't carry out
+    NonStrictContext visit(AstExprTableComprehension* comprehension)
+    {
+        visit(comprehension->loop);
+        return {};
+    }
+
+    NonStrictContext visit(AstStatComprehensionItem* item)
+    {
+        if (item->key)
+            visit(item->key, ValueContext::RValue);
+        visit(item->value, ValueContext::RValue);
         return {};
     }
 

@@ -5670,6 +5670,12 @@ struct Compiler
             return;
         }
 
+        // Luwu Table Comprehensions (rfcs/table-comprehensions.md): nothing can observe the table in `#{ for ... }`, so only
+        // its length is computed and the table is never built
+        AstExprTableComprehension* counted = expr->op == AstExprUnary::Op::Len ? expr->expr->as<AstExprTableComprehension>() : nullptr;
+        if (counted && !counted->item->key)
+            return compileComprehensionCount(counted, target);
+
         uint8_t re = compileExprAuto(expr->expr, rs);
 
         bytecode.emitABC(getUnaryOp(expr->op), target, re, 0);
@@ -5931,6 +5937,378 @@ struct Compiler
         patchJumps(expr, giveFrames.back().jumps, endLabel);
 
         giveFrames.pop_back();
+    }
+
+    // Luwu Table Comprehensions (rfcs/table-comprehensions.md): the comprehension's loop compiles like any loop, with its
+    // item appending to the table (compileStatComprehensionItem). What makes it faster than the loop one would write by
+    // hand is the sizing: the table is allocated for every element the source can produce, by NEWTABLE for a constant
+    // range or by PRESIZETABLE at the loop's start (compileComprehensionPresize), so filling it never rehashes. An array
+    // comprehension that skipped elements is trimmed afterwards, so it never holds more than twice what it uses, like a
+    // table grown one element at a time.
+    void compileExprTableComprehension(AstExprTableComprehension* expr, uint8_t target, bool targetTemp)
+    {
+        if (options.optimizationLevel >= 2 && tryCompileConstantComprehension(expr, target))
+            return;
+
+        RegScope rs(this);
+
+        bool isMap = expr->item->key != nullptr;
+
+        // The target can be a local the loop reads (`t = { for _, v in t do v }`), so the table is only written to it at the end
+        uint8_t table = targetTemp ? target : allocReg(expr, 1u);
+        uint8_t counter = isMap ? kInvalidReg : allocReg(expr, 1u);
+
+        // Only a single clause's source says how many elements there are: a flattening comprehension grows as it goes
+        AstStat* presizeLoop = expr->clauseCount == 1 ? expr->loop : nullptr;
+        unsigned staticSize = 0;
+
+        if (AstStatFor* range = presizeLoop ? presizeLoop->as<AstStatFor>() : nullptr)
+        {
+            double from = 0;
+            double step = 0;
+            int tripCount = getConstantTripCount(range, from, step);
+
+            if (tripCount >= 0)
+            {
+                staticSize = std::min(unsigned(tripCount), unsigned(LBC_PRESIZE_RANGE_LIMIT));
+                presizeLoop = nullptr;
+            }
+        }
+
+        bool sized = presizeLoop || staticSize > 0;
+
+        bytecode.addDebugRemark("allocation: table comprehension");
+
+        if (isMap)
+        {
+            bytecode.emitABC(LOP_NEWTABLE, table, encodeHashSize(staticSize), 0);
+            bytecode.emitAux(0);
+        }
+        else
+        {
+            bytecode.emitABC(LOP_NEWTABLE, table, 0, 0);
+            bytecode.emitAux(staticSize);
+            bytecode.emitABC(LOP_LOADN, counter, 0, 0);
+        }
+
+        comprehensionFrames.push_back({table, counter, presizeLoop});
+        compileStat(expr->loop);
+        comprehensionFrames.pop_back();
+
+        if (!isMap && sized)
+            bytecode.emitABC(LOP_PRESIZETABLE, table, counter, LBC_PRESIZE_TRIM);
+
+        if (table != target)
+            bytecode.emitABC(LOP_MOVE, target, table, 0);
+    }
+
+    // Luwu Table Comprehensions (rfcs/table-comprehensions.md): the trip count of a numeric for whose bounds and step are
+    // constants, with the first value and the step; -1 when they aren't constant (see getTripCount for the other -1 cases)
+    int getConstantTripCount(AstStatFor* range, double& from, double& step)
+    {
+        Constant one = {Constant::Type_Number};
+        one.valueNumber = 1.0;
+
+        Constant fromc = getConstant(range->from);
+        Constant toc = getConstant(range->to);
+        Constant stepc = range->step ? getConstant(range->step) : one;
+
+        bool constantRange = fromc.type == Constant::Type_Number && toc.type == Constant::Type_Number && stepc.type == Constant::Type_Number;
+        if (!constantRange)
+            return -1;
+
+        from = fromc.valueNumber;
+        step = stepc.valueNumber;
+        return getTripCount(fromc.valueNumber, toc.valueNumber, stepc.valueNumber);
+    }
+
+    // Luwu Table Comprehensions (rfcs/table-comprehensions.md): an array comprehension over a constant range whose item and
+    // `when` conditions fold to constants on every iteration has nothing left to run at runtime. It compiles to what the
+    // literal it builds compiles to: `{ for i = 1, 4 do i * 2 }` is `{ 2, 4, 6, 8 }`, a NEWTABLE and SETLISTs.
+    bool tryCompileConstantComprehension(AstExprTableComprehension* expr, uint8_t target)
+    {
+        AstStatFor* range = expr->clauseCount == 1 ? expr->loop->as<AstStatFor>() : nullptr;
+        if (!range || expr->item->key)
+            return false;
+
+        AstStatIf* guard = range->body->body.data[0]->as<AstStatIf>();
+        if (guard)
+        {
+            // a binding needs a register, so it can't fold away
+            for (const AstIfClause& clause : guard->clauses)
+                if (clause.declaration)
+                    return false;
+        }
+
+        double from = 0;
+        double step = 0;
+        int tripCount = getConstantTripCount(range, from, step);
+
+        if (tripCount < 0 || tripCount > kConstantComprehensionLimit)
+            return false;
+
+        if (Variable* lv = variables.find(range->var); lv && lv->written)
+            return false;
+
+        AstLocal* var = range->var;
+        std::vector<Constant> values;
+        bool foldable = true;
+
+        // Local logs: the shared ones may hold an enclosing unrolled loop's or inlined call's changes
+        Compile::ExprConstantChangeLog foldExprChanges;
+        Compile::LocalConstantChangeLog foldLocalChanges;
+
+        for (int iv = 0; iv < tripCount && foldable; ++iv)
+        {
+            locstants[var].type = Constant::Type_Number;
+            locstants[var].valueNumber = from + iv * step;
+
+            // the first fold records what it changes, so the state before the comprehension can be restored
+            foldConstants(
+                constants,
+                variables,
+                locstants,
+                builtinsFold,
+                builtinsFoldLibraryK,
+                options.vectorPrecision == 1,
+                options.libraryMemberConstantCb,
+                range,
+                names,
+                tableConstants,
+                iv == 0 ? &foldExprChanges : nullptr,
+                iv == 0 ? &foldLocalChanges : nullptr
+            );
+
+            bool skipped = false;
+
+            if (guard)
+            {
+                // a single plain `when` is the if's own condition, a chain is its clauses
+                std::vector<AstExpr*> conditions;
+                if (guard->clauses.size == 0)
+                    conditions.push_back(guard->condition);
+                for (const AstIfClause& clause : guard->clauses)
+                    conditions.push_back(clause.expr);
+
+                for (AstExpr* conditionExpr : conditions)
+                {
+                    Constant condition = getConstant(conditionExpr);
+                    if (condition.type == Constant::Type_Unknown)
+                    {
+                        foldable = false;
+                        break;
+                    }
+
+                    if (!condition.isTruthful())
+                    {
+                        skipped = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!foldable || skipped)
+                continue;
+
+            Constant value = getConstant(expr->item->value);
+            if (value.type == Constant::Type_Unknown)
+                foldable = false;
+            else if (value.type != Constant::Type_Nil)
+                values.push_back(value);
+        }
+
+        locstants[var].type = Constant::Type_Unknown;
+        Compile::undoChanges(constants, foldExprChanges);
+        Compile::undoChanges(locstants, foldLocalChanges);
+
+        if (!foldable)
+            return false;
+
+        bytecode.addDebugRemark("allocation: table comprehension folded to %d constants", int(values.size()));
+
+        // the items are constants, so nothing reads the target and the table can be built in it directly
+        bytecode.emitABC(LOP_NEWTABLE, target, 0, 0);
+        bytecode.emitAux(uint32_t(values.size()));
+
+        RegScope rs(this);
+        unsigned chunkSize = std::min(16u, unsigned(values.size()));
+        uint8_t chunk = chunkSize ? allocReg(expr, chunkSize) : 0;
+
+        for (size_t start = 0; start < values.size(); start += chunkSize)
+        {
+            size_t count = std::min(size_t(chunkSize), values.size() - start);
+
+            for (size_t i = 0; i < count; ++i)
+                compileExprConstant(expr->item->value, &values[start + i], uint8_t(chunk + i));
+
+            bytecode.emitABC(LOP_SETLIST, target, chunk, uint8_t(count + 1));
+            bytecode.emitAux(uint32_t(start + 1));
+        }
+
+        return true;
+    }
+
+    // Luwu Table Comprehensions (rfcs/table-comprehensions.md): `#{ for ... }`, which counts the items that aren't nil
+    // without building the table (see ComprehensionFrame)
+    void compileComprehensionCount(AstExprTableComprehension* expr, uint8_t target)
+    {
+        RegScope rs(this);
+
+        // the target can be a local the loop reads, so the count is only written to it at the end
+        uint8_t counter = allocReg(expr, 1u);
+        bytecode.emitABC(LOP_LOADN, counter, 0, 0);
+
+        comprehensionFrames.push_back({kInvalidReg, counter, nullptr});
+        compileStat(expr->loop);
+        comprehensionFrames.pop_back();
+
+        bytecode.emitABC(LOP_MOVE, target, counter, 0);
+    }
+
+    // Luwu Table Comprehensions (rfcs/table-comprehensions.md): sizes the comprehension's table from the loop whose
+    // registers start at `regs`, when that loop is the one its frame sizes from
+    void compileComprehensionPresize(AstStat* loop, uint8_t regs, bool range)
+    {
+        if (comprehensionFrames.empty() || comprehensionFrames.back().presizeLoop != loop)
+            return;
+
+        const ComprehensionFrame& frame = comprehensionFrames.back();
+        bool isMap = frame.counter == kInvalidReg;
+
+        uint8_t form = 0;
+        if (range)
+            form = isMap ? LBC_PRESIZE_RANGE_HASH : LBC_PRESIZE_RANGE_ARRAY;
+        else
+            form = isMap ? LBC_PRESIZE_ITER_HASH : LBC_PRESIZE_ITER_ARRAY;
+
+        bytecode.emitABC(LOP_PRESIZETABLE, frame.table, regs, form);
+    }
+
+    // Luwu Table Comprehensions (rfcs/table-comprehensions.md): one element. A nil value adds nothing, which is also how an
+    // `if c then v else nil` item filters.
+    void compileStatComprehensionItem(AstStatComprehensionItem* stat)
+    {
+        LUAU_ASSERT(!comprehensionFrames.empty());
+        // A copy: compiling the item can push a nested comprehension's frame, which may reallocate the vector
+        ComprehensionFrame frame = comprehensionFrames.back();
+
+        RegScope rs(this);
+
+        if (frame.table == kInvalidReg)
+        {
+            LUAU_ASSERT(!stat->key);
+            compileComprehensionCountItem(stat, frame.counter, rs);
+            return;
+        }
+
+        // the key is evaluated before the value, as in a table constructor
+        uint8_t key = stat->key ? compileExprAuto(stat->key, rs) : kInvalidReg;
+        uint8_t value = compileExprAuto(stat->value, rs);
+
+        if (!stat->key)
+        {
+            bytecode.emitABC(LOP_APPENDTABLE, frame.table, value, frame.counter);
+            return;
+        }
+
+        size_t skipLabel = bytecode.emitLabel();
+        bytecode.emitAD(LOP_JUMPXEQKNIL, value, 0);
+        bytecode.emitAux(0);
+
+        if (stat->accumulate)
+            compileComprehensionAccumulate(stat, frame.table, key, value);
+        else
+            bytecode.emitABC(LOP_SETTABLE, value, frame.table, key);
+
+        size_t endLabel = bytecode.emitLabel();
+        patchJump(stat, skipLabel, endLabel);
+    }
+
+    // Luwu Table Comprehensions (rfcs/table-comprehensions.md): an item of `#{ for ... }`: counted unless it is nil
+    void compileComprehensionCountItem(AstStatComprehensionItem* stat, uint8_t counter, RegScope& rs)
+    {
+        // a constant has no side effects to keep, so a non-nil one just counts and a nil one does nothing
+        const Constant* constant = constants.find(stat->value);
+        bool knownNil = constant && constant->type == Constant::Type_Nil;
+        bool knownValue = constant && constant->type != Constant::Type_Unknown && !knownNil;
+
+        if (knownNil)
+            return;
+
+        size_t skipLabel = 0;
+        if (!knownValue)
+        {
+            uint8_t value = compileExprAuto(stat->value, rs);
+            skipLabel = bytecode.emitLabel();
+            bytecode.emitAD(LOP_JUMPXEQKNIL, value, 0);
+            bytecode.emitAux(0);
+        }
+
+        int32_t one = bytecode.addConstantNumber(1.0);
+        if (one < 0)
+            CompileError::raise(stat->location, "Exceeded constant limit; simplify the code to compile");
+
+        if (one <= 255)
+        {
+            bytecode.emitABC(LOP_ADDK, counter, counter, uint8_t(one));
+        }
+        else
+        {
+            RegScope rs(this);
+            uint8_t step = allocReg(stat, 1u);
+            bytecode.emitABC(LOP_LOADN, step, 1, 0);
+            bytecode.emitABC(LOP_ADD, counter, counter, step);
+        }
+
+        if (!knownValue)
+            patchJump(stat, skipLabel, bytecode.emitLabel());
+    }
+
+    // Luwu Table Comprehensions (rfcs/table-comprehensions.md): `[key] op= value`. The key's current value is combined
+    // with the new one; an absent key stores the value itself (negated for -=)
+    void compileComprehensionAccumulate(AstStatComprehensionItem* stat, uint8_t table, uint8_t key, uint8_t value)
+    {
+        RegScope rs(this);
+        AstExprBinary::Op op = *stat->accumulate;
+
+        uint8_t current = allocReg(stat, 1u);
+        bytecode.emitABC(LOP_GETTABLE, current, table, key);
+
+        size_t absentLabel = bytecode.emitLabel();
+        bytecode.emitAD(LOP_JUMPXEQKNIL, current, 0);
+        bytecode.emitAux(0);
+
+        if (op == AstExprBinary::Concat)
+        {
+            // CONCAT reads a run of consecutive registers
+            uint8_t pair = allocReg(stat, 2u);
+            bytecode.emitABC(LOP_MOVE, pair, current, 0);
+            bytecode.emitABC(LOP_MOVE, uint8_t(pair + 1), value, 0);
+            bytecode.emitABC(LOP_CONCAT, current, pair, uint8_t(pair + 1));
+        }
+        else
+        {
+            bytecode.emitABC(getBinaryOpArith(op), current, current, value);
+        }
+
+        bytecode.emitABC(LOP_SETTABLE, current, table, key);
+
+        size_t doneLabel = bytecode.emitLabel();
+        bytecode.emitAD(LOP_JUMP, 0, 0);
+
+        patchJump(stat, absentLabel, bytecode.emitLabel());
+
+        if (op == AstExprBinary::Sub)
+        {
+            bytecode.emitABC(LOP_MINUS, current, value, 0);
+            bytecode.emitABC(LOP_SETTABLE, current, table, key);
+        }
+        else
+        {
+            bytecode.emitABC(LOP_SETTABLE, value, table, key);
+        }
+
+        patchJump(stat, doneLabel, bytecode.emitLabel());
     }
 
     // Luwu Do Expressions (rfcs/do-expressions.md)
@@ -6734,6 +7112,10 @@ struct Compiler
         else if (AstExprDo* expr = node->as<AstExprDo>())
         {
             compileExprDo(expr, target, targetTemp);
+        }
+        else if (AstExprTableComprehension* expr = node->as<AstExprTableComprehension>())
+        {
+            compileExprTableComprehension(expr, target, targetTemp);
         }
         else if (AstExprInterpString* interpString = node->as<AstExprInterpString>())
         {
@@ -7727,6 +8109,8 @@ struct Compiler
             bytecode.emitABC(LOP_LOADN, uint8_t(regs + 1), 1, 0);
         loops.back().compilingHeader = false;
 
+        compileComprehensionPresize(stat, regs, /* range= */ true);
+
         size_t forLabel = bytecode.emitLabel();
 
         bytecode.emitAD(LOP_FORNPREP, regs, 0);
@@ -7778,6 +8162,8 @@ struct Compiler
         loops.back().compilingHeader = true;
         compileExprListTemp(stat->values, regs, 3, /* targetTop= */ true);
         loops.back().compilingHeader = false;
+
+        compileComprehensionPresize(stat, regs, /* range= */ false);
 
         // note that we reserve at least 2 variables; this allows our fast path to assume that we need 2 variables instead of 1 or 2
         uint8_t vars = allocReg(stat, std::max(unsigned(stat->vars.size), 2u));
@@ -8224,6 +8610,10 @@ struct Compiler
         else if (AstStatGive* stat = node->as<AstStatGive>())
         {
             compileStatGive(stat);
+        }
+        else if (AstStatComprehensionItem* stat = node->as<AstStatComprehensionItem>())
+        {
+            compileStatComprehensionItem(stat);
         }
         else if (AstStatReturn* stat = node->as<AstStatReturn>())
         {
@@ -9767,6 +10157,22 @@ struct Compiler
         std::vector<size_t> jumps;
     };
     std::vector<GiveFrame> giveFrames;
+
+    // Luwu Table Comprehensions (rfcs/table-comprehensions.md): the comprehensions being compiled, innermost last
+    struct ComprehensionFrame
+    {
+        // The table being built, or kInvalidReg for `#{ for ... }`, which only counts (compileComprehensionCount).
+        uint8_t table;
+        // An array comprehension's element count; kInvalidReg for a map comprehension.
+        uint8_t counter;
+        // The loop whose header sizes the table with PRESIZETABLE, or null when the table isn't sized at runtime.
+        AstStat* presizeLoop;
+    };
+    std::vector<ComprehensionFrame> comprehensionFrames;
+
+    // Luwu Table Comprehensions (rfcs/table-comprehensions.md): the longest constant range a comprehension is folded to
+    // a literal for (tryCompileConstantComprehension). Past it, the loop is less bytecode than the constants.
+    static const int kConstantComprehensionLimit = 64;
     // Luwu Classes (rfcs/classes): classes whose initializers are being compiled at a construction site
     // (tryCompileNewObjectFieldParameters), innermost last
     std::vector<AstStatClass*> fieldsExpansionStack;

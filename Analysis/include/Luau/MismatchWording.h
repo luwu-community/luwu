@@ -109,8 +109,8 @@ struct Difference
         NothingReturned,
         // An argument passed to a function that has no parameter to take it.
         ExtraPassed,
-        // A table with named fields and no indexer, where a map is expected: Luau doesn't treat one
-        // as the other even when every field would fit.
+        // A table with no indexer (named fields, or none at all), where an array or a map is expected: Luau
+        // doesn't treat one as the other even when every field would fit.
         NotAMap,
     };
 
@@ -131,6 +131,10 @@ struct Difference
     // For `CouldBeNil`, what an aliased `sub` stands for (`Slot` is `Stack?`): an alias hides the `nil`
     // the sentence is about.
     std::optional<std::string> subMeaning;
+    // For `NotAMap`: the expected table is an array (`{ T }`) rather than a map, and the given table has no fields
+    // at all (`table.freeze({})` is typed `{}`, an empty table that can never hold anything).
+    bool expectsArray = false;
+    bool givenEmpty = false;
 };
 
 // The names paths hang off, and what the text rendered so far needs a legend for. Every piece of text
@@ -232,6 +236,12 @@ std::string similarHeader(std::string_view arrival, size_t paths);
 std::string pathsHeader(std::string_view arrival, size_t paths);
 std::string becauseHeader();
 std::string couldBeNilHeader(const std::string& subject);
+// The whole given value is a table with no indexer where an array or a map is expected (`NotAMap` at the root).
+std::string noIndexerSentence(const std::string& subject, const Difference& d);
+// For a table whose type says nothing about what it holds, `{}` or `{unknown}` (from `table.create(n)`): the type has
+// to be written down. `Help (...)` blocks, which go under the explanation.
+std::string emptyTableHelp(const std::string& variable, const std::string& type);
+std::string unknownElementsHelp(const std::string& variable, const std::string& type);
 std::string unionMembersHeader(bool noneFit, const std::string& unionName, const std::string& target);
 // Scalars that aren't the scalar expected: `'string' isn't a 'number'.`, `Neither ... nor ...`,
 // `None of ...`. `article` says whether the expected type takes an `a`.

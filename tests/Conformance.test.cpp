@@ -87,6 +87,7 @@ LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuwuIfLocal)
 LUAU_FASTFLAG(DebugLuwuDoExpr)
+LUAU_FASTFLAG(LuwuTableComprehensions)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 LUAU_FASTFLAG(LuauExportValueSyntax)
@@ -6538,6 +6539,17 @@ TEST_CASE("DoExpressions")
     runConformance("do_expr.luwu");
 }
 
+TEST_CASE("TableComprehensions")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuTableComprehensions, true},
+        {FFlag::DebugLuwuDoExpr, true},
+        {FFlag::LuwuIfLocal, true},
+    };
+
+    runConformance("table_comprehensions.luwu");
+}
+
 TEST_CASE("DoExpressionsCursed")
 {
     ScopedFastFlag sffs[] = {
@@ -6692,11 +6704,18 @@ TEST_CASE("LuwuBytecodeHeader")
     {
         // a WIP feature's flag switches the version to LWBC_VERSION_WIP
         ScopedFastFlag luwuClassesOff{FFlag::LuwuClasses, false};
+        ScopedFastFlag comprehensionsOff{FFlag::LuwuTableComprehensions, false};
         std::string bytecode = Luau::compile("return 1");
         REQUIRE(bytecode.size() > LWBC_HEADER_SIZE);
         CHECK(uint8_t(bytecode[0]) == LWBC_MAGIC);
         CHECK(uint8_t(bytecode[1]) == LWBC_VERSION_TARGET);
         CHECK(getLoadError(bytecode) == "");
+
+        // Luwu Table Comprehensions (rfcs/table-comprehensions.md): their opcodes are WIP bytecode too
+        ScopedFastFlag comprehensions{FFlag::LuwuTableComprehensions, true};
+        std::string withComprehensions = Luau::compile("return 1");
+        REQUIRE(withComprehensions.size() > LWBC_HEADER_SIZE);
+        CHECK(uint8_t(withComprehensions[1]) == LWBC_VERSION_WIP);
     }
 
     ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};

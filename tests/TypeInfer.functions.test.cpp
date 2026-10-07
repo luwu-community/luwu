@@ -4682,6 +4682,36 @@ TEST_CASE_FIXTURE(Fixture, "return_length_mismatch_counts_the_values")
     );
 }
 
+TEST_CASE_FIXTURE(Fixture, "return_may_leave_off_trailing_optional_values")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    // Upstream requires every declared value, so ending an iterator takes `return nil, nil, nil`.
+    CheckResult ok = check(R"(
+        local function next(): (number?, { number }?, string?)
+            return nil
+        end
+        local function partial(): (number?, string?, boolean?)
+            return 1, "two"
+        end
+        local f: () -> (number?, string?) = function() return nil end
+    )");
+    LUAU_REQUIRE_NO_ERRORS(ok);
+
+    // Only optional values can be left off, and returning nothing is still not returning `nil`.
+    CheckResult required = check(R"(
+        local function g(): (number?, string) return nil end
+        local function h(): (number?, string?) return end
+    )");
+    LUAU_REQUIRE_ERROR_COUNT(2, required);
+    CHECK_EQ(
+        "Expected this function to return 2 values, but it returns 1 value.\n"
+        "Consider returning every value the annotation lists, or removing the ones it doesn't from the annotation.",
+        toString(required.errors[0])
+    );
+    CHECK_EQ("Expected this function to return 'number?, string?', but it returns nothing at all.", toString(required.errors[1]));
+}
+
 TEST_CASE_FIXTURE(Fixture, "a_genuine_partial_return_still_reports_codepaths")
 {
     ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};

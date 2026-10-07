@@ -92,6 +92,7 @@ struct LintWarning
         Code_OrContinue = 60,              // Luwu: `x or continue`, which reads a binding named `continue`
         Code_KeywordShadow = 61,           // Luwu: a binding named after a contextual keyword (`class`, `continue`, ...)
         Code_BuiltinShadow = 62,           // Luwu: a binding that hides a builtin global (`type`, `typeof`, `table`, ...)
+        Code_LuwuOnlyApi = 63,             // Luwu: a Luwu-only library function (`table.drop`) used in a `.luau` file
 
         Code__Count
     };
@@ -198,6 +199,7 @@ inline constexpr const char* kWarningNames[] = {
     "OrContinue",
     "KeywordShadow",
     "BuiltinShadow",
+    "LuwuOnlyApi",
 };
 // clang-format on
 

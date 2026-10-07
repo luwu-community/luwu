@@ -664,10 +664,63 @@ const function generate(seed: number): (string, string)
                 const skip_at, stop_at = rng.int(1, 5), rng.int(2, 6)
                 const form = rng.pick({
                     "give_call", "give_loop", "or_return", "if_local", "if_local_expr", "do_receiver", "do_header",
-                    "do_closures", "do_yield", "inlined_return",
+                    "do_closures", "do_yield", "inlined_return", "comp_array", "comp_map", "comp_break", "comp_flatten",
+                    "comp_objects", "comp_yield",
                 })
 
-                if form == "give_call" then
+                -- Luwu Table Comprehensions (rfcs/table-comprehensions.md): the same operations as a comprehension's item and `when`
+                -- bindings, so they run inside a loop the compiler sizes and appends to itself
+                if form == "comp_array" then
+                    op("comp_array", {
+                        `local xs = \{ for i = 1, 6 when i ~= {skip_at} when const o = {make} give norm({use("o")}) }`,
+                        "local out = {}",
+                        "for _, x in xs do table.insert(out, tostring(x)) end",
+                        "return #xs, table.concat(out, ',')",
+                    }, divergent)
+                elseif form == "comp_map" then
+                    op("comp_map", {
+                        `local m = \{ for i = 1, 5 when const o = {make} give [o:describe() .. i] = norm({use("o")}) }`,
+                        "local keys = {}",
+                        "for k in m do table.insert(keys, k) end",
+                        "table.sort(keys)",
+                        "local out = {}",
+                        "for _, k in keys do table.insert(out, k .. '=' .. tostring(m[k])) end",
+                        "return table.concat(out, ',')",
+                    }, divergent)
+                elseif form == "comp_break" then
+                    op("comp_break", {
+                        `local xs = \{ for i = 1, 6 give if i == {stop_at} then (do break) elseif i == {skip_at} then (do continue) else norm({use(`({make})`)}) }`,
+                        "local out = {}",
+                        "for _, x in xs do table.insert(out, tostring(x)) end",
+                        "return #xs, table.concat(out, ',')",
+                    }, divergent)
+                elseif form == "comp_flatten" then
+                    op("comp_flatten", {
+                        `local xs = \{ for i = 1, 3 for j = 1, i when j ~= {skip_at} give ({make}):describe() .. j }`,
+                        "return #xs, table.concat(xs, '|')",
+                    })
+                elseif form == "comp_objects" then
+                    op("comp_objects", {
+                        `local objs = \{ for i = 1, 4 give {make} }`,
+                        `local xs = \{ for i, o in objs when i ~= {skip_at} give norm({use("o")}) }`,
+                        "local out = {}",
+                        "for _, x in xs do table.insert(out, tostring(x)) end",
+                        "return #objs, table.concat(out, ',')",
+                    }, divergent)
+                elseif form == "comp_yield" then
+                    op("comp_yield", {
+                        "local co = coroutine.wrap(function()",
+                        `    return \{ for i = 1, 3 when const o = {make} give coroutine.yield(o:describe()) and norm({use("o")}) }`,
+                        "end)",
+                        "local first = co()",
+                        "co(true)",
+                        "co(false)",
+                        "local xs = co(true)",
+                        "local out = {}",
+                        "for _, x in xs do table.insert(out, tostring(x)) end",
+                        "return first, #xs, table.concat(out, ',')",
+                    }, divergent)
+                elseif form == "give_call" then
                     op("do_give_call", { "local v = do", `    local o = {make}`, `    give {use("o")}`, "return v" }, divergent)
                 elseif form == "give_loop" then
                     op("do_give_loop", {

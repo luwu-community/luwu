@@ -197,6 +197,7 @@ private:
     void visit(AstStatContinue*);
     void visit(AstStatReturn* ret);
     void visit(AstStatGive* give);
+    void visit(AstStatComprehensionItem* item);
     void visit(AstStatExpr* expr);
     void visit(AstStatLocal* local);
     void visit(AstStatFor* forStatement);
@@ -273,6 +274,7 @@ private:
     void visit(AstExprTypeAssertion* expr);
     void visit(AstExprIfElse* expr);
     void visit(AstExprDo* expr);
+    void visit(AstExprTableComprehension* expr);
     void visit(AstExprInterpString* interpString);
     void visit(AstExprInstantiate* explicitTypeInstantiation);
     void visit(AstExprError* expr);

@@ -216,6 +216,8 @@ static bool similar(AstExpr* lhs, AstExpr* rhs)
     }
     // Luwu Do Expressions (rfcs/do-expressions.md): a block runs statements, so two are never the same check
     CASE(AstExprDo) return false;
+    // Luwu Table Comprehensions (rfcs/table-comprehensions.md): each evaluation builds a new table
+    CASE(AstExprTableComprehension) return false;
     else
     {
         LUAU_ASSERT(!"Unknown expression type");
@@ -6078,6 +6080,18 @@ private:
                     return leaves;
             }
 
+            // Luwu Table Comprehensions (rfcs/table-comprehensions.md): an item evaluates its key and value every time, so a
+            // `do` expression there that always leaves (`{ for i = 1, 10 do (do break) }`) leaves the iteration
+            if (AstStatComprehensionItem* item = stat->as<AstStatComprehensionItem>())
+            {
+                for (AstExpr* part : {item->key, item->value})
+                {
+                    AstExprDo* leaving = part ? unparenthesized(part)->as<AstExprDo>() : nullptr;
+                    if (leaving && howBlockLeaves(leaving->body) != Leaves::Never)
+                        return Leaves::Directly;
+                }
+            }
+
             AstStatIf* branch = stat->as<AstStatIf>();
             bool everyBranchLeaves = branch && branch->elsebody && howBlockLeaves(branch->thenbody) != Leaves::Never &&
                                      elseLeaves(branch->elsebody);
@@ -7170,6 +7184,67 @@ private:
     }
 };
 
+// Luwu: a Luwu-only library function read in a Luau or Lua module (its config's `language`, from a `.luau` or `.lua`
+// file). Luwu code goes in `.luwu` files.
+class LintLuwuOnlyApi : AstVisitor
+{
+public:
+    LUAU_NOINLINE static void process(LintContext& context)
+    {
+        if (!context.module || context.module->language == Language::Luwu)
+            return;
+
+        LintLuwuOnlyApi pass;
+        pass.context = &context;
+
+        context.root->visit(&pass);
+    }
+
+private:
+    LintContext* context;
+
+    // Members Luwu adds to libraries upstream Luau also has. Upstream's `class` library has `isinstance` too, and
+    // `classof` where Luwu has `of`.
+    static bool isLuwuOnlyMember(std::string_view library, std::string_view member)
+    {
+        if (library == "class")
+        {
+            static const char* const kLuwuClassMembers[] = {"of", "name", "implements", "fields"};
+            for (const char* luwuMember : kLuwuClassMembers)
+            {
+                if (member == luwuMember)
+                    return true;
+            }
+            return false;
+        }
+        if (library == "table")
+            return member == "drop";
+        if (library == "buffer")
+            return member == "isfrozen";
+        return false;
+    }
+
+    bool visit(AstExprIndexName* node) override
+    {
+        // A local named `table` is the reader's own, so only the global library counts.
+        AstExprGlobal* global = node->expr->as<AstExprGlobal>();
+        if (!global || !isLuwuOnlyMember(global->name.value, node->index.value))
+            return true;
+
+        std::string qualified = std::string(global->name.value) + "." + node->index.value;
+        const char* language = context->module->language == Language::Lua ? "Lua" : "Luau";
+        emitWarning(
+            *context,
+            LintWarning::Code_LuwuOnlyApi,
+            node->location,
+            "'%s' only exists in Luwu, but this is a %s file; rename it to '.luwu' if it's Luwu code",
+            qualified.c_str(),
+            language
+        );
+        return true;
+    }
+};
+
 // Luwu: `pairs` and `ipairs`, which generalized iteration (`for k, v in t`) replaces. Each is its own lint so a module
 // can keep using one without turning off DeprecatedApi or the other.
 class LintLuaIterators : AstVisitor
@@ -7193,15 +7268,24 @@ private:
                 *context,
                 LintWarning::Code_Pairs,
                 node->location,
-                "'pairs' is deprecated; iterate the table directly: 'for key, value in t do'"
+                "'pairs' is deprecated; use 'for key, value in t do' directly.\n"
+                "\n"
+                "Help (pairs):\n"
+                "  - In Luau and Luwu you can directly iterate over tables, objects, or extern types (generalized iteration)\n"
+                "  - Unlike 'pairs', generalized iteration uses the value's '__iter' metamethod when it has one\n"
+                "  - If you want to skip '__iter' or '__call', add '@[nolint(Pairs)]' or '--!nolint LuaIterators' to silence"
             );
         else if (node->name == "ipairs")
             emitWarning(
                 *context,
                 LintWarning::Code_Ipairs,
                 node->location,
-                "'ipairs' is deprecated; iterate the array directly: 'for index, value in t do'. Unlike 'ipairs', it doesn't stop "
-                "at the first nil"
+                "'ipairs' is deprecated; use 'for index, value in t do' directly.\n"
+                "\n"
+                "Help (ipairs):\n"
+                "  - In Luau and Luwu you can directly iterate over tables, objects, or extern types (generalized iteration)\n"
+                "  - Unlike 'ipairs', generalized iteration doesn't stop at the first 'nil'\n"
+                "  - If you want to stop at the first nil, add '@[nolint(Ipairs)]' or '--!nolint LuaIterators' to silence"
             );
 
         return true;
@@ -7846,6 +7930,15 @@ std::vector<LintWarning> lint(
     for (const LintScope& scope : scopes)
         context.options.warningMask |= scope.enable;
 
+    // Luwu: these lints suggest Luau replacements for Lua idioms, which a Lua module can't use
+    if (module && module->language == Language::Lua)
+    {
+        context.options.warningMask.reset(LintWarning::Code_LuaIterators);
+        context.options.warningMask.reset(LintWarning::Code_Pairs);
+        context.options.warningMask.reset(LintWarning::Code_Ipairs);
+        context.options.warningMask.reset(LintWarning::Code_LuaAndOr);
+    }
+
     if (context.warningEnabled(LintWarning::Code_UnknownGlobal) || context.warningEnabled(LintWarning::Code_DeprecatedGlobal) ||
         context.warningEnabled(LintWarning::Code_GlobalUsedAsLocal) || context.warningEnabled(LintWarning::Code_PlaceholderRead) ||
         context.warningEnabled(LintWarning::Code_BuiltinGlobalWrite))
@@ -7953,6 +8046,9 @@ std::vector<LintWarning> lint(
 
     if (context.warningEnabled(LintWarning::Code_FloatIndex))
         LintFloatIndex::process(context);
+
+    if (context.warningEnabled(LintWarning::Code_LuwuOnlyApi))
+        LintLuwuOnlyApi::process(context);
 
     // Luwu: turning LuaIterators off turns off its parts
     if (context.warningEnabled(LintWarning::Code_LuaIterators) &&

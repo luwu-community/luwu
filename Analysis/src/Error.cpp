@@ -21,6 +21,7 @@ LUAU_FASTINTVARIABLE(LuauIndentTypeMismatchMaxTypeLength, 10)
 LUAU_FASTFLAGVARIABLE(LuauTweakAccessViolationReporting)
 LUAU_FASTFLAGVARIABLE(LuauBetterMissingPropertiesTypeError)
 LUAU_FASTFLAG(LuauBetterPackAndVariadicMismatchErrors)
+LUAU_FASTFLAG(LuwuDeclareStatements)
 
 static std::string wrongNumberOfArgsString(
     size_t expectedCount,
@@ -107,6 +108,138 @@ static const char* externTypeNoun(TypeId t)
 static const char* memberNoun(TypeId t)
 {
     return luwuNominalKind(t) ? "Field" : "Key";
+}
+
+// Luwu: the libraries every Luau runtime has. Their tables are named `typeof(debug)` and so on, which is what
+// upstream prints when a key is missing ("Key 'profilebegin' not found in table 'typeof(debug)'").
+static const char* const kStandardLibraries[] = {
+    "bit32", "buffer", "class", "coroutine", "debug", "math", "os", "string", "table", "utf8", "vector",
+};
+
+// Members some environments add to a standard library and others don't have, so a missing one is reported as
+// unsupported here rather than as a typo. Code checking for one (`debug.profilebegin or fallback`) can't `declare` it
+// either: a library's table can't be extended.
+static const char* const kEnvironmentLibraryMembers[] = {
+    // Roblox.
+    "debug.profilebegin",
+    "debug.profileend",
+    "debug.setmemorycategory",
+    "debug.resetmemorycategory",
+    "debug.getmemorycategory",
+    "debug.dumpcodesize",
+    "utf8.graphemes",
+    "utf8.nfcnormalize",
+    "utf8.nfdnormalize",
+    // Luwu's own, missing when their flags (`LuwuTableDrop`, `LuwuBufferIsFrozen`) are off.
+    "table.drop",
+    "buffer.isfrozen",
+};
+
+// Globals common environments provide that Luau doesn't: `warn` (Roblox, Lune, seal) and Roblox's own. Upstream says
+// "consider assigning to it first", which is the wrong fix for a global the environment is meant to provide.
+static const char* const kEnvironmentGlobals[] = {
+    "warn",
+    "task",
+    "tick",
+    "time",
+    "wait",
+    "spawn",
+    "delay",
+    "elapsedTime",
+    "game",
+    "workspace",
+    "script",
+    "plugin",
+    "Instance",
+    "Enum",
+    "Vector2",
+    "Vector3",
+    "CFrame",
+    "Color3",
+    "UDim",
+    "UDim2",
+    "BrickColor",
+    "TweenInfo",
+    "Random",
+    "DateTime",
+    "RaycastParams",
+};
+
+static bool isEnvironmentGlobal(const std::string& name)
+{
+    for (const char* global : kEnvironmentGlobals)
+    {
+        if (name == global)
+            return true;
+    }
+    return false;
+}
+
+static std::string describeMissingEnvironmentGlobal(const std::string& name)
+{
+    std::string message = "This environment doesn't support the global '" + name + "'.\n\n"
+                          "Help (environment-specific global):\n"
+                          "  - Some environments provide '" + name + "'; this one doesn't";
+    if (FFlag::LuwuDeclareStatements)
+        message += "\n  - If yours does, add a 'declare' for it";
+    return message;
+}
+
+static std::optional<std::string> standardLibraryName(TypeId t)
+{
+    const TableType* ttv = get<TableType>(t);
+    if (!ttv || !ttv->name)
+        return std::nullopt;
+
+    for (const char* library : kStandardLibraries)
+    {
+        if (*ttv->name == "typeof(" + std::string(library) + ")")
+            return library;
+    }
+    return std::nullopt;
+}
+
+// Library members upstream Luau has and Luwu doesn't, with Luwu's equivalent.
+struct LuauOnlyMember
+{
+    const char* name;
+    const char* luwuEquivalent;
+};
+
+static const LuauOnlyMember kLuauOnlyLibraryMembers[] = {
+    // Luwu Classes (rfcs/classes): upstream's `class` library spells it `classof`.
+    {"class.classof", "class.of"},
+};
+
+// In Luwu code, point at Luwu's equivalent. In Luau code, the member is a real Luau API that Luwu can't check.
+static std::string describeLuauOnlyMember(const LuauOnlyMember& member, bool inLuwuFile)
+{
+    std::string message = "'" + std::string(member.name) + "' is a Luau-only API and doesn't exist in Luwu";
+    if (inLuwuFile)
+        return message + ". Did you mean '" + member.luwuEquivalent + "'?";
+    return message + "; diagnostics for it may be limited.";
+}
+
+static std::string describeMissingLibraryMember(const std::string& library, const std::string& key, bool inLuwuFile)
+{
+    const std::string qualified = library + "." + key;
+    for (const LuauOnlyMember& member : kLuauOnlyLibraryMembers)
+    {
+        if (qualified == member.name)
+            return describeLuauOnlyMember(member, inLuwuFile);
+    }
+
+    for (const char* member : kEnvironmentLibraryMembers)
+    {
+        if (qualified == member)
+        {
+            return "This environment doesn't support '" + qualified + "'.\n\n" +
+                   "Help (environment-specific API):\n"
+                   "  - Some environments add '" + key + "' to the '" + library + "' library; this one doesn't\n"
+                   "  - To use it where it exists, read it through 'any': '(" + library + " :: any)." + key + "'";
+        }
+    }
+    return "The '" + library + "' library has no member '" + key + "'";
 }
 
 // A class declaration produces two extern types that both stringify as the bare class name, so a
@@ -627,6 +760,8 @@ struct ErrorConverter
         switch (e.context)
         {
         case UnknownSymbol::Binding:
+            if (isEnvironmentGlobal(e.name))
+                return describeMissingEnvironmentGlobal(e.name);
             return "Unknown global '" + e.name + "'; consider assigning to it first";
         case UnknownSymbol::Type:
             return "Unknown type '" + e.name + "'";
@@ -639,6 +774,8 @@ struct ErrorConverter
     std::string operator()(const Luau::UnknownProperty& e) const
     {
         TypeId t = follow(e.table);
+        if (std::optional<std::string> library = standardLibraryName(t))
+            return describeMissingLibraryMember(*library, e.key, e.language == Language::Luwu);
         if (get<TableType>(t))
             return "Key '" + e.key + "' not found in table '" + Luau::toString(t) + "'";
         else if (get<ExternType>(t))

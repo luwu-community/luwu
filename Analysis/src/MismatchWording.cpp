@@ -201,6 +201,18 @@ std::string slotInProse(const std::string& noun, bool named)
     return named ? quoted(noun) : noun;
 }
 
+// The table a `NotAMap` difference expected: `the array '{any}'` or `the map '{ [string]: number }'`.
+static std::string expectedContainer(const Difference& d)
+{
+    return (d.expectsArray ? "the array " : "the map ") + quoted(d.super);
+}
+
+// Why the given table of a `NotAMap` difference can't be one, as a parenthetical.
+static std::string noIndexerNote(const Difference& d)
+{
+    return d.givenEmpty ? "(an empty table with no indexer)" : "(named fields but no indexer)";
+}
+
 // A value passed to a parameter: `'i: number'` for a named one, `'number' as its 2nd argument` for one
 // whose name is lost. `parameterWord` says `parameter 'i: number'`, for a sentence with the signature
 // in it.
@@ -270,8 +282,8 @@ std::string describeInFunction(
         case Difference::Kind::CouldBeNil:
             return "In " + quoted(function) + ", " + nonNilVersion(d, noun, named);
         case Difference::Kind::NotAMap:
-            return calls + " with " + passedValue(noun, named, d.sub, collapsed) + " (named fields but no indexer), where the map " +
-                   quoted(d.super) + " is expected";
+            return calls + " with " + passedValue(noun, named, d.sub, collapsed) + " " + noIndexerNote(d) + ", where " +
+                   expectedContainer(d) + " is expected";
         case Difference::Kind::Missing:
         {
             std::string parent = slotNoun(d.path, at, d.path.size() - 1, notation);
@@ -307,7 +319,7 @@ std::string describeInFunction(
         case Difference::Kind::CouldBeNil:
             return should + quoted(d.super) + here + ", never 'nil'";
         case Difference::Kind::NotAMap:
-            return should + "the map " + quoted(d.super) + here + ", not " + quoted(d.sub) + " (named fields but no indexer)";
+            return should + expectedContainer(d) + here + ", not " + quoted(d.sub) + " " + noIndexerNote(d);
         case Difference::Kind::Missing:
             return should + "a value with field " + missingField(d) + returnPlace(d.path, at, d.path.size() - 1, notation);
         case Difference::Kind::NothingReturned:
@@ -344,7 +356,7 @@ std::string describeAsListItem(const Difference& d, uint8_t* notation)
         case Difference::Kind::CouldBeNil:
             return nonNilVersion(d, noun, named);
         case Difference::Kind::NotAMap:
-            return passedValue(noun, named, d.sub, false) + " (named fields but no indexer)";
+            return passedValue(noun, named, d.sub, false) + " " + noIndexerNote(d);
         case Difference::Kind::Missing:
             return slotInProse(slotNoun(d.path, at, d.path.size() - 1, notation), named) + " missing field " + missingField(d);
         case Difference::Kind::NothingPassed:
@@ -368,7 +380,7 @@ std::string describeAsListItem(const Difference& d, uint8_t* notation)
         case Difference::Kind::CouldBeNil:
             return quoted(d.super) + here + ", never 'nil'";
         case Difference::Kind::NotAMap:
-            return "the map " + quoted(d.super) + here + ", not " + quoted(d.sub) + " (named fields but no indexer)";
+            return expectedContainer(d) + here + ", not " + quoted(d.sub) + " " + noIndexerNote(d);
         case Difference::Kind::Missing:
             return "a value with field " + missingField(d) + returnPlace(d.path, at, d.path.size() - 1, notation);
         case Difference::Kind::NothingPassed:
@@ -459,7 +471,7 @@ std::string describe(const Difference& d, Rendering& rendering)
     case Difference::Kind::CouldBeNil:
         return path + ": expected " + quoted(d.super) + ", but it could be 'nil'";
     case Difference::Kind::NotAMap:
-        return path + ": expected the map " + quoted(d.super) + ", got " + quoted(d.sub) + " (named fields but no indexer)";
+        return path + ": expected " + expectedContainer(d) + ", got " + quoted(d.sub) + " " + noIndexerNote(d);
     case Difference::Kind::NothingReturned:
     case Difference::Kind::NothingPassed:
     case Difference::Kind::ExtraPassed:
@@ -624,6 +636,27 @@ std::string becauseHeader()
 std::string couldBeNilHeader(const std::string& subject)
 {
     return "This is because " + quoted(subject) + " could be 'nil'.";
+}
+
+std::string noIndexerSentence(const std::string& subject, const Difference& d)
+{
+    std::string what = d.givenEmpty ? " is an empty table with no indexer" : " has named fields but no indexer";
+    return subject + what + ", so it can't be used as " + expectedContainer(d) + ".";
+}
+
+std::string emptyTableHelp(const std::string& variable, const std::string& type)
+{
+    return "Help (empty table type):\n"
+           "  - Nothing tells the type checker what " + quoted(variable) + " will hold, so its type is '{}'\n"
+           "  - To fix this, annotate " + quoted(variable) + " as " + quoted(type) + " where it's declared";
+}
+
+std::string unknownElementsHelp(const std::string& variable, const std::string& type)
+{
+    return "Help (unknown element type):\n"
+           "  - Nothing tells the type checker what " + quoted(variable) + " holds, so its elements are 'unknown' "
+           "('table.create(n)' without a value does this)\n"
+           "  - To fix this, annotate " + quoted(variable) + " as " + quoted(type) + " where it's declared";
 }
 
 std::string unionMembersHeader(bool noneFit, const std::string& unionName, const std::string& target)

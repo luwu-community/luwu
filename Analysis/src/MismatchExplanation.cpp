@@ -955,7 +955,10 @@ struct Differ
         bool givenSealedRecord = givenTable && !givenTable->indexer && givenTable->state == TableState::Sealed;
         if (expectsPureMap && givenSealedRecord)
         {
-            differ(Difference::Kind::NotAMap, path, sub, super);
+            Difference notAMap{Difference::Kind::NotAMap, path, display(sub), display(super)};
+            notAMap.expectsArray = follow(superTable->indexer->indexType) == follow(builtinTypes->numberType);
+            notAMap.givenEmpty = givenTable->props.empty();
+            push(std::move(notAMap), sub, super);
             return;
         }
 
@@ -1297,11 +1300,15 @@ std::vector<Line> bullets(const std::vector<Difference>& differences, Rendering&
     return lines;
 }
 
-// Close enough that the reader most likely meant it: a few differences, or most of it agreeing.
+// Close enough that the reader most likely meant it: something agrees, and either only a few things
+// differ or most of it agrees. With nothing agreeing, a single difference is the whole type: `{unknown}`
+// against `{number}` differs in its only part, the element type, which is not "similar".
 bool isNear(size_t differences, int matched)
 {
     constexpr size_t kFewDifferences = 3;
     constexpr int kAgreeingPercent = 75;
+    if (matched == 0)
+        return false;
     int compared = matched + int(differences);
     return differences <= kFewDifferences || matched * 100 >= compared * kAgreeingPercent;
 }
@@ -1567,6 +1574,8 @@ std::optional<MismatchExplanation> explainMismatch(
 
     std::vector<Line> lines;
     std::string header;
+    // A `Help (...)` block saying how to declare a table whose type says nothing about what it holds.
+    std::string declarationHelp;
     bool suppressedAny = false;
 
     // What "could be 'nil'" is about: the given type as printed above when it's short (`'Drop?'`),
@@ -1823,8 +1832,22 @@ std::optional<MismatchExplanation> explainMismatch(
         // slot by slot, which the bullets already say.
         bool comparedSlotBySlot = givenShape == Shape::Function || expectedShape == Shape::Function || expectedShape == Shape::Intersection;
 
+        // The whole value is a table with no indexer: there is no path to point at, so it's one sentence.
+        const Difference* rootNotAMap = nullptr;
+        for (const Difference& d : differ.differences)
+        {
+            if (d.kind == Difference::Kind::NotAMap && d.path.empty() && !d.suppressing)
+                rootNotAMap = &d;
+        }
+
         if (onlyNil)
             header = couldBeNilHeader(nilSubject());
+        else if (located.empty() && rootNotAMap)
+        {
+            header = noIndexerSentence(emptySubject, *rootNotAMap);
+            if (rootNotAMap->givenEmpty && variable)
+                declarationHelp = emptyTableHelp(*variable, rootNotAMap->super);
+        }
         else if (located.empty() && involvesStructure && !suppressedAny)
             return std::nullopt;
         else if (!located.empty())
@@ -1836,6 +1859,12 @@ std::optional<MismatchExplanation> explainMismatch(
             else
                 header = pathsHeader(arrival, located.size());
             lines = bullets(located, rendering, callee, kMaxBullets);
+
+            // `table.create(n)` with no value gives `{unknown}`: nothing says what it holds, so the fix is to say it.
+            const TableType* givenCoreTable = get<TableType>(givenCore);
+            bool holdsUnknown = givenCoreTable && givenCoreTable->indexer && get<UnknownType>(follow(givenCoreTable->indexer->indexResultType));
+            if (holdsUnknown && variable)
+                declarationHelp = unknownElementsHelp(*variable, differ.display(expectedCore));
 
             // Every difference is in the root function's parameters, or every one is in its returns:
             // say which, and print only that part of the two function types.
@@ -1910,7 +1939,11 @@ std::optional<MismatchExplanation> explainMismatch(
                 narrowed.push_back(&d);
         }
 
-        explanation.reason = composeReason(differ.helps, header, lines, narrowedParameterHelp(narrowed, rendering), rendering);
+        std::string why = narrowedParameterHelp(narrowed, rendering);
+        if (!declarationHelp.empty())
+            why += (why.empty() ? "" : "\n\n") + declarationHelp;
+
+        explanation.reason = composeReason(differ.helps, header, lines, why, rendering);
     }
 
     // An aliased union's members are spelled out under its name only if something above counts them.

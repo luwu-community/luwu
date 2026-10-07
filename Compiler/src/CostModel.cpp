@@ -225,6 +225,17 @@ struct CostVisitor : AstVisitor
         {
             return model(expr->expr);
         }
+        else if (AstExprTableComprehension* expr = node->as<AstExprTableComprehension>())
+        {
+            // Luwu Table Comprehensions (rfcs/table-comprehensions.md): an allocation plus the loop, modeled like any loop
+            Cost outer = result;
+            result = Cost();
+            expr->loop->visit(this);
+
+            Cost loop = result;
+            result = outer;
+            return loop + Cost(1, 0);
+        }
         else if (AstExprDo* expr = node->as<AstExprDo>())
         {
             // Luwu Do Expressions (rfcs/do-expressions.md): the cost of the block, modeled like any statements

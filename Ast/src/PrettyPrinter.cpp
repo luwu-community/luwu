@@ -894,6 +894,135 @@ struct Printer
             for (AstStat* stat : a->body->body)
                 visualize(*stat);
         }
+        else if (const auto& a = expr.as<AstExprTableComprehension>())
+        {
+            // Luwu Table Comprehensions (rfcs/table-comprehensions.md): prints the clauses back from the loop they are
+            // stored as (see AstExprTableComprehension)
+            writer.symbol("{");
+
+            AstStat* stat = a->loop;
+            Location doLocation;
+
+            while (stat && !stat->is<AstStatComprehensionItem>())
+            {
+                AstStatBlock* body = nullptr;
+
+                if (AstStatFor* range = stat->as<AstStatFor>())
+                {
+                    const auto cstNode = lookupCstNode<CstStatFor>(range);
+
+                    advance(range->forLocation.begin);
+                    writer.keyword("for");
+                    visualize(*range->var, cstNode ? cstNode->annotationColonPosition : Position::missing());
+
+                    if (cstNode)
+                        advance(cstNode->equalsPosition);
+                    writer.symbol("=");
+                    visualize(*range->from);
+
+                    if (cstNode)
+                        maybeAdvanceAndWrite(cstNode->endCommaPosition, ",");
+                    else
+                        writer.symbol(",");
+                    visualize(*range->to);
+
+                    if (range->step)
+                    {
+                        if (cstNode)
+                            advance(cstNode->stepCommaPosition);
+                        writer.symbol(",");
+                        visualize(*range->step);
+                    }
+
+                    body = range->body;
+                    doLocation = range->doLocation;
+                }
+                else
+                {
+                    AstStatForIn* generic = stat->as<AstStatForIn>();
+                    LUAU_ASSERT(generic);
+                    const auto cstNode = lookupCstNode<CstStatForIn>(generic);
+
+                    advance(generic->forLocation.begin);
+                    writer.keyword("for");
+
+                    CommaSeparatorInserter varComma(writer, cstNode ? cstNode->varsCommaPositions.begin() : nullptr);
+                    for (size_t i = 0; i < generic->vars.size; i++)
+                    {
+                        varComma();
+                        bool hasColon = cstNode && cstNode->varsAnnotationColonPositions.size > i;
+                        visualize(*generic->vars.data[i], hasColon ? cstNode->varsAnnotationColonPositions.data[i] : Position::missing());
+                    }
+
+                    advance(generic->inLocation.begin);
+                    writer.keyword("in");
+
+                    CommaSeparatorInserter valComma(writer, cstNode ? cstNode->valuesCommaPositions.begin() : nullptr);
+                    for (AstExpr* value : generic->values)
+                    {
+                        valComma();
+                        visualize(*value);
+                    }
+
+                    body = generic->body;
+                    doLocation = generic->doLocation;
+                }
+
+                LUAU_ASSERT(body->body.size == 1);
+                stat = body->body.data[0];
+
+                if (AstStatIf* guard = stat->as<AstStatIf>())
+                {
+                    // a single plain `when` is stored as an ordinary condition, and its `when` is the if's keyword
+                    if (guard->clauses.size == 0)
+                    {
+                        advance(guard->ifLocation.begin);
+                        writer.keyword("when");
+                    }
+
+                    visualizeIfCondition(*guard->condition, guard->clauses);
+                    LUAU_ASSERT(guard->thenbody->body.size == 1);
+                    stat = guard->thenbody->body.data[0];
+                }
+            }
+
+            advance(doLocation.begin);
+            writer.keyword("give");
+
+            const auto cstNode = lookupCstNode<CstExprTable>(a);
+            const CstExprTable::Item* cstItem = cstNode && cstNode->items.size == 1 ? cstNode->items.begin() : nullptr;
+
+            if (a->item->key)
+            {
+                std::string assignment = a->item->accumulate ? toString(*a->item->accumulate) + "=" : "=";
+
+                if (cstItem)
+                {
+                    maybeAdvanceAndWrite(cstItem->indexerOpenPosition, "[", true);
+                    visualize(*a->item->key);
+                    maybeAdvanceAndWrite(cstItem->indexerClosePosition, "]");
+                    maybeAdvanceAndWrite(cstItem->equalsPosition, assignment);
+                }
+                else
+                {
+                    writer.symbol("[");
+                    visualize(*a->item->key);
+                    writer.symbol("]");
+                    writer.maybeSpace(a->item->value->location.begin, 1);
+                    writer.symbol(assignment);
+                }
+            }
+
+            visualize(*a->item->value);
+
+            Position endPos = expr.location.end;
+            if (endPos.column > 0)
+                --endPos.column;
+
+            advance(endPos);
+            writer.symbol("}");
+            advance(expr.location.end);
+        }
         else if (const auto& a = expr.as<AstExprInterpString>())
         {
             const auto* cstNode = lookupCstNode<CstExprInterpString>(a);

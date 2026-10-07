@@ -560,6 +560,8 @@ private:
         Position position;
     };
 
+    AstExpr* parseTableComprehension(const Location& start, const MatchLexeme& matchBrace);
+
     bool expectMatchAndConsume(char value, const MatchLexeme& begin, bool searchForMissing = false);
     void expectMatchAndConsumeFail(Lexeme::Type type, const MatchLexeme& begin, const char* extra = nullptr);
     bool expectMatchAndConsumeRecover(char value, const MatchLexeme& begin, bool searchForMissing);

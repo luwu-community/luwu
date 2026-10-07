@@ -26,6 +26,7 @@ LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuwuIfLocal)
 LUAU_FASTFLAG(DebugLuwuDoExpr)
+LUAU_FASTFLAG(LuwuTableComprehensions)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
@@ -8546,6 +8547,86 @@ TEST_CASE_FIXTURE(Fixture, "if_local_without_the_flag_says_how_to_enable_it")
     matchParseError("if local a = f() then end", message);
     matchParseError("if a when b then end", message);
     matchParseError("local x = if const a = f() then a else nil", message);
+}
+
+// Luwu Table Comprehensions (rfcs/table-comprehensions.md)
+TEST_CASE_FIXTURE(Fixture, "table_comprehension_is_stored_as_its_loop")
+{
+    ScopedFastFlag comprehensions{FFlag::LuwuTableComprehensions, true};
+
+    AstStatBlock* block = parse(R"(
+        local a = { for _, v in xs when v > 1 when local w = v * 2 for i = 1, w give [i] = w }
+    )");
+
+    REQUIRE_EQ(block->body.size, 1);
+    AstStatLocal* local = block->body.data[0]->as<AstStatLocal>();
+    REQUIRE(local);
+    AstExprTableComprehension* expr = local->values.data[0]->as<AstExprTableComprehension>();
+    REQUIRE(expr);
+    CHECK(expr->luwuOnly);
+    CHECK_EQ(expr->clauseCount, 2);
+
+    // for ... in, its `when` chain as an if, then the numeric for, then the item
+    AstStatForIn* outer = expr->loop->as<AstStatForIn>();
+    REQUIRE(outer);
+    REQUIRE_EQ(outer->body->body.size, 1);
+    AstStatIf* guard = outer->body->body.data[0]->as<AstStatIf>();
+    REQUIRE(guard);
+    REQUIRE_EQ(guard->clauses.size, 2);
+    REQUIRE(guard->clauses.data[1].local);
+    CHECK(!guard->elsebody);
+    REQUIRE_EQ(guard->thenbody->body.size, 1);
+    AstStatFor* inner = guard->thenbody->body.data[0]->as<AstStatFor>();
+    REQUIRE(inner);
+    REQUIRE_EQ(inner->body->body.size, 1);
+    CHECK_EQ(inner->body->body.data[0], expr->item);
+
+    // the item sees every binding
+    REQUIRE(expr->item->key);
+    CHECK_EQ(expr->item->key->as<AstExprLocal>()->local, inner->var);
+    CHECK_EQ(expr->item->value->as<AstExprLocal>()->local, guard->clauses.data[1].local);
+}
+
+TEST_CASE_FIXTURE(Fixture, "table_comprehension_parse_errors")
+{
+    ScopedFastFlag comprehensions{FFlag::LuwuTableComprehensions, true};
+
+    matchParseError("local a = { for _, v in xs give v, 1 }", "A table comprehension must be the only item in its table");
+    matchParseError("local a = { 1, for _, v in xs do v }", "A table comprehension must be the only item in its table");
+    matchParseError(
+        "local a = { for _, v in xs give x = v }", "A table comprehension's item is a value or '[key] = value'; 'name = value' writes one key"
+    );
+    matchParseError("local a = { for _, v in xs v }", "Expected 'give' when parsing table comprehension, got 'v'");
+    // pointed at the `do`, in a single-line and a multi-line comprehension
+    matchParseError("local a = { for _, v in xs do v }", "Table comprehensions don't use 'do'; did you mean 'give'?", Location{{0, 27}, {0, 29}});
+    matchParseError(
+        "local a = {\n    for _, v in xs\n        when v > 1\n    do v\n}",
+        "Table comprehensions don't use 'do'; did you mean 'give'?",
+        Location{{3, 4}, {3, 6}}
+    );
+    matchParseError(
+        "local a = { for _, v in xs give [v] /= 2 }", "A table comprehension can accumulate with '+=', '-=', '*=' or '..=', not '/='"
+    );
+
+    // an accumulating item records its operator
+    AstStatBlock* tally = parse("local a = { for _, v in xs give [v] += 1 }");
+    AstExprTableComprehension* counted = tally->body.data[0]->as<AstStatLocal>()->values.data[0]->as<AstExprTableComprehension>();
+    REQUIRE(counted);
+    CHECK(counted->item->accumulate == AstExprBinary::Add);
+
+    // the bindings aren't visible after the comprehension
+    AstStatBlock* block = parse("local a = { for i = 1, 2 give i } local b = i");
+    REQUIRE_EQ(block->body.size, 2);
+    CHECK(block->body.data[1]->as<AstStatLocal>()->values.data[0]->is<AstExprGlobal>());
+}
+
+TEST_CASE_FIXTURE(Fixture, "table_comprehension_needs_its_flag")
+{
+    ScopedFastFlag comprehensions{FFlag::LuwuTableComprehensions, false};
+
+    matchParseError(
+        "local a = { for _, v in xs give v }", "Table comprehensions are a Luwu feature; enable the 'LuwuTableComprehensions' fast flag to use them"
+    );
 }
 
 static AstExprDo* doExprValue(AstStatBlock* block, size_t index)

@@ -1152,6 +1152,19 @@ const Instruction* executeINITTRAITS(lua_State* L, const Instruction* pc, StkId 
     return pc;
 }
 
+// Luwu Table Comprehensions (rfcs/table-comprehensions.md): LOP_PRESIZETABLE for native code (see FALLBACK_PRESIZETABLE)
+const Instruction* executePRESIZETABLE(lua_State* L, const Instruction* pc, StkId base, TValue* k)
+{
+    Instruction insn = *pc++;
+    StkId ra = VM_REG(LUAU_INSN_A(insn));
+    StkId rb = VM_REG(LUAU_INSN_B(insn));
+
+    LUAU_ASSERT(ttistable(ra));
+
+    VM_PROTECT(luaV_presizetable(L, hvalue(ra), rb, LUAU_INSN_C(insn)));
+    return pc;
+}
+
 void executeGETVARARGSMultRet(lua_State* L, const Instruction* pc, StkId base, int rai)
 {
     [[maybe_unused]] Closure* cl = clvalue(L->ci->func);

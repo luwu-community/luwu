@@ -42,6 +42,7 @@ LUAU_FASTFLAGVARIABLE(LuwuDestructuring)
 LUAU_FASTFLAGVARIABLE(LuwuIfLocal)
 // Luwu Do Expressions (rfcs/do-expressions.md): `do ... give exp` expressions. Experimental.
 LUAU_FASTFLAGVARIABLE(DebugLuwuDoExpr)
+LUAU_FASTFLAG(LuwuTableComprehensions)
 // Luwu Declare Statements (rfcs/declare-statements.md): `declare` in ordinary source, where upstream only accepts it
 // in definition files. Still in progress.
 LUAU_FASTFLAGVARIABLE(LuwuDeclareStatements)
@@ -7114,10 +7115,23 @@ AstExpr* Parser::parseTableConstructor()
     // Clip with LuauTableEntriesDontNeedToMatchIndent
     unsigned lastElementIndent_DEPRECATED = 0;
 
+    // Luwu Table Comprehensions (rfcs/table-comprehensions.md): `for` can't start an expression, so a table that
+    // starts with it is a comprehension.
+    if (lexer.current().type == Lexeme::ReservedFor)
+        return parseTableComprehension(start, matchBrace);
+
     while (lexer.current().type != '}')
     {
         if (!FFlag::LuauTableEntriesDontNeedToMatchIndent)
             lastElementIndent_DEPRECATED = lexer.current().location.begin.column;
+
+        if (lexer.current().type == Lexeme::ReservedFor)
+        {
+            report(lexer.current().location, "A table comprehension must be the only item in its table");
+            AstExpr* comprehension = parseTableComprehension(lexer.current().location, lexer.current());
+            items.push_back({AstExprTable::Item::Kind::List, nullptr, comprehension});
+            break;
+        }
 
         AstArray<AstAttr*> attributes{nullptr, 0};
         TempVector<CstAttrList*> cstAttrLists(scratchCstAttrList);
@@ -7238,6 +7252,280 @@ AstExpr* Parser::parseTableConstructor()
     AstExprTable* node = allocator.alloc<AstExprTable>(Location(start, end), copy(items));
     if (options.storeCstData)
         cstNodeMap[node] = allocator.alloc<CstExprTable>(copy(cstItems));
+    return node;
+}
+
+// Luwu Table Comprehensions (rfcs/table-comprehensions.md):
+// comprehension ::= `{' clause {clause} `give' item `}'
+// clause ::= `for' binding `=' exp `,' exp [`,' exp] {`when' condition}
+//          | `for' bindinglist `in' explist {`when' condition}
+// item ::= exp | `[' exp `]' `=' exp | `[' exp `]' compoundop exp
+// Starts at `for`; `start` and `matchBrace` are the `{`. Builds the loop the comprehension runs (see
+// AstExprTableComprehension) and consumes the closing `}`.
+AstExpr* Parser::parseTableComprehension(const Location& start, const MatchLexeme& matchBrace)
+{
+    if (!FFlag::LuwuTableComprehensions)
+        report(
+            lexer.current().location,
+            "Table comprehensions are a Luwu feature; enable the 'LuwuTableComprehensions' fast flag to use them"
+        );
+
+    struct Clause
+    {
+        Location forLocation;
+        // Numeric clause: `var`, `from`, `to` and `step` (step may be null).
+        AstLocal* var = nullptr;
+        AstExpr* from = nullptr;
+        AstExpr* to = nullptr;
+        AstExpr* step = nullptr;
+        // Generic clause.
+        AstArray<AstLocal*> vars{nullptr, 0};
+        AstArray<AstExpr*> values{nullptr, 0};
+        bool hasIn = false;
+        Location inLocation;
+        // The `when` chain: clauses and where it starts. Empty without one.
+        AstArray<AstIfClause> when{nullptr, 0};
+        Location whenLocation;
+        // The loop's CST node, when CST data is stored.
+        CstNode* cst = nullptr;
+    };
+
+    std::vector<Clause> clauses;
+    unsigned int localsBegin = saveLocals();
+    unsigned int loopDepthBefore = functionStack.back().loopDepth;
+
+    while (lexer.current().type == Lexeme::ReservedFor)
+    {
+        Clause clause;
+        clause.forLocation = lexer.current().location;
+        nextLexeme(); // for
+
+        Binding varname = parseBinding();
+
+        if (lexer.current().type == '=')
+        {
+            Position equalsPosition = lexer.current().location.begin;
+            nextLexeme();
+            clause.from = parseExpr();
+
+            bool hasEndComma = expectAndConsume(',', "index range");
+            Position endCommaPosition = hasEndComma ? lexer.previousLocation().begin : Position::missing();
+            clause.to = parseExpr();
+
+            Position stepCommaPosition = Position::missing();
+            if (lexer.current().type == ',')
+            {
+                stepCommaPosition = lexer.current().location.begin;
+                nextLexeme();
+                clause.step = parseExpr();
+            }
+
+            clause.var = pushLocal(varname);
+
+            if (options.storeCstData)
+                clause.cst = allocator.alloc<CstStatFor>(varname.colonPosition, equalsPosition, endCommaPosition, stepCommaPosition);
+        }
+        else
+        {
+            TempVector<Binding> names(scratchBinding);
+            AstArray<Position> varsCommaPosition;
+            names.push_back(varname);
+
+            if (lexer.current().type == ',')
+            {
+                if (options.storeCstData)
+                {
+                    Position initialCommaPosition = lexer.current().location.begin;
+                    nextLexeme();
+                    parseBindingList(names, false, false, &varsCommaPosition, &initialCommaPosition);
+                }
+                else
+                {
+                    nextLexeme();
+                    parseBindingList(names);
+                }
+            }
+
+            clause.inLocation = lexer.current().location;
+            clause.hasIn = expectAndConsume(Lexeme::ReservedIn, "table comprehension");
+
+            TempVector<AstExpr*> values(scratchExpr);
+            TempVector<Position> valuesCommaPositions(scratchPosition);
+            parseExprList(values, options.storeCstData ? &valuesCommaPositions : nullptr);
+            clause.values = copy(values);
+
+            TempVector<AstLocal*> vars(scratchLocal);
+            for (const Binding& name : names)
+                vars.push_back(pushLocal(name));
+            clause.vars = copy(vars);
+
+            if (options.storeCstData)
+                clause.cst =
+                    allocator.alloc<CstStatForIn>(extractAnnotationColonPositions(names), varsCommaPosition, copy(valuesCommaPositions));
+        }
+
+        // Everything after the iterator belongs to this clause's loop: `continue` in a `when` skips the element.
+        functionStack.back().loopDepth++;
+
+        if (whenFollows())
+        {
+            clause.whenLocation = lexer.current().location;
+            std::vector<AstIfClause> chain;
+            std::optional<Location> whenLocation;
+
+            while (whenFollows())
+            {
+                whenLocation = lexer.current().location;
+                nextLexeme(); // when
+
+                if (ifBindingFollows())
+                {
+                    parseIfBindingClause(chain, whenLocation);
+                }
+                else
+                {
+                    AstIfClause plain;
+                    plain.expr = parseExpr();
+                    plain.whenLocation = whenLocation;
+                    chain.push_back(plain);
+                }
+            }
+
+            clause.when = copy(chain.data(), chain.size());
+        }
+
+        clauses.push_back(clause);
+    }
+
+    // `give` is contextual here: after an expression list or a `when` condition, a bare name can't continue it
+    Location doLocation = lexer.current().location;
+    bool giveFollows = lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "give";
+
+    if (giveFollows)
+    {
+        nextLexeme();
+    }
+    else if (lexer.current().type == Lexeme::ReservedDo)
+    {
+        // `do` would read as a loop body; a comprehension gives one item
+        report(lexer.current().location, "Table comprehensions don't use 'do'; did you mean 'give'?");
+        nextLexeme();
+    }
+    else
+    {
+        report(lexer.current().location, "Expected 'give' when parsing table comprehension, got %s", lexer.current().toString().c_str());
+    }
+
+    AstExpr* key = nullptr;
+    AstExpr* value = nullptr;
+    std::optional<AstExprBinary::Op> accumulate;
+    Location itemStart = lexer.current().location;
+
+    CstExprTable::Item cstItem{Position::missing(), Position::missing(), Position::missing(), CstExprTable::Separator::Missing, Position::missing()};
+
+    if (lexer.current().type == '[')
+    {
+        cstItem.indexerOpenPosition = lexer.current().location.begin;
+        MatchLexeme matchBracket = lexer.current();
+        nextLexeme();
+        key = parseExpr();
+
+        if (expectMatchAndConsume(']', matchBracket))
+            cstItem.indexerClosePosition = lexer.previousLocation().begin;
+
+        // `[k] += v` accumulates into the key; only operators with a natural starting value are allowed
+        if (std::optional<AstExprBinary::Op> op = parseCompoundOp(lexer.current()))
+        {
+            bool hasStart = *op == AstExprBinary::Add || *op == AstExprBinary::Sub || *op == AstExprBinary::Mul || *op == AstExprBinary::Concat;
+            if (!hasStart)
+                report(lexer.current().location, "A table comprehension can accumulate with '+=', '-=', '*=' or '..=', not '%s='", toString(*op).c_str());
+
+            accumulate = op;
+            cstItem.equalsPosition = lexer.current().location.begin;
+            nextLexeme();
+        }
+        else if (expectAndConsume('=', "table comprehension item"))
+        {
+            cstItem.equalsPosition = lexer.previousLocation().begin;
+        }
+
+        value = parseExpr();
+    }
+    else if (lexer.current().type == Lexeme::Name && lexer.lookahead().type == '=')
+    {
+        // `name = v` would write the same key on every iteration.
+        report(lexer.current().location, "A table comprehension's item is a value or '[key] = value'; 'name = value' writes one key");
+        nextLexeme();
+        nextLexeme();
+        value = parseExpr();
+    }
+    else
+    {
+        value = parseExpr();
+    }
+
+    functionStack.back().loopDepth = loopDepthBefore;
+    restoreLocals(localsBegin);
+
+    Location end = lexer.current().location;
+
+    if (lexer.current().type == ',' || lexer.current().type == ';')
+        report(lexer.current().location, "A table comprehension must be the only item in its table");
+
+    if (!expectMatchAndConsume('}', matchBrace))
+        end = lexer.previousLocation();
+
+    Location itemLocation(itemStart, value->location);
+    AstStatComprehensionItem* item = allocator.alloc<AstStatComprehensionItem>(itemLocation, key, value);
+    item->accumulate = accumulate;
+    item->luwuOnly = true;
+
+    // Build the loops from the innermost clause out.
+    AstStat* inner = item;
+
+    for (size_t i = clauses.size(); i-- > 0;)
+    {
+        const Clause& clause = clauses[i];
+        Location loopLocation(clause.forLocation, itemLocation);
+
+        AstStatBlock* body = allocator.alloc<AstStatBlock>(inner->location, copy(&inner, 1), false);
+
+        if (clause.when.size != 0)
+        {
+            AstStatIf* guard = allocator.alloc<AstStatIf>(
+                Location(clause.whenLocation, inner->location), clause.when.data[0].expr, body, nullptr, std::nullopt, std::nullopt, clause.whenLocation
+            );
+            // a single plain condition is an ordinary `if`, which gets every shortcut an ordinary condition does (constant
+            // folding, fused compares); a chain with a binding or several conditions keeps its clauses
+            bool plainCondition = clause.when.size == 1 && !clause.when.data[0].declaration;
+            if (!plainCondition)
+                guard->clauses = clause.when;
+            guard->luwuOnly = true;
+            body = allocator.alloc<AstStatBlock>(guard->location, copy({static_cast<AstStat*>(guard)}), false);
+        }
+
+        if (clause.var)
+            inner = allocator.alloc<AstStatFor>(
+                loopLocation, clause.var, clause.from, clause.to, clause.step, body, true, doLocation, clause.forLocation
+            );
+        else
+            inner = allocator.alloc<AstStatForIn>(
+                loopLocation, clause.vars, clause.values, body, clause.hasIn, clause.inLocation, true, doLocation, clause.forLocation
+            );
+
+        inner->luwuOnly = true;
+
+        if (clause.cst)
+            cstNodeMap[inner] = clause.cst;
+    }
+
+    AstExprTableComprehension* node =
+        allocator.alloc<AstExprTableComprehension>(Location(start, end), inner, item, unsigned(clauses.size()));
+    node->luwuOnly = true;
+
+    // the item's `[`, `]` and `=`, in the table constructor's own CST shape
+    if (options.storeCstData)
+        cstNodeMap[node] = allocator.alloc<CstExprTable>(copy(&cstItem, 1));
     return node;
 }
 

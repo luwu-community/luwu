@@ -16,6 +16,7 @@ LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuwuIfLocal)
 LUAU_FASTFLAG(DebugLuwuDoExpr)
+LUAU_FASTFLAG(LuwuTableComprehensions)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuauSolverV2)
 LUAU_FASTFLAG(LuwuDefaultArguments)
@@ -3894,6 +3895,46 @@ return a, b, c, d
     CHECK_EQ(found[2].location.begin.line, 6);
 }
 
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuwuOnlyApiReportsLuwuFunctionsInLuauFiles")
+{
+    const std::string source = R"(
+local t = { 1, 2, 2 }
+local removed = table.drop(t, 2)
+local frozen = buffer.isfrozen(buffer.create(1))
+local owner = class.of
+local check = class.isinstance
+local function shadowed(table: { drop: () -> () })
+    table.drop()
+end
+return removed, frozen, shadowed, owner, check
+)";
+
+    // The module's language comes from its config, which the CLI and the language server set from the file extension
+    auto luwuOnly = [&](const ModuleName& name, Language language)
+    {
+        fileResolver.source[name] = source;
+        configResolver.configFiles[name].language = language;
+        std::vector<LintWarning> found;
+        for (const LintWarning& warning : lintModule(name).warnings)
+            if (warning.code == LintWarning::Code_LuwuOnlyApi)
+                found.push_back(warning);
+        return found;
+    };
+
+    // A local named `table` isn't the library, and upstream's `class` library has `isinstance` too
+    std::vector<LintWarning> inLuau = luwuOnly("game/a", Language::Luau);
+    REQUIRE_EQ(inLuau.size(), 3);
+    CHECK_EQ(inLuau[0].text, "'table.drop' only exists in Luwu, but this is a Luau file; rename it to '.luwu' if it's Luwu code");
+    CHECK_EQ(inLuau[1].location, Location({3, 15}, {3, 30}));
+    CHECK_EQ(inLuau[2].text, "'class.of' only exists in Luwu, but this is a Luau file; rename it to '.luwu' if it's Luwu code");
+
+    CHECK(luwuOnly("game/b", Language::Luwu).empty());
+
+    std::vector<LintWarning> inLua = luwuOnly("game/c", Language::Lua);
+    REQUIRE_EQ(inLua.size(), 3);
+    CHECK_EQ(inLua[0].text, "'table.drop' only exists in Luwu, but this is a Lua file; rename it to '.luwu' if it's Luwu code");
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "LuaIteratorsReportsPairsAndIpairsSeparately")
 {
     const std::string source = R"(
@@ -3920,6 +3961,37 @@ return next_pair
     // a local named `pairs` is someone else's function
     LintResult shadowed = lint("local function pairs(t) return next, t end\nfor k in pairs({}) do print(k) end\n");
     CHECK_EQ(countWarnings(shadowed, LintWarning::Code_Pairs), 0);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuaIdiomLintsSkipLuaModules")
+{
+    const std::string source = R"(
+local t = { 1, 2 }
+for k, v in pairs(t) do print(k, v) end
+for i, v in ipairs(t) do print(i, v) end
+local flag = #t > 1
+local label = flag and "many" or "one"
+return label
+)";
+
+    auto luaIdioms = [&](const ModuleName& name, Language language)
+    {
+        fileResolver.source[name] = source;
+        configResolver.configFiles[name].language = language;
+        size_t count = 0;
+        for (const LintWarning& warning : lintModule(name).warnings)
+        {
+            bool isLuaIdiom = warning.code == LintWarning::Code_Pairs || warning.code == LintWarning::Code_Ipairs ||
+                              warning.code == LintWarning::Code_LuaAndOr;
+            if (isLuaIdiom)
+                count++;
+        }
+        return count;
+    };
+
+    // A Lua module has no generalized iteration or if-expressions to use instead
+    CHECK_EQ(luaIdioms("game/a", Language::Luau), 3);
+    CHECK_EQ(luaIdioms("game/b", Language::Lua), 0);
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "MisleadingAndOrUsesTheMiddleOperandsType")
@@ -4518,6 +4590,31 @@ return f
     CHECK_EQ(2, found[0].location.begin.line);
     CHECK_EQ(5, found[1].location.begin.line);
     CHECK_EQ(9, found[2].location.begin.line);
+}
+
+// Luwu Table Comprehensions (rfcs/table-comprehensions.md): the loop lints see a comprehension's loops
+TEST_CASE_FIXTURE(BuiltinsFixture, "LoopLintsSeeTableComprehensions")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuTableComprehensions, true},
+        {FFlag::DebugLuwuDoExpr, true},
+    };
+
+    LintResult result = lint(R"(
+local a = { for i = 1, 10 give (do break) }
+local b = { for i = 10, 1 give i }
+local c = { for i = 1, 10 give if i > 3 then (do break) else i }
+local d = { for _, v in {1, 2} give v * 2 }
+return a, b, c, d
+)");
+
+    std::vector<LintWarning> useless = warningsWithCode(result, LintWarning::Code_UselessLoop);
+    REQUIRE(1 == useless.size());
+    CHECK_EQ(1, useless[0].location.begin.line);
+
+    std::vector<LintWarning> range = warningsWithCode(result, LintWarning::Code_ForRange);
+    REQUIRE(1 == range.size());
+    CHECK_EQ(2, range[0].location.begin.line);
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "StringIndexZero")

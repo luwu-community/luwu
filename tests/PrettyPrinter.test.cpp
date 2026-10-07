@@ -14,6 +14,7 @@ LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuwuIfLocal)
 LUAU_FASTFLAG(DebugLuwuDoExpr)
+LUAU_FASTFLAG(LuwuTableComprehensions)
 LUAU_FASTFLAG(LuauTableEntriesDontNeedToMatchIndent)
 LUAU_FASTFLAG(LuauCstAttr)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
@@ -2386,6 +2387,29 @@ local function g()
 end
     )";
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
+}
+
+// Luwu Table Comprehensions (rfcs/table-comprehensions.md)
+TEST_CASE("prettyPrint_table_comprehensions")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuTableComprehensions, true},
+        {FFlag::LuwuIfLocal, true},
+    };
+
+    std::string code = R"(
+local a = { for _, v in xs give v * 2 }
+local b = {for i=1,10 , 2 when i > 2   when const j = i * 2 give [ i ]  = j}
+local t = { for _, w in words give [w]  += 1 }
+local c = {
+    for _, row in grid
+        when #row > 0
+    for _ , x in row
+    give x
+}
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+    CHECK_EQ(code, prettyPrint(code).code);
 }
 
 TEST_CASE("prettyPrint_class_attributes_beyond_methods")

@@ -759,6 +759,8 @@ void TypeChecker2::visit(AstStat* stat)
         return visit(s);
     else if (auto s = stat->as<AstStatGive>())
         return visit(s);
+    else if (auto s = stat->as<AstStatComprehensionItem>())
+        return visit(s);
     else if (auto s = stat->as<AstStatExpr>())
         return visit(s);
     else if (auto s = stat->as<AstStatLocal>())
@@ -1019,6 +1021,29 @@ static std::optional<std::string> explainReturnCountMismatch(TypePackId givenTp,
            "Consider adding 'return nil', or annotating the return type as '()' if it is meant to return nothing.";
 }
 
+// Luwu: a `return` that gives at least one value may leave off trailing values the function declares as optional,
+// the same rule a call already follows for trailing optional arguments. `return nil` ends an iterator declared
+// `(): (number?, { number }?)`. Upstream requires every declared value (`return nil, nil`), which for an iterator with
+// a long multiret means `return nil, nil, nil, nil, nil, nil`. A bare `return` still doesn't satisfy `-> nil` or
+// `-> (number?, string?)`: returning nothing is not returning `nil`.
+static void padOmittedOptionalReturns(std::vector<TypeId>& actualHead, std::optional<TypePackId> actualTail, TypePackId expectedRetType)
+{
+    if (actualHead.empty() || actualTail)
+        return;
+
+    auto [expectedHead, _] = flatten(expectedRetType);
+    if (actualHead.size() >= expectedHead.size())
+        return;
+
+    for (size_t i = actualHead.size(); i < expectedHead.size(); ++i)
+    {
+        if (!isOptional(expectedHead[i]))
+            return;
+    }
+
+    actualHead.insert(actualHead.end(), expectedHead.begin() + actualHead.size(), expectedHead.end());
+}
+
 void TypeChecker2::visit(AstStatReturn* ret)
 {
     Scope* scope = findInnermostScope(ret->location);
@@ -1087,6 +1112,7 @@ void TypeChecker2::visit(AstStatReturn* ret)
     // we double error.
     if (isSubtype)
     {
+        padOmittedOptionalReturns(actualHead, actualTail, expectedRetType);
         auto reconstructedRetType = module->internalTypes->addTypePack(TypePack{std::move(actualHead), std::move(actualTail)});
         testReturnPack(reconstructedRetType, expectedRetType, ret->location);
     }
@@ -2833,6 +2859,8 @@ void TypeChecker2::visit(AstExpr* expr, ValueContext context)
         return visit(e);
     else if (auto e = expr->as<AstExprDo>())
         return visit(e);
+    else if (auto e = expr->as<AstExprTableComprehension>())
+        return visit(e);
     else if (auto e = expr->as<AstExprInstantiate>())
         return visit(e);
     else if (auto e = expr->as<AstExprInterpString>())
@@ -3043,6 +3071,24 @@ static AstType* parameterAnnotation(
         return nullptr;
 
     return fn->args.data[argIndex]->annotation;
+}
+
+// Luwu: `debug.profilebegin or fallback` and `(x :: any) or fallback` give a union with an `*error-type*` member
+// and a `~(false?)` one, because `any` (and an error) refined by truthiness splits that way. Normalizing that union
+// loses the error, so upstream reports "Cannot call a value of type ~(false?) in union" on every call of it: a second
+// error for a mistake already reported where the error came from, or for an `any` the user chose.
+static bool hasErrorSuppressingMember(TypeId ty)
+{
+    const UnionType* ut = get<UnionType>(follow(ty));
+    if (!ut)
+        return false;
+
+    for (TypeId member : ut)
+    {
+        if (get<ErrorType>(member) || get<AnyType>(member))
+            return true;
+    }
+    return false;
 }
 
 void TypeChecker2::visitCall(AstExprCall* call)
@@ -3320,7 +3366,12 @@ void TypeChecker2::visitCall(AstExprCall* call)
             }
             else if (const auto errorVec = get_if<ErrorVec>(&reasons))
             {
-                reportErrors(*errorVec);
+                for (const TypeError& error : *errorVec)
+                {
+                    const CannotCallNonFunction* uncallable = get<CannotCallNonFunction>(error);
+                    if (!uncallable || !hasErrorSuppressingMember(uncallable->ty))
+                        reportError(error);
+                }
             }
             else
                 LUAU_ASSERT(!"Unreachable");
@@ -4620,6 +4671,41 @@ void TypeChecker2::visit(AstExprDo* expr)
 void TypeChecker2::visit(AstStatGive* give)
 {
     visit(give->value, ValueContext::RValue);
+}
+
+// Luwu Table Comprehensions (rfcs/table-comprehensions.md): the loop is checked like any loop, then the item against the
+// table's indexer, which an annotation may have decided. A nil value adds nothing, so the value may be nil even when
+// the element type isn't.
+void TypeChecker2::visit(AstExprTableComprehension* expr)
+{
+    InConditionalContext inContext(&typeContext, TypeContext::Default);
+    visit(expr->loop);
+
+    const TableType* ttv = get<TableType>(follow(lookupType(expr)));
+    if (!ttv || !ttv->indexer)
+        return;
+
+    AstStatComprehensionItem* item = expr->item;
+
+    if (item->key)
+        testIsSubtype(lookupType(item->key), ttv->indexer->indexType, item->key->location);
+
+    // Accepted against `element | nil`, but reported against the element type, which is what the reader wrote
+    TypeId valueType = lookupType(item->value);
+    TypeId elementOrNil = module->internalTypes->addType(UnionType{{ttv->indexer->indexResultType, builtinTypes->nilType}});
+    NotNull<Scope> scope{findInnermostScope(item->value->location)};
+
+    if (!subtyping->isSubtype(valueType, elementOrNil, scope).isSubtype)
+        testIsSubtype(valueType, ttv->indexer->indexResultType, item->value->location);
+}
+
+// Luwu Table Comprehensions (rfcs/table-comprehensions.md): see visit(AstExprTableComprehension*)
+void TypeChecker2::visit(AstStatComprehensionItem* item)
+{
+    if (item->key)
+        visit(item->key, ValueContext::RValue);
+
+    visit(item->value, ValueContext::RValue);
 }
 
 void TypeChecker2::visit(AstExprInstantiate* explicitTypeInstantiation)
@@ -6518,7 +6604,10 @@ void TypeChecker2::testIsSubtypeForInStat(const TypeId iterFunc, const TypeId pr
 void TypeChecker2::reportError(TypeErrorData data, const Location& location)
 {
     if (auto utk = get_if<UnknownProperty>(&data))
+    {
+        utk->language = module->language;
         diagnoseMissingTableKey(utk, data);
+    }
 
     module->errors.emplace_back(location, module->name, std::move(data));
 

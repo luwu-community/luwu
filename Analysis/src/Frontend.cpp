@@ -923,6 +923,7 @@ std::vector<ModuleName> Frontend::getRequiredScripts(const ModuleName& name, con
         opts.captureComments = true;
         SourceModule result = parse(name, source->source, opts);
         result.type = source->type;
+        result.language = config.language;
         require = traceRequires(fileResolver, result.root, name, limits);
     }
     std::vector<std::string> requiredModuleNames;
@@ -1614,6 +1615,7 @@ ModulePtr check(
     module->checkedInNewSolver = true;
     module->name = sourceModule.name;
     module->humanReadableName = sourceModule.humanReadableName;
+    module->language = sourceModule.language;
     module->mode = mode;
     module->internalTypes->owningModule = module.get();
     module->interfaceTypes.owningModule = module.get();
@@ -1993,6 +1995,7 @@ std::pair<SourceNode*, SourceModule*> Frontend::getSourceNode(const ModuleName& 
     opts.captureComments = true;
     SourceModule result = parse(name, source->source, opts);
     result.type = source->type;
+    result.language = config.language;
 
     RequireTraceResult& require = requireTrace[name];
     require = traceRequires(fileResolver, result.root, name, limits);

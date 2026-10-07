@@ -18,6 +18,15 @@ using ModuleName = std::string;
 
 constexpr const char* kConfigName = ".luaurc";
 
+// Luwu: the language a module is written in. Luwu code lives in `.luwu` files; Luau and Lua files are checked too, and
+// some diagnostics depend on which language a module is (a Luwu-only API in a Luau module is a lint).
+enum class Language
+{
+    Lua,
+    Luau,
+    Luwu,
+};
+
 struct Config
 {
     Config();
@@ -30,6 +39,10 @@ struct Config
     // is greenfield and the nonstrict type checker is practically useless. It's only useful
     // for upstream because their platform has tons of untyped code that they need to infer
     Mode mode = Mode::Strict;
+
+    // Luwu: not read from a config file. A config resolver sets it for the module it's resolving (the CLI and the
+    // language server go by file extension), so modules in one directory can differ.
+    Language language = Language::Luwu;
 
     ParseOptions parseOptions;
 

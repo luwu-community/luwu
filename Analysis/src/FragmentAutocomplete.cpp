@@ -1175,6 +1175,7 @@ FragmentTypeCheckResult typecheckFragment_(
     ModulePtr incrementalModule = std::make_shared<Module>(std::make_shared<TypeArena>());
     incrementalModule->name = stale->name;
     incrementalModule->humanReadableName = "Incremental$" + stale->humanReadableName;
+    incrementalModule->language = stale->language;
     incrementalModule->internalTypes->owningModule = incrementalModule.get();
     incrementalModule->interfaceTypes.owningModule = incrementalModule.get();
     incrementalModule->allocator = std::move(astAllocator);

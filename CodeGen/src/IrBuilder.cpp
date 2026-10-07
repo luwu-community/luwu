@@ -711,6 +711,14 @@ void IrBuilder::translateInst(LuauOpcode op, const Instruction* pc, int i)
         translateInstInitTraits(*this, pc, i);
         break;
 
+    case LOP_APPENDTABLE:
+        translateInstAppendTable(*this, pc, i);
+        break;
+
+    case LOP_PRESIZETABLE:
+        inst(IrCmd::FALLBACK_PRESIZETABLE, constUint(i), vmReg(LUAU_INSN_A(*pc)), vmReg(LUAU_INSN_B(*pc)), constInt(LUAU_INSN_C(*pc)));
+        break;
+
     case LOP_GETOBJECTMEMBER:
         translateInstGetObjectMember(*this, pc, i);
         break;

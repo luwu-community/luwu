@@ -1017,6 +1017,25 @@ public:
     AstExpr* value;
 };
 
+// Luwu Table Comprehensions (rfcs/table-comprehensions.md): a comprehension's item, `value`, `[key] = value` or an
+// accumulating `[key] op= value`, run once per iteration of the innermost clause. A nil value adds nothing.
+class AstStatComprehensionItem : public AstStat
+{
+public:
+    LUAU_RTTI(AstStatComprehensionItem)
+
+    AstStatComprehensionItem(const Location& location, AstExpr* key, AstExpr* value);
+
+    void visit(AstVisitor* visitor) override;
+
+    // Null for an array comprehension.
+    AstExpr* key;
+    AstExpr* value;
+    // `[key] += value` (or -=, *=, ..=): combines with what `key` already holds. An absent key takes the value as is
+    // (negated for -=), which is what starting from 0, 1 or "" gives without assuming the value is a number.
+    std::optional<AstExprBinary::Op> accumulate;
+};
+
 class AstStatContinue : public AstStat
 {
 public:
@@ -1819,6 +1838,29 @@ public:
     bool shorthand = false;
 };
 
+// Luwu Table Comprehensions (rfcs/table-comprehensions.md): `{ for ... in ... when ... give item }`, a table built by
+// a loop. It is stored as the loop it runs: `loop` is an ordinary AstStatFor or AstStatForIn, so every pass that
+// handles loops and if-local chains handles a comprehension through that code. A clause's `when` chain is an
+// AstStatIf with no else that is the only statement of its loop's body: an ordinary condition for a single plain
+// `when`, the chain's `clauses` otherwise. A following `for` clause is the only statement of the previous clause's
+// body (or of its `when` if), and the innermost body holds `item`, an AstStatComprehensionItem, as its only
+// statement. The loops' `doLocation` is the `give`.
+class AstExprTableComprehension : public AstExpr
+{
+public:
+    LUAU_RTTI(AstExprTableComprehension)
+
+    AstExprTableComprehension(const Location& location, AstStat* loop, class AstStatComprehensionItem* item, unsigned clauseCount);
+
+    void visit(AstVisitor* visitor) override;
+
+    // The outermost clause's AstStatFor or AstStatForIn.
+    AstStat* loop;
+    class AstStatComprehensionItem* item;
+    // The number of `for` clauses, 1 unless the comprehension flattens nested loops.
+    unsigned clauseCount;
+};
+
 class AstExprError : public AstExpr
 {
 public:
@@ -2048,6 +2090,10 @@ public:
     {
         return visit(static_cast<AstExpr*>(node));
     }
+    virtual bool visit(class AstExprTableComprehension* node)
+    {
+        return visit(static_cast<AstExpr*>(node));
+    }
     virtual bool visit(class AstExprDo* node)
     {
         return visit(static_cast<AstExpr*>(node));
@@ -2091,6 +2137,10 @@ public:
         return visit(static_cast<AstStat*>(node));
     }
     virtual bool visit(class AstStatContinue* node)
+    {
+        return visit(static_cast<AstStat*>(node));
+    }
+    virtual bool visit(class AstStatComprehensionItem* node)
     {
         return visit(static_cast<AstStat*>(node));
     }
