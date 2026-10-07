@@ -207,6 +207,18 @@ static void visitVmRegDefsUses(T& visitor, IrFunction& function, IrInst& inst)
         visitor.use(OP_C(inst));
         visitor.def(OP_B(inst));
         break;
+    case IrCmd::FALLBACK_PRESIZETABLE:
+    {
+        visitor.use(OP_B(inst));
+
+        // the iterator forms read the generator and state, the range forms the limit, step and index
+        int form = function.intOp(OP_D(inst));
+        if (form == LBC_PRESIZE_TRIM)
+            visitor.use(OP_C(inst));
+        else
+            visitor.useRange(vmRegOp(OP_C(inst)), form <= LBC_PRESIZE_ITER_HASH ? 2 : 3);
+        break;
+    }
     case IrCmd::FALLBACK_NEWCLASSMEMBER:
         visitor.use(OP_B(inst));
         visitor.useRange(vmRegOp(OP_C(inst)), function.intOp(OP_D(inst)));

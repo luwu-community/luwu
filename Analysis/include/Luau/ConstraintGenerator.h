@@ -111,6 +111,17 @@ struct ConstraintGenerator
     };
     std::vector<GiveContext> giveContexts;
 
+    // Luwu Table Comprehensions (rfcs/table-comprehensions.md): the comprehensions being checked, innermost last. The
+    // expected key and value types come from an annotation; the item's types are collected when there is none.
+    struct ComprehensionContext
+    {
+        std::optional<TypeId> expectedKey;
+        std::optional<TypeId> expectedValue;
+        std::optional<TypeId> keyType;
+        std::optional<TypeId> valueType;
+    };
+    std::vector<ComprehensionContext> comprehensionContexts;
+
     ModulePtr module;
     NotNull<BuiltinTypes> builtinTypes;
     const NotNull<TypeArena> arena;
@@ -420,6 +431,7 @@ private:
     ControlFlow visit(const ScopePtr& scope, AstStatFunction* function);
     ControlFlow visit(const ScopePtr& scope, AstStatReturn* ret);
     ControlFlow visit(const ScopePtr& scope, AstStatGive* give);
+    ControlFlow visit(const ScopePtr& scope, AstStatComprehensionItem* item);
     ControlFlow visit(const ScopePtr& scope, AstStatAssign* assign);
     ControlFlow visit(const ScopePtr& scope, AstStatCompoundAssign* assign);
     ControlFlow visit(const ScopePtr& scope, AstStatIf* ifStatement);
@@ -490,6 +502,7 @@ private:
     );
     Inference check(const ScopePtr& scope, AstExprIfElse* ifElse, std::optional<TypeId> expectedType);
     Inference check(const ScopePtr& scope, AstExprDo* doExpr, std::optional<TypeId> expectedType);
+    Inference check(const ScopePtr& scope, AstExprTableComprehension* comprehension, std::optional<TypeId> expectedType);
     Inference check(const ScopePtr& scope, AstExprTypeAssertion* typeAssert);
     Inference check(const ScopePtr& scope, AstExprInterpString* interpString);
     Inference check(const ScopePtr& scope, AstExprInstantiate* explicitTypeInstantiation);

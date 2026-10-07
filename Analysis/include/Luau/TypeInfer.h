@@ -82,6 +82,7 @@ struct TypeChecker
     ControlFlow check(const ScopePtr& scope, const AstStatRepeat& statement);
     ControlFlow check(const ScopePtr& scope, const AstStatReturn& return_);
     ControlFlow check(const ScopePtr& scope, const AstStatGive& give);
+    ControlFlow check(const ScopePtr& scope, const AstStatComprehensionItem& item);
     ControlFlow check(const ScopePtr& scope, const AstStatAssign& assign);
     ControlFlow check(const ScopePtr& scope, const AstStatCompoundAssign& assign);
     ControlFlow check(const ScopePtr& scope, const AstStatLocal& local);
@@ -135,6 +136,7 @@ struct TypeChecker
     WithPredicate<TypeId> checkExpr(const ScopePtr& scope, const AstExprError& expr);
     WithPredicate<TypeId> checkExpr(const ScopePtr& scope, const AstExprIfElse& expr, std::optional<TypeId> expectedType = std::nullopt);
     WithPredicate<TypeId> checkExpr(const ScopePtr& scope, const AstExprDo& expr);
+    WithPredicate<TypeId> checkExpr(const ScopePtr& scope, const AstExprTableComprehension& expr);
     WithPredicate<TypeId> checkExpr(const ScopePtr& scope, const AstExprInterpString& expr);
     WithPredicate<TypeId> checkExpr(const ScopePtr& scope, const AstExprInstantiate& explicitTypeInstantiation);
 

@@ -446,6 +446,8 @@ ControlFlow DataFlowGraphBuilder::visit(AstStat* s)
         return visit(r);
     else if (auto g = s->as<AstStatGive>())
         return visit(g);
+    else if (auto i = s->as<AstStatComprehensionItem>())
+        return visit(i);
     else if (auto e = s->as<AstStatExpr>())
         return visit(e);
     else if (auto l = s->as<AstStatLocal>())
@@ -1101,6 +1103,8 @@ DataFlowResult DataFlowGraphBuilder::visitExpr(AstExpr* e)
             return visitExpr(i);
         else if (auto d = e->as<AstExprDo>())
             return visitExpr(d);
+        else if (auto c = e->as<AstExprTableComprehension>())
+            return visitExpr(c);
         else if (auto error = e->as<AstExprError>())
             return visitExpr(error);
         else
@@ -1401,6 +1405,30 @@ DataFlowResult DataFlowGraphBuilder::visitExpr(AstExprDo* d)
         outer->inherit(joined);
 
     return {defArena->freshCell(Symbol{}, d->location), nullptr};
+}
+
+// Luwu Table Comprehensions (rfcs/table-comprehensions.md): the loop is an ordinary loop statement, scoped to the
+// expression
+DataFlowResult DataFlowGraphBuilder::visitExpr(AstExprTableComprehension* c)
+{
+    DfgScope* inner = makeChildScope();
+    {
+        PushScope ps{scopeStack, inner};
+        visit(c->loop);
+    }
+
+    currentScope()->inherit(inner);
+
+    return {defArena->freshCell(Symbol{}, c->location), nullptr};
+}
+
+ControlFlow DataFlowGraphBuilder::visit(AstStatComprehensionItem* i)
+{
+    if (i->key)
+        visitExpr(i->key);
+
+    visitExpr(i->value);
+    return ControlFlow::None;
 }
 
 // Luwu Do Expressions (rfcs/do-expressions.md): records what this path assigned since the `do` expression started, and

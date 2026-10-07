@@ -807,6 +807,36 @@ struct AstJsonEncoder : public AstVisitor
         );
     }
 
+    // Luwu Table Comprehensions (rfcs/table-comprehensions.md)
+    void write(class AstExprTableComprehension* node)
+    {
+        writeNode(
+            node,
+            "AstExprTableComprehension",
+            [&]()
+            {
+                PROP(loop);
+                PROP(clauseCount);
+            }
+        );
+    }
+
+    void write(class AstStatComprehensionItem* node)
+    {
+        writeNode(
+            node,
+            "AstStatComprehensionItem",
+            [&]()
+            {
+                if (node->key)
+                    PROP(key);
+                PROP(value);
+                if (node->accumulate)
+                    write("accumulate", *node->accumulate);
+            }
+        );
+    }
+
     void write(class AstExprDo* node)
     {
         writeNode(
@@ -1330,6 +1360,18 @@ struct AstJsonEncoder : public AstVisitor
     }
 
     bool visit(class AstExprDo* node) override
+    {
+        write(node);
+        return false;
+    }
+
+    bool visit(class AstExprTableComprehension* node) override
+    {
+        write(node);
+        return false;
+    }
+
+    bool visit(class AstStatComprehensionItem* node) override
     {
         write(node);
         return false;

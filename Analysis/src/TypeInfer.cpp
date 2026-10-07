@@ -348,6 +348,8 @@ ControlFlow TypeChecker::check(const ScopePtr& scope, const AstStat& program)
         return check(scope, *return_);
     else if (auto give = program.as<AstStatGive>())
         return check(scope, *give);
+    else if (auto item = program.as<AstStatComprehensionItem>())
+        return check(scope, *item);
     else if (auto expr = program.as<AstStatExpr>())
     {
         checkExprPack(scope, *expr->expr);
@@ -1971,6 +1973,8 @@ WithPredicate<TypeId> TypeChecker::checkExpr(const ScopePtr& scope, const AstExp
         result = checkExpr(scope, *a, expectedType);
     else if (auto a = expr.as<AstExprDo>())
         result = checkExpr(scope, *a);
+    else if (auto a = expr.as<AstExprTableComprehension>())
+        result = checkExpr(scope, *a);
     else if (auto a = expr.as<AstExprInterpString>())
         result = checkExpr(scope, *a);
     else if (auto a = expr.as<AstExprInstantiate>())
@@ -3336,6 +3340,22 @@ WithPredicate<TypeId> TypeChecker::checkExpr(const ScopePtr& scope, const AstExp
 {
     check(childScope(scope, expr.body->location), *expr.body);
     return WithPredicate{anyType};
+}
+
+// Luwu Table Comprehensions (rfcs/table-comprehensions.md): the old solver gets the minimum, so it doesn't fail on one:
+// the loop is checked, and the expression is `any`.
+WithPredicate<TypeId> TypeChecker::checkExpr(const ScopePtr& scope, const AstExprTableComprehension& expr)
+{
+    check(childScope(scope, expr.location), *expr.loop);
+    return WithPredicate{anyType};
+}
+
+ControlFlow TypeChecker::check(const ScopePtr& scope, const AstStatComprehensionItem& item)
+{
+    if (item.key)
+        checkExpr(scope, *item.key);
+    checkExpr(scope, *item.value);
+    return ControlFlow::None;
 }
 
 ControlFlow TypeChecker::check(const ScopePtr& scope, const AstStatGive& give)

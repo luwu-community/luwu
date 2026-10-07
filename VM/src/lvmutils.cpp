@@ -750,3 +750,73 @@ LUAU_NOINLINE void luaV_tryfuncTM(lua_State* L, StkId func)
     L->top++;              // stack space pre-allocated by the caller
     setobj2s(L, func, tm); // tag method is the new function to be called
 }
+
+// Luwu Table Comprehensions (rfcs/table-comprehensions.md): how many elements a table iterated by a generic for can
+// produce at most, read in O(1): its array part plus its hash part. A table with __iter can produce anything, which only
+// makes the size a worse guess.
+static int iterationcapacity(const TValue* generator)
+{
+    const TValue* source = ttistable(generator) ? generator : ttistable(generator + 1) ? generator + 1 : NULL;
+
+    if (!source)
+        return 0;
+
+    const LuaTable* h = hvalue(source);
+    int hashcapacity = h->node == &luaH_dummynode ? 0 : sizenode(h);
+    return h->sizearray + hashcapacity;
+}
+
+// The trip count of a numeric for whose limit, step and index are in `limit` onwards, capped at LBC_PRESIZE_RANGE_LIMIT.
+static int rangetripcount(const TValue* limit)
+{
+    const TValue* step = limit + 1;
+    const TValue* index = limit + 2;
+
+    if (!ttisnumber(limit) || !ttisnumber(step) || !ttisnumber(index))
+        return 0;
+
+    double l = nvalue(limit);
+    double s = nvalue(step);
+    double i = nvalue(index);
+
+    // comparisons with NaN are false, so a NaN anywhere gives 0
+    bool runs = (s > 0 && i <= l) || (s < 0 && i >= l);
+    if (!runs)
+        return 0;
+
+    double trips = floor((l - i) / s) + 1;
+    return trips < LBC_PRESIZE_RANGE_LIMIT ? int(trips) : LBC_PRESIZE_RANGE_LIMIT;
+}
+
+void luaV_presizetable(lua_State* L, LuaTable* t, const TValue* rb, int form)
+{
+    switch (form)
+    {
+    case LBC_PRESIZE_ITER_ARRAY:
+        if (int n = iterationcapacity(rb))
+            luaH_resizearray(L, t, n);
+        break;
+    case LBC_PRESIZE_ITER_HASH:
+        if (int n = iterationcapacity(rb))
+            luaH_resizehash(L, t, n);
+        break;
+    case LBC_PRESIZE_RANGE_ARRAY:
+        if (int n = rangetripcount(rb))
+            luaH_resizearray(L, t, n);
+        break;
+    case LBC_PRESIZE_RANGE_HASH:
+        if (int n = rangetripcount(rb))
+            luaH_resizehash(L, t, n);
+        break;
+    case LBC_PRESIZE_TRIM:
+    {
+        LUAU_ASSERT(ttisnumber(rb));
+        int used = int(nvalue(rb));
+        if (used < t->sizearray / 2)
+            luaH_resizearray(L, t, used);
+        break;
+    }
+    default:
+        LUAU_ASSERT(!"Unknown PRESIZETABLE form");
+    }
+}
