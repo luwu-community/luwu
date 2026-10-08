@@ -65,6 +65,69 @@ namespace Luau
 bool doesCallError(const AstExprCall* call);        // TypeInfer.cpp
 const AstStat* getFallthrough(const AstStat* node); // TypeInfer.cpp
 
+// Luwu Traits (rfcs/classes/traits.md): whether `record` is a trait's
+static bool isTraitRecord(const ClassDeclRecord* record)
+{
+    const ExternType* type = record ? get<ExternType>(follow(record->ty)) : nullptr;
+    return type && type->traitInfo;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): finds a `Self` in the annotations it visits
+struct NamesSelf : AstVisitor
+{
+    bool found = false;
+
+    bool visit(AstType* ty) override
+    {
+        return !found;
+    }
+
+    bool visit(AstTypePack* pack) override
+    {
+        return !found;
+    }
+
+    bool visit(AstTypeReference* ref) override
+    {
+        if (!ref->prefix && ref->name == "Self")
+            found = true;
+        return !found;
+    }
+};
+
+// Luwu Traits (rfcs/classes/traits.md): whether `Self` in `scope` is the one a class or trait binds for itself, not a type
+// the code named `Self`
+static bool isOwnSelf(const Scope& scope, const ClassDeclRecord* record)
+{
+    std::optional<TypeFun> self = scope.lookupType("Self");
+    return record && self && self->typeParams.empty() && follow(self->type) == follow(record->ty);
+}
+
+// Luwu Traits (rfcs/classes/traits.md): whether an annotation names `Self`
+static bool typeNamesSelf(AstType* annotation)
+{
+    NamesSelf names;
+    annotation->visit(&names);
+    return names.found;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): whether a function's parameter or return annotations name `Self`
+static bool signatureNamesSelf(AstExprFunction* fn)
+{
+    NamesSelf names;
+    for (AstLocal* arg : fn->args)
+    {
+        if (arg->annotation)
+            arg->annotation->visit(&names);
+    }
+    if (fn->varargAnnotation)
+        fn->varargAnnotation->visit(&names);
+    if (fn->returnAnnotation)
+        fn->returnAnnotation->visit(&names);
+
+    return names.found;
+}
+
 static bool isValidClassMetamethod(const Name& name)
 {
     return name == "__call" || name == "__concat" || name == "__unm" || name == "__add" || name == "__sub" || name == "__mul" || name == "__div" ||
@@ -1141,6 +1204,13 @@ void ConstraintGenerator::prototypeClass(
             !classInstanceEtv->instantiatedTypeParams.empty() || !classInstanceEtv->instantiatedTypePackParams.empty();
     }
 
+    // Luwu Traits (rfcs/classes/traits.md): `Self` in a class is the class's own object type (`Box<T>` in `class Box<T>`).
+    // In a trait it is whichever class implements it. The trait itself stands in for that class here, which is what a
+    // value typed as the trait has; a method naming `Self` is generic over it instead (checkFunctionSignature), and a
+    // field naming it gets a template for implementing classes (visitClass). A type the code itself names `Self` wins.
+    if (FFlag::LuwuTraits && FFlag::LuwuGenericNominals && !defnScope->lookupType("Self"))
+        defnScope->privateTypeBindings["Self"] = TypeFun{classInstanceTy};
+
     // A primary constructor counts here too: its `__init` is synthesized from the parameter
     // list, so neither it nor the constructor is the POD table constructor below.
     bool hasCustomInit = classDecl->primaryConstructor != nullptr;
@@ -1863,6 +1933,22 @@ void ConstraintGenerator::checkTraitArguments(const ScopePtr& initializerScope, 
     }
 }
 
+void ConstraintGenerator::resolveSelfFieldTemplate(const ScopePtr& traitScope, ClassDeclRecord* trait, const AstClassProperty& field)
+{
+    ExternType* traitType = getMutable<ExternType>(follow(trait->ty));
+    if (!traitType || !traitType->traitInfo)
+        return;
+
+    ExternType::TraitInfo& info = *traitType->traitInfo;
+    if (!info.selfMarker)
+        info.selfMarker = arena->addType(GenericType{traitScope.get(), "Self", Polarity::Mixed});
+
+    // Resolved before the field's own type, which then has the last word on what the annotation resolved to
+    ScopePtr templateScope = std::make_shared<Scope>(traitScope);
+    templateScope->privateTypeBindings["Self"] = TypeFun{*info.selfMarker};
+    info.selfFieldTemplates[field.name.value] = resolveType(templateScope, field.ty, /* inTypeArguments */ false);
+}
+
 std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scope, AstStatClass* cls, ClassDeclRecord* record)
 {
     std::map<Name, TypeId> expectedFieldTypes;
@@ -1911,6 +1997,27 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
             return prop;
 
         return instantiateTraitProperty(scope, location, trait, it->second, prop);
+    };
+
+    // A trait field naming `Self`, as this class has it: the field's template with the class for `Self`, and the trait's
+    // arguments for its generics
+    auto instantiateSelfField = [&](TypeId trait, const Property& prop, TypeId fieldTemplate, TypeId selfMarker, Location location)
+    {
+        TraitInstantiation instantiation;
+        if (auto it = instantiations.find(trait); it != instantiations.end())
+            instantiation = it->second;
+        else
+            instantiation.instantiated = trait;
+
+        instantiation.params.push_back(selfMarker);
+        instantiation.args.push_back(record->ty);
+
+        Property templated = prop;
+        templated.readTy = fieldTemplate;
+        if (prop.writeTy)
+            templated.writeTy = fieldTemplate;
+
+        return instantiateTraitProperty(scope, location, trait, instantiation, templated);
     };
 
     for (size_t i = 0; i < traits.size(); ++i)
@@ -2266,7 +2373,11 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
             if (!provide(name, prop))
                 continue;
 
-            classType->props()[name] = instantiateProperty(trait, prop, location);
+            auto selfTemplate = info.selfFieldTemplates.find(name);
+            if (selfTemplate != info.selfFieldTemplates.end() && info.selfMarker)
+                classType->props()[name] = instantiateSelfField(trait, prop, selfTemplate->second, *info.selfMarker, location);
+            else
+                classType->props()[name] = instantiateProperty(trait, prop, location);
 
             if (classFields && isTraitField(name))
                 classFields->insert(name);
@@ -4104,6 +4215,9 @@ void ConstraintGenerator::visitClass(const ScopePtr& scope, AstStatClass* statCl
                     TypeId target;
                     if (classProp.ty)
                     {
+                        if (FFlag::LuwuTraits && statClass->isTrait && typeNamesSelf(classProp.ty) && isOwnSelf(*bodyScope, classDeclRecord))
+                            resolveSelfFieldTemplate(bodyScope, classDeclRecord, classProp);
+
                         target = resolveType(bodyScope, classProp.ty, false);
                         if (classProp.defaultValue)
                         {
@@ -5929,6 +6043,16 @@ ConstraintGenerator::FunctionSignature ConstraintGenerator::checkFunctionSignatu
     }
 
 
+    // Luwu Traits (rfcs/classes/traits.md): a trait method whose signature names `Self` is generic over it. `self` is `Self &
+    // Trait`, so a call infers `Self` from the receiver: the implementing class, or the trait for a value typed as the trait.
+    TypeId traitSelf = nullptr;
+    if (FFlag::LuwuTraits && isTraitRecord(enclosingClass) && signatureNamesSelf(fn) && isOwnSelf(*signatureScope, enclosingClass))
+    {
+        traitSelf = arena->addType(GenericType{signatureScope.get(), "Self", Polarity::Mixed});
+        genericTypes.push_back(traitSelf);
+        signatureScope->privateTypeBindings["Self"] = TypeFun{traitSelf};
+    }
+
     bool hasExplicitSelf;
     bool hasSelf;
 
@@ -5940,7 +6064,9 @@ ConstraintGenerator::FunctionSignature ConstraintGenerator::checkFunctionSignatu
         if (hasSelf)
         {
             TypeId selfType = nullptr;
-            if (enclosingClass != nullptr)
+            if (traitSelf)
+                selfType = arena->addType(IntersectionType{{traitSelf, enclosingClass->ty}});
+            else if (enclosingClass != nullptr)
                 selfType = enclosingClass->ty;
             else
                 selfType = freshType(signatureScope, Polarity::Negative);

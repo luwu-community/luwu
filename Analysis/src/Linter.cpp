@@ -6909,6 +6909,121 @@ private:
     }
 };
 
+// Luwu Traits (rfcs/classes/traits.md): a trait method returning `self`, or a new object of self's class
+// (`class.of(self)(...)`), with the trait as its return type. That type forgets self's class and its other traits;
+// `Self` keeps them.
+class LintReturnSelf : AstVisitor
+{
+public:
+    LUAU_NOINLINE static void process(LintContext& context)
+    {
+        LintReturnSelf pass;
+        pass.context = &context;
+
+        context.root->visit(&pass);
+    }
+
+private:
+    LintContext* context;
+
+    // The `return`s of one function, not of the functions nested in it, that give back `self` or a new object of its class
+    struct SelfReturns : AstVisitor
+    {
+        AstLocal* self = nullptr;
+        std::vector<AstExpr*> found;
+
+        bool isSelf(AstExpr* expr) const
+        {
+            AstExprLocal* local = expr->as<AstExprLocal>();
+            return local && local->local == self;
+        }
+
+        // `class.of(self)(...)`
+        bool isNewOfSelfsClass(AstExpr* expr) const
+        {
+            AstExprCall* construct = expr->as<AstExprCall>();
+            AstExprCall* classOf = construct ? construct->func->as<AstExprCall>() : nullptr;
+            AstExprIndexName* of = classOf ? classOf->func->as<AstExprIndexName>() : nullptr;
+            AstExprGlobal* classLib = of ? of->expr->as<AstExprGlobal>() : nullptr;
+
+            bool namesClassOf = classLib && classLib->name == "class" && of->index == "of";
+            return namesClassOf && classOf->args.size == 1 && isSelf(classOf->args.data[0]);
+        }
+
+        bool visit(AstExprFunction* fn) override
+        {
+            return false;
+        }
+
+        bool visit(AstStatReturn* ret) override
+        {
+            if (ret->list.size == 1)
+            {
+                AstExpr* value = ret->list.data[0];
+                while (AstExprGroup* group = value->as<AstExprGroup>())
+                    value = group->expr;
+
+                if (isSelf(value) || isNewOfSelfsClass(value))
+                    found.push_back(ret->list.data[0]);
+            }
+            return true;
+        }
+    };
+
+    // Whether a method's return type is the trait: written as the trait's name, or left out (then inferred as the trait)
+    static bool returnsTrait(AstExprFunction* fn, AstName trait)
+    {
+        if (!fn->returnAnnotation)
+            return true;
+
+        AstTypePackExplicit* pack = fn->returnAnnotation->as<AstTypePackExplicit>();
+        if (!pack || pack->typeList.types.size != 1 || pack->typeList.tailType)
+            return false;
+
+        AstTypeReference* ref = pack->typeList.types.data[0]->as<AstTypeReference>();
+        return ref && !ref->prefix && ref->name == trait;
+    }
+
+    bool visit(AstStatClass* cls) override
+    {
+        if (!cls->isTrait)
+            return true;
+
+        for (const AstClassMember& member : cls->members)
+        {
+            const AstClassMethod* method = member.get_if<AstClassMethod>();
+            AstExprFunction* fn = method ? method->function : nullptr;
+            if (!fn || method->expectLocation)
+                continue;
+
+            AstLocal* self = fn->self;
+            if (!self && fn->args.size > 0 && fn->args.data[0]->name == "self")
+                self = fn->args.data[0];
+            if (!self || !returnsTrait(fn, cls->name->name))
+                continue;
+
+            SelfReturns returns;
+            returns.self = self;
+            fn->body->visit(&returns);
+
+            for (AstExpr* value : returns.found)
+                emitWarning(
+                    *context,
+                    LintWarning::Code_ReturnSelf,
+                    value->location,
+                    "Did you mean to return 'Self' here?\n\n"
+                    "Help (method returns trait instead of Self):\n"
+                    "  - Returning '%s' here loses 'self's class and any other traits on it\n"
+                    "  - Callers rely on knowing self's class to pass into other functions\n"
+                    "  - Return 'Self' here so the type checker knows to use the class type instead of the trait type",
+                    cls->name->name.value
+                );
+        }
+
+        return true;
+    }
+};
+
 // Luwu: a computed value stored in a local and overwritten, in the same block, before anything reads it. The work that
 // produced it was for nothing, which usually means a use of it was forgotten. Only computed values count (calls,
 // arithmetic, ...): `local x = 0` then `x = f()` is just a default.
@@ -7540,6 +7655,9 @@ std::vector<LintWarning> lint(
 
     if (context.warningEnabled(LintWarning::Code_DeadStore))
         LintDeadStore::process(context);
+
+    if (context.warningEnabled(LintWarning::Code_ReturnSelf))
+        LintReturnSelf::process(context);
 
     LintValueMistakes::Enabled valueMistakes;
     valueMistakes.newValueComparison = context.warningEnabled(LintWarning::Code_NewValueComparison);

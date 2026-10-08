@@ -87,6 +87,7 @@ struct LintWarning
         Code_MethodsNotInlined = 55,       // code that keeps the compiler from proving a class, so its methods aren't inlined
         Code_FloorDivision = 56,           // `math.floor(a / b)`, which is `a // b`
         Code_FenvDeoptimization = 57,      // `getfenv`/`setfenv`, which deoptimize the whole module
+        Code_ReturnSelf = 58,              // Luwu Traits: a trait method returning `self` typed as the trait, not `Self`
 
         Code__Count
     };
@@ -188,6 +189,7 @@ inline constexpr const char* kWarningNames[] = {
     "MethodsNotInlined",
     "FloorDivision",
     "FenvDeoptimization",
+    "ReturnSelf",
 };
 // clang-format on
 

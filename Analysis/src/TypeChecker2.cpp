@@ -11,6 +11,7 @@
 #include "Luau/DenseHash.h"
 #include "Luau/Error.h"
 #include "Luau/Instantiation.h"
+#include "Luau/Instantiation2.h"
 #include "Luau/MismatchExplanation.h"
 #include "Luau/Metamethods.h"
 #include "Luau/Normalize.h"
@@ -1839,6 +1840,21 @@ static const Property* findClassMember(const ExternType* type, const Name& name)
     return nullptr;
 }
 
+// Luwu Traits (rfcs/classes/traits.md): a trait field naming `Self`, as `classTy` has it
+std::optional<TypeId> TypeChecker2::selfFieldFor(const ExternType* traitType, TypeId classTy, const Name& name)
+{
+    const ExternType::TraitInfo& info = *traitType->traitInfo;
+    auto fieldTemplate = info.selfFieldTemplates.find(name);
+    if (fieldTemplate == info.selfFieldTemplates.end() || !info.selfMarker)
+        return std::nullopt;
+
+    DenseHashMap<TypeId, TypeId> replacements{nullptr};
+    DenseHashMap<TypePackId, TypePackId> packReplacements{nullptr};
+    replacements[*info.selfMarker] = classTy;
+    Replacer replacer{NotNull{module->internalTypes.get()}, NotNull{&replacements}, NotNull{&packReplacements}};
+    return replacer.substitute(fieldTemplate->second);
+}
+
 void TypeChecker2::checkTraitFieldExpectations(AstStatClass* stat)
 {
     NotNull<Scope> scope{findInnermostScope(stat->location)};
@@ -1873,8 +1889,19 @@ void TypeChecker2::checkTraitFieldExpectations(AstStatClass* stat)
             if (!provided || !found || !provided->readTy || !found->readTy)
                 continue;
 
-            Location location = classMemberLocation(stat, name).value_or(traitRefLocation(scope, stat, traitType));
-            testIsSubtype(*found->readTy, *provided->readTy, location);
+            // A field naming `Self` is this class's own type in the class (the trait's field has the trait for it). Not
+            // overridden, the class has it from the trait as written; overridden, it has to fit that.
+            TypeId providedTy = *provided->readTy;
+            std::optional<Location> declaredAt = classMemberLocation(stat, name);
+            if (std::optional<TypeId> selfField = selfFieldFor(traitType, classTypeFun->type, name))
+            {
+                if (!declaredAt)
+                    continue;
+                providedTy = *selfField;
+            }
+
+            Location location = declaredAt.value_or(traitRefLocation(scope, stat, traitType));
+            testIsSubtype(*found->readTy, providedTy, location);
         }
 
         for (const auto& [name, optional] : traitType->traitInfo->expectations)

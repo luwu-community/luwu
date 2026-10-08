@@ -4994,4 +4994,121 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "iterating_an_object_without_iter_names_the_m
     CHECK_EQ("Cannot iterate over class 'Bag' itself; only objects can be iterated, when their class defines '__iter'", toString(result.errors[2]));
 }
 
+// Luwu Traits (rfcs/classes/traits.md): `Self` in a trait method is the class it is called on
+TEST_CASE_FIXTURE(ClassesFixture, "trait_self_is_the_implementing_class")
+{
+    ScopedFastFlag flags[2]{{FFlag::LuwuTraits, true}, {FFlag::LuwuGenericNominals, true}};
+
+    CheckResult result = check(R"(
+        trait Aliased
+            private _aliases: { string } = {}
+            public function aliases(self, alias: string): Self
+                self._aliases[#self._aliases + 1] = alias
+                return self
+            end
+        end
+
+        trait Unprefixed needs Aliased
+            public function aliases(self, alias: string): Self
+                self._aliases[#self._aliases + 1] = alias
+                return self
+            end
+        end
+
+        class Command(public name: string) implements Unprefixed
+            public function run(self): Self
+                return self
+            end
+        end
+
+        local c = Command("run"):aliases("r"):run()
+        local viaTrait: Unprefixed = c
+        local back = viaTrait:aliases("x")
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("Command", toString(requireType("c")));
+    CHECK_EQ("Unprefixed", toString(requireType("back")));
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a trait field naming `Self` has each implementing class's own type in that class
+TEST_CASE_FIXTURE(ClassesFixture, "trait_self_fields_are_the_implementing_class")
+{
+    ScopedFastFlag flags[2]{{FFlag::LuwuTraits, true}, {FFlag::LuwuGenericNominals, true}};
+
+    CheckResult result = check(R"(
+        trait Linked
+            public next: Self? = nil
+            public children: { Self } = {}
+        end
+
+        class Node(public name: string) implements Linked
+        end
+        class Other() implements Linked
+        end
+        class Overrides() implements Linked
+            public next: number? = nil
+        end
+
+        local n = Node("a")
+        local next = n.next
+        local kids = n.children
+        local viaTrait: Linked = n
+        local traitNext = viaTrait.next
+        n.next = Other()
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    // the override has to fit `Self?` as Overrides has it
+    CHECK_EQ(result.errors[0].location.begin.line, 11);
+    // `next` is a `Node?` on a Node
+    CHECK_EQ(result.errors[1].location.begin.line, 19);
+    CHECK_EQ("Node?", toString(requireType("next")));
+    CHECK_EQ("{Node}", toString(requireType("kids")));
+    CHECK_EQ("Linked?", toString(requireType("traitNext")));
+}
+
+// Luwu Traits (rfcs/classes/traits.md): `Self` in a class is the class, with its own generics
+TEST_CASE_FIXTURE(ClassesFixture, "class_self_is_the_class")
+{
+    ScopedFastFlag flags[2]{{FFlag::LuwuTraits, true}, {FFlag::LuwuGenericNominals, true}};
+
+    CheckResult result = check(R"(
+        class Box<T>(public value: T)
+            public function with(self, value: T): Self
+                self.value = value
+                return self
+            end
+        end
+
+        local b = Box(1):with(2)
+        local wrong: Box<string> = Box(1):with(2)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 9);
+    CHECK_EQ("Box<number>", toString(requireType("b")));
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a type the code names `Self` itself, like a trait parameter, isn't replaced
+TEST_CASE_FIXTURE(ClassesFixture, "trait_parameter_named_self_wins")
+{
+    ScopedFastFlag flags[2]{{FFlag::LuwuTraits, true}, {FFlag::LuwuGenericNominals, true}};
+
+    CheckResult result = check(R"(
+        trait Fluent<Self>
+            public function again(self): Self
+                return self :: any
+            end
+        end
+
+        class Thing() implements Fluent<Thing>
+        end
+
+        local t = Thing():again()
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("Thing", toString(requireType("t")));
+}
 TEST_SUITE_END();

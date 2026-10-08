@@ -755,6 +755,10 @@ struct ExternType
         // `class<Trait>`: the class value of any class implementing the trait. Callable when the trait expects `__init`,
         // and carrying the trait's functions, expected ones included. Implementing classes' values are subtypes of it.
         std::optional<TypeId> implementorClass;
+        // `Self` in the trait's fields. The fields themselves (props) read `Self` as the trait. `selfFieldTemplates` has
+        // each field that names `Self` with `selfMarker` in its place, which an implementing class replaces with itself.
+        std::optional<TypeId> selfMarker;
+        std::map<Name, TypeId> selfFieldTemplates;
     };
     std::optional<TraitInfo> traitInfo;
 

@@ -4488,4 +4488,49 @@ return 1
     CHECK_EQ(result.warnings[2].text, "lint directive refers to unknown lint rule 'ConstLocl'; did you mean 'ConstLocal'?");
 }
 
+TEST_CASE_FIXTURE(BuiltinsFixture, "ReturnSelfFlagsSelfReturnedAsTheTrait")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    LintResult result = lint(R"(
+trait Aliased
+    public function annotated(self): Aliased
+        return self
+    end
+    public function unannotated(self)
+        return (self)
+    end
+    public function copy(self): Aliased
+        return class.of(self)()
+    end
+    public function good(self): Self
+        return self
+    end
+    public function nested(self): Aliased
+        local f = function()
+            return self
+        end
+        return f()
+    end
+end
+)");
+
+    std::vector<LintWarning> found;
+    for (const LintWarning& warning : result.warnings)
+        if (warning.code == LintWarning::Code_ReturnSelf)
+            found.push_back(warning);
+
+    REQUIRE_EQ(found.size(), 3);
+    CHECK_EQ(found[0].location.begin.line, 3);
+    CHECK_EQ(found[1].location.begin.line, 6);
+    CHECK_EQ(found[2].location.begin.line, 9);
+    CHECK_EQ(
+        found[0].text,
+        "Did you mean to return 'Self' here?\n\n"
+        "Help (method returns trait instead of Self):\n"
+        "  - Returning 'Aliased' here loses 'self's class and any other traits on it\n"
+        "  - Callers rely on knowing self's class to pass into other functions\n"
+        "  - Return 'Self' here so the type checker knows to use the class type instead of the trait type"
+    );
+}
 TEST_SUITE_END();
