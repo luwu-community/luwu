@@ -4525,6 +4525,7 @@ void ConstraintGenerator::visitClass(const ScopePtr& scope, AstStatClass* statCl
             if (param->annotation)
             {
                 polarity = Polarity::Positive;
+                size_t literalsBefore = primaryCtorLiteralParams.size();
                 paramTy = resolveParameterAnnotation(
                     bodyScope,
                     param->annotation,
@@ -4534,6 +4535,8 @@ void ConstraintGenerator::visitClass(const ScopePtr& scope, AstStatClass* statCl
                     /* inTypeArguments */ false,
                     /* replaceErrorWithFresh */ false
                 );
+                if (primaryCtorLiteralParams.size() > literalsBefore)
+                    module->literalParameterLocals[param] = primaryCtorLiteralParams.back().validator;
 
                 // as with a default function argument, the default has to fit the annotation
                 if (paramDefault)
@@ -5896,7 +5899,25 @@ Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprIfElse* ifEls
 Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprTypeAssertion* typeAssert)
 {
     check(scope, typeAssert->expr, std::nullopt);
-    return Inference{resolveType(scope, typeAssert->annotation, /* inTypeArguments */ false)};
+
+    // Luwu literal types: a cast to a literal type is a `B` that passes as a literal (Module::literalAssertions)
+    std::optional<ResolvedLiteral> literal;
+    if (AstTypeReference* literalRef = findLiteralReference(*scope, typeAssert->annotation))
+    {
+        polarity = Polarity::Positive;
+        literal = resolveLiteralAnnotation(scope, typeAssert->annotation, literalRef, /* inTypeArguments */ false, false);
+    }
+    else
+    {
+        TypeId asserted = resolveType(scope, typeAssert->annotation, /* inTypeArguments */ false);
+        literal = literalOfType(asserted);
+        if (!literal)
+            return Inference{asserted};
+    }
+
+    module->astResolvedTypes[typeAssert->annotation] = literal->base;
+    module->literalAssertions.insert(typeAssert);
+    return Inference{literal->base};
 }
 
 Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprInterpString* interpString)
@@ -6599,6 +6620,7 @@ ConstraintGenerator::FunctionSignature ConstraintGenerator::checkFunctionSignatu
         if (local->annotation)
         {
             polarity = Polarity::Negative;
+            size_t literalsBefore = literalParameters.size();
             argTy = resolveParameterAnnotation(
                 signatureScope,
                 local->annotation,
@@ -6608,6 +6630,8 @@ ConstraintGenerator::FunctionSignature ConstraintGenerator::checkFunctionSignatu
                 /* inTypeArguments */ false,
                 /* replaceErrorWithFresh*/ true
             );
+            if (literalParameters.size() > literalsBefore)
+                module->literalParameterLocals[local] = literalParameters.back().validator;
             hasSpecifiedArgTy = true;
         }
         else

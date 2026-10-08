@@ -260,6 +260,8 @@ private:
     // Luwu literal types: reports an argument for a `literal<B>` parameter that isn't a literal, and runs a `V<literal<B>>`
     // parameter's validator on its argument
     void checkLiteralParameters(AstExprCall* call, const FunctionType* fty, size_t selfOffset, NotNull<Scope> scope);
+    // Luwu literal types: whether `value` is a cast to a literal type (`s :: literal<string>`)
+    bool isLiteralAssertion(AstExpr* value) const;
     // Luwu literal types: whether a local's annotation is `literal<B>`
     bool isLiteralAnnotation(AstType* annotation);
     // Luwu literal types: reports a value given for a `local x: literal<B>` that isn't a literal
