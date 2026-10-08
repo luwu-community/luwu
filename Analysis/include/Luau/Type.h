@@ -426,6 +426,23 @@ struct FunctionType
     };
     std::optional<TruthyRefinement> truthyRefinement;
 
+    // Luwu literal types: a parameter annotated `literal<B>` or `V<literal<B>>` has type `B` in the function's argument
+    // pack, which is what its body sees. Its argument at each call keeps its literal type (`"-f"`, not `string`) and must
+    // be a literal. For `V<literal<B>>`, the call also checks the argument against `validator` with `placeholder` replaced
+    // by that literal type, so a user type function can accept or reject the value itself.
+    struct LiteralParameter
+    {
+        // Counting `self`. For the variadic parameter, the first argument it covers.
+        size_t argIndex;
+        bool variadic;
+        TypeId base;
+        // Both null for a bare `literal<B>`. Otherwise `placeholder` is the GenericType `literal<B>` resolved to inside
+        // `validator`.
+        TypeId validator;
+        TypeId placeholder;
+    };
+    std::vector<LiteralParameter> literalParameters;
+
     // Set when this function type is the target of a `type X = (...) -> ...` alias. See TableType::name/syntheticName.
     std::optional<std::string> name;
     std::optional<std::string> syntheticName;
