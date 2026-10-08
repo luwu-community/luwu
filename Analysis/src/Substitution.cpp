@@ -317,6 +317,11 @@ void Tarjan::visitChildren(TypeId ty, int index)
                 for (TypeId argument : arguments)
                     visitChild(argument);
             }
+
+            if (etv->traitInfo->selfMarker)
+                visitChild(*etv->traitInfo->selfMarker);
+            for (const auto& [_, field] : etv->traitInfo->selfFieldTemplates)
+                visitChild(field);
         }
 
         for (TypeId trait : etv->traitIntersection)
@@ -971,6 +976,11 @@ void Substitution::replaceChildren(TypeId ty)
                 for (TypeId& argument : arguments)
                     argument = replace(argument);
             }
+
+            if (etv->traitInfo->selfMarker)
+                etv->traitInfo->selfMarker = replace(*etv->traitInfo->selfMarker);
+            for (auto& [_, field] : etv->traitInfo->selfFieldTemplates)
+                field = replace(field);
         }
 
         for (TypeId& trait : etv->traitIntersection)

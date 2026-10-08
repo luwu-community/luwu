@@ -214,6 +214,7 @@ private:
     void visit(AstStatDeclareExternType* stat);
     void visit(AstStatClass* stat);
     // Luwu Traits (rfcs/classes/traits.md): the class's fields against the types of the fields its traits expect
+    std::optional<TypeId> selfFieldFor(const ExternType* traitType, TypeId classTy, const Name& name);
     void checkTraitFieldExpectations(AstStatClass* stat);
     // Luwu Traits (rfcs/classes/traits.md): the class's constructor against the trait's expected `__init`
     void checkTraitConstructorExpectation(AstStatClass* stat, const ExternType* classType, const ExternType* traitType);
