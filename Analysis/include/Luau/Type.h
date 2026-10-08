@@ -131,6 +131,10 @@ struct GenericType
     // Luwu Traits (rfcs/classes/traits.md): the `Self` a trait function is generic over. Printed as `Self`, without the
     // `<Self>` the function would otherwise list it in, and `Self & Trait` (its `self`) as just `Self`.
     bool traitSelf = false;
+
+    // Luwu literal types: set on the generic `literal<B>` stands for in a validator (`V<literal<B>>`) or an alias of one, to
+    // `B`. A parameter annotated with such an alias is a literal parameter.
+    TypeId literalBase = nullptr;
 };
 
 // When an equality constraint is found, it is then "bound" to that type,
