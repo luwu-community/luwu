@@ -3735,6 +3735,38 @@ fn("-x")
     CHECK_EQ(toString(result.errors[3]), "no dashes: -x");
 }
 
+TEST_CASE_FIXTURE(BuiltinsFixture, "literal_parameters_in_primary_constructors")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastFlag literalTypes{FFlag::LuwuLiteralTypes, true};
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+
+    CheckResult result = check(R"(
+type function NoDashes(alias: type): type
+    if alias:is("singleton") and string.sub(alias:value() :: string, 1, 1) == "-" then
+        return types.error(`no dashes: {alias:value()}`)
+    end
+    return alias
+end
+type Unprefixed = NoDashes<literal<string>>
+
+class Positional(public name: Unprefixed, public help: string) end
+class Tagged(public tag: literal<string>) end
+
+local p = Positional("file", "the file")
+local name = p.name
+Positional("-f", "dashes")
+Tagged("x")
+local s: string = "y"
+Tagged(s)
+    )");
+
+    REQUIRE_EQ(result.errors.size(), 2);
+    CHECK_EQ(toString(result.errors[0]), "no dashes: -f");
+    CHECK_EQ(toString(result.errors[1]), "expected a literal of type string, but got string");
+    CHECK_EQ("string", toString(requireType("name")));
+}
+
 // Luwu: an argument that is an error was reported where it's written; the type function adds nothing about it
 TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_error_type_argument_reports_once")
 {

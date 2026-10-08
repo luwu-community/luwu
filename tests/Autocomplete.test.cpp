@@ -23,6 +23,7 @@ LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuwuIfLocal)
 LUAU_FASTFLAG(DebugLuwuDoExpr)
+LUAU_FASTFLAG(LuwuLiteralTypes)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
@@ -3243,6 +3244,22 @@ type A<T = @1> = () -> T
     auto ac = autocomplete('1');
 
     CHECK(ac.entryMap.count("number"));
+    CHECK(ac.entryMap.count("string"));
+    CHECK_EQ(ac.context, AutocompleteContext::Type);
+}
+
+// Luwu literal types: `literal` is resolved by name rather than bound in a scope, so it is offered on its own
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_offers_literal_in_types")
+{
+    ScopedFastFlag literalTypes{FFlag::LuwuLiteralTypes, true};
+
+    check(R"(
+local function f(name: @1) end
+    )");
+
+    auto ac = autocomplete('1');
+
+    CHECK(ac.entryMap.count("literal"));
     CHECK(ac.entryMap.count("string"));
     CHECK_EQ(ac.context, AutocompleteContext::Type);
 }

@@ -4477,6 +4477,8 @@ void ConstraintGenerator::visitClass(const ScopePtr& scope, AstStatClass* statCl
     // the methods below are deliberately not checked in.
     ScopePtr initializerScope = bodyScope;
     std::vector<TypeId> primaryCtorParamTypes;
+    // Luwu literal types: the constructor's literal parameters, counting the class value (or, for `__init`, the instance)
+    std::vector<FunctionType::LiteralParameter> primaryCtorLiteralParams;
 
     if (const AstClassPrimaryConstructor* primaryConstructor = statClass->primaryConstructor)
     {
@@ -4501,7 +4503,16 @@ void ConstraintGenerator::visitClass(const ScopePtr& scope, AstStatClass* statCl
 
             if (param->annotation)
             {
-                paramTy = resolveType(bodyScope, param->annotation, /* inTypeArguments */ false);
+                polarity = Polarity::Positive;
+                paramTy = resolveParameterAnnotation(
+                    bodyScope,
+                    param->annotation,
+                    i + 1,
+                    /* variadic */ false,
+                    primaryCtorLiteralParams,
+                    /* inTypeArguments */ false,
+                    /* replaceErrorWithFresh */ false
+                );
 
                 // as with a default function argument, the default has to fit the annotation
                 if (paramDefault)
@@ -4828,7 +4839,10 @@ void ConstraintGenerator::visitClass(const ScopePtr& scope, AstStatClass* statCl
 
         // keep the parameter names, so tooling prints `Cat(name: string, age: number)`
         if (FunctionType* newCtorFtv = getMutable<FunctionType>(newCtorTy))
+        {
             newCtorFtv->argNames = argNames;
+            newCtorFtv->literalParameters = primaryCtorLiteralParams;
+        }
 
         if (classDeclRecord->ctorTy && is<BlockedType>(follow(classDeclRecord->ctorTy)))
             emplaceType<BoundType>(asMutable(follow(classDeclRecord->ctorTy)), newCtorTy);
@@ -4843,7 +4857,10 @@ void ConstraintGenerator::visitClass(const ScopePtr& scope, AstStatClass* statCl
         });
 
         if (FunctionType* newInitFtv = getMutable<FunctionType>(newInitTy))
+        {
             newInitFtv->argNames = std::move(argNames);
+            newInitFtv->literalParameters = std::move(primaryCtorLiteralParams);
+        }
 
         if (classDeclRecord->primaryInitTy && is<BlockedType>(follow(classDeclRecord->primaryInitTy)))
             emplaceType<BoundType>(asMutable(follow(classDeclRecord->primaryInitTy)), newInitTy);
