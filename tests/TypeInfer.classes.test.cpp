@@ -5068,6 +5068,108 @@ TEST_CASE_FIXTURE(ClassesFixture, "trait_self_fields_are_the_implementing_class"
     CHECK_EQ("Linked?", toString(requireType("traitNext")));
 }
 
+// Luwu Traits (rfcs/classes/traits.md): a trait function returning only `self` or `class.of(self)(...)` returns `Self`, and an
+// implementing class's copy has the class for `Self`
+TEST_CASE_FIXTURE(ClassesFixture, "trait_self_returns_infer_self")
+{
+    ScopedFastFlag flags[2]{{FFlag::LuwuTraits, true}, {FFlag::LuwuGenericNominals, true}};
+
+    CheckResult result = check(R"(
+        trait Aliased
+            expect public function __init(self)
+            public function chain(self)
+                return self
+            end
+            public function copy(self)
+                return class.of(self)()
+            end
+        end
+
+        class Command() implements Aliased
+            public function run(self) end
+        end
+
+        local c = Command():chain():copy()
+        c:run()
+        local viaTrait: Aliased = Command()
+        local back = viaTrait:chain()
+        local inClass = Command().chain
+        local inTrait = viaTrait.chain
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("Command", toString(requireType("c")));
+    CHECK_EQ("Aliased", toString(requireType("back")));
+    CHECK_EQ("(Command) -> Command", toString(requireType("inClass")));
+    CHECK_EQ("(Self) -> Self", toString(requireType("inTrait")));
+}
+
+// Luwu Traits (rfcs/classes/traits.md): an override returning the trait where the overridden function returns `Self`
+TEST_CASE_FIXTURE(ClassesFixture, "trait_self_mismatch_explains_self")
+{
+    ScopedFastFlag flags[2]{{FFlag::LuwuTraits, true}, {FFlag::LuwuGenericNominals, true}};
+
+    CheckResult result = check(R"(
+        trait Aliased
+            public function aliases(self, first: string): Self
+                return self
+            end
+        end
+        trait Unprefixed needs Aliased
+            public function aliases(self, first: string): Unprefixed
+                return self
+            end
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        toString(result.errors[0]),
+        "Expected this function to return 'Self', but got 'Unprefixed'\n"
+        "`Self` is the class this is called on, and a `Unprefixed` may be a different class, so this has to be `Self` too: "
+        "`self`, or `class.of(self)(...)` for a new object of its class"
+    );
+}
+
+// Luwu Traits (rfcs/classes/traits.md): an override takes the parameter and return types it leaves out from the function it
+// overrides, in a trait that needs the overridden one's trait and in a class implementing it
+TEST_CASE_FIXTURE(ClassesFixture, "trait_overrides_infer_their_signature")
+{
+    ScopedFastFlag flags[2]{{FFlag::LuwuTraits, true}, {FFlag::LuwuGenericNominals, true}};
+
+    CheckResult result = check(R"(
+        trait Aliased
+            public function aliases(self, first: string, ...: string): Self
+                return self
+            end
+            public function describe(self, verbose: boolean): string
+                return ""
+            end
+        end
+        trait Unprefixed needs Aliased
+            public function aliases(self, first, ...)
+                return self
+            end
+        end
+        class Command() implements Unprefixed
+            public function describe(self, verbose)
+                return "cmd"
+            end
+        end
+
+        local inTrait = Unprefixed.aliases
+        local inClass = Command().describe
+        local c = Command():aliases("a", "b")
+        c:describe(5)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 23);
+    CHECK_EQ("(Self, string, ...string) -> Self", toString(requireType("inTrait")));
+    CHECK_EQ("(Command, boolean) -> string", toString(requireType("inClass")));
+    CHECK_EQ("Command", toString(requireType("c")));
+}
+
 // Luwu Traits (rfcs/classes/traits.md): `Self` in a class is the class, with its own generics
 TEST_CASE_FIXTURE(ClassesFixture, "class_self_is_the_class")
 {

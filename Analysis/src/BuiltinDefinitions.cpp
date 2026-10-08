@@ -2089,6 +2089,12 @@ bool MagicClassOf::infer(const MagicFunctionCallContext& context)
     bool known = false;
     if (const UnionType* ut = get<UnionType>(argTy))
         known = std::all_of(begin(ut), end(ut), addClassOf);
+    else if (const IntersectionType* it = get<IntersectionType>(argTy))
+    {
+        // Luwu Traits (rfcs/classes/traits.md): `self` in a trait method generic over `Self` is `Self & Trait`, made by
+        // some class implementing the trait; the object types in an intersection say what made it
+        known = std::any_of(begin(it), end(it), addClassOf);
+    }
     else
         known = addClassOf(argTy);
 

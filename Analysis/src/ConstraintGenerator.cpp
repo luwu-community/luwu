@@ -13,6 +13,7 @@
 #include "Luau/DcrLogger.h"
 #include "Luau/Def.h"
 #include "Luau/DenseHash.h"
+#include "Luau/Instantiation2.h"
 #include "Luau/IterativeTypeVisitor.h"
 #include "Luau/ModuleResolver.h"
 #include "Luau/Normalize.h"
@@ -101,6 +102,88 @@ static bool isOwnSelf(const Scope& scope, const ClassDeclRecord* record)
 {
     std::optional<TypeFun> self = scope.lookupType("Self");
     return record && self && self->typeParams.empty() && follow(self->type) == follow(record->ty);
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a class's or trait's member `name`, from its object type or its metatable
+static const Property* findNominalMember(const ExternType* type, const Name& name)
+{
+    if (auto it = type->props().find(name); it != type->props().end())
+        return &it->second;
+
+    const TableType* metatable = type->metatable ? get<TableType>(follow(*type->metatable)) : nullptr;
+    if (metatable)
+    {
+        if (auto it = metatable->props.find(name); it != metatable->props.end())
+            return &it->second;
+    }
+
+    return nullptr;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): the function `name` that a method of `type` overrides: the one the traits it
+// implements (a class) or needs (a trait) provide. Of several, the one that needs the others, as the runtime picks it. A
+// trait from this module has its signature in `signatures`; one from another module is solved already.
+static std::optional<TypeId> overriddenTraitFunction(
+    const ExternType* type,
+    const Name& name,
+    const DenseHashMap<TypeId, std::map<Name, TypeId>>& signatures
+)
+{
+    const ExternType* provider = nullptr;
+    std::optional<TypeId> function;
+
+    for (TypeId trait : type->implementedTraits)
+    {
+        const ExternType* traitType = get<ExternType>(follow(trait));
+        if (!traitType || !traitType->traitInfo)
+            continue;
+
+        std::optional<TypeId> provided;
+        const std::map<Name, TypeId>* local = signatures.find(follow(trait));
+        if (auto it = local ? local->find(name) : std::map<Name, TypeId>::const_iterator{}; local && it != local->end())
+            provided = it->second;
+        else if (const Property* prop = findNominalMember(traitType, name); prop && prop->readTy)
+            provided = follow(*prop->readTy);
+
+        if (!provided || !get<FunctionType>(follow(*provided)))
+            continue;
+
+        if (!provider || isSubclass(traitType, provider))
+        {
+            provider = traitType;
+            function = follow(*provided);
+        }
+    }
+
+    return function;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): the `...T` a function type takes, if it ends in one
+static std::optional<TypePackId> variadicTailOf(const FunctionType* function)
+{
+    if (!function)
+        return std::nullopt;
+
+    std::optional<TypePackId> tail = flatten(function->argTypes).second;
+    if (tail && get<VariadicTypePack>(follow(*tail)))
+        return follow(*tail);
+    return std::nullopt;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): whether a method leaves out a parameter or return annotation, which an overridden
+// function can fill in
+static bool hasUnannotatedSignature(AstExprFunction* fn)
+{
+    if (!fn->returnAnnotation)
+        return true;
+
+    for (AstLocal* arg : fn->args)
+    {
+        if (!arg->annotation && arg->name != "self")
+            return true;
+    }
+
+    return fn->vararg && !fn->varargAnnotation;
 }
 
 // Luwu Traits (rfcs/classes/traits.md): whether an annotation names `Self`
@@ -1999,6 +2082,33 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
         return instantiateTraitProperty(scope, location, trait, it->second, prop);
     };
 
+    // A trait function generic over `Self`, as this class has it: the class for `Self` and for `self` (`Self & Trait`),
+    // so it isn't generic in the class
+    auto instantiateSelfFunction = [&](TypeId trait, const Property& prop, const ExternType::TraitInfo::SelfFunction& function, Location location)
+    {
+        TraitInstantiation instantiation;
+        if (auto it = instantiations.find(trait); it != instantiations.end())
+            instantiation = it->second;
+        else
+            instantiation.instantiated = trait;
+
+        instantiation.params.push_back(function.generic);
+        instantiation.args.push_back(record->ty);
+        instantiation.params.push_back(function.selfType);
+        instantiation.args.push_back(record->ty);
+
+        return instantiateTraitProperty(scope, location, trait, instantiation, prop);
+    };
+
+    // A member of `trait` as this class has it
+    auto instantiateMemberOf = [&](TypeId trait, const ExternType* traitType, const Name& name, const Property& prop, Location location)
+    {
+        const ExternType::TraitInfo& info = *traitType->traitInfo;
+        if (auto function = info.selfFunctions.find(name); function != info.selfFunctions.end())
+            return instantiateSelfFunction(trait, prop, function->second, location);
+        return instantiateProperty(trait, prop, location);
+    };
+
     // A trait field naming `Self`, as this class has it: the field's template with the class for `Self`, and the trait's
     // arguments for its generics
     auto instantiateSelfField = [&](TypeId trait, const Property& prop, TypeId fieldTemplate, TypeId selfMarker, Location location)
@@ -2377,7 +2487,7 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
             if (selfTemplate != info.selfFieldTemplates.end() && info.selfMarker)
                 classType->props()[name] = instantiateSelfField(trait, prop, selfTemplate->second, *info.selfMarker, location);
             else
-                classType->props()[name] = instantiateProperty(trait, prop, location);
+                classType->props()[name] = instantiateMemberOf(trait, traitType, name, prop, location);
 
             if (classFields && isTraitField(name))
                 classFields->insert(name);
@@ -2400,7 +2510,7 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
                 auto winner = winners.find(name);
                 bool isWinner = winner == winners.end() || winner->second == traitType;
                 if (provided && isWinner && !classValueType->props().count(name))
-                    classValueType->props()[name] = instantiateProperty(trait, prop, location);
+                    classValueType->props()[name] = instantiateMemberOf(trait, traitType, name, prop, location);
             }
         }
 
@@ -2410,7 +2520,7 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
             for (const auto& [name, prop] : traitMetatable->props)
             {
                 if (provide(name, prop))
-                    classMetatable->props[name] = instantiateProperty(trait, prop, location);
+                    classMetatable->props[name] = instantiateMemberOf(trait, traitType, name, prop, location);
             }
         }
     }
@@ -4275,8 +4385,30 @@ void ConstraintGenerator::visitClass(const ScopePtr& scope, AstStatClass* statCl
                     if (unannotatedTraitCreate)
                         expectedType = arena->addType(FunctionType{arena->addTypePack({}), arena->addTypePack({classDeclRecord->ty})});
 
-                    FunctionSignature sig =
-                        checkFunctionSignature(bodyScope, classDeclRecord, method.function, expectedType, method.function->location);
+                    // Luwu Traits (rfcs/classes/traits.md): an override takes what it leaves unannotated from the function it
+                    // overrides, so it doesn't restate the signature
+                    const ExternType* overriding = get<ExternType>(follow(classDeclRecord->ty));
+                    bool mayOverride = FFlag::LuwuTraits && !expectedType && overriding && hasUnannotatedSignature(method.function);
+                    bool overrides = false;
+                    if (mayOverride && method.functionName != "__create")
+                    {
+                        expectedType = overriddenTraitFunction(overriding, method.functionName.value, traitFunctionSignatures);
+                        overrides = expectedType.has_value();
+                    }
+
+                    FunctionSignature sig;
+                    {
+                        ScopedMemberValue<bool> override{checkingOverride, overrides};
+                        sig = checkFunctionSignature(bodyScope, classDeclRecord, method.function, expectedType, method.function->location);
+                    }
+
+                    if (statClass->isTrait)
+                        traitFunctionSignatures[follow(classDeclRecord->ty)][method.functionName.value] = sig.signature;
+
+                    // Luwu Traits (rfcs/classes/traits.md): what an implementing class replaces in its copy (implementTraits)
+                    ExternType* selfTrait = sig.traitSelf ? getMutable<ExternType>(follow(classDeclRecord->ty)) : nullptr;
+                    if (selfTrait && selfTrait->traitInfo)
+                        selfTrait->traitInfo->selfFunctions[method.functionName.value] = {sig.traitSelf, sig.traitSelfType};
 
                     Checkpoint start = checkpoint(this);
                     // a declared method, and a trait's expected function (Luwu Traits (rfcs/classes/traits.md)), are only a signature
@@ -4619,7 +4751,18 @@ InferencePack ConstraintGenerator::checkPack(const ScopePtr& scope, AstExprCall*
 
     Checkpoint funcEndCheckpoint = checkpoint(this);
 
-    return checkExprCall(scope, call, fnType, funcBeginCheckpoint, funcEndCheckpoint, expectedType);
+    InferencePack result = checkExprCall(scope, call, fnType, funcBeginCheckpoint, funcEndCheckpoint, expectedType);
+
+    // Luwu Traits (rfcs/classes/traits.md): `class.of(self)(...)` in a trait method generic over `Self` constructs another
+    // object of self's class, whatever the trait's constructor says it makes
+    if (AstLocal* of = FFlag::LuwuTraits ? newOfClassOf(call) : nullptr)
+    {
+        std::optional<TypeId> selfType = scope->lookup(of);
+        if (selfType && traitSelfTypes.contains(*selfType))
+            return InferencePack{arena->addTypePack({*selfType})};
+    }
+
+    return result;
 }
 
 InferencePack ConstraintGenerator::checkExprCall(
@@ -6043,14 +6186,64 @@ ConstraintGenerator::FunctionSignature ConstraintGenerator::checkFunctionSignatu
     }
 
 
-    // Luwu Traits (rfcs/classes/traits.md): a trait method whose signature names `Self` is generic over it. `self` is `Self &
-    // Trait`, so a call infers `Self` from the receiver: the implementing class, or the trait for a value typed as the trait.
+    // Luwu Traits (rfcs/classes/traits.md): a trait method whose signature names `Self`, or that returns `self` with its
+    // return type left out, is generic over it. `self` is `Self & Trait`, so a call infers `Self` from the receiver: the
+    // implementing class, or the trait for a value typed as the trait.
     TypeId traitSelf = nullptr;
-    if (FFlag::LuwuTraits && isTraitRecord(enclosingClass) && signatureNamesSelf(fn) && isOwnSelf(*signatureScope, enclosingClass))
+    TypeId traitSelfType = nullptr;
+    bool inferredSelfReturn = !fn->returnAnnotation && returnsOnlySelf(fn, methodSelf(fn));
+    // An override of a function generic over its trait's `Self` (its expected type) is generic over its own
+    std::vector<TypeId> overriddenSelves;
+    if (expectedFunction)
+    {
+        for (TypeId generic : expectedFunction->generics)
+        {
+            const GenericType* gt = get<GenericType>(follow(generic));
+            if (gt && gt->traitSelf)
+                overriddenSelves.push_back(generic);
+        }
+    }
+    bool usesSelf = signatureNamesSelf(fn) || inferredSelfReturn || !overriddenSelves.empty();
+    if (FFlag::LuwuTraits && isTraitRecord(enclosingClass) && usesSelf && isOwnSelf(*signatureScope, enclosingClass))
     {
         traitSelf = arena->addType(GenericType{signatureScope.get(), "Self", Polarity::Mixed});
+        getMutable<GenericType>(traitSelf)->traitSelf = true;
         genericTypes.push_back(traitSelf);
         signatureScope->privateTypeBindings["Self"] = TypeFun{traitSelf};
+    }
+
+    // Luwu Traits (rfcs/classes/traits.md): the overridden function's `Self` is this function's `Self` in a trait, or the
+    // class in a class
+    if (!overriddenSelves.empty() && enclosingClass)
+    {
+        TypeId ownSelf = traitSelf ? traitSelf : enclosingClass->ty;
+
+        DenseHashMap<TypeId, TypeId> replacements{nullptr};
+        DenseHashMap<TypePackId, TypePackId> packReplacements{nullptr};
+        for (TypeId generic : overriddenSelves)
+            replacements[generic] = ownSelf;
+
+        Replacer replacer{arena, NotNull{&replacements}, NotNull{&packReplacements}};
+        std::optional<TypePackId> args = replacer.substitute(expectedFunction->argTypes);
+        std::optional<TypePackId> rets = replacer.substitute(expectedFunction->retTypes);
+        if (args && rets)
+        {
+            TypeId substituted = arena->addType(FunctionType{*args, *rets});
+            expectedFunction = get<FunctionType>(substituted);
+            expectedArgPack = extendTypePack(*arena, builtinTypes, expectedFunction->argTypes, fn->args.size);
+        }
+
+        genericTypes.erase(
+            std::remove_if(
+                genericTypes.begin(),
+                genericTypes.end(),
+                [&](TypeId generic)
+                {
+                    return std::find(overriddenSelves.begin(), overriddenSelves.end(), generic) != overriddenSelves.end();
+                }
+            ),
+            genericTypes.end()
+        );
     }
 
     bool hasExplicitSelf;
@@ -6065,7 +6258,11 @@ ConstraintGenerator::FunctionSignature ConstraintGenerator::checkFunctionSignatu
         {
             TypeId selfType = nullptr;
             if (traitSelf)
+            {
                 selfType = arena->addType(IntersectionType{{traitSelf, enclosingClass->ty}});
+                traitSelfTypes.insert(selfType);
+                traitSelfType = selfType;
+            }
             else if (enclosingClass != nullptr)
                 selfType = enclosingClass->ty;
             else
@@ -6183,6 +6380,8 @@ ConstraintGenerator::FunctionSignature ConstraintGenerator::checkFunctionSignatu
         }
         else if (expectedArgPack.tail && get<VariadicTypePack>(*expectedArgPack.tail))
             varargPack = *expectedArgPack.tail;
+        else if (std::optional<TypePackId> overriddenVariadic = checkingOverride ? variadicTailOf(expectedFunction) : std::nullopt)
+            varargPack = *overriddenVariadic;
         else
             varargPack = builtinTypes->anyTypePack;
 
@@ -6238,6 +6437,12 @@ ConstraintGenerator::FunctionSignature ConstraintGenerator::checkFunctionSignatu
         LUAU_ASSERT(get<FreeTypePack>(returnType));
         emplaceTypePack<BoundTypePack>(asMutable(returnType), annotatedRetType);
     }
+    else if (traitSelf && inferredSelfReturn)
+    {
+        // Luwu Traits (rfcs/classes/traits.md): a trait method that only ever returns `self` (or a new object of its
+        // class) returns `Self`, as if written
+        emplaceTypePack<BoundTypePack>(asMutable(returnType), arena->addTypePack({traitSelf}));
+    }
     else if (expectedFunction)
     {
         emplaceTypePack<BoundTypePack>(asMutable(returnType), expectedFunction->retTypes);
@@ -6277,6 +6482,8 @@ ConstraintGenerator::FunctionSignature ConstraintGenerator::checkFunctionSignatu
         /* signature */ actualFunctionType,
         /* signatureScope */ std::move(signatureScope),
         /* bodyScope */ std::move(bodyScope),
+        /* traitSelf */ traitSelf,
+        /* traitSelfType */ traitSelfType,
     };
 }
 

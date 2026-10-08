@@ -933,12 +933,21 @@ struct TypeStringifier
             return;
         }
 
+        // Luwu Traits (rfcs/classes/traits.md): a trait function's `Self` isn't listed; it reads like the trait's own
+        std::vector<TypeId> listedGenerics;
+        for (TypeId generic : ftv.generics)
+        {
+            const GenericType* gt = get<GenericType>(follow(generic));
+            if (!gt || !gt->traitSelf)
+                listedGenerics.push_back(generic);
+        }
+
         // We should not be respecting opts.hideNamedFunctionTypeParameters here.
-        if (ftv.generics.size() > 0 || ftv.genericPacks.size() > 0)
+        if (listedGenerics.size() > 0 || ftv.genericPacks.size() > 0)
         {
             state.emit("<");
             bool comma = false;
-            for (auto it = ftv.generics.begin(); it != ftv.generics.end(); ++it)
+            for (auto it = listedGenerics.begin(); it != listedGenerics.end(); ++it)
             {
                 if (comma)
                     state.emit(", ");
@@ -1422,6 +1431,17 @@ struct TypeStringifier
 
     void operator()(TypeId ty, const IntersectionType& uv)
     {
+        // Luwu Traits (rfcs/classes/traits.md): `self` in a trait function generic over `Self` is `Self & Trait`, read as `Self`
+        for (TypeId part : uv.parts)
+        {
+            const GenericType* gt = get<GenericType>(follow(part));
+            if (gt && gt->traitSelf)
+            {
+                stringify(part);
+                return;
+            }
+        }
+
         bool showName = (!state.exhaustive || state.opts.hideTableAliasExpansions) && state.suppressNameFor != ty;
 
         if (showName && uv.name)

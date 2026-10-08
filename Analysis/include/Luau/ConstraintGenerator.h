@@ -347,6 +347,20 @@ private:
         std::vector<TypeId> args;
     };
     std::optional<TraitInstantiation> instantiateTraitRef(const ScopePtr& scope, const AstClassTraitRef& ref);
+    // Luwu Traits (rfcs/classes/traits.md): the type of `self` in each trait method generic over `Self` (`Self & Trait`).
+    // `class.of(self)(...)` there makes another object of self's class, so it has that type too (checkPack).
+    DenseHashSet<TypeId> traitSelfTypes{nullptr};
+
+    // Luwu Traits (rfcs/classes/traits.md): set while checking the signature of an override, whose expected type is the
+    // function it overrides. Its unannotated `...` then takes that function's variadic type too, which upstream leaves
+    // `any` for a lambda's.
+    bool checkingOverride = false;
+
+    // Luwu Traits (rfcs/classes/traits.md): each trait's function signatures in this module, keyed by the trait's object type,
+    // as checkFunctionSignature made them. A function's member type is blocked until the solver generalizes it, so an
+    // override in this module reads the function it overrides from here.
+    DenseHashMap<TypeId, std::map<Name, TypeId>> traitFunctionSignatures{nullptr};
+
     // Luwu Traits (rfcs/classes/traits.md): records the template of a trait field naming `Self` (TraitInfo::selfFieldTemplates)
     void resolveSelfFieldTemplate(const ScopePtr& traitScope, ClassDeclRecord* trait, const AstClassProperty& field);
     // Luwu Traits (rfcs/classes/traits.md): `trait` instantiated with `args`, for a trait implied through `needs`.
@@ -491,6 +505,10 @@ private:
         // The scope that encompasses the function's body. Is a child scope of
         // signatureScope, if present.
         ScopePtr bodyScope;
+        // Luwu Traits (rfcs/classes/traits.md): for a trait method generic over `Self`, that generic and the type of
+        // `self` (`Self & Trait`)
+        TypeId traitSelf = nullptr;
+        TypeId traitSelfType = nullptr;
     };
 
     FunctionSignature checkFunctionSignature(

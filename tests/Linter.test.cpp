@@ -4520,15 +4520,15 @@ end
         if (warning.code == LintWarning::Code_ReturnSelf)
             found.push_back(warning);
 
-    REQUIRE_EQ(found.size(), 3);
-    CHECK_EQ(found[0].location.begin.line, 3);
-    CHECK_EQ(found[1].location.begin.line, 6);
-    CHECK_EQ(found[2].location.begin.line, 9);
+    // on the return type, which is what's wrong, not on `return self`; a method without one already returns `Self`
+    REQUIRE_EQ(found.size(), 2);
+    CHECK_EQ(found[0].location, Location{{2, 37}, {2, 44}});
+    CHECK_EQ(found[1].location, Location{{8, 32}, {8, 39}});
     CHECK_EQ(
         found[0].text,
         "Did you mean to return 'Self' here?\n\n"
         "Help (method returns trait instead of Self):\n"
-        "  - Returning 'Aliased' here loses 'self's class and any other traits on it\n"
+        "  - Returning 'Aliased' here loses self's class and any other traits on it\n"
         "  - Callers rely on knowing self's class to pass into other functions\n"
         "  - Return 'Self' here so the type checker knows to use the class type instead of the trait type"
     );

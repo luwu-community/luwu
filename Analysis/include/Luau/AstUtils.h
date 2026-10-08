@@ -37,4 +37,18 @@ void findUniqueTypes(
     NotNull<const DenseHashMap<const AstExpr*, TypeId>> astTypes
 );
 
+// Luwu Traits (rfcs/classes/traits.md): the `self` of a method, written `function T:m()` or `function m(self)`
+AstLocal* methodSelf(AstExprFunction* fn);
+
+// Luwu Traits (rfcs/classes/traits.md): whether `fn`'s own `return`s (not those of functions nested in it) give back `self`,
+// or a new object of self's class (`class.of(self)(...)`)
+bool returnsSelf(AstExprFunction* fn, AstLocal* self);
+
+// Luwu Traits (rfcs/classes/traits.md): whether every one of `fn`'s own `return`s gives back `self` or a new object of
+// self's class, and its body ends in one (so it never returns nothing)
+bool returnsOnlySelf(AstExprFunction* fn, AstLocal* self);
+
+// Luwu Traits (rfcs/classes/traits.md): `class.of(self)` called, the `self` it is the class of
+AstLocal* newOfClassOf(AstExprCall* call);
+
 } // namespace Luau

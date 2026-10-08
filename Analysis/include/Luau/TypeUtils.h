@@ -515,4 +515,29 @@ TypeId withoutFirstParameter(TypeArena& arena, TypeId fnTy);
  */
 bool containsErrorType(TypeId ty);
 
+// Luwu (helpful subtyping errors): gives a member a value for the lifetime of the guard and restores the one it
+// had on every exit, including a `TimeLimitError` or `UserCancelError` thrown through it.
+template<typename T>
+struct ScopedMemberValue
+{
+    ScopedMemberValue(T& target, T value)
+        : member(target)
+        , previous(std::move(target))
+    {
+        member = std::move(value);
+    }
+
+    ~ScopedMemberValue()
+    {
+        member = std::move(previous);
+    }
+
+    ScopedMemberValue(const ScopedMemberValue&) = delete;
+    ScopedMemberValue& operator=(const ScopedMemberValue&) = delete;
+
+private:
+    T& member;
+    T previous;
+};
+
 } // namespace Luau

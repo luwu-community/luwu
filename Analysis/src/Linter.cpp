@@ -2,6 +2,7 @@
 #include "Luau/Linter.h"
 
 #include "Luau/AstQuery.h"
+#include "Luau/AstUtils.h"
 #include "Luau/LinterConfig.h"
 #include "Luau/Module.h"
 #include "Luau/PrettyPrinter.h"
@@ -6911,7 +6912,8 @@ private:
 
 // Luwu Traits (rfcs/classes/traits.md): a trait method returning `self`, or a new object of self's class
 // (`class.of(self)(...)`), with the trait as its return type. That type forgets self's class and its other traits;
-// `Self` keeps them.
+// `Self` keeps them. Returning `self` is right; the return type is what to fix, so that is where it is reported. With
+// the return type left out, a method returning `self` already returns `Self`.
 class LintReturnSelf : AstVisitor
 {
 public:
@@ -6926,62 +6928,22 @@ public:
 private:
     LintContext* context;
 
-    // The `return`s of one function, not of the functions nested in it, that give back `self` or a new object of its class
-    struct SelfReturns : AstVisitor
+    // The return type annotation of a method that says it returns the trait
+    static std::optional<Location> traitReturnType(const AstClassMethod& method, AstName trait)
     {
-        AstLocal* self = nullptr;
-        std::vector<AstExpr*> found;
-
-        bool isSelf(AstExpr* expr) const
-        {
-            AstExprLocal* local = expr->as<AstExprLocal>();
-            return local && local->local == self;
-        }
-
-        // `class.of(self)(...)`
-        bool isNewOfSelfsClass(AstExpr* expr) const
-        {
-            AstExprCall* construct = expr->as<AstExprCall>();
-            AstExprCall* classOf = construct ? construct->func->as<AstExprCall>() : nullptr;
-            AstExprIndexName* of = classOf ? classOf->func->as<AstExprIndexName>() : nullptr;
-            AstExprGlobal* classLib = of ? of->expr->as<AstExprGlobal>() : nullptr;
-
-            bool namesClassOf = classLib && classLib->name == "class" && of->index == "of";
-            return namesClassOf && classOf->args.size == 1 && isSelf(classOf->args.data[0]);
-        }
-
-        bool visit(AstExprFunction* fn) override
-        {
-            return false;
-        }
-
-        bool visit(AstStatReturn* ret) override
-        {
-            if (ret->list.size == 1)
-            {
-                AstExpr* value = ret->list.data[0];
-                while (AstExprGroup* group = value->as<AstExprGroup>())
-                    value = group->expr;
-
-                if (isSelf(value) || isNewOfSelfsClass(value))
-                    found.push_back(ret->list.data[0]);
-            }
-            return true;
-        }
-    };
-
-    // Whether a method's return type is the trait: written as the trait's name, or left out (then inferred as the trait)
-    static bool returnsTrait(AstExprFunction* fn, AstName trait)
-    {
+        AstExprFunction* fn = method.function;
         if (!fn->returnAnnotation)
-            return true;
+            return std::nullopt;
 
         AstTypePackExplicit* pack = fn->returnAnnotation->as<AstTypePackExplicit>();
         if (!pack || pack->typeList.types.size != 1 || pack->typeList.tailType)
-            return false;
+            return std::nullopt;
 
         AstTypeReference* ref = pack->typeList.types.data[0]->as<AstTypeReference>();
-        return ref && !ref->prefix && ref->name == trait;
+        if (!ref || ref->prefix || ref->name != trait)
+            return std::nullopt;
+
+        return ref->location;
     }
 
     bool visit(AstStatClass* cls) override
@@ -6996,24 +6958,15 @@ private:
             if (!fn || method->expectLocation)
                 continue;
 
-            AstLocal* self = fn->self;
-            if (!self && fn->args.size > 0 && fn->args.data[0]->name == "self")
-                self = fn->args.data[0];
-            if (!self || !returnsTrait(fn, cls->name->name))
-                continue;
-
-            SelfReturns returns;
-            returns.self = self;
-            fn->body->visit(&returns);
-
-            for (AstExpr* value : returns.found)
+            std::optional<Location> returnType = traitReturnType(*method, cls->name->name);
+            if (returnType && returnsSelf(fn, methodSelf(fn)))
                 emitWarning(
                     *context,
                     LintWarning::Code_ReturnSelf,
-                    value->location,
+                    *returnType,
                     "Did you mean to return 'Self' here?\n\n"
                     "Help (method returns trait instead of Self):\n"
-                    "  - Returning '%s' here loses 'self's class and any other traits on it\n"
+                    "  - Returning '%s' here loses self's class and any other traits on it\n"
                     "  - Callers rely on knowing self's class to pass into other functions\n"
                     "  - Return 'Self' here so the type checker knows to use the class type instead of the trait type",
                     cls->name->name.value

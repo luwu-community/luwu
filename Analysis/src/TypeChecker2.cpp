@@ -67,31 +67,6 @@ LUAU_FASTFLAG(LuwuDefaultArguments)
 namespace Luau
 {
 
-// Luwu (helpful subtyping errors): gives a member a value for the lifetime of the guard and restores the one it
-// had on every exit, including a `TimeLimitError` or `UserCancelError` thrown through it.
-template<typename T>
-struct ScopedMemberValue
-{
-    ScopedMemberValue(T& target, T value)
-        : member(target)
-        , previous(std::move(target))
-    {
-        member = std::move(value);
-    }
-
-    ~ScopedMemberValue()
-    {
-        member = std::move(previous);
-    }
-
-    ScopedMemberValue(const ScopedMemberValue&) = delete;
-    ScopedMemberValue& operator=(const ScopedMemberValue&) = delete;
-
-private:
-    T& member;
-    T previous;
-};
-
 struct TypeChecker2::DeclarationIndex
 {
     // Keyed by where a function starts; its `FunctionDefinition::definitionLocation` is checked in full on lookup.
@@ -5062,6 +5037,13 @@ static TypePath::Path narrationPath(const TypePath::Path& path, std::optional<Ty
     return TypePath::Path{std::move(result)};
 }
 
+// Luwu Traits (rfcs/classes/traits.md): why `given` doesn't fit a trait function's `Self`
+static std::string traitSelfMismatchReason(const std::string& given)
+{
+    return "`Self` is the class this is called on, and a `" + given +
+           "` may be a different class, so this has to be `Self` too: `self`, or `class.of(self)(...)` for a new object of its class";
+}
+
 template<typename TID>
 Reasonings TypeChecker2::explainReasonings_(TID subTy, TID superTy, Location location, const SubtypingResult& r)
 {
@@ -5141,9 +5123,16 @@ Reasonings TypeChecker2::explainReasonings_(TID subTy, TID superTy, Location loc
             }
         }
 
+        // Luwu Traits (rfcs/classes/traits.md): `Self` is the class of whatever the trait function is called on, which a
+        // value of the trait type (or any other class) may not be. Saying so beats "`X` is not a subtype of `Self`".
+        const GenericType* superGeneric = superLeafTy ? get<GenericType>(follow(*superLeafTy)) : nullptr;
+        const bool expectsTraitSelf = !optionalSubLeaf && superGeneric && superGeneric->traitSelf;
+
         std::stringstream baseReasonBuilder;
         if (optionalSubLeaf)
             baseReasonBuilder << "`" << subLeafAsString << "` could be `nil`";
+        else if (expectsTraitSelf)
+            baseReasonBuilder << traitSelfMismatchReason(subLeafAsString);
         else
             baseReasonBuilder << "`" << subLeafAsString << "` is not " << relation << " `" << superLeafAsString << "`";
         std::string baseReason = baseReasonBuilder.str();
@@ -5155,6 +5144,11 @@ Reasonings TypeChecker2::explainReasonings_(TID subTy, TID superTy, Location loc
         std::string superLeafAndSubNot = optionalSubLeaf
                                              ? ("`" + superLeafAsString + "`, and `" + subLeafAsString + "` could be `nil`")
                                              : ("`" + superLeafAsString + "`, and `" + subLeafAsString + "` is not " + relation + " it");
+        if (expectsTraitSelf)
+        {
+            subLeafNotSuper = "`" + subLeafAsString + "`, which may be a different class than `Self`";
+            superLeafAndSubNot = "`Self`, and `" + subLeafAsString + "` may be a different class";
+        }
 
         std::stringstream reason;
 
