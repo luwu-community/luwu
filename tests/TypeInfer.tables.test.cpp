@@ -20,6 +20,7 @@ using namespace Luau;
 
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuTableFunctionFields)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuauTruthyFalsy)
@@ -490,6 +491,32 @@ TEST_CASE_FIXTURE(Fixture, "table_param_width_subtyping_1")
     )");
 
     LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "table_function_fields_type_like_assigned_functions")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuTableFunctionFields, true},
+        {FFlag::DebugLuauForceOldSolver, false},
+    };
+
+    CheckResult result = check(R"(
+        local t = {
+            count = 0,
+            function add(self, n: number): number
+                return n + 1
+            end,
+            function name(): string return "t" end,
+        }
+        local a = t:add(1)
+        local b = t.name()
+        local c: number = t.name()
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<TypeMismatch>(result.errors[0]));
+    CHECK_EQ("number", toString(requireType("a")));
+    CHECK_EQ("string", toString(requireType("b")));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "table_param_width_subtyping_2")

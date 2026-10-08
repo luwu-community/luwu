@@ -734,6 +734,28 @@ struct Printer
 
                 visualizeAttributesOf(item.attributes, nullptr);
 
+                // Luwu: `function name() end`, written as such rather than `name = function() end`
+                if (AstExprFunction* fn = item.value->as<AstExprFunction>(); cstItem && cstItem->namedFunction && fn)
+                {
+                    for (const auto& attribute : fn->attributes)
+                        visualizeAttribute(*attribute);
+
+                    if (const auto cstNode = lookupCstNode<CstExprFunction>(fn); cstNode && cstNode->functionKeywordPosition.hasValue())
+                        advance(cstNode->functionKeywordPosition);
+                    writer.keyword("function");
+
+                    const auto& name = item.key->as<AstExprConstantString>()->value;
+                    advance(item.key->location.begin);
+                    writer.identifier(std::string_view(name.data, name.size));
+
+                    visualizeFunctionBody(*fn);
+
+                    if (cstItem->separator != CstExprTable::Separator::Missing)
+                        maybeAdvanceAndWrite(cstItem->separatorPosition, cstItem->separator == CstExprTable::Separator::Comma ? "," : ";", true);
+                    cstItem++;
+                    continue;
+                }
+
                 switch (item.kind)
                 {
                 case AstExprTable::Item::Kind::List:

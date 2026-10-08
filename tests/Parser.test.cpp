@@ -27,6 +27,7 @@ LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuwuIfLocal)
 LUAU_FASTFLAG(DebugLuwuDoExpr)
 LUAU_FASTFLAG(LuwuTableComprehensions)
+LUAU_FASTFLAG(LuwuTableFunctionFields)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
@@ -8626,6 +8627,51 @@ TEST_CASE_FIXTURE(Fixture, "table_comprehension_needs_its_flag")
 
     matchParseError(
         "local a = { for _, v in xs give v }", "Table comprehensions are a Luwu feature; enable the 'LuwuTableComprehensions' fast flag to use them"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "table_function_fields")
+{
+    ScopedFastFlag tableFunctions{FFlag::LuwuTableFunctionFields, true};
+
+    AstStatBlock* block = parse(R"(
+        local t = {
+            function foo(a: number): number return a end,
+            function() end;
+            bar = 1,
+        }
+    )");
+
+    REQUIRE_EQ(block->body.size, 1);
+    AstExprTable* table = block->body.data[0]->as<AstStatLocal>()->values.data[0]->as<AstExprTable>();
+    REQUIRE(table);
+    REQUIRE_EQ(table->items.size, 3);
+
+    // `function foo() end` is `foo = function() end`, named after its key
+    const AstExprTable::Item& foo = table->items.data[0];
+    CHECK(foo.kind == AstExprTable::Item::Kind::Record);
+    REQUIRE(foo.key->is<AstExprConstantString>());
+    CHECK_EQ(std::string(foo.key->as<AstExprConstantString>()->value.data, 3), "foo");
+    AstExprFunction* fn = foo.value->as<AstExprFunction>();
+    REQUIRE(fn);
+    CHECK_EQ(std::string(fn->debugname.value), "foo");
+    CHECK_EQ(fn->args.size, 1);
+    CHECK(!fn->self);
+
+    // an anonymous function is still a list item
+    CHECK(table->items.data[1].kind == AstExprTable::Item::Kind::List);
+    CHECK(table->items.data[1].value->is<AstExprFunction>());
+
+    matchParseError("local t = {\n    function a() end\n    function b() end\n}", "Expected ',' after table constructor element");
+}
+
+TEST_CASE_FIXTURE(Fixture, "table_function_fields_need_their_flag")
+{
+    ScopedFastFlag tableFunctions{FFlag::LuwuTableFunctionFields, false};
+
+    matchParseError(
+        "local t = { function foo() end }",
+        "Named functions in table literals are a Luwu feature; enable the 'LuwuTableFunctionFields' fast flag to use them"
     );
 }
 

@@ -43,6 +43,8 @@ LUAU_FASTFLAGVARIABLE(LuwuIfLocal)
 // Luwu Do Expressions (rfcs/do-expressions.md): `do ... give exp` expressions. Experimental.
 LUAU_FASTFLAGVARIABLE(DebugLuwuDoExpr)
 LUAU_FASTFLAG(LuwuTableComprehensions)
+// Luwu: `{ function foo() end }` in a table literal, meaning `{ foo = function() end }`.
+LUAU_FASTFLAGVARIABLE(LuwuTableFunctionFields)
 // Luwu Declare Statements (rfcs/declare-statements.md): `declare` in ordinary source, where upstream only accepts it
 // in definition files. Still in progress.
 LUAU_FASTFLAGVARIABLE(LuwuDeclareStatements)
@@ -7210,6 +7212,53 @@ AstExpr* Parser::parseTableConstructor()
                 );
             }
         }
+        else if (lexer.current().type == Lexeme::ReservedFunction && lexer.lookahead().type == Lexeme::Name)
+        {
+            // Luwu: `function foo() end` is `foo = function() end`, the way `function t.foo() end` is a statement
+            // assigning `t.foo`. An anonymous function (`function() end`) stays a list item.
+            Lexeme matchFunction = lexer.current();
+            nextLexeme();
+
+            Name name = parseName("function name");
+
+            if (!FFlag::LuwuTableFunctionFields)
+                report(
+                    Location(matchFunction.location, name.location),
+                    "Named functions in table literals are a Luwu feature; enable the 'LuwuTableFunctionFields' fast flag to use them"
+                );
+
+            AstArray<AstAttr*> functionAttributes{nullptr, 0};
+            TempVector<CstAttrList*>* functionCstAttrLists = nullptr;
+            if (pendingFunctionAttributes)
+            {
+                functionAttributes = pendingFunctionAttributes->attributes;
+                functionCstAttrLists = pendingFunctionAttributes->cstAttrLists;
+                pendingFunctionAttributes.reset();
+            }
+
+            AstArray<char> nameString;
+            nameString.data = const_cast<char*>(name.name.value);
+            nameString.size = strlen(name.name.value);
+
+            AstExpr* key = allocator.alloc<AstExprConstantString>(name.location, nameString, AstExprConstantString::QuoteStyle::Unquoted);
+            AstExprFunction* value =
+                parseFunctionBody(false, matchFunction, name.name, nullptr, functionAttributes, false, functionCstAttrLists).first;
+
+            items.push_back({AstExprTable::Item::Kind::Record, key, value, attributes});
+            if (options.storeCstData)
+            {
+                CstExprTable::Separator separator = tableSeparator();
+                CstExprTable::Item cstItem{
+                    Position::missing(),
+                    Position::missing(),
+                    Position::missing(),
+                    separator,
+                    separator == CstExprTable::Separator::Missing ? Position::missing() : lexer.current().location.begin
+                };
+                cstItem.namedFunction = true;
+                cstItems.push_back(cstItem);
+            }
+        }
         else
         {
             AstExpr* expr = parseExpr();
@@ -7233,7 +7282,8 @@ AstExpr* Parser::parseTableConstructor()
         {
             nextLexeme();
         }
-        else if ((lexer.current().type == '[' || lexer.current().type == Lexeme::Name) &&
+        else if ((lexer.current().type == '[' || lexer.current().type == Lexeme::Name ||
+                  (lexer.current().type == Lexeme::ReservedFunction && lexer.lookahead().type == Lexeme::Name)) &&
                  (FFlag::LuauTableEntriesDontNeedToMatchIndent ? true : lexer.current().location.begin.column == lastElementIndent_DEPRECATED))
         {
             report(lexer.current().location, "Expected ',' after table constructor element");
