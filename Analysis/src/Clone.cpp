@@ -387,6 +387,11 @@ private:
                 for (TypeId& argument : arguments)
                     argument = shallowClone(argument);
             }
+
+            if (t->traitInfo->selfMarker)
+                t->traitInfo->selfMarker = shallowClone(*t->traitInfo->selfMarker);
+            for (auto& [_, field] : t->traitInfo->selfFieldTemplates)
+                field = shallowClone(field);
         }
 
         for (TypeId& trait : t->traitIntersection)
