@@ -87,6 +87,7 @@ LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuIfLocal)
 LUAU_FASTFLAG(DebugLuwuDoExpr)
 LUAU_FASTFLAG(LuwuTableComprehensions)
+LUAU_FASTFLAG(LuwuTableFunctionFields)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 LUAU_FASTFLAG(LuauExportValueSyntax)
@@ -6537,6 +6538,13 @@ TEST_CASE("TableComprehensions")
     };
 
     runConformance("table_comprehensions.luwu");
+}
+
+TEST_CASE("TableFunctionFields")
+{
+    ScopedFastFlag tableFunctions{FFlag::LuwuTableFunctionFields, true};
+
+    runConformance("table_function_fields.luwu");
 }
 
 TEST_CASE("DoExpressionsCursed")

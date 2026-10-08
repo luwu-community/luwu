@@ -14,6 +14,7 @@ LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuIfLocal)
 LUAU_FASTFLAG(DebugLuwuDoExpr)
 LUAU_FASTFLAG(LuwuTableComprehensions)
+LUAU_FASTFLAG(LuwuTableFunctionFields)
 LUAU_FASTFLAG(LuauTableEntriesDontNeedToMatchIndent)
 LUAU_FASTFLAG(LuauCstAttr)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
@@ -2395,6 +2396,22 @@ local c = {
     )";
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
     CHECK_EQ(code, prettyPrint(code).code);
+}
+
+TEST_CASE("prettyPrint_table_function_fields")
+{
+    ScopedFastFlag tableFunctions{FFlag::LuwuTableFunctionFields, true};
+
+    std::string code = R"(
+local t = {
+    function   foo(a: number) : number
+        return a
+    end,
+    function bar  () end ;
+    baz = function() end
+}
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
 }
 
 TEST_CASE("prettyPrint_class_attributes_beyond_methods")
