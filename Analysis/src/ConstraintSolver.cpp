@@ -2373,6 +2373,15 @@ bool ConstraintSolver::tryDispatch(const FunctionCheckConstraint& c, NotNull<con
 
         AstExpr* expr = unwrapGroup(c.callSite->args.data[i]);
 
+        // Luwu literal types: an argument for a `literal<B>` parameter keeps its literal type, which also solves a generic
+        // `literal<S>` to it
+        if (findLiteralParameter(*ftv, i + expectedArgOffset))
+        {
+            TypeId argTy = follow(argPackHead[i + typeOffset]);
+            if (std::optional<TypeId> literal = undecidedLiteral(argTy))
+                bind(constraint, argTy, *literal);
+        }
+
         PushTypeResult result = pushTypeInto(
             c.astTypes,
             c.astExpectedTypes,

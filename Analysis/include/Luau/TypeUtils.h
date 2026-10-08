@@ -515,6 +515,16 @@ TypeId withoutFirstParameter(TypeArena& arena, TypeId fnTy);
  */
 bool containsErrorType(TypeId ty);
 
+// Luwu literal types: whether `ref` is `literal<B>`, i.e. not a type the code itself named `literal`
+bool isLiteralTypeReference(const Scope& scope, const class AstTypeReference* ref);
+
+// Luwu literal types: the singleton a literal's still-undecided type (`"a"` until it widens to `string`) would keep, for
+// binding it there so it doesn't widen
+std::optional<TypeId> undecidedLiteral(TypeId ty);
+
+// Luwu literal types: the literal parameter an argument at `paramIndex` (counting `self`) is passed to, if any
+const FunctionType::LiteralParameter* findLiteralParameter(const FunctionType& fty, size_t paramIndex);
+
 // Luwu (helpful subtyping errors): gives a member a value for the lifetime of the guard and restores the one it
 // had on every exit, including a `TimeLimitError` or `UserCancelError` thrown through it.
 template<typename T>

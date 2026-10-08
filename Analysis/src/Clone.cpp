@@ -332,6 +332,18 @@ private:
         // Luwu user-defined refinements
         if (t->truthyRefinement)
             t->truthyRefinement->type = shallowClone(t->truthyRefinement->type);
+
+        // Luwu literal types: the cloner maps each type once, so the placeholder inside the cloned validator is the
+        // cloned placeholder
+        for (FunctionType::LiteralParameter& literal : t->literalParameters)
+        {
+            literal.base = shallowClone(literal.base);
+            if (literal.validator)
+            {
+                literal.validator = shallowClone(literal.validator);
+                literal.placeholder = shallowClone(literal.placeholder);
+            }
+        }
     }
 
     void cloneChildren(TableType* t)

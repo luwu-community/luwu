@@ -116,6 +116,13 @@ struct TypeFunctionNeverType
 {
 };
 
+// Luwu: `types.error(message)`. Returning it from a type function reports `message` as a type error where the type function
+// is applied; it isn't a type, so it can't appear inside one.
+struct TypeFunctionErrorType
+{
+    std::string message;
+};
+
 struct TypeFunctionNegationType
 {
     TypeFunctionTypeId type;
@@ -260,7 +267,8 @@ using TypeFunctionTypeVariant = Luau::Variant<
     TypeFunctionFunctionType,
     TypeFunctionTableType,
     TypeFunctionExternType,
-    TypeFunctionGenericType>;
+    TypeFunctionGenericType,
+    TypeFunctionErrorType>;
 
 struct TypeFunctionType
 {

@@ -257,6 +257,13 @@ private:
     void visit(AstExprGlobal* expr);
     void visit(AstExprVarargs* expr);
     void visitCall(AstExprCall* call);
+    // Luwu literal types: reports an argument for a `literal<B>` parameter that isn't a literal, and runs a `V<literal<B>>`
+    // parameter's validator on its argument
+    void checkLiteralParameters(AstExprCall* call, const FunctionType* fty, size_t selfOffset, NotNull<Scope> scope);
+    // Luwu literal types: whether a local's annotation is `literal<B>`
+    bool isLiteralAnnotation(AstType* annotation);
+    // Luwu literal types: reports a value given for a `local x: literal<B>` that isn't a literal
+    void checkLiteralLocal(TypeId valueTy, TypeId base, Location location);
     void visit(AstExprCall* call);
     std::optional<TypeId> tryStripUnionFromNil(TypeId ty) const;
     TypeId stripFromNilAndReport(TypeId ty, const Location& location);

@@ -458,6 +458,8 @@ static std::string getTag(lua_State* L, TypeFunctionTypeId ty)
         return "extern";
     else if (get<TypeFunctionGenericType>(ty))
         return "generic";
+    else if (get<TypeFunctionErrorType>(ty))
+        return "error";
 
     LUAU_ASSERT(!"Unsupported type in getTag");
     luaL_error(L, "VM encountered unexpected type variant when determining tag");
@@ -477,6 +479,17 @@ static int createUnknown(lua_State* L)
 static int createNever(lua_State* L)
 {
     allocTypeUserData(L, TypeFunctionNeverType{});
+
+    return 1;
+}
+
+// Luwu: `types.error(message: string)`
+// Returned from a type function, reports `message` as a type error where the type function is applied
+static int createError(lua_State* L)
+{
+    size_t length = 0;
+    const char* message = luaL_checklstring(L, 1, &length);
+    allocTypeUserData(L, TypeFunctionErrorType{std::string(message, length)});
 
     return 1;
 }
@@ -1944,6 +1957,7 @@ void registerTypesLibrary(lua_State* L)
         {"newfunction", createFunction},
         {"copy", deepCopy},
         {"generic", createGeneric},
+        {"error", createError},
 
         {nullptr, nullptr}
     };
@@ -2371,6 +2385,13 @@ bool areEqual(AreEqualState& seen, const TypeFunctionType& lhs, const TypeFuncti
         return true;
 
     {
+        const TypeFunctionErrorType* le = get<TypeFunctionErrorType>(&lhs);
+        const TypeFunctionErrorType* re = get<TypeFunctionErrorType>(&rhs);
+        if (le && re)
+            return le->message == re->message;
+    }
+
+    {
         const TypeFunctionSingletonType* lf = get<TypeFunctionSingletonType>(&lhs);
         const TypeFunctionSingletonType* rf = get<TypeFunctionSingletonType>(&rhs);
         if (lf && rf)
@@ -2710,6 +2731,8 @@ private:
             target = ty; // Don't copy a class since they are immutable
         else if (auto g = get<TypeFunctionGenericType>(ty))
             target = typeFunctionRuntime->typeArena.allocate(TypeFunctionGenericType{g->isNamed, g->isPack, g->name});
+        else if (auto e = get<TypeFunctionErrorType>(ty))
+            target = typeFunctionRuntime->typeArena.allocate(TypeFunctionErrorType{e->message});
         else
             LUAU_ASSERT(!"Unknown type");
 
@@ -2765,6 +2788,8 @@ private:
             cloneChildren(c1, c2);
         else if (auto [g1, g2] = std::tuple{getMutable<TypeFunctionGenericType>(ty), getMutable<TypeFunctionGenericType>(tfti)}; g1 && g2)
             cloneChildren(g1, g2);
+        else if (get<TypeFunctionErrorType>(ty) && get<TypeFunctionErrorType>(tfti))
+            return; // the message is copied with the type
         else
             LUAU_ASSERT(!"Unknown pair?"); // First and argument should always represent the same types
     }

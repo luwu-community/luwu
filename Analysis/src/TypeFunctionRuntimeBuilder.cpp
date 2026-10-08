@@ -807,6 +807,12 @@ private:
         {
             target = c->externTy;
         }
+        else if (get<TypeFunctionErrorType>(ty))
+        {
+            // Luwu: only a type function's own result can be `types.error` (UserDefinedTypeFunction.cpp reports it)
+            pushRuntimeError("types.error(...) can only be returned from a type function, not used inside another type");
+            return nullptr;
+        }
         else if (auto g = get<TypeFunctionGenericType>(ty))
         {
             if (g->isPack)

@@ -661,6 +661,7 @@ declare types: {
     integer: type,
 
     singleton: @checked (arg: string | boolean | nil) -> type,
+    error: @checked (message: string) -> type,
     optional: @checked (arg: type) -> type,
     generic: @checked (name: string, ispack: boolean?) -> type,
     negationof: @checked (arg: type) -> type,
@@ -686,6 +687,7 @@ declare types: {
     none: type,
 
     singleton: @checked (arg: string | boolean | nil) -> type,
+    error: @checked (message: string) -> type,
     optional: @checked (arg: type) -> type,
     generic: @checked (name: string, ispack: boolean?) -> type,
     negationof: @checked (arg: type) -> type,

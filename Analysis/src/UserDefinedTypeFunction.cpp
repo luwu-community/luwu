@@ -434,6 +434,10 @@ TypeFunctionReductionResult<TypeId> userDefinedTypeFunction(
 
     TypeFunctionTypeId retTypeFunctionTypeId = getTypeUserData(L, 1);
 
+    // Luwu: `return types.error(message)` reports exactly `message`
+    if (const TypeFunctionErrorType* error = get<TypeFunctionErrorType>(retTypeFunctionTypeId))
+        return {std::nullopt, Reduction::Erroneous, {}, {}, error->message, ctx->typeFunctionRuntime->messages};
+
     if (FFlag::LuauTypeFunctionStructuredErrors)
     {
         // No errors should be present here since we should've returned already if any were raised during serialization.

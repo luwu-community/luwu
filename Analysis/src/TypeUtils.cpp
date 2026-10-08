@@ -14,6 +14,8 @@
 
 #include <algorithm>
 
+LUAU_FASTFLAG(LuwuLiteralTypes)
+
 namespace Luau
 {
 
@@ -1338,6 +1340,35 @@ bool containsErrorType(TypeId ty)
     ErrorTypeFinder finder;
     finder.traverse(ty);
     return finder.found;
+}
+
+bool isLiteralTypeReference(const Scope& scope, const AstTypeReference* ref)
+{
+    if (!FFlag::LuwuLiteralTypes || ref->prefix.has_value() || ref->name != "literal" || !ref->hasParameterList)
+        return false;
+
+    return !scope.lookupType("literal");
+}
+
+const FunctionType::LiteralParameter* findLiteralParameter(const FunctionType& fty, size_t paramIndex)
+{
+    for (const FunctionType::LiteralParameter& literal : fty.literalParameters)
+    {
+        bool covers = literal.variadic ? paramIndex >= literal.argIndex : paramIndex == literal.argIndex;
+        if (covers)
+            return &literal;
+    }
+
+    return nullptr;
+}
+
+std::optional<TypeId> undecidedLiteral(TypeId ty)
+{
+    const FreeType* ft = get<FreeType>(follow(ty));
+    if (!ft || !ft->primitiveType || !get<SingletonType>(follow(ft->lowerBound)))
+        return std::nullopt;
+
+    return ft->lowerBound;
 }
 
 } // namespace Luau

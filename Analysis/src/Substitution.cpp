@@ -102,6 +102,8 @@ static TypeId shallowClone(TypeId ty, TypeArena& dest, const TxnLog* log, bool t
             clone.nodiscardReason = a.nodiscardReason;
             // Luwu user-defined refinements
             clone.truthyRefinement = a.truthyRefinement;
+            // Luwu literal types
+            clone.literalParameters = a.literalParameters;
             clone.name = a.name;
             clone.syntheticName = a.syntheticName;
             return dest.addType(std::move(clone));
@@ -892,6 +894,15 @@ void Substitution::replaceChildren(TypeId ty)
         // Luwu user-defined refinements: a generic target is instantiated with the call
         if (ftv->truthyRefinement)
             ftv->truthyRefinement->type = replace(ftv->truthyRefinement->type);
+
+        // Luwu literal types: a base or validator can name the function's or its class's generics (`literal<S>`,
+        // `V<literal<string>, T>`). The placeholder is in no substitution's map, so it comes through unchanged.
+        for (FunctionType::LiteralParameter& literal : ftv->literalParameters)
+        {
+            literal.base = replace(literal.base);
+            if (literal.validator)
+                literal.validator = replace(literal.validator);
+        }
     }
     else if (TableType* ttv = getMutable<TableType>(ty))
     {
