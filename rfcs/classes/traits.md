@@ -125,6 +125,7 @@ Specifically:
   - The trait primary parameters list follows the same syntax as the class primary constructor parameters list.
 - The `needs` keyword may follow the optional parameters list, followed by a comma separated list of the traits that this trait requires.
   Trailing commas are not permitted.
+  - The list may be surrounded by parentheses (`needs (A, B)`), so a long list can be written one trait per line; the same goes for a class's `implements` list.
 - After the trait header starts the trait body.
 - The trait body can more-or-less contain the same elements the class body can contain, with some exceptions:
   - Fields and functions without defaults are not allowed.
@@ -309,6 +310,8 @@ The standard library function `class.implements` participates in refinement.
 
 The magic type function `class<Trait>` refers to the class value of any class that implements `Trait`. This is useful for factory functions
 (and `__create`) that live on traits and need to create objects of a concrete class.
+
+In a trait or class, the type `Self` is the class of the object a function is called on (in a class, that class), so a trait function returning `self` can be annotated `: Self` and keep the caller's class.
 
 ### Editor support
 
