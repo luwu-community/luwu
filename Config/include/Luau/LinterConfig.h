@@ -95,6 +95,7 @@ struct LintWarning
         Code_AnyCast = 60,                 // `x :: any` without a comment saying why
         Code_AnyAnnotation = 61,           // `x: any` on a parameter, local or property, which `unknown` would type safely
         Code_LuwuOnlyApi = 62,             // Luwu: a Luwu-only library function (`table.drop`) used in a `.luau` or `.lua` file
+        Code_ReturnSelf = 63,              // Luwu Traits: a trait method returning `self` typed as the trait, not `Self`
 
         Code__Count
     };
@@ -204,6 +205,7 @@ inline constexpr const char* kWarningNames[] = {
     "AnyCast",
     "AnyAnnotation",
     "LuwuOnlyApi",
+    "ReturnSelf",
 };
 // clang-format on
 

@@ -347,6 +347,8 @@ private:
         std::vector<TypeId> args;
     };
     std::optional<TraitInstantiation> instantiateTraitRef(const ScopePtr& scope, const AstClassTraitRef& ref);
+    // Luwu Traits (rfcs/classes/traits.md): records the template of a trait field naming `Self` (TraitInfo::selfFieldTemplates)
+    void resolveSelfFieldTemplate(const ScopePtr& traitScope, ClassDeclRecord* trait, const AstClassProperty& field);
     // Luwu Traits (rfcs/classes/traits.md): `trait` instantiated with `args`, for a trait implied through `needs`.
     // `copiedReferences` are alias references substituting the arguments copied, which this expands with the rest.
     TraitInstantiation instantiateImpliedTrait(
