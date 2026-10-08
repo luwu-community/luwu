@@ -121,4 +121,96 @@ void findUniqueTypes(
     findUniqueTypes(uniqueTypes, exprs.begin(), exprs.end(), astTypes);
 }
 
+AstLocal* methodSelf(AstExprFunction* fn)
+{
+    if (fn->self)
+        return fn->self;
+    if (fn->args.size > 0 && fn->args.data[0]->name == "self")
+        return fn->args.data[0];
+    return nullptr;
+}
+
+namespace
+{
+
+struct SelfReturns : AstVisitor
+{
+    AstLocal* self = nullptr;
+    size_t returns = 0;
+    size_t selfReturns = 0;
+
+    bool isSelf(AstExpr* expr) const
+    {
+        AstExprLocal* local = expr->as<AstExprLocal>();
+        return local && local->local == self;
+    }
+
+    // `class.of(self)(...)`
+    bool isNewOfSelfsClass(AstExpr* expr) const
+    {
+        AstExprCall* construct = expr->as<AstExprCall>();
+        return construct && newOfClassOf(construct) == self;
+    }
+
+    bool visit(AstExprFunction* fn) override
+    {
+        return false;
+    }
+
+    bool visit(AstStatReturn* ret) override
+    {
+        ++returns;
+        if (ret->list.size == 1 && isSelfValue(ret->list.data[0]))
+            ++selfReturns;
+        return true;
+    }
+
+    bool isSelfValue(AstExpr* value) const
+    {
+        while (AstExprGroup* group = value->as<AstExprGroup>())
+            value = group->expr;
+        return isSelf(value) || isNewOfSelfsClass(value);
+    }
+};
+
+SelfReturns countSelfReturns(AstExprFunction* fn, AstLocal* self)
+{
+    SelfReturns returns;
+    returns.self = self;
+    if (self && fn->body)
+        fn->body->visit(&returns);
+    return returns;
+}
+
+} // namespace
+
+AstLocal* newOfClassOf(AstExprCall* call)
+{
+    AstExprCall* classOf = call->func->as<AstExprCall>();
+    AstExprIndexName* of = classOf ? classOf->func->as<AstExprIndexName>() : nullptr;
+    AstExprGlobal* classLib = of ? of->expr->as<AstExprGlobal>() : nullptr;
+
+    bool namesClassOf = classLib && classLib->name == "class" && of->index == "of";
+    if (!namesClassOf || classOf->args.size != 1)
+        return nullptr;
+
+    AstExprLocal* local = classOf->args.data[0]->as<AstExprLocal>();
+    return local ? local->local : nullptr;
+}
+
+bool returnsSelf(AstExprFunction* fn, AstLocal* self)
+{
+    return countSelfReturns(fn, self).selfReturns > 0;
+}
+
+bool returnsOnlySelf(AstExprFunction* fn, AstLocal* self)
+{
+    SelfReturns returns = countSelfReturns(fn, self);
+    if (returns.selfReturns == 0 || returns.selfReturns != returns.returns || fn->body->body.size == 0)
+        return false;
+
+    AstStatReturn* last = fn->body->body.data[fn->body->body.size - 1]->as<AstStatReturn>();
+    return last && last->list.size == 1 && returns.isSelfValue(last->list.data[0]);
+}
+
 } // namespace Luau
