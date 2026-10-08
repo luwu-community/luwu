@@ -392,6 +392,11 @@ private:
                 t->traitInfo->selfMarker = shallowClone(*t->traitInfo->selfMarker);
             for (auto& [_, field] : t->traitInfo->selfFieldTemplates)
                 field = shallowClone(field);
+            for (auto& [_, function] : t->traitInfo->selfFunctions)
+            {
+                function.generic = shallowClone(function.generic);
+                function.selfType = shallowClone(function.selfType);
+            }
         }
 
         for (TypeId& trait : t->traitIntersection)

@@ -127,6 +127,10 @@ struct GenericType
     bool explicitName = false;
 
     Polarity polarity = Polarity::Unknown;
+
+    // Luwu Traits (rfcs/classes/traits.md): the `Self` a trait function is generic over. Printed as `Self`, without the
+    // `<Self>` the function would otherwise list it in, and `Self & Trait` (its `self`) as just `Self`.
+    bool traitSelf = false;
 };
 
 // When an equality constraint is found, it is then "bound" to that type,
@@ -759,6 +763,14 @@ struct ExternType
         // each field that names `Self` with `selfMarker` in its place, which an implementing class replaces with itself.
         std::optional<TypeId> selfMarker;
         std::map<Name, TypeId> selfFieldTemplates;
+        // The trait's functions that are generic over `Self`: that generic and their `self`'s type (`Self & Trait`). An
+        // implementing class's copy has the class for both, so it isn't generic.
+        struct SelfFunction
+        {
+            TypeId generic;
+            TypeId selfType;
+        };
+        std::map<Name, SelfFunction> selfFunctions;
     };
     std::optional<TraitInfo> traitInfo;
 
