@@ -20,6 +20,7 @@ using namespace Luau;
 
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuTableFunctionFields)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAG(LuauTruthyFalsy)
 
@@ -490,6 +491,32 @@ TEST_CASE_FIXTURE(Fixture, "table_param_width_subtyping_1")
     )");
 
     LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "table_function_fields_type_like_assigned_functions")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuTableFunctionFields, true},
+        {FFlag::DebugLuauForceOldSolver, false},
+    };
+
+    CheckResult result = check(R"(
+        local t = {
+            count = 0,
+            function add(self, n: number): number
+                return n + 1
+            end,
+            function name(): string return "t" end,
+        }
+        local a = t:add(1)
+        local b = t.name()
+        local c: number = t.name()
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<TypeMismatch>(result.errors[0]));
+    CHECK_EQ("number", toString(requireType("a")));
+    CHECK_EQ("string", toString(requireType("b")));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "table_param_width_subtyping_2")
@@ -7803,127 +7830,6 @@ TEST_CASE_FIXTURE(Fixture, "variance_read_only_is_not_suggested_inside_function_
     CHECK(toString(explained.errors[0]).find("'read") == std::string::npos);
 }
 
-// Luwu: a union's members can't be told apart by a field some of them lack, since a table type is a shape a class
-// object or vector also fits; the help says how to declare it
-TEST_CASE_FIXTURE(BuiltinsFixture, "a_field_some_union_members_lack_says_how_to_tell_them_apart")
-{
-    DOES_NOT_PASS_OLD_SOLVER_GUARD();
-
-    CheckResult result = check(R"(
-        type Ok = { message: string }
-        type Err = { err: string }
-        local function get(): Ok | Err
-            return { message = "hi" }
-        end
-        local thing = get()
-        if thing.message then
-        end
-    )");
-
-    LUAU_REQUIRE_ERROR_COUNT(1, result);
-    CHECK_EQ(
-        "Key 'message' is missing from 'Err' in the type 'Err | Ok'\n\n"
-        "Help (telling variants apart):\n"
-        "  • Add 'message: nil' to 'Err' so that checking 'message' tells the variants apart",
-        toString(result.errors[0])
-    );
-}
-
-// Luwu: a library's types aren't the reader's to edit, so the help only says how to narrow to the members with the key
-TEST_CASE_FIXTURE(BuiltinsFixture, "a_field_some_members_of_another_modules_union_lack_says_how_to_narrow")
-{
-    DOES_NOT_PASS_OLD_SOLVER_GUARD();
-
-    fileResolver.source["game/library"] = R"(
-        export type Ok = { ok: true, out: string }
-        export type Err = { ok: false, err: string }
-        export type Found = { path: string }
-        export type Missing = { reason: string }
-        export type Flag = { is: "Flag", aliases: { string } }
-        export type Named = { is: "Named", aliases: { string } }
-        export type Positional = { is: "Positional" }
-        export type Arg = Flag | Named | Positional
-        return {}
-    )";
-
-    fileResolver.source["game/user"] = R"(
-        local library = require(game.library)
-        local function run(): library.Ok | library.Err
-            error("unused")
-        end
-        local function find(): library.Found | library.Missing
-            error("unused")
-        end
-        local function name(): string | { name: string }
-            error("unused")
-        end
-        local function arg(): library.Arg
-            error("unused")
-        end
-        local result = run()
-        local found = find()
-        local named = name()
-        local a = arg()
-        print(result.out, found.path, named.name, a.aliases)
-    )";
-
-    CheckResult result = getFrontend().check("game/user");
-    LUAU_REQUIRE_ERROR_COUNT(4, result);
-    CHECK_EQ(
-        "Key 'out' is missing from 'Err' in the type 'Err | Ok'\n\n"
-        "Help (telling variants apart):\n"
-        "  • Make sure this is the correct variant by checking 'result.ok' before reading 'out'",
-        toString(result.errors[0])
-    );
-    // nothing tells these apart, and the types aren't the reader's to change
-    CHECK_EQ(
-        "Key 'path' is missing from 'Missing' in the type 'Found | Missing'\n\n"
-        "Help (telling variants apart):\n"
-        "  • Narrow 'found' to a variant that has 'path' before reading it",
-        toString(result.errors[1])
-    );
-    CHECK_EQ(
-        "Key 'name' is missing from 'string' in the type 'string | { name: string }'\n\n"
-        "Help (telling variants apart):\n"
-        "  • Make sure this is the correct variant by checking 'type(named) == \"table\"' before reading 'name'",
-        toString(result.errors[2])
-    );
-    // a named union is counted rather than printed, and a string field is always truthy, so the check compares it
-    CHECK_EQ(
-        "Key 'aliases' is missing from 1 variant of the union 'Arg'\n\n"
-        "Help (telling variants apart):\n"
-        "  • Make sure this is the correct variant by checking 'a.is == \"Flag\" or a.is == \"Named\"' before reading 'aliases'",
-        toString(result.errors[3])
-    );
-}
-
-// Luwu: a result type with methods, `(Ok | Err) & { methods }`, is named by its alias, and a singleton field that tells
-// its variants apart is the check to make first
-TEST_CASE_FIXTURE(BuiltinsFixture, "a_field_some_members_of_an_intersected_union_lack_names_the_members")
-{
-    DOES_NOT_PASS_OLD_SOLVER_GUARD();
-
-    CheckResult result = check(R"(
-        type Ok = { ok: true, out: string }
-        type Err = { ok: false, err: string }
-        type Result = (Ok | Err) & { unwrap: (self: Result) -> string }
-        local function run(): Result
-            error("unused")
-        end
-        local result = run()
-        print(result.out)
-    )");
-
-    LUAU_REQUIRE_ERROR_COUNT(1, result);
-    CHECK_EQ(
-        "Key 'out' is missing from 1 variant of the union 'Result'\n\n"
-        "Help (telling variants apart):\n"
-        "  • Make sure this is the correct variant by checking 'result.ok' before reading 'out'\n"
-        "  • Or add 'out: nil' to 'Err' so that checking 'out' tells the variants apart",
-        toString(result.errors[0])
-    );
-}
-
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "table_without_indexer_as_array_names_what_it_is")
 {
@@ -8051,6 +7957,127 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "luau_only_class_classof_depends_on_the_file"
     CheckResult inLuwu = getFrontend().check("game/b");
     LUAU_REQUIRE_ERROR_COUNT(1, inLuwu);
     CHECK_EQ("'class.classof' is a Luau-only API and doesn't exist in Luwu. Did you mean 'class.of'?", toString(inLuwu.errors[0]));
+}
+
+// Luwu: a union's members can't be told apart by a field some of them lack, since a table type is a shape a class
+// object or vector also fits; the help says how to declare it
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_field_some_union_members_lack_says_how_to_tell_them_apart")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    CheckResult result = check(R"(
+        type Ok = { message: string }
+        type Err = { err: string }
+        local function get(): Ok | Err
+            return { message = "hi" }
+        end
+        local thing = get()
+        if thing.message then
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        "Key 'message' is missing from 'Err' in the type 'Err | Ok'\n\n"
+        "Help (telling variants apart):\n"
+        "  • Add 'message: nil' to 'Err' so that checking 'message' tells the variants apart",
+        toString(result.errors[0])
+    );
+}
+
+// Luwu: a library's types aren't the reader's to edit, so the help only says how to narrow to the members with the key
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_field_some_members_of_another_modules_union_lack_says_how_to_narrow")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    fileResolver.source["game/library"] = R"(
+        export type Ok = { ok: true, out: string }
+        export type Err = { ok: false, err: string }
+        export type Found = { path: string }
+        export type Missing = { reason: string }
+        export type Flag = { is: "Flag", aliases: { string } }
+        export type Named = { is: "Named", aliases: { string } }
+        export type Positional = { is: "Positional" }
+        export type Arg = Flag | Named | Positional
+        return {}
+    )";
+
+    fileResolver.source["game/user"] = R"(
+        local library = require(game.library)
+        local function run(): library.Ok | library.Err
+            error("unused")
+        end
+        local function find(): library.Found | library.Missing
+            error("unused")
+        end
+        local function name(): string | { name: string }
+            error("unused")
+        end
+        local function arg(): library.Arg
+            error("unused")
+        end
+        local result = run()
+        local found = find()
+        local named = name()
+        local a = arg()
+        print(result.out, found.path, named.name, a.aliases)
+    )";
+
+    CheckResult result = getFrontend().check("game/user");
+    LUAU_REQUIRE_ERROR_COUNT(4, result);
+    CHECK_EQ(
+        "Key 'out' is missing from 'Err' in the type 'Err | Ok'\n\n"
+        "Help (telling variants apart):\n"
+        "  • Make sure this is the correct variant by checking 'result.ok' before reading 'out'",
+        toString(result.errors[0])
+    );
+    // nothing tells these apart, and the types aren't the reader's to change
+    CHECK_EQ(
+        "Key 'path' is missing from 'Missing' in the type 'Found | Missing'\n\n"
+        "Help (telling variants apart):\n"
+        "  • Narrow 'found' to a variant that has 'path' before reading it",
+        toString(result.errors[1])
+    );
+    CHECK_EQ(
+        "Key 'name' is missing from 'string' in the type 'string | { name: string }'\n\n"
+        "Help (telling variants apart):\n"
+        "  • Make sure this is the correct variant by checking 'type(named) == \"table\"' before reading 'name'",
+        toString(result.errors[2])
+    );
+    // a named union is counted rather than printed, and a string field is always truthy, so the check compares it
+    CHECK_EQ(
+        "Key 'aliases' is missing from 1 variant of the union 'Arg'\n\n"
+        "Help (telling variants apart):\n"
+        "  • Make sure this is the correct variant by checking 'a.is == \"Flag\" or a.is == \"Named\"' before reading 'aliases'",
+        toString(result.errors[3])
+    );
+}
+
+// Luwu: a result type with methods, `(Ok | Err) & { methods }`, is named by its alias, and a singleton field that tells
+// its variants apart is the check to make first
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_field_some_members_of_an_intersected_union_lack_names_the_members")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    CheckResult result = check(R"(
+        type Ok = { ok: true, out: string }
+        type Err = { ok: false, err: string }
+        type Result = (Ok | Err) & { unwrap: (self: Result) -> string }
+        local function run(): Result
+            error("unused")
+        end
+        local result = run()
+        print(result.out)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        "Key 'out' is missing from 1 variant of the union 'Result'\n\n"
+        "Help (telling variants apart):\n"
+        "  • Make sure this is the correct variant by checking 'result.ok' before reading 'out'\n"
+        "  • Or add 'out: nil' to 'Err' so that checking 'out' tells the variants apart",
+        toString(result.errors[0])
+    );
 }
 
 TEST_SUITE_END();
