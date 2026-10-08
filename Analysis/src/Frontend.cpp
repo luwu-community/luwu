@@ -1247,6 +1247,8 @@ void Frontend::checkBuildQueueItem(BuildQueueItem& item)
         module->astTypes.clear();
         module->astTypePacks.clear();
         module->astExpectedTypes.clear();
+        module->literalParameterLocals.clear();
+        module->literalAssertions.clear();
         module->astOriginalCallTypes.clear();
         module->astOverloadResolvedTypes.clear();
         module->astForInNextTypes.clear();

@@ -3767,6 +3767,79 @@ Tagged(s)
     CHECK_EQ("string", toString(requireType("name")));
 }
 
+// Luwu literal types: a function's own literal parameter, passed on unchanged, was checked where that function was called
+TEST_CASE_FIXTURE(BuiltinsFixture, "literal_parameters_forward")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastFlag literalTypes{FFlag::LuwuLiteralTypes, true};
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+
+    CheckResult result = check(R"(
+type function NoDashes(alias: type): type
+    return alias
+end
+type function Short(alias: type): type
+    return alias
+end
+type Unprefixed = NoDashes<literal<string>>
+
+class Positional(public name: Unprefixed) end
+
+local function same(name: Unprefixed)
+    return Positional(name)
+end
+local function bare(name: literal<string>)
+    return Positional(name)
+end
+local function other(name: Short<literal<string>>)
+    return Positional(name)
+end
+local function plainString(name: string)
+    return Positional(name)
+end
+return { same = same, bare = bare, other = other, plainString = plainString }
+    )");
+
+    REQUIRE_EQ(result.errors.size(), 3);
+    CHECK_EQ(
+        toString(result.errors[0]),
+        "'name' isn't checked by 'NoDashes'; annotate 'name' with 'NoDashes' (or an alias of it), or pass a literal here"
+    );
+    CHECK_EQ(
+        toString(result.errors[1]),
+        "'name' was checked by 'Short', not 'NoDashes'; annotate 'name' with 'NoDashes' (or an alias of it), or pass a literal here"
+    );
+    CHECK_EQ(toString(result.errors[2]), "expected a literal of type string, but got string");
+}
+
+// Luwu literal types: a cast to a literal type passes as a literal, unchecked, like a cast to `any`
+TEST_CASE_FIXTURE(BuiltinsFixture, "literal_casts_pass_as_literals")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastFlag literalTypes{FFlag::LuwuLiteralTypes, true};
+
+    CheckResult result = check(R"(
+type function NoDashes(alias: type): type
+    return types.error("never reached for a cast")
+end
+type Unprefixed = NoDashes<literal<string>>
+local function named(name: Unprefixed) end
+local function tag(t: literal<string>) end
+
+local s: string = "file"
+named(s :: literal<string>)
+named(s :: Unprefixed)
+tag((s :: literal<string>))
+local l: literal<string> = s :: literal<string>
+local back: string = s :: literal<string>
+tag(s)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 14);
+    CHECK_EQ(toString(result.errors[0]), "expected a literal of type string, but got string");
+}
+
 // Luwu: an argument that is an error was reported where it's written; the type function adds nothing about it
 TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_error_type_argument_reports_once")
 {

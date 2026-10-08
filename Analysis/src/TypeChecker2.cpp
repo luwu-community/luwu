@@ -134,6 +134,34 @@ static bool isMissingLiteral(TypeId base, TypeId given)
     return hasLiterals(base) && !isLiteralValue(given);
 }
 
+// Luwu literal types: the type function a validator applies (`NoDashes` of `NoDashes<literal<string>>`), if any
+static std::optional<std::string> validatorName(TypeId validator)
+{
+    if (!validator)
+        return std::nullopt;
+
+    validator = follow(validator);
+    if (const TypeFunctionInstanceType* instance = get<TypeFunctionInstanceType>(validator))
+    {
+        if (instance->userFuncName)
+            return std::string(instance->userFuncName->value);
+        return instance->function->name;
+    }
+    if (const PendingExpansionType* pending = get<PendingExpansionType>(validator))
+        return std::string(pending->name.value);
+    return std::nullopt;
+}
+
+static std::string forwardedLiteralMessage(const AstLocal* parameter, TypeId checkedBy, TypeId wanted)
+{
+    std::string wants = validatorName(wanted).value_or("this parameter's validator");
+    std::string fix = format("annotate '%s' with '%s' (or an alias of it), or pass a literal here", parameter->name.value, wants.c_str());
+
+    if (std::optional<std::string> checked = validatorName(checkedBy))
+        return format("'%s' was checked by '%s', not '%s'; %s", parameter->name.value, checked->c_str(), wants.c_str(), fix.c_str());
+    return format("'%s' isn't checked by '%s'; %s", parameter->name.value, wants.c_str(), fix.c_str());
+}
+
 static std::string notALiteralMessage(TypeId base, TypeId given)
 {
     return format("expected a literal of type %s, but got %s", toString(base).c_str(), toString(given).c_str());
@@ -1238,7 +1266,7 @@ void TypeChecker2::visit(AstStatLocal* local)
                 if (valueType)
                     testPotentialLiteralIsSubtype(value, annotationType);
 
-                if (valueType && isLiteralAnnotation(var->annotation))
+                if (valueType && isLiteralAnnotation(var->annotation) && !isLiteralAssertion(value))
                     checkLiteralLocal(writtenLiteralType(*module->internalTypes, builtinTypes, value, valueType), annotationType, value->location);
 
                 visit(var->annotation);
@@ -3187,6 +3215,13 @@ static bool hasErrorSuppressingMember(TypeId ty)
     return false;
 }
 
+bool TypeChecker2::isLiteralAssertion(AstExpr* value) const
+{
+    while (AstExprGroup* group = value->as<AstExprGroup>())
+        value = group->expr;
+    return module->literalAssertions.contains(value);
+}
+
 bool TypeChecker2::isLiteralAnnotation(AstType* annotation)
 {
     AstTypeReference* ref = annotation->as<AstTypeReference>();
@@ -3216,6 +3251,24 @@ void TypeChecker2::checkLiteralParameters(AstExprCall* call, const FunctionType*
 
         // A multret argument (a call last in the list) is checked by its first value only
         AstExpr* arg = call->args.data[idx];
+
+        // The caller's own literal parameter, passed on: its argument was checked where the caller was called. Only the
+        // same validator can stand in for this one's, which can't see what that literal was.
+        AstExpr* written = arg;
+        while (AstExprGroup* group = written->as<AstExprGroup>())
+            written = group->expr;
+        // A cast to a literal type (`s :: literal<string>`) passes as one, checked by nothing, like a cast to `any`
+        if (module->literalAssertions.contains(written))
+            continue;
+
+        AstExprLocal* forwarded = written->as<AstExprLocal>();
+        if (TypeId* forwardedValidator = forwarded ? module->literalParameterLocals.find(forwarded->local) : nullptr)
+        {
+            bool sameCheck = !literal->validator || validatorName(literal->validator) == validatorName(*forwardedValidator);
+            if (!sameCheck)
+                reportError(GenericError{forwardedLiteralMessage(forwarded->local, *forwardedValidator, literal->validator)}, arg->location);
+            continue;
+        }
         TypeId literalTy = writtenLiteralType(arena, builtinTypes, arg, lookupType(arg));
 
         if (isErrorSuppressing(arg->location, literalTy))
