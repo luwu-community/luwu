@@ -28,6 +28,7 @@ LUAU_FASTINT(LuauTypeInferIterationLimit)
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
+LUAU_FASTFLAG(LuwuLiteralTypes)
 LUAU_FASTFLAGVARIABLE(DebugLuauMagicVariableNames)
 LUAU_FASTFLAGVARIABLE(LuauAutocompleteConst)
 LUAU_FASTFLAGVARIABLE(LuauAutocompleteExport)
@@ -1248,6 +1249,11 @@ AutocompleteEntryMap autocompleteTypeNames(
             }
         }
     }
+
+    // Luwu literal types: `literal<T>` isn't bound in any scope (ConstraintGenerator resolves it by name), so it's offered
+    // here, unless the code has its own type named `literal`
+    if (FFlag::LuwuLiteralTypes && !result.count("literal"))
+        result["literal"] = AutocompleteEntry{AutocompleteEntryKind::Keyword};
 
     AstNode* parent = nullptr;
     AstType* topType = nullptr; // TODO: rename?
