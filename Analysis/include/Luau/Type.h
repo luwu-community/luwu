@@ -740,6 +740,9 @@ struct ExternType
         std::map<Name, bool> expectations;
         // Whether the trait takes parameters, which keeps `needs` from implying it.
         bool hasParameters = false;
+        // Whether the trait's members are written with `public`/`private` (all or none of them are), so a message showing
+        // one of them as a class would write it says which.
+        bool hasAccessSpecifiers = false;
         // The trait's parameters in order, and whether each has a default. Each is also a field of the trait, whose
         // type is what an `implements` argument for it is checked against.
         struct Parameter

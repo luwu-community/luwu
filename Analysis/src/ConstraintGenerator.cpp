@@ -1247,6 +1247,11 @@ void ConstraintGenerator::prototypeClass(
 
         for (const AstClassMember& member : classDecl->members)
         {
+            const AstClassProperty* written = member.get_if<AstClassProperty>();
+            const AstClassMethod* writtenMethod = member.get_if<AstClassMethod>();
+            if ((written && written->qualifierLocation) || (writtenMethod && writtenMethod->qualifierLocation))
+                info.hasAccessSpecifiers = true;
+
             if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && prop->expectLocation)
                 info.expectations[prop->name.value] = false;
             else if (prop && prop->finalLocation)

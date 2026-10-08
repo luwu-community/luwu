@@ -2057,6 +2057,113 @@ static std::optional<AutocompleteEntryMap> autocompleteStringParams(
     return std::nullopt;
 }
 
+// Luwu Traits (rfcs/classes/traits.md): a member of a class or trait type, on the type itself or, for a method, in its metatable
+static const Property* findClassMember(const ExternType* type, const Name& name)
+{
+    if (auto it = type->props().find(name); it != type->props().end())
+        return &it->second;
+
+    const TableType* metatable = type->metatable ? get<TableType>(follow(*type->metatable)) : nullptr;
+    if (metatable)
+    {
+        if (auto it = metatable->props.find(name); it != metatable->props.end())
+            return &it->second;
+    }
+
+    return nullptr;
+}
+
+static std::string typeNameInScope(const ScopePtr& scope, TypeId ty)
+{
+    if (std::optional<Name> name = tryGetTypeNameInScope(scope, ty, true))
+        return *name;
+    return toString(ty);
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a trait member as an implementing class writes it: `public name: string`, or
+// `function parse(self, s: string): boolean` and its `end`
+static std::string traitMemberDeclaration(const ScopePtr& scope, const ExternType* traitType, const Name& name, const Property& prop, bool isField)
+{
+    std::string result;
+    if (traitType->traitInfo->hasAccessSpecifiers)
+        result += prop.isPrivate ? "private " : "public ";
+
+    const FunctionType* fn = prop.readTy ? get<FunctionType>(follow(*prop.readTy)) : nullptr;
+    if (isField || !fn)
+    {
+        if (prop.isConst)
+            result += "const ";
+        result += name;
+        if (prop.readTy)
+            result += ": " + typeNameInScope(scope, *prop.readTy);
+        return result;
+    }
+
+    result += "function " + name + "(";
+
+    auto [args, tail] = flatten(fn->argTypes);
+    for (size_t i = 0; i < args.size(); ++i)
+    {
+        if (i > 0)
+            result += ", ";
+
+        std::string argName = i < fn->argNames.size() && fn->argNames[i] ? fn->argNames[i]->name : "a" + std::to_string(i);
+
+        // `self` is the class's own, so it's left unannotated
+        if (i == 0 && argName == "self")
+            result += argName;
+        else
+            result += argName + ": " + typeNameInScope(scope, args[i]);
+    }
+
+    if (const VariadicTypePack* variadic = tail ? get<VariadicTypePack>(follow(*tail)) : nullptr)
+        result += std::string(args.empty() ? "" : ", ") + "...: " + typeNameInScope(scope, variadic->ty);
+
+    result += ")";
+
+    auto [rets, retTail] = flatten(fn->retTypes);
+    size_t returnCount = rets.size() + (retTail ? 1 : 0);
+    if (returnCount > 0)
+    {
+        std::optional<std::string> returnTypes = tryGetTypeNameInScope(scope, fn->retTypes, true);
+        std::string written = returnTypes ? *returnTypes : toString(fn->retTypes);
+        result += returnCount == 1 ? ": " + written : ": (" + written + ")";
+    }
+
+    result += "\nend";
+    return result;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): in a class body, each member its traits expect that it doesn't have yet, inserted
+// as its declaration
+static void autocompleteMissingTraitMembers(const ScopePtr& scope, AstStatClass* classStat, AutocompleteEntryMap& result)
+{
+    std::optional<TypeFun> classTypeFun = scope->lookupType(classStat->name->name.value);
+    const ExternType* classType = classTypeFun ? get<ExternType>(follow(classTypeFun->type)) : nullptr;
+    if (!classType)
+        return;
+
+    for (TypeId trait : classType->implementedTraits)
+    {
+        const ExternType* traitType = get<ExternType>(follow(trait));
+        const ClassFieldUserData* traitFields = traitType ? dynamic_cast<const ClassFieldUserData*>(traitType->userData.get()) : nullptr;
+        if (!traitFields || !traitType->traitInfo)
+            continue;
+
+        for (const auto& [name, optional] : traitType->traitInfo->expectations)
+        {
+            const Property* expected = findClassMember(traitType, name);
+            if (name == "__init" || !expected || findClassMember(classType, name) || result.count(name))
+                continue;
+
+            AutocompleteEntry entry{AutocompleteEntryKind::Property, expected->readTy};
+            entry.prop = expected;
+            entry.insertText = traitMemberDeclaration(scope, traitType, name, *expected, traitFields->fieldNames.count(name) > 0);
+            result[name] = std::move(entry);
+        }
+    }
+}
+
 static AutocompleteResult autocompleteWhileLoopKeywords(std::vector<AstNode*> ancestry)
 {
     AutocompleteEntryMap ret;
@@ -2767,6 +2874,9 @@ AutocompleteResult autocomplete_(
             ret["needs"] = {AutocompleteEntryKind::Keyword};
         else if (FFlag::LuwuTraits && onHeaderLine && !classStat->isTrait && classStat->implements.size == 0)
             ret["implements"] = {AutocompleteEntryKind::Keyword};
+
+        if (FFlag::LuwuTraits && !onHeaderLine && !classStat->isTrait)
+            autocompleteMissingTraitMembers(scopeAtPosition, classStat, ret);
 
         return {std::move(ret), ancestry, AutocompleteContext::Keyword};
     }

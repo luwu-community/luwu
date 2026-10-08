@@ -1728,7 +1728,7 @@ static std::optional<Location> classMemberLocation(AstStatClass* stat, const Nam
 // Luwu Traits (rfcs/classes/traits.md): where to report something about `trait` in `stat`: its `implements` entry, or for
 // a trait implied through another one's `needs`, the entry that implies it. Never the class's name: the class header is
 // not where a trait's requirement is broken.
-static Location traitRefLocation(NotNull<Scope> scope, AstStatClass* stat, const ExternType* trait)
+static const AstClassTraitRef& traitRefFor(NotNull<Scope> scope, AstStatClass* stat, const ExternType* trait)
 {
     LUAU_ASSERT(stat->implements.size > 0);
 
@@ -1741,7 +1741,7 @@ static Location traitRefLocation(NotNull<Scope> scope, AstStatClass* stat, const
             name = index->index;
 
         if (name.value && trait->name == name.value)
-            return ref.trait->location;
+            return ref;
     }
 
     for (const AstClassTraitRef& ref : stat->implements)
@@ -1749,11 +1749,16 @@ static Location traitRefLocation(NotNull<Scope> scope, AstStatClass* stat, const
         std::optional<TypeFun> listed = scope->lookupTraitRef(ref);
         const ExternType* listedType = listed ? get<ExternType>(follow(listed->type)) : nullptr;
         if (listedType && isSubclass(listedType, trait))
-            return ref.trait->location;
+            return ref;
     }
 
     // a trait none of the entries resolves to or needs (an instantiation of a generic one) still goes on the list
-    return stat->implements.data[0].trait->location;
+    return stat->implements.data[0];
+}
+
+static Location traitRefLocation(NotNull<Scope> scope, AstStatClass* stat, const ExternType* trait)
+{
+    return traitRefFor(scope, stat, trait).trait->location;
 }
 
 // Luwu Traits (rfcs/classes/traits.md): the class's constructor has to accept what the trait's expected `__init` takes
@@ -1838,6 +1843,10 @@ void TypeChecker2::checkTraitFieldExpectations(AstStatClass* stat)
     if (!classType)
         return;
 
+    // every member the class is missing, grouped by the `implements` entry it's reported on, so a class missing several
+    // gets one error listing them rather than one error each
+    std::vector<MissingTraitMembers> missing;
+
     for (TypeId trait : classType->implementedTraits)
     {
         const ExternType* traitType = get<ExternType>(follow(trait));
@@ -1883,7 +1892,7 @@ void TypeChecker2::checkTraitFieldExpectations(AstStatClass* stat)
         {
             // an expected constructor is checked by checkTraitConstructorExpectation
             if (name != "__init" && !findClassMember(classType, name))
-                reportMissingTraitMember(stat, classType, traitType, name, traitFields->fieldNames.count(name) > 0);
+                addMissingTraitMember(missing, stat, traitType, name, traitFields->fieldNames.count(name) > 0);
 
             const Property* expected = findClassMember(traitType, name);
             const Property* found = findClassMember(classType, name);
@@ -1905,6 +1914,9 @@ void TypeChecker2::checkTraitFieldExpectations(AstStatClass* stat)
                 testIsSubtype(withoutSelfParameter(*found->readTy), withoutSelfParameter(*expected->readTy), location);
         }
     }
+
+    for (const MissingTraitMembers& group : missing)
+        reportMissingTraitMembers(classType, group);
 }
 
 // Luwu Traits (rfcs/classes/traits.md): "'C' implements 'Base<string>', but 'Mut<number>' needs 'Base<number>'"
@@ -2288,14 +2300,35 @@ void TypeChecker2::checkTraitOverrides(AstStatClass* stat)
     }
 }
 
-void TypeChecker2::reportMissingTraitMember(
+void TypeChecker2::addMissingTraitMember(
+    std::vector<MissingTraitMembers>& missing,
     AstStatClass* stat,
-    const ExternType* classType,
     const ExternType* traitType,
     const Name& name,
     bool isField
 )
 {
+    NotNull<Scope> scope{findInnermostScope(stat->location)};
+    const AstClassTraitRef& ref = traitRefFor(scope, stat, traitType);
+
+    auto group = std::find_if(
+        missing.begin(),
+        missing.end(),
+        [&](const MissingTraitMembers& g)
+        {
+            return g.location == ref.trait->location;
+        }
+    );
+
+    if (group == missing.end())
+    {
+        // the trait the entry names, which a member reached through its `needs` isn't
+        std::optional<TypeFun> listed = scope->lookupTraitRef(ref);
+        const ExternType* listedType = listed ? get<ExternType>(follow(listed->type)) : nullptr;
+        missing.push_back({ref.trait->location, listedType ? listedType->name : traitType->name});
+        group = missing.end() - 1;
+    }
+
     // the member as the trait declares it: `name: type` for a field, a signature for a function
     const Property* expected = findClassMember(traitType, name);
     std::optional<TypeId> expectedTy = expected ? expected->readTy : std::nullopt;
@@ -2305,18 +2338,37 @@ void TypeChecker2::reportMissingTraitMember(
     if (isField && expectedTy)
         member += ": " + toString(*expectedTy);
     else if (expectedFn)
-        member = toStringNamedFunction(name, *expectedFn);
+        member = "function " + toStringNamedFunction(name, *expectedFn);
 
-    reportError(
-        GenericError{format(
-            "Missing %s '%s' required for '%s' to implement '%s'",
-            isField ? "field" : "function",
-            member.c_str(),
-            classType->name.c_str(),
-            traitType->name.c_str()
-        )},
-        traitRefLocation(NotNull{findInnermostScope(stat->location)}, stat, traitType)
-    );
+    // written as the class has to write it
+    if (expected && isField && expected->isConst)
+        member = "const " + member;
+    if (expected && traitType->traitInfo->hasAccessSpecifiers)
+        member = (expected->isPrivate ? "private " : "public ") + member;
+
+    std::string entry = "'" + member + "'";
+    if (traitType->name != group->traitName)
+        entry += " (from '" + traitType->name + "')";
+
+    group->members.push_back(std::move(entry));
+    (isField ? group->fields : group->functions)++;
+}
+
+// "'Flag' is missing 3 members to implement 'ArgInProgress':" and a bullet per member, like a table literal's missing
+// fields
+void TypeChecker2::reportMissingTraitMembers(const ExternType* classType, const MissingTraitMembers& group)
+{
+    size_t count = group.members.size();
+    const char* kind = group.functions == 0 ? "field" : group.fields == 0 ? "function" : "member";
+
+    std::string message = "'" + classType->name + "' is missing ";
+    message += count == 1 ? std::string("a ") + kind : std::to_string(count) + " " + kind + "s";
+    message += " to implement '" + group.traitName + "':";
+
+    for (const std::string& member : group.members)
+        message += "\n  • " + member;
+
+    reportError(GenericError{message}, group.location);
 }
 
 void TypeChecker2::visit(AstStatClass* stat)
@@ -2702,7 +2754,14 @@ void TypeChecker2::visit(AstStatError* stat)
         visit(expr, ValueContext::RValue);
 
     for (AstStat* s : stat->statements)
+    {
+        // Luwu Classes (rfcs/classes): a class the parser refused (a second one with a name already taken) was never
+        // given a type, so its members have none to check; the parse error is what's wrong with it
+        if (s->is<AstStatClass>())
+            continue;
+
         visit(s);
+    }
 }
 
 void TypeChecker2::visit(AstExpr* expr, ValueContext context)

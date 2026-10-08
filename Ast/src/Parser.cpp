@@ -2842,8 +2842,9 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
 
     auto contextualKeywordListFollows = [&](const char* keyword)
     {
+        // the list may be parenthesized (`implements (A, B)`), which no class member starts with
         return FFlag::LuwuTraits && lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == keyword &&
-               lexer.lookahead().type == Lexeme::Name;
+               (lexer.lookahead().type == Lexeme::Name || lexer.lookahead().type == '(');
     };
 
     if (contextualKeywordListFollows("implements"))
@@ -3601,6 +3602,14 @@ AstArray<AstClassTraitRef> Parser::parseClassTraitRefs(bool allowArgs, AstClassP
     LUAU_ASSERT(FFlag::LuwuTraits);
     std::vector<AstClassTraitRef> refs;
 
+    // `implements (A, B)`, so a long list can go one per line
+    std::optional<MatchLexeme> parenthesized;
+    if (lexer.current().type == '(')
+    {
+        parenthesized = lexer.current();
+        nextLexeme();
+    }
+
     while (true)
     {
         AstClassTraitRef ref;
@@ -3682,6 +3691,9 @@ AstArray<AstClassTraitRef> Parser::parseClassTraitRefs(bool allowArgs, AstClassP
 
         nextLexeme();
     }
+
+    if (parenthesized)
+        expectMatchAndConsume(')', *parenthesized);
 
     return copy(refs.data(), refs.size());
 }

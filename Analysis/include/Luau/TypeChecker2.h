@@ -224,13 +224,23 @@ private:
     void checkNeededTraitArguments(AstStatClass* stat);
     void checkTraitRefs(AstStatClass* stat, const AstArray<AstClassTraitRef>& refs);
     void checkTraitOverrides(AstStatClass* stat);
-    void reportMissingTraitMember(
+    // Luwu Traits (rfcs/classes/traits.md): the members a class is missing, reported on one `implements` entry
+    struct MissingTraitMembers
+    {
+        Location location;
+        std::string traitName;
+        std::vector<std::string> members;
+        size_t fields = 0;
+        size_t functions = 0;
+    };
+    void addMissingTraitMember(
+        std::vector<MissingTraitMembers>& missing,
         AstStatClass* stat,
-        const ExternType* classType,
         const ExternType* traitType,
         const Name& name,
         bool isField
     );
+    void reportMissingTraitMembers(const ExternType* classType, const MissingTraitMembers& group);
     void visit(AstStatDeclareClass* stat);
     void visit(AstStatError* stat);
     void visit(AstExpr* expr, ValueContext context);

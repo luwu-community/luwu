@@ -5389,6 +5389,45 @@ TEST_CASE_FIXTURE(Fixture, "trait_declarations_parse")
     CHECK_EQ(rifle->implements.data[1].args.size, 1);
 }
 
+TEST_CASE_FIXTURE(Fixture, "trait_lists_may_be_parenthesized")
+{
+    ScopedFastFlag _[3]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}, {FFlag::LuwuGenericNominals, true}};
+
+    AstStatBlock* block = parse(R"(
+        trait A<T> end
+        trait B(n: number) end
+        trait C needs (
+            A<string>
+        )
+        end
+        class Flag<T = boolean>(
+            public name: string
+        ) implements (
+            A<T>,
+            B(1),
+            C
+        )
+        end
+    )");
+    REQUIRE(block);
+    REQUIRE(block->body.size == 4);
+
+    AstStatClass* c = block->body.data[2]->as<AstStatClass>();
+    REQUIRE(c);
+    REQUIRE(c->needs.size == 1);
+    CHECK_EQ(c->needs.data[0].typeArguments.size, 1);
+
+    AstStatClass* flag = block->body.data[3]->as<AstStatClass>();
+    REQUIRE(flag);
+    REQUIRE(flag->implements.size == 3);
+    CHECK_EQ(flag->implements.data[0].typeArguments.size, 1);
+    CHECK(flag->implements.data[1].hasArgs);
+    CHECK(flag->implements.data[2].trait->is<AstExprGlobal>());
+    CHECK(flag->members.size == 0);
+
+    matchParseError("trait A end class C implements (A, ) end", "Expected identifier when parsing trait name, got ')'");
+}
+
 TEST_CASE_FIXTURE(Fixture, "trait_syntax_errors")
 {
     ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};

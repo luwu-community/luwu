@@ -3190,7 +3190,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "trait_arguments_are_checked")
     LUAU_REQUIRE_ERROR_COUNT(4, result);
     CHECK_EQ("This trait must be called: 'Item(category, max)'", toString(result.errors[0]));
     CHECK_EQ("Trait 'Item' takes 1 to 2 arguments, but 3 were given", toString(result.errors[1]));
-    CHECK_EQ("Missing field 'name: string' required for 'Package' to implement 'Item'", toString(result.errors[2]));
+    CHECK_EQ("'Package' is missing a field to implement 'Item':\n  • 'name: string'", toString(result.errors[2]));
     CHECK(get<TypeMismatch>(result.errors[3]));
 }
 
@@ -3220,8 +3220,8 @@ TEST_CASE_FIXTURE(ClassesFixture, "trait_expectations_are_checked")
     CHECK_EQ(result.errors[1].location.begin.line, 11);
     CHECK_EQ("'y' must be private for 'A' to implement 'T'", toString(result.errors[2]));
     CHECK_EQ(result.errors[3].location.begin.line, 10);
-    CHECK_EQ("Missing function 'f(self: T): number' required for 'A' to implement 'T'", toString(result.errors[4]));
-    CHECK(get<TypeMismatch>(result.errors[5]));
+    CHECK(get<TypeMismatch>(result.errors[4]));
+    CHECK_EQ("'A' is missing a function to implement 'T':\n  • 'public function f(self: T): number'", toString(result.errors[5]));
 }
 
 TEST_CASE_FIXTURE(ClassesFixture, "traits_may_expect_the_same_member")
@@ -3723,7 +3723,41 @@ TEST_CASE_FIXTURE(ClassesFixture, "trait_values_have_their_needed_traits_members
 
     // Base's expectation is still Base's: Missing is told, Good isn't accused of redeclaring `name`
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    CHECK_EQ("Missing field 'name: string' required for 'Missing' to implement 'Base'", toString(result.errors[0]));
+    CHECK_EQ("'Missing' is missing a field to implement 'Needy':\n  • 'name: string' (from 'Base')", toString(result.errors[0]));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "missing_trait_members_are_listed_in_one_error")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait HelpInfo
+            expect public const name: string
+            expect private help: string
+        end
+        trait ArgInProgress needs HelpInfo
+            expect phrase: string
+            expect function parse(self, s: string): boolean
+        end
+        trait Other
+            expect other: number
+        end
+        class Flag implements ArgInProgress, Other
+        end
+    )");
+
+    // one error per `implements` entry; a member a needed trait expects says which trait that is
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ(
+        "'Flag' is missing 4 members to implement 'ArgInProgress':\n"
+        "  • 'function parse(self: ArgInProgress, s: string): boolean'\n"
+        "  • 'phrase: string'\n"
+        "  • 'private help: string' (from 'HelpInfo')\n"
+        "  • 'public const name: string' (from 'HelpInfo')",
+        toString(result.errors[0])
+    );
+    CHECK_EQ(result.errors[0].location.begin.line, 12);
+    CHECK_EQ("'Flag' is missing a field to implement 'Other':\n  • 'other: number'", toString(result.errors[1]));
 }
 
 TEST_CASE_FIXTURE(ClassesFixture, "trait_needs_graph_is_walked_once")

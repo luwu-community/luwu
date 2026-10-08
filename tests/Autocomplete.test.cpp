@@ -1070,6 +1070,39 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_class_member_position_offers_qualifie
     CHECK_EQ(ac.entryMap.count("local"), 0);
 }
 
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_offers_missing_trait_members")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+    };
+
+    check(R"(
+        trait HelpInfo
+            expect public const name: string
+            expect private help: string
+        end
+        trait ArgInProgress needs HelpInfo
+            expect phrase: string
+            expect function parse(self, s: string, ...: number): boolean
+        end
+        class Flag implements ArgInProgress
+            phrase = "p"
+            @1
+        end
+    )");
+
+    auto ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("phrase"), 0);
+    REQUIRE(ac.entryMap.count("parse"));
+    CHECK_EQ(ac.entryMap["parse"].insertText, "function parse(self, s: string, ...: number): boolean\nend");
+    REQUIRE(ac.entryMap.count("name"));
+    CHECK_EQ(ac.entryMap["name"].insertText, "public const name: string");
+    REQUIRE(ac.entryMap.count("help"));
+    CHECK_EQ(ac.entryMap["help"].insertText, "private help: string");
+    CHECK_EQ(ac.entryMap.count("public"), 1);
+}
+
 TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_offers_private_class_members_only_inside_their_class")
 {
     ScopedFastFlag sffs[] = {
