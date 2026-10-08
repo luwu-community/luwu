@@ -3692,9 +3692,63 @@ local function ret(): literal<string> return "a" end
     for (const TypeError& error : result.errors)
         CHECK_EQ(
             toString(error),
-            "literal<T> only works in the annotation of a function parameter or a local, or as the argument of a type function "
-            "there (`name: Validate<literal<string>>`)"
+            "literal<T> only works in the annotation of a function parameter, a local or a type alias, or as the argument of a "
+            "type function there (`name: Validate<literal<string>>`)"
         );
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "literal_parameters_through_type_aliases")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastFlag literalTypes{FFlag::LuwuLiteralTypes, true};
+
+    CheckResult result = check(R"(
+type function NoDashes(alias: type): type
+    if alias:is("singleton") and string.sub(alias:value() :: string, 1, 1) == "-" then
+        return types.error(`no dashes: {alias:value()}`)
+    end
+    return alias
+end
+
+type Unprefixed = NoDashes<literal<string>>
+type AnyLiteral = literal<string>
+
+local function aliases(first: Unprefixed, ...: Unprefixed)
+    local s: string = first
+end
+local function sym(n: AnyLiteral) end
+type Fn = (first: Unprefixed) -> ()
+local fn: Fn = nil :: any
+
+aliases("f", "g")
+aliases("-f", "--g")
+sym("ok")
+local str: string = "x"
+sym(str)
+fn("-x")
+    )");
+
+    REQUIRE_EQ(result.errors.size(), 4);
+    CHECK_EQ(toString(result.errors[0]), "no dashes: -f");
+    CHECK_EQ(toString(result.errors[1]), "no dashes: --g");
+    CHECK_EQ(toString(result.errors[2]), "expected a literal of type string, but got string");
+    CHECK_EQ(toString(result.errors[3]), "no dashes: -x");
+}
+
+// Luwu: an argument that is an error was reported where it's written; the type function adds nothing about it
+TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_error_type_argument_reports_once")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+
+    CheckResult result = check(R"(
+type function Id(t: type): type
+    return t
+end
+local x: Id<Nope> = 1
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(toString(result.errors[0]), "Unknown type 'Nope'");
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "literal_parameters_yield_to_a_type_named_literal")

@@ -296,6 +296,10 @@ private:
     void cloneChildren(GenericType* t)
     {
         // TODO: clone upper bounds.
+
+        // Luwu literal types
+        if (t->literalBase)
+            t->literalBase = shallowClone(t->literalBase);
     }
 
     void cloneChildren(PrimitiveType* t)

@@ -244,6 +244,20 @@ TypeFunctionReductionResult<TypeId> userDefinedTypeFunction(
     if (!check.blockingTypes.empty())
         return {std::nullopt, Reduction::MaybeOk, check.blockingTypes, {}};
 
+    // Luwu: an argument that is itself an error (an unknown type, a misused `literal<T>`, ...) was reported where it is
+    // written. Upstream tries to pass it in and reports "Type functions do not currently support types of the form
+    // '*error-type*'", which reads as a limitation of type functions rather than of the argument.
+    for (TypeId typeParam : typeParams)
+    {
+        if (get<ErrorType>(follow(typeParam)))
+        {
+            std::string message = format(
+                "Cannot resolve type function '%s' because one of its arguments has a type error", typeFunction->userFuncData.definition->name.value
+            );
+            return {std::nullopt, Reduction::Erroneous, {}, {}, std::move(message)};
+        }
+    }
+
     // Ensure that whole type function environment is registered
     for (auto& [name, definition] : typeFunction->userFuncData.environmentFunction)
     {

@@ -573,6 +573,26 @@ private:
         bool inTypeArguments,
         bool replaceErrorWithFresh
     );
+    // Luwu literal types: an annotation that is `literal<B>` or has it as a type argument (`V<literal<B>>`), resolved. The
+    // placeholder is the generic `literal<B>` stands for, marked with `B`; `validator` is the annotation around it (null for
+    // a bare `literal<B>`).
+    struct ResolvedLiteral
+    {
+        TypeId base;
+        TypeId placeholder;
+        TypeId validator;
+    };
+    // Luwu literal types: what a type an annotation resolved to says about it being a literal parameter: the placeholder of
+    // an alias of `literal<B>`, or a validator applied to one (an alias of `V<literal<B>>`)
+    static std::optional<ResolvedLiteral> literalOfType(TypeId ty);
+    ResolvedLiteral resolveLiteralAnnotation(
+        const ScopePtr& scope,
+        AstType* annotation,
+        AstTypeReference* literalRef,
+        bool inTypeArguments,
+        bool replaceErrorWithFresh
+    );
+
     // Luwu literal types: `B` of `literal<B>`, reporting a `literal` without exactly one type argument
     TypeId resolveLiteralBase(const ScopePtr& scope, AstTypeReference* literalRef, bool inTypeArguments, bool replaceErrorWithFresh);
     // Luwu literal types: the `literal<B>` that resolves to the placeholder while a validator is being resolved

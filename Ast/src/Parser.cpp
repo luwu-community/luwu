@@ -2738,7 +2738,19 @@ AstStat* Parser::parseTypeAlias(
     bool equalsFound = expectAndConsume('=', "type alias");
     Position equalsPosition = equalsFound ? lexer.previousLocation().begin : Position::missing();
 
-    AstType* type = parseType();
+    // Luwu: `type Name` with nothing after it is an unfinished alias, and the next line is the next statement. Upstream
+    // parses that line as the alias's type, which eats a statement keyword like `trait` or `local` and turns everything
+    // up to the next `end` into a cascade of errors.
+    bool nextLineStartsStatement = !equalsFound && lexer.current().location.begin.line > lexer.previousLocation().end.line;
+
+    AstType* type = nullptr;
+    if (nextLineStartsStatement)
+    {
+        Position missingAt = lexer.previousLocation().end;
+        type = allocator.alloc<AstTypeError>(Location(missingAt, missingAt), AstArray<AstType*>{}, true, unsigned(parseErrors.size() - 1));
+    }
+    else
+        type = parseType();
 
     AstStatTypeAlias* node = allocator.alloc<AstStatTypeAlias>(
         Location(start, type->location), name->name, name->location, generics, genericPacks, type, exported, typeKeywordLocation

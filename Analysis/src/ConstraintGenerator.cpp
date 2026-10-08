@@ -233,12 +233,40 @@ static AstTypeReference* findLiteralReference(const Scope& scope, AstType* annot
     return nullptr;
 }
 
+std::optional<ConstraintGenerator::ResolvedLiteral> ConstraintGenerator::literalOfType(TypeId ty)
+{
+    if (!FFlag::LuwuLiteralTypes)
+        return std::nullopt;
+
+    ty = follow(ty);
+    if (const GenericType* generic = get<GenericType>(ty); generic && generic->literalBase)
+        return ConstraintGenerator::ResolvedLiteral{generic->literalBase, ty, nullptr};
+
+    // A validator is still an alias expansion while constraints are generated, and a type function once expanded
+    const std::vector<TypeId>* arguments = nullptr;
+    if (const TypeFunctionInstanceType* instance = get<TypeFunctionInstanceType>(ty))
+        arguments = &instance->typeArguments;
+    else if (const PendingExpansionType* pending = get<PendingExpansionType>(ty))
+        arguments = &pending->typeArguments;
+    if (!arguments)
+        return std::nullopt;
+
+    for (TypeId arg : *arguments)
+    {
+        const GenericType* generic = get<GenericType>(follow(arg));
+        if (generic && generic->literalBase)
+            return ConstraintGenerator::ResolvedLiteral{generic->literalBase, follow(arg), ty};
+    }
+
+    return std::nullopt;
+}
+
 // Luwu literal types: where `literal<B>` doesn't work yet, which is everywhere but the annotation of a parameter or a local,
 // and the type arguments of a parameter's validator
 static const char* literalNotSupportedHereMessage()
 {
-    return "literal<T> only works in the annotation of a function parameter or a local, or as the argument of a type function "
-           "there (`name: Validate<literal<string>>`)";
+    return "literal<T> only works in the annotation of a function parameter, a local or a type alias, or as the argument of a "
+           "type function there (`name: Validate<literal<string>>`)";
 }
 
 // Luwu literal types: the variadic type of `...: T`, which is where a variadic parameter's annotation is
@@ -246,20 +274,6 @@ static AstType* variadicParameterAnnotation(AstTypePack* tail)
 {
     AstTypePackVariadic* variadic = tail ? tail->as<AstTypePackVariadic>() : nullptr;
     return variadic ? variadic->variadicType : nullptr;
-}
-
-// Luwu literal types: whether a function type's parameters `(a: A, ...: B)` include one annotated `literal<B>` or
-// `V<literal<B>>`
-static bool hasLiteralParameter(const Scope& scope, const AstTypeList& params)
-{
-    for (AstType* param : params.types)
-    {
-        if (findLiteralReference(scope, param))
-            return true;
-    }
-
-    AstType* variadic = variadicParameterAnnotation(params.tailType);
-    return variadic && findLiteralReference(scope, variadic);
 }
 
 static bool isValidClassMetamethod(const Name& name)
@@ -3934,12 +3948,21 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatTypeAlias* 
     ScopePtr defnScope = *defnScopePtr;
     resolveGenericDefaultParameters(defnScope, alias, bindingIt->second);
 
-    TypeId ty = resolveType(
-        defnScope,
-        alias->type,
-        /* inTypeArguments */ false,
-        /* replaceErrorWithFresh */ false
-    );
+    // Luwu literal types: `type Alias = V<literal<B>>` (or `literal<B>`) names a literal parameter's annotation
+    TypeId ty = nullptr;
+    if (AstTypeReference* literalRef = findLiteralReference(*defnScope, alias->type))
+    {
+        polarity = Polarity::Positive;
+        ResolvedLiteral literal = resolveLiteralAnnotation(defnScope, alias->type, literalRef, /* inTypeArguments */ false, false);
+        ty = literal.validator ? literal.validator : literal.placeholder;
+    }
+    else
+        ty = resolveType(
+            defnScope,
+            alias->type,
+            /* inTypeArguments */ false,
+            /* replaceErrorWithFresh */ false
+        );
 
     TypeId aliasTy = bindingIt->second.type;
     LUAU_ASSERT(get<BlockedType>(aliasTy));
@@ -6783,8 +6806,9 @@ ConstraintGenerator::FunctionSignature ConstraintGenerator::checkFunctionSignatu
 
     if (fn->vararg)
     {
-        AstType* variadicAnnotation = variadicParameterAnnotation(fn->varargAnnotation);
-        if (variadicAnnotation && findLiteralReference(*signatureScope, variadicAnnotation))
+        // Luwu literal types: also an alias of one, which only resolving it tells apart, so any `...: T` goes this way
+        AstType* variadicAnnotation = FFlag::LuwuLiteralTypes ? variadicParameterAnnotation(fn->varargAnnotation) : nullptr;
+        if (variadicAnnotation)
         {
             // The polarity resolveTypePack gives the variadic annotation below
             polarity = Polarity::Positive;
@@ -6959,36 +6983,51 @@ TypeId ConstraintGenerator::resolveParameterAnnotation(
     bool replaceErrorWithFresh
 )
 {
-    AstTypeReference* literalRef = findLiteralReference(*scope, annotation);
-    if (!literalRef)
-        return resolveType_(scope, annotation, inTypeArguments, replaceErrorWithFresh);
-
-    TypeId base = resolveLiteralBase(scope, literalRef, inTypeArguments, replaceErrorWithFresh);
+    std::optional<ResolvedLiteral> literal;
+    if (AstTypeReference* literalRef = findLiteralReference(*scope, annotation))
+        literal = resolveLiteralAnnotation(scope, annotation, literalRef, inTypeArguments, replaceErrorWithFresh);
+    else
+    {
+        // An alias of one (`type Alias = V<literal<string>>`, then `name: Alias`)
+        TypeId resolved = resolveType_(scope, annotation, inTypeArguments, replaceErrorWithFresh);
+        literal = literalOfType(resolved);
+        if (!literal)
+            return resolved;
+    }
 
     // The annotation declares the parameter's type, which is `B`. TypeChecker2 checks the parameter against it.
-    module->astResolvedTypes[annotation] = base;
+    module->astResolvedTypes[annotation] = literal->base;
+
+    TypeId placeholder = literal->validator ? literal->placeholder : nullptr;
+    literalParameters.push_back(FunctionType::LiteralParameter{argIndex, variadic, literal->base, literal->validator, placeholder});
+    return literal->base;
+}
+
+ConstraintGenerator::ResolvedLiteral ConstraintGenerator::resolveLiteralAnnotation(
+    const ScopePtr& scope,
+    AstType* annotation,
+    AstTypeReference* literalRef,
+    bool inTypeArguments,
+    bool replaceErrorWithFresh
+)
+{
+    TypeId base = resolveLiteralBase(scope, literalRef, inTypeArguments, replaceErrorWithFresh);
+
+    // A generic so that the solver leaves a validator unreduced: nothing can be known about it until a call supplies the
+    // argument. TypeChecker2::checkLiteralParameters substitutes it. Named as written, so a validator prints as
+    // `V<literal<string>>`.
+    TypeId placeholder = arena->addType(GenericType{scope.get(), "literal<" + toString(base) + ">"});
+    getMutable<GenericType>(placeholder)->literalBase = base;
 
     if (literalRef == annotation)
     {
-        literalParameters.push_back(FunctionType::LiteralParameter{argIndex, variadic, base, nullptr, nullptr});
-        return base;
+        module->astResolvedTypes[annotation] = placeholder;
+        return ResolvedLiteral{base, placeholder, nullptr};
     }
 
-    // A generic so that the solver leaves the validator unreduced: nothing can be known about it until a call supplies the
-    // argument. TypeChecker2::checkLiteralParameters substitutes it.
-    // Named as written, so the validator prints as `V<literal<string>>`
-    TypeId placeholder = arena->addType(GenericType{scope.get(), "literal<" + toString(base) + ">"});
-    TypeId validator = nullptr;
-    {
-        ScopedMemberValue<std::optional<PendingLiteral>> pending(pendingLiteral, PendingLiteral{literalRef, placeholder});
-        validator = resolveType_(scope, annotation, inTypeArguments, replaceErrorWithFresh);
-    }
-
-    // Resolving the validator overwrote the annotation's resolved type
-    module->astResolvedTypes[annotation] = base;
-
-    literalParameters.push_back(FunctionType::LiteralParameter{argIndex, variadic, base, validator, placeholder});
-    return base;
+    ScopedMemberValue<std::optional<PendingLiteral>> pending(pendingLiteral, PendingLiteral{literalRef, placeholder});
+    TypeId validator = resolveType_(scope, annotation, inTypeArguments, replaceErrorWithFresh);
+    return ResolvedLiteral{base, placeholder, validator};
 }
 
 TypeId ConstraintGenerator::resolveLiteralBase(const ScopePtr& scope, AstTypeReference* literalRef, bool inTypeArguments, bool replaceErrorWithFresh)
@@ -7372,7 +7411,8 @@ TypeId ConstraintGenerator::resolveFunctionType(
     polarity = invert(polarity);
     std::vector<FunctionType::LiteralParameter> literalParameters;
     TypePackId argTypes = nullptr;
-    if (hasLiteralParameter(*signatureScope, fn->argTypes))
+    // Luwu literal types: a parameter annotated as one, or as an alias of one, which only resolving it tells apart
+    if (FFlag::LuwuLiteralTypes)
         argTypes = resolveParameterAnnotations(signatureScope, fn->argTypes, literalParameters, inTypeArguments, replaceErrorWithFresh);
     else
         argTypes = resolveTypePack_(signatureScope, &tempArgTypes, inTypeArguments, replaceErrorWithFresh);

@@ -5709,6 +5709,31 @@ return a +
     }
 }
 
+// Luwu: a `type Name` with nothing after it doesn't take the next line's statement as its type
+TEST_CASE_FIXTURE(Fixture, "unfinished_type_alias_leaves_the_next_statement_alone")
+{
+    try
+    {
+        parse(R"(
+type Validator
+local function f(x: number): number
+    return x
+end
+type Same number
+return f
+)");
+        FAIL("Expected ParseErrors to be thrown");
+    }
+    catch (const Luau::ParseErrors& e)
+    {
+        // the unfinished alias, and `number` on the same line as `type Same`, which stays its type
+        REQUIRE_EQ(2, e.getErrors().size());
+        CHECK_EQ("Expected '=' when parsing type alias, got 'local'", e.getErrors()[0].getMessage());
+        CHECK_EQ(Location{{2, 0}, {2, 5}}, e.getErrors()[0].getLocation());
+        CHECK_EQ("Expected '=' when parsing type alias, got 'number'", e.getErrors()[1].getMessage());
+    }
+}
+
 // check that we are not skipping tokens that weren't processed at all
 TEST_CASE_FIXTURE(Fixture, "statement_error_recovery_expected")
 {
