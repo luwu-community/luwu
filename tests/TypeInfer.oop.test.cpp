@@ -983,6 +983,45 @@ TEST_CASE_FIXTURE(Fixture, "fuzzer_duplicate_class_definition")
     CHECK_EQ("A class named 'l0' has already been declared in this module", err->message);
 }
 
+TEST_CASE_FIXTURE(Fixture, "duplicate_class_or_trait_with_methods_is_only_the_syntax_error")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+        {FFlag::DebugLuauForceOldSolver, false},
+    };
+
+    // the second declaration's methods were checked without types: "Lambda has non-function type any"
+    CheckResult result = check(R"(
+        trait OptionalArgument
+            private _required = false
+            expect public phrase: string
+            public function required(self)
+                self._required = true
+                return self
+            end
+        end
+        trait OptionalArgument
+            private _required = false
+            expect public phrase: string
+            public function required(self)
+                self._required = true
+                return self
+            end
+        end
+        class C
+            function f(self) return 1 end
+        end
+        class C
+            function f(self) return 1 end
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK(get<SyntaxError>(result.errors[0]));
+    CHECK(get<SyntaxError>(result.errors[1]));
+}
+
 TEST_CASE_FIXTURE(Fixture, "repeat_props")
 {
     ScopedFastFlag sffs[] = {
