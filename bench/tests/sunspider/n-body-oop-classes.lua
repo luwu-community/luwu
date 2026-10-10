@@ -1,4 +1,4 @@
--- --bench-args: --fflags=DebugLuauUserDefinedClasses,DebugLuauUserDefinedClassesRuntime
+-- --bench-args: --fflags=LuwuClasses
 local function prequire(name) local success, result = pcall(require, name); return success and result end
 local bench = script and require(script.Parent.bench_support) or prequire("bench_support") or require("../../bench_support")
 
@@ -7,13 +7,13 @@ local SOLAR_MASS = 4 * PI * PI
 local DAYS_PER_YEAR = 365.24
 
 class Body
-    public x: number
-    public y: number
-    public z: number
-    public vx: number
-    public vy: number
-    public vz: number
-    public mass: number
+    x: number
+    y: number
+    z: number
+    vx: number
+    vy: number
+    vz: number
+    mass: number
 
     function new(x, y, z, vx, vy, vz, mass)
         return Body {
@@ -65,7 +65,7 @@ local function Sun()
 end
 
 class NBodySystem
-    public bodies: { Body }
+    bodies: { Body }
 
     function new(bodies)
         local self = NBodySystem { bodies = bodies }

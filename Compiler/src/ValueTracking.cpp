@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "ValueTracking.h"
 
 #include "Luau/Lexer.h"
@@ -8,8 +8,10 @@ namespace Luau
 namespace Compile
 {
 
-struct ValueVisitor : AstVisitor
+struct ValueVisitor : AssignmentVisitor
 {
+    using AssignmentVisitor::visit;
+
     DenseHashMap<AstName, Global>& globals;
     DenseHashMap<AstLocal*, Variable>& variables;
     DenseHashMap<AstName, AstLocal*>& classLocals;
@@ -21,11 +23,17 @@ struct ValueVisitor : AstVisitor
     {
     }
 
-    void assign(AstExpr* var)
+    void assign(AstExpr* var) override
     {
         if (AstExprLocal* lv = var->as<AstExprLocal>())
         {
-            variables[lv->local].written = true;
+            Variable& variable = variables[lv->local];
+            variable.written = true;
+
+            // an upvalue reference is a write from a function nested inside the declaring one, which can
+            // run whenever that function is called -- no region of the declaring function excludes it
+            if (lv->upvalue)
+                variable.writtenByNestedFunction = true;
         }
         else if (AstExprGlobal* gv = var->as<AstExprGlobal>())
         {
@@ -49,38 +57,11 @@ struct ValueVisitor : AstVisitor
         return true;
     }
 
-    bool visit(AstStatAssign* node) override
-    {
-        for (size_t i = 0; i < node->vars.size; ++i)
-            assign(node->vars.data[i]);
-
-        for (size_t i = 0; i < node->values.size; ++i)
-            node->values.data[i]->visit(this);
-
-        return false;
-    }
-
-    bool visit(AstStatCompoundAssign* node) override
-    {
-        assign(node->var);
-        node->value->visit(this);
-
-        return false;
-    }
-
     bool visit(AstStatLocalFunction* node) override
     {
         variables[node->name].init = node->func;
 
         return true;
-    }
-
-    bool visit(AstStatFunction* node) override
-    {
-        assign(node->name);
-        node->func->visit(this);
-
-        return false;
     }
 
     bool visit(AstExprFunction* node) override
@@ -93,11 +74,16 @@ struct ValueVisitor : AstVisitor
 
     bool visit(AstStatClass* decl) override
     {
-        if (!FFlag::DebugLuauUserDefinedClasses)
+        if (!FFlag::LuwuClasses)
             return false;
 
+        // Unlike AstStatLocalFunction, we don't mark this local written just for existing --
+        // a class's own hoisting placeholder write is not a real mutation (see
+        // Compiler::classLocalFinalized). Only a genuine reassignment via AstStatAssign/
+        // AstStatCompoundAssign elsewhere should mark this local written. We still have to touch
+        // `variables` so the entry exists (defaulting to unwritten) for shouldShareClosure's lookup.
         classLocals[decl->name->name] = decl->name;
-        variables[decl->name].written = true;
+        (void)variables[decl->name];
 
         return true;
     }

@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
 #include "Luau/BytecodeGraph.h"
@@ -9,7 +9,7 @@
 #include <optional>
 #include <utility>
 
-LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
+LUAU_FASTFLAG(LuwuClasses)
 
 namespace Luau
 {
@@ -535,6 +535,14 @@ struct BytecodeGraphParser
                     addVmConstInput(node, aux & 0xFFFFFF);
                     break;
 
+                case LOP_JUMPXISA:
+                    addVmRegInput(node, LUAU_INSN_A(insn));
+                    addImmInput(node, static_cast<bool>(aux & LBC_JUMPXISA_JUMPIFINSTANCE));
+                    addJumpInput(node, jumpTarget);
+                    addVmRegInput(node, aux & 0xff);
+                    addImmInput(node, static_cast<bool>(aux & LBC_JUMPXISA_CHECKCLASS));
+                    break;
+
                 case LOP_JUMPIF:
                 case LOP_JUMPIFNOT:
                     addVmRegInput(node, LUAU_INSN_A(insn));
@@ -773,6 +781,7 @@ struct BytecodeGraphParser
             case LOP_JUMPXEQKB:
             case LOP_JUMPXEQKN:
             case LOP_JUMPXEQKS:
+            case LOP_JUMPXISA:
             case LOP_JUMPIF:
             case LOP_JUMPIFNOT:
             case LOP_JUMPIFEQ:
@@ -1000,9 +1009,65 @@ struct BytecodeGraphParser
                 addJumpInput(node, getJumpTarget(insn, i));
                 break;
 
-            case LOP_NEWCLASSMEMBER:
-                LUAU_ASSERT(FFlag::DebugLuauUserDefinedClasses);
+            case LOP_CHECKSELFCLASS:
                 addVmRegInput(node, LUAU_INSN_A(insn));
+                // operand B is a register, or LBC_SELFCLASS_OWNER meaning "take the class from
+                // Proto::ownerclass". Only a real register is an input; the sentinel takes its slot as an
+                // immediate, and the next immediate records which of the two the slot holds.
+                if (LUAU_INSN_B(insn) == LBC_SELFCLASS_OWNER)
+                    addImmInput(node, static_cast<int32_t>(LBC_SELFCLASS_OWNER));
+                else
+                    addVmRegInput(node, LUAU_INSN_B(insn));
+                addImmInput(node, static_cast<int32_t>(LUAU_INSN_B(insn) == LBC_SELFCLASS_OWNER ? 1 : 0));
+                addImmInput(node, static_cast<int32_t>(LUAU_INSN_C(insn)));
+                addVmConstInput(node, aux);
+                break;
+
+            case LOP_GETOBJECTMEMBER:
+                addVmRegInput(node, LUAU_INSN_B(insn));
+                addImmInput(node, static_cast<int32_t>(aux));
+                addProducer(LUAU_INSN_A(insn), nodeOp);
+                break;
+
+            case LOP_SETOBJECTMEMBER:
+                addVmRegInput(node, LUAU_INSN_A(insn));
+                addVmRegInput(node, LUAU_INSN_B(insn));
+                addImmInput(node, static_cast<int32_t>(aux));
+                break;
+
+            case LOP_NEWOBJECT:
+            {
+                // Luwu Classes (rfcs/classes): A is only written. What else is read and written depends on the
+                // form in C (see LOP_NEWOBJECT in Bytecode.h).
+                Reg base = LUAU_INSN_A(insn);
+                int form = LUAU_INSN_C(insn);
+
+                addVmRegInput(node, LUAU_INSN_B(insn));
+                addImmInput(node, static_cast<int32_t>(form));
+                addImmInput(node, static_cast<int32_t>(aux));
+
+                if (form == LBC_NEWOBJECT_INIT)
+                {
+                    // lays out the frame of the CALL that follows: `__init` in A + 1 and the instance again in A + 2
+                    func.regs[nodeOp] = base;
+                    for (uint32_t slot = 0; slot < 3; slot++)
+                        addProducer(base + slot, func.addProj(nodeOp, slot));
+                }
+                else
+                {
+                    // DEFAULT reads its optional argument table and FIELDS one value per member, from A + 1 up
+                    for (uint32_t slot = 1; slot <= aux; slot++)
+                        addVmRegInput(node, base + slot);
+
+                    addProducer(base, nodeOp);
+                }
+                break;
+            }
+
+            case LOP_NEWCLASSMEMBER:
+                LUAU_ASSERT(FFlag::LuwuClasses);
+                addVmRegInput(node, LUAU_INSN_A(insn));
+                addVmRegInput(node, LUAU_INSN_C(insn));
                 addVmConstInput(node, aux);
                 break;
 

@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/Repl.h"
 
 #include "Luau/CodeGenOptions.h"
@@ -583,6 +583,11 @@ static std::string getFilePath(const char* name)
         return name;
 
     std::string base = name;
+
+    // Luwu: `.luwu` files are tried first.
+    std::string luwuPath = base + ".luwu";
+    if (isFile(luwuPath))
+        return luwuPath;
 
     std::string luauPath = base + ".luau";
     if (isFile(luauPath))

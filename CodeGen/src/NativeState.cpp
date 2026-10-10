@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "NativeState.h"
 
 #include "Luau/UnwindBuilder.h"
@@ -8,6 +8,7 @@
 #include "lbuiltins.h"
 #include "lgc.h"
 #include "ltable.h"
+#include "lclass.h"
 #include "lfunc.h"
 #include "lvm.h"
 
@@ -45,6 +46,7 @@ void initFunctions(NativeContext& context)
     context.luaH_getn = luaH_getn;
     context.luaH_new = luaH_new;
     context.luaH_clone = luaH_clone;
+    context.luaR_newobjectuninit = luaR_newobjectuninit;
     context.luaH_resizearray = luaH_resizearray;
     context.luaH_setnum = luaH_setnum;
 
@@ -102,6 +104,8 @@ void initFunctions(NativeContext& context)
 
     context.executeNAMECALL = executeNAMECALL;
     context.executeFORGPREP = executeFORGPREP;
+    context.executeNEWOBJECT = executeNEWOBJECT;
+    context.executeNEWCLASSMEMBER = executeNEWCLASSMEMBER;
     context.executeGETVARARGSMultRet = executeGETVARARGSMultRet;
     context.executeGETVARARGSConst = executeGETVARARGSConst;
     context.executeDUPCLOSURE = executeDUPCLOSURE;

@@ -1,4 +1,4 @@
--- This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+-- This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 print('testing vector library')
 
 local function noinline(x, ...) local s, r = pcall(function(y) return y end, x) return r end

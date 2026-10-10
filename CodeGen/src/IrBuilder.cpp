@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/IrBuilder.h"
 
 #include "Luau/Bytecode.h"
@@ -108,6 +108,12 @@ static void buildArgumentTypeChecks(IrBuilder& build, IrOp entry)
             break;
         case LBC_TYPE_SYMNONE:
             build.inst(IrCmd::CHECK_TAG, load, build.constTag(LUA_TSYMNONE), build.vmExit(kVmExitEntryGuardPc));
+            break;
+        case LBC_TYPE_CLASS:
+            build.inst(IrCmd::CHECK_TAG, load, build.constTag(LUA_TCLASS), build.vmExit(kVmExitEntryGuardPc));
+            break;
+        case LBC_TYPE_OBJECT:
+            build.inst(IrCmd::CHECK_TAG, load, build.constTag(LUA_TOBJECT), build.vmExit(kVmExitEntryGuardPc));
             break;
         default:
             if (tag >= LBC_TYPE_TAGGED_USERDATA_BASE && tag < LBC_TYPE_TAGGED_USERDATA_END)
@@ -675,10 +681,37 @@ void IrBuilder::translateInst(LuauOpcode op, const Instruction* pc, int i)
         inst(IrCmd::FALLBACK_FORGPREP, constUint(i), vmReg(LUAU_INSN_A(*pc)), loopStart);
         break;
     }
-    // We do not support classes in NCG at the moment, so if we see a class
-    // operation then unconditionally exit to the VM.
+    // Class declaration and non-native construction have no machine code lowering. They still can't be
+    // a bare `JUMP vmExit`. Such a jump carries no VM register operands, so nothing downstream knows
+    // which registers the interpreter will read next, and stores it still needs get eliminated. For
+    // example, a numeric for loop's limit, step and index sit in registers below these instructions'
+    // own operands, and these instructions don't touch them.
+    //
+    // So both run as ordinary C fallbacks instead. That also keeps the rest of the function native,
+    // rather than handing it to the interpreter at the first construction. (CHECKSELFCLASS does have a
+    // real lowering; see translateInstCheckSelfClass.)
     case LOP_NEWCLASSMEMBER:
-        inst(IrCmd::JUMP, vmExit(i));
+        inst(IrCmd::FALLBACK_NEWCLASSMEMBER, constUint(i), vmReg(LUAU_INSN_A(*pc)), vmReg(LUAU_INSN_C(*pc)));
+        break;
+
+    case LOP_NEWOBJECT:
+        translateInstNewObject(*this, pc, i);
+        break;
+
+    case LOP_GETOBJECTMEMBER:
+        translateInstGetObjectMember(*this, pc, i);
+        break;
+
+    case LOP_SETOBJECTMEMBER:
+        translateInstSetObjectMember(*this, pc, i);
+        break;
+
+    case LOP_CHECKSELFCLASS:
+        translateInstCheckSelfClass(*this, pc, i);
+        break;
+
+    case LOP_JUMPXISA:
+        translateInstJumpXIsa(*this, pc, i);
         break;
 
     case LOP_CMPPROTO:

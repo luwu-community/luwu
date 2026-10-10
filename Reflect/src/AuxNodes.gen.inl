@@ -23,10 +23,10 @@ bool createDefaultAstAux(ReflectAtom atom, const std::shared_ptr<AstDocumentStat
         out = AstAuxData(doc, Luau::AstDeclaredExternTypeProperty{Luau::AstName(), Luau::Location(), nullptr, false, Luau::Location(), Luau::AstTableAccess::ReadWrite});
         return true;
     case ReflectAtom::AstClassProperty:
-        out = AstAuxData(doc, Luau::AstClassProperty{Luau::Location(), Luau::AstName(), Luau::Location(), std::nullopt, nullptr});
+        out = AstAuxData(doc, Luau::AstClassProperty{std::nullopt, Luau::AstClassMemberVisibility::Public, Luau::AstName(), Luau::Location(), std::nullopt, nullptr});
         return true;
     case ReflectAtom::AstClassMethod:
-        out = AstAuxData(doc, Luau::AstClassMethod{std::nullopt, Luau::Location(), Luau::AstName(), Luau::Location(), nullptr});
+        out = AstAuxData(doc, Luau::AstClassMethod{std::nullopt, Luau::AstClassMemberVisibility::Public, Luau::Location(), Luau::AstName(), Luau::Location(), nullptr});
         return true;
     case ReflectAtom::AstComment:
         out = AstAuxData(doc, ReflectComment{Luau::Lexeme::Type::Comment, "--", Luau::Location()});

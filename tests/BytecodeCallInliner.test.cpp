@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/BytecodeBuilder.h"
 #include "Luau/BytecodeGraph.h"
 #include "Luau/BytecodeWire.h"
@@ -165,7 +165,7 @@ struct BytecodeInlinerFixture
     {
         std::string bytecode = bcb.getBytecode();
         const char* data = bytecode.data();
-        size_t offset = 2; // skip versions
+        size_t offset = LWBC_HEADER_SIZE; // skip the Luwu header
         std::vector<std::string> result;
         uint32_t stringsCount = readVarInt(data, offset);
         for (uint32_t i = 0; i < stringsCount; i++)

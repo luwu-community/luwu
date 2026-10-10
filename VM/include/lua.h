@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 #pragma once
 
@@ -535,6 +535,19 @@ LUA_API int lua_getrefpool(lua_State* L, int ref);
 #define lua_isclass(L, n) (lua_type(L, (n)) == LUA_TCLASS)
 #define lua_isobject(L, n) (lua_type(L, (n)) == LUA_TOBJECT)
 
+// Luwu Classes (rfcs/classes)
+enum lua_MemberAccess
+{
+    LUA_MEMBERMISSING = 0,
+    LUA_MEMBERPUBLIC,
+    LUA_MEMBERPRIVATE,
+};
+
+LUA_API void lua_newobject(lua_State* L, int idx);
+LUA_API int lua_getmemberaccess(lua_State* L, int idx, const char* membername);
+LUA_API int lua_ismemberconst(lua_State* L, int idx, const char* membername);
+LUA_API const char* lua_getclassname(lua_State* L, int idx);
+
 LUA_API int lua_getbuffermode(lua_State* L, int idx);
 LUA_API void* lua_getbufferuserdata(lua_State* L, int idx);
 
@@ -649,6 +662,7 @@ typedef struct lua_Callbacks lua_Callbacks;
 LUA_API lua_Callbacks* lua_callbacks(lua_State* L);
 
 /******************************************************************************
+ * Copyright (c) 2026 Luwu contributors
  * Copyright (c) 2019-2023 Roblox Corporation
  * Copyright (C) 1994-2008 Lua.org, PUC-Rio.  All rights reserved.
  *

@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 #include "lgc.h"
 
@@ -420,6 +420,12 @@ static void traverseproto(global_State* g, Proto* f)
 
     if (f->deoptimized)
         markobject(g, f->deoptimized);
+
+    // Luwu Classes (rfcs/classes): keep the owning class alive while its method proto is alive.
+    // Private-access authorization compares this pointer, and CHECKSELFCLASS's LBC_SELFCLASS_OWNER form
+    // uses it as the class (its error path reads the class name).
+    if (f->ownerclass)
+        markobject(g, f->ownerclass);
 }
 
 static void traverseclosure(global_State* g, Closure* cl)
@@ -456,24 +462,28 @@ static void traversestack(global_State* g, lua_State* l)
     }
 }
 
-static void traverseclass(global_State* g, LuauClass* classobject)
+static void traverseclass(global_State* g, LuauClass* classdef)
 {
-    markobject(g, classobject->name);
-    markobject(g, classobject->memberstooffset);
-    for (uint32_t i = 0; i < classobject->numberofallmembers; i++)
-        markobject(g, classobject->offsettomember[i]);
-    for (uint32_t i = 0; i < classobject->numberofallmembers - classobject->numberofinstancemembers; i++)
-        markvalue(g, &classobject->staticmembers[i]);
-    markobject(g, classobject->metatable);
-    if (classobject->instancemetatable)
-        markobject(g, classobject->instancemetatable);
+    markobject(g, classdef->name);
+    markobject(g, classdef->memberstooffset);
+    for (uint32_t i = 0; i < classdef->numberofallmembers; i++)
+        if (classdef->offsettomember[i])
+            markobject(g, classdef->offsettomember[i]);
+    for (uint32_t i = 0; i < classdef->numberofallmembers - classdef->numberofinstancemembers; i++)
+        markvalue(g, &classdef->staticmembers[i]);
+    if (classdef->memberdefaults)
+        for (uint32_t i = 0; i < classdef->numberofinstancemembers; i++)
+            markvalue(g, &classdef->memberdefaults[i]);
+    markobject(g, classdef->metatable);
+    if (classdef->instancemetatable)
+        markobject(g, classdef->instancemetatable);
 }
 
-static void traverseobject(global_State* g, LuauObject* classinst)
+static void traverseobject(global_State* g, LuauObject* object)
 {
-    markobject(g, classinst->lclass);
-    for (uint32_t i = 0; i < classinst->numberofmembers; i++)
-        markvalue(g, &classinst->members[i]);
+    markobject(g, object->lclass);
+    for (uint32_t i = 0; i < object->numberofmembers; i++)
+        markvalue(g, &object->members[i]);
 }
 
 static void clearstack(lua_State* l)
@@ -594,25 +604,19 @@ static size_t propagatemark(global_State* g)
     }
     case LUA_TCLASS:
     {
-        LuauClass* classobject = gco2class(o);
-        g->gray = classobject->gclist;
-        traverseclass(g, classobject);
-        // We've traversed the "object" itself ...
-        return sizeof(LuauClass) +
-               // ... plus the method closures, each a `TValue` wide ...
-               ((classobject->numberofallmembers - classobject->numberofinstancemembers) * sizeof(TValue)) +
-               // ... plus a string pointer for each method or property, each a pointer wide.
-               (classobject->numberofallmembers * sizeof(TString*));
+        LuauClass* classdef = gco2class(o);
+        g->gray = classdef->gclist;
+        traverseclass(g, classdef);
+        return luaR_classsize(classdef);
     }
     case LUA_TOBJECT:
     {
-        LuauObject* classinst = gco2object(o);
-        g->gray = classinst->gclist;
-        traverseobject(g, classinst);
-        // We've traversed the instance ...
-        return sizeof(LuauObject) +
-               // ... plus all of the instance fields.
-               classinst->numberofmembers * sizeof(TValue);
+        LuauObject* object = gco2object(o);
+        g->gray = object->gclist;
+        traverseobject(g, object);
+        // We've traversed the instance, header plus its inline fields (one allocation, see
+        // luaR_objectsize).
+        return luaR_objectsize(object->numberofmembers);
     }
     default:
         LUAU_ASSERT(0);

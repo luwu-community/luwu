@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/FileUtils.h"
 
 #include "Luau/Common.h"
@@ -450,7 +450,7 @@ std::vector<std::string> getSourceFiles(int argc, char** argv)
                 {
                     std::string ext = getExtension(name);
 
-                    if (ext == ".lua" || ext == ".luau")
+                    if (ext == ".lua" || ext == ".luau" || ext == ".luwu")
                         files.push_back(name);
                 }
             );

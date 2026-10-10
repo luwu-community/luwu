@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/TypeInfer.h"
 #include "Luau/BuiltinDefinitions.h"
 #include "Luau/Common.h"
@@ -1030,7 +1030,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "tonumber_returns_optional_number_type")
     {
         CHECK_EQ(
             "Expected this to be 'number', but got 'number?'; \n"
-            "the 2nd component of the union is `nil`, which is not a subtype of `number`",
+            "`number?` could be `nil`",
             toString(result.errors[0])
         );
     }

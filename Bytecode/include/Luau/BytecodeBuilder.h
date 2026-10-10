@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
 #include "Luau/Bytecode.h"
@@ -53,6 +53,13 @@ public:
         int32_t className;
         std::vector<int32_t> propertyNames;
         std::vector<int32_t> methodNames;
+        // Parallel to propertyNames/methodNames; LBC_CLASSMEMBER_* bits (see Luau/Bytecode.h) for
+        // each member, in the same order (properties first, then methods).
+        std::vector<uint8_t> propertyFlags;
+        std::vector<uint8_t> methodFlags;
+        // Parallel to propertyNames: for a member flagged LBC_CLASSMEMBER_CONSTDEFAULT, the proto
+        // constant index of its default value; -1 for every other member.
+        std::vector<int32_t> propertyDefaults;
     };
 
     BytecodeBuilder(BytecodeEncoder* encoder = 0);

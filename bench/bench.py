@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-# This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+# This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 import argparse
 import os
 import subprocess
@@ -28,7 +28,7 @@ except ModuleNotFoundError:
     stats = None
 
 scriptdir = os.path.dirname(os.path.realpath(__file__))
-defaultVm = 'luau.exe' if os.name == "nt" else './luau'
+defaultVm = 'luwu.exe' if os.name == "nt" else './luwu'
 
 argumentParser = argparse.ArgumentParser(description='Benchmark Lua script execution with an option to compare different VMs')
 

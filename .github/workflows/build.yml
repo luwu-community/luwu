@@ -16,6 +16,9 @@ on:
       - 'rfcs/**'
       - '*.md'
 
+env:
+  SEAL_VERSION: 0.8.1
+
 jobs:
   unix:
     strategy:
@@ -35,27 +38,48 @@ jobs:
     - name: work around ASLR+ASAN compatibility
       run: sudo sysctl -w vm.mmap_rnd_bits=28
       if: matrix.os.name == 'ubuntu'
+    - name: install seal
+      # Conformance's ClassesFuzz runs tests/classes_fuzz with seal 0.8.x (>= 0.8.1) and fails without it
+      shell: bash
+      run: |
+        case "${{runner.os}}-${{runner.arch}}" in
+          Linux-X64) asset=linux-x64.tar.gz ;;
+          Linux-ARM64) asset=linux-arm64.tar.gz ;;
+          macOS-ARM64) asset=macos-darwin-arm64.tar.gz ;;
+          Windows-X64) asset=windows-x64.zip ;;
+          Windows-ARM64) asset=windows-arm64.zip ;;
+          *) echo "::error::seal $SEAL_VERSION has no build for ${{runner.os}}-${{runner.arch}}; set LUWU_SKIP_CLASSES_FUZZ=1 for this job"; exit 1 ;;
+        esac
+        dir="$RUNNER_TEMP/seal"
+        mkdir -p "$dir"
+        curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 -o "$dir/$asset" "https://github.com/seal-runtime/seal/releases/download/v$SEAL_VERSION/seal-v$SEAL_VERSION-$asset"
+        case "$asset" in
+          *.zip) 7z x -y -o"$dir" "$dir/$asset" >/dev/null ;;
+          *) tar -xzf "$dir/$asset" -C "$dir" ;;
+        esac
+        echo "$dir" >> "$GITHUB_PATH"
+        "$dir/seal" --version
     - name: make tests
       run: |
-        CC=${{matrix.compiler.cc}} CXX=${{matrix.compiler.cxx}} make -j2 config=sanitize werror=1 native=1 luau-tests
+        CC=${{matrix.compiler.cc}} CXX=${{matrix.compiler.cxx}} make -j2 config=sanitize werror=1 native=1 luwu-tests
     - name: run tests
       run: |
-        ./luau-tests
-        ./luau-tests --fflags=true
+        ./luwu-tests
+        ./luwu-tests --fflags=true
     - name: run extra conformance tests
       run: |
-        ./luau-tests -ts=Conformance -O2
-        ./luau-tests -ts=Conformance -O2 --fflags=true
-        ./luau-tests -ts=Conformance --codegen
-        ./luau-tests -ts=Conformance --codegen --fflags=true
-        ./luau-tests -ts=Conformance --codegen -O2
-        ./luau-tests -ts=Conformance --codegen -O2 --fflags=true
+        ./luwu-tests -ts=Conformance -O2
+        ./luwu-tests -ts=Conformance -O2 --fflags=true
+        ./luwu-tests -ts=Conformance --codegen
+        ./luwu-tests -ts=Conformance --codegen --fflags=true
+        ./luwu-tests -ts=Conformance --codegen -O2
+        ./luwu-tests -ts=Conformance --codegen -O2 --fflags=true
     - name: make cli
       run: |
-         make -j2 config=sanitize werror=1 luau luau-analyze luau-compile # match config with tests to improve build time
-         ./luau tests/conformance/assert.luau
-         ./luau-analyze tests/conformance/assert.luau
-         ./luau-compile tests/conformance/assert.luau
+         make -j2 config=sanitize werror=1 luwu luwu-analyze luwu-compile # match config with tests to improve build time
+         ./luwu tests/conformance/assert.luau
+         ./luwu-analyze tests/conformance/assert.luau
+         ./luwu-compile tests/conformance/assert.luau
 
   windows:
     runs-on: windows-latest
@@ -64,36 +88,60 @@ jobs:
         arch: [Win32, x64]
     steps:
     - uses: actions/checkout@v1
+    - name: install seal
+      # Conformance's ClassesFuzz runs tests/classes_fuzz with seal 0.8.x (>= 0.8.1) and fails without it
+      shell: bash
+      run: |
+        case "${{runner.os}}-${{runner.arch}}" in
+          Linux-X64) asset=linux-x64.tar.gz ;;
+          Linux-ARM64) asset=linux-arm64.tar.gz ;;
+          macOS-ARM64) asset=macos-darwin-arm64.tar.gz ;;
+          Windows-X64) asset=windows-x64.zip ;;
+          Windows-ARM64) asset=windows-arm64.zip ;;
+          *) echo "::error::seal $SEAL_VERSION has no build for ${{runner.os}}-${{runner.arch}}; set LUWU_SKIP_CLASSES_FUZZ=1 for this job"; exit 1 ;;
+        esac
+        dir="$RUNNER_TEMP/seal"
+        mkdir -p "$dir"
+        curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 -o "$dir/$asset" "https://github.com/seal-runtime/seal/releases/download/v$SEAL_VERSION/seal-v$SEAL_VERSION-$asset"
+        case "$asset" in
+          *.zip) 7z x -y -o"$dir" "$dir/$asset" >/dev/null ;;
+          *) tar -xzf "$dir/$asset" -C "$dir" ;;
+        esac
+        echo "$dir" >> "$GITHUB_PATH"
+        "$dir/seal" --version
     - name: cmake configure
       run: cmake . -A ${{matrix.arch}} -DLUAU_WERROR=ON -DLUAU_NATIVE=ON
     - name: cmake build
-      run: cmake --build . --target Luau.UnitTest Luau.Conformance --config Debug
+      run: cmake --build . --target Luwu.UnitTest Luwu.Conformance --config Debug
     - name: run tests
       shell: bash # necessary for fail-fast
       run: |
-        Debug/Luau.UnitTest.exe
-        Debug/Luau.Conformance.exe
-        Debug/Luau.UnitTest.exe --fflags=true
-        Debug/Luau.Conformance.exe --fflags=true
+        Debug/Luwu.UnitTest.exe
+        Debug/Luwu.Conformance.exe
+        Debug/Luwu.UnitTest.exe --fflags=true
+        Debug/Luwu.Conformance.exe --fflags=true
     - name: run extra conformance tests
       shell: bash # necessary for fail-fast
       run: |
-        Debug/Luau.Conformance.exe -O2
-        Debug/Luau.Conformance.exe -O2 --fflags=true
-        Debug/Luau.Conformance.exe --codegen
-        Debug/Luau.Conformance.exe --codegen --fflags=true
-        Debug/Luau.Conformance.exe --codegen -O2
-        Debug/Luau.Conformance.exe --codegen -O2 --fflags=true
+        Debug/Luwu.Conformance.exe -O2
+        Debug/Luwu.Conformance.exe -O2 --fflags=true
+        Debug/Luwu.Conformance.exe --codegen
+        Debug/Luwu.Conformance.exe --codegen --fflags=true
+        Debug/Luwu.Conformance.exe --codegen -O2
+        Debug/Luwu.Conformance.exe --codegen -O2 --fflags=true
     - name: cmake cli
       shell: bash # necessary for fail-fast
       run: |
-        cmake --build . --target Luau.Repl.CLI Luau.Analyze.CLI Luau.Compile.CLI --config Debug # match config with tests to improve build time
-        Debug/luau tests/conformance/assert.luau
-        Debug/luau-analyze tests/conformance/assert.luau
-        Debug/luau-compile tests/conformance/assert.luau
+        cmake --build . --target Luwu.Repl.CLI Luwu.Analyze.CLI Luwu.Compile.CLI --config Debug # match config with tests to improve build time
+        Debug/luwu tests/conformance/assert.luau
+        Debug/luwu-analyze tests/conformance/assert.luau
+        Debug/luwu-compile tests/conformance/assert.luau
 
   coverage:
     runs-on: ubuntu-22.04
+    env:
+      # the classes fuzzer runs in the unix and windows jobs; its luwu processes wouldn't count toward coverage
+      LUWU_SKIP_CLASSES_FUZZ: 1
     steps:
     - uses: actions/checkout@v2
     - name: install
@@ -125,4 +173,4 @@ jobs:
       run: |
         source emsdk/emsdk_env.sh
         emcmake cmake . -DLUAU_BUILD_WEB=ON -DCMAKE_BUILD_TYPE=Release
-        make -j2 Luau.Web
+        make -j2 Luwu.Web

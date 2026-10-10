@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
 #include "Luau/Bytecode.h"
@@ -39,6 +39,11 @@ inline int getOpLength(LuauOpcode op)
     case LOP_NEWCLASSMEMBER:
     case LOP_CALLFB:
     case LOP_CMPPROTO:
+    case LOP_JUMPXISA:
+    case LOP_CHECKSELFCLASS:
+    case LOP_NEWOBJECT:
+    case LOP_GETOBJECTMEMBER:
+    case LOP_SETOBJECTMEMBER:
         return 2;
 
     default:
@@ -87,6 +92,7 @@ inline bool isJumpD(LuauOpcode op)
     case LOP_JUMPXEQKN:
     case LOP_JUMPXEQKS:
     case LOP_CMPPROTO:
+    case LOP_JUMPXISA:
         return true;
 
     default:

@@ -1,0 +1,49 @@
+--!nocheck
+
+-- Regression test: an `export class` referenced later in the same module, including by constructing
+-- another class from it, could see the exported class as nil because of the order exports are hoisted in.
+--
+-- How the test is set up: `export` statements make the module's implicit return the (frozen) export
+-- table, which conflicts with an explicit top-level `return`. So, as in exportclasses.luwu, the exported
+-- class under test lives in its own chunk, loaded and run with loadstring. This outer chunk has no
+-- exports, so it can `return 'OK'`. The inner chunk can't `return` its result either, so it stores the
+-- result in a global.
+local source = [[
+    export class ReproCat
+        name: string
+        age: number
+        function __init(self, name, age)
+            self.name = name
+            self.age = age
+        end
+        function meow(self, message = "says meow")
+            return `{self.name} {message}`
+        end
+    end
+
+    class ReproList<T>
+        private const inner: { T }
+
+        public function __init(self, ...: T)
+            self.inner = { ... }
+        end
+    end
+
+    reproTestResult = ReproList(
+        ReproCat("Taz", 12),
+        ReproCat("Nanuk", 2)
+    )
+]]
+
+local chunk, compileErr = loadstring(source)
+assert(chunk, `failed to compile export hoisting repro chunk: {tostring(compileErr)}`)
+
+local ok, err = pcall(chunk)
+assert(ok, `expected ReproList/ReproCat construction to succeed, got error: {tostring(err)}`)
+
+local result = reproTestResult
+assert(typeof(result) == "object", `expected typeof(result) == "object", got {typeof(result)}`)
+
+print("ok: exported class referenced by another class in the same module is not nil")
+
+return 'OK'

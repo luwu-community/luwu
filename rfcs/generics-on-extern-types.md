@@ -1,12 +1,14 @@
-# Generic parameters on extern types
+# Generic Nominals (on extern types and classes)
 
-FFlags: LuauGenericNominals, LuauExternTypeGenericMethods
+Status: Implemented (Flagged)
 
-Implementation-related upstream bugfix FFlags: LuauExternTypeUseDefinitionScope
+FFlags: LuwuGenericNominals, LuwuExternTypeGenericMethods
+
+Implementation-related upstream bugfix FFlags: LuwuExternTypeUseDefinitionScope
 
 ## Summary
 
-Allows nominal types (extern types and classes) to take generic parameters (like `<T>`).
+Allows nominal types (extern types and classes) to take generic parameters (like `<T>`, `<T = string>`).
 This first implementation focuses only on extern types, with a followup implementation adding support for user-defined classes.
 
 ## Motivation
@@ -28,7 +30,7 @@ The type solver is modified to handle generic parameters on extern types:
 - Generic parameters on extern types do not affect the runtime `typeof` of the extern type, and there's no way at runtime to recover what `T`
 an extern type was instantiated with. This feature only exists to improve strictly typed semantics.
 - Users may use `typeof` to refine a union of values including extern types with generic parameters to one or more extern types.
-- Generic parameters on classes are planned but not implemented in the first iteration of this RFC. We want to wait for our version of classes to land before implementing generic parameters on them.
+- Like table types with generic parameters, extern types with generic parameters also accept defaults (`declare extern type Container<T = { string }>`).
 
 Example of using `typeof` to narrow:
 

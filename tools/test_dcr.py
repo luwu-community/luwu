@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-# This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+# This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 
 import argparse
 import os.path
@@ -98,10 +98,10 @@ def print_stderr(*args, **kw):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run Luau.UnitTest with deferred constraint resolution enabled"
+        description="Run Luwu.UnitTest with deferred constraint resolution enabled"
     )
     parser.add_argument(
-        "path", action="store", help="Path to the Luau.UnitTest executable"
+        "path", action="store", help="Path to the Luwu.UnitTest executable"
     )
     parser.add_argument(
         "--fflags",

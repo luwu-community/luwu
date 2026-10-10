@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/Ast.h"
 #include "Luau/AstJsonEncoder.h"
 #include "Luau/Parser.h"
@@ -13,14 +13,14 @@ using namespace Luau;
 
 
 LUAU_FASTFLAG(LuauDisallowExternClassInTypeDefinitions)
-LUAU_FASTFLAG(LuauDefaultArguments)
+LUAU_FASTFLAG(LuwuDefaultArguments)
 
 struct JsonEncoderFixture
 {
     Allocator allocator;
     AstNameTable names{allocator};
     ScopedFastFlag sff{FFlag::LuauDisallowExternClassInTypeDefinitions, true};
-    ScopedFastFlag sffDefaultArguments{FFlag::LuauDefaultArguments, true};
+    ScopedFastFlag sffDefaultArguments{FFlag::LuwuDefaultArguments, true};
 
     ParseResult parse(std::string_view src)
     {
@@ -411,7 +411,7 @@ TEST_CASE_FIXTURE(JsonEncoderFixture, "encode_AstStatLocalFunction")
     AstStat* statement = expectParseStatement("local function a(b) return end");
 
     std::string_view expected =
-        R"({"type":"AstStatLocalFunction","location":"0,0 - 0,30","name":{"luauType":null,"name":"a","isConst":false,"type":"AstLocal","location":"0,15 - 0,16"},"func":{"type":"AstExprFunction","location":"0,0 - 0,30","attributes":[],"generics":[],"genericPacks":[],"args":[{"luauType":null,"name":"b","isConst":false,"type":"AstLocal","location":"0,17 - 0,18"}],"argsDefaults":[null],"vararg":false,"varargLocation":"0,0 - 0,0","body":{"type":"AstStatBlock","location":"0,19 - 0,27","hasEnd":true,"body":[{"type":"AstStatReturn","location":"0,20 - 0,26","list":[]}]},"functionDepth":1,"debugname":"a"}})";
+        R"({"type":"AstStatLocalFunction","location":"0,0 - 0,30","name":{"luauType":null,"name":"a","isConst":false,"type":"AstLocal","location":"0,15 - 0,16"},"func":{"type":"AstExprFunction","location":"0,6 - 0,30","attributes":[],"generics":[],"genericPacks":[],"args":[{"luauType":null,"name":"b","isConst":false,"type":"AstLocal","location":"0,17 - 0,18"}],"argsDefaults":[null],"vararg":false,"varargLocation":"0,0 - 0,0","body":{"type":"AstStatBlock","location":"0,19 - 0,27","hasEnd":true,"body":[{"type":"AstStatReturn","location":"0,20 - 0,26","list":[]}]},"functionDepth":1,"debugname":"a"}})";
 
     CHECK(toJson(statement) == expected);
 }

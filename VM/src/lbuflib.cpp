@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "lualib.h"
 
 #include "lcommon.h"
@@ -9,7 +9,7 @@
 #endif
 
 LUAU_FASTFLAG(LuauIntegerLibrary)
-LUAU_FASTFLAGVARIABLE(LuauBufferIsFrozen)
+LUAU_FASTFLAGVARIABLE(LuwuBufferIsFrozen)
 
 #include <string.h>
 
@@ -447,7 +447,7 @@ int luaopen_buffer(lua_State* L)
     else
         luaL_register(L, LUA_BUFFERLIBNAME, bufferlib_NOINTEGER);
 
-    if (FFlag::LuauBufferIsFrozen)
+    if (FFlag::LuwuBufferIsFrozen)
     {
         lua_pushcfunction(L, buffer_isfrozen, "isfrozen");
         lua_setfield(L, -2, "isfrozen");

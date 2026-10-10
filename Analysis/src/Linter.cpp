@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/Linter.h"
 
 #include "Luau/AstQuery.h"
@@ -15,6 +15,8 @@
 
 LUAU_FASTINTVARIABLE(LuauSuggestionDistance, 4)
 LUAU_FASTFLAGVARIABLE(LuauFunctionUnusedRecursiveLinting)
+LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
+LUAU_FASTFLAGVARIABLE(LuwuTableRemoveFootgunLint)
 
 namespace Luau
 {
@@ -613,6 +615,41 @@ private:
 
         return true;
     }
+
+    bool visit(AstStatClass* node) override
+    {
+        for (size_t i = 1; i < node->members.size; ++i)
+        {
+            Location last = Luau::visit([](auto&& member) -> Location
+                { return member.nameLocation; }, node->members.data[i - 1]);
+            Location location = Luau::visit([](auto&& member) -> Location
+                { return member.nameLocation; }, node->members.data[i]);
+
+            if (location.begin.line != last.end.line)
+                continue;
+
+            if (location.begin.line == lastLine)
+                continue;
+
+            bool lastHasSemicolon =
+                Luau::visit([](auto&& member) -> bool
+                    { return member.hasSemicolon; }, node->members.data[i - 1]);
+
+            if (lastHasSemicolon)
+                continue;
+
+            emitWarning(
+                *context,
+                LintWarning::Code_SameLineStatement,
+                location,
+                "Each class field should be on its own line; separate fields with a semicolon to silence"
+            );
+
+            lastLine = location.begin.line;
+        }
+
+        return true;
+    }
 };
 
 class LintMultiLineStatement : AstVisitor
@@ -735,11 +772,13 @@ private:
     DenseHashMap<AstLocal*, Local> locals;
     DenseHashMap<AstName, AstLocal*> imports;
     DenseHashMap<AstName, Global> globals;
+    DenseHashMap<AstName, AstStatClass*> classes;
 
     LintLocalHygiene()
         : locals(NULL)
         , imports(AstName())
         , globals(AstName())
+        , classes(AstName())
     {
     }
 
@@ -747,11 +786,37 @@ private:
     {
         for (auto& l : locals)
         {
+            bool shadowsClass = l.second.defined && reportClassShadow(l.first);
+
             if (l.second.used)
-                reportUsedLocal(l.first, l.second);
+            {
+                if (!shadowsClass)
+                    reportUsedLocal(l.first, l.second);
+            }
             else if (l.second.defined)
                 reportUnusedLocal(l.first, l.second);
         }
+    }
+
+    // Luwu Classes (rfcs/classes): classes are declared at the top level and a class binding is
+    // const, so a `local` or `local function` with a class's name anywhere in its module (before or
+    // after the class, at any depth) hides the class from the code that follows it.
+    bool reportClassShadow(AstLocal* local)
+    {
+        AstStatClass** cls = classes.find(local->name);
+        if (!cls)
+            return false;
+
+        emitWarning(
+            *context,
+            LintWarning::Code_LocalShadow,
+            local->location,
+            "Variable '%s' shadows class '%s' declared at line %d",
+            local->name.value,
+            (*cls)->name->name.value,
+            (*cls)->name->location.begin.line + 1
+        );
+        return true;
     }
 
     void reportUsedLocal(AstLocal* local, const Local& info)
@@ -893,6 +958,12 @@ private:
         l.defined = node;
         l.function.emplace(node->location);
 
+        return true;
+    }
+
+    bool visit(AstStatClass* node) override
+    {
+        classes[node->name->name] = node;
         return true;
     }
 
@@ -2631,10 +2702,79 @@ public:
 
 private:
     LintContext* context;
+    DenseHashSet<AstLocal*> tableFindResultLocals;
 
     LintTableOperations(LintContext* context)
         : context(context)
     {
+    }
+
+    static bool isTableFindCall(AstExpr* expr)
+    {
+        if (!expr)
+            return false;
+
+        if (AstExprTypeAssertion* typeAssertion = expr->as<AstExprTypeAssertion>())
+            return isTableFindCall(typeAssertion->expr);
+
+        if (AstExprGroup* group = expr->as<AstExprGroup>())
+            return isTableFindCall(group->expr);
+
+        if (AstExprCall* call = expr->as<AstExprCall>())
+        {
+            if (AstExprIndexName* indexName = call->func->as<AstExprIndexName>())
+            {
+                if (indexName->index == "find")
+                {
+                    if (AstExprGlobal* global = indexName->expr->as<AstExprGlobal>())
+                        return global->name == "table";
+                }
+            }
+        }
+
+        return false;
+    }
+
+    bool isTableFindResult(AstExpr* expr)
+    {
+        if (!expr)
+            return false;
+
+        if (AstExprTypeAssertion* typeAssertion = expr->as<AstExprTypeAssertion>())
+            return isTableFindResult(typeAssertion->expr);
+
+        if (AstExprGroup* group = expr->as<AstExprGroup>())
+            return isTableFindResult(group->expr);
+
+        if (isTableFindCall(expr))
+            return true;
+
+        if (AstExprLocal* local = expr->as<AstExprLocal>())
+            return tableFindResultLocals.contains(local->local);
+
+        return false;
+    }
+
+    bool visit(AstStatLocal* node) override
+    {
+        for (size_t i = 0; i < node->vars.size && i < node->values.size; ++i)
+        {
+            if (isTableFindCall(node->values.data[i]))
+                tableFindResultLocals.insert(node->vars.data[i]);
+        }
+
+        return true;
+    }
+
+    bool visit(AstStatAssign* node) override
+    {
+        for (size_t i = 0; i < node->vars.size && i < node->values.size; ++i)
+        {
+            if (AstExprLocal* local = node->vars.data[i]->as<AstExprLocal>(); local && isTableFindCall(node->values.data[i]))
+                tableFindResultLocals.insert(local->local);
+        }
+
+        return true;
     }
 
     bool visit(AstExprUnary* node) override
@@ -2759,6 +2899,47 @@ private:
                     "table.remove will remove the value before the last element, which is likely a bug; consider removing the second argument or "
                     "wrap it in parentheses to silence"
                 );
+
+            // table.remove(t, <optional number expression>) -- common footgun when passing table.find
+            if (FFlag::LuwuTableRemoveFootgunLint && !args[1]->is<AstExprConstantNil>())
+            {
+                bool warnForOptionalNumber = isTableFindResult(args[1]);
+
+                if (!warnForOptionalNumber)
+                {
+                    if (std::optional<TypeId> ty = context->getType(args[1]))
+                    {
+                        TypeId t = follow(*ty);
+
+                        bool hasNumber = false;
+                        if (isNumber(t))
+                            hasNumber = true;
+                        else if (const UnionType* ut = get<UnionType>(t))
+                        {
+                            for (TypeId part : ut->options)
+                            {
+                                if (isNumber(part))
+                                {
+                                    hasNumber = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        warnForOptionalNumber = isOptional(t) && hasNumber;
+                    }
+                }
+
+                if (warnForOptionalNumber)
+                {
+                    emitWarning(
+                        *context,
+                        LintWarning::Code_TableOperations,
+                        args[1]->location,
+                        "If this is `nil`, `table.remove` will remove the last element of the array.\nConsider using `table.drop` instead. If order is not important, use a key/value table for better performance."
+                    );
+                }
+            }
         }
 
         if (func->index == "move" && node->args.size >= 4)
@@ -3460,6 +3641,22 @@ static void lintComments(LintContext& context, const std::vector<HotComment>& ho
                         context, LintWarning::Code_CommentDirective, hc.location, "native directive has extra symbols at the end of the line"
                     );
             }
+            else if (first == "trust")
+            {
+                // Luwu Classes (rfcs/classes): the directive only counts when the embedder allows it (see
+                // DebugLuwuCompilerTrustsTypeAnnotations in Compiler.cpp).
+                if (space != std::string::npos)
+                    emitWarning(
+                        context, LintWarning::Code_CommentDirective, hc.location, "trust directive has extra symbols at the end of the line"
+                    );
+                else if (!FFlag::DebugLuwuCompilerTrustsTypeAnnotations)
+                    emitWarning(
+                        context,
+                        LintWarning::Code_CommentDirective,
+                        hc.location,
+                        "trust directive has no effect because DebugLuwuCompilerTrustsTypeAnnotations is disabled"
+                    );
+            }
             else
             {
                 static const char* kHotComments[] = {
@@ -3469,6 +3666,7 @@ static void lintComments(LintContext& context, const std::vector<HotComment>& ho
                     "strict",
                     "optimize",
                     "native",
+                    "trust",
                 };
 
                 if (const char* suggestion = fuzzyMatch(first, kHotComments, std::size(kHotComments)))

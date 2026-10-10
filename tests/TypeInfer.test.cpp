@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 
 #include "Luau/AstQuery.h"
 #include "Luau/BuiltinDefinitions.h"
@@ -1181,7 +1181,9 @@ TEST_CASE_FIXTURE(Fixture, "cli_50041_committing_txnlog_in_apollo_client_error")
 
         LUAU_REQUIRE_ERROR_COUNT(1, result);
         const std::string expected =
-            "Expected this to be exactly 'Policies' from 'MainModule', but got 'Policies' from 'MainModule'"
+            // Both sides are the same alias from the same module, so there is nothing to qualify
+            // them with; naming that one module twice told the reader nothing.
+            "Expected this to be exactly 'Policies', but got 'Policies'"
             "\ncaused by:\n"
             "  Property 'getStoreFieldName' is not compatible.\n"
             "Expected this to be exactly\n\t"
@@ -1196,7 +1198,7 @@ TEST_CASE_FIXTURE(Fixture, "cli_50041_committing_txnlog_in_apollo_client_error")
             "'FieldSpecifier'"
             "\ncaused by:\n"
             "  Not all intersection parts are compatible.\n"
-            "extra field 'fieldName' found in type 'FieldSpecifier' from expected type '{ from: number? }'";
+            "extra field 'fieldName' found in type\n  'FieldSpecifier'\nexpected type:\n  '{ from: number? }'";
         CHECK_EQ(expected, toString(result.errors[0]));
     }
     else

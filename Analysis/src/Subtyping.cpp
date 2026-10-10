@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 
 #include "Luau/Subtyping.h"
 
@@ -31,6 +31,7 @@ LUAU_FASTFLAGVARIABLE(LuauDontBindOptionalGenericToNil)
 LUAU_FASTFLAGVARIABLE(LuauImproveUniqueTableWidthSubtyping)
 LUAU_FASTFLAG(LuauBidirectionalInferenceSimplifyTables)
 LUAU_FASTFLAG(LuauIndexerModifierMismatchErrors)
+LUAU_FASTFLAG(LuwuGenericNominals)
 
 namespace Luau
 {
@@ -2261,7 +2262,49 @@ SubtypingResult Subtyping::isCovariantWith(
     NotNull<Scope> scope
 )
 {
-    return {isSubclass(subExternType, superExternType)};
+    if (isSubclass(subExternType, superExternType))
+        return {true};
+
+    // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): `isSubclass` compares a generic nominal's type arguments with `sameNominalTypeArg`
+    // (Type.cpp), which can only answer pointer identity or another nominal -- it lives in Type.cpp
+    // and has no subtyping machinery to call. So two separately-constructed but identical arguments
+    // never match, and `Exception<{ n: number }>` is not a subtype of `Exception<{ n: number }>`.
+    // Here the machinery *is* available, so compare the arguments properly. A nominal's type
+    // parameters are invariant, so this is equivalence, not subtyping -- `Exception<string>` still
+    // has nothing to do with `Exception<number>`.
+    if (FFlag::LuwuGenericNominals && subExternType->name == superExternType->name &&
+        subExternType->definitionModuleName == superExternType->definitionModuleName &&
+        subExternType->definitionLocation == superExternType->definitionLocation &&
+        subExternType->instantiatedTypeParams.size() == superExternType->instantiatedTypeParams.size() &&
+        subExternType->instantiatedTypePackParams.size() == superExternType->instantiatedTypePackParams.size() &&
+        !subExternType->instantiatedTypeParams.empty())
+    {
+        SubtypingResult result{true};
+        bool anyUnsuppressedMismatch = false;
+
+        for (size_t i = 0; i < subExternType->instantiatedTypeParams.size(); ++i)
+        {
+            SubtypingResult argResult =
+                isInvariantWith(env, follow(subExternType->instantiatedTypeParams[i]), follow(superExternType->instantiatedTypeParams[i]), scope);
+            anyUnsuppressedMismatch |= !argResult.isSubtype && !argResult.isErrorSuppressing;
+            result.andAlso(std::move(argResult));
+        }
+
+        for (size_t i = 0; i < subExternType->instantiatedTypePackParams.size(); ++i)
+        {
+            if (follow(subExternType->instantiatedTypePackParams[i]) != follow(superExternType->instantiatedTypePackParams[i]))
+                return {false};
+        }
+
+        // An argument that only mismatches `any` (`A<any>` against `A<string>`) fails with the error
+        // suppressed, like the structural `{ v: any }` against `{ v: string }`. Any other mismatch
+        // fails without reasonings: their paths lead into type arguments, which the error
+        // explanation can't follow.
+        if (result.isSubtype || !anyUnsuppressedMismatch)
+            return result;
+    }
+
+    return {false};
 }
 
 SubtypingResult Subtyping::isCovariantWith(

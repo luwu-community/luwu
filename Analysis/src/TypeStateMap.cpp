@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/TypeStateMap.h"
 
 #include "Luau/Common.h"
@@ -12,7 +12,7 @@
 
 
 LUAU_FASTINTVARIABLE(LuauMaxCFGDataflowIterations, 2);
-LUAU_FASTFLAG(LuauGenericNominals)
+LUAU_FASTFLAG(LuwuGenericNominals)
 
 namespace Luau::CFG
 {
@@ -192,15 +192,18 @@ TypeId TypeStateMap::getDiscriminantOf(const Refine& refine)
         discriminantTy = builtinTypes->externType;
     }
     else if (auto typeFun = globalScope->lookupType(name);
-             typeFun && (FFlag::LuauGenericNominals ? get<ExternType>(follow(typeFun->type)) != nullptr
+             typeFun && (FFlag::LuwuGenericNominals ? get<ExternType>(follow(typeFun->type)) != nullptr
                                                      : (typeFun->typeParams.empty() && typeFun->typePackParams.empty())))
     {
         TypeId ty = follow(typeFun->type);
 
-        // Only accept the root of an extern-type chain (or anything tagged as a
-        // typeof root). Anything else stays `never` and produces an empty
-        // refinement.
-        if (auto etv = get<ExternType>(ty); etv && (etv->parent == builtinTypes->externType || hasTag(ty, kTypeofRootTag)))
+        // Only accept a type `typeof` can name: a userdata datatype root (a
+        // direct child of the `userdata` root), or the `object`/`class` roots
+        // themselves (an individual class's typeof is "object", not its name).
+        // Anything else stays `never` and produces an empty refinement.
+        if (auto etv = get<ExternType>(ty); etv &&
+            (etv->parent == builtinTypes->externType || ty == builtinTypes->objectType || ty == builtinTypes->classType ||
+             hasTag(ty, kTypeofRootTag)))
             discriminantTy = ty;
     }
 

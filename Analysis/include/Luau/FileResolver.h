@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
 #include "Luau/TypeCheckLimits.h"
@@ -70,7 +70,7 @@ struct RequireNode
         return {};
     }
 
-    // Resolve a path relative to the current node. The Luau.Require library
+    // Resolve a path relative to the current node. The Luwu.Require library
     // provides utilities that can help with implementing this logic.
     virtual std::unique_ptr<RequireNode> resolvePathToNode(const std::string& path) const = 0;
 

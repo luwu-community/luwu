@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 #include "lualib.h"
 #include "lstate.h"
@@ -6,7 +6,7 @@
 #include <stdlib.h>
 
 LUAU_FASTFLAG(LuauIntegerLibrary)
-LUAU_FASTFLAG(DebugLuauUserDefinedClassesRuntime)
+LUAU_FASTFLAG(LuwuClasses)
 
 static const luaL_Reg lualibs[] = {
     {"", luaopen_base},
@@ -54,7 +54,7 @@ void luaL_openlibs(lua_State* L)
         lua_call(L, 1, 0);
     }
 
-    if (FFlag::DebugLuauUserDefinedClassesRuntime)
+    if (FFlag::LuwuClasses)
     {
         lua_pushcfunction(L, luaopen_class, NULL);
         lua_pushstring(L, LUA_CLASSLIBNAME);

@@ -14,7 +14,7 @@
 #include <string>
 
 LUAU_FASTFLAG(LuauDirectFieldGet)
-LUAU_FASTFLAG(LuauManagedReferences2)
+LUAU_FASTFLAG(LuwuManagedReferences2)
 
 static int dostring(lua_State* L, const char* code)
 {
@@ -41,7 +41,7 @@ TEST_SUITE_BEGIN("Reflect");
 TEST_CASE("LazyAstTypeof")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
-    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
@@ -91,7 +91,7 @@ TEST_CASE("LazyAstTypeof")
 TEST_CASE("LazyAstProperties")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
-    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
@@ -141,7 +141,7 @@ TEST_CASE("LazyAstProperties")
 TEST_CASE("LazyAstChildrenAndWalk")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
-    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
@@ -210,7 +210,7 @@ TEST_CASE("LazyAstChildrenAndWalk")
 TEST_CASE("LazyAstParseExpr")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
-    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
@@ -246,7 +246,7 @@ TEST_CASE("LazyAstParseExpr")
 TEST_CASE("LazyAstErrors")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
-    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
@@ -275,7 +275,7 @@ TEST_CASE("LazyAstErrors")
 TEST_CASE("LazyCstData")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
-    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
@@ -355,7 +355,7 @@ TEST_CASE("LazyCstData")
 TEST_CASE("LazyAstComments")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
-    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
@@ -390,7 +390,7 @@ TEST_CASE("LazyAstComments")
 TEST_CASE("LazyAstTableItems")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
-    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
@@ -464,7 +464,7 @@ TEST_CASE("LazyAstTableItems")
 TEST_CASE("AstTypeTableAndAstAux")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
-    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
@@ -524,7 +524,7 @@ TEST_CASE("AstTypeTableAndAstAux")
 TEST_CASE("TestFields")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
-    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
@@ -578,7 +578,7 @@ TEST_CASE("TestFields")
 TEST_CASE("ParseReflectTypesFile")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
-    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
 
     std::ifstream file("Reflect/types.luau");
     if (!file.is_open())
@@ -612,7 +612,7 @@ TEST_CASE("ParseReflectTypesFile")
 TEST_CASE("ReflectUseAtoms")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
-    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
     ScopedFastFlag sff3{FFlag::OptLuwuReflectUseAtoms, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
@@ -705,7 +705,7 @@ TEST_CASE("ReflectUseAtoms")
 TEST_CASE("ReflectUserdataId")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
-    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
     ScopedFastFlag sff3{FFlag::OptLuwuReflectUseAtoms, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
@@ -757,7 +757,7 @@ TEST_CASE("ReflectUserdataId")
 TEST_CASE("ReflectUserdataProtectedMetatable")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
-    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
     ScopedFastFlag sff3{FFlag::OptLuwuReflectUseAtoms, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
@@ -794,7 +794,7 @@ TEST_CASE("ReflectUserdataProtectedMetatable")
 TEST_CASE("ReflectAstFilter")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
-    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
     ScopedFastFlag sff3{FFlag::OptLuwuReflectUseAtoms, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
@@ -889,7 +889,7 @@ TEST_CASE("ReflectAstFilter")
 TEST_CASE("ReflectAstMutations")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
-    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
     ScopedFastFlag sff3{FFlag::OptLuwuReflectUseAtoms, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
@@ -1057,7 +1057,7 @@ TEST_CASE("ReflectAstMutations")
 TEST_CASE("ReflectProperties")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
-    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
@@ -1135,7 +1135,7 @@ TEST_CASE("ReflectProperties")
 TEST_CASE("AstAllocator")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
-    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
     ScopedFastFlag sff3{FFlag::OptLuwuReflectUseAtoms, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
@@ -1186,7 +1186,7 @@ TEST_CASE("AstAllocator")
 TEST_CASE("AstAllocatorDefaultNode")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
-    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
     ScopedFastFlag sff3{FFlag::OptLuwuReflectUseAtoms, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
@@ -1297,7 +1297,7 @@ TEST_CASE("AstAllocatorDefaultNode")
 TEST_CASE("ReflectCommentTracking")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
-    ScopedFastFlag sff2{FFlag::LuauManagedReferences2, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();

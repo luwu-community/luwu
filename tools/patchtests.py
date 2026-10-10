@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-# This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+# This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 
 # This code can be used to patch Compiler.test.cpp following bytecode changes, based on error output
 import sys

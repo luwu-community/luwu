@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 
 #include "Luau/BuiltinTypeFunctions.h"
 
@@ -21,7 +21,7 @@ LUAU_DYNAMIC_FASTINT(LuauTypeFamilyApplicationCartesianProductLimit)
 LUAU_DYNAMIC_FASTINTVARIABLE(LuauStepRefineRecursionLimit, 64)
 
 LUAU_FASTFLAGVARIABLE(LuauConcatDoesntAlwaysReturnString)
-LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
+LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier)
 LUAU_FASTFLAG(LuauRemoveExtraSubtypingInstances)
 
@@ -1314,7 +1314,8 @@ TypeFunctionReductionResult<TypeId> refineTypeFunction(
         // NOTE: This block causes us to refine too early in some cases.
         if (auto negation = get<NegationType>(discriminant))
         {
-            if (auto primitive = get<PrimitiveType>(follow(negation->ty)); primitive && primitive->type == PrimitiveType::NilType)
+            if (auto primitive = get<PrimitiveType>(follow(negation->ty));
+                primitive && (primitive->type == PrimitiveType::NilType || primitive->type == PrimitiveType::NoneType))
             {
                 SimplifyResult result = simplifyIntersection(ctx->builtins, ctx->arena, target, discriminant);
                 return {result.result, {}};
@@ -2524,7 +2525,7 @@ TypeFunctionReductionResult<TypeId> objectofTypeFunction(
     NotNull<TypeFunctionContext> ctx
 )
 {
-    LUAU_ASSERT(FFlag::DebugLuauUserDefinedClasses);
+    LUAU_ASSERT(FFlag::LuwuClasses);
     if (typeParams.size() != 1 || !packParams.empty())
     {
         ctx->ice->ice("objectof type function: encountered a type function instance without the required argument structure");
@@ -2536,13 +2537,94 @@ TypeFunctionReductionResult<TypeId> objectofTypeFunction(
     if (isPending(targetTy, ctx->solver))
         return {std::nullopt, Reduction::MaybeOk, {targetTy}, {}};
 
-    if (auto klass = get<ExternType>(targetTy); klass && klass->relation)
+    // objectof maps a class value to its instance type; only a class value (a type rooted at
+    // `class`) has one. `root` is the classifier; `relation` carries the link to the object type.
+    if (auto klass = get<ExternType>(targetTy); klass && klass->root == ctx->builtins->classType && klass->relation)
     {
         if (auto obj = klass->relation->get_if<Obj>())
             return {obj->ty, Reduction::MaybeOk, {}, {}};
     }
 
     return {ctx->builtins->errorType, Reduction::MaybeOk, {}, {}};
+}
+
+// The mirror of objectof: maps an object type to the class value it was declared by. Only an object
+// type (a type rooted at `object`) has one; `relation` carries the link back.
+//
+// Distributes over unions. Intersections are deliberately left to error for now: with no inheritance
+// an `A & B` of two classes is uninhabited, but pinning that down properly is normalization work
+// that belongs with traits.
+static TypeFunctionReductionResult<TypeId> classValueHelper(TypeId targetTy, NotNull<TypeFunctionContext> ctx)
+{
+    targetTy = follow(targetTy);
+
+    if (isPending(targetTy, ctx->solver))
+        return {std::nullopt, Reduction::MaybeOk, {targetTy}, {}};
+
+    // An uninhabited object type was produced by no class, so `class<never>` is vacuously never.
+    if (is<NeverType>(targetTy))
+        return {ctx->builtins->neverType, Reduction::MaybeOk, {}, {}};
+
+    // `object` is the top of the object lattice, so the class that produced such a value could be
+    // any class at all -- which is exactly `class`, the top of the class lattice.
+    if (targetTy == ctx->builtins->objectType)
+        return {ctx->builtins->classType, Reduction::MaybeOk, {}, {}};
+
+    if (auto obj = get<ExternType>(targetTy); obj && obj->root == ctx->builtins->objectType && obj->relation)
+    {
+        if (auto klass = obj->relation->get_if<Klass>())
+            return {klass->ty, Reduction::MaybeOk, {}, {}};
+    }
+
+    if (auto ut = get<UnionType>(targetTy))
+    {
+        std::vector<TypeId> options{};
+        options.reserve(ut->options.size());
+
+        // UnionTypeIterator flattens nested unions (and stops on one that contains itself), so the
+        // recursion below never reaches this branch again.
+        for (TypeId option : ut)
+        {
+            TypeFunctionReductionResult<TypeId> result = classValueHelper(option, ctx);
+
+            // Propagates a blocked argument as well as a bad one.
+            if (!result.result)
+                return result;
+
+            // An uninhabited option contributes nothing to the union.
+            if (!is<NeverType>(follow(*result.result)))
+                options.push_back(*result.result);
+        }
+
+        if (options.empty())
+            return {ctx->builtins->neverType, Reduction::MaybeOk, {}, {}};
+
+        if (options.size() == 1)
+            return {options.front(), Reduction::MaybeOk, {}, {}};
+
+        return {ctx->arena->addType(UnionType{std::move(options)}), Reduction::MaybeOk, {}, {}};
+    }
+
+    // Unlike objectof, which is only ever minted internally by isinstance refinements, `class<T>` is
+    // written by hand, so a bad argument is a user error rather than a silently uninhabited type.
+    return {std::nullopt, Reduction::Erroneous, {}, {}};
+}
+
+TypeFunctionReductionResult<TypeId> classTypeFunction(
+    TypeId instance,
+    const std::vector<TypeId>& typeParams,
+    const std::vector<TypePackId>& packParams,
+    NotNull<TypeFunctionContext> ctx
+)
+{
+    LUAU_ASSERT(FFlag::LuwuClasses);
+    if (typeParams.size() != 1 || !packParams.empty())
+    {
+        ctx->ice->ice("class type function: encountered a type function instance without the required argument structure");
+        LUAU_ASSERT(false);
+    }
+
+    return classValueHelper(typeParams.at(0), ctx);
 }
 
 TypeFunctionReductionResult<TypeId> weakoptionalTypeFunc(
@@ -2606,6 +2688,7 @@ BuiltinTypeFunctions::BuiltinTypeFunctions()
     , setmetatableFunc{"setmetatable", setmetatableTypeFunction}
     , getmetatableFunc{"getmetatable", getmetatableTypeFunction}
     , objectofFunc{"objectof", objectofTypeFunction}
+    , classFunc{"class", classTypeFunction}
     , weakoptionalFunc{"weakoptional", weakoptionalTypeFunc}
 {
 }

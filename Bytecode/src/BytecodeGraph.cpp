@@ -9,9 +9,7 @@
 #include <unordered_set>
 #include <algorithm>
 
-LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
-LUAU_FASTFLAG(LuauCostModel)
-LUAU_FASTFLAG(LuauCallFeedback)
+LUAU_FASTFLAG(LuwuClasses)
 
 namespace Luau
 {
@@ -169,6 +167,37 @@ std::optional<CompTimeBcFunction> fromFunctionBytecode(std::string bytecode, std
             fn.constants[i].valueInteger = isNegative ? (int64_t)(~magnitude + 1) : (int64_t)magnitude;
             break;
         }
+
+        case LBC_CONSTANT_CLASS_SHAPE:
+        {
+            fn.constants[i].kind = BcVmConstKind::ClassShape;
+            fn.constants[i].valueClassShape = uint32_t(fn.classShapes.size());
+
+            // the layout BytecodeBuilder::writeClassShape writes
+            BytecodeBuilder::ClassShape shape;
+            shape.className = readVarInt(data, offset);
+            uint32_t propertyCount = readVarInt(data, offset);
+            uint32_t methodCount = readVarInt(data, offset);
+
+            for (uint32_t j = 0; j < propertyCount; ++j)
+            {
+                shape.propertyNames.push_back(readVarInt(data, offset));
+                shape.propertyFlags.push_back(uint8_t(readVarInt(data, offset)));
+                shape.propertyDefaults.push_back(
+                    (shape.propertyFlags.back() & LBC_CLASSMEMBER_CONSTDEFAULT) ? int32_t(readVarInt(data, offset)) : -1
+                );
+            }
+
+            for (uint32_t j = 0; j < methodCount; ++j)
+            {
+                shape.methodNames.push_back(readVarInt(data, offset));
+                shape.methodFlags.push_back(uint8_t(readVarInt(data, offset)));
+            }
+
+            fn.classShapes.push_back(std::move(shape));
+            break;
+        }
+
         default:
             LUAU_ASSERT(!"Unknown constant type!");
         }
@@ -238,23 +267,19 @@ std::optional<CompTimeBcFunction> fromFunctionBytecode(std::string bytecode, std
             fn.upvalueNames[i] = readString(strings, data, offset);
     }
 
-    if (FFlag::LuauCallFeedback)
+    // Luwu bytecode versioning: BytecodeBuilder always writes the feedback vector and the inlining cost (upstream reads each only
+    // when its flag is on)
+    uint32_t feedbackvecsize = readVarInt(data, offset);
+    for (uint32_t j = 0; j < feedbackvecsize; j++)
     {
-        uint32_t feedbackvecsize = readVarInt(data, offset);
-        for (uint32_t j = 0; j < feedbackvecsize; j++)
-        {
-            uint8_t slottype = read<uint8_t>(data, offset);
-            LUAU_ASSERT(slottype == LFT_CALLTARGET);
-            // read slot PC. ignore it for now.
-            readVarInt(data, offset);
-        }
+        uint8_t slottype = read<uint8_t>(data, offset);
+        LUAU_ASSERT(slottype == LFT_CALLTARGET);
+        // read slot PC. ignore it for now.
+        readVarInt(data, offset);
     }
 
-    if (FFlag::LuauCostModel)
-    {
-        if ((fn.flags & LPF_INLINABLE) != 0)
-            readVarInt64(data, offset);
-    }
+    if ((fn.flags & LPF_INLINABLE) != 0)
+        readVarInt64(data, offset);
 
     std::vector<uint32_t> insnsPC;
     BytecodeGraphParser<BcVmConst> graphParser(fn);
@@ -352,6 +377,11 @@ std::string toFunctionBytecode(BytecodeBuilder& bcb, CompTimeBcFunction& fn)
 
         case BcVmConstKind::Integer:
             consts.push_back(bcb.addConstantInteger(c.valueInteger));
+            break;
+
+        case BcVmConstKind::ClassShape:
+            LUAU_ASSERT(c.valueClassShape < fn.classShapes.size());
+            consts.push_back(bcb.addClassShape(fn.classShapes[c.valueClassShape]));
             break;
         }
     }

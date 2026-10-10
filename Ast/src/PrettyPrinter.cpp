@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/PrettyPrinter.h"
 
 #include "Luau/Cst.h"
@@ -10,11 +10,11 @@
 #include <limits>
 #include <math.h>
 
-LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
+LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 
 LUAU_FASTFLAG(LuauCstAttr)
-LUAU_FASTFLAG(LuauDefaultArguments)
+LUAU_FASTFLAG(LuwuDefaultArguments)
 
 namespace
 {
@@ -1385,11 +1385,63 @@ struct Printer
             writer.symbol(":");
             visualizeTypeAnnotation(*a->type);
         }
-        else if (const auto& c = program.as<AstStatClass>(); c && FFlag::DebugLuauUserDefinedClasses)
+        else if (const auto& c = program.as<AstStatClass>(); c && FFlag::LuwuClasses)
         {
+            if (c->exported)
+                writer.keyword("export");
+
+            writer.advance(c->keywordLocation.begin);
             writer.keyword("class");
             writer.advance(c->name->location.begin);
             writer.identifier(c->name->name.value);
+
+            if (writeTypes)
+                visualizeClassGenerics(*c);
+
+            // Luwu Classes (rfcs/classes): the primary constructor's parameter list has to be
+            // reproduced even when it is empty -- `class Counter()` and `class Counter` differ, the
+            // former having no default table constructor.
+            if (const AstClassPrimaryConstructor* primaryConstructor = c->primaryConstructor)
+            {
+                visualizeClassQualifiers(primaryConstructor->qualifierLocation, primaryConstructor->visibility, std::nullopt);
+
+                writer.advance(primaryConstructor->argLocation.begin);
+                writer.symbol("(");
+
+                CommaSeparatorInserter comma(writer);
+
+                // the parser builds both parallel to `args`
+                LUAU_ASSERT(primaryConstructor->argsDefaults.size == primaryConstructor->args.size);
+                LUAU_ASSERT(primaryConstructor->argsQualifiers.size == primaryConstructor->args.size);
+
+                for (size_t i = 0; i < primaryConstructor->args.size; ++i)
+                {
+                    AstLocal* arg = primaryConstructor->args.data[i];
+
+                    comma();
+
+                    const AstClassPrimaryConstructorParamQualifiers& qualifiers = primaryConstructor->argsQualifiers.data[i];
+                    visualizeClassQualifiers(qualifiers.qualifierLocation, qualifiers.visibility, qualifiers.constLocation);
+
+                    advance(arg->location.begin);
+                    writer.identifier(arg->name.value);
+
+                    if (writeTypes && arg->annotation)
+                    {
+                        writer.symbol(":");
+                        visualizeTypeAnnotation(*arg->annotation);
+                    }
+
+                    if (AstExpr* defaultValue = primaryConstructor->argsDefaults.data[i])
+                    {
+                        writer.maybeSpace(defaultValue->location.begin, 2);
+                        writer.symbol("=");
+                        visualize(*defaultValue);
+                    }
+                }
+
+                writer.symbol(")");
+            }
 
             for (const auto& member : c->members)
             {
@@ -1397,8 +1449,7 @@ struct Printer
                     overloaded{
                         [&](const AstClassProperty& prop)
                         {
-                            writer.advance(prop.qualifierLocation.begin);
-                            writer.keyword("public");
+                            visualizeClassQualifiers(prop.qualifierLocation, prop.visibility, prop.constLocation);
                             writer.advance(prop.nameLocation.begin);
                             writer.identifier(prop.name.value);
                             if (writeTypes && prop.ty)
@@ -1408,13 +1459,51 @@ struct Printer
                                 writer.symbol(":");
                                 visualizeTypeAnnotation(*prop.ty);
                             }
+                            if (prop.defaultValue)
+                            {
+                                if (prop.equalsLocation)
+                                    writer.advance(prop.equalsLocation->begin);
+                                else
+                                    writer.maybeSpace(prop.defaultValue->location.begin, 2);
+                                writer.symbol("=");
+                                visualize(*prop.defaultValue);
+                            }
                         },
                         [&](const AstClassMethod& method)
                         {
+                            // A method's attributes may be written on either side of the access
+                            // specifier, so emit them in the order the source had them -- `advance`
+                            // never moves backwards, and writing them in the wrong order would run
+                            // them into the keyword.
+                            auto visualizeMethodAttributes = [&]()
+                            {
+                                if (FFlag::LuauCstAttr)
+                                {
+                                    if (const CstExprFunction* cstNode = lookupCstNode<CstExprFunction>(method.function))
+                                        visualizeAttributes(method.function->attributes, &cstNode->attrLists);
+                                    else
+                                        visualizeAttributes(method.function->attributes, nullptr);
+                                }
+                                else
+                                {
+                                    for (const auto& attribute : method.function->attributes)
+                                        visualizeAttribute(*attribute);
+                                }
+                            };
+
+                            const bool attributesPrecedeQualifier = method.function->attributes.size > 0 && method.qualifierLocation &&
+                                                                    method.function->attributes.data[0]->location.begin <
+                                                                        method.qualifierLocation->begin;
+
+                            if (!method.qualifierLocation || attributesPrecedeQualifier)
+                                visualizeMethodAttributes();
+
                             if (method.qualifierLocation)
                             {
-                                writer.advance(method.qualifierLocation->begin);
-                                writer.keyword("public");
+                                visualizeClassQualifiers(method.qualifierLocation, method.visibility, std::nullopt);
+
+                                if (!attributesPrecedeQualifier)
+                                    visualizeMethodAttributes();
                             }
                             writer.advance(method.keywordLocation.begin);
                             writer.keyword("function");
@@ -1441,6 +1530,86 @@ struct Printer
             advanceBefore(program.location.end, 1);
             writer.symbol(";");
         }
+    }
+
+    // Luwu Classes (rfcs/classes): the access specifier and `const` modifier of a class member, a
+    // primary constructor parameter or the primary constructor itself, each written only if the source had it.
+    void visualizeClassQualifiers(
+        const std::optional<Location>& qualifierLocation,
+        AstClassMemberVisibility visibility,
+        const std::optional<Location>& constLocation
+    )
+    {
+        if (qualifierLocation)
+        {
+            writer.advance(qualifierLocation->begin);
+            writer.keyword(visibility == AstClassMemberVisibility::Private ? "private" : "public");
+        }
+
+        if (constLocation)
+        {
+            writer.advance(constLocation->begin);
+            writer.keyword("const");
+        }
+    }
+
+    // Luwu Classes (rfcs/classes): `class Box<T, U = string, V...>`. Classes carry no CST node of
+    // their own, so the brackets and commas are written where they fall; each generic still advances to
+    // its own location.
+    void visualizeClassGenerics(const AstStatClass& c)
+    {
+        if (c.generics.size == 0 && c.genericPacks.size == 0)
+            return;
+
+        writer.symbol("<");
+        CommaSeparatorInserter comma(writer);
+
+        for (AstGenericType* generic : c.generics)
+        {
+            comma();
+
+            writer.advance(generic->location.begin);
+            writer.identifier(generic->name.value);
+
+            if (generic->defaultValue)
+            {
+                const CstGenericType* cstNode = lookupCstNode<CstGenericType>(generic);
+                if (cstNode && cstNode->defaultEqualsPosition.hasValue())
+                    advance(cstNode->defaultEqualsPosition);
+                else
+                    writer.maybeSpace(generic->defaultValue->location.begin, 2);
+
+                writer.symbol("=");
+                visualizeTypeAnnotation(*generic->defaultValue);
+            }
+        }
+
+        for (AstGenericTypePack* genericPack : c.genericPacks)
+        {
+            comma();
+
+            const CstGenericTypePack* cstNode = lookupCstNode<CstGenericTypePack>(genericPack);
+
+            writer.advance(genericPack->location.begin);
+            writer.identifier(genericPack->name.value);
+            if (cstNode)
+                maybeAdvanceAndWrite(cstNode->ellipsisPosition, "...");
+            else
+                writer.symbol("...");
+
+            if (genericPack->defaultValue)
+            {
+                if (cstNode && cstNode->defaultEqualsPosition.hasValue())
+                    advance(cstNode->defaultEqualsPosition);
+                else
+                    writer.maybeSpace(genericPack->defaultValue->location.begin, 2);
+
+                writer.symbol("=");
+                visualizeTypePackAnnotation(*genericPack->defaultValue, false);
+            }
+        }
+
+        writer.symbol(">");
     }
 
     void visualizeFunctionBody(AstExprFunction& func)
@@ -1507,7 +1676,7 @@ struct Printer
                 visualizeTypeAnnotation(*local->annotation);
             }
 
-            if (FFlag::LuauDefaultArguments)
+            if (FFlag::LuwuDefaultArguments)
             {
                 if (AstExpr* defaultValue = func.argsDefaults.data[i])
                 {

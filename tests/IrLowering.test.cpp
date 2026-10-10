@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "lua.h"
 #include "lualib.h"
 #include "luacode.h"
@@ -7,13 +7,17 @@
 #include "Luau/CodeGen.h"
 #include "Luau/Compiler.h"
 #include "Luau/Parser.h"
+#include "Luau/IrAnalysis.h"
 #include "Luau/IrBuilder.h"
+#include "Luau/IrDump.h"
 
 #include "doctest.h"
 #include "ScopedFlags.h"
 #include "ConformanceIrHooks.h"
 
 #include <memory>
+#include <regex>
+#include <sstream>
 #include <string_view>
 
 LUAU_FASTFLAG(LuauIntegerFastcalls)
@@ -25,6 +29,8 @@ LUAU_FASTFLAG(LuauCallFeedback)
 LUAU_FASTFLAG(LuauCodegenA64ExitUseCheck)
 LUAU_FASTFLAG(LuauBackedgeHeapCheck)
 LUAU_FASTFLAG(LuauCodegenConstVectorBufferRead)
+LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 
 #define ensureVectorSize3() \
     if constexpr (LUA_VECTOR_SIZE != 3) \
@@ -32,6 +38,10 @@ LUAU_FASTFLAG(LuauCodegenConstVectorBufferRead)
 #define ensureVectorFloat() \
     if constexpr (LUA_VECTOR_DOUBLE == 1) \
     return
+
+// Luwu Classes (rfcs/classes): with classes on, an untyped table access also gets an object path in a fallback block.
+// The table path is unchanged, but the extra blocks and values shift the numbering these expectations pin.
+#define numberBlocksWithoutClasses() ScopedFastFlag luwuClassesOff{FFlag::LuwuClasses, false}
 
 static void luauLibraryConstantLookup(const char* library, const char* member, Luau::CompileConstant* constant)
 {
@@ -2253,6 +2263,8 @@ bb_linear_17:
 // Our fast-path lowering checks that there is no metatable and all accesses are in bounds
 TEST_CASE_FIXTURE(LoweringFixture, "DuplicateArrayLoads2")
 {
+    numberBlocksWithoutClasses();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -2581,6 +2593,8 @@ bb_linear_11:
 // Note that CHECK_SLOT_MATCH ensures that key is in mainposition and not nil, so metatable is not triggered
 TEST_CASE_FIXTURE(LoweringFixture, "TableNodeLoadStoreProp1")
 {
+    numberBlocksWithoutClasses();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -3050,6 +3064,8 @@ bb_linear_9:
 
 TEST_CASE_FIXTURE(LoweringFixture, "CheckReadonlyEliminationOnSsaValues")
 {
+    numberBlocksWithoutClasses();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -3103,6 +3119,7 @@ bb_linear_15:
 
 TEST_CASE_FIXTURE(LoweringFixture, "CheckNoMetatableEliminationOnSsaValues")
 {
+    numberBlocksWithoutClasses();
     ensureVectorSize3();
 
     CHECK_EQ(
@@ -3158,6 +3175,7 @@ bb_linear_15:
 
 TEST_CASE_FIXTURE(LoweringFixture, "CheckNoMetatableSsaElim")
 {
+    numberBlocksWithoutClasses();
     ensureVectorSize3();
 
     CHECK_EQ(
@@ -3497,6 +3515,10 @@ TEST_CASE_FIXTURE(LoweringFixture, "ArgumentTypeRefinement")
     ensureVectorFloat();
     ensureVectorSize3();
 
+    // Luwu: `x` is known to be a vector only inside the block that writes it, and that is all the IR needs.
+    // The parameter's own type stays unknown, because the value it arrives with is unknown (see
+    // updateLocalTypeCandidates in BytecodeAnalysis.cpp). Upstream records `; R0: vector [argument]`, which
+    // every block then assumes on entry.
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -3509,7 +3531,6 @@ end
                ),
         R"(
 ; function getsum($arg0, $arg1) line 2
-; R0: vector [argument]
 bb_bytecode_0:
   implicit CHECK_SAFE_ENV exit(0)
   CHECK_TAG R1, tnumber, bb_exit_2
@@ -3748,6 +3769,7 @@ end
 
 TEST_CASE_FIXTURE(LoweringFixture, "ResolveVectorNamecalls")
 {
+    numberBlocksWithoutClasses();
     ensureVectorFloat();
 
     CHECK_EQ(
@@ -8067,6 +8089,7 @@ bb_linear_9:
 
 TEST_CASE_FIXTURE(LoweringFixture, "TableOperationTagSuggestion2")
 {
+    numberBlocksWithoutClasses();
     ScopedFastFlag callFb{FFlag::LuauCallFeedback, true};
     ScopedFastFlag emitCallFb{FFlag::LuauEmitCallFeedback, true};
 
@@ -8498,4 +8521,810 @@ bb_bytecode_1:
 )"
     );
 }
+
+TEST_CASE_FIXTURE(LoweringFixture, "ClassProvenSelfMemberAccess")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    // `self.field` inside a method compiles to GETOBJECTMEMBER/SETOBJECTMEMBER, which lower to a
+    // constant-offset address with no slot cache, no class-side bounds check, no name compare and no
+    // authorization -- the prologue's CHECKSELFCLASS already proved the class. Note this test has to
+    // live here: tests/conformance/classes.luwu has `@native` functions, so only those are natively
+    // compiled and it could not catch a lowering bug in the rest.
+    //
+    // The repeated `self.x` is also the CSE case: the address is computed once and the second read
+    // reuses the first load's value.
+    CHECK_EQ(
+        "\n" + getCodegenAssembly(
+                   R"(
+class C
+    public x: number = 1
+    public y: number = 2
+
+    public function bump(self)
+        self.y = self.x + self.x
+        return self.y
+    end
+end
+)",
+                   /* includeIrTypes= */ false,
+                   /* debugLevel= */ 1,
+                   /* optimizationLevel= */ 2,
+                   /* clipToFirstReturn= */ true
+               ),
+        R"(
+; function bump($arg0) line 6
+bb_0:
+  CHECK_TAG R0, tobject, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  %6 = LOAD_POINTER R0
+  %7 = LOAD_OWNER_CLASS
+  CHECK_OBJECT_CLASS %6, %7, exit(0)
+  %10 = OBJECT_MEMBER_ADDR %6, 0u
+  %11 = LOAD_TVALUE %10
+  STORE_TVALUE R2, %11
+  STORE_TVALUE R3, %11
+  CHECK_TAG R2, tnumber, bb_fallback_3
+  %21 = LOAD_DOUBLE R2
+  %23 = ADD_NUM %21, %21
+  STORE_DOUBLE R1, %23
+  STORE_TAG R1, tnumber
+  JUMP bb_4
+bb_4:
+  %30 = LOAD_POINTER R0
+  %31 = OBJECT_MEMBER_ADDR %30, 1u
+  %32 = LOAD_TVALUE R1
+  STORE_TVALUE %31, %32
+  BARRIER_OBJ %30, R1, undef
+  INTERRUPT 11u
+  RETURN R1, 1i
+)"
+    );
+}
+
+TEST_CASE_FIXTURE(LoweringFixture, "ClassesRuntimeKeepsUntypedTableFieldAccessLinear")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    // With the classes runtime on, field access on a plain table must compile to the same IR as without it.
+    // The object path for untyped receivers must not add a branch in front of the table path (see
+    // translateInstGetTableKS for why).
+    //
+    // Expected: one tag check, which jumps to the object path in `bb_fallback_2` on a miss. One pointer load.
+    // The first slot address is reused for the write, and the stores are unboxed with no barrier.
+    CHECK_EQ(
+        "\n" + getCodegenAssembly(
+                   R"(
+local function deposit(self, amount)
+    self.balance += amount
+    self.count += 1
+end
+)",
+                   /* includeIrTypes= */ false,
+                   /* debugLevel= */ 1,
+                   /* optimizationLevel= */ 2,
+                   /* clipToFirstReturn= */ true
+               ),
+        R"(
+; function deposit($arg0, $arg1) line 2
+bb_bytecode_0:
+  CHECK_TAG R0, ttable, bb_fallback_2
+  %2 = LOAD_POINTER R0
+  %3 = GET_SLOT_NODE_ADDR %2, 0u, K0 ('balance')
+  CHECK_SLOT_MATCH %3, K0 ('balance'), bb_fallback_1
+  %5 = LOAD_TVALUE %3, 0i
+  STORE_TVALUE R2, %5
+  JUMP bb_linear_17
+bb_linear_17:
+  CHECK_TAG R2, tnumber, bb_fallback_4
+  CHECK_TAG R1, tnumber, bb_fallback_4
+  %101 = LOAD_DOUBLE R2
+  %103 = ADD_NUM %101, R1
+  STORE_DOUBLE R2, %103
+  CHECK_READONLY %2, bb_fallback_6
+  STORE_SPLIT_TVALUE %3, tnumber, %103, 0i
+  %119 = GET_SLOT_NODE_ADDR %2, 5u, K1 ('count')
+  CHECK_SLOT_MATCH %119, K1 ('count'), bb_fallback_9
+  %121 = LOAD_TVALUE %119, 0i
+  STORE_TVALUE R2, %121
+  CHECK_TAG R2, tnumber, bb_fallback_12
+  %126 = LOAD_DOUBLE R2
+  %127 = ADD_NUM %126, 1
+  STORE_SPLIT_TVALUE %119, tnumber, %127, 0i
+  INTERRUPT 10u
+  RETURN R0, 0i
+)"
+    );
+}
+
+TEST_CASE_FIXTURE(LoweringFixture, "ClassIsinstanceKnownTag")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    // Inside a method the prologue's CHECKSELFCLASS already establishes that `self` is an object, so
+    // constant propagation folds the tag operand of CLASS_ISINSTANCE into a constant; lowering must
+    // accept that instead of assuming the operand is always another instruction's result.
+    CHECK_EQ(
+        "\n" + getCodegenAssembly(
+                   R"(
+class C
+    public x: number = 1
+
+    public function get_x(self)
+        return class.isinstance(self, C)
+    end
+end
+)",
+                   /* includeIrTypes= */ false,
+                   /* debugLevel= */ 1,
+                   /* optimizationLevel= */ 2,
+                   /* clipToFirstReturn= */ true
+               ),
+        R"(
+; function get_x($arg0) line 5
+bb_0:
+  CHECK_TAG R0, tobject, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  implicit CHECK_SAFE_ENV exit(0)
+  %6 = LOAD_POINTER R0
+  %7 = LOAD_OWNER_CLASS
+  CHECK_OBJECT_CLASS %6, %7, exit(0)
+  %9 = GET_UPVALUE U0
+  STORE_TVALUE R3, %9
+  CHECK_TAG R3, tclass, exit(5)
+  %16 = LOAD_POINTER R3
+  %17 = CLASS_ISINSTANCE tobject, %6, %16
+  STORE_INT R1, %17
+  STORE_TAG R1, tboolean
+  INTERRUPT 9u
+  RETURN R1, 1i
+)"
+    );
+}
+
+TEST_CASE_FIXTURE(LoweringFixture, "ClassObjectMemberReadResetsRegisterType")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    // GETOBJECTMEMBER R2 (self.nxt) reuses the register that MULK just wrote a number into. The read's
+    // result type is unknown, so `.x` on it uses the untyped layout. The table guard misses to the object
+    // path (bb_fallback_8), which is a different block from the slot check's generic fallback
+    // (bb_fallback_7). If the register kept MULK's stale `number` type, both the table guard and the slot
+    // check would miss to the generic fallback, and an object would never take a native path.
+    CHECK_EQ(
+        "\n" + getCodegenAssembly(
+                   R"(
+class Node
+    public nxt: any
+    public v: number = 1
+
+    public function f(self)
+        local a = self.v * 2 + 1
+        return self.nxt.x
+    end
+end
+)",
+                   /* includeIrTypes= */ false,
+                   /* debugLevel= */ 1,
+                   /* optimizationLevel= */ 2,
+                   /* clipToFirstReturn= */ true
+               ),
+        R"(
+; function f($arg0) line 6
+bb_0:
+  CHECK_TAG R0, tobject, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  %6 = LOAD_POINTER R0
+  %7 = LOAD_OWNER_CLASS
+  CHECK_OBJECT_CLASS %6, %7, exit(0)
+  %10 = OBJECT_MEMBER_ADDR %6, 1u
+  %11 = LOAD_TVALUE %10
+  STORE_TVALUE R3, %11
+  CHECK_TAG R3, tnumber, bb_fallback_3
+  JUMP bb_linear_10
+bb_linear_10:
+  %64 = OBJECT_MEMBER_ADDR %6, 0u
+  %65 = LOAD_TVALUE %64
+  STORE_TVALUE R2, %65
+  CHECK_TAG R2, ttable, bb_fallback_8
+  %69 = LOAD_POINTER R2
+  %70 = GET_SLOT_NODE_ADDR %69, 8u, K5 ('x')
+  CHECK_SLOT_MATCH %70, K5 ('x'), bb_fallback_7
+  %72 = LOAD_TVALUE %70, 0i
+  STORE_TVALUE R2, %72
+  INTERRUPT 10u
+  RETURN R2, 1i
+)"
+    );
+}
+
+TEST_CASE_FIXTURE(LoweringFixture, "ClassConstructionTypesItsRegister")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    // NEWOBJECT leaves an object in its target register, so `p.x` goes straight to the object path instead
+    // of missing the table guard first.
+    CHECK_EQ(
+        "\n" + getCodegenAssembly(
+                   R"(
+class P
+    public x: number
+    public y: number
+end
+
+local function make(a, b)
+    local p = P { x = a, y = b }
+    return p.x
+end
+)",
+                   /* includeIrTypes= */ false,
+                   /* debugLevel= */ 1,
+                   /* optimizationLevel= */ 2,
+                   /* clipToFirstReturn= */ true
+               ),
+        R"(
+; function make($arg0, $arg1) line 7
+bb_bytecode_0:
+  %0 = LOAD_TVALUE R0
+  STORE_TVALUE R4, %0
+  %2 = LOAD_TVALUE R1
+  STORE_TVALUE R5, %2
+  %4 = GET_UPVALUE U0
+  STORE_TVALUE R6, %4
+  %6 = LOAD_POINTER R6
+  CHECK_CLASS_FIELDS_CONSTRUCTIBLE %6, bb_fallback_1
+  SET_SAVEDPC 5u
+  %9 = NEW_OBJECT %6
+  %10 = OBJECT_MEMBER_ADDR %9, 0u
+  STORE_TVALUE %10, %0
+  %13 = OBJECT_MEMBER_ADDR %9, 1u
+  STORE_TVALUE %13, %2
+  STORE_POINTER R3, %9
+  STORE_TAG R3, tobject
+  CHECK_GC
+  JUMP bb_2
+bb_2:
+  %22 = LOAD_TVALUE R3
+  STORE_TVALUE R2, %22
+  CHECK_TAG R3, tobject, exit(6)
+  %26 = LOAD_POINTER R3
+  %27 = TRY_OBJECT_MEMBER_ADDR %26, 6u, K0 ('x'), bb_fallback_4
+  %28 = LOAD_TVALUE %27
+  STORE_TVALUE R3, %28
+  JUMP bb_3
+bb_3:
+  INTERRUPT 8u
+  RETURN R3, 1i
+)"
+    );
+}
+
+TEST_CASE_FIXTURE(LoweringFixture, "ClassInlineSiteSelfCheckKeepsBlockLinear")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag trustAnnotations{FFlag::DebugLuwuCompilerTrustsTypeAnnotations, true};
+
+    // CHECKSELFCLASS's C operand records `:` syntax for the error message; it is not a skip count, so the
+    // `:` inline site's check falls through into the inlined body with no block split after it.
+    CHECK_EQ(
+        "\n" + getCodegenAssembly(
+                   R"(--!trust
+class Cat
+    public n: number = 1
+
+    public function meow(self)
+        return self.n + 1
+    end
+end
+
+local function g(c: Cat, k: number)
+    local z = k * 2
+    local r = c:meow()
+    return r + z
+end
+)",
+                   /* includeIrTypes= */ false,
+                   /* debugLevel= */ 1,
+                   /* optimizationLevel= */ 2,
+                   /* clipToFirstReturn= */ false
+               ),
+        R"(
+; function meow($arg0) line 5
+bb_0:
+  CHECK_TAG R0, tobject, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  %6 = LOAD_POINTER R0
+  %7 = LOAD_OWNER_CLASS
+  CHECK_OBJECT_CLASS %6, %7, exit(0)
+  %10 = OBJECT_MEMBER_ADDR %6, 0u
+  %11 = LOAD_TVALUE %10
+  STORE_TVALUE R2, %11
+  CHECK_TAG R2, tnumber, bb_fallback_3
+  %15 = LOAD_DOUBLE R2
+  %16 = ADD_NUM %15, 1
+  STORE_DOUBLE R1, %16
+  STORE_TAG R1, tnumber
+  JUMP bb_4
+bb_4:
+  INTERRUPT 5u
+  RETURN R1, 1i
+; function g($arg0, $arg1) line 10
+bb_0:
+  CHECK_TAG R0, tobject, exit(entry)
+  CHECK_TAG R1, tnumber, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  %8 = LOAD_DOUBLE R1
+  %9 = ADD_NUM %8, %8
+  STORE_DOUBLE R2, %9
+  STORE_TAG R2, tnumber
+  %12 = GET_UPVALUE U0
+  STORE_TVALUE R4, %12
+  %16 = LOAD_POINTER R0
+  %17 = LOAD_POINTER R4
+  CHECK_OBJECT_CLASS %16, %17, exit(2)
+  %20 = OBJECT_MEMBER_ADDR %16, 0u
+  %21 = LOAD_TVALUE %20
+  STORE_TVALUE R4, %21
+  CHECK_TAG R4, tnumber, bb_fallback_3
+  %25 = LOAD_DOUBLE R4
+  %26 = ADD_NUM %25, 1
+  STORE_DOUBLE R3, %26
+  STORE_TAG R3, tnumber
+  JUMP bb_4
+bb_4:
+  CHECK_TAG R3, tnumber, bb_fallback_5
+  CHECK_TAG R2, tnumber, exit(7)
+  %37 = LOAD_DOUBLE R3
+  %39 = ADD_NUM %37, R2
+  STORE_DOUBLE R4, %39
+  STORE_TAG R4, tnumber
+  JUMP bb_6
+bb_6:
+  INTERRUPT 8u
+  RETURN R4, 1i
+)"
+    );
+}
+
+TEST_CASE_FIXTURE(LoweringFixture, "ClassIsinstanceOfKnownNonObjectFolds")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    // `x` is a number here, which is never an instance, so the fused test folds to a plain jump.
+    CHECK_EQ(
+        "\n" + getCodegenAssembly(
+                   R"(
+class C
+    public v: number = 1
+end
+
+local function f(a: number)
+    local x = a + 1
+    if class.isinstance(x, C) then
+        return 1
+    end
+    return 2
+end
+)",
+                   /* includeIrTypes= */ false,
+                   /* debugLevel= */ 1,
+                   /* optimizationLevel= */ 2,
+                   /* clipToFirstReturn= */ false
+               ),
+        R"(
+; function f($arg0) line 6
+bb_0:
+  CHECK_TAG R0, tnumber, exit(entry)
+  JUMP bb_3
+bb_3:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  %10 = GET_UPVALUE U0
+  STORE_TVALUE R2, %10
+  JUMP bb_bytecode_2
+bb_bytecode_2:
+  STORE_DOUBLE R2, 2
+  STORE_TAG R2, tnumber
+  INTERRUPT 7u
+  RETURN R2, 1i
+)"
+    );
+}
+
+// Luwu Classes (rfcs/classes): the construction and class-member fallbacks call into C, which clobbers
+// every caller-saved register, so a value live across one has to be spilled first. x64 gets that from
+// IrCallWrapperX64; a64's emitFallback is a bare call, so the lowering spills explicitly.
+static std::string lowerClassFallbackWithLiveValueA64(Luau::CodeGen::IrCmd fallback)
+{
+    using namespace Luau::CodeGen;
+
+    HostIrHooks hooks;
+    IrBuilder build(hooks);
+
+    IrOp entry = build.block(IrBlockKind::Internal);
+    build.beginBlock(entry);
+
+    IrOp d = build.inst(IrCmd::LOAD_DOUBLE, build.vmReg(1));
+    IrOp sum = build.inst(IrCmd::ADD_NUM, d, d);
+
+    if (fallback == IrCmd::FALLBACK_NEWOBJECT)
+        build.inst(IrCmd::FALLBACK_NEWOBJECT, build.constUint(0), build.vmReg(2), build.vmReg(3), build.constInt(0), build.constInt(0));
+    else
+        build.inst(IrCmd::FALLBACK_NEWCLASSMEMBER, build.constUint(0), build.vmReg(2), build.vmReg(3));
+
+    build.inst(IrCmd::STORE_DOUBLE, build.vmReg(0), sum);
+    build.inst(IrCmd::RETURN, build.vmReg(0), build.constInt(1));
+    updateUseCounts(build.function);
+
+    AssemblyOptions options;
+    options.target = AssemblyOptions::A64;
+    options.outputBinary = false;
+    options.includeAssembly = true;
+    options.includeIr = true;
+    options.includeOutlinedCode = false;
+    options.includeIrPrefix = IncludeIrPrefix::No;
+    options.includeUseInfo = IncludeUseInfo::No;
+    options.includeCfgInfo = IncludeCfgInfo::No;
+    options.includeRegFlowInfo = IncludeRegFlowInfo::No;
+
+    return getAssemblyFromIr(build, options);
+}
+
+TEST_CASE("ClassFallbacksSpillLiveValuesA64")
+{
+    using namespace Luau::CodeGen;
+
+    if (!Luau::CodeGen::isSupported())
+        return;
+
+    for (IrCmd fallback : {IrCmd::FALLBACK_NEWOBJECT, IrCmd::FALLBACK_NEWCLASSMEMBER})
+    {
+        CAPTURE(int(fallback));
+        std::string text = lowerClassFallbackWithLiveValueA64(fallback);
+        INFO(text);
+
+        // %1 is still needed by STORE_DOUBLE after the call, so it is stored to the stack before the `blr`
+        // and loaded back after it
+        size_t call = text.find("blr");
+        REQUIRE(call != std::string::npos);
+        const std::regex stackStore(R"(\n\s+str\s+d\d+,\[sp,#\d+\])");
+        const std::regex stackLoad(R"(\n\s+ldr\s+d\d+,\[sp,#\d+\])");
+        CHECK(std::regex_search(text.substr(0, call), stackStore));
+        CHECK(std::regex_search(text.substr(call), stackLoad));
+    }
+}
+
+// Luwu Classes (rfcs/classes): some class lowerings contain a check that branches forward to a label inside
+// their own code and rejoins the main line there. Such a lowering must reserve all of its scratch registers
+// before that branch.
+//
+// The reason: if a register is evicted after the branch, it is stored to its spill slot only on the path that
+// did not jump. The code after the label reloads it from that slot on both paths, so the path that jumped
+// reads a slot nothing wrote.
+//
+// This test keeps twenty integers live, which exhausts the allocator. Any reservation made after the branch
+// then shows up as a store to a stack slot between the branch and its label.
+static std::string lowerClassInstUnderPressure(Luau::CodeGen::AssemblyOptions::Target target, Luau::CodeGen::IrCmd cmd)
+{
+    using namespace Luau::CodeGen;
+
+    constexpr int kLiveValues = 20;
+
+    HostIrHooks hooks;
+    IrBuilder build(hooks);
+
+    IrOp entry = build.block(IrBlockKind::Internal);
+    IrOp fallback = build.fallbackBlock(0);
+    IrOp done = build.block(IrBlockKind::Internal);
+
+    build.beginBlock(entry);
+
+    IrOp ptr = build.inst(IrCmd::LOAD_POINTER, build.vmReg(0));
+    IrOp base = build.inst(IrCmd::LOAD_INT, build.vmReg(1));
+
+    std::vector<IrOp> live;
+    for (int i = 0; i < kLiveValues; i++)
+        live.push_back(build.inst(IrCmd::ADD_INT, base, build.constInt(i + 1)));
+
+    if (cmd == IrCmd::TRY_OBJECT_MEMBER_ADDR)
+    {
+        // write mode, so the authorization takes its const path
+        IrOp addr = build.inst(IrCmd::TRY_OBJECT_MEMBER_ADDR, ptr, build.constUint(0), build.vmConst(0), fallback, build.constUint(1));
+        build.inst(IrCmd::STORE_TVALUE, addr, build.inst(IrCmd::LOAD_TVALUE, build.vmReg(2)));
+    }
+    else if (cmd == IrCmd::CLASS_ISINSTANCE)
+    {
+        IrOp tag = build.inst(IrCmd::LOAD_TAG, build.vmReg(0));
+        IrOp cls = build.inst(IrCmd::LOAD_POINTER, build.vmReg(2));
+        build.inst(IrCmd::STORE_INT, build.vmReg(3), build.inst(IrCmd::CLASS_ISINSTANCE, tag, ptr, cls));
+    }
+    else
+    {
+        build.inst(IrCmd::CHECK_CLASS_FIELDS_CONSTRUCTIBLE, ptr, fallback);
+    }
+
+    for (int i = 0; i < kLiveValues; i++)
+        build.inst(IrCmd::STORE_INT, build.vmReg(uint8_t(10 + i)), live[i]);
+
+    build.inst(IrCmd::JUMP, done);
+
+    build.beginBlock(fallback);
+    build.inst(IrCmd::JUMP, done);
+
+    build.beginBlock(done);
+    build.inst(IrCmd::RETURN, build.vmReg(0), build.constInt(0));
+
+    updateUseCounts(build.function);
+
+    AssemblyOptions options;
+    options.target = target;
+    options.outputBinary = false;
+    options.includeAssembly = true;
+    options.includeIr = true;
+    options.includeOutlinedCode = true;
+    options.includeIrPrefix = IncludeIrPrefix::No;
+    options.includeUseInfo = IncludeUseInfo::No;
+    options.includeCfgInfo = IncludeCfgInfo::No;
+    options.includeRegFlowInfo = IncludeRegFlowInfo::No;
+
+    return getAssemblyFromIr(build, options);
+}
+
+TEST_CASE("ClassLoweringsReserveScratchRegistersBeforeRejoiningBranches")
+{
+    using namespace Luau::CodeGen;
+
+    if (!Luau::CodeGen::isSupported())
+        return;
+
+    const std::regex labelDef(R"(^(\.L\d+):)");
+    // a64 `str w4,[sp,#144]`, x64 `mov dword ptr [rsp+048h],r11d`
+    const std::regex spillStore(R"(^\s+(str\s+[wxdq]\d+,\[sp,|\w+\s+\w+ ptr \[rsp\+\w+\],))");
+    const std::regex branchTarget(R"(^\s+(b|b\.\w+|cbz|cbnz|tbz|tbnz|j\w+)\s.*(\.L\d+)\s*$)");
+
+    for (AssemblyOptions::Target target : {AssemblyOptions::A64, AssemblyOptions::X64_SystemV})
+    {
+        for (IrCmd cmd : {IrCmd::TRY_OBJECT_MEMBER_ADDR, IrCmd::CLASS_ISINSTANCE, IrCmd::CHECK_CLASS_FIELDS_CONSTRUCTIBLE})
+        {
+            CAPTURE(int(target));
+            CAPTURE(int(cmd));
+
+            std::string text = lowerClassInstUnderPressure(target, cmd);
+            INFO(text);
+
+            // the lines lowered for `cmd`: from its IR line up to the first STORE_INT after it
+            std::string name = getCmdName(cmd);
+            size_t start = text.find(name);
+            REQUIRE(start != std::string::npos);
+            size_t end = text.find("STORE_INT", start);
+            REQUIRE(end != std::string::npos);
+
+            std::vector<std::string> lines;
+            std::istringstream segment(text.substr(start, end - start));
+            for (std::string line; std::getline(segment, line);)
+                lines.push_back(line);
+
+            int spillsSeen = 0;
+
+            for (size_t i = 0; i < lines.size(); i++)
+            {
+                if (std::regex_search(lines[i], spillStore))
+                    spillsSeen++;
+
+                std::smatch branch;
+                if (!std::regex_match(lines[i], branch, branchTarget))
+                    continue;
+
+                // only a forward branch to a label inside this instruction's code rejoins it; the others leave
+                // for another block
+                std::string target = branch[2].str();
+                size_t labelLine = lines.size();
+
+                for (size_t j = i + 1; j < lines.size() && labelLine == lines.size(); j++)
+                {
+                    std::smatch label;
+                    if (std::regex_search(lines[j], label, labelDef) && label[1].str() == target)
+                        labelLine = j;
+                }
+
+                for (size_t j = i + 1; j < labelLine && labelLine != lines.size(); j++)
+                    CHECK_MESSAGE(!std::regex_search(lines[j], spillStore), "spill between a branch to " << target << " and its label: " << lines[j]);
+            }
+
+            // the allocator really was exhausted while lowering `cmd`
+            CHECK(spillsSeen > 0);
+        }
+    }
+}
+
+TEST_CASE_FIXTURE(LoweringFixture, "ReassignedLocalOfOtherTypeIsNotRefined")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    // `t` first holds `self` (an object), then whatever `self.nxt` is. Typing it from its first write would
+    // guard `t.x` as an object with an exit to the VM, taken on every call where `nxt` is a table.
+    CHECK_EQ(
+        "\n" + getCodegenAssembly(
+                   R"(
+class Node
+    public nxt: any
+    public v: number = 1
+
+    public function f(self)
+        local t = self
+        t = self.nxt
+        return t.x
+    end
+end
+)",
+                   /* includeIrTypes= */ true,
+                   /* debugLevel= */ 1,
+                   /* optimizationLevel= */ 1,
+                   /* clipToFirstReturn= */ true
+               ),
+        R"(
+; function f($arg0) line 6
+; R0: object [argument]
+; R1: any from 2 to 8
+bb_0:
+  CHECK_TAG R0, tobject, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  %6 = LOAD_POINTER R0
+  %7 = LOAD_OWNER_CLASS
+  CHECK_OBJECT_CLASS %6, %7, exit(0)
+  %12 = OBJECT_MEMBER_ADDR %6, 0u
+  %13 = LOAD_TVALUE %12
+  STORE_TVALUE R1, %13
+  CHECK_TAG R1, ttable, bb_fallback_4
+  %17 = LOAD_POINTER R1
+  %18 = GET_SLOT_NODE_ADDR %17, 5u, K2 ('x')
+  CHECK_SLOT_MATCH %18, K2 ('x'), bb_fallback_3
+  %20 = LOAD_TVALUE %18, 0i
+  STORE_TVALUE R2, %20
+  JUMP bb_5
+bb_5:
+  INTERRUPT 7u
+  RETURN R2, 1i
+)"
+    );
+
+    // the same for a table (typed here by the setmetatable fastcall's result)
+    CHECK_EQ(
+        "\n" + getCodegenAssembly(
+                   R"(
+local function f(o, mt)
+    local t = setmetatable({}, mt)
+    t = o.nxt
+    return t.x
+end
+)",
+                   /* includeIrTypes= */ true,
+                   /* debugLevel= */ 1,
+                   /* optimizationLevel= */ 1,
+                   /* clipToFirstReturn= */ true
+               ),
+        R"(
+; function f($arg0, $arg1) line 2
+; R2: any from 0 to 13
+bb_bytecode_0:
+  implicit CHECK_SAFE_ENV exit(0)
+  SET_SAVEDPC 1u
+  %1 = NEW_TABLE 0u, 0u
+  STORE_POINTER R3, %1
+  STORE_TAG R3, ttable
+  CHECK_GC
+  SET_SAVEDPC 4u
+  %7 = INVOKE_FASTCALL 61u, R2, R3, R1, undef, 2i, 1i
+  CHECK_FASTCALL_RES %7, bb_fallback_1
+  JUMP bb_linear_9
+bb_linear_9:
+  CHECK_TAG R0, ttable, bb_fallback_4
+  %56 = LOAD_POINTER R0
+  %57 = GET_SLOT_NODE_ADDR %56, 8u, K2 ('nxt')
+  CHECK_SLOT_MATCH %57, K2 ('nxt'), bb_fallback_3
+  %59 = LOAD_TVALUE %57, 0i
+  STORE_TVALUE R2, %59
+  CHECK_TAG R2, ttable, bb_fallback_7
+  %64 = LOAD_POINTER R2
+  %65 = GET_SLOT_NODE_ADDR %64, 10u, K3 ('x')
+  CHECK_SLOT_MATCH %65, K3 ('x'), bb_fallback_6
+  %67 = LOAD_TVALUE %65, 0i
+  STORE_TVALUE R3, %67
+  INTERRUPT 12u
+  RETURN R3, 1i
+)"
+    );
+}
+
+TEST_CASE_FIXTURE(LoweringFixture, "ReassignedLocalOfOneTypeKeepsIt")
+{
+    // Every write to `t` is a table and every write to `n` a number, including `n + 1` (a number only if `n`
+    // is), so both keep their types across blocks.
+    CHECK_EQ(
+        "\n" + getCodegenAssembly(
+                   R"(
+local function f(c: boolean)
+    local t = {}
+    local n = 0
+    if c then
+        t = { x = 1 }
+        n = n + 1
+    end
+    return t.x, n * 2
+end
+)",
+                   /* includeIrTypes= */ true,
+                   /* debugLevel= */ 1,
+                   /* optimizationLevel= */ 1,
+                   /* clipToFirstReturn= */ true
+               ),
+        R"(
+; function f($arg0) line 2
+; R0: boolean [argument]
+; R1: table from 0 to 11
+; R2: number from 2 to 11
+bb_0:
+  CHECK_TAG R0, tboolean, exit(entry)
+  JUMP bb_3
+bb_3:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  SET_SAVEDPC 1u
+  %5 = NEW_TABLE 0u, 0u
+  STORE_POINTER R1, %5
+  STORE_TAG R1, ttable
+  CHECK_GC
+  STORE_DOUBLE R2, 0
+  STORE_TAG R2, tnumber
+  JUMP_IF_FALSY R0, bb_bytecode_2, bb_4
+bb_4:
+  SET_SAVEDPC 5u
+  %13 = LOAD_POINTER K2 ()
+  %14 = DUP_TABLE %13
+  STORE_POINTER R3, %14
+  STORE_TAG R3, ttable
+  CHECK_GC
+  STORE_SPLIT_TVALUE R1, ttable, %14
+  %22 = LOAD_DOUBLE R2
+  %23 = ADD_NUM %22, 1
+  STORE_DOUBLE R2, %23
+  JUMP bb_bytecode_2
+bb_bytecode_2:
+  CHECK_TAG R1, ttable, exit(7)
+  %28 = LOAD_POINTER R1
+  %29 = GET_SLOT_NODE_ADDR %28, 7u, K0 ('x')
+  CHECK_SLOT_MATCH %29, K0 ('x'), bb_fallback_5
+  %31 = LOAD_TVALUE %29, 0i
+  STORE_TVALUE R3, %31
+  JUMP bb_6
+bb_6:
+  CHECK_TAG R2, tnumber, exit(9)
+  %38 = LOAD_DOUBLE R2
+  %39 = ADD_NUM %38, %38
+  STORE_DOUBLE R4, %39
+  STORE_TAG R4, tnumber
+  INTERRUPT 10u
+  RETURN R3, 2i
+)"
+    );
+}
+
 TEST_SUITE_END();

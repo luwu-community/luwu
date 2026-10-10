@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
 // clang-format off
@@ -53,6 +53,24 @@
 // Version 10: Adds LBC_CONSTANT_CLASS_SHAPE and NEWCLASSMEMBER for use with Luau Classes. Experimental.
 // Version 11: Adds CALLFB, CMPPROTO and feedback vector description. Experimental.
 // Version 12: Adds cost function serialized for proto and prepend each proto with size in bytes. Experimental.
+//
+// Luwu bytecode versioning: versions 3..12 are loaded as "legacy" Luau bytecode: what upstream Luau up to 0.731 emits, plus
+// LBC_TYPE_SYMNONE and LBF_BUFFER_ISFROZEN, which the mluau-vendored Luau that preceded Luwu emitted under
+// these same numbers. Upstream has since assigned 13 (double-precision vector constants), 14 (FASTPCALL)
+// and 100 (work-in-progress classes); Luwu refuses those by name and never follows upstream's numbering.
+// Legacy class shapes (upstream's experimental classes) are refused: Luwu classes are a different design.
+
+// # Luwu bytecode version history
+// A blob starting with LWBC_MAGIC is Luwu bytecode: LWBC_MAGIC, the Luwu version, the type encoding version,
+// then the version 12 layout above (per-proto size prefix, feedback vector, inlining cost).
+//
+// Version 1: Baseline. Everything legacy version 12 has.
+//
+// Version 200 (WIP, like upstream's 100): in-progress format changes, emitted while their feature flags are on.
+// Moves into the next released version when the feature ships.
+//   Luwu Classes: CHECKSELFCLASS, JUMPXISA, NEWOBJECT, GETOBJECTMEMBER and SETOBJECTMEMBER, per-member flags
+//   and constant field defaults in LBC_CONSTANT_CLASS_SHAPE, LBC_TYPE_CLASS/LBC_TYPE_OBJECT and
+//   LBF_CLASS_ISINSTANCE.
 
 // # Bytecode type information history
 // Version 1: (from bytecode version 4) Type information for function signature. Currently supported.
@@ -437,6 +455,10 @@ enum LuauOpcode
     // B: reserved
     // C: initial value of this member. currently must be a function.
     // AUX: The name of this member as a constant string
+    // Luwu Classes (rfcs/classes): B is 0, C holds a Luau function and AUX names a method of A's class shape
+    // (LBC_CONSTANT_CLASS_SHAPE). Besides the declared methods, the compiler registers the synthesized `__init`
+    // of a primary constructor and the `__defaults` closure for non-constant field defaults this way. Upstream
+    // encodes it the same; its class shapes differ (see LBC_CONSTANT_CLASS_SHAPE).
     LOP_NEWCLASSMEMBER,
 
     // CALLFB: call specified function with collecting runtime stats in a feedback slot
@@ -451,6 +473,84 @@ enum LuauOpcode
     // D: jump offset if proto doesn't match
     // AUX: proto id
     LOP_CMPPROTO,
+
+    // CHECKSELFCLASS: check that a register holds an object instance of a specific class, falling
+    // through when it does and raising when it does not. Luwu Classes (rfcs/classes) emit it where code
+    // after it relies on the value being an instance: a method's prologue (its own `self`), an O2 inline
+    // site of a method (the receiver), and after a fused `assert(class.isinstance(x, C))` whose `assert`
+    // returned. Raising here rather than through an inline `error(...)` call keeps the message out of
+    // the constant table and lets it name the value's *actual* class or type, which is only known at runtime.
+    // A: register holding the value to check
+    // B: register holding the class, or LBC_SELFCLASS_OWNER to take the class from the executing closure's
+    //    Proto::ownerclass instead (see LBC_SELFCLASS_OWNER). A register always holds a class (the VM asserts it).
+    // C: 1 at an inline site of a `:` call, 0 everywhere else; only affects the error message
+    // AUX: string constant index of the method's name, for the error message
+    LOP_CHECKSELFCLASS,
+
+    // JUMPXISA: fused class.isinstance(value, class) test-and-branch (see rfcs/classes), emitted
+    // for `class.isinstance(x, C)` used as a condition and for `assert(class.isinstance(x, C))`. Avoids
+    // the builtin call and the boolean materialization. Like the builtin, it tests for an instance of
+    // exactly that class.
+    // A: value register
+    // D: jump offset
+    // AUX: the class register in bits 0..7, and two flags. Bits 8..29 are 0.
+    //   bit 31, LBC_JUMPXISA_JUMPIFINSTANCE: when set, jump if the value IS an instance of the class. When
+    //       clear, jump if it is NOT. JUMPXEQK* uses the same bit as its NOT flag (LUAU_INSN_AUX_NOT reads it),
+    //       but with the opposite sense: there a set bit negates the comparison, here a set bit means "jump
+    //       on a match".
+    //   bit 30, LBC_JUMPXISA_CHECKCLASS: when set, the class register may hold any value, and a non-class
+    //       raises the builtin's error. This covers a class from another module, or a class used where its
+    //       declaration may not have run yet. When clear, the register holds a class and the VM only
+    //       asserts it.
+    LOP_JUMPXISA,
+
+    // NEWOBJECT: allocate an instance of a class, initialized according to C (below).
+    // Emitted for a call whose callee is a class declared in this module and certainly assigned at that
+    // point, in place of the `__call` metamethod dispatch and C constructor frame a generic CALL would go
+    // through. Operands the VM asserts rather than checks: B holds a class, C agrees with that class
+    // (below), and the class has no `__defaults` closure unless C is LBC_NEWOBJECT_INIT.
+    // A: destination register, which holds the instance afterwards
+    // B: register holding the class
+    // C: how the instance is initialized, and what AUX counts:
+    //   LBC_NEWOBJECT_DEFAULT - the class has no `__init`; AUX is the argument count (0 or 1), and the
+    //       table of field values, if AUX is 1, is in A + 1. The instance is complete afterwards.
+    //   LBC_NEWOBJECT_INIT - the class has a user-defined `__init` or a primary constructor; AUX is the
+    //       argument count. Only the call frame is prepared -- A + 1 gets `__init`, A + 2 gets the
+    //       instance again as `self`, and the arguments are already in A + 3 onwards -- and
+    //       CALL A+1, AUX+2, 1 always follows, after which A holds the instance.
+    //   LBC_NEWOBJECT_FIELDS - fields supplied positionally, so the instance is complete afterwards with no
+    //       call at all: AUX is the class's instance member count, and A + 1 onwards hold one value per
+    //       member in declaration order, with nil meaning "keep this member's default". Emitted for a
+    //       primary constructor's `ClassName(a, b)`, and for `ClassName { field = value }` on a class with
+    //       no `__init` when every key names a declared field, so no argument table is built at all.
+    LOP_NEWOBJECT,
+
+    // GETOBJECTMEMBER: read an instance member at a known offset, for a receiver whose class the
+    // compiler has *proven* with a runtime check, and which nothing can reassign while the proof holds:
+    //   - a method's own `self`, checked by the method's CHECKSELFCLASS prologue;
+    //   - an inlined method's `self`. Either the inline site emitted a CHECKSELFCLASS for it, or no check was
+    //     emitted because the receiver was already proven: this code constructed it (`local c = C()`), or it
+    //     is covered by `class.isinstance(c, C)` in an `if` or an `assert`;
+    //   - a local in the then-branch of `if class.isinstance(local, C)`, or in the statements after
+    //     `assert(class.isinstance(local, C))` in the same block (JUMPXISA against a class declared in
+    //     this module).
+    // The member's offset is its index in declaration order, so none of GETTABLEKS's per-access work is
+    // needed: no slot cache, no bounds check, no name compare and no private-access check. A private member
+    // is only accessed this way through a proven `self`, whose method body is the class's own code, or from
+    // inside one of the class's methods. The VM asserts, but does not check, that B holds an object with a
+    // member at AUX.
+    // A: target register
+    // B: register holding the object
+    // AUX: member offset
+    LOP_GETOBJECTMEMBER,
+
+    // SETOBJECTMEMBER: the write counterpart of GETOBJECTMEMBER, under the same proof. Only ever
+    // emitted for a non-`const` member: a `const` member's write has to keep going through
+    // SETTABLEKS, where luaR_checkconstassign decides whether this closure is allowed to write it.
+    // A: register holding the value to store
+    // B: register holding the object
+    // AUX: member offset
+    LOP_SETOBJECTMEMBER,
 
     // Enum entry for number of opcodes, not a valid opcode by itself!
     LOP__COUNT
@@ -488,6 +588,17 @@ enum LuauOpcode
 // Used in LOP_JUMPXEQK* instructions
 #define LUAU_INSN_AUX_NOT(aux) ((aux) >> 31)
 
+// Luwu Classes (rfcs/classes): JUMPXISA aux flags (see LOP_JUMPXISA)
+// Jump when the value is an instance of the class, rather than when it is not
+#define LBC_JUMPXISA_JUMPIFINSTANCE (1u << 31)
+// The class operand must be checked at runtime
+#define LBC_JUMPXISA_CHECKCLASS (1u << 30)
+
+// Luwu Classes (rfcs/classes): operand C of LOP_NEWOBJECT, how the instance is initialized (see LOP_NEWOBJECT)
+#define LBC_NEWOBJECT_DEFAULT 0
+#define LBC_NEWOBJECT_INIT 1
+#define LBC_NEWOBJECT_FIELDS 2
+
 // Auxilary 16-bit constant index and 16-bit cachedslot
 // Used in LOP_GETUDATAKS, LOP_SETUDATAKS and LOP_NAMECALLUDATA
 #define LUAU_INSN_AUX_KV16(aux) ((aux) & 0xffffu)
@@ -498,10 +609,9 @@ enum LuauOpcode
 // Bytecode tags, used internally for bytecode encoded as a string
 enum LuauBytecodeTag
 {
-    // Bytecode version; runtime supports [MIN, MAX], compiler emits TARGET by default but may emit a higher version when flags are enabled
+    // Legacy Luau bytecode version; runtime loads [MIN, MAX]. The Luwu compiler never emits it (see LuwuBytecodeTag).
     LBC_VERSION_MIN = 3,
     LBC_VERSION_MAX = 12,
-    LBC_VERSION_TARGET = 9,
     // Type encoding version
     LBC_TYPE_VERSION_MIN = 1,
     LBC_TYPE_VERSION_MAX = 3,
@@ -524,6 +634,66 @@ enum LuauBytecodeTag
     LBC_CONSTANT__COUNT
 };
 
+// Luwu bytecode versioning: the header of Luwu bytecode, which the compiler always emits (see "Luwu bytecode version history").
+enum LuwuBytecodeTag
+{
+    // First byte of a Luwu blob. Upstream versions are counted up from 1 and 0 marks a compile error.
+    LWBC_MAGIC = 0xff,
+    // Released Luwu versions the runtime loads; the compiler emits TARGET
+    LWBC_VERSION_MIN = 1,
+    LWBC_VERSION_MAX = 1,
+    LWBC_VERSION_TARGET = 1,
+    // In-progress format changes, emitted while their feature flags are on
+    LWBC_VERSION_WIP = 200,
+    // LWBC_MAGIC, the Luwu version and the type encoding version
+    LWBC_HEADER_SIZE = 3,
+};
+
+// Luwu bytecode versioning: the last opcode, builtin id and type tag legacy (upstream-numbered) bytecode may use; anything past
+// them comes from a newer upstream Luau or from Luwu's own additions, which only Luwu bytecode carries.
+#define LBC_LEGACY_LAST_OPCODE LOP_CMPPROTO
+#define LBC_LEGACY_LAST_BUILTIN LBF_BUFFER_ISFROZEN
+#define LBC_LEGACY_LAST_TYPE LBC_TYPE_SYMNONE
+
+// Luwu Classes (rfcs/classes): per-member attribute bits serialized as part of
+// LBC_CONSTANT_CLASS_SHAPE. The single source of truth for these bits; both the compiler
+// (Compiler/src/Compiler.cpp) and the VM (VM/src/lclass.h/.cpp) use these directly.
+#define LBC_CLASSMEMBER_PRIVATE (1 << 0)
+#define LBC_CLASSMEMBER_CONST (1 << 1)
+// Set on properties that have a default value expression (see AstClassProperty::defaultValue).
+#define LBC_CLASSMEMBER_HASDEFAULT (1 << 2)
+// Set on an instance member whose default value is a compile-time constant: the value is serialized
+// inline in LBC_CONSTANT_CLASS_SHAPE (a constant table index follows the flags byte) and copied
+// straight into each new instance, instead of being produced by the synthesized `__defaults` closure.
+// Implies LBC_CLASSMEMBER_HASDEFAULT.
+#define LBC_CLASSMEMBER_CONSTDEFAULT (1 << 3)
+// Set on the `__init` a primary constructor implies (`class Cat(name: string)`). Such an `__init`
+// only assigns fields from its parameters, which is what lets a construction site initialize the
+// instance positionally (LOP_NEWOBJECT's FIELDS form) instead of calling it: the VM checks this bit
+// before honoring that form on a class that has a custom `__init`.
+#define LBC_CLASSMEMBER_PRIMARYINIT (1 << 4)
+// Never serialized: the VM sets this on every class's `__init` when it builds the class. Reading `__init`
+// as a member raises, since calling it on a constructed object would re-run construction, which may
+// reassign its `const` fields. Construction never reads `__init` by name, so it is unaffected. Lives
+// here so no compiler-emitted bit can collide with it.
+#define LBC_CLASSMEMBER_INITBLOCKED (1 << 7)
+
+// Luwu Classes (rfcs/classes): operand B of LOP_CHECKSELFCLASS. Instead of naming a register
+// holding the class, take the class from the executing closure's `Proto::ownerclass`.
+//
+// A method's prologue check uses this form. The class it validates against is a constant of the
+// proto, stamped there by luaR_addclassmember and GC-marked with it, so reading it from a register
+// would cost a GETUPVAL on every call and force every method to capture its class as an upvalue --
+// which in turn denies DUPCLOSURE sharing to methods that have no other upvalue.
+//
+// An *inlined* copy of a method body must NOT use this form: it executes inside the caller's proto,
+// whose ownerclass is a different class or none, so it passes the class in a register. See
+// Compiler.cpp's emitSelfClassCheck call sites.
+//
+// 255 is safe as a sentinel because the compiler never allocates it: kMaxRegisterCount is 255 and
+// allocation is bounded by `top + count > kMaxRegisterCount`, so valid registers are 0..254.
+#define LBC_SELFCLASS_OWNER 255
+
 // Type table tags
 enum LuauBytecodeType
 {
@@ -539,6 +709,10 @@ enum LuauBytecodeType
     LBC_TYPE_BUFFER,
     LBC_TYPE_INTEGER,
     LBC_TYPE_SYMNONE,
+    // Luwu Classes (rfcs/classes): a class value (the factory/namespace) and an object
+    // (instance). Kept in the 12..14 gap below LBC_TYPE_ANY so existing values don't shift.
+    LBC_TYPE_CLASS = 12,
+    LBC_TYPE_OBJECT = 13,
 
     LBC_TYPE_ANY = 15,
 
@@ -738,6 +912,9 @@ enum LuauBuiltinFunction
     LBF_BUFFER_WRITEINTEGER,
 
     LBF_BUFFER_ISFROZEN,
+
+    // Luwu Classes (rfcs/classes): class.isinstance(value, class) -> boolean
+    LBF_CLASS_ISINSTANCE,
 };
 
 // Capture type, used in LOP_CAPTURE

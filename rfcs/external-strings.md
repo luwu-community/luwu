@@ -1,5 +1,9 @@
 # External Strings
 
+Status: Implemented (Flagged)
+
+FFlag: LuwuExternalString, DebugLuwuAllowNonNullTerminatedStrings (test suite only)
+
 ## Summary
 
 Add support for externally managed/allocated strings to the Luwu VM, allowing embedders to create zero-copy Luwu strings that fully participate in all existing Luwu features (like interning etc.) and behave identically to normal strings to the user.

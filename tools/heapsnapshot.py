@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-# This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+# This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 
 # Given a Luau heap dump, this tool generates a heap snapshot which can be imported by Chrome's DevTools Memory panel
 # To generate a snapshot, use lua_memorydump, ideally preceded by lua_gc(L, LUA_GCCOLLECT, 0)

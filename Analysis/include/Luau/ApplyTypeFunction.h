@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
 #include "Luau/Substitution.h"
@@ -20,7 +20,7 @@ struct ApplyTypeFunction : Substitution
     // Never set under deferred constraint resolution.
     bool encounteredForwardedType;
 
-    // When instantiating a nominal type with generic parameters (see LuauGenericNominals),
+    // When instantiating a nominal type with generic parameters (see LuwuGenericNominals),
     // this is the TypeId of the template ExternType currently being expanded, which is
     // `tf->type` in ConstraintSolver::tryDispatch(TypeAliasExpansionConstraint). ExternTypes
     // are normally opaque leaves to this substitution, so their contents are left alone and
@@ -30,6 +30,12 @@ struct ApplyTypeFunction : Substitution
     // in the type graph (an unrelated class reached through some field, a non-generic
     // superclass, etc.) stays fully opaque, same as before.
     TypeId genericNominalRoot = nullptr;
+
+    // Made public here. A caller instantiating a nominal type maps the template onto the
+    // instantiation (see ConstraintSolver::tryDispatch(InstantiateNominalPropConstraint)), and has to
+    // mark the instantiation itself as not to be walked. `Substitution` declares `dontTraverseInto`
+    // protected, because its own subclasses only call it from `clean()`.
+    using Substitution::dontTraverseInto;
 
     std::unordered_map<TypeId, TypeId> typeArguments;
     std::unordered_map<TypePackId, TypePackId> typePackArguments;

@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
 #include "Luau/AssemblyBuilderA64.h"
@@ -104,6 +104,10 @@ inline bool lowerImpl(
 
     bool outputEnabled = options.includeAssembly || options.includeIr;
 
+    // Luwu codegen logging: upstream checks `logger` for null only here. Before each
+    // `logger->formatAppend` below it tests only the output flag. That relies on callers that pass a
+    // null logger (CodeGenContext) never asking for IR or assembly output. Luwu also checks `logger` at
+    // each of those appends, and uses `build.logAppend` when it is null.
     std::string emptyLog;
     IrToStringContext ctx{
         FFlag::LuauCodegenSharedLog ? (logger ? logger->text : emptyLog) : build.text,
@@ -150,7 +154,7 @@ inline bool lowerImpl(
         {
             if (options.includeIrPrefix == IncludeIrPrefix::Yes)
             {
-                if (FFlag::LuauCodegenSharedLog)
+                if (FFlag::LuauCodegenSharedLog && logger)
                     logger->formatAppend("# ");
                 else
                     build.logAppend("# ");
@@ -183,7 +187,7 @@ inline bool lowerImpl(
         {
             if (options.includeIr)
             {
-                if (FFlag::LuauCodegenSharedLog)
+                if (FFlag::LuauCodegenSharedLog && logger)
                 {
                     if (options.includeIrPrefix == IncludeIrPrefix::Yes)
                         logger->formatAppend("# ");
@@ -221,7 +225,7 @@ inline bool lowerImpl(
                 {
                     toString(ctx.result, bcTypes, options.compilationOptions.userdataTypes);
 
-                    if (FFlag::LuauCodegenSharedLog)
+                    if (FFlag::LuauCodegenSharedLog && logger)
                         logger->formatAppend("\n");
                     else
                         build.logAppend("\n");
@@ -260,7 +264,7 @@ inline bool lowerImpl(
             {
                 if (options.includeIrPrefix == IncludeIrPrefix::Yes)
                 {
-                    if (FFlag::LuauCodegenSharedLog)
+                    if (FFlag::LuauCodegenSharedLog && logger)
                         logger->formatAppend("# ");
                     else
                         build.logAppend("# ");
@@ -316,7 +320,7 @@ inline bool lowerImpl(
 
         if (options.includeIr && options.includeIrPrefix == IncludeIrPrefix::Yes)
         {
-            if (FFlag::LuauCodegenSharedLog)
+            if (FFlag::LuauCodegenSharedLog && logger)
                 logger->formatAppend("#\n");
             else
                 build.logAppend("#\n");
@@ -340,7 +344,7 @@ inline bool lowerImpl(
 
         if (options.includeAssembly)
         {
-            if (FFlag::LuauCodegenSharedLog)
+            if (FFlag::LuauCodegenSharedLog && logger)
                 logger->formatAppend("; skipping %u bytes of outlined code\n", unsigned((build.getCodeSize() - codeSize) * sizeof(build.code[0])));
             else
                 build.logAppend("; skipping %u bytes of outlined code\n", unsigned((build.getCodeSize() - codeSize) * sizeof(build.code[0])));

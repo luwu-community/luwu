@@ -1,0 +1,748 @@
+-- This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
+-- Luwu Classes (rfcs/classes): regression tests for fixes from the classes review (compiler).
+--!nocheck
+print("testing classes fixes (compiler)")
+
+local function expectfail(s, expected, f, ...)
+    local ok, err = pcall(f, ...)
+    assert(not ok, `{s}: succeeded`)
+    assert(type(err) == "string", `{s}: error is a {type(err)}`)
+    assert(string.find(err, expected, 1, true), `{s} expected:\n\t{expected}\nActual:\n\t{err}`)
+    return err
+end
+
+-- A class used before its declaration statement has run reads a nil binding (classes hoist).
+-- - Every construction form must raise the same error as calling nil. It raises after the arguments are
+--   evaluated and before any default is.
+-- - `class.isinstance` against the nil binding must raise the builtin's error, not test against nil.
+-- The results are bound to locals, because `return Cls()` would compile to a plain call and never reach
+-- NEWOBJECT.
+local earlyArgs = 0
+local earlyDefaults = 0
+
+local function earlyArg()
+    earlyArgs += 1
+    return earlyArgs
+end
+
+function earlyDefault()
+    earlyDefaults += 1
+    return earlyDefaults
+end
+
+local function constructPodEarly()
+    local p = HoistPod()
+    return p
+end
+
+local function constructPodTableEarly()
+    local p = HoistPod { x = earlyArg() }
+    return p
+end
+
+local function constructPodArgumentEarly(t)
+    local p = HoistPod(t)
+    return p
+end
+
+local function constructInitEarly()
+    local p = HoistInit(earlyArg())
+    return p
+end
+
+local function constructPrimaryEarly()
+    local p = HoistPrimary(earlyArg())
+    return p
+end
+
+local function isinstanceEarly(v)
+    if class.isinstance(v, HoistPod) then
+        return "yes"
+    end
+    return "no"
+end
+
+local function assertEarly(v)
+    assert(class.isinstance(v, HoistPod))
+    return "passed"
+end
+
+expectfail("POD construction before declaration", "attempt to call a nil value", constructPodEarly)
+expectfail("POD table construction before declaration", "attempt to call a nil value", constructPodTableEarly)
+expectfail("POD argument construction before declaration", "attempt to call a nil value", constructPodArgumentEarly, { x = 1 })
+expectfail("__init construction before declaration", "attempt to call a nil value", constructInitEarly)
+expectfail("primary construction before declaration", "attempt to call a nil value", constructPrimaryEarly)
+assert(earlyArgs == 3, "arguments are evaluated before the call raises")
+assert(earlyDefaults == 0, "defaults do not run when the class is nil")
+expectfail("isinstance before declaration", "invalid argument #2 to 'isinstance' (class expected, got nil)", isinstanceEarly, {})
+expectfail("assert isinstance before declaration", "invalid argument #2 to 'isinstance' (class expected, got nil)", assertEarly, {})
+
+class HoistPod
+    public x: number = 0
+end
+
+class HoistInit
+    public v: number
+
+    public function __init(self, v: number)
+        self.v = v
+    end
+end
+
+class HoistPrimary(public a: number, public b: number = earlyDefault())
+end
+
+assert(constructPodEarly().x == 0)
+assert(constructPodTableEarly().x == 4)
+assert(constructPodArgumentEarly({ x = 7 }).x == 7)
+assert(constructInitEarly().v == 5)
+assert(constructPrimaryEarly().a == 6 and earlyDefaults == 1)
+assert(isinstanceEarly(HoistPod()) == "yes" and isinstanceEarly({}) == "no")
+assert(assertEarly(HoistPod()) == "passed")
+
+-- An explicit `__init` declared before a field whose default is a function: the default is compiled into
+-- `__init`'s prologue, so its closure must exist first.
+class InitBeforeFunctionDefault
+    public a: number
+
+    public function __init(self, a: number)
+        self.a = a
+    end
+
+    public h = function()
+        return 2
+    end
+end
+
+do
+    local i = InitBeforeFunctionDefault(5)
+    assert(i.a == 5 and i.h() == 2)
+end
+
+-- Recursive primary constructor initializers stay legal. The construction site expands a class's
+-- initializers inline, and constructs the class through `__init` where the expansion would recurse.
+class RecNode(public depth: number)
+    public child = if depth > 0 then RecNode(depth - 1) else nil
+end
+
+class MutualA(public n: number)
+    public other = if n > 0 then MutualB(n - 1) else nil
+end
+
+class MutualB(public n: number)
+    public other = if n > 0 then MutualA(n - 1) else nil
+end
+
+recBudget = 2
+
+function takeRecBudget()
+    local b = recBudget
+    recBudget -= 1
+    return b
+end
+
+class RecDefault(public n: number, public parent = if recBudget > 0 then RecDefault(takeRecBudget()) else nil)
+end
+
+do
+    local r = RecNode(2)
+    assert(r.depth == 2 and r.child.depth == 1 and r.child.child.depth == 0 and r.child.child.child == nil)
+
+    local m = MutualA(3)
+    assert(class.isinstance(m.other, MutualB) and class.isinstance(m.other.other, MutualA))
+    assert(m.other.other.other.n == 0 and m.other.other.other.other == nil)
+
+    local d = RecDefault(10)
+    assert(d.n == 10 and d.parent.n == 2 and d.parent.parent.n == 1 and d.parent.parent.parent == nil)
+end
+
+-- Primary constructor initializers are class code: their private access is the class's, wherever the
+-- construction is compiled.
+class LeakSpy(public c)
+    public stolen = c.secret
+end
+
+class LeakVault
+    private secret = "hunter2"
+
+    public function lend(self)
+        local s = LeakSpy(self)
+        return s
+    end
+end
+
+class PrivateStaticDefault(public x: number)
+    public y = PrivateStaticDefault.helper(x)
+
+    private function helper(v)
+        return v * 2
+    end
+end
+
+class PrivateCtorDefault private (public v: number)
+    public function make(v)
+        local p = PrivateCtorDefault(v)
+        return p
+    end
+end
+
+class ConstructsPrivate(public inner = PrivateCtorDefault(1))
+end
+
+do
+    expectfail("primary default reads the caller's private field", "'secret' is a private member of 'LeakVault'", function()
+        local s = LeakVault():lend()
+        return s
+    end)
+
+    local p = PrivateStaticDefault(3)
+    assert(p.x == 3 and p.y == 6, "a primary default reads its own class's private static")
+
+    assert(PrivateCtorDefault.make(4).v == 4)
+    expectfail("private constructor from outside", "PrivateCtorDefault", function()
+        local p = PrivateCtorDefault(4)
+        return p
+    end)
+    expectfail("private constructor from another class's default", "PrivateCtorDefault", function()
+        local c = ConstructsPrivate()
+        return c
+    end)
+end
+
+-- A construction evaluates every argument, then the defaults of the parameters that came out nil, then
+-- the field initializers -- whether it runs `__init` or is compiled at the call site.
+local orderLog = {}
+
+local function logged(s)
+    table.insert(orderLog, s)
+    return s
+end
+
+local orderUpvalue = 0
+
+class OrderFields(public a = logged("default a"), public b)
+    public c = logged("field c")
+end
+
+class OrderInit(public a = logged("default a"), public b)
+    public c = logged("field c")
+    public z = orderUpvalue
+end
+
+do
+    local f = OrderFields(nil, logged("arg b"))
+    assert(table.concat(orderLog, ",") == "arg b,default a,field c")
+    assert(f.a == "default a" and f.b == "arg b" and f.c == "field c")
+
+    table.clear(orderLog)
+    local i = OrderInit(nil, logged("arg b"))
+    assert(table.concat(orderLog, ",") == "arg b,default a,field c")
+    assert(i.a == "default a" and i.b == "arg b" and i.c == "field c")
+end
+
+-- An explicit nil takes a parameter's default, as it does for an ordinary function.
+class NilPoint(public x = 1, public y = 2)
+end
+
+class NilPointInit(public x = 1, public y = 2)
+    public z = orderUpvalue
+end
+
+class NilExplicit
+    public x: number
+
+    public function __init(self, x = 1)
+        self.x = x
+    end
+end
+
+do
+    local none = nil
+
+    local a = NilPoint(nil, nil)
+    assert(a.x == 1 and a.y == 2)
+    local b = NilPoint(none)
+    assert(b.x == 1 and b.y == 2)
+    local c = NilPoint(nil, 5)
+    assert(c.x == 1 and c.y == 5)
+    local d = NilPointInit(none, nil)
+    assert(d.x == 1 and d.y == 2)
+    local e = NilExplicit(nil)
+    assert(e.x == 1)
+end
+
+-- A repeated key in a POD literal still evaluates its earlier value, and the later one wins.
+class DupPod
+    public x: number = 0
+    public y: number = 0
+end
+
+do
+    local calls = 0
+
+    local function eval(v)
+        calls += 1
+        return v
+    end
+
+    local p = DupPod { x = eval(1), y = 5, x = eval(2) }
+    assert(calls == 2 and p.x == 2 and p.y == 5)
+end
+
+-- Every kind of write to a proven local ends its proof: `function c() end`, and one target of a multiple
+-- assignment. A stale proof would read a constant field offset off whatever `c` now holds.
+class ProofCat
+    public a: number = 1
+    public name: string = "cat"
+
+    public function meow(self)
+        return "meow " .. self.name
+    end
+end
+
+class ProofDog
+    public name: string = "dog"
+    public b: number = 2
+end
+
+local function proofFunctionStatement(c)
+    if class.isinstance(c, ProofCat) then
+        function c() end
+        local r = c.name
+        return r
+    end
+    return "no"
+end
+
+local function proofAssertFunctionStatement(c)
+    assert(class.isinstance(c, ProofCat))
+    function c() end
+    local r = c:meow()
+    return r
+end
+
+local function proofMultipleAssign(c)
+    if class.isinstance(c, ProofCat) then
+        local other
+        other, c = 1, 5
+        local r = c.name
+        return r
+    end
+    return "no"
+end
+
+expectfail("function statement ends an if proof", "attempt to index function with 'name'", proofFunctionStatement, ProofCat())
+expectfail("function statement ends an assert proof", "attempt to index function with 'meow'", proofAssertFunctionStatement, ProofCat())
+expectfail("multiple assignment ends a proof", "attempt to index number with 'name'", proofMultipleAssign, ProofCat())
+
+-- A fused `assert(class.isinstance(...))` still evaluates its message on success...
+do
+    local msgCalls = 0
+
+    local function message()
+        msgCalls += 1
+        return "bad"
+    end
+
+    local function withMessage(c)
+        assert(class.isinstance(c, ProofCat), message())
+        local r = c.name
+        return r
+    end
+
+    assert(withMessage(ProofCat()) == "cat" and withMessage(ProofCat()) == "cat")
+    assert(msgCalls == 2)
+end
+
+-- ...and never enters its proven region on a failed check, even when the environment's `assert` returns.
+-- At O0 nothing is fused or proven and the replacement's return is simply followed; at O1 and O2 the check
+-- raises after the call. Either way the Dog's `b` is never read at the Cat's `name` offset.
+do
+    local function replacedAssert(c)
+        assert(class.isinstance(c, ProofCat))
+        local r = c.name
+        return r
+    end
+
+    local setEnvironment = _G["setf" .. "env"]
+    setEnvironment(replacedAssert, { assert = function() end, class = class })
+
+    assert(replacedAssert(ProofCat()) == "cat")
+
+    local ok, result = pcall(replacedAssert, ProofDog())
+    assert(result ~= 2)
+    assert((ok and result == "dog") or (not ok and string.find(result, "'ProofCat.assert'", 1, true)), tostring(result))
+
+    local okNumber, resultNumber = pcall(replacedAssert, 42)
+    assert(not okNumber, "a number is never indexed as a ProofCat")
+    assert(string.find(resultNumber, "attempt to index number", 1, true) or string.find(resultNumber, "'ProofCat.assert'", 1, true))
+end
+
+-- An assert that isn't fused (its message or operand can't be read twice) proves nothing, since nothing
+-- follows its call to raise when the environment's `assert` returns.
+do
+    local function message()
+        return "m"
+    end
+
+    local holder = {}
+
+    local function unfusedMessage(c)
+        assert(class.isinstance(c, ProofCat), message())
+        local r = c.name
+        return r
+    end
+
+    local function unfusedField(c)
+        assert(class.isinstance(c, ProofCat), holder.x)
+        local r = c:meow()
+        return r
+    end
+
+    local setEnvironment = _G["setf" .. "env"]
+    local env = { assert = function() end, class = class }
+    setEnvironment(unfusedMessage, env)
+    setEnvironment(unfusedField, env)
+
+    local ok, result = pcall(unfusedMessage, ProofDog())
+    assert(ok and result == "dog", tostring(result))
+    expectfail("unfused assert on a number", "attempt to index number with 'name'", unfusedMessage, 42)
+    expectfail("unfused assert calls the Dog's own method", "'ProofDog'", unfusedField, ProofDog())
+    assert(unfusedField(ProofCat()) == "meow cat")
+end
+
+-- Another class's method inlined into a method gains no private access of the class it lands in.
+class SnoopCat
+    public name: string = "cat"
+
+    public function snoop(self, d)
+        return d.secret
+    end
+
+    public function greet(self)
+        return "hi " .. self.name
+    end
+end
+
+class SnoopDog
+    private secret: string = "bone"
+
+    public function peek(self)
+        local cat = SnoopCat()
+        local r = cat:snoop(self)
+        return r
+    end
+
+    public function greetCat(self)
+        local cat = SnoopCat()
+        local r = cat:greet()
+        return r
+    end
+end
+
+do
+    expectfail("inlined method reads the caller class's private field", "'secret' is a private member of 'SnoopDog'", function()
+        local r = SnoopDog():peek()
+        return r
+    end)
+    assert(SnoopDog():greetCat() == "hi cat")
+end
+
+-- A POD constructor reads an object argument's private fields with the private access of the nearest Lua
+-- frame, which for an inlined body is the caller's. A method handing `self` to one keeps its call.
+class LootBag
+    public token: string
+end
+
+class Vaulted
+    private token: string = "hunter2"
+
+    public function copyAs(self)
+        local t = LootBag(self)
+        return t
+    end
+
+    public function copyViaPcall(self)
+        local ok, t = pcall(LootBag, self)
+        assert(ok, t)
+        return t
+    end
+end
+
+do
+    local v = Vaulted()
+    local a = v:copyAs()
+    local b = v:copyViaPcall()
+    assert(a.token == "hunter2" and b.token == "hunter2")
+end
+
+-- The same holds for a POD constructor reached through a field (`self:cb()`, `self.cb(d)`), and for primary
+-- constructor initializers that construct a POD class from an argument, directly or through an alias.
+class CbBag
+    public token: string = "none"
+end
+
+class CbVault
+    private token: string = "hunter2"
+    public cb: any = CbBag
+
+    public function run(self)
+        local t = self:cb()
+        return t
+    end
+end
+
+class CbCat
+    public cb: any = CbBag
+
+    public function copy(self, d)
+        local t = self.cb(d)
+        return t
+    end
+end
+
+class CbDog
+    private token: string = "bone"
+
+    public function peek(self)
+        local c = CbCat()
+        local r = c:copy(self)
+        return r.token
+    end
+end
+
+PodInitAlias = CbBag
+
+class PodInitSpy(public c)
+    public stolen = CbBag(c)
+end
+
+class PodInitAliasSpy(public c)
+    public stolen = PodInitAlias(c)
+end
+
+class PodInitPcallSpy(public c)
+    public viaPcall = select(2, pcall(CbBag, c))
+end
+
+class PodInitVault
+    private token = "hunter2"
+
+    public function lend(self, which)
+        local s
+        if which == 1 then
+            s = PodInitSpy(self)
+        elseif which == 2 then
+            s = PodInitAliasSpy(self)
+        else
+            s = PodInitPcallSpy(self)
+        end
+        return s
+    end
+end
+
+do
+    local v = CbVault()
+    local t = v:run()
+    assert(t.token == "hunter2", "a method's own POD construction keeps its access")
+
+    expectfail("POD construction through another class's field", "'token' is a private member of 'CbDog'", function()
+        local r = CbDog():peek()
+        return r
+    end)
+
+    local pv = PodInitVault()
+    expectfail("POD construction in an initializer", "'token' is a private member of 'PodInitVault'", function()
+        local s = pv:lend(1)
+        return s
+    end)
+    expectfail("POD construction through an alias in an initializer", "'token' is a private member of 'PodInitVault'", function()
+        local s = pv:lend(2)
+        return s
+    end)
+    local s = pv:lend(3)
+    assert(type(s.viaPcall) == "string" and string.find(s.viaPcall, "'token' is a private member of 'PodInitVault'", 1, true))
+end
+
+-- `assert(class.isinstance(...))` proves its local in an inlined function's body and in a repeat body.
+local function speak(c)
+    assert(class.isinstance(c, ProofCat))
+    local r = c:meow()
+    return r
+end
+
+local function speakTwice(c)
+    local a = speak(c)
+    local b = speak(c)
+    return a .. "/" .. b
+end
+
+local function speakInRepeat(c)
+    local r
+    repeat
+        assert(class.isinstance(c, ProofCat))
+        r = c:meow()
+    until true
+    return r
+end
+
+assert(speakTwice(ProofCat()) == "meow cat/meow cat")
+assert(speakInRepeat(ProofCat()) == "meow cat")
+expectfail("inlined assert still raises", "assertion failed", speakTwice, ProofDog())
+
+-- A `const` field is written only by its class's `__init`, on its own `self`. That holds whatever `__init`
+-- calls: a function outside the class, a function compiled from another chunk (the closest this harness gets
+-- to another module), a closure called through `pcall`, and at O2, where a function called by `__init` could
+-- otherwise be inlined into it.
+local function writeConstOutside(obj)
+    obj.c = 1
+end
+
+local writeConstOtherChunk = loadstring("return function(obj) obj.c = 2 end")()
+
+local constErrors = {}
+
+class ConstCallsOut
+    public const c: number = 0
+
+    public function __init(self, how: string)
+        local ok, err
+        if how == "outside" then
+            ok, err = pcall(writeConstOutside, self)
+        elseif how == "chunk" then
+            ok, err = pcall(writeConstOtherChunk, self)
+        elseif how == "closure" then
+            ok, err = pcall(function()
+                self.c = 3
+            end)
+        elseif how == "direct" then
+            -- a direct call, which O2 would inline if nothing stopped it
+            writeConstOutside(self)
+            ok = true
+        end
+        table.insert(constErrors, if ok then "ok" else err)
+    end
+end
+
+do
+    local constMessage = "'c' is a const member of 'ConstCallsOut'"
+
+    for _, how in { "outside", "chunk", "closure" } do
+        table.clear(constErrors)
+        local o = ConstCallsOut(how)
+        assert(o.c == 0, how)
+        assert(string.find(constErrors[1], constMessage, 1, true), `{how}: {constErrors[1]}`)
+    end
+
+    expectfail("direct call from __init", constMessage, function()
+        local o = ConstCallsOut("direct")
+        return o
+    end)
+end
+
+-- `__init` that yields in a coroutine and writes its const field after being resumed, and a vararg `__init`.
+class ConstAfterYield
+    public const c: number = 0
+
+    public function __init(self, v: number)
+        coroutine.yield("paused")
+        self.c = v
+    end
+end
+
+class ConstVararg
+    public const c: number = 0
+    public const n: number = 0
+
+    public function __init(self, ...)
+        self.c = select(1, ...)
+        self.n = select("#", ...)
+    end
+end
+
+do
+    local co = coroutine.wrap(function()
+        local o = ConstAfterYield(7)
+        return o
+    end)
+    assert(co() == "paused")
+    local o = co()
+    assert(o.c == 7)
+
+    local v = ConstVararg(4, 5, 6)
+    assert(v.c == 4 and v.n == 3)
+end
+
+-- A method's `self`, `__init`'s included, is const: every way of writing it is a compile error. Shadowing it
+-- with a new local, and writing its fields, are not writes to it.
+do
+    local writes = {
+        "self = other",
+        "self, other = other, self",
+        "self ..= 'x'",
+        "function self() end",
+        "local function f() self = other end",
+        "if other then self = other end; self.x = 1",
+    }
+
+    for _, method in { "m", "__init" } do
+        for _, write in writes do
+            local source = `class SelfWrite public x = 0 public function {method}(self, other) {write} end end`
+            local f, err = loadstring(source)
+            assert(f == nil, source)
+            assert(string.find(err, "Variable 'self' is constant and may not be reassigned", 1, true), `{source}: {err}`)
+        end
+    end
+
+    local legal = loadstring([[
+class SelfShadow
+    public x = 0
+    public f = nil
+
+    public function m(self, other)
+        self.x = 1
+        function self.f() return 2 end
+        local self = other
+        self = 3
+        return self
+    end
+end
+local s = SelfShadow()
+return s:m(nil), s.x, s.f()
+]])
+    local r, x, fr = legal()
+    assert(r == 3 and x == 1 and fr == 2)
+end
+
+-- A function expression in an ordinary function's or a method's default argument.
+do
+    local function withClosureDefault(a, b = (function() return 1 end)())
+        return a + b
+    end
+
+    assert(withClosureDefault(3) == 4 and withClosureDefault(3, 5) == 8)
+end
+
+class ClosureDefaultMethod
+    public function m(self, cb = function() return 1 end)
+        return cb()
+    end
+end
+
+do
+    local c = ClosureDefaultMethod()
+    assert(c:m() == 1)
+    assert(c:m(function() return 2 end) == 2)
+end
+
+-- A default argument reading a constant outer local, inlined into the main chunk.
+local defaultOuter = 1
+
+local function defaultReader(x, y = defaultOuter)
+    return y
+end
+
+local defaultRead = defaultReader("p")
+assert(defaultRead == 1)
+
+return 'OK'

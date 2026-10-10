@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/ConstraintSolver.h"
 
 #include "Luau/Anyification.h"
@@ -44,9 +44,9 @@ LUAU_FASTFLAGVARIABLE(DebugLuauLogSolver)
 LUAU_FASTFLAGVARIABLE(DebugLuauLogBindings)
 LUAU_FASTFLAGVARIABLE(LuauFixPropReadsOnMetatableTypes)
 LUAU_FASTFLAGVARIABLE(LuauAlsoInstantiateInferredArguments)
-LUAU_FASTFLAG(LuauGenericNominals)
+LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FLAGVERSION(LuauAlsoInstantiateInferredArguments, 2)
-LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
+LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAGVARIABLE(LuauRemoveConstraintSolverEmplace)
 LUAU_FASTFLAGVARIABLE(LuauInstantiateFunctionTypeBeforePush)
 LUAU_FASTFLAGVARIABLE(LuauAvoidCascadingRecursiveConstraintViolationError)
@@ -354,7 +354,7 @@ struct InstantiationQueuer : IterativeTypeVisitor
 
     bool visit(TypeId ty, const ExternType& etv) override
     {
-        if (FFlag::LuauGenericNominals && etv.hasUnresolvedGenerics)
+        if (FFlag::LuwuGenericNominals && etv.hasUnresolvedGenerics)
             return true;
 
         return false;
@@ -367,6 +367,9 @@ struct InfiniteTypeFinder : IterativeTypeVisitor
     const InstantiationSignature& signature;
     NotNull<Scope> scope;
     bool foundInfiniteType = false;
+    // Luwu Classes (rfcs/classes): the reference that makes a generic class infinite, when
+    // `signature.fn` is one (see isInfiniteSelfReference).
+    std::optional<TypeId> infiniteSelfReference;
 
     explicit InfiniteTypeFinder(ConstraintSolver* solver, const InstantiationSignature& signature, NotNull<Scope> scope)
         : IterativeTypeVisitor("InfiniteTypeFinder", /* skipBoundTypes */ true)
@@ -396,6 +399,18 @@ struct InfiniteTypeFinder : IterativeTypeVisitor
         // have two different type aliases.
         if (follow(tf->type) != follow(signature.fn.type))
             return true;
+
+        if (isGenericNominalTemplate())
+        {
+            if (isInfiniteSelfReference(petv))
+            {
+                foundInfiniteType = true;
+                infiniteSelfReference = ty;
+                return false;
+            }
+
+            return true;
+        }
 
         // We want to check that the arguments to this pending expansion
         // type are exactly the generic arguments provided.
@@ -437,6 +452,45 @@ struct InfiniteTypeFinder : IterativeTypeVisitor
         return false;
     }
 
+    bool isGenericNominalTemplate() const
+    {
+        return FFlag::LuwuGenericNominals && get<ExternType>(follow(signature.fn.type));
+    }
+
+    // Luwu Classes (rfcs/classes): a class is nominal, so a reference to itself inside its own
+    // body is only infinite when a type argument wraps one of the class's parameters (`A<{T}>`,
+    // `A<A<T>>`): each instantiation then mentions a new one. `A<string>` and `Pair<B, A>` reach
+    // finitely many instantiations and expand normally. Upstream rejects every self-reference with
+    // different arguments, which is right for structural aliases.
+    //
+    // `petv` must be a reference to this class (`signature.fn`).
+    bool isInfiniteSelfReference(const PendingExpansionType& petv) const
+    {
+        DenseHashSet<const void*> classParams{nullptr};
+        for (const GenericTypeDefinition& param : signature.fn.typeParams)
+            classParams.insert(follow(param.ty));
+        for (const GenericTypePackDefinition& param : signature.fn.typePackParams)
+            classParams.insert(follow(param.tp));
+
+        for (TypeId arg : petv.typeArguments)
+        {
+            arg = follow(arg);
+            bool wrapsClassParam = !classParams.contains(arg) && containsGeneric(arg, NotNull{&classParams});
+            if (wrapsClassParam)
+                return true;
+        }
+
+        for (TypePackId arg : petv.packArguments)
+        {
+            arg = follow(arg);
+            bool wrapsClassParam = !classParams.contains(arg) && containsGeneric(arg, NotNull{&classParams});
+            if (wrapsClassParam)
+                return true;
+        }
+
+        return false;
+    }
+
     bool visit(TypeId ty, const FunctionType& ftv) override
     {
         if (foundInfiniteType)
@@ -447,7 +501,7 @@ struct InfiniteTypeFinder : IterativeTypeVisitor
         // is: `To` is bound fresh at each call site, not at Option's own definition. Without
         // this carve-out, this reference to `Option<To>` looks identical to the genuinely
         // infinite `type Foo<T> = { x: Foo<SomeOtherType> }` case, since `To != T`.
-        if (FFlag::LuauGenericNominals && (!ftv.generics.empty() || !ftv.genericPacks.empty()))
+        if (FFlag::LuwuGenericNominals && (!ftv.generics.empty() || !ftv.genericPacks.empty()))
             return false;
 
         return true;
@@ -967,7 +1021,7 @@ bool ConstraintSolver::tryDispatch(NotNull<const Constraint> constraint, bool fo
     else if (auto nc = get<NameConstraint>(*constraint))
         success = tryDispatch(*nc, constraint);
     else if (auto taec = get<TypeAliasExpansionConstraint>(*constraint))
-        success = tryDispatch(*taec, constraint);
+        success = tryDispatch(*taec, constraint, force);
     else if (auto fcc = get<FunctionCallConstraint>(*constraint))
         success = tryDispatch(*fcc, constraint, force);
     else if (auto fcc = get<FunctionCheckConstraint>(*constraint))
@@ -1000,6 +1054,8 @@ bool ConstraintSolver::tryDispatch(NotNull<const Constraint> constraint, bool fo
         success = tryDispatch(*esgc, constraint);
     else if (auto ptc = get<PushTypeConstraint>(*constraint))
         success = tryDispatch(*ptc, constraint, force);
+    else if (auto inpc = get<InstantiateNominalPropConstraint>(*constraint))
+        success = tryDispatch(*inpc, constraint, force);
     else
         LUAU_ASSERT(false);
 
@@ -1028,6 +1084,20 @@ bool ConstraintSolver::tryDispatch(const PackSubtypeConstraint& c, NotNull<const
     unify(constraint, c.subPack, c.superPack);
 
     return true;
+}
+
+// Luwu Classes (rfcs/classes): a generic class's method as read through the class value, where
+// nothing instantiates the class's generics, so the method is generic over them itself.
+TypeId ConstraintSolver::quantifyOverClassGenerics(TypeId methodTy, const GeneralizationConstraint& c)
+{
+    const FunctionType* ftv = get<FunctionType>(methodTy);
+    if (!ftv)
+        return methodTy;
+
+    FunctionType quantified = *ftv;
+    quantified.generics.insert(quantified.generics.begin(), c.classGenerics.begin(), c.classGenerics.end());
+    quantified.genericPacks.insert(quantified.genericPacks.begin(), c.classGenericPacks.begin(), c.classGenericPacks.end());
+    return arena->addType(std::move(quantified));
 }
 
 bool ConstraintSolver::tryDispatch(const GeneralizationConstraint& c, NotNull<const Constraint> constraint)
@@ -1059,11 +1129,16 @@ bool ConstraintSolver::tryDispatch(const GeneralizationConstraint& c, NotNull<co
                 fty->deprecatedInfo = std::make_shared<AstAttr::DeprecatedInfo>(c.deprecatedInfo);
             }
         }
+
+        if (c.classValueMethodType)
+            bind(constraint, *c.classValueMethodType, quantifyOverClassGenerics(follow(generalizedType), c));
     }
     else
     {
         reportError(CodeTooComplex{}, constraint->location);
         bind(constraint, c.generalizedType, builtinTypes->errorType);
+        if (c.classValueMethodType)
+            bind(constraint, *c.classValueMethodType, builtinTypes->errorType);
     }
 
     // We check if this member is initialized and then access it, but
@@ -1292,15 +1367,32 @@ bool ConstraintSolver::tryDispatch(const NameConstraint& c, NotNull<const Constr
     }
     else if (MetatableType* mtv = getMutable<MetatableType>(target))
         mtv->syntheticName = c.name;
-    else if (get<IntersectionType>(target) || get<UnionType>(target))
+    else if (UnionType* utv = getMutable<UnionType>(target))
     {
-        // nothing (yet)
+        if (c.synthetic && !utv->name)
+            utv->syntheticName = c.name;
+        else
+            utv->name = c.name;
+    }
+    else if (IntersectionType* itv = getMutable<IntersectionType>(target))
+    {
+        if (c.synthetic && !itv->name)
+            itv->syntheticName = c.name;
+        else
+            itv->name = c.name;
+    }
+    else if (FunctionType* ftv = getMutable<FunctionType>(target))
+    {
+        if (c.synthetic && !ftv->name)
+            ftv->syntheticName = c.name;
+        else
+            ftv->name = c.name;
     }
 
     return true;
 }
 
-bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNull<const Constraint> constraint)
+bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNull<const Constraint> constraint, bool force)
 {
     const PendingExpansionType* petv = get<PendingExpansionType>(follow(c.target));
     if (!petv)
@@ -1391,6 +1483,43 @@ bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNul
         return true;
     }
 
+    // A generic class can reach this point before its own body is solved. This always happens for a
+    // reference to the class from inside itself, and for a forward reference to a class declared
+    // later in the file. The class's members are then still BlockedTypes. Instantiating would share
+    // them instead of substituting into them, so `Box<number>:get()` would return `T`. So wait for
+    // the members first.
+    //
+    // Waiting cannot deadlock. The class's own annotations became PendingExpansionTypes during
+    // constraint generation, so its members can be solved without this expansion running first.
+    //
+    // On a forced dispatch there is nothing left to wait for. The substitution below then defers each
+    // member that is still blocked (see InstantiateNominalPropConstraint).
+    if (FFlag::LuwuGenericNominals && !force)
+    {
+        if (const ExternType* templateEtv = get<ExternType>(follow(tf->type)))
+        {
+            bool anyBlocked = false;
+
+            for (const auto& [_, prop] : templateEtv->props)
+            {
+                if (prop.readTy && isBlocked(follow(*prop.readTy)))
+                {
+                    block(follow(*prop.readTy), constraint);
+                    anyBlocked = true;
+                }
+
+                if (prop.writeTy && !prop.isShared() && isBlocked(follow(*prop.writeTy)))
+                {
+                    block(follow(*prop.writeTy), constraint);
+                    anyBlocked = true;
+                }
+            }
+
+            if (anyBlocked)
+                return false;
+        }
+    }
+
     InstantiationSignature signature{
         *tf,
         typeArguments,
@@ -1417,6 +1546,13 @@ bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNul
 
     if (itf.foundInfiniteType)
     {
+        // Luwu Classes (rfcs/classes): upstream reports a type alias's violation from the alias
+        // statement (TypeChecker2, `invalidTypeAliases`); a class has no such statement to hang it on,
+        // so the solver reports the reference that causes it. The expansion that ran into it gets the
+        // error type, like a use of an invalid alias.
+        if (itf.infiniteSelfReference)
+            reportInfiniteSelfReference(*itf.infiniteSelfReference, follow(tf->type), constraint->location);
+
         bindResult(builtinTypes->errorType);
         constraint->scope->invalidTypeAliases[petv->name.value] = constraint->location;
         return true;
@@ -1427,7 +1563,7 @@ bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNul
     // e.g. `<T...>(T...) -> T...` instantiated with `any` for `T...` becomes
     // `<any>(any) -> any`, where none of these things are _generics_.
     ApplyTypeFunction applyTypeFunction{arena};
-    if (FFlag::LuauGenericNominals)
+    if (FFlag::LuwuGenericNominals)
         applyTypeFunction.genericNominalRoot = follow(tf->type);
     for (size_t i = 0; i < typeArguments.size(); ++i)
     {
@@ -1447,7 +1583,7 @@ bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNul
     if (!maybeInstantiated.has_value())
     {
         // TODO (CLI-56761): Report an error unconditionally, not just under this flag.
-        if (FFlag::LuauGenericNominals)
+        if (FFlag::LuwuGenericNominals)
             reportError(CodeTooComplex{}, constraint->location);
         bindResult(builtinTypes->errorType);
         return true;
@@ -1458,7 +1594,7 @@ bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNul
 
     // Record whether this freshly-instantiated generic nominal type still contains an
     // unresolved generic anywhere inside it. See ExternType::hasUnresolvedGenerics.
-    if (FFlag::LuauGenericNominals && get<ExternType>(follow(tf->type)))
+    if (FFlag::LuwuGenericNominals && get<ExternType>(follow(tf->type)))
     {
         // If none of the type arguments were actually used in the template body, substitution
         // hands back tf->type unchanged (no clone). We still want a distinct object per
@@ -1483,6 +1619,65 @@ bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNul
             marker.root = target;
             marker.traverse(target);
             targetExternType->hasUnresolvedGenerics = marker.found;
+
+            // On a forced dispatch a member of the template can still be blocked (see the wait
+            // above). Such a member is still a BlockedType here, and the
+            // substitution above copied it by reference, so binding it later would hand this
+            // instantiation the member *without* the type arguments applied. Stand a fresh blocked
+            // type in its place and substitute it once the template's member is known.
+            std::vector<TypeId> templateTypeParams;
+            templateTypeParams.reserve(tf->typeParams.size());
+            for (const GenericTypeDefinition& param : tf->typeParams)
+                templateTypeParams.push_back(param.ty);
+
+            std::vector<TypePackId> templateTypePackParams;
+            templateTypePackParams.reserve(tf->typePackParams.size());
+            for (const GenericTypePackDefinition& param : tf->typePackParams)
+                templateTypePackParams.push_back(param.tp);
+
+            // Structured bindings can't be captured by lambdas before C++20 (older clang rejects it).
+            const std::vector<TypeId>& typeArgumentsRef = typeArguments;
+            const std::vector<TypePackId>& packArgumentsRef = packArguments;
+
+            auto deferProp = [&](TypeId blockedProp)
+            {
+                TypeId placeholder = arena->addType(BlockedType{});
+                NotNull<Constraint> propConstraint = pushConstraint(
+                    constraint->scope,
+                    constraint->location,
+                    InstantiateNominalPropConstraint{
+                        blockedProp,
+                        placeholder,
+                        follow(tf->type),
+                        target,
+                        templateTypeParams,
+                        typeArgumentsRef,
+                        templateTypePackParams,
+                        packArgumentsRef
+                    }
+                );
+                getMutable<BlockedType>(placeholder)->setOwner(propConstraint);
+                return placeholder;
+            };
+
+            for (auto& [_, prop] : targetExternType->props)
+            {
+                const bool shared = prop.isShared();
+
+                if (prop.readTy && isBlocked(follow(*prop.readTy)))
+                {
+                    TypeId placeholder = deferProp(follow(*prop.readTy));
+                    prop.readTy = placeholder;
+                    if (shared)
+                        prop.writeTy = placeholder;
+                }
+
+                if (!shared && prop.writeTy && isBlocked(follow(*prop.writeTy)))
+                    prop.writeTy = deferProp(follow(*prop.writeTy));
+
+                if (prop.readTy)
+                    queuePendingMemberExpansions(*prop.readTy, constraint);
+            }
         }
     }
 
@@ -1620,6 +1815,11 @@ static void patchUnconstrainedGenericsFromExpectedType(TypeId overloadFn, TypeId
 
         // Only patch generics that argument matching left completely unconstrained; if
         // arguments already pinned a lower bound, trust that over the expected type.
+        //
+        // Widening a pinned bound to the expected type here is NOT sound: argument matching has
+        // already run against the old bound by this point, so overriding it discards that check --
+        // `Exception("hello")` against an annotated `Exception<number>` stops erroring entirely.
+        // Making the expected type win has to happen before arguments are matched, not here.
         if (!is<NeverType>(follow(ft->lowerBound)) || !is<UnknownType>(follow(ft->upperBound)))
             continue;
 
@@ -1628,6 +1828,8 @@ static void patchUnconstrainedGenericsFromExpectedType(TypeId overloadFn, TypeId
         ft->upperBound = expectedArg;
     }
 }
+
+static std::optional<TypeId> selectExpectedNominal(const FunctionType* ftv, TypeId expectedType);
 
 bool ConstraintSolver::tryDispatch(const FunctionCallConstraint& c, NotNull<const Constraint> constraint, bool force)
 {
@@ -1791,7 +1993,7 @@ bool ConstraintSolver::tryDispatch(const FunctionCallConstraint& c, NotNull<cons
     for (TypePackId freeTp : u2.newFreshTypePacks)
         trackInteriorFreeTypePack(constraint->scope, freeTp);
 
-    if (FFlag::LuauGenericNominals && c.expectedType)
+    if (FFlag::LuwuGenericNominals && c.expectedType)
         patchUnconstrainedGenericsFromExpectedType(overloadToUse, follow(*c.expectedType), u2.genericSubstitutions);
 
     if (!u2.genericSubstitutions.empty() || !u2.genericPackSubstitutions.empty())
@@ -1912,6 +2114,82 @@ bool ConstraintSolver::tryDispatch(const FunctionCallConstraint& c, NotNull<cons
     return true;
 }
 
+// Luwu Generic Nominals (rfcs/generics-on-extern-types.md): the option of `expectedType` that names the
+// same generic nominal as `ftv` returns, if there is exactly one. `expectedType` may be a union: for
+// example, a function declared `(): string | Exception<Info>` that returns `Exception(...)`. The single
+// option naming that class is the one this call is expected to produce. More than one such option is
+// ambiguous and yields nothing, and so does an expectation that names a different class.
+//
+// This is deliberately an identity check on the class itself (name + definition site + arity) and
+// never looks at the type arguments: matching them is the caller's business, and pairing two
+// unrelated nominals would be exactly the confusion nominality exists to prevent.
+static std::optional<TypeId> selectExpectedNominal(const FunctionType* ftv, TypeId expectedType)
+{
+    if (!ftv)
+        return std::nullopt;
+
+    TypePackId retPack = follow(ftv->retTypes);
+    auto it = begin(retPack);
+    if (it == end(retPack))
+        return std::nullopt;
+
+    const ExternType* retEt = get<ExternType>(follow(*it));
+    if (!retEt)
+        return std::nullopt;
+
+    auto namesSameClass = [&](const ExternType* other)
+    {
+        return other && retEt->name == other->name && retEt->definitionModuleName == other->definitionModuleName &&
+               retEt->definitionLocation == other->definitionLocation &&
+               retEt->instantiatedTypeParams.size() == other->instantiatedTypeParams.size() &&
+               retEt->instantiatedTypePackParams.size() == other->instantiatedTypePackParams.size();
+    };
+
+    expectedType = follow(expectedType);
+
+    if (namesSameClass(get<ExternType>(expectedType)))
+        return expectedType;
+
+    if (const UnionType* utv = get<UnionType>(expectedType))
+    {
+        std::optional<TypeId> found;
+        for (TypeId option : utv)
+        {
+            option = follow(option);
+            if (!namesSameClass(get<ExternType>(option)))
+                continue;
+
+            if (found)
+                return std::nullopt; // ambiguous
+            found = option;
+        }
+        return found;
+    }
+
+    return std::nullopt;
+}
+
+// Luwu Generic Nominals (rfcs/generics-on-extern-types.md): pair each still-generic type parameter of
+// the nominal `ftv` returns with the corresponding type argument of the expectation, for pushing into
+// the call's arguments.
+static void collectNominalGenericBindings(const FunctionType* ftv, TypeId expectedType, DenseHashMap<TypeId, TypeId>& bindings)
+{
+    std::optional<TypeId> expected = selectExpectedNominal(ftv, expectedType);
+    if (!expected)
+        return;
+
+    const ExternType* retEt = get<ExternType>(follow(*begin(follow(ftv->retTypes))));
+    const ExternType* expectedEt = get<ExternType>(*expected);
+    LUAU_ASSERT(retEt && expectedEt);
+
+    for (size_t i = 0; i < retEt->instantiatedTypeParams.size(); ++i)
+    {
+        TypeId param = follow(retEt->instantiatedTypeParams[i]);
+        if (get<GenericType>(param))
+            bindings[param] = follow(expectedEt->instantiatedTypeParams[i]);
+    }
+}
+
 bool ConstraintSolver::tryDispatch(const FunctionCheckConstraint& c, NotNull<const Constraint> constraint, bool force)
 {
     TypeId fn = follow(c.fn);
@@ -1948,6 +2226,26 @@ bool ConstraintSolver::tryDispatch(const FunctionCheckConstraint& c, NotNull<con
 
     // FIXME: Bidirectional type checking of overloaded functions is not yet supported.
     const FunctionType* ftv = get<FunctionType>(fn);
+
+    // `fn` may not be a function directly but instead something callable via a `__call`
+    // metamethod (e.g. a class value being invoked as its own constructor: `Cat { ... }`).
+    // Unwrap that so bidirectional inference still pushes expected types into the arguments --
+    // see OverloadResolver::testFunctionOrCallMetamethod for the equivalent unwrapping done
+    // during actual call resolution.
+    bool viaCallMetamethod = false;
+    if (!ftv)
+    {
+        ErrorVec dummyErrors;
+        if (auto callMetamethod = findMetatableEntry(builtinTypes, dummyErrors, fn, "__call", constraint->location))
+        {
+            // The `__call` metamethod can itself be overloaded (an intersection); bidirectional
+            // inference doesn't support overloaded functions in general (see FIXME above), so we
+            // only handle the simple, non-overloaded case here.
+            ftv = get<FunctionType>(follow(*callMetamethod));
+            viaCallMetamethod = ftv != nullptr;
+        }
+    }
+
     if (!ftv)
         return true;
 
@@ -1958,13 +2256,27 @@ bool ConstraintSolver::tryDispatch(const FunctionCheckConstraint& c, NotNull<con
 
     Unifier2 u2{arena, builtinTypes, constraint->scope, NotNull{&iceReporter}};
 
+    // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): a call that constructs a nominal (`Exception(...)`) against a known expected type
+    // (`: Exception<Info>`) can solve that nominal's generics from the expectation before its
+    // arguments are checked. Without this they become `never`/`unknown` below, a table literal
+    // argument has nothing to check against and widens -- `{ kind = "InvalidInput" }` infers
+    // `{ kind: string }` -- and the resulting `Exception<{ kind: string }>` is then rejected against
+    // the annotation. A nominal's type parameters are invariant, so there is no recovering from that
+    // afterwards; the writer's only workaround is to restate the annotation on a temporary.
+    DenseHashMap<TypeId, TypeId> nominalBindings{nullptr};
+    if (FFlag::LuwuGenericNominals && c.expectedType)
+        collectNominalGenericBindings(ftv, follow(*c.expectedType), nominalBindings);
+
     for (auto generic : ftv->generics)
     {
         // We may see non-generic types here, for example when evaluating a
         // recursive function call.
         if (auto gty = get<GenericType>(follow(generic)))
         {
-            replacements[generic] = gty->polarity == Polarity::Negative ? builtinTypes->neverType : builtinTypes->unknownType;
+            if (TypeId* bound = nominalBindings.find(follow(generic)))
+                replacements[generic] = *bound;
+            else
+                replacements[generic] = gty->polarity == Polarity::Negative ? builtinTypes->neverType : builtinTypes->unknownType;
             genericTypesAndPacks.insert(generic);
         }
     }
@@ -1979,17 +2291,32 @@ bool ConstraintSolver::tryDispatch(const FunctionCheckConstraint& c, NotNull<con
     // We don't attempt to perform bidirectional inference on the self type.
     const size_t typeOffset = c.callSite->self ? 1 : 0;
 
-    const std::vector<TypeId> expectedArgs = FFlag::LuauBidirectionalInferenceVariadics
-                                                 ? extendTypePack(*arena, builtinTypes, ftv->argTypes, c.callSite->args.size + typeOffset).head
-                                                 : flatten(ftv->argTypes).first;
+    // When calling through a `__call` metamethod, `ftv->argTypes` has an extra leading parameter
+    // for the callable value forwarded as its own "self" (see
+    // OverloadResolver::testFunctionOrCallMetamethod) that isn't present in `argsPack`/the AST
+    // call's arguments -- so skip it when indexing into `expectedArgs`, but not when indexing into
+    // `argPackHead` (which has no such extra entry).
+    const size_t expectedArgOffset = typeOffset + (viaCallMetamethod ? 1 : 0);
+
+    const std::vector<TypeId> expectedArgs =
+        FFlag::LuauBidirectionalInferenceVariadics
+            ? extendTypePack(*arena, builtinTypes, ftv->argTypes, c.callSite->args.size + expectedArgOffset).head
+            : flatten(ftv->argTypes).first;
     const std::vector<TypeId> argPackHead = flatten(argsPack).first;
 
     // TODO: Clip with LuauRemoveExtraSubtypingInstances
     Subtyping subtyping_DEPRECATED{builtinTypes, arena, normalizer, typeFunctionRuntime, NotNull{&iceReporter}};
 
-    for (size_t i = 0; i < c.callSite->args.size && i + typeOffset < expectedArgs.size() && i + typeOffset < argPackHead.size(); ++i)
+    for (size_t i = 0; i < c.callSite->args.size && i + expectedArgOffset < expectedArgs.size() && i + typeOffset < argPackHead.size(); ++i)
     {
-        TypeId expectedArgTy = follow(expectedArgs[i + typeOffset]);
+        TypeId expectedArgTy = follow(expectedArgs[i + expectedArgOffset]);
+
+        // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): a parameter whose type is one of the nominal's generics has a real expected type
+        // once that generic is solved from the call's own expected type -- push that in, rather
+        // than the bare generic, so a literal argument is checked against it instead of widening.
+        if (TypeId* bound = nominalBindings.find(expectedArgTy))
+            expectedArgTy = follow(*bound);
+
         AstExpr* expr = unwrapGroup(c.callSite->args.data[i]);
 
         PushTypeResult result = pushTypeInto(
@@ -3085,6 +3412,51 @@ bool ConstraintSolver::tryDispatch(const PushFunctionTypeConstraint& c, NotNull<
     return true;
 }
 
+bool ConstraintSolver::tryDispatch(const InstantiateNominalPropConstraint& c, NotNull<const Constraint> constraint, bool force)
+{
+    LUAU_ASSERT(FFlag::LuwuGenericNominals);
+
+    TypeId templateProp = follow(c.templateProp);
+
+    if (isBlocked(templateProp))
+    {
+        // A member that never resolves would keep this constraint alive forever, so on a forced
+        // dispatch stop waiting. There is nothing useful to substitute at that point.
+        if (!force)
+            return block(templateProp, constraint);
+
+        bind(constraint, c.target, builtinTypes->errorType);
+        return true;
+    }
+
+    ApplyTypeFunction applyTypeFunction{arena};
+
+    for (size_t i = 0; i < c.typeParams.size() && i < c.typeArguments.size(); ++i)
+        applyTypeFunction.typeArguments[c.typeParams[i]] = c.typeArguments[i];
+
+    for (size_t i = 0; i < c.typePackParams.size() && i < c.typePackArguments.size(); ++i)
+        applyTypeFunction.typePackArguments[c.typePackParams[i]] = c.typePackArguments[i];
+
+    // A member that mentions the class itself -- `self`, or a method returning `Box<T>` -- has to
+    // land on the instantiation we are filling in, not on a fresh copy of the template. Mapping the
+    // template onto the instantiation does that; `dontTraverseInto` keeps the substitution from
+    // then rewriting the instantiation's own children out from under us.
+    applyTypeFunction.typeArguments[follow(c.templateType)] = c.instantiatedType;
+    applyTypeFunction.dontTraverseInto(c.instantiatedType);
+
+    std::optional<TypeId> substituted = applyTypeFunction.substitute(templateProp);
+
+    if (!substituted)
+    {
+        reportError(CodeTooComplex{}, constraint->location);
+        bind(constraint, c.target, builtinTypes->errorType);
+        return true;
+    }
+
+    bind(constraint, c.target, *substituted);
+    return true;
+}
+
 bool ConstraintSolver::tryDispatch(const TypeInstantiationConstraint& c, NotNull<const Constraint> constraint)
 {
     if (isBlocked(c.functionType))
@@ -3186,7 +3558,7 @@ TypeId ConstraintSolver::instantiateFunctionType(
     auto result = r.substitute(clonedFunctionTypeId);
     if (!result)
     {
-        if (FFlag::LuauGenericNominals)
+        if (FFlag::LuwuGenericNominals)
             reportError(CodeTooComplex{}, location);
         return builtinTypes->errorType;
     }
@@ -3609,7 +3981,7 @@ TablePropLookupResult ConstraintSolver::lookupTableProp(
         if (auto p = lookupExternTypeProp(ct, propName))
             return {{}, context == ValueContext::RValue ? p->readTy : p->writeTy};
 
-        if (FFlag::DebugLuauUserDefinedClasses)
+        if (FFlag::LuwuClasses)
         {
             if (ct->metatable)
             {
@@ -4047,6 +4419,63 @@ void ConstraintSolver::reportError(TypeError e)
 {
     errors.emplace_back(std::move(e));
     errors.back().moduleName = module->name;
+}
+
+// Also expands a table's display arguments, which InstantiationQueuer doesn't visit.
+struct MemberExpansionQueuer : InstantiationQueuer
+{
+    using InstantiationQueuer::InstantiationQueuer;
+    using InstantiationQueuer::visit;
+
+    bool visit(TypeId ty, const TableType& ttv) override
+    {
+        for (TypeId arg : ttv.instantiatedTypeParams)
+            traverse(arg);
+
+        return true;
+    }
+};
+
+void ConstraintSolver::queuePendingMemberExpansions(TypeId memberTy, NotNull<const Constraint> constraint)
+{
+    // A member that is itself pending is deferred by the caller instead.
+    if (get<PendingExpansionType>(follow(memberTy)))
+        return;
+
+    MemberExpansionQueuer queuer{constraint->scope, constraint->location, this};
+    queuer.run(memberTy);
+}
+
+void ConstraintSolver::reportInfiniteSelfReference(TypeId reference, TypeId classTemplate, const Location& expansionLocation)
+{
+    // Report the error at the reference written inside the class, not at `expansionLocation`: the
+    // expansion that found the problem can come from any use of the class. The reference's own
+    // TypeAliasExpansionConstraint is still unsolved (the reference hasn't been expanded) and carries
+    // the reference's location, so look for it. A use of the class can also queue another expansion
+    // of the same reference at the use's location. That is why the constraint must also lie inside
+    // the class declaration. If none is found, fall back to `expansionLocation`.
+    Location location = expansionLocation;
+    if (const ExternType* templateEtv = get<ExternType>(classTemplate))
+    {
+        for (NotNull<const Constraint> c : unsolvedConstraints)
+        {
+            const TypeAliasExpansionConstraint* expansion = get<TypeAliasExpansionConstraint>(*c);
+            bool isThisReference = expansion && follow(expansion->target) == reference;
+            if (isThisReference && isInsideClassDeclaration(templateEtv, module->name, c->location))
+            {
+                location = c->location;
+                break;
+            }
+        }
+    }
+
+    for (const TypeError& e : errors)
+    {
+        if (e.location == location && get<RecursiveRestraintViolation>(e))
+            return;
+    }
+
+    reportError(RecursiveRestraintViolation{}, location);
 }
 
 bool ConstraintSolver::hasUnresolvedConstraints(TypeId ty)

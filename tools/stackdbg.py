@@ -7,10 +7,10 @@ automatically imported.
 
 If using vscode, you can add the above command to your launch.json under `preRunCommands` for the appropriate target. For example:
 {
-    "name": "Luau.UnitTest",
+    "name": "Luwu.UnitTest",
     "type": "lldb",
     "request": "launch",
-    "program": "${workspaceFolder}/build/ninja/common-tests/noopt/Luau/Luau.UnitTest",
+    "program": "${workspaceFolder}/build/ninja/common-tests/noopt/Luau/Luwu.UnitTest",
     "preRunCommands": [
         "command script import ${workspaceFolder}/Client/Luau/tools/stackdbg.py"
     ],

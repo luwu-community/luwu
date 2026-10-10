@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/CodeGen.h"
 #include "Luau/IrAnalysis.h"
 #include "Luau/IrBuilder.h"
@@ -105,7 +105,7 @@ public:
     IrBuilder build;
     AssemblyOptions options;
 
-    // Luau.VM headers are not accessible
+    // Luwu.VM headers are not accessible
     int tnil = parseTagName("tnil");
     int tboolean = parseTagName("tboolean");
     int tnumber = parseTagName("tnumber");

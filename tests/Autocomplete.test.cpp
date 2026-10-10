@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/Autocomplete.h"
 #include "Luau/AutocompleteTypes.h"
 #include "Luau/BuiltinDefinitions.h"
@@ -18,6 +18,9 @@
 LUAU_DYNAMIC_FASTINT(LuauSubtypingRecursionLimit)
 
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
+LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuauExportValueSyntax)
+LUAU_FASTFLAG(LuauExportValueTypecheck)
 LUAU_FASTFLAG(LuauAutocompleteFunctionArglistSuggestion)
 LUAU_FASTFLAG(LuauAutocompleteMetatableInheritance)
 LUAU_FASTFLAG(LuauCheckTypeForDeprecated)
@@ -25,6 +28,7 @@ LUAU_FASTFLAG(LuauDeprecatedAttributeOnAnonymousFunctions)
 LUAU_FASTFLAG(LuauAutocompleteSkipErrorTypeInUnion)
 LUAU_FASTFLAG(LuauCheckTypeForDeprecated)
 LUAU_FASTFLAG(LuauDeprecatedAttributeOnAnonymousFunctions)
+LUAU_FASTFLAG(LuwuTableDrop)
 
 using namespace Luau;
 
@@ -363,14 +367,17 @@ TEST_CASE_FIXTURE(ACFixture, "function_parameters")
 
 TEST_CASE_FIXTURE(ACBuiltinsFixture, "get_member_completions")
 {
+    ScopedFastFlag tableDrop{FFlag::LuwuTableDrop, true};
+
     check(R"(
         local a = table.@1
     )");
 
     auto ac = autocomplete('1');
 
-    CHECK_EQ(17, ac.entryMap.size());
+    CHECK_EQ(18, ac.entryMap.size());
     CHECK(ac.entryMap.count("find"));
+    CHECK(ac.entryMap.count("drop"));
     CHECK(ac.entryMap.count("pack"));
     LUAU_CHECK_HAS_NO_KEY(ac.entryMap, "math");
     CHECK_EQ(ac.context, AutocompleteContext::Property);
@@ -469,6 +476,8 @@ TEST_CASE_FIXTURE(ACFixture, "table_intersection")
 
 TEST_CASE_FIXTURE(ACBuiltinsFixture, "get_string_completions")
 {
+    ScopedFastFlag tableDrop{FFlag::LuwuTableDrop, true};
+
     check(R"(
         local a = ("foo"):@1
     )");
@@ -476,6 +485,7 @@ TEST_CASE_FIXTURE(ACBuiltinsFixture, "get_string_completions")
     auto ac = autocomplete('1');
 
     CHECK_EQ(17, ac.entryMap.size());
+    LUAU_CHECK_HAS_NO_KEY(ac.entryMap, "drop");
     CHECK_EQ(ac.context, AutocompleteContext::Property);
 }
 
@@ -1021,6 +1031,89 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_end_with_lambda")
     auto ac = autocomplete('1');
     CHECK_EQ(ac.entryMap.count("end"), 1);
     CHECK_EQ(ac.context, AutocompleteContext::Statement);
+}
+
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_end_inside_class_method")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    check(R"(
+        class Foo
+            function bar(self)
+                if true then  @1
+            end
+        end
+    )");
+
+    auto ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("end"), 1);
+}
+
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_class_member_position_offers_qualifiers")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    check(R"(
+        class Foo
+            @1
+        end
+    )");
+
+    auto ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("public"), 1);
+    CHECK_EQ(ac.entryMap.count("private"), 1);
+    CHECK_EQ(ac.entryMap.count("function"), 1);
+    CHECK_EQ(ac.entryMap.count("if"), 0);
+    CHECK_EQ(ac.entryMap.count("local"), 0);
+}
+
+TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_offers_private_class_members_only_inside_their_class")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuauExportValueSyntax, true},
+        {FFlag::LuauExportValueTypecheck, true},
+    };
+
+    fileResolver.source["Module/A"] = R"(
+export class Secret
+    private key: string
+    public id: number
+    public function make(): Secret return Secret { key = "k", id = 1 } end
+    public function peek(self) return self.key end
+end
+    )";
+
+    getFrontend().check("Module/A");
+
+    // The cursor is inside `Secret`'s line range in Module/A, but in another module.
+    fileResolver.source["Module/B"] = R"(
+local aaa = require(script.Parent.A)
+local s = aaa.Secret.make()
+local k = s.
+    )";
+
+    auto outside = autocomplete("Module/B", Position{3, 12});
+    CHECK(outside.entryMap.count("id"));
+    CHECK_FALSE(outside.entryMap.count("key"));
+
+    auto inside = autocomplete("Module/A", Position{5, 43});
+    CHECK(inside.entryMap.count("id"));
+    CHECK(inside.entryMap.count("key"));
+}
+
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_expected_type_of_an_overloaded_call_starts_at_its_first_argument")
+{
+    // An overloaded callee also resolves through its chosen overload; unlike a `__call`, nothing is
+    // passed ahead of the written arguments.
+    check(R"(
+        local f: ((mode: "left" | "right") -> ()) & ((n: number) -> ()) = nil :: any
+        f("@1left")
+    )");
+
+    auto ac = autocomplete('1');
+    CHECK(ac.entryMap.count("left"));
+    CHECK(ac.entryMap.count("right"));
 }
 
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_end_of_do_block")
@@ -5322,7 +5415,7 @@ TEST_CASE_FIXTURE(ACFixture, "we_know_the_fields_of_a_class_instance")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauForceOldSolver, false},
-        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuwuClasses, true},
     };
 
     check(R"(
@@ -5586,7 +5679,7 @@ TEST_CASE_FIXTURE(ACFixture, "ac_static_method_autocomplete")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauForceOldSolver, false},
-        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuwuClasses, true},
     };
 
     check(R"(
@@ -5608,7 +5701,7 @@ TEST_CASE_FIXTURE(ACFixture, "class_autocomplete_classname_inside_method")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauForceOldSolver, false},
-        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuwuClasses, true},
     };
 
     check(R"(
@@ -5653,7 +5746,7 @@ TEST_CASE_FIXTURE(ACFixture, "class_autocomplete_classname_inside_method")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauForceOldSolver, false},
-        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuwuClasses, true},
     };
 
     check(R"(

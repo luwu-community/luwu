@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 
 #include "Luau/FragmentAutocomplete.h"
 #include "Fixture.h"
@@ -23,7 +23,7 @@ using namespace Luau;
 LUAU_FASTINT(LuauParseErrorLimit)
 
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
-LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
+LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAG(LuauAutocompleteMetatableInheritance)
 LUAU_FASTFLAG(LuauAutocompleteSkipErrorTypeInUnion)
@@ -1104,7 +1104,7 @@ local function bar() return x + foo() end
 
 TEST_CASE_FIXTURE(FragmentAutocompleteFixture, "class_method_self_in_local_stack")
 {
-    ScopedFastFlag sff{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
 
     auto result = runAutocompleteVisitor(
         R"(
@@ -1124,7 +1124,7 @@ end
 
 TEST_CASE_FIXTURE(FragmentAutocompleteFixture, "class_method_args_not_in_scope_outside_class")
 {
-    ScopedFastFlag sff{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
 
     // Cursor is after the class `end` — method args must not leak into the outer scope.
     auto result = runAutocompleteVisitor(
@@ -5052,7 +5052,7 @@ TEST_CASE_FIXTURE(FragmentAutocompleteFixture, "fragment_autocomplete_react_narr
 
 TEST_CASE_FIXTURE(FragmentAutocompleteFixture, "class_method_self_dot_autocomplete")
 {
-    ScopedFastFlag sff{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
 
     const std::string source = R"(--!strict
 class Bar
@@ -5086,7 +5086,7 @@ end
 
 TEST_CASE_FIXTURE(FragmentAutocompleteFixture, "class_method_self_dot_multiple_properties")
 {
-    ScopedFastFlag sff{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
 
     const std::string source = R"(--!strict
 class Vec3
@@ -5125,7 +5125,7 @@ end
 
 TEST_CASE_FIXTURE(FragmentAutocompleteFixture, "class_method_extra_args_visible_in_body")
 {
-    ScopedFastFlag sff{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
 
     const std::string source = R"(--!strict
 class Counter
@@ -5159,7 +5159,7 @@ end
 
 TEST_CASE_FIXTURE(FragmentAutocompleteFixture, "class_second_method_self_dot")
 {
-    ScopedFastFlag sff{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
 
     const std::string source = R"(--!strict
 class Bar
@@ -5196,7 +5196,7 @@ end
 
 TEST_CASE_FIXTURE(FragmentAutocompleteFixture, "class_instance_dot_property_from_outside")
 {
-    ScopedFastFlag sff{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
 
     const std::string source = R"(--!strict
 class Bar
@@ -5228,7 +5228,7 @@ bar.@1
 
 TEST_CASE_FIXTURE(FragmentAutocompleteFixture, "class_instance_dot_includes_method_from_outside")
 {
-    ScopedFastFlag sff{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
 
     const std::string source = R"(--!strict
 class Bar
@@ -5264,7 +5264,7 @@ bar.@1
 
 TEST_CASE_FIXTURE(FragmentAutocompleteFixture, "class_instance_multiple_props_from_outside")
 {
-    ScopedFastFlag sff{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
 
     const std::string source = R"(--!strict
 class Point
@@ -5301,7 +5301,7 @@ p.@1
 
 TEST_CASE_FIXTURE(FragmentAutocompleteFixture, "class_static_method_dot_autocomplete_1")
 {
-    ScopedFastFlag sff{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
 
     const std::string source = R"(--!strict
 class Bar
@@ -5337,7 +5337,7 @@ Bar.@1
 
 TEST_CASE_FIXTURE(FragmentAutocompleteFixture, "class_static_method_dot_autocomplete_2")
 {
-    ScopedFastFlag sff{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
 
     const std::string source = R"(--!strict
 class Bar
@@ -5376,7 +5376,7 @@ Bar.@1
 
 TEST_CASE_FIXTURE(FragmentAutocompleteFixture, "class_autocomplete_between_definitions")
 {
-    ScopedFastFlag sff{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
 
     const std::string source = R"(--!strict
 class Bar
@@ -5411,7 +5411,7 @@ end
 
 TEST_CASE_FIXTURE(FragmentAutocompleteFixture, "class_autocomplete_classname_inside_method")
 {
-    ScopedFastFlag sff{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
 
     const std::string source = R"(--!strict
 class Bar
@@ -5445,7 +5445,7 @@ end
 TEST_CASE_FIXTURE(FragmentAutocompleteBuiltinsFixture, "isinstance_refines_for_autocomplete")
 {
     ScopedFastFlag sffs[] = {
-        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuwuClasses, true},
         {FFlag::LuauAllowGlobalDeclarationToBeCalledClass, true},
     };
 

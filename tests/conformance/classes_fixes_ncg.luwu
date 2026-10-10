@@ -1,0 +1,240 @@
+-- This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
+-- Luwu Classes (rfcs/classes): regression tests for fixes from the classes review (ncg).
+print("testing classes fixes (ncg)")
+
+-- Under --codegen every function here is natively compiled (there is no `@native`, see
+-- Conformance.test.cpp), on x64 and on arm64 CI runners alike. The first group keeps many computed values
+-- alive across each class operation that calls into C or branches inside its own lowering, and checks every
+-- one of them afterwards: a value left in a caller-saved register across the call, or restored from a spill
+-- slot the taken branch never wrote, comes back wrong.
+
+class Plain
+    public x: number
+    public y: number
+end
+
+class Defaulted
+    public x: number = 10
+    public y: number = 20
+end
+
+class WithInit
+    public n: number
+
+    public function __init(self, n: number)
+        self.n = n * 2
+    end
+end
+
+class Guarded private (public a: number, public b: number)
+    public function make(a: number, b: number): Guarded
+        -- the private primary constructor from inside its class takes the native path's private branch
+        local g = Guarded(a, b)
+        return g
+    end
+end
+
+class Sealed
+    public const id: number
+    public tag: number
+
+    public function __init(self, id: number, t: number)
+        -- const writes from `__init` take the native authorization's const path
+        self.id = id
+        self.tag = t
+    end
+end
+
+local function sum8(a, b, c, d, e, f, g, h)
+    return a + b + c + d + e + f + g + h
+end
+
+-- eight values computed before a construction and read after it, in a loop so the loop registers are
+-- live as well
+local function constructAll(n: number)
+    local total = 0
+
+    for i = 1, n do
+        local a, b, c, d = i * 3, i * 5, i * 7, i * 11
+        local e, f, g, h = a + b, c + d, a * c, b * d
+
+        local p = Plain { x = a, y = b }               -- native FIELDS construction
+        local q = Defaulted { x = c, y = nil }          -- constant defaults: the FIELDS fallback
+        local w = WithInit(e)                          -- INIT form: FALLBACK_NEWOBJECT, then a call
+        local t = Plain({ x = f, y = g })              -- table form: FALLBACK_NEWOBJECT
+        local s = Sealed(h, i)
+        local gd = Guarded.make(a, h)
+
+        assert(p.x == a and p.y == b)
+        assert(q.x == c and q.y == 20)
+        assert(w.n == e * 2)
+        assert(t.x == f and t.y == g)
+        assert(s.id == h and s.tag == i)
+        assert(gd.a == a and gd.b == h)
+        assert(sum8(a, b, c, d, e, f, g, h) == 52 * i + 76 * i * i)
+
+        total += sum8(a, b, c, d, e, f, g, h)
+    end
+
+    return total
+end
+
+do
+    local expected = 0
+    for i = 1, 50 do
+        expected += 52 * i + 76 * i * i
+    end
+    assert(constructAll(50) == expected)
+end
+
+-- `__init` may assign const fields only on the object it is constructing. The native authorization of a
+-- const write checks that the object is the `self` in register 0 of `__init`'s frame, as the interpreter does.
+class Stamp
+    public const id: number
+
+    public function __init(self, id: number, other: Stamp?)
+        self.id = id
+        if other then
+            other.id = id
+        end
+    end
+end
+
+do
+    local first = Stamp(1, nil)
+    for _ = 1, 3 do
+        local ok, err = pcall(function()
+            local second = Stamp(2, first)
+            return second
+        end)
+        assert(not ok, "a const write to another object from __init was allowed")
+        assert(string.find(err, "can only assign it on the object it is constructing", 1, true), err)
+        assert(first.id == 1)
+    end
+end
+
+-- NEWCLASSMEMBER (FALLBACK_NEWCLASSMEMBER): values computed in the main chunk stay live across a class
+-- declaration's member additions
+local chunkA, chunkB, chunkC = constructAll(2), constructAll(3) * 2, constructAll(1) + 7
+
+class Declared
+    public v: number
+
+    public function get(self)
+        return self.v
+    end
+
+    public function twice(self)
+        return self.v * 2
+    end
+end
+
+assert(chunkA == constructAll(2) and chunkB == constructAll(3) * 2 and chunkC == constructAll(1) + 7)
+assert(Declared { v = chunkA }:get() == chunkA and Declared { v = chunkC }:twice() == chunkC * 2)
+
+-- CLASS_ISINSTANCE with live values on both of its paths (not an object, object of another class, instance)
+local function classify(values, n: number)
+    local hits, misses = 0, 0
+    local a, b, c = n * 2, n * 3, n * 5
+
+    for _, v in values do
+        if class.isinstance(v, Plain) then
+            hits += 1
+        else
+            misses += 1
+        end
+    end
+
+    return hits, misses, a, b, c
+end
+
+do
+    local hits, misses, a, b, c = classify({ Plain { x = 1, y = 2 }, 5, "s", Defaulted {}, Plain { x = 3, y = 4 }, {} }, 7)
+    assert(hits == 2 and misses == 4)
+    assert(a == 14 and b == 21 and c == 35)
+end
+
+-- A value known not to be an object is never an instance: the check folds to a plain jump.
+local function numberIsNeverInstance(n: number)
+    local x = n + 1
+    if class.isinstance(x, Plain) then
+        return "instance"
+    end
+    return "not"
+end
+
+assert(numberIsNeverInstance(1) == "not")
+
+-- A register reused for a member read after holding a number: the read's result is untyped, so a table or
+-- an object behind it is read correctly either way.
+class Node
+    public nxt: any
+    public v: number = 1
+
+    public function f(self)
+        local a = self.v * 2 + 1
+        return self.nxt.x + a
+    end
+end
+
+do
+    local viaTable = Node { nxt = { x = 5 } }
+    local viaObject = Node { nxt = Plain { x = 7, y = 0 } }
+    for _ = 1, 3 do
+        assert(viaTable:f() == 8)
+        assert(viaObject:f() == 10)
+    end
+end
+
+-- An object constructed into a register is read through the object path directly.
+local function constructed(a: number)
+    local p = Plain { x = a, y = a + 1 }
+    return p.x + p.y
+end
+
+for i = 1, 3 do
+    assert(constructed(i) == 2 * i + 1)
+end
+
+-- A method read as a plain field (not a call) through an object. Correctness only: such a read always
+-- misses TRY_OBJECT_MEMBER_ADDR, which is bounded to instance members, and resolves in the fallback.
+class Greeter
+    public name: string
+
+    public function hello(self)
+        return "hi " .. self.name
+    end
+end
+
+do
+    local g = Greeter { name = "cat" }
+    for _ = 1, 3 do
+        local m = g.hello
+        assert(m(g) == "hi cat")
+    end
+end
+
+-- A class with more than 256 members: operand C can't cache offsets past 255, so members there are
+-- looked up by name every time, and must still read and write the right slot. Correctness only; that the
+-- slot cache is left unpatched is ClassesNativeMemberSlotCacheSkipsWideOffsets in Conformance.test.cpp.
+do
+    local fields = {}
+    for i = 1, 300 do
+        table.insert(fields, `public f{i}: number = {i}`)
+    end
+
+    local source = `class Wide\n{table.concat(fields, "\n")}\npublic function last(self) return self.f300 end\nend\n`
+        .. "return Wide, function(w) local s = 0; for _ = 1, 3 do s += w.f300 + w.f257 + w.f44; w.f300 += 1 end; return s, w:last() end"
+
+    local chunk, err = loadstring(source)
+    assert(chunk, err)
+    local Wide, run = chunk()
+
+    local w = Wide()
+    local s, last = run(w)
+    assert(s == (300 + 257 + 44) + (301 + 257 + 44) + (302 + 257 + 44), s)
+    assert(last == 303)
+    assert(w.f44 == 44 and w.f257 == 257)
+end
+
+return 'OK'

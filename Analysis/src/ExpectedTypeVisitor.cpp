@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/ExpectedTypeVisitor.h"
 
 #include "Luau/Scope.h"
@@ -172,8 +172,28 @@ bool ExpectedTypeVisitor::visit(AstExprIndexExpr* expr)
 bool ExpectedTypeVisitor::visit(AstExprCall* expr)
 {
     TypeId* ty = astOverloadResolvedTypes->find(expr);
-    if (!ty)
+
+    // If the resolved call type came from `astOverloadResolvedTypes` rather than the callee
+    // expression's own type, and the callee's own type isn't itself a function, then this call
+    // was resolved through a `__call` metamethod (e.g. a class value invoked as its own
+    // constructor: `Cat { ... }`). Such calls forward the callee as an implicit leading argument
+    // (see OverloadResolver::testFunctionOrCallMetamethod) that doesn't correspond to any AST
+    // argument, so we need to skip it below the same way we skip an explicit `self` argument.
+    // An overloaded callee (an intersection of functions) also resolves through
+    // `astOverloadResolvedTypes`, with no extra argument, so ask for the metamethod itself.
+    bool viaCallMetamethod = false;
+    if (ty)
+    {
+        if (TypeId* calleeTy = astTypes->find(expr->func))
+        {
+            ErrorVec metatableErrors;
+            viaCallMetamethod = get<FunctionType>(follow(*calleeTy)) == nullptr &&
+                                findMetatableEntry(builtinTypes, metatableErrors, *calleeTy, "__call", expr->func->location).has_value();
+        }
+    }
+    else
         ty = astTypes->find(expr->func);
+
     if (!ty)
         return true;
 
@@ -194,6 +214,9 @@ bool ExpectedTypeVisitor::visit(AstExprCall* expr)
         // pack will be the type of `self`, so we just skip that.
         it++;
     }
+
+    if (viaCallMetamethod && it != end(ftv->argTypes))
+        it++;
 
     while (idx < expr->args.size && it != end(ftv->argTypes))
     {

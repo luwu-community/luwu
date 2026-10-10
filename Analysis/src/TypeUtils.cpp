@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/TypeUtils.h"
 
 #include "Luau/Common.h"
@@ -1110,5 +1110,40 @@ OccursCheckResult occursCheck(TypePackId needle, TypePackId haystack)
     return OccursCheckResult::Pass;
 }
 
+// Deliberately narrower than `isOptional`, which also answers true for `any` and `unknown`: "could be
+// `nil`" is misleading for those, and what we are after here is the `T?` the reader actually wrote.
+static bool couldBeNil(TypeId ty)
+{
+    ty = follow(ty);
+
+    if (const UnionType* utv = get<UnionType>(ty))
+        return std::any_of(begin(utv), end(utv), isNil);
+
+    return isNil(ty);
+}
+
+std::optional<std::string> describeOptionalOperands(TypeId left, std::optional<TypeId> right)
+{
+    const bool leftCouldBeNil = couldBeNil(left);
+
+    if (!right)
+        return leftCouldBeNil ? std::make_optional<std::string>("the operand could be `nil`") : std::nullopt;
+
+    const bool rightCouldBeNil = couldBeNil(*right);
+
+    if (leftCouldBeNil && rightCouldBeNil)
+        return std::string{"one or both operands could be `nil`"};
+    if (leftCouldBeNil)
+        return std::string{"the left operand could be `nil`"};
+    if (rightCouldBeNil)
+        return std::string{"the right operand could be `nil`"};
+
+    return std::nullopt;
+}
+
+bool isInsideClassDeclaration(const ExternType* cls, const ModuleName& moduleName, const Location& location)
+{
+    return cls->definitionLocation && cls->definitionModuleName == moduleName && cls->definitionLocation->encloses(location);
+}
 
 } // namespace Luau

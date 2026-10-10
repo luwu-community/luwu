@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 #include "lfunc.h"
 
@@ -41,6 +41,7 @@ Proto* luaF_newproto(lua_State* L)
     f->typeinfo = NULL;
 
     f->userdata = NULL;
+    f->ownerclass = NULL;
 
     f->gclist = NULL;
 

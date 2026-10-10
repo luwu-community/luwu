@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "IrValueLocationTracking.h"
 
 #include "Luau/IrDump.h"
@@ -148,8 +148,12 @@ void IrValueLocationTracking::beforeInstLowering(IrInst& inst)
     case IrCmd::FALLBACK_FORGPREP:
         invalidateRestoreVmRegs(vmRegOp(OP_B(inst)), 3);
         break;
+    case IrCmd::FALLBACK_NEWOBJECT:
+        invalidateRestoreVmRegs(vmRegOp(OP_B(inst)), function.intOp(OP_D(inst)) == LBC_NEWOBJECT_INIT ? 3 : 1);
+        break;
 
         // Make sure all VmReg referencing instructions are handled explicitly (only register reads here)
+    case IrCmd::FALLBACK_NEWCLASSMEMBER:
     case IrCmd::LOAD_TAG:
     case IrCmd::LOAD_POINTER:
     case IrCmd::LOAD_DOUBLE:

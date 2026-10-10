@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
 #include "Luau/Ast.h"
@@ -170,6 +170,9 @@ private:
     // attributes ::= {attribute}
     AstArray<AstAttr*> parseAttributes(TempVector<CstAttrList*>* cstAttrLists = nullptr);
 
+    // `first` followed by `second`, for attributes written on both sides of an access specifier.
+    AstArray<AstAttr*> concatAttributes(const AstArray<AstAttr*>& first, const AstArray<AstAttr*>& second);
+
     // attributes local function Name funcbody
     // attributes function funcname funcbody
     // attributes `declare function' Name`(' [parlist] `)' [`:` Type]
@@ -190,9 +193,21 @@ private:
     AstStat* parseReturn();
 
     // type Name `=' Type
-    AstStat* parseTypeAlias(const Location& start, bool exported, Position typeKeywordPosition);
+    AstStat* parseTypeAlias(const Location& start, bool exported, Position typeKeywordPosition, const Location& typeKeywordLocation);
 
-    AstStat* parseClassStat(const Location& start, bool exported);
+    AstStat* parseClassStat(const Location& start, bool exported, const Location& classKeywordLocation);
+
+    // True when the class body is looking at something that reads as a statement rather than a class
+    // member, which means the class was never closed. See its definition.
+    bool classBodyLooksLikeStatement();
+
+    // Luwu Classes (rfcs/classes): parse a class's primary constructor parameter list, e.g. the
+    // `(name: string, age = 0)` of `class Cat(name: string, age = 0)`.
+    AstClassPrimaryConstructor* parseClassPrimaryConstructor(const std::optional<Location>& qualifierLocation, AstClassMemberVisibility visibility);
+
+    // Brings a primary constructor's parameters into scope; the caller takes a saveLocals() offset
+    // first and passes it to restoreLocals once the expression that needed them has been parsed.
+    void pushClassPrimaryConstructorParams(AstClassPrimaryConstructor* primaryConstructor);
 
     // type function Name ... end
     AstStat* parseTypeFunction(const Location& start, bool exported, Position typeKeywordPosition);
@@ -229,7 +244,17 @@ private:
         const Name* localName,
         const AstArray<AstAttr*>& attributes,
         const bool isConst = false,
-        TempVector<CstAttrList*>* cstAttrLists = nullptr
+        TempVector<CstAttrList*>* cstAttrLists = nullptr,
+        // Used only for the closing 'end' indentation-mismatch diagnostic; defaults to
+        // `matchFunction` itself. Callers that need that diagnostic to report a different column
+        // than the true 'function' keyword (e.g. 'local function'/'const function' aligning it to
+        // 'local'/'const' instead) pass a separate lexeme here rather than mutating `matchFunction`,
+        // since `matchFunction.location` is also used as the real, unadjusted 'function' keyword
+        // location for the resulting AstExprFunction and its CST node.
+        const Lexeme* endMatchLexeme = nullptr,
+        // Luwu Classes (rfcs/classes): set for a class function, whose first parameter, when named
+        // `self`, is bound const.
+        bool isClassFunction = false
     );
 
     // explist ::= {exp `,'} exp
@@ -578,6 +603,7 @@ private:
     std::vector<AstTypeOrPack> scratchTypeOrPack;
     std::vector<AstDeclaredExternTypeProperty> scratchDeclaredClassProps;
     std::vector<AstClassMember> scratchClassDeclarations;
+    std::vector<AstClassPrimaryConstructorParamQualifiers> scratchClassParamQualifiers;
     std::vector<AstExprTable::Item> scratchItem;
     std::vector<CstExprTable::Item> scratchCstItem;
     std::vector<AstArgumentName> scratchArgName;

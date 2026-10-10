@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Builtins.h"
 
 #include "Luau/Bytecode.h"
@@ -9,7 +9,8 @@
 
 LUAU_FASTFLAGVARIABLE(LuauIntegerFastcalls)
 LUAU_FASTFLAGVARIABLE(LuauIntegerBufferFastcalls)
-LUAU_FASTFLAG(LuauBufferIsFrozen)
+LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuBufferIsFrozen)
 
 namespace Luau
 {
@@ -260,7 +261,7 @@ static int getBuiltinFunctionId(const Builtin& builtin, const CompileOptions& op
             return LBF_BUFFER_READINTEGER;
         if (FFlag::LuauIntegerFastcalls && FFlag::LuauIntegerBufferFastcalls && builtin.method == "writeinteger")
             return LBF_BUFFER_WRITEINTEGER;
-        if (FFlag::LuauBufferIsFrozen && builtin.method == "isfrozen")
+        if (FFlag::LuwuBufferIsFrozen && builtin.method == "isfrozen")
             return LBF_BUFFER_ISFROZEN;
     }
 
@@ -385,6 +386,13 @@ static int getBuiltinFunctionId(const Builtin& builtin, const CompileOptions& op
                 return LBF_VECTOR;
         }
     }
+
+    // Luwu Classes (rfcs/classes): class.isinstance(value, class). Recognizing it as a fastcall
+    // turns the per-branch dispatch (`if class.isinstance(node, Foo)`) from a full call into an inline
+    // object-class comparison. The FASTCALL safe-env guard falls back to the real call if `class`
+    // isn't the class library, so this stays correct even when the classes feature is disabled.
+    if (FFlag::LuwuClasses && builtin.isMethod("class", "isinstance"))
+        return LBF_CLASS_ISINSTANCE;
 
     return -1;
 }
@@ -599,6 +607,9 @@ BuiltinInfo getBuiltinInfo(int bfid)
 
     case LBF_RAWGET:
     case LBF_RAWEQUAL:
+        return {2, 1};
+
+    case LBF_CLASS_ISINSTANCE:
         return {2, 1};
 
     case LBF_TABLE_INSERT:

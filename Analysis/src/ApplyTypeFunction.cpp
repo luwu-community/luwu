@@ -1,10 +1,10 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 
 #include "Luau/ApplyTypeFunction.h"
 
 #include "Luau/Common.h"
 
-LUAU_FASTFLAG(LuauGenericNominals)
+LUAU_FASTFLAG(LuwuGenericNominals)
 
 namespace Luau
 {
@@ -37,7 +37,7 @@ bool ApplyTypeFunction::ignoreChildren(TypeId ty)
         return true;
     else if (get<ExternType>(ty))
     {
-        if (FFlag::LuauGenericNominals)
+        if (FFlag::LuwuGenericNominals)
         {
             // replaceChildren() re-checks ignoreChildren on the freshly cloned type, so the
             // root check must also match the clone produced for genericNominalRoot, not just

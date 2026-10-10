@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 
 #include "Luau/Constraint.h"
 #include "Luau/TypeFunction.h"
@@ -199,6 +199,10 @@ std::pair<TypeIds, TypePackIds> Constraint::getMaybeMutatedTypes() const
     else if (auto ptc = get<PushTypeConstraint>(*this))
     {
         rci.traverse(ptc->targetType);
+    }
+    else if (auto inpc = get<InstantiateNominalPropConstraint>(*this))
+    {
+        rci.traverse(inpc->target);
     }
 
     return {std::move(types), std::move(typePacks)};

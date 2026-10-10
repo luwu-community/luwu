@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
 #include "Luau/Error.h"
@@ -443,5 +443,26 @@ bool isBlocked(TypeId ty);
  *         union of functions.
  */
 std::optional<TypePackId> getApproximateReturnTypeForFunctionCall(TypeId ty);
+
+/**
+ * Names the operands of an operator that could be `nil`, for an error message: "one or both operands
+ * could be `nil`", "the left operand could be `nil`", "the operand could be `nil`".
+ *
+ * `nil` never carries a metamethod, so an optional operand is always a reason the operator could not
+ * be applied -- and, unlike a missing metamethod on a type the reader did not think they were using,
+ * it is the reason they can act on.
+ *
+ * Pass nullopt for `right` for a unary operator. Returns nullopt when no operand could be `nil`.
+ * Deliberately narrower than `isOptional`, which also answers true for `any` and `unknown`.
+ */
+std::optional<std::string> describeOptionalOperands(TypeId left, std::optional<TypeId> right);
+
+/**
+ * Luwu Classes (rfcs/classes): whether `location`, a position in module `moduleName`, lies inside
+ * `cls`'s class declaration (for `private` members and private constructors). A class's location
+ * belongs to the module that declares it, so a location in any other module is outside, whatever
+ * its line and column.
+ */
+bool isInsideClassDeclaration(const ExternType* cls, const ModuleName& moduleName, const Location& location);
 
 } // namespace Luau

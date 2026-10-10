@@ -131,19 +131,19 @@ struct DirectChildCollector : public Luau::AstVisitor
         LUAU_AST_FIELD_RW(HasEnd, SetHasEnd, hasEnd) \
         LUAU_AST_FIELD_RW(Body, SetBody, body)) \
     NODE(AstStatIf, "AstStatIf", Stat, \
-        LUAU_NODE_DEFAULT(Luau::Location(), nullptr, nullptr, nullptr, std::nullopt, std::nullopt) \
+        LUAU_NODE_DEFAULT(Luau::Location(), nullptr, nullptr, nullptr, std::nullopt, std::nullopt, Luau::Location()) \
         LUAU_AST_STAT_BASE \
         LUAU_AST_FIELD_RW(Condition, SetCondition, condition) \
         LUAU_AST_FIELD_RW(ThenBody, SetThenBody, thenbody) \
         LUAU_AST_FIELD_RW(ElseBody, SetElseBody, elsebody)) \
     NODE(AstStatWhile, "AstStatWhile", Stat, \
-        LUAU_NODE_DEFAULT(Luau::Location(), nullptr, nullptr, false, Luau::Location()) \
+        LUAU_NODE_DEFAULT(Luau::Location(), nullptr, nullptr, false, Luau::Location(), Luau::Location()) \
         LUAU_AST_STAT_BASE \
         LUAU_AST_FIELD_RW(HasDo, SetHasDo, hasDo) \
         LUAU_AST_FIELD_RW(Condition, SetCondition, condition) \
         LUAU_AST_FIELD_RW(Body, SetBody, body)) \
     NODE(AstStatRepeat, "AstStatRepeat", Stat, \
-        LUAU_NODE_DEFAULT(Luau::Location(), nullptr, nullptr, false) \
+        LUAU_NODE_DEFAULT(Luau::Location(), nullptr, nullptr, false, Luau::Location(), Luau::Location()) \
         LUAU_AST_STAT_BASE \
         LUAU_AST_FIELD_RW(Condition, SetCondition, condition) \
         LUAU_AST_FIELD_RW(Body, SetBody, body)) \
@@ -154,7 +154,7 @@ struct DirectChildCollector : public Luau::AstVisitor
         LUAU_NODE_DEFAULT(Luau::Location()) \
         LUAU_AST_STAT_BASE) \
     NODE(AstStatReturn, "AstStatReturn", Stat, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstArray<Luau::AstExpr*>{nullptr, 0}) \
+        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstArray<Luau::AstExpr*>{nullptr, 0}, Luau::Location()) \
         LUAU_AST_STAT_BASE \
         LUAU_AST_FIELD_RW(List, SetList, list)) \
     NODE(AstStatExpr, "AstStatExpr", Stat, \
@@ -169,7 +169,7 @@ struct DirectChildCollector : public Luau::AstVisitor
         LUAU_AST_FIELD_RW(Vars, SetVars, vars) \
         LUAU_AST_FIELD_RW(Values, SetValues, values)) \
     NODE(AstStatFor, "AstStatFor", Stat, \
-        LUAU_NODE_DEFAULT(Luau::Location(), nullptr, nullptr, nullptr, nullptr, nullptr, false, Luau::Location()) \
+        LUAU_NODE_DEFAULT(Luau::Location(), nullptr, nullptr, nullptr, nullptr, nullptr, false, Luau::Location(), Luau::Location()) \
         LUAU_AST_STAT_BASE \
         LUAU_AST_FIELD_RW(HasDo, SetHasDo, hasDo) \
         LUAU_AST_FIELD_RW(Var, SetVar, var) \
@@ -178,7 +178,7 @@ struct DirectChildCollector : public Luau::AstVisitor
         LUAU_AST_FIELD_RW(Step, SetStep, step) \
         LUAU_AST_FIELD_RW(Body, SetBody, body)) \
     NODE(AstStatForIn, "AstStatForIn", Stat, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstArray<Luau::AstLocal*>{nullptr, 0}, Luau::AstArray<Luau::AstExpr*>{nullptr, 0}, nullptr, false, Luau::Location(), false, Luau::Location()) \
+        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstArray<Luau::AstLocal*>{nullptr, 0}, Luau::AstArray<Luau::AstExpr*>{nullptr, 0}, nullptr, false, Luau::Location(), false, Luau::Location(), Luau::Location()) \
         LUAU_AST_STAT_BASE \
         LUAU_AST_FIELD_RW(HasIn, SetHasIn, hasIn) \
         LUAU_AST_FIELD_RW(HasDo, SetHasDo, hasDo) \
@@ -197,18 +197,18 @@ struct DirectChildCollector : public Luau::AstVisitor
         LUAU_AST_FIELD_RW(Var, SetVar, var) \
         LUAU_AST_FIELD_RW(Value, SetValue, value)) \
     NODE(AstStatFunction, "AstStatFunction", Stat, \
-        LUAU_NODE_DEFAULT(Luau::Location(), nullptr, nullptr) \
+        LUAU_NODE_DEFAULT(Luau::Location(), nullptr, nullptr, Luau::Location()) \
         LUAU_AST_STAT_BASE \
         LUAU_AST_FIELD_RW(Name, SetName, name) \
         LUAU_AST_FIELD_RW(Func, SetFunc, func)) \
     NODE(AstStatLocalFunction, "AstStatLocalFunction", Stat, \
-        LUAU_NODE_DEFAULT(Luau::Location(), nullptr, nullptr, false, Luau::Position::missing()) \
+        LUAU_NODE_DEFAULT(Luau::Location(), nullptr, nullptr, false, Luau::Position::missing(), Luau::Location(), Luau::Location()) \
         LUAU_AST_STAT_BASE \
         LUAU_AST_FIELD_RW(IsConst, SetIsConst, isConst) \
         LUAU_AST_FIELD_RW(Name, SetName, name) \
         LUAU_AST_FIELD_RW(Func, SetFunc, func)) \
     NODE(AstStatTypeAlias, "AstStatTypeAlias", Stat, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstName(), Luau::Location(), Luau::AstArray<Luau::AstGenericType*>{nullptr, 0}, Luau::AstArray<Luau::AstGenericTypePack*>{nullptr, 0}, nullptr, false) \
+        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstName(), Luau::Location(), Luau::AstArray<Luau::AstGenericType*>{nullptr, 0}, Luau::AstArray<Luau::AstGenericTypePack*>{nullptr, 0}, nullptr, false, Luau::Location()) \
         LUAU_AST_STAT_BASE \
         LUAU_AST_FIELD_RW(Name, SetName, name) \
         LUAU_AST_FIELD_RW(Exported, SetExported, exported) \
@@ -223,12 +223,12 @@ struct DirectChildCollector : public Luau::AstVisitor
         LUAU_AST_FIELD_RW(HasErrors, SetHasErrors, hasErrors) \
         LUAU_AST_FIELD_RW(Body, SetBody, body)) \
     NODE(AstStatDeclareGlobal, "AstStatDeclareGlobal", Stat, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstName(), Luau::Location(), nullptr) \
+        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstName(), Luau::Location(), nullptr, Luau::Location()) \
         LUAU_AST_STAT_BASE \
         LUAU_AST_FIELD_RW(Name, SetName, name) \
         LUAU_AST_FIELD_RW(Type, SetType, type)) \
     NODE(AstStatDeclareFunction, "AstStatDeclareFunction", Stat, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstArray<Luau::AstAttr*>{nullptr, 0}, Luau::AstName(), Luau::Location(), Luau::AstArray<Luau::AstGenericType*>{nullptr, 0}, Luau::AstArray<Luau::AstGenericTypePack*>{nullptr, 0}, Luau::AstTypeList{}, Luau::AstArray<Luau::AstArgumentName>{nullptr, 0}, false, Luau::Location(), nullptr) \
+        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstArray<Luau::AstAttr*>{nullptr, 0}, Luau::AstName(), Luau::Location(), Luau::AstArray<Luau::AstGenericType*>{nullptr, 0}, Luau::AstArray<Luau::AstGenericTypePack*>{nullptr, 0}, Luau::AstTypeList{}, Luau::AstArray<Luau::AstArgumentName>{nullptr, 0}, false, Luau::Location(), nullptr, Luau::Location(), Luau::Location()) \
         LUAU_AST_STAT_BASE \
         LUAU_AST_FIELD_RW(Name, SetName, name) \
         LUAU_AST_FIELD_RW(Vararg, SetVararg, vararg) \
@@ -238,13 +238,13 @@ struct DirectChildCollector : public Luau::AstVisitor
         LUAU_AST_FIELD_RW(ReturnTypes, SetReturnTypes, retTypes) \
         LUAU_AST_FIELD_RW(Attributes, SetAttributes, attributes)) \
     NODE(AstStatClass, "AstStatClass", Stat, \
-        LUAU_NODE_DEFAULT(Luau::Location(), nullptr, Luau::AstArray<Luau::AstClassMember>{nullptr, 0}, false) \
+        LUAU_NODE_DEFAULT(Luau::Location(), nullptr, Luau::AstArray<Luau::AstClassMember>{nullptr, 0}, false, Luau::Location()) \
         LUAU_AST_STAT_BASE \
         LUAU_AST_FIELD_RW(Exported, SetExported, exported) \
         LUAU_AST_FIELD_RW(Name, SetName, name) \
         LUAU_AST_FIELD_RW(Members, SetMembers, members)) \
     NODE(AstStatDeclareExternType, "AstStatDeclareExternType", Stat, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstName(), std::nullopt, Luau::AstArray<Luau::AstDeclaredExternTypeProperty>{nullptr, 0}, nullptr) \
+        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstName(), std::nullopt, Luau::AstArray<Luau::AstDeclaredExternTypeProperty>{nullptr, 0}, Luau::Location(), Luau::Location(), std::nullopt, nullptr) \
         LUAU_AST_STAT_BASE \
         LUAU_AST_FIELD_RW(Name, SetName, name) \
         LUAU_AST_FIELD_RW(SuperName, SetSuperName, superName) \
@@ -346,7 +346,7 @@ struct DirectChildCollector : public Luau::AstVisitor
         LUAU_AST_FIELD_RW(Expr, SetExpr, expr) \
         LUAU_AST_FIELD_RW(Annotation, SetAnnotation, annotation)) \
     NODE(AstExprIfElse, "AstExprIfElse", Expr, \
-        LUAU_NODE_DEFAULT(Luau::Location(), nullptr, true, nullptr, true, nullptr) \
+        LUAU_NODE_DEFAULT(Luau::Location(), nullptr, true, nullptr, true, nullptr, Luau::Location(), std::nullopt, std::nullopt) \
         LUAU_AST_NODE_BASE \
         LUAU_AST_FIELD_RW(HasElse, SetHasElse, hasElse) \
         LUAU_AST_FIELD_RW(Condition, SetCondition, condition) \

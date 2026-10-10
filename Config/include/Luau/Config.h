@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
 #include "Luau/DenseHash.h"
@@ -26,7 +26,10 @@ struct Config
     Config(Config&& other) = default;
     Config& operator=(Config&& other) = default;
 
-    Mode mode = Mode::Nonstrict;
+    // Luwu uses *strict* mode by default unlike upstream Luau. This is because most Luwu code
+    // is greenfield and the nonstrict type checker is practically useless. It's only useful
+    // for upstream because their platform has tons of untyped code that they need to infer
+    Mode mode = Mode::Strict;
 
     ParseOptions parseOptions;
 

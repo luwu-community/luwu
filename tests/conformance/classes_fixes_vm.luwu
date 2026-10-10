@@ -1,0 +1,369 @@
+-- This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
+-- Luwu Classes (rfcs/classes): regression tests for fixes from the classes review (vm).
+--!nocheck
+print("testing classes fixes (vm)")
+
+local function expectfail(s, expected, f, ...)
+    local ok, err = pcall(f, ...)
+    assert(not ok, `{s}: succeeded`)
+    assert(type(err) == "string", `{s}: error is a {type(err)}`)
+    assert(string.find(err, expected, 1, true), `{s} expected:\n\t{expected}\nActual:\n\t{err}`)
+    return err
+end
+
+-- Fields read from a non-plain argument each go through an `__index` call, which can run the collector
+-- while the object under construction is already black. Every stored field needs its own write barrier:
+-- after the next call overwrites the stack slot, the object holds the only reference.
+class Wide
+    f1: any
+    f2: any
+    f3: any
+    f4: any
+    f5: any
+    f6: any
+    f7: any
+    f8: any
+    f9: any
+    f10: any
+    f11: any
+    f12: any
+    f13: any
+    f14: any
+    f15: any
+    f16: any
+end
+
+class WideDefaults
+    d: any = {}
+    f1: any
+    f2: any
+    f3: any
+    f4: any
+    f5: any
+    f6: any
+    f7: any
+    f8: any
+end
+
+local function fieldProxy()
+    return setmetatable({}, {
+        __index = function(_, k)
+            -- move the incremental collector along between fields, so that some construction sees the
+            -- object blackened and an atomic phase finish while earlier fields are only in the object
+            for _ = 1, 4 do
+                collectgarbage("step", 1)
+            end
+            return { tag = k }
+        end,
+    })
+end
+
+local function checkFields(o, count, what)
+    -- reuse any freed memory before reading the fields back
+    for _ = 1, 50 do
+        local _ = table.create(8, 1.5)
+        local _ = { tag = "garbage" }
+    end
+    for i = 1, count do
+        local k = `f{i}`
+        local v = o[k]
+        assert(type(v) == "table" and v.tag == k, `{what}: field {k} was collected`)
+    end
+end
+
+do
+    local objects = {}
+    for round = 1, 60 do
+        objects[#objects + 1] = { select(2, pcall(Wide, fieldProxy())), "pcall(Wide, proxy)" }
+        objects[#objects + 1] = { Wide(fieldProxy()), "Wide(proxy)" }
+        local w = select(2, pcall(WideDefaults, fieldProxy()))
+        assert(type(w.d) == "table")
+        objects[#objects + 1] = { w, "pcall(WideDefaults, proxy)" }
+        objects[#objects + 1] = { WideDefaults(fieldProxy()), "WideDefaults(proxy)" }
+    end
+    collectgarbage()
+    for _, entry in objects do
+        local o, what = entry[1], entry[2]
+        checkFields(o, if class.isinstance(o, Wide) then 16 else 8, what)
+    end
+end
+
+-- The constructor closure can outlive its class; its debug name must not point into the class.
+do
+    local weak = setmetatable({}, { __mode = "k" })
+    local leaked
+    do
+        local chunk = loadstring([[
+class AVeryLongClassNameSoTheDebugNameIsLongerThanAnyStringReuse
+    x: number
+    function __init(self)
+        self.x = 1
+        LEAKED_CTOR = debug.info(2, "f")
+    end
+end
+pcall(AVeryLongClassNameSoTheDebugNameIsLongerThanAnyStringReuse)
+return AVeryLongClassNameSoTheDebugNameIsLongerThanAnyStringReuse
+]])
+        weak[chunk()] = true
+        leaked = LEAKED_CTOR
+        LEAKED_CTOR = nil
+    end
+    for _ = 1, 3 do
+        collectgarbage()
+    end
+    for _ = 1, 200 do
+        local _ = table.create(16, 1.5e300)
+    end
+    assert(next(weak) == nil, "the class should have been collected")
+    local expected = "AVeryLongClassNameSoTheDebugNameIsLongerThanAnyStringReuse() constructor"
+    assert(debug.info(leaked, "n") == expected, debug.info(leaked, "n"))
+    local ok, err = pcall(leaked, 1)
+    assert(not ok and string.find(err, expected, 1, true), err)
+end
+
+-- `__init` is not readable by name, for any class, from anywhere; construction still works.
+class Pod
+    x: number = 1
+    function peek(self)
+        return Pod.__init
+    end
+    function reinit(self)
+        self:__init { x = 5 }
+    end
+end
+
+class WithInit
+    x: number
+    function __init(self, x)
+        self.x = x
+    end
+end
+
+class Primary(x: number) end
+
+class PrivatePrimary private (x: number)
+    function make(x)
+        return PrivatePrimary(x)
+    end
+    function makeViaPcall(x)
+        return select(2, pcall(PrivatePrimary, x))
+    end
+end
+
+do
+    local blocked = "cannot be accessed or called explicitly"
+    local pod = Pod()
+    expectfail("Pod.__init", blocked, function() return Pod.__init end)
+    expectfail("pod.__init", blocked, function() return pod.__init end)
+    expectfail("pod:__init", blocked, function() pod:__init { x = 2 } end)
+    expectfail("Pod.__init from its own method", blocked, function() return pod:peek() end)
+    expectfail("self:__init from its own method", blocked, function() pod:reinit() end)
+    expectfail("WithInit.__init", blocked, function() return WithInit.__init end)
+    expectfail("withInit:__init", blocked, function() WithInit(1):__init(2) end)
+    expectfail("Primary.__init", blocked, function() return Primary.__init end)
+    expectfail("primary:__init", blocked, function() Primary(1):__init(2) end)
+    local key = "__init"
+    expectfail("Pod[key]", blocked, function() return Pod[key] end)
+    expectfail("pod[key]", blocked, function() return pod[key] end)
+    expectfail("WithInit[key]", blocked, function() return WithInit[key] end)
+    assert(pod.x == 1)
+
+    assert(WithInit(3).x == 3)
+    assert(select(2, pcall(WithInit, 4)).x == 4)
+    assert(Primary(5).x == 5)
+    assert(PrivatePrimary.make(6).x == 6)
+    assert(PrivatePrimary.makeViaPcall(7).x == 7)
+end
+
+-- The ban on reading `__init` holds whatever slot a call site has cached. A call site's key is a fixed
+-- constant, so the only way its slot cache can be warm before an object reaches it is through a table.
+-- Reading `__init` off a table caches that table's hash slot for the key. That slot can be any number,
+-- including an object's `__init` offset: `Empty` has no fields, so its `__init` is at offset 0.
+class Empty
+end
+
+local function readInit(o)
+    return o.__init
+end
+
+local function readInitIndexed(o)
+    return o["__init"]
+end
+
+local function callInit(o)
+    return o:__init()
+end
+
+do
+    local blocked = "cannot be accessed or called explicitly"
+    local objects = { Pod(), WithInit(1), Primary(1), Empty() }
+    local classes = { Pod, WithInit, Primary, Empty }
+    for size = 0, 40 do
+        local t = { __init = function() return "table" end }
+        for i = 1, size do
+            t[`k{i}`] = i
+        end
+        for _, o in objects do
+            assert(readInit(t) ~= nil and readInitIndexed(t) ~= nil and callInit(t) == "table")
+            expectfail("o.__init after a table", blocked, readInit, o)
+            expectfail("o['__init'] after a table", blocked, readInitIndexed, o)
+            expectfail("o:__init() after a table", blocked, callInit, o)
+        end
+        for _, c in classes do
+            assert(readInit(t) ~= nil and readInitIndexed(t) ~= nil)
+            expectfail("C.__init after a table", blocked, readInit, c)
+            expectfail("C['__init'] after a table", blocked, readInitIndexed, c)
+        end
+    end
+end
+
+-- `Any.__init(frozen, {...})` could re-run another class's default constructor on a frozen object.
+class Frozen
+    const x: number
+end
+
+class Any
+    x: number
+end
+
+do
+    local f = Frozen { x = 1 }
+    expectfail("Any.__init", "cannot be accessed or called explicitly", function() return Any.__init end)
+    expectfail("f.x = 5", "is a const member of 'Frozen'", function() f.x = 5 end)
+    assert(f.x == 1)
+end
+
+-- `__init` may assign the `const` fields of the object it is constructing, and no other object's.
+class Dog
+    public const c: number = 1
+
+    public function __init(self, other, ...)
+        self.c = 2
+        self.c = 3
+        if other then
+            other.c = 99
+        end
+    end
+end
+
+local function setc(o, v)
+    o.c = v
+end
+
+class Cat
+    public const c: number = 1
+
+    public function __init(self, other)
+        if other then
+            setc(other, 99)
+        end
+    end
+end
+
+do
+    local d1 = Dog()
+    assert(d1.c == 3)
+    expectfail(
+        "__init assigning another object's const field",
+        "'c' is a const member of 'Dog'; Dog's '__init' can only assign it on the object it is constructing",
+        function() Dog(d1) end
+    )
+    expectfail("pcall(Dog, d1)", "is a const member of 'Dog'", Dog, d1)
+    assert(d1.c == 3)
+
+    -- at O2 `setc` is inlined into `__init`, which must not make it a writer of `other`
+    local c1 = Cat()
+    expectfail("__init's helper assigning another object's const field", "is a const member of 'Cat'", function() Cat(c1) end)
+    assert(c1.c == 1)
+end
+
+-- `__init` checks const writes against its `self` parameter, so `self` must not be rebindable to another
+-- object of the class: `self` is const in methods, and this is a compile error.
+do
+    local f, err = loadstring([[
+class Swapped
+    const x: number
+    function __init(self, other, v)
+        if other then self = other end
+        self.x = v
+    end
+end
+]])
+    assert(f == nil, "assigning to self compiled")
+    -- the parser names the constant only with LuauExportValueSyntax, which this runner leaves off
+    local named = string.find(err, ":4: Variable 'self' is constant", 1, true)
+    local generic = string.find(err, ":4: Assigned expression must be a variable or a field", 1, true)
+    assert(named or generic, err)
+end
+
+-- The POD constructor reads an object argument's private fields on behalf of the Lua code constructing,
+-- however the constructor was reached.
+class Thief
+    token: string
+end
+
+class Secret
+    private token: string
+
+    public function copyAs(self)
+        return Thief(self), select(2, pcall(Thief, self))
+    end
+end
+
+do
+    local s = Secret { token = "hunter2" }
+    local private = "'token' is a private member of 'Secret'"
+    expectfail("Thief(s)", private, function() return Thief(s).token end)
+    expectfail("pcall(Thief, s)", private, Thief, s)
+    local T = Thief
+    expectfail("alias T(s)", private, function() return T(s).token end)
+    expectfail("__index chain to s", private, Thief, setmetatable({}, { __index = s }))
+    -- Secret's own methods may read it (called dynamically: inlining copyAs at O2 moves the
+    -- construction out of Secret's code)
+    local method = "copyAs"
+    local a, b = s[method](s)
+    assert(a.token == "hunter2" and b.token == "hunter2")
+end
+
+-- `Point(nil)` constructs the same object as `Point()`.
+class Point
+    x: number = 1
+    y: number = 2
+end
+
+class PointDefaults
+    x: number = 1
+    t: any = {}
+end
+
+do
+    local n = nil
+    for _, p in { Point(nil), Point(n), select(2, pcall(Point, nil)), select(2, pcall(Point, n)) } do
+        assert(p.x == 1 and p.y == 2)
+    end
+    for _, p in { PointDefaults(nil), PointDefaults(n), select(2, pcall(PointDefaults, nil)) } do
+        assert(p.x == 1 and type(p.t) == "table")
+    end
+    expectfail("Point(1)", "attempt to index number", Point, 1)
+    expectfail("Point({}, {})", "expected zero or one arguments", Point, {}, {})
+end
+
+-- A private primary constructor is reported as a private constructor, at the constructing line.
+class SshKey private (public const public_key: string, private const private_key: string)
+    public function keygen(): SshKey
+        return SshKey("pub", "priv")
+    end
+end
+
+do
+    assert(SshKey.keygen().public_key == "pub")
+    local message = "the constructor of 'SshKey' is private"
+    for _, err in {
+        expectfail("SshKey(...)", message, function() return SshKey("x", "y") end),
+        expectfail("pcall(SshKey, ...)", message, SshKey, "x", "y"),
+    } do
+        assert(string.match(err, "^[^:]+:%d+: "), `no location in: {err}`)
+    end
+end
+
+return 'OK'

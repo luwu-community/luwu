@@ -1,4 +1,4 @@
--- This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+-- This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 print("testing interrupts")
 
 -- this function will be called by C code with a special interrupt handler that validates hit locations

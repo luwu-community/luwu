@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
 #include "Luau/NotNull.h"
@@ -139,7 +139,7 @@ struct GenericTypeFinder : TypeOnceVisitor
         return false;
     }
 
-    // Set by the caller (see LuauGenericNominals) to allow traversing into one specific
+    // Set by the caller (see LuwuGenericNominals) to allow traversing into one specific
     // ExternType -- the one this GenericTypeFinder is being run on -- while every other
     // ExternType reached during that traversal remains opaque, same as before.
     TypeId root = nullptr;

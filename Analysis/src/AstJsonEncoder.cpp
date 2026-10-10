@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/AstJsonEncoder.h"
 
 #include "Luau/Ast.h"
@@ -9,7 +9,7 @@
 #include <math.h>
 
 LUAU_FASTFLAG(LuauTrackPrefixLocal)
-LUAU_FASTFLAG(LuauDefaultArguments)
+LUAU_FASTFLAG(LuwuDefaultArguments)
 
 namespace Luau
 {
@@ -457,7 +457,7 @@ struct AstJsonEncoder : public AstVisitor
                 if (node->self)
                     PROP(self);
                 PROP(args);
-                if (FFlag::LuauDefaultArguments)
+                if (FFlag::LuwuDefaultArguments)
                     PROP(argsDefaults);
                 if (node->returnAnnotation)
                     PROP(returnAnnotation);

@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 #include "lualib.h"
 
@@ -12,7 +12,7 @@
 #include <stdlib.h>
 
 LUAU_FASTFLAG(LuauCustomYieldablePcalls)
-LUAU_FASTFLAGVARIABLE(LuauNonePrimitive)
+LUAU_FASTFLAGVARIABLE(LuwuNonePrimitive)
 
 static void writestring(const char* s, size_t l)
 {
@@ -503,7 +503,7 @@ int luaopen_base(lua_State* L)
     lua_pushliteral(L, "Luau");
     lua_setglobal(L, "_VERSION"); // set global _VERSION
 
-    if (FFlag::LuauNonePrimitive)
+    if (FFlag::LuwuNonePrimitive)
     {
         lua_pushsymnone(L);
         lua_setglobal(L, "none");

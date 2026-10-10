@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 #include "lclass.h"
 #include "lvm.h"
@@ -15,11 +15,12 @@
 #include "lbytecode.h"
 #include "lapi.h"
 
+#include <stdarg.h>
+#include <stdio.h>
 #include <string.h>
 
 LUAU_FASTFLAGVARIABLE(LuauUdataDirectAccess6)
 LUAU_FASTFLAG(LuauCallFeedback)
-LUAU_FASTFLAGVARIABLE(LuauCostModel)
 
 template<typename T>
 struct TempBuffer
@@ -218,7 +219,10 @@ static void resolveImportSafe(lua_State* L, LuaTable* env, TValue* k, uint32_t i
     }
 }
 
-static void remapUserdataTypes(char* data, size_t size, uint8_t* userdataRemapping, uint32_t count)
+// Calls visit(uint8_t& tag) on every type tag in a proto's type info (argument, upvalue and local types),
+// skipping the bytes around them.
+template<typename F>
+static void visitTypeTags(char* data, size_t size, F&& visit)
 {
     size_t offset = 0;
 
@@ -232,12 +236,7 @@ static void remapUserdataTypes(char* data, size_t size, uint8_t* userdataRemappi
 
         // Skip two bytes of function type introduction
         for (uint32_t i = 2; i < typeSize; i++)
-        {
-            uint32_t index = uint32_t(types[i] - LBC_TYPE_TAGGED_USERDATA_BASE);
-
-            if (index < count)
-                types[i] = userdataRemapping[index];
-        }
+            visit(types[i]);
 
         offset += typeSize;
     }
@@ -247,32 +246,154 @@ static void remapUserdataTypes(char* data, size_t size, uint8_t* userdataRemappi
         uint8_t* types = (uint8_t*)data + offset;
 
         for (uint32_t i = 0; i < upvalCount; i++)
-        {
-            uint32_t index = uint32_t(types[i] - LBC_TYPE_TAGGED_USERDATA_BASE);
-
-            if (index < count)
-                types[i] = userdataRemapping[index];
-        }
+            visit(types[i]);
 
         offset += upvalCount;
     }
 
-    if (localCount != 0)
+    for (uint32_t i = 0; i < localCount; i++)
     {
-        for (uint32_t i = 0; i < localCount; i++)
-        {
-            uint32_t index = uint32_t(data[offset] - LBC_TYPE_TAGGED_USERDATA_BASE);
+        visit(*(uint8_t*)(data + offset));
 
-            if (index < count)
-                data[offset] = userdataRemapping[index];
-
-            offset += 2;
-            readVarInt(data, size, offset);
-            readVarInt(data, size, offset);
-        }
+        offset += 2;
+        readVarInt(data, size, offset);
+        readVarInt(data, size, offset);
     }
 
     LUAU_ASSERT(offset == size);
+}
+
+static void remapUserdataTypes(char* data, size_t size, uint8_t* userdataRemapping, uint32_t count)
+{
+    visitTypeTags(
+        data,
+        size,
+        [&](uint8_t& tag)
+        {
+            uint32_t index = uint32_t(tag - LBC_TYPE_TAGGED_USERDATA_BASE);
+
+            if (index < count)
+                tag = userdataRemapping[index];
+        }
+    );
+}
+
+// Luwu bytecode versioning: what a blob's header says it contains. The loader checks these, never a raw
+// version number. A version number must not imply every feature below it, and legacy and Luwu bytecode each
+// decide their own features.
+struct BytecodeFeatures
+{
+    // Upstream-numbered Luau bytecode (LBC_VERSION_MIN..LBC_VERSION_MAX), rather than Luwu bytecode
+    bool legacy = false;
+    // Proto::flags and type information
+    bool typeInfo = false;
+    bool feedbackVector = false;
+    bool protoSizePrefix = false;
+    bool inlineCost = false;
+};
+
+static BytecodeFeatures getLegacyFeatures(uint8_t version)
+{
+    BytecodeFeatures features;
+    features.legacy = true;
+    features.typeInfo = version >= 4;
+    features.feedbackVector = version >= 11;
+    features.protoSizePrefix = version >= 12;
+    features.inlineCost = version >= 12;
+    return features;
+}
+
+static BytecodeFeatures getLuwuFeatures()
+{
+    BytecodeFeatures features;
+    features.typeInfo = true;
+    features.feedbackVector = true;
+    features.protoSizePrefix = true;
+    features.inlineCost = true;
+    return features;
+}
+
+// Luwu bytecode versioning: what upstream Luau put in the versions it numbered after LBC_VERSION_MAX, to name them when refusing them
+static const char* getUpstreamVersionContents(uint8_t version)
+{
+    switch (version)
+    {
+    case 13:
+        return "double-precision vector constants";
+    case 14:
+        return "FASTPCALL";
+    case 100:
+        return "upstream Luau's work-in-progress classes";
+    default:
+        return nullptr;
+    }
+}
+
+// Luwu bytecode versioning: for a proto loaded as legacy bytecode, the first opcode or builtin id in its
+// code that legacy bytecode never contained, if any
+struct LegacyCodeViolation
+{
+    const char* what;
+    int value;
+};
+
+static LegacyCodeViolation findNonLegacyCode(const Proto* p)
+{
+    for (const Instruction* pc = p->code; pc < p->code + p->sizecode;)
+    {
+        int op = LUAU_INSN_OP(*pc);
+
+        if (op > LBC_LEGACY_LAST_OPCODE)
+            return {"opcode", op};
+
+        bool isFastcall = op == LOP_FASTCALL || op == LOP_FASTCALL1 || op == LOP_FASTCALL2 || op == LOP_FASTCALL2K || op == LOP_FASTCALL3;
+
+        if (isFastcall && LUAU_INSN_A(*pc) > LBC_LEGACY_LAST_BUILTIN)
+            return {"builtin function id", int(LUAU_INSN_A(*pc))};
+
+        pc += Luau::getOpLength(LuauOpcode(op));
+    }
+
+    return {nullptr, 0};
+}
+
+// Luwu bytecode versioning: for a proto loaded as legacy bytecode, the first type tag in its type info that
+// legacy bytecode never contained, or -1
+static int findNonLegacyTypeTag(Proto* p)
+{
+    int found = -1;
+
+    visitTypeTags(
+        (char*)p->typeinfo,
+        p->sizetypeinfo,
+        [&](uint8_t& tag)
+        {
+            int base = tag & ~LBC_TYPE_OPTIONAL_BIT;
+            bool isTaggedUserdata = base >= LBC_TYPE_TAGGED_USERDATA_BASE && base < LBC_TYPE_TAGGED_USERDATA_END;
+            bool isLegacy = base <= LBC_LEGACY_LAST_TYPE || base == LBC_TYPE_ANY || isTaggedUserdata;
+
+            if (!isLegacy && found < 0)
+                found = tag;
+        }
+    );
+
+    return found;
+}
+
+// Pushes "<chunk id>: <message>" and returns 1, the way loadsafe reports every error
+static int pushLoadError(lua_State* L, const char* chunkname, const char* fmt, ...)
+{
+    char chunkbuf[LUA_IDSIZE];
+    const char* chunkid = luaO_chunkid(chunkbuf, sizeof(chunkbuf), chunkname, strlen(chunkname));
+
+    char message[256];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(message, sizeof(message), fmt, args);
+    va_end(args);
+
+    lua_pushfstring(L, "%s: %s", chunkid, message);
+    return 1;
 }
 
 static int loadsafe(
@@ -299,29 +420,64 @@ static int loadsafe(
         return 1;
     }
 
-    if (version < LBC_VERSION_MIN || version > LBC_VERSION_MAX)
+    // Luwu bytecode versioning: upstream reads only its own version number here; see "Luwu bytecode version history" in Bytecode.h
+    BytecodeFeatures features;
+
+    if (version == LWBC_MAGIC)
     {
-        char chunkbuf[LUA_IDSIZE];
-        const char* chunkid = luaO_chunkid(chunkbuf, sizeof(chunkbuf), chunkname, strlen(chunkname));
-        lua_pushfstring(L, "%s: bytecode version mismatch (expected [%d..%d], got %d)", chunkid, LBC_VERSION_MIN, LBC_VERSION_MAX, version);
-        return 1;
+        uint8_t luwuVersion = read<uint8_t>(data, size, offset);
+        bool isKnownLuwuVersion = (luwuVersion >= LWBC_VERSION_MIN && luwuVersion <= LWBC_VERSION_MAX) || luwuVersion == LWBC_VERSION_WIP;
+
+        if (!isKnownLuwuVersion)
+            return pushLoadError(
+                L,
+                chunkname,
+                "Luwu bytecode version %d is newer than this Luwu loads (versions %d..%d and %d); recompile it from source",
+                luwuVersion,
+                LWBC_VERSION_MIN,
+                LWBC_VERSION_MAX,
+                LWBC_VERSION_WIP
+            );
+
+        features = getLuwuFeatures();
+    }
+    else if (version >= LBC_VERSION_MIN && version <= LBC_VERSION_MAX)
+    {
+        features = getLegacyFeatures(version);
+    }
+    else if (version > LBC_VERSION_MAX)
+    {
+        const char* contents = getUpstreamVersionContents(version);
+
+        return pushLoadError(
+            L,
+            chunkname,
+            "Luau bytecode version %d%s%s%s comes from a newer upstream Luau; Luwu loads Luau bytecode versions %d..%d and Luwu bytecode",
+            version,
+            contents ? " (" : "",
+            contents ? contents : "",
+            contents ? ")" : "",
+            LBC_VERSION_MIN,
+            LBC_VERSION_MAX
+        );
+    }
+    else
+    {
+        return pushLoadError(
+            L, chunkname, "bytecode version mismatch (expected [%d..%d] or Luwu bytecode, got %d)", LBC_VERSION_MIN, LBC_VERSION_MAX, version
+        );
     }
 
     uint8_t typesversion = 0;
 
-    if (version >= 4)
+    if (features.typeInfo)
     {
         typesversion = read<uint8_t>(data, size, offset);
 
         if (typesversion < LBC_TYPE_VERSION_MIN || typesversion > LBC_TYPE_VERSION_MAX)
-        {
-            char chunkbuf[LUA_IDSIZE];
-            const char* chunkid = luaO_chunkid(chunkbuf, sizeof(chunkbuf), chunkname, strlen(chunkname));
-            lua_pushfstring(
-                L, "%s: bytecode type version mismatch (expected [%d..%d], got %d)", chunkid, LBC_TYPE_VERSION_MIN, LBC_TYPE_VERSION_MAX, typesversion
+            return pushLoadError(
+                L, chunkname, "bytecode type version mismatch (expected [%d..%d], got %d)", LBC_TYPE_VERSION_MIN, LBC_TYPE_VERSION_MAX, typesversion
             );
-            return 1;
-        }
     }
 
     // env is 0 for current environment and a stack index otherwise
@@ -373,7 +529,7 @@ static int loadsafe(
     for (unsigned int i = 0; i < protoCount; ++i)
     {
         uint32_t protoSize = 0;
-        if (version >= 12)
+        if (features.protoSizePrefix)
             protoSize = readVarInt(data, size, offset);
         size_t protoStartOffset = offset;
         Proto* p = luaF_newproto(L);
@@ -386,7 +542,7 @@ static int loadsafe(
         p->nups = read<uint8_t>(data, size, offset);
         p->is_vararg = read<uint8_t>(data, size, offset);
 
-        if (version >= 4)
+        if (features.typeInfo)
         {
             p->flags = read<uint8_t>(data, size, offset);
 
@@ -456,6 +612,34 @@ static int loadsafe(
             p->code[j] = read<uint32_t>(data, size, offset);
 
         p->codeentry = p->code;
+
+        if (features.legacy)
+        {
+            LegacyCodeViolation violation = findNonLegacyCode(p);
+
+            if (violation.what)
+                return pushLoadError(
+                    L,
+                    chunkname,
+                    "Luau bytecode version %d uses %s %d, which Luau bytecode up to version %d doesn't have; recompile it from source",
+                    version,
+                    violation.what,
+                    violation.value,
+                    LBC_VERSION_MAX
+                );
+
+            int tag = p->typeinfo ? findNonLegacyTypeTag(p) : -1;
+
+            if (tag >= 0)
+                return pushLoadError(
+                    L,
+                    chunkname,
+                    "Luau bytecode version %d uses type tag %d, which Luau bytecode up to version %d doesn't have; recompile it from source",
+                    version,
+                    tag,
+                    LBC_VERSION_MAX
+                );
+        }
 
         const int sizek = readVarInt(data, size, offset);
         p->k = luaM_newarray(L, sizek, TValue, p->memcat);
@@ -596,28 +780,80 @@ static int loadsafe(
 
             case LBC_CONSTANT_CLASS_SHAPE:
             {
+                if (features.legacy)
+                    return pushLoadError(
+                        L,
+                        chunkname,
+                        "Luau bytecode version %d contains classes, which Luwu only loads from Luwu bytecode (upstream Luau's experimental "
+                        "classes are a different design); recompile it from source",
+                        version
+                    );
+
                 uint32_t cnid = readVarInt(data, size, offset);
                 TValue* classname = &p->k[cnid];
                 LUAU_ASSERT(ttisstring(classname));
                 uint32_t numProperties = readVarInt(data, size, offset);
                 uint32_t numMethods = readVarInt(data, size, offset);
                 uint32_t numMembers = numMethods + numProperties;
-                TString** offsetToMember = luaM_newarray(L, numMembers, TString*, L->activememcat);
-                LuaTable* membersToOffset = luaH_new(L, 0, numMembers);
 
+                TString* initName = luaS_newlstr(L, "__init", 6);
+                bool hasCustomInit = false;
+                size_t peekOffset = offset;
+                bool hasConstDefaults = false;
+
+                for (uint32_t idx = 0; idx < numMembers; idx++)
+                {
+                    uint32_t mid = readVarInt(data, size, peekOffset);
+                    uint32_t flags = readVarInt(data, size, peekOffset);
+                    hasCustomInit |= tsvalue(&p->k[mid]) == initName;
+
+                    // a constant default is stored inline right after its member's flags
+                    if (flags & LBC_CLASSMEMBER_CONSTDEFAULT)
+                    {
+                        readVarInt(data, size, peekOffset);
+                        hasConstDefaults = true;
+                    }
+                }
+
+                // A class without a custom `__init` still has an `__init` member, which only exists to
+                // be refused by name (luaR_sealclassshape); its slot stays nil.
+                uint32_t numStaticWithInit = hasCustomInit ? numMethods : numMethods + 1;
+
+                // The class owns its shape buffers from here on, so nothing leaks if a later allocation fails.
+                LuauClass* lco = luaR_newclass(L, tsvalue(classname), numProperties, numStaticWithInit, hasConstDefaults);
+
+                // Members are written properties-first, so index idx here is exactly the member's runtime
+                // offset.
                 for (uint32_t idx = 0; idx < numMembers; idx++)
                 {
                     uint32_t mid = readVarInt(data, size, offset);
                     TValue* memberName = &p->k[mid];
                     LUAU_ASSERT(ttisstring(memberName));
-                    offsetToMember[idx] = tsvalue(memberName);
-                    TValue* val = luaH_setstr(L, membersToOffset, tsvalue(memberName));
+                    lco->offsettomember[idx] = tsvalue(memberName);
+                    lco->memberflags[idx] = uint8_t(readVarInt(data, size, offset));
+
+                    if (lco->memberflags[idx] & LBC_CLASSMEMBER_CONSTDEFAULT)
+                    {
+                        uint32_t did = readVarInt(data, size, offset);
+                        LUAU_ASSERT(lco->memberdefaults && idx < numProperties);
+                        // a constant field default; its own constant is written before the shape, so it's
+                        // already loaded
+                        setobj(L, &lco->memberdefaults[idx], &p->k[did]);
+                    }
+
+                    TValue* val = luaH_setstr(L, lco->memberstooffset, tsvalue(memberName));
                     setnvalue(val, idx);
                 }
 
-                membersToOffset->readonly = true;
+                if (!hasCustomInit)
+                {
+                    lco->offsettomember[numMembers] = initName;
+                    lco->memberflags[numMembers] = 0;
+                    TValue* val = luaH_setstr(L, lco->memberstooffset, initName);
+                    setnvalue(val, numMembers);
+                }
 
-                LuauClass* lco = luaR_newclass(L, tsvalue(classname), membersToOffset, offsetToMember, numProperties, numMethods);
+                luaR_sealclassshape(L, lco);
                 setclassvalue(L, &p->k[j], lco);
                 break;
             }
@@ -748,7 +984,7 @@ static int loadsafe(
             }
         }
 
-        if (version >= 11)
+        if (features.feedbackVector)
         {
             p->feedbackvecsize = readVarInt(data, size, offset);
 
@@ -768,13 +1004,13 @@ static int loadsafe(
             }
         }
 
-        if (version >= 12)
+        if (features.inlineCost)
         {
             if ((p->flags & LPF_INLINABLE) != 0)
                 p->cost = readVarInt64(data, size, offset);
         }
 
-        if (version >= 12)
+        if (features.protoSizePrefix)
         {
             // Potantially skipping unknown data at the end of Proto.
             offset = protoStartOffset + protoSize;

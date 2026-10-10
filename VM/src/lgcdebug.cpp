@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 #include "lgc.h"
 
@@ -10,6 +10,7 @@
 #include "ltable.h"
 #include "ludata.h"
 #include "lbuffer.h"
+#include "lclass.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -136,20 +137,32 @@ static void validateproto(global_State* g, Proto* f)
     for (int i = 0; i < f->sizelocvars; i++)
         if (f->locvars[i].varname)
             validateobjref(g, obj2gco(f), obj2gco(f->locvars[i].varname));
+
+    if (f->ownerclass)
+        validateobjref(g, obj2gco(f), obj2gco(f->ownerclass));
 }
 
+// Luwu Classes (rfcs/classes): a class whose construction failed with LUA_ERRMEM (luaR_newclass) stays
+// in the heap until it is swept, with any of its buffers and tables still NULL, and the heap walks below
+// visit it like any other object.
 static void validateclass(global_State* g, LuauClass* lco)
 {
     GCObject* obj = obj2gco(lco);
     validateobjref(g, obj, obj2gco(lco->name));
-    validateobjref(g, obj, obj2gco(lco->memberstooffset));
-    for (uint32_t i = 0; i < lco->numberofallmembers; i++)
-    {
-        validateobjref(g, obj, obj2gco(lco->offsettomember[i]));
-        if (i >= lco->numberofinstancemembers)
-            validateref(g, obj, &lco->staticmembers[i - lco->numberofinstancemembers]);
-    }
-    validateobjref(g, obj, obj2gco(lco->metatable));
+    if (lco->memberstooffset)
+        validateobjref(g, obj, obj2gco(lco->memberstooffset));
+    if (lco->offsettomember)
+        for (uint32_t i = 0; i < lco->numberofallmembers; i++)
+            if (lco->offsettomember[i])
+                validateobjref(g, obj, obj2gco(lco->offsettomember[i]));
+    if (lco->staticmembers)
+        for (uint32_t i = 0; i < lco->numberofallmembers - lco->numberofinstancemembers; i++)
+            validateref(g, obj, &lco->staticmembers[i]);
+    if (lco->memberdefaults)
+        for (uint32_t i = 0; i < lco->numberofinstancemembers; i++)
+            validateref(g, obj, &lco->memberdefaults[i]);
+    if (lco->metatable)
+        validateobjref(g, obj, obj2gco(lco->metatable));
     if (lco->instancemetatable)
         validateobjref(g, obj, obj2gco(lco->instancemetatable));
 }
@@ -584,6 +597,12 @@ static void dumpproto(FILE* f, Proto* p)
         fprintf(f, "]");
     }
 
+    if (p->ownerclass)
+    {
+        fprintf(f, ",\"ownerclass\":");
+        dumpref(f, obj2gco(p->ownerclass));
+    }
+
     fprintf(f, "}");
 }
 
@@ -600,35 +619,48 @@ static void dumpupval(FILE* f, UpVal* uv)
     fprintf(f, "}");
 }
 
+static void dumpoptref(FILE* f, GCObject* o)
+{
+    if (o)
+        dumpref(f, o);
+    else
+        fprintf(f, "null");
+}
+
+// See validateclass: any buffer or table may be NULL.
 static void dumpclass(FILE* f, LuauClass* lco)
 {
-    fprintf(f, R"({"type":"class","cat":%d,"size":%d)", lco->memcat, int(sizeof(LuauClass)));
+    fprintf(f, R"({"type":"class","cat":%d,"size":%d)", lco->memcat, int(luaR_classsize(lco)));
     fprintf(f, R"(,"name":)");
     dumpstringdata(f, lco->name->data, lco->name->len);
     fprintf(f, R"(,"membernames":[)");
-    for (uint32_t i = 0; i < lco->numberofallmembers; i++)
+    if (lco->offsettomember)
     {
-        if (i != 0)
-            fputc(',', f);
-        dumpref(f, (GCObject*)lco->offsettomember[i]);
+        for (uint32_t i = 0; i < lco->numberofallmembers; i++)
+        {
+            if (i != 0)
+                fputc(',', f);
+            dumpoptref(f, (GCObject*)lco->offsettomember[i]);
+        }
     }
     fprintf(f, R"(],"staticmembers":[)");
-    dumprefs(f, lco->staticmembers, lco->numberofallmembers - lco->numberofinstancemembers);
+    if (lco->staticmembers)
+        dumprefs(f, lco->staticmembers, lco->numberofallmembers - lco->numberofinstancemembers);
+    fprintf(f, R"(],"memberdefaults":[)");
+    if (lco->memberdefaults)
+        dumprefs(f, lco->memberdefaults, lco->numberofinstancemembers);
     fprintf(f, R"(],"metatable":)");
-    dumpref(f, obj2gco(lco->metatable));
+    dumpoptref(f, (GCObject*)lco->metatable);
     fprintf(f, R"(,"instancemetatable":)");
-    if (lco->instancemetatable)
-        dumpref(f, obj2gco(lco->instancemetatable));
-    else
-        fprintf(f, "null");
+    dumpoptref(f, (GCObject*)lco->instancemetatable);
     fprintf(f, R"(,"memberstooffset":)");
-    dumpref(f, obj2gco(lco->memberstooffset));
+    dumpoptref(f, (GCObject*)lco->memberstooffset);
     fprintf(f, "}");
 }
 
 static void dumpobject(FILE* f, LuauObject* inst)
 {
-    fprintf(f, R"({"type":"object","cat":%d,"size":%d)", inst->memcat, int(sizeof(LuauObject)));
+    fprintf(f, R"({"type":"object","cat":%d,"size":%d)", inst->memcat, int(luaR_objectsize(inst->numberofmembers)));
     fprintf(f, R"(,"class":)");
     dumpref(f, obj2gco(inst->lclass));
     fprintf(f, R"(,"members":[)");
@@ -985,6 +1017,9 @@ static void enumproto(EnumContext* ctx, Proto* p)
 
     for (int i = 0; i < p->sizep; ++i)
         enumedge(ctx, obj2gco(p), obj2gco(p->p[i]), "protos");
+
+    if (p->ownerclass)
+        enumedge(ctx, obj2gco(p), obj2gco(p->ownerclass), "ownerclass");
 }
 
 static void enumupval(EnumContext* ctx, UpVal* uv)
@@ -995,16 +1030,18 @@ static void enumupval(EnumContext* ctx, UpVal* uv)
         enumedge(ctx, obj2gco(uv), gcvalue(uv->v), "value");
 }
 
+// See validateclass: any buffer or table may be NULL.
 static void enumclass(EnumContext* ctx, LuauClass* lco)
 {
     char buf[LUA_IDSIZE];
     GCObject* obj = obj2gco(lco);
     snprintf(buf, sizeof(buf), "class object %s", getstr(lco->name));
-    enumnode(ctx, obj, sizeof(LuauClass), buf);
+    enumnode(ctx, obj, luaR_classsize(lco), buf);
     enumedge(ctx, obj, obj2gco(lco->name), "classname");
-    enumedge(ctx, obj, obj2gco(lco->memberstooffset), "classoffsets");
+    if (lco->memberstooffset)
+        enumedge(ctx, obj, obj2gco(lco->memberstooffset), "classoffsets");
     uint32_t numberofstaticmembers = lco->numberofallmembers - lco->numberofinstancemembers;
-    for (uint32_t i = 0; i < numberofstaticmembers; i++)
+    for (uint32_t i = 0; lco->staticmembers && i < numberofstaticmembers; i++)
     {
         // It's a bit strange that if we have a non-collectable static member,
         // we'll just not note it as an edge.
@@ -1012,12 +1049,19 @@ static void enumclass(EnumContext* ctx, LuauClass* lco)
             continue;
 
         char membername[32];
-        snprintf(membername, sizeof(membername), "%s", getstr(lco->offsettomember[i + lco->numberofinstancemembers]));
+        TString* name = lco->offsettomember ? lco->offsettomember[i + lco->numberofinstancemembers] : NULL;
+        snprintf(membername, sizeof(membername), "%s", name ? getstr(name) : "__init");
         enumedge(ctx, obj, gcvalue(&lco->staticmembers[i]), membername);
     }
-    for (uint32_t i = 0; i < lco->numberofallmembers; i++)
-        enumedge(ctx, obj, obj2gco(lco->offsettomember[i]), "membername");
-    enumedge(ctx, obj, obj2gco(lco->metatable), "metatable");
+    for (uint32_t i = 0; lco->offsettomember && i < lco->numberofallmembers; i++)
+        if (lco->offsettomember[i])
+            enumedge(ctx, obj, obj2gco(lco->offsettomember[i]), "membername");
+    if (lco->memberdefaults)
+        enumedges(ctx, obj, lco->memberdefaults, lco->numberofinstancemembers, "memberdefaults");
+    if (lco->metatable)
+        enumedge(ctx, obj, obj2gco(lco->metatable), "metatable");
+    if (lco->instancemetatable)
+        enumedge(ctx, obj, obj2gco(lco->instancemetatable), "instancemetatable");
 }
 
 static void enumobject(EnumContext* ctx, LuauObject* inst)
@@ -1025,7 +1069,7 @@ static void enumobject(EnumContext* ctx, LuauObject* inst)
     char buf[LUA_IDSIZE];
     GCObject* obj = obj2gco(inst);
     snprintf(buf, sizeof(buf), "object %s", getstr(inst->lclass->name));
-    enumnode(ctx, obj, sizeof(LuauObject), buf);
+    enumnode(ctx, obj, luaR_objectsize(inst->numberofmembers), buf);
     for (uint32_t i = 0; i < inst->lclass->numberofinstancemembers; i++)
     {
         // It's a bit strange that if we have a non-collectable static member,

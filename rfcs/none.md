@@ -1,8 +1,8 @@
 # None Primitive
 
-Status: Proposed
+Status: Implemented (Flagged)
 Author: @cheesycod
-FFlag: `LuauNonePrimitive`
+FFlag: `LuwuNonePrimitive`
 
 ## Summary
 
@@ -22,7 +22,7 @@ The name `null` is too close to `nil`, which can cause visual confusion, typos, 
 
 ### Global Value and Type
 
-When `LuauNonePrimitive` is enabled, `none` is exposed as a built-in global value representing the singleton value of the `none` primitive type.
+When `LuwuNonePrimitive` is enabled, `none` is exposed as a built-in global value representing the singleton value of the `none` primitive type.
 
 1. **Primitive Type:**
    A new primitive value type `none` is introduced.

@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-# This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+# This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 
 # NOTE: This script is experimental. This script uses a linear regression to construct a model for predicting native
 # code size from bytecode. Some initial work has been done to analyze a large corpus of Luau scripts, and while for

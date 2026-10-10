@@ -1,4 +1,4 @@
--- This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+-- This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 print("testing that native code does not hit spill limit in complex integer code")
 
 local function bit32_add(lhs, rhs)

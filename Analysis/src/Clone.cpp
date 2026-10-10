@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/Clone.h"
 
 #include "Luau/Ast.h"
@@ -12,7 +12,7 @@
 #include "Luau/VisitType.h"
 
 LUAU_FASTFLAG(LuauSolverV2)
-LUAU_FASTFLAG(LuauGenericNominals)
+LUAU_FASTFLAG(LuwuGenericNominals)
 
 // For each `Luau::clone` call, we will clone only up to N amount of types _and_ packs, as controlled by this limit.
 LUAU_FASTINTVARIABLE(LuauTypeCloneIterationLimit, 100'000)
@@ -359,7 +359,7 @@ private:
             t->indexer->indexResultType = shallowClone(t->indexer->indexResultType);
         }
 
-        if (FFlag::DebugLuauUserDefinedClasses && t->relation)
+        if (FFlag::LuwuClasses && t->relation)
         {
             Luau::visit(
                 overloaded{
@@ -376,7 +376,7 @@ private:
             );
         }
 
-        if (FFlag::LuauGenericNominals)
+        if (FFlag::LuwuGenericNominals)
         {
             for (TypeId& itp : t->instantiatedTypeParams)
                 itp = shallowClone(itp);

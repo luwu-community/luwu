@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-# This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+# This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 
 # Given a heap snapshot, this tool gathers basic statistics about the allocated objects
 # To generate a snapshot, use lua_memorydump, ideally preceded by lua_gc(L, LUA_GCCOLLECT, 0)

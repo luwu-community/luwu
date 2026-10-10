@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-# This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+# This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 
 # Given two heap snapshots (A & B), this tool performs reachability analysis on new objects allocated in B
 # This is useful to find memory leaks - reachability analysis answers the question "why is this set of objects not freed"

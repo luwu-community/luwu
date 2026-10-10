@@ -1,4 +1,4 @@
-# This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+# This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 .SUFFIXES:
 MAKEFLAGS+=-r -j8
 COMMA=,
@@ -60,31 +60,31 @@ ISOCLINE_TARGET=$(BUILD)/libisocline.a
 
 TESTS_SOURCES=$(wildcard tests/*.cpp) CLI/src/FileUtils.cpp CLI/src/Flags.cpp CLI/src/Profiler.cpp CLI/src/Coverage.cpp CLI/src/Counters.cpp CLI/src/Repl.cpp CLI/src/ReplRequirer.cpp CLI/src/VfsNavigator.cpp
 TESTS_OBJECTS=$(TESTS_SOURCES:%=$(BUILD)/%.o)
-TESTS_TARGET=$(BUILD)/luau-tests
+TESTS_TARGET=$(BUILD)/luwu-tests
 
 TEST_LINK_VM_SOURCES=tests/link/Vm.test.cpp
 TEST_LINK_VM_OBJECTS=$(TEST_LINK_VM_SOURCES:%=$(BUILD)/%.o)
-TEST_LINK_VM_TARGET=$(BUILD)/luau-test-link-vm
+TEST_LINK_VM_TARGET=$(BUILD)/luwu-test-link-vm
 
 TEST_LINK_CODEGEN_SOURCES=tests/link/VmCodeGen.test.cpp
 TEST_LINK_CODEGEN_OBJECTS=$(TEST_LINK_CODEGEN_SOURCES:%=$(BUILD)/%.o)
-TEST_LINK_CODEGEN_TARGET=$(BUILD)/luau-test-link-codegen
+TEST_LINK_CODEGEN_TARGET=$(BUILD)/luwu-test-link-codegen
 
 REPL_CLI_SOURCES=CLI/src/FileUtils.cpp CLI/src/Flags.cpp CLI/src/Profiler.cpp CLI/src/Coverage.cpp CLI/src/Counters.cpp CLI/src/Repl.cpp CLI/src/ReplEntry.cpp CLI/src/ReplRequirer.cpp CLI/src/VfsNavigator.cpp
 REPL_CLI_OBJECTS=$(REPL_CLI_SOURCES:%=$(BUILD)/%.o)
-REPL_CLI_TARGET=$(BUILD)/luau
+REPL_CLI_TARGET=$(BUILD)/luwu
 
 ANALYZE_CLI_SOURCES=CLI/src/FileUtils.cpp CLI/src/Flags.cpp CLI/src/Analyze.cpp CLI/src/AnalyzeRequirer.cpp CLI/src/VfsNavigator.cpp
 ANALYZE_CLI_OBJECTS=$(ANALYZE_CLI_SOURCES:%=$(BUILD)/%.o)
-ANALYZE_CLI_TARGET=$(BUILD)/luau-analyze
+ANALYZE_CLI_TARGET=$(BUILD)/luwu-analyze
 
 COMPILE_CLI_SOURCES=CLI/src/FileUtils.cpp CLI/src/Flags.cpp CLI/src/Compile.cpp
 COMPILE_CLI_OBJECTS=$(COMPILE_CLI_SOURCES:%=$(BUILD)/%.o)
-COMPILE_CLI_TARGET=$(BUILD)/luau-compile
+COMPILE_CLI_TARGET=$(BUILD)/luwu-compile
 
 BYTECODE_CLI_SOURCES=CLI/src/FileUtils.cpp CLI/src/Flags.cpp CLI/src/Bytecode.cpp
 BYTECODE_CLI_OBJECTS=$(BYTECODE_CLI_SOURCES:%=$(BUILD)/%.o)
-BYTECODE_CLI_TARGET=$(BUILD)/luau-bytecode
+BYTECODE_CLI_TARGET=$(BUILD)/luwu-bytecode
 
 MUTATOR_LIBS=build/libprotobuf-mutator/src/libfuzzer/libprotobuf-mutator-libfuzzer.a build/libprotobuf-mutator/src/libprotobuf-mutator.a
 
@@ -100,10 +100,13 @@ ifneq ($(opt),)
 endif
 
 OBJECTS=$(COMMON_OBJECTS) $(AST_OBJECTS) $(COMPILER_OBJECTS) $(BYTECODE_OBJECTS) $(JITINLINER_OBJECTS) $(CONFIG_OBJECTS) $(ANALYSIS_OBJECTS) $(EQSAT_OBJECTS) $(CODEGEN_OBJECTS) $(VM_OBJECTS) $(REQUIRE_OBJECTS) $(REFLECT_OBJECTS) $(ISOCLINE_OBJECTS) $(TESTS_OBJECTS) $(REPL_CLI_OBJECTS) $(ANALYZE_CLI_OBJECTS) $(COMPILE_CLI_OBJECTS) $(BYTECODE_CLI_OBJECTS) $(TEST_LINK_VM_OBJECTS) $(TEST_LINK_CODEGEN_OBJECTS) $(FUZZ_OBJECTS)
-EXECUTABLE_ALIASES = luau luau-analyze luau-compile luau-bytecode luau-tests
+EXECUTABLE_ALIASES = luwu luwu-analyze luwu-compile luwu-bytecode luwu-tests
 
 # `LUAU_CONFORMANCE_SOURCE_DIR` is configured at build time
 LUAU_CONFORMANCE_SOURCE_DIR = "\"$(realpath .)/tests/conformance\""
+# Luwu Classes: the ClassesFuzz conformance case drives tests/classes_fuzz (a seal script) against the luwu CLI built here
+LUWU_CLASSES_FUZZ_DIR = "\"$(realpath .)/tests/classes_fuzz\""
+LUWU_REPL_CLI_PATH = "\"$(abspath $(REPL_CLI_TARGET))\""
 
 # common flags
 CXXFLAGS=-g -Wall
@@ -183,7 +186,7 @@ $(VM_OBJECTS): CXXFLAGS+=-std=c++11 -ICommon/include -IVM/include
 $(REQUIRE_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IVM/include -IAst/include -IConfig/include -IRequire/include
 $(REFLECT_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IBytecode/include -ICompiler/include -IVM/include -IConfig/include -IReflect/include
 $(ISOCLINE_OBJECTS): CXXFLAGS+=-Wno-unused-function -Iextern/isocline/include
-$(TESTS_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IBytecode/include -IInliner/include -ICompiler/include -IConfig/include -IAnalysis/include -ICodeGen/include -IVM/include -IVM/src -IRequire/include -IReflect/include -ICLI/include -Iextern -DDOCTEST_CONFIG_DOUBLE_STRINGIFY -DDOCTEST_CONFIG_USE_STD_HEADERS -DLUAU_CONFORMANCE_SOURCE_DIR=$(LUAU_CONFORMANCE_SOURCE_DIR)
+$(TESTS_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IBytecode/include -IInliner/include -ICompiler/include -IConfig/include -IAnalysis/include -ICodeGen/include -IVM/include -IVM/src -IRequire/include -IReflect/include -ICLI/include -Iextern -DDOCTEST_CONFIG_DOUBLE_STRINGIFY -DDOCTEST_CONFIG_USE_STD_HEADERS -DLUAU_CONFORMANCE_SOURCE_DIR=$(LUAU_CONFORMANCE_SOURCE_DIR) -DLUWU_CLASSES_FUZZ_DIR=$(LUWU_CLASSES_FUZZ_DIR) -DLUWU_REPL_CLI_PATH=$(LUWU_REPL_CLI_PATH)
 $(REPL_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IBytecode/include -IInliner/include -ICompiler/include -IVM/include -ICodeGen/include -IRequire/include -Iextern -Iextern/isocline/include -ICLI/include
 $(ANALYZE_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IAnalysis/include -IConfig/include -IRequire/include -IVM/include -Iextern -ICLI/include
 $(COMPILE_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IBytecode/include -ICompiler/include -IVM/include -ICodeGen/include -ICLI/include
@@ -198,7 +201,7 @@ $(ANALYZE_CLI_TARGET): LDFLAGS+=-lpthread
 fuzz-proto fuzz-prototest: LDFLAGS+=$(LPROTOBUF)
 
 # pseudo targets
-.PHONY: all test clean coverage format luau-size aliases build-mutator-libs
+.PHONY: all test clean coverage luwu-size aliases build-mutator-libs
 
 # Explicitly make 'all' the default goal ensuring that even if targets are added before 'all', they won't
 # implicitly become the default target built by make.
@@ -230,43 +233,40 @@ coverage: $(TESTS_TARGET) $(COMPILE_CLI_TARGET)
 	mv default.profraw codegen.profraw
 	$(TESTS_TARGET) -ts=Conformance --codegen --fflags=true
 	mv default.profraw codegen-flags.profraw
-	$(COMPILE_CLI_TARGET) --codegennull --target=a64 --fflags=DebugLuauUserDefinedClasses=true tests/conformance
+	$(COMPILE_CLI_TARGET) --codegennull --target=a64 --fflags=LuwuClasses=true tests/conformance
 	mv default.profraw codegen-a64.profraw
-	$(COMPILE_CLI_TARGET) --codegennull --target=x64 --fflags=DebugLuauUserDefinedClasses=true tests/conformance
+	$(COMPILE_CLI_TARGET) --codegennull --target=x64 --fflags=LuwuClasses=true tests/conformance
 	mv default.profraw codegen-x64.profraw
 	llvm-profdata merge *.profraw -o default.profdata
 	rm *.profraw
-	llvm-cov show -format=html -show-instantiations=false -show-line-counts=true -show-region-summary=false -ignore-filename-regex=\(tests\|extern\|CLI\)/.* -output-dir=coverage --instr-profile default.profdata -object build/coverage/luau-tests -object build/coverage/luau-compile
-	llvm-cov report -ignore-filename-regex=\(tests\|extern\|CLI\)/.* -show-region-summary=false --instr-profile default.profdata -object build/coverage/luau-tests -object build/coverage/luau-compile
-	llvm-cov export -ignore-filename-regex=\(tests\|extern\|CLI\)/.* -format lcov --instr-profile default.profdata -object build/coverage/luau-tests -object build/coverage/luau-compile >coverage.info
-
-format:
-	git ls-files '*.h' '*.cpp' | xargs clang-format-11 -i
+	llvm-cov show -format=html -show-instantiations=false -show-line-counts=true -show-region-summary=false -ignore-filename-regex=\(tests\|extern\|CLI\)/.* -output-dir=coverage --instr-profile default.profdata -object build/coverage/luwu-tests -object build/coverage/luwu-compile
+	llvm-cov report -ignore-filename-regex=\(tests\|extern\|CLI\)/.* -show-region-summary=false --instr-profile default.profdata -object build/coverage/luwu-tests -object build/coverage/luwu-compile
+	llvm-cov export -ignore-filename-regex=\(tests\|extern\|CLI\)/.* -format lcov --instr-profile default.profdata -object build/coverage/luwu-tests -object build/coverage/luwu-compile >coverage.info
 
 FUZZ_OBJECTS: $(MUTATOR_LIBS)
 
-luau-size: luau
-	nm --print-size --demangle luau | grep ' t void luau_execute<false>' | awk -F ' ' '{sum += strtonum("0x" $$2)} END {print sum " interpreter" }'
-	nm --print-size --demangle luau | grep ' t luauF_' | awk -F ' ' '{sum += strtonum("0x" $$2)} END {print sum " builtins" }'
+luwu-size: luwu
+	nm --print-size --demangle luwu | grep ' t void luau_execute<false>' | awk -F ' ' '{sum += strtonum("0x" $$2)} END {print sum " interpreter" }'
+	nm --print-size --demangle luwu | grep ' t luauF_' | awk -F ' ' '{sum += strtonum("0x" $$2)} END {print sum " builtins" }'
 
 check-source:
 	git ls-files '*.h' '*.cpp' | xargs -I+ sh -c 'grep -L LICENSE +'
 	git ls-files '*.h' ':!:extern' | xargs -I+ sh -c 'grep -L "#pragma once" +'
 
 # executable target aliases
-luau: $(REPL_CLI_TARGET)
+luwu: $(REPL_CLI_TARGET)
 	ln -fs $^ $@
 
-luau-analyze: $(ANALYZE_CLI_TARGET)
+luwu-analyze: $(ANALYZE_CLI_TARGET)
 	ln -fs $^ $@
 
-luau-compile: $(COMPILE_CLI_TARGET)
+luwu-compile: $(COMPILE_CLI_TARGET)
 	ln -fs $^ $@
 
-luau-bytecode: $(BYTECODE_CLI_TARGET)
+luwu-bytecode: $(BYTECODE_CLI_TARGET)
 	ln -fs $^ $@
 
-luau-tests: $(TESTS_TARGET) $(TEST_LINK_VM_TARGET) $(TEST_LINK_CODEGEN_TARGET)
+luwu-tests: $(TESTS_TARGET) $(TEST_LINK_VM_TARGET) $(TEST_LINK_CODEGEN_TARGET)
 	ln -fs $(TESTS_TARGET) $@
 
 # executable targets
@@ -275,6 +275,8 @@ $(REPL_CLI_TARGET): $(REPL_CLI_OBJECTS) $(COMPILER_TARGET) $(JITINLINER_TARGET) 
 $(ANALYZE_CLI_TARGET): $(ANALYZE_CLI_OBJECTS) $(ANALYSIS_TARGET) $(EQSAT_TARGET) $(AST_TARGET) $(COMPILER_TARGET) $(BYTECODE_TARGET) $(VM_TARGET) $(REQUIRE_TARGET) $(CONFIG_TARGET) $(COMMON_TARGET)
 $(COMPILE_CLI_TARGET): $(COMPILE_CLI_OBJECTS) $(COMPILER_TARGET) $(BYTECODE_TARGET) $(AST_TARGET) $(CODEGEN_TARGET) $(VM_TARGET) $(COMMON_TARGET)
 $(BYTECODE_CLI_TARGET): $(BYTECODE_CLI_OBJECTS) $(COMPILER_TARGET) $(BYTECODE_TARGET) $(AST_TARGET) $(CODEGEN_TARGET) $(VM_TARGET) $(COMMON_TARGET)
+# ClassesFuzz runs the luwu CLI (LUWU_REPL_CLI_PATH); order-only, so it isn't linked into the tests
+$(TESTS_TARGET): | $(REPL_CLI_TARGET)
 
 $(TESTS_TARGET) $(REPL_CLI_TARGET) $(ANALYZE_CLI_TARGET) $(COMPILE_CLI_TARGET) $(BYTECODE_CLI_TARGET):
 	$(CXX) $^ $(LDFLAGS) -o $@

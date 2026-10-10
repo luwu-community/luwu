@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
 #include "Luau/Bytecode.h"
@@ -49,6 +49,7 @@ struct NativeContext
     int (*luaH_getn)(LuaTable* t) = nullptr;
     LuaTable* (*luaH_new)(lua_State* L, int narray, int lnhash) = nullptr;
     LuaTable* (*luaH_clone)(lua_State* L, LuaTable* tt) = nullptr;
+    LuauObject* (*luaR_newobjectuninit)(lua_State* L, LuauClass* classdef) = nullptr;
     void (*luaH_resizearray)(lua_State* L, LuaTable* t, int nasize) = nullptr;
     TValue* (*luaH_setnum)(lua_State* L, LuaTable* t, int key);
 
@@ -107,6 +108,8 @@ struct NativeContext
     const Instruction* (*executeNAMECALL)(lua_State* L, const Instruction* pc, StkId base, TValue* k) = nullptr;
     const Instruction* (*executeSETLIST)(lua_State* L, const Instruction* pc, StkId base, TValue* k) = nullptr;
     const Instruction* (*executeFORGPREP)(lua_State* L, const Instruction* pc, StkId base, TValue* k) = nullptr;
+    const Instruction* (*executeNEWOBJECT)(lua_State* L, const Instruction* pc, StkId base, TValue* k) = nullptr;
+    const Instruction* (*executeNEWCLASSMEMBER)(lua_State* L, const Instruction* pc, StkId base, TValue* k) = nullptr;
     void (*executeGETVARARGSMultRet)(lua_State* L, const Instruction* pc, StkId base, int rai) = nullptr;
     void (*executeGETVARARGSConst)(lua_State* L, StkId base, int rai, int b) = nullptr;
     const Instruction* (*executeDUPCLOSURE)(lua_State* L, const Instruction* pc, StkId base, TValue* k) = nullptr;

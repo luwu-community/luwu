@@ -1,6 +1,6 @@
 export class Point
-    public x: number
-    public y: number
+    x: number
+    y: number
 
     function getX(self): number
         return self.x

@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/Error.h"
 
 #include "Luau/Clone.h"
@@ -10,6 +10,7 @@
 #include "Luau/Type.h"
 #include "Luau/TypeChecker2.h"
 #include "Luau/TypeFunction.h"
+#include "Luau/TypeUtils.h"
 
 #include <optional>
 #include <string>
@@ -92,6 +93,58 @@ static const std::unordered_map<std::string, const char*> kUnaryOps{{"unm", "-"}
 // putting a type function in this list indicates that it is expected to _always_ reduce
 static const std::unordered_set<std::string> kUnreachableTypeFunctions{"refine", "singleton", "union", "intersect", "and", "or"};
 
+// An ExternType is only "external" when the embedder handed it to us. A Luwu class value is rooted
+// at `class` and one of its instances at `object` (rfcs/classes), and those are the words the
+// language itself uses -- `typeof` on an instance answers "object" -- so name the type after its
+// hierarchy root rather than telling someone that `Dog` is an external type.
+static const char* externTypeNoun(TypeId t)
+{
+    const ExternType* etv = get<ExternType>(t);
+    if (!etv || !etv->root)
+        return "external type";
+
+    const ExternType* rootEtv = get<ExternType>(follow(*etv->root));
+    if (!rootEtv)
+        return "external type";
+
+    if (rootEtv->name == "class")
+        return "class";
+    if (rootEtv->name == "object")
+        return "object";
+
+    return "external type";
+}
+
+// A class declaration produces two extern types that both stringify as the bare class name, so a
+// mismatch between them otherwise reads "Expected this to be 'Item', but got 'Item'". `class<Item>`
+// is the language's own spelling for the class value, so say that instead of inventing a gloss.
+static std::optional<std::string> nominalDisplayName(TypeId t)
+{
+    const ExternType* etv = get<ExternType>(follow(t));
+    if (!etv || !etv->root || !etv->relation)
+        return std::nullopt;
+
+    const ExternType* rootEtv = get<ExternType>(follow(*etv->root));
+    if (!rootEtv || rootEtv->name != "class")
+        return std::nullopt;
+
+    // Only a class value carries an `Obj` relation; an object carries a `Klass` one.
+    if (!etv->relation->get_if<Obj>())
+        return std::nullopt;
+
+    return "class<" + etv->name + ">";
+}
+
+static bool isClassValueAgainstItsObject(TypeId given, TypeId wanted)
+{
+    const ExternType* givenEtv = get<ExternType>(follow(given));
+    const ExternType* wantedEtv = get<ExternType>(follow(wanted));
+    if (!givenEtv || !wantedEtv || givenEtv->name != wantedEtv->name)
+        return false;
+
+    return nominalDisplayName(given).has_value() != nominalDisplayName(wanted).has_value();
+}
+
 struct ErrorConverter
 {
     FileResolver* fileResolver = nullptr;
@@ -108,13 +161,22 @@ struct ErrorConverter
             return "'" + s + "'";
         };
 
+        // Normally this preamble just reads "Expected this to be"; when the mismatch reasoning
+        // was entirely about one specific, recognizable aspect of the type (e.g. a function's
+        // return type, or its arguments), a more specific phrase reads a lot more naturally,
+        // e.g. "Expected this function to return" instead of forcing the reader to infer that
+        // context from a wordy explanation below.
+        std::string preamble = tm.contextVerb ? ("Expected " + *tm.contextVerb) : "Expected this to be";
+
+        // A qualifier is rendered already formatted (" from 'a.luau'", " defined on line 3") because
+        // the two kinds of qualifier don't read the same way after the type name.
         auto constructErrorMessage = [&](std::string givenType,
                                          std::string wantedType,
-                                         std::optional<std::string> givenModule,
-                                         std::optional<std::string> wantedModule) -> std::string
+                                         std::optional<std::string> givenQualifier,
+                                         std::optional<std::string> wantedQualifier) -> std::string
         {
-            std::string given = givenModule ? quote(givenType) + " from " + quote(*givenModule) : quote(givenType);
-            std::string wanted = wantedModule ? quote(wantedType) + " from " + quote(*wantedModule) : quote(wantedType);
+            std::string given = givenQualifier ? quote(givenType) + *givenQualifier : quote(givenType);
+            std::string wanted = wantedQualifier ? quote(wantedType) + *wantedQualifier : quote(wantedType);
             size_t luauIndentTypeMismatchMaxTypeLength = size_t(FInt::LuauIndentTypeMismatchMaxTypeLength);
             if (get<NeverType>(follow(tm.wantedType)))
             {
@@ -131,26 +193,47 @@ struct ErrorConverter
             }
 
             if (givenType.length() <= luauIndentTypeMismatchMaxTypeLength || wantedType.length() <= luauIndentTypeMismatchMaxTypeLength)
-                return "Expected this to be " + wanted + ", but got " + given;
-            return "Expected this to be\n\t" + wanted + "\nbut got\n\t" + given;
+                return preamble + " " + wanted + ", but got " + given;
+            return preamble + "\n\t" + wanted + "\nbut got\n\t" + given;
         };
 
-        if (givenTypeName == wantedTypeName)
+        // Two types that stringify identically need something appended to tell them apart. Only
+        // append a fact that actually differs between them: try each distinguishing fact in turn,
+        // and if none separates the two, append nothing rather than the same qualifier on both sides.
+        // Luwu: upstream appends the defining module whenever the names match, even when both types
+        // come from the same module, which reads "Expected this to be 'X' from 'a.luau', but got 'X'
+        // from 'a.luau'".
+        //
+        // First case: a class value against one of its own objects. Spell the class side as
+        // `class<X>`. This applies even when the two strings differ, because an object of a generic
+        // class prints its type arguments (`Box<number>`) and the class value doesn't.
+        if (isClassValueAgainstItsObject(tm.givenType, tm.wantedType))
+        {
+            std::optional<std::string> givenDisplay = nominalDisplayName(tm.givenType);
+            std::optional<std::string> wantedDisplay = nominalDisplayName(tm.wantedType);
+            result =
+                constructErrorMessage(givenDisplay.value_or(givenTypeName), wantedDisplay.value_or(wantedTypeName), std::nullopt, std::nullopt);
+        }
+
+        if (result.empty() && givenTypeName == wantedTypeName)
         {
             if (auto givenDefinitionModule = getDefinitionModuleName(tm.givenType))
             {
                 if (auto wantedDefinitionModule = getDefinitionModuleName(tm.wantedType))
                 {
+                    std::string givenModuleName = *givenDefinitionModule;
+                    std::string wantedModuleName = *wantedDefinitionModule;
+
                     if (fileResolver != nullptr)
                     {
-                        std::string givenModuleName = fileResolver->getHumanReadableModuleName(*givenDefinitionModule);
-                        std::string wantedModuleName = fileResolver->getHumanReadableModuleName(*wantedDefinitionModule);
-                        result = constructErrorMessage(givenTypeName, wantedTypeName, givenModuleName, wantedModuleName);
+                        givenModuleName = fileResolver->getHumanReadableModuleName(*givenDefinitionModule);
+                        wantedModuleName = fileResolver->getHumanReadableModuleName(*wantedDefinitionModule);
                     }
-                    else
-                    {
-                        result = constructErrorMessage(givenTypeName, wantedTypeName, *givenDefinitionModule, *wantedDefinitionModule);
-                    }
+
+                    if (givenModuleName != wantedModuleName)
+                        result = constructErrorMessage(
+                            givenTypeName, wantedTypeName, " from " + quote(givenModuleName), " from " + quote(wantedModuleName)
+                        );
                 }
             }
         }
@@ -196,7 +279,7 @@ struct ErrorConverter
         if (get<TableType>(t))
             return "Key '" + e.key + "' not found in table '" + Luau::toString(t) + "'";
         else if (get<ExternType>(t))
-            return "Key '" + e.key + "' not found in external type '" + Luau::toString(t) + "'";
+            return "Key '" + e.key + "' not found in " + externTypeNoun(t) + " '" + Luau::toString(t) + "'";
         else
             return "Type '" + Luau::toString(e.table) + "' does not have key '" + e.key + "'";
     }
@@ -368,7 +451,7 @@ struct ErrorConverter
 
         TypeId t = follow(e.table);
         if (get<ExternType>(t))
-            s += "external type";
+            s += externTypeNoun(t);
         else
             s += "table";
 
@@ -556,7 +639,7 @@ struct ErrorConverter
             s += "'" + e.properties[i] + "'";
         }
 
-        s += afterFieldList + " found in type '" + toString(e.subType) + "' from expected type '" + toString(e.superType) + "'";
+        s += afterFieldList + " found in type\n  '" + toString(e.subType) + "'\nexpected type:\n  '" + toString(e.superType) + "'";
 
         return s;
     }
@@ -677,7 +760,14 @@ struct ErrorConverter
             {
                 result += "operand of type " + Luau::toString(tfit->typeArguments[0]);
 
-                if (tfit->function->name != "not")
+                // `nil` never carries a metamethod, so an operand that could be `nil` is the reason
+                // the operator failed, and the one the reader can do something about. Pointing at a
+                // missing `__unm` instead sends them looking at the wrong type.
+                std::optional<std::string> nilClause = describeOptionalOperands(tfit->typeArguments[0], std::nullopt);
+
+                if (nilClause)
+                    result += "; " + *nilClause;
+                else if (tfit->function->name != "not")
                     result += "; there is no corresponding overload for __" + tfit->function->name;
             }
             else
@@ -707,10 +797,16 @@ struct ErrorConverter
         {
             std::string result = "Operator '" + std::string(binaryString->second) + "' could not be applied to operands of types ";
 
+            // Set in the two-operand case below: names the operands that could be `nil`. See
+            // describeOptionalOperands.
+            std::optional<std::string> nilClause;
+
             if (tfit->typeArguments.size() == 2 && tfit->packArguments.empty())
             {
                 // this is the expected case.
                 result += Luau::toString(tfit->typeArguments[0]) + " and " + Luau::toString(tfit->typeArguments[1]);
+
+                nilClause = describeOptionalOperands(tfit->typeArguments[0], tfit->typeArguments[1]);
             }
             else
             {
@@ -730,12 +826,29 @@ struct ErrorConverter
                     result += ", " + Luau::toString(packArg);
             }
 
-            result += "; there is no corresponding overload for __" + tfit->function->name;
+            // `number? + number?` has a perfectly good `__add`; what it does not have is a guarantee
+            // that either side is there. Naming the metamethod as well would send the reader after a
+            // second, often imaginary problem -- `string? .. number` concatenates fine once the `nil`
+            // is gone -- so when an operand could be `nil`, that is the whole message. A genuine
+            // second mismatch surfaces on the next check, once the `nil` is handled.
+            if (nilClause)
+                result += "; " + *nilClause;
+            else
+                result += "; there is no corresponding overload for __" + tfit->function->name;
 
             return result;
         }
 
         // miscellaneous
+
+        if ("class" == tfit->function->name)
+        {
+            if (tfit->typeArguments.size() == 1 && tfit->packArguments.empty())
+                return "Type '" + toString(tfit->typeArguments[0]) +
+                       "' is not the object type of a class, so '" + Luau::toString(e.ty) + "' is invalid";
+            else
+                return "Type function instance " + Luau::toString(e.ty) + " is ill-formed, and thus invalid";
+        }
 
         if ("keyof" == tfit->function->name || "rawkeyof" == tfit->function->name)
         {
@@ -834,6 +947,48 @@ struct ErrorConverter
 
         LUAU_UNREACHABLE();
         return "<Invalid PropertyAccessViolation>";
+    }
+
+    std::string operator()(const PrivatePropertyAccess& e) const
+    {
+        const std::string member = "'" + e.key + "' of class '" + e.className + "' is private; ";
+        if (e.isFunction)
+            return "Function " + member + "calling it here will raise a runtime error";
+        return "Field " + member + "accessing it here will raise a runtime error";
+    }
+
+    std::string operator()(const ConstPropertyAssignment& e) const
+    {
+        return "Field '" + e.key + "' of class '" + e.className + "' is constant; assigning to it outside of '__init' will raise a runtime error";
+    }
+
+    std::string operator()(const UnusableClass& e) const
+    {
+        return "This class cannot be used because it only has private fields";
+    }
+
+    std::string operator()(const UninstantiableClass& e) const
+    {
+        return "This class can never be instantiated because its constructor is private and is never called; did you mean to return "
+               "an instance of this class from a `public function` instead? Call the constructor to silence";
+    }
+
+    std::string operator()(const ConstructorReadByName& e) const
+    {
+        return "Cannot read '__init' of class '" + e.className + "'; constructing the class with '" + e.className +
+               "(...)' is the only way to run it, and reading it here will raise a runtime error";
+    }
+
+    std::string operator()(const PrivateConstructorAccess& e) const
+    {
+        return "This class's constructor is private; call a factory function instead of calling the constructor directly";
+    }
+
+    std::string operator()(const UninitializableClassField& e) const
+    {
+        return "Field '" + e.key +
+               "' will always be initialized to `nil` but is not marked as optional; consider providing a default field value, adding a class "
+               "parameter of the same name, or marking the field as optional with `?`";
     }
 
     std::string operator()(const CheckedFunctionIncorrectArgs& e) const
@@ -1125,6 +1280,41 @@ bool UnknownProperty::operator==(const UnknownProperty& rhs) const
 bool PropertyAccessViolation::operator==(const PropertyAccessViolation& rhs) const
 {
     return *table == *rhs.table && key == rhs.key && context == rhs.context;
+}
+
+bool PrivatePropertyAccess::operator==(const PrivatePropertyAccess& rhs) const
+{
+    return *table == *rhs.table && key == rhs.key && isFunction == rhs.isFunction && className == rhs.className;
+}
+
+bool ConstPropertyAssignment::operator==(const ConstPropertyAssignment& rhs) const
+{
+    return *table == *rhs.table && key == rhs.key && className == rhs.className;
+}
+
+bool UninitializableClassField::operator==(const UninitializableClassField& rhs) const
+{
+    return classTy == rhs.classTy && key == rhs.key;
+}
+
+bool UnusableClass::operator==(const UnusableClass& rhs) const
+{
+    return classTy == rhs.classTy;
+}
+
+bool UninstantiableClass::operator==(const UninstantiableClass& rhs) const
+{
+    return classTy == rhs.classTy;
+}
+
+bool ConstructorReadByName::operator==(const ConstructorReadByName& rhs) const
+{
+    return *table == *rhs.table && className == rhs.className;
+}
+
+bool PrivateConstructorAccess::operator==(const PrivateConstructorAccess& rhs) const
+{
+    return *classTy == *rhs.classTy;
 }
 
 bool NotATable::operator==(const NotATable& rhs) const
@@ -1670,6 +1860,20 @@ void copyError(T& e, TypeArena& destArena, CloneState& cloneState)
     }
     else if constexpr (std::is_same_v<T, PropertyAccessViolation>)
         e.table = clone(e.table);
+    else if constexpr (std::is_same_v<T, PrivatePropertyAccess>)
+        e.table = clone(e.table);
+    else if constexpr (std::is_same_v<T, ConstPropertyAssignment>)
+        e.table = clone(e.table);
+    else if constexpr (std::is_same_v<T, PrivateConstructorAccess>)
+        e.classTy = clone(e.classTy);
+    else if constexpr (std::is_same_v<T, ConstructorReadByName>)
+        e.table = clone(e.table);
+    else if constexpr (std::is_same_v<T, UninitializableClassField>)
+        e.classTy = clone(e.classTy);
+    else if constexpr (std::is_same_v<T, UnusableClass>)
+        e.classTy = clone(e.classTy);
+    else if constexpr (std::is_same_v<T, UninstantiableClass>)
+        e.classTy = clone(e.classTy);
     else if constexpr (std::is_same_v<T, CheckedFunctionIncorrectArgs>)
     {
     }

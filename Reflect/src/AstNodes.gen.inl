@@ -48,45 +48,45 @@ Luau::AstNode* createDefaultAstNode(ReflectAtom atom, Luau::Allocator& alloc)
     case ReflectAtom::AstStatBlock:
         return alloc.alloc<Luau::AstStatBlock>(Luau::Location(), Luau::AstArray<Luau::AstStat*>{nullptr, 0}, false);
     case ReflectAtom::AstStatIf:
-        return alloc.alloc<Luau::AstStatIf>(Luau::Location(), nullptr, nullptr, nullptr, std::nullopt, std::nullopt);
+        return alloc.alloc<Luau::AstStatIf>(Luau::Location(), nullptr, nullptr, nullptr, std::nullopt, std::nullopt, Luau::Location());
     case ReflectAtom::AstStatWhile:
-        return alloc.alloc<Luau::AstStatWhile>(Luau::Location(), nullptr, nullptr, false, Luau::Location());
+        return alloc.alloc<Luau::AstStatWhile>(Luau::Location(), nullptr, nullptr, false, Luau::Location(), Luau::Location());
     case ReflectAtom::AstStatRepeat:
-        return alloc.alloc<Luau::AstStatRepeat>(Luau::Location(), nullptr, nullptr, false);
+        return alloc.alloc<Luau::AstStatRepeat>(Luau::Location(), nullptr, nullptr, false, Luau::Location(), Luau::Location());
     case ReflectAtom::AstStatBreak:
         return alloc.alloc<Luau::AstStatBreak>(Luau::Location());
     case ReflectAtom::AstStatContinue:
         return alloc.alloc<Luau::AstStatContinue>(Luau::Location());
     case ReflectAtom::AstStatReturn:
-        return alloc.alloc<Luau::AstStatReturn>(Luau::Location(), Luau::AstArray<Luau::AstExpr*>{nullptr, 0});
+        return alloc.alloc<Luau::AstStatReturn>(Luau::Location(), Luau::AstArray<Luau::AstExpr*>{nullptr, 0}, Luau::Location());
     case ReflectAtom::AstStatExpr:
         return alloc.alloc<Luau::AstStatExpr>(Luau::Location(), nullptr);
     case ReflectAtom::AstStatLocal:
         return alloc.alloc<Luau::AstStatLocal>(Luau::Location(), Luau::AstArray<Luau::AstLocal*>{nullptr, 0}, Luau::AstArray<Luau::AstExpr*>{nullptr, 0}, std::nullopt, false);
     case ReflectAtom::AstStatFor:
-        return alloc.alloc<Luau::AstStatFor>(Luau::Location(), nullptr, nullptr, nullptr, nullptr, nullptr, false, Luau::Location());
+        return alloc.alloc<Luau::AstStatFor>(Luau::Location(), nullptr, nullptr, nullptr, nullptr, nullptr, false, Luau::Location(), Luau::Location());
     case ReflectAtom::AstStatForIn:
-        return alloc.alloc<Luau::AstStatForIn>(Luau::Location(), Luau::AstArray<Luau::AstLocal*>{nullptr, 0}, Luau::AstArray<Luau::AstExpr*>{nullptr, 0}, nullptr, false, Luau::Location(), false, Luau::Location());
+        return alloc.alloc<Luau::AstStatForIn>(Luau::Location(), Luau::AstArray<Luau::AstLocal*>{nullptr, 0}, Luau::AstArray<Luau::AstExpr*>{nullptr, 0}, nullptr, false, Luau::Location(), false, Luau::Location(), Luau::Location());
     case ReflectAtom::AstStatAssign:
         return alloc.alloc<Luau::AstStatAssign>(Luau::Location(), Luau::AstArray<Luau::AstExpr*>{nullptr, 0}, Luau::AstArray<Luau::AstExpr*>{nullptr, 0});
     case ReflectAtom::AstStatCompoundAssign:
         return alloc.alloc<Luau::AstStatCompoundAssign>(Luau::Location(), Luau::AstExprBinary::Op::Add, nullptr, nullptr);
     case ReflectAtom::AstStatFunction:
-        return alloc.alloc<Luau::AstStatFunction>(Luau::Location(), nullptr, nullptr);
+        return alloc.alloc<Luau::AstStatFunction>(Luau::Location(), nullptr, nullptr, Luau::Location());
     case ReflectAtom::AstStatLocalFunction:
-        return alloc.alloc<Luau::AstStatLocalFunction>(Luau::Location(), nullptr, nullptr, false, Luau::Position::missing());
+        return alloc.alloc<Luau::AstStatLocalFunction>(Luau::Location(), nullptr, nullptr, false, Luau::Position::missing(), Luau::Location(), Luau::Location());
     case ReflectAtom::AstStatTypeAlias:
-        return alloc.alloc<Luau::AstStatTypeAlias>(Luau::Location(), Luau::AstName(), Luau::Location(), Luau::AstArray<Luau::AstGenericType*>{nullptr, 0}, Luau::AstArray<Luau::AstGenericTypePack*>{nullptr, 0}, nullptr, false);
+        return alloc.alloc<Luau::AstStatTypeAlias>(Luau::Location(), Luau::AstName(), Luau::Location(), Luau::AstArray<Luau::AstGenericType*>{nullptr, 0}, Luau::AstArray<Luau::AstGenericTypePack*>{nullptr, 0}, nullptr, false, Luau::Location());
     case ReflectAtom::AstStatTypeFunction:
         return alloc.alloc<Luau::AstStatTypeFunction>(Luau::Location(), Luau::AstName(), Luau::Location(), nullptr, false, false);
     case ReflectAtom::AstStatDeclareGlobal:
-        return alloc.alloc<Luau::AstStatDeclareGlobal>(Luau::Location(), Luau::AstName(), Luau::Location(), nullptr);
+        return alloc.alloc<Luau::AstStatDeclareGlobal>(Luau::Location(), Luau::AstName(), Luau::Location(), nullptr, Luau::Location());
     case ReflectAtom::AstStatDeclareFunction:
-        return alloc.alloc<Luau::AstStatDeclareFunction>(Luau::Location(), Luau::AstArray<Luau::AstAttr*>{nullptr, 0}, Luau::AstName(), Luau::Location(), Luau::AstArray<Luau::AstGenericType*>{nullptr, 0}, Luau::AstArray<Luau::AstGenericTypePack*>{nullptr, 0}, Luau::AstTypeList{}, Luau::AstArray<Luau::AstArgumentName>{nullptr, 0}, false, Luau::Location(), nullptr);
+        return alloc.alloc<Luau::AstStatDeclareFunction>(Luau::Location(), Luau::AstArray<Luau::AstAttr*>{nullptr, 0}, Luau::AstName(), Luau::Location(), Luau::AstArray<Luau::AstGenericType*>{nullptr, 0}, Luau::AstArray<Luau::AstGenericTypePack*>{nullptr, 0}, Luau::AstTypeList{}, Luau::AstArray<Luau::AstArgumentName>{nullptr, 0}, false, Luau::Location(), nullptr, Luau::Location(), Luau::Location());
     case ReflectAtom::AstStatClass:
-        return alloc.alloc<Luau::AstStatClass>(Luau::Location(), nullptr, Luau::AstArray<Luau::AstClassMember>{nullptr, 0}, false);
+        return alloc.alloc<Luau::AstStatClass>(Luau::Location(), nullptr, Luau::AstArray<Luau::AstClassMember>{nullptr, 0}, false, Luau::Location());
     case ReflectAtom::AstStatDeclareExternType:
-        return alloc.alloc<Luau::AstStatDeclareExternType>(Luau::Location(), Luau::AstName(), std::nullopt, Luau::AstArray<Luau::AstDeclaredExternTypeProperty>{nullptr, 0}, nullptr);
+        return alloc.alloc<Luau::AstStatDeclareExternType>(Luau::Location(), Luau::AstName(), std::nullopt, Luau::AstArray<Luau::AstDeclaredExternTypeProperty>{nullptr, 0}, Luau::Location(), Luau::Location(), std::nullopt, nullptr);
     case ReflectAtom::AstStatError:
         return alloc.alloc<Luau::AstStatError>(Luau::Location(), Luau::AstArray<Luau::AstExpr*>{nullptr, 0}, Luau::AstArray<Luau::AstStat*>{nullptr, 0}, 0);
     case ReflectAtom::AstExprGroup:
@@ -124,7 +124,7 @@ Luau::AstNode* createDefaultAstNode(ReflectAtom atom, Luau::Allocator& alloc)
     case ReflectAtom::AstExprTypeAssertion:
         return alloc.alloc<Luau::AstExprTypeAssertion>(Luau::Location(), nullptr, nullptr);
     case ReflectAtom::AstExprIfElse:
-        return alloc.alloc<Luau::AstExprIfElse>(Luau::Location(), nullptr, true, nullptr, true, nullptr);
+        return alloc.alloc<Luau::AstExprIfElse>(Luau::Location(), nullptr, true, nullptr, true, nullptr, Luau::Location(), std::nullopt, std::nullopt);
     case ReflectAtom::AstExprInterpString:
         return alloc.alloc<Luau::AstExprInterpString>(Luau::Location(), Luau::AstArray<Luau::AstArray<char>>{nullptr, 0}, Luau::AstArray<Luau::AstExpr*>{nullptr, 0});
     case ReflectAtom::AstExprInstantiate:
@@ -230,7 +230,7 @@ static void collectAstStatBlockProps(lua_State* L, AstNodeData& handle)
 
 static Luau::AstNode* createDefaultAstStatIf(Luau::Allocator& alloc)
 {
-    return alloc.alloc<Luau::AstStatIf>(Luau::Location(), nullptr, nullptr, nullptr, std::nullopt, std::nullopt);
+    return alloc.alloc<Luau::AstStatIf>(Luau::Location(), nullptr, nullptr, nullptr, std::nullopt, std::nullopt, Luau::Location());
 }
 
 static bool handleAstStatIfMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
@@ -297,7 +297,7 @@ static void collectAstStatIfProps(lua_State* L, AstNodeData& handle)
 
 static Luau::AstNode* createDefaultAstStatWhile(Luau::Allocator& alloc)
 {
-    return alloc.alloc<Luau::AstStatWhile>(Luau::Location(), nullptr, nullptr, false, Luau::Location());
+    return alloc.alloc<Luau::AstStatWhile>(Luau::Location(), nullptr, nullptr, false, Luau::Location(), Luau::Location());
 }
 
 static bool handleAstStatWhileMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
@@ -364,7 +364,7 @@ static void collectAstStatWhileProps(lua_State* L, AstNodeData& handle)
 
 static Luau::AstNode* createDefaultAstStatRepeat(Luau::Allocator& alloc)
 {
-    return alloc.alloc<Luau::AstStatRepeat>(Luau::Location(), nullptr, nullptr, false);
+    return alloc.alloc<Luau::AstStatRepeat>(Luau::Location(), nullptr, nullptr, false, Luau::Location(), Luau::Location());
 }
 
 static bool handleAstStatRepeatMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
@@ -502,7 +502,7 @@ static void collectAstStatContinueProps(lua_State* L, AstNodeData& handle)
 
 static Luau::AstNode* createDefaultAstStatReturn(Luau::Allocator& alloc)
 {
-    return alloc.alloc<Luau::AstStatReturn>(Luau::Location(), Luau::AstArray<Luau::AstExpr*>{nullptr, 0});
+    return alloc.alloc<Luau::AstStatReturn>(Luau::Location(), Luau::AstArray<Luau::AstExpr*>{nullptr, 0}, Luau::Location());
 }
 
 static bool handleAstStatReturnMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
@@ -676,7 +676,7 @@ static void collectAstStatLocalProps(lua_State* L, AstNodeData& handle)
 
 static Luau::AstNode* createDefaultAstStatFor(Luau::Allocator& alloc)
 {
-    return alloc.alloc<Luau::AstStatFor>(Luau::Location(), nullptr, nullptr, nullptr, nullptr, nullptr, false, Luau::Location());
+    return alloc.alloc<Luau::AstStatFor>(Luau::Location(), nullptr, nullptr, nullptr, nullptr, nullptr, false, Luau::Location(), Luau::Location());
 }
 
 static bool handleAstStatForMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
@@ -770,7 +770,7 @@ static void collectAstStatForProps(lua_State* L, AstNodeData& handle)
 
 static Luau::AstNode* createDefaultAstStatForIn(Luau::Allocator& alloc)
 {
-    return alloc.alloc<Luau::AstStatForIn>(Luau::Location(), Luau::AstArray<Luau::AstLocal*>{nullptr, 0}, Luau::AstArray<Luau::AstExpr*>{nullptr, 0}, nullptr, false, Luau::Location(), false, Luau::Location());
+    return alloc.alloc<Luau::AstStatForIn>(Luau::Location(), Luau::AstArray<Luau::AstLocal*>{nullptr, 0}, Luau::AstArray<Luau::AstExpr*>{nullptr, 0}, nullptr, false, Luau::Location(), false, Luau::Location(), Luau::Location());
 }
 
 static bool handleAstStatForInMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
@@ -980,7 +980,7 @@ static void collectAstStatCompoundAssignProps(lua_State* L, AstNodeData& handle)
 
 static Luau::AstNode* createDefaultAstStatFunction(Luau::Allocator& alloc)
 {
-    return alloc.alloc<Luau::AstStatFunction>(Luau::Location(), nullptr, nullptr);
+    return alloc.alloc<Luau::AstStatFunction>(Luau::Location(), nullptr, nullptr, Luau::Location());
 }
 
 static bool handleAstStatFunctionMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
@@ -1038,7 +1038,7 @@ static void collectAstStatFunctionProps(lua_State* L, AstNodeData& handle)
 
 static Luau::AstNode* createDefaultAstStatLocalFunction(Luau::Allocator& alloc)
 {
-    return alloc.alloc<Luau::AstStatLocalFunction>(Luau::Location(), nullptr, nullptr, false, Luau::Position::missing());
+    return alloc.alloc<Luau::AstStatLocalFunction>(Luau::Location(), nullptr, nullptr, false, Luau::Position::missing(), Luau::Location(), Luau::Location());
 }
 
 static bool handleAstStatLocalFunctionMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
@@ -1105,7 +1105,7 @@ static void collectAstStatLocalFunctionProps(lua_State* L, AstNodeData& handle)
 
 static Luau::AstNode* createDefaultAstStatTypeAlias(Luau::Allocator& alloc)
 {
-    return alloc.alloc<Luau::AstStatTypeAlias>(Luau::Location(), Luau::AstName(), Luau::Location(), Luau::AstArray<Luau::AstGenericType*>{nullptr, 0}, Luau::AstArray<Luau::AstGenericTypePack*>{nullptr, 0}, nullptr, false);
+    return alloc.alloc<Luau::AstStatTypeAlias>(Luau::Location(), Luau::AstName(), Luau::Location(), Luau::AstArray<Luau::AstGenericType*>{nullptr, 0}, Luau::AstArray<Luau::AstGenericTypePack*>{nullptr, 0}, nullptr, false, Luau::Location());
 }
 
 static bool handleAstStatTypeAliasMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
@@ -1266,7 +1266,7 @@ static void collectAstStatTypeFunctionProps(lua_State* L, AstNodeData& handle)
 
 static Luau::AstNode* createDefaultAstStatDeclareGlobal(Luau::Allocator& alloc)
 {
-    return alloc.alloc<Luau::AstStatDeclareGlobal>(Luau::Location(), Luau::AstName(), Luau::Location(), nullptr);
+    return alloc.alloc<Luau::AstStatDeclareGlobal>(Luau::Location(), Luau::AstName(), Luau::Location(), nullptr, Luau::Location());
 }
 
 static bool handleAstStatDeclareGlobalMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
@@ -1324,7 +1324,7 @@ static void collectAstStatDeclareGlobalProps(lua_State* L, AstNodeData& handle)
 
 static Luau::AstNode* createDefaultAstStatDeclareFunction(Luau::Allocator& alloc)
 {
-    return alloc.alloc<Luau::AstStatDeclareFunction>(Luau::Location(), Luau::AstArray<Luau::AstAttr*>{nullptr, 0}, Luau::AstName(), Luau::Location(), Luau::AstArray<Luau::AstGenericType*>{nullptr, 0}, Luau::AstArray<Luau::AstGenericTypePack*>{nullptr, 0}, Luau::AstTypeList{}, Luau::AstArray<Luau::AstArgumentName>{nullptr, 0}, false, Luau::Location(), nullptr);
+    return alloc.alloc<Luau::AstStatDeclareFunction>(Luau::Location(), Luau::AstArray<Luau::AstAttr*>{nullptr, 0}, Luau::AstName(), Luau::Location(), Luau::AstArray<Luau::AstGenericType*>{nullptr, 0}, Luau::AstArray<Luau::AstGenericTypePack*>{nullptr, 0}, Luau::AstTypeList{}, Luau::AstArray<Luau::AstArgumentName>{nullptr, 0}, false, Luau::Location(), nullptr, Luau::Location(), Luau::Location());
 }
 
 static bool handleAstStatDeclareFunctionMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
@@ -1427,7 +1427,7 @@ static void collectAstStatDeclareFunctionProps(lua_State* L, AstNodeData& handle
 
 static Luau::AstNode* createDefaultAstStatClass(Luau::Allocator& alloc)
 {
-    return alloc.alloc<Luau::AstStatClass>(Luau::Location(), nullptr, Luau::AstArray<Luau::AstClassMember>{nullptr, 0}, false);
+    return alloc.alloc<Luau::AstStatClass>(Luau::Location(), nullptr, Luau::AstArray<Luau::AstClassMember>{nullptr, 0}, false, Luau::Location());
 }
 
 static bool handleAstStatClassMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
@@ -1494,7 +1494,7 @@ static void collectAstStatClassProps(lua_State* L, AstNodeData& handle)
 
 static Luau::AstNode* createDefaultAstStatDeclareExternType(Luau::Allocator& alloc)
 {
-    return alloc.alloc<Luau::AstStatDeclareExternType>(Luau::Location(), Luau::AstName(), std::nullopt, Luau::AstArray<Luau::AstDeclaredExternTypeProperty>{nullptr, 0}, nullptr);
+    return alloc.alloc<Luau::AstStatDeclareExternType>(Luau::Location(), Luau::AstName(), std::nullopt, Luau::AstArray<Luau::AstDeclaredExternTypeProperty>{nullptr, 0}, Luau::Location(), Luau::Location(), std::nullopt, nullptr);
 }
 
 static bool handleAstStatDeclareExternTypeMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
@@ -2476,7 +2476,7 @@ static void collectAstExprTypeAssertionProps(lua_State* L, AstNodeData& handle)
 
 static Luau::AstNode* createDefaultAstExprIfElse(Luau::Allocator& alloc)
 {
-    return alloc.alloc<Luau::AstExprIfElse>(Luau::Location(), nullptr, true, nullptr, true, nullptr);
+    return alloc.alloc<Luau::AstExprIfElse>(Luau::Location(), nullptr, true, nullptr, true, nullptr, Luau::Location(), std::nullopt, std::nullopt);
 }
 
 static bool handleAstExprIfElseMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)

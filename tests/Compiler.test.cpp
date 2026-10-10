@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/Compiler.h"
 #include "Luau/BytecodeBuilder.h"
 #include "Luau/StringUtils.h"
@@ -29,10 +29,13 @@ LUAU_FASTFLAG(LuauCompileIifeInline)
 LUAU_FASTFLAG(LuauIntegerBufferFastcalls)
 LUAU_FASTFLAG(LuauCompileStringInterpTargetTop)
 LUAU_FASTFLAG(LuauExportValueSyntax)
-LUAU_FASTFLAG(LuauExportedClassIsNilWorkaround)
+LUAU_FASTFLAG(LuwuExportedClassIsNilWorkaround)
 LUAU_FASTFLAG(DebugLuauNoInline)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
-LUAU_FASTFLAG(LuauDefaultArguments)
+LUAU_FASTFLAG(LuwuDefaultArguments)
+LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuGenericNominals)
+LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 
 using namespace Luau;
 
@@ -233,6 +236,15 @@ TEST_CASE("BytecodeIsStable")
     // Bytecode type encoding (serialized & in-memory)
     // Note: these *can* change retroactively *if* type version is bumped, but probably shouldn't
     LUAU_ASSERT(LBC_TYPE_BUFFER == 9); // type version 1
+
+    // Luwu bytecode versioning: the mluau-vendored Luau that preceded Luwu emitted these under legacy version numbers, so legacy
+    // bytecode that is loaded today can contain them (see "Luwu bytecode version history" in Bytecode.h)
+    CHECK(LBF_BUFFER_ISFROZEN == 133);
+    CHECK(LBC_TYPE_SYMNONE == 11);
+
+    // Luwu bytecode versioning: the header of Luwu bytecode
+    CHECK(LWBC_MAGIC == 0xff);
+    CHECK(LWBC_VERSION_WIP == 200);
 }
 
 TEST_CASE("CompileToBytecode")
@@ -3949,7 +3961,7 @@ local function foo(x)
 end
 
 -- remark: builtin assert/1
--- remark: inlining succeeded (cost 2, profit 2.50x, depth 0)
+-- remark: inlining succeeded: foo (cost 2, profit 2.50x, depth 0)
 return foo(a) + foo(assert(b))
 )"
     );
@@ -3971,7 +3983,7 @@ local function foo()
     return value
 end
 
--- remark: inlining succeeded (cost 0, profit 3.00x, depth 0)
+-- remark: inlining succeeded: foo (cost 0, profit 3.00x, depth 0)
 return foo()
 )"
     );
@@ -3993,7 +4005,7 @@ local function foo()
     return not value
 end
 
--- remark: inlining succeeded (cost 0, profit 3.00x, depth 0)
+-- remark: inlining succeeded: foo (cost 0, profit 3.00x, depth 0)
 return foo()
 )"
     );
@@ -4016,7 +4028,7 @@ local function foo()
     return s
 end
 
--- remark: inlining failed: too expensive (cost 127, profit 1.02x)
+-- remark: inlining failed: foo is too expensive (cost 127, profit 1.02x)
 return foo()
 )"
     );
@@ -4039,7 +4051,7 @@ local function foo()
     return s
 end
 
--- remark: inlining failed: too expensive (cost 127, profit 1.02x)
+-- remark: inlining failed: foo is too expensive (cost 127, profit 1.02x)
 return foo()
 )"
     );
@@ -4088,9 +4100,9 @@ local function test(a)
     until a > 10
     return a
 end
--- remark: inlining failed: too expensive (cost 76, profit 1.03x)
+-- remark: inlining failed: test is too expensive (cost 76, profit 1.03x)
 local a = test(x)
--- remark: inlining failed: too expensive (cost 73, profit 1.08x)
+-- remark: inlining failed: test is too expensive (cost 73, profit 1.08x)
 local b = test(2)
 )"
     );
@@ -4131,7 +4143,7 @@ local function writeMany(buf, offset, x, y, z, w, u, v)
     buffer.writef32(buf, offset + 20, v)
 end
 
--- remark: inlining succeeded (cost 12, profit 1.66x, depth 0)
+-- remark: inlining succeeded: writeMany (cost 12, profit 1.66x, depth 0)
 writeMany(b, 0, x, y, z, w, u, v)
 return b
 )"
@@ -11093,7 +11105,7 @@ RETURN R0 11
 
 TEST_CASE("ClassDeclBasic")
 {
-    ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag _{FFlag::LuwuClasses, true};
 
     std::string source = R"(
         class Point
@@ -11113,14 +11125,1392 @@ RETURN R0 0
 )" == res0);
 }
 
+TEST_CASE("ClassGenericsAreUntypedInMethodSignatures")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag genericNominals{FFlag::LuwuGenericNominals, true};
+
+    // A class's own generic (`T` in `class List<T>`) must type like a function generic -- unknown -- in
+    // method parameters and in locals inside methods. It used to fall through to the host-userdata guess,
+    // giving `push(self, value: T)` an entry guard against userdata that every real argument fails, so each
+    // native call went back to the interpreter.
+    const char* source = R"(
+class List<T>
+    public items: { T }
+
+    public function push(self, value: T, index: number, other: List<T>)
+        local copy: T = value
+        self.items[index] = copy
+    end
+end
+)";
+
+    Luau::BytecodeBuilder bcb;
+    bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code | Luau::BytecodeBuilder::Dump_Types);
+
+    Luau::CompileOptions options;
+    options.typeInfoLevel = 1;
+
+    Luau::compileOrThrow(bcb, source, options);
+
+    CHECK_EQ("\n" + bcb.dumpFunction(0), R"(
+R0: object [argument]
+R1: any [argument]
+R2: number [argument]
+R3: object [argument]
+R1: any from 2 to 6
+CHECKSELFCLASS R0 OWNER K0 ['push']
+GETOBJECTMEMBER R4 R0 0
+SETTABLE R1 R4 R2
+RETURN R0 0
+)");
+}
+
+TEST_CASE("ClassTypedLocalRangeStartsAfterInitializer")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag genericNominals{FFlag::LuwuGenericNominals, true};
+    ScopedFastFlag noCallFb{FFlag::LuauEmitCallFeedback, false};
+
+    // `local box: Box<number> = Box.make()` evaluates `Box.make` in the local's own register. That register
+    // holds the class, then the function, and only then the object. Codegen trusts a declared register type
+    // over the type it computes, and guards it with a VM exit. So if the declared range started where the
+    // register is allocated, the guard would exit at the GETTABLEKS on every run. The declared range has to
+    // start where the initializer finishes.
+    const char* source = R"(
+class Box<T>
+    public value: T
+
+    public function make(): Box<T>
+        return Box { value = nil }
+    end
+end
+
+function use()
+    local box: Box<number> = Box.make()
+    return box
+end
+)";
+
+    Luau::BytecodeBuilder bcb;
+    bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code | Luau::BytecodeBuilder::Dump_Types);
+
+    Luau::CompileOptions options;
+    options.typeInfoLevel = 1;
+
+    Luau::compileOrThrow(bcb, source, options);
+
+    CHECK_EQ("\n" + bcb.dumpFunction(1), R"(
+U0: class
+R0: object from 4 to 5
+GETUPVAL R0 0
+GETTABLEKS R0 R0 K0 ['make']
+CALL R0 0 1
+RETURN R0 1
+)");
+}
+
+TEST_CASE("ClassGenericAnnotationResolvesReceiverForInlining")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag genericNominals{FFlag::LuwuGenericNominals, true};
+    // this test is about receivers the compiler knows only from an annotation
+    ScopedFastFlag trustAnnotations{FFlag::DebugLuwuCompilerTrustsTypeAnnotations, true};
+
+    // Type arguments are erased at runtime, so `Box<number>` names the same class as `Box` for resolving a
+    // method call's receiver. The inlined body keeps its CHECKSELFCLASS, so a lying annotation still can't run
+    // the wrong method.
+    const char* source = R"(--!trust
+class Box<T>
+    public value: T
+
+    public function get(self): T
+        return self.value
+    end
+end
+
+function use(box: Box<number>, plain: Box)
+    local a = box:get()
+    local b = plain:get()
+    return a, b
+end
+)";
+
+    Luau::BytecodeBuilder bcb;
+    bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code);
+
+    Luau::CompileOptions options;
+    options.optimizationLevel = 2;
+
+    Luau::compileOrThrow(bcb, source, options);
+
+    std::string code = bcb.dumpFunction(1);
+    CHECK(code.find("NAMECALL") == std::string::npos);
+    CHECK(code.find("CHECKSELFCLASS") != std::string::npos);
+}
+
+TEST_CASE("ClassConstructionResolvesReceiverForInlining")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    // A local initialized by constructing a class in this module is an instance of that class with no
+    // annotation, so its method calls inline (classFromConstruction). A local that is assigned to
+    // anywhere is not, and keeps its NAMECALL.
+    const char* source = R"(
+class Cat
+    public name: string
+
+    public function meow(self): string
+        return self.name
+    end
+end
+
+function use(n: string, other)
+    local cat = Cat(n)
+    local a = cat:meow()
+
+    local reassigned = Cat(n)
+    reassigned = other
+    local b = reassigned:meow()
+
+    return a, b
+end
+)";
+
+    Luau::BytecodeBuilder bcb;
+    bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code);
+
+    Luau::CompileOptions options;
+    options.optimizationLevel = 2;
+
+    Luau::compileOrThrow(bcb, source, options);
+
+    std::string code = bcb.dumpFunction(1);
+
+    // exactly one of the two calls survives as a NAMECALL: the one on the reassigned local
+    CHECK_EQ(code.find("NAMECALL"), code.rfind("NAMECALL"));
+    CHECK(code.find("NAMECALL") != std::string::npos);
+
+    // construction is a *proven* receiver, so the inlined call carries no CHECKSELFCLASS: the object
+    // was made by this very class and nothing could have replaced it
+    CHECK(code.find("CHECKSELFCLASS") == std::string::npos);
+}
+
+TEST_CASE("ClassReceiverTrustTiersDecideSelfCheck")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    // this test is about receivers the compiler knows only from an annotation
+    ScopedFastFlag trustAnnotations{FFlag::DebugLuwuCompilerTrustsTypeAnnotations, true};
+
+    // rfcs/classes: every receiver resolution is either *proven* (a runtime check on this path
+    // establishes the exact class) or *trusted* (an annotation says so). Both inline; only proven ones
+    // may skip the inline site's CHECKSELFCLASS. This pins the split itself -- a new resolution path
+    // must not acquire elision by accident.
+    const char* source = R"(--!trust
+class Vec(public x: number)
+    public function get(self): number
+        return self.x
+    end
+end
+
+class Holder(public v: Vec)
+    public function viaField(self): number
+        local r = self.v:get()
+        return r
+    end
+end
+
+function viaConstruction(n: number): number
+    local v = Vec(n)
+    local r = v:get()
+    return r
+end
+
+function viaAnnotation(v: Vec): number
+    local r = v:get()
+    return r
+end
+
+function viaIsinstance(p): number
+    if class.isinstance(p, Vec) then
+        local r = p:get()
+        return r
+    end
+    return 0
+end
+)";
+
+    Luau::BytecodeBuilder bcb;
+    bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code);
+
+    Luau::CompileOptions options;
+    options.optimizationLevel = 2;
+
+    Luau::compileOrThrow(bcb, source, options);
+
+    // every one of them inlines
+    for (int f : {1, 2, 3, 4})
+        CHECK_MESSAGE(bcb.dumpFunction(f).find("NAMECALL") == std::string::npos, "function " << f << " did not inline");
+
+    // trusted: a declared field type (the method's own prologue check is the first CHECKSELFCLASS here,
+    // the inline site's is the second) and a declared local type
+    std::string viaField = bcb.dumpFunction(1);
+    CHECK(viaField.find("CHECKSELFCLASS") != viaField.rfind("CHECKSELFCLASS"));
+    CHECK(bcb.dumpFunction(3).find("CHECKSELFCLASS") != std::string::npos);
+
+    // proven: construction, and a class.isinstance branch
+    CHECK(bcb.dumpFunction(2).find("CHECKSELFCLASS") == std::string::npos);
+    CHECK(bcb.dumpFunction(4).find("CHECKSELFCLASS") == std::string::npos);
+}
+
+TEST_CASE("ClassIsinstanceProvenReceiverInlinesWithoutSelfCheck")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    // only `annotated`, the contrast case, needs annotations trusted to inline at all
+    ScopedFastFlag trustAnnotations{FFlag::DebugLuwuCompilerTrustsTypeAnnotations, true};
+
+    // Inside `if class.isinstance(p, Path)`, JUMPXISA has checked the exact class on this path and the
+    // local can't have been reassigned, so the method call inlines with no CHECKSELFCLASS of its own --
+    // unlike the annotation path, where the check is what makes a lying annotation safe.
+    const char* source = R"(--!trust
+class Path
+    public raw: string
+
+    public function ext(self): string
+        return self.raw
+    end
+end
+
+function fromUnion(p: Path | string): string
+    if class.isinstance(p, Path) then
+        local a = p:ext()
+        return a
+    end
+    return ""
+end
+
+function fromUnknown(p): string
+    if class.isinstance(p, Path) then
+        local a = p:ext()
+        return a
+    end
+    return ""
+end
+
+function annotated(p: Path): string
+    local a = p:ext()
+    return a
+end
+)";
+
+    Luau::BytecodeBuilder bcb;
+    bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code);
+
+    Luau::CompileOptions options;
+    options.optimizationLevel = 2;
+
+    Luau::compileOrThrow(bcb, source, options);
+
+    // a refined union receiver and a fully unknown one behave the same: the proof is the runtime check,
+    // not the static type
+    for (int f : {1, 2})
+    {
+        std::string code = bcb.dumpFunction(f);
+
+        CHECK(code.find("JUMPXISA") != std::string::npos);
+        CHECK(code.find("NAMECALL") == std::string::npos);
+        CHECK(code.find("CHECKSELFCLASS") == std::string::npos);
+        CHECK(code.find("GETOBJECTMEMBER") != std::string::npos);
+    }
+
+    // the annotated receiver still inlines, but keeps its check
+    std::string annotated = bcb.dumpFunction(3);
+    CHECK(annotated.find("NAMECALL") == std::string::npos);
+    CHECK(annotated.find("CHECKSELFCLASS") != std::string::npos);
+}
+
+TEST_CASE("ClassIsinstanceProofIsBoundedByTheBranchItGuards")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    // A class.isinstance proof removes the inline site's CHECKSELFCLASS. If a write could replace the
+    // local before a use inside the branch, the inlined body would read constant field offsets off the
+    // wrong value.
+    //
+    // The proof covers only the then-body it guards. Two kinds of write can reach a use inside it, and
+    // each must cancel the proof:
+    // - a write inside the then-body;
+    // - a write from a nested function, which runs whenever the closure is called.
+    //
+    // Other writes in the enclosing function cannot invalidate the proof. A write before the branch
+    // happened before JUMPXISA tested the value, and a write after the branch cannot reach a use inside it.
+    const char* source = R"(
+class Cat(public name: string)
+    public function meow(self): string
+        return self.name
+    end
+end
+
+function writeInBranch(c: Cat?): string
+    if class.isinstance(c, Cat) then
+        c = nil
+        local r = c:meow()
+        return r
+    end
+    return ""
+end
+
+function writeInBranchLoop(c: Cat?, other): string
+    if class.isinstance(c, Cat) then
+        local out = ""
+        for i = 1, 2 do
+            local r = c:meow()
+            out ..= r
+            c = other
+        end
+        return out
+    end
+    return ""
+end
+
+function writeFromClosure(c: Cat?): string
+    if class.isinstance(c, Cat) then
+        local clear = function()
+            c = nil
+        end
+        clear()
+        local r = c:meow()
+        return r
+    end
+    return ""
+end
+
+function writeFromOuterClosure(c: Cat?): string
+    local clear = function()
+        c = nil
+    end
+    if class.isinstance(c, Cat) then
+        clear()
+        local r = c:meow()
+        return r
+    end
+    return ""
+end
+
+function copiedToOptional(c: Cat?): string
+    if class.isinstance(c, Cat) then
+        local d: Cat? = c
+        local r = d:meow()
+        return r
+    end
+    return ""
+end
+
+function writeAfterBranch(c: Cat?): string
+    local out = ""
+    if class.isinstance(c, Cat) then
+        local r = c:meow()
+        out = r .. c.name
+    end
+    c = nil
+    return out
+end
+
+function writeBeforeBranch(c: Cat?, replacement): string
+    c = replacement
+    if class.isinstance(c, Cat) then
+        local r = c:meow()
+        return r
+    end
+    return ""
+end
+
+function writeInEnclosingLoop(a, b): string
+    local c = a
+    local out = ""
+    for i = 1, 4 do
+        if class.isinstance(c, Cat) then
+            local r = c:meow()
+            out ..= r
+        end
+        c = if c == a then b else a
+    end
+    return out
+end
+)";
+
+    Luau::BytecodeBuilder bcb;
+    bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code);
+
+    Luau::CompileOptions options;
+    options.optimizationLevel = 2;
+
+    Luau::compileOrThrow(bcb, source, options);
+
+    // Function indices: 0 is meow. Protos are emitted innermost first, so 3 and 5 are the two nested
+    // closures, 4 is writeFromClosure and 6 is writeFromOuterClosure.
+    //
+    // These functions have a write the proof cannot see coming, so each must keep its NAMECALL:
+    // - 1: a write inside the branch.
+    // - 2: a write inside a loop in the branch. The loop's second iteration would see it.
+    // - 4: a write from a closure declared inside the branch.
+    // - 6: a write from a closure declared outside the branch and called inside it. The assignment is
+    //   not in the branch, so only Variable::writtenByNestedFunction rules this one out.
+    // - 7: a copy into a local annotated `Cat?`. The annotation alone is not evidence of anything.
+    for (int f : {1, 2, 4, 6, 7})
+        CHECK_MESSAGE(bcb.dumpFunction(f).find("NAMECALL") != std::string::npos, "function " << f << " inlined past a write it cannot see");
+
+    // These writes cannot reach a use inside the branch, so each function inlines with no check of its own:
+    // - 8: a write after the branch.
+    // - 9: a write before the branch.
+    // - 10: a write outside the branch but inside an enclosing loop. The check re-runs on every iteration.
+    // 8 also reads a field (`c.name`) at a constant offset.
+    for (int f : {8, 9, 10})
+    {
+        std::string code = bcb.dumpFunction(f);
+
+        CHECK_MESSAGE(code.find("NAMECALL") == std::string::npos, "function " << f << " did not inline");
+        CHECK_MESSAGE(code.find("CHECKSELFCLASS") == std::string::npos, "function " << f << " kept a check a proven receiver does not need");
+        CHECK_MESSAGE(code.find("GETOBJECTMEMBER") != std::string::npos, "function " << f << " did not reach the object path");
+    }
+}
+
+TEST_CASE("ClassAssertIsinstanceProvesTheRestOfTheBlock")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    // `assert(class.isinstance(c, C))` raises when the check fails. So every path that reaches the
+    // statements after it passed the same runtime check JUMPXISA performs. The assert therefore proves `c`
+    // for the rest of the block, the way a branch proves it for its body, and the inline site's
+    // CHECKSELFCLASS is dropped the same way.
+    //
+    // The proven region is the statements after the assert. The same two kinds of write that cancel a
+    // branch's proof cancel this one: a write inside the region, and a write from a nested function.
+    const char* source = R"(
+class Cat(public name: string)
+    public function meow(self): string
+        return self.name
+    end
+end
+
+function plain(c): string
+    assert(class.isinstance(c, Cat))
+    local r = c:meow()
+    return r .. c.name
+end
+
+function withMessage(c): string
+    assert(class.isinstance(c, Cat), "expected a Cat")
+    local r = c:meow()
+    return r
+end
+
+function unionReceiver(c: Cat | string): string
+    assert(class.isinstance(c, Cat))
+    local r = c:meow()
+    return r
+end
+
+function nestedBlock(c): string
+    assert(class.isinstance(c, Cat))
+    do
+        local r = c:meow()
+        return r
+    end
+end
+
+function writeAfterAssert(c, other): string
+    assert(class.isinstance(c, Cat))
+    c = other
+    local r = c:meow()
+    return r
+end
+
+function writeFromClosure(c, other): string
+    local swap = function()
+        c = other
+    end
+    assert(class.isinstance(c, Cat))
+    swap()
+    local r = c:meow()
+    return r
+end
+
+function assertInsideIf(c, flag): string
+    if flag then
+        assert(class.isinstance(c, Cat))
+        local r = c:meow()
+        return r
+    end
+    local r = c:meow()
+    return r
+end
+
+function notAnAssert(c): string
+    local ok = class.isinstance(c, Cat)
+    local r = c:meow()
+    return r
+end
+)";
+
+    Luau::BytecodeBuilder bcb;
+    bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code);
+
+    Luau::CompileOptions options;
+    options.optimizationLevel = 2;
+
+    Luau::compileOrThrow(bcb, source, options);
+
+    // proven for the rest of the block: a bare assert (1, whose `c.name` also reads at a constant
+    // offset), one carrying a message (2), a receiver whose annotation alone proves nothing (3), and a
+    // nested block inside the region (4)
+    for (int f : {1, 2, 3, 4})
+    {
+        std::string code = bcb.dumpFunction(f);
+
+        CHECK_MESSAGE(code.find("NAMECALL") == std::string::npos, "function " << f << " did not inline after the assert");
+        CHECK_MESSAGE(code.find("] SELF") == std::string::npos, "function " << f << " kept a check a proven receiver does not need");
+        CHECK_MESSAGE(code.find("GETOBJECTMEMBER") != std::string::npos, "function " << f << " did not reach the object path");
+    }
+
+    // 6 is writeFromClosure's nested closure. A write in the region (5) or from a closure (7) refuses the
+    // proof, and `class.isinstance` on its own without an assert (9) never established one.
+    for (int f : {5, 7, 9})
+        CHECK_MESSAGE(bcb.dumpFunction(f).find("NAMECALL") != std::string::npos, "function " << f << " inlined without a proof");
+
+    // the proof reaches the end of the block the assert is in, and no further
+    std::string insideIf = bcb.dumpFunction(8);
+    CHECK(insideIf.find("GETOBJECTMEMBER") != std::string::npos);
+    CHECK_EQ(insideIf.find("NAMECALL"), insideIf.rfind("NAMECALL"));
+    CHECK(insideIf.find("NAMECALL") != std::string::npos);
+}
+
+TEST_CASE("ClassAnnotationReceiversNeedTheTrustFlag")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    // rfcs/classes: by default the compiler acts only on receivers a runtime check on this path
+    // proves. A class known from a declared parameter, local or field type compiles to an ordinary
+    // NAMECALL, so a value that does not match its annotation behaves as it does at O0/O1 instead of
+    // raising at an inline site. DebugLuwuCompilerTrustsTypeAnnotations opts into the faster, stricter
+    // reading. Field reads through a *proven* receiver (`self.v` here) are unaffected either way.
+    const char* source = R"(
+class Vec(public x: number)
+    public function get(self): number
+        return self.x
+    end
+end
+
+class Holder(public v: Vec)
+    public function viaField(self): number
+        local r = self.v:get()
+        return r
+    end
+end
+
+function viaParameter(v: Vec): number
+    local r = v:get()
+    return r
+end
+
+function viaLocal(): number
+    local v: Vec = Vec(1) :: any
+    local r = v:get()
+    return r
+end
+
+function viaConstruction(n: number): number
+    local v = Vec(n)
+    local r = v:get()
+    return r
+end
+
+function viaIsinstance(p): number
+    if class.isinstance(p, Vec) then
+        local r = p:get()
+        return r
+    end
+    return 0
+end
+
+function viaAssert(p): number
+    assert(class.isinstance(p, Vec))
+    local r = p:get()
+    return r
+end
+)";
+
+    Luau::CompileOptions options;
+    options.optimizationLevel = 2;
+
+    // the three annotation-known receivers keep their call; the three proven ones inline regardless
+    {
+        Luau::BytecodeBuilder bcb;
+        bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code);
+        Luau::compileOrThrow(bcb, source, options);
+
+        for (int f : {1, 2, 3})
+            CHECK_MESSAGE(bcb.dumpFunction(f).find("NAMECALL") != std::string::npos, "function " << f << " inlined on an annotation alone");
+
+        // ... and the field read through `self`, which is proven, still reads at a constant offset
+        CHECK(bcb.dumpFunction(1).find("GETOBJECTMEMBER") != std::string::npos);
+
+        for (int f : {4, 5, 6})
+        {
+            std::string code = bcb.dumpFunction(f);
+
+            CHECK_MESSAGE(code.find("NAMECALL") == std::string::npos, "function " << f << " stopped inlining a proven receiver");
+            CHECK_MESSAGE(code.find("] SELF") == std::string::npos, "function " << f << " kept a check a proven receiver does not need");
+        }
+    }
+
+    // with the flag on and `--!trust` in the file, the annotation-known receivers inline too, each keeping
+    // the check that turns a wrong annotation into an error
+    {
+        ScopedFastFlag trustAnnotations{FFlag::DebugLuwuCompilerTrustsTypeAnnotations, true};
+
+        Luau::BytecodeBuilder bcb;
+        bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code);
+        Luau::compileOrThrow(bcb, "--!trust" + std::string(source), options);
+
+        for (int f : {1, 2, 3})
+        {
+            std::string code = bcb.dumpFunction(f);
+
+            CHECK_MESSAGE(code.find("NAMECALL") == std::string::npos, "function " << f << " did not inline with the trust flag on");
+            // the inline site's check is the `:` form, which the dump marks with a trailing SELF; the method's
+            // own prologue check (function 1 is a method) has no such marker
+            CHECK_MESSAGE(code.find("] SELF") != std::string::npos, "function " << f << " inlined a trusted receiver without a check");
+        }
+    }
+}
+
+TEST_CASE("ClassAssertIsinstanceFusesIntoJumpxisa")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    // `assert(class.isinstance(x, C))` is how code opts into the proven receiver tier, so it ends up in hot
+    // paths. It must cost what the `if` form costs: one JUMPXISA over the assert, not two builtin call
+    // sequences. The assert call stays behind the jump, so a failure raises exactly as written, with
+    // assert's own message or the custom one, on the right line. The operands are read once by JUMPXISA and
+    // again by the assert call when the check fails, so they must be safe to read twice.
+    const char* source = R"(
+class Vec(public x: number)
+    public function get(self): number
+        return self.x
+    end
+end
+
+local function sideEffect(v)
+    return v
+end
+
+function fused(p): number
+    assert(class.isinstance(p, Vec))
+    local r = p:get()
+    return r
+end
+
+function fusedWithMessage(p): number
+    assert(class.isinstance(p, Vec), "expected a Vec")
+    local r = p:get()
+    return r
+end
+
+function notFused(v): number
+    assert(class.isinstance(sideEffect(v), Vec))
+    return 1
+end
+)";
+
+    Luau::BytecodeBuilder bcb;
+    bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code);
+
+    Luau::CompileOptions options;
+    options.optimizationLevel = 2;
+
+    Luau::compileOrThrow(bcb, source, options);
+
+    // 0 is get, 1 is sideEffect
+    for (int f : {2, 3})
+    {
+        std::string code = bcb.dumpFunction(f);
+
+        CHECK_MESSAGE(code.find("JUMPXISA") != std::string::npos, "function " << f << " did not fuse the assert");
+        // the call is still there, behind the jump, so the failure path is unchanged
+        CHECK_MESSAGE(code.find("[assert]") != std::string::npos, "function " << f << " lost the raising path");
+    }
+
+    // an operand that cannot be read a second time keeps the ordinary two-call sequence
+    std::string notFused = bcb.dumpFunction(4);
+    CHECK(notFused.find("JUMPXISA") == std::string::npos);
+    CHECK(notFused.find("[assert]") != std::string::npos);
+}
+
+TEST_CASE("TrustDirectiveEnablesAnnotationTrust")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    // `--!trust` is the file saying its annotations are true, so the compiler may act on them. Without
+    // it the receiver's class is known only from a declaration nothing verified, and the call stays a
+    // NAMECALL. The fast flag only permits the directive: with the flag off, `--!trust` does nothing,
+    // and with it on, a file without the directive is still untrusted.
+    const char* body = R"(
+class Vec(public x: number)
+    public function get(self): number
+        return self.x
+    end
+end
+
+function viaParameter(v: Vec): number
+    local r = v:get()
+    return r
+end
+)";
+
+    Luau::CompileOptions options;
+    options.optimizationLevel = 2;
+
+    auto compiled = [&](const std::string& source)
+    {
+        Luau::BytecodeBuilder bcb;
+        bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code);
+        Luau::compileOrThrow(bcb, source, options);
+        return bcb.dumpFunction(1);
+    };
+
+    {
+        ScopedFastFlag disallowed{FFlag::DebugLuwuCompilerTrustsTypeAnnotations, false};
+        std::string ignored = compiled("--!trust\n" + std::string(body));
+        CHECK(ignored.find("NAMECALL") != std::string::npos);
+    }
+
+    ScopedFastFlag allowed{FFlag::DebugLuwuCompilerTrustsTypeAnnotations, true};
+
+    std::string without = compiled(body);
+    CHECK(without.find("NAMECALL") != std::string::npos);
+
+    std::string with = compiled("--!trust\n" + std::string(body));
+    CHECK(with.find("NAMECALL") == std::string::npos);
+    CHECK(with.find("CHECKSELFCLASS") != std::string::npos);
+
+    // it is a header directive like `--!native`, so it does nothing further down the file
+    std::string late = compiled(std::string(body) + "\n--!trust\n");
+    CHECK(late.find("NAMECALL") != std::string::npos);
+}
+
+TEST_CASE("ClassIsinstanceProofDoesNotInlinePrivateMethods")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    // The call to a private method *is* the private access NAMECALL checks, so proving the receiver's
+    // class doesn't make it inlinable from outside the class -- proving the class and being allowed to
+    // call the method are separate questions.
+    const char* source = R"(
+class Guarded
+    public n: number
+
+    private function secret(self): number
+        return self.n
+    end
+end
+
+function outside(p): number
+    if class.isinstance(p, Guarded) then
+        local r = p:secret()
+        return r
+    end
+    return 0
+end
+)";
+
+    Luau::BytecodeBuilder bcb;
+    bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code);
+
+    Luau::CompileOptions options;
+    options.optimizationLevel = 2;
+
+    Luau::compileOrThrow(bcb, source, options);
+
+    std::string code = bcb.dumpFunction(1);
+    CHECK(code.find("NAMECALL") != std::string::npos);
+}
+
+TEST_CASE("ClassUsedBeforeItsDeclarationChecksItsBinding")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    // rfcs/classes: a class binding is nil until its declaration runs, and a function declared above
+    // the class can run first. NEWOBJECT and an unchecked JUMPXISA take the class operand on trust, so code
+    // above the declaration checks the binding; code below it can't see nil and pays nothing.
+    const char* source = R"(
+local function early(n)
+    local p = Pt(n)
+    if class.isinstance(n, Pt) then
+        return 1
+    end
+    return p
+end
+
+class Pt(public x: number)
+end
+
+local function late(n)
+    local p = Pt(n)
+    if class.isinstance(n, Pt) then
+        return 1
+    end
+    return p
+end
+)";
+
+    // 0 is early, 1 is late
+    std::string early = compileFunction(source, 0, 1);
+    CHECK(early.find("JUMPXEQKNIL") != std::string::npos);
+    CHECK(early.find("CHECKCLASS") != std::string::npos);
+    CHECK(early.find("NEWOBJECT") != std::string::npos);
+
+    std::string late = compileFunction(source, 1, 1);
+    CHECK(late.find("JUMPXEQKNIL") == std::string::npos);
+    CHECK(late.find("CHECKCLASS") == std::string::npos);
+    CHECK(late.find("NEWOBJECT") != std::string::npos);
+}
+
+TEST_CASE("ClassPrimaryConstructorFieldsFormKeepsPrivateAccess")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    // rfcs/classes: a primary constructor's initializers are class code, so the construction site may
+    // compile them itself (NEWOBJECT ... FIELDS) only where that doesn't change what they may access.
+    // Ordinary initializers keep the fast path everywhere; one naming a private member keeps it only inside
+    // the class.
+    const char* source = R"(
+class Vec(public x: number, public y: number)
+    public len = math.sqrt(x * x + y * y)
+end
+
+class Spy(public c)
+    public stolen = c.secret
+end
+
+class Guard(public v: number)
+    public w = Guard.helper(v)
+
+    private function helper(v)
+        return v
+    end
+
+    public function copy(self)
+        local g = Guard(self.v)
+        return g
+    end
+end
+
+function outsideVec(a)
+    local v = Vec(a, a)
+    return v
+end
+
+function outsideSpy(a)
+    local s = Spy(a)
+    return s
+end
+
+function outsideGuard(a)
+    local g = Guard(a)
+    return g
+end
+)";
+
+    // 0 is Guard.helper, 1 is Guard:copy
+    CHECK(compileFunction(source, 1, 1).find("FIELDS") != std::string::npos);
+    CHECK(compileFunction(source, 2, 1).find("FIELDS") != std::string::npos);
+
+    // `c.secret` names no member private to Spy or to the site's class (there is none), so it may move
+    CHECK(compileFunction(source, 3, 1).find("FIELDS") != std::string::npos);
+
+    // `Guard.helper` is private to Guard, so outside Guard it runs in `__init`
+    std::string outsideGuard = compileFunction(source, 4, 1);
+    CHECK(outsideGuard.find("FIELDS") == std::string::npos);
+    CHECK(outsideGuard.find("INIT") != std::string::npos);
+}
+
+TEST_CASE("ClassPrimaryConstructorFieldsFormInsideAnotherClass")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    // Spy is constructed inside a Vault method. If Spy's initializers were compiled at that construction
+    // site, they would run with Vault's private access. So an initializer that names a member private to
+    // the site's class (`c.secret`, private to Vault) keeps the `__init` call.
+    const char* source = R"(
+class Spy(public c)
+    public stolen = c.secret
+end
+
+class Vault
+    private secret = "hunter2"
+
+    public function lend(self)
+        local s = Spy(self)
+        return s
+    end
+end
+)";
+
+    // 0 is Vault:lend
+    std::string lend = compileFunction(source, 0, 1);
+    CHECK(lend.find("FIELDS") == std::string::npos);
+    CHECK(lend.find("INIT") != std::string::npos);
+}
+
+TEST_CASE("ClassRecursivePrimaryConstructorFallsBackToInit")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    // rfcs/classes: an initializer may construct its own class. The site expands the initializers once,
+    // and the construction inside them goes through `__init`, as does the one in `__init` itself.
+    const char* source = R"(
+class Node(public depth: number)
+    public child = if depth > 0 then Node(depth - 1) else nil
+end
+
+function make(n)
+    local node = Node(n)
+    return node
+end
+)";
+
+    // 0 is make, 1 is Node's `__init`
+    std::string make = compileFunction(source, 0, 1);
+    CHECK(make.find("FIELDS") != std::string::npos);
+    CHECK(make.find("INIT") != std::string::npos);
+
+    std::string init = compileFunction(source, 1, 1);
+    CHECK(init.find("FIELDS") == std::string::npos);
+    CHECK(init.find("INIT") != std::string::npos);
+}
+
+TEST_CASE("ClassAssertIsinstanceFailurePathRaises")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    // rfcs/classes: the code after a fused `assert(class.isinstance(...))` is proven, so a failed check
+    // must never reach it. That has to hold even when `assert` has been replaced, through the environment,
+    // by a function that returns instead of raising. So the assert call is followed by a second check that
+    // raises.
+    //
+    // A message with side effects is evaluated even when the check passes, so an assert with such a message
+    // is not fused at all.
+    const char* source = R"(
+class Vec(public x: number)
+end
+
+local function message()
+    return "bad"
+end
+
+function fused(p): number
+    assert(class.isinstance(p, Vec), "expected a Vec")
+    local r = p.x
+    return r
+end
+
+function withCall(p): number
+    assert(class.isinstance(p, Vec), message())
+    local r = p.x
+    return r
+end
+)";
+
+    // 0 is message, 1 is fused, 2 is withCall
+    std::string fused = compileFunction(source, 1, 1);
+    size_t call = fused.find("[assert]");
+    REQUIRE(call != std::string::npos);
+    CHECK(fused.find("JUMPXISA") < call);
+    CHECK(fused.find("JUMPXISA", call) != std::string::npos);
+    CHECK(fused.find("CHECKSELFCLASS", call) != std::string::npos);
+
+    std::string withCall = compileFunction(source, 2, 1);
+    CHECK(withCall.find("JUMPXISA") == std::string::npos);
+    CHECK(withCall.find("[assert]") != std::string::npos);
+}
+
+TEST_CASE("ClassAssertIsinstanceProvesInlinedAndRepeatBodies")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    // An assert proves the rest of the statement list it is in, including the body of a function inlined
+    // into another, and a repeat body.
+    const char* source = R"(
+class Cat
+    public name: string = "cat"
+
+    public function meow(self)
+        return "meow " .. self.name
+    end
+end
+
+local function speak(c)
+    assert(class.isinstance(c, Cat))
+    local r = c:meow()
+    return r
+end
+
+function viaInlinedBody(x)
+    local r = speak(x)
+    return r
+end
+
+function viaRepeat(c)
+    local r
+    repeat
+        assert(class.isinstance(c, Cat))
+        r = c:meow()
+    until true
+    return r
+end
+)";
+
+    // 0 is Cat:meow, 1 is speak, 2 is viaInlinedBody, 3 is viaRepeat
+    for (int f : {1, 2, 3})
+    {
+        std::string code = compileFunction(source, f, 2);
+
+        CHECK_MESSAGE(code.find("NAMECALL") == std::string::npos, "function " << f << " did not inline a proven receiver");
+        CHECK_MESSAGE(code.find("] SELF") == std::string::npos, "function " << f << " kept a check a proven receiver does not need");
+    }
+}
+
+TEST_CASE("ClassMethodInlinedIntoAnotherClassGainsNoPrivateAccess")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    // rfcs/classes: an inlined body runs under the caller's closure. Cat's method inlined into a Dog
+    // method would read Dog's private fields with Dog's access, which the call doesn't have, so a body that
+    // names one keeps the call. One that doesn't still inlines.
+    const char* source = R"(
+class Cat
+    public name: string = "cat"
+
+    public function snoop(self, d)
+        return d.secret
+    end
+
+    public function greet(self)
+        return "hi " .. self.name
+    end
+end
+
+class Dog
+    private secret: string = "bone"
+
+    public function peek(self)
+        local cat = Cat()
+        local r = cat:snoop(self)
+        return r
+    end
+
+    public function greetCat(self)
+        local cat = Cat()
+        local r = cat:greet()
+        return r
+    end
+end
+)";
+
+    // 0 and 1 are Cat's methods, 2 is Dog:peek, 3 is Dog:greetCat
+    CHECK(compileFunction(source, 2, 2).find("NAMECALL") != std::string::npos);
+    CHECK(compileFunction(source, 3, 2).find("NAMECALL") == std::string::npos);
+}
+
+TEST_CASE("ClassMethodPassingObjectsToPodConstructionKeepsItsCall")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    // rfcs/classes: a POD constructor reads an object argument's fields with the private access of the
+    // nearest Lua frame. Once a method body is inlined, that frame is the caller's.
+    // So consider a method of a class with private members whose body may hand an object to a POD
+    // construction, either directly or through a C function like `pcall`. Called from outside the class,
+    // that method keeps its call. A method that passes a table still inlines, since a table can't be an
+    // object.
+    const char* source = R"(
+class Bag
+    public token: string
+end
+
+class Vaulted
+    private token: string = "hunter2"
+
+    public function direct(self)
+        local t = Bag(self)
+        return t
+    end
+
+    public function viaPcall(self)
+        local ok, t = pcall(Bag, self)
+        return t
+    end
+
+    public function fromTable(self)
+        local t = Bag({ token = "copy" })
+        return t
+    end
+end
+
+function useDirect()
+    local v = Vaulted()
+    local r = v:direct()
+    return r
+end
+
+function useViaPcall()
+    local v = Vaulted()
+    local r = v:viaPcall()
+    return r
+end
+
+function useFromTable()
+    local v = Vaulted()
+    local r = v:fromTable()
+    return r
+end
+)";
+
+    // 0-2 are Vaulted's methods, then useDirect, useViaPcall, useFromTable
+    CHECK(compileFunction(source, 3, 2).find("NAMECALL") != std::string::npos);
+    CHECK(compileFunction(source, 4, 2).find("NAMECALL") != std::string::npos);
+    CHECK(compileFunction(source, 5, 2).find("NAMECALL") == std::string::npos);
+}
+
+TEST_CASE("ClassAnnotationResolutionRespectsShadowingAndDeclarationOrder")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag trustAnnotations{FFlag::DebugLuwuCompilerTrustsTypeAnnotations, true};
+
+    // A trusted annotation names a class only if nothing can shadow the name: the compiler has no type
+    // scopes, and `type Node = Other` inside a function names a different class. And a trusted receiver
+    // above the class's declaration keeps its call, because the inline site's check reads the class binding,
+    // which may still be nil there.
+    const char* source = R"(--!trust
+local function early(v: Late)
+    local r = v:get()
+    return r
+end
+
+class Node(public v: number)
+    public function get(self)
+        return self.v
+    end
+end
+
+class Other(public v: number)
+    public function get(self)
+        return self.v * 10
+    end
+end
+
+class Late(public v: number)
+    public function get(self)
+        return self.v
+    end
+end
+
+function shadowed(x)
+    type Node = Other
+    local y: Node = x
+    local r = y:get()
+    return r
+end
+
+function direct(x: Other)
+    local r = x:get()
+    return r
+end
+
+function afterDeclaration(v: Late)
+    local r = v:get()
+    return r
+end
+)";
+
+    // 0 is early, 1-3 are the classes' `get`, 4 is shadowed, 5 is direct, 6 is afterDeclaration
+    CHECK(compileFunction(source, 0, 2).find("NAMECALL") != std::string::npos);
+    CHECK(compileFunction(source, 4, 2).find("NAMECALL") != std::string::npos);
+    CHECK(compileFunction(source, 5, 2).find("NAMECALL") == std::string::npos);
+    CHECK(compileFunction(source, 6, 2).find("NAMECALL") == std::string::npos);
+}
+
+TEST_CASE("ClassUnfusedAssertIsinstanceProvesNothing")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    // Only a fused assert is followed by the recheck that raises when the environment's `assert` returns, so
+    // an assert whose message can't be read twice leaves its receiver unproven.
+    const char* source = R"(
+class Cat
+    public name: string = "cat"
+
+    public function meow(self)
+        return "meow " .. self.name
+    end
+end
+
+local function message()
+    return "m"
+end
+
+function unfused(c)
+    assert(class.isinstance(c, Cat), message())
+    local r = c:meow()
+    return r
+end
+
+function fused(c)
+    assert(class.isinstance(c, Cat), "m")
+    local r = c:meow()
+    return r
+end
+)";
+
+    // 0 is Cat:meow, 1 is message, 2 is unfused, 3 is fused
+    CHECK(compileFunction(source, 2, 2).find("NAMECALL") != std::string::npos);
+    CHECK(compileFunction(source, 3, 2).find("NAMECALL") == std::string::npos);
+}
+
+TEST_CASE("ClassInliningGainsNothingFromDeclarationsOrFields")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag trustAnnotations{FFlag::DebugLuwuCompilerTrustsTypeAnnotations, true};
+
+    // Inlined into a Dog method, a Cat method runs with Dog's private access. So these two Cat methods
+    // must keep their call when Dog calls them:
+    // - `copy` passes `self.inner` to a POD construction. The field's declared table type does not make
+    //   that safe. If the annotation lies and the field holds an object, the construction reads that
+    //   object's private fields with Dog's access.
+    // - `viaField` calls `self:cb()`. That call reaches a method only when the class has a method named
+    //   `cb`. Here `cb` is a field holding the POD class `Bag`, so the call is a POD construction.
+    const char* source = R"(--!trust
+class Bag
+    public token: string = "none"
+end
+
+class Cat
+    public inner: { token: string }
+    public cb: any = Bag
+
+    public function __init(self, x)
+        self.inner = x
+    end
+
+    public function copy(self)
+        local t = Bag(self.inner)
+        return t
+    end
+
+    public function viaField(self)
+        local t = self:cb()
+        return t
+    end
+end
+
+class Dog
+    private token: string = "bone"
+
+    public function peek(self)
+        local c = Cat(self)
+        local r = c:copy()
+        return r
+    end
+
+    public function peekField(self)
+        local c = Cat(self)
+        local r = c:viaField()
+        return r
+    end
+end
+)";
+
+    // 0-2 are Cat's methods, 3 and 4 are Dog's
+    CHECK(compileFunction(source, 3, 2).find("NAMECALL") != std::string::npos);
+    CHECK(compileFunction(source, 4, 2).find("NAMECALL") != std::string::npos);
+}
+
+TEST_CASE("ClassInitDoesNotInlineConstFieldWrites")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    // rfcs/classes: a `const` field is written only by its class's `__init`, checked against the running
+    // closure. A function `__init` calls must not be inlined into it if it may write one of the class's const
+    // fields, or the write would pass. Other calls still inline.
+    const char* source = R"(
+local function writeConst(obj)
+    obj.c = 1
+end
+
+local function writeOther(obj)
+    obj.d = 1
+end
+
+class K
+    public const c: number = 0
+    public d: number = 0
+
+    public function __init(self)
+        writeConst(self)
+        writeOther(self)
+    end
+end
+)";
+
+    // 0 is writeConst, 1 is writeOther, 2 is K's `__init`
+    std::string init = compileFunction(source, 2, 2);
+
+    // one call remains, to writeConst; writeOther's `obj.d = 1` was inlined next to the prologue's defaults.
+    // With LuauEmitCallFeedback, a call to a function that could have been inlined is a CALLFB.
+    size_t calls = 0;
+    for (const char* op : {"\nCALL ", "\nCALLFB "})
+    {
+        for (size_t at = init.find(op); at != std::string::npos; at = init.find(op, at + 1))
+            ++calls;
+    }
+    CHECK_EQ(calls, 1);
+    CHECK(init.find("['d']") != init.rfind("['d']"));
+}
+
+TEST_CASE("InlinedDefaultArgumentReadsConstantOuterLocal")
+{
+    ScopedFastFlag defaultArguments{FFlag::LuwuDefaultArguments, true};
+
+    // Luwu Function Default Arguments (rfcs/function-default-arguments.md): a default reading a local that folded
+    // to a constant is compiled at the inline site, where that local has no register, so it has to fold
+    // there too. In the main chunk there is no upvalue to fall back on.
+    const char* source = R"(
+local x = 1
+local function f(a, y = x)
+    return y
+end
+local r = f("p")
+return r
+)";
+
+    std::string main = compileFunction(source, 1, 2);
+    CHECK(main.find("GETUPVAL") == std::string::npos);
+    CHECK(main.find("CALL") == std::string::npos);
+}
+
 TEST_CASE("ClassDeclWithMethod")
 {
-    ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag _{FFlag::LuwuClasses, true};
+    // This dump expects a plain CALL for the in-method `error(...)`; pin the
+    // feedback-vector opcode off so it stays deterministic under --fflags=true
+    // (where LuauEmitCallFeedback would otherwise emit CALLFB for this nested,
+    // non-builtin call). Tests that want CALLFB opt in explicitly.
+    ScopedFastFlag noCallFb{FFlag::LuauEmitCallFeedback, false};
 
     std::string source = R"(
         class Point
-            public x: number
-            public y: number
+            x: number
+            y: number
             function magnitude(self)
                 return self.x * self.x + self.y * self.y
             end
@@ -11129,11 +12519,12 @@ TEST_CASE("ClassDeclWithMethod")
     )";
     auto res0 = "\n" + compileFunction(source.c_str(), 0, 0, 0);
     CHECK(R"(
-GETTABLEKS R3 R0 K0 ['x']
-GETTABLEKS R4 R0 K0 ['x']
+CHECKSELFCLASS R0 OWNER K0 ['magnitude']
+GETOBJECTMEMBER R3 R0 0
+GETOBJECTMEMBER R4 R0 0
 MUL R2 R3 R4
-GETTABLEKS R4 R0 K1 ['y']
-GETTABLEKS R5 R0 K1 ['y']
+GETOBJECTMEMBER R4 R0 1
+GETOBJECTMEMBER R5 R0 1
 MUL R3 R4 R5
 ADD R1 R2 R3
 RETURN R1 1
@@ -11151,18 +12542,377 @@ RETURN R0 0
 )" == res1);
 }
 
+TEST_CASE("ClassConstantFieldDefaults")
+{
+    ScopedFastFlag _{FFlag::LuwuClasses, true};
+
+    // A POD class whose field defaults are all compile-time constants carries them in its own class
+    // shape, so it needs no synthesized `__defaults` closure -- no extra proto, no NEWCLASSMEMBER,
+    // and no call per construction. A class with any non-constant default still gets one, since such
+    // a default has to be re-evaluated on every construction.
+    std::string source = R"(
+        class ConstDefaults
+            public n: number = 42
+            public s: string = "hi"
+        end
+        class ComputedDefault
+            public t = {}
+            public n: number = 1
+        end
+        print(ConstDefaults, ComputedDefault)
+    )";
+
+    // function 0 is ComputedDefault's `__defaults`; ConstDefaults contributes no function at all
+    auto res0 = "\n" + compileFunction(source.c_str(), 0, 2, 0);
+    CHECK(R"(
+NEWTABLE R0 0 0
+LOADN R1 1
+RETURN R0 2
+)" == res0);
+
+    auto res1 = "\n" + compileFunction(source.c_str(), 1, 2, 0);
+    CHECK(R"(
+LOADNIL R0
+LOADNIL R1
+LOADKX R0 K5 [class ConstDefaults (props: 2, methods: 0)]
+LOADKX R1 K10 [class ComputedDefault (props: 2, methods: 1)]
+DUPCLOSURE R2 K8 []
+NEWCLASSMEMBER R1 R2 ['__defaults']
+GETIMPORT R2 12 [print]
+MOVE R3 R0
+MOVE R4 R1
+CALL R2 2 0
+RETURN R0 0
+)" == res1);
+}
+
+TEST_CASE("ClassNewObject")
+{
+    ScopedFastFlag _{FFlag::LuwuClasses, true};
+
+    // A call whose callee is a statically resolved class compiles to NEWOBJECT: on its own for a
+    // class using the default constructor, and followed by a plain CALL of `__init` for a class that
+    // declares one. A class with non-constant defaults behind a `__defaults` closure still needs the
+    // constructor to call it, so it keeps the ordinary CALL sequence.
+    std::string source = R"(
+        class Pod
+            public x: number = 1
+            public y: number = 2
+        end
+        class WithInit
+            public x: number = 0
+            public function __init(self, x) self.x = x end
+        end
+        class Computed
+            public t = {}
+        end
+        local a = Pod()
+        local b = Pod { x = 9 }
+        local c = WithInit(5)
+        local d = Computed()
+        print(a, b, c, d)
+    )";
+
+    auto res = "\n" + compileFunction(source.c_str(), 2, 2, 0);
+    CHECK(R"(
+LOADNIL R0
+LOADNIL R1
+LOADNIL R2
+LOADKX R0 K5 [class Pod (props: 2, methods: 0)]
+LOADKX R1 K9 [class WithInit (props: 1, methods: 1)]
+DUPCLOSURE R3 K7 ['__init']
+NEWCLASSMEMBER R1 R3 ['__init']
+LOADKX R2 K14 [class Computed (props: 1, methods: 1)]
+DUPCLOSURE R3 K12 []
+NEWCLASSMEMBER R2 R3 ['__defaults']
+NEWOBJECT R3 R0 0
+LOADNIL R7
+LOADN R6 9
+NEWOBJECT R5 R0 2 FIELDS
+MOVE R4 R5
+LOADN R9 5
+NEWOBJECT R6 R1 1 INIT
+CALL R7 2 0
+MOVE R5 R6
+MOVE R6 R2
+CALL R6 0 1
+GETIMPORT R7 16 [print]
+MOVE R8 R3
+MOVE R9 R4
+MOVE R10 R5
+MOVE R11 R6
+CALL R7 4 0
+RETURN R0 0
+)" == res);
+}
+
+TEST_CASE("ClassPrimaryConstructor")
+{
+    ScopedFastFlag _{FFlag::LuwuClasses, true};
+
+    // A primary constructor (rfcs/classes) declares a public field per parameter. A statically
+    // resolved construction site doesn't call the synthesized `__init` at all: the parameters are
+    // evaluated into registers, each field's initializer is compiled inline, and NEWOBJECT's
+    // positional FIELDS form finishes the instance. The class body's own properties come first, then
+    // the parameters the body doesn't restate -- `id`, `size`, `name` here. `name` is read by nothing
+    // but its own field, so its argument is evaluated straight into that field's register: no
+    // temporary and no move. `size` is read by another field's initializer, so it keeps one.
+    std::string source = R"(
+        class Frame(public name: string, public size: number)
+            private id = 7
+            public size = size * 2
+        end
+        local f = Frame("main", 10)
+        print(f)
+    )";
+
+    auto res = "\n" + compileFunction(source.c_str(), 1, 2, 0);
+    CHECK(R"(
+LOADNIL R0
+LOADKX R0 K6 [class Frame (props: 3, methods: 1)]
+DUPCLOSURE R1 K4 ['__init']
+NEWCLASSMEMBER R0 R1 ['__init']
+LOADK R5 K7 ['main']
+LOADN R6 10
+LOADN R3 7
+MULK R4 R6 K8 [2]
+NEWOBJECT R2 R0 3 FIELDS
+MOVE R1 R2
+GETIMPORT R2 10 [print]
+MOVE R3 R1
+CALL R2 1 0
+RETURN R0 0
+)" == res);
+}
+
+TEST_CASE("ClassPrimaryConstructorInit")
+{
+    ScopedFastFlag _{FFlag::LuwuClasses, true};
+    // a primary constructor's parameter defaults ride on the function parameter default flag
+    ScopedFastFlag defaultArgs{FFlag::LuwuDefaultArguments, true};
+
+    // The body of that synthesized `__init`: the self check every method gets, then the parameter
+    // defaults, then one field assignment per field in declaration order -- body properties first,
+    // then the parameters the body didn't restate. Assignments are body statements rather than the
+    // prologue injection an explicit `__init` uses, which is what puts them after the defaults.
+    std::string source = R"(
+        class Frame(public name: string, public size = 10)
+            private id = 7
+            public size = size * 2
+        end
+    )";
+
+    auto res = "\n" + compileFunction(source.c_str(), 0, 2, 0);
+    CHECK(R"(
+CHECKSELFCLASS R0 OWNER K0 ['__init']
+JUMPXEQKNIL R2 L0 NOT
+LOADN R2 10
+L0: LOADN R3 7
+SETTABLEKS R3 R0 K1 ['id']
+MULK R3 R2 K2 [2]
+SETTABLEKS R3 R0 K3 ['size']
+SETTABLEKS R1 R0 K4 ['name']
+RETURN R0 0
+)" == res);
+}
+
+TEST_CASE("ClassMethodInlineSelfCheck")
+{
+    ScopedFastFlag _{FFlag::LuwuClasses, true};
+    // see ClassDeclWithMethod: pin the feedback-vector opcode off so the in-method `error(...)`
+    // stays a plain CALL in this dump
+    ScopedFastFlag noCallFb{FFlag::LuauEmitCallFeedback, false};
+    // this test is about receivers the compiler knows only from an annotation
+    ScopedFastFlag trustAnnotations{FFlag::DebugLuwuCompilerTrustsTypeAnnotations, true};
+
+    // Runtime checking of `self` for methods (rfcs/classes) must survive method inlining at -O2:
+    // the inlined copy of the body never runs the callee's prologue, so compileInlinedCall re-emits
+    // the CHECKSELFCLASS itself. Without it, a receiver whose annotation lies about its class would
+    // silently run the wrong class's body.
+    std::string source = R"(--!trust
+        class Point
+            x: number
+            function get_x(self)
+                return self.x
+            end
+            function double_x(self)
+                local v = self:get_x()
+                return v * 2
+            end
+        end
+        local function outside(p: Point)
+            local v = p:get_x()
+            return v
+        end
+        print(outside)
+    )";
+
+    // a same-class `self:method()` inline needs no second check: the enclosing method's own prologue
+    // already validated this exact value. Either way the inlined `self` is proven, so its fields are read
+    // at a constant offset (inlineProvenSelfClass).
+    auto res1 = "\n" + compileFunction(source.c_str(), 1, 2, 0);
+    CHECK(R"(
+CHECKSELFCLASS R0 OWNER K0 ['double_x']
+GETOBJECTMEMBER R1 R0 0
+MULK R2 R1 K2 [2]
+RETURN R2 1
+)" == res1);
+
+    // inlining into a non-method (or any other class's) body re-emits the check at the call site
+    auto res2 = "\n" + compileFunction(source.c_str(), 2, 2, 0);
+    CHECK(R"(
+GETUPVAL R2 0
+CHECKSELFCLASS R0 R2 K0 ['get_x'] SELF
+GETOBJECTMEMBER R1 R0 0
+RETURN R1 1
+)" == res2);
+}
+
+TEST_CASE("ClassMethodInlineNoRecursion")
+{
+    ScopedFastFlag _{FFlag::LuwuClasses, true};
+    // see ClassDeclWithMethod: pin the feedback-vector opcode off so the non-inlined recursive
+    // `self:pong(...)` stays a plain CALL in this dump
+    ScopedFastFlag noCallFb{FFlag::LuauEmitCallFeedback, false};
+
+    // A method that calls itself, directly or through a sibling method, must never be inlined into
+    // its own body.
+    //
+    // tryResolveMethodCall resolves `self:method()` to the AstExprFunction that is being compiled.
+    // That function's Function record (canInline, cost model) is only registered in `functions` once
+    // its compilation finishes, so `fi` is null while its body is being compiled. The general "don't
+    // inline into an unregistered function" guard then keeps the recursive call a real CALL/CALLM.
+    // Plain function recursion relies on the same guard (see InlineProhibitedRecursion).
+    CHECK_EQ(
+        compileWithRemarks(R"(
+class Fact
+    function compute(self, n)
+        if n <= 1 then
+            return 1
+        end
+        return n * self:compute(n - 1)
+    end
+end
+)"),
+        R"(
+class Fact
+    function compute(self, n)
+        if n <= 1 then
+            return 1
+        end
+        return n * self:compute(n - 1)
+    end
+end
+)"
+    );
+
+    // Mutual recursion between two sibling methods may inline once, but it can never cycle:
+    // - `ping` is fully registered by the time `pong` is compiled, so `pong`'s call to `self:ping(...)`
+    //   inlines.
+    // - `ping`'s own call to `self:pong(...)` can't inline, because `pong` isn't registered yet.
+    // - The copy of `ping` inlined into `pong` calls `self:pong(...)`. That is the real `pong`, which is
+    //   still being compiled and still unregistered, so the call stays a call instead of inlining again.
+    CHECK_EQ(
+        compileWithRemarks(R"(
+class Ping
+    function ping(self, n)
+        if n <= 0 then
+            return 0
+        end
+        local v = self:pong(n - 1)
+        return v
+    end
+    function pong(self, n)
+        if n <= 0 then
+            return 0
+        end
+        local v = self:ping(n - 1)
+        return v
+    end
+end
+)"),
+        R"(
+class Ping
+    function ping(self, n)
+        if n <= 0 then
+            return 0
+        end
+        local v = self:pong(n - 1)
+        return v
+    end
+    function pong(self, n)
+        if n <= 0 then
+            return 0
+        end
+        -- remark: inlining succeeded: Ping:ping (cost 7, profit 1.42x, depth 0)
+        local v = self:ping(n - 1)
+        return v
+    end
+end
+)"
+    );
+
+    // Check the bytecode directly. `pong` contains `ping`'s inlined body (the `n <= 0` guard appears
+    // twice). The `self:pong(...)` call inside that copy is a real NAMECALL/CALL to `pong`, which is
+    // still being compiled and unregistered. It is not another level of inlining, so mutual recursion
+    // can never blow up the compiler.
+    CHECK_EQ(
+        "\n" + compileFunction(
+                   R"(
+class Ping
+    function ping(self, n)
+        if n <= 0 then
+            return 0
+        end
+        local v = self:pong(n - 1)
+        return v
+    end
+    function pong(self, n)
+        if n <= 0 then
+            return 0
+        end
+        local v = self:ping(n - 1)
+        return v
+    end
+end
+)",
+                   1,
+                   2,
+                   0
+               ),
+        R"(
+CHECKSELFCLASS R0 OWNER K0 ['pong']
+LOADN R2 0
+JUMPIFNOTLE R1 R2 L0
+LOADN R2 0
+RETURN R2 1
+L0: SUBK R3 R1 K1 [1]
+LOADN R4 0
+JUMPIFNOTLE R3 R4 L1
+LOADN R2 0
+RETURN R2 1
+L1: SUBK R6 R3 K1 [1]
+NAMECALL R4 R0 K0 ['pong']
+CALL R4 2 1
+MOVE R2 R4
+RETURN R2 1
+)"
+    );
+
+}
+
 TEST_CASE("ClassDeclWithAmbiguousGlobal")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuauCompileStringInterpTargetTop, true},
-        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::LuwuClasses, true},
         {FFlag::LuauEmitCallFeedback, true},
     };
 
     std::string source = R"(
         class Point
-            public x: number
-            public y: number
+            x: number
+            y: number
             function print(self)
                 print(`Point(x = {self.x}, y = {self.y})`)
             end
@@ -11171,10 +12921,11 @@ TEST_CASE("ClassDeclWithAmbiguousGlobal")
     )";
     auto res0 = "\n" + compileFunction(source.c_str(), 0, 0, 0);
     CHECK(R"(
+CHECKSELFCLASS R0 OWNER K0 ['print']
 GETGLOBAL R1 K0 ['print']
 LOADK R2 K1 ['Point(x = %*, y = %*)']
-GETTABLEKS R4 R0 K2 ['x']
-GETTABLEKS R5 R0 K3 ['y']
+GETOBJECTMEMBER R4 R0 0
+GETOBJECTMEMBER R5 R0 1
 NAMECALL R2 R2 K4 ['format']
 CALL R2 3 1
 CALLFB R1 1 0 [0]
@@ -11195,7 +12946,7 @@ RETURN R1 1
 
 TEST_CASE("ClassDeclHoistingForwardReference")
 {
-    ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag _{FFlag::LuwuClasses, true};
 
     std::string source = R"(
         local ref = Point
@@ -11215,7 +12966,7 @@ RETURN R0 0
 
 TEST_CASE("ClassDeclHoistingNestedFunctionUpvalCapture")
 {
-    ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag _{FFlag::LuwuClasses, true};
 
     std::string source = R"(
         class Point
@@ -11236,15 +12987,14 @@ RETURN R0 1
 LOADNIL R0
 LOADKX R0 K2 [class Point (props: 1, methods: 0)]
 NEWCLOSURE R1 P0
-CAPTURE REF R0
-CLOSEUPVALS R0
+CAPTURE VAL R0
 RETURN R0 0
 )" == outer);
 }
 
 TEST_CASE("ClassDeclHoistingForwardWriteProducesError")
 {
-    ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag _{FFlag::LuwuClasses, true};
 
     std::string source = R"(
         Point = nil
@@ -12081,15 +13831,15 @@ TEST_CASE("ExportClass")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuauExportValueSyntax, true},
-        {FFlag::DebugLuauUserDefinedClasses, true},
-        {FFlag::LuauExportedClassIsNilWorkaround, false},
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuExportedClassIsNilWorkaround, false},
     };
 
     CHECK_EQ(
         "\n" + compileFunction0(R"(
 export class Point
-    public x: number
-    public y: number
+    x: number
+    y: number
 end
 )"),
         R"(
@@ -12108,8 +13858,8 @@ RETURN R2 1
         "\n" + compileFunction(
                    R"(
 export class Point
-    public x: number
-    public y: number
+    x: number
+    y: number
 
     function getX(self)
         return self.x
@@ -12142,8 +13892,8 @@ RETURN R2 1
         "\n" + compileFunction(
                    R"(
 export class Point
-    public x: number
-    public y: number
+    x: number
+    y: number
 end
 
 local p = Point {x = 1, y = 2}
@@ -12155,11 +13905,12 @@ local p = Point {x = 1, y = 2}
 LOADNIL R0
 NEWTABLE R1 0 0
 LOADKX R0 K3 [class Point (props: 2, methods: 0)]
-MOVE R2 R0
-DUPTABLE R3 6
-CALL R2 1 1
+LOADN R4 1
+LOADN R5 2
+NEWOBJECT R3 R0 2 FIELDS
+MOVE R2 R3
 SETTABLEKS R0 R1 K0 ['Point']
-GETIMPORT R3 9 [table.freeze]
+GETIMPORT R3 6 [table.freeze]
 MOVE R4 R1
 CALL R3 1 1
 RETURN R3 1
@@ -12169,7 +13920,7 @@ RETURN R3 1
 
 TEST_CASE("DefaultArguments")
 {
-    ScopedFastFlag sff{FFlag::LuauDefaultArguments, true};
+    ScopedFastFlag sff{FFlag::LuwuDefaultArguments, true};
 
     // Assigning constants as default arguments
     CHECK_EQ(
@@ -12232,3 +13983,171 @@ RETURN R3 1
 }
 
 TEST_SUITE_END();
+
+// Compiler B (classes review) begin
+
+TEST_SUITE_BEGIN("Compiler");
+
+// The type info of function `id` (arguments, upvalues, locals), with local ranges dropped so the expectation
+// doesn't depend on the code around them.
+static std::string compileTypesWithoutRanges(const char* source, uint32_t id, int optimizationLevel)
+{
+    Luau::BytecodeBuilder bcb;
+    bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code | Luau::BytecodeBuilder::Dump_Types);
+
+    Luau::CompileOptions options;
+    options.optimizationLevel = optimizationLevel;
+    options.typeInfoLevel = 1;
+
+    Luau::compileOrThrow(bcb, source, options);
+
+    std::string dump = bcb.dumpFunction(id);
+    std::string result;
+    for (std::string_view line : Luau::split(dump, '\n'))
+    {
+        // type info lines look like `R0: object [argument]`, `U0: class` or `R1: object from 3 to 25`
+        bool isTypeInfo = line.size() > 1 && (line[0] == 'R' || line[0] == 'U') && isdigit(line[1]) && line.find(": ") != std::string_view::npos;
+        if (!isTypeInfo)
+            continue;
+
+        result += "\n";
+        result += line.substr(0, line.find(" from "));
+    }
+
+    return result + "\n";
+}
+
+TEST_CASE("ClassTypeHintsSeeClassesDeclaredLater")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag genericNominals{FFlag::LuwuGenericNominals, true};
+
+    // Classes hoist, so code above a class's declaration can name it. The type hints checked here:
+    // - A `Cat` annotation above the declaration (`before`) is `object`. It must not get the host-userdata
+    //   guess an unknown type name gets, because that guess becomes an entry guard every real argument fails.
+    // - A construction (`Cat()`) is `object`.
+    // - A static call declared to return a class (`Cat.new()`) is `object` only when annotations are trusted.
+    // - It stays `any` when the declared return type is optional (`Cat.maybe()`), or when it is a generic that
+    //   happens to be spelled like the class: the class's own generic (`Box.get()`) or the method's (`Cat.pick()`).
+    const char* source = R"(
+local function before(c: Cat) return c.x end
+local function f()
+    local a = Cat()
+    local b = Cat.new()
+    local c = Cat.maybe()
+    local d = Box.get()
+    local e = Cat.pick(a)
+    return a, b, c, d, e
+end
+class Cat
+    public x = 0
+    public function new(): Cat return Cat() end
+    public function maybe(): Cat? return nil end
+    public function pick<Cat>(v: Cat): Cat return v end
+end
+class Box<Cat>
+    public function get(): Cat return nil :: any end
+end
+local function after(c: Cat) return c.x end
+)";
+
+    ScopedFastFlag allowTrust{FFlag::DebugLuwuCompilerTrustsTypeAnnotations, true};
+
+    for (bool trusted : {false, true})
+    {
+        std::string file = trusted ? "--!trust" + std::string(source) : std::string(source);
+
+        for (int optimizationLevel = 1; optimizationLevel <= 2; ++optimizationLevel)
+        {
+            CHECK_EQ(compileTypesWithoutRanges(file.c_str(), 0, optimizationLevel), R"(
+R0: object [argument]
+)");
+
+            CHECK_EQ(
+                compileTypesWithoutRanges(file.c_str(), 1, optimizationLevel),
+                std::string(R"(
+U0: class
+U1: class
+R0: object
+R1: )") + (trusted ? "object" : "any") +
+                    R"(
+R2: any
+R3: any
+R4: any
+)"
+            );
+
+            CHECK_EQ(compileTypesWithoutRanges(file.c_str(), 6, optimizationLevel), R"(
+R0: object [argument]
+)");
+        }
+    }
+}
+
+TEST_CASE("ClassConstructionHintSkipsWrittenLocals")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    // Codegen guards a local's declared type with a VM exit, so a construction's `object` hint on a local that is
+    // later written would exit on every call once the write runs. Only `kept` is never written.
+    const char* source = R"(
+class Cat
+    public x = 0
+end
+local function f(t)
+    local kept = Cat()
+    local reassigned = Cat()
+    reassigned = t
+    local fromClosure = Cat()
+    local function set() fromClosure = t end
+    return kept.x, reassigned.x, fromClosure.x, set
+end
+)";
+
+    for (int optimizationLevel = 1; optimizationLevel <= 2; ++optimizationLevel)
+    {
+        // R1 `kept`, R2 `reassigned`, R3 `fromClosure`, R4 `set`
+        CHECK_EQ(compileTypesWithoutRanges(source, 1, optimizationLevel), R"(
+U0: class
+R1: object
+R2: any
+R3: any
+R4: any
+)");
+
+        // `set` captures `fromClosure` and `t`
+        CHECK_EQ(compileTypesWithoutRanges(source, 0, optimizationLevel), R"(
+U0: any
+U1: any
+)");
+    }
+}
+
+TEST_CASE("ClassTypeTagsNeedClasses")
+{
+    // `class` and `object` only name the class type tags while classes are on; otherwise they are ordinary type
+    // names, guessed to be host userdata as upstream does
+    const char* source = R"(
+local function f(x: object, y: class) return x end
+)";
+
+    {
+        ScopedFastFlag luwuClasses{FFlag::LuwuClasses, false};
+
+        CHECK_EQ(compileTypesWithoutRanges(source, 0, 1), R"(
+R0: userdata [argument]
+R1: userdata [argument]
+)");
+    }
+
+    {
+        ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+        CHECK_EQ(compileTypesWithoutRanges(source, 0, 1), R"(
+R0: object [argument]
+R1: class [argument]
+)");
+    }
+}
+
+// Compiler B (classes review) end

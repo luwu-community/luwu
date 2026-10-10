@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 
 #include "Luau/Ast.h"
 #include "Luau/Instantiation2.h"
@@ -1069,7 +1069,7 @@ TEST_CASE_FIXTURE(SubtypeFixture, "class A and B not subtypes of each other")
 
 TEST_CASE_FIXTURE(SubtypeFixture, "Classes are subtypes of themselves")
 {
-    ScopedFastFlag sff{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
     TypeId a = userDefinedCls("A");
     TypeId b = userDefinedCls("B");
     CHECK_IS_SUBTYPE(a, a);

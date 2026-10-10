@@ -53,11 +53,11 @@ const char* getAstAuxKind(const AstAuxData& handle)
         LUAU_AUX_FIELD_RW(IsMethod, SetIsMethod, n.isMethod) \
         LUAU_AUX_FIELD_RW(Access, SetAccess, n.access)) \
     AUX(Aux_ClassProperty, classProp, "AstClassProperty", \
-        LUAU_AUX_DEFAULT(AstAuxData(doc, Luau::AstClassProperty{Luau::Location(), Luau::AstName(), Luau::Location(), std::nullopt, nullptr})) \
+        LUAU_AUX_DEFAULT(AstAuxData(doc, Luau::AstClassProperty{std::nullopt, Luau::AstClassMemberVisibility::Public, Luau::AstName(), Luau::Location(), std::nullopt, nullptr})) \
         LUAU_AUX_FIELD_RW(Name, SetName, n.name) \
         LUAU_AUX_FIELD_RW(Type, SetType, n.ty)) \
     AUX(Aux_ClassMethod, classMethod, "AstClassMethod", \
-        LUAU_AUX_DEFAULT(AstAuxData(doc, Luau::AstClassMethod{std::nullopt, Luau::Location(), Luau::AstName(), Luau::Location(), nullptr})) \
+        LUAU_AUX_DEFAULT(AstAuxData(doc, Luau::AstClassMethod{std::nullopt, Luau::AstClassMemberVisibility::Public, Luau::Location(), Luau::AstName(), Luau::Location(), nullptr})) \
         LUAU_AUX_FIELD_RW(Name, SetName, n.functionName) \
         LUAU_AUX_FIELD_RW(Func, SetFunc, n.function)) \
     AUX(Aux_Comment, comment, "AstComment", \

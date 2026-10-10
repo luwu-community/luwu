@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 
 #include "AutocompleteCore.h"
 
@@ -15,6 +15,7 @@
 #include "Luau/Subtyping.h"
 #include "Luau/TypeInfer.h"
 #include "Luau/TypePack.h"
+#include "Luau/TypeUtils.h"
 
 #include <algorithm>
 #include <array>
@@ -25,6 +26,7 @@
 
 LUAU_FASTINT(LuauTypeInferIterationLimit)
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
+LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAGVARIABLE(DebugLuauMagicVariableNames)
 LUAU_FASTFLAGVARIABLE(LuauAutocompleteConst)
 LUAU_FASTFLAGVARIABLE(LuauAutocompleteExport)
@@ -399,14 +401,25 @@ static void autocompleteProps(
         }
     };
 
-    auto fillProps = [&](const ExternType::Props& props)
+    auto fillProps = [&](const ExternType::Props& props, const ExternType* owner)
     {
         for (const auto& [name, prop] : props)
         {
             // We are walking up the class hierarchy, so if we encounter a property that we have
             // already populated, it takes precedence over the property we found just now.
-            if (result.count(name) == 0 && name != kParseNameError)
+            // `__init` is callable (see classes.md's `reset` example) but deliberately hidden from
+            // completion so it isn't casually discovered/misused; explicit typing still resolves it.
+            if (result.count(name) == 0 && name != kParseNameError && name != "__init")
             {
+                // Private members are only visible for autocomplete from within their own
+                // class's definition block.
+                if (prop.isPrivate)
+                {
+                    bool insideOwningClass =
+                        owner && !nodes.empty() && isInsideClassDeclaration(owner, module.name, nodes.back()->location);
+                    if (!insideOwningClass)
+                        continue;
+                }
                 Luau::TypeId type;
                 if (auto ty = prop.readTy)
                     type = follow(*ty);
@@ -465,13 +478,13 @@ static void autocompleteProps(
     if (auto cls = get<ExternType>(ty))
     {
         containingExternType = containingExternType.value_or(cls);
-        fillProps(cls->props);
+        fillProps(cls->props, cls);
         if (cls->parent)
             autocompleteProps(module, typeArena, builtinTypes, rootTy, *cls->parent, indexType, nodes, result, seen, containingExternType);
     }
     else if (auto tbl = get<TableType>(ty))
     {
-        fillProps(tbl->props);
+        fillProps(tbl->props, nullptr);
         if (tbl->indexer && indexType == PropIndexType::Point)
         {
             auto indexerTy = follow(tbl->indexer->indexType);
@@ -1452,6 +1465,8 @@ static AutocompleteEntryMap autocompleteStatement(
             result.emplace("end", AutocompleteEntry{AutocompleteEntryKind::Keyword});
         else if (AstExprFunction* exprFunction = (*it)->as<AstExprFunction>(); exprFunction && !exprFunction->body->hasEnd)
             result.emplace("end", AutocompleteEntry{AutocompleteEntryKind::Keyword});
+        else if (AstStatClass* statClass = (*it)->as<AstStatClass>(); statClass && !statClass->hasEnd)
+            result.emplace("end", AutocompleteEntry{AutocompleteEntryKind::Keyword});
         if (AstStatBlock* exprBlock = (*it)->as<AstStatBlock>(); exprBlock && !exprBlock->hasEnd)
             result.emplace("end", AutocompleteEntry{AutocompleteEntryKind::Keyword});
     }
@@ -2343,6 +2358,19 @@ AutocompleteResult autocomplete_(
 
     if (node->is<AstExprConstantNumber>())
         return {};
+
+    // We're at the start of a new class member (not inside any existing member's own
+    // sub-locations, which would have matched a more specific branch above): offer the
+    // qualifiers and the `function` keyword, rather than the generic statement keyword list
+    // (most of which -- if/local/for/etc -- aren't valid class members).
+    if (node->is<AstStatClass>())
+    {
+        AutocompleteEntryMap ret;
+        ret["public"] = {AutocompleteEntryKind::Keyword};
+        ret["private"] = {AutocompleteEntryKind::Keyword};
+        ret["function"] = {AutocompleteEntryKind::Keyword};
+        return {std::move(ret), ancestry, AutocompleteContext::Keyword};
+    }
 
     if (node->asExpr())
     {
