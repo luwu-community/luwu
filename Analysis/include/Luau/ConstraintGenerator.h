@@ -334,6 +334,7 @@ private:
     ControlFlow visit(const ScopePtr& scope, AstStatReturn* ret);
     ControlFlow visit(const ScopePtr& scope, AstStatAssign* assign);
     ControlFlow visit(const ScopePtr& scope, AstStatCompoundAssign* assign);
+    ControlFlow visit(const ScopePtr& scope, AstStatPush* push);
     ControlFlow visit(const ScopePtr& scope, AstStatIf* ifStatement);
     ControlFlow visit(const ScopePtr& scope, AstStatTypeAlias* alias);
     ControlFlow visit(const ScopePtr& scope, AstStatTypeFunction* function);
@@ -387,6 +388,7 @@ private:
     Inference check(const ScopePtr& scope, AstExprIndexExpr* indexExpr);
     Inference check(const ScopePtr& scope, AstExprFunction* func, std::optional<TypeId> expectedType, bool generalize);
     Inference check(const ScopePtr& scope, AstExprUnary* unary);
+    Inference check(const ScopePtr& scope, AstExprPop* pop);
     Inference check(const ScopePtr& scope, AstExprBinary* binary, std::optional<TypeId> expectedType);
     Inference checkAstExprBinary(
         const ScopePtr& scope,

@@ -106,6 +106,8 @@ void initFunctions(NativeContext& context)
     context.executeFORGPREP = executeFORGPREP;
     context.executeNEWOBJECT = executeNEWOBJECT;
     context.executeNEWCLASSMEMBER = executeNEWCLASSMEMBER;
+    context.executePUSH = executePUSH;
+    context.executePOP = executePOP;
     context.executeGETVARARGSMultRet = executeGETVARARGSMultRet;
     context.executeGETVARARGSConst = executeGETVARARGSConst;
     context.executeDUPCLOSURE = executeDUPCLOSURE;

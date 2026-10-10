@@ -23,6 +23,7 @@ LUAU_FASTINT(LuauCompileInlineThresholdMaxBoost)
 LUAU_FASTINT(LuauCompileLoopUnrollThreshold)
 LUAU_FASTINT(LuauCompileLoopUnrollThresholdMaxBoost)
 LUAU_FASTINT(LuauRecursionLimit)
+LUAU_FASTFLAG(DebugLuwuPoperators)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuauIntegerFastcalls)
 LUAU_FASTFLAG(LuauCompileIifeInline)
@@ -1452,6 +1453,53 @@ GETIMPORT R0 9 [Enum.Material.Sand]
 JUMPIF R0 L2
 L1: GETIMPORT R0 13 [Enum.Material.Sandstone]
 L2: RETURN R0 1
+)");
+}
+
+TEST_CASE("PushPop")
+{
+    ScopedFastFlag poperators{FFlag::DebugLuwuPoperators, true};
+
+    // values go to consecutive registers after the container; a call or `...` last pushes everything up to the top
+    CHECK_EQ("\n" + compileFunction0(R"(
+local t = {}
+t <+ 1, nil
+t <+ f()
+t <+ 1, ...
+local x = <-t
+local y = <-t.items
+g(x, y)
+)"), R"(
+NEWTABLE R0 0 0
+LOADN R1 1
+LOADNIL R2
+PUSH R0 R1 2
+GETIMPORT R1 1 [f]
+CALL R1 0 -1
+PUSH R0 R1 -1
+LOADN R1 1
+GETVARARGS R2 -1
+PUSH R0 R1 -1
+POP R1 R0
+GETTABLEKS R3 R0 K2 ['items']
+POP R2 R3
+GETIMPORT R3 4 [g]
+MOVE R4 R1
+MOVE R5 R2
+CALL R3 2 0
+RETURN R0 0
+)");
+
+    // one value is pushed from the register it's already in
+    CHECK_EQ("\n" + compileFunction0(R"(
+local t = {}
+local x = 1
+t <+ x
+)"), R"(
+NEWTABLE R0 0 0
+LOADN R1 1
+PUSH R0 R1 1
+RETURN R0 0
 )");
 }
 

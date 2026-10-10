@@ -119,6 +119,9 @@ std::string Lexeme::toString() const
     case ConcatAssign:
         return "'..='";
 
+    case Push:
+        return "'<+'";
+
     case RawString:
     case QuotedString:
         return data ? format("\"%.*s\"", length, data) : "string";
@@ -420,6 +423,28 @@ Lexeme Lexer::lookahead()
         braceStack.push_back(currentBraceType);
     else if (braceStack.size() > currentBraceStackSize)
         braceStack.pop_back();
+
+    return result;
+}
+
+Lexeme Lexer::lookaheadSecond()
+{
+    unsigned int currentOffset = offset;
+    unsigned int currentLine = line;
+    unsigned int currentLineOffset = lineOffset;
+    Lexeme currentLexeme = lexeme;
+    Location currentPrevLocation = prevLocation;
+    std::vector<BraceType> currentBraceStack = braceStack;
+
+    next();
+    Lexeme result = next();
+
+    offset = currentOffset;
+    line = currentLine;
+    lineOffset = currentLineOffset;
+    lexeme = currentLexeme;
+    prevLocation = currentPrevLocation;
+    braceStack = std::move(currentBraceStack);
 
     return result;
 }
@@ -819,6 +844,12 @@ Lexeme Lexer::readNext()
         {
             consume();
             return Lexeme(Location(start, 2), Lexeme::LessEqual);
+        }
+        // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): Luau has no unary `+`, so `<+` is never valid Luau
+        else if (peekch() == '+')
+        {
+            consume();
+            return Lexeme(Location(start, 2), Lexeme::Push);
         }
         else
             return Lexeme(Location(start, 1), '<');

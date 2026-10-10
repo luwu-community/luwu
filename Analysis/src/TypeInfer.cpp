@@ -195,7 +195,7 @@ static bool isMetamethod(const Name& name)
     return name == "__index" || name == "__newindex" || name == "__call" || name == "__concat" || name == "__unm" || name == "__add" ||
            name == "__sub" || name == "__mul" || name == "__div" || name == "__mod" || name == "__pow" || name == "__tostring" ||
            name == "__metatable" || name == "__eq" || name == "__lt" || name == "__le" || name == "__mode" || name == "__iter" || name == "__len" ||
-           name == "__idiv";
+           name == "__idiv" || name == "__push" || name == "__pop"; // Luwu Push and Pop Operators (rfcs/push-pop-operators.md)
 }
 
 size_t HashBoolNamePair::operator()(const std::pair<bool, Name>& pair) const
@@ -365,6 +365,8 @@ ControlFlow TypeChecker::check(const ScopePtr& scope, const AstStat& program)
         return check(scope, *assign);
     else if (auto assign = program.as<AstStatCompoundAssign>())
         return check(scope, *assign);
+    else if (auto push = program.as<AstStatPush>())
+        return check(scope, *push);
     else if (program.is<AstStatFunction>())
         ice("Should not be calling two-argument check() on a function statement", program.location);
     else if (program.is<AstStatLocalFunction>())
@@ -1934,6 +1936,8 @@ WithPredicate<TypeId> TypeChecker::checkExpr(const ScopePtr& scope, const AstExp
         result = checkExpr(scope, *a);
     else if (auto a = expr.as<AstExprIfElse>())
         result = checkExpr(scope, *a, expectedType);
+    else if (auto a = expr.as<AstExprPop>())
+        result = checkExpr(scope, *a);
     else if (auto a = expr.as<AstExprInterpString>())
         result = checkExpr(scope, *a);
     else if (auto a = expr.as<AstExprInstantiate>())
@@ -3278,6 +3282,22 @@ WithPredicate<TypeId> TypeChecker::checkExpr(const ScopePtr& scope, const AstExp
     if (types.empty())
         return WithPredicate{neverType};
     return WithPredicate{types.size() == 1 ? types[0] : addType(UnionType{std::move(types)})};
+}
+
+// Luwu Push and Pop Operators (rfcs/push-pop-operators.md): the old solver gets the minimum, so it doesn't fail on them:
+// the operands are checked, and a pop is `any`.
+ControlFlow TypeChecker::check(const ScopePtr& scope, const AstStatPush& push)
+{
+    checkExpr(scope, *push.target);
+    for (AstExpr* value : push.values)
+        checkExpr(scope, *value);
+    return ControlFlow::None;
+}
+
+WithPredicate<TypeId> TypeChecker::checkExpr(const ScopePtr& scope, const AstExprPop& expr)
+{
+    checkExpr(scope, *expr.expr);
+    return WithPredicate{anyType};
 }
 
 WithPredicate<TypeId> TypeChecker::checkExpr(const ScopePtr& scope, const AstExprInterpString& expr)

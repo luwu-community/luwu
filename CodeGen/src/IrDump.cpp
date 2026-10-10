@@ -471,6 +471,10 @@ const char* getCmdName(IrCmd cmd)
         return "FALLBACK_NEWOBJECT";
     case IrCmd::FALLBACK_NEWCLASSMEMBER:
         return "FALLBACK_NEWCLASSMEMBER";
+    case IrCmd::FALLBACK_PUSH:
+        return "FALLBACK_PUSH";
+    case IrCmd::FALLBACK_POP:
+        return "FALLBACK_POP";
     case IrCmd::SUBSTITUTE:
         return "SUBSTITUTE";
     case IrCmd::MARK_USED:

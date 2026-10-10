@@ -581,6 +581,15 @@ struct BytecodeGraphSerializer
             bcb.emitAux(getImmInt(insn, 2));
             break;
 
+        case LOP_PUSH:
+            LUAU_ASSERT(insn.ops.size() > 2);
+            bcb.emitABC(LOP_PUSH, getRegInput(insn, 1), getRegInput(insn, 2), getImmInt(insn, 0) + 1);
+            break;
+
+        case LOP_POP:
+            bcb.emitABC(LOP_POP, getRegister(insnOp), getRegInput(insn, 0), 0);
+            break;
+
         case LOP__COUNT:
             LUAU_UNREACHABLE();
         }

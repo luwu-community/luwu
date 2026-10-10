@@ -83,6 +83,7 @@ LUAU_FASTFLAG(LuauCodegenFixBufferLenCheck)
 LUAU_FASTFLAG(LuauYieldIter2)
 LUAU_FASTFLAG(LuauCustomYieldablePcalls)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(DebugLuwuPoperators)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuwuExportedClassIsNilWorkaround)
@@ -3064,7 +3065,7 @@ TEST_CASE("ApiPcallMulti")
     CHECK_EQ(std::string(lua_tostring(L, -2)), "traceback2");
     CHECK_EQ(std::string(lua_tostring(L, -1)), "test error");
     lua_pop(L, 3); // pop results
-    
+
     // Test multiple returns where we pass nresults = LUA_MULTRET
     lua_getglobal(L, "errorfunc");
     status = lua_pcallmulti(L, 0, LUA_MULTRET, handler_idx);
@@ -6244,6 +6245,16 @@ TEST_CASE("DefaultArguments")
     ScopedFastFlag sff{FFlag::LuwuDefaultArguments, true};
 
     runConformance("defaultarg.luwu");
+}
+
+TEST_CASE("PushPopOperators")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuPoperators, true},
+        {FFlag::LuwuClasses, true},
+    };
+
+    runConformance("push_pop.luwu");
 }
 
 TEST_CASE("None")

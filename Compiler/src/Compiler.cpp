@@ -4742,6 +4742,16 @@ struct Compiler
             bytecode.emitABC(LOP_MOVE, target, reg, 0);
     }
 
+    // Luwu Push and Pop Operators (rfcs/push-pop-operators.md)
+    void compileExprPop(AstExprPop* expr, uint8_t target)
+    {
+        RegScope rs(this);
+
+        uint8_t container = compileExprAuto(expr->expr, rs);
+
+        bytecode.emitABC(LOP_POP, target, container, 0);
+    }
+
     void compileExprUnary(AstExprUnary* expr, uint8_t target)
     {
         RegScope rs(this);
@@ -5692,6 +5702,10 @@ struct Compiler
         else if (AstExprIfElse* expr = node->as<AstExprIfElse>())
         {
             compileExprIfElse(expr, target, targetTemp);
+        }
+        else if (AstExprPop* expr = node->as<AstExprPop>())
+        {
+            compileExprPop(expr, target);
         }
         else if (AstExprInterpString* interpString = node->as<AstExprInterpString>())
         {
@@ -6955,6 +6969,41 @@ struct Compiler
         }
     }
 
+    // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): the container, then the values left to right into
+    // consecutive registers. A call or `...` last pushes all of its values.
+    void compileStatPush(AstStatPush* stat)
+    {
+        // LOP_PUSH encodes the value count + 1 in a byte, with 0 meaning multret
+        if (stat->values.size >= 255)
+            CompileError::raise(stat->location, "Exceeded push value count limit; simplify the code to compile");
+
+        RegScope rs(this);
+
+        uint8_t container = compileExprAuto(stat->target, rs);
+
+        // Optimization: push one value from wherever it already is, such as a local's register, instead of copying it
+        bool single = stat->values.size == 1 && !isExprMultRet(stat->values.data[0]);
+        if (single)
+        {
+            uint8_t value = compileExprAuto(stat->values.data[0], rs);
+            bytecode.emitABC(LOP_PUSH, container, value, 2);
+            return;
+        }
+
+        uint8_t values = allocReg(stat, unsigned(stat->values.size));
+
+        bool multRet = false;
+        for (size_t i = 0; i < stat->values.size; ++i)
+        {
+            if (i + 1 == stat->values.size)
+                multRet = compileExprTempMultRet(stat->values.data[i], uint8_t(values + i));
+            else
+                compileExprTempTop(stat->values.data[i], uint8_t(values + i));
+        }
+
+        bytecode.emitABC(LOP_PUSH, container, values, multRet ? 0 : uint8_t(stat->values.size + 1));
+    }
+
     void compileStatCompoundAssign(AstStatCompoundAssign* stat)
     {
         RegScope rs(this);
@@ -7182,6 +7231,10 @@ struct Compiler
         else if (AstStatCompoundAssign* stat = node->as<AstStatCompoundAssign>())
         {
             compileStatCompoundAssign(stat);
+        }
+        else if (AstStatPush* stat = node->as<AstStatPush>())
+        {
+            compileStatPush(stat);
         }
         else if (AstStatFunction* stat = node->as<AstStatFunction>())
         {
