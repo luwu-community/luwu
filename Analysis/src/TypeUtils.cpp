@@ -389,6 +389,123 @@ TypeId stripNil(NotNull<BuiltinTypes> builtinTypes, TypeArena& arena, TypeId ty)
     return follow(ty);
 }
 
+std::optional<TypeId> mergeUnionMethods(NotNull<BuiltinTypes> builtinTypes, NotNull<TypeArena> arena, TypeId fn)
+{
+    const UnionType* methods = get<UnionType>(follow(fn));
+    if (!methods || methods->options.size() < 2)
+        return std::nullopt;
+
+    // Each member declares its own copy of a shared method's signature, so the same type comes once per member (twelve
+    // copies of `Metadata` for `type:metadata()`); keep one of each
+    auto distinct = [](const std::vector<TypeId>& types)
+    {
+        std::vector<TypeId> result;
+        for (TypeId ty : types)
+        {
+            ty = follow(ty);
+            bool seen = std::any_of(
+                result.begin(),
+                result.end(),
+                [&](TypeId kept)
+                {
+                    return kept == ty || *kept == *ty;
+                }
+            );
+            if (!seen)
+                result.push_back(ty);
+        }
+        return result;
+    };
+
+    auto unionOf = [&](const std::vector<TypeId>& alternatives) -> TypeId
+    {
+        std::vector<TypeId> types = distinct(alternatives);
+        TypeId result = types[0];
+        for (size_t i = 1; i < types.size(); ++i)
+            result = simplifyUnion(builtinTypes, arena, result, types[i]).result;
+        return follow(result);
+    };
+
+    // equal variadic tails (`...any` in two signatures is two packs)
+    auto samePack = [](TypePackId a, TypePackId b)
+    {
+        a = follow(a);
+        b = follow(b);
+        return a == b || *a == *b;
+    };
+
+    const FunctionType* first = nullptr;
+    std::vector<TypeId> firstParams;
+    std::optional<TypePackId> firstParamTail;
+    std::vector<TypeId> firstReturns;
+    std::optional<TypePackId> firstReturnTail;
+
+    std::vector<TypeId> selves;
+    // every member's type for each parameter after `self`, which an argument has to satisfy all of
+    std::vector<std::vector<TypeId>> params;
+    std::vector<std::vector<TypeId>> returns;
+
+    for (TypeId option : methods->options)
+    {
+        const FunctionType* method = get<FunctionType>(follow(option));
+        if (!method || !method->generics.empty() || !method->genericPacks.empty())
+            return std::nullopt;
+
+        auto [methodParams, paramTail] = flatten(method->argTypes);
+        auto [rets, retTail] = flatten(method->retTypes);
+        if (methodParams.empty())
+            return std::nullopt;
+
+        if (!first)
+        {
+            first = method;
+            firstParams = methodParams;
+            firstParamTail = paramTail;
+            firstReturns = rets;
+            firstReturnTail = retTail;
+            params.resize(methodParams.size());
+            returns.resize(rets.size());
+        }
+        else
+        {
+            // as many parameters and returns, and the same variadic tails
+            bool sameShape = methodParams.size() == firstParams.size() && rets.size() == firstReturns.size() &&
+                             paramTail.has_value() == firstParamTail.has_value() && retTail.has_value() == firstReturnTail.has_value();
+            if (!sameShape || (paramTail && !samePack(*paramTail, *firstParamTail)) || (retTail && !samePack(*retTail, *firstReturnTail)))
+                return std::nullopt;
+        }
+
+        selves.push_back(methodParams[0]);
+        for (size_t i = 1; i < methodParams.size(); ++i)
+            params[i].push_back(methodParams[i]);
+        for (size_t i = 0; i < rets.size(); ++i)
+            returns[i].push_back(rets[i]);
+    }
+
+    // an argument every member accepts
+    auto intersectionOf = [&](const std::vector<TypeId>& required) -> TypeId
+    {
+        std::vector<TypeId> types = distinct(required);
+        TypeId result = types[0];
+        for (size_t i = 1; i < types.size(); ++i)
+            result = simplifyIntersection(builtinTypes, arena, result, types[i]).result;
+        return follow(result);
+    };
+
+    std::vector<TypeId> mergedParams{unionOf(selves)};
+    for (size_t i = 1; i < params.size(); ++i)
+        mergedParams.push_back(intersectionOf(params[i]));
+
+    std::vector<TypeId> mergedReturns;
+    for (const std::vector<TypeId>& alternatives : returns)
+        mergedReturns.push_back(unionOf(alternatives));
+
+    FunctionType merged{arena->addTypePack(std::move(mergedParams), firstParamTail), arena->addTypePack(std::move(mergedReturns), firstReturnTail)};
+    merged.argNames = first->argNames;
+    merged.hasSelf = true;
+    return arena->addType(std::move(merged));
+}
+
 ErrorSuppression shouldSuppressErrors(NotNull<Normalizer> normalizer, TypeId ty)
 {
     if (auto tfit = get<TypeFunctionInstanceType>(follow(ty)))
