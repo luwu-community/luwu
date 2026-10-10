@@ -53,6 +53,11 @@ struct LintWarning
         Code_NilNoneComparison = 30, // Luwu: comparing with nil where only none is possible, or the reverse
         Code_VarargCast = 31,        // Luwu: `f(... :: T)` passes only the first value
         Code_DeclareMismatch = 32,   // Luwu: `declare x: T` gives a global from the loaded definitions a different type
+        Code_OptimizationHint = 33,  // Luwu: code the compiler could optimize better if it were written differently
+        // Luwu: parts of OptimizationHint that can be turned off on their own. Turning OptimizationHint off turns these off too.
+        Code_LoopConcat = 34,              // `s ..= x` in a loop
+        Code_InefficientTableInsert = 35,  // `table.insert(t, 1, v)` in a loop
+        Code_InefficientTableRemove = 36,  // `table.remove(t, 1)` in a loop
 
         Code__Count
     };
@@ -123,6 +128,10 @@ inline constexpr const char* kWarningNames[] = {
     "NilNoneComparison",
     "VarargCast",
     "DeclareMismatch",
+    "OptimizationHint",
+    "LoopConcat",
+    "InefficientTableInsert",
+    "InefficientTableRemove",
 };
 // clang-format on
 

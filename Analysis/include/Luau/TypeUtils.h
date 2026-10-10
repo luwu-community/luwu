@@ -466,6 +466,13 @@ std::optional<std::string> describeOptionalOperands(TypeId left, std::optional<T
 bool isInsideClassDeclaration(const ExternType* cls, const ModuleName& moduleName, const Location& location);
 
 /**
+ * Luwu Classes (rfcs/classes): "object", "class" or "trait" when `ty` is an object, a class value or a trait value
+ * (or one of those roots itself), and nullptr for anything else. These are the words `type` and `typeof` answer at
+ * runtime. A union answers only when every member has the same kind.
+ */
+const char* luwuNominalKind(TypeId ty);
+
+/**
  * Luwu Attributes (rfcs/attributes-for-types-variables-fields-classes.md): marks `prop` deprecated when the
  * field it was declared from carries `@deprecated`, with the attribute's `use` as its suggestion. Leaves `prop`
  * alone otherwise.
