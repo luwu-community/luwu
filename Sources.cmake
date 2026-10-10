@@ -226,6 +226,7 @@ target_sources(Luwu.Analysis PRIVATE
     Analysis/include/Luau/DumpCFG.h
     Analysis/include/Luau/TypeStateMap.h
     Analysis/include/Luau/DataFlowGraph.h
+    Analysis/include/Luau/DocRefs.h
     Analysis/include/Luau/DcrLogger.h
     Analysis/include/Luau/Def.h
     Analysis/include/Luau/Documentation.h
@@ -316,6 +317,7 @@ target_sources(Luwu.Analysis PRIVATE
     Analysis/src/DumpCFG.cpp
     Analysis/src/TypeStateMap.cpp
     Analysis/src/DataFlowGraph.cpp
+    Analysis/src/DocRefs.cpp
     Analysis/src/DcrLogger.cpp
     Analysis/src/Def.cpp
     Analysis/src/EmbeddedBuiltinDefinitions.cpp
@@ -577,6 +579,7 @@ if(TARGET Luwu.UnitTest)
         tests/TypeInfer.functions.test.cpp
         tests/TypeInfer.generics.test.cpp
         tests/TypeInfer.intersectionTypes.test.cpp
+        tests/TypeInfer.docRefs.test.cpp
         tests/TypeInfer.loops.test.cpp
         tests/TypeInfer.modules.test.cpp
         tests/TypeInfer.negations.test.cpp

@@ -437,6 +437,8 @@ struct TableIndexer
     bool isReadOnly = false;
 };
 
+struct TypeMetadataTable;
+
 struct Property
 {
     static Property readonly(TypeId ty);
@@ -472,6 +474,11 @@ struct Property
 
     Tags tags;
     std::optional<std::string> documentationSymbol;
+
+    // Luwu doc references: the property's own doc comments (`comments`, like a type's metadata): the ones around a field
+    // in a table type, or what a type function set (`setpropertycomments`). A field's type can be shared (`number`), so
+    // they can't live on it.
+    std::shared_ptr<const TypeMetadataTable> metadata;
 
     // DEPRECATED
     // TODO: Kill all constructors in favor of `Property::rw(TypeId read, TypeId write)` and friends.
@@ -886,6 +893,30 @@ using TypeVariant = Unifiable::Variant<
     NoRefineType,
     TypeFunctionInstanceType>;
 
+// Luwu: what a type function can attach to a type with `type:setmetadata`, plus the `comments` the checker attaches to a
+// declared type (`attachDeclarationComments`). A Lua table's contents, minus what can't outlive a type function run:
+// booleans, numbers, strings, types and tables of those. Types share it when they're copied.
+struct TypeMetadataTable;
+using TypeMetadataValue = Variant<bool, double, std::string, TypeId, std::shared_ptr<const TypeMetadataTable>>;
+
+// Luwu doc references: where the doc comments in a type's metadata were written, so references in them
+// (`[fs.file.read]`) resolve where their author could see those names.
+struct MetadataDocContext
+{
+    ModuleName module;
+    // the declaration the comments were above, or the type function call that set them
+    Location location;
+    // set by a type function rather than read from the source; the source's own doc comments are checked as such
+    bool generated = false;
+};
+
+struct TypeMetadataTable
+{
+    std::vector<std::pair<TypeMetadataValue, TypeMetadataValue>> entries;
+    // Luwu doc references: only on a type's top-level metadata. A type function can't see or set it.
+    std::optional<MetadataDocContext> docContext;
+};
+
 struct Type final
 {
     explicit Type(const TypeVariant& ty)
@@ -909,6 +940,7 @@ struct Type final
     {
         ty = rhs.ty;
         documentationSymbol = rhs.documentationSymbol;
+        metadata = rhs.metadata;
     }
 
     TypeVariant ty;
@@ -919,6 +951,9 @@ struct Type final
     bool persistent = false;
 
     std::optional<std::string> documentationSymbol;
+
+    // Luwu: see TypeMetadataTable
+    std::shared_ptr<const TypeMetadataTable> metadata;
 
     // Pointer to the type arena that allocated this type.
     TypeArena* owningArena = nullptr;

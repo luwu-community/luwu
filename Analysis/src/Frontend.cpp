@@ -50,6 +50,7 @@ LUAU_FLAGVERSION(LuauExportValueTypecheck, 2)
 
 LUAU_FASTFLAGVARIABLE(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(DebugLuauCFG)
+LUAU_FASTFLAG(LuwuInLuwuDocs)
 LUAU_FASTFLAG(DebugLuauLogCFG)
 LUAU_FASTFLAG(DebugLuauDumpCFGJson)
 LUAU_FASTFLAGVARIABLE(DebugLuauCyclicRequireTypeInference)
@@ -176,6 +177,7 @@ static ParseResult parseSourceForModule(std::string_view source, Luau::SourceMod
     {
         sourceModule.hotcomments = parseResult.hotcomments;
         sourceModule.commentLocations = parseResult.commentLocations;
+        sourceModule.comments = readSourceComments(source, sourceModule.commentLocations);
     }
 
     return parseResult;
@@ -220,6 +222,7 @@ static void persistCheckedTypes(ModulePtr checkedModule, GlobalTypes& globals, S
 
         generateDocumentationSymbols(globalTy.type, documentationSymbol);
         targetScope->exportedTypeBindings[name] = globalTy;
+        targetScope->definitionFileTypeModules[name] = packageName;
 
         typesToPersist.push_back(globalTy.type);
     }
@@ -1689,6 +1692,7 @@ ModulePtr check(
         FFlag::DebugLuauCFG ? state.get() : nullptr
     };
 
+    cg.sourceComments = &sourceModule.comments;
     ConstraintSet constraintSet = cg.run(sourceModule.root);
     module->errors = std::move(constraintSet.errors);
     module->constraintGenerationDidNotComplete = cg.recursionLimitMet;
@@ -1795,6 +1799,10 @@ ModulePtr check(
 
         if (FFlag::LuauExportValueSyntax && FFlag::LuauExportValueTypecheck && !module->timeout && !module->cancelled)
             synthesizeExportReturn(builtinTypes, NotNull{module.get()});
+
+        // Luwu doc references: doc comments' code is checked like code, as far as it goes
+        if (FFlag::LuwuInLuwuDocs && !module->timeout && !module->cancelled)
+            checkDocComments(sourceModule, *module, builtinTypes, fileResolver, moduleResolver, limits, mode);
     }
 
     // if the only error we're producing is one about constraint solving being incomplete, we can silence it.
@@ -2096,6 +2104,11 @@ SourceModule Frontend::parse(const ModuleName& name, std::string_view src, const
     {
         sourceModule.commentLocations = std::move(parseResult.commentLocations);
         sourceModule.hotcomments = std::move(parseResult.hotcomments);
+        sourceModule.comments = readSourceComments(src, sourceModule.commentLocations);
+
+        // Luwu doc references: the references and bindings in doc comments
+        if (FFlag::LuwuInLuwuDocs && sourceModule.root)
+            parseDocComments(sourceModule, src);
     }
 
     return sourceModule;

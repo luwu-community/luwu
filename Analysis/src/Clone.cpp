@@ -156,6 +156,49 @@ protected:
         }
     }
 
+    // Luwu: metadata shares its tables, but a type in it belongs to the arena being cloned from (TypeMetadataTable)
+    std::shared_ptr<const TypeMetadataTable> cloneMetadata(const std::shared_ptr<const TypeMetadataTable>& metadata)
+    {
+        if (!metadata || !metadataHasTypes(*metadata))
+            return metadata;
+
+        auto cloneValue = [&](const TypeMetadataValue& value) -> TypeMetadataValue
+        {
+            if (const TypeId* ty = get_if<TypeId>(&value))
+                return shallowClone(*ty);
+            if (const auto* table = get_if<std::shared_ptr<const TypeMetadataTable>>(&value))
+                return cloneMetadata(*table);
+            return value;
+        };
+
+        auto cloned = std::make_shared<TypeMetadataTable>();
+        cloned->entries.reserve(metadata->entries.size());
+        for (const auto& [key, value] : metadata->entries)
+            cloned->entries.emplace_back(cloneValue(key), cloneValue(value));
+        cloned->docContext = metadata->docContext;
+
+        return cloned;
+    }
+
+    static bool metadataHasTypes(const TypeMetadataTable& metadata)
+    {
+        auto hasTypes = [](const TypeMetadataValue& value)
+        {
+            if (get_if<TypeId>(&value))
+                return true;
+            const auto* table = get_if<std::shared_ptr<const TypeMetadataTable>>(&value);
+            return table && *table && metadataHasTypes(**table);
+        };
+
+        for (const auto& [key, value] : metadata.entries)
+        {
+            if (hasTypes(key) || hasTypes(value))
+                return true;
+        }
+
+        return false;
+    }
+
 public:
     virtual TypeId shallowClone(TypeId ty)
     {
@@ -169,6 +212,7 @@ public:
 
         TypeId target = arena->addType(ty->ty);
         asMutable(target)->documentationSymbol = ty->documentationSymbol;
+        asMutable(target)->metadata = cloneMetadata(ty->metadata);
 
         if (auto generic = getMutable<GenericType>(target))
             generic->scope = nullptr;
@@ -520,6 +564,7 @@ public:
 
         TypeId target = arena->addType(ty->ty);
         asMutable(target)->documentationSymbol = ty->documentationSymbol;
+        asMutable(target)->metadata = cloneMetadata(ty->metadata);
 
         if (auto generic = getMutable<GenericType>(target))
             generic->scope = nullptr;
