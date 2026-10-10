@@ -196,6 +196,8 @@ static bool similar(AstExpr* lhs, AstExpr* rhs)
     {
         return similar(le->expr, re->expr);
     }
+    // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): each pop takes a different element
+    CASE(AstExprPop) return false;
     else
     {
         LUAU_ASSERT(!"Unknown expression type");

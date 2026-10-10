@@ -698,6 +698,14 @@ void IrBuilder::translateInst(LuauOpcode op, const Instruction* pc, int i)
         translateInstNewObject(*this, pc, i);
         break;
 
+    case LOP_PUSH:
+        translateInstPush(*this, pc, i);
+        break;
+
+    case LOP_POP:
+        translateInstPop(*this, pc, i);
+        break;
+
     case LOP_GETOBJECTMEMBER:
         translateInstGetObjectMember(*this, pc, i);
         break;

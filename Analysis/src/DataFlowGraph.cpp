@@ -448,6 +448,8 @@ ControlFlow DataFlowGraphBuilder::visit(AstStat* s)
         return visit(a);
     else if (auto c = s->as<AstStatCompoundAssign>())
         return visit(c);
+    else if (auto p = s->as<AstStatPush>())
+        return visit(p);
     else if (auto f = s->as<AstStatFunction>())
         return visit(f);
     else if (auto l = s->as<AstStatLocalFunction>())
@@ -720,6 +722,18 @@ ControlFlow DataFlowGraphBuilder::visit(AstStatCompoundAssign* c)
 {
     (void)visitExpr(c->value);
     (void)visitExpr(c->var);
+
+    return ControlFlow::None;
+}
+
+// Luwu Push and Pop Operators (rfcs/push-pop-operators.md): a push changes the container, not the variable holding it, so
+// the target is only read
+ControlFlow DataFlowGraphBuilder::visit(AstStatPush* p)
+{
+    (void)visitExpr(p->target);
+
+    for (AstExpr* value : p->values)
+        (void)visitExpr(value);
 
     return ControlFlow::None;
 }
@@ -1004,6 +1018,8 @@ DataFlowResult DataFlowGraphBuilder::visitExpr(AstExpr* e)
             return visitExpr(t);
         else if (auto u = e->as<AstExprUnary>())
             return visitExpr(u);
+        else if (auto p = e->as<AstExprPop>())
+            return visitExpr(p);
         else if (auto b = e->as<AstExprBinary>())
             return visitExpr(b);
         else if (auto t = e->as<AstExprTypeAssertion>())
@@ -1244,6 +1260,14 @@ DataFlowResult DataFlowGraphBuilder::visitExpr(AstExprUnary* u)
     visitExpr(u->expr);
 
     return {defArena->freshCell(Symbol{}, u->location), nullptr};
+}
+
+// Luwu Push and Pop Operators (rfcs/push-pop-operators.md)
+DataFlowResult DataFlowGraphBuilder::visitExpr(AstExprPop* p)
+{
+    visitExpr(p->expr);
+
+    return {defArena->freshCell(Symbol{}, p->location), nullptr};
 }
 
 DataFlowResult DataFlowGraphBuilder::visitExpr(AstExprBinary* b)

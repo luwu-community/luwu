@@ -576,6 +576,7 @@ if(TARGET Luwu.UnitTest)
         tests/TypeInfer.externTypes.test.cpp
         tests/TypeInfer.functions.test.cpp
         tests/TypeInfer.generics.test.cpp
+        tests/TypeInfer.pushPop.test.cpp
         tests/TypeInfer.intersectionTypes.test.cpp
         tests/TypeInfer.loops.test.cpp
         tests/TypeInfer.modules.test.cpp

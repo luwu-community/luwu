@@ -27,6 +27,7 @@ LUAU_FASTFLAGVARIABLE(LuauExportValueSyntax)
 LUAU_FLAGVERSION(LuauExportValueSyntax, 3)
 
 LUAU_FASTFLAGVARIABLE(DebugLuauNoInline)
+LUAU_FASTFLAG(DebugLuwuPoperators)
 LUAU_FASTFLAGVARIABLE(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAGVARIABLE(LuauDisallowExternClassInTypeDefinitions)
 LUAU_FASTFLAGVARIABLE(LuauTableEntriesDontNeedToMatchIndent)
@@ -513,6 +514,11 @@ AstStat* Parser::parseStat()
     // we need to disambiguate a few cases, primarily assignment (lvalue = ...) vs statements-that-are calls
     AstExpr* expr = parsePrimaryExpr(/* asStatement= */ true);
 
+    // Luwu Push and Pop Operators (rfcs/push-pop-operators.md), `<-` syntax: `x <- y` is a comparison as an expression,
+    // which can't be a statement, so as a statement it's someone reaching for a push or a pop
+    if (FFlag::DebugLuwuPoperators && !expr->is<AstExprError>() && popFollows())
+        return parseMistakenPushArrow(expr);
+
     if (expr->is<AstExprCall>())
         return allocator.alloc<AstStatExpr>(expr->location, expr);
 
@@ -523,6 +529,9 @@ AstStat* Parser::parseStat()
     // if the next token is a compound assignment operator, it's a compound assignment (these don't support multiple variables)
     if (std::optional<AstExprBinary::Op> op = parseCompoundOp(lexer.current()))
         return parseCompoundAssignment(expr, *op);
+
+    if (lexer.current().type == Lexeme::Push)
+        return parsePush(expr);
 
     // we know this isn't a call or an assignment; therefore it must be a context-sensitive keyword such as `type` or `continue`
     AstName ident = getIdentifier(expr);
@@ -1653,6 +1662,9 @@ const std::unordered_set<std::string> ALLOWED_METAMETHODS{
     "__iter",
     "__len",
     "__idiv",
+    // Luwu Push and Pop Operators (rfcs/push-pop-operators.md)
+    "__push",
+    "__pop",
 };
 
 const std::unordered_set<std::string> EXPLICITLY_DISALLOWED_METAMETHODS{
@@ -3075,6 +3087,103 @@ AstStat* Parser::parseCompoundAssignment(AstExpr* initial, AstExprBinary::Op op)
     AstStatCompoundAssign* node = allocator.alloc<AstStatCompoundAssign>(Location(initial->location, value->location), op, initial, value);
     if (options.storeCstData)
         cstNodeMap[node] = allocator.alloc<CstStatCompoundAssign>(opPosition);
+    return node;
+}
+
+AstStat* Parser::parsePush(AstExpr* target)
+{
+    if (!FFlag::DebugLuwuPoperators)
+        report(lexer.current().location, "'<+' is a Luwu feature; enable the 'DebugLuwuPoperators' fast flag to use it");
+
+    // A push changes the container, not the variable holding it, so a `const` variable can be pushed to
+    bool variableOrField =
+        target->is<AstExprLocal>() || target->is<AstExprGlobal>() || target->is<AstExprIndexExpr>() || target->is<AstExprIndexName>();
+    if (!variableOrField)
+        target = reportExprError(target->location, copy({target}), "'<+' can only push to a variable or a field");
+
+    Location opLocation = lexer.current().location;
+    nextLexeme();
+
+    TempVector<AstExpr*> values(scratchExpr);
+    TempVector<Position> valuesCommaPositions(scratchPosition);
+    parseExprList(values, options.storeCstData ? &valuesCommaPositions : nullptr);
+
+    LUAU_ASSERT(values.size() > 0);
+    AstStatPush* node =
+        allocator.alloc<AstStatPush>(Location(target->location, values.back()->location), target, opLocation, copy(values));
+    if (options.storeCstData)
+        cstNodeMap[node] = allocator.alloc<CstStatPush>(opLocation.begin, copy(valuesCommaPositions));
+    return node;
+}
+
+bool Parser::typeArgumentsFollow()
+{
+    if (lexer.current().type != '<' || lexer.lookahead().type != '<')
+        return false;
+
+    // Luwu Push and Pop Operators (rfcs/push-pop-operators.md), `<-` syntax: upstream reads `<` `<` as explicit type
+    // arguments even with a space between them. No type starts with `-`, so `x < <-t` is a comparison with a pop.
+    Lexeme second = lexer.lookahead();
+    Lexeme third = lexer.lookaheadSecond();
+    bool popAfterSecond = third.type == '-' && third.location.begin == second.location.end;
+    return !popAfterSecond;
+}
+
+AstStat* Parser::parseMistakenPushArrow(AstExpr* target)
+{
+    // `<` and `-`
+    nextLexeme();
+    nextLexeme();
+
+    AstExpr* value = parseExpr();
+    Location location(target->location, value->location);
+
+    AstName targetName = getIdentifier(target);
+    AstName valueName = getIdentifier(value);
+    if (targetName.value && valueName.value)
+    {
+        return reportStatError(
+            location,
+            copy({target, value}),
+            {},
+            "Did you mean '%s <+ %s' to push, or '%s = <-%s' to pop? A pop's '<-' goes before its container",
+            targetName.value,
+            valueName.value,
+            targetName.value,
+            valueName.value
+        );
+    }
+
+    return reportStatError(
+        location, copy({target, value}), {}, "Did you mean '<+' to push, or '= <-' to pop? A pop's '<-' goes before its container"
+    );
+}
+
+bool Parser::popFollows()
+{
+    if (lexer.current().type != '<')
+        return false;
+
+    Lexeme next = lexer.lookahead();
+    return next.type == '-' && next.location.begin == lexer.current().location.end;
+}
+
+AstExpr* Parser::parsePop(unsigned int unaryPriority)
+{
+    Location start = lexer.current().location;
+    // `<` and `-`
+    nextLexeme();
+    Location op = Location(start, lexer.current().location);
+    nextLexeme();
+
+    if (!FFlag::DebugLuwuPoperators)
+        report(op, "'<-' is a Luwu feature; enable the 'DebugLuwuPoperators' fast flag to use it");
+
+    AstExpr* container = parseExpr(unaryPriority);
+
+    AstExprPop* node = allocator.alloc<AstExprPop>(Location(start, container->location), container);
+    if (options.storeCstData)
+        cstNodeMap[node] = allocator.alloc<CstExprOp>(start.begin);
     return node;
 }
 
@@ -4520,6 +4629,12 @@ AstExpr* Parser::parseExpr(unsigned int limit)
         if (options.storeCstData)
             cstNodeMap[expr] = allocator.alloc<CstExprOp>(opPosition);
     }
+    // Luwu Push and Pop Operators (rfcs/push-pop-operators.md), `<-` syntax: no expression starts with `<`, so `<-x` here
+    // is a pop. Between operands, `a<-b` is still `a < -b`.
+    else if (popFollows())
+    {
+        expr = parsePop(unaryPriority);
+    }
     else
     {
         expr = parseAssertionExpr();
@@ -4666,7 +4781,7 @@ AstExpr* Parser::parsePrimaryExpr(bool asStatement)
         {
             expr = parseFunctionArgs(expr, false);
         }
-        else if (lexer.current().type == '<' && lexer.lookahead().type == '<')
+        else if (typeArgumentsFollow())
         {
             expr = parseExplicitTypeInstantiationExpr(start, *expr);
         }
@@ -4714,7 +4829,7 @@ AstExpr* Parser::parseMethodCall(Position start, AstExpr* expr)
     AstArray<AstTypeOrPack> typeArguments;
     CstTypeInstantiation* cstTypeArguments = options.storeCstData ? allocator.alloc<CstTypeInstantiation>() : nullptr;
 
-    if (lexer.current().type == '<' && lexer.lookahead().type == '<')
+    if (typeArgumentsFollow())
     {
         typeArguments = parseTypeInstantiationExpr(cstTypeArguments);
     }

@@ -21,6 +21,7 @@ LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(DebugLuauNoInline)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(DebugLuwuPoperators)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAG(LuauTrackPrefixLocal)
 LUAU_FASTFLAG(LuwuDefaultArguments)
@@ -7536,6 +7537,94 @@ TEST_CASE_FIXTURE(Fixture, "extern_read_write_attributes")
     CHECK_EQ(declaredExternType->props.data[1].access, AstTableAccess::Write);
     CHECK_EQ(declaredExternType->props.data[2].access, AstTableAccess::ReadWrite);
     CHECK_EQ(declaredExternType->props.data[3].access, AstTableAccess::ReadWrite);
+}
+
+TEST_CASE_FIXTURE(Fixture, "push_and_pop")
+{
+    ScopedFastFlag poperators{FFlag::DebugLuwuPoperators, true};
+
+    AstStatBlock* block = parse(R"(
+        const t = {}
+        t <+ 1, f()
+        local x = <-t.items
+        local y = a<-b
+    )");
+
+    REQUIRE_EQ(block->body.size, 4);
+
+    // a const variable can be pushed to: the push changes the table, not the variable
+    AstStatPush* push = block->body.data[1]->as<AstStatPush>();
+    REQUIRE(push);
+    CHECK(push->luwuOnly);
+    CHECK(push->target->is<AstExprLocal>());
+    CHECK_EQ(push->opLocation, Location{{2, 10}, {2, 12}});
+    REQUIRE_EQ(push->values.size, 2);
+    CHECK(push->values.data[1]->is<AstExprCall>());
+
+    // pop binds like `#`: the whole field is the operand
+    AstStatLocal* popped = block->body.data[2]->as<AstStatLocal>();
+    REQUIRE(popped);
+    AstExprPop* pop = popped->values.data[0]->as<AstExprPop>();
+    REQUIRE(pop);
+    CHECK(pop->luwuOnly);
+    CHECK(pop->expr->is<AstExprIndexName>());
+
+    // between two operands, `<-` is still a comparison with a negation
+    AstStatLocal* compared = block->body.data[3]->as<AstStatLocal>();
+    REQUIRE(compared);
+    AstExprBinary* comparison = compared->values.data[0]->as<AstExprBinary>();
+    REQUIRE(comparison);
+    CHECK_EQ(comparison->op, AstExprBinary::CompareLt);
+    CHECK(comparison->right->is<AstExprUnary>());
+}
+
+TEST_CASE_FIXTURE(Fixture, "a_pop_after_less_than_is_not_explicit_type_arguments")
+{
+    ScopedFastFlag poperators{FFlag::DebugLuwuPoperators, true};
+
+    AstStatBlock* block = parse(R"(
+        local a = x < <-t
+        local b = f< <number>>()
+    )");
+
+    REQUIRE_EQ(block->body.size, 2);
+
+    AstStatLocal* compared = block->body.data[0]->as<AstStatLocal>();
+    REQUIRE(compared);
+    AstExprBinary* comparison = compared->values.data[0]->as<AstExprBinary>();
+    REQUIRE(comparison);
+    CHECK_EQ(comparison->op, AstExprBinary::CompareLt);
+    CHECK(comparison->right->is<AstExprPop>());
+
+    // `< <` with no `-` after it still opens type arguments
+    AstStatLocal* instantiated = block->body.data[1]->as<AstStatLocal>();
+    REQUIRE(instantiated);
+    AstExprCall* call = instantiated->values.data[0]->as<AstExprCall>();
+    REQUIRE(call);
+    CHECK(call->func->is<AstExprInstantiate>());
+}
+
+TEST_CASE_FIXTURE(Fixture, "an_arrow_statement_suggests_push_or_pop")
+{
+    ScopedFastFlag poperators{FFlag::DebugLuwuPoperators, true};
+
+    matchParseError("x <- y", "Did you mean 'x <+ y' to push, or 'x = <-y' to pop? A pop's '<-' goes before its container", Location{{0, 0}, {0, 6}});
+    matchParseError("t.items <- y", "Did you mean '<+' to push, or '= <-' to pop? A pop's '<-' goes before its container");
+}
+
+TEST_CASE_FIXTURE(Fixture, "push_target_must_be_a_variable_or_a_field")
+{
+    ScopedFastFlag poperators{FFlag::DebugLuwuPoperators, true};
+
+    matchParseError("(t) <+ 1", "'<+' can only push to a variable or a field");
+}
+
+TEST_CASE_FIXTURE(Fixture, "push_and_pop_need_their_flag")
+{
+    ScopedFastFlag poperators{FFlag::DebugLuwuPoperators, false};
+
+    matchParseError("t <+ 1", "'<+' is a Luwu feature; enable the 'DebugLuwuPoperators' fast flag to use it", Location{{0, 2}, {0, 4}});
+    matchParseError("local x = <-t", "'<-' is a Luwu feature; enable the 'DebugLuwuPoperators' fast flag to use it", Location{{0, 10}, {0, 12}});
 }
 
 // TODO unit tests for various parse errors.

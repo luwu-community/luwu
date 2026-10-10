@@ -387,6 +387,8 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::FALLBACK_FORGPREP:
     case IrCmd::FALLBACK_NEWOBJECT:
     case IrCmd::FALLBACK_NEWCLASSMEMBER:
+    case IrCmd::FALLBACK_PUSH:
+    case IrCmd::FALLBACK_POP:
         return IrValueKind::None;
     case IrCmd::SUBSTITUTE:
         return IrValueKind::Unknown;

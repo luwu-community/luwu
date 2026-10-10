@@ -1591,7 +1591,16 @@ static void analyzeBytecodeTypesPass(
             case LOP_CHECKSELFCLASS:
             case LOP_JUMPXISA:
             case LOP_SETOBJECTMEMBER:
+            case LOP_PUSH:
                 break;
+            case LOP_POP:
+            {
+                // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): any element, or whatever __pop returns
+                int ra = LUAU_INSN_A(*pc);
+                regTags[ra] = LBC_TYPE_ANY;
+                bcType.result = regTags[ra];
+                break;
+            }
             case LOP_GETOBJECTMEMBER:
             {
                 // Luwu Classes (rfcs/classes): the member's type is unknown here, like GETTABLEKS's result
@@ -1691,6 +1700,7 @@ static void visitBytecodeRegWrites(const IrFunction& function, const std::vector
         if (LUAU_INSN_C(*code) == LBC_NEWOBJECT_INIT)
             visitRange(ra + 1, 2);
         break;
+    case LOP_POP:
     case LOP_NAMECALL:
     case LOP_NAMECALLUDATA:
         visitRange(ra, 2);

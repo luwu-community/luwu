@@ -763,6 +763,15 @@ struct Printer
             }
             visualize(*a->expr);
         }
+        // Luwu Push and Pop Operators (rfcs/push-pop-operators.md), `<-` syntax
+        else if (const auto& a = expr.as<AstExprPop>())
+        {
+            if (const auto cstNode = lookupCstNode<CstExprOp>(a))
+                advance(cstNode->opPosition);
+
+            writer.symbol("<-");
+            visualize(*a->expr);
+        }
         else if (const auto& a = expr.as<AstExprBinary>())
         {
             visualize(*a->left);
@@ -1193,6 +1202,25 @@ struct Printer
             }
 
             visualize(*a->value);
+        }
+        else if (const auto& a = program.as<AstStatPush>())
+        {
+            const auto cstNode = lookupCstNode<CstStatPush>(a);
+
+            visualize(*a->target);
+
+            if (cstNode)
+                advance(cstNode->opPosition);
+            else
+                writer.space();
+            writer.symbol("<+");
+
+            CommaSeparatorInserter valueComma(writer, cstNode ? cstNode->valuesCommaPositions.begin() : nullptr);
+            for (const auto& value : a->values)
+            {
+                valueComma();
+                visualize(*value);
+            }
         }
         else if (const auto& a = program.as<AstStatFunction>())
         {

@@ -617,6 +617,18 @@ struct AstJsonEncoder : public AstVisitor
         );
     }
 
+    void write(class AstExprPop* node)
+    {
+        writeNode(
+            node,
+            "AstExprPop",
+            [&]()
+            {
+                PROP(expr);
+            }
+        );
+    }
+
     void write(AstExprBinary::Op op)
     {
         switch (op)
@@ -870,6 +882,19 @@ struct AstJsonEncoder : public AstVisitor
                 PROP(op);
                 PROP(var);
                 PROP(value);
+            }
+        );
+    }
+
+    void write(class AstStatPush* node)
+    {
+        writeNode(
+            node,
+            "AstStatPush",
+            [&]()
+            {
+                PROP(target);
+                PROP(values);
             }
         );
     }
@@ -1326,6 +1351,12 @@ struct AstJsonEncoder : public AstVisitor
         return false;
     }
 
+    bool visit(class AstExprPop* node) override
+    {
+        write(node);
+        return false;
+    }
+
     bool visit(class AstExprBinary* node) override
     {
         write(node);
@@ -1417,6 +1448,12 @@ struct AstJsonEncoder : public AstVisitor
     }
 
     bool visit(class AstStatCompoundAssign* node) override
+    {
+        write(node);
+        return false;
+    }
+
+    bool visit(class AstStatPush* node) override
     {
         write(node);
         return false;

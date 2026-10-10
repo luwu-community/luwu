@@ -244,6 +244,18 @@ private:
     // var [`+=' | `-=' | `*=' | `/=' | `%=' | `^=' | `..='] exp
     AstStat* parseCompoundAssignment(AstExpr* initial, AstExprBinary::Op op);
 
+    // Luwu Push and Pop Operators (rfcs/push-pop-operators.md)
+    // var `<+' explist
+    AstStat* parsePush(AstExpr* target);
+    // `<-` syntax: whether the current `<` and the `-` right after it start a pop.
+    bool popFollows();
+    // `<-' exp, the operand parsed like a unary operator's
+    AstExpr* parsePop(unsigned int unaryPriority);
+    // Whether `<<` (or `< <`) opening explicit type arguments follows.
+    bool typeArgumentsFollow();
+    // `<-` syntax: `x <- y` as a statement, which reads like a push with an arrow
+    AstStat* parseMistakenPushArrow(AstExpr* target);
+
     std::tuple<AstLocal*, AstArray<AstLocal*>, AstArray<AstExpr*>> prepareFunctionArguments(const Location& start, bool hasself, const TempVector<Binding>& args);
 
     // funcbodyhead ::= `(' [namelist [`,' `...'] | `...'] `)' [`:` Type]

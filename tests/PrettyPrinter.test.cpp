@@ -11,6 +11,7 @@
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(DebugLuauNoInline)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(DebugLuwuPoperators)
 LUAU_FASTFLAG(LuauTableEntriesDontNeedToMatchIndent)
 LUAU_FASTFLAG(LuauCstAttr)
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
@@ -2262,6 +2263,23 @@ class Box   (a)
 end
     )";
     CHECK_EQ(expected, prettyPrint(code, {}, false).code);
+}
+
+TEST_CASE("prettyPrint_push_and_pop")
+{
+    ScopedFastFlag poperators{FFlag::DebugLuwuPoperators, true};
+
+    std::string code = R"(
+const t = {}
+t <+ 1
+t  <+ 1 ,  f()
+self.items<+x
+local x = <-t
+local y = <-  t.items + #t
+local z = a<-b
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+    CHECK_EQ(code, prettyPrint(code).code);
 }
 
 TEST_CASE("prettyPrint_function_attributes")
