@@ -2654,4 +2654,27 @@ end
     CHECK_EQ(toString(missing->missing[0]), "Dog");
 }
 
+TEST_CASE_FIXTURE(ClassesFixture, "method_call_on_a_union_of_classes")
+{
+    CheckResult result = check(R"(
+        --!strict
+        class Cat(public name: string)
+            public function speak(self): string
+                return "meow"
+            end
+        end
+        class Dog(public name: string)
+            public function speak(self): string
+                return "woof"
+            end
+        end
+
+        local function talk(pet: Cat | Dog): string
+            return pet:speak()
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
 TEST_SUITE_END();

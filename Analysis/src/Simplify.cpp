@@ -397,7 +397,9 @@ Relation relateTables(const TableType* leftTable, const TableType* rightTable, S
     if (relate(leftTable->indexer->indexType, rightTable->indexer->indexType, seen) != Relation::Coincident)
         return Relation::Intersects;
 
-    if (relate(leftTable->indexer->indexType, rightTable->indexer->indexType, seen) != Relation::Coincident)
+    // Luwu: the values too. Upstream compares the keys twice, so `{ number }` and `{ string }` were coincident and
+    // `{ number } | { string }` simplified to `{ number }`.
+    if (relate(leftTable->indexer->indexResultType, rightTable->indexer->indexResultType, seen) != Relation::Coincident)
         return Relation::Intersects;
 
     return hasSubset ? Relation::Subset : Relation::Coincident;
@@ -1519,6 +1521,24 @@ TypeId TypeSimplifier::intersect(TypeId left, TypeId right)
         return arena->addType(IntersectionType{{left, right}});
 }
 
+// Luwu: an empty table literal (`{}` in `x or {}`) is already one of `table`'s values when `table` has no required
+// fields. The literal is unsealed: it may gain fields later, which only ever happens through what refers to it.
+static bool emptyLiteralFits(TypeId literal, TypeId table)
+{
+    const TableType* empty = get<TableType>(literal);
+    const TableType* fits = get<TableType>(table);
+    bool emptyLiteral = empty && empty->state == TableState::Unsealed && empty->props.empty() && !empty->indexer;
+    if (!emptyLiteral || !fits || fits->state != TableState::Sealed)
+        return false;
+
+    for (const auto& [_, prop] : fits->props)
+    {
+        if (!prop.readTy || !isOptional(*prop.readTy))
+            return false;
+    }
+    return true;
+}
+
 TypeId TypeSimplifier::union_(TypeId left, TypeId right)
 {
     RecursionLimiter rl("TypeSimplifier::union", &recursionDepth, 15);
@@ -1574,6 +1594,11 @@ TypeId TypeSimplifier::union_(TypeId left, TypeId right)
     }
     else if (get<UnionType>(right))
         return union_(right, left);
+
+    if (emptyLiteralFits(right, left))
+        return left;
+    if (emptyLiteralFits(left, right))
+        return right;
 
     Relation r = relate(left, right);
     if (left == right || r == Relation::Coincident || r == Relation::Superset)
