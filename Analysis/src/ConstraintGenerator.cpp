@@ -1142,6 +1142,10 @@ void ConstraintGenerator::prototypeClass(
 
                     auto prop = Property::readonly(propertyType);
                     prop.location = method.nameLocation;
+                    // Luwu Traits (rfcs/classes/traits.md): an implementing class may leave an optional expected function
+                    // out, so through the trait it reads as `F?` (expectedTraitFunction gives its `F`)
+                    if (method.isOptional)
+                        prop.readTy = makeOption(builtinTypes, *arena, propertyType);
                     if (FFlag::LuwuClasses)
                         prop.isPrivate = method.visibility == AstClassMemberVisibility::Private;
                     // Luwu Classes (rfcs/classes): an instance method is also readable through the
@@ -1681,10 +1685,24 @@ void ConstraintGenerator::recordNeededTypeArguments(
 
 void ConstraintGenerator::linkTraitNeeds(const ScopePtr& scope, const AstArray<AstStat*>& statements)
 {
-    for (AstStat* stat : statements)
+    // A trait statement, or a `declare trait type` (Luwu Declare Statements, rfcs/declare-statements.md), which the
+    // file's own block links, like it prototypes it.
+    auto traitOf = [&](AstStat* stat) -> AstStatClass*
     {
         AstStatClass* trait = stat->as<AstStatClass>();
-        if (!trait || !trait->isTrait || trait->needs.size == 0)
+        if (AstStatDeclareClass* declared = stat->as<AstStatDeclareClass>())
+        {
+            bool linkedByFileBlock = declaresFileGlobals() && scope.get() != rootScope;
+            trait = linkedByFileBlock ? nullptr : declared->shape;
+        }
+
+        return trait && trait->isTrait ? trait : nullptr;
+    };
+
+    for (AstStat* stat : statements)
+    {
+        AstStatClass* trait = traitOf(stat);
+        if (!trait || trait->needs.size == 0)
             continue;
 
         std::unique_ptr<ClassDeclRecord>* record = classDeclRecords.find(trait->name);
@@ -1712,8 +1730,8 @@ void ConstraintGenerator::linkTraitNeeds(const ScopePtr& scope, const AstArray<A
     DenseHashMap<const ExternType*, AstStatClass*> traitDecls{nullptr};
     for (AstStat* stat : statements)
     {
-        AstStatClass* trait = stat->as<AstStatClass>();
-        std::unique_ptr<ClassDeclRecord>* record = trait && trait->isTrait ? classDeclRecords.find(trait->name) : nullptr;
+        AstStatClass* trait = traitOf(stat);
+        std::unique_ptr<ClassDeclRecord>* record = trait ? classDeclRecords.find(trait->name) : nullptr;
         if (const ExternType* traitType = record ? get<ExternType>(follow((*record)->ty)) : nullptr)
             traitDecls[traitType] = trait;
     }
@@ -1743,8 +1761,8 @@ void ConstraintGenerator::linkTraitNeeds(const ScopePtr& scope, const AstArray<A
 
     for (AstStat* stat : statements)
     {
-        AstStatClass* trait = stat->as<AstStatClass>();
-        std::unique_ptr<ClassDeclRecord>* record = trait && trait->isTrait ? classDeclRecords.find(trait->name) : nullptr;
+        AstStatClass* trait = traitOf(stat);
+        std::unique_ptr<ClassDeclRecord>* record = trait ? classDeclRecords.find(trait->name) : nullptr;
         if (record)
             instantiateNeeds(getMutable<ExternType>(follow((*record)->ty)));
     }
@@ -1753,8 +1771,8 @@ void ConstraintGenerator::linkTraitNeeds(const ScopePtr& scope, const AstArray<A
     // implements too. Each needed trait is visited once, however the `needs` graph branches or loops.
     for (AstStat* stat : statements)
     {
-        AstStatClass* trait = stat->as<AstStatClass>();
-        std::unique_ptr<ClassDeclRecord>* record = trait && trait->isTrait ? classDeclRecords.find(trait->name) : nullptr;
+        AstStatClass* trait = traitOf(stat);
+        std::unique_ptr<ClassDeclRecord>* record = trait ? classDeclRecords.find(trait->name) : nullptr;
         ExternType* traitType = record ? getMutable<ExternType>(follow((*record)->ty)) : nullptr;
         if (!traitType || !traitType->traitInfo || traitType->implementedTraits.empty())
             continue;
@@ -1883,8 +1901,8 @@ void ConstraintGenerator::linkTraitNeeds(const ScopePtr& scope, const AstArray<A
 
     for (AstStat* stat : statements)
     {
-        AstStatClass* trait = stat->as<AstStatClass>();
-        if (!trait || !trait->isTrait || trait->needs.size == 0)
+        AstStatClass* trait = traitOf(stat);
+        if (!trait || trait->needs.size == 0)
             continue;
 
         std::unique_ptr<ClassDeclRecord>* record = classDeclRecords.find(trait->name);
@@ -2548,12 +2566,10 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
 
             if (found == classType->props().end() && !inMetatable)
             {
-                // an optional function the class leaves out reads as nil
+                // an optional function the class leaves out reads as nil, with the trait's `F?` type
                 if (optional && expectedProp != traitType->props().end() && expectedProp->second.readTy)
                 {
-                    Property nilable = instantiateProperty(trait, expectedProp->second, location);
-                    nilable.readTy = makeOption(builtinTypes, *arena, *nilable.readTy);
-                    classType->props()[name] = nilable;
+                    classType->props()[name] = instantiateProperty(trait, expectedProp->second, location);
                     continue;
                 }
 

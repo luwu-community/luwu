@@ -390,6 +390,22 @@ TypeId stripNil(NotNull<BuiltinTypes> builtinTypes, TypeArena& arena, TypeId ty)
     return follow(ty);
 }
 
+TypeId expectedTraitFunction(TypeId ty)
+{
+    ty = follow(ty);
+
+    if (const UnionType* options = get<UnionType>(ty))
+    {
+        for (TypeId option : options->options)
+        {
+            if (!isNil(option))
+                return follow(option);
+        }
+    }
+
+    return ty;
+}
+
 ErrorSuppression shouldSuppressErrors(NotNull<Normalizer> normalizer, TypeId ty)
 {
     if (auto tfit = get<TypeFunctionInstanceType>(follow(ty)))

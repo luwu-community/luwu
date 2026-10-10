@@ -311,7 +311,8 @@ The standard library function `class.implements` participates in refinement.
 The magic type function `class<Trait>` refers to the class value of any class that implements `Trait`. This is useful for factory functions
 (and `__create`) that live on traits and need to create objects of a concrete class.
 
-In a trait or class, the type `Self` is the class of the object a function is called on (in a class, that class), so a trait function returning `self` can be annotated `: Self` and keep the caller's class.
+In a trait or class, the type `Self` is the class of the object a function is called on (in a class, that class), so a trait function returning `self`
+can be annotated `: Self` and keep the caller's class.
 
 ### Editor support
 

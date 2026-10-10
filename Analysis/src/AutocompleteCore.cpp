@@ -2084,7 +2084,7 @@ static std::string traitMemberDeclaration(const ScopePtr& scope, const ExternTyp
     if (traitType->traitInfo->hasAccessSpecifiers)
         result += prop.isPrivate ? "private " : "public ";
 
-    const FunctionType* fn = prop.readTy ? get<FunctionType>(follow(*prop.readTy)) : nullptr;
+    const FunctionType* fn = prop.readTy ? get<FunctionType>(expectedTraitFunction(*prop.readTy)) : nullptr;
     if (isField || !fn)
     {
         if (prop.isConst)

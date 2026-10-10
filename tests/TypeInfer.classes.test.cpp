@@ -2905,6 +2905,168 @@ TEST_CASE_FIXTURE(ClassesFixture, "isinstance_refines_to_an_imported_declared_cl
     LUAU_REQUIRE_NO_ERRORS(getFrontend().check("game/B"));
 }
 
+TEST_CASE_FIXTURE(ClassesFixture, "declared_trait_types")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        declare trait type Named
+            expect public name: string
+        end
+
+        declare trait type Greeter needs Named
+            expect public function speak?(self): string
+            private secret: number
+            public function greet(self): string
+        end
+
+        local function hello(g: Greeter): string
+            local n: string = g.name
+            local s = g.speak
+            local hidden = g.secret
+            return g:greet()
+        end
+
+        local Greeter = (nil :: any) :: trait<Greeter>
+        local greet = Greeter.greet
+    )");
+
+    // `secret` is private
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 15);
+    // an implementing class may leave `speak` out
+    CHECK_EQ(toString(requireTypeAtPosition({14, 25})), "((Greeter) -> string)?");
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "optional_expected_functions_may_be_nil_through_the_trait")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        trait Greeter
+            expect function speak?(self): string
+            function greet(self): string
+                if self.speak then
+                    return self:speak()
+                end
+                return "..."
+            end
+            function shout(self): string
+                return self:speak()
+            end
+        end
+
+        class Cat implements Greeter
+            function speak(self): string return "meow" end
+        end
+        class Rock implements Greeter end
+
+        local function f(g: Greeter, c: Cat, r: Rock)
+            local a = g.speak
+            local b = c.speak
+            local d = r.speak
+        end
+    )");
+
+    // `shout` calls `speak` without checking that the class has it
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 11);
+    CHECK_EQ(toString(requireTypeAtPosition({21, 25})), "((Greeter) -> string)?");
+    CHECK_EQ(toString(requireTypeAtPosition({22, 25})), "(Cat) -> string");
+    CHECK_EQ(toString(requireTypeAtPosition({23, 25})), "((Greeter) -> string)?");
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "classes_implement_declared_traits")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        declare trait type Greeter
+            expect public name: string
+            public function greet(self): string
+        end
+
+        declare class type Robot implements Greeter
+            public name: string
+            public serial: number
+        end
+
+        local Greeter = (nil :: any) :: trait<Greeter>
+
+        class Cat implements Greeter
+            public name = "c"
+        end
+
+        class Rock implements Greeter
+            public weight = 1
+        end
+
+        local function robot(r: Robot): Greeter
+            local s: string = r:greet()
+            return r
+        end
+
+        local cat: Greeter = Cat()
+
+        local function f(x: unknown)
+            if class.implements(x, Greeter) then
+                local refined = x
+            end
+        end
+
+        -- the annotation names the trait, whatever the local is called
+        const G: trait<Greeter> = Greeter
+        class Dog implements G end
+    )");
+
+    // Rock doesn't have the `name` Greeter expects, and neither does Dog
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 18);
+    CHECK_EQ(result.errors[1].location.begin.line, 37);
+    CHECK_EQ(toString(requireTypeAtPosition({31, 32})), "Greeter");
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "declared_traits_are_scoped_like_types")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    fileResolver.source["game/A"] = R"(
+        --!strict
+        export declare trait type Greeter
+            expect public name: string
+            public function greet(self): string
+        end
+        declare trait type Hidden
+            public function hide(self)
+        end
+        return {} :: { Greeter: trait<Greeter> }
+    )";
+    fileResolver.source["game/B"] = R"(
+        --!strict
+        local a = require(game.A)
+        local function hello(g: a.Greeter): string
+            return g:greet() .. g.name
+        end
+        class Cat implements a.Greeter
+            public name = "c"
+        end
+        local g: a.Greeter = Cat()
+        type H = a.Hidden
+    )";
+
+    CheckResult result = getFrontend().check("game/B");
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    UnknownSymbol* hidden = get<UnknownSymbol>(result.errors[0]);
+    REQUIRE(hidden);
+    CHECK_EQ(hidden->name, "a.Hidden");
+}
+
 TEST_CASE_FIXTURE(ClassesFixture, "class_of_a_generic_class_without_type_arguments")
 {
     ScopedFastFlag luwuGenericNominals{FFlag::LuwuGenericNominals, true};

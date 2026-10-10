@@ -76,6 +76,7 @@ const char* const kDeclareExportValueError =
 const char* const kLegacyDeclareClassError = "In Luwu, 'declare class' does not declare an extern type; write 'declare extern type' instead";
 const char* const kDeclareClassNeedsTypeError =
     "A declared class is written 'declare class type Name'; to declare an extern type, write 'declare extern type Name'";
+const char* const kDeclareTraitNeedsTypeError = "A declared trait is written 'declare trait type Name'";
 const char* const kDeclareExportOrderError = "'export' goes before 'declare': write 'export declare'";
 const char* const kClassesDisabledError = "Classes are currently disabled; enable the 'LuwuClasses' fast flag to use 'class'";
 
@@ -2890,12 +2891,13 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
             if (strncmp(propName->name.value, "__", 2) == 0)
                 report(propName->location, "%s fields cannot start with '__'", isTrait ? "Trait" : "Class");
 
-            if (expectLocation && defaultValue)
+            if (expectLocation && equalsLocation)
                 report(*equalsLocation, "Expected fields can't have default values");
 
             // Luwu Traits (rfcs/classes/traits.md): a final field's value is the trait's default, which nothing else can set
             bool isFinalField = isTrait && finalLocation && !expectLocation;
-            if (isFinalField && !defaultValue)
+            // a declared trait's final field may leave its default out: the value is the trait's business
+            if (isFinalField && !defaultValue && !declared)
                 report(propName->location, "Final field '%s' needs a default value", propName->name.value);
             else if (isFinalField && findPrimaryConstructorParam(propName->name) >= 0)
                 report(propName->location, "Final field '%s' can't be a trait parameter", propName->name.value);
@@ -2911,7 +2913,12 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
 
             // Luwu Declare Statements (rfcs/declare-statements.md): a declaration writes every type out
             if (declared && !propType)
-                report(propName->location, "Declared class field '%s' needs a type: 'name: T', or 'name = T' if it has a default", propName->name.value);
+                report(
+                    propName->location,
+                    "Declared %s field '%s' needs a type: 'name: T', or 'name = T' if it has a default",
+                    kind,
+                    propName->name.value
+                );
 
             // The member turned out to be a field rather than a method, so pin the attributes down
             // to that position now -- `@native` is a method-only attribute.
@@ -3484,7 +3491,8 @@ AstStat* Parser::parseDeclaration(const Location& start, const AstArray<AstAttr*
 
     if (exportLocation)
     {
-        bool exportsType = declaresClass() || (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "extern");
+        bool exportsType =
+            declaresClass() || declaresTrait() || (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "extern");
         if (!exportsType)
         {
             report(*exportLocation, "%s", kDeclareExportValueError);
@@ -3492,7 +3500,10 @@ AstStat* Parser::parseDeclaration(const Location& start, const AstArray<AstAttr*
         }
     }
 
-    if (declaresClass())
+    // Luwu Traits (rfcs/classes/traits.md): `declare trait type Name` declares a trait the way `declare class type` declares a
+    // class, as the same shape.
+    bool isTrait = declaresTrait();
+    if (isTrait || declaresClass())
     {
         Location classKeywordLocation = lexer.current().location;
         nextLexeme();
@@ -3503,9 +3514,11 @@ AstStat* Parser::parseDeclaration(const Location& start, const AstArray<AstAttr*
         if (typeKeyword)
             nextLexeme();
         else
-            report(classKeywordLocation, "%s", kDeclareClassNeedsTypeError);
+            report(classKeywordLocation, "%s", isTrait ? kDeclareTraitNeedsTypeError : kDeclareClassNeedsTypeError);
 
-        AstStat* stat = parseClassStat(start, /* exported= */ exportLocation.has_value(), classKeywordLocation, {nullptr, 0}, /* declared= */ true);
+        AstStat* stat = parseClassStat(
+            start, /* exported= */ exportLocation.has_value(), classKeywordLocation, {nullptr, 0}, /* declared= */ true, isTrait
+        );
         AstStatClass* shape = stat->as<AstStatClass>();
         if (!shape)
             return stat;
@@ -3900,6 +3913,13 @@ bool Parser::legacyDeclareClass()
 bool Parser::declaresClass()
 {
     return FFlag::LuwuDeclareStatements && FFlag::LuwuClasses && lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "class" &&
+           lexer.lookahead().type == Lexeme::Name;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): `declare trait type Name`. `declare trait: T` is still a global named `trait`.
+bool Parser::declaresTrait()
+{
+    return FFlag::LuwuDeclareStatements && traitsEnabled() && lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "trait" &&
            lexer.lookahead().type == Lexeme::Name;
 }
 

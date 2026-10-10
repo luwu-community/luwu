@@ -133,6 +133,24 @@ std::optional<TypeFun> Scope::lookupTraitRef(const AstClassTraitRef& ref) const
     if (AstExprGlobal* global = ref.trait->as<AstExprGlobal>())
         return lookupType(global->name.value);
 
+    // Luwu Declare Statements (rfcs/declare-statements.md): a declared trait has no value, so a class implementing one names
+    // a local holding it, `local Greeter = ... :: trait<Greeter>` or `const G: trait<Greeter> = ...`. The annotation says
+    // which trait; without one, the local is taken to be named after it, as a global is.
+    if (AstExprLocal* local = ref.trait->as<AstExprLocal>())
+    {
+        AstTypeReference* traitValue = local->local->annotation ? local->local->annotation->as<AstTypeReference>() : nullptr;
+        bool annotated = traitValue && !traitValue->prefix && traitValue->name == "trait" && traitValue->parameters.size == 1;
+        AstType* argument = annotated ? traitValue->parameters.data[0].type : nullptr;
+        AstTypeReference* named = argument ? argument->as<AstTypeReference>() : nullptr;
+        if (!named)
+            return lookupType(local->local->name.value);
+
+        if (named->prefix)
+            return lookupImportedType(named->prefix->value, named->name.value);
+
+        return lookupType(named->name.value);
+    }
+
     AstExprIndexName* index = ref.trait->as<AstExprIndexName>();
     if (!index)
         return std::nullopt;
