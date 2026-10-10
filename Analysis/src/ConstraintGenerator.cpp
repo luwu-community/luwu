@@ -1337,6 +1337,9 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
             getMutable<ExternType>(externTy)->relation.emplace(Obj{classInstanceTy});
             getMutable<ExternType>(classInstanceTy)->relation.emplace(Klass{externTy});
 
+            attachDeclarationComments(classInstanceTy, classDecl->location);
+            attachDeclarationComments(externTy, classDecl->location);
+
             LUAU_ASSERT(!is<BoundType>(theTy));
             [[maybe_unused]] const BlockedType* bt = get<BlockedType>(theTy);
             LUAU_ASSERT(bt);
@@ -1764,6 +1767,14 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatLocal* stat
         }
     }
 
+    // Luwu: a table or function written as a local's value is that local's own (attachDeclarationComments)
+    for (AstExpr* value : statLocal->values)
+    {
+        bool literal = value->is<AstExprTable>() || value->is<AstExprFunction>();
+        if (TypeId* valueTy = literal ? module->astTypes.find(value) : nullptr)
+            attachDeclarationComments(*valueTy, statLocal->location);
+    }
+
     return ControlFlow::None;
 }
 
@@ -1899,6 +1910,28 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatRepeat* rep
     return ControlFlow::None;
 }
 
+// Luwu doc references: the first table or function type written as an argument of a user-defined type function call
+// (`Freeze<{ ... }>`), or null
+static AstType* typeFunctionLiteralArgument(const Scope& scope, AstType* annotation)
+{
+    AstTypeReference* call = annotation->as<AstTypeReference>();
+    if (!call || call->prefix || call->parameters.size == 0)
+        return nullptr;
+
+    std::optional<TypeFun> callee = scope.lookupType(call->name.value);
+    const TypeFunctionInstanceType* function = callee ? get<TypeFunctionInstanceType>(follow(callee->type)) : nullptr;
+    if (!function || !function->userFuncData.definition)
+        return nullptr;
+
+    for (const AstTypeOrPack& param : call->parameters)
+    {
+        if (param.type && (param.type->is<AstTypeTable>() || param.type->is<AstTypeFunction>()))
+            return param.type;
+    }
+
+    return nullptr;
+}
+
 static void propagateDeprecatedAttributeToConstraint(ConstraintV& c, const AstExprFunction* func)
 {
     if (GeneralizationConstraint* genConstraint = c.get_if<GeneralizationConstraint>())
@@ -1927,6 +1960,7 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatLocalFuncti
     scope->bindings[function->name] = Binding{functionType, function->name->location};
 
     FunctionSignature sig = checkFunctionSignature(scope, nullptr, function->func, /* expectedType */ std::nullopt, function->name->location);
+    attachDeclarationComments(sig.signature, function->location);
     sig.bodyScope->bindings[function->name] = Binding{sig.signature, function->name->location};
 
     DefId def = dfg->getDef(function->name);
@@ -1959,6 +1993,7 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatFunction* f
 
     Checkpoint start = checkpoint(this);
     FunctionSignature sig = checkFunctionSignature(scope, nullptr, function->func, /* expectedType */ std::nullopt, function->name->location);
+    attachDeclarationComments(sig.signature, function->location);
 
     DefId def = dfg->getDef(function->name);
 
@@ -2291,6 +2326,18 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatTypeAlias* 
         /* replaceErrorWithFresh */ false
     );
 
+    // Luwu: a table or function type written out here is this alias's own, so the comments around the alias are about it
+    if (alias->type->is<AstTypeTable>() || alias->type->is<AstTypeFunction>())
+        attachDeclarationComments(ty, alias->location);
+    // Luwu doc references: so is one written as a type function's argument (`type Lib = Freeze<{ ... }>`), which the type
+    // function then sees in its argument's metadata. The declaration runs to the end of that argument, so a comment after
+    // its closing brace is beside it.
+    else if (AstType* literal = typeFunctionLiteralArgument(*defnScope, alias->type))
+    {
+        if (TypeId* literalTy = module->astResolvedTypes.find(literal))
+            attachDeclarationComments(*literalTy, Location{alias->location.begin, literal->location.end});
+    }
+
     TypeId aliasTy = bindingIt->second.type;
     LUAU_ASSERT(get<BlockedType>(aliasTy));
     if (occursCheck(aliasTy, ty))
@@ -2464,6 +2511,7 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatDeclareExte
 
     TypeId externTy =
         arena->addType(ExternType(std::move(className), {}, superTy, std::nullopt, {}, {}, module->name, declaredExternType->location));
+    attachDeclarationComments(externTy, declaredExternType->location);
     ExternType* etv = getMutable<ExternType>(externTy);
 
     TypeId metaTy = arena->addType(TableType{TableState::Sealed, scope->level, scope.get()});
@@ -2722,6 +2770,102 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatDeclareFunc
     updateRValueRefinements(rootScope, def, fnType);
 
     return ControlFlow::None;
+}
+
+// Luwu: puts the comments directly above `declaration` (each starting its own line, with no gap) and the first one to the
+// right of its first line into `ty`'s metadata, as
+// `comments = { { prefix = "--", message = "...", location = "above" | "side" }, ... }`, top to bottom. Only a type
+// the declaration made gets them: one shared with other declarations (builtins, an alias of an alias) is left alone.
+void ConstraintGenerator::attachDeclarationComments(TypeId ty, const Location& declaration)
+{
+    ty = follow(ty);
+    bool declaredHere = get<TableType>(ty) || get<FunctionType>(ty) || get<MetatableType>(ty) || get<ExternType>(ty);
+    if (!declaredHere || ty->persistent || ty->metadata)
+        return;
+
+    if (std::shared_ptr<TypeMetadataTable> metadata = declarationComments(declaration))
+        asMutable(ty)->metadata = std::move(metadata);
+}
+
+std::shared_ptr<TypeMetadataTable> ConstraintGenerator::declarationComments(const Location& declaration)
+{
+    if (!sourceComments || sourceComments->empty())
+        return nullptr;
+
+    const std::vector<SourceComment>& comments = *sourceComments;
+    auto onDeclarationLine = std::lower_bound(
+        comments.begin(),
+        comments.end(),
+        declaration.begin.line,
+        [](const SourceComment& comment, unsigned line)
+        {
+            return comment.location.begin.line < line;
+        }
+    );
+
+    std::vector<const SourceComment*> found;
+    size_t aboveCount = 0;
+    unsigned nextLine = declaration.begin.line;
+    for (auto it = onDeclarationLine; it != comments.begin(); --it)
+    {
+        const SourceComment& above = *std::prev(it);
+        if (!above.startsLine || above.location.end.line + 1 != nextLine)
+            break;
+
+        found.push_back(&above);
+        nextLine = above.location.begin.line;
+    }
+    std::reverse(found.begin(), found.end());
+    aboveCount = found.size();
+
+    for (auto it = onDeclarationLine; it != comments.end() && it->location.begin.line == declaration.begin.line; ++it)
+    {
+        if (!it->startsLine && it->location.begin.column > declaration.begin.column)
+        {
+            found.push_back(&*it);
+            break;
+        }
+    }
+
+    // and the first comment after a multi-line declaration's end, on its last line (`} --- the config`)
+    if (declaration.end.line > declaration.begin.line)
+    {
+        auto onLastLine = std::lower_bound(
+            comments.begin(),
+            comments.end(),
+            declaration.end.line,
+            [](const SourceComment& comment, unsigned line)
+            {
+                return comment.location.begin.line < line;
+            }
+        );
+        for (auto it = onLastLine; it != comments.end() && it->location.begin.line == declaration.end.line; ++it)
+        {
+            if (it->location.begin.column >= declaration.end.column)
+            {
+                found.push_back(&*it);
+                break;
+            }
+        }
+    }
+
+    if (found.empty())
+        return nullptr;
+
+    auto list = std::make_shared<TypeMetadataTable>();
+    for (size_t i = 0; i < found.size(); ++i)
+    {
+        auto entry = std::make_shared<TypeMetadataTable>();
+        entry->entries.emplace_back(std::string("prefix"), found[i]->prefix);
+        entry->entries.emplace_back(std::string("message"), found[i]->message);
+        entry->entries.emplace_back(std::string("location"), std::string(i < aboveCount ? "above" : "side"));
+        list->entries.emplace_back(double(i + 1), std::shared_ptr<const TypeMetadataTable>(std::move(entry)));
+    }
+
+    auto metadata = std::make_shared<TypeMetadataTable>();
+    metadata->entries.emplace_back(std::string("comments"), std::shared_ptr<const TypeMetadataTable>(std::move(list)));
+    metadata->docContext = MetadataDocContext{module->name, declaration};
+    return metadata;
 }
 
 ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatClass* statClass)
@@ -5000,6 +5144,13 @@ TypeId ConstraintGenerator::resolveTableType(const ScopePtr& scope, AstType* ty,
         TypeId propTy = resolveType_(scope, prop.type, inTypeArguments);
 
         propRef.typeLocation = prop.location;
+
+        // Luwu doc references: the comments around a field are the property's (Property::metadata), whatever its type. A
+        // table or function type written out as the field's type is the field's own too, so it gets them as well (a value
+        // of it keeps them when it leaves the table).
+        propRef.metadata = declarationComments(prop.location);
+        if (prop.type->is<AstTypeTable>() || prop.type->is<AstTypeFunction>())
+            attachDeclarationComments(propTy, prop.location);
 
         switch (prop.access)
         {

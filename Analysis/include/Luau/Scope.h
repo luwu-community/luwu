@@ -51,6 +51,9 @@ struct Scope
     std::unordered_map<Name, TypeFun> privateTypeBindings;
     std::unordered_map<Name, Location> typeAliasLocations;
     std::unordered_map<Name, Location> typeAliasNameLocations;
+    // Luwu doc references: the definitions file package (`@seal`) each type a definitions file exported came from; its
+    // TypeFun::definitionLocation is in that file
+    std::unordered_map<Name, ModuleName> definitionFileTypeModules;
     std::unordered_map<Name, ModuleName> importedModules; // Mapping from the name in the require statement to the internal moduleName.
     std::unordered_map<Name, std::unordered_map<Name, TypeFun>> importedTypeBindings;
 
