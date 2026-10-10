@@ -8476,6 +8476,92 @@ declare class: number
     CHECK(result.root->body.data[2]->is<AstStatDeclareGlobal>());
 }
 
+TEST_CASE_FIXTURE(Fixture, "declare_trait")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuDeclareStatements, true}, {FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}, {FFlag::LuwuGenericNominals, true}
+    };
+
+    Allocator allocator;
+    AstNameTable names(allocator);
+    ParseResult result = parseSource(allocator, names, R"(
+export declare trait type Container<T>
+    expect public function __len(self): number
+    expect public function front?(self): T?
+    expect public function back?(self): T?
+end
+declare trait type Handler(public name = string) needs Container<string>
+    private cb: (() -> ())?
+    public final tag: string
+    public final function on_callback(self, cb: () -> ())
+    public function describe(self): string
+end
+declare trait: number
+)");
+
+    REQUIRE(result.errors.empty());
+    REQUIRE_EQ(result.root->body.size, 3);
+
+    AstStatDeclareClass* container = result.root->body.data[0]->as<AstStatDeclareClass>();
+    REQUIRE(container);
+    CHECK(container->shape->isTrait);
+    CHECK(container->shape->exported);
+    REQUIRE_EQ(container->shape->members.size, 3);
+    const AstClassMethod* front = container->shape->members.data[1].get_if<AstClassMethod>();
+    REQUIRE(front);
+    CHECK(front->expectLocation);
+    CHECK(front->isOptional);
+
+    AstStatDeclareClass* handler = result.root->body.data[1]->as<AstStatDeclareClass>();
+    REQUIRE(handler);
+    AstStatClass* shape = handler->shape;
+    CHECK(shape->isTrait);
+    CHECK_FALSE(shape->exported);
+    REQUIRE(shape->primaryConstructor);
+    CHECK(shape->primaryConstructor->argsQualifiers.data[0].declaredDefaultLocation);
+    REQUIRE_EQ(shape->needs.size, 1);
+    REQUIRE_EQ(shape->members.size, 4);
+    const AstClassProperty* tag = shape->members.data[1].get_if<AstClassProperty>();
+    REQUIRE(tag);
+    CHECK(tag->finalLocation);
+    const AstClassMethod* describe = shape->members.data[3].get_if<AstClassMethod>();
+    REQUIRE(describe);
+    CHECK_EQ(describe->function->body->body.size, 0);
+
+    // `trait` followed by `:` is the name of a global
+    CHECK(result.root->body.data[2]->is<AstStatDeclareGlobal>());
+}
+
+TEST_CASE_FIXTURE(Fixture, "declare_trait_mistakes")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuDeclareStatements, true}, {FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    auto onlyError = [](const char* source, const std::string& message)
+    {
+        INFO(std::string(source));
+        std::vector<std::string> errors = sourceParseErrors(source);
+        REQUIRE_EQ(errors.size(), 1);
+        CHECK_EQ(errors[0], message);
+    };
+
+    onlyError("declare trait Handler\nend", "A declared trait is written 'declare trait type Name'");
+    onlyError("declare trait type A\n    expect x = number\nend", "Expected fields can't have default values");
+    onlyError("declare trait type A\n    c\nend", "Declared trait field 'c' needs a type: 'name: T', or 'name = T' if it has a default");
+    onlyError("declare trait type A\n    function f(self, x)\nend", "All declaration parameters must be annotated");
+    onlyError("declare trait type A\n    x: number = 1\nend", "In a declaration, a default is written as its type: 'name = T'");
+    onlyError("declare trait type A implements B\nend", "Traits can't implement traits; did you mean 'needs'?");
+
+    // `export` goes first, and a declared trait is a type
+    Allocator allocator;
+    AstNameTable names(allocator);
+    ParseResult result = parseSource(allocator, names, "declare export trait type A\nend");
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "'export' goes before 'declare': write 'export declare'");
+    AstStatDeclareClass* trait = result.root->body.data[0]->as<AstStatDeclareClass>();
+    REQUIRE(trait);
+    CHECK(trait->shape->exported);
+}
+
 TEST_CASE_FIXTURE(Fixture, "declare_class_mistakes")
 {
     ScopedFastFlag sffs[] = {{FFlag::LuwuDeclareStatements, true}, {FFlag::LuwuClasses, true}};

@@ -1951,11 +1951,12 @@ void TypeChecker2::checkTraitFieldExpectations(AstStatClass* stat)
                 continue;
             }
 
-            // An optional function the class leaves out has the trait's own type, made optional. An expectation whose
-            // signature has an error (reported where it is written) isn't compared.
-            bool bothFunctions = get<FunctionType>(follow(*expected->readTy)) && get<FunctionType>(follow(*found->readTy));
-            if (bothFunctions && !containsErrorType(*expected->readTy))
-                testIsSubtype(withoutSelfParameter(*found->readTy), withoutSelfParameter(*expected->readTy), location);
+            // An optional function the class leaves out has the trait's own `F?` type, and isn't a function. An expectation
+            // whose signature has an error (reported where it is written) isn't compared.
+            TypeId expectedFunction = expectedTraitFunction(*expected->readTy);
+            bool bothFunctions = get<FunctionType>(expectedFunction) && get<FunctionType>(follow(*found->readTy));
+            if (bothFunctions && !containsErrorType(expectedFunction))
+                testIsSubtype(withoutSelfParameter(*found->readTy), withoutSelfParameter(expectedFunction), location);
         }
     }
 

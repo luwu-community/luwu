@@ -126,6 +126,10 @@ std::vector<TypeId> reduceUnion(const std::vector<TypeId>& types);
  */
 TypeId stripNil(NotNull<BuiltinTypes> builtinTypes, TypeArena& arena, TypeId ty);
 
+// Luwu Traits (rfcs/classes/traits.md): through the trait, an optional expected function (`expect function f?(self)`)
+// reads as `F?`, since an implementing class may leave it out. This is its `F`, and `ty` itself for any other member.
+TypeId expectedTraitFunction(TypeId ty);
+
 struct ErrorSuppression
 {
     enum Value

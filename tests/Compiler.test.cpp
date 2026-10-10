@@ -14174,6 +14174,27 @@ TEST_CASE("LuwuSyntaxInALuauModuleDoesNotCompile")
     CHECK_NE(Luau::compile("local function f(x = 1) return x end")[0], 0);
 }
 
+TEST_CASE("DeclaredTraitsCompileToNothing")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag luwuTraits{FFlag::LuwuTraits, true};
+
+    CHECK_EQ("\n" + compileFunction0Coverage(R"(
+declare trait type Greeter needs Named
+    expect name: string
+    function greet(self): string
+end
+print(Greeter)
+)", 2), "\n" + compileFunction0Coverage(R"(
+
+
+
+
+print(Greeter)
+)", 2));
+}
+
 TEST_SUITE_END();
 
 // Compiler B (classes review) begin

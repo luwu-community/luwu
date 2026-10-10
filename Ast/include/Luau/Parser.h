@@ -280,6 +280,7 @@ private:
     void checkDuplicateDeclaration(const Name& name);
     void checkTypeName(const Name& name, bool declared);
     bool declaresClass();
+    bool declaresTrait();
 
     // Luwu Traits (rfcs/classes/traits.md): whether `trait` declarations parse.
     bool traitsEnabled() const;
