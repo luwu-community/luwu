@@ -5861,6 +5861,40 @@ TEST_CASE_FIXTURE(ACFixture, "destructuring_keys_in_loop_bindings_complete_the_e
     CHECK(!ac.entryMap.count("name"));
 }
 
+TEST_CASE_FIXTURE(ACFixture, "type_destructuring_keys_complete_the_modules_exported_types")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    fileResolver.source["Module/A"] = R"(
+export type Point = { x: number }
+export type Size = number
+return {}
+    )";
+    getFrontend().check("Module/A");
+
+    fileResolver.source["Module/B"] = R"(
+local A = require(script.Parent.A)
+type .{} = A
+type .{Point, } = A
+type .{Point as } = A
+    )";
+
+    AutocompleteResult ac = autocomplete("Module/B", Position{2, 7});
+    CHECK_EQ(ac.context, AutocompleteContext::Type);
+    CHECK(ac.entryMap.count("Point"));
+    CHECK(ac.entryMap.count("Size"));
+    CHECK(!ac.entryMap.count("A"));
+
+    ac = autocomplete("Module/B", Position{3, 14});
+    CHECK(!ac.entryMap.count("Point"));
+    CHECK(ac.entryMap.count("Size"));
+
+    // a name after `as` declares a type
+    ac = autocomplete("Module/B", Position{4, 16});
+    CHECK_EQ(ac.context, AutocompleteContext::Unknown);
+    CHECK(ac.entryMap.empty());
+}
+
 TEST_CASE_FIXTURE(ACFixture, "destructuring_hidden_local_is_not_suggested")
 {
     ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};

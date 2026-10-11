@@ -2282,6 +2282,19 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatTypeAlias* 
         return ControlFlow::None;
 
     ScopePtr defnScope = *defnScopePtr;
+
+    // Luwu Destructuring (rfcs/destructuring.md): `type .{List} = mod` is written without type arguments, so a generic
+    // `mod.List` is aliased whole: the alias takes its type and its generics.
+    if (std::optional<TypeFun> imported = importedGenericOfDestructuredAlias(*scope, alias))
+    {
+        TypeId aliasTy = bindingIt->second.type;
+        LUAU_ASSERT(get<BlockedType>(aliasTy));
+        emplaceType<BoundType>(asMutable(aliasTy), imported->type);
+        bindingIt->second.typeParams = imported->typeParams;
+        bindingIt->second.typePackParams = imported->typePackParams;
+        return ControlFlow::None;
+    }
+
     resolveGenericDefaultParameters(defnScope, alias, bindingIt->second);
 
     TypeId ty = resolveType(

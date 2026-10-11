@@ -537,7 +537,9 @@ AstStat* Parser::parseStat()
     AstExpr* expr = parsePrimaryExpr(/* asStatement= */ true);
 
     // Luwu Destructuring (rfcs/destructuring.md): `name.{x} = t` with no `local`/`const`, see parsePrimaryExpr.
-    bool destructuringWithoutKeyword = destructurePatternFollows() && getIdentifier(expr) != "const";
+    // `type .{A} = module` is a type destructuring (parseTypeDestructuring).
+    AstName leading = getIdentifier(expr);
+    bool destructuringWithoutKeyword = destructurePatternFollows() && leading != "const" && leading != "type";
     if (destructuringWithoutKeyword)
     {
         report(expr->location, "%s", kDestructuringNeedsKeywordError);
@@ -2161,6 +2163,19 @@ AstStat* Parser::parseTypeAlias(const Location& start, bool exported, Position t
     if (lexer.current().type == Lexeme::ReservedFunction)
         return parseTypeFunction(start, exported, typeKeywordPosition);
 
+    // Luwu Destructuring (rfcs/destructuring.md): `type .{A, B} = module`
+    if (destructurePatternFollows())
+        return parseTypeDestructuring(start, exported, typeKeywordLocation);
+
+    bool namedTypeDestructuring = lexer.current().type == Lexeme::Name && lexer.lookahead().type == '.' && lexer.lookaheadSecond().type == '{';
+    if (namedTypeDestructuring)
+    {
+        Lexeme name = lexer.current();
+        report(name.location, "A type destructuring declares only the types; drop '%s' before '.{'", name.name);
+        nextLexeme();
+        return parseTypeDestructuring(start, exported, typeKeywordLocation);
+    }
+
     // parsing a type alias
 
     // note: `type` token is already parsed for us, so we just need to parse the rest
@@ -2193,6 +2208,130 @@ AstStat* Parser::parseTypeAlias(const Location& start, bool exported, Position t
             typeKeywordPosition, genericsOpenPosition, genericsCommaPositions, genericsClosePosition, equalsPosition
         );
     return node;
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): `type .{A, B as C} = module` desugars to one alias per field, each reading
+// the module's exported type of that name:
+//
+//   type .{FsMetadata, FileEntry as Entry} = fs
+//
+//   type FsMetadata = fs.FsMetadata
+//   type Entry = fs.FileEntry
+//
+// A generic type keeps its generics: ConstraintGenerator binds the alias to the imported type function itself. The
+// first alias is returned; the rest are left in pendingStatements for parseBlockNoScope.
+AstStat* Parser::parseTypeDestructuring(const Location& start, bool exported, const Location& typeKeywordLocation)
+{
+    DestructureTarget target;
+    parseDestructurePattern(target);
+
+    Name module(nameError, lexer.current().location);
+    std::optional<Location> equalsLocation;
+
+    if (lexer.current().type == '=')
+    {
+        equalsLocation = lexer.current().location;
+        nextLexeme();
+        AstType* value = parseType();
+
+        AstTypeReference* reference = value->as<AstTypeReference>();
+        bool isModuleName = reference && !reference->prefix && !reference->hasParameterList;
+        if (isModuleName)
+            module = Name(reference->name, reference->location);
+        else
+            report(value->location, "A type destructuring reads types from a required module: 'type .{A, B} = module'");
+    }
+    else
+    {
+        report(lexer.current().location, "Expected '=' and a module after the destructuring pattern: 'type .{A, B} = module'");
+    }
+
+    Location location(start, lexer.previousLocation());
+
+    if (!FFlag::LuwuDestructuring)
+        report(location, "Destructuring is a Luwu feature; enable the 'LuwuDestructuring' fast flag to use it");
+
+    AstLocal* moduleLocal = nullptr;
+    if (FFlag::LuauTrackPrefixLocal)
+    {
+        AstLocal* const* found = localMap.find(module.name);
+        moduleLocal = (found && *found) ? *found : nullptr;
+    }
+
+    std::vector<AstStatTypeAlias*> aliases;
+    TempVector<AstTypeDestructureField> fields(scratchTypeDestructureField);
+
+    for (const DestructureField& field : target.fields)
+    {
+        if (field.target.patternLocation)
+            report(*field.target.patternLocation, "A type destructuring can't nest; list the module's types directly: 'type .{A, B} = module'");
+
+        if (field.target.annotation)
+            report(field.target.annotation->location, "A destructured type takes no annotation: 'type .{A, B} = module'");
+
+        // `key as .{...}` has no name of its own; the key names the type
+        Name name = field.target.name ? *field.target.name : field.key;
+        Location keyLocation = field.key.location;
+
+        AstTypeReference* reference = allocator.alloc<AstTypeReference>(
+            keyLocation,
+            module.name,
+            field.key.name,
+            module.location,
+            keyLocation,
+            /* hasParameterList= */ false,
+            AstArray<AstTypeOrPack>{},
+            moduleLocal
+        );
+        AstStatTypeAlias* alias = allocator.alloc<AstStatTypeAlias>(
+            Location(keyLocation.begin, name.location.end),
+            name.name,
+            name.location,
+            AstArray<AstGenericType*>{},
+            AstArray<AstGenericTypePack*>{},
+            reference,
+            exported,
+            typeKeywordLocation
+        );
+
+        aliases.push_back(alias);
+        fields.push_back(AstTypeDestructureField{alias, field.asLocation});
+    }
+
+    // A pattern with no fields still needs a statement to hold it; an alias with the error name is skipped by
+    // everything that checks aliases
+    if (aliases.empty())
+    {
+        AstTypeReference* reference = allocator.alloc<AstTypeReference>(location, module.name, nameError, module.location, location);
+        aliases.push_back(allocator.alloc<AstStatTypeAlias>(
+            location, nameError, location, AstArray<AstGenericType*>{}, AstArray<AstGenericTypePack*>{}, reference, exported, typeKeywordLocation
+        ));
+    }
+
+    AstStatTypeAlias* first = aliases.front();
+    first->location = location;
+
+    AstTypeDestructure* destructure = allocator.alloc<AstTypeDestructure>();
+    destructure->location = target.patternLocation.value_or(location);
+    destructure->closed = target.closed;
+    destructure->equalsLocation = equalsLocation;
+    destructure->module = module.name;
+    destructure->moduleLocation = module.location;
+    destructure->fields = copy(fields);
+    first->destructure = destructure;
+
+    // Upstream's destructuring RFC (luau-lang/rfcs#260) is still open, so none of this is Luau syntax yet.
+    for (AstStatTypeAlias* alias : aliases)
+    {
+        alias->luwuOnly = true;
+
+        if (alias != first)
+            alias->destructuredFrom = first;
+    }
+
+    pendingStatements.insert(pendingStatements.end(), aliases.begin() + 1, aliases.end());
+
+    return first;
 }
 
 namespace

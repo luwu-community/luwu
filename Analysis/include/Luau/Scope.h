@@ -123,6 +123,10 @@ bool subsumesStrict(Scope* left, Scope* right);
 // outermost-possible scope.
 bool subsumes(Scope* left, Scope* right);
 
+// Luwu Destructuring (rfcs/destructuring.md): for an alias desugared from `type .{List} = mod`, the type function
+// `mod.List` when it is generic. The alias stands for that type function whole, generics included.
+std::optional<TypeFun> importedGenericOfDestructuredAlias(const Scope& scope, const AstStatTypeAlias* alias);
+
 inline Scope* max(Scope* left, Scope* right)
 {
     if (subsumes(left, right))

@@ -640,6 +640,9 @@ private:
             if (AstStatLocal* local = node->body.data[i]->as<AstStatLocal>(); local && local->isDesugaredField())
                 continue;
 
+            if (AstStatTypeAlias* alias = node->body.data[i]->as<AstStatTypeAlias>(); alias && alias->destructuredFrom)
+                continue;
+
             // A loop's destructured fields are written in the loop's header, before its body
             if (AstStatLocal* local = node->body.data[i - 1]->as<AstStatLocal>(); local && local->destructuredFromLoop)
                 continue;

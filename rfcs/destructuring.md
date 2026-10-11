@@ -33,7 +33,11 @@ const items = getitems() -- { Item }
 const store_info.{store as store_name, items} = getitems()
 ```
 
-We support this in `local` and `const` declarations, and in `for ... in` bindings.
+We support destructuring in `local`, `const`, and `type` bindings, as well as `export type`, as well as in
+loop variables of `for ... in` loops. Note that `type` bindings *should* destructure a runtime binding from a `require`
+call that magically contains types visible to the type system. We report a TypeError if a user incorrectly destructures
+a runtime binding that does not contain types. Supplying a top level variable in the destructure
+(`type Smth.{Ta, Tb} = smth`) is a syntax error, since such a type cannot exist.
 
 ## Compatibility
 

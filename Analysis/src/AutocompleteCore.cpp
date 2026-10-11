@@ -2072,14 +2072,15 @@ struct DestructureCursor
     const AstStatForIn* loop = nullptr;
 };
 
+// Right after a `}` is outside a pattern; at the end of an unclosed one is where the next field goes
+static bool patternHolds(const Location& location, bool closed, Position position)
+{
+    return closed ? location.contains(position) : location.containsClosed(position);
+}
+
 static std::optional<DestructureCursor> findDestructureCursorInPattern(const AstDestructurePattern& pattern, Position position)
 {
-    if (!pattern.location)
-        return std::nullopt;
-
-    // Right after a `}` is outside the pattern; at the end of an unclosed one is where the next field goes
-    bool inside = pattern.closed ? pattern.location->contains(position) : pattern.location->containsClosed(position);
-    if (!inside)
+    if (!pattern.location || !patternHolds(*pattern.location, pattern.closed, position))
         return std::nullopt;
 
     for (const AstDestructureField& field : pattern.fields)
@@ -2143,6 +2144,30 @@ static std::optional<DestructureCursor> findDestructureCursor(const std::vector<
     }
 
     return std::nullopt;
+}
+
+// The `type .{...} = module` in `ancestry`'s blocks whose pattern holds `position`, if any.
+static const AstTypeDestructure* findTypeDestructure(const std::vector<AstNode*>& ancestry, Position position)
+{
+    for (auto it = ancestry.rbegin(); it != ancestry.rend(); ++it)
+    {
+        const AstStatBlock* block = (*it)->as<AstStatBlock>();
+        if (!block)
+            continue;
+
+        for (AstStat* stat : block->body)
+        {
+            const AstStatTypeAlias* alias = stat->as<AstStatTypeAlias>();
+            if (!alias || !alias->destructure)
+                continue;
+
+            const AstTypeDestructure& pattern = *alias->destructure;
+            if (patternHolds(pattern.location, pattern.closed, position))
+                return &pattern;
+        }
+    }
+
+    return nullptr;
 }
 
 // The type of the value a pattern level destructures: its annotation's, or else its desugared statement's value's.
@@ -2239,6 +2264,31 @@ AutocompleteResult autocomplete_(
         for (const std::string_view hc : kHotComments)
             result.emplace(hc, AutocompleteEntry{AutocompleteEntryKind::HotComment});
         return {std::move(result), ancestry, AutocompleteContext::HotComment};
+    }
+
+    // Luwu Destructuring (rfcs/destructuring.md): a key in `type .{...} = module` takes the module's exported types. A
+    // name after `as` declares a type.
+    if (const AstTypeDestructure* pattern = findTypeDestructure(ancestry, position))
+    {
+        for (const AstTypeDestructureField& field : pattern->fields)
+        {
+            if (field.asLocation && field.alias->nameLocation.containsClosed(position))
+                return {{}, ancestry, AutocompleteContext::Unknown};
+        }
+
+        AutocompleteEntryMap types;
+        if (pattern->module != kParseNameError)
+            types = autocompleteModuleTypes(*module, scopeAtPosition, position, pattern->module.value);
+
+        // Keys already in the pattern, except the one being written
+        for (const AstTypeDestructureField& field : pattern->fields)
+        {
+            const AstTypeReference* reference = field.alias->destructuredReference();
+            if (reference && !reference->nameLocation.containsClosed(position))
+                types.erase(reference->name.value);
+        }
+
+        return {std::move(types), ancestry, AutocompleteContext::Type};
     }
 
     // Luwu Destructuring (rfcs/destructuring.md): a field key in a pattern takes the properties of the value the

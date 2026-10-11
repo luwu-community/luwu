@@ -19,6 +19,7 @@ LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
 LUAU_FASTINT(LuauSolverConstraintLimit)
 LUAU_FASTFLAG(LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier)
+LUAU_FASTFLAG(LuwuDestructuring)
 
 using namespace Luau;
 
@@ -1267,6 +1268,71 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "non_exported_class")
     REQUIRE(err);
     CHECK("A.Point" == err->name);
     CHECK(UnknownSymbol::Context::Type == err->context);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "destructured_types_alias_a_modules_exported_types")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    fileResolver.source["game/A"] = R"(
+        export type Point = { x: number }
+        export type Box<T> = { value: T }
+        export type Pair<K, V = string> = { key: K, value: V }
+        return {}
+    )";
+
+    fileResolver.source["game/B"] = R"(
+        --!strict
+        local A = require(game.A)
+        type .{Point, Box as Crate, Pair} = A
+        local p: Point = { x = 1 }
+        local b: Crate<number> = { value = 1 }
+        local s: Crate<string> = { value = 1 }
+        local pair: Pair<number> = { key = 1, value = "v" }
+        export type .{Point as Exported, Box} = A
+        return {}
+    )";
+
+    CheckResult aResult = getFrontend().check("game/A");
+    LUAU_REQUIRE_NO_ERRORS(aResult);
+
+    // A generic type keeps its generics, its defaults included; the one error is `Crate<string>` holding a number
+    CheckResult bResult = getFrontend().check("game/B");
+    LUAU_REQUIRE_ERROR_COUNT(1, bResult);
+    CHECK_EQ(bResult.errors[0].location.begin.line, 6);
+
+    ModulePtr b = getFrontend().moduleResolver.getModule("game/B");
+    REQUIRE(b);
+    CHECK(b->exportedTypeBindings.count("Exported"));
+    REQUIRE(b->exportedTypeBindings.count("Box"));
+    CHECK_EQ(b->exportedTypeBindings["Box"].typeParams.size(), 1);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "destructured_types_report_what_the_module_does_not_export")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    fileResolver.source["game/A"] = R"(
+        export type Box<T> = { value: T }
+        return {}
+    )";
+
+    fileResolver.source["game/B"] = R"(
+        --!strict
+        local A = require(game.A)
+        type .{Missing, Box} = A
+        local b: Box = { value = 1 }
+    )";
+
+    getFrontend().check("game/A");
+    CheckResult result = getFrontend().check("game/B");
+
+    // `Missing` isn't exported, and `Box` still takes its type argument where it's used
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    UnknownSymbol* unknown = get<UnknownSymbol>(result.errors[0]);
+    REQUIRE(unknown);
+    CHECK_EQ(unknown->name, "A.Missing");
+    CHECK(get<IncorrectGenericParameterCount>(result.errors[1]));
 }
 
 TEST_SUITE_END();

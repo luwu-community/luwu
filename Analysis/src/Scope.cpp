@@ -300,6 +300,19 @@ bool subsumesStrict(Scope* left, Scope* right)
     return false;
 }
 
+std::optional<TypeFun> importedGenericOfDestructuredAlias(const Scope& scope, const AstStatTypeAlias* alias)
+{
+    const AstTypeReference* reference = alias->destructuredReference();
+    if (!reference || !reference->prefix)
+        return std::nullopt;
+
+    std::optional<TypeFun> imported = scope.lookupImportedType(reference->prefix->value, reference->name.value);
+    if (!imported || (imported->typeParams.empty() && imported->typePackParams.empty()))
+        return std::nullopt;
+
+    return imported;
+}
+
 bool subsumes(Scope* left, Scope* right)
 {
     if (!left || !right)

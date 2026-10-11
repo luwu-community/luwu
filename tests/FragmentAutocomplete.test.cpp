@@ -5560,4 +5560,40 @@ local .{alpha, @1} = value
     );
 }
 
+TEST_CASE_FIXTURE(FragmentAutocompleteBuiltinsFixture, "type_destructuring_keys_complete_in_a_fragment")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    fileResolver.source["MainModule/A"] = R"(
+export type Point = { x: number }
+export type Size = number
+return {}
+    )";
+
+    // The fragment has to include the module after the pattern, and must not start at the second alias
+    const std::string source = R"(
+local A = require(script.A)
+type .{Point} = A
+)";
+    const std::string updated = R"(
+local A = require(script.A)
+type .{Point, @1} = A
+)";
+
+    autocompleteFragmentInBothSolvers(
+        source,
+        updated,
+        '1',
+        [](FragmentAutocompleteStatusResult& fragment)
+        {
+            REQUIRE(fragment.result);
+            auto acResults = fragment.result->acResults;
+
+            CHECK_EQ(AutocompleteContext::Type, acResults.context);
+            CHECK(acResults.entryMap.count("Size"));
+            CHECK(!acResults.entryMap.count("Point"));
+        }
+    );
+}
+
 TEST_SUITE_END();
