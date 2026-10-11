@@ -977,7 +977,9 @@ struct Printer
     {
         // Luwu Destructuring (rfcs/destructuring.md): the first statement a destructuring declaration desugars to
         // prints the whole declaration, so the rest print nothing but a trailing `;`.
-        if (const auto& local = program.as<AstStatLocal>(); local && local->isDesugaredField())
+        bool desugaredLocal = program.is<AstStatLocal>() && program.as<AstStatLocal>()->isDesugaredField();
+        bool desugaredTypeAlias = program.is<AstStatTypeAlias>() && program.as<AstStatTypeAlias>()->destructuredFrom;
+        if (desugaredLocal || desugaredTypeAlias)
         {
             if (program.hasSemicolon)
             {
@@ -1325,7 +1327,11 @@ struct Printer
         }
         else if (const auto& a = program.as<AstStatTypeAlias>())
         {
-            if (writeTypes)
+            if (writeTypes && a->destructure)
+            {
+                visualizeTypeDestructuring(*a);
+            }
+            else if (writeTypes)
             {
                 const auto* cstNode = lookupCstNode<CstStatTypeAlias>(a);
 
@@ -1807,6 +1813,60 @@ struct Printer
             visualizeBlock(*block);
         else
             LUAU_ASSERT(!"visualizeBlock was expecting an AstStatBlock");
+    }
+
+    // Luwu Destructuring (rfcs/destructuring.md): `[export] type .{A, B as C} = module`, from the source form the parser
+    // kept on the first alias.
+    void visualizeTypeDestructuring(const AstStatTypeAlias& first)
+    {
+        const AstTypeDestructure& pattern = *first.destructure;
+
+        if (first.exported)
+            writer.keyword("export");
+
+        advance(first.typeLocation.begin);
+        writer.keyword("type");
+
+        advance(pattern.location.begin);
+        writer.symbol(".");
+        writer.symbol("{");
+
+        CommaSeparatorInserter comma(writer, nullptr);
+        for (const AstTypeDestructureField& field : pattern.fields)
+        {
+            const AstTypeReference* reference = field.alias->destructuredReference();
+            LUAU_ASSERT(reference);
+
+            comma();
+            advance(reference->nameLocation.begin);
+            writer.identifier(reference->name.value);
+
+            if (field.asLocation)
+            {
+                advance(field.asLocation->begin);
+                writer.keyword("as");
+                advance(field.alias->nameLocation.begin);
+                writer.identifier(field.alias->name.value);
+            }
+        }
+
+        if (pattern.closed)
+        {
+            advanceBefore(pattern.location.end, 1);
+            writer.symbol("}");
+        }
+
+        if (!pattern.equalsLocation)
+            return;
+
+        advance(pattern.equalsLocation->begin);
+        writer.symbol("=");
+
+        if (pattern.module != kParseNameError)
+        {
+            advance(pattern.moduleLocation.begin);
+            writer.identifier(pattern.module.value);
+        }
     }
 
     // Luwu Destructuring (rfcs/destructuring.md): a `for ... in` loop's variables. A destructured one prints its pattern.

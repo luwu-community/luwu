@@ -1102,6 +1102,29 @@ public:
     Location functionLocation;
 };
 
+// Luwu Destructuring (rfcs/destructuring.md): the source form of `type .{A, B as C} = module`, kept on the first
+// alias it desugars to (Parser::parseTypeDestructuring) so tools can print it back.
+struct AstTypeDestructureField
+{
+    // Declares the type: `type C = module.B`. Its name and reference hold the field's name and key.
+    class AstStatTypeAlias* alias = nullptr;
+    // The `as` keyword, when the type is declared under another name.
+    std::optional<Location> asLocation;
+};
+
+struct AstTypeDestructure
+{
+    // From the `.` to the `}`.
+    Location location;
+    // False when the `}` is missing, as it is while a pattern is being written.
+    bool closed = true;
+    std::optional<Location> equalsLocation;
+    // The module local the types are read from; kParseNameError when the value isn't a name.
+    AstName module;
+    Location moduleLocation;
+    AstArray<AstTypeDestructureField> fields{nullptr, 0};
+};
+
 class AstStatTypeAlias : public AstStat
 {
 public:
@@ -1129,6 +1152,15 @@ public:
 
     // Location of the leading 'type' keyword token only.
     Location typeLocation;
+
+    // Luwu Destructuring (rfcs/destructuring.md): `type .{A, B} = module` desugars to one alias per field (see
+    // Parser::parseTypeDestructuring). The first spans the whole declaration and holds its source form in
+    // `destructure`; every one after it points to the first through `destructuredFrom`.
+    AstTypeDestructure* destructure = nullptr;
+    AstStatTypeAlias* destructuredFrom = nullptr;
+
+    // The `module.Name` a destructured alias reads, or null for any other alias.
+    class AstTypeReference* destructuredReference() const;
 };
 
 class AstStatTypeFunction : public AstStat

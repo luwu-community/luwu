@@ -7818,6 +7818,68 @@ TEST_CASE_FIXTURE(Fixture, "destructuring_a_numeric_for_variable_gets_one_error"
     );
 }
 
+TEST_CASE_FIXTURE(Fixture, "type_destructuring_desugars_to_one_alias_per_type")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    AstStatBlock* block = parse(R"(
+        type .{Metadata, Entry as FileEntry} = fs
+        export type .{Box} = fs
+    )");
+
+    REQUIRE_EQ(block->body.size, 3);
+
+    AstStatTypeAlias* first = block->body.data[0]->as<AstStatTypeAlias>();
+    AstStatTypeAlias* renamed = block->body.data[1]->as<AstStatTypeAlias>();
+    AstStatTypeAlias* exported = block->body.data[2]->as<AstStatTypeAlias>();
+    REQUIRE(first);
+    REQUIRE(renamed);
+    REQUIRE(exported);
+
+    // the first spans the declaration and holds its source form; the rest point back to it
+    REQUIRE(first->destructure);
+    CHECK_EQ(first->location, Location{{1, 8}, {1, 49}});
+    CHECK_EQ(std::string(first->destructure->module.value), "fs");
+    REQUIRE_EQ(first->destructure->fields.size, 2);
+    CHECK(!first->destructure->fields.data[0].asLocation);
+    CHECK(first->destructure->fields.data[1].asLocation);
+    CHECK_EQ(first->destructure->fields.data[1].alias, renamed);
+    CHECK_EQ(renamed->destructuredFrom, first);
+    CHECK(first->luwuOnly);
+    CHECK(renamed->luwuOnly);
+
+    // `type FileEntry = fs.Entry`
+    CHECK_EQ(std::string(renamed->name.value), "FileEntry");
+    CHECK_EQ(renamed->generics.size, 0);
+    AstTypeReference* reference = renamed->destructuredReference();
+    REQUIRE(reference);
+    REQUIRE(reference->prefix);
+    CHECK_EQ(std::string(reference->prefix->value), "fs");
+    CHECK_EQ(std::string(reference->name.value), "Entry");
+    CHECK(!reference->hasParameterList);
+
+    CHECK(exported->exported);
+    CHECK_EQ(std::string(exported->name.value), "Box");
+    CHECK(exported->destructure);
+}
+
+TEST_CASE_FIXTURE(Fixture, "type_destructuring_mistakes_get_one_error_that_names_the_fix")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    matchOnlyDestructuringError(*this, "type fs.{A} = fs", "A type destructuring declares only the types; drop 'fs' before '.{'");
+    matchOnlyDestructuringError(*this, "type .{A} = fs.inner", "A type destructuring reads types from a required module: 'type .{A, B} = module'");
+    matchOnlyDestructuringError(
+        *this, "type .{A} = { x: number }", "A type destructuring reads types from a required module: 'type .{A, B} = module'"
+    );
+    matchOnlyDestructuringError(
+        *this, "type .{inner.{A}} = fs", "A type destructuring can't nest; list the module's types directly: 'type .{A, B} = module'"
+    );
+    matchOnlyDestructuringError(*this, "type .{A: number} = fs", "A destructured type takes no annotation: 'type .{A, B} = module'");
+    matchOnlyDestructuringError(*this, "type .{A}", "Expected '=' and a module after the destructuring pattern: 'type .{A, B} = module'");
+    matchOnlyDestructuringError(*this, "type .{} = fs", "A destructuring pattern needs at least one field");
+}
+
 TEST_CASE_FIXTURE(Fixture, "destructuring_is_luwu_only")
 {
     ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};

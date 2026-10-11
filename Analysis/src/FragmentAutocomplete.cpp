@@ -235,6 +235,9 @@ Location getFragmentLocation(AstStat* nearestStatement, const Position& cursorPo
 // which spans the whole declaration, can start a fragment.
 static bool canStartFragment(AstStat* stat)
 {
+    if (AstStatTypeAlias* alias = stat->as<AstStatTypeAlias>())
+        return !alias->destructuredFrom;
+
     AstStatLocal* local = stat->as<AstStatLocal>();
     return !local || !local->isDesugaredField();
 }
@@ -258,6 +261,15 @@ struct DestructuringDeclarationFinder : AstVisitor
         return true;
     }
 
+    bool visit(AstStatTypeAlias* alias) override
+    {
+        bool holdsCursor = alias->destructure && alias->destructure->location.begin <= cursor && cursor <= alias->location.end;
+        if (holdsCursor)
+            end = alias->location.end;
+
+        return true;
+    }
+
     Position cursor;
     std::optional<Position> end;
 };
@@ -267,6 +279,9 @@ static Position fragmentStartOf(AstStat* stat)
 {
     if (AstStatLocal* local = stat->as<AstStatLocal>(); local && local->destructuredFrom)
         return local->destructuredFrom->location.begin;
+
+    if (AstStatTypeAlias* alias = stat->as<AstStatTypeAlias>(); alias && alias->destructuredFrom)
+        return alias->destructuredFrom->location.begin;
 
     return stat->location.begin;
 }
@@ -651,6 +666,12 @@ struct UsageFinder : public AstVisitor
     bool visit(AstStatTypeAlias* alias) override
     {
         declaredAliases.insert(std::string(alias->name.value));
+
+        // Luwu Destructuring (rfcs/destructuring.md): a key in `type .{...} = module` completes from every type the
+        // module exports, not only the ones already written
+        if (alias->destructure && alias->destructure->module != kParseNameError)
+            referencedImportedModules.emplace_back(alias->destructure->module.value);
+
         return true;
     }
 
@@ -701,6 +722,7 @@ struct UsageFinder : public AstVisitor
     DenseHashSet<const Def*> mentionedDefs{nullptr};
     std::vector<Name> referencedBindings{""};
     std::vector<std::pair<Name, Name>> referencedImportedBindings{{"", ""}};
+    std::vector<Name> referencedImportedModules;
     std::vector<std::pair<AstName, const Def*>> globalDefsToPrePopulate;
     std::vector<AstName> globalFunctionsReferenced;
     std::vector<std::pair<const Def*, Symbol>> symbolsToRefine;
@@ -792,6 +814,22 @@ void cloneTypesFromFragment(
         if (std::optional<TypeFun> tf = staleScope->lookupImportedType(mod, name))
         {
             destScope->importedTypeBindings[mod].insert_or_assign(name, Luau::cloneIncremental(*tf, *destArena, cloneState, destScope));
+        }
+    }
+
+    // Modules a type destructuring reads from are imported whole
+    for (const Name& mod : f.referencedImportedModules)
+    {
+        for (const Scope* scope = staleScope; scope; scope = scope->parent.get())
+        {
+            auto imported = scope->importedTypeBindings.find(mod);
+            if (imported == scope->importedTypeBindings.end())
+                continue;
+
+            for (const auto& [name, tf] : imported->second)
+                destScope->importedTypeBindings[mod].insert_or_assign(name, Luau::cloneIncremental(tf, *destArena, cloneState, destScope));
+
+            break;
         }
     }
 

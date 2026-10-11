@@ -248,6 +248,7 @@ private:
 
     // type Name `=' Type
     AstStat* parseTypeAlias(const Location& start, bool exported, Position typeKeywordPosition, const Location& typeKeywordLocation);
+    AstStat* parseTypeDestructuring(const Location& start, bool exported, const Location& typeKeywordLocation);
 
     AstStat* parseClassStat(const Location& start, bool exported, const Location& classKeywordLocation);
 
@@ -695,6 +696,7 @@ private:
     std::vector<Position> scratchPosition2;
     std::vector<CstAttrList*> scratchCstAttrList;
     std::vector<AstDestructureField> scratchDestructureField;
+    std::vector<AstTypeDestructureField> scratchTypeDestructureField;
     std::string scratchData;
 
     CstNodeMap cstNodeMap;
