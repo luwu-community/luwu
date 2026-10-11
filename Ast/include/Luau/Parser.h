@@ -224,6 +224,24 @@ private:
         bool isConst,
         std::vector<AstStat*>& out
     );
+    AstDestructurePattern desugarDestructureFields(const DestructureTarget& target, AstLocal* local, bool isConst, std::vector<AstStat*>& out);
+
+    // Luwu Destructuring (rfcs/destructuring.md): patterns in a `for ... in` loop's bindings
+    bool loopPatternFollows();
+    AstStatBlock* prependLoopFields(const std::vector<AstStat*>& fields, AstStatBlock* body);
+    Binding parseLoopPattern(std::vector<std::optional<DestructureTarget>>& patterns);
+    void parseLoopBindings(
+        TempVector<Binding>& names,
+        std::vector<std::optional<DestructureTarget>>& patterns,
+        AstArray<Position>* commaPositions,
+        Position* initialCommaPosition
+    );
+    AstArray<AstLocal*> pushLoopLocals(
+        const TempVector<Binding>& names,
+        const std::vector<std::optional<DestructureTarget>>& patterns,
+        std::vector<AstStat*>& fields,
+        AstArray<AstDestructurePattern*>& destructure
+    );
 
     // return [explist]
     AstStat* parseReturn();

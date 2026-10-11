@@ -112,4 +112,68 @@ do
     assert(f({ x = 1, y = 2 })() == 3)
 end
 
+-- destructured loop bindings
+do
+    local people = { { name = "ann", age = 20 }, { name = "bob", age = 10 }, { name = "cy", age = 30 } }
+
+    local names = {}
+    for _, .{name, age} in people do
+        if age > 15 then
+            table.insert(names, name)
+        end
+    end
+    assert(table.concat(names, ",") == "ann,cy")
+
+    -- a named pattern keeps the element, `as` renames, and a missing field is nil
+    local seen = {}
+    for i, p.{name as who, missing} in people do
+        assert(p == people[i])
+        assert(missing == nil)
+        table.insert(seen, who)
+    end
+    assert(table.concat(seen, ",") == "ann,bob,cy")
+
+    -- nested patterns and several patterns in one loop
+    local function pairs_of(t)
+        local i = 0
+        return function()
+            i += 1
+            local v = t[i]
+            if v then
+                return v, { tag = v.pos.x }
+            end
+            return nil
+        end
+    end
+
+    local pts = { { pos = { x = 1, y = 2 } }, { pos = { x = 3, y = 4 } } }
+    local total = 0
+    for .{pos as .{x, y}}, .{tag} in pairs_of(pts) do
+        assert(tag == x)
+        total += x * 10 + y
+    end
+    assert(total == 12 + 34)
+
+    -- fields are fresh each iteration, so closures capture their own
+    local fns = {}
+    for _, .{name} in people do
+        table.insert(fns, function()
+            return name
+        end)
+    end
+    assert(fns[1]() == "ann" and fns[3]() == "cy")
+
+    -- a field can be written in the body without touching the element
+    for _, .{age} in people do
+        age += 1
+    end
+    assert(people[1].age == 20)
+
+    -- an element that can't be indexed raises like any destructuring
+    local ok, err = pcall(function()
+        for _, .{x} in { 1 } do
+        end
+    end)
+    assert(not ok and string.find(err, "attempt to index number"))
+end
 return "OK"

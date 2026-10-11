@@ -7761,6 +7761,63 @@ TEST_CASE_FIXTURE(Fixture, "destructuring_mistakes_get_one_error_that_names_the_
     );
 }
 
+TEST_CASE_FIXTURE(Fixture, "destructuring_for_in_bindings_start_the_body_with_their_fields")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    AstStatBlock* block = parse(R"(
+        for _, .{name, age as years} in people do
+            print(name, years)
+        end
+        for i, entry.{kind} in entries do
+            print(entry)
+        end
+    )");
+
+    REQUIRE_EQ(block->body.size, 2);
+
+    AstStatForIn* unnamed = block->body.data[0]->as<AstStatForIn>();
+    REQUIRE(unnamed);
+    CHECK(unnamed->luwuOnly);
+    REQUIRE_EQ(unnamed->destructure.size, 2);
+    CHECK(!unnamed->destructure.data[0]);
+    REQUIRE(unnamed->destructure.data[1]);
+    AstLocal* hidden = unnamed->vars.data[1];
+    CHECK_EQ(std::string(hidden->name.value), kDestructuredLocalName);
+    CHECK_EQ(unnamed->destructure.data[1]->local, hidden);
+
+    // the body starts with the fields, read from the loop variable
+    REQUIRE_EQ(unnamed->body->body.size, 3);
+    AstStatLocal* name = unnamed->body->body.data[0]->as<AstStatLocal>();
+    AstStatLocal* years = unnamed->body->body.data[1]->as<AstStatLocal>();
+    REQUIRE(name);
+    REQUIRE(years);
+    CHECK(name->destructuredFromLoop);
+    CHECK(name->isDesugaredField());
+    CHECK(name->luwuOnly);
+    CHECK_EQ(std::string(years->vars.data[0]->name.value), "years");
+    AstExprIndexName* read = name->values.data[0]->as<AstExprIndexName>();
+    REQUIRE(read);
+    REQUIRE(read->expr->is<AstExprLocal>());
+    CHECK_EQ(read->expr->as<AstExprLocal>()->local, hidden);
+
+    AstStatForIn* named = block->body.data[1]->as<AstStatForIn>();
+    REQUIRE(named);
+    REQUIRE_EQ(named->vars.size, 2);
+    CHECK_EQ(std::string(named->vars.data[1]->name.value), "entry");
+    REQUIRE_EQ(named->body->body.size, 2);
+    CHECK(named->body->body.data[0]->as<AstStatLocal>()->destructuredFromLoop);
+}
+
+TEST_CASE_FIXTURE(Fixture, "destructuring_a_numeric_for_variable_gets_one_error")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    matchOnlyDestructuringError(
+        *this, "for .{x} = 1, 2 do end", "A numeric 'for' loop's variable is a number; only 'for ... in' bindings can be destructured"
+    );
+}
+
 TEST_CASE_FIXTURE(Fixture, "destructuring_is_luwu_only")
 {
     ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};

@@ -2067,6 +2067,9 @@ struct DestructureCursor
     // The statements the declaration desugared to: `block->body[first]` and the ones after it that point back to it
     const AstStatBlock* block = nullptr;
     size_t first = 0;
+
+    // For a pattern in a `for` loop's bindings: the loop. `block` is then its body, which starts with the fields.
+    const AstStatForIn* loop = nullptr;
 };
 
 static std::optional<DestructureCursor> findDestructureCursorInPattern(const AstDestructurePattern& pattern, Position position)
@@ -2104,6 +2107,22 @@ static std::optional<DestructureCursor> findDestructureCursor(const std::vector<
 {
     for (auto it = ancestry.rbegin(); it != ancestry.rend(); ++it)
     {
+        if (const AstStatForIn* loop = (*it)->as<AstStatForIn>())
+        {
+            for (const AstDestructurePattern* pattern : loop->destructure)
+            {
+                if (!pattern)
+                    continue;
+
+                if (std::optional<DestructureCursor> cursor = findDestructureCursorInPattern(*pattern, position))
+                {
+                    cursor->block = loop->body;
+                    cursor->loop = loop;
+                    return cursor;
+                }
+            }
+        }
+
         const AstStatBlock* block = (*it)->as<AstStatBlock>();
         if (!block)
             continue;
@@ -2127,7 +2146,7 @@ static std::optional<DestructureCursor> findDestructureCursor(const std::vector<
 }
 
 // The type of the value a pattern level destructures: its annotation's, or else its desugared statement's value's.
-static std::optional<TypeId> destructuredValueType(const Module& module, const DestructureCursor& cursor)
+static std::optional<TypeId> destructuredValueType(const Module& module, const DestructureCursor& cursor, const ScopePtr& scope)
 {
     const AstDestructurePattern& level = *cursor.level;
 
@@ -2137,14 +2156,42 @@ static std::optional<TypeId> destructuredValueType(const Module& module, const D
             return follow(*annotated);
     }
 
+    // A loop pattern's own level is the loop variable, which no statement declares
+    if (cursor.loop)
+    {
+        for (AstLocal* var : cursor.loop->vars)
+        {
+            if (var != level.local)
+                continue;
+
+            if (ScopePtr loopScope = findScopeAtPosition(module, cursor.loop->body->location.end))
+            {
+                if (std::optional<TypeId> ty = loopScope->lookup(Symbol{var}))
+                    return follow(*ty);
+            }
+
+            if (std::optional<TypeId> ty = scope->lookup(Symbol{var}))
+                return follow(*ty);
+
+            return std::nullopt;
+        }
+    }
+
     // The level's local is declared by the first statement or by one of the statements that point back to it
+    if (cursor.first >= cursor.block->body.size)
+        return std::nullopt;
+
     const AstStatLocal* first = cursor.block->body.data[cursor.first]->as<AstStatLocal>();
     const AstStatLocal* declaring = nullptr;
 
     for (size_t i = cursor.first; i < cursor.block->body.size && !declaring; ++i)
     {
         const AstStatLocal* candidate = cursor.block->body.data[i]->as<AstStatLocal>();
-        bool partOfDeclaration = candidate && (candidate == first || candidate->destructuredFrom == first);
+        bool partOfDeclaration = false;
+        if (cursor.loop)
+            partOfDeclaration = candidate && candidate->destructuredFromLoop;
+        else
+            partOfDeclaration = candidate && (candidate == first || candidate->destructuredFrom == first);
         if (!partOfDeclaration)
             break;
 
@@ -2202,7 +2249,7 @@ AutocompleteResult autocomplete_(
             return {{}, ancestry, AutocompleteContext::Unknown};
 
         AutocompleteEntryMap props;
-        if (std::optional<TypeId> valueType = destructuredValueType(*module, *cursor))
+        if (std::optional<TypeId> valueType = destructuredValueType(*module, *cursor, scopeAtPosition))
             props = autocompleteProps(*module, typeArena, builtinTypes, *valueType, PropIndexType::Point, ancestry);
 
         // Keys already in the pattern, except the one being written
