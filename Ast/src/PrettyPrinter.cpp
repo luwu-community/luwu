@@ -977,7 +977,7 @@ struct Printer
     {
         // Luwu Destructuring (rfcs/destructuring.md): the first statement a destructuring declaration desugars to
         // prints the whole declaration, so the rest print nothing but a trailing `;`.
-        if (const auto& local = program.as<AstStatLocal>(); local && local->destructuredFrom)
+        if (const auto& local = program.as<AstStatLocal>(); local && local->isDesugaredField())
         {
             if (program.hasSemicolon)
             {
@@ -1158,18 +1158,7 @@ struct Printer
 
             writer.keyword("for");
 
-            CommaSeparatorInserter varComma(writer, cstNode ? cstNode->varsCommaPositions.begin() : nullptr);
-            for (size_t i = 0; i < a->vars.size; i++)
-            {
-                varComma();
-                if (cstNode)
-                {
-                    LUAU_ASSERT(cstNode->varsAnnotationColonPositions.size > i);
-                    visualize(*a->vars.data[i], cstNode->varsAnnotationColonPositions.data[i]);
-                }
-                else
-                    visualize(*a->vars.data[i], Position{0, 0});
-            }
+            visualizeLoopVars(*a, cstNode);
 
             advance(a->inLocation.begin);
             writer.keyword("in");
@@ -1818,6 +1807,25 @@ struct Printer
             visualizeBlock(*block);
         else
             LUAU_ASSERT(!"visualizeBlock was expecting an AstStatBlock");
+    }
+
+    // Luwu Destructuring (rfcs/destructuring.md): a `for ... in` loop's variables. A destructured one prints its pattern.
+    void visualizeLoopVars(const AstStatForIn& loop, const CstStatForIn* cstNode)
+    {
+        CommaSeparatorInserter varComma(writer, cstNode ? cstNode->varsCommaPositions.begin() : nullptr);
+        for (size_t i = 0; i < loop.vars.size; i++)
+        {
+            varComma();
+
+            if (loop.destructure.size > i && loop.destructure.data[i])
+            {
+                visualizeDestructuring(*loop.destructure.data[i]);
+                continue;
+            }
+
+            bool hasColon = cstNode && cstNode->varsAnnotationColonPositions.size > i;
+            visualize(*loop.vars.data[i], hasColon ? cstNode->varsAnnotationColonPositions.data[i] : Position::missing());
+        }
     }
 
     void visualizeElseIf(AstStatIf& elseif)

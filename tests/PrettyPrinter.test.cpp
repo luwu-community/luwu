@@ -2279,6 +2279,19 @@ local .{x: number, y as py: string, pos.{a}: Vec2, tar as .{gz}: Archive}: Whole
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
 }
 
+TEST_CASE("prettyPrint_destructured_loop_bindings")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    std::string code = R"(
+for _ , .{name, age as years}: Person in people do
+    print(name)
+end
+for k, entry.{kind}, x in iter do end
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+}
+
 TEST_CASE("prettyPrint_function_attributes")
 {
     ScopedFastFlag fflags[] = {{FFlag::LuauCstAttr, true}, {FFlag::LuauExportValueSyntax, true}};

@@ -816,6 +816,160 @@ AstStat* Parser::parseContinue(const Location& start)
     return allocator.alloc<AstStatContinue>(start);
 }
 
+// Luwu Destructuring (rfcs/destructuring.md): `body` with a loop's destructured fields (pushLoopLocals) in front of it.
+AstStatBlock* Parser::prependLoopFields(const std::vector<AstStat*>& fields, AstStatBlock* body)
+{
+    if (fields.empty())
+        return body;
+
+    std::vector<AstStat*> statements = fields;
+    statements.insert(statements.end(), body->body.begin(), body->body.end());
+    return allocator.alloc<AstStatBlock>(body->location, copy(statements.data(), statements.size()), body->hasEnd);
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): `.{` or `name.{` where a loop variable goes.
+bool Parser::loopPatternFollows()
+{
+    if (destructurePatternFollows())
+        return true;
+
+    return lexer.current().type == Lexeme::Name && lexer.lookahead().type == '.' && lexer.lookaheadSecond().type == '{';
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): a loop binding written as a pattern, `[name].{fields}[: Type]`. Appends
+// the pattern to `patterns` and returns the binding for the loop variable: the name, or a hidden one for `.{...}`.
+Parser::Binding Parser::parseLoopPattern(std::vector<std::optional<DestructureTarget>>& patterns)
+{
+    Location start = lexer.current().location;
+    DestructureTarget target;
+
+    if (lexer.current().type == Lexeme::Name)
+        target.name = parseName("variable name");
+
+    parseDestructurePattern(target);
+
+    Position colonPosition = Position::missing();
+    if (lexer.current().type == ':')
+    {
+        colonPosition = lexer.current().location.begin;
+        nextLexeme();
+        target.annotation = parseType();
+    }
+
+    if (!FFlag::LuwuDestructuring)
+        report(Location(start, lexer.previousLocation()), "Destructuring is a Luwu feature; enable the 'LuwuDestructuring' fast flag to use it");
+
+    Name name = target.name ? *target.name : Name(nameDestructured, target.patternLocation.value_or(start));
+    Binding binding(name, target.annotation, colonPosition);
+    patterns.push_back(std::move(target));
+    return binding;
+}
+
+// The bindings after a `for` loop's first one, where any can be a pattern. Like parseBindingList otherwise.
+void Parser::parseLoopBindings(
+    TempVector<Binding>& names,
+    std::vector<std::optional<DestructureTarget>>& patterns,
+    AstArray<Position>* commaPositions,
+    Position* initialCommaPosition
+)
+{
+    TempVector<Position> localCommaPositions(scratchPosition);
+
+    if (commaPositions && initialCommaPosition)
+        localCommaPositions.push_back(*initialCommaPosition);
+
+    while (true)
+    {
+        if (loopPatternFollows())
+        {
+            names.push_back(parseLoopPattern(patterns));
+        }
+        else
+        {
+            names.push_back(parseBinding());
+            patterns.push_back(std::nullopt);
+        }
+
+        if (lexer.current().type != ',')
+            break;
+        if (commaPositions)
+            localCommaPositions.push_back(lexer.current().location.begin);
+        nextLexeme();
+    }
+
+    if (commaPositions)
+        *commaPositions = copy(localCommaPositions);
+}
+
+// Declares a `for ... in` loop's variables, after its values are parsed. A pattern's loop variable is its name, or a
+// hidden local that code can't name; the pattern's fields go to `fields` as the `local`s the loop body starts with,
+// and every pattern (null for a plain name) to `destructure`, which stays empty when there are none.
+AstArray<AstLocal*> Parser::pushLoopLocals(
+    const TempVector<Binding>& names,
+    const std::vector<std::optional<DestructureTarget>>& patterns,
+    std::vector<AstStat*>& fields,
+    AstArray<AstDestructurePattern*>& destructure
+)
+{
+    LUAU_ASSERT(names.size() == patterns.size());
+
+    TempVector<AstLocal*> vars(scratchLocal);
+    bool anyPattern = false;
+
+    for (size_t i = 0; i < names.size(); ++i)
+    {
+        if (patterns[i] && !patterns[i]->name)
+        {
+            // as in desugarDestructuring: the hidden local never enters the scope
+            vars.push_back(allocator.alloc<AstLocal>(
+                nameDestructured,
+                names[i].name.location,
+                /* shadow= */ nullptr,
+                functionStack.size() - 1,
+                functionStack.back().loopDepth,
+                names[i].annotation
+            ));
+        }
+        else
+        {
+            vars.push_back(pushLocal(names[i]));
+        }
+
+        anyPattern |= patterns[i].has_value();
+    }
+
+    AstArray<AstLocal*> result = copy(vars);
+
+    if (!anyPattern)
+        return result;
+
+    std::vector<AstDestructurePattern*> sources;
+
+    // Fields are pushed after every loop variable, so a field can shadow a loop variable but not the other way around
+    for (size_t i = 0; i < names.size(); ++i)
+    {
+        if (!patterns[i])
+        {
+            sources.push_back(nullptr);
+            continue;
+        }
+
+        size_t first = fields.size();
+        sources.push_back(allocator.alloc<AstDestructurePattern>(desugarDestructureFields(*patterns[i], result.data[i], false, fields)));
+
+        for (size_t j = first; j < fields.size(); ++j)
+        {
+            AstStatLocal* field = fields[j]->as<AstStatLocal>();
+            LUAU_ASSERT(field);
+            field->destructuredFromLoop = true;
+            field->luwuOnly = true;
+        }
+    }
+
+    destructure = copy(sources.data(), sources.size());
+    return result;
+}
+
 // for binding `=' exp `,' exp [`,' exp] do block end |
 // for bindinglist in explist do block end |
 AstStat* Parser::parseFor()
@@ -825,10 +979,18 @@ AstStat* Parser::parseFor()
     Lexeme matchFor = lexer.current();
     nextLexeme(); // for
 
-    Binding varname = parseBinding();
+    // Luwu Destructuring (rfcs/destructuring.md): `for _, p.{x, y} in ps`
+    std::vector<std::optional<DestructureTarget>> patterns;
+    bool firstIsPattern = loopPatternFollows();
+    Binding varname = firstIsPattern ? parseLoopPattern(patterns) : parseBinding();
+    if (!firstIsPattern)
+        patterns.push_back(std::nullopt);
 
     if (lexer.current().type == '=')
     {
+        if (firstIsPattern)
+            report(varname.name.location, "A numeric 'for' loop's variable is a number; only 'for ... in' bindings can be destructured");
+
         Position equalsPosition = lexer.current().location.begin;
         nextLexeme();
 
@@ -889,13 +1051,13 @@ AstStat* Parser::parseFor()
             {
                 Position initialCommaPosition = lexer.current().location.begin;
                 nextLexeme();
-                parseBindingList(names, false, false, &varsCommaPosition, &initialCommaPosition);
+                parseLoopBindings(names, patterns, &varsCommaPosition, &initialCommaPosition);
             }
             else
             {
                 nextLexeme();
 
-                parseBindingList(names);
+                parseLoopBindings(names, patterns, nullptr, nullptr);
             }
         }
 
@@ -914,10 +1076,9 @@ AstStat* Parser::parseFor()
 
         functionStack.back().loopDepth++;
 
-        TempVector<AstLocal*> vars(scratchLocal);
-
-        for (size_t i = 0; i < names.size(); ++i)
-            vars.push_back(pushLocal(names[i]));
+        std::vector<AstStat*> fields;
+        AstArray<AstDestructurePattern*> destructure{nullptr, 0};
+        AstArray<AstLocal*> vars = pushLoopLocals(names, patterns, fields, destructure);
 
         AstStatBlock* body = parseBlock();
 
@@ -930,9 +1091,14 @@ AstStat* Parser::parseFor()
         bool hasEnd = expectMatchEndAndConsume(Lexeme::ReservedEnd, matchEnd);
         body->hasEnd = hasEnd;
 
+        // Destructured fields are read at the start of every iteration
+        AstStatBlock* loopBody = prependLoopFields(fields, body);
+
         AstStatForIn* node = allocator.alloc<AstStatForIn>(
-            Location(start, end), copy(vars), copy(values), body, hasIn, inLocation, hasDo, matchDo.location, start
+            Location(start, end), vars, copy(values), loopBody, hasIn, inLocation, hasDo, matchDo.location, start
         );
+        node->destructure = destructure;
+        node->luwuOnly = destructure.size != 0;
         if (options.storeCstData)
         {
             cstNodeMap[node] = allocator.alloc<CstStatForIn>(extractAnnotationColonPositions(names), varsCommaPosition, copy(valuesCommaPositions));
@@ -1922,6 +2088,13 @@ AstDestructurePattern Parser::desugarDestructuring(
 
     out.push_back(allocator.alloc<AstStatLocal>(location, copy({local}), copy({value}), equalsLocation, isConst));
 
+    return desugarDestructureFields(target, local, isConst, out);
+}
+
+// The fields of `target`'s pattern, read from `local` (already declared): one `local`/`const` per binding, appended
+// to `out`. Returns the pattern's source form.
+AstDestructurePattern Parser::desugarDestructureFields(const DestructureTarget& target, AstLocal* local, bool isConst, std::vector<AstStat*>& out)
+{
     AstDestructurePattern pattern;
     pattern.local = local;
     pattern.location = target.patternLocation;

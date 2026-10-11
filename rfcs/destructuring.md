@@ -33,7 +33,7 @@ const items = getitems() -- { Item }
 const store_info.{store as store_name, items} = getitems()
 ```
 
-We support this in `local` and `const` declarations.
+We support this in `local` and `const` declarations, and in `for ... in` bindings.
 
 ## Compatibility
 
@@ -53,7 +53,7 @@ Use any of the previous syntaxes proposed in Luwu and Luau: `const x, y, z from 
 
 ## Future work (optional)
 
-Support in for loops. Probably don't want to support in parameters because default values will be very wonky.
+Probably don't want to support in parameters because default values will be very wonky.
 Also it would be very confusing.
 
 ## Prior art (required only for syntax and semantics changing RFCs)

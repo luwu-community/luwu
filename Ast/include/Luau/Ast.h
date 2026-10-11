@@ -948,6 +948,16 @@ public:
     // `destructure`; every one after it points to the first through `destructuredFrom`.
     AstDestructurePattern* destructure = nullptr;
     AstStatLocal* destructuredFrom = nullptr;
+    // A field of a pattern in a `for` loop's bindings (`for _, p.{x, y} in ps`): the loop body starts with one of
+    // these per bound name, and the loop holds the pattern (AstStatForIn::destructure).
+    bool destructuredFromLoop = false;
+
+    // One of several statements a single destructuring in the source desugars to, other than the one that holds
+    // the pattern. Tools that work on the source skip these.
+    bool isDesugaredField() const
+    {
+        return destructuredFrom || destructuredFromLoop;
+    }
 };
 
 class AstStatFor : public AstStat
@@ -1013,6 +1023,11 @@ public:
 
     // Location of the leading 'for' keyword token only.
     Location forLocation;
+
+    // Luwu Destructuring (rfcs/destructuring.md): the pattern of each binding written as one (`for _, p.{x, y} in ps`),
+    // null for a plain name; empty when no binding is a pattern. The loop variable is the pattern's local (hidden for
+    // `.{x, y}`), and `body` starts with one `local` per bound name (AstStatLocal::destructuredFromLoop).
+    AstArray<AstDestructurePattern*> destructure{nullptr, 0};
 };
 
 class AstStatAssign : public AstStat

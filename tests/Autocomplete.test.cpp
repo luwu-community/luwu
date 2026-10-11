@@ -5833,6 +5833,34 @@ TEST_CASE_FIXTURE(ACFixture, "destructuring_keys_complete_the_properties_of_the_
     CHECK_EQ(ac.context, AutocompleteContext::Property);
 }
 
+TEST_CASE_FIXTURE(ACFixture, "destructuring_keys_in_loop_bindings_complete_the_elements_properties")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    check(R"(
+        local people = { { name = "a", age = 1, pos = { x = 1 } } }
+        for _, .{@1} in people do end
+        for _, p.{name, @2} in people do end
+        for _, .{pos as .{@3}} in people do end
+    )");
+
+    AutocompleteResult ac = autocomplete('1');
+    CHECK_EQ(ac.context, AutocompleteContext::Property);
+    CHECK(ac.entryMap.count("name"));
+    CHECK(ac.entryMap.count("age"));
+    CHECK(!ac.entryMap.count("people"));
+
+    ac = autocomplete('2');
+    CHECK_EQ(ac.context, AutocompleteContext::Property);
+    CHECK(!ac.entryMap.count("name"));
+    CHECK(ac.entryMap.count("age"));
+
+    ac = autocomplete('3');
+    CHECK_EQ(ac.context, AutocompleteContext::Property);
+    CHECK(ac.entryMap.count("x"));
+    CHECK(!ac.entryMap.count("name"));
+}
+
 TEST_CASE_FIXTURE(ACFixture, "destructuring_hidden_local_is_not_suggested")
 {
     ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};

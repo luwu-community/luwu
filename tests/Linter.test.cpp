@@ -2774,6 +2774,21 @@ a<<"hi">>("hi")
     REQUIRE(0 == result.warnings.size());
 }
 
+TEST_CASE_FIXTURE(Fixture, "destructured_loop_bindings_lint_like_the_names_they_bind")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    // The fields are written in the loop's header, not as statements of its body, so only the unused one warns
+    LintResult result = lint(R"(
+local people = {}
+for _, .{name, unused} in people do print(name) end
+)");
+
+    REQUIRE_EQ(result.warnings.size(), 1);
+    CHECK_EQ(result.warnings[0].code, LintWarning::Code_LocalUnused);
+    CHECK_EQ(result.warnings[0].text, "Variable 'unused' is never used; prefix with '_' to silence");
+}
+
 TEST_CASE_FIXTURE(Fixture, "destructuring_lints_like_the_names_it_binds")
 {
     ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};

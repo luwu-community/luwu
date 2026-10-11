@@ -637,7 +637,11 @@ private:
 
             // Luwu Destructuring (rfcs/destructuring.md): the statements a destructuring declaration desugars to
             // are one statement in the source.
-            if (AstStatLocal* local = node->body.data[i]->as<AstStatLocal>(); local && local->destructuredFrom)
+            if (AstStatLocal* local = node->body.data[i]->as<AstStatLocal>(); local && local->isDesugaredField())
+                continue;
+
+            // A loop's destructured fields are written in the loop's header, before its body
+            if (AstStatLocal* local = node->body.data[i - 1]->as<AstStatLocal>(); local && local->destructuredFromLoop)
                 continue;
 
             // Luwu: a half-typed statement (`local t =`) ends on the next statement's line because the parser gave up

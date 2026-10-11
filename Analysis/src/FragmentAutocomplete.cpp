@@ -236,7 +236,7 @@ Location getFragmentLocation(AstStat* nearestStatement, const Position& cursorPo
 static bool canStartFragment(AstStat* stat)
 {
     AstStatLocal* local = stat->as<AstStatLocal>();
-    return !local || !local->destructuredFrom;
+    return !local || !local->isDesugaredField();
 }
 
 // The end of the destructuring declaration whose pattern holds `cursor` in `root`. A fragment normally ends at the
