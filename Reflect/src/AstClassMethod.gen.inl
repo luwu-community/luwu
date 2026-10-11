@@ -26,32 +26,33 @@ static bool handleAstClassMethodMethods(lua_State* L, AstItem& handle, ReflectAt
         n.functionName.value ? lua_pushstring(L, n.functionName.value) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetName:
-        beginReflectWrite(L, handle.doc, false);
         n.functionName = readName(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Func:
         pushAstNode(L, handle.doc, n.function);
         return true;
     case ReflectAtom::SetFunc:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n.function = readNode<Luau::AstExprFunction>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Visibility:
         lua_pushstring(L, toString(n.visibility).c_str());
         return true;
     case ReflectAtom::SetVisibility:
-        beginReflectWrite(L, handle.doc, false);
         n.visibility = readEnum<Luau::AstClassMemberVisibility>(L, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasSemicolon:
         lua_pushboolean(L, n.hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        beginReflectWrite(L, handle.doc, false);
         n.hasSemicolon = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::QualifierLocation:

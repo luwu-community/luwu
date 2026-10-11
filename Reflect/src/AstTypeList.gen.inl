@@ -21,16 +21,18 @@ static bool handleAstTypeListMethods(lua_State* L, AstItem& handle, ReflectAtom 
         pushNodeArray(L, handle.doc, n.types);
         return true;
     case ReflectAtom::SetTypes:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n.types = readNodeArray<Luau::AstType>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::TailType:
         pushAstNode(L, handle.doc, n.tailType);
         return true;
     case ReflectAtom::SetTailType:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n.tailType = readNode<Luau::AstTypePack>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     default:

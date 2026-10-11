@@ -24,8 +24,8 @@ static bool handleAstTablePropMethods(lua_State* L, AstItem& handle, ReflectAtom
         n.name.value ? lua_pushstring(L, n.name.value) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetName:
-        beginReflectWrite(L, handle.doc, false);
         n.name = readName(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::OrigLocation:
@@ -35,16 +35,17 @@ static bool handleAstTablePropMethods(lua_State* L, AstItem& handle, ReflectAtom
         pushAstNode(L, handle.doc, n.type);
         return true;
     case ReflectAtom::SetType:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n.type = readNode<Luau::AstType>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Access:
         lua_pushstring(L, toString(n.access).c_str());
         return true;
     case ReflectAtom::SetAccess:
-        beginReflectWrite(L, handle.doc, false);
         n.access = readEnum<Luau::AstTableAccess>(L, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::AccessLocation:

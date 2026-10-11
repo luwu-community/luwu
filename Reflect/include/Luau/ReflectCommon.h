@@ -120,18 +120,26 @@ struct AstAllocatorState
 {
     Luau::Allocator allocator;
     Luau::AstNameTable names;
-    NodeCommentMap nodeComments;
-    NodeCommentMap parsedComments;
-    DenseHashMap2<const void*, bool> explicitVisibility;
-
-    bool mutated = false;
-    int activeWalks = 0;
 
     AstAllocatorState()
         : allocator()
         , names(allocator)
     {
     }
+};
+
+struct AstTreeState
+{
+    std::shared_ptr<AstTreeState> forward;
+
+    NodeCommentMap nodeComments;
+    NodeCommentMap parsedComments;
+    DenseHashMap2<const void*, bool> explicitVisibility;
+    DenseHashMap2<const Luau::AstNode*, int> untainted;
+
+    bool tainted = false;
+    bool edited = false;
+    int activeWalks = 0;
 };
 
 inline std::string toString(ConstantNumberParseResult result)
@@ -184,20 +192,20 @@ inline const AstArgumentName* argumentName(const std::optional<AstArgumentName>&
     return entry && entry->first.value ? &*entry : nullptr;
 }
 
-inline bool hasExplicitVisibility(const AstAllocatorState& arena, const void* target)
+inline bool hasExplicitVisibility(const AstTreeState& tree, const void* target)
 {
-    const bool* flag = arena.explicitVisibility.find(target);
+    const bool* flag = tree.explicitVisibility.find(target);
     return flag && *flag;
 }
 
-inline void copyExplicitVisibility(AstAllocatorState& arena, const void* from, const void* to)
+inline void copyExplicitVisibility(AstTreeState& tree, const void* from, const void* to)
 {
-    if (from == to || arena.explicitVisibility.empty())
+    if (from == to || tree.explicitVisibility.empty())
         return;
 
-    bool value = hasExplicitVisibility(arena, from);
-    if (value || arena.explicitVisibility.contains(to))
-        arena.explicitVisibility[to] = value;
+    bool value = hasExplicitVisibility(tree, from);
+    if (value || tree.explicitVisibility.contains(to))
+        tree.explicitVisibility[to] = value;
 }
 
 struct AstAllocatorData
@@ -209,6 +217,7 @@ struct AstDocumentState
 {
     std::string source;
     std::shared_ptr<AstAllocatorState> arena;
+    std::shared_ptr<AstTreeState> tree = std::make_shared<AstTreeState>();
     Luau::ParseResult parseResult;
     std::vector<size_t> lineOffsets;
     std::vector<ReflectComment*> comments;
@@ -227,6 +236,20 @@ struct AstDocumentState
     Luau::Allocator* allocator() const { return arena ? &arena->allocator : nullptr; }
     Luau::AstNameTable* names() const { return arena ? &arena->names : nullptr; }
 };
+
+inline AstTreeState& treeOf(AstDocumentState& doc)
+{
+    while (doc.tree->forward)
+        doc.tree = doc.tree->forward;
+    return *doc.tree;
+}
+
+inline bool isTainted(const AstTreeState& tree, const Luau::AstNode* node)
+{
+    return tree.tainted && !tree.untainted.contains(node);
+}
+
+void joinDocuments(AstDocumentState& doc, AstDocumentState& other);
 
 struct AstDocumentData
 {
@@ -415,7 +438,7 @@ const Luau::CstNode* createDefaultCstNode(lua_State* L, ReflectAtom atom, Luau::
 void attachCommentsToAst(AstDocumentState& doc, Luau::AstNode* rootNode = nullptr);
 void recordParsedComments(AstDocumentState& doc, Luau::AstNode* rootNode = nullptr);
 void recordExplicitVisibility(AstDocumentState& doc);
-std::string reflectPrettyPrint(Luau::AstNode* node, bool asProgram, const AstAllocatorState& arena, std::string& error);
+std::string reflectPrettyPrint(Luau::AstNode* node, bool asProgram, const AstTreeState& tree, std::string& error);
 bool canNodeHoldComments(Luau::AstNode* node);
 
 // Array push helpers

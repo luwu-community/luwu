@@ -61,6 +61,7 @@ AstAttr::AstAttr(const Location& location, Type type, AstArray<AstExpr*> args, A
 
 void AstAttr::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     visitor->visit(this);
 }
 
@@ -137,6 +138,7 @@ AstGenericType::AstGenericType(const Location& location, AstName name, AstType* 
 
 void AstGenericType::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
     {
         if (defaultValue)
@@ -153,6 +155,7 @@ AstGenericTypePack::AstGenericTypePack(const Location& location, AstName name, A
 
 void AstGenericTypePack::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
     {
         if (defaultValue)
@@ -168,6 +171,7 @@ AstExprGroup::AstExprGroup(const Location& location, AstExpr* expr)
 
 void AstExprGroup::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
         expr->visit(visitor);
 }
@@ -179,6 +183,7 @@ AstExprConstantNil::AstExprConstantNil(const Location& location)
 
 void AstExprConstantNil::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     visitor->visit(this);
 }
 
@@ -190,6 +195,7 @@ AstExprConstantBool::AstExprConstantBool(const Location& location, bool value)
 
 void AstExprConstantBool::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     visitor->visit(this);
 }
 
@@ -202,6 +208,7 @@ AstExprConstantNumber::AstExprConstantNumber(const Location& location, double va
 
 void AstExprConstantNumber::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     visitor->visit(this);
 }
 
@@ -214,6 +221,7 @@ AstExprConstantInteger::AstExprConstantInteger(const Location& location, int64_t
 
 void AstExprConstantInteger::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     visitor->visit(this);
 }
 
@@ -226,6 +234,7 @@ AstExprConstantString::AstExprConstantString(const Location& location, const Ast
 
 void AstExprConstantString::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     visitor->visit(this);
 }
 
@@ -274,6 +283,7 @@ AstExprLocal::AstExprLocal(const Location& location, AstLocal* local, bool upval
 
 void AstExprLocal::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     visitor->visit(this);
 }
 
@@ -285,6 +295,7 @@ AstExprGlobal::AstExprGlobal(const Location& location, const AstName& name)
 
 void AstExprGlobal::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     visitor->visit(this);
 }
 
@@ -295,6 +306,7 @@ AstExprVarargs::AstExprVarargs(const Location& location)
 
 void AstExprVarargs::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     visitor->visit(this);
 }
 
@@ -317,6 +329,7 @@ AstExprCall::AstExprCall(
 
 void AstExprCall::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
     {
         func->visit(visitor);
@@ -345,6 +358,7 @@ AstExprIndexName::AstExprIndexName(
 
 void AstExprIndexName::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
         expr->visit(visitor);
 }
@@ -358,6 +372,7 @@ AstExprIndexExpr::AstExprIndexExpr(const Location& location, AstExpr* expr, AstE
 
 void AstExprIndexExpr::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
     {
         expr->visit(visitor);
@@ -408,6 +423,7 @@ AstExprFunction::AstExprFunction(
 
 void AstExprFunction::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
     {
         for (AstLocal* arg : args)
@@ -463,6 +479,7 @@ AstExprTable::AstExprTable(const Location& location, const AstArray<Item>& items
 
 void AstExprTable::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
     {
         for (const Item& item : items)
@@ -524,6 +541,7 @@ AstExprUnary::AstExprUnary(const Location& location, Op op, AstExpr* expr)
 
 void AstExprUnary::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
         expr->visit(visitor);
 }
@@ -566,6 +584,7 @@ AstExprBinary::AstExprBinary(const Location& location, Op op, AstExpr* left, Ast
 
 void AstExprBinary::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
     {
         left->visit(visitor);
@@ -662,6 +681,7 @@ AstExprTypeAssertion::AstExprTypeAssertion(const Location& location, AstExpr* ex
 
 void AstExprTypeAssertion::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
     {
         expr->visit(visitor);
@@ -694,6 +714,7 @@ AstExprIfElse::AstExprIfElse(
 
 void AstExprIfElse::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
     {
         condition->visit(visitor);
@@ -718,6 +739,7 @@ AstExprInterpString::AstExprInterpString(const Location& location, const AstArra
 
 void AstExprInterpString::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
     {
         for (AstExpr* expr : expressions)
@@ -734,6 +756,7 @@ AstExprInstantiate::AstExprInstantiate(const Location& location, AstExpr* expr, 
 
 void AstExprInstantiate::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
     {
         expr->visit(visitor);
@@ -744,6 +767,7 @@ void AstExprInstantiate::visit(AstVisitor* visitor)
 
 void AstExprError::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
     {
         for (AstExpr* expression : expressions)
@@ -760,6 +784,7 @@ AstStatBlock::AstStatBlock(const Location& location, const AstArray<AstStat*>& b
 
 void AstStatBlock::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
     {
         for (AstStat* stat : body)
@@ -788,6 +813,7 @@ AstStatIf::AstStatIf(
 
 void AstStatIf::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
     {
         condition->visit(visitor);
@@ -817,6 +843,7 @@ AstStatWhile::AstStatWhile(
 
 void AstStatWhile::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
     {
         condition->visit(visitor);
@@ -843,6 +870,7 @@ AstStatRepeat::AstStatRepeat(
 
 void AstStatRepeat::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
     {
         body->visit(visitor);
@@ -857,6 +885,7 @@ AstStatBreak::AstStatBreak(const Location& location)
 
 void AstStatBreak::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     visitor->visit(this);
 }
 
@@ -867,6 +896,7 @@ AstStatContinue::AstStatContinue(const Location& location)
 
 void AstStatContinue::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     visitor->visit(this);
 }
 
@@ -879,6 +909,7 @@ AstStatReturn::AstStatReturn(const Location& location, const AstArray<AstExpr*>&
 
 void AstStatReturn::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
     {
         for (AstExpr* expr : list)
@@ -894,6 +925,7 @@ AstStatExpr::AstStatExpr(const Location& location, AstExpr* expr)
 
 void AstStatExpr::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
         expr->visit(visitor);
 }
@@ -915,6 +947,7 @@ AstStatLocal::AstStatLocal(
 
 void AstStatLocal::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
     {
         for (AstLocal* var : vars)
@@ -953,6 +986,7 @@ AstStatFor::AstStatFor(
 
 void AstStatFor::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
     {
         if (var->annotation)
@@ -993,6 +1027,7 @@ AstStatForIn::AstStatForIn(
 
 void AstStatForIn::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
     {
         for (AstLocal* var : vars)
@@ -1017,6 +1052,7 @@ AstStatAssign::AstStatAssign(const Location& location, const AstArray<AstExpr*>&
 
 void AstStatAssign::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
     {
         for (AstExpr* lvalue : vars)
@@ -1037,6 +1073,7 @@ AstStatCompoundAssign::AstStatCompoundAssign(const Location& location, AstExprBi
 
 void AstStatCompoundAssign::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
     {
         var->visit(visitor);
@@ -1054,6 +1091,7 @@ AstStatFunction::AstStatFunction(const Location& location, AstExpr* name, AstExp
 
 void AstStatFunction::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
     {
         name->visit(visitor);
@@ -1082,6 +1120,7 @@ AstStatLocalFunction::AstStatLocalFunction(
 
 void AstStatLocalFunction::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
         func->visit(visitor);
 }
@@ -1109,6 +1148,7 @@ AstStatTypeAlias::AstStatTypeAlias(
 
 void AstStatTypeAlias::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
     {
         for (AstGenericType* el : generics)
@@ -1144,6 +1184,7 @@ AstStatTypeFunction::AstStatTypeFunction(
 
 void AstStatTypeFunction::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
         body->visit(visitor);
 }
@@ -1165,6 +1206,7 @@ AstStatDeclareGlobal::AstStatDeclareGlobal(
 
 void AstStatDeclareGlobal::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
         type->visit(visitor);
 }
@@ -1227,6 +1269,7 @@ AstStatClass::AstStatClass(
 
 void AstStatClass::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     LUAU_ASSERT(FFlag::LuwuClasses);
     if (visitor->visit(this))
     {
@@ -1329,6 +1372,7 @@ AstStatDeclareFunction::AstStatDeclareFunction(
 
 void AstStatDeclareFunction::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
     {
         visitTypeList(visitor, params);
@@ -1397,6 +1441,7 @@ AstStatDeclareExternType::AstStatDeclareExternType(
 
 void AstStatDeclareExternType::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
     {
         for (const AstDeclaredExternTypeProperty& prop : props)
@@ -1419,6 +1464,7 @@ AstStatError::AstStatError(
 
 void AstStatError::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
     {
         for (AstNode* expression : expressions)
@@ -1452,6 +1498,7 @@ AstTypeReference::AstTypeReference(
 
 void AstTypeReference::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
     {
         visitTypeOrPackArray(visitor, parameters);
@@ -1467,6 +1514,7 @@ AstTypeTable::AstTypeTable(const Location& location, const AstArray<AstTableProp
 
 void AstTypeTable::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
     {
         for (const AstTableProp& prop : props)
@@ -1521,6 +1569,7 @@ AstTypeFunction::AstTypeFunction(
 
 void AstTypeFunction::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
     {
         visitTypeList(visitor, argTypes);
@@ -1557,6 +1606,7 @@ AstTypeTypeof::AstTypeTypeof(const Location& location, AstExpr* expr)
 
 void AstTypeTypeof::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
         expr->visit(visitor);
 }
@@ -1568,6 +1618,7 @@ AstTypeOptional::AstTypeOptional(const Location& location)
 
 void AstTypeOptional::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     visitor->visit(this);
 }
 
@@ -1579,6 +1630,7 @@ AstTypeUnion::AstTypeUnion(const Location& location, const AstArray<AstType*>& t
 
 void AstTypeUnion::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
     {
         for (AstType* type : types)
@@ -1594,6 +1646,7 @@ AstTypeIntersection::AstTypeIntersection(const Location& location, const AstArra
 
 void AstTypeIntersection::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
     {
         for (AstType* type : types)
@@ -1609,6 +1662,7 @@ AstTypeSingletonBool::AstTypeSingletonBool(const Location& location, bool value)
 
 void AstTypeSingletonBool::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     visitor->visit(this);
 }
 
@@ -1620,6 +1674,7 @@ AstTypeSingletonString::AstTypeSingletonString(const Location& location, const A
 
 void AstTypeSingletonString::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     visitor->visit(this);
 }
 
@@ -1631,6 +1686,7 @@ AstTypeGroup::AstTypeGroup(const Location& location, AstType* type)
 
 void AstTypeGroup::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
         type->visit(visitor);
 }
@@ -1645,6 +1701,7 @@ AstTypeError::AstTypeError(const Location& location, const AstArray<AstType*>& t
 
 void AstTypeError::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
     {
         for (AstType* type : types)
@@ -1660,6 +1717,7 @@ AstTypePackExplicit::AstTypePackExplicit(const Location& location, AstTypeList t
 
 void AstTypePackExplicit::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
     {
         for (AstType* type : typeList.types)
@@ -1678,6 +1736,7 @@ AstTypePackVariadic::AstTypePackVariadic(const Location& location, AstType* vari
 
 void AstTypePackVariadic::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     if (visitor->visit(this))
         variadicType->visit(visitor);
 }
@@ -1690,6 +1749,7 @@ AstTypePackGeneric::AstTypePackGeneric(const Location& location, AstName name)
 
 void AstTypePackGeneric::visit(AstVisitor* visitor)
 {
+    AstVisitDepth visitDepth(visitor);
     visitor->visit(this);
 }
 

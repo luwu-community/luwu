@@ -22,24 +22,26 @@ static bool handleAstTableItemMethods(lua_State* L, AstItem& handle, ReflectAtom
         pushAstNode(L, handle.doc, n.key);
         return true;
     case ReflectAtom::SetKey:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n.key = readNode<Luau::AstExpr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Value:
         pushAstNode(L, handle.doc, n.value);
         return true;
     case ReflectAtom::SetValue:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n.value = readNode<Luau::AstExpr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::ItemKind:
         lua_pushstring(L, toString(n.kind).c_str());
         return true;
     case ReflectAtom::SetItemKind:
-        beginReflectWrite(L, handle.doc, false);
         n.kind = readEnum<Luau::AstExprTable::Item::Kind>(L, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Validity);
         lua_pushvalue(L, 1);
         return true;
     default:

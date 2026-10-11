@@ -512,6 +512,8 @@ export type CstNode =
 export type AstNodeCommon = {
     read id: Id,
     read prettyprint: (self: AstNode) -> string,
+    read untaint: (self: AstNode) -> AstNode,
+    read tainted: (self: AstNode) -> boolean,
     read leadingComments: (self: AstNode) -> {AstComment},
     read setLeadingComments: (self: AstNode, comments: {AstComment}) -> AstNode,
     read trailingComments: (self: AstNode) -> {AstComment},

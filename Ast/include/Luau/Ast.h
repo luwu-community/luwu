@@ -1653,6 +1653,8 @@ class AstVisitor
 public:
     virtual ~AstVisitor() {}
 
+    int depth = 0;
+
     virtual bool visit(class AstNode*)
     {
         return true;
@@ -1925,6 +1927,25 @@ public:
     {
         return visit(static_cast<AstTypePack*>(node));
     }
+};
+
+struct AstVisitDepth
+{
+    explicit AstVisitDepth(AstVisitor* visitor)
+        : visitor(visitor)
+    {
+        visitor->depth++;
+    }
+
+    ~AstVisitDepth()
+    {
+        visitor->depth--;
+    }
+
+    AstVisitDepth(const AstVisitDepth&) = delete;
+    AstVisitDepth& operator=(const AstVisitDepth&) = delete;
+
+    AstVisitor* visitor;
 };
 
 bool isLValue(const AstExpr*);

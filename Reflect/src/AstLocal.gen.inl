@@ -27,8 +27,8 @@ static bool handleAstLocalMethods(lua_State* L, AstItem& handle, ReflectAtom ato
         n.name.value ? lua_pushstring(L, n.name.value) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetName:
-        beginReflectWrite(L, handle.doc, false);
         n.name = readName(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::OrigLocation:
@@ -38,48 +38,50 @@ static bool handleAstLocalMethods(lua_State* L, AstItem& handle, ReflectAtom ato
         pushItem(L, handle.doc, n.shadow);
         return true;
     case ReflectAtom::SetShadow:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n.shadow = readLocal(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Depth:
         lua_pushinteger64(L, int64_t(n.functionDepth));
         return true;
     case ReflectAtom::SetDepth:
-        beginReflectWrite(L, handle.doc, false);
         n.functionDepth = lua_isnumber(L, 2) ? size_t(lua_tointeger(L, 2)) : size_t(luaL_checkinteger64(L, 2));
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::IsConst:
         lua_pushboolean(L, n.isConst);
         return true;
     case ReflectAtom::SetIsConst:
-        beginReflectWrite(L, handle.doc, false);
         n.isConst = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Exported:
         lua_pushboolean(L, n.isExported);
         return true;
     case ReflectAtom::SetExported:
-        beginReflectWrite(L, handle.doc, false);
         n.isExported = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Annotation:
         pushAstNode(L, handle.doc, n.annotation);
         return true;
     case ReflectAtom::SetAnnotation:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n.annotation = readNode<Luau::AstType>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::LoopDepth:
         lua_pushinteger64(L, int64_t(n.loopDepth));
         return true;
     case ReflectAtom::SetLoopDepth:
-        beginReflectWrite(L, handle.doc, false);
         n.loopDepth = lua_isnumber(L, 2) ? size_t(lua_tointeger(L, 2)) : size_t(luaL_checkinteger64(L, 2));
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     default:

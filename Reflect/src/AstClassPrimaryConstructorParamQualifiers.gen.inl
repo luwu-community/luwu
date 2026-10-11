@@ -17,23 +17,23 @@ static bool handleAstClassPrimaryConstructorParamQualifiersMethods(lua_State* L,
     static_assert(std::is_same_v<std::remove_const_t<decltype(n.isConst)>, bool>, "schema type of AstClassPrimaryConstructorParamQualifiers.isConst does not match the C++ member");
     static_assert(std::is_same_v<std::remove_const_t<decltype(n.qualifierLocation)>, std::optional<Luau::Location>>, "schema type of AstClassPrimaryConstructorParamQualifiers.qualifierLocation does not match the C++ member");
     static_assert(std::is_same_v<std::remove_const_t<decltype(n.constLocation)>, std::optional<Luau::Location>>, "schema type of AstClassPrimaryConstructorParamQualifiers.constLocation does not match the C++ member");
-    static_assert(std::is_same_v<std::remove_const_t<decltype(hasExplicitVisibility(*handle.doc->arena, &n))>, bool>, "schema type of AstClassPrimaryConstructorParamQualifiers.explicitVisibility does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(hasExplicitVisibility(treeOf(*handle.doc), &n))>, bool>, "schema type of AstClassPrimaryConstructorParamQualifiers.explicitVisibility does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::Visibility:
         lua_pushstring(L, toString(n.visibility).c_str());
         return true;
     case ReflectAtom::SetVisibility:
-        beginReflectWrite(L, handle.doc, false);
         n.visibility = readEnum<Luau::AstClassMemberVisibility>(L, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::IsConst:
         lua_pushboolean(L, n.isConst);
         return true;
     case ReflectAtom::SetIsConst:
-        beginReflectWrite(L, handle.doc, false);
         n.isConst = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::QualifierLocation:
@@ -43,11 +43,11 @@ static bool handleAstClassPrimaryConstructorParamQualifiersMethods(lua_State* L,
         n.constLocation ? pushLocation(L, handle.doc, *n.constLocation) : lua_pushnil(L);
         return true;
     case ReflectAtom::ExplicitVisibility:
-        lua_pushboolean(L, hasExplicitVisibility(*handle.doc->arena, &n));
+        lua_pushboolean(L, hasExplicitVisibility(treeOf(*handle.doc), &n));
         return true;
     case ReflectAtom::SetExplicitVisibility:
-        beginReflectWrite(L, handle.doc, false);
-        handle.doc->arena->explicitVisibility[&n] = lua_toboolean(L, 2) != 0;
+        treeOf(*handle.doc).explicitVisibility[&n] = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -67,7 +67,7 @@ static void collectAstClassPrimaryConstructorParamQualifiersProps(lua_State* L, 
     lua_setfield(L, -2, "qualifierLocation");
     n.constLocation ? pushLocation(L, handle.doc, *n.constLocation) : lua_pushnil(L);
     lua_setfield(L, -2, "constLocation");
-    lua_pushboolean(L, hasExplicitVisibility(*handle.doc->arena, &n));
+    lua_pushboolean(L, hasExplicitVisibility(treeOf(*handle.doc), &n));
     lua_setfield(L, -2, "explicitVisibility");
 }
 

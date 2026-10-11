@@ -22,16 +22,16 @@ static bool handleAstCommentMethods(lua_State* L, AstItem& handle, ReflectAtom a
         lua_pushstring(L, toString(n.type).c_str());
         return true;
     case ReflectAtom::SetType:
-        beginReflectWrite(L, handle.doc, false);
         n.type = readEnum<Luau::Lexeme::Type>(L, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Text:
         lua_pushlstring(L, n.text.data ? n.text.data : "", n.text.size);
         return true;
     case ReflectAtom::SetText:
-        beginReflectWrite(L, handle.doc, false);
         n.text = readString(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::OrigLocation:

@@ -27,24 +27,26 @@ static bool handleAstTableIndexerMethods(lua_State* L, AstItem& handle, ReflectA
         pushAstNode(L, handle.doc, n.indexType);
         return true;
     case ReflectAtom::SetIndexType:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n.indexType = readNode<Luau::AstType>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::ResultType:
         pushAstNode(L, handle.doc, n.resultType);
         return true;
     case ReflectAtom::SetResultType:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n.resultType = readNode<Luau::AstType>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Access:
         lua_pushstring(L, toString(n.access).c_str());
         return true;
     case ReflectAtom::SetAccess:
-        beginReflectWrite(L, handle.doc, false);
         n.access = readEnum<Luau::AstTableAccess>(L, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::AccessLocation:

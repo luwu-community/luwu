@@ -8,18 +8,41 @@
 namespace Luau
 {
 
+inline void joinDocuments(const std::shared_ptr<AstDocumentState>& doc, const std::shared_ptr<AstDocumentState>& other)
+{
+    if (doc && other && doc != other)
+        joinDocuments(*doc, *other);
+}
+
 inline void checkSameAllocator(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const std::shared_ptr<AstDocumentState>& other, const char* what)
 {
     if (doc && other && other->allocator() != doc->allocator())
         luaL_error(L, "cross-allocator %s assignment is not permitted", what);
+    joinDocuments(doc, other);
 }
 
-inline void beginReflectWrite(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, bool structural)
+enum class ReflectWrite
 {
-    AstAllocatorState& arena = *doc->arena;
-    if (structural && arena.activeWalks > 0)
+    Value,
+    Validity,
+    Structural,
+};
+
+inline void beginReflectWrite(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, ReflectWrite write)
+{
+    if (write == ReflectWrite::Structural && treeOf(*doc).activeWalks > 0)
         luaL_error(L, "cannot change the structure of an AST while it is being walked");
-    arena.mutated = true;
+}
+
+inline void finishReflectWrite(const std::shared_ptr<AstDocumentState>& doc, ReflectWrite write)
+{
+    AstTreeState& tree = treeOf(*doc);
+    tree.edited = true;
+    if (write != ReflectWrite::Value)
+    {
+        tree.tainted = true;
+        tree.untainted.clear();
+    }
 }
 
 inline Luau::AstName readName(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int idx)
@@ -28,6 +51,8 @@ inline Luau::AstName readName(lua_State* L, const std::shared_ptr<AstDocumentSta
         return Luau::AstName();
     size_t len = 0;
     const char* s = luaL_checklstring(L, idx, &len);
+    if (len == 0)
+        luaL_error(L, "a name cannot be an empty string");
     return doc->names() ? doc->names()->getOrAdd(s, len) : Luau::AstName(s);
 }
 
@@ -90,6 +115,7 @@ inline T* readNode(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, i
     auto& nodeData = checkAstNode(L, idx);
     if (doc && nodeData.doc && nodeData.doc->allocator() != doc->allocator())
         luaL_error(L, "cross-allocator AST node assignment is not permitted");
+    joinDocuments(doc, nodeData.doc);
     T* casted = castAstNode<T>(nodeData.node());
     if (!casted)
         luaL_error(L, "invalid AstNode subtype at argument #%d", idx);
@@ -103,6 +129,7 @@ inline Luau::AstLocal* readLocal(lua_State* L, const std::shared_ptr<AstDocument
     auto& handle = checkItem<Luau::AstLocal>(L, idx);
     if (doc && handle.doc && handle.doc->allocator() != doc->allocator())
         luaL_error(L, "cross-allocator AstLocal assignment is not permitted");
+    joinDocuments(doc, handle.doc);
     return static_cast<Luau::AstLocal*>(handle.target);
 }
 
@@ -129,6 +156,7 @@ inline Luau::AstArray<T*> readNodeArray(lua_State* L, const std::shared_ptr<AstD
         auto& nodeData = checkAstNode(L, -1);
         if (doc && nodeData.doc && nodeData.doc->allocator() != doc->allocator())
             luaL_error(L, "cross-allocator AST node assignment is not permitted at table index %d", i);
+        joinDocuments(doc, nodeData.doc);
         T* casted = castAstNode<T>(nodeData.node());
         if (!casted)
             luaL_error(L, "invalid AstNode subtype at table index %d", i);
@@ -145,6 +173,7 @@ inline Luau::AstArray<T*> readOptionalNodeArray(lua_State* L, const std::shared_
         auto& nodeData = checkAstNode(L, -1);
         if (doc && nodeData.doc && nodeData.doc->allocator() != doc->allocator())
             luaL_error(L, "cross-allocator AST node assignment is not permitted at table index %d", i);
+        joinDocuments(doc, nodeData.doc);
         T* casted = castAstNode<T>(nodeData.node());
         if (!casted)
             luaL_error(L, "invalid AstNode subtype at table index %d", i);
@@ -206,7 +235,7 @@ inline Luau::AstArray<T> realignCompanion(
             if (before.data[j] == after.data[i])
             {
                 buffer[i] = companion.data[j];
-                copyExplicitVisibility(*doc->arena, &companion.data[j], &buffer[i]);
+                copyExplicitVisibility(treeOf(*doc), &companion.data[j], &buffer[i]);
                 break;
             }
         }
@@ -242,7 +271,7 @@ inline Luau::AstArray<T> fitCompanion(
         AstItem* item = static_cast<AstItem*>(lua_touserdatatagged(L, -1, TagItem));
         if (item && item->target == &list.data[i])
         {
-            copyExplicitVisibility(*doc->arena, item->target, &buffer[i]);
+            copyExplicitVisibility(treeOf(*doc), item->target, &buffer[i]);
             item->target = &buffer[i];
         }
         lua_pop(L, 1);
@@ -264,7 +293,7 @@ inline void readItemInto(lua_State* L, const std::shared_ptr<AstDocumentState>& 
     AstItem& item = checkOwnedItem<T>(L, doc, idx);
     if (item.target != &dest)
         dest = *static_cast<T*>(item.target);
-    copyExplicitVisibility(*doc->arena, item.target, &dest);
+    copyExplicitVisibility(treeOf(*doc), item.target, &dest);
     item.target = &dest;
 }
 
@@ -275,7 +304,7 @@ inline T* readItemPointer(lua_State* L, const std::shared_ptr<AstDocumentState>&
         return nullptr;
     AstItem& item = checkOwnedItem<T>(L, doc, idx);
     T* copy = doc->allocator()->alloc<T>(*static_cast<T*>(item.target));
-    copyExplicitVisibility(*doc->arena, item.target, copy);
+    copyExplicitVisibility(treeOf(*doc), item.target, copy);
     item.target = copy;
     return copy;
 }
@@ -291,7 +320,7 @@ inline Luau::AstArray<T> readItemArray(lua_State* L, const std::shared_ptr<AstDo
     {
         lua_rawgeti(L, idx, int(i + 1));
         AstItem* item = static_cast<AstItem*>(lua_touserdata(L, -1));
-        copyExplicitVisibility(*doc->arena, item->target, &result.data[i]);
+        copyExplicitVisibility(treeOf(*doc), item->target, &result.data[i]);
         item->target = &result.data[i];
         lua_pop(L, 1);
     }
@@ -365,21 +394,15 @@ struct AstValidator
     int tallestChild = 0;
     const char* kind = "AstNode";
     DenseHashMap2<const Luau::AstNode*, int> heights;
+    std::vector<const Luau::AstNode*> order;
+    const DenseHashMap2<const Luau::AstNode*, int>* untainted = nullptr;
 
     void node(Luau::AstNode* node);
     void child(Luau::AstNode* node, const char* field, int index, const char* missing);
     void local(Luau::AstLocal* local, const char* field, int index, const char* missing);
     void name(const Luau::AstName& name, const char* field, int index, const char* missing);
     [[noreturn]] void fail(const char* field, int index, const char* problem);
+    [[noreturn]] void tooDeep();
 };
-
-enum class AstValidation
-{
-    Node,
-    Walk,
-    Print
-};
-
-void validateAstNode(lua_State* L, const AstItem& handle, AstValidation mode);
 
 } // namespace Luau

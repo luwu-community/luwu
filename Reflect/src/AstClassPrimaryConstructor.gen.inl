@@ -19,15 +19,15 @@ static bool handleAstClassPrimaryConstructorMethods(lua_State* L, AstItem& handl
     static_assert(std::is_same_v<std::remove_const_t<decltype(n.argsQualifiers)>, Luau::AstArray<Luau::AstClassPrimaryConstructorParamQualifiers>>, "schema type of AstClassPrimaryConstructor.argsQualifiers does not match the C++ member");
     static_assert(std::is_same_v<std::remove_const_t<decltype(n.qualifierLocation)>, std::optional<Luau::Location>>, "schema type of AstClassPrimaryConstructor.qualifierLocation does not match the C++ member");
     static_assert(std::is_same_v<std::remove_const_t<decltype(n.argLocation)>, Luau::Location>, "schema type of AstClassPrimaryConstructor.argLocation does not match the C++ member");
-    static_assert(std::is_same_v<std::remove_const_t<decltype(hasExplicitVisibility(*handle.doc->arena, &n))>, bool>, "schema type of AstClassPrimaryConstructor.explicitVisibility does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(hasExplicitVisibility(treeOf(*handle.doc), &n))>, bool>, "schema type of AstClassPrimaryConstructor.explicitVisibility does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::Visibility:
         lua_pushstring(L, toString(n.visibility).c_str());
         return true;
     case ReflectAtom::SetVisibility:
-        beginReflectWrite(L, handle.doc, false);
         n.visibility = readEnum<Luau::AstClassMemberVisibility>(L, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Args:
@@ -35,11 +35,12 @@ static bool handleAstClassPrimaryConstructorMethods(lua_State* L, AstItem& handl
         return true;
     case ReflectAtom::SetArgs:
     {
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         Luau::AstArray<Luau::AstLocal*> previous = n.args;
         n.args = readLocalArray(L, handle.doc, 2);
         n.argsDefaults = realignCompanion(handle.doc, previous, n.args, n.argsDefaults);
         n.argsQualifiers = realignCompanion(handle.doc, previous, n.args, n.argsQualifiers);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     }
@@ -48,9 +49,10 @@ static bool handleAstClassPrimaryConstructorMethods(lua_State* L, AstItem& handl
         return true;
     case ReflectAtom::SetArgsDefaults:
     {
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         auto list = readOptionalNodeArray<Luau::AstExpr>(L, handle.doc, 2);
         n.argsDefaults = fitCompanion(L, handle.doc, 2, list, n.args.size, "argsDefaults", "args");
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     }
@@ -59,9 +61,10 @@ static bool handleAstClassPrimaryConstructorMethods(lua_State* L, AstItem& handl
         return true;
     case ReflectAtom::SetArgsQualifiers:
     {
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         auto list = readItemArray<Luau::AstClassPrimaryConstructorParamQualifiers>(L, handle.doc, 2);
         n.argsQualifiers = fitCompanion(L, handle.doc, 2, list, n.args.size, "argsQualifiers", "args");
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     }
@@ -72,11 +75,11 @@ static bool handleAstClassPrimaryConstructorMethods(lua_State* L, AstItem& handl
         pushLocation(L, handle.doc, n.argLocation);
         return true;
     case ReflectAtom::ExplicitVisibility:
-        lua_pushboolean(L, hasExplicitVisibility(*handle.doc->arena, &n));
+        lua_pushboolean(L, hasExplicitVisibility(treeOf(*handle.doc), &n));
         return true;
     case ReflectAtom::SetExplicitVisibility:
-        beginReflectWrite(L, handle.doc, false);
-        handle.doc->arena->explicitVisibility[&n] = lua_toboolean(L, 2) != 0;
+        treeOf(*handle.doc).explicitVisibility[&n] = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -100,7 +103,7 @@ static void collectAstClassPrimaryConstructorProps(lua_State* L, AstItem& handle
     lua_setfield(L, -2, "qualifierLocation");
     pushLocation(L, handle.doc, n.argLocation);
     lua_setfield(L, -2, "argLocation");
-    lua_pushboolean(L, hasExplicitVisibility(*handle.doc->arena, &n));
+    lua_pushboolean(L, hasExplicitVisibility(treeOf(*handle.doc), &n));
     lua_setfield(L, -2, "explicitVisibility");
 }
 

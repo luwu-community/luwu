@@ -88,11 +88,11 @@ static int astAllocatorDefaultnode(lua_State* L)
     ReflectAtom kind = resolveGlobalReflectAtom(std::string_view(str, len));
 
     auto doc = std::make_shared<AstDocumentState>(handle.state);
-
-    handle.state->mutated = true;
+    doc->tree->edited = true;
 
     if (Luau::AstNode* node = createDefaultAstNode(L, kind, handle.state->allocator))
     {
+        doc->tree->tainted = true;
         pushAstNode(L, doc, node);
         return 1;
     }

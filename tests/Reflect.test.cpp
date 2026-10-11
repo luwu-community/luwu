@@ -1465,45 +1465,80 @@ TEST_CASE("ReflectMalformedTreesRaiseErrors")
         end
 
         local ifStat = alloc:defaultnode("AstStatIf")
-        fails(function() visitAll(ifStat) end, "AstStatIf.condition is nil")
+        fails(function() visitAll(ifStat) end, "cannot walk a tainted AST")
+        fails(function() return ifStat:prettyprint() end, "cannot prettyprint a tainted AST")
+        fails(function() return ifStat:untaint() end, "AstStatIf.condition is nil")
         fails(function() return ifStat:children() end, "AstStatIf.condition is nil")
-        fails(function() return ifStat:prettyprint() end, "AstStatIf.condition is nil")
 
         ifStat:setCondition(alloc:parseexpr("x")):setThenBody(alloc:defaultnode("AstStatBlock"))
         assert(#ifStat:children() == 2)
+        fails(function() visitAll(ifStat) end, "tainted AST")
+        assert(ifStat:untaint() == ifStat)
         visitAll(ifStat)
+        visitAll(ifStat:thenbody())
+        assert(ifStat:untaint() == ifStat)
         assert(ifStat:elsebody() == nil)
 
         local parsedIf = alloc:parse("if x then y() end"):root():body()[1]
+        visitAll(parsedIf)
         parsedIf:setCondition(nil)
         fails(function() return parsedIf:children() end, "AstStatIf.condition is nil")
-        fails(function() visitAll(parsedIf) end, "AstStatIf.condition is nil")
+        fails(function() visitAll(parsedIf) end, "tainted AST")
+        fails(function() return parsedIf:untaint() end, "AstStatIf.condition is nil")
 
         local doc = alloc:parse("while true do if x then y() end end")
         doc:root():body()[1]:body():body()[1]:setThenBody(nil)
-        fails(function() visitAll(doc:root()) end, "AstStatIf.thenbody is nil")
-        fails(function() return doc:root():prettyprint() end, "AstStatIf.thenbody is nil")
+        fails(function() visitAll(doc:root()) end, "tainted AST")
+        fails(function() return doc:root():prettyprint() end, "tainted AST")
+        fails(function() return doc:root():untaint() end, "AstStatIf.thenbody is nil")
+
+        local failed = alloc:parse("local a = 1"):root()
+        fails(function() failed:setBody({ reflect.allocator():parse("b()"):root():body()[1] }) end, "cross-allocator")
+        fails(function() failed:setBody({ failed:body()[1]:vars()[1] }) end, "AstNode")
+        visitAll(failed)
+        assert(failed:prettyprint() == "local a = 1")
+
+        local untouched = alloc:parse("local keep = 1")
+        failed:setBody({})
+        visitAll(untouched:root())
+        fails(function() visitAll(failed) end, "tainted AST")
 
         local global = alloc:defaultnode("AstExprGlobal")
-        visitAll(global)
+        fails(function() visitAll(global) end, "tainted AST")
+        visitAll(global:untaint())
         fails(function() return global:prettyprint() end, "AstExprGlobal.name is nil")
         assert(global:setName("g"):prettyprint() == "g")
-        fails(function() return alloc:defaultnode("AstExprLocal"):prettyprint() end, "AstExprLocal.local is nil")
+        fails(function() return alloc:defaultnode("AstExprLocal"):untaint() end, "AstExprLocal.local is nil")
+
+        fails(function() return global:setName("") end, "a name cannot be an empty string")
+        assert(global:name() == "g")
+
+        local renamed = alloc:parse("local x = y"):root()
+        renamed:body()[1]:values()[1]:setName("z")
+        renamed:body()[1]:setHasSemicolon(true)
+        assert(renamed:prettyprint() == "local x = z;")
+        visitAll(renamed)
 
         local ref = alloc:parse("local v: Foo<number, string, boolean> = nil"):root():body()[1]:vars()[1]:annotation()
         local params = ref:parameters()
         ref:setParameters({ params[1], nil, params[3] })
-        fails(function() return ref:prettyprint() end, "AstTypeReference.parameters[2] is nil")
+        fails(function() return ref:untaint() end, "AstTypeReference.parameters[2] is nil")
 
         local tbl = alloc:parseexpr("{ x = 1 }")
         local item = tbl:items()[1]
         item:setKey(alloc:parseexpr("1 + 2"))
         tbl:setItems({ item })
-        visitAll(tbl)
+        fails(function() visitAll(tbl) end, "tainted AST")
+        visitAll(tbl:untaint())
         fails(function() return tbl:prettyprint() end, "is a record item whose key is not a string constant")
         item:setItemKind("general")
+        fails(function() return tbl:prettyprint() end, "tainted AST")
         tbl:setItems({ item })
-        assert(string.gsub(tbl:prettyprint(), "%s", "") == "{[1+2]=1}")
+        assert(string.gsub(tbl:untaint():prettyprint(), "%s", "") == "{[1+2]=1}")
+
+        local keyless = alloc:parseexpr("{ 1 }")
+        keyless:items()[1]:setItemKind("record")
+        fails(function() return keyless:untaint() end, "has no key")
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);
@@ -1534,23 +1569,39 @@ TEST_CASE("ReflectCyclesAndDeepNesting")
         local root = alloc:parse("do end"):root()
         local block = root:body()[1]
         block:setBody({ block })
-        fails(function() return root:prettyprint() end, "AstStatBlock is nested inside itself")
-        fails(function() root:walk(function() return true end) end, "AstStatBlock is nested inside itself")
+        fails(function() return root:untaint() end, "AstStatBlock is nested inside itself")
+        fails(function() return root:prettyprint() end, "tainted AST")
+        fails(function() root:walk(function() return true end) end, "tainted AST")
         assert(#root:children() == 1)
 
         local bin = alloc:parseexpr("a + b")
         local group = alloc:defaultnode("AstExprGroup"):setExpr(bin)
         bin:setLeft(group)
-        fails(function() return group:prettyprint() end, "is nested inside itself")
+        fails(function() return group:untaint() end, "is nested inside itself")
+        fails(function() return bin:untaint() end, "is nested inside itself")
 
         local x = alloc:parseexpr("x")
         local sum = alloc:parseexpr("a + b"):setLeft(x):setRight(x)
-        assert(string.gsub(sum:prettyprint(), "%s", "") == "x+x")
+        assert(string.gsub(sum:untaint():prettyprint(), "%s", "") == "x+x")
         local shared = x
         for i = 1, 64 do
             shared = alloc:parseexpr("a + b"):setLeft(shared):setRight(shared)
         end
         assert(#shared:children() == 2)
+        assert(shared:untaint() == shared)
+
+        local deepRoot = alloc:parse("do end"):root()
+        local deepBlock = deepRoot:body()[1]
+        deepRoot:untaint()
+        local tall = alloc:parse("x()"):root():body()[1]
+        for i = 1, 500 do
+            tall = alloc:defaultnode("AstStatBlock"):setBody({ tall })
+        end
+        deepBlock:setBody({ tall })
+        assert(deepBlock:untaint() == deepBlock)
+        deepBlock:walk(function() return true end)
+        fails(function() deepRoot:walk(function() return true end) end, "tainted AST")
+        deepRoot:untaint():walk(function() return true end)
 
         local function nest(depth)
             local expr = alloc:parseexpr("1")
@@ -1559,9 +1610,9 @@ TEST_CASE("ReflectCyclesAndDeepNesting")
             end
             return expr
         end
-        assert(#nest(100):prettyprint() == 201)
-        fails(function() return nest(5000):prettyprint() end, "nesting is deeper than the limit")
-        fails(function() nest(5000):walk(function() return true end) end, "nesting is deeper than the limit")
+        assert(#nest(100):untaint():prettyprint() == 201)
+        fails(function() return nest(5000):untaint() end, "nesting is deeper than the limit")
+        fails(function() nest(5000):walk(function() return true end) end, "tainted AST")
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);
@@ -1609,7 +1660,7 @@ TEST_CASE("ReflectCrossAllocatorAuxValues")
 
         local tblA2 = a:parseexpr("{ y = 2 }")
         tblA:setItems(tblA2:items())
-        assert(string.gsub(tblA:prettyprint(), "%s", "") == "{y=2}")
+        assert(string.gsub(tblA:untaint():prettyprint(), "%s", "") == "{y=2}")
         local typeA2 = a:parse("type V = { z: boolean }"):root():body()[1]:type()
         typeA:setProps(typeA2:props())
         assert(typeA:props()[1]:name() == "z")
@@ -1756,10 +1807,13 @@ TEST_CASE("ReflectEveryDefaultNodeIsSafeToUse")
                 pcall(function() return node:children() end)
                 pcall(function() node:walk(function() return true end) end)
                 pcall(function() return node:prettyprint() end)
+                pcall(function() return node:untaint() end)
+                pcall(function() node:walk(function() return true end) end)
+                pcall(function() return node:prettyprint() end)
                 local parent = alloc:defaultnode("AstStatExpr")
-                pcall(function() parent:setExpr(node) return parent:prettyprint() end)
+                pcall(function() parent:setExpr(node) return parent:untaint():prettyprint() end)
                 local group = alloc:defaultnode("AstTypeGroup")
-                pcall(function() group:setType(node) return group:prettyprint() end)
+                pcall(function() group:setType(node) return group:untaint():prettyprint() end)
             end
         end
 
@@ -1964,31 +2018,31 @@ TEST_CASE("ReflectFunctionArgDefaults")
         local args = fn:args()
         fn:setArgs({ args[1], args[2] })
         assert(#fn:argsDefaults() == 2)
-        assert(doc:root():prettyprint() == "local function f(x, y = 2)\nend")
+        assert(doc:root():untaint():prettyprint() == "local function f(x, y = 2)\nend")
 
         fn:setArgs({ args[2], args[1], args[3] })
         assert(#fn:argsDefaults() == 3)
         assert(fn:argsDefaults()[1] == defaults[2])
         assert(fn:argsDefaults()[3] == false)
-        assert(doc:root():prettyprint() == "local function f(y = 2, x, z)\nend")
+        assert(doc:root():untaint():prettyprint() == "local function f(y = 2, x, z)\nend")
 
         fn:setArgs({ args[1], args[2] })
         assert(fn:setArgsDefaults({ false, defaults[3] }) == fn)
         assert(fn:argsDefaults()[1] == false)
         assert(fn:argsDefaults()[2] == defaults[3])
-        assert(string.gsub(doc:root():prettyprint(), "%s", "") == "localfunctionf(x,y=x+1)end")
+        assert(string.gsub(doc:root():untaint():prettyprint(), "%s", "") == "localfunctionf(x,y=x+1)end")
 
         fn:setArgsDefaults({ defaults[2] })
         assert(#fn:argsDefaults() == 2)
         assert(fn:argsDefaults()[2] == false)
-        assert(doc:root():prettyprint() == "local function f(x = 2, y)\nend")
+        assert(doc:root():untaint():prettyprint() == "local function f(x = 2, y)\nend")
 
         local okLong, errLong = pcall(function() fn:setArgsDefaults({ false, false, false }) end)
         assert(not okLong and string.find(errLong, "argsDefaults has more entries than args", 1, true) ~= nil, errLong)
 
         fn:setArgsDefaults({})
         assert(#fn:argsDefaults() == 0)
-        assert(doc:root():prettyprint() == "local function f(x, y)\nend")
+        assert(doc:root():untaint():prettyprint() == "local function f(x, y)\nend")
         fn:setArgsDefaults({ false, defaults[3] })
 
         assert(not pcall(function() fn:setArgsDefaults({ false, doc:root() }) end))
@@ -2132,7 +2186,7 @@ TEST_CASE("ReflectAuxWriteThrough")
 
         local expr = alloc:parseexpr("{ a = 1 }")
         expr:items()[1]:setValue(alloc:parseexpr("2"))
-        assert(string.gsub(expr:prettyprint(), "%s", "") == "{a=2}")
+        assert(string.gsub(expr:untaint():prettyprint(), "%s", "") == "{a=2}")
 
         local indexed = alloc:parse("type I = { [string]: number }"):root():body()[1]:type()
         indexed:indexer():setAccess("read")
@@ -2142,6 +2196,9 @@ TEST_CASE("ReflectAuxWriteThrough")
         local fn = alloc:parse("type F = (number) -> string"):root():body()[1]:type()
         fn:argTypes():setTypes({})
         assert(#fn:argTypes():types() == 0)
+
+        fails(function() doc:root():walk(function() return true end) end, "tainted AST")
+        doc:root():untaint()
 
         fails(function()
             doc:root():walk(function(node)
@@ -2161,7 +2218,8 @@ TEST_CASE("ReflectAuxWriteThrough")
         assert(tbl:props()[1]:name() == "inwalk")
 
         tbl:props()[1]:setType(nil)
-        fails(function() return doc:root():prettyprint() end, "AstTypeTable.props[1] has no type")
+        fails(function() return doc:root():prettyprint() end, "tainted AST")
+        fails(function() return doc:root():untaint() end, "AstTypeTable.props[1] has no type")
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);
@@ -2281,7 +2339,7 @@ TEST_CASE("ReflectPrettyprintComments")
         two:setLeadingComments({ alloc:defaultnode("AstComment"):setText("--[[ three ]]"):setType("block") })
         block:setBody({ one, two })
         assert(#block:body()[1]:leadingComments() == 1)
-        assert(block:prettyprint() == "-- one\nfoo() -- two\n--[[ three ]]\nbar()", block:prettyprint())
+        assert(block:untaint():prettyprint() == "-- one\nfoo() -- two\n--[[ three ]]\nbar()")
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);
@@ -2333,19 +2391,19 @@ TEST_CASE("ReflectPrettyprintFormatting")
 
         local mul = alloc:parseexpr("x * y")
         mul:setLeft(alloc:parseexpr("a + b"))
-        assert(mul:prettyprint() == "(a + b) * y")
+        assert(mul:untaint():prettyprint() == "(a + b) * y")
 
         local pow = alloc:parseexpr("x ^ y")
         pow:setLeft(alloc:parseexpr("-a"))
-        assert(pow:prettyprint() == "(-a) ^ y")
+        assert(pow:untaint():prettyprint() == "(-a) ^ y")
 
         local neg = alloc:parseexpr("-x")
         neg:setExpr(alloc:parseexpr("-y"))
-        assert(neg:prettyprint() == "- -y")
+        assert(neg:untaint():prettyprint() == "- -y")
 
         local call = alloc:parseexpr("f()")
         call:setFunc(alloc:parseexpr("function() end"))
-        assert(call:prettyprint() == "(function()\nend)()")
+        assert(call:untaint():prettyprint() == "(function()\nend)()")
 
         local block = alloc:parse(""):root()
         block:setBody({
@@ -2353,7 +2411,7 @@ TEST_CASE("ReflectPrettyprintFormatting")
             alloc:parse("(g)()"):root():body()[1],
             alloc:parse("bar()"):root():body()[1],
         })
-        assert(block:prettyprint() == "local a = f;\n(g)()\nbar()", block:prettyprint())
+        assert(block:untaint():prettyprint() == "local a = f;\n(g)()\nbar()")
         assert(#alloc:parse(block:prettyprint()):errors() == 0)
     )LUA";
 
@@ -2420,7 +2478,7 @@ TEST_CASE("ReflectClassVisibility")
             return doc:root():body()[1]
         end
         local function printed(cls)
-            local out = cls:prettyprint()
+            local out = cls:untaint():prettyprint()
             assert(#alloc:parse(out):errors() == 0, out)
             return out
         end
@@ -2543,6 +2601,193 @@ TEST_CASE("ReflectClassVisibility")
     CHECK_EQ(dostring(L, script), 0);
 }
 
+TEST_CASE("ReflectTaintAndDocuments")
+{
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
+    ScopedFastFlag sffClasses{FFlag::LuwuClasses, true};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    Luau::luaopen_reflect(L);
+    lua_setglobal(L, "reflect");
+
+    const char* script = R"LUA(
+        local function fails(f, message)
+            local ok, err = pcall(f)
+            assert(not ok, "expected an error containing: " .. message)
+            assert(string.find(tostring(err), message, 1, true) ~= nil, tostring(err))
+        end
+        local function visitAll(node)
+            local count = 0
+            node:walk(function()
+                count += 1
+                return true
+            end)
+            return count
+        end
+
+        local alloc = reflect.allocator()
+
+        local parsed = alloc:parse("local a = 1\nlocal b = 2"):root()
+        assert(parsed:tainted() == false)
+        assert(visitAll(parsed) == 5)
+        assert(parsed:untaint() == parsed)
+        assert(visitAll(parsed:body()[1]) == 2)
+
+        local fresh = alloc:defaultnode("AstStatBlock")
+        assert(fresh:tainted() == true)
+        assert(fresh:untaint():tainted() == false)
+        assert(alloc:defaultnode("AstStatIf"):tainted() == true)
+        fails(function() return alloc:defaultnode("AstStatIf"):untaint() end, "AstStatIf.condition is nil")
+        fails(function() return alloc:defaultnode("AstLocal"):tainted() end, "tainted is not a valid method of AstLocal")
+
+        local flagged = alloc:parse("local c = d\nlocal e = f"):root()
+        local firstStat, secondStat = flagged:body()[1], flagged:body()[2]
+        firstStat:values()[1]:setName("renamed")
+        firstStat:setHasSemicolon(true)
+        assert(flagged:tainted() == false)
+        firstStat:setValues({})
+        assert(flagged:tainted() == true)
+        assert(firstStat:tainted() == true)
+        assert(secondStat:tainted() == true)
+        assert(secondStat:untaint():tainted() == false)
+        assert(secondStat:values()[1]:tainted() == false)
+        assert(firstStat:tainted() == true)
+        assert(flagged:tainted() == true)
+        assert(flagged:untaint():tainted() == false)
+        assert(firstStat:tainted() == false)
+        fails(function() flagged:setBody({ flagged:body()[1]:vars()[1] }) end, "AstNode")
+        assert(flagged:tainted() == false)
+
+        local first = alloc:parse("while x do y() end"):root()
+        local second = alloc:parse("z()"):root()
+        first:walk(function(node)
+            if node.kind == "AstStatWhile" then
+                second:setBody({})
+            end
+            return true
+        end)
+        fails(function() return visitAll(second) end, "tainted AST")
+        assert(visitAll(first) == 7)
+        assert(visitAll(second:untaint()) == 1)
+
+        local host = alloc:parse("do end"):root()
+        local guest = alloc:parse("local n = 1"):root()
+        local moved = guest:body()[1]
+        host:body()[1]:setBody({ moved })
+        fails(function() return visitAll(host) end, "tainted AST")
+        fails(function() return visitAll(guest) end, "tainted AST")
+        assert(visitAll(host:untaint()) == 4)
+        assert(visitAll(moved) == 2)
+        fails(function() return visitAll(guest) end, "tainted AST")
+        assert(visitAll(guest:untaint()) == 3)
+        assert(host:prettyprint() == "do\n    local n = 1\nend")
+
+        moved:setValues({})
+        fails(function() return visitAll(host) end, "tainted AST")
+        fails(function() return host:prettyprint() end, "tainted AST")
+        assert(host:untaint():prettyprint() == "do\n    local n\nend")
+
+        moved:setValues({ nil })
+        moved:vars()[1]:setName("renamed")
+        assert(host:untaint():prettyprint() == "do\n    local renamed\nend")
+
+        fails(function()
+            host:walk(function(node)
+                if node.kind == "AstStatLocal" then
+                    guest:setBody({})
+                end
+                return true
+            end)
+        end, "cannot change the structure of an AST while it is being walked")
+        guest:setBody({})
+
+        local walked = alloc:parse("local p = q"):root()
+        local sink = alloc:parse(""):root()
+        fails(function()
+            walked:walk(function(node)
+                if node.kind == "AstStatLocal" then
+                    sink:setBody({ node })
+                    error("stop")
+                end
+                return true
+            end)
+        end, "stop")
+        walked:setBody({})
+        sink:setBody({})
+        assert(visitAll(walked:untaint()) == 1)
+
+        local inside = alloc:parse("local r = s"):root()
+        local seen = 0
+        inside:walk(function(node)
+            assert(node:untaint() == node)
+            seen += visitAll(node)
+            return true
+        end)
+        assert(seen == 3 + 2 + 1)
+
+        local commented = alloc:parse("foo()"):root()
+        local source = alloc:parse("-- carried\nbar()", false, true):root()
+        local carried = source:body()[1]
+        assert(#carried:leadingComments() == 1)
+        commented:setBody({ commented:body()[1], carried })
+        assert(#commented:body()[2]:leadingComments() == 1)
+        assert(commented:untaint():prettyprint() == "foo()\n-- carried\nbar()")
+
+        local plain = alloc:parse("baz()"):root()
+        plain:body()[1]:setLeadingComments({ alloc:defaultnode("AstComment"):setText("-- attached") })
+        assert(plain:prettyprint() == "-- attached\nbaz()")
+        assert(visitAll(plain) == 4)
+
+        local owner = alloc:parse("class A(x) end"):root():body()[1]
+        local donor = alloc:parse("class B public (public y: number) end"):root():body()[1]
+        owner:setPrimaryConstructor(donor:primaryConstructor())
+        assert(owner:primaryConstructor():explicitVisibility() == true)
+        assert(owner:primaryConstructor():argsQualifiers()[1]:explicitVisibility() == true)
+        assert(owner:untaint():prettyprint() == "class A public (y: number)\nend")
+        owner:setExplicitVisibility(true)
+        assert(owner:prettyprint() == "class A public (public y: number)\nend")
+
+        local built = alloc:defaultnode("AstStatBlock")
+        local statements = {}
+        for i = 1, 50 do
+            statements[i] = alloc:parse("f" .. i .. "()"):root():body()[1]
+        end
+        built:setBody(statements)
+        fails(function() return built:prettyprint() end, "tainted AST")
+        assert(visitAll(built:untaint()) == 1 + 50 * 3)
+        assert(visitAll(statements[50]) == 3)
+        statements[1]:setExpr(alloc:parseexpr("g()"))
+        fails(function() return visitAll(statements[50]) end, "tainted AST")
+        assert(visitAll(statements[50]:untaint()) == 3)
+        assert(visitAll(statements[49]:untaint()) == 3)
+        assert(visitAll(statements[50]) == 3)
+        fails(function() return visitAll(built) end, "tainted AST")
+        assert(visitAll(built:untaint()) == 1 + 50 * 3)
+
+        local left = alloc:parse("-- left\none()", false, true):root()
+        local right = alloc:parse("-- right\ntwo()", false, true):root()
+        left:setBody({ left:body()[1], right:body()[1] })
+        assert(left:untaint():prettyprint() == "-- left\none()\n-- right\ntwo()")
+        assert(right:untaint():prettyprint() == "-- right\ntwo()")
+
+        local many = alloc:parse("-- a\none()\n-- b\ntwo()\n-- c\nthree()", false, true):root()
+        local more = alloc:parse("-- d\nfour()\n-- e\nfive()\n-- f\nsix()\n-- g\nseven()", false, true):root()
+        local combined = many:body()
+        for _, stat in more:body() do
+            table.insert(combined, stat)
+        end
+        many:setBody(combined)
+        assert(many:untaint():prettyprint() == "-- a\none()\n-- b\ntwo()\n-- c\nthree()\n-- d\nfour()\n-- e\nfive()\n-- f\nsix()\n-- g\nseven()")
+    )LUA";
+
+    CHECK_EQ(dostring(L, script), 0);
+}
+
 TEST_CASE("ReflectExposesEveryMember")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
@@ -2614,8 +2859,9 @@ TEST_CASE("ReflectExposesEveryMember")
         assert(span(fn:argLocation()) == "5:13-5:29")
         assert(fn:varargAnnotation().kind == "AstTypePackVariadic")
         fn:setVarargAnnotation(nil)
-        assert(statFunction:prettyprint() == "function T:m(a, ...)\nend")
+        assert(statFunction:untaint():prettyprint() == "function T:m(a, ...)\nend")
         assert(fn:setSelf(nil):self() == nil)
+        doc:root():untaint()
 
         local alias = body[5]
         local typeFunction = alias:type()
@@ -2688,7 +2934,7 @@ TEST_CASE("ReflectExposesEveryMember")
         assert(span(method:keywordLocation()) == "3:12-3:20")
         assert(class:prettyprint() == "class K\n    public a: number = 1;\n    public function f(self)\n    end\nend")
         property:setDefaultValue(nil):setHasSemicolon(false)
-        assert(class:prettyprint() == "class K\n    public a: number\n    public function f(self)\n    end\nend")
+        assert(class:untaint():prettyprint() == "class K\n    public a: number\n    public function f(self)\n    end\nend")
         assert(class:setHasEnd(false):hasEnd() == false)
     )LUA";
 
@@ -2712,6 +2958,196 @@ static std::optional<std::string> readReflectSourceFile(const std::string& relat
         prefix += "../";
     }
     return std::nullopt;
+}
+
+TEST_CASE("ReflectNestedWalksAreBounded")
+{
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    Luau::luaopen_reflect(L);
+    lua_setglobal(L, "reflect");
+
+    const char* script = R"LUA(
+        local alloc = reflect.allocator()
+
+        local nested = alloc:parse("local function a() local function b() local function c() local function d() return 1 end end end end"):root()
+        local level, deepest = 0, 0
+        local function walkFunctions(block)
+            level += 1
+            deepest = math.max(deepest, level)
+            block:walk(function(node)
+                if node.kind == "AstExprFunction" then
+                    walkFunctions(node:body())
+                    return false
+                end
+                return true
+            end)
+            level -= 1
+        end
+        walkFunctions(nested)
+        assert(deepest == 5)
+
+        local deep = alloc:parse(string.rep("do ", 900) .. "x()" .. string.rep(" end", 900)):root()
+        local count = 0
+        deep:walk(function()
+            count += 1
+            return true
+        end)
+        assert(count == 904)
+
+        local restarts = 0
+        local function walkAgain()
+            restarts += 1
+            deep:walk(function(node)
+                if node.kind == "AstExprGlobal" then
+                    walkAgain()
+                end
+                return true
+            end)
+        end
+        local ok, err = pcall(walkAgain)
+        assert(not ok and string.find(tostring(err), "C stack overflow", 1, true) ~= nil, tostring(err))
+        assert(restarts == 2)
+
+        count = 0
+        deep:walk(function()
+            count += 1
+            return true
+        end)
+        assert(count == 904)
+
+        local function pcallChain(n)
+            if n == 0 then
+                return true
+            end
+            return select(2, pcall(pcallChain, n - 1))
+        end
+        assert(pcallChain(150) == true)
+
+        local descents = 0
+        local function descend(node)
+            descents += 1
+            node:walk(function(child)
+                if child ~= node and child.kind == "AstStatBlock" then
+                    descend(child)
+                    return false
+                end
+                return true
+            end)
+        end
+        local moderate = alloc:parse(string.rep("do ", 60) .. "x()" .. string.rep(" end", 60)):root()
+        descend(moderate)
+        assert(descents == 61)
+
+        local printed, untainted, printErr
+        deep:walk(function(node)
+            if node.kind == "AstExprGlobal" then
+                printed, printErr = pcall(function() return deep:prettyprint() end)
+                untainted = pcall(function() return node:untaint() end)
+            end
+            return true
+        end)
+        assert(printed == false and string.find(tostring(printErr), "C stack overflow", 1, true) ~= nil, tostring(printErr))
+        assert(untainted == true)
+        assert(#deep:prettyprint() > 1000)
+
+        local viaCoroutine, coroutineErr
+        deep:walk(function(node)
+            if node.kind == "AstExprGlobal" then
+                coroutine.wrap(function()
+                    viaCoroutine, coroutineErr = pcall(function()
+                        deep:walk(function() return true end)
+                    end)
+                end)()
+            end
+            return true
+        end)
+        assert(viaCoroutine == false and string.find(tostring(coroutineErr), "C stack overflow", 1, true) ~= nil)
+
+        local shallow = alloc:parse("local a = 1"):root()
+        local shallowRestarts = 0
+        local function shallowAgain()
+            shallowRestarts += 1
+            shallow:walk(function(node)
+                if node.kind == "AstExprConstantNumber" and shallowRestarts < 40 then
+                    shallowAgain()
+                end
+                return true
+            end)
+        end
+        shallowAgain()
+        assert(shallowRestarts == 40)
+    )LUA";
+
+    CHECK_EQ(dostring(L, script), 0);
+    CHECK(lua_cstackdepth(L) == 0);
+}
+
+TEST_CASE("AstVisitorTracksDepth")
+{
+    struct DepthRecorder : Luau::AstVisitor
+    {
+        std::vector<std::pair<std::string, int>> seen;
+        int deepest = 0;
+
+        bool visit(Luau::AstNode* node) override
+        {
+            seen.emplace_back(Luau::getNodeKind(node), depth);
+            deepest = std::max(deepest, depth);
+            return true;
+        }
+    };
+
+    Luau::Allocator allocator;
+    Luau::AstNameTable names(allocator);
+
+    std::string source = "local x = ((1))\nwhile x do y(z) end";
+    Luau::ParseResult result = Luau::Parser::parse(source.data(), source.size(), names, allocator);
+    REQUIRE(result.errors.empty());
+
+    Luau::initializeAstNodeClasses();
+
+    DepthRecorder recorder;
+    result.root->visit(&recorder);
+
+    std::vector<std::pair<std::string, int>> expected = {
+        {"AstStatBlock", 1},
+        {"AstStatLocal", 2},
+        {"AstExprGroup", 3},
+        {"AstExprGroup", 4},
+        {"AstExprConstantNumber", 5},
+        {"AstStatWhile", 2},
+        {"AstExprLocal", 3},
+        {"AstStatBlock", 3},
+        {"AstStatExpr", 4},
+        {"AstExprCall", 5},
+        {"AstExprGlobal", 6},
+        {"AstExprGlobal", 6},
+    };
+    CHECK(recorder.seen == expected);
+    CHECK(recorder.deepest == 6);
+    CHECK(recorder.depth == 0);
+
+    std::optional<std::string> ast = readReflectSourceFile("Ast/src/Ast.cpp");
+    REQUIRE_MESSAGE(ast, "cannot find Ast/src/Ast.cpp from the working directory");
+
+    auto countOf = [&](const std::string& needle)
+    {
+        size_t count = 0;
+        for (size_t at = ast->find(needle); at != std::string::npos; at = ast->find(needle, at + needle.size()))
+            count++;
+        return count;
+    };
+
+    size_t visitFunctions = countOf("::visit(AstVisitor* visitor)\n{");
+    CHECK(visitFunctions >= 60);
+    CHECK(countOf("::visit(AstVisitor* visitor)\n{\n    AstVisitDepth visitDepth(visitor);\n") == visitFunctions);
 }
 
 static void collectDeclaredMembers(const std::string& source, ReflectMemberSet& members)
@@ -2841,7 +3277,7 @@ TEST_CASE("ReflectSchemaCoversEveryAstMember")
         exposedAnywhere.insert(names.begin(), names.end());
 
     const std::set<std::string> baseClasses = {"AstNode", "AstExpr", "AstStat", "AstType", "AstTypePack", "CstNode"};
-    const std::set<std::string> notReflected = {"AstName", "AstArray", "AstTypeOrPack", "AstVisitor", "AstRtti", "CstRtti", "AstAttr::DeprecatedInfo"};
+    const std::set<std::string> notReflected = {"AstName", "AstArray", "AstTypeOrPack", "AstVisitor", "AstVisitDepth", "AstRtti", "CstRtti", "AstAttr::DeprecatedInfo"};
     const std::set<std::string> internal = {"AstNode.classIndex", "CstNode.classIndex", "AstStatRepeat.DEPRECATED_hasUntil"};
     const std::map<std::string, std::string> schemaNames = {
         {"AstExprTable::Item", "AstTableItem"},

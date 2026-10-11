@@ -30,48 +30,50 @@ static bool handleAstClassPropertyMethods(lua_State* L, AstItem& handle, Reflect
         n.name.value ? lua_pushstring(L, n.name.value) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetName:
-        beginReflectWrite(L, handle.doc, false);
         n.name = readName(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Type:
         pushAstNode(L, handle.doc, n.ty);
         return true;
     case ReflectAtom::SetType:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n.ty = readNode<Luau::AstType>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::DefaultValue:
         pushAstNode(L, handle.doc, n.defaultValue);
         return true;
     case ReflectAtom::SetDefaultValue:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n.defaultValue = readNode<Luau::AstExpr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Visibility:
         lua_pushstring(L, toString(n.visibility).c_str());
         return true;
     case ReflectAtom::SetVisibility:
-        beginReflectWrite(L, handle.doc, false);
         n.visibility = readEnum<Luau::AstClassMemberVisibility>(L, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::IsConst:
         lua_pushboolean(L, n.isConst);
         return true;
     case ReflectAtom::SetIsConst:
-        beginReflectWrite(L, handle.doc, false);
         n.isConst = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasSemicolon:
         lua_pushboolean(L, n.hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        beginReflectWrite(L, handle.doc, false);
         n.hasSemicolon = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::QualifierLocation:

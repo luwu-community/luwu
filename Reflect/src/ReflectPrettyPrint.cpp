@@ -262,14 +262,14 @@ bool isBlockComment(const ReflectComment& comment)
 
 struct ReflectFormatter
 {
-    ReflectFormatter(const AstAllocatorState& arena)
-        : arena(arena)
-        , comments(&arena.nodeComments)
-        , fallbackComments(&arena.parsedComments)
+    ReflectFormatter(const AstTreeState& tree)
+        : tree(tree)
+        , comments(&tree.nodeComments)
+        , fallbackComments(&tree.parsedComments)
     {
     }
 
-    const AstAllocatorState& arena;
+    const AstTreeState& tree;
 
     std::string out;
     int indent = 0;
@@ -1144,7 +1144,7 @@ struct ReflectFormatter
 
     bool classIsQualified(AstStatClass& value)
     {
-        if (hasExplicitVisibility(arena, &value))
+        if (hasExplicitVisibility(tree, &value))
             return true;
 
         if (const AstClassPrimaryConstructor* constructor = value.primaryConstructor)
@@ -1194,7 +1194,7 @@ struct ReflectFormatter
 
         if (qualifiers.visibility == AstClassMemberVisibility::Private)
             write("private ");
-        else if (qualified && (!restated || hasExplicitVisibility(arena, &qualifiers)))
+        else if (qualified && (!restated || hasExplicitVisibility(tree, &qualifiers)))
             write("public ");
     }
 
@@ -1213,7 +1213,7 @@ struct ReflectFormatter
         {
             if (constructor->visibility == AstClassMemberVisibility::Private)
                 write(" private ");
-            else if (hasExplicitVisibility(arena, constructor))
+            else if (hasExplicitVisibility(tree, constructor))
                 write(" public ");
 
             write("(");
@@ -1628,9 +1628,9 @@ struct ReflectFormatter
 
 } // namespace
 
-std::string reflectPrettyPrint(Luau::AstNode* node, bool asProgram, const AstAllocatorState& arena, std::string& error)
+std::string reflectPrettyPrint(Luau::AstNode* node, bool asProgram, const AstTreeState& tree, std::string& error)
 {
-    ReflectFormatter formatter(arena);
+    ReflectFormatter formatter(tree);
 
     AstStatBlock* program = asProgram ? node->as<AstStatBlock>() : nullptr;
     if (program)

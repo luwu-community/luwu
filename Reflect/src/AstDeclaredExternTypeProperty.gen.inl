@@ -25,8 +25,8 @@ static bool handleAstDeclaredExternTypePropertyMethods(lua_State* L, AstItem& ha
         n.name.value ? lua_pushstring(L, n.name.value) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetName:
-        beginReflectWrite(L, handle.doc, false);
         n.name = readName(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::OrigLocation:
@@ -36,24 +36,25 @@ static bool handleAstDeclaredExternTypePropertyMethods(lua_State* L, AstItem& ha
         pushAstNode(L, handle.doc, n.ty);
         return true;
     case ReflectAtom::SetType:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n.ty = readNode<Luau::AstType>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::IsMethod:
         lua_pushboolean(L, n.isMethod);
         return true;
     case ReflectAtom::SetIsMethod:
-        beginReflectWrite(L, handle.doc, false);
         n.isMethod = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Access:
         lua_pushstring(L, toString(n.access).c_str());
         return true;
     case ReflectAtom::SetAccess:
-        beginReflectWrite(L, handle.doc, false);
         n.access = readEnum<Luau::AstTableAccess>(L, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::NameLocation:

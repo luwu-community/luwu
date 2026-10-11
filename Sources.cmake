@@ -555,6 +555,7 @@ if(TARGET Luwu.UnitTest)
         tests/Subtyping.test.cpp
         tests/Symbol.test.cpp
         tests/Reflect.test.cpp
+        tests/CStackDepth.test.cpp
         tests/ToDot.test.cpp
         tests/TopoSort.test.cpp
         tests/ToString.test.cpp

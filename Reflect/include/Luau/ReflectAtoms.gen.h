@@ -399,6 +399,7 @@ enum class ReflectAtom : int16_t
     Strings,
     SuperName,
     TailType,
+    Tainted,
     Text,
     ThenBody,
     ThenLocation,
@@ -413,6 +414,7 @@ enum class ReflectAtom : int16_t
     TypeList,
     TypeLocation,
     Types,
+    Untaint,
     UntilLocation,
     UntilPosition,
     Upvalue,
@@ -1214,6 +1216,8 @@ inline const char* getAtomString(ReflectAtom atom)
         return "superName";
     case ReflectAtom::TailType:
         return "tailType";
+    case ReflectAtom::Tainted:
+        return "tainted";
     case ReflectAtom::Text:
         return "text";
     case ReflectAtom::ThenBody:
@@ -1242,6 +1246,8 @@ inline const char* getAtomString(ReflectAtom atom)
         return "typeLocation";
     case ReflectAtom::Types:
         return "types";
+    case ReflectAtom::Untaint:
+        return "untaint";
     case ReflectAtom::UntilLocation:
         return "untilLocation";
     case ReflectAtom::UntilPosition:
@@ -1672,6 +1678,7 @@ inline ReflectAtom resolveGlobalReflectAtom(std::string_view key)
         map["strings"] = ReflectAtom::Strings;
         map["superName"] = ReflectAtom::SuperName;
         map["tailType"] = ReflectAtom::TailType;
+        map["tainted"] = ReflectAtom::Tainted;
         map["text"] = ReflectAtom::Text;
         map["thenLocation"] = ReflectAtom::ThenLocation;
         map["thenPosition"] = ReflectAtom::ThenPosition;
@@ -1687,6 +1694,7 @@ inline ReflectAtom resolveGlobalReflectAtom(std::string_view key)
         map["typeLocation"] = ReflectAtom::TypeLocation;
         map["typePack"] = ReflectAtom::CategoryTypePack;
         map["types"] = ReflectAtom::Types;
+        map["untaint"] = ReflectAtom::Untaint;
         map["untilLocation"] = ReflectAtom::UntilLocation;
         map["untilPosition"] = ReflectAtom::UntilPosition;
         map["upvalue"] = ReflectAtom::Upvalue;

@@ -45,7 +45,24 @@ Walkable type: `AstDocument | AstNode`
 
 ## Misc changes
 
-As reflect is the first internal lib in Luwu making use of userdata, this RFC also implements a reserved userdata/lightuserdata tagging system for these internal libs to be freely loadable by embedders by raising the default userdata tag limit by 16 to 144 (from 128). These tags (from `LUA_UTAG_RESERVED_START` to `LUA_UTAG_RESERVED_END`) can freely be used internally by Luwu to implement things like reflect (as well as any potential stdlib we may want to expose in Luwu).
+As `ast` is the first internal lib in Luwu making use of userdata, this RFC also implements a reserved userdata/lightuserdata tagging system for these internal libs to be freely loadable by embedders by raising the default userdata tag limit by 16 to 144 (from 128). These tags (from `LUA_UTAG_RESERVED_START` to `LUA_UTAG_RESERVED_END`) can freely be used internally by Luwu to implement things like `ast` (as well as any potential stdlib we may want to expose in Luwu).
+
+Additionally, `ast` also adds 3 additional C APIs to the VM to enable the VM to track embedder C stack frames without causing crashes when recursive embedder code (such as `ast`'s walk APIs) call into Luwu code:
+
+- `lua_cstackdepth(lua_State* L)`: returns the current C stack depth tracked by the VM
+- `lua_cstackreserve(lua_State* L, int n)`: reserves `n` C stack depth, raising a C stack overflow if the embedder+VM stack depth grows beyond the allowed safe nesting level
+- `lua_cstackrelease(lua_State* L, int n)`: releases `n` C stack depth
+- `lua_cstacklimit(lua_State* L)`: returns the C stack limit
+
+### Tainting
+
+Not all Luau AST's are structurally valid (and in general, most probably aren't). `walk`ing such an AST is undefined and cannot be allowed. As such, `reflect` exposes a tainting system with the following rules:
+
+- Documents parsed from Luau source code starts untained.
+- Nodes created with `defaultnode` starts tainted
+- Editing a node (in a way that can make a valid AST an invalid one) taints the entire document
+- "Committing" a node validates the structure starting from the given node and untaints all nodes reachable from said node.
+- It is not allowed to walk or pretty print from a tainted node. Allowing this tends to crash the Luwu parser with a segmentation fault etc.
 
 ### Node Walking
 

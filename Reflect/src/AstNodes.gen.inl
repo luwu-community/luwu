@@ -187,32 +187,33 @@ static bool handleAstStatBlockMethods(lua_State* L, AstItem& handle, ReflectAtom
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasSemicolon:
         lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        beginReflectWrite(L, handle.doc, false);
         n->hasSemicolon = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasEnd:
         lua_pushboolean(L, n->hasEnd);
         return true;
     case ReflectAtom::SetHasEnd:
-        beginReflectWrite(L, handle.doc, false);
         n->hasEnd = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Body:
         pushNodeArray(L, handle.doc, n->body);
         return true;
     case ReflectAtom::SetBody:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->body = readNodeArray<Luau::AstStat>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -274,40 +275,43 @@ static bool handleAstStatIfMethods(lua_State* L, AstItem& handle, ReflectAtom at
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasSemicolon:
         lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        beginReflectWrite(L, handle.doc, false);
         n->hasSemicolon = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Condition:
         pushAstNode(L, handle.doc, n->condition);
         return true;
     case ReflectAtom::SetCondition:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->condition = readNode<Luau::AstExpr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::ThenBody:
         pushAstNode(L, handle.doc, n->thenbody);
         return true;
     case ReflectAtom::SetThenBody:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->thenbody = readNode<Luau::AstStatBlock>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::ElseBody:
         pushAstNode(L, handle.doc, n->elsebody);
         return true;
     case ReflectAtom::SetElseBody:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->elsebody = readNode<Luau::AstStat>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::IfLocation:
@@ -384,40 +388,42 @@ static bool handleAstStatWhileMethods(lua_State* L, AstItem& handle, ReflectAtom
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasSemicolon:
         lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        beginReflectWrite(L, handle.doc, false);
         n->hasSemicolon = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasDo:
         lua_pushboolean(L, n->hasDo);
         return true;
     case ReflectAtom::SetHasDo:
-        beginReflectWrite(L, handle.doc, false);
         n->hasDo = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Condition:
         pushAstNode(L, handle.doc, n->condition);
         return true;
     case ReflectAtom::SetCondition:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->condition = readNode<Luau::AstExpr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Body:
         pushAstNode(L, handle.doc, n->body);
         return true;
     case ReflectAtom::SetBody:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->body = readNode<Luau::AstStatBlock>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::WhileLocation:
@@ -487,32 +493,34 @@ static bool handleAstStatRepeatMethods(lua_State* L, AstItem& handle, ReflectAto
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasSemicolon:
         lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        beginReflectWrite(L, handle.doc, false);
         n->hasSemicolon = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Condition:
         pushAstNode(L, handle.doc, n->condition);
         return true;
     case ReflectAtom::SetCondition:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->condition = readNode<Luau::AstExpr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Body:
         pushAstNode(L, handle.doc, n->body);
         return true;
     case ReflectAtom::SetBody:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->body = readNode<Luau::AstStatBlock>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::RepeatLocation:
@@ -576,16 +584,16 @@ static bool handleAstStatBreakMethods(lua_State* L, AstItem& handle, ReflectAtom
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasSemicolon:
         lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        beginReflectWrite(L, handle.doc, false);
         n->hasSemicolon = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -633,16 +641,16 @@ static bool handleAstStatContinueMethods(lua_State* L, AstItem& handle, ReflectA
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasSemicolon:
         lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        beginReflectWrite(L, handle.doc, false);
         n->hasSemicolon = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -692,24 +700,25 @@ static bool handleAstStatReturnMethods(lua_State* L, AstItem& handle, ReflectAto
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasSemicolon:
         lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        beginReflectWrite(L, handle.doc, false);
         n->hasSemicolon = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::List:
         pushNodeArray(L, handle.doc, n->list);
         return true;
     case ReflectAtom::SetList:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->list = readNodeArray<Luau::AstExpr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::ReturnLocation:
@@ -769,24 +778,25 @@ static bool handleAstStatExprMethods(lua_State* L, AstItem& handle, ReflectAtom 
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasSemicolon:
         lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        beginReflectWrite(L, handle.doc, false);
         n->hasSemicolon = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Expr:
         pushAstNode(L, handle.doc, n->expr);
         return true;
     case ReflectAtom::SetExpr:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->expr = readNode<Luau::AstExpr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -843,48 +853,50 @@ static bool handleAstStatLocalMethods(lua_State* L, AstItem& handle, ReflectAtom
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasSemicolon:
         lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        beginReflectWrite(L, handle.doc, false);
         n->hasSemicolon = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::IsConst:
         lua_pushboolean(L, n->isConst);
         return true;
     case ReflectAtom::SetIsConst:
-        beginReflectWrite(L, handle.doc, false);
         n->isConst = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Exported:
         lua_pushboolean(L, n->isExported);
         return true;
     case ReflectAtom::SetExported:
-        beginReflectWrite(L, handle.doc, false);
         n->isExported = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Vars:
         pushLocalArray(L, handle.doc, n->vars);
         return true;
     case ReflectAtom::SetVars:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->vars = readLocalArray(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Values:
         pushNodeArray(L, handle.doc, n->values);
         return true;
     case ReflectAtom::SetValues:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->values = readNodeArray<Luau::AstExpr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::KeywordLocation:
@@ -966,64 +978,69 @@ static bool handleAstStatForMethods(lua_State* L, AstItem& handle, ReflectAtom a
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasSemicolon:
         lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        beginReflectWrite(L, handle.doc, false);
         n->hasSemicolon = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasDo:
         lua_pushboolean(L, n->hasDo);
         return true;
     case ReflectAtom::SetHasDo:
-        beginReflectWrite(L, handle.doc, false);
         n->hasDo = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Var:
         pushItem(L, handle.doc, n->var);
         return true;
     case ReflectAtom::SetVar:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->var = readLocal(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::From:
         pushAstNode(L, handle.doc, n->from);
         return true;
     case ReflectAtom::SetFrom:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->from = readNode<Luau::AstExpr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::To:
         pushAstNode(L, handle.doc, n->to);
         return true;
     case ReflectAtom::SetTo:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->to = readNode<Luau::AstExpr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Step:
         pushAstNode(L, handle.doc, n->step);
         return true;
     case ReflectAtom::SetStep:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->step = readNode<Luau::AstExpr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Body:
         pushAstNode(L, handle.doc, n->body);
         return true;
     case ReflectAtom::SetBody:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->body = readNode<Luau::AstStatBlock>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::ForLocation:
@@ -1106,56 +1123,59 @@ static bool handleAstStatForInMethods(lua_State* L, AstItem& handle, ReflectAtom
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasSemicolon:
         lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        beginReflectWrite(L, handle.doc, false);
         n->hasSemicolon = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasIn:
         lua_pushboolean(L, n->hasIn);
         return true;
     case ReflectAtom::SetHasIn:
-        beginReflectWrite(L, handle.doc, false);
         n->hasIn = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasDo:
         lua_pushboolean(L, n->hasDo);
         return true;
     case ReflectAtom::SetHasDo:
-        beginReflectWrite(L, handle.doc, false);
         n->hasDo = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Vars:
         pushLocalArray(L, handle.doc, n->vars);
         return true;
     case ReflectAtom::SetVars:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->vars = readLocalArray(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Values:
         pushNodeArray(L, handle.doc, n->values);
         return true;
     case ReflectAtom::SetValues:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->values = readNodeArray<Luau::AstExpr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Body:
         pushAstNode(L, handle.doc, n->body);
         return true;
     case ReflectAtom::SetBody:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->body = readNode<Luau::AstStatBlock>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::ForLocation:
@@ -1239,32 +1259,34 @@ static bool handleAstStatAssignMethods(lua_State* L, AstItem& handle, ReflectAto
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasSemicolon:
         lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        beginReflectWrite(L, handle.doc, false);
         n->hasSemicolon = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Vars:
         pushNodeArray(L, handle.doc, n->vars);
         return true;
     case ReflectAtom::SetVars:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->vars = readNodeArray<Luau::AstExpr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Values:
         pushNodeArray(L, handle.doc, n->values);
         return true;
     case ReflectAtom::SetValues:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->values = readNodeArray<Luau::AstExpr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -1327,40 +1349,42 @@ static bool handleAstStatCompoundAssignMethods(lua_State* L, AstItem& handle, Re
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasSemicolon:
         lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        beginReflectWrite(L, handle.doc, false);
         n->hasSemicolon = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Op:
         lua_pushstring(L, toString(n->op).c_str());
         return true;
     case ReflectAtom::SetOp:
-        beginReflectWrite(L, handle.doc, false);
         n->op = readEnum<Luau::AstExprBinary::Op>(L, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Var:
         pushAstNode(L, handle.doc, n->var);
         return true;
     case ReflectAtom::SetVar:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->var = readNode<Luau::AstExpr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Value:
         pushAstNode(L, handle.doc, n->value);
         return true;
     case ReflectAtom::SetValue:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->value = readNode<Luau::AstExpr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -1419,32 +1443,34 @@ static bool handleAstStatFunctionMethods(lua_State* L, AstItem& handle, ReflectA
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasSemicolon:
         lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        beginReflectWrite(L, handle.doc, false);
         n->hasSemicolon = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Name:
         pushAstNode(L, handle.doc, n->name);
         return true;
     case ReflectAtom::SetName:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->name = readNode<Luau::AstExpr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Func:
         pushAstNode(L, handle.doc, n->func);
         return true;
     case ReflectAtom::SetFunc:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->func = readNode<Luau::AstExprFunction>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::FunctionLocation:
@@ -1509,40 +1535,42 @@ static bool handleAstStatLocalFunctionMethods(lua_State* L, AstItem& handle, Ref
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasSemicolon:
         lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        beginReflectWrite(L, handle.doc, false);
         n->hasSemicolon = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::IsConst:
         lua_pushboolean(L, n->isConst);
         return true;
     case ReflectAtom::SetIsConst:
-        beginReflectWrite(L, handle.doc, false);
         n->isConst = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Name:
         pushItem(L, handle.doc, n->name);
         return true;
     case ReflectAtom::SetName:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->name = readLocal(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Func:
         pushAstNode(L, handle.doc, n->func);
         return true;
     case ReflectAtom::SetFunc:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->func = readNode<Luau::AstExprFunction>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::ConstKeywordBegin:
@@ -1620,56 +1648,59 @@ static bool handleAstStatTypeAliasMethods(lua_State* L, AstItem& handle, Reflect
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasSemicolon:
         lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        beginReflectWrite(L, handle.doc, false);
         n->hasSemicolon = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Name:
         n->name.value ? lua_pushstring(L, n->name.value) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetName:
-        beginReflectWrite(L, handle.doc, false);
         n->name = readName(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Exported:
         lua_pushboolean(L, n->exported);
         return true;
     case ReflectAtom::SetExported:
-        beginReflectWrite(L, handle.doc, false);
         n->exported = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Type:
         pushAstNode(L, handle.doc, n->type);
         return true;
     case ReflectAtom::SetType:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->type = readNode<Luau::AstType>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Generics:
         pushNodeArray(L, handle.doc, n->generics);
         return true;
     case ReflectAtom::SetGenerics:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->generics = readNodeArray<Luau::AstGenericType>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::GenericPacks:
         pushNodeArray(L, handle.doc, n->genericPacks);
         return true;
     case ReflectAtom::SetGenericPacks:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->genericPacks = readNodeArray<Luau::AstGenericTypePack>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::NameLocation:
@@ -1752,48 +1783,49 @@ static bool handleAstStatTypeFunctionMethods(lua_State* L, AstItem& handle, Refl
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasSemicolon:
         lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        beginReflectWrite(L, handle.doc, false);
         n->hasSemicolon = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Name:
         n->name.value ? lua_pushstring(L, n->name.value) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetName:
-        beginReflectWrite(L, handle.doc, false);
         n->name = readName(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Exported:
         lua_pushboolean(L, n->exported);
         return true;
     case ReflectAtom::SetExported:
-        beginReflectWrite(L, handle.doc, false);
         n->exported = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasErrors:
         lua_pushboolean(L, n->hasErrors);
         return true;
     case ReflectAtom::SetHasErrors:
-        beginReflectWrite(L, handle.doc, false);
         n->hasErrors = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Body:
         pushAstNode(L, handle.doc, n->body);
         return true;
     case ReflectAtom::SetBody:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->body = readNode<Luau::AstExprFunction>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::NameLocation:
@@ -1860,32 +1892,33 @@ static bool handleAstStatDeclareGlobalMethods(lua_State* L, AstItem& handle, Ref
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasSemicolon:
         lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        beginReflectWrite(L, handle.doc, false);
         n->hasSemicolon = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Name:
         n->name.value ? lua_pushstring(L, n->name.value) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetName:
-        beginReflectWrite(L, handle.doc, false);
         n->name = readName(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Type:
         pushAstNode(L, handle.doc, n->type);
         return true;
     case ReflectAtom::SetType:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->type = readNode<Luau::AstType>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::NameLocation:
@@ -1962,80 +1995,85 @@ static bool handleAstStatDeclareFunctionMethods(lua_State* L, AstItem& handle, R
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasSemicolon:
         lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        beginReflectWrite(L, handle.doc, false);
         n->hasSemicolon = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Name:
         n->name.value ? lua_pushstring(L, n->name.value) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetName:
-        beginReflectWrite(L, handle.doc, false);
         n->name = readName(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Vararg:
         lua_pushboolean(L, n->vararg);
         return true;
     case ReflectAtom::SetVararg:
-        beginReflectWrite(L, handle.doc, false);
         n->vararg = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Generics:
         pushNodeArray(L, handle.doc, n->generics);
         return true;
     case ReflectAtom::SetGenerics:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->generics = readNodeArray<Luau::AstGenericType>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::GenericPacks:
         pushNodeArray(L, handle.doc, n->genericPacks);
         return true;
     case ReflectAtom::SetGenericPacks:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->genericPacks = readNodeArray<Luau::AstGenericTypePack>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Params:
         pushItem(L, handle.doc, &n->params);
         return true;
     case ReflectAtom::SetParams:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         readItemInto(L, handle.doc, 2, n->params);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::ReturnTypes:
         pushAstNode(L, handle.doc, n->retTypes);
         return true;
     case ReflectAtom::SetReturnTypes:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->retTypes = readNode<Luau::AstTypePack>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Attributes:
         pushNodeArray(L, handle.doc, n->attributes);
         return true;
     case ReflectAtom::SetAttributes:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->attributes = readNodeArray<Luau::AstAttr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::ParamNames:
         pushArgumentNames(L, n->paramNames);
         return true;
     case ReflectAtom::SetParamNames:
-        beginReflectWrite(L, handle.doc, false);
         n->paramNames = readArgumentNames<Luau::AstArgumentName>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::ParamNameLocations:
@@ -2142,7 +2180,7 @@ static bool handleAstStatClassMethods(lua_State* L, AstItem& handle, ReflectAtom
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->primaryConstructor)>, Luau::AstClassPrimaryConstructor*>, "schema type of AstStatClass.primaryConstructor does not match the C++ member");
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->hasEnd)>, bool>, "schema type of AstStatClass.hasEnd does not match the C++ member");
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->keywordLocation)>, Luau::Location>, "schema type of AstStatClass.keywordLocation does not match the C++ member");
-    static_assert(std::is_same_v<std::remove_const_t<decltype(hasExplicitVisibility(*handle.doc->arena, n))>, bool>, "schema type of AstStatClass.explicitVisibility does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(hasExplicitVisibility(treeOf(*handle.doc), n))>, bool>, "schema type of AstStatClass.explicitVisibility does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
@@ -2155,83 +2193,88 @@ static bool handleAstStatClassMethods(lua_State* L, AstItem& handle, ReflectAtom
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasSemicolon:
         lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        beginReflectWrite(L, handle.doc, false);
         n->hasSemicolon = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Exported:
         lua_pushboolean(L, n->exported);
         return true;
     case ReflectAtom::SetExported:
-        beginReflectWrite(L, handle.doc, false);
         n->exported = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Name:
         pushItem(L, handle.doc, n->name);
         return true;
     case ReflectAtom::SetName:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->name = readLocal(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Members:
         pushClassMembers(L, handle.doc, n->members);
         return true;
     case ReflectAtom::SetMembers:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->members = readClassMembers(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Generics:
         pushNodeArray(L, handle.doc, n->generics);
         return true;
     case ReflectAtom::SetGenerics:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->generics = readNodeArray<Luau::AstGenericType>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::GenericPacks:
         pushNodeArray(L, handle.doc, n->genericPacks);
         return true;
     case ReflectAtom::SetGenericPacks:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->genericPacks = readNodeArray<Luau::AstGenericTypePack>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::PrimaryConstructor:
         pushItem(L, handle.doc, n->primaryConstructor);
         return true;
     case ReflectAtom::SetPrimaryConstructor:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->primaryConstructor = readItemPointer<Luau::AstClassPrimaryConstructor>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasEnd:
         lua_pushboolean(L, n->hasEnd);
         return true;
     case ReflectAtom::SetHasEnd:
-        beginReflectWrite(L, handle.doc, false);
         n->hasEnd = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::KeywordLocation:
         pushLocation(L, handle.doc, n->keywordLocation);
         return true;
     case ReflectAtom::ExplicitVisibility:
-        lua_pushboolean(L, hasExplicitVisibility(*handle.doc->arena, n));
+        lua_pushboolean(L, hasExplicitVisibility(treeOf(*handle.doc), n));
         return true;
     case ReflectAtom::SetExplicitVisibility:
-        beginReflectWrite(L, handle.doc, false);
-        handle.doc->arena->explicitVisibility[n] = lua_toboolean(L, 2) != 0;
+        treeOf(*handle.doc).explicitVisibility[n] = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -2267,7 +2310,7 @@ static void collectAstStatClassProps(lua_State* L, AstItem& handle)
     lua_setfield(L, -2, "hasEnd");
     pushLocation(L, handle.doc, n->keywordLocation);
     lua_setfield(L, -2, "keywordLocation");
-    lua_pushboolean(L, hasExplicitVisibility(*handle.doc->arena, n));
+    lua_pushboolean(L, hasExplicitVisibility(treeOf(*handle.doc), n));
     lua_setfield(L, -2, "explicitVisibility");
 }
 
@@ -2343,64 +2386,68 @@ static bool handleAstStatDeclareExternTypeMethods(lua_State* L, AstItem& handle,
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasSemicolon:
         lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        beginReflectWrite(L, handle.doc, false);
         n->hasSemicolon = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Name:
         n->name.value ? lua_pushstring(L, n->name.value) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetName:
-        beginReflectWrite(L, handle.doc, false);
         n->name = readName(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::SuperName:
         (n->superName && n->superName->value) ? lua_pushstring(L, n->superName->value) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetSuperName:
-        beginReflectWrite(L, handle.doc, false);
         n->superName = lua_isnil(L, 2) ? std::nullopt : std::optional<Luau::AstName>(readName(L, handle.doc, 2));
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Props:
         pushArray(L, n->props.size, [&](size_t i) { pushItem(L, handle.doc, &n->props.data[i]); });
         return true;
     case ReflectAtom::SetProps:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->props = readItemArray<Luau::AstDeclaredExternTypeProperty>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Indexer:
         pushItem(L, handle.doc, n->indexer);
         return true;
     case ReflectAtom::SetIndexer:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->indexer = readItemPointer<Luau::AstTableIndexer>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Generics:
         pushNodeArray(L, handle.doc, n->generics);
         return true;
     case ReflectAtom::SetGenerics:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->generics = readNodeArray<Luau::AstGenericType>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::GenericPacks:
         pushNodeArray(L, handle.doc, n->genericPacks);
         return true;
     case ReflectAtom::SetGenericPacks:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->genericPacks = readNodeArray<Luau::AstGenericTypePack>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::DeclareLocation:
@@ -2503,16 +2550,16 @@ static bool handleAstStatErrorMethods(lua_State* L, AstItem& handle, ReflectAtom
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasSemicolon:
         lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        beginReflectWrite(L, handle.doc, false);
         n->hasSemicolon = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::MessageIndex:
@@ -2583,16 +2630,17 @@ static bool handleAstExprGroupMethods(lua_State* L, AstItem& handle, ReflectAtom
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Expr:
         pushAstNode(L, handle.doc, n->expr);
         return true;
     case ReflectAtom::SetExpr:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->expr = readNode<Luau::AstExpr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -2640,8 +2688,8 @@ static bool handleAstExprConstantNilMethods(lua_State* L, AstItem& handle, Refle
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -2687,16 +2735,16 @@ static bool handleAstExprConstantBoolMethods(lua_State* L, AstItem& handle, Refl
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Value:
         lua_pushboolean(L, n->value);
         return true;
     case ReflectAtom::SetValue:
-        beginReflectWrite(L, handle.doc, false);
         n->value = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -2745,24 +2793,24 @@ static bool handleAstExprConstantNumberMethods(lua_State* L, AstItem& handle, Re
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Value:
         lua_pushnumber(L, n->value);
         return true;
     case ReflectAtom::SetValue:
-        beginReflectWrite(L, handle.doc, false);
         n->value = luaL_checknumber(L, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::ParseResult:
         lua_pushstring(L, toString(n->parseResult).c_str());
         return true;
     case ReflectAtom::SetParseResult:
-        beginReflectWrite(L, handle.doc, false);
         n->parseResult = readEnum<Luau::ConstantNumberParseResult>(L, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -2813,24 +2861,24 @@ static bool handleAstExprConstantIntegerMethods(lua_State* L, AstItem& handle, R
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Value:
         lua_pushinteger64(L, int64_t(n->value));
         return true;
     case ReflectAtom::SetValue:
-        beginReflectWrite(L, handle.doc, false);
         n->value = lua_isnumber(L, 2) ? int64_t(lua_tointeger(L, 2)) : int64_t(luaL_checkinteger64(L, 2));
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::ParseResult:
         lua_pushstring(L, toString(n->parseResult).c_str());
         return true;
     case ReflectAtom::SetParseResult:
-        beginReflectWrite(L, handle.doc, false);
         n->parseResult = readEnum<Luau::ConstantNumberParseResult>(L, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -2881,24 +2929,24 @@ static bool handleAstExprConstantStringMethods(lua_State* L, AstItem& handle, Re
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Value:
         lua_pushlstring(L, n->value.data ? n->value.data : "", n->value.size);
         return true;
     case ReflectAtom::SetValue:
-        beginReflectWrite(L, handle.doc, false);
         n->value = readString(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::QuoteStyle:
         lua_pushstring(L, toString(n->quoteStyle).c_str());
         return true;
     case ReflectAtom::SetQuoteStyle:
-        beginReflectWrite(L, handle.doc, false);
         n->quoteStyle = readEnum<Luau::AstExprConstantString::QuoteStyle>(L, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -2949,24 +2997,25 @@ static bool handleAstExprLocalMethods(lua_State* L, AstItem& handle, ReflectAtom
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Upvalue:
         lua_pushboolean(L, n->upvalue);
         return true;
     case ReflectAtom::SetUpvalue:
-        beginReflectWrite(L, handle.doc, false);
         n->upvalue = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Local:
         pushItem(L, handle.doc, n->local);
         return true;
     case ReflectAtom::SetLocal:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->local = readLocal(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -3017,16 +3066,16 @@ static bool handleAstExprGlobalMethods(lua_State* L, AstItem& handle, ReflectAto
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Name:
         n->name.value ? lua_pushstring(L, n->name.value) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetName:
-        beginReflectWrite(L, handle.doc, false);
         n->name = readName(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -3074,8 +3123,8 @@ static bool handleAstExprVarargsMethods(lua_State* L, AstItem& handle, ReflectAt
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -3125,40 +3174,43 @@ static bool handleAstExprCallMethods(lua_State* L, AstItem& handle, ReflectAtom 
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Self:
         lua_pushboolean(L, n->self);
         return true;
     case ReflectAtom::SetSelf:
-        beginReflectWrite(L, handle.doc, false);
         n->self = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Func:
         pushAstNode(L, handle.doc, n->func);
         return true;
     case ReflectAtom::SetFunc:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->func = readNode<Luau::AstExpr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Args:
         pushNodeArray(L, handle.doc, n->args);
         return true;
     case ReflectAtom::SetArgs:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->args = readNodeArray<Luau::AstExpr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::TypeArguments:
         pushTypeOrPackArray(L, handle.doc, n->typeArguments);
         return true;
     case ReflectAtom::SetTypeArguments:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->typeArguments = readTypeOrPackArray(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::ArgLocation:
@@ -3230,32 +3282,33 @@ static bool handleAstExprIndexNameMethods(lua_State* L, AstItem& handle, Reflect
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Index:
         n->index.value ? lua_pushstring(L, n->index.value) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetIndex:
-        beginReflectWrite(L, handle.doc, false);
         n->index = readName(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Op:
         lua_pushlstring(L, &n->op, 1);
         return true;
     case ReflectAtom::SetOp:
-        beginReflectWrite(L, handle.doc, false);
         n->op = readChar(L, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Expr:
         pushAstNode(L, handle.doc, n->expr);
         return true;
     case ReflectAtom::SetExpr:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->expr = readNode<Luau::AstExpr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::IndexLocation:
@@ -3320,24 +3373,26 @@ static bool handleAstExprIndexExprMethods(lua_State* L, AstItem& handle, Reflect
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Expr:
         pushAstNode(L, handle.doc, n->expr);
         return true;
     case ReflectAtom::SetExpr:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->expr = readNode<Luau::AstExpr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Index:
         pushAstNode(L, handle.doc, n->index);
         return true;
     case ReflectAtom::SetIndex:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->index = readNode<Luau::AstExpr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -3402,24 +3457,24 @@ static bool handleAstExprFunctionMethods(lua_State* L, AstItem& handle, ReflectA
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Vararg:
         lua_pushboolean(L, n->vararg);
         return true;
     case ReflectAtom::SetVararg:
-        beginReflectWrite(L, handle.doc, false);
         n->vararg = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::DebugName:
         n->debugname.value ? lua_pushstring(L, n->debugname.value) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetDebugName:
-        beginReflectWrite(L, handle.doc, false);
         n->debugname = readName(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Args:
@@ -3427,10 +3482,11 @@ static bool handleAstExprFunctionMethods(lua_State* L, AstItem& handle, ReflectA
         return true;
     case ReflectAtom::SetArgs:
     {
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         Luau::AstArray<Luau::AstLocal*> previous = n->args;
         n->args = readLocalArray(L, handle.doc, 2);
         n->argsDefaults = realignCompanion(handle.doc, previous, n->args, n->argsDefaults);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     }
@@ -3438,40 +3494,45 @@ static bool handleAstExprFunctionMethods(lua_State* L, AstItem& handle, ReflectA
         pushAstNode(L, handle.doc, n->body);
         return true;
     case ReflectAtom::SetBody:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->body = readNode<Luau::AstStatBlock>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Generics:
         pushNodeArray(L, handle.doc, n->generics);
         return true;
     case ReflectAtom::SetGenerics:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->generics = readNodeArray<Luau::AstGenericType>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::GenericPacks:
         pushNodeArray(L, handle.doc, n->genericPacks);
         return true;
     case ReflectAtom::SetGenericPacks:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->genericPacks = readNodeArray<Luau::AstGenericTypePack>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::ReturnAnnotation:
         pushAstNode(L, handle.doc, n->returnAnnotation);
         return true;
     case ReflectAtom::SetReturnAnnotation:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->returnAnnotation = readNode<Luau::AstTypePack>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Attributes:
         pushNodeArray(L, handle.doc, n->attributes);
         return true;
     case ReflectAtom::SetAttributes:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->attributes = readNodeArray<Luau::AstAttr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::ArgsDefaults:
@@ -3479,9 +3540,10 @@ static bool handleAstExprFunctionMethods(lua_State* L, AstItem& handle, ReflectA
         return true;
     case ReflectAtom::SetArgsDefaults:
     {
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         auto list = readOptionalNodeArray<Luau::AstExpr>(L, handle.doc, 2);
         n->argsDefaults = fitCompanion(L, handle.doc, 2, list, n->args.size, "argsDefaults", "args");
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     }
@@ -3489,24 +3551,26 @@ static bool handleAstExprFunctionMethods(lua_State* L, AstItem& handle, ReflectA
         pushAstNode(L, handle.doc, n->varargAnnotation);
         return true;
     case ReflectAtom::SetVarargAnnotation:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->varargAnnotation = readNode<Luau::AstTypePack>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Self:
         pushItem(L, handle.doc, n->self);
         return true;
     case ReflectAtom::SetSelf:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->self = readLocal(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::FunctionDepth:
         lua_pushinteger64(L, int64_t(n->functionDepth));
         return true;
     case ReflectAtom::SetFunctionDepth:
-        beginReflectWrite(L, handle.doc, false);
         n->functionDepth = lua_isnumber(L, 2) ? size_t(lua_tointeger(L, 2)) : size_t(luaL_checkinteger64(L, 2));
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::VarargLocation:
@@ -3610,16 +3674,17 @@ static bool handleAstExprTableMethods(lua_State* L, AstItem& handle, ReflectAtom
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Items:
         pushArray(L, n->items.size, [&](size_t i) { pushItem(L, handle.doc, &n->items.data[i]); });
         return true;
     case ReflectAtom::SetItems:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->items = readItemArray<Luau::AstExprTable::Item>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -3676,24 +3741,25 @@ static bool handleAstExprUnaryMethods(lua_State* L, AstItem& handle, ReflectAtom
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Op:
         lua_pushstring(L, toString(n->op).c_str());
         return true;
     case ReflectAtom::SetOp:
-        beginReflectWrite(L, handle.doc, false);
         n->op = readEnum<Luau::AstExprUnary::Op>(L, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Expr:
         pushAstNode(L, handle.doc, n->expr);
         return true;
     case ReflectAtom::SetExpr:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->expr = readNode<Luau::AstExpr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -3746,32 +3812,34 @@ static bool handleAstExprBinaryMethods(lua_State* L, AstItem& handle, ReflectAto
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Op:
         lua_pushstring(L, toString(n->op).c_str());
         return true;
     case ReflectAtom::SetOp:
-        beginReflectWrite(L, handle.doc, false);
         n->op = readEnum<Luau::AstExprBinary::Op>(L, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Left:
         pushAstNode(L, handle.doc, n->left);
         return true;
     case ReflectAtom::SetLeft:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->left = readNode<Luau::AstExpr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Right:
         pushAstNode(L, handle.doc, n->right);
         return true;
     case ReflectAtom::SetRight:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->right = readNode<Luau::AstExpr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -3826,24 +3894,26 @@ static bool handleAstExprTypeAssertionMethods(lua_State* L, AstItem& handle, Ref
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Expr:
         pushAstNode(L, handle.doc, n->expr);
         return true;
     case ReflectAtom::SetExpr:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->expr = readNode<Luau::AstExpr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Annotation:
         pushAstNode(L, handle.doc, n->annotation);
         return true;
     case ReflectAtom::SetAnnotation:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->annotation = readNode<Luau::AstType>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -3902,48 +3972,51 @@ static bool handleAstExprIfElseMethods(lua_State* L, AstItem& handle, ReflectAto
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasElse:
         lua_pushboolean(L, n->hasElse);
         return true;
     case ReflectAtom::SetHasElse:
-        beginReflectWrite(L, handle.doc, false);
         n->hasElse = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Condition:
         pushAstNode(L, handle.doc, n->condition);
         return true;
     case ReflectAtom::SetCondition:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->condition = readNode<Luau::AstExpr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::TrueExpr:
         pushAstNode(L, handle.doc, n->trueExpr);
         return true;
     case ReflectAtom::SetTrueExpr:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->trueExpr = readNode<Luau::AstExpr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::FalseExpr:
         pushAstNode(L, handle.doc, n->falseExpr);
         return true;
     case ReflectAtom::SetFalseExpr:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->falseExpr = readNode<Luau::AstExpr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasThen:
         lua_pushboolean(L, n->hasThen);
         return true;
     case ReflectAtom::SetHasThen:
-        beginReflectWrite(L, handle.doc, false);
         n->hasThen = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::IfLocation:
@@ -4018,24 +4091,25 @@ static bool handleAstExprInterpStringMethods(lua_State* L, AstItem& handle, Refl
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Strings:
         pushArray(L, n->strings.size, [&](size_t i) { lua_pushlstring(L, n->strings.data[i].data ? n->strings.data[i].data : "", n->strings.data[i].size); });
         return true;
     case ReflectAtom::SetStrings:
-        beginReflectWrite(L, handle.doc, false);
         n->strings = readArray<Luau::AstArray<char>>(L, handle.doc, 2, [&](int) { return readString(L, handle.doc, -1); });
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Expressions:
         pushNodeArray(L, handle.doc, n->expressions);
         return true;
     case ReflectAtom::SetExpressions:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->expressions = readNodeArray<Luau::AstExpr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -4090,24 +4164,26 @@ static bool handleAstExprInstantiateMethods(lua_State* L, AstItem& handle, Refle
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Expr:
         pushAstNode(L, handle.doc, n->expr);
         return true;
     case ReflectAtom::SetExpr:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->expr = readNode<Luau::AstExpr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::TypeArguments:
         pushTypeOrPackArray(L, handle.doc, n->typeArguments);
         return true;
     case ReflectAtom::SetTypeArguments:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->typeArguments = readTypeOrPackArray(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -4163,8 +4239,8 @@ static bool handleAstExprErrorMethods(lua_State* L, AstItem& handle, ReflectAtom
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::MessageIndex:
@@ -4230,48 +4306,50 @@ static bool handleAstTypeReferenceMethods(lua_State* L, AstItem& handle, Reflect
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Name:
         n->name.value ? lua_pushstring(L, n->name.value) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetName:
-        beginReflectWrite(L, handle.doc, false);
         n->name = readName(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Prefix:
         (n->prefix && n->prefix->value) ? lua_pushstring(L, n->prefix->value) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetPrefix:
-        beginReflectWrite(L, handle.doc, false);
         n->prefix = lua_isnil(L, 2) ? std::nullopt : std::optional<Luau::AstName>(readName(L, handle.doc, 2));
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasParameterList:
         lua_pushboolean(L, n->hasParameterList);
         return true;
     case ReflectAtom::SetHasParameterList:
-        beginReflectWrite(L, handle.doc, false);
         n->hasParameterList = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Parameters:
         pushTypeOrPackArray(L, handle.doc, n->parameters);
         return true;
     case ReflectAtom::SetParameters:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->parameters = readTypeOrPackArray(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::PrefixLocal:
         pushItem(L, handle.doc, n->prefixLocal);
         return true;
     case ReflectAtom::SetPrefixLocal:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->prefixLocal = readLocal(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::PrefixLocation:
@@ -4348,24 +4426,26 @@ static bool handleAstTypeTableMethods(lua_State* L, AstItem& handle, ReflectAtom
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Props:
         pushArray(L, n->props.size, [&](size_t i) { pushItem(L, handle.doc, &n->props.data[i]); });
         return true;
     case ReflectAtom::SetProps:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->props = readItemArray<Luau::AstTableProp>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Indexer:
         pushItem(L, handle.doc, n->indexer);
         return true;
     case ReflectAtom::SetIndexer:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->indexer = readItemPointer<Luau::AstTableIndexer>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -4433,56 +4513,61 @@ static bool handleAstTypeFunctionMethods(lua_State* L, AstItem& handle, ReflectA
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Generics:
         pushNodeArray(L, handle.doc, n->generics);
         return true;
     case ReflectAtom::SetGenerics:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->generics = readNodeArray<Luau::AstGenericType>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::GenericPacks:
         pushNodeArray(L, handle.doc, n->genericPacks);
         return true;
     case ReflectAtom::SetGenericPacks:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->genericPacks = readNodeArray<Luau::AstGenericTypePack>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::ArgTypes:
         pushItem(L, handle.doc, &n->argTypes);
         return true;
     case ReflectAtom::SetArgTypes:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         readItemInto(L, handle.doc, 2, n->argTypes);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::ReturnTypes:
         pushAstNode(L, handle.doc, n->returnTypes);
         return true;
     case ReflectAtom::SetReturnTypes:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->returnTypes = readNode<Luau::AstTypePack>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Attributes:
         pushNodeArray(L, handle.doc, n->attributes);
         return true;
     case ReflectAtom::SetAttributes:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->attributes = readNodeArray<Luau::AstAttr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::ArgNames:
         pushArgumentNames(L, n->argNames);
         return true;
     case ReflectAtom::SetArgNames:
-        beginReflectWrite(L, handle.doc, false);
         n->argNames = readArgumentNames<std::optional<Luau::AstArgumentName>>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::ArgNameLocations:
@@ -4566,16 +4651,17 @@ static bool handleAstTypeTypeofMethods(lua_State* L, AstItem& handle, ReflectAto
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Expr:
         pushAstNode(L, handle.doc, n->expr);
         return true;
     case ReflectAtom::SetExpr:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->expr = readNode<Luau::AstExpr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -4623,8 +4709,8 @@ static bool handleAstTypeOptionalMethods(lua_State* L, AstItem& handle, ReflectA
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -4670,16 +4756,17 @@ static bool handleAstTypeUnionMethods(lua_State* L, AstItem& handle, ReflectAtom
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Types:
         pushNodeArray(L, handle.doc, n->types);
         return true;
     case ReflectAtom::SetTypes:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->types = readNodeArray<Luau::AstType>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -4731,16 +4818,17 @@ static bool handleAstTypeIntersectionMethods(lua_State* L, AstItem& handle, Refl
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Types:
         pushNodeArray(L, handle.doc, n->types);
         return true;
     case ReflectAtom::SetTypes:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->types = readNodeArray<Luau::AstType>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -4792,16 +4880,16 @@ static bool handleAstTypeSingletonBoolMethods(lua_State* L, AstItem& handle, Ref
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Value:
         lua_pushboolean(L, n->value);
         return true;
     case ReflectAtom::SetValue:
-        beginReflectWrite(L, handle.doc, false);
         n->value = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -4849,16 +4937,16 @@ static bool handleAstTypeSingletonStringMethods(lua_State* L, AstItem& handle, R
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Value:
         lua_pushlstring(L, n->value.data ? n->value.data : "", n->value.size);
         return true;
     case ReflectAtom::SetValue:
-        beginReflectWrite(L, handle.doc, false);
         n->value = readString(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -4906,16 +4994,17 @@ static bool handleAstTypeGroupMethods(lua_State* L, AstItem& handle, ReflectAtom
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Type:
         pushAstNode(L, handle.doc, n->type);
         return true;
     case ReflectAtom::SetType:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->type = readNode<Luau::AstType>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -4966,8 +5055,8 @@ static bool handleAstTypeErrorMethods(lua_State* L, AstItem& handle, ReflectAtom
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::IsMissing:
@@ -5032,16 +5121,17 @@ static bool handleAstTypePackExplicitMethods(lua_State* L, AstItem& handle, Refl
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::TypeList:
         pushItem(L, handle.doc, &n->typeList);
         return true;
     case ReflectAtom::SetTypeList:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         readItemInto(L, handle.doc, 2, n->typeList);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -5097,16 +5187,17 @@ static bool handleAstTypePackVariadicMethods(lua_State* L, AstItem& handle, Refl
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::VariadicType:
         pushAstNode(L, handle.doc, n->variadicType);
         return true;
     case ReflectAtom::SetVariadicType:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->variadicType = readNode<Luau::AstType>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -5155,16 +5246,16 @@ static bool handleAstTypePackGenericMethods(lua_State* L, AstItem& handle, Refle
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Name:
         n->genericName.value ? lua_pushstring(L, n->genericName.value) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetName:
-        beginReflectWrite(L, handle.doc, false);
         n->genericName = readName(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -5214,24 +5305,25 @@ static bool handleAstGenericTypeMethods(lua_State* L, AstItem& handle, ReflectAt
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Name:
         n->name.value ? lua_pushstring(L, n->name.value) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetName:
-        beginReflectWrite(L, handle.doc, false);
         n->name = readName(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Type:
         pushAstNode(L, handle.doc, n->defaultValue);
         return true;
     case ReflectAtom::SetType:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->defaultValue = readNode<Luau::AstType>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -5284,24 +5376,25 @@ static bool handleAstGenericTypePackMethods(lua_State* L, AstItem& handle, Refle
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Name:
         n->name.value ? lua_pushstring(L, n->name.value) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetName:
-        beginReflectWrite(L, handle.doc, false);
         n->name = readName(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Type:
         pushAstNode(L, handle.doc, n->defaultValue);
         return true;
     case ReflectAtom::SetType:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->defaultValue = readNode<Luau::AstTypePack>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -5355,32 +5448,33 @@ static bool handleAstAttrMethods(lua_State* L, AstItem& handle, ReflectAtom atom
         lua_pushboolean(L, n->luwuOnly);
         return true;
     case ReflectAtom::SetLuwuOnly:
-        beginReflectWrite(L, handle.doc, false);
         n->luwuOnly = lua_toboolean(L, 2) != 0;
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Type:
         lua_pushstring(L, toString(n->type).c_str());
         return true;
     case ReflectAtom::SetType:
-        beginReflectWrite(L, handle.doc, false);
         n->type = readEnum<Luau::AstAttr::Type>(L, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Name:
         n->name.value ? lua_pushstring(L, n->name.value) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetName:
-        beginReflectWrite(L, handle.doc, false);
         n->name = readName(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Value);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Args:
         pushNodeArray(L, handle.doc, n->args);
         return true;
     case ReflectAtom::SetArgs:
-        beginReflectWrite(L, handle.doc, true);
+        beginReflectWrite(L, handle.doc, ReflectWrite::Structural);
         n->args = readNodeArray<Luau::AstExpr>(L, handle.doc, 2);
+        finishReflectWrite(handle.doc, ReflectWrite::Structural);
         lua_pushvalue(L, 1);
         return true;
     default:

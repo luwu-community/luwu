@@ -57,20 +57,39 @@ const char* getNodeKind(Luau::AstNode* node)
     return node ? astNodeClass(node)->kind : "nil";
 }
 
+static const int kVisitLevelsPerCStackUnit = 8;
+
+static int availableDepth(lua_State* L)
+{
+    int budget = (lua_cstacklimit(L) - lua_cstackdepth(L)) * kVisitLevelsPerCStackUnit;
+    return std::min(int(FInt::LuauRecursionLimit), budget);
+}
+
+void AstValidator::tooDeep()
+{
+    if (maxDepth < int(FInt::LuauRecursionLimit))
+        luaL_error(L, "C stack overflow");
+    luaL_error(L, "malformed AST: nesting is deeper than the limit of %d", maxDepth);
+}
+
 void AstValidator::node(Luau::AstNode* node)
 {
-    if (const int* known = heights.find(node))
+    const int* known = heights.find(node);
+    if (!known && untainted)
+        known = untainted->find(node);
+
+    if (known)
     {
         if (*known < 0)
             luaL_error(L, "malformed AST: %s is nested inside itself", getNodeKind(node));
         if (depth + *known > maxDepth)
-            luaL_error(L, "malformed AST: nesting is deeper than the limit of %d", maxDepth);
+            tooDeep();
         tallestChild = std::max(tallestChild, *known);
         return;
     }
 
     if (depth >= maxDepth)
-        luaL_error(L, "malformed AST: nesting is deeper than the limit of %d", maxDepth);
+        tooDeep();
 
     heights[node] = -1;
 
@@ -86,6 +105,7 @@ void AstValidator::node(Luau::AstNode* node)
     depth--;
     int height = tallestChild + 1;
     heights[node] = height;
+    order.push_back(node);
     kind = outerKind;
     tallestChild = std::max(outerTallestChild, height);
 }
@@ -128,13 +148,41 @@ void AstValidator::name(const Luau::AstName& name, const char* field, int index,
         fail(field, index, missing);
 }
 
-void validateAstNode(lua_State* L, const AstItem& handle, AstValidation mode)
+static void requireUntainted(lua_State* L, const AstItem& handle, const char* action)
 {
-    if (!handle.doc || !handle.doc->arena || !handle.doc->arena->mutated)
-        return;
+    if (isTainted(treeOf(*handle.doc), handle.node()))
+        luaL_error(L, "cannot %s a tainted AST; call :untaint() on it first", action);
+}
 
-    AstValidator validator{L, mode != AstValidation::Node, mode == AstValidation::Print, int(FInt::LuauRecursionLimit)};
-    validator.node(handle.node());
+static int astNodeUntaint(lua_State* L)
+{
+    auto& handle = checkAstNode(L, 1);
+    AstTreeState& tree = treeOf(*handle.doc);
+
+    if (isTainted(tree, handle.node()))
+    {
+        AstValidator validator{L, true, false, availableDepth(L)};
+        validator.untainted = &tree.untainted;
+        validator.node(handle.node());
+
+        if (tree.untainted.empty())
+            tree.untainted = std::move(validator.heights);
+        else
+        {
+            for (const Luau::AstNode* visited : validator.order)
+                tree.untainted[visited] = *validator.heights.find(visited);
+        }
+    }
+
+    lua_pushvalue(L, 1);
+    return 1;
+}
+
+static int astNodeTainted(lua_State* L)
+{
+    auto& handle = checkAstNode(L, 1);
+    lua_pushboolean(L, isTainted(treeOf(*handle.doc), handle.node()));
+    return 1;
 }
 
 struct DirectChildCollector : public Luau::AstVisitor
@@ -177,7 +225,11 @@ void initializeAstNodeClasses()
 static int astNodeChildren(lua_State* L)
 {
     auto& handle = checkAstNode(L, 1);
-    validateAstNode(L, handle, AstValidation::Node);
+    if (isTainted(treeOf(*handle.doc), handle.node()))
+    {
+        AstValidator validator{L, false, false, int(FInt::LuauRecursionLimit)};
+        validator.node(handle.node());
+    }
     DirectChildCollector collector;
     handle.node()->visit(&collector);
     pushArray(L, collector.children.size(), [&](size_t i) {
@@ -212,10 +264,17 @@ struct CallbackVisitor : public Luau::AstVisitor
         if (hasFilter && !filter.matches(node))
             return true;
 
+        int reserved = depth / kVisitLevelsPerCStackUnit;
+        if (reserved > 0)
+            lua_cstackreserve(L, reserved);
+
         lua_pushvalue(L, callbackIndex);
         pushAstNode(L, doc, node);
 
         int status = lua_pcall(L, 1, 1, 0);
+        if (reserved > 0)
+            lua_cstackrelease(L, reserved);
+
         if (status != 0)
         {
             errorOccurred = true;
@@ -251,23 +310,23 @@ static int astNodeWalk(lua_State* L)
 
     AstFilterData filter = extractAstFilter(L, 3);
 
-    validateAstNode(L, handle, AstValidation::Walk);
+    requireUntainted(L, handle, "walk");
 
     struct WalkScope
     {
-        AstAllocatorState& arena;
+        std::shared_ptr<AstDocumentState> doc;
 
-        explicit WalkScope(AstAllocatorState& arena)
-            : arena(arena)
+        explicit WalkScope(std::shared_ptr<AstDocumentState> doc)
+            : doc(std::move(doc))
         {
-            arena.activeWalks++;
+            treeOf(*this->doc).activeWalks++;
         }
 
         ~WalkScope()
         {
-            arena.activeWalks--;
+            treeOf(*doc).activeWalks--;
         }
-    } walkScope(*handle.doc->arena);
+    } walkScope(handle.doc);
 
     CallbackVisitor visitor(L, handle.doc, 2, filter, !lua_isnoneornil(L, 3));
     handle.node()->visit(&visitor);
@@ -308,7 +367,7 @@ static int astNodeProperties(lua_State* L)
     if (handle.cls->propCollector)
         handle.cls->propCollector(L, handle);
 
-    const auto* comments = handle.doc->arena->nodeComments.find(handle.node());
+    const auto* comments = treeOf(*handle.doc).nodeComments.find(handle.node());
     pushCommentList(L, handle, comments ? &comments->leading : nullptr);
     lua_setfield(L, -2, "leadingComments");
     pushCommentList(L, handle, comments ? &comments->trailing : nullptr);
@@ -320,13 +379,20 @@ static int astNodeProperties(lua_State* L)
 static int astNodePrettyprint(lua_State* L)
 {
     auto& handle = checkAstNode(L, 1);
-    validateAstNode(L, handle, AstValidation::Print);
+    requireUntainted(L, handle, "prettyprint");
 
-    AstAllocatorState& arena = *handle.doc->arena;
+    AstTreeState& tree = treeOf(*handle.doc);
     Luau::AstNode* node = handle.node();
 
+    int maxDepth = availableDepth(L);
+    if (tree.edited || maxDepth < int(FInt::LuauRecursionLimit))
+    {
+        AstValidator validator{L, true, true, maxDepth};
+        validator.node(node);
+    }
+
     std::string error;
-    std::string s = reflectPrettyPrint(node, node == handle.doc->parseResult.root, arena, error);
+    std::string s = reflectPrettyPrint(node, node == handle.doc->parseResult.root, tree, error);
     if (!error.empty())
         luaL_error(L, "%s", error.c_str());
 
@@ -420,12 +486,12 @@ static void collectNodeComments(AstDocumentState& doc, Luau::AstNode* rootNode, 
 
 void attachCommentsToAst(AstDocumentState& doc, Luau::AstNode* rootNode)
 {
-    collectNodeComments(doc, rootNode, doc.arena->nodeComments);
+    collectNodeComments(doc, rootNode, treeOf(doc).nodeComments);
 }
 
 void recordParsedComments(AstDocumentState& doc, Luau::AstNode* rootNode)
 {
-    collectNodeComments(doc, rootNode, doc.arena->parsedComments);
+    collectNodeComments(doc, rootNode, treeOf(doc).parsedComments);
 }
 
 void recordExplicitVisibility(AstDocumentState& doc)
@@ -434,7 +500,7 @@ void recordExplicitVisibility(AstDocumentState& doc)
     if (!root)
         return;
 
-    DenseHashMap2<const void*, bool>& written = doc.arena->explicitVisibility;
+    DenseHashMap2<const void*, bool>& written = treeOf(doc).explicitVisibility;
 
     for (Luau::AstStat* stat : root->body)
     {
@@ -475,7 +541,7 @@ void recordExplicitVisibility(AstDocumentState& doc)
 static int astNodeGetComments(lua_State* L, bool trailing)
 {
     auto& handle = checkAstNode(L, 1);
-    const auto* comments = handle.doc->arena->nodeComments.find(handle.node());
+    const auto* comments = treeOf(*handle.doc).nodeComments.find(handle.node());
     pushCommentList(L, handle, comments ? (trailing ? &comments->trailing : &comments->leading) : nullptr);
     return 1;
 }
@@ -512,9 +578,13 @@ static void parseCommentArray(lua_State* L, AstItem& handle, int argIdx, std::ve
 static int astNodeSetComments(lua_State* L, bool trailing)
 {
     auto& handle = checkAstNode(L, 1);
-    ClassifiedNodeComments& comments = handle.doc->arena->nodeComments[handle.node()];
-    auto& target = trailing ? comments.trailing : comments.leading;
-    parseCommentArray(L, handle, 2, target);
+    std::vector<ReflectComment*> list;
+    parseCommentArray(L, handle, 2, list);
+
+    AstTreeState& tree = treeOf(*handle.doc);
+    tree.edited = true;
+    ClassifiedNodeComments& comments = tree.nodeComments[handle.node()];
+    (trailing ? comments.trailing : comments.leading) = std::move(list);
     lua_pushvalue(L, 1);
     return 1;
 }
@@ -537,6 +607,8 @@ int dispatchAstNodeMethod(lua_State* L, AstItem& handle, ReflectAtom atom, const
     case ReflectAtom::Walk:                return astNodeWalk(L);
     case ReflectAtom::Properties:          return astNodeProperties(L);
     case ReflectAtom::Prettyprint:         return astNodePrettyprint(L);
+    case ReflectAtom::Untaint:             return astNodeUntaint(L);
+    case ReflectAtom::Tainted:             return astNodeTainted(L);
     case ReflectAtom::LeadingComments:     return astNodeLeadingComments(L);
     case ReflectAtom::SetLeadingComments:  return astNodeSetLeadingComments(L);
     case ReflectAtom::TrailingComments:    return astNodeTrailingComments(L);

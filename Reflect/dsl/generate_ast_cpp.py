@@ -54,6 +54,7 @@ class FieldDef(BaseModel):
     nullable: bool = False
     companions: list[str] = []
     companion_of: Optional[str] = None
+    affects_validity: bool = False
 
     @field_validator("accessor", mode="before")
     @classmethod
@@ -283,6 +284,8 @@ BUILTIN_ATOMS: list[tuple[str, str]] = [
     ("Root", "root"),
     ("Source", "source"),
     ("Prettyprint", "prettyprint"),
+    ("Untaint", "untaint"),
+    ("Tainted", "tainted"),
     ("Walk", "walk"),
     ("Errors", "errors"),
     ("Comments", "comments"),
@@ -799,8 +802,8 @@ AST_NODES_USERDATA = UserdataDef(
                 F.boolean(
                     "explicitVisibility",
                     accessor=FieldAccessor(
-                        read="hasExplicitVisibility(*handle.doc->arena, n)",
-                        write="handle.doc->arena->explicitVisibility[n]",
+                        read="hasExplicitVisibility(treeOf(*handle.doc), n)",
+                        write="treeOf(*handle.doc).explicitVisibility[n]",
                     ),
                 ),
             ],
@@ -1874,8 +1877,8 @@ PLAIN_ITEMS: list[NodeDef] = [
             F.boolean(
                 "explicitVisibility",
                 accessor=FieldAccessor(
-                    read="hasExplicitVisibility(*handle.doc->arena, &n)",
-                    write="handle.doc->arena->explicitVisibility[&n]",
+                    read="hasExplicitVisibility(treeOf(*handle.doc), &n)",
+                    write="treeOf(*handle.doc).explicitVisibility[&n]",
                 ),
             ),
         ],
@@ -1900,8 +1903,8 @@ PLAIN_ITEMS: list[NodeDef] = [
             F.boolean(
                 "explicitVisibility",
                 accessor=FieldAccessor(
-                    read="hasExplicitVisibility(*handle.doc->arena, &n)",
-                    write="handle.doc->arena->explicitVisibility[&n]",
+                    read="hasExplicitVisibility(treeOf(*handle.doc), &n)",
+                    write="treeOf(*handle.doc).explicitVisibility[&n]",
                 ),
             ),
         ],
@@ -1934,7 +1937,7 @@ PLAIN_ITEMS: list[NodeDef] = [
         fields=[
             F.node("key", "AstExpr", member="n.key", nullable=True),
             F.node("value", "AstExpr", member="n.value"),
-            F.enum("itemKind", "AstExprTable::Item::Kind", member="n.kind"),
+            F.enum("itemKind", "AstExprTable::Item::Kind", member="n.kind", affects_validity=True),
         ],
         validate_extra=[
             'if (item.kind != Luau::AstExprTable::Item::Kind::List && !item.key) v.fail({field}, {index}, "has no key");',
@@ -2389,8 +2392,14 @@ class CppGenerator:
             if write_target:
                 body: list[CppNode] = []
                 if ud.mutable:
-                    structural = "true" if f.type.kind in STRUCTURAL_KINDS else "false"
-                    body.append(Raw(text=f"beginReflectWrite(L, handle.doc, {structural});"))
+                    if f.type.kind in STRUCTURAL_KINDS:
+                        write = "Structural"
+                    elif f.affects_validity:
+                        write = "Validity"
+                    else:
+                        write = "Value"
+                    if write == "Structural":
+                        body.append(Raw(text=f"beginReflectWrite(L, handle.doc, ReflectWrite::{write});"))
                 by_name = {other.name: other for other in fields}
                 if f.companions:
                     body.append(Raw(text=f"{self._cpp_type(f.type)} previous = {write_target};"))
@@ -2411,6 +2420,8 @@ class CppGenerator:
                     )
                 else:
                     body.extend(self._read(f.type, write_target))
+                if ud.mutable:
+                    body.append(Raw(text=f"finishReflectWrite(handle.doc, ReflectWrite::{write});"))
                 body.append(Raw(text="lua_pushvalue(L, 1);"))
                 body.append(Return(expr="true"))
                 if f.companions or f.companion_of:
