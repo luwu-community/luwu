@@ -1740,15 +1740,16 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatLocal* stat
 
             AstExpr* require = *maybeRequire;
 
-            auto moduleInfo = moduleResolver->resolveModuleInfo(module->name, *require);
-            if (!moduleInfo)
-                continue;
-
-            ModulePtr module = moduleResolver->getModule(moduleInfo->name);
-            if (!module)
-                continue;
-
             const Name name{statLocal->vars.data[i]->name.value};
+
+            auto moduleInfo = moduleResolver->resolveModuleInfo(module->name, *require);
+            ModulePtr module = moduleInfo ? moduleResolver->getModule(moduleInfo->name) : nullptr;
+            if (!module)
+            {
+                scope->unresolvedRequires.insert(name);
+                continue;
+            }
+
             scope->importedTypeBindings[name] = module->exportedTypeBindings;
             scope->importedModules[name] = moduleInfo->name;
 

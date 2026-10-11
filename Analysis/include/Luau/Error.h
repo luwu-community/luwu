@@ -110,8 +110,26 @@ struct UnknownSymbol
     Name name;
     Context context;
 
+    // Luwu: for a module-qualified type `x.A`, what `x` turned out to be, so the message can say which half is wrong.
+    // Upstream reports every case as "Unknown type 'x.A'".
+    enum class Qualifier
+    {
+        // Not qualified, or a require that didn't resolve (which has its own error already)
+        Unknown,
+        // `x` isn't bound to a require
+        NotAModule,
+        // `x` is a required module that exports no type `A`
+        NotExported,
+    };
+    Qualifier qualifier = Qualifier::Unknown;
+    Name module;
+    Name member;
+
     bool operator==(const UnknownSymbol& rhs) const;
 };
+
+// The error for a type reference that names no type in `scope`.
+UnknownSymbol unknownTypeReference(const Scope& scope, const AstTypeReference& reference);
 
 struct UnknownProperty
 {
