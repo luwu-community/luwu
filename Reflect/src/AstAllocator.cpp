@@ -33,6 +33,10 @@ static int astAllocatorParse(lua_State* L)
 
     if (processComments)
         attachCommentsToAst(*doc);
+    else
+        recordParsedComments(*doc);
+
+    recordExplicitVisibility(*doc);
 
     pushAstDocument(L, std::move(doc));
     return 1;
@@ -57,13 +61,20 @@ static int astAllocatorParseExpr(lua_State* L)
 
     auto result = Luau::Parser::parseExpr(doc->source.data(), doc->source.size(), handle.state->names, handle.state->allocator, options);
     doc->parseResult.root = nullptr;
+    doc->parseResult.lines = result.lines;
+    doc->parseResult.hotcomments = std::move(result.hotcomments);
     doc->parseResult.errors = std::move(result.errors);
     doc->parseResult.commentLocations = std::move(result.commentLocations);
     if (includeCst)
         doc->parseResult.cstNodeMap = std::move(result.cstNodeMap);
 
-    if (processComments && result.root)
-        attachCommentsToAst(*doc, result.root);
+    if (result.root)
+    {
+        if (processComments)
+            attachCommentsToAst(*doc, result.root);
+        else
+            recordParsedComments(*doc, result.root);
+    }
 
     pushAstNode(L, doc, result.root);
     return 1;
@@ -90,15 +101,9 @@ static int astAllocatorDefaultnode(lua_State* L)
         pushCstNode(L, doc, cst);
         return 1;
     }
-    if (Luau::AstLocal* local = createDefaultAstLocal(L, kind, handle.state->allocator))
+    if (const AstItemClass* cls = plainItemClass(kind))
     {
-        pushAstLocal(L, doc, local);
-        return 1;
-    }
-    AstAuxData aux(doc);
-    if (createDefaultAstAux(kind, doc, aux))
-    {
-        pushAstAuxData(L, aux);
+        cls->create(L, doc);
         return 1;
     }
 

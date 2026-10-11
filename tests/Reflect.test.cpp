@@ -11,7 +11,13 @@
 #include <memory>
 #include <cstring>
 #include <fstream>
+#include <map>
+#include <optional>
+#include <regex>
+#include <set>
+#include <sstream>
 #include <string>
+#include <vector>
 
 LUAU_FASTFLAG(LuauDirectFieldGet)
 LUAU_FASTFLAG(LuwuManagedReferences2)
@@ -62,22 +68,22 @@ TEST_CASE("LazyAstTypeof")
         assert(doc:allocator() == arena)
 
         local root = doc:root()
-        assert(typeof(root) == "AstNode")
+        assert(typeof(root) == "AstItem")
         assert(root.kind == "AstStatBlock")
         assert(root.category == "stat")
 
         local stat = root:body()[1]
-        assert(typeof(stat) == "AstNode")
+        assert(typeof(stat) == "AstItem")
         assert(stat.kind == "AstStatLocal")
         assert(stat.category == "stat")
 
         local val = stat:values()[1]
-        assert(typeof(val) == "AstNode")
+        assert(typeof(val) == "AstItem")
         assert(val.kind == "AstExprConstantNumber")
         assert(val.category == "expr")
 
         local localItem = stat:vars()[1]
-        assert(typeof(localItem) == "AstLocal")
+        assert(typeof(localItem) == "AstItem")
         assert(localItem.kind == "AstLocal")
         assert(localItem:name() == "x")
 
@@ -230,7 +236,7 @@ TEST_CASE("LazyAstParseExpr")
         local arena = reflect.allocator()
         local expr = arena:parseexpr("a + b * 2")
         assert(expr ~= nil)
-        assert(typeof(expr) == "AstNode")
+        assert(typeof(expr) == "AstItem")
         assert(expr.kind == "AstExprBinary")
         assert(expr.category == "expr")
         assert(expr:op() == "+")
@@ -238,7 +244,7 @@ TEST_CASE("LazyAstParseExpr")
         assert(expr:left():name() == "a")
 
         local right = expr:right()
-        assert(typeof(right) == "AstNode")
+        assert(typeof(right) == "AstItem")
         assert(right.kind == "AstExprBinary")
         assert(right.category == "expr")
         assert(right:op() == "*")
@@ -302,17 +308,17 @@ TEST_CASE("LazyCstData")
         local locStat = stats[1]
         local locStatCst = locStat:cst()
         assert(locStatCst ~= nil)
-        assert(typeof(locStatCst) == "CstNode")
+        assert(typeof(locStatCst) == "AstItem")
         assert(locStatCst.kind == "CstStatLocal")
-        assert(locStatCst.category == "generic")
+        assert(locStatCst.category == "cst")
 
         -- Check string CST quote style
         local strExpr = locStat:values()[1]
         local strExprCst = strExpr:cst()
         assert(strExprCst ~= nil)
-        assert(typeof(strExprCst) == "CstNode")
+        assert(typeof(strExprCst) == "AstItem")
         assert(strExprCst.kind == "CstExprConstantString")
-        assert(strExprCst.category == "generic")
+        assert(strExprCst.category == "cst")
         assert(strExprCst:quoteStyle() == "single")
         assert(strExprCst:sourceString() == "hello world")
 
@@ -381,14 +387,14 @@ TEST_CASE("LazyAstComments")
         assert(#comments == 2)
 
         local c1 = comments[1]
-        assert(typeof(c1) == "AstAux")
+        assert(typeof(c1) == "AstItem")
         assert(c1.kind == "AstComment")
         assert(c1:type() == "single")
         assert(c1:origlocation().begin.x == 1)
         assert(c1:text() == "-- single comment")
 
         local c2 = comments[2]
-        assert(typeof(c2) == "AstAux")
+        assert(typeof(c2) == "AstItem")
         assert(c2.kind == "AstComment")
         assert(c2:type() == "block")
         assert(c2:text() == "--[[\nblock comment\n]]")
@@ -431,16 +437,18 @@ TEST_CASE("LazyAstTableItems")
 
         -- List item
         local item1 = items[1]
-        assert(typeof(item1) == "AstAux")
-        assert(item1.kind == "list")
+        assert(typeof(item1) == "AstItem")
+        assert(item1.kind == "AstTableItem")
+        assert(item1:itemKind() == "list")
         assert(item1:key() == nil)
         assert(item1:value().kind == "AstExprConstantString")
         assert(item1:value():value() == "hello")
 
         -- Record item
         local item2 = items[2]
-        assert(typeof(item2) == "AstAux")
-        assert(item2.kind == "record")
+        assert(typeof(item2) == "AstItem")
+        assert(item2.kind == "AstTableItem")
+        assert(item2:itemKind() == "record")
         assert(item2:key() ~= nil)
         assert(item2:key().kind == "AstExprConstantString")
         assert(item2:key():value() == "foo")
@@ -449,8 +457,9 @@ TEST_CASE("LazyAstTableItems")
 
         -- General item
         local item3 = items[3]
-        assert(typeof(item3) == "AstAux")
-        assert(item3.kind == "general")
+        assert(typeof(item3) == "AstItem")
+        assert(item3.kind == "AstTableItem")
+        assert(item3:itemKind() == "general")
         assert(item3:key() ~= nil)
         assert(item3:key().kind == "AstExprBinary")
         assert(item3:key():op() == "..")
@@ -462,9 +471,9 @@ TEST_CASE("LazyAstTableItems")
         assert(tableCst ~= nil)
         local cstItems = tableCst:items()
         assert(#cstItems == 3)
-        assert(typeof(cstItems[1]) == "AstAux")
-        assert(typeof(cstItems[2]) == "AstAux")
-        assert(typeof(cstItems[3]) == "AstAux")
+        assert(typeof(cstItems[1]) == "AstItem")
+        assert(typeof(cstItems[2]) == "AstItem")
+        assert(typeof(cstItems[3]) == "AstItem")
         assert(cstItems[2]:equalsPosition() ~= nil)
         assert(cstItems[3]:indexerOpenPosition() ~= nil)
     )LUA";
@@ -472,7 +481,7 @@ TEST_CASE("LazyAstTableItems")
     CHECK_EQ(dostring(L, script), 0);
 }
 
-TEST_CASE("AstTypeTableAndAstAux")
+TEST_CASE("AstTypeTableAndItems")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
     ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
@@ -1033,9 +1042,12 @@ TEST_CASE("ReflectAstMutations")
         local items = tblExpr:items()
         assert(#items == 1)
         local itm = items[1]
-        assert(itm.kind == "record")
-        assert(itm:setKind("list"):setValue(tblStat:values()[1]) == itm)
-        assert(itm:kind() == "list")
+        assert(itm.kind == "AstTableItem")
+        assert(itm:itemKind() == "record")
+        assert(itm:properties().kind == "AstTableItem")
+        assert(itm:properties().itemKind == "record")
+        assert(itm:setItemKind("list"):setValue(tblStat:values()[1]) == itm)
+        assert(itm:itemKind() == "list")
         assert(tblExpr:setItems({}) == tblExpr)
         assert(#tblExpr:items() == 0)
         assert(tblExpr:setItems(items) == tblExpr)
@@ -1145,7 +1157,7 @@ TEST_CASE("ReflectProperties")
         if cst then
             local cstProps = cst:properties()
             assert(cstProps.id ~= nil)
-            assert(cstProps.category == "generic")
+            assert(cstProps.category == "cst")
         end
     )LUA";
 
@@ -1223,7 +1235,7 @@ TEST_CASE("AstAllocatorDefaultNode")
 
         -- Ast Node Creation
         local numExpr = alloc:defaultnode("AstExprConstantNumber")
-        assert(typeof(numExpr) == "AstNode")
+        assert(typeof(numExpr) == "AstItem")
         assert(numExpr.kind == "AstExprConstantNumber")
         assert(numExpr.category == "expr")
         assert(numExpr:value() == 0)
@@ -1231,7 +1243,7 @@ TEST_CASE("AstAllocatorDefaultNode")
         assert(numExpr:value() == 42)
 
         local localStat = alloc:defaultnode("AstStatLocal")
-        assert(typeof(localStat) == "AstNode")
+        assert(typeof(localStat) == "AstItem")
         assert(localStat.kind == "AstStatLocal")
         assert(localStat.category == "stat")
         assert(#localStat:vars() == 0)
@@ -1241,30 +1253,30 @@ TEST_CASE("AstAllocatorDefaultNode")
         assert(localStat:values()[1] == numExpr)
 
         local genType = alloc:defaultnode("AstGenericType")
-        assert(typeof(genType) == "AstNode")
+        assert(typeof(genType) == "AstItem")
         assert(genType.kind == "AstGenericType")
         assert(genType:setName("T") == genType)
         assert(genType:name() == "T")
 
         local genTypePack = alloc:defaultnode("AstGenericTypePack")
-        assert(typeof(genTypePack) == "AstNode")
+        assert(typeof(genTypePack) == "AstItem")
         assert(genTypePack.kind == "AstGenericTypePack")
         assert(genTypePack:setName("U...") == genTypePack)
         assert(genTypePack:name() == "U...")
 
         local attr = alloc:defaultnode("AstAttr")
-        assert(typeof(attr) == "AstNode")
+        assert(typeof(attr) == "AstItem")
         assert(attr.kind == "AstAttr")
 
         -- Cst Node Creation
         local cstLocal = alloc:defaultnode("CstStatLocal")
-        assert(typeof(cstLocal) == "CstNode")
+        assert(typeof(cstLocal) == "AstItem")
         assert(cstLocal.kind == "CstStatLocal")
-        assert(cstLocal.category == "generic")
+        assert(cstLocal.category == "cst")
 
         -- AstLocal Creation (dedicated userdata)
         local astLocal = alloc:defaultnode("AstLocal")
-        assert(typeof(astLocal) == "AstLocal")
+        assert(typeof(astLocal) == "AstItem")
         assert(astLocal.kind == "AstLocal")
         assert(astLocal:setName("myVar"):setIsConst(true) == astLocal)
         assert(astLocal:name() == "myVar")
@@ -1272,11 +1284,11 @@ TEST_CASE("AstAllocatorDefaultNode")
 
         -- Aux Creation
         local astComment = alloc:defaultnode("AstComment")
-        assert(typeof(astComment) == "AstAux")
+        assert(typeof(astComment) == "AstItem")
         assert(astComment.kind == "AstComment")
 
         local astTableProp = alloc:defaultnode("AstTableProp")
-        assert(typeof(astTableProp) == "AstAux")
+        assert(typeof(astTableProp) == "AstItem")
         assert(astTableProp.kind == "AstTableProp")
         assert(astTableProp:setName("myProp"):setAccess("read") == astTableProp)
         assert(astTableProp:name() == "myProp")
@@ -1489,7 +1501,7 @@ TEST_CASE("ReflectMalformedTreesRaiseErrors")
         tbl:setItems({ item })
         visitAll(tbl)
         fails(function() return tbl:prettyprint() end, "is a record item whose key is not a string constant")
-        item:setKind("general")
+        item:setItemKind("general")
         tbl:setItems({ item })
         assert(string.gsub(tbl:prettyprint(), "%s", "") == "{[1+2]=1}")
     )LUA";
@@ -1679,7 +1691,7 @@ TEST_CASE("ReflectDefaultNodesThatNeedAFlag")
 
         const char* script = R"LUA(
             local alloc = reflect.allocator()
-            for kind, flag in { AstStatClass = "LuwuClasses", CstAttr = "LuauCstAttr", CstParametrizedAttr = "LuauCstAttr" } do
+            for kind, flag in { AstStatClass = "LuwuClasses", CstAttr = "LuauCstAttr", CstParametrizedAttr = "LuauCstAttr", CstAttrList = "LuauCstAttr" } do
                 local ok, res = pcall(function() return alloc:defaultnode(kind) end)
                 assert(ok == enabled, kind)
                 if not ok then
@@ -1740,7 +1752,7 @@ TEST_CASE("ReflectEveryDefaultNodeIsSafeToUse")
 
             pcall(function() return tostring(node) end)
             pcall(function() return node:properties() end)
-            if typeof(node) == "AstNode" then
+            if typeof(node) == "AstItem" then
                 pcall(function() return node:children() end)
                 pcall(function() node:walk(function() return true end) end)
                 pcall(function() return node:prettyprint() end)
@@ -1827,11 +1839,11 @@ TEST_CASE("ReflectPrettyprintRoot")
     const char* script = R"LUA(
         local alloc = reflect.allocator()
         assert(alloc:parse("local x = 1 + 2"):root():prettyprint() == "local x = 1 + 2")
-        assert(alloc:parse("local x = 1\nif y then z() end"):root():prettyprint() == "local x = 1\nif y then z() end")
+        assert(alloc:parse("local x = 1\nif y then z() end"):root():prettyprint() == "local x = 1\nif y then\n    z()\nend")
         assert(alloc:parse(""):root():prettyprint() == "")
 
         local doc = alloc:parse("if y then z() end")
-        assert(doc:root():body()[1]:prettyprint() == "if y then z() end")
+        assert(doc:root():body()[1]:prettyprint() == "if y then\n    z()\nend")
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);
@@ -1947,18 +1959,37 @@ TEST_CASE("ReflectFunctionArgDefaults")
         assert(defaults[1] == false)
         assert(defaults[2].kind == "AstExprConstantNumber")
         assert(defaults[3].kind == "AstExprBinary")
-        assert(doc:root():prettyprint() == "local function f(x, y = 2, z = x + 1) end")
+        assert(doc:root():prettyprint() == "local function f(x, y = 2, z = x + 1)\nend")
 
         local args = fn:args()
         fn:setArgs({ args[1], args[2] })
-        local ok, err = pcall(function() return doc:root():prettyprint() end)
-        assert(not ok)
-        assert(string.find(err, "AstExprFunction.args has a different length", 1, true) ~= nil, err)
+        assert(#fn:argsDefaults() == 2)
+        assert(doc:root():prettyprint() == "local function f(x, y = 2)\nend")
 
+        fn:setArgs({ args[2], args[1], args[3] })
+        assert(#fn:argsDefaults() == 3)
+        assert(fn:argsDefaults()[1] == defaults[2])
+        assert(fn:argsDefaults()[3] == false)
+        assert(doc:root():prettyprint() == "local function f(y = 2, x, z)\nend")
+
+        fn:setArgs({ args[1], args[2] })
         assert(fn:setArgsDefaults({ false, defaults[3] }) == fn)
         assert(fn:argsDefaults()[1] == false)
         assert(fn:argsDefaults()[2] == defaults[3])
         assert(string.gsub(doc:root():prettyprint(), "%s", "") == "localfunctionf(x,y=x+1)end")
+
+        fn:setArgsDefaults({ defaults[2] })
+        assert(#fn:argsDefaults() == 2)
+        assert(fn:argsDefaults()[2] == false)
+        assert(doc:root():prettyprint() == "local function f(x = 2, y)\nend")
+
+        local okLong, errLong = pcall(function() fn:setArgsDefaults({ false, false, false }) end)
+        assert(not okLong and string.find(errLong, "argsDefaults has more entries than args", 1, true) ~= nil, errLong)
+
+        fn:setArgsDefaults({})
+        assert(#fn:argsDefaults() == 0)
+        assert(doc:root():prettyprint() == "local function f(x, y)\nend")
+        fn:setArgsDefaults({ false, defaults[3] })
 
         assert(not pcall(function() fn:setArgsDefaults({ false, doc:root() }) end))
         local okCross, errCross = pcall(function() fn:setArgsDefaults({ false, reflect.allocator():parseexpr("1") }) end)
@@ -1971,6 +2002,884 @@ TEST_CASE("ReflectFunctionArgDefaults")
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);
+}
+
+TEST_CASE("ReflectItemCategories")
+{
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    Luau::luaopen_reflect(L);
+    lua_setglobal(L, "reflect");
+
+    const char* script = R"LUA(
+        local function fails(f, message)
+            local ok, err = pcall(f)
+            assert(not ok, "expected an error containing: " .. message)
+            assert(string.find(tostring(err), message, 1, true) ~= nil, tostring(err))
+        end
+
+        local alloc = reflect.allocator()
+        local doc = alloc:parse("local t: { x: number } = { 1 }", true)
+        assert(typeof(alloc) == "AstAllocator")
+        assert(typeof(doc) == "AstDocument")
+
+        local stat = doc:root():body()[1]
+        assert(typeof(stat) == "AstItem")
+        assert(stat.kind == "AstStatLocal")
+        assert(stat.category == "stat")
+        assert(tostring(stat) == "AstNode(AstStatLocal)")
+
+        local loc = stat:vars()[1]
+        assert(typeof(loc) == "AstItem")
+        assert(loc.kind == "AstLocal")
+        assert(loc.category == "local")
+        assert(tostring(loc) == "AstLocal(t)")
+
+        local prop = loc:annotation():props()[1]
+        assert(typeof(prop) == "AstItem")
+        assert(prop.kind == "AstTableProp")
+        assert(prop.category == "aux")
+        assert(tostring(prop) == "AstTableProp(x)")
+
+        local item = stat:values()[1]:items()[1]
+        assert(item.kind == "AstTableItem")
+        assert(item:itemKind() == "list")
+        assert(item.category == "aux")
+        assert(tostring(item) == "AstTableItem")
+        assert(item ~= prop)
+        assert(item == stat:values()[1]:items()[1])
+
+        local cst = stat:cst()
+        assert(typeof(cst) == "AstItem")
+        assert(cst.kind == "CstStatLocal")
+        assert(cst.category == "cst")
+        assert(tostring(cst) == "CstNode(CstStatLocal)")
+
+        assert(stat ~= loc)
+        assert(loc ~= prop)
+        assert(stat == doc:root():body()[1])
+        assert(loc == stat:vars()[1])
+        assert(cst == stat:cst())
+
+        fails(function() stat:setVars({ prop }) end, "AstLocal")
+        fails(function() loc:annotation():setProps({ loc }) end, "AstTableProp")
+        fails(function() loc:annotation():setProps({ item }) end, "AstTableProp")
+        fails(function() stat:values()[1]:setItems({ prop }) end, "AstTableItem")
+        fails(function() return prop:walk(function() end) end, "walk is not a valid method of AstTableProp")
+        fails(function() stat:setValues({ loc }) end, "AstNode")
+        fails(function() return reflect.filter("stat"):match(loc) end, "AstNode")
+        fails(function() return loc:walk(function() end) end, "walk is not a valid method of AstLocal")
+        fails(function() return cst:setName("x") end, "setName is not a valid method of CstNode")
+    )LUA";
+
+    CHECK_EQ(dostring(L, script), 0);
+}
+
+TEST_CASE("ReflectAuxWriteThrough")
+{
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    Luau::luaopen_reflect(L);
+    lua_setglobal(L, "reflect");
+
+    const char* script = R"LUA(
+        local function fails(f, message)
+            local ok, err = pcall(f)
+            assert(not ok, "expected an error containing: " .. message)
+            assert(string.find(tostring(err), message, 1, true) ~= nil, tostring(err))
+        end
+
+        local alloc = reflect.allocator()
+        local doc = alloc:parse("type T = { x: number, y: string }")
+        local tbl = doc:root():body()[1]:type()
+
+        local prop = tbl:props()[1]
+        prop:setName("renamed")
+        assert(tbl:props()[1]:name() == "renamed")
+        assert(string.gsub(doc:root():prettyprint(), "%s", "") == "typeT={renamed:number,y:string}")
+
+        assert(tbl:props()[1] == prop)
+        assert(tbl:props()[1].id == prop.id)
+        assert(tbl:props()[1] ~= tbl:props()[2])
+
+        local fresh = alloc:defaultnode("AstTableProp")
+        fresh:setName("z"):setType(alloc:parse("type U = boolean"):root():body()[1]:type())
+        tbl:setProps({ prop, fresh })
+        fresh:setName("w")
+        assert(tbl:props()[2]:name() == "w")
+        assert(tbl:props()[2] == fresh)
+        prop:setName("first")
+        assert(tbl:props()[1]:name() == "first")
+
+        local old = tbl:props()[1]
+        tbl:setProps({ fresh })
+        old:setName("detached")
+        assert(#tbl:props() == 1)
+        assert(tbl:props()[1]:name() == "w")
+        assert(old:name() == "detached")
+
+        local expr = alloc:parseexpr("{ a = 1 }")
+        expr:items()[1]:setValue(alloc:parseexpr("2"))
+        assert(string.gsub(expr:prettyprint(), "%s", "") == "{a=2}")
+
+        local indexed = alloc:parse("type I = { [string]: number }"):root():body()[1]:type()
+        indexed:indexer():setAccess("read")
+        assert(indexed:indexer():access() == "read")
+        assert(indexed:indexer() == indexed:indexer())
+
+        local fn = alloc:parse("type F = (number) -> string"):root():body()[1]:type()
+        fn:argTypes():setTypes({})
+        assert(#fn:argTypes():types() == 0)
+
+        fails(function()
+            doc:root():walk(function(node)
+                if node.kind == "AstTypeTable" then
+                    node:props()[1]:setType(nil)
+                end
+                return true
+            end)
+        end, "cannot change the structure of an AST while it is being walked")
+
+        doc:root():walk(function(node)
+            if node.kind == "AstTypeTable" then
+                node:props()[1]:setName("inwalk")
+            end
+            return true
+        end)
+        assert(tbl:props()[1]:name() == "inwalk")
+
+        tbl:props()[1]:setType(nil)
+        fails(function() return doc:root():prettyprint() end, "AstTypeTable.props[1] has no type")
+    )LUA";
+
+    CHECK_EQ(dostring(L, script), 0);
+}
+
+TEST_CASE("ReflectCommentsAreShared")
+{
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    Luau::luaopen_reflect(L);
+    lua_setglobal(L, "reflect");
+
+    const char* script = R"LUA(
+        local function fails(f, message)
+            local ok, err = pcall(f)
+            assert(not ok, "expected an error containing: " .. message)
+            assert(string.find(tostring(err), message, 1, true) ~= nil, tostring(err))
+        end
+
+        local arena = reflect.allocator()
+        local doc = arena:parse("-- lead\nlocal x = 1 -- trail\n", false, true)
+        local stat = doc:root():body()[1]
+
+        local lead = stat:leadingComments()[1]
+        assert(lead:text() == "-- lead")
+        lead:setText("-- edited")
+        assert(stat:leadingComments()[1]:text() == "-- edited")
+        assert(stat:leadingComments()[1] == lead)
+        assert(doc:comments()[1] == lead)
+        assert(doc:comments()[1]:text() == "-- edited")
+        assert(doc:comments()[2] == stat:trailingComments()[1])
+
+        local added = arena:defaultnode("AstComment"):setText("-- added")
+        stat:setLeadingComments({ lead, added })
+        added:setType("block")
+        assert(stat:leadingComments()[2]:type() == "block")
+        assert(stat:leadingComments()[2] == added)
+
+        fails(function() stat:setLeadingComments({ reflect.allocator():defaultnode("AstComment") }) end, "cross-allocator")
+        fails(function() stat:setLeadingComments({ stat }) end, "expected AstComment at index 1")
+    )LUA";
+
+    CHECK_EQ(dostring(L, script), 0);
+}
+
+TEST_CASE("ReflectPrettyprintComments")
+{
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    Luau::luaopen_reflect(L);
+    lua_setglobal(L, "reflect");
+
+    const char* script = R"LUA(
+        local alloc = reflect.allocator()
+
+        local exact = {
+            "-- header\nlocal x = 1 -- trailing\n-- before\nlocal y = 2\n-- last",
+            "--[=[ block\n     comment ]=]\nlocal x = 1",
+            "if x then\n    -- inside\n    y = 2 -- same line\nend",
+            "if x then\n    y()\n    -- about the next branch\nelseif z then\n    w()\nend",
+            "local function f()\n    -- first\n    -- second\n    return 1\nend",
+            "while x do\n    -- only a comment\nend",
+        }
+        for _, source in exact do
+            for _, processed in { true, false } do
+                local doc = alloc:parse(source, false, processed)
+                assert(doc:root():prettyprint() == source, doc:root():prettyprint())
+            end
+        end
+
+        local moved = alloc:parse("local t = { 1, -- inside\n  2 }\nlocal after = 3\n")
+        assert(moved:root():prettyprint() == "local t = { 1, 2 }\n-- inside\nlocal after = 3")
+
+        local doc = alloc:parse("-- lead\nlocal x = 1 -- trail\nif x then\n    -- inner\n    y()\nend", false, true)
+        local first = doc:root():body()[1]
+        assert(first:prettyprint() == "local x = 1")
+        assert(doc:root():body()[2]:prettyprint() == "if x then\n    -- inner\n    y()\nend")
+
+        first:leadingComments()[1]:setText("-- edited")
+        first:setTrailingComments({})
+        assert(doc:root():prettyprint() == "-- edited\nlocal x = 1\nif x then\n    -- inner\n    y()\nend")
+
+        local tail = alloc:parse("while x do\n    y()\n    -- tail\nend -- after\nz()", false, true)
+        local loop = tail:root():body()[1]
+        assert(#loop:body():trailingComments() == 1)
+        assert(loop:body():trailingComments()[1]:text() == "-- tail")
+        assert(#loop:trailingComments() == 1)
+        assert(loop:trailingComments()[1]:text() == "-- after")
+        assert(#tail:root():body()[2]:leadingComments() == 0)
+        assert(tail:root():prettyprint() == "while x do\n    y()\n    -- tail\nend -- after\nz()")
+
+        local lines = alloc:parse("foo()"):root()
+        lines:body()[1]:setTrailingComments({
+            alloc:defaultnode("AstComment"):setText("-- a"),
+            alloc:defaultnode("AstComment"):setText("-- b"),
+        })
+        assert(lines:prettyprint() == "foo() -- a\n-- b")
+        assert(#alloc:parse(lines:prettyprint()):comments() == 2)
+
+        local block = alloc:parse(""):root()
+        local one = alloc:parse("foo()"):root():body()[1]
+        local two = alloc:parse("bar()"):root():body()[1]
+        one:setLeadingComments({ alloc:defaultnode("AstComment"):setText("-- one") })
+        one:setTrailingComments({ alloc:defaultnode("AstComment"):setText("-- two") })
+        two:setLeadingComments({ alloc:defaultnode("AstComment"):setText("--[[ three ]]"):setType("block") })
+        block:setBody({ one, two })
+        assert(#block:body()[1]:leadingComments() == 1)
+        assert(block:prettyprint() == "-- one\nfoo() -- two\n--[[ three ]]\nbar()", block:prettyprint())
+    )LUA";
+
+    CHECK_EQ(dostring(L, script), 0);
+}
+
+TEST_CASE("ReflectPrettyprintFormatting")
+{
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    Luau::luaopen_reflect(L);
+    lua_setglobal(L, "reflect");
+
+    const char* script = R"LUA(
+        local alloc = reflect.allocator()
+        local function format(source)
+            local doc = alloc:parse(source)
+            assert(#doc:errors() == 0, source)
+            return doc:root():prettyprint()
+        end
+
+        assert(format("local   x,y = 1,  'two'") == 'local x, y = 1, "two"')
+        assert(format("if x then y() elseif z then w() else q() end") == "if x then\n    y()\nelseif z then\n    w()\nelse\n    q()\nend")
+        assert(format("for i=1,10,2 do print(i) end") == "for i = 1, 10, 2 do\n    print(i)\nend")
+        assert(format("for k,v in pairs(t) do continue end") == "for k, v in pairs(t) do\n    continue\nend")
+        assert(format("repeat x+=1 until x>10") == "repeat\n    x += 1\nuntil x > 10")
+        assert(format("do local inner = 1 end") == "do\n    local inner = 1\nend")
+        assert(format("function M.sub:method<T>(a: T, ...: number): T return a end") == "function M.sub:method<T>(a: T, ...: number): T\n    return a\nend")
+        assert(format("local t = {1,key='v',['not plain']=true,[1+2]=f}") == 'local t = {\n    1,\n    key = "v",\n    ["not plain"] = true,\n    [1 + 2] = f,\n}')
+        assert(format("local t = {1,2}") == "local t = { 1, 2 }")
+        assert(format("local t = {}") == "local t = {}")
+        assert(format("type P<K, V = string> = { read key: K, value: V, [number]: boolean }") == "type P<K, V = string> = { read key: K, value: V, [number]: boolean }")
+        assert(format("type F = (name: string, ...number) -> (boolean, string)") == "type F = (name: string, ...number) -> (boolean, string)")
+        assert(format("type O = (() -> ())?") == "type O = (() -> ())?")
+        assert(format("export type A = {number}") == "export type A = { number }")
+        assert(format("local v = -x^2+(a or b) and not c") == "local v = -x ^ 2 + (a or b) and not c")
+        assert(format("local n = - -x") == "local n = - -x")
+        assert(format("local w = f\n;(g or h)()") == "local w = f;\n(g or h)()")
+        assert(format("local s = `a {b} c`") == "local s = `a {b} c`")
+
+        local source = "local a = 1\nlocal function f(x)\n    return x\nend\nreturn f(a)"
+        assert(format(source) == source)
+        assert(format(format(source)) == source)
+
+        local mul = alloc:parseexpr("x * y")
+        mul:setLeft(alloc:parseexpr("a + b"))
+        assert(mul:prettyprint() == "(a + b) * y")
+
+        local pow = alloc:parseexpr("x ^ y")
+        pow:setLeft(alloc:parseexpr("-a"))
+        assert(pow:prettyprint() == "(-a) ^ y")
+
+        local neg = alloc:parseexpr("-x")
+        neg:setExpr(alloc:parseexpr("-y"))
+        assert(neg:prettyprint() == "- -y")
+
+        local call = alloc:parseexpr("f()")
+        call:setFunc(alloc:parseexpr("function() end"))
+        assert(call:prettyprint() == "(function()\nend)()")
+
+        local block = alloc:parse(""):root()
+        block:setBody({
+            alloc:parse("local a = f"):root():body()[1],
+            alloc:parse("(g)()"):root():body()[1],
+            alloc:parse("bar()"):root():body()[1],
+        })
+        assert(block:prettyprint() == "local a = f;\n(g)()\nbar()", block:prettyprint())
+        assert(#alloc:parse(block:prettyprint()):errors() == 0)
+    )LUA";
+
+    CHECK_EQ(dostring(L, script), 0);
+}
+
+TEST_CASE("ReflectPrettyprintClasses")
+{
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
+    ScopedFastFlag sffClasses{FFlag::LuwuClasses, true};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    Luau::luaopen_reflect(L);
+    lua_setglobal(L, "reflect");
+
+    const char* script = R"LUA(
+        local alloc = reflect.allocator()
+        local function format(source)
+            local doc = alloc:parse(source)
+            assert(#doc:errors() == 0, source)
+            local out = doc:root():prettyprint()
+            local again = alloc:parse(out)
+            assert(#again:errors() == 0, out)
+            assert(again:root():prettyprint() == out, out)
+            return out
+        end
+
+        assert(format("class P x: number = 0 function len(self): number return self.x end end") == "class P\n    x: number = 0\n    function len(self): number\n        return self.x\n    end\nend")
+        assert(format("class A public x: number public function f(self) end end") == "class A\n    public x: number\n    public function f(self)\n    end\nend")
+        assert(format("class B private x: number public const y: number = 1 end") == "class B\n    private x: number\n    public const y: number = 1\nend")
+        assert(format("class C private (public const key: string, private secret: string) end") == "class C private (public const key: string, private secret: string)\nend")
+        assert(format("class D(text: string, public other: number) private text: string end") == "class D(text: string, public other: number)\n    private text: string\nend")
+        assert(format("class F() end") == "class F()\nend")
+    )LUA";
+
+    CHECK_EQ(dostring(L, script), 0);
+}
+
+TEST_CASE("ReflectClassVisibility")
+{
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
+    ScopedFastFlag sffClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag sffDefaults{FFlag::LuwuDefaultArguments, true};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    Luau::luaopen_reflect(L);
+    lua_setglobal(L, "reflect");
+
+    const char* script = R"LUA(
+        local alloc = reflect.allocator()
+        local function class(source)
+            local doc = alloc:parse(source)
+            assert(#doc:errors() == 0, source)
+            return doc:root():body()[1]
+        end
+        local function printed(cls)
+            local out = cls:prettyprint()
+            assert(#alloc:parse(out):errors() == 0, out)
+            return out
+        end
+
+        local a = class("class A public x: number public function f(self) end end")
+        assert(a:explicitVisibility() == true)
+        assert(a:primaryConstructor() == nil)
+        assert(a:properties().explicitVisibility == true)
+        assert(printed(a) == "class A\n    public x: number\n    public function f(self)\n    end\nend")
+        assert(a:setExplicitVisibility(false) == a)
+        assert(printed(a) == "class A\n    x: number\n    function f(self)\n    end\nend")
+
+        local b = class("class B x: number y: number end")
+        assert(b:explicitVisibility() == false)
+        local members = b:members()
+        assert(members[1]:visibility() == "public")
+        assert(members[1]:isConst() == false)
+        assert(members[1]:properties().visibility == "public")
+        members[1]:setVisibility("private")
+        members[2]:setIsConst(true)
+        assert(printed(b) == "class B\n    private x: number\n    public const y: number\nend")
+        assert(not pcall(function() members[1]:setVisibility("protected") end))
+
+        local m = class("class M private function f(self) end public function g(self) end end")
+        assert(m:members()[1]:visibility() == "private")
+        m:members()[1]:setVisibility("public")
+        assert(printed(m) == "class M\n    public function f(self)\n    end\n    public function g(self)\n    end\nend")
+        m:setExplicitVisibility(false)
+        assert(printed(m) == "class M\n    function f(self)\n    end\n    function g(self)\n    end\nend")
+
+        local c = class("class C public (public const key: string, public secret: string = 'a') end")
+        local ctor = c:primaryConstructor()
+        assert(ctor.kind == "AstClassPrimaryConstructor")
+        assert(ctor.category == "aux")
+        assert(ctor:visibility() == "public")
+        assert(ctor:explicitVisibility() == true)
+        assert(#ctor:args() == 2 and ctor:args()[1]:name() == "key")
+        assert(ctor:argsDefaults()[1] == false)
+        assert(ctor:argsDefaults()[2].kind == "AstExprConstantString")
+        local qualifiers = ctor:argsQualifiers()
+        assert(qualifiers[1].kind == "AstClassPrimaryConstructorParamQualifiers")
+        assert(qualifiers[1]:visibility() == "public")
+        assert(qualifiers[1]:isConst() == true)
+        assert(qualifiers[1]:explicitVisibility() == true)
+        assert(qualifiers[2]:isConst() == false)
+        assert(printed(c) == 'class C public (public const key: string, public secret: string = "a")\nend')
+
+        ctor:setExplicitVisibility(false)
+        assert(printed(c) == 'class C(public const key: string, public secret: string = "a")\nend')
+        ctor:setVisibility("private")
+        qualifiers[2]:setVisibility("private")
+        qualifiers[1]:setIsConst(false)
+        assert(printed(c) == 'class C private (public key: string, private secret: string = "a")\nend')
+
+        local d = class("class D(public text: string) public text: string private n: number end")
+        assert(printed(d) == "class D(public text: string)\n    public text: string\n    private n: number\nend")
+        d:primaryConstructor():argsQualifiers()[1]:setExplicitVisibility(false)
+        assert(printed(d) == "class D(text: string)\n    public text: string\n    private n: number\nend")
+
+        local e = class("class E(text: string, public other: number) private text: string end")
+        assert(e:primaryConstructor():argsQualifiers()[1]:explicitVisibility() == false)
+        assert(e:primaryConstructor():argsQualifiers()[2]:explicitVisibility() == true)
+        assert(printed(e) == "class E(text: string, public other: number)\n    private text: string\nend")
+
+        local g = class("class G public (public a: number) end")
+        g:primaryConstructor():setArgsQualifiers(g:primaryConstructor():argsQualifiers())
+        g:setPrimaryConstructor(g:primaryConstructor())
+        assert(g:primaryConstructor():explicitVisibility() == true)
+        assert(g:primaryConstructor():argsQualifiers()[1]:explicitVisibility() == true)
+        assert(printed(g) == "class G public (public a: number)\nend")
+
+        local f = class("class F(private a: number = 1, public const b: string) end")
+        local fc = f:primaryConstructor()
+        fc:setArgs({ fc:args()[2], fc:args()[1] })
+        assert(printed(f) == "class F(public const b: string, private a: number = 1)\nend")
+        assert(fc:argsQualifiers()[1]:isConst() == true)
+        assert(fc:argsQualifiers()[1]:explicitVisibility() == true)
+        assert(fc:argsDefaults()[1] == false)
+
+        fc:setArgs({ fc:args()[2], alloc:defaultnode("AstLocal"):setName("c") })
+        assert(#fc:argsDefaults() == 2 and #fc:argsQualifiers() == 2)
+        assert(fc:argsDefaults()[2] == false)
+        assert(fc:argsQualifiers()[2]:visibility() == "public")
+        assert(printed(f) == "class F(private a: number = 1, public c)\nend")
+
+        fc:setArgsQualifiers({ fc:argsQualifiers()[1]:setIsConst(true) })
+        assert(#fc:argsQualifiers() == 2)
+        assert(fc:argsQualifiers()[1]:explicitVisibility() == true)
+        local ok, err = pcall(function() fc:setArgsDefaults({ false, false, false }) end)
+        assert(not ok and string.find(err, "argsDefaults has more entries than args", 1, true))
+        ok, err = pcall(function() fc:setArgsQualifiers({ fc:argsQualifiers()[1], fc:argsQualifiers()[2], fc:argsQualifiers()[1] }) end)
+        assert(not ok and string.find(err, "argsQualifiers has more entries than args", 1, true))
+        fc:setArgsDefaults({})
+        assert(printed(f) == "class F(private const a: number, public c)\nend")
+
+        fc:setArgs({})
+        assert(#fc:argsDefaults() == 0 and #fc:argsQualifiers() == 0)
+        assert(printed(f) == "class F()\nend")
+
+        local other = reflect.allocator()
+        local foreign = other:parse("class X(a) end"):root():body()[1]:primaryConstructor()
+        assert(not pcall(function() f:setPrimaryConstructor(foreign) end))
+        assert(not pcall(function() fc:setArgsQualifiers(foreign:argsQualifiers()) end))
+
+        local h = alloc:defaultnode("AstStatClass")
+        h:setName(alloc:defaultnode("AstLocal"):setName("H"))
+        local hc = alloc:defaultnode("AstClassPrimaryConstructor")
+        hc:setArgs({ alloc:defaultnode("AstLocal"):setName("x") })
+        hc:setArgsDefaults({ false })
+        hc:setArgsQualifiers({ alloc:defaultnode("AstClassPrimaryConstructorParamQualifiers"):setVisibility("private"):setIsConst(true) })
+        h:setPrimaryConstructor(hc)
+        h:setMembers({ alloc:defaultnode("AstClassProperty"):setName("y") })
+        assert(h:explicitVisibility() == false)
+        assert(printed(h) == "class H(private const x)\n    public y\nend")
+        h:setPrimaryConstructor(nil)
+        assert(h:primaryConstructor() == nil)
+        assert(printed(h) == "class H\n    y\nend")
+    )LUA";
+
+    CHECK_EQ(dostring(L, script), 0);
+}
+
+TEST_CASE("ReflectExposesEveryMember")
+{
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
+    ScopedFastFlag sffClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag sffCstAttr{FFlag::LuauCstAttr, true};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    Luau::luaopen_reflect(L);
+    lua_setglobal(L, "reflect");
+
+    const char* script = R"LUA(
+        local alloc = reflect.allocator()
+        local function span(l)
+            return l.begin.x .. ":" .. l.begin.y .. "-" .. l["end"].x .. ":" .. l["end"].y
+        end
+
+        local doc = alloc:parse("--!strict\nlocal x = 0x10\nif x then y() else z() end\nlocal v = if a then b else c\nfunction T:m(a, ...: number) end\ntype F = (name: string, number) -> ()\ntype R = Mod.Thing\n")
+        assert(#doc:errors() == 0)
+        assert(doc:lines() == 7)
+        assert(#doc:hotcomments() == 1)
+        assert(doc:hotcomments()[1].header == true)
+        assert(doc:hotcomments()[1].content == "strict")
+        assert(span(doc:hotcomments()[1].location) == "1:1-1:10")
+        assert(doc:properties().lines == 7)
+        assert(#doc:properties().hotcomments == 1)
+
+        local body = doc:root():body()
+
+        local statLocal = body[1]
+        assert(span(statLocal:keywordLocation()) == "2:1-2:6")
+        assert(span(statLocal:equalsSignLocation()) == "2:9-2:10")
+        assert(span(statLocal:properties().keywordLocation) == "2:1-2:6")
+        assert(not pcall(function() statLocal:setKeywordLocation(nil) end))
+        assert(statLocal:luwuOnly() == false)
+        assert(statLocal:setLuwuOnly(true):luwuOnly() == true)
+        assert(tostring(statLocal:vars()[1]:loopDepth()) == "0")
+        assert(tostring(statLocal:vars()[1]:setLoopDepth(2):loopDepth()) == "2")
+
+        local number = statLocal:values()[1]
+        assert(number:parseResult() == "ok")
+        assert(not pcall(function() number:setParseResult("bogus") end))
+        assert(number:setParseResult("imprecise"):parseResult() == "imprecise")
+
+        local statIf = body[2]
+        assert(span(statIf:ifLocation()) == "3:1-3:3")
+        assert(span(statIf:thenLocation()) == "3:6-3:10")
+        assert(span(statIf:elseLocation()) == "3:15-3:19")
+        assert(alloc:parse("if x then end"):root():body()[1]:elseLocation() == nil)
+
+        local ifElse = body[3]:values()[1]
+        assert(ifElse:hasThen() == true)
+        assert(span(ifElse:ifLocation()) == "4:11-4:13")
+        assert(span(ifElse:thenLocation()) == "4:16-4:20")
+        assert(span(ifElse:elseLocation()) == "4:23-4:27")
+        assert(ifElse:setHasThen(false):hasThen() == false)
+
+        local statFunction = body[4]
+        local fn = statFunction:func()
+        assert(span(statFunction:functionLocation()) == "5:1-5:9")
+        assert(fn:self():name() == "self")
+        assert(tostring(fn:functionDepth()) == "1")
+        assert(tostring(fn:setFunctionDepth(3):functionDepth()) == "3")
+        assert(span(fn:varargLocation()) == "5:17-5:20")
+        assert(span(fn:argLocation()) == "5:13-5:29")
+        assert(fn:varargAnnotation().kind == "AstTypePackVariadic")
+        fn:setVarargAnnotation(nil)
+        assert(statFunction:prettyprint() == "function T:m(a, ...)\nend")
+        assert(fn:setSelf(nil):self() == nil)
+
+        local alias = body[5]
+        local typeFunction = alias:type()
+        assert(span(alias:nameLocation()) == "6:6-6:7")
+        assert(span(alias:typeLocation()) == "6:1-6:5")
+        assert(typeFunction:argNames()[1] == "name")
+        assert(typeFunction:argNames()[2] == false)
+        assert(span(typeFunction:argNameLocations()[1]) == "6:11-6:15")
+        assert(typeFunction:argNameLocations()[2] == false)
+        typeFunction:setArgNames({ false, "count" })
+        assert(alias:prettyprint() == "type F = (string, count: number) -> ()")
+        typeFunction:setArgNames({ "only" })
+        assert(alias:prettyprint() == "type F = (only: string, number) -> ()")
+        typeFunction:setArgNames({ "a", "b", "c", "d" })
+        assert(alias:prettyprint() == "type F = (a: string, b: number) -> ()")
+        typeFunction:setArgNames({})
+        assert(alias:prettyprint() == "type F = (string, number) -> ()")
+
+        local reference = body[6]:type()
+        assert(span(reference:prefixLocation()) == "7:10-7:13")
+        assert(span(reference:nameLocation()) == "7:14-7:19")
+        assert(reference:prefixLocal() == nil)
+
+        local declarations = alloc:parse("declare function foo(a: number, b: string): boolean\ndeclare extern type E extends B with\n  p: number\nend"):root():body()
+        local declared = declarations[1]
+        assert(declared:paramNames()[1] == "a" and declared:paramNames()[2] == "b")
+        assert(span(declared:paramNameLocations()[1]) == "1:22-1:23")
+        assert(span(declared:nameLocation()) == "1:18-1:21")
+        assert(span(declared:declareLocation()) == "1:1-1:8")
+        assert(span(declared:functionLocation()) == "1:9-1:17")
+        declared:setParamNames({ "first" })
+        assert(declared:prettyprint() == "declare function foo(first: number, string): boolean")
+        local extern = declarations[2]
+        assert(span(extern:declareLocation()) == "2:1-2:8")
+        assert(span(extern:classLocation()) == "2:16-2:20")
+        assert(span(extern:extendsLocation()) == "2:23-2:30")
+        assert(span(extern:props()[1]:nameLocation()) == "3:3-3:4")
+
+        local withCst = alloc:parse("@[native, checked] local function g() end\nlocal s = `a{1}b`\ntype T = { x: number, [\"y\"]: string }\nlocal t: { read a: number }\n", true):root():body()
+        local attrLists = withCst[1]:cst():attrLists()
+        assert(#attrLists == 1)
+        assert(attrLists[1].kind == "CstAttrList")
+        assert(attrLists[1].category == "aux")
+        assert(attrLists[1]:atBracketPosition() ~= nil)
+        assert(#attrLists[1]:commaPositions() == 1)
+        assert(not pcall(function() attrLists[1]:setCommaPositions({}) end))
+        local sourceStrings = withCst[2]:values()[1]:cst():sourceStrings()
+        assert(#sourceStrings == 2 and sourceStrings[1] == "a" and sourceStrings[2] == "b")
+        local items = withCst[3]:type():cst():items()
+        assert(#items == 2)
+        assert(items[1].kind == "CstTypeTableItem" and items[1]:itemKind() == "property")
+        assert(items[2].kind == "CstTypeTableItem" and items[2]:itemKind() == "stringProperty")
+        assert(items[2]:stringInfo().kind == "CstExprConstantString")
+        assert(items[1]:stringInfo() == nil)
+        assert(items[1]:separator() == "comma")
+        assert(items[1]:colonPosition() ~= nil)
+        assert(span(withCst[4]:vars()[1]:annotation():props()[1]:accessLocation()) == "4:12-4:16")
+
+        local class = alloc:parse("class K\n    public a: number = 1;\n    public function f(self) end\nend"):root():body()[1]
+        assert(class:hasEnd() == true)
+        assert(span(class:keywordLocation()) == "1:1-1:6")
+        assert(#class:generics() == 0 and #class:genericPacks() == 0)
+        local property, method = class:members()[1], class:members()[2]
+        assert(property:hasSemicolon() == true)
+        assert(method:hasSemicolon() == false)
+        assert(property:defaultValue().kind == "AstExprConstantNumber")
+        assert(span(property:qualifierLocation()) == "2:5-2:11")
+        assert(span(property:nameLocation()) == "2:12-2:13")
+        assert(property:constLocation() == nil)
+        assert(span(method:keywordLocation()) == "3:12-3:20")
+        assert(class:prettyprint() == "class K\n    public a: number = 1;\n    public function f(self)\n    end\nend")
+        property:setDefaultValue(nil):setHasSemicolon(false)
+        assert(class:prettyprint() == "class K\n    public a: number\n    public function f(self)\n    end\nend")
+        assert(class:setHasEnd(false):hasEnd() == false)
+    )LUA";
+
+    CHECK_EQ(dostring(L, script), 0);
+}
+
+using ReflectMemberSet = std::map<std::string, std::set<std::string>>;
+
+static std::optional<std::string> readReflectSourceFile(const std::string& relative)
+{
+    std::string prefix;
+    for (int i = 0; i < 8; i++)
+    {
+        std::ifstream file(prefix + relative);
+        if (file)
+        {
+            std::stringstream buffer;
+            buffer << file.rdbuf();
+            return buffer.str();
+        }
+        prefix += "../";
+    }
+    return std::nullopt;
+}
+
+static void collectDeclaredMembers(const std::string& source, ReflectMemberSet& members)
+{
+    static const std::regex definition(R"(^(?:class|struct)\s+(\w+)[^;]*$)");
+    static const std::regex identifier(R"([A-Za-z_]\w*)");
+    static const char* const skipped[] = {"static ", "using ", "friend ", "typedef ", "template", "enum ", "class ", "struct ", "return "};
+
+    struct Scope
+    {
+        std::string name;
+        int depth;
+    };
+
+    std::vector<Scope> scopes;
+    std::string pending;
+    int depth = 0;
+
+    std::istringstream stream(source);
+    std::string line;
+    while (std::getline(stream, line))
+    {
+        if (size_t comment = line.find("//"); comment != std::string::npos)
+            line.erase(comment);
+
+        size_t first = line.find_first_not_of(" \t\r");
+        if (first == std::string::npos)
+            continue;
+        line = line.substr(first, line.find_last_not_of(" \t\r") - first + 1);
+
+        bool isSkipped = false;
+        for (const char* prefix : skipped)
+            isSkipped = isSkipped || line.rfind(prefix, 0) == 0;
+
+        std::smatch match;
+        if (std::regex_match(line, match, definition))
+        {
+            pending = scopes.empty() ? match[1].str() : scopes.back().name + "::" + match[1].str();
+            members[pending];
+        }
+        else if (!scopes.empty() && depth == scopes.back().depth + 1 && line.back() == ';' && !isSkipped &&
+                 line.find_first_of("()") == std::string::npos)
+        {
+            std::string declaration = line.substr(0, line.find_first_of("={;"));
+            std::vector<std::string> words(
+                std::sregex_token_iterator(declaration.begin(), declaration.end(), identifier),
+                std::sregex_token_iterator()
+            );
+            if (words.size() >= 2)
+                members[scopes.back().name].insert(words.back());
+        }
+
+        for (char c : line)
+        {
+            if (c == '{')
+            {
+                if (!pending.empty())
+                {
+                    scopes.push_back({pending, depth});
+                    pending.clear();
+                }
+                depth++;
+            }
+            else if (c == '}')
+            {
+                depth--;
+                if (!scopes.empty() && scopes.back().depth == depth)
+                    scopes.pop_back();
+            }
+        }
+    }
+}
+
+static void collectSchemaMembers(const std::string& source, ReflectMemberSet& members)
+{
+    static const std::regex owner(R"rx("schema type of (\w+)\.)rx");
+    static const std::regex member(R"(\bn(?:->|\.)(\w+))");
+
+    std::istringstream stream(source);
+    std::string line;
+    while (std::getline(stream, line))
+    {
+        std::smatch match;
+        if (!std::regex_search(line, match, owner))
+            continue;
+
+        std::string expression = line.substr(0, size_t(match.position(0)));
+        std::set<std::string>& names = members[match[1].str()];
+        for (std::sregex_iterator it(expression.begin(), expression.end(), member), end; it != end; ++it)
+            names.insert((*it)[1].str());
+    }
+}
+
+TEST_CASE("ReflectSchemaCoversEveryAstMember")
+{
+    ReflectMemberSet declared;
+    for (const char* header : {"Ast/include/Luau/Ast.h", "Ast/include/Luau/Cst.h"})
+    {
+        std::optional<std::string> source = readReflectSourceFile(header);
+        REQUIRE_MESSAGE(source, "cannot find " << std::string(header) << " from the working directory");
+        collectDeclaredMembers(*source, declared);
+    }
+
+    std::vector<std::string> generatedFiles = {"Reflect/src/AstNodes.gen.inl", "Reflect/src/CstNodes.gen.inl"};
+    {
+        std::optional<std::string> index = readReflectSourceFile("Reflect/src/AstItems.gen.inl");
+        REQUIRE_MESSAGE(index, "cannot find Reflect/src/AstItems.gen.inl from the working directory");
+
+        static const std::regex include(R"rx(#include "(\w+\.gen\.inl)")rx");
+        for (std::sregex_iterator it(index->begin(), index->end(), include), end; it != end; ++it)
+            generatedFiles.push_back("Reflect/src/" + (*it)[1].str());
+    }
+    CHECK(generatedFiles.size() > 10);
+
+    ReflectMemberSet exposed;
+    std::string generated;
+    for (const std::string& file : generatedFiles)
+    {
+        std::optional<std::string> source = readReflectSourceFile(file);
+        REQUIRE_MESSAGE(source, "cannot find " << file << " from the working directory");
+        collectSchemaMembers(*source, exposed);
+        generated += *source;
+    }
+
+    std::set<std::string> exposedAnywhere;
+    for (const auto& [owner, names] : exposed)
+        exposedAnywhere.insert(names.begin(), names.end());
+
+    const std::set<std::string> baseClasses = {"AstNode", "AstExpr", "AstStat", "AstType", "AstTypePack", "CstNode"};
+    const std::set<std::string> notReflected = {"AstName", "AstArray", "AstTypeOrPack", "AstVisitor", "AstRtti", "CstRtti", "AstAttr::DeprecatedInfo"};
+    const std::set<std::string> internal = {"AstNode.classIndex", "CstNode.classIndex", "AstStatRepeat.DEPRECATED_hasUntil"};
+    const std::map<std::string, std::string> schemaNames = {
+        {"AstExprTable::Item", "AstTableItem"},
+        {"CstExprTable::Item", "CstTableItem"},
+        {"CstTypeTable::Item", "CstTypeTableItem"},
+    };
+
+    std::string missing;
+    size_t checked = 0;
+
+    for (const auto& [owner, names] : declared)
+    {
+        bool isAst = owner.rfind("Ast", 0) == 0 || owner.rfind("Cst", 0) == 0;
+        if (!isAst || notReflected.count(owner))
+            continue;
+
+        auto renamed = schemaNames.find(owner);
+        const std::string& schemaName = renamed != schemaNames.end() ? renamed->second : owner;
+        bool isBase = baseClasses.count(owner) > 0;
+
+        if (!isBase && generated.find("\"" + schemaName + "\"") == std::string::npos)
+            missing += owner + " ";
+
+        auto entry = exposed.find(schemaName);
+        for (const std::string& name : names)
+        {
+            checked++;
+            if (internal.count(owner + "." + name))
+                continue;
+
+            bool found = isBase ? exposedAnywhere.count(name) > 0 : entry != exposed.end() && entry->second.count(name) > 0;
+            if (!found)
+                missing += owner + "." + name + " ";
+        }
+    }
+
+    CHECK_MESSAGE(missing.empty(), "AST or CST declarations with no Reflect schema entry: " << missing);
+    CHECK(checked > 300);
 }
 
 TEST_SUITE_END();

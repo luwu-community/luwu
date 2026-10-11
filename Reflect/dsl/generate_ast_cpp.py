@@ -38,7 +38,7 @@ class FieldType(BaseModel):
     arg: Optional[str] = None
 
 
-STRUCTURAL_KINDS = {"node", "nodes", "opt_nodes", "local", "locals", "type_or_packs", "aux", "aux_ptr", "aux_list", "class_members"}
+STRUCTURAL_KINDS = {"node", "nodes", "opt_nodes", "local", "locals", "type_or_packs", "item", "item_ptr", "item_list", "class_members"}
 WIDE_INTEGERS = {"size_t", "int64_t", "uint64_t"}
 
 
@@ -52,6 +52,8 @@ class FieldDef(BaseModel):
     doc: Optional[str] = None
     label: Optional[str] = None
     nullable: bool = False
+    companions: list[str] = []
+    companion_of: Optional[str] = None
 
     @field_validator("accessor", mode="before")
     @classmethod
@@ -131,10 +133,6 @@ class F:
         return F._field("strings", name, **kwargs)
 
     @staticmethod
-    def text(name: str, **kwargs: Any) -> FieldDef:
-        return F._field("text", name, **kwargs)
-
-    @staticmethod
     def name(name: str, **kwargs: Any) -> FieldDef:
         return F._field("name", name, **kwargs)
 
@@ -149,6 +147,18 @@ class F:
     @staticmethod
     def location(name: str, **kwargs: Any) -> FieldDef:
         return F._field("location", name, **kwargs)
+
+    @staticmethod
+    def opt_location(name: str, **kwargs: Any) -> FieldDef:
+        return F._field("opt_location", name, **kwargs)
+
+    @staticmethod
+    def arg_names(name: str, optional: bool, **kwargs: Any) -> FieldDef:
+        return F._field("arg_names", name, "optional" if optional else "required", **kwargs)
+
+    @staticmethod
+    def arg_name_locations(name: str, optional: bool, **kwargs: Any) -> FieldDef:
+        return F._field("arg_name_locations", name, "optional" if optional else "required", **kwargs)
 
     @staticmethod
     def position(name: str, **kwargs: Any) -> FieldDef:
@@ -183,16 +193,20 @@ class F:
         return F._field("type_or_packs", name, **kwargs)
 
     @staticmethod
-    def aux(name: str, aux: str, **kwargs: Any) -> FieldDef:
-        return F._field("aux", name, aux, **kwargs)
+    def item(name: str, item: str, **kwargs: Any) -> FieldDef:
+        return F._field("item", name, item, **kwargs)
 
     @staticmethod
-    def aux_ptr(name: str, aux: str, **kwargs: Any) -> FieldDef:
-        return F._field("aux_ptr", name, aux, **kwargs)
+    def item_ptr(name: str, item: str, **kwargs: Any) -> FieldDef:
+        return F._field("item_ptr", name, item, **kwargs)
 
     @staticmethod
-    def aux_list(name: str, aux: str, **kwargs: Any) -> FieldDef:
-        return F._field("aux_list", name, aux, **kwargs)
+    def item_list(name: str, item: str, **kwargs: Any) -> FieldDef:
+        return F._field("item_list", name, item, **kwargs)
+
+    @staticmethod
+    def item_ptrs(name: str, item: str, **kwargs: Any) -> FieldDef:
+        return F._field("item_ptrs", name, item, **kwargs)
 
     @staticmethod
     def class_members(name: str, **kwargs: Any) -> FieldDef:
@@ -208,10 +222,8 @@ class F:
 
 
 class FactoryDef(BaseModel):
-    strategy: Literal["alloc", "aux_union", "empty", "custom"] = "alloc"
+    strategy: Literal["alloc", "empty"] = "alloc"
     args: list[str] = []
-    inner_type: Optional[str] = None
-    custom_expr: Optional[str] = None
     requires_fflag: Optional[str] = None
 
 
@@ -224,8 +236,8 @@ class NodeDef(BaseModel):
     doc: Optional[str] = None
     validate_extra: list[str] = []
 
-    enum_name: Optional[str] = None
-    union_member: Optional[str] = None
+    cpp: Optional[str] = None
+    display: Optional[str] = None
 
     @field_validator("fields", mode="before")
     @classmethod
@@ -247,15 +259,15 @@ class NodeDef(BaseModel):
 class UserdataDef(BaseModel):
     name: str
     tag: str
-    storage: Literal["pointer", "union", "single", "value"] = "pointer"
+    storage: Literal["pointer", "plain"] = "pointer"
+    family: str = "Node"
+    category: Optional[str] = None
     is_const: bool = False
     output_file: str = ""
     register_func: Optional[str] = None
-    class_info_name: Optional[str] = None
     class_table_name: Optional[str] = None
     class_index_getter: str = "T::ClassIndex()"
     mutable: bool = False
-    handle_member: str = "node"
     fflags: list[str] = []
     headers: list[str] = []
     categories: list[str] = []
@@ -275,12 +287,15 @@ BUILTIN_ATOMS: list[tuple[str, str]] = [
     ("Errors", "errors"),
     ("Comments", "comments"),
     ("LineOffsets", "lineOffsets"),
+    ("Hotcomments", "hotcomments"),
+    ("Lines", "lines"),
     ("Properties", "properties"),
     ("Allocator", "allocator"),
     ("Parse", "parse"),
     ("Parseexpr", "parseexpr"),
     ("Defaultnode", "defaultnode"),
     # Node methods
+    ("Kind", "kind"),
     ("Category", "category"),
     ("Children", "children"),
     # Comment methods
@@ -368,16 +383,13 @@ class ReflectSchema(BaseModel):
         return sorted(mapping.items(), key=lambda x: x[0])
 
 
-HIDDEN = FieldAccessor(read=False, write=False)
-
 AST_NODES_USERDATA = UserdataDef(
     name="AstNode",
-    tag="TagNode",
+    tag="TagItem",
     storage="pointer",
     is_const=False,
     output_file="AstNodes.gen.inl",
     register_func="registerNodeClass",
-    class_info_name="AstNodeClassInfo",
     class_table_name="s_nodeClassTable",
     class_index_getter="T::ClassIndex()",
     mutable=True,
@@ -393,6 +405,7 @@ AST_NODES_USERDATA = UserdataDef(
     base_fields=[
         F.location("origlocation", atom="OrigLocation", accessor=FieldAccessor(read="n->location", write=False)),
         F.cst("cst", atom="Cst", accessor=FieldAccessor(read="getNodeCst(handle, n)", write=False)),
+        F.boolean("luwuOnly"),
     ],
     stat_fields=[F.boolean("hasSemicolon", atom="HasSemicolon", accessor=FieldAccessor())],
     nodes=[
@@ -427,6 +440,9 @@ AST_NODES_USERDATA = UserdataDef(
                 F.node("condition", "AstExpr"),
                 F.node("thenbody", "AstStatBlock", atom="ThenBody"),
                 F.node("elsebody", "AstStat", atom="ElseBody", nullable=True),
+                F.location("ifLocation", accessor=FieldAccessor(write=False)),
+                F.opt_location("thenLocation", accessor=FieldAccessor(write=False)),
+                F.opt_location("elseLocation", accessor=FieldAccessor(write=False)),
             ],
         ),
         NodeDef(
@@ -444,7 +460,11 @@ AST_NODES_USERDATA = UserdataDef(
                     "Luau::Location()",
                 ],
             ),
-            fields=[F.boolean("hasDo"), F.node("condition", "AstExpr"), F.node("body", "AstStatBlock")],
+            fields=[
+                F.boolean("hasDo"), F.node("condition", "AstExpr"), F.node("body", "AstStatBlock"),
+                F.location("whileLocation", accessor=FieldAccessor(write=False)),
+                F.location("doLocation", accessor=FieldAccessor(write=False)),
+            ],
         ),
         NodeDef(
             name="AstStatRepeat",
@@ -461,7 +481,11 @@ AST_NODES_USERDATA = UserdataDef(
                     "Luau::Location()",
                 ],
             ),
-            fields=[F.node("condition", "AstExpr"), F.node("body", "AstStatBlock")],
+            fields=[
+                F.node("condition", "AstExpr"), F.node("body", "AstStatBlock"),
+                F.location("repeatLocation", accessor=FieldAccessor(write=False)),
+                F.location("untilLocation", accessor=FieldAccessor(write=False)),
+            ],
         ),
         NodeDef(
             name="AstStatBreak",
@@ -489,7 +513,10 @@ AST_NODES_USERDATA = UserdataDef(
                     "Luau::Location()",
                 ],
             ),
-            fields=[F.nodes("list", "AstExpr")],
+            fields=[
+                F.nodes("list", "AstExpr"),
+                F.location("returnLocation", accessor=FieldAccessor(write=False)),
+            ],
         ),
         NodeDef(
             name="AstStatExpr",
@@ -517,6 +544,8 @@ AST_NODES_USERDATA = UserdataDef(
                 F.boolean("exported", member="isExported", atom="Exported"),
                 F.locals("vars"),
                 F.nodes("values", "AstExpr"),
+                F.opt_location("keywordLocation", accessor=FieldAccessor(write=False)),
+                F.opt_location("equalsSignLocation", accessor=FieldAccessor(write=False)),
             ],
         ),
         NodeDef(
@@ -544,6 +573,8 @@ AST_NODES_USERDATA = UserdataDef(
                 F.node("to", "AstExpr"),
                 F.node("step", "AstExpr", nullable=True),
                 F.node("body", "AstStatBlock"),
+                F.location("forLocation", accessor=FieldAccessor(write=False)),
+                F.location("doLocation", accessor=FieldAccessor(write=False)),
             ],
         ),
         NodeDef(
@@ -570,6 +601,9 @@ AST_NODES_USERDATA = UserdataDef(
                 F.locals("vars"),
                 F.nodes("values", "AstExpr"),
                 F.node("body", "AstStatBlock"),
+                F.location("forLocation", accessor=FieldAccessor(write=False)),
+                F.location("inLocation", accessor=FieldAccessor(write=False)),
+                F.location("doLocation", accessor=FieldAccessor(write=False)),
             ],
         ),
         NodeDef(
@@ -609,7 +643,10 @@ AST_NODES_USERDATA = UserdataDef(
                     "Luau::Location()",
                 ],
             ),
-            fields=[F.node("name", "AstExpr"), F.node("func", "AstExprFunction")],
+            fields=[
+                F.node("name", "AstExpr"), F.node("func", "AstExprFunction"),
+                F.location("functionLocation", accessor=FieldAccessor(write=False)),
+            ],
         ),
         NodeDef(
             name="AstStatLocalFunction",
@@ -627,7 +664,12 @@ AST_NODES_USERDATA = UserdataDef(
                     "Luau::Location()",
                 ],
             ),
-            fields=[F.boolean("isConst"), F.local("name"), F.node("func", "AstExprFunction")],
+            fields=[
+                F.boolean("isConst"), F.local("name"), F.node("func", "AstExprFunction"),
+                F.position("constKeywordBegin", accessor=FieldAccessor(write=False)),
+                F.location("keywordLocation", accessor=FieldAccessor(write=False)),
+                F.location("functionLocation", accessor=FieldAccessor(write=False)),
+            ],
         ),
         NodeDef(
             name="AstStatTypeAlias",
@@ -652,6 +694,8 @@ AST_NODES_USERDATA = UserdataDef(
                 F.node("type", "AstType"),
                 F.nodes("generics", "AstGenericType"),
                 F.nodes("genericPacks", "AstGenericTypePack"),
+                F.location("nameLocation", accessor=FieldAccessor(write=False)),
+                F.location("typeLocation", accessor=FieldAccessor(write=False)),
             ],
         ),
         NodeDef(
@@ -667,6 +711,7 @@ AST_NODES_USERDATA = UserdataDef(
                 F.boolean("exported"),
                 F.boolean("hasErrors"),
                 F.node("body", "AstExprFunction"),
+                F.location("nameLocation", accessor=FieldAccessor(write=False)),
             ],
         ),
         NodeDef(
@@ -683,7 +728,11 @@ AST_NODES_USERDATA = UserdataDef(
                     "Luau::Location()",
                 ],
             ),
-            fields=[F.name("name"), F.node("type", "AstType")],
+            fields=[
+                F.name("name"), F.node("type", "AstType"),
+                F.location("nameLocation", accessor=FieldAccessor(write=False)),
+                F.location("declareLocation", accessor=FieldAccessor(write=False)),
+            ],
         ),
         NodeDef(
             name="AstStatDeclareFunction",
@@ -712,9 +761,15 @@ AST_NODES_USERDATA = UserdataDef(
                 F.boolean("vararg"),
                 F.nodes("generics", "AstGenericType"),
                 F.nodes("genericPacks", "AstGenericTypePack"),
-                F.aux("params", "AstTypeList"),
+                F.item("params", "AstTypeList"),
                 F.node("returnTypes", "AstTypePack", member="retTypes", atom="ReturnTypes"),
                 F.nodes("attributes", "AstAttr"),
+                F.arg_names("paramNames", optional=False),
+                F.arg_name_locations("paramNameLocations", optional=False, member="paramNames", accessor=FieldAccessor(write=False)),
+                F.location("nameLocation", accessor=FieldAccessor(write=False)),
+                F.location("varargLocation", accessor=FieldAccessor(write=False)),
+                F.location("declareLocation", accessor=FieldAccessor(write=False)),
+                F.location("functionLocation", accessor=FieldAccessor(write=False)),
             ],
         ),
         NodeDef(
@@ -736,13 +791,18 @@ AST_NODES_USERDATA = UserdataDef(
                 F.boolean("exported"),
                 F.local("name"),
                 F.class_members("members"),
-                F.nodes("generics", "AstGenericType", accessor=HIDDEN),
-                F.nodes("genericPacks", "AstGenericTypePack", accessor=HIDDEN),
-                F.opaque("primaryConstructor", "Luau::AstClassPrimaryConstructor*", accessor=HIDDEN, nullable=True),
-            ],
-            validate_extra=[
-                'for (size_t i = 0; n->primaryConstructor && i < n->primaryConstructor->args.size; i++) v.local(n->primaryConstructor->args.data[i], "primaryConstructor", int(i), "is nil");',
-                'for (size_t i = 0; n->primaryConstructor && i < n->primaryConstructor->argsDefaults.size; i++) v.child(n->primaryConstructor->argsDefaults.data[i], "primaryConstructor", int(i), nullptr);',
+                F.nodes("generics", "AstGenericType"),
+                F.nodes("genericPacks", "AstGenericTypePack"),
+                F.item_ptr("primaryConstructor", "AstClassPrimaryConstructor", nullable=True),
+                F.boolean("hasEnd"),
+                F.location("keywordLocation", accessor=FieldAccessor(write=False)),
+                F.boolean(
+                    "explicitVisibility",
+                    accessor=FieldAccessor(
+                        read="hasExplicitVisibility(*handle.doc->arena, n)",
+                        write="handle.doc->arena->explicitVisibility[n]",
+                    ),
+                ),
             ],
         ),
         NodeDef(
@@ -765,10 +825,13 @@ AST_NODES_USERDATA = UserdataDef(
             fields=[
                 F.name("name"),
                 F.opt_name("superName"),
-                F.aux_list("props", "AstDeclaredExternTypeProperty"),
-                F.aux_ptr("indexer", "AstTableIndexer", nullable=True),
+                F.item_list("props", "AstDeclaredExternTypeProperty"),
+                F.item_ptr("indexer", "AstTableIndexer", nullable=True),
                 F.nodes("generics", "AstGenericType"),
                 F.nodes("genericPacks", "AstGenericTypePack"),
+                F.location("declareLocation", accessor=FieldAccessor(write=False)),
+                F.location("classLocation", accessor=FieldAccessor(write=False)),
+                F.opt_location("extendsLocation", accessor=FieldAccessor(write=False)),
             ],
         ),
         NodeDef(
@@ -817,14 +880,20 @@ AST_NODES_USERDATA = UserdataDef(
             category="Expr",
             base="AstNode",
             factory=FactoryDef(strategy="alloc", args=["Luau::Location()", "0.0"]),
-            fields=[F.number("value")],
+            fields=[
+                F.number("value"),
+                F.enum("parseResult", "ConstantNumberParseResult"),
+            ],
         ),
         NodeDef(
             name="AstExprConstantInteger",
             category="Expr",
             base="AstNode",
             factory=FactoryDef(strategy="alloc", args=["Luau::Location()", "int64_t(0)"]),
-            fields=[F.integer("value", "int64_t")],
+            fields=[
+                F.integer("value", "int64_t"),
+                F.enum("parseResult", "ConstantNumberParseResult"),
+            ],
         ),
         NodeDef(
             name="AstExprConstantString",
@@ -881,6 +950,7 @@ AST_NODES_USERDATA = UserdataDef(
                 F.node("func", "AstExpr"),
                 F.nodes("args", "AstExpr"),
                 F.type_or_packs("typeArguments"),
+                F.location("argLocation", accessor=FieldAccessor(write=False)),
             ],
         ),
         NodeDef(
@@ -898,7 +968,11 @@ AST_NODES_USERDATA = UserdataDef(
                     "'.'",
                 ],
             ),
-            fields=[F.name("index"), F.char("op"), F.node("expr", "AstExpr")],
+            fields=[
+                F.name("index"), F.char("op"), F.node("expr", "AstExpr"),
+                F.location("indexLocation", accessor=FieldAccessor(write=False)),
+                F.position("opPosition", accessor=FieldAccessor(write=False)),
+            ],
         ),
         NodeDef(
             name="AstExprIndexExpr",
@@ -934,17 +1008,18 @@ AST_NODES_USERDATA = UserdataDef(
             fields=[
                 F.boolean("vararg"),
                 F.name("debugname", atom="DebugName", nullable=True),
-                F.locals("args"),
+                F.locals("args", companions=["argsDefaults"]),
                 F.node("body", "AstStatBlock"),
                 F.nodes("generics", "AstGenericType"),
                 F.nodes("genericPacks", "AstGenericTypePack"),
                 F.node("returnAnnotation", "AstTypePack", nullable=True),
                 F.nodes("attributes", "AstAttr"),
-                F.opt_nodes("argsDefaults", "AstExpr"),
-                F.node("varargAnnotation", "AstTypePack", accessor=HIDDEN, nullable=True),
-            ],
-            validate_extra=[
-                'if (v.forPrint && FFlag::LuwuDefaultArguments && n->argsDefaults.size != n->args.size) v.fail("args", -1, "has a different length than the function\'s default-argument list");',
+                F.opt_nodes("argsDefaults", "AstExpr", companion_of="args"),
+                F.node("varargAnnotation", "AstTypePack", nullable=True),
+                F.local("self", nullable=True),
+                F.integer("functionDepth", "size_t"),
+                F.location("varargLocation", accessor=FieldAccessor(write=False)),
+                F.opt_location("argLocation", accessor=FieldAccessor(write=False)),
             ],
         ),
         NodeDef(
@@ -955,7 +1030,7 @@ AST_NODES_USERDATA = UserdataDef(
                 strategy="alloc",
                 args=["Luau::Location()", "Luau::AstArray<Luau::AstExprTable::Item>{nullptr, 0}"],
             ),
-            fields=[F.aux_list("items", "AstTableItem")],
+            fields=[F.item_list("items", "AstTableItem")],
         ),
         NodeDef(
             name="AstExprUnary",
@@ -1007,6 +1082,10 @@ AST_NODES_USERDATA = UserdataDef(
                 F.node("condition", "AstExpr"),
                 F.node("trueExpr", "AstExpr"),
                 F.node("falseExpr", "AstExpr"),
+                F.boolean("hasThen"),
+                F.location("ifLocation", accessor=FieldAccessor(write=False)),
+                F.opt_location("thenLocation", accessor=FieldAccessor(write=False)),
+                F.opt_location("elseLocation", accessor=FieldAccessor(write=False)),
             ],
         ),
         NodeDef(
@@ -1068,6 +1147,9 @@ AST_NODES_USERDATA = UserdataDef(
                 F.opt_name("prefix"),
                 F.boolean("hasParameterList"),
                 F.type_or_packs("parameters"),
+                F.local("prefixLocal", nullable=True),
+                F.opt_location("prefixLocation", accessor=FieldAccessor(write=False)),
+                F.location("nameLocation", accessor=FieldAccessor(write=False)),
             ],
         ),
         NodeDef(
@@ -1079,8 +1161,8 @@ AST_NODES_USERDATA = UserdataDef(
                 args=["Luau::Location()", "Luau::AstArray<Luau::AstTableProp>{nullptr, 0}", "nullptr"],
             ),
             fields=[
-                F.aux_list("props", "AstTableProp"),
-                F.aux_ptr("indexer", "AstTableIndexer", nullable=True),
+                F.item_list("props", "AstTableProp"),
+                F.item_ptr("indexer", "AstTableIndexer", nullable=True),
             ],
         ),
         NodeDef(
@@ -1102,9 +1184,11 @@ AST_NODES_USERDATA = UserdataDef(
             fields=[
                 F.nodes("generics", "AstGenericType"),
                 F.nodes("genericPacks", "AstGenericTypePack"),
-                F.aux("argTypes", "AstTypeList"),
+                F.item("argTypes", "AstTypeList"),
                 F.node("returnTypes", "AstTypePack"),
                 F.nodes("attributes", "AstAttr"),
+                F.arg_names("argNames", optional=True),
+                F.arg_name_locations("argNameLocations", optional=True, member="argNames", accessor=FieldAccessor(write=False)),
             ],
         ),
         NodeDef(
@@ -1184,7 +1268,7 @@ AST_NODES_USERDATA = UserdataDef(
             category="TypePack",
             base="AstNode",
             factory=FactoryDef(strategy="alloc", args=["Luau::Location()", "Luau::AstTypeList{}"]),
-            fields=[F.aux("typeList", "AstTypeList")],
+            fields=[F.item("typeList", "AstTypeList")],
         ),
         NodeDef(
             name="AstTypePackVariadic",
@@ -1235,12 +1319,13 @@ AST_NODES_USERDATA = UserdataDef(
 
 CST_NODES_USERDATA = UserdataDef(
     name="CstNode",
-    tag="TagCstNode",
+    tag="TagItem",
     storage="pointer",
+    family="Cst",
+    category="cst",
     is_const=True,
     output_file="CstNodes.gen.inl",
     register_func="registerCstNodeClass",
-    class_info_name="CstNodeClassInfo",
     class_table_name="s_cstClassTable",
     class_index_getter="T::CstClassIndex()",
     headers=[
@@ -1305,6 +1390,7 @@ CST_NODES_USERDATA = UserdataDef(
                 F.position("openParens", accessor=FieldAccessor(write=False)),
                 F.position("closeParens", accessor=FieldAccessor(write=False)),
                 F.positions("commaPositions", accessor=FieldAccessor(write=False)),
+                F.item_ptr("explicitTypes", "CstTypeInstantiation", accessor=FieldAccessor(write=False), nullable=True),
             ],
         ),
         NodeDef(
@@ -1330,12 +1416,13 @@ CST_NODES_USERDATA = UserdataDef(
                 F.positions("argsCommaPositions", accessor=FieldAccessor(write=False)),
                 F.position("varargAnnotationColonPosition", accessor=FieldAccessor(write=False)),
                 F.position("returnSpecifierPosition", accessor=FieldAccessor(write=False)),
+                F.item_ptrs("attrLists", "CstAttrList", accessor=FieldAccessor(write=False)),
             ],
         ),
         NodeDef(
             name="CstExprTable",
             factory=FactoryDef(strategy="alloc", args=["Luau::AstArray<Luau::CstExprTable::Item>{nullptr, 0}"]),
-            fields=[F.aux_list("items", "CstTableItem", accessor=FieldAccessor(write=False))],
+            fields=[F.item_list("items", "CstTableItem", accessor=FieldAccessor(write=False))],
         ),
         NodeDef(
             name="CstExprOp",
@@ -1367,12 +1454,13 @@ CST_NODES_USERDATA = UserdataDef(
             ),
             fields=[
                 F.positions("commaPositions", member="stringPositions", accessor=FieldAccessor(write=False)),
+                F.strings("sourceStrings", accessor=FieldAccessor(write=False)),
             ],
         ),
         NodeDef(
             name="CstExprExplicitTypeInstantiation",
             factory=FactoryDef(strategy="empty", args=["Luau::CstTypeInstantiation{}"]),
-            fields=[],
+            fields=[F.item("instantiation", "CstTypeInstantiation", accessor=FieldAccessor(write=False))],
         ),
         NodeDef(
             name="CstStatDo",
@@ -1466,7 +1554,10 @@ CST_NODES_USERDATA = UserdataDef(
         NodeDef(
             name="CstStatFunction",
             factory=FactoryDef(strategy="alloc", args=["Luau::Position::missing()"]),
-            fields=[F.position("functionKeywordPosition", accessor=FieldAccessor(write=False))],
+            fields=[
+                F.position("functionKeywordPosition", accessor=FieldAccessor(write=False)),
+                F.item_ptrs("attrLists", "CstAttrList", accessor=FieldAccessor(write=False)),
+            ],
         ),
         NodeDef(
             name="CstStatLocalFunction",
@@ -1474,6 +1565,7 @@ CST_NODES_USERDATA = UserdataDef(
             fields=[
                 F.position("localKeywordPosition", accessor=FieldAccessor(write=False)),
                 F.position("functionKeywordPosition", accessor=FieldAccessor(write=False)),
+                F.item_ptrs("attrLists", "CstAttrList", accessor=FieldAccessor(write=False)),
             ],
         ),
         NodeDef(
@@ -1538,7 +1630,10 @@ CST_NODES_USERDATA = UserdataDef(
         NodeDef(
             name="CstTypeTable",
             factory=FactoryDef(strategy="alloc", args=["Luau::AstArray<Luau::CstTypeTable::Item>{nullptr, 0}", "false"]),
-            fields=[F.boolean("isArray", accessor=FieldAccessor(write=False))],
+            fields=[
+                F.boolean("isArray", accessor=FieldAccessor(write=False)),
+                F.item_list("items", "CstTypeTableItem", accessor=FieldAccessor(write=False)),
+            ],
         ),
         NodeDef(
             name="CstTypeFunction",
@@ -1628,244 +1723,362 @@ CST_NODES_USERDATA = UserdataDef(
 )
 
 
-AUX_NODES_USERDATA = UserdataDef(
-    name="AstAux",
-    tag="TagAux",
-    storage="union",
-    output_file="AuxNodes.gen.inl",
-    headers=[
-        '"Luau/Ast.h"',
-        '"Luau/Cst.h"',
-        '"Luau/ReflectCommon.h"',
-        '"Luau/ReflectAstHandler.h"',
-    ],
-    nodes=[
-        NodeDef(
-            name="AstTableProp",
-            enum_name="Aux_TableProp",
-            union_member="tableProp",
-            factory=FactoryDef(
-                strategy="aux_union",
-                inner_type="Luau::AstTableProp",
-                args=[
-                    "Luau::AstName()",
-                    "Luau::Location()",
-                    "nullptr",
-                    "Luau::AstTableAccess::ReadWrite",
-                    "std::nullopt",
-                ],
-            ),
-            fields=[
-                F.name("name", member="n.name"),
-                F.location("origlocation", accessor=FieldAccessor(write=False), member="n.location"),
-                F.node("type", "AstType", member="n.type"),
-                F.enum("access", "AstTableAccess", member="n.access"),
+PLAIN_ITEMS: list[NodeDef] = [
+    NodeDef(
+        name="AstTableProp",
+        category="aux",
+        cpp="Luau::AstTableProp",
+        display="name",
+        factory=FactoryDef(
+            args=[
+                "Luau::AstName()",
+                "Luau::Location()",
+                "nullptr",
+                "Luau::AstTableAccess::ReadWrite",
+                "std::nullopt",
             ],
         ),
-        NodeDef(
-            name="AstTableIndexer",
-            enum_name="Aux_TableIndexer",
-            union_member="tableIndexer",
-            factory=FactoryDef(
-                strategy="aux_union",
-                inner_type="Luau::AstTableIndexer",
-                args=[
-                    "nullptr",
-                    "nullptr",
-                    "Luau::Location()",
-                    "Luau::AstTableAccess::ReadWrite",
-                    "std::nullopt",
-                ],
-            ),
-            fields=[
-                F.location("origlocation", accessor=FieldAccessor(write=False), member="n.location"),
-                F.node("indexType", "AstType", member="n.indexType", label="index type"),
-                F.node("resultType", "AstType", member="n.resultType", label="result type"),
-                F.enum("access", "AstTableAccess", member="n.access"),
+        fields=[
+            F.name("name", member="n.name"),
+            F.location("origlocation", accessor=FieldAccessor(write=False), member="n.location"),
+            F.node("type", "AstType", member="n.type"),
+            F.enum("access", "AstTableAccess", member="n.access"),
+            F.opt_location("accessLocation", accessor=FieldAccessor(write=False), member="n.accessLocation"),
+        ],
+    ),
+    NodeDef(
+        name="AstTableIndexer",
+        category="aux",
+        cpp="Luau::AstTableIndexer",
+        factory=FactoryDef(
+            args=[
+                "nullptr",
+                "nullptr",
+                "Luau::Location()",
+                "Luau::AstTableAccess::ReadWrite",
+                "std::nullopt",
             ],
         ),
-        NodeDef(
-            name="AstDeclaredExternTypeProperty",
-            enum_name="Aux_DeclaredExternTypeProperty",
-            union_member="declaredExternProp",
-            factory=FactoryDef(
-                strategy="aux_union",
-                inner_type="Luau::AstDeclaredExternTypeProperty",
-                args=[
-                    "Luau::AstName()",
-                    "Luau::Location()",
-                    "nullptr",
-                    "false",
-                    "Luau::Location()",
-                    "Luau::AstTableAccess::ReadWrite",
-                ],
-            ),
-            fields=[
-                F.name("name", member="n.name"),
-                F.location("origlocation", accessor=FieldAccessor(write=False), member="n.location"),
-                F.node("type", "AstType", member="n.ty"),
-                F.boolean("isMethod", member="n.isMethod"),
-                F.enum("access", "AstTableAccess", member="n.access"),
+        fields=[
+            F.location("origlocation", accessor=FieldAccessor(write=False), member="n.location"),
+            F.node("indexType", "AstType", member="n.indexType", label="index type"),
+            F.node("resultType", "AstType", member="n.resultType", label="result type"),
+            F.enum("access", "AstTableAccess", member="n.access"),
+            F.opt_location("accessLocation", accessor=FieldAccessor(write=False), member="n.accessLocation"),
+        ],
+    ),
+    NodeDef(
+        name="AstDeclaredExternTypeProperty",
+        category="aux",
+        cpp="Luau::AstDeclaredExternTypeProperty",
+        display="name",
+        factory=FactoryDef(
+            args=[
+                "Luau::AstName()",
+                "Luau::Location()",
+                "nullptr",
+                "false",
+                "Luau::Location()",
+                "Luau::AstTableAccess::ReadWrite",
             ],
         ),
-        NodeDef(
-            name="AstClassProperty",
-            enum_name="Aux_ClassProperty",
-            union_member="classProp",
-            factory=FactoryDef(
-                strategy="aux_union",
-                inner_type="Luau::AstClassProperty",
-                args=[
-                    "std::nullopt",
-                    "Luau::AstClassMemberVisibility::Public",
-                    "Luau::AstName()",
-                    "Luau::Location()",
-                    "std::nullopt",
-                    "nullptr",
-                ],
-            ),
-            fields=[
-                F.name("name", member="n.name"),
-                F.node("type", "AstType", member="n.ty", nullable=True),
-                F.node("defaultValue", "AstExpr", member="n.defaultValue", accessor=HIDDEN, nullable=True),
+        fields=[
+            F.name("name", member="n.name"),
+            F.location("origlocation", accessor=FieldAccessor(write=False), member="n.location"),
+            F.node("type", "AstType", member="n.ty"),
+            F.boolean("isMethod", member="n.isMethod"),
+            F.enum("access", "AstTableAccess", member="n.access"),
+            F.location("nameLocation", accessor=FieldAccessor(write=False), member="n.nameLocation"),
+        ],
+    ),
+    NodeDef(
+        name="AstClassProperty",
+        category="aux",
+        cpp="Luau::AstClassProperty",
+        display="name",
+        factory=FactoryDef(
+            args=[
+                "std::nullopt",
+                "Luau::AstClassMemberVisibility::Public",
+                "Luau::AstName()",
+                "Luau::Location()",
+                "std::nullopt",
+                "nullptr",
             ],
         ),
-        NodeDef(
-            name="AstClassMethod",
-            enum_name="Aux_ClassMethod",
-            union_member="classMethod",
-            factory=FactoryDef(
-                strategy="aux_union",
-                inner_type="Luau::AstClassMethod",
-                args=[
-                    "std::nullopt",
-                    "Luau::AstClassMemberVisibility::Public",
-                    "Luau::Location()",
-                    "Luau::AstName()",
-                    "Luau::Location()",
-                    "nullptr",
-                ],
-            ),
-            fields=[
-                F.name("name", member="n.functionName"),
-                F.node("func", "AstExprFunction", member="n.function", label="function"),
+        fields=[
+            F.name("name", member="n.name"),
+            F.node("type", "AstType", member="n.ty", nullable=True),
+            F.node("defaultValue", "AstExpr", member="n.defaultValue", nullable=True),
+            F.enum("visibility", "AstClassMemberVisibility", member="n.visibility"),
+            F.boolean("isConst", member="n.isConst"),
+            F.boolean("hasSemicolon", member="n.hasSemicolon"),
+            F.opt_location("qualifierLocation", accessor=FieldAccessor(write=False), member="n.qualifierLocation"),
+            F.location("nameLocation", accessor=FieldAccessor(write=False), member="n.nameLocation"),
+            F.opt_location("typeColonLocation", accessor=FieldAccessor(write=False), member="n.typeColonLocation"),
+            F.opt_location("constLocation", accessor=FieldAccessor(write=False), member="n.constLocation"),
+            F.opt_location("equalsLocation", accessor=FieldAccessor(write=False), member="n.equalsLocation"),
+        ],
+    ),
+    NodeDef(
+        name="AstClassMethod",
+        category="aux",
+        cpp="Luau::AstClassMethod",
+        display="name",
+        factory=FactoryDef(
+            args=[
+                "std::nullopt",
+                "Luau::AstClassMemberVisibility::Public",
+                "Luau::Location()",
+                "Luau::AstName()",
+                "Luau::Location()",
+                "nullptr",
             ],
         ),
-        NodeDef(
-            name="AstComment",
-            enum_name="Aux_Comment",
-            union_member="comment",
-            factory=FactoryDef(
-                strategy="custom",
-                custom_expr='AstAuxData(doc, ReflectComment{Luau::Lexeme::Type::Comment, "--", Luau::Location()})',
-            ),
-            fields=[
-                F.enum("type", "Lexeme::Type", member="handle.comment.type"),
-                F.text("text", member="handle.comment.text"),
-                F.location("origlocation", accessor=FieldAccessor(write=False), member="handle.comment.location"),
+        fields=[
+            F.name("name", member="n.functionName"),
+            F.node("func", "AstExprFunction", member="n.function", label="function"),
+            F.enum("visibility", "AstClassMemberVisibility", member="n.visibility"),
+            F.boolean("hasSemicolon", member="n.hasSemicolon"),
+            F.opt_location("qualifierLocation", accessor=FieldAccessor(write=False), member="n.qualifierLocation"),
+            F.location("keywordLocation", accessor=FieldAccessor(write=False), member="n.keywordLocation"),
+            F.location("nameLocation", accessor=FieldAccessor(write=False), member="n.nameLocation"),
+        ],
+    ),
+    NodeDef(
+        name="AstClassPrimaryConstructor",
+        category="aux",
+        cpp="Luau::AstClassPrimaryConstructor",
+        factory=FactoryDef(
+            args=[
+                "std::nullopt",
+                "Luau::AstClassMemberVisibility::Public",
+                "Luau::AstArray<Luau::AstLocal*>{nullptr, 0}",
+                "Luau::AstArray<Luau::AstExpr*>{nullptr, 0}",
+                "Luau::AstArray<Luau::AstClassPrimaryConstructorParamQualifiers>{nullptr, 0}",
+                "Luau::Location()",
             ],
         ),
-        NodeDef(
-            name="AstTableItem",
-            enum_name="Aux_TableItem",
-            union_member="tableItem",
-            factory=FactoryDef(
-                strategy="aux_union",
-                inner_type="Luau::AstExprTable::Item",
-                args=[
-                    "Luau::AstExprTable::Item::Kind::List",
-                    "nullptr",
-                    "nullptr",
-                ],
+        fields=[
+            F.enum("visibility", "AstClassMemberVisibility", member="n.visibility"),
+            F.locals("args", member="n.args", companions=["argsDefaults", "argsQualifiers"]),
+            F.opt_nodes("argsDefaults", "AstExpr", member="n.argsDefaults", companion_of="args"),
+            F.item_list(
+                "argsQualifiers",
+                "AstClassPrimaryConstructorParamQualifiers",
+                member="n.argsQualifiers",
+                companion_of="args",
             ),
-            fields=[
-                F.node("key", "AstExpr", member="n.key", nullable=True),
-                F.node("value", "AstExpr", member="n.value"),
-                F.enum("kind", "AstExprTable::Item::Kind", member="n.kind"),
-            ],
-            validate_extra=[
-                'if (item.kind != Luau::AstExprTable::Item::Kind::List && !item.key) v.fail({field}, {index}, "has no key");',
-                'if (v.forPrint && item.kind == Luau::AstExprTable::Item::Kind::Record && !item.key->is<Luau::AstExprConstantString>()) v.fail({field}, {index}, "is a record item whose key is not a string constant");',
+            F.opt_location("qualifierLocation", accessor=FieldAccessor(write=False), member="n.qualifierLocation"),
+            F.location("argLocation", accessor=FieldAccessor(write=False), member="n.argLocation"),
+            F.boolean(
+                "explicitVisibility",
+                accessor=FieldAccessor(
+                    read="hasExplicitVisibility(*handle.doc->arena, &n)",
+                    write="handle.doc->arena->explicitVisibility[&n]",
+                ),
+            ),
+        ],
+    ),
+    NodeDef(
+        name="AstClassPrimaryConstructorParamQualifiers",
+        category="aux",
+        cpp="Luau::AstClassPrimaryConstructorParamQualifiers",
+        factory=FactoryDef(
+            args=[
+                "std::nullopt",
+                "Luau::AstClassMemberVisibility::Public",
+                "std::nullopt",
+                "false",
             ],
         ),
-        NodeDef(
-            name="AstTypeList",
-            enum_name="Aux_TypeList",
-            union_member="typeList",
-            factory=FactoryDef(
-                strategy="aux_union",
-                inner_type="Luau::AstTypeList",
-                args=[
-                    "Luau::AstArray<Luau::AstType*>{nullptr, 0}",
-                    "nullptr",
-                ],
+        fields=[
+            F.enum("visibility", "AstClassMemberVisibility", member="n.visibility"),
+            F.boolean("isConst", member="n.isConst"),
+            F.opt_location("qualifierLocation", accessor=FieldAccessor(write=False), member="n.qualifierLocation"),
+            F.opt_location("constLocation", accessor=FieldAccessor(write=False), member="n.constLocation"),
+            F.boolean(
+                "explicitVisibility",
+                accessor=FieldAccessor(
+                    read="hasExplicitVisibility(*handle.doc->arena, &n)",
+                    write="handle.doc->arena->explicitVisibility[&n]",
+                ),
             ),
-            fields=[
-                F.nodes("types", "AstType", member="n.types"),
-                F.node("tailType", "AstTypePack", member="n.tailType", nullable=True),
+        ],
+    ),
+    NodeDef(
+        name="AstComment",
+        category="aux",
+        cpp="ReflectComment",
+        display="text",
+        factory=FactoryDef(
+            args=["Luau::Lexeme::Type::Comment", 'copyToArena(*doc->allocator(), "--")', "Luau::Location()"],
+        ),
+        fields=[
+            F.enum("type", "Lexeme::Type", member="n.type"),
+            F.string("text", member="n.text"),
+            F.location("origlocation", accessor=FieldAccessor(write=False), member="n.location"),
+        ],
+    ),
+    NodeDef(
+        name="AstTableItem",
+        category="aux",
+        cpp="Luau::AstExprTable::Item",
+        factory=FactoryDef(
+            args=[
+                "Luau::AstExprTable::Item::Kind::List",
+                "nullptr",
+                "nullptr",
             ],
         ),
-        NodeDef(
-            name="CstTableItem",
-            enum_name="Aux_CstTableItem",
-            union_member="cstTableItem",
-            factory=FactoryDef(
-                strategy="aux_union",
-                inner_type="Luau::CstExprTable::Item",
-                args=[
-                    "Luau::Position::missing()",
-                    "Luau::Position::missing()",
-                    "Luau::Position::missing()",
-                    "Luau::CstExprTable::Separator::Missing",
-                    "Luau::Position::missing()",
-                ],
-            ),
-            fields=[
-                F.position("indexerOpenPosition", accessor=FieldAccessor(write=False), member="n.indexerOpenPosition"),
-                F.position("indexerClosePosition", accessor=FieldAccessor(write=False), member="n.indexerClosePosition"),
-                F.position("equalsPosition", accessor=FieldAccessor(write=False), member="n.equalsPosition"),
-                F.position("separatorPosition", accessor=FieldAccessor(write=False), member="n.separatorPosition"),
-                F.enum("separator", "CstExprTable::Separator", accessor=FieldAccessor(write=False), member="n.separator"),
+        fields=[
+            F.node("key", "AstExpr", member="n.key", nullable=True),
+            F.node("value", "AstExpr", member="n.value"),
+            F.enum("itemKind", "AstExprTable::Item::Kind", member="n.kind"),
+        ],
+        validate_extra=[
+            'if (item.kind != Luau::AstExprTable::Item::Kind::List && !item.key) v.fail({field}, {index}, "has no key");',
+            'if (v.forPrint && item.kind == Luau::AstExprTable::Item::Kind::Record && !item.key->is<Luau::AstExprConstantString>()) v.fail({field}, {index}, "is a record item whose key is not a string constant");',
+        ],
+    ),
+    NodeDef(
+        name="AstTypeList",
+        category="aux",
+        cpp="Luau::AstTypeList",
+        factory=FactoryDef(
+            args=[
+                "Luau::AstArray<Luau::AstType*>{nullptr, 0}",
+                "nullptr",
             ],
         ),
-    ],
-)
+        fields=[
+            F.nodes("types", "AstType", member="n.types"),
+            F.node("tailType", "AstTypePack", member="n.tailType", nullable=True),
+        ],
+    ),
+    NodeDef(
+        name="CstTableItem",
+        category="aux",
+        cpp="Luau::CstExprTable::Item",
+        factory=FactoryDef(
+            args=[
+                "Luau::Position::missing()",
+                "Luau::Position::missing()",
+                "Luau::Position::missing()",
+                "Luau::CstExprTable::Separator::Missing",
+                "Luau::Position::missing()",
+            ],
+        ),
+        fields=[
+            F.position("indexerOpenPosition", accessor=FieldAccessor(write=False), member="n.indexerOpenPosition"),
+            F.position("indexerClosePosition", accessor=FieldAccessor(write=False), member="n.indexerClosePosition"),
+            F.position("equalsPosition", accessor=FieldAccessor(write=False), member="n.equalsPosition"),
+            F.position("separatorPosition", accessor=FieldAccessor(write=False), member="n.separatorPosition"),
+            F.enum("separator", "CstExprTable::Separator", accessor=FieldAccessor(write=False), member="n.separator"),
+        ],
+    ),
+    NodeDef(
+        name="CstAttrList",
+        category="aux",
+        cpp="Luau::CstAttrList",
+        factory=FactoryDef(
+            args=[
+                "Luau::Position::missing()",
+                "Luau::Position::missing()",
+                "Luau::AstArray<Luau::Position>{nullptr, 0}",
+            ],
+            requires_fflag="LuauCstAttr",
+        ),
+        fields=[
+            F.position("atBracketPosition", accessor=FieldAccessor(write=False), member="n.atBracketPosition"),
+            F.position("closeBracketPosition", accessor=FieldAccessor(write=False), member="n.closeBracketPosition"),
+            F.positions("commaPositions", accessor=FieldAccessor(write=False), member="n.commaPositions"),
+        ],
+    ),
+    NodeDef(
+        name="CstTypeInstantiation",
+        category="aux",
+        cpp="Luau::CstTypeInstantiation",
+        factory=FactoryDef(args=[]),
+        fields=[
+            F.position("leftArrow1Position", accessor=FieldAccessor(write=False), member="n.leftArrow1Position"),
+            F.position("leftArrow2Position", accessor=FieldAccessor(write=False), member="n.leftArrow2Position"),
+            F.positions("commaPositions", accessor=FieldAccessor(write=False), member="n.commaPositions"),
+            F.position("rightArrow1Position", accessor=FieldAccessor(write=False), member="n.rightArrow1Position"),
+            F.position("rightArrow2Position", accessor=FieldAccessor(write=False), member="n.rightArrow2Position"),
+        ],
+    ),
+    NodeDef(
+        name="CstTypeTableItem",
+        category="aux",
+        cpp="Luau::CstTypeTable::Item",
+        factory=FactoryDef(
+            args=[
+                "Luau::CstTypeTable::Item::Kind::Property",
+                "Luau::Position::missing()",
+                "Luau::Position::missing()",
+                "Luau::Position::missing()",
+                "Luau::CstExprTable::Separator::Missing",
+                "Luau::Position::missing()",
+            ],
+        ),
+        fields=[
+            F.enum("itemKind", "CstTypeTable::Item::Kind", accessor=FieldAccessor(write=False), member="n.kind"),
+            F.position("indexerOpenPosition", accessor=FieldAccessor(write=False), member="n.indexerOpenPosition"),
+            F.position("indexerClosePosition", accessor=FieldAccessor(write=False), member="n.indexerClosePosition"),
+            F.position("colonPosition", accessor=FieldAccessor(write=False), member="n.colonPosition"),
+            F.enum("separator", "CstExprTable::Separator", accessor=FieldAccessor(write=False), member="n.separator"),
+            F.position("separatorPosition", accessor=FieldAccessor(write=False), member="n.separatorPosition"),
+            F.cst(
+                "stringInfo",
+                accessor=FieldAccessor(read="static_cast<const Luau::CstNode*>(n.stringInfo)", write=False),
+            ),
+            F.position("stringPosition", accessor=FieldAccessor(write=False), member="n.stringPosition"),
+        ],
+    ),
+    NodeDef(
+        name="AstLocal",
+        category="local",
+        cpp="Luau::AstLocal",
+        display="name",
+        factory=FactoryDef(
+            args=["Luau::AstName()", "Luau::Location()", "nullptr", "0", "0", "nullptr", "false"],
+        ),
+        fields=[
+            F.name("name", member="n.name"),
+            F.location("origlocation", member="n.location", accessor=FieldAccessor(write=False)),
+            F.local("shadow", member="n.shadow", nullable=True),
+            F.integer("depth", "size_t", member="n.functionDepth"),
+            F.boolean("isConst", member="n.isConst"),
+            F.boolean("exported", member="n.isExported"),
+            F.node("annotation", "AstType", member="n.annotation", nullable=True),
+            F.integer("loopDepth", "size_t", member="n.loopDepth"),
+        ],
+    ),
+]
 
 
-LOCAL_USERDATA = UserdataDef(
-    name="AstLocal",
-    tag="TagLocal",
-    storage="single",
-    output_file="AstLocal.gen.inl",
-    mutable=True,
-    handle_member="local",
-    headers=[
-        '"Luau/Ast.h"',
-        '"Luau/ReflectCommon.h"',
-        '"Luau/ReflectAstHandler.h"',
-    ],
-    nodes=[
-        NodeDef(
-            name="AstLocal",
-            factory=FactoryDef(
-                strategy="alloc",
-                args=["Luau::AstName()", "Luau::Location()", "nullptr", "0", "0", "nullptr", "false"],
-            ),
-            fields=[
-                F.name("name"),
-                F.location("origlocation", member="location", accessor=FieldAccessor(write=False)),
-                F.local("shadow", nullable=True),
-                F.integer("depth", "size_t", member="functionDepth"),
-                F.boolean("isConst"),
-                F.boolean("exported", member="isExported"),
-                F.node("annotation", "AstType", nullable=True),
-            ],
-        ),
-    ],
-)
+def plain_userdata(node: NodeDef) -> UserdataDef:
+    return UserdataDef(
+        name=node.name,
+        tag="TagItem",
+        storage="plain",
+        family="Plain",
+        category=node.category,
+        mutable=True,
+        output_file=f"{node.name}.gen.inl",
+        headers=[
+            '"Luau/Ast.h"',
+            '"Luau/Cst.h"',
+            '"Luau/ReflectCommon.h"',
+            '"Luau/ReflectAstHandler.h"',
+        ],
+        nodes=[node],
+    )
+
 
 GLOBAL_SCHEMA = ReflectSchema(
-    userdatas=[AST_NODES_USERDATA, CST_NODES_USERDATA, AUX_NODES_USERDATA, LOCAL_USERDATA]
+    userdatas=[AST_NODES_USERDATA, CST_NODES_USERDATA, *[plain_userdata(node) for node in PLAIN_ITEMS]]
 )
 
 
@@ -1879,25 +2092,24 @@ class CppGenerator:
             raise ValueError(f"Userdata not found: {target}")
         if ud.storage == "pointer":
             return self._generate_pointer_inl(ud)
-        elif ud.storage == "union":
-            return self._generate_union_inl(ud)
-        elif ud.storage == "single":
-            return self._generate_single_inl(ud)
+        elif ud.storage == "plain":
+            return self._generate_plain_inl(ud)
         raise ValueError(f"Unsupported storage type: {ud.storage}")
 
-    def _aux(self, name: str) -> NodeDef:
-        for ud in self.schema.userdatas:
-            if ud.storage == "union":
-                for node in ud.nodes:
-                    if node.name == name:
-                        return node
-        raise ValueError(f"Unknown aux type: {name}")
+    def _plain_items(self) -> list[NodeDef]:
+        return [ud.nodes[0] for ud in self.schema.userdatas if ud.storage == "plain"]
 
-    def _aux_cpp(self, name: str) -> str:
-        node = self._aux(name)
-        if not (node.factory and node.factory.inner_type):
-            raise ValueError(f"Aux type has no C++ type: {name}")
-        return node.factory.inner_type
+    def _item(self, name: str) -> NodeDef:
+        for node in self._plain_items():
+            if node.name == name:
+                return node
+        raise ValueError(f"Unknown item type: {name}")
+
+    def _item_cpp(self, name: str) -> str:
+        node = self._item(name)
+        if not node.cpp:
+            raise ValueError(f"Item type has no C++ type: {name}")
+        return node.cpp
 
     def _cpp_type(self, t: FieldType) -> str:
         fixed = {
@@ -1906,10 +2118,10 @@ class CppGenerator:
             "char": "char",
             "string": "Luau::AstArray<char>",
             "strings": "Luau::AstArray<Luau::AstArray<char>>",
-            "text": "std::string",
             "name": "Luau::AstName",
             "opt_name": "std::optional<Luau::AstName>",
             "location": "Luau::Location",
+            "opt_location": "std::optional<Luau::Location>",
             "position": "Luau::Position",
             "positions": "Luau::AstArray<Luau::Position>",
             "local": "Luau::AstLocal*",
@@ -1928,13 +2140,20 @@ class CppGenerator:
             return f"Luau::{t.arg}*"
         if t.kind in ("nodes", "opt_nodes"):
             return f"Luau::AstArray<Luau::{t.arg}*>"
-        if t.kind == "aux" and t.arg:
-            return self._aux_cpp(t.arg)
-        if t.kind == "aux_ptr" and t.arg:
-            return f"{self._aux_cpp(t.arg)}*"
-        if t.kind == "aux_list" and t.arg:
-            return f"Luau::AstArray<{self._aux_cpp(t.arg)}>"
+        if t.kind == "item" and t.arg:
+            return self._item_cpp(t.arg)
+        if t.kind == "item_ptr" and t.arg:
+            return f"{self._item_cpp(t.arg)}*"
+        if t.kind == "item_list" and t.arg:
+            return f"Luau::AstArray<{self._item_cpp(t.arg)}>"
+        if t.kind == "item_ptrs" and t.arg:
+            return f"Luau::AstArray<{self._item_cpp(t.arg)}*>"
+        if t.kind in ("arg_names", "arg_name_locations"):
+            return f"Luau::AstArray<{self._arg_name_cpp(t)}>"
         raise ValueError(f"Unknown field type: {t.kind}")
+
+    def _arg_name_cpp(self, t: FieldType) -> str:
+        return "std::optional<Luau::AstArgumentName>" if t.arg == "optional" else "Luau::AstArgumentName"
 
     def _type_assert(self, owner: str, f: FieldDef, expr: str) -> CppNode:
         return Raw(
@@ -1959,8 +2178,6 @@ class CppGenerator:
                 f"pushArray(L, {e}.size, [&](size_t i) {{ "
                 f'lua_pushlstring(L, {e}.data[i].data ? {e}.data[i].data : "", {e}.data[i].size); }});'
             )
-        elif k == "text":
-            text = f"lua_pushlstring(L, {e}.data(), {e}.size());"
         elif k == "name":
             text = f"{e}.value ? lua_pushstring(L, {e}.value) : lua_pushnil(L);"
         elif k == "opt_name":
@@ -1969,6 +2186,12 @@ class CppGenerator:
             text = f"lua_pushstring(L, toString({e}).c_str());"
         elif k == "location":
             text = f"pushLocation(L, handle.doc, {e});"
+        elif k == "opt_location":
+            text = f"{e} ? pushLocation(L, handle.doc, *{e}) : lua_pushnil(L);"
+        elif k == "arg_names":
+            text = f"pushArgumentNames(L, {e});"
+        elif k == "arg_name_locations":
+            text = f"pushArgumentNameLocations(L, handle.doc, {e});"
         elif k == "position":
             text = f"pushPosition(L, handle.doc, {e});"
         elif k == "positions":
@@ -1983,28 +2206,29 @@ class CppGenerator:
                 f"{e}.data[i] ? pushAstNode(L, handle.doc, {e}.data[i]) : lua_pushboolean(L, false); }});"
             )
         elif k == "local":
-            text = f"pushAstLocal(L, handle.doc, {e});"
+            text = f"pushItem(L, handle.doc, {e});"
         elif k == "locals":
             text = f"pushLocalArray(L, handle.doc, {e});"
         elif k == "type_or_packs":
             text = f"pushTypeOrPackArray(L, handle.doc, {e});"
         elif k == "cst":
             text = f"pushCstNode(L, handle.doc, {e});"
-        elif k == "aux":
-            text = f"pushAstAux(L, handle.doc, {e});"
-        elif k == "aux_ptr":
-            text = f"{e} ? pushAstAux(L, handle.doc, *{e}) : lua_pushnil(L);"
-        elif k == "aux_list":
-            text = f"pushArray(L, {e}.size, [&](size_t i) {{ pushAstAux(L, handle.doc, {e}.data[i]); }});"
+        elif k == "item":
+            text = f"pushItem(L, handle.doc, &{e});"
+        elif k == "item_ptr":
+            text = f"pushItem(L, handle.doc, {e});"
+        elif k == "item_list":
+            text = f"pushArray(L, {e}.size, [&](size_t i) {{ pushItem(L, handle.doc, &{e}.data[i]); }});"
+        elif k == "item_ptrs":
+            text = (
+                f"pushArray(L, {e}.size, [&](size_t i) {{ "
+                f"{e}.data[i] ? pushItem(L, handle.doc, {e}.data[i]) : lua_pushboolean(L, false); }});"
+            )
         elif k == "class_members":
             text = f"pushClassMembers(L, handle.doc, {e});"
         else:
             raise ValueError(f"Field type cannot be read: {k}")
         return [Raw(text=text)]
-
-    def _read_aux(self, name: str, idx: str) -> str:
-        node = self._aux(name)
-        return f'readAux(L, handle.doc, {idx}, {node.enum_name}, &AstAuxData::{node.union_member}, "{node.name}")'
 
     def _read(self, t: FieldType, target: str) -> list[CppNode]:
         k = t.kind
@@ -2026,16 +2250,6 @@ class CppGenerator:
                 f"{target} = readArray<Luau::AstArray<char>>(L, handle.doc, 2, "
                 f"[&](int) {{ return readString(L, handle.doc, -1); }});"
             )
-        elif k == "text":
-            return [
-                Block(
-                    body=[
-                        Raw(text="size_t len = 0;"),
-                        Raw(text="const char* str = luaL_checklstring(L, 2, &len);"),
-                        Raw(text=f"{target}.assign(str, len);"),
-                    ]
-                )
-            ]
         elif k == "name":
             text = f"{target} = readName(L, handle.doc, 2);"
         elif k == "opt_name":
@@ -2057,28 +2271,21 @@ class CppGenerator:
             text = f"{target} = readLocalArray(L, handle.doc, 2);"
         elif k == "type_or_packs":
             text = f"{target} = readTypeOrPackArray(L, handle.doc, 2);"
-        elif k == "aux" and t.arg:
-            text = f"{target} = {self._read_aux(t.arg, '2')};"
-        elif k == "aux_ptr" and t.arg:
-            text = (
-                f"{target} = lua_isnil(L, 2) ? nullptr : "
-                f"handle.doc->allocator()->alloc<{self._aux_cpp(t.arg)}>({self._read_aux(t.arg, '2')});"
-            )
-        elif k == "aux_list" and t.arg:
-            text = (
-                f"{target} = readArray<{self._aux_cpp(t.arg)}>(L, handle.doc, 2, "
-                f"[&](int) {{ return {self._read_aux(t.arg, '-1')}; }});"
-            )
+        elif k == "item":
+            text = f"readItemInto(L, handle.doc, 2, {target});"
+        elif k == "item_ptr" and t.arg:
+            text = f"{target} = readItemPointer<{self._item_cpp(t.arg)}>(L, handle.doc, 2);"
+        elif k == "item_list" and t.arg:
+            text = f"{target} = readItemArray<{self._item_cpp(t.arg)}>(L, handle.doc, 2);"
+        elif k == "arg_names":
+            text = f"{target} = readArgumentNames<{self._arg_name_cpp(t)}>(L, handle.doc, 2);"
         elif k == "class_members":
-            text = (
-                f"{target} = readArray<Luau::AstClassMember>(L, handle.doc, 2, "
-                f"[&](int) {{ return readClassMember(L, handle.doc, -1); }});"
-            )
+            text = f"{target} = readClassMembers(L, handle.doc, 2);"
         else:
             raise ValueError(f"Field type cannot be written: {k}")
         return [Raw(text=text)]
 
-    def _validate_aux(self, node: NodeDef, e: str, field: str, index: str, scoped: bool = False) -> list[CppNode]:
+    def _validate_item(self, node: NodeDef, e: str, field: str, index: str, scoped: bool = False) -> list[CppNode]:
         body: list[CppNode] = []
         for f in node.fields:
             member = f.member_expr
@@ -2136,20 +2343,20 @@ class CppGenerator:
                     ],
                 )
             ]
-        if k == "aux" and t.arg:
-            return self._validate_aux(self._aux(t.arg), e, field, index, scoped=True)
-        if k == "aux_ptr" and t.arg:
-            inner = self._validate_aux(self._aux(t.arg), f"*{e}", field, index)
+        if k == "item" and t.arg:
+            return self._validate_item(self._item(t.arg), e, field, index, scoped=True)
+        if k == "item_ptr" and t.arg:
+            inner = self._validate_item(self._item(t.arg), f"*{e}", field, index)
             otherwise: list[CppNode] = [] if nullable else [Raw(text=f'v.fail("{field}", {index}, {missing});')]
             if not inner and not otherwise:
                 return []
             return [If(cond=e, then_body=inner, else_body=otherwise)]
-        if k == "aux_list" and t.arg:
-            inner = self._validate_aux(self._aux(t.arg), f"{e}.data[{i}]", field, f"int({i})")
+        if k == "item_list" and t.arg:
+            inner = self._validate_item(self._item(t.arg), f"{e}.data[{i}]", field, f"int({i})")
             return [For(header=loop, body=inner)] if inner else []
         if k == "class_members":
-            prop = self._validate_aux(self._aux("AstClassProperty"), "*prop", field, f"int({i})")
-            method = self._validate_aux(self._aux("AstClassMethod"), "*method", field, f"int({i})")
+            prop = self._validate_item(self._item("AstClassProperty"), "*prop", field, f"int({i})")
+            method = self._validate_item(self._item("AstClassMethod"), "*method", field, f"int({i})")
             return [
                 For(
                     header=loop,
@@ -2184,9 +2391,30 @@ class CppGenerator:
                 if ud.mutable:
                     structural = "true" if f.type.kind in STRUCTURAL_KINDS else "false"
                     body.append(Raw(text=f"beginReflectWrite(L, handle.doc, {structural});"))
-                body.extend(self._read(f.type, write_target))
+                by_name = {other.name: other for other in fields}
+                if f.companions:
+                    body.append(Raw(text=f"{self._cpp_type(f.type)} previous = {write_target};"))
+                    body.extend(self._read(f.type, write_target))
+                    for name in f.companions:
+                        companion = by_name[name].write_expr(prefix)
+                        body.append(
+                            Raw(text=f"{companion} = realignCompanion(handle.doc, previous, {write_target}, {companion});")
+                        )
+                elif f.companion_of:
+                    owner = by_name[f.companion_of].write_expr(prefix)
+                    body.extend(self._read(f.type, "auto list"))
+                    body.append(
+                        Raw(
+                            text=f"{write_target} = fitCompanion(L, handle.doc, 2, list, {owner}.size, "
+                            f'"{f.name}", "{f.companion_of}");'
+                        )
+                    )
+                else:
+                    body.extend(self._read(f.type, write_target))
                 body.append(Raw(text="lua_pushvalue(L, 1);"))
                 body.append(Return(expr="true"))
+                if f.companions or f.companion_of:
+                    body = [Block(body=body)]
                 cases.append(SwitchCase(label=f"ReflectAtom::{f.set_atom_name}", body=body))
         return cases
 
@@ -2208,11 +2436,11 @@ class CppGenerator:
         node: NodeDef,
         fields: list[FieldDef],
         node_decl: str,
-        handle_ref: CppType,
-        base_ptr_type: CppType,
+        prefix: str,
         with_validator: bool,
     ) -> list[CppNode]:
         class_name = node.name
+        item_ref = Type(name="AstItem").ref()
         items: list[CppNode] = []
 
         if not fields:
@@ -2221,8 +2449,8 @@ class CppGenerator:
             handler_body = [
                 Raw(text=node_decl),
                 Unused(name="n"),
-                *self._type_asserts(class_name, fields, "n->"),
-                Switch(expr="atom", cases=self._method_cases(ud, fields, "n->"), default_body=[Return(expr="false")]),
+                *self._type_asserts(class_name, fields, prefix),
+                Switch(expr="atom", cases=self._method_cases(ud, fields, prefix), default_body=[Return(expr="false")]),
             ]
 
         items.append(
@@ -2232,7 +2460,7 @@ class CppGenerator:
                 is_static=True,
                 params=[
                     LUA_STATE_PTR.param("L"),
-                    handle_ref.param("handle"),
+                    item_ref.param("handle"),
                     REFLECT_ATOM.param("atom"),
                 ],
                 body=handler_body,
@@ -2243,7 +2471,7 @@ class CppGenerator:
         if fields:
             collector_body.append(Raw(text=node_decl))
             collector_body.append(Unused(name="n"))
-            collector_body.extend(self._collect_props(fields, "n->"))
+            collector_body.extend(self._collect_props(fields, prefix))
 
         items.append(
             Function(
@@ -2252,7 +2480,7 @@ class CppGenerator:
                 is_static=True,
                 params=[
                     LUA_STATE_PTR.param("L"),
-                    handle_ref.param("handle"),
+                    item_ref.param("handle"),
                 ],
                 body=collector_body,
             )
@@ -2275,7 +2503,7 @@ class CppGenerator:
                     is_static=True,
                     params=[
                         Type(name="AstValidator").ref().param("v"),
-                        base_ptr_type.param("node"),
+                        Type(name="Luau::AstNode").ptr().param("node"),
                     ],
                     body=validator_body,
                 )
@@ -2283,145 +2511,8 @@ class CppGenerator:
 
         return items
 
-    def _generate_pointer_inl(self, ud: UserdataDef) -> str:
-        base_node_type = Type(name=f"Luau::{ud.name}")
-        base_ptr_type = base_node_type.ptr(is_const=ud.is_const)
-        handle_type = Type(name=f"{ud.name}Data")
-        handle_ref = handle_type.ref()
-
-        ns_items: list[CppNode] = []
-
-        method_handler_type = FuncPtr(
-            return_type=BOOL,
-            params=[
-                LUA_STATE_PTR.param("L"),
-                handle_ref.param("handle"),
-                REFLECT_ATOM.param("atom"),
-            ],
-        )
-        prop_collector_type = FuncPtr(
-            return_type=VOID,
-            params=[
-                LUA_STATE_PTR.param("L"),
-                handle_ref.param("handle"),
-            ],
-        )
-        validator_type = FuncPtr(
-            return_type=VOID,
-            params=[
-                Type(name="AstValidator").ref().param("v"),
-                base_ptr_type.param("node"),
-            ],
-        )
-
-        if ud.register_func and ud.class_info_name and ud.class_table_name:
-            fields = [
-                StructField(type=CONST_CHAR_PTR, name="kind", default="nullptr"),
-            ]
-            if ud.categories:
-                fields.append(StructField(type=CONST_CHAR_PTR, name="category", default="nullptr"))
-                fields.append(StructField(type=NODE_CATEGORY, name="categoryEnum", default="NodeCategory::Unknown"))
-            else:
-                fields.append(StructField(type=CONST_CHAR_PTR, name="category", default='"generic"'))
-            fields.append(
-                StructField(
-                    type=method_handler_type,
-                    name="methodHandler",
-                    default="nullptr",
-                )
-            )
-            fields.append(
-                StructField(
-                    type=prop_collector_type,
-                    name="propCollector",
-                    default="nullptr",
-                )
-            )
-            if ud.mutable:
-                fields.append(
-                    StructField(
-                        type=validator_type,
-                        name="validator",
-                        default="nullptr",
-                    )
-                )
-            if ud.categories:
-                fields.append(StructField(type=BOOL, name="canHoldComments", default="false"))
-
-            ns_items.append(Struct(name=ud.class_info_name, fields=fields))
-            ns_items.append(
-                Variable(
-                    type=TemplateType(name="std::vector", args=[Type(name=ud.class_info_name)]),
-                    name=ud.class_table_name,
-                    is_static=True,
-                )
-            )
-
-            reg_params = [
-                CONST_CHAR_PTR.param("kind"),
-            ]
-            if ud.categories:
-                reg_params.append(NODE_CATEGORY.param("category"))
-            reg_params.extend([
-                method_handler_type.param("methodHandler", default="nullptr"),
-                prop_collector_type.param("propCollector", default="nullptr"),
-            ])
-            if ud.mutable:
-                reg_params.append(validator_type.param("validator", default="nullptr"))
-            validator_default = ", nullptr" if ud.mutable else ""
-            validator_arg = ", validator" if ud.mutable else ""
-
-            reg_body: list[CppNode] = [
-                Raw(text=f"int idx = {ud.class_index_getter};"),
-            ]
-            if ud.categories:
-                reg_body.append(
-                    If(
-                        cond=f"size_t(idx) >= {ud.class_table_name}.size()",
-                        then_body=[
-                            Raw(
-                                text=f'{ud.class_table_name}.resize(idx + 1, {ud.class_info_name}{{"{ud.name}", "unknown", NodeCategory::Unknown, nullptr, nullptr{validator_default}, false}});'
-                            )
-                        ],
-                    )
-                )
-                reg_body.append(Raw(text="bool canHoldComments = (category == NodeCategory::Stat);"))
-                reg_body.append(
-                    Raw(
-                        text=f"{ud.class_table_name}[idx] = {ud.class_info_name}{{kind, categoryToString(category), category, methodHandler, propCollector{validator_arg}, canHoldComments}};"
-                    )
-                )
-            else:
-                reg_body.append(
-                    If(
-                        cond=f"size_t(idx) >= {ud.class_table_name}.size()",
-                        then_body=[
-                            Raw(
-                                text=f'{ud.class_table_name}.resize(idx + 1, {ud.class_info_name}{{"{ud.name}", "generic", nullptr, nullptr{validator_default}}});'
-                            )
-                        ],
-                    )
-                )
-                reg_body.append(
-                    Raw(
-                        text=f'{ud.class_table_name}[idx] = {ud.class_info_name}{{kind, "generic", methodHandler, propCollector{validator_arg}}};'
-                    )
-                )
-
-            ns_items.append(
-                Function(
-                    name=ud.register_func,
-                    return_type=VOID,
-                    template_params=["typename T"],
-                    is_static=True,
-                    multiline_params=True,
-                    params=reg_params,
-                    body=reg_body,
-                )
-            )
-
-        factory_cases = []
-        required_fflags: list[str] = []
+    def _factory_cases(self, ud: UserdataDef, required_fflags: list[str]) -> list[SwitchCase]:
+        cases = []
         for node in ud.nodes:
             if node.factory and node.factory.strategy in ("alloc", "empty"):
                 args_str = ", ".join(node.factory.args)
@@ -2439,22 +2530,102 @@ class CppGenerator:
                         )
                     )
                 case_body.append(Return(expr=f"alloc.alloc<Luau::{node.name}>({args_str})"))
-                factory_cases.append(SwitchCase(label=f"ReflectAtom::{node.name}", body=case_body))
+                cases.append(SwitchCase(label=f"ReflectAtom::{node.name}", body=case_body))
+        return cases
+
+    def _default_factory(self, ud: UserdataDef, base_ptr_type: CppType, required_fflags: list[str]) -> CppNode:
+        return Function(
+            name=f"createDefault{ud.name}",
+            return_type=base_ptr_type,
+            params=[
+                LUA_STATE_PTR.param("L"),
+                REFLECT_ATOM.param("atom"),
+                ALLOCATOR_REF.param("alloc"),
+            ],
+            body=[
+                Switch(
+                    expr="atom",
+                    cases=self._factory_cases(ud, required_fflags),
+                    default_body=[Return(expr="nullptr")],
+                )
+            ],
+        )
+
+    def _translation_unit(self, ud: UserdataDef, ns_items: list[CppNode], required_fflags: list[str]) -> str:
+        flags = [*required_fflags, *ud.fflags]
+        body: list[CppNode] = [Raw(text=f"LUAU_FASTFLAG({flag})") for flag in flags]
+        if flags:
+            body.append(BlankLine())
+        body.append(Namespace(name="Luau", body=ns_items))
+        return TranslationUnit(includes=ud.headers, body=body).render()
+
+    def _generate_pointer_inl(self, ud: UserdataDef) -> str:
+        base_ptr_type = Type(name=f"Luau::{ud.name}").ptr(is_const=ud.is_const)
+        item_ref = Type(name="AstItem").ref()
+        method_handler_type = FuncPtr(
+            return_type=BOOL,
+            params=[LUA_STATE_PTR.param("L"), item_ref.param("handle"), REFLECT_ATOM.param("atom")],
+        )
+        prop_collector_type = FuncPtr(
+            return_type=VOID,
+            params=[LUA_STATE_PTR.param("L"), item_ref.param("handle")],
+        )
+        validator_type = FuncPtr(
+            return_type=VOID,
+            params=[Type(name="AstValidator").ref().param("v"), Type(name="Luau::AstNode").ptr().param("node")],
+        )
+
+        ns_items: list[CppNode] = [
+            Variable(
+                type=TemplateType(name="std::vector", args=[Type(name="AstItemClass")]),
+                name=ud.class_table_name,
+                is_static=True,
+            )
+        ]
+
+        reg_params = [CONST_CHAR_PTR.param("kind")]
+        if ud.categories:
+            reg_params.append(NODE_CATEGORY.param("category"))
+        reg_params.extend([
+            method_handler_type.param("methodHandler", default="nullptr"),
+            prop_collector_type.param("propCollector", default="nullptr"),
+        ])
+        if ud.mutable:
+            reg_params.append(validator_type.param("validator", default="nullptr"))
+
+        table = ud.class_table_name
+        fallback_category = "unknown" if ud.categories else ud.category
+        fallback = f'AstItemClass{{"{ud.name}", "{fallback_category}", ItemFamily::{ud.family}}}'
+        if ud.categories:
+            entry = (
+                f"AstItemClass{{kind, categoryToString(category), ItemFamily::{ud.family}, category, "
+                f"category == NodeCategory::Stat, methodHandler, propCollector"
+                f"{', validator' if ud.mutable else ''}}}"
+            )
+        else:
+            entry = (
+                f'AstItemClass{{kind, "{ud.category}", ItemFamily::{ud.family}, NodeCategory::Unknown, false, '
+                f"methodHandler, propCollector{', validator' if ud.mutable else ''}}}"
+            )
 
         ns_items.append(
             Function(
-                name=f"createDefault{ud.name}",
-                return_type=base_ptr_type,
-                params=[
-                    LUA_STATE_PTR.param("L"),
-                    REFLECT_ATOM.param("atom"),
-                    ALLOCATOR_REF.param("alloc"),
-                ],
+                name=ud.register_func,
+                return_type=VOID,
+                template_params=["typename T"],
+                is_static=True,
+                multiline_params=True,
+                params=reg_params,
                 body=[
-                    Switch(expr="atom", cases=factory_cases, default_body=[Return(expr="nullptr")])
+                    Raw(text=f"int idx = {ud.class_index_getter};"),
+                    If(cond=f"size_t(idx) >= {table}.size()", then_body=[Raw(text=f"{table}.resize(idx + 1, {fallback});")]),
+                    Raw(text=f"{table}[idx] = {entry};"),
                 ],
             )
         )
+
+        required_fflags: list[str] = []
+        ns_items.append(self._default_factory(ud, base_ptr_type, required_fflags))
 
         for node in ud.nodes:
             class_ptr = f"{'const ' if ud.is_const else ''}Luau::{node.name}*"
@@ -2469,9 +2640,8 @@ class CppGenerator:
                     ud,
                     node,
                     fields,
-                    f"auto* n = static_cast<{class_ptr}>(handle.node);",
-                    handle_ref,
-                    base_ptr_type,
+                    f"auto* n = static_cast<{class_ptr}>(handle.target);",
+                    "n->",
                     ud.mutable,
                 )
             )
@@ -2494,169 +2664,127 @@ class CppGenerator:
             )
         )
 
-        tu = TranslationUnit(
-            includes=ud.headers,
-            body=[
-                *(Raw(text=f"LUAU_FASTFLAG({flag})") for flag in [*required_fflags, *ud.fflags]),
-                BlankLine(),
-                Namespace(name="Luau", body=ns_items),
-            ],
-        )
-        return tu.render()
+        return self._translation_unit(ud, ns_items, required_fflags)
 
-    def _generate_union_inl(self, ud: UserdataDef) -> str:
-        ns_items: list[CppNode] = []
-        ast_aux_ref = Type(name="AstAuxData").ref()
+    def _generate_plain_inl(self, ud: UserdataDef) -> str:
+        node = ud.nodes[0]
+        cpp = self._item_cpp(node.name)
         doc_state_ref = TemplateType(name="std::shared_ptr", args=[Type(name="AstDocumentState")]).ref(is_const=True)
+        item_ref = Type(name="AstItem").ref()
+        node_decl = f"auto& n = *static_cast<{cpp}*>(handle.target);"
+        required_fflags: list[str] = []
 
-        aux_factory_cases = []
-        for node in ud.nodes:
-            if node.factory and node.factory.strategy == "aux_union" and node.factory.inner_type:
-                args_str = ", ".join(node.factory.args)
-                body: list[CppNode] = [
-                    Raw(text=f"out = AstAuxData(doc, {node.factory.inner_type}{{{args_str}}});"),
-                    Return(expr="true"),
-                ]
-            elif node.factory and node.factory.custom_expr:
-                body = [
-                    Raw(text=f"out = {node.factory.custom_expr};"),
-                    Return(expr="true"),
-                ]
-            else:
-                body = [Return(expr="false")]
-            aux_factory_cases.append(SwitchCase(label=f"ReflectAtom::{node.name}", body=body))
+        ns_items: list[CppNode] = self._node_functions(ud, node, list(node.fields), node_decl, "", False)
 
-        ns_items.append(
-            Function(
-                name="createDefaultAstAux",
-                return_type=BOOL,
-                params=[
-                    REFLECT_ATOM.param("atom"),
-                    doc_state_ref.param("doc"),
-                    ast_aux_ref.param("out"),
-                ],
-                body=[
-                    Switch(expr="atom", cases=aux_factory_cases, default_body=[Return(expr="false")])
-                ],
-            )
-        )
-
-        dispatch_cases = []
-        collect_cases = []
-        for node in ud.nodes:
-            enum_name = node.enum_name or f"Aux_{node.name}"
-            fields = [f for f in node.fields if f.is_readable or f.is_writable]
-            prelude: list[CppNode] = []
-            if node.union_member:
-                prelude.append(Raw(text=f"auto& n = handle.{node.union_member};"))
-                prelude.append(Unused(name="n"))
-
-            dispatch_cases.append(
-                SwitchCase(
-                    label=enum_name,
-                    body=[
-                        Block(
-                            body=[
-                                *prelude,
-                                *self._type_asserts(node.name, node.fields, ""),
-                                Switch(
-                                    expr="atom",
-                                    cases=self._method_cases(ud, fields, ""),
-                                    default_body=[Return(expr="false")],
-                                ),
-                            ]
-                        )
-                    ],
+        create_body: list[CppNode] = []
+        args_str = ", ".join(node.factory.args) if node.factory else ""
+        flag = node.factory.requires_fflag if node.factory else None
+        if flag:
+            required_fflags.append(flag)
+            create_body.append(
+                If(
+                    cond=f"!FFlag::{flag}",
+                    then_body=[Raw(text=f'luaL_error(L, "cannot create a default {node.name}: FFlag {flag} is not enabled");')],
                 )
             )
-            collect_cases.append(
-                SwitchCase(
-                    label=enum_name,
-                    body=[Block(body=[*prelude, *self._collect_props(fields, ""), Break()])],
-                )
-            )
-
+        create_body.append(Raw(text=f"pushItem(L, doc, doc->allocator()->alloc<{cpp}>({cpp}{{{args_str}}}));"))
         ns_items.append(
             Function(
-                name="dispatchAux",
-                return_type=BOOL,
-                is_static=True,
-                params=[
-                    LUA_STATE_PTR.param("L"),
-                    ast_aux_ref.param("handle"),
-                    REFLECT_ATOM.param("atom"),
-                ],
-                body=[
-                    Switch(expr="handle.kind", cases=dispatch_cases, default_body=[Return(expr="false")])
-                ],
-            )
-        )
-
-        ns_items.append(
-            Function(
-                name="collectAuxProps",
+                name=f"create{node.name}",
                 return_type=VOID,
                 is_static=True,
-                params=[
-                    LUA_STATE_PTR.param("L"),
-                    ast_aux_ref.param("handle"),
-                ],
-                body=[
-                    Switch(expr="handle.kind", cases=collect_cases, default_body=[Break()])
-                ],
+                params=[LUA_STATE_PTR.param("L"), doc_state_ref.param("doc")],
+                body=create_body,
             )
         )
 
-        tu = TranslationUnit(
-            includes=ud.headers,
-            body=[Namespace(name="Luau", body=ns_items)],
+        label = "nullptr"
+        if node.display:
+            shown = next(f for f in node.fields if f.name == node.display)
+            expr = shown.read_expr("")
+            if shown.type.kind == "name":
+                label_body: list[CppNode] = [
+                    Raw(text=node_decl),
+                    If(
+                        cond=f"{expr}.value",
+                        then_body=[Raw(text=f'lua_pushfstring(L, "{node.name}(%s)", {expr}.value);')],
+                        else_body=[Raw(text=f'lua_pushstring(L, "{node.name}");')],
+                    ),
+                ]
+            elif shown.type.kind == "string":
+                label_body = [
+                    Raw(text=node_decl),
+                    Raw(text=f'std::string text({expr}.data ? {expr}.data : "", {expr}.size);'),
+                    Raw(text=f'lua_pushfstring(L, "{node.name}(%s)", text.c_str());'),
+                ]
+            else:
+                raise ValueError(f"Field cannot be displayed: {node.name}.{node.display}")
+            label = f"label{node.name}"
+            ns_items.append(
+                Function(
+                    name=label,
+                    return_type=VOID,
+                    is_static=True,
+                    params=[LUA_STATE_PTR.param("L"), item_ref.param("handle")],
+                    body=label_body,
+                )
+            )
+
+        ns_items.append(
+            Raw(
+                text=f'const AstItemClass g_{node.name}Class = {{"{node.name}", "{ud.category}", ItemFamily::{ud.family}, '
+                f"NodeCategory::Unknown, false, handle{node.name}Methods, collect{node.name}Props, nullptr, "
+                f"create{node.name}, {label}}};"
+            )
         )
-        return tu.render()
 
-    def _generate_single_inl(self, ud: UserdataDef) -> str:
-        node = ud.nodes[0]
-        base_ptr_type = Type(name=f"Luau::{ud.name}").ptr(is_const=ud.is_const)
-        handle_ref = Type(name=f"{ud.name}Data").ref()
-        args_str = ", ".join(node.factory.args) if node.factory else ""
+        return self._translation_unit(ud, ns_items, required_fflags)
 
-        ns_items: list[CppNode] = [
-            Function(
-                name=f"createDefault{ud.name}",
-                return_type=base_ptr_type,
-                params=[
-                    LUA_STATE_PTR.param("L"),
-                    REFLECT_ATOM.param("atom"),
-                    ALLOCATOR_REF.param("alloc"),
-                ],
+    def generate_items_inl(self) -> str:
+        items = self._plain_items()
+        body: list[CppNode] = [
+            Namespace(
+                name="Luau",
                 body=[
-                    Switch(
-                        expr="atom",
-                        cases=[
-                            SwitchCase(
-                                label=f"ReflectAtom::{node.name}",
-                                body=[Return(expr=f"alloc.alloc<Luau::{node.name}>({args_str})")],
+                    Function(
+                        name="plainItemClass",
+                        return_type=Type(name="AstItemClass").ptr(is_const=True),
+                        params=[REFLECT_ATOM.param("atom")],
+                        body=[
+                            Switch(
+                                expr="atom",
+                                cases=[
+                                    SwitchCase(label=f"ReflectAtom::{node.name}", body=[Return(expr=f"&g_{node.name}Class")])
+                                    for node in items
+                                ],
+                                default_body=[Return(expr="nullptr")],
                             )
                         ],
-                        default_body=[Return(expr="nullptr")],
                     )
                 ],
-            ),
-            *self._node_functions(
-                ud,
-                node,
-                list(node.fields),
-                f"auto* n = handle.{ud.handle_member};",
-                handle_ref,
-                base_ptr_type,
-                False,
-            ),
+            )
         ]
+        return TranslationUnit(includes=[f'"{node.name}.gen.inl"' for node in items], body=body).render()
 
-        tu = TranslationUnit(
-            includes=ud.headers,
-            body=[Namespace(name="Luau", body=ns_items)],
-        )
-        return tu.render()
+    def generate_items_h(self) -> str:
+        ns_items: list[CppNode] = [
+            Raw(text="struct AstItemClass;\nstruct ReflectComment;"),
+            Raw(text="template<typename T>\nconst AstItemClass* itemClass() = delete;"),
+        ]
+        for node in self._plain_items():
+            ns_items.append(
+                Raw(
+                    text=f"extern const AstItemClass g_{node.name}Class;\n"
+                    f"template<>\n"
+                    f"inline const AstItemClass* itemClass<{self._item_cpp(node.name)}>()\n"
+                    f"{{\n"
+                    f"    return &g_{node.name}Class;\n"
+                    f"}}"
+                )
+            )
+        return TranslationUnit(
+            includes=['"Luau/Ast.h"', '"Luau/Cst.h"'], body=[Namespace(name="Luau", body=ns_items)]
+        ).render()
 
     def generate_atoms_h(self) -> str:
         atoms = self.schema.all_atoms()
@@ -2820,6 +2948,14 @@ def main() -> int:
             inl_path.write_text(content, encoding="utf-8")
             print(f"Generated: {inl_path}")
 
+    items_path = src_dir / "AstItems.gen.inl"
+    items_path.write_text(generator.generate_items_inl(), encoding="utf-8")
+    print(f"Generated: {items_path}")
+
+    items_header_path = inc_dir / "ReflectItems.gen.h"
+    items_header_path.write_text(generator.generate_items_h(), encoding="utf-8")
+    print(f"Generated: {items_header_path}")
+
     atoms_path = inc_dir / "ReflectAtoms.gen.h"
     atoms_content = generator.generate_atoms_h()
     atoms_path.write_text(atoms_content, encoding="utf-8")
@@ -2827,7 +2963,9 @@ def main() -> int:
 
     print("\nSummary:")
     for ud in GLOBAL_SCHEMA.userdatas:
-        print(f"  {ud.name:<10} : {len(ud.nodes)} nodes")
+        if ud.storage == "pointer":
+            print(f"  {ud.name:<11}: {len(ud.nodes)} nodes")
+    print(f"  Plain items: {len(PLAIN_ITEMS)} types")
     print(f"  ReflectAtom: {len(GLOBAL_SCHEMA.all_atoms())} atoms")
     print("Code generation successful.")
 

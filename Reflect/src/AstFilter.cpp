@@ -75,7 +75,7 @@ static int astFilterMatchMethod(lua_State* L)
 {
     auto& handle = checkAstFilter(L, 1);
     auto& nodeHandle = checkAstNode(L, 2);
-    lua_pushboolean(L, handle.matches(nodeHandle.node));
+    lua_pushboolean(L, handle.matches(nodeHandle.node()));
     return 1;
 }
 

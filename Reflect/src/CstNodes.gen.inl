@@ -11,29 +11,21 @@ LUAU_FASTFLAG(LuauCstAttr)
 namespace Luau
 {
 
-struct CstNodeClassInfo
-{
-    const char* kind = nullptr;
-    const char* category = "generic";
-    bool (*methodHandler)(lua_State* L, CstNodeData& handle, ReflectAtom atom) = nullptr;
-    void (*propCollector)(lua_State* L, CstNodeData& handle) = nullptr;
-};
-
-static std::vector<CstNodeClassInfo> s_cstClassTable;
+static std::vector<AstItemClass> s_cstClassTable;
 
 template<typename T>
 static void registerCstNodeClass(
     const char* kind,
-    bool (*methodHandler)(lua_State* L, CstNodeData& handle, ReflectAtom atom) = nullptr,
-    void (*propCollector)(lua_State* L, CstNodeData& handle) = nullptr
+    bool (*methodHandler)(lua_State* L, AstItem& handle, ReflectAtom atom) = nullptr,
+    void (*propCollector)(lua_State* L, AstItem& handle) = nullptr
 )
 {
     int idx = T::CstClassIndex();
     if (size_t(idx) >= s_cstClassTable.size())
     {
-        s_cstClassTable.resize(idx + 1, CstNodeClassInfo{"CstNode", "generic", nullptr, nullptr});
+        s_cstClassTable.resize(idx + 1, AstItemClass{"CstNode", "cst", ItemFamily::Cst});
     }
-    s_cstClassTable[idx] = CstNodeClassInfo{kind, "generic", methodHandler, propCollector};
+    s_cstClassTable[idx] = AstItemClass{kind, "cst", ItemFamily::Cst, NodeCategory::Unknown, false, methodHandler, propCollector};
 }
 
 const Luau::CstNode* createDefaultCstNode(lua_State* L, ReflectAtom atom, Luau::Allocator& alloc)
@@ -131,9 +123,9 @@ const Luau::CstNode* createDefaultCstNode(lua_State* L, ReflectAtom atom, Luau::
     }
 }
 
-static bool handleCstAttrMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstAttrMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstAttr*>(handle.node);
+    auto* n = static_cast<const Luau::CstAttr*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->hasAt)>, bool>, "schema type of CstAttr.hasAt does not match the C++ member");
     switch (atom)
@@ -146,17 +138,17 @@ static bool handleCstAttrMethods(lua_State* L, CstNodeData& handle, ReflectAtom 
     }
 }
 
-static void collectCstAttrProps(lua_State* L, CstNodeData& handle)
+static void collectCstAttrProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstAttr*>(handle.node);
+    auto* n = static_cast<const Luau::CstAttr*>(handle.target);
     (void)n;
     lua_pushboolean(L, n->hasAt);
     lua_setfield(L, -2, "hasAt");
 }
 
-static bool handleCstParametrizedAttrMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstParametrizedAttrMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstParametrizedAttr*>(handle.node);
+    auto* n = static_cast<const Luau::CstParametrizedAttr*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->openParenPosition)>, Luau::Position>, "schema type of CstParametrizedAttr.openParenPosition does not match the C++ member");
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->closeParenPosition)>, Luau::Position>, "schema type of CstParametrizedAttr.closeParenPosition does not match the C++ member");
@@ -177,9 +169,9 @@ static bool handleCstParametrizedAttrMethods(lua_State* L, CstNodeData& handle, 
     }
 }
 
-static void collectCstParametrizedAttrProps(lua_State* L, CstNodeData& handle)
+static void collectCstParametrizedAttrProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstParametrizedAttr*>(handle.node);
+    auto* n = static_cast<const Luau::CstParametrizedAttr*>(handle.target);
     (void)n;
     pushPosition(L, handle.doc, n->openParenPosition);
     lua_setfield(L, -2, "openParenPosition");
@@ -189,9 +181,9 @@ static void collectCstParametrizedAttrProps(lua_State* L, CstNodeData& handle)
     lua_setfield(L, -2, "argsCommaPositions");
 }
 
-static bool handleCstExprGroupMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstExprGroupMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstExprGroup*>(handle.node);
+    auto* n = static_cast<const Luau::CstExprGroup*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->closePosition)>, Luau::Position>, "schema type of CstExprGroup.closePosition does not match the C++ member");
     switch (atom)
@@ -204,17 +196,17 @@ static bool handleCstExprGroupMethods(lua_State* L, CstNodeData& handle, Reflect
     }
 }
 
-static void collectCstExprGroupProps(lua_State* L, CstNodeData& handle)
+static void collectCstExprGroupProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstExprGroup*>(handle.node);
+    auto* n = static_cast<const Luau::CstExprGroup*>(handle.target);
     (void)n;
     pushPosition(L, handle.doc, n->closePosition);
     lua_setfield(L, -2, "closePosition");
 }
 
-static bool handleCstExprConstantNumberMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstExprConstantNumberMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstExprConstantNumber*>(handle.node);
+    auto* n = static_cast<const Luau::CstExprConstantNumber*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->value)>, Luau::AstArray<char>>, "schema type of CstExprConstantNumber.value does not match the C++ member");
     switch (atom)
@@ -227,17 +219,17 @@ static bool handleCstExprConstantNumberMethods(lua_State* L, CstNodeData& handle
     }
 }
 
-static void collectCstExprConstantNumberProps(lua_State* L, CstNodeData& handle)
+static void collectCstExprConstantNumberProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstExprConstantNumber*>(handle.node);
+    auto* n = static_cast<const Luau::CstExprConstantNumber*>(handle.target);
     (void)n;
     lua_pushlstring(L, n->value.data ? n->value.data : "", n->value.size);
     lua_setfield(L, -2, "value");
 }
 
-static bool handleCstExprConstantIntegerMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstExprConstantIntegerMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstExprConstantInteger*>(handle.node);
+    auto* n = static_cast<const Luau::CstExprConstantInteger*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->value)>, Luau::AstArray<char>>, "schema type of CstExprConstantInteger.value does not match the C++ member");
     switch (atom)
@@ -250,17 +242,17 @@ static bool handleCstExprConstantIntegerMethods(lua_State* L, CstNodeData& handl
     }
 }
 
-static void collectCstExprConstantIntegerProps(lua_State* L, CstNodeData& handle)
+static void collectCstExprConstantIntegerProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstExprConstantInteger*>(handle.node);
+    auto* n = static_cast<const Luau::CstExprConstantInteger*>(handle.target);
     (void)n;
     lua_pushlstring(L, n->value.data ? n->value.data : "", n->value.size);
     lua_setfield(L, -2, "value");
 }
 
-static bool handleCstExprConstantStringMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstExprConstantStringMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstExprConstantString*>(handle.node);
+    auto* n = static_cast<const Luau::CstExprConstantString*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->quoteStyle)>, Luau::CstExprConstantString::QuoteStyle>, "schema type of CstExprConstantString.quoteStyle does not match the C++ member");
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->blockDepth)>, unsigned int>, "schema type of CstExprConstantString.blockDepth does not match the C++ member");
@@ -281,9 +273,9 @@ static bool handleCstExprConstantStringMethods(lua_State* L, CstNodeData& handle
     }
 }
 
-static void collectCstExprConstantStringProps(lua_State* L, CstNodeData& handle)
+static void collectCstExprConstantStringProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstExprConstantString*>(handle.node);
+    auto* n = static_cast<const Luau::CstExprConstantString*>(handle.target);
     (void)n;
     lua_pushstring(L, toString(n->quoteStyle).c_str());
     lua_setfield(L, -2, "quoteStyle");
@@ -293,13 +285,14 @@ static void collectCstExprConstantStringProps(lua_State* L, CstNodeData& handle)
     lua_setfield(L, -2, "sourceString");
 }
 
-static bool handleCstExprCallMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstExprCallMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstExprCall*>(handle.node);
+    auto* n = static_cast<const Luau::CstExprCall*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->openParens)>, Luau::Position>, "schema type of CstExprCall.openParens does not match the C++ member");
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->closeParens)>, Luau::Position>, "schema type of CstExprCall.closeParens does not match the C++ member");
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->commaPositions)>, Luau::AstArray<Luau::Position>>, "schema type of CstExprCall.commaPositions does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->explicitTypes)>, Luau::CstTypeInstantiation*>, "schema type of CstExprCall.explicitTypes does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OpenParens:
@@ -311,14 +304,17 @@ static bool handleCstExprCallMethods(lua_State* L, CstNodeData& handle, ReflectA
     case ReflectAtom::CommaPositions:
         pushPositionArray(L, handle.doc, n->commaPositions);
         return true;
+    case ReflectAtom::ExplicitTypes:
+        pushItem(L, handle.doc, n->explicitTypes);
+        return true;
     default:
         return false;
     }
 }
 
-static void collectCstExprCallProps(lua_State* L, CstNodeData& handle)
+static void collectCstExprCallProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstExprCall*>(handle.node);
+    auto* n = static_cast<const Luau::CstExprCall*>(handle.target);
     (void)n;
     pushPosition(L, handle.doc, n->openParens);
     lua_setfield(L, -2, "openParens");
@@ -326,11 +322,13 @@ static void collectCstExprCallProps(lua_State* L, CstNodeData& handle)
     lua_setfield(L, -2, "closeParens");
     pushPositionArray(L, handle.doc, n->commaPositions);
     lua_setfield(L, -2, "commaPositions");
+    pushItem(L, handle.doc, n->explicitTypes);
+    lua_setfield(L, -2, "explicitTypes");
 }
 
-static bool handleCstExprIndexExprMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstExprIndexExprMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstExprIndexExpr*>(handle.node);
+    auto* n = static_cast<const Luau::CstExprIndexExpr*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->openBracketPosition)>, Luau::Position>, "schema type of CstExprIndexExpr.openBracketPosition does not match the C++ member");
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->closeBracketPosition)>, Luau::Position>, "schema type of CstExprIndexExpr.closeBracketPosition does not match the C++ member");
@@ -347,9 +345,9 @@ static bool handleCstExprIndexExprMethods(lua_State* L, CstNodeData& handle, Ref
     }
 }
 
-static void collectCstExprIndexExprProps(lua_State* L, CstNodeData& handle)
+static void collectCstExprIndexExprProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstExprIndexExpr*>(handle.node);
+    auto* n = static_cast<const Luau::CstExprIndexExpr*>(handle.target);
     (void)n;
     pushPosition(L, handle.doc, n->openBracketPosition);
     lua_setfield(L, -2, "openBracketPosition");
@@ -357,9 +355,9 @@ static void collectCstExprIndexExprProps(lua_State* L, CstNodeData& handle)
     lua_setfield(L, -2, "closeBracketPosition");
 }
 
-static bool handleCstExprFunctionMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstExprFunctionMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstExprFunction*>(handle.node);
+    auto* n = static_cast<const Luau::CstExprFunction*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->functionKeywordPosition)>, Luau::Position>, "schema type of CstExprFunction.functionKeywordPosition does not match the C++ member");
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->openGenericsPosition)>, Luau::Position>, "schema type of CstExprFunction.openGenericsPosition does not match the C++ member");
@@ -369,6 +367,7 @@ static bool handleCstExprFunctionMethods(lua_State* L, CstNodeData& handle, Refl
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->argsCommaPositions)>, Luau::AstArray<Luau::Position>>, "schema type of CstExprFunction.argsCommaPositions does not match the C++ member");
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->varargAnnotationColonPosition)>, Luau::Position>, "schema type of CstExprFunction.varargAnnotationColonPosition does not match the C++ member");
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->returnSpecifierPosition)>, Luau::Position>, "schema type of CstExprFunction.returnSpecifierPosition does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->attrLists)>, Luau::AstArray<Luau::CstAttrList*>>, "schema type of CstExprFunction.attrLists does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::FunctionKeywordPosition:
@@ -395,14 +394,17 @@ static bool handleCstExprFunctionMethods(lua_State* L, CstNodeData& handle, Refl
     case ReflectAtom::ReturnSpecifierPosition:
         pushPosition(L, handle.doc, n->returnSpecifierPosition);
         return true;
+    case ReflectAtom::AttrLists:
+        pushArray(L, n->attrLists.size, [&](size_t i) { n->attrLists.data[i] ? pushItem(L, handle.doc, n->attrLists.data[i]) : lua_pushboolean(L, false); });
+        return true;
     default:
         return false;
     }
 }
 
-static void collectCstExprFunctionProps(lua_State* L, CstNodeData& handle)
+static void collectCstExprFunctionProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstExprFunction*>(handle.node);
+    auto* n = static_cast<const Luau::CstExprFunction*>(handle.target);
     (void)n;
     pushPosition(L, handle.doc, n->functionKeywordPosition);
     lua_setfield(L, -2, "functionKeywordPosition");
@@ -420,34 +422,36 @@ static void collectCstExprFunctionProps(lua_State* L, CstNodeData& handle)
     lua_setfield(L, -2, "varargAnnotationColonPosition");
     pushPosition(L, handle.doc, n->returnSpecifierPosition);
     lua_setfield(L, -2, "returnSpecifierPosition");
+    pushArray(L, n->attrLists.size, [&](size_t i) { n->attrLists.data[i] ? pushItem(L, handle.doc, n->attrLists.data[i]) : lua_pushboolean(L, false); });
+    lua_setfield(L, -2, "attrLists");
 }
 
-static bool handleCstExprTableMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstExprTableMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstExprTable*>(handle.node);
+    auto* n = static_cast<const Luau::CstExprTable*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->items)>, Luau::AstArray<Luau::CstExprTable::Item>>, "schema type of CstExprTable.items does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::Items:
-        pushArray(L, n->items.size, [&](size_t i) { pushAstAux(L, handle.doc, n->items.data[i]); });
+        pushArray(L, n->items.size, [&](size_t i) { pushItem(L, handle.doc, &n->items.data[i]); });
         return true;
     default:
         return false;
     }
 }
 
-static void collectCstExprTableProps(lua_State* L, CstNodeData& handle)
+static void collectCstExprTableProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstExprTable*>(handle.node);
+    auto* n = static_cast<const Luau::CstExprTable*>(handle.target);
     (void)n;
-    pushArray(L, n->items.size, [&](size_t i) { pushAstAux(L, handle.doc, n->items.data[i]); });
+    pushArray(L, n->items.size, [&](size_t i) { pushItem(L, handle.doc, &n->items.data[i]); });
     lua_setfield(L, -2, "items");
 }
 
-static bool handleCstExprOpMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstExprOpMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstExprOp*>(handle.node);
+    auto* n = static_cast<const Luau::CstExprOp*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->opPosition)>, Luau::Position>, "schema type of CstExprOp.opPosition does not match the C++ member");
     switch (atom)
@@ -460,17 +464,17 @@ static bool handleCstExprOpMethods(lua_State* L, CstNodeData& handle, ReflectAto
     }
 }
 
-static void collectCstExprOpProps(lua_State* L, CstNodeData& handle)
+static void collectCstExprOpProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstExprOp*>(handle.node);
+    auto* n = static_cast<const Luau::CstExprOp*>(handle.target);
     (void)n;
     pushPosition(L, handle.doc, n->opPosition);
     lua_setfield(L, -2, "opPosition");
 }
 
-static bool handleCstExprTypeAssertionMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstExprTypeAssertionMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstExprTypeAssertion*>(handle.node);
+    auto* n = static_cast<const Luau::CstExprTypeAssertion*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->opPosition)>, Luau::Position>, "schema type of CstExprTypeAssertion.opPosition does not match the C++ member");
     switch (atom)
@@ -483,17 +487,17 @@ static bool handleCstExprTypeAssertionMethods(lua_State* L, CstNodeData& handle,
     }
 }
 
-static void collectCstExprTypeAssertionProps(lua_State* L, CstNodeData& handle)
+static void collectCstExprTypeAssertionProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstExprTypeAssertion*>(handle.node);
+    auto* n = static_cast<const Luau::CstExprTypeAssertion*>(handle.target);
     (void)n;
     pushPosition(L, handle.doc, n->opPosition);
     lua_setfield(L, -2, "opPosition");
 }
 
-static bool handleCstExprIfElseMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstExprIfElseMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstExprIfElse*>(handle.node);
+    auto* n = static_cast<const Luau::CstExprIfElse*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->isElseIf)>, bool>, "schema type of CstExprIfElse.isElseIf does not match the C++ member");
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->thenPosition)>, Luau::Position>, "schema type of CstExprIfElse.thenPosition does not match the C++ member");
@@ -514,9 +518,9 @@ static bool handleCstExprIfElseMethods(lua_State* L, CstNodeData& handle, Reflec
     }
 }
 
-static void collectCstExprIfElseProps(lua_State* L, CstNodeData& handle)
+static void collectCstExprIfElseProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstExprIfElse*>(handle.node);
+    auto* n = static_cast<const Luau::CstExprIfElse*>(handle.target);
     (void)n;
     lua_pushboolean(L, n->isElseIf);
     lua_setfield(L, -2, "isElseIf");
@@ -526,41 +530,61 @@ static void collectCstExprIfElseProps(lua_State* L, CstNodeData& handle)
     lua_setfield(L, -2, "elsePosition");
 }
 
-static bool handleCstExprInterpStringMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstExprInterpStringMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstExprInterpString*>(handle.node);
+    auto* n = static_cast<const Luau::CstExprInterpString*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->stringPositions)>, Luau::AstArray<Luau::Position>>, "schema type of CstExprInterpString.commaPositions does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->sourceStrings)>, Luau::AstArray<Luau::AstArray<char>>>, "schema type of CstExprInterpString.sourceStrings does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::CommaPositions:
         pushPositionArray(L, handle.doc, n->stringPositions);
+        return true;
+    case ReflectAtom::SourceStrings:
+        pushArray(L, n->sourceStrings.size, [&](size_t i) { lua_pushlstring(L, n->sourceStrings.data[i].data ? n->sourceStrings.data[i].data : "", n->sourceStrings.data[i].size); });
         return true;
     default:
         return false;
     }
 }
 
-static void collectCstExprInterpStringProps(lua_State* L, CstNodeData& handle)
+static void collectCstExprInterpStringProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstExprInterpString*>(handle.node);
+    auto* n = static_cast<const Luau::CstExprInterpString*>(handle.target);
     (void)n;
     pushPositionArray(L, handle.doc, n->stringPositions);
     lua_setfield(L, -2, "commaPositions");
+    pushArray(L, n->sourceStrings.size, [&](size_t i) { lua_pushlstring(L, n->sourceStrings.data[i].data ? n->sourceStrings.data[i].data : "", n->sourceStrings.data[i].size); });
+    lua_setfield(L, -2, "sourceStrings");
 }
 
-static bool handleCstExprExplicitTypeInstantiationMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstExprExplicitTypeInstantiationMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    return false;
+    auto* n = static_cast<const Luau::CstExprExplicitTypeInstantiation*>(handle.target);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->instantiation)>, Luau::CstTypeInstantiation>, "schema type of CstExprExplicitTypeInstantiation.instantiation does not match the C++ member");
+    switch (atom)
+    {
+    case ReflectAtom::Instantiation:
+        pushItem(L, handle.doc, &n->instantiation);
+        return true;
+    default:
+        return false;
+    }
 }
 
-static void collectCstExprExplicitTypeInstantiationProps(lua_State* L, CstNodeData& handle)
+static void collectCstExprExplicitTypeInstantiationProps(lua_State* L, AstItem& handle)
 {
+    auto* n = static_cast<const Luau::CstExprExplicitTypeInstantiation*>(handle.target);
+    (void)n;
+    pushItem(L, handle.doc, &n->instantiation);
+    lua_setfield(L, -2, "instantiation");
 }
 
-static bool handleCstStatDoMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstStatDoMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstStatDo*>(handle.node);
+    auto* n = static_cast<const Luau::CstStatDo*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->statsStartPosition)>, Luau::Position>, "schema type of CstStatDo.statsStartPosition does not match the C++ member");
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->endPosition)>, Luau::Position>, "schema type of CstStatDo.endPosition does not match the C++ member");
@@ -577,9 +601,9 @@ static bool handleCstStatDoMethods(lua_State* L, CstNodeData& handle, ReflectAto
     }
 }
 
-static void collectCstStatDoProps(lua_State* L, CstNodeData& handle)
+static void collectCstStatDoProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstStatDo*>(handle.node);
+    auto* n = static_cast<const Luau::CstStatDo*>(handle.target);
     (void)n;
     pushPosition(L, handle.doc, n->statsStartPosition);
     lua_setfield(L, -2, "statsStartPosition");
@@ -587,9 +611,9 @@ static void collectCstStatDoProps(lua_State* L, CstNodeData& handle)
     lua_setfield(L, -2, "endPosition");
 }
 
-static bool handleCstStatRepeatMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstStatRepeatMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstStatRepeat*>(handle.node);
+    auto* n = static_cast<const Luau::CstStatRepeat*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->untilPosition)>, Luau::Position>, "schema type of CstStatRepeat.untilPosition does not match the C++ member");
     switch (atom)
@@ -602,17 +626,17 @@ static bool handleCstStatRepeatMethods(lua_State* L, CstNodeData& handle, Reflec
     }
 }
 
-static void collectCstStatRepeatProps(lua_State* L, CstNodeData& handle)
+static void collectCstStatRepeatProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstStatRepeat*>(handle.node);
+    auto* n = static_cast<const Luau::CstStatRepeat*>(handle.target);
     (void)n;
     pushPosition(L, handle.doc, n->untilPosition);
     lua_setfield(L, -2, "untilPosition");
 }
 
-static bool handleCstStatReturnMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstStatReturnMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstStatReturn*>(handle.node);
+    auto* n = static_cast<const Luau::CstStatReturn*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->commaPositions)>, Luau::AstArray<Luau::Position>>, "schema type of CstStatReturn.commaPositions does not match the C++ member");
     switch (atom)
@@ -625,17 +649,17 @@ static bool handleCstStatReturnMethods(lua_State* L, CstNodeData& handle, Reflec
     }
 }
 
-static void collectCstStatReturnProps(lua_State* L, CstNodeData& handle)
+static void collectCstStatReturnProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstStatReturn*>(handle.node);
+    auto* n = static_cast<const Luau::CstStatReturn*>(handle.target);
     (void)n;
     pushPositionArray(L, handle.doc, n->commaPositions);
     lua_setfield(L, -2, "commaPositions");
 }
 
-static bool handleCstStatLocalMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstStatLocalMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstStatLocal*>(handle.node);
+    auto* n = static_cast<const Luau::CstStatLocal*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->varsAnnotationColonPositions)>, Luau::AstArray<Luau::Position>>, "schema type of CstStatLocal.varsAnnotationColonPositions does not match the C++ member");
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->varsCommaPositions)>, Luau::AstArray<Luau::Position>>, "schema type of CstStatLocal.varsCommaPositions does not match the C++ member");
@@ -656,9 +680,9 @@ static bool handleCstStatLocalMethods(lua_State* L, CstNodeData& handle, Reflect
     }
 }
 
-static void collectCstStatLocalProps(lua_State* L, CstNodeData& handle)
+static void collectCstStatLocalProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstStatLocal*>(handle.node);
+    auto* n = static_cast<const Luau::CstStatLocal*>(handle.target);
     (void)n;
     pushPositionArray(L, handle.doc, n->varsAnnotationColonPositions);
     lua_setfield(L, -2, "varsAnnotationColonPositions");
@@ -668,9 +692,9 @@ static void collectCstStatLocalProps(lua_State* L, CstNodeData& handle)
     lua_setfield(L, -2, "valuesCommaPositions");
 }
 
-static bool handleCstStatForMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstStatForMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstStatFor*>(handle.node);
+    auto* n = static_cast<const Luau::CstStatFor*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->annotationColonPosition)>, Luau::Position>, "schema type of CstStatFor.annotationColonPosition does not match the C++ member");
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->equalsPosition)>, Luau::Position>, "schema type of CstStatFor.equalsPosition does not match the C++ member");
@@ -695,9 +719,9 @@ static bool handleCstStatForMethods(lua_State* L, CstNodeData& handle, ReflectAt
     }
 }
 
-static void collectCstStatForProps(lua_State* L, CstNodeData& handle)
+static void collectCstStatForProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstStatFor*>(handle.node);
+    auto* n = static_cast<const Luau::CstStatFor*>(handle.target);
     (void)n;
     pushPosition(L, handle.doc, n->annotationColonPosition);
     lua_setfield(L, -2, "annotationColonPosition");
@@ -709,9 +733,9 @@ static void collectCstStatForProps(lua_State* L, CstNodeData& handle)
     lua_setfield(L, -2, "stepCommaPosition");
 }
 
-static bool handleCstStatForInMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstStatForInMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstStatForIn*>(handle.node);
+    auto* n = static_cast<const Luau::CstStatForIn*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->varsAnnotationColonPositions)>, Luau::AstArray<Luau::Position>>, "schema type of CstStatForIn.varsAnnotationColonPositions does not match the C++ member");
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->varsCommaPositions)>, Luau::AstArray<Luau::Position>>, "schema type of CstStatForIn.varsCommaPositions does not match the C++ member");
@@ -732,9 +756,9 @@ static bool handleCstStatForInMethods(lua_State* L, CstNodeData& handle, Reflect
     }
 }
 
-static void collectCstStatForInProps(lua_State* L, CstNodeData& handle)
+static void collectCstStatForInProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstStatForIn*>(handle.node);
+    auto* n = static_cast<const Luau::CstStatForIn*>(handle.target);
     (void)n;
     pushPositionArray(L, handle.doc, n->varsAnnotationColonPositions);
     lua_setfield(L, -2, "varsAnnotationColonPositions");
@@ -744,9 +768,9 @@ static void collectCstStatForInProps(lua_State* L, CstNodeData& handle)
     lua_setfield(L, -2, "valuesCommaPositions");
 }
 
-static bool handleCstStatAssignMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstStatAssignMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstStatAssign*>(handle.node);
+    auto* n = static_cast<const Luau::CstStatAssign*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->varsCommaPositions)>, Luau::AstArray<Luau::Position>>, "schema type of CstStatAssign.varsCommaPositions does not match the C++ member");
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->equalsPosition)>, Luau::Position>, "schema type of CstStatAssign.equalsPosition does not match the C++ member");
@@ -767,9 +791,9 @@ static bool handleCstStatAssignMethods(lua_State* L, CstNodeData& handle, Reflec
     }
 }
 
-static void collectCstStatAssignProps(lua_State* L, CstNodeData& handle)
+static void collectCstStatAssignProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstStatAssign*>(handle.node);
+    auto* n = static_cast<const Luau::CstStatAssign*>(handle.target);
     (void)n;
     pushPositionArray(L, handle.doc, n->varsCommaPositions);
     lua_setfield(L, -2, "varsCommaPositions");
@@ -779,9 +803,9 @@ static void collectCstStatAssignProps(lua_State* L, CstNodeData& handle)
     lua_setfield(L, -2, "valuesCommaPositions");
 }
 
-static bool handleCstStatCompoundAssignMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstStatCompoundAssignMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstStatCompoundAssign*>(handle.node);
+    auto* n = static_cast<const Luau::CstStatCompoundAssign*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->opPosition)>, Luau::Position>, "schema type of CstStatCompoundAssign.opPosition does not match the C++ member");
     switch (atom)
@@ -794,43 +818,50 @@ static bool handleCstStatCompoundAssignMethods(lua_State* L, CstNodeData& handle
     }
 }
 
-static void collectCstStatCompoundAssignProps(lua_State* L, CstNodeData& handle)
+static void collectCstStatCompoundAssignProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstStatCompoundAssign*>(handle.node);
+    auto* n = static_cast<const Luau::CstStatCompoundAssign*>(handle.target);
     (void)n;
     pushPosition(L, handle.doc, n->opPosition);
     lua_setfield(L, -2, "opPosition");
 }
 
-static bool handleCstStatFunctionMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstStatFunctionMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstStatFunction*>(handle.node);
+    auto* n = static_cast<const Luau::CstStatFunction*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->functionKeywordPosition)>, Luau::Position>, "schema type of CstStatFunction.functionKeywordPosition does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->attrLists)>, Luau::AstArray<Luau::CstAttrList*>>, "schema type of CstStatFunction.attrLists does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::FunctionKeywordPosition:
         pushPosition(L, handle.doc, n->functionKeywordPosition);
+        return true;
+    case ReflectAtom::AttrLists:
+        pushArray(L, n->attrLists.size, [&](size_t i) { n->attrLists.data[i] ? pushItem(L, handle.doc, n->attrLists.data[i]) : lua_pushboolean(L, false); });
         return true;
     default:
         return false;
     }
 }
 
-static void collectCstStatFunctionProps(lua_State* L, CstNodeData& handle)
+static void collectCstStatFunctionProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstStatFunction*>(handle.node);
+    auto* n = static_cast<const Luau::CstStatFunction*>(handle.target);
     (void)n;
     pushPosition(L, handle.doc, n->functionKeywordPosition);
     lua_setfield(L, -2, "functionKeywordPosition");
+    pushArray(L, n->attrLists.size, [&](size_t i) { n->attrLists.data[i] ? pushItem(L, handle.doc, n->attrLists.data[i]) : lua_pushboolean(L, false); });
+    lua_setfield(L, -2, "attrLists");
 }
 
-static bool handleCstStatLocalFunctionMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstStatLocalFunctionMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstStatLocalFunction*>(handle.node);
+    auto* n = static_cast<const Luau::CstStatLocalFunction*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->localKeywordPosition)>, Luau::Position>, "schema type of CstStatLocalFunction.localKeywordPosition does not match the C++ member");
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->functionKeywordPosition)>, Luau::Position>, "schema type of CstStatLocalFunction.functionKeywordPosition does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->attrLists)>, Luau::AstArray<Luau::CstAttrList*>>, "schema type of CstStatLocalFunction.attrLists does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::LocalKeywordPosition:
@@ -839,24 +870,29 @@ static bool handleCstStatLocalFunctionMethods(lua_State* L, CstNodeData& handle,
     case ReflectAtom::FunctionKeywordPosition:
         pushPosition(L, handle.doc, n->functionKeywordPosition);
         return true;
+    case ReflectAtom::AttrLists:
+        pushArray(L, n->attrLists.size, [&](size_t i) { n->attrLists.data[i] ? pushItem(L, handle.doc, n->attrLists.data[i]) : lua_pushboolean(L, false); });
+        return true;
     default:
         return false;
     }
 }
 
-static void collectCstStatLocalFunctionProps(lua_State* L, CstNodeData& handle)
+static void collectCstStatLocalFunctionProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstStatLocalFunction*>(handle.node);
+    auto* n = static_cast<const Luau::CstStatLocalFunction*>(handle.target);
     (void)n;
     pushPosition(L, handle.doc, n->localKeywordPosition);
     lua_setfield(L, -2, "localKeywordPosition");
     pushPosition(L, handle.doc, n->functionKeywordPosition);
     lua_setfield(L, -2, "functionKeywordPosition");
+    pushArray(L, n->attrLists.size, [&](size_t i) { n->attrLists.data[i] ? pushItem(L, handle.doc, n->attrLists.data[i]) : lua_pushboolean(L, false); });
+    lua_setfield(L, -2, "attrLists");
 }
 
-static bool handleCstGenericTypeMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstGenericTypeMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstGenericType*>(handle.node);
+    auto* n = static_cast<const Luau::CstGenericType*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->defaultEqualsPosition)>, Luau::Position>, "schema type of CstGenericType.defaultEqualsPosition does not match the C++ member");
     switch (atom)
@@ -869,17 +905,17 @@ static bool handleCstGenericTypeMethods(lua_State* L, CstNodeData& handle, Refle
     }
 }
 
-static void collectCstGenericTypeProps(lua_State* L, CstNodeData& handle)
+static void collectCstGenericTypeProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstGenericType*>(handle.node);
+    auto* n = static_cast<const Luau::CstGenericType*>(handle.target);
     (void)n;
     pushPosition(L, handle.doc, n->defaultEqualsPosition);
     lua_setfield(L, -2, "defaultEqualsPosition");
 }
 
-static bool handleCstGenericTypePackMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstGenericTypePackMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstGenericTypePack*>(handle.node);
+    auto* n = static_cast<const Luau::CstGenericTypePack*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->ellipsisPosition)>, Luau::Position>, "schema type of CstGenericTypePack.ellipsisPosition does not match the C++ member");
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->defaultEqualsPosition)>, Luau::Position>, "schema type of CstGenericTypePack.defaultEqualsPosition does not match the C++ member");
@@ -896,9 +932,9 @@ static bool handleCstGenericTypePackMethods(lua_State* L, CstNodeData& handle, R
     }
 }
 
-static void collectCstGenericTypePackProps(lua_State* L, CstNodeData& handle)
+static void collectCstGenericTypePackProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstGenericTypePack*>(handle.node);
+    auto* n = static_cast<const Luau::CstGenericTypePack*>(handle.target);
     (void)n;
     pushPosition(L, handle.doc, n->ellipsisPosition);
     lua_setfield(L, -2, "ellipsisPosition");
@@ -906,9 +942,9 @@ static void collectCstGenericTypePackProps(lua_State* L, CstNodeData& handle)
     lua_setfield(L, -2, "defaultEqualsPosition");
 }
 
-static bool handleCstStatTypeAliasMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstStatTypeAliasMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstStatTypeAlias*>(handle.node);
+    auto* n = static_cast<const Luau::CstStatTypeAlias*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->typeKeywordPosition)>, Luau::Position>, "schema type of CstStatTypeAlias.typeKeywordPosition does not match the C++ member");
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->genericsOpenPosition)>, Luau::Position>, "schema type of CstStatTypeAlias.genericsOpenPosition does not match the C++ member");
@@ -937,9 +973,9 @@ static bool handleCstStatTypeAliasMethods(lua_State* L, CstNodeData& handle, Ref
     }
 }
 
-static void collectCstStatTypeAliasProps(lua_State* L, CstNodeData& handle)
+static void collectCstStatTypeAliasProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstStatTypeAlias*>(handle.node);
+    auto* n = static_cast<const Luau::CstStatTypeAlias*>(handle.target);
     (void)n;
     pushPosition(L, handle.doc, n->typeKeywordPosition);
     lua_setfield(L, -2, "typeKeywordPosition");
@@ -953,9 +989,9 @@ static void collectCstStatTypeAliasProps(lua_State* L, CstNodeData& handle)
     lua_setfield(L, -2, "equalsPosition");
 }
 
-static bool handleCstStatTypeFunctionMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstStatTypeFunctionMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstStatTypeFunction*>(handle.node);
+    auto* n = static_cast<const Luau::CstStatTypeFunction*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->typeKeywordPosition)>, Luau::Position>, "schema type of CstStatTypeFunction.typeKeywordPosition does not match the C++ member");
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->functionKeywordPosition)>, Luau::Position>, "schema type of CstStatTypeFunction.functionKeywordPosition does not match the C++ member");
@@ -972,9 +1008,9 @@ static bool handleCstStatTypeFunctionMethods(lua_State* L, CstNodeData& handle, 
     }
 }
 
-static void collectCstStatTypeFunctionProps(lua_State* L, CstNodeData& handle)
+static void collectCstStatTypeFunctionProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstStatTypeFunction*>(handle.node);
+    auto* n = static_cast<const Luau::CstStatTypeFunction*>(handle.target);
     (void)n;
     pushPosition(L, handle.doc, n->typeKeywordPosition);
     lua_setfield(L, -2, "typeKeywordPosition");
@@ -982,9 +1018,9 @@ static void collectCstStatTypeFunctionProps(lua_State* L, CstNodeData& handle)
     lua_setfield(L, -2, "functionKeywordPosition");
 }
 
-static bool handleCstTypeReferenceMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstTypeReferenceMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstTypeReference*>(handle.node);
+    auto* n = static_cast<const Luau::CstTypeReference*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->prefixPointPosition)>, Luau::Position>, "schema type of CstTypeReference.prefixPointPosition does not match the C++ member");
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->openParametersPosition)>, Luau::Position>, "schema type of CstTypeReference.openParametersPosition does not match the C++ member");
@@ -1009,9 +1045,9 @@ static bool handleCstTypeReferenceMethods(lua_State* L, CstNodeData& handle, Ref
     }
 }
 
-static void collectCstTypeReferenceProps(lua_State* L, CstNodeData& handle)
+static void collectCstTypeReferenceProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstTypeReference*>(handle.node);
+    auto* n = static_cast<const Luau::CstTypeReference*>(handle.target);
     (void)n;
     pushPosition(L, handle.doc, n->prefixPointPosition);
     lua_setfield(L, -2, "prefixPointPosition");
@@ -1023,32 +1059,38 @@ static void collectCstTypeReferenceProps(lua_State* L, CstNodeData& handle)
     lua_setfield(L, -2, "closeParametersPosition");
 }
 
-static bool handleCstTypeTableMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstTypeTableMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstTypeTable*>(handle.node);
+    auto* n = static_cast<const Luau::CstTypeTable*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->isArray)>, bool>, "schema type of CstTypeTable.isArray does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->items)>, Luau::AstArray<Luau::CstTypeTable::Item>>, "schema type of CstTypeTable.items does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::IsArray:
         lua_pushboolean(L, n->isArray);
+        return true;
+    case ReflectAtom::Items:
+        pushArray(L, n->items.size, [&](size_t i) { pushItem(L, handle.doc, &n->items.data[i]); });
         return true;
     default:
         return false;
     }
 }
 
-static void collectCstTypeTableProps(lua_State* L, CstNodeData& handle)
+static void collectCstTypeTableProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstTypeTable*>(handle.node);
+    auto* n = static_cast<const Luau::CstTypeTable*>(handle.target);
     (void)n;
     lua_pushboolean(L, n->isArray);
     lua_setfield(L, -2, "isArray");
+    pushArray(L, n->items.size, [&](size_t i) { pushItem(L, handle.doc, &n->items.data[i]); });
+    lua_setfield(L, -2, "items");
 }
 
-static bool handleCstTypeFunctionMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstTypeFunctionMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstTypeFunction*>(handle.node);
+    auto* n = static_cast<const Luau::CstTypeFunction*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->openGenericsPosition)>, Luau::Position>, "schema type of CstTypeFunction.openGenericsPosition does not match the C++ member");
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->genericsCommaPositions)>, Luau::AstArray<Luau::Position>>, "schema type of CstTypeFunction.genericsCommaPositions does not match the C++ member");
@@ -1089,9 +1131,9 @@ static bool handleCstTypeFunctionMethods(lua_State* L, CstNodeData& handle, Refl
     }
 }
 
-static void collectCstTypeFunctionProps(lua_State* L, CstNodeData& handle)
+static void collectCstTypeFunctionProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstTypeFunction*>(handle.node);
+    auto* n = static_cast<const Luau::CstTypeFunction*>(handle.target);
     (void)n;
     pushPosition(L, handle.doc, n->openGenericsPosition);
     lua_setfield(L, -2, "openGenericsPosition");
@@ -1111,9 +1153,9 @@ static void collectCstTypeFunctionProps(lua_State* L, CstNodeData& handle)
     lua_setfield(L, -2, "returnArrowPosition");
 }
 
-static bool handleCstTypeTypeofMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstTypeTypeofMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstTypeTypeof*>(handle.node);
+    auto* n = static_cast<const Luau::CstTypeTypeof*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->openPosition)>, Luau::Position>, "schema type of CstTypeTypeof.openPosition does not match the C++ member");
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->closePosition)>, Luau::Position>, "schema type of CstTypeTypeof.closePosition does not match the C++ member");
@@ -1130,9 +1172,9 @@ static bool handleCstTypeTypeofMethods(lua_State* L, CstNodeData& handle, Reflec
     }
 }
 
-static void collectCstTypeTypeofProps(lua_State* L, CstNodeData& handle)
+static void collectCstTypeTypeofProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstTypeTypeof*>(handle.node);
+    auto* n = static_cast<const Luau::CstTypeTypeof*>(handle.target);
     (void)n;
     pushPosition(L, handle.doc, n->openPosition);
     lua_setfield(L, -2, "openPosition");
@@ -1140,9 +1182,9 @@ static void collectCstTypeTypeofProps(lua_State* L, CstNodeData& handle)
     lua_setfield(L, -2, "closePosition");
 }
 
-static bool handleCstTypeUnionMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstTypeUnionMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstTypeUnion*>(handle.node);
+    auto* n = static_cast<const Luau::CstTypeUnion*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->leadingPosition)>, Luau::Position>, "schema type of CstTypeUnion.leadingPosition does not match the C++ member");
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->separatorPositions)>, Luau::AstArray<Luau::Position>>, "schema type of CstTypeUnion.separatorPositions does not match the C++ member");
@@ -1159,9 +1201,9 @@ static bool handleCstTypeUnionMethods(lua_State* L, CstNodeData& handle, Reflect
     }
 }
 
-static void collectCstTypeUnionProps(lua_State* L, CstNodeData& handle)
+static void collectCstTypeUnionProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstTypeUnion*>(handle.node);
+    auto* n = static_cast<const Luau::CstTypeUnion*>(handle.target);
     (void)n;
     pushPosition(L, handle.doc, n->leadingPosition);
     lua_setfield(L, -2, "leadingPosition");
@@ -1169,9 +1211,9 @@ static void collectCstTypeUnionProps(lua_State* L, CstNodeData& handle)
     lua_setfield(L, -2, "separatorPositions");
 }
 
-static bool handleCstTypeIntersectionMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstTypeIntersectionMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstTypeIntersection*>(handle.node);
+    auto* n = static_cast<const Luau::CstTypeIntersection*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->leadingPosition)>, Luau::Position>, "schema type of CstTypeIntersection.leadingPosition does not match the C++ member");
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->separatorPositions)>, Luau::AstArray<Luau::Position>>, "schema type of CstTypeIntersection.separatorPositions does not match the C++ member");
@@ -1188,9 +1230,9 @@ static bool handleCstTypeIntersectionMethods(lua_State* L, CstNodeData& handle, 
     }
 }
 
-static void collectCstTypeIntersectionProps(lua_State* L, CstNodeData& handle)
+static void collectCstTypeIntersectionProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstTypeIntersection*>(handle.node);
+    auto* n = static_cast<const Luau::CstTypeIntersection*>(handle.target);
     (void)n;
     pushPosition(L, handle.doc, n->leadingPosition);
     lua_setfield(L, -2, "leadingPosition");
@@ -1198,9 +1240,9 @@ static void collectCstTypeIntersectionProps(lua_State* L, CstNodeData& handle)
     lua_setfield(L, -2, "separatorPositions");
 }
 
-static bool handleCstTypeSingletonStringMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstTypeSingletonStringMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstTypeSingletonString*>(handle.node);
+    auto* n = static_cast<const Luau::CstTypeSingletonString*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->quoteStyle)>, Luau::CstExprConstantString::QuoteStyle>, "schema type of CstTypeSingletonString.quoteStyle does not match the C++ member");
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->blockDepth)>, unsigned int>, "schema type of CstTypeSingletonString.blockDepth does not match the C++ member");
@@ -1221,9 +1263,9 @@ static bool handleCstTypeSingletonStringMethods(lua_State* L, CstNodeData& handl
     }
 }
 
-static void collectCstTypeSingletonStringProps(lua_State* L, CstNodeData& handle)
+static void collectCstTypeSingletonStringProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstTypeSingletonString*>(handle.node);
+    auto* n = static_cast<const Luau::CstTypeSingletonString*>(handle.target);
     (void)n;
     lua_pushstring(L, toString(n->quoteStyle).c_str());
     lua_setfield(L, -2, "quoteStyle");
@@ -1233,9 +1275,9 @@ static void collectCstTypeSingletonStringProps(lua_State* L, CstNodeData& handle
     lua_setfield(L, -2, "sourceString");
 }
 
-static bool handleCstTypeGroupMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstTypeGroupMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstTypeGroup*>(handle.node);
+    auto* n = static_cast<const Luau::CstTypeGroup*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->closePosition)>, Luau::Position>, "schema type of CstTypeGroup.closePosition does not match the C++ member");
     switch (atom)
@@ -1248,17 +1290,17 @@ static bool handleCstTypeGroupMethods(lua_State* L, CstNodeData& handle, Reflect
     }
 }
 
-static void collectCstTypeGroupProps(lua_State* L, CstNodeData& handle)
+static void collectCstTypeGroupProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstTypeGroup*>(handle.node);
+    auto* n = static_cast<const Luau::CstTypeGroup*>(handle.target);
     (void)n;
     pushPosition(L, handle.doc, n->closePosition);
     lua_setfield(L, -2, "closePosition");
 }
 
-static bool handleCstTypePackExplicitMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstTypePackExplicitMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstTypePackExplicit*>(handle.node);
+    auto* n = static_cast<const Luau::CstTypePackExplicit*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->openParenthesesPosition)>, Luau::Position>, "schema type of CstTypePackExplicit.openParenthesesPosition does not match the C++ member");
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->closeParenthesesPosition)>, Luau::Position>, "schema type of CstTypePackExplicit.closeParenthesesPosition does not match the C++ member");
@@ -1279,9 +1321,9 @@ static bool handleCstTypePackExplicitMethods(lua_State* L, CstNodeData& handle, 
     }
 }
 
-static void collectCstTypePackExplicitProps(lua_State* L, CstNodeData& handle)
+static void collectCstTypePackExplicitProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstTypePackExplicit*>(handle.node);
+    auto* n = static_cast<const Luau::CstTypePackExplicit*>(handle.target);
     (void)n;
     pushPosition(L, handle.doc, n->openParenthesesPosition);
     lua_setfield(L, -2, "openParenthesesPosition");
@@ -1291,9 +1333,9 @@ static void collectCstTypePackExplicitProps(lua_State* L, CstNodeData& handle)
     lua_setfield(L, -2, "commaPositions");
 }
 
-static bool handleCstTypePackGenericMethods(lua_State* L, CstNodeData& handle, ReflectAtom atom)
+static bool handleCstTypePackGenericMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    auto* n = static_cast<const Luau::CstTypePackGeneric*>(handle.node);
+    auto* n = static_cast<const Luau::CstTypePackGeneric*>(handle.target);
     (void)n;
     static_assert(std::is_same_v<std::remove_const_t<decltype(n->ellipsisPosition)>, Luau::Position>, "schema type of CstTypePackGeneric.ellipsisPosition does not match the C++ member");
     switch (atom)
@@ -1306,9 +1348,9 @@ static bool handleCstTypePackGenericMethods(lua_State* L, CstNodeData& handle, R
     }
 }
 
-static void collectCstTypePackGenericProps(lua_State* L, CstNodeData& handle)
+static void collectCstTypePackGenericProps(lua_State* L, AstItem& handle)
 {
-    auto* n = static_cast<const Luau::CstTypePackGeneric*>(handle.node);
+    auto* n = static_cast<const Luau::CstTypePackGeneric*>(handle.target);
     (void)n;
     pushPosition(L, handle.doc, n->ellipsisPosition);
     lua_setfield(L, -2, "ellipsisPosition");

@@ -30,9 +30,9 @@ static int astDocComments(lua_State* L)
 {
     auto& handle = checkAstDocument(L, 1);
     auto& doc = handle.doc;
-    const auto& comments = doc->parseResult.commentLocations;
+    const auto& comments = documentComments(*doc);
     pushArray(L, comments.size(), [&](size_t i) {
-        pushAstAux(L, doc, extractReflectComment(*doc, comments[i]));
+        pushItem(L, doc, comments[i]);
     });
     return 1;
 }
@@ -63,6 +63,35 @@ static int astDocLineOffsets(lua_State* L)
     return 1;
 }
 
+static void pushHotComments(lua_State* L, const std::shared_ptr<AstDocumentState>& doc)
+{
+    const auto& hotcomments = doc->parseResult.hotcomments;
+    pushArray(L, hotcomments.size(), [&](size_t i) {
+        const auto& hotcomment = hotcomments[i];
+        lua_createtable(L, 0, 3);
+        lua_pushboolean(L, hotcomment.header);
+        lua_setfield(L, -2, "header");
+        lua_pushlstring(L, hotcomment.content.data(), hotcomment.content.size());
+        lua_setfield(L, -2, "content");
+        pushLocation(L, doc, hotcomment.location);
+        lua_setfield(L, -2, "location");
+    });
+}
+
+static int astDocHotComments(lua_State* L)
+{
+    auto& handle = checkAstDocument(L, 1);
+    pushHotComments(L, handle.doc);
+    return 1;
+}
+
+static int astDocLines(lua_State* L)
+{
+    auto& handle = checkAstDocument(L, 1);
+    lua_pushinteger(L, int(handle.doc->parseResult.lines));
+    return 1;
+}
+
 static int astDocAllocator(lua_State* L)
 {
     auto& handle = checkAstDocument(L, 1);
@@ -74,7 +103,7 @@ static int astDocProperties(lua_State* L)
 {
     auto& handle = checkAstDocument(L, 1);
     auto& doc = handle.doc;
-    lua_createtable(L, 0, 7);
+    lua_createtable(L, 0, 9);
 
     lua_pushlightuserdatatagged(L, (void*)doc.get(), TagId);
     lua_setfield(L, -2, "id");
@@ -88,9 +117,9 @@ static int astDocProperties(lua_State* L)
     lua_pushlstring(L, doc->source.data(), doc->source.size());
     lua_setfield(L, -2, "source");
 
-    const auto& comments = doc->parseResult.commentLocations;
+    const auto& comments = documentComments(*doc);
     pushArray(L, comments.size(), [&](size_t i) {
-        pushAstAux(L, doc, extractReflectComment(*doc, comments[i]));
+        pushItem(L, doc, comments[i]);
     });
     lua_setfield(L, -2, "comments");
 
@@ -110,6 +139,12 @@ static int astDocProperties(lua_State* L)
     });
     lua_setfield(L, -2, "lineOffsets");
 
+    pushHotComments(L, doc);
+    lua_setfield(L, -2, "hotcomments");
+
+    lua_pushinteger(L, int(doc->parseResult.lines));
+    lua_setfield(L, -2, "lines");
+
     return 1;
 }
 
@@ -123,6 +158,8 @@ static int dispatchAstDocMethod(lua_State* L, AstDocumentData& handle, ReflectAt
     case ReflectAtom::Comments:    return astDocComments(L);
     case ReflectAtom::Errors:      return astDocErrors(L);
     case ReflectAtom::LineOffsets: return astDocLineOffsets(L);
+    case ReflectAtom::Hotcomments: return astDocHotComments(L);
+    case ReflectAtom::Lines:       return astDocLines(L);
     case ReflectAtom::Properties:  return astDocProperties(L);
     default: break;
     }

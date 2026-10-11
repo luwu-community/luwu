@@ -692,17 +692,32 @@ if(TARGET Luwu.Reflect)
         Reflect/include/Luau/ReflectCommon.h
         Reflect/include/Luau/ReflectAstHandler.h
         Reflect/include/Luau/ReflectAtoms.gen.h
+        Reflect/include/Luau/ReflectItems.gen.h
         Reflect/src/AstNodes.gen.inl
         Reflect/src/CstNodes.gen.inl
-        Reflect/src/AuxNodes.gen.inl
+        Reflect/src/AstItems.gen.inl
+        Reflect/src/AstTableProp.gen.inl
+        Reflect/src/AstTableIndexer.gen.inl
+        Reflect/src/AstDeclaredExternTypeProperty.gen.inl
+        Reflect/src/AstClassProperty.gen.inl
+        Reflect/src/AstClassMethod.gen.inl
+        Reflect/src/AstClassPrimaryConstructor.gen.inl
+        Reflect/src/AstClassPrimaryConstructorParamQualifiers.gen.inl
+        Reflect/src/AstComment.gen.inl
+        Reflect/src/AstTableItem.gen.inl
+        Reflect/src/AstTypeList.gen.inl
+        Reflect/src/CstTableItem.gen.inl
+        Reflect/src/CstAttrList.gen.inl
+        Reflect/src/CstTypeInstantiation.gen.inl
+        Reflect/src/CstTypeTableItem.gen.inl
         Reflect/src/AstLocal.gen.inl
         Reflect/src/Reflect.cpp
+        Reflect/src/ReflectPrettyPrint.cpp
         Reflect/src/AstAllocator.cpp
         Reflect/src/AstDocument.cpp
+        Reflect/src/AstItem.cpp
         Reflect/src/AstNode.cpp
         Reflect/src/CstNode.cpp
-        Reflect/src/AstAux.cpp
-        Reflect/src/AstLocal.cpp
         Reflect/src/AstFilter.cpp
     )
 endif()

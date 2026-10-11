@@ -2,85 +2,84 @@
 #pragma once
 
 #include "Luau/Ast.h"
+#include "Luau/Cst.h"
 #include "Luau/ReflectCommon.h"
 #include "Luau/ReflectAstHandler.h"
 
 namespace Luau
 {
 
-Luau::AstLocal* createDefaultAstLocal(lua_State* L, ReflectAtom atom, Luau::Allocator& alloc)
+static bool handleAstLocalMethods(lua_State* L, AstItem& handle, ReflectAtom atom)
 {
-    switch (atom)
-    {
-    case ReflectAtom::AstLocal:
-        return alloc.alloc<Luau::AstLocal>(Luau::AstName(), Luau::Location(), nullptr, 0, 0, nullptr, false);
-    default:
-        return nullptr;
-    }
-}
-
-static bool handleAstLocalMethods(lua_State* L, AstLocalData& handle, ReflectAtom atom)
-{
-    auto* n = handle.local;
+    auto& n = *static_cast<Luau::AstLocal*>(handle.target);
     (void)n;
-    static_assert(std::is_same_v<std::remove_const_t<decltype(n->name)>, Luau::AstName>, "schema type of AstLocal.name does not match the C++ member");
-    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstLocal.origlocation does not match the C++ member");
-    static_assert(std::is_same_v<std::remove_const_t<decltype(n->shadow)>, Luau::AstLocal*>, "schema type of AstLocal.shadow does not match the C++ member");
-    static_assert(std::is_same_v<std::remove_const_t<decltype(n->functionDepth)>, size_t>, "schema type of AstLocal.depth does not match the C++ member");
-    static_assert(std::is_same_v<std::remove_const_t<decltype(n->isConst)>, bool>, "schema type of AstLocal.isConst does not match the C++ member");
-    static_assert(std::is_same_v<std::remove_const_t<decltype(n->isExported)>, bool>, "schema type of AstLocal.exported does not match the C++ member");
-    static_assert(std::is_same_v<std::remove_const_t<decltype(n->annotation)>, Luau::AstType*>, "schema type of AstLocal.annotation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n.name)>, Luau::AstName>, "schema type of AstLocal.name does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n.location)>, Luau::Location>, "schema type of AstLocal.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n.shadow)>, Luau::AstLocal*>, "schema type of AstLocal.shadow does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n.functionDepth)>, size_t>, "schema type of AstLocal.depth does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n.isConst)>, bool>, "schema type of AstLocal.isConst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n.isExported)>, bool>, "schema type of AstLocal.exported does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n.annotation)>, Luau::AstType*>, "schema type of AstLocal.annotation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n.loopDepth)>, size_t>, "schema type of AstLocal.loopDepth does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::Name:
-        n->name.value ? lua_pushstring(L, n->name.value) : lua_pushnil(L);
+        n.name.value ? lua_pushstring(L, n.name.value) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetName:
         beginReflectWrite(L, handle.doc, false);
-        n->name = readName(L, handle.doc, 2);
+        n.name = readName(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::OrigLocation:
-        pushLocation(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n.location);
         return true;
     case ReflectAtom::Shadow:
-        pushAstLocal(L, handle.doc, n->shadow);
+        pushItem(L, handle.doc, n.shadow);
         return true;
     case ReflectAtom::SetShadow:
         beginReflectWrite(L, handle.doc, true);
-        n->shadow = readLocal(L, handle.doc, 2);
+        n.shadow = readLocal(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Depth:
-        lua_pushinteger64(L, int64_t(n->functionDepth));
+        lua_pushinteger64(L, int64_t(n.functionDepth));
         return true;
     case ReflectAtom::SetDepth:
         beginReflectWrite(L, handle.doc, false);
-        n->functionDepth = lua_isnumber(L, 2) ? size_t(lua_tointeger(L, 2)) : size_t(luaL_checkinteger64(L, 2));
+        n.functionDepth = lua_isnumber(L, 2) ? size_t(lua_tointeger(L, 2)) : size_t(luaL_checkinteger64(L, 2));
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::IsConst:
-        lua_pushboolean(L, n->isConst);
+        lua_pushboolean(L, n.isConst);
         return true;
     case ReflectAtom::SetIsConst:
         beginReflectWrite(L, handle.doc, false);
-        n->isConst = lua_toboolean(L, 2) != 0;
+        n.isConst = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Exported:
-        lua_pushboolean(L, n->isExported);
+        lua_pushboolean(L, n.isExported);
         return true;
     case ReflectAtom::SetExported:
         beginReflectWrite(L, handle.doc, false);
-        n->isExported = lua_toboolean(L, 2) != 0;
+        n.isExported = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Annotation:
-        pushAstNode(L, handle.doc, n->annotation);
+        pushAstNode(L, handle.doc, n.annotation);
         return true;
     case ReflectAtom::SetAnnotation:
         beginReflectWrite(L, handle.doc, true);
-        n->annotation = readNode<Luau::AstType>(L, handle.doc, 2);
+        n.annotation = readNode<Luau::AstType>(L, handle.doc, 2);
+        lua_pushvalue(L, 1);
+        return true;
+    case ReflectAtom::LoopDepth:
+        lua_pushinteger64(L, int64_t(n.loopDepth));
+        return true;
+    case ReflectAtom::SetLoopDepth:
+        beginReflectWrite(L, handle.doc, false);
+        n.loopDepth = lua_isnumber(L, 2) ? size_t(lua_tointeger(L, 2)) : size_t(luaL_checkinteger64(L, 2));
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -88,24 +87,46 @@ static bool handleAstLocalMethods(lua_State* L, AstLocalData& handle, ReflectAto
     }
 }
 
-static void collectAstLocalProps(lua_State* L, AstLocalData& handle)
+static void collectAstLocalProps(lua_State* L, AstItem& handle)
 {
-    auto* n = handle.local;
+    auto& n = *static_cast<Luau::AstLocal*>(handle.target);
     (void)n;
-    n->name.value ? lua_pushstring(L, n->name.value) : lua_pushnil(L);
+    n.name.value ? lua_pushstring(L, n.name.value) : lua_pushnil(L);
     lua_setfield(L, -2, "name");
-    pushLocation(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n.location);
     lua_setfield(L, -2, "origlocation");
-    pushAstLocal(L, handle.doc, n->shadow);
+    pushItem(L, handle.doc, n.shadow);
     lua_setfield(L, -2, "shadow");
-    lua_pushinteger64(L, int64_t(n->functionDepth));
+    lua_pushinteger64(L, int64_t(n.functionDepth));
     lua_setfield(L, -2, "depth");
-    lua_pushboolean(L, n->isConst);
+    lua_pushboolean(L, n.isConst);
     lua_setfield(L, -2, "isConst");
-    lua_pushboolean(L, n->isExported);
+    lua_pushboolean(L, n.isExported);
     lua_setfield(L, -2, "exported");
-    pushAstNode(L, handle.doc, n->annotation);
+    pushAstNode(L, handle.doc, n.annotation);
     lua_setfield(L, -2, "annotation");
+    lua_pushinteger64(L, int64_t(n.loopDepth));
+    lua_setfield(L, -2, "loopDepth");
 }
+
+static void createAstLocal(lua_State* L, const std::shared_ptr<AstDocumentState>& doc)
+{
+    pushItem(L, doc, doc->allocator()->alloc<Luau::AstLocal>(Luau::AstLocal{Luau::AstName(), Luau::Location(), nullptr, 0, 0, nullptr, false}));
+}
+
+static void labelAstLocal(lua_State* L, AstItem& handle)
+{
+    auto& n = *static_cast<Luau::AstLocal*>(handle.target);
+    if (n.name.value)
+    {
+        lua_pushfstring(L, "AstLocal(%s)", n.name.value);
+    }
+    else
+    {
+        lua_pushstring(L, "AstLocal");
+    }
+}
+
+const AstItemClass g_AstLocalClass = {"AstLocal", "local", ItemFamily::Plain, NodeCategory::Unknown, false, handleAstLocalMethods, collectAstLocalProps, nullptr, createAstLocal, labelAstLocal};
 
 } // namespace Luau

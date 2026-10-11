@@ -88,11 +88,9 @@ inline T* readNode(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, i
     if (lua_isnil(L, idx))
         return nullptr;
     auto& nodeData = checkAstNode(L, idx);
-    if (!nodeData.node)
-        luaL_typeerror(L, idx, "AstNode");
     if (doc && nodeData.doc && nodeData.doc->allocator() != doc->allocator())
         luaL_error(L, "cross-allocator AST node assignment is not permitted");
-    T* casted = castAstNode<T>(nodeData.node);
+    T* casted = castAstNode<T>(nodeData.node());
     if (!casted)
         luaL_error(L, "invalid AstNode subtype at argument #%d", idx);
     return casted;
@@ -102,12 +100,10 @@ inline Luau::AstLocal* readLocal(lua_State* L, const std::shared_ptr<AstDocument
 {
     if (lua_isnil(L, idx))
         return nullptr;
-    auto& handle = checkAstLocal(L, idx);
-    if (!handle.local)
-        luaL_typeerror(L, idx, "AstLocal");
+    auto& handle = checkItem<Luau::AstLocal>(L, idx);
     if (doc && handle.doc && handle.doc->allocator() != doc->allocator())
         luaL_error(L, "cross-allocator AstLocal assignment is not permitted");
-    return handle.local;
+    return static_cast<Luau::AstLocal*>(handle.target);
 }
 
 // Luwu will pass a table to the setter so we need to allocate space for the passed table when reading from luau
@@ -133,7 +129,7 @@ inline Luau::AstArray<T*> readNodeArray(lua_State* L, const std::shared_ptr<AstD
         auto& nodeData = checkAstNode(L, -1);
         if (doc && nodeData.doc && nodeData.doc->allocator() != doc->allocator())
             luaL_error(L, "cross-allocator AST node assignment is not permitted at table index %d", i);
-        T* casted = castAstNode<T>(nodeData.node);
+        T* casted = castAstNode<T>(nodeData.node());
         if (!casted)
             luaL_error(L, "invalid AstNode subtype at table index %d", i);
         return casted;
@@ -149,7 +145,7 @@ inline Luau::AstArray<T*> readOptionalNodeArray(lua_State* L, const std::shared_
         auto& nodeData = checkAstNode(L, -1);
         if (doc && nodeData.doc && nodeData.doc->allocator() != doc->allocator())
             luaL_error(L, "cross-allocator AST node assignment is not permitted at table index %d", i);
-        T* casted = castAstNode<T>(nodeData.node);
+        T* casted = castAstNode<T>(nodeData.node());
         if (!casted)
             luaL_error(L, "invalid AstNode subtype at table index %d", i);
         return casted;
@@ -169,59 +165,187 @@ inline Luau::AstArray<Luau::AstTypeOrPack> readTypeOrPackArray(lua_State* L, con
         if (lua_isnil(L, -1))
             return Luau::AstTypeOrPack{};
         auto& nodeData = checkAstNode(L, -1);
-        if (!nodeData.node)
-            luaL_typeerror(L, -1, "AstNode");
         checkSameAllocator(L, doc, nodeData.doc, "AST node");
-        if (auto* t = nodeData.node->asType())
+        if (auto* t = nodeData.node()->asType())
             return Luau::AstTypeOrPack{t, nullptr};
-        if (auto* tp = castAstNode<Luau::AstTypePack>(nodeData.node))
+        if (auto* tp = castAstNode<Luau::AstTypePack>(nodeData.node()))
             return Luau::AstTypeOrPack{nullptr, tp};
         luaL_error(L, "expected AstType or AstTypePack at argument #%d", -1);
     });
 }
 
 template<typename T>
-inline T readAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int idx, AstAuxKind kind, T AstAuxData::* member, const char* name)
+inline Luau::AstArray<T> readArgumentNames(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int idx)
 {
-    auto& aux = checkAstAux(L, idx);
-    if (aux.kind != kind)
-        luaL_typeerror(L, idx, name);
-    checkSameAllocator(L, doc, aux.doc, name);
-    return aux.*member;
+    return readArray<T>(L, doc, idx, [&](int) -> T {
+        if (!lua_toboolean(L, -1))
+            return T{};
+        return T(Luau::AstArgumentName(readName(L, doc, -1), Luau::Location()));
+    });
 }
 
-inline Luau::AstClassMember readClassMember(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int idx)
+template<typename T>
+inline Luau::AstArray<T> realignCompanion(
+    const std::shared_ptr<AstDocumentState>& doc,
+    const Luau::AstArray<Luau::AstLocal*>& before,
+    const Luau::AstArray<Luau::AstLocal*>& after,
+    const Luau::AstArray<T>& companion
+)
 {
-    auto& aux = checkAstAux(L, idx);
-    if (aux.kind == Aux_ClassProperty)
+    if (companion.size == 0)
+        return companion;
+    if (after.size == 0)
+        return Luau::AstArray<T>{nullptr, 0};
+
+    T* buffer = static_cast<T*>(doc->allocator()->allocate(sizeof(T) * after.size));
+    for (size_t i = 0; i < after.size; i++)
     {
-        checkSameAllocator(L, doc, aux.doc, "AstClassProperty");
-        Luau::AstClassProperty prop = aux.classProp;
-        if (prop.ty && !prop.typeColonLocation)
-            prop.typeColonLocation = prop.ty->location;
-        return Luau::AstClassMember(prop);
+        new (&buffer[i]) T();
+        for (size_t j = 0; j < before.size && j < companion.size; j++)
+        {
+            if (before.data[j] == after.data[i])
+            {
+                buffer[i] = companion.data[j];
+                copyExplicitVisibility(*doc->arena, &companion.data[j], &buffer[i]);
+                break;
+            }
+        }
     }
-    if (aux.kind == Aux_ClassMethod)
+    return Luau::AstArray<T>{buffer, after.size};
+}
+
+template<typename T>
+inline Luau::AstArray<T> fitCompanion(
+    lua_State* L,
+    const std::shared_ptr<AstDocumentState>& doc,
+    int idx,
+    const Luau::AstArray<T>& list,
+    size_t count,
+    const char* field,
+    const char* owner
+)
+{
+    if (list.size > count)
+        luaL_error(L, "%s has more entries than %s", field, owner);
+    if (list.size == 0 || list.size == count)
+        return list;
+
+    T* buffer = static_cast<T*>(doc->allocator()->allocate(sizeof(T) * count));
+    for (size_t i = 0; i < count; i++)
+        new (&buffer[i]) T();
+
+    for (size_t i = 0; i < list.size; i++)
     {
-        checkSameAllocator(L, doc, aux.doc, "AstClassMethod");
-        return Luau::AstClassMember(aux.classMethod);
+        buffer[i] = list.data[i];
+
+        lua_rawgeti(L, idx, int(i + 1));
+        AstItem* item = static_cast<AstItem*>(lua_touserdatatagged(L, -1, TagItem));
+        if (item && item->target == &list.data[i])
+        {
+            copyExplicitVisibility(*doc->arena, item->target, &buffer[i]);
+            item->target = &buffer[i];
+        }
+        lua_pop(L, 1);
     }
-    luaL_error(L, "expected AstClassProperty or AstClassMethod at argument #%d", idx);
+    return Luau::AstArray<T>{buffer, count};
+}
+
+template<typename T>
+inline AstItem& checkOwnedItem(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int idx)
+{
+    AstItem& item = checkItem<T>(L, idx);
+    checkSameAllocator(L, doc, item.doc, item.cls->kind);
+    return item;
+}
+
+template<typename T>
+inline void readItemInto(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int idx, T& dest)
+{
+    AstItem& item = checkOwnedItem<T>(L, doc, idx);
+    if (item.target != &dest)
+        dest = *static_cast<T*>(item.target);
+    copyExplicitVisibility(*doc->arena, item.target, &dest);
+    item.target = &dest;
+}
+
+template<typename T>
+inline T* readItemPointer(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int idx)
+{
+    if (lua_isnil(L, idx))
+        return nullptr;
+    AstItem& item = checkOwnedItem<T>(L, doc, idx);
+    T* copy = doc->allocator()->alloc<T>(*static_cast<T*>(item.target));
+    copyExplicitVisibility(*doc->arena, item.target, copy);
+    item.target = copy;
+    return copy;
+}
+
+template<typename T>
+inline Luau::AstArray<T> readItemArray(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int idx)
+{
+    Luau::AstArray<T> result = readArray<T>(L, doc, idx, [&](int) -> T {
+        return *static_cast<T*>(checkOwnedItem<T>(L, doc, -1).target);
+    });
+
+    for (size_t i = 0; i < result.size; i++)
+    {
+        lua_rawgeti(L, idx, int(i + 1));
+        AstItem* item = static_cast<AstItem*>(lua_touserdata(L, -1));
+        copyExplicitVisibility(*doc->arena, item->target, &result.data[i]);
+        item->target = &result.data[i];
+        lua_pop(L, 1);
+    }
+
+    return result;
+}
+
+inline Luau::AstArray<Luau::AstClassMember> readClassMembers(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int idx)
+{
+    Luau::AstArray<Luau::AstClassMember> result = readArray<Luau::AstClassMember>(L, doc, idx, [&](int) -> Luau::AstClassMember {
+        AstItem* item = static_cast<AstItem*>(lua_touserdatatagged(L, -1, TagItem));
+        if (item && item->cls == itemClass<Luau::AstClassProperty>())
+        {
+            checkSameAllocator(L, doc, item->doc, item->cls->kind);
+            Luau::AstClassProperty prop = *static_cast<Luau::AstClassProperty*>(item->target);
+            if (prop.ty && !prop.typeColonLocation)
+                prop.typeColonLocation = prop.ty->location;
+            return Luau::AstClassMember(prop);
+        }
+        if (item && item->cls == itemClass<Luau::AstClassMethod>())
+        {
+            checkSameAllocator(L, doc, item->doc, item->cls->kind);
+            return Luau::AstClassMember(*static_cast<Luau::AstClassMethod*>(item->target));
+        }
+        luaL_error(L, "expected AstClassProperty or AstClassMethod at argument #%d", -1);
+    });
+
+    for (size_t i = 0; i < result.size; i++)
+    {
+        lua_rawgeti(L, idx, int(i + 1));
+        AstItem* item = static_cast<AstItem*>(lua_touserdata(L, -1));
+        if (auto* prop = Luau::get_if<Luau::AstClassProperty>(&result.data[i]))
+            item->target = prop;
+        else
+            item->target = Luau::get_if<Luau::AstClassMethod>(&result.data[i]);
+        lua_pop(L, 1);
+    }
+
+    return result;
 }
 
 inline void pushClassMembers(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstArray<Luau::AstClassMember>& members)
 {
     pushArray(L, members.size, [&](size_t i) {
-        if (const auto* p = Luau::get_if<Luau::AstClassProperty>(&members.data[i]))
-            pushAstAux(L, doc, *p);
-        else if (const auto* m = Luau::get_if<Luau::AstClassMethod>(&members.data[i]))
-            pushAstAux(L, doc, *m);
+        if (auto* p = Luau::get_if<Luau::AstClassProperty>(&members.data[i]))
+            pushItem(L, doc, p);
+        else if (auto* m = Luau::get_if<Luau::AstClassMethod>(&members.data[i]))
+            pushItem(L, doc, m);
         else
             lua_pushnil(L);
     });
 }
 
-inline const Luau::CstNode* getNodeCst(const AstNodeData& handle, const Luau::AstNode* n)
+inline const Luau::CstNode* getNodeCst(const AstItem& handle, const Luau::AstNode* n)
 {
     if (!handle.doc)
         return nullptr;
@@ -256,6 +380,6 @@ enum class AstValidation
     Print
 };
 
-void validateAstNode(lua_State* L, const AstNodeData& handle, AstValidation mode);
+void validateAstNode(lua_State* L, const AstItem& handle, AstValidation mode);
 
 } // namespace Luau

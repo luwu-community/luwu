@@ -10,12 +10,27 @@
 namespace Luau
 {
 
-LUAU_REFLECT_DEFINE_POINTER_USERDATA(pushCstNode, checkCstNode, cstNodeDtor, CstNodeData, const Luau::CstNode*, TagCstNode, "CstNode")
+static const AstItemClass s_unknownCstClass = {"CstNode", "cst", ItemFamily::Cst};
 
-LUAU_REFLECT_GET_NODE_KIND(getCstNodeKind, const Luau::CstNode*, s_cstClassTable, "CstNode")
-LUAU_REFLECT_GET_NODE_CATEGORY(getCstNodeCategory, const Luau::CstNode*, s_cstClassTable, "generic")
+const AstItemClass* cstNodeClass(const Luau::CstNode* node)
+{
+    int idx = node->classIndex;
+    if (idx >= 0 && idx < int(s_cstClassTable.size()))
+        return &s_cstClassTable[idx];
+    return &s_unknownCstClass;
+}
 
-static void initializeCstDispatchTables()
+void pushCstNode(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::CstNode* node)
+{
+    if (!node)
+    {
+        lua_pushnil(L);
+        return;
+    }
+    pushAstItem(L, doc, cstNodeClass(node), const_cast<Luau::CstNode*>(node));
+}
+
+void initializeCstNodeClasses()
 {
     static const bool initialized = []() {
         registerCstNodeClasses();
@@ -24,63 +39,31 @@ static void initializeCstDispatchTables()
     (void)initialized;
 }
 
-static int cstNodeProperties(lua_State* L)
+static int cstNodeProperties(lua_State* L, AstItem& handle)
 {
-    auto& handle = checkCstNode(L, 1);
-    if (!handle.node)
-    {
-        lua_newtable(L);
-        return 1;
-    }
-
     lua_createtable(L, 0, 6);
 
-    lua_pushlightuserdatatagged(L, (void*)handle.node, TagId);
+    lua_pushlightuserdatatagged(L, handle.target, TagId);
     lua_setfield(L, -2, "id");
 
-    lua_pushstring(L, getCstNodeCategory(handle.node));
+    lua_pushstring(L, handle.cls->category);
     lua_setfield(L, -2, "category");
 
-    int idx = handle.node->classIndex;
-    if (idx >= 0 && idx < int(s_cstClassTable.size()) && s_cstClassTable[idx].propCollector)
-    {
-        s_cstClassTable[idx].propCollector(L, handle);
-    }
+    if (handle.cls->propCollector)
+        handle.cls->propCollector(L, handle);
 
     return 1;
 }
 
-static int dispatchCstNodeMethod(lua_State* L, CstNodeData& handle, ReflectAtom atom, const char* str, size_t len)
+int dispatchCstNodeMethod(lua_State* L, AstItem& handle, ReflectAtom atom, const char* str, size_t len)
 {
     if (atom == ReflectAtom::Properties)
-        return cstNodeProperties(L);
+        return cstNodeProperties(L, handle);
 
-    int idx = handle.node ? handle.node->classIndex : -1;
-    if (idx >= 0 && idx < int(s_cstClassTable.size()) && s_cstClassTable[idx].methodHandler)
-    {
-        if (s_cstClassTable[idx].methodHandler(L, handle, atom))
-            return 1;
-    }
+    if (handle.cls->methodHandler && handle.cls->methodHandler(L, handle, atom))
+        return 1;
+
     luaL_error(L, "%.*s is not a valid method of CstNode", int(len), str);
-}
-
-LUAU_REFLECT_METHOD_TRAMPOLINE(cstNodeMethodTrampoline, checkCstNode, dispatchCstNodeMethod)
-LUAU_REFLECT_NAMECALL(cstNodeNamecall, checkCstNode, dispatchCstNodeMethod)
-LUAU_REFLECT_INDEX(cstNodeIndex, checkCstNode, getCstNodeKind, getCstNodeCategory, TagCstNode, cstNodeMethodTrampoline)
-
-static int cstNodeToString(lua_State* L)
-{
-    auto& handle = checkCstNode(L, 1);
-    lua_pushfstring(L, "CstNode(%s)", getCstNodeKind(handle.node));
-    return 1;
-}
-
-LUAU_REFLECT_DEFINE_EQ(cstNodeEq, TagCstNode, checkCstNode, a.node == b.node)
-
-void registerCstNode(lua_State* L)
-{
-    initializeCstDispatchTables();
-    registerUserdataType(L, TagCstNode, "CstNode", cstNodeDtor, cstNodeIndex, cstNodeToString, cstNodeEq, cstNodeNamecall);
 }
 
 } // namespace Luau

@@ -12,18 +12,25 @@ enum class ReflectAtom : int16_t
 {
     Unknown = -1,
     Access,
+    AccessLocation,
     Allocator,
     Annotation,
     AnnotationColonPosition,
+    ArgLocation,
+    ArgNameLocations,
+    ArgNames,
     ArgTypes,
     Args,
     ArgsAnnotationColonPositions,
     ArgsCommaPositions,
     ArgsDefaults,
+    ArgsQualifiers,
     ArgumentNameColonPositions,
     ArgumentsCommaPositions,
     AstAttr,
     AstClassMethod,
+    AstClassPrimaryConstructor,
+    AstClassPrimaryConstructorParamQualifiers,
     AstClassProperty,
     AstComment,
     AstDeclaredExternTypeProperty,
@@ -91,6 +98,8 @@ enum class ReflectAtom : int16_t
     AstTypeTable,
     AstTypeTypeof,
     AstTypeUnion,
+    AtBracketPosition,
+    AttrLists,
     Attributes,
     Begin,
     BlockDepth,
@@ -103,6 +112,7 @@ enum class ReflectAtom : int16_t
     CategoryType,
     CategoryTypePack,
     Children,
+    ClassLocation,
     CloseArgsPosition,
     CloseBracketPosition,
     CloseGenericsPosition,
@@ -111,11 +121,15 @@ enum class ReflectAtom : int16_t
     CloseParens,
     CloseParenthesesPosition,
     ClosePosition,
+    ColonPosition,
     CommaPositions,
     Comments,
     Condition,
+    ConstKeywordBegin,
+    ConstLocation,
     Cst,
     CstAttr,
+    CstAttrList,
     CstExprCall,
     CstExprConstantInteger,
     CstExprConstantNumber,
@@ -147,33 +161,47 @@ enum class ReflectAtom : int16_t
     CstTableItem,
     CstTypeFunction,
     CstTypeGroup,
+    CstTypeInstantiation,
     CstTypeIntersection,
     CstTypePackExplicit,
     CstTypePackGeneric,
     CstTypeReference,
     CstTypeSingletonString,
     CstTypeTable,
+    CstTypeTableItem,
     CstTypeTypeof,
     CstTypeUnion,
     DebugName,
+    DeclareLocation,
     DefaultEqualsPosition,
+    DefaultValue,
     Defaultnode,
     Depth,
+    DoLocation,
     EllipsisPosition,
     ElseBody,
+    ElseLocation,
     ElsePosition,
     End,
     EndCommaPosition,
     EndPosition,
+    EqualsLocation,
     EqualsPosition,
+    EqualsSignLocation,
     Errors,
+    ExplicitTypes,
+    ExplicitVisibility,
     Exported,
     Expr,
     Expressions,
+    ExtendsLocation,
     FalseExpr,
+    ForLocation,
     From,
     Func,
+    FunctionDepth,
     FunctionKeywordPosition,
+    FunctionLocation,
     GenericPacks,
     Generics,
     GenericsClosePosition,
@@ -187,31 +215,45 @@ enum class ReflectAtom : int16_t
     HasIn,
     HasParameterList,
     HasSemicolon,
+    HasThen,
+    Hotcomments,
     Id,
+    IfLocation,
+    InLocation,
     Index,
+    IndexLocation,
     IndexType,
     Indexer,
     IndexerClosePosition,
     IndexerOpenPosition,
+    Instantiation,
     IsArray,
     IsConst,
     IsElseIf,
     IsMethod,
     IsMissing,
+    ItemKind,
     Items,
     Key,
+    KeywordLocation,
     Kind,
     LeadingComments,
     LeadingPosition,
     Left,
+    LeftArrow1Position,
+    LeftArrow2Position,
     LineOffsets,
+    Lines,
     List,
     Local,
     LocalKeywordPosition,
+    LoopDepth,
+    LuwuOnly,
     Match,
     Members,
     MessageIndex,
     Name,
+    NameLocation,
     Op,
     OpPosition,
     OpenArgsPosition,
@@ -223,23 +265,34 @@ enum class ReflectAtom : int16_t
     OpenParenthesesPosition,
     OpenPosition,
     OrigLocation,
+    ParamNameLocations,
+    ParamNames,
     Parameters,
     ParametersCommaPositions,
     Params,
     Parse,
+    ParseResult,
     Parseexpr,
     Prefix,
+    PrefixLocal,
+    PrefixLocation,
     PrefixPointPosition,
     Prettyprint,
+    PrimaryConstructor,
     Properties,
     Props,
+    QualifierLocation,
     QuoteStyle,
+    RepeatLocation,
     ResultType,
     ReturnAnnotation,
     ReturnArrowPosition,
+    ReturnLocation,
     ReturnSpecifierPosition,
     ReturnTypes,
     Right,
+    RightArrow1Position,
+    RightArrow2Position,
     Root,
     Self,
     Separator,
@@ -247,23 +300,28 @@ enum class ReflectAtom : int16_t
     SeparatorPositions,
     SetAccess,
     SetAnnotation,
+    SetArgNames,
     SetArgTypes,
     SetArgs,
     SetArgsDefaults,
+    SetArgsQualifiers,
     SetAttributes,
     SetBegin,
     SetBody,
     SetCondition,
     SetDebugName,
+    SetDefaultValue,
     SetDepth,
     SetElseBody,
     SetEnd,
+    SetExplicitVisibility,
     SetExported,
     SetExpr,
     SetExpressions,
     SetFalseExpr,
     SetFrom,
     SetFunc,
+    SetFunctionDepth,
     SetGenericPacks,
     SetGenerics,
     SetHasDo,
@@ -273,24 +331,31 @@ enum class ReflectAtom : int16_t
     SetHasIn,
     SetHasParameterList,
     SetHasSemicolon,
+    SetHasThen,
     SetIndex,
     SetIndexType,
     SetIndexer,
     SetIsConst,
     SetIsMethod,
+    SetItemKind,
     SetItems,
     SetKey,
-    SetKind,
     SetLeadingComments,
     SetLeft,
     SetList,
     SetLocal,
+    SetLoopDepth,
+    SetLuwuOnly,
     SetMembers,
     SetName,
     SetOp,
+    SetParamNames,
     SetParameters,
     SetParams,
+    SetParseResult,
     SetPrefix,
+    SetPrefixLocal,
+    SetPrimaryConstructor,
     SetProps,
     SetQuoteStyle,
     SetResultType,
@@ -317,29 +382,38 @@ enum class ReflectAtom : int16_t
     SetValues,
     SetVar,
     SetVararg,
+    SetVarargAnnotation,
     SetVariadicType,
     SetVars,
+    SetVisibility,
     Shadow,
     Source,
     SourceString,
+    SourceStrings,
     Statements,
     StatsStartPosition,
     Step,
     StepCommaPosition,
+    StringInfo,
+    StringPosition,
     Strings,
     SuperName,
     TailType,
     Text,
     ThenBody,
+    ThenLocation,
     ThenPosition,
     To,
     TrailingComments,
     TrueExpr,
     Type,
     TypeArguments,
+    TypeColonLocation,
     TypeKeywordPosition,
     TypeList,
+    TypeLocation,
     Types,
+    UntilLocation,
     UntilPosition,
     Upvalue,
     Value,
@@ -347,12 +421,16 @@ enum class ReflectAtom : int16_t
     ValuesCommaPositions,
     Var,
     Vararg,
+    VarargAnnotation,
     VarargAnnotationColonPosition,
+    VarargLocation,
     VariadicType,
     Vars,
     VarsAnnotationColonPositions,
     VarsCommaPositions,
+    Visibility,
     Walk,
+    WhileLocation,
     Count,
 };
 
@@ -362,12 +440,20 @@ inline const char* getAtomString(ReflectAtom atom)
     {
     case ReflectAtom::Access:
         return "access";
+    case ReflectAtom::AccessLocation:
+        return "accessLocation";
     case ReflectAtom::Allocator:
         return "allocator";
     case ReflectAtom::Annotation:
         return "annotation";
     case ReflectAtom::AnnotationColonPosition:
         return "annotationColonPosition";
+    case ReflectAtom::ArgLocation:
+        return "argLocation";
+    case ReflectAtom::ArgNameLocations:
+        return "argNameLocations";
+    case ReflectAtom::ArgNames:
+        return "argNames";
     case ReflectAtom::ArgTypes:
         return "argTypes";
     case ReflectAtom::Args:
@@ -378,6 +464,8 @@ inline const char* getAtomString(ReflectAtom atom)
         return "argsCommaPositions";
     case ReflectAtom::ArgsDefaults:
         return "argsDefaults";
+    case ReflectAtom::ArgsQualifiers:
+        return "argsQualifiers";
     case ReflectAtom::ArgumentNameColonPositions:
         return "argumentNameColonPositions";
     case ReflectAtom::ArgumentsCommaPositions:
@@ -386,6 +474,10 @@ inline const char* getAtomString(ReflectAtom atom)
         return "AstAttr";
     case ReflectAtom::AstClassMethod:
         return "AstClassMethod";
+    case ReflectAtom::AstClassPrimaryConstructor:
+        return "AstClassPrimaryConstructor";
+    case ReflectAtom::AstClassPrimaryConstructorParamQualifiers:
+        return "AstClassPrimaryConstructorParamQualifiers";
     case ReflectAtom::AstClassProperty:
         return "AstClassProperty";
     case ReflectAtom::AstComment:
@@ -520,6 +612,10 @@ inline const char* getAtomString(ReflectAtom atom)
         return "AstTypeTypeof";
     case ReflectAtom::AstTypeUnion:
         return "AstTypeUnion";
+    case ReflectAtom::AtBracketPosition:
+        return "atBracketPosition";
+    case ReflectAtom::AttrLists:
+        return "attrLists";
     case ReflectAtom::Attributes:
         return "attributes";
     case ReflectAtom::Begin:
@@ -544,6 +640,8 @@ inline const char* getAtomString(ReflectAtom atom)
         return "typePack";
     case ReflectAtom::Children:
         return "children";
+    case ReflectAtom::ClassLocation:
+        return "classLocation";
     case ReflectAtom::CloseArgsPosition:
         return "closeArgsPosition";
     case ReflectAtom::CloseBracketPosition:
@@ -560,16 +658,24 @@ inline const char* getAtomString(ReflectAtom atom)
         return "closeParenthesesPosition";
     case ReflectAtom::ClosePosition:
         return "closePosition";
+    case ReflectAtom::ColonPosition:
+        return "colonPosition";
     case ReflectAtom::CommaPositions:
         return "commaPositions";
     case ReflectAtom::Comments:
         return "comments";
     case ReflectAtom::Condition:
         return "condition";
+    case ReflectAtom::ConstKeywordBegin:
+        return "constKeywordBegin";
+    case ReflectAtom::ConstLocation:
+        return "constLocation";
     case ReflectAtom::Cst:
         return "cst";
     case ReflectAtom::CstAttr:
         return "CstAttr";
+    case ReflectAtom::CstAttrList:
+        return "CstAttrList";
     case ReflectAtom::CstExprCall:
         return "CstExprCall";
     case ReflectAtom::CstExprConstantInteger:
@@ -632,6 +738,8 @@ inline const char* getAtomString(ReflectAtom atom)
         return "CstTypeFunction";
     case ReflectAtom::CstTypeGroup:
         return "CstTypeGroup";
+    case ReflectAtom::CstTypeInstantiation:
+        return "CstTypeInstantiation";
     case ReflectAtom::CstTypeIntersection:
         return "CstTypeIntersection";
     case ReflectAtom::CstTypePackExplicit:
@@ -644,22 +752,32 @@ inline const char* getAtomString(ReflectAtom atom)
         return "CstTypeSingletonString";
     case ReflectAtom::CstTypeTable:
         return "CstTypeTable";
+    case ReflectAtom::CstTypeTableItem:
+        return "CstTypeTableItem";
     case ReflectAtom::CstTypeTypeof:
         return "CstTypeTypeof";
     case ReflectAtom::CstTypeUnion:
         return "CstTypeUnion";
     case ReflectAtom::DebugName:
         return "debugname";
+    case ReflectAtom::DeclareLocation:
+        return "declareLocation";
     case ReflectAtom::DefaultEqualsPosition:
         return "defaultEqualsPosition";
+    case ReflectAtom::DefaultValue:
+        return "defaultValue";
     case ReflectAtom::Defaultnode:
         return "defaultnode";
     case ReflectAtom::Depth:
         return "depth";
+    case ReflectAtom::DoLocation:
+        return "doLocation";
     case ReflectAtom::EllipsisPosition:
         return "ellipsisPosition";
     case ReflectAtom::ElseBody:
         return "elsebody";
+    case ReflectAtom::ElseLocation:
+        return "elseLocation";
     case ReflectAtom::ElsePosition:
         return "elsePosition";
     case ReflectAtom::End:
@@ -668,24 +786,40 @@ inline const char* getAtomString(ReflectAtom atom)
         return "endCommaPosition";
     case ReflectAtom::EndPosition:
         return "endPosition";
+    case ReflectAtom::EqualsLocation:
+        return "equalsLocation";
     case ReflectAtom::EqualsPosition:
         return "equalsPosition";
+    case ReflectAtom::EqualsSignLocation:
+        return "equalsSignLocation";
     case ReflectAtom::Errors:
         return "errors";
+    case ReflectAtom::ExplicitTypes:
+        return "explicitTypes";
+    case ReflectAtom::ExplicitVisibility:
+        return "explicitVisibility";
     case ReflectAtom::Exported:
         return "exported";
     case ReflectAtom::Expr:
         return "expr";
     case ReflectAtom::Expressions:
         return "expressions";
+    case ReflectAtom::ExtendsLocation:
+        return "extendsLocation";
     case ReflectAtom::FalseExpr:
         return "falseExpr";
+    case ReflectAtom::ForLocation:
+        return "forLocation";
     case ReflectAtom::From:
         return "from";
     case ReflectAtom::Func:
         return "func";
+    case ReflectAtom::FunctionDepth:
+        return "functionDepth";
     case ReflectAtom::FunctionKeywordPosition:
         return "functionKeywordPosition";
+    case ReflectAtom::FunctionLocation:
+        return "functionLocation";
     case ReflectAtom::GenericPacks:
         return "genericPacks";
     case ReflectAtom::Generics:
@@ -712,10 +846,20 @@ inline const char* getAtomString(ReflectAtom atom)
         return "hasParameterList";
     case ReflectAtom::HasSemicolon:
         return "hasSemicolon";
+    case ReflectAtom::HasThen:
+        return "hasThen";
+    case ReflectAtom::Hotcomments:
+        return "hotcomments";
     case ReflectAtom::Id:
         return "id";
+    case ReflectAtom::IfLocation:
+        return "ifLocation";
+    case ReflectAtom::InLocation:
+        return "inLocation";
     case ReflectAtom::Index:
         return "index";
+    case ReflectAtom::IndexLocation:
+        return "indexLocation";
     case ReflectAtom::IndexType:
         return "indexType";
     case ReflectAtom::Indexer:
@@ -724,6 +868,8 @@ inline const char* getAtomString(ReflectAtom atom)
         return "indexerClosePosition";
     case ReflectAtom::IndexerOpenPosition:
         return "indexerOpenPosition";
+    case ReflectAtom::Instantiation:
+        return "instantiation";
     case ReflectAtom::IsArray:
         return "isArray";
     case ReflectAtom::IsConst:
@@ -734,10 +880,14 @@ inline const char* getAtomString(ReflectAtom atom)
         return "isMethod";
     case ReflectAtom::IsMissing:
         return "isMissing";
+    case ReflectAtom::ItemKind:
+        return "itemKind";
     case ReflectAtom::Items:
         return "items";
     case ReflectAtom::Key:
         return "key";
+    case ReflectAtom::KeywordLocation:
+        return "keywordLocation";
     case ReflectAtom::Kind:
         return "kind";
     case ReflectAtom::LeadingComments:
@@ -746,14 +896,24 @@ inline const char* getAtomString(ReflectAtom atom)
         return "leadingPosition";
     case ReflectAtom::Left:
         return "left";
+    case ReflectAtom::LeftArrow1Position:
+        return "leftArrow1Position";
+    case ReflectAtom::LeftArrow2Position:
+        return "leftArrow2Position";
     case ReflectAtom::LineOffsets:
         return "lineOffsets";
+    case ReflectAtom::Lines:
+        return "lines";
     case ReflectAtom::List:
         return "list";
     case ReflectAtom::Local:
         return "local";
     case ReflectAtom::LocalKeywordPosition:
         return "localKeywordPosition";
+    case ReflectAtom::LoopDepth:
+        return "loopDepth";
+    case ReflectAtom::LuwuOnly:
+        return "luwuOnly";
     case ReflectAtom::Match:
         return "match";
     case ReflectAtom::Members:
@@ -762,6 +922,8 @@ inline const char* getAtomString(ReflectAtom atom)
         return "messageIndex";
     case ReflectAtom::Name:
         return "name";
+    case ReflectAtom::NameLocation:
+        return "nameLocation";
     case ReflectAtom::Op:
         return "op";
     case ReflectAtom::OpPosition:
@@ -784,6 +946,10 @@ inline const char* getAtomString(ReflectAtom atom)
         return "openPosition";
     case ReflectAtom::OrigLocation:
         return "origlocation";
+    case ReflectAtom::ParamNameLocations:
+        return "paramNameLocations";
+    case ReflectAtom::ParamNames:
+        return "paramNames";
     case ReflectAtom::Parameters:
         return "parameters";
     case ReflectAtom::ParametersCommaPositions:
@@ -792,32 +958,50 @@ inline const char* getAtomString(ReflectAtom atom)
         return "params";
     case ReflectAtom::Parse:
         return "parse";
+    case ReflectAtom::ParseResult:
+        return "parseResult";
     case ReflectAtom::Parseexpr:
         return "parseexpr";
     case ReflectAtom::Prefix:
         return "prefix";
+    case ReflectAtom::PrefixLocal:
+        return "prefixLocal";
+    case ReflectAtom::PrefixLocation:
+        return "prefixLocation";
     case ReflectAtom::PrefixPointPosition:
         return "prefixPointPosition";
     case ReflectAtom::Prettyprint:
         return "prettyprint";
+    case ReflectAtom::PrimaryConstructor:
+        return "primaryConstructor";
     case ReflectAtom::Properties:
         return "properties";
     case ReflectAtom::Props:
         return "props";
+    case ReflectAtom::QualifierLocation:
+        return "qualifierLocation";
     case ReflectAtom::QuoteStyle:
         return "quoteStyle";
+    case ReflectAtom::RepeatLocation:
+        return "repeatLocation";
     case ReflectAtom::ResultType:
         return "resultType";
     case ReflectAtom::ReturnAnnotation:
         return "returnAnnotation";
     case ReflectAtom::ReturnArrowPosition:
         return "returnArrowPosition";
+    case ReflectAtom::ReturnLocation:
+        return "returnLocation";
     case ReflectAtom::ReturnSpecifierPosition:
         return "returnSpecifierPosition";
     case ReflectAtom::ReturnTypes:
         return "returnTypes";
     case ReflectAtom::Right:
         return "right";
+    case ReflectAtom::RightArrow1Position:
+        return "rightArrow1Position";
+    case ReflectAtom::RightArrow2Position:
+        return "rightArrow2Position";
     case ReflectAtom::Root:
         return "root";
     case ReflectAtom::Self:
@@ -832,12 +1016,16 @@ inline const char* getAtomString(ReflectAtom atom)
         return "setAccess";
     case ReflectAtom::SetAnnotation:
         return "setAnnotation";
+    case ReflectAtom::SetArgNames:
+        return "setArgNames";
     case ReflectAtom::SetArgTypes:
         return "setArgTypes";
     case ReflectAtom::SetArgs:
         return "setArgs";
     case ReflectAtom::SetArgsDefaults:
         return "setArgsDefaults";
+    case ReflectAtom::SetArgsQualifiers:
+        return "setArgsQualifiers";
     case ReflectAtom::SetAttributes:
         return "setAttributes";
     case ReflectAtom::SetBegin:
@@ -848,12 +1036,16 @@ inline const char* getAtomString(ReflectAtom atom)
         return "setCondition";
     case ReflectAtom::SetDebugName:
         return "setDebugName";
+    case ReflectAtom::SetDefaultValue:
+        return "setDefaultValue";
     case ReflectAtom::SetDepth:
         return "setDepth";
     case ReflectAtom::SetElseBody:
         return "setElseBody";
     case ReflectAtom::SetEnd:
         return "setEnd";
+    case ReflectAtom::SetExplicitVisibility:
+        return "setExplicitVisibility";
     case ReflectAtom::SetExported:
         return "setExported";
     case ReflectAtom::SetExpr:
@@ -866,6 +1058,8 @@ inline const char* getAtomString(ReflectAtom atom)
         return "setFrom";
     case ReflectAtom::SetFunc:
         return "setFunc";
+    case ReflectAtom::SetFunctionDepth:
+        return "setFunctionDepth";
     case ReflectAtom::SetGenericPacks:
         return "setGenericPacks";
     case ReflectAtom::SetGenerics:
@@ -884,6 +1078,8 @@ inline const char* getAtomString(ReflectAtom atom)
         return "setHasParameterList";
     case ReflectAtom::SetHasSemicolon:
         return "setHasSemicolon";
+    case ReflectAtom::SetHasThen:
+        return "setHasThen";
     case ReflectAtom::SetIndex:
         return "setIndex";
     case ReflectAtom::SetIndexType:
@@ -894,12 +1090,12 @@ inline const char* getAtomString(ReflectAtom atom)
         return "setIsConst";
     case ReflectAtom::SetIsMethod:
         return "setIsMethod";
+    case ReflectAtom::SetItemKind:
+        return "setItemKind";
     case ReflectAtom::SetItems:
         return "setItems";
     case ReflectAtom::SetKey:
         return "setKey";
-    case ReflectAtom::SetKind:
-        return "setKind";
     case ReflectAtom::SetLeadingComments:
         return "setLeadingComments";
     case ReflectAtom::SetLeft:
@@ -908,18 +1104,30 @@ inline const char* getAtomString(ReflectAtom atom)
         return "setList";
     case ReflectAtom::SetLocal:
         return "setLocal";
+    case ReflectAtom::SetLoopDepth:
+        return "setLoopDepth";
+    case ReflectAtom::SetLuwuOnly:
+        return "setLuwuOnly";
     case ReflectAtom::SetMembers:
         return "setMembers";
     case ReflectAtom::SetName:
         return "setName";
     case ReflectAtom::SetOp:
         return "setOp";
+    case ReflectAtom::SetParamNames:
+        return "setParamNames";
     case ReflectAtom::SetParameters:
         return "setParameters";
     case ReflectAtom::SetParams:
         return "setParams";
+    case ReflectAtom::SetParseResult:
+        return "setParseResult";
     case ReflectAtom::SetPrefix:
         return "setPrefix";
+    case ReflectAtom::SetPrefixLocal:
+        return "setPrefixLocal";
+    case ReflectAtom::SetPrimaryConstructor:
+        return "setPrimaryConstructor";
     case ReflectAtom::SetProps:
         return "setProps";
     case ReflectAtom::SetQuoteStyle:
@@ -972,16 +1180,22 @@ inline const char* getAtomString(ReflectAtom atom)
         return "setVar";
     case ReflectAtom::SetVararg:
         return "setVararg";
+    case ReflectAtom::SetVarargAnnotation:
+        return "setVarargAnnotation";
     case ReflectAtom::SetVariadicType:
         return "setVariadicType";
     case ReflectAtom::SetVars:
         return "setVars";
+    case ReflectAtom::SetVisibility:
+        return "setVisibility";
     case ReflectAtom::Shadow:
         return "shadow";
     case ReflectAtom::Source:
         return "source";
     case ReflectAtom::SourceString:
         return "sourceString";
+    case ReflectAtom::SourceStrings:
+        return "sourceStrings";
     case ReflectAtom::Statements:
         return "statements";
     case ReflectAtom::StatsStartPosition:
@@ -990,6 +1204,10 @@ inline const char* getAtomString(ReflectAtom atom)
         return "step";
     case ReflectAtom::StepCommaPosition:
         return "stepCommaPosition";
+    case ReflectAtom::StringInfo:
+        return "stringInfo";
+    case ReflectAtom::StringPosition:
+        return "stringPosition";
     case ReflectAtom::Strings:
         return "strings";
     case ReflectAtom::SuperName:
@@ -1000,6 +1218,8 @@ inline const char* getAtomString(ReflectAtom atom)
         return "text";
     case ReflectAtom::ThenBody:
         return "thenbody";
+    case ReflectAtom::ThenLocation:
+        return "thenLocation";
     case ReflectAtom::ThenPosition:
         return "thenPosition";
     case ReflectAtom::To:
@@ -1012,12 +1232,18 @@ inline const char* getAtomString(ReflectAtom atom)
         return "type";
     case ReflectAtom::TypeArguments:
         return "typeArguments";
+    case ReflectAtom::TypeColonLocation:
+        return "typeColonLocation";
     case ReflectAtom::TypeKeywordPosition:
         return "typeKeywordPosition";
     case ReflectAtom::TypeList:
         return "typeList";
+    case ReflectAtom::TypeLocation:
+        return "typeLocation";
     case ReflectAtom::Types:
         return "types";
+    case ReflectAtom::UntilLocation:
+        return "untilLocation";
     case ReflectAtom::UntilPosition:
         return "untilPosition";
     case ReflectAtom::Upvalue:
@@ -1032,8 +1258,12 @@ inline const char* getAtomString(ReflectAtom atom)
         return "var";
     case ReflectAtom::Vararg:
         return "vararg";
+    case ReflectAtom::VarargAnnotation:
+        return "varargAnnotation";
     case ReflectAtom::VarargAnnotationColonPosition:
         return "varargAnnotationColonPosition";
+    case ReflectAtom::VarargLocation:
+        return "varargLocation";
     case ReflectAtom::VariadicType:
         return "variadicType";
     case ReflectAtom::Vars:
@@ -1042,8 +1272,12 @@ inline const char* getAtomString(ReflectAtom atom)
         return "varsAnnotationColonPositions";
     case ReflectAtom::VarsCommaPositions:
         return "varsCommaPositions";
+    case ReflectAtom::Visibility:
+        return "visibility";
     case ReflectAtom::Walk:
         return "walk";
+    case ReflectAtom::WhileLocation:
+        return "whileLocation";
     default:
         return "";
     }
@@ -1055,6 +1289,8 @@ inline ReflectAtom resolveGlobalReflectAtom(std::string_view key)
         DenseHashMap2<std::string_view, ReflectAtom> map;
         map["AstAttr"] = ReflectAtom::AstAttr;
         map["AstClassMethod"] = ReflectAtom::AstClassMethod;
+        map["AstClassPrimaryConstructor"] = ReflectAtom::AstClassPrimaryConstructor;
+        map["AstClassPrimaryConstructorParamQualifiers"] = ReflectAtom::AstClassPrimaryConstructorParamQualifiers;
         map["AstClassProperty"] = ReflectAtom::AstClassProperty;
         map["AstComment"] = ReflectAtom::AstComment;
         map["AstDeclaredExternTypeProperty"] = ReflectAtom::AstDeclaredExternTypeProperty;
@@ -1123,6 +1359,7 @@ inline ReflectAtom resolveGlobalReflectAtom(std::string_view key)
         map["AstTypeTypeof"] = ReflectAtom::AstTypeTypeof;
         map["AstTypeUnion"] = ReflectAtom::AstTypeUnion;
         map["CstAttr"] = ReflectAtom::CstAttr;
+        map["CstAttrList"] = ReflectAtom::CstAttrList;
         map["CstExprCall"] = ReflectAtom::CstExprCall;
         map["CstExprConstantInteger"] = ReflectAtom::CstExprConstantInteger;
         map["CstExprConstantNumber"] = ReflectAtom::CstExprConstantNumber;
@@ -1154,32 +1391,42 @@ inline ReflectAtom resolveGlobalReflectAtom(std::string_view key)
         map["CstTableItem"] = ReflectAtom::CstTableItem;
         map["CstTypeFunction"] = ReflectAtom::CstTypeFunction;
         map["CstTypeGroup"] = ReflectAtom::CstTypeGroup;
+        map["CstTypeInstantiation"] = ReflectAtom::CstTypeInstantiation;
         map["CstTypeIntersection"] = ReflectAtom::CstTypeIntersection;
         map["CstTypePackExplicit"] = ReflectAtom::CstTypePackExplicit;
         map["CstTypePackGeneric"] = ReflectAtom::CstTypePackGeneric;
         map["CstTypeReference"] = ReflectAtom::CstTypeReference;
         map["CstTypeSingletonString"] = ReflectAtom::CstTypeSingletonString;
         map["CstTypeTable"] = ReflectAtom::CstTypeTable;
+        map["CstTypeTableItem"] = ReflectAtom::CstTypeTableItem;
         map["CstTypeTypeof"] = ReflectAtom::CstTypeTypeof;
         map["CstTypeUnion"] = ReflectAtom::CstTypeUnion;
         map["access"] = ReflectAtom::Access;
+        map["accessLocation"] = ReflectAtom::AccessLocation;
         map["allocator"] = ReflectAtom::Allocator;
         map["annotation"] = ReflectAtom::Annotation;
         map["annotationColonPosition"] = ReflectAtom::AnnotationColonPosition;
+        map["argLocation"] = ReflectAtom::ArgLocation;
+        map["argNameLocations"] = ReflectAtom::ArgNameLocations;
+        map["argNames"] = ReflectAtom::ArgNames;
         map["argTypes"] = ReflectAtom::ArgTypes;
         map["args"] = ReflectAtom::Args;
         map["argsAnnotationColonPositions"] = ReflectAtom::ArgsAnnotationColonPositions;
         map["argsCommaPositions"] = ReflectAtom::ArgsCommaPositions;
         map["argsDefaults"] = ReflectAtom::ArgsDefaults;
+        map["argsQualifiers"] = ReflectAtom::ArgsQualifiers;
         map["argumentNameColonPositions"] = ReflectAtom::ArgumentNameColonPositions;
         map["argumentsCommaPositions"] = ReflectAtom::ArgumentsCommaPositions;
+        map["atBracketPosition"] = ReflectAtom::AtBracketPosition;
         map["attr"] = ReflectAtom::CategoryAttr;
+        map["attrLists"] = ReflectAtom::AttrLists;
         map["attributes"] = ReflectAtom::Attributes;
         map["begin"] = ReflectAtom::Begin;
         map["blockDepth"] = ReflectAtom::BlockDepth;
         map["body"] = ReflectAtom::Body;
         map["category"] = ReflectAtom::Category;
         map["children"] = ReflectAtom::Children;
+        map["classLocation"] = ReflectAtom::ClassLocation;
         map["closeArgsPosition"] = ReflectAtom::CloseArgsPosition;
         map["closeBracketPosition"] = ReflectAtom::CloseBracketPosition;
         map["closeGenericsPosition"] = ReflectAtom::CloseGenericsPosition;
@@ -1188,29 +1435,44 @@ inline ReflectAtom resolveGlobalReflectAtom(std::string_view key)
         map["closeParens"] = ReflectAtom::CloseParens;
         map["closeParenthesesPosition"] = ReflectAtom::CloseParenthesesPosition;
         map["closePosition"] = ReflectAtom::ClosePosition;
+        map["colonPosition"] = ReflectAtom::ColonPosition;
         map["commaPositions"] = ReflectAtom::CommaPositions;
         map["comments"] = ReflectAtom::Comments;
         map["condition"] = ReflectAtom::Condition;
+        map["constKeywordBegin"] = ReflectAtom::ConstKeywordBegin;
+        map["constLocation"] = ReflectAtom::ConstLocation;
         map["cst"] = ReflectAtom::Cst;
         map["debugname"] = ReflectAtom::DebugName;
+        map["declareLocation"] = ReflectAtom::DeclareLocation;
         map["defaultEqualsPosition"] = ReflectAtom::DefaultEqualsPosition;
+        map["defaultValue"] = ReflectAtom::DefaultValue;
         map["defaultnode"] = ReflectAtom::Defaultnode;
         map["depth"] = ReflectAtom::Depth;
+        map["doLocation"] = ReflectAtom::DoLocation;
         map["ellipsisPosition"] = ReflectAtom::EllipsisPosition;
+        map["elseLocation"] = ReflectAtom::ElseLocation;
         map["elsePosition"] = ReflectAtom::ElsePosition;
         map["elsebody"] = ReflectAtom::ElseBody;
         map["end"] = ReflectAtom::End;
         map["endCommaPosition"] = ReflectAtom::EndCommaPosition;
         map["endPosition"] = ReflectAtom::EndPosition;
+        map["equalsLocation"] = ReflectAtom::EqualsLocation;
         map["equalsPosition"] = ReflectAtom::EqualsPosition;
+        map["equalsSignLocation"] = ReflectAtom::EqualsSignLocation;
         map["errors"] = ReflectAtom::Errors;
+        map["explicitTypes"] = ReflectAtom::ExplicitTypes;
+        map["explicitVisibility"] = ReflectAtom::ExplicitVisibility;
         map["exported"] = ReflectAtom::Exported;
         map["expr"] = ReflectAtom::Expr;
         map["expressions"] = ReflectAtom::Expressions;
+        map["extendsLocation"] = ReflectAtom::ExtendsLocation;
         map["falseExpr"] = ReflectAtom::FalseExpr;
+        map["forLocation"] = ReflectAtom::ForLocation;
         map["from"] = ReflectAtom::From;
         map["func"] = ReflectAtom::Func;
+        map["functionDepth"] = ReflectAtom::FunctionDepth;
         map["functionKeywordPosition"] = ReflectAtom::FunctionKeywordPosition;
+        map["functionLocation"] = ReflectAtom::FunctionLocation;
         map["generic"] = ReflectAtom::CategoryGeneric;
         map["genericPacks"] = ReflectAtom::GenericPacks;
         map["generics"] = ReflectAtom::Generics;
@@ -1225,31 +1487,45 @@ inline ReflectAtom resolveGlobalReflectAtom(std::string_view key)
         map["hasIn"] = ReflectAtom::HasIn;
         map["hasParameterList"] = ReflectAtom::HasParameterList;
         map["hasSemicolon"] = ReflectAtom::HasSemicolon;
+        map["hasThen"] = ReflectAtom::HasThen;
+        map["hotcomments"] = ReflectAtom::Hotcomments;
         map["id"] = ReflectAtom::Id;
+        map["ifLocation"] = ReflectAtom::IfLocation;
+        map["inLocation"] = ReflectAtom::InLocation;
         map["index"] = ReflectAtom::Index;
+        map["indexLocation"] = ReflectAtom::IndexLocation;
         map["indexType"] = ReflectAtom::IndexType;
         map["indexer"] = ReflectAtom::Indexer;
         map["indexerClosePosition"] = ReflectAtom::IndexerClosePosition;
         map["indexerOpenPosition"] = ReflectAtom::IndexerOpenPosition;
+        map["instantiation"] = ReflectAtom::Instantiation;
         map["isArray"] = ReflectAtom::IsArray;
         map["isConst"] = ReflectAtom::IsConst;
         map["isElseIf"] = ReflectAtom::IsElseIf;
         map["isMethod"] = ReflectAtom::IsMethod;
         map["isMissing"] = ReflectAtom::IsMissing;
+        map["itemKind"] = ReflectAtom::ItemKind;
         map["items"] = ReflectAtom::Items;
         map["key"] = ReflectAtom::Key;
+        map["keywordLocation"] = ReflectAtom::KeywordLocation;
         map["kind"] = ReflectAtom::Kind;
         map["leadingComments"] = ReflectAtom::LeadingComments;
         map["leadingPosition"] = ReflectAtom::LeadingPosition;
         map["left"] = ReflectAtom::Left;
+        map["leftArrow1Position"] = ReflectAtom::LeftArrow1Position;
+        map["leftArrow2Position"] = ReflectAtom::LeftArrow2Position;
         map["lineOffsets"] = ReflectAtom::LineOffsets;
+        map["lines"] = ReflectAtom::Lines;
         map["list"] = ReflectAtom::List;
         map["local"] = ReflectAtom::Local;
         map["localKeywordPosition"] = ReflectAtom::LocalKeywordPosition;
+        map["loopDepth"] = ReflectAtom::LoopDepth;
+        map["luwuOnly"] = ReflectAtom::LuwuOnly;
         map["match"] = ReflectAtom::Match;
         map["members"] = ReflectAtom::Members;
         map["messageIndex"] = ReflectAtom::MessageIndex;
         map["name"] = ReflectAtom::Name;
+        map["nameLocation"] = ReflectAtom::NameLocation;
         map["op"] = ReflectAtom::Op;
         map["opPosition"] = ReflectAtom::OpPosition;
         map["openArgsPosition"] = ReflectAtom::OpenArgsPosition;
@@ -1261,23 +1537,34 @@ inline ReflectAtom resolveGlobalReflectAtom(std::string_view key)
         map["openParenthesesPosition"] = ReflectAtom::OpenParenthesesPosition;
         map["openPosition"] = ReflectAtom::OpenPosition;
         map["origlocation"] = ReflectAtom::OrigLocation;
+        map["paramNameLocations"] = ReflectAtom::ParamNameLocations;
+        map["paramNames"] = ReflectAtom::ParamNames;
         map["parameters"] = ReflectAtom::Parameters;
         map["parametersCommaPositions"] = ReflectAtom::ParametersCommaPositions;
         map["params"] = ReflectAtom::Params;
         map["parse"] = ReflectAtom::Parse;
+        map["parseResult"] = ReflectAtom::ParseResult;
         map["parseexpr"] = ReflectAtom::Parseexpr;
         map["prefix"] = ReflectAtom::Prefix;
+        map["prefixLocal"] = ReflectAtom::PrefixLocal;
+        map["prefixLocation"] = ReflectAtom::PrefixLocation;
         map["prefixPointPosition"] = ReflectAtom::PrefixPointPosition;
         map["prettyprint"] = ReflectAtom::Prettyprint;
+        map["primaryConstructor"] = ReflectAtom::PrimaryConstructor;
         map["properties"] = ReflectAtom::Properties;
         map["props"] = ReflectAtom::Props;
+        map["qualifierLocation"] = ReflectAtom::QualifierLocation;
         map["quoteStyle"] = ReflectAtom::QuoteStyle;
+        map["repeatLocation"] = ReflectAtom::RepeatLocation;
         map["resultType"] = ReflectAtom::ResultType;
         map["returnAnnotation"] = ReflectAtom::ReturnAnnotation;
         map["returnArrowPosition"] = ReflectAtom::ReturnArrowPosition;
+        map["returnLocation"] = ReflectAtom::ReturnLocation;
         map["returnSpecifierPosition"] = ReflectAtom::ReturnSpecifierPosition;
         map["returnTypes"] = ReflectAtom::ReturnTypes;
         map["right"] = ReflectAtom::Right;
+        map["rightArrow1Position"] = ReflectAtom::RightArrow1Position;
+        map["rightArrow2Position"] = ReflectAtom::RightArrow2Position;
         map["root"] = ReflectAtom::Root;
         map["self"] = ReflectAtom::Self;
         map["separator"] = ReflectAtom::Separator;
@@ -1285,23 +1572,28 @@ inline ReflectAtom resolveGlobalReflectAtom(std::string_view key)
         map["separatorPositions"] = ReflectAtom::SeparatorPositions;
         map["setAccess"] = ReflectAtom::SetAccess;
         map["setAnnotation"] = ReflectAtom::SetAnnotation;
+        map["setArgNames"] = ReflectAtom::SetArgNames;
         map["setArgTypes"] = ReflectAtom::SetArgTypes;
         map["setArgs"] = ReflectAtom::SetArgs;
         map["setArgsDefaults"] = ReflectAtom::SetArgsDefaults;
+        map["setArgsQualifiers"] = ReflectAtom::SetArgsQualifiers;
         map["setAttributes"] = ReflectAtom::SetAttributes;
         map["setBegin"] = ReflectAtom::SetBegin;
         map["setBody"] = ReflectAtom::SetBody;
         map["setCondition"] = ReflectAtom::SetCondition;
         map["setDebugName"] = ReflectAtom::SetDebugName;
+        map["setDefaultValue"] = ReflectAtom::SetDefaultValue;
         map["setDepth"] = ReflectAtom::SetDepth;
         map["setElseBody"] = ReflectAtom::SetElseBody;
         map["setEnd"] = ReflectAtom::SetEnd;
+        map["setExplicitVisibility"] = ReflectAtom::SetExplicitVisibility;
         map["setExported"] = ReflectAtom::SetExported;
         map["setExpr"] = ReflectAtom::SetExpr;
         map["setExpressions"] = ReflectAtom::SetExpressions;
         map["setFalseExpr"] = ReflectAtom::SetFalseExpr;
         map["setFrom"] = ReflectAtom::SetFrom;
         map["setFunc"] = ReflectAtom::SetFunc;
+        map["setFunctionDepth"] = ReflectAtom::SetFunctionDepth;
         map["setGenericPacks"] = ReflectAtom::SetGenericPacks;
         map["setGenerics"] = ReflectAtom::SetGenerics;
         map["setHasDo"] = ReflectAtom::SetHasDo;
@@ -1311,24 +1603,31 @@ inline ReflectAtom resolveGlobalReflectAtom(std::string_view key)
         map["setHasIn"] = ReflectAtom::SetHasIn;
         map["setHasParameterList"] = ReflectAtom::SetHasParameterList;
         map["setHasSemicolon"] = ReflectAtom::SetHasSemicolon;
+        map["setHasThen"] = ReflectAtom::SetHasThen;
         map["setIndex"] = ReflectAtom::SetIndex;
         map["setIndexType"] = ReflectAtom::SetIndexType;
         map["setIndexer"] = ReflectAtom::SetIndexer;
         map["setIsConst"] = ReflectAtom::SetIsConst;
         map["setIsMethod"] = ReflectAtom::SetIsMethod;
+        map["setItemKind"] = ReflectAtom::SetItemKind;
         map["setItems"] = ReflectAtom::SetItems;
         map["setKey"] = ReflectAtom::SetKey;
-        map["setKind"] = ReflectAtom::SetKind;
         map["setLeadingComments"] = ReflectAtom::SetLeadingComments;
         map["setLeft"] = ReflectAtom::SetLeft;
         map["setList"] = ReflectAtom::SetList;
         map["setLocal"] = ReflectAtom::SetLocal;
+        map["setLoopDepth"] = ReflectAtom::SetLoopDepth;
+        map["setLuwuOnly"] = ReflectAtom::SetLuwuOnly;
         map["setMembers"] = ReflectAtom::SetMembers;
         map["setName"] = ReflectAtom::SetName;
         map["setOp"] = ReflectAtom::SetOp;
+        map["setParamNames"] = ReflectAtom::SetParamNames;
         map["setParameters"] = ReflectAtom::SetParameters;
         map["setParams"] = ReflectAtom::SetParams;
+        map["setParseResult"] = ReflectAtom::SetParseResult;
         map["setPrefix"] = ReflectAtom::SetPrefix;
+        map["setPrefixLocal"] = ReflectAtom::SetPrefixLocal;
+        map["setPrimaryConstructor"] = ReflectAtom::SetPrimaryConstructor;
         map["setProps"] = ReflectAtom::SetProps;
         map["setQuoteStyle"] = ReflectAtom::SetQuoteStyle;
         map["setResultType"] = ReflectAtom::SetResultType;
@@ -1355,20 +1654,26 @@ inline ReflectAtom resolveGlobalReflectAtom(std::string_view key)
         map["setValues"] = ReflectAtom::SetValues;
         map["setVar"] = ReflectAtom::SetVar;
         map["setVararg"] = ReflectAtom::SetVararg;
+        map["setVarargAnnotation"] = ReflectAtom::SetVarargAnnotation;
         map["setVariadicType"] = ReflectAtom::SetVariadicType;
         map["setVars"] = ReflectAtom::SetVars;
+        map["setVisibility"] = ReflectAtom::SetVisibility;
         map["shadow"] = ReflectAtom::Shadow;
         map["source"] = ReflectAtom::Source;
         map["sourceString"] = ReflectAtom::SourceString;
+        map["sourceStrings"] = ReflectAtom::SourceStrings;
         map["stat"] = ReflectAtom::CategoryStat;
         map["statements"] = ReflectAtom::Statements;
         map["statsStartPosition"] = ReflectAtom::StatsStartPosition;
         map["step"] = ReflectAtom::Step;
         map["stepCommaPosition"] = ReflectAtom::StepCommaPosition;
+        map["stringInfo"] = ReflectAtom::StringInfo;
+        map["stringPosition"] = ReflectAtom::StringPosition;
         map["strings"] = ReflectAtom::Strings;
         map["superName"] = ReflectAtom::SuperName;
         map["tailType"] = ReflectAtom::TailType;
         map["text"] = ReflectAtom::Text;
+        map["thenLocation"] = ReflectAtom::ThenLocation;
         map["thenPosition"] = ReflectAtom::ThenPosition;
         map["thenbody"] = ReflectAtom::ThenBody;
         map["to"] = ReflectAtom::To;
@@ -1376,10 +1681,13 @@ inline ReflectAtom resolveGlobalReflectAtom(std::string_view key)
         map["trueExpr"] = ReflectAtom::TrueExpr;
         map["type"] = ReflectAtom::Type;
         map["typeArguments"] = ReflectAtom::TypeArguments;
+        map["typeColonLocation"] = ReflectAtom::TypeColonLocation;
         map["typeKeywordPosition"] = ReflectAtom::TypeKeywordPosition;
         map["typeList"] = ReflectAtom::TypeList;
+        map["typeLocation"] = ReflectAtom::TypeLocation;
         map["typePack"] = ReflectAtom::CategoryTypePack;
         map["types"] = ReflectAtom::Types;
+        map["untilLocation"] = ReflectAtom::UntilLocation;
         map["untilPosition"] = ReflectAtom::UntilPosition;
         map["upvalue"] = ReflectAtom::Upvalue;
         map["value"] = ReflectAtom::Value;
@@ -1387,12 +1695,16 @@ inline ReflectAtom resolveGlobalReflectAtom(std::string_view key)
         map["valuesCommaPositions"] = ReflectAtom::ValuesCommaPositions;
         map["var"] = ReflectAtom::Var;
         map["vararg"] = ReflectAtom::Vararg;
+        map["varargAnnotation"] = ReflectAtom::VarargAnnotation;
         map["varargAnnotationColonPosition"] = ReflectAtom::VarargAnnotationColonPosition;
+        map["varargLocation"] = ReflectAtom::VarargLocation;
         map["variadicType"] = ReflectAtom::VariadicType;
         map["vars"] = ReflectAtom::Vars;
         map["varsAnnotationColonPositions"] = ReflectAtom::VarsAnnotationColonPositions;
         map["varsCommaPositions"] = ReflectAtom::VarsCommaPositions;
+        map["visibility"] = ReflectAtom::Visibility;
         map["walk"] = ReflectAtom::Walk;
+        map["whileLocation"] = ReflectAtom::WhileLocation;
         return map;
     }();
 

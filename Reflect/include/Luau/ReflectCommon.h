@@ -3,6 +3,7 @@
 
 #include "Luau/Reflect.h"
 #include "Luau/ReflectAtoms.gen.h"
+#include "Luau/ReflectItems.gen.h"
 
 #include "lapix.h"
 #include "Luau/Ast.h"
@@ -35,12 +36,9 @@ namespace Luau
 enum AstUserdataTag : int
 {
     TagDocument  = LUA_INTERNAL_UTAG(0),
-    TagNode      = LUA_INTERNAL_UTAG(1),
-    TagCstNode   = LUA_INTERNAL_UTAG(2),
-    TagAux       = LUA_INTERNAL_UTAG(3),
-    TagFilter    = LUA_INTERNAL_UTAG(4),
-    TagAllocator = LUA_INTERNAL_UTAG(5),
-    TagLocal     = LUA_INTERNAL_UTAG(6),
+    TagItem      = LUA_INTERNAL_UTAG(1),
+    TagFilter    = LUA_INTERNAL_UTAG(2),
+    TagAllocator = LUA_INTERNAL_UTAG(3),
 };
 
 enum AstLightUserdataTag : int
@@ -103,10 +101,28 @@ struct AstFilterData
     bool addCategory(std::string_view category);
 };
 
+struct ReflectComment
+{
+    Luau::Lexeme::Type type = Luau::Lexeme::Type::Comment;
+    Luau::AstArray<char> text = {};
+    Luau::Location location;
+};
+
+struct ClassifiedNodeComments
+{
+    std::vector<ReflectComment*> leading;
+    std::vector<ReflectComment*> trailing;
+};
+
+using NodeCommentMap = DenseHashMap2<const Luau::AstNode*, ClassifiedNodeComments>;
+
 struct AstAllocatorState
 {
     Luau::Allocator allocator;
     Luau::AstNameTable names;
+    NodeCommentMap nodeComments;
+    NodeCommentMap parsedComments;
+    DenseHashMap2<const void*, bool> explicitVisibility;
 
     bool mutated = false;
     int activeWalks = 0;
@@ -118,22 +134,75 @@ struct AstAllocatorState
     }
 };
 
+inline std::string toString(ConstantNumberParseResult result)
+{
+    switch (result)
+    {
+    case ConstantNumberParseResult::Ok:
+        return "ok";
+    case ConstantNumberParseResult::Imprecise:
+        return "imprecise";
+    case ConstantNumberParseResult::Malformed:
+        return "malformed";
+    case ConstantNumberParseResult::BinOverflow:
+        return "binoverflow";
+    case ConstantNumberParseResult::HexOverflow:
+        return "hexoverflow";
+    case ConstantNumberParseResult::IntOverflow:
+        return "intoverflow";
+    }
+
+    return "unknown";
+}
+
+template<>
+inline std::optional<ConstantNumberParseResult> fromString<ConstantNumberParseResult>(std::string_view s)
+{
+    for (ConstantNumberParseResult result : {
+             ConstantNumberParseResult::Ok,
+             ConstantNumberParseResult::Imprecise,
+             ConstantNumberParseResult::Malformed,
+             ConstantNumberParseResult::BinOverflow,
+             ConstantNumberParseResult::HexOverflow,
+             ConstantNumberParseResult::IntOverflow,
+         })
+    {
+        if (s == toString(result))
+            return result;
+    }
+
+    return std::nullopt;
+}
+
+inline const AstArgumentName* argumentName(const AstArgumentName& entry)
+{
+    return entry.first.value ? &entry : nullptr;
+}
+
+inline const AstArgumentName* argumentName(const std::optional<AstArgumentName>& entry)
+{
+    return entry && entry->first.value ? &*entry : nullptr;
+}
+
+inline bool hasExplicitVisibility(const AstAllocatorState& arena, const void* target)
+{
+    const bool* flag = arena.explicitVisibility.find(target);
+    return flag && *flag;
+}
+
+inline void copyExplicitVisibility(AstAllocatorState& arena, const void* from, const void* to)
+{
+    if (from == to || arena.explicitVisibility.empty())
+        return;
+
+    bool value = hasExplicitVisibility(arena, from);
+    if (value || arena.explicitVisibility.contains(to))
+        arena.explicitVisibility[to] = value;
+}
+
 struct AstAllocatorData
 {
     std::shared_ptr<AstAllocatorState> state;
-};
-
-struct ReflectComment
-{
-    Luau::Lexeme::Type type = Luau::Lexeme::Type::Comment;
-    std::string text;
-    Luau::Location location;
-};
-
-struct ClassifiedNodeComments
-{
-    std::vector<ReflectComment> leading;
-    std::vector<ReflectComment> trailing;
 };
 
 struct AstDocumentState
@@ -142,7 +211,8 @@ struct AstDocumentState
     std::shared_ptr<AstAllocatorState> arena;
     Luau::ParseResult parseResult;
     std::vector<size_t> lineOffsets;
-    DenseHashMap2<const Luau::AstNode*, ClassifiedNodeComments> nodeComments;
+    std::vector<ReflectComment*> comments;
+    bool commentsExtracted = false;
 
     AstDocumentState()
         : arena(std::make_shared<AstAllocatorState>())
@@ -163,66 +233,38 @@ struct AstDocumentData
     std::shared_ptr<AstDocumentState> doc;
 };
 
-struct AstNodeData
+enum class ItemFamily : uint8_t
 {
-    std::shared_ptr<AstDocumentState> doc;
-    Luau::AstNode* node = nullptr;
+    Node,
+    Cst,
+    Plain,
 };
 
-struct CstNodeData
+struct AstItem;
+struct AstValidator;
+
+struct AstItemClass
 {
-    std::shared_ptr<AstDocumentState> doc;
-    const Luau::CstNode* node = nullptr;
+    const char* kind = nullptr;
+    const char* category = nullptr;
+    ItemFamily family = ItemFamily::Node;
+    NodeCategory categoryEnum = NodeCategory::Unknown;
+    bool canHoldComments = false;
+    bool (*methodHandler)(lua_State* L, AstItem& handle, ReflectAtom atom) = nullptr;
+    void (*propCollector)(lua_State* L, AstItem& handle) = nullptr;
+    void (*validator)(AstValidator& v, Luau::AstNode* node) = nullptr;
+    void (*create)(lua_State* L, const std::shared_ptr<AstDocumentState>& doc) = nullptr;
+    void (*label)(lua_State* L, AstItem& handle) = nullptr;
 };
 
-struct AstLocalData
+struct AstItem
 {
     std::shared_ptr<AstDocumentState> doc;
-    Luau::AstLocal* local = nullptr;
-};
+    const AstItemClass* cls = nullptr;
+    void* target = nullptr;
 
-enum AstAuxKind : uint8_t
-{
-    Aux_TableProp,
-    Aux_TableIndexer,
-    Aux_DeclaredExternTypeProperty,
-    Aux_ClassProperty,
-    Aux_ClassMethod,
-    Aux_Comment,
-    Aux_TableItem,
-    Aux_CstTableItem,
-    Aux_TypeList,
-};
-
-struct AstAuxData
-{
-    std::shared_ptr<AstDocumentState> doc;
-    AstAuxKind kind;
-    ReflectComment comment;
-    union
-    {
-        Luau::AstTableProp tableProp;
-        Luau::AstTableIndexer tableIndexer;
-        Luau::AstDeclaredExternTypeProperty declaredExternProp;
-        Luau::AstClassProperty classProp;
-        Luau::AstClassMethod classMethod;
-        Luau::AstExprTable::Item tableItem;
-        Luau::CstExprTable::Item cstTableItem;
-        Luau::AstTypeList typeList;
-    };
-
-    AstAuxData() : doc(nullptr), kind(Aux_Comment), comment{} {}
-    AstAuxData(const std::shared_ptr<AstDocumentState>& doc) : doc(doc), kind(Aux_Comment), comment{} {}
-    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstTableProp& p) : doc(doc), kind(Aux_TableProp), tableProp(p) {}
-    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstTableIndexer& idx) : doc(doc), kind(Aux_TableIndexer), tableIndexer(idx) {}
-    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstDeclaredExternTypeProperty& p) : doc(doc), kind(Aux_DeclaredExternTypeProperty), declaredExternProp(p) {}
-    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstClassProperty& p) : doc(doc), kind(Aux_ClassProperty), classProp(p) {}
-    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstClassMethod& m) : doc(doc), kind(Aux_ClassMethod), classMethod(m) {}
-    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const ReflectComment& c) : doc(doc), kind(Aux_Comment), comment(c) {}
-    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstExprTable::Item& item) : doc(doc), kind(Aux_TableItem), tableItem(item) {}
-    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::CstExprTable::Item& item) : doc(doc), kind(Aux_CstTableItem), cstTableItem(item) {}
-    AstAuxData(const std::shared_ptr<AstDocumentState>& doc, const Luau::AstTypeList& tl) : doc(doc), kind(Aux_TypeList), typeList(tl) {}
-    ~AstAuxData() {}
+    Luau::AstNode* node() const { return static_cast<Luau::AstNode*>(target); }
+    const Luau::CstNode* cst() const { return static_cast<const Luau::CstNode*>(target); }
 };
 
 // Line and location offset utilities (adapted from lute)
@@ -262,10 +304,26 @@ inline std::pair<size_t, size_t> locationToOffsets(const std::vector<size_t>& li
     return {start, end};
 }
 
-inline ReflectComment extractReflectComment(const AstDocumentState& doc, const Luau::Comment& c)
+inline Luau::AstArray<char> copyToArena(Luau::Allocator& allocator, std::string_view text)
 {
-    auto [startOff, endOff] = locationToOffsets(doc.lineOffsets, doc.source.size(), c.location);
-    return ReflectComment{c.type, doc.source.substr(startOff, endOff - startOff), c.location};
+    char* copy = static_cast<char*>(allocator.allocate(text.size()));
+    std::memcpy(copy, text.data(), text.size());
+    return Luau::AstArray<char>{copy, text.size()};
+}
+
+inline const std::vector<ReflectComment*>& documentComments(AstDocumentState& doc)
+{
+    if (!doc.commentsExtracted)
+    {
+        doc.commentsExtracted = true;
+        for (const Luau::Comment& c : doc.parseResult.commentLocations)
+        {
+            auto [startOff, endOff] = locationToOffsets(doc.lineOffsets, doc.source.size(), c.location);
+            std::string_view text = std::string_view(doc.source).substr(startOff, endOff - startOff);
+            doc.comments.push_back(doc.allocator()->alloc<ReflectComment>(ReflectComment{c.type, copyToArena(*doc.allocator(), text), c.location}));
+        }
+    }
+    return doc.comments;
 }
 
 // Push helpers
@@ -299,39 +357,65 @@ inline void pushLocation(lua_State* L, const std::shared_ptr<AstDocumentState>& 
     lua_setreadonly(L, -1, true);
 }
 
+inline void pushAstItem(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const AstItemClass* cls, void* target)
+{
+    AstItem* item = static_cast<AstItem*>(lua_newuserdatataggedwithmetatable(L, sizeof(AstItem), TagItem));
+    new (item) AstItem{doc, cls, target};
+}
+
+const AstItemClass* astNodeClass(Luau::AstNode* node);
+const AstItemClass* cstNodeClass(const Luau::CstNode* node);
+const AstItemClass* plainItemClass(ReflectAtom atom);
+
 template<typename T>
-inline void pushAstAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const T& item)
+inline void pushItem(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const T* target)
 {
-    AstAuxData* data = static_cast<AstAuxData*>(lua_newuserdatataggedwithmetatable(L, sizeof(AstAuxData), TagAux));
-    new (data) AstAuxData{doc, item};
+    if (target)
+        pushAstItem(L, doc, itemClass<T>(), const_cast<T*>(target));
+    else
+        lua_pushnil(L);
 }
-
-inline void pushAstAuxData(lua_State* L, const AstAuxData& aux)
-{
-    AstAuxData* data = static_cast<AstAuxData*>(lua_newuserdatataggedwithmetatable(L, sizeof(AstAuxData), TagAux));
-    new (data) AstAuxData(aux);
-}
-
-void pushAstLocal(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, Luau::AstLocal* local);
 
 void pushAstFilter(lua_State* L, const AstFilterData& filter);
 
 // Check helpers
 AstDocumentData& checkAstDocument(lua_State* L, int idx);
-AstNodeData& checkAstNode(lua_State* L, int idx);
-CstNodeData& checkCstNode(lua_State* L, int idx);
-AstLocalData& checkAstLocal(lua_State* L, int idx);
-AstAuxData& checkAstAux(lua_State* L, int idx);
 AstFilterData& checkAstFilter(lua_State* L, int idx);
 AstFilterData extractAstFilter(lua_State* L, int idx);
 
-const char* getAstAuxKind(const AstAuxData& handle);
+inline AstItem& checkAstItem(lua_State* L, int idx, ItemFamily family, const char* typeName)
+{
+    AstItem* item = static_cast<AstItem*>(lua_touserdatatagged(L, idx, TagItem));
+    if (!item || item->cls->family != family)
+        luaL_typeerrorL(L, idx, typeName);
+    return *item;
+}
+
+inline AstItem& checkAstNode(lua_State* L, int idx)
+{
+    return checkAstItem(L, idx, ItemFamily::Node, "AstNode");
+}
+
+inline AstItem& checkCstNode(lua_State* L, int idx)
+{
+    return checkAstItem(L, idx, ItemFamily::Cst, "CstNode");
+}
+
+template<typename T>
+inline AstItem& checkItem(lua_State* L, int idx)
+{
+    AstItem* item = static_cast<AstItem*>(lua_touserdatatagged(L, idx, TagItem));
+    if (!item || item->cls != itemClass<T>())
+        luaL_typeerrorL(L, idx, itemClass<T>()->kind);
+    return *item;
+}
 
 Luau::AstNode* createDefaultAstNode(lua_State* L, ReflectAtom atom, Luau::Allocator& alloc);
 const Luau::CstNode* createDefaultCstNode(lua_State* L, ReflectAtom atom, Luau::Allocator& alloc);
-Luau::AstLocal* createDefaultAstLocal(lua_State* L, ReflectAtom atom, Luau::Allocator& alloc);
-bool createDefaultAstAux(ReflectAtom atom, const std::shared_ptr<AstDocumentState>& doc, AstAuxData& out);
 void attachCommentsToAst(AstDocumentState& doc, Luau::AstNode* rootNode = nullptr);
+void recordParsedComments(AstDocumentState& doc, Luau::AstNode* rootNode = nullptr);
+void recordExplicitVisibility(AstDocumentState& doc);
+std::string reflectPrettyPrint(Luau::AstNode* node, bool asProgram, const AstAllocatorState& arena, std::string& error);
 bool canNodeHoldComments(Luau::AstNode* node);
 
 // Array push helpers
@@ -344,6 +428,28 @@ inline void pushArray(lua_State* L, size_t size, F&& pushElem)
         pushElem(i);
         lua_rawseti(L, -2, int(i + 1));
     }
+}
+
+template<typename T>
+inline void pushArgumentNames(lua_State* L, const Luau::AstArray<T>& names)
+{
+    pushArray(L, names.size, [&](size_t i) {
+        if (const Luau::AstArgumentName* name = argumentName(names.data[i]))
+            lua_pushstring(L, name->first.value);
+        else
+            lua_pushboolean(L, false);
+    });
+}
+
+template<typename T>
+inline void pushArgumentNameLocations(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstArray<T>& names)
+{
+    pushArray(L, names.size, [&](size_t i) {
+        if (const Luau::AstArgumentName* name = argumentName(names.data[i]))
+            pushLocation(L, doc, name->second);
+        else
+            lua_pushboolean(L, false);
+    });
 }
 
 inline void pushPositionArray(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstArray<Luau::Position>& array)
@@ -364,7 +470,7 @@ inline void pushNodeArray(lua_State* L, const std::shared_ptr<AstDocumentState>&
 inline void pushLocalArray(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstArray<Luau::AstLocal*>& array)
 {
     pushArray(L, array.size, [&](size_t i) {
-        pushAstLocal(L, doc, array.data[i]);
+        pushItem(L, doc, array.data[i]);
     });
 }
 
@@ -387,7 +493,6 @@ inline void pushTypeOrPackArray(lua_State* L, const std::shared_ptr<AstDocumentS
 
 // Node Kind Lookup
 const char* getNodeKind(Luau::AstNode* node);
-const char* getCstNodeKind(const Luau::CstNode* node);
 
 // Userdata registration helper
 inline void registerUserdataType(
@@ -494,59 +599,6 @@ inline int reflectNamecall(lua_State* L)
     return DispatchFn(L, handle, atom, str, len);
 }
 
-template<typename DataType, auto CheckFn, auto GetKindFn, auto GetCategoryFn, int TagValue, lua_CFunction TrampolineFn>
-inline int reflectNodeIndex(lua_State* L)
-{
-    auto& handle = CheckFn(L, 1);
-    const char* keyStr = nullptr;
-    ReflectAtom atom = resolveIndexAtom(L, keyStr);
-    if (!keyStr)
-    {
-        lua_pushnil(L);
-        return 1;
-    }
-    switch (atom)
-    {
-    case ReflectAtom::Kind:
-        lua_pushstring(L, GetKindFn(handle.node));
-        return 1;
-    case ReflectAtom::Category:
-        lua_pushstring(L, GetCategoryFn(handle.node));
-        return 1;
-    case ReflectAtom::Id:
-        lua_pushlightuserdatatagged(L, (void*)handle.node, TagId);
-        return 1;
-    default:
-        break;
-    }
-    if (atom != ReflectAtom::Unknown)
-        return pushCachedUserdataMethod(L, TagValue, keyStr, TrampolineFn);
-    lua_pushnil(L);
-    return 1;
-}
-
-template<typename NodeType, typename Table>
-inline const char* getNodeKindFromTable(NodeType node, const Table& classTable, const char* defaultName)
-{
-    if (!node)
-        return "nil";
-    int idx = node->classIndex;
-    if (idx >= 0 && idx < int(classTable.size()) && classTable[idx].kind)
-        return classTable[idx].kind;
-    return defaultName;
-}
-
-template<typename NodeType, typename Table>
-inline const char* getNodeCategoryFromTable(NodeType node, const Table& classTable, const char* defaultName)
-{
-    if (!node)
-        return "nil";
-    int idx = node->classIndex;
-    if (idx >= 0 && idx < int(classTable.size()) && classTable[idx].category)
-        return classTable[idx].category;
-    return defaultName;
-}
-
 template<int TagValue, typename DataType>
 inline DataType& checkReflectUserdata(lua_State* L, int idx, const char* typeName)
 {
@@ -561,18 +613,6 @@ inline void reflectUserdataDtor(lua_State* L, void* userdata)
     static_cast<DataType*>(userdata)->~DataType();
 }
 
-template<int TagValue, typename DataType, typename NodeType>
-inline void pushReflectPointerUserdata(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, NodeType node)
-{
-    if (!node)
-    {
-        lua_pushnil(L);
-        return;
-    }
-    DataType* data = static_cast<DataType*>(lua_newuserdatataggedwithmetatable(L, sizeof(DataType), TagValue));
-    new (data) DataType{doc, node};
-}
-
 #define LUAU_REFLECT_RESOLVE_INDEX_ATOM() const char* keyStr = nullptr; ReflectAtom atom = resolveIndexAtom(L, keyStr); if (!keyStr) { lua_pushnil(L); return 1; }
 #define LUAU_REFLECT_RESOLVE_NAMECALL_ATOM() const char* str = nullptr; size_t len = 0; ReflectAtom atom = resolveNamecallAtom(L, str, len);
 
@@ -585,28 +625,12 @@ inline void pushReflectPointerUserdata(lua_State* L, const std::shared_ptr<AstDo
 #define LUAU_REFLECT_NAMECALL(funcName, checkFunc, dispatchFunc) \
     static int funcName(lua_State* L) { return reflectNamecall<std::decay_t<decltype(checkFunc(nullptr, 0))>, checkFunc, dispatchFunc>(L); }
 
-#define LUAU_REFLECT_INDEX(funcName, checkFunc, getKindFunc, getCategoryFunc, TagValue, trampolineFunc) \
-    static int funcName(lua_State* L) { return reflectNodeIndex<std::decay_t<decltype(checkFunc(nullptr, 0))>, checkFunc, getKindFunc, getCategoryFunc, TagValue, trampolineFunc>(L); }
-
-#define LUAU_REFLECT_GET_NODE_KIND(funcName, NodeType, classTable, defaultName) \
-    const char* funcName(NodeType node) { return getNodeKindFromTable(node, classTable, defaultName); }
-
-#define LUAU_REFLECT_GET_NODE_CATEGORY(funcName, NodeType, classTable, defaultName) \
-    const char* funcName(NodeType node) { return getNodeCategoryFromTable(node, classTable, defaultName); }
-
 #define LUAU_REFLECT_DEFINE_USERDATA_BASIC(checkName, dtorName, DataType, TagValue, TypeNameStr) \
     DataType& checkName(lua_State* L, int idx) { return checkReflectUserdata<TagValue, DataType>(L, idx, TypeNameStr); } \
     static void dtorName(lua_State* L, void* userdata) { reflectUserdataDtor<DataType>(L, userdata); }
 
-#define LUAU_REFLECT_DEFINE_POINTER_USERDATA(pushName, checkName, dtorName, DataType, NodeType, TagValue, TypeNameStr) \
-    void pushName(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, NodeType node) { pushReflectPointerUserdata<TagValue, DataType>(L, doc, node); } \
-    LUAU_REFLECT_DEFINE_USERDATA_BASIC(checkName, dtorName, DataType, TagValue, TypeNameStr)
-
 #define LUAU_REFLECT_DEFINE_TOSTRING(funcName, TypeNameStr) \
     static int funcName(lua_State* L) { lua_pushstring(L, TypeNameStr); return 1; }
-
-#define LUAU_REFLECT_DEFINE_DYNAMIC_TOSTRING(funcName, checkFunc, getKindFunc, member) \
-    static int funcName(lua_State* L) { auto& handle = checkFunc(L, 1); lua_pushstring(L, getKindFunc(handle.member)); return 1; }
 
 #define LUAU_REFLECT_DEFINE_EQ(funcName, TagValue, checkFunc, compareExpr) \
     static int funcName(lua_State* L) \
@@ -618,11 +642,15 @@ inline void pushReflectPointerUserdata(lua_State* L, const std::shared_ptr<AstDo
 // Module registration functions
 void registerAstAllocator(lua_State* L);
 void registerAstDocument(lua_State* L);
-void registerAstNode(lua_State* L);
-void registerCstNode(lua_State* L);
-void registerAstAux(lua_State* L);
-void registerAstLocal(lua_State* L);
+void registerAstItem(lua_State* L);
 void registerAstFilter(lua_State* L);
+
+void initializeAstNodeClasses();
+void initializeCstNodeClasses();
+
+int dispatchAstNodeMethod(lua_State* L, AstItem& handle, ReflectAtom atom, const char* str, size_t len);
+int dispatchCstNodeMethod(lua_State* L, AstItem& handle, ReflectAtom atom, const char* str, size_t len);
+
 int reflectFilter(lua_State* L);
 
 } // namespace Luau
