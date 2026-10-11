@@ -201,7 +201,10 @@ TEST_CASE_FIXTURE(Fixture, "type_error_of_unknown_qualified_type")
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
 
-    REQUIRE_EQ(result.errors[0], (TypeError{Location{{1, 17}, {1, 40}}, UnknownSymbol{"SomeModule.DoesNotExist"}}));
+    // Luwu: the error says `SomeModule` isn't a module; upstream's carries only the name
+    UnknownSymbol expected{"SomeModule.DoesNotExist", UnknownSymbol::Context::Type};
+    expected.qualifier = UnknownSymbol::Qualifier::NotAModule;
+    REQUIRE_EQ(result.errors[0], (TypeError{Location{{1, 17}, {1, 40}}, expected}));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "require_module_that_does_not_export")
@@ -1271,6 +1274,36 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "non_exported_class")
     REQUIRE(err);
     CHECK("A.Point" == err->name);
     CHECK(UnknownSymbol::Context::Type == err->context);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "unknown_module_types_say_whether_the_module_or_the_type_is_missing")
+{
+    fileResolver.source["game/A"] = R"(
+        export type Point = { x: number }
+        return {}
+    )";
+
+    fileResolver.source["game/B"] = R"(
+        --!strict
+        local A = require(game.A)
+        local notAModule = 5
+        local missing = require(game.DoesNotExist)
+        local a: A.Size = 1
+        local b: notAModule.Size = 1
+        local c: missing.Size = 1
+        local d: Nowhere = 1
+    )";
+
+    getFrontend().check("game/A");
+    CheckResult result = getFrontend().check("game/B");
+
+    // the unresolved require reports itself; its type keeps the plain message so the two don't contradict
+    LUAU_REQUIRE_ERROR_COUNT(5, result);
+    CHECK(get<UnknownRequire>(result.errors[0]));
+    CHECK_EQ(toString(result.errors[1]), "Unknown type 'A.Size': module 'A' exports no type named 'Size'");
+    CHECK_EQ(toString(result.errors[2]), "Unknown type 'notAModule.Size': 'notAModule' isn't a required module");
+    CHECK_EQ(toString(result.errors[3]), "Unknown type 'missing.Size'");
+    CHECK_EQ(toString(result.errors[4]), "Unknown type 'Nowhere'");
 }
 
 TEST_SUITE_END();

@@ -914,7 +914,8 @@ TEST_CASE_FIXTURE(Fixture, "cannot_create_cyclic_type_with_unknown_module")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    CHECK(toString(result.errors[0]) == "Unknown type 'B.AAA'");
+    // Luwu: says which half of `B.AAA` is missing; upstream reports "Unknown type 'B.AAA'"
+    CHECK(toString(result.errors[0]) == "Unknown type 'B.AAA': 'B' isn't a required module");
 }
 
 TEST_CASE_FIXTURE(Fixture, "type_alias_locations")

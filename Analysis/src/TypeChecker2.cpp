@@ -3881,15 +3881,7 @@ void TypeChecker2::visit(AstTypeReference* ty)
         }
         else
         {
-            std::string symbol = "";
-            if (ty->prefix)
-            {
-                symbol += (*(ty->prefix)).value;
-                symbol += ".";
-            }
-            symbol += ty->name.value;
-
-            reportError(UnknownSymbol{std::move(symbol), UnknownSymbol::Context::Type}, ty->location);
+            reportError(unknownTypeReference(*scope, *ty), ty->location);
         }
     }
 }

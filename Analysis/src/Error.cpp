@@ -5,6 +5,7 @@
 #include "Luau/Common.h"
 #include "Luau/FileResolver.h"
 #include "Luau/NotNull.h"
+#include "Luau/Scope.h"
 #include "Luau/StringUtils.h"
 #include "Luau/ToString.h"
 #include "Luau/Type.h"
@@ -374,6 +375,15 @@ struct ErrorConverter
         case UnknownSymbol::Binding:
             return "Unknown global '" + e.name + "'; consider assigning to it first";
         case UnknownSymbol::Type:
+            switch (e.qualifier)
+            {
+            case UnknownSymbol::Qualifier::NotAModule:
+                return "Unknown type '" + e.name + "': '" + e.module + "' isn't a required module";
+            case UnknownSymbol::Qualifier::NotExported:
+                return "Unknown type '" + e.name + "': module '" + e.module + "' exports no type named '" + e.member + "'";
+            case UnknownSymbol::Qualifier::Unknown:
+                break;
+            }
             return "Unknown type '" + e.name + "'";
         }
 
@@ -1429,7 +1439,37 @@ bool TypeMismatch::operator==(const TypeMismatch& rhs) const
 
 bool UnknownSymbol::operator==(const UnknownSymbol& rhs) const
 {
-    return name == rhs.name;
+    return name == rhs.name && qualifier == rhs.qualifier;
+}
+
+UnknownSymbol unknownTypeReference(const Scope& scope, const AstTypeReference& reference)
+{
+    if (!reference.prefix)
+        return UnknownSymbol{reference.name.value, UnknownSymbol::Context::Type};
+
+    std::string module = reference.prefix->value;
+    std::string member = reference.name.value;
+    UnknownSymbol error{module + "." + member, UnknownSymbol::Context::Type};
+
+    for (const Scope* s = &scope; s; s = s->parent.get())
+    {
+        if (s->importedTypeBindings.count(module))
+        {
+            error.qualifier = UnknownSymbol::Qualifier::NotExported;
+            break;
+        }
+
+        // Already reported as an unknown require; saying `x` isn't a module would contradict the code
+        if (s->unresolvedRequires.count(module))
+            return error;
+    }
+
+    if (error.qualifier == UnknownSymbol::Qualifier::Unknown)
+        error.qualifier = UnknownSymbol::Qualifier::NotAModule;
+
+    error.module = std::move(module);
+    error.member = std::move(member);
+    return error;
 }
 
 bool UnknownProperty::operator==(const UnknownProperty& rhs) const
