@@ -3,6 +3,8 @@
 #include "Luau/ReflectCommon.h"
 #include "Luau/ReflectAstHandler.h"
 
+#include "AstLocal.gen.inl"
+
 namespace Luau
 {
 
@@ -17,98 +19,18 @@ static int astLocalProperties(lua_State* L, AstLocalData& handle)
     lua_pushstring(L, "AstLocal");
     lua_setfield(L, -2, "kind");
 
-    pushReflectValue(L, handle.doc, handle.local->name);
-    lua_setfield(L, -2, "name");
-
-    pushLocation(L, handle.doc, handle.local->location);
-    lua_setfield(L, -2, "origlocation");
-
-    pushReflectValue(L, handle.doc, handle.local->shadow);
-    lua_setfield(L, -2, "shadow");
-
-    pushReflectValue(L, handle.doc, handle.local->functionDepth);
-    lua_setfield(L, -2, "depth");
-
-    pushReflectValue(L, handle.doc, handle.local->isConst);
-    lua_setfield(L, -2, "isConst");
-
-    pushReflectValue(L, handle.doc, handle.local->isExported);
-    lua_setfield(L, -2, "exported");
-
-    pushReflectValue(L, handle.doc, handle.local->annotation);
-    lua_setfield(L, -2, "annotation");
+    collectAstLocalProps(L, handle);
 
     return 1;
 }
 
 static int dispatchAstLocalMethod(lua_State* L, AstLocalData& handle, ReflectAtom atom, const char* str, size_t len)
 {
-    switch (atom)
-    {
-    case ReflectAtom::Properties:
+    if (atom == ReflectAtom::Properties)
         return astLocalProperties(L, handle);
 
-    case ReflectAtom::Name:
-        pushReflectValue(L, handle.doc, handle.local->name);
+    if (handleAstLocalMethods(L, handle, atom))
         return 1;
-
-    case ReflectAtom::SetName:
-        readReflectValue(L, handle.doc, 2, handle.local->name);
-        lua_pushvalue(L, 1);
-        return 1;
-
-    case ReflectAtom::OrigLocation:
-        pushLocation(L, handle.doc, handle.local->location);
-        return 1;
-
-    case ReflectAtom::Shadow:
-        pushReflectValue(L, handle.doc, handle.local->shadow);
-        return 1;
-
-    case ReflectAtom::SetShadow:
-        readReflectValue(L, handle.doc, 2, handle.local->shadow);
-        lua_pushvalue(L, 1);
-        return 1;
-
-    case ReflectAtom::Depth:
-        pushReflectValue(L, handle.doc, handle.local->functionDepth);
-        return 1;
-
-    case ReflectAtom::SetDepth:
-        readReflectValue(L, handle.doc, 2, handle.local->functionDepth);
-        lua_pushvalue(L, 1);
-        return 1;
-
-    case ReflectAtom::IsConst:
-        pushReflectValue(L, handle.doc, handle.local->isConst);
-        return 1;
-
-    case ReflectAtom::SetIsConst:
-        readReflectValue(L, handle.doc, 2, handle.local->isConst);
-        lua_pushvalue(L, 1);
-        return 1;
-
-    case ReflectAtom::Exported:
-        pushReflectValue(L, handle.doc, handle.local->isExported);
-        return 1;
-
-    case ReflectAtom::SetExported:
-        readReflectValue(L, handle.doc, 2, handle.local->isExported);
-        lua_pushvalue(L, 1);
-        return 1;
-
-    case ReflectAtom::Annotation:
-        pushReflectValue(L, handle.doc, handle.local->annotation);
-        return 1;
-
-    case ReflectAtom::SetAnnotation:
-        readReflectValue(L, handle.doc, 2, handle.local->annotation);
-        lua_pushvalue(L, 1);
-        return 1;
-
-    default:
-        break;
-    }
 
     luaL_error(L, "%.*s is not a valid method of AstLocal", int(len), str);
 }
@@ -152,13 +74,6 @@ static int astLocalToString(lua_State* L)
 }
 
 LUAU_REFLECT_DEFINE_EQ(astLocalEq, TagLocal, checkAstLocal, a.local == b.local)
-
-Luau::AstLocal* createDefaultAstLocal(std::string_view kind, Luau::Allocator& alloc)
-{
-    if (kind == "AstLocal")
-        return alloc.alloc<Luau::AstLocal>(Luau::AstName(), Luau::Location(), nullptr, 0, 0, nullptr, false);
-    return nullptr;
-}
 
 void registerAstLocal(lua_State* L)
 {

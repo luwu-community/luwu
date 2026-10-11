@@ -19,6 +19,7 @@ enum class ReflectAtom : int16_t
     Args,
     ArgsAnnotationColonPositions,
     ArgsCommaPositions,
+    ArgsDefaults,
     ArgumentNameColonPositions,
     ArgumentsCommaPositions,
     AstAttr,
@@ -207,7 +208,7 @@ enum class ReflectAtom : int16_t
     List,
     Local,
     LocalKeywordPosition,
-    Matches,
+    Match,
     Members,
     MessageIndex,
     Name,
@@ -248,6 +249,7 @@ enum class ReflectAtom : int16_t
     SetAnnotation,
     SetArgTypes,
     SetArgs,
+    SetArgsDefaults,
     SetAttributes,
     SetBegin,
     SetBody,
@@ -374,6 +376,8 @@ inline const char* getAtomString(ReflectAtom atom)
         return "argsAnnotationColonPositions";
     case ReflectAtom::ArgsCommaPositions:
         return "argsCommaPositions";
+    case ReflectAtom::ArgsDefaults:
+        return "argsDefaults";
     case ReflectAtom::ArgumentNameColonPositions:
         return "argumentNameColonPositions";
     case ReflectAtom::ArgumentsCommaPositions:
@@ -750,8 +754,8 @@ inline const char* getAtomString(ReflectAtom atom)
         return "local";
     case ReflectAtom::LocalKeywordPosition:
         return "localKeywordPosition";
-    case ReflectAtom::Matches:
-        return "matches";
+    case ReflectAtom::Match:
+        return "match";
     case ReflectAtom::Members:
         return "members";
     case ReflectAtom::MessageIndex:
@@ -832,6 +836,8 @@ inline const char* getAtomString(ReflectAtom atom)
         return "setArgTypes";
     case ReflectAtom::SetArgs:
         return "setArgs";
+    case ReflectAtom::SetArgsDefaults:
+        return "setArgsDefaults";
     case ReflectAtom::SetAttributes:
         return "setAttributes";
     case ReflectAtom::SetBegin:
@@ -1164,6 +1170,7 @@ inline ReflectAtom resolveGlobalReflectAtom(std::string_view key)
         map["args"] = ReflectAtom::Args;
         map["argsAnnotationColonPositions"] = ReflectAtom::ArgsAnnotationColonPositions;
         map["argsCommaPositions"] = ReflectAtom::ArgsCommaPositions;
+        map["argsDefaults"] = ReflectAtom::ArgsDefaults;
         map["argumentNameColonPositions"] = ReflectAtom::ArgumentNameColonPositions;
         map["argumentsCommaPositions"] = ReflectAtom::ArgumentsCommaPositions;
         map["attr"] = ReflectAtom::CategoryAttr;
@@ -1239,7 +1246,7 @@ inline ReflectAtom resolveGlobalReflectAtom(std::string_view key)
         map["list"] = ReflectAtom::List;
         map["local"] = ReflectAtom::Local;
         map["localKeywordPosition"] = ReflectAtom::LocalKeywordPosition;
-        map["matches"] = ReflectAtom::Matches;
+        map["match"] = ReflectAtom::Match;
         map["members"] = ReflectAtom::Members;
         map["messageIndex"] = ReflectAtom::MessageIndex;
         map["name"] = ReflectAtom::Name;
@@ -1280,6 +1287,7 @@ inline ReflectAtom resolveGlobalReflectAtom(std::string_view key)
         map["setAnnotation"] = ReflectAtom::SetAnnotation;
         map["setArgTypes"] = ReflectAtom::SetArgTypes;
         map["setArgs"] = ReflectAtom::SetArgs;
+        map["setArgsDefaults"] = ReflectAtom::SetArgsDefaults;
         map["setAttributes"] = ReflectAtom::SetAttributes;
         map["setBegin"] = ReflectAtom::SetBegin;
         map["setBody"] = ReflectAtom::SetBody;

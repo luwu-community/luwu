@@ -6,28 +6,14 @@
 #include "Luau/ReflectCommon.h"
 #include "Luau/ReflectAstHandler.h"
 
+#include "AstNodes.gen.inl"
+
+LUAU_FASTINT(LuauRecursionLimit)
+
 namespace Luau
 {
 
 LUAU_REFLECT_DEFINE_POINTER_USERDATA(pushAstNode, checkAstNode, astNodeDtor, AstNodeData, Luau::AstNode*, TagNode, "AstNode")
-
-typedef bool (*NodeMethodHandler)(lua_State* L, AstNodeData& handle, ReflectAtom atom);
-typedef void (*NodePropCollector)(lua_State* L, AstNodeData& handle);
-typedef Luau::AstNode* (*NodeFactoryFn)(Luau::Allocator& alloc);
-
-struct AstNodeClassInfo
-{
-    const char* kind = nullptr;
-    const char* category = nullptr;
-    // derived field used for filtering
-    NodeCategory categoryEnum = NodeCategory::Unknown;
-    NodeMethodHandler methodHandler = nullptr;
-    NodePropCollector propCollector = nullptr;
-    NodeFactoryFn factory = nullptr;
-    bool canHoldComments = false;
-};
-
-static std::vector<AstNodeClassInfo> s_nodeClassTable;
 
 NodeCategory getNodeCategory(Luau::AstNode* node)
 {
@@ -59,33 +45,89 @@ int getNodeClassIndexByKind(std::string_view kind)
     return -1;
 }
 
-// Register every node statically to allow for all AST node operations to be direct jumps and not if-else hell.
-template<typename T>
-static void registerNodeClass(
-    const char* kind,
-    NodeCategory category,
-    NodeMethodHandler methodHandler = nullptr,
-    NodePropCollector propCollector = nullptr,
-    NodeFactoryFn factory = nullptr
-)
-{
-    int idx = T::ClassIndex();
-    if (size_t(idx) >= s_nodeClassTable.size())
-        s_nodeClassTable.resize(idx + 1, AstNodeClassInfo{"AstNode", "unknown", NodeCategory::Unknown, nullptr, nullptr, nullptr, false});
-    bool canHoldComments = (category == NodeCategory::Stat);
-    s_nodeClassTable[idx] = AstNodeClassInfo{kind, categoryToString(category), category, methodHandler, propCollector, factory, canHoldComments};
-}
-
-Luau::AstNode* createDefaultAstNode(std::string_view kind, Luau::Allocator& alloc)
-{
-    int idx = getNodeClassIndexByKind(kind);
-    if (idx >= 0 && idx < int(s_nodeClassTable.size()) && s_nodeClassTable[idx].factory)
-        return s_nodeClassTable[idx].factory(alloc);
-    return nullptr;
-}
-
 LUAU_REFLECT_GET_NODE_KIND(getNodeKind, Luau::AstNode*, s_nodeClassTable, "AstNode")
 LUAU_REFLECT_GET_NODE_CATEGORY(getAstNodeCategory, Luau::AstNode*, s_nodeClassTable, "unknown")
+
+void AstValidator::node(Luau::AstNode* node)
+{
+    if (const int* known = heights.find(node))
+    {
+        if (*known < 0)
+            luaL_error(L, "malformed AST: %s is nested inside itself", getNodeKind(node));
+        if (depth + *known > maxDepth)
+            luaL_error(L, "malformed AST: nesting is deeper than the limit of %d", maxDepth);
+        tallestChild = std::max(tallestChild, *known);
+        return;
+    }
+
+    if (depth >= maxDepth)
+        luaL_error(L, "malformed AST: nesting is deeper than the limit of %d", maxDepth);
+
+    heights[node] = -1;
+
+    const char* outerKind = kind;
+    int outerTallestChild = tallestChild;
+    kind = getNodeKind(node);
+    tallestChild = 0;
+    depth++;
+
+    int idx = node->classIndex;
+    if (idx >= 0 && idx < int(s_nodeClassTable.size()) && s_nodeClassTable[idx].validator)
+        s_nodeClassTable[idx].validator(*this, node);
+
+    depth--;
+    int height = tallestChild + 1;
+    heights[node] = height;
+    kind = outerKind;
+    tallestChild = std::max(outerTallestChild, height);
+}
+
+void AstValidator::fail(const char* field, int index, const char* problem)
+{
+    if (index >= 0)
+        luaL_error(L, "malformed AST: %s.%s[%d] %s", kind, field, index + 1, problem);
+    luaL_error(L, "malformed AST: %s.%s %s", kind, field, problem);
+}
+
+void AstValidator::child(Luau::AstNode* node, const char* field, int index, const char* missing)
+{
+    if (!node)
+    {
+        if (missing)
+            fail(field, index, missing);
+        return;
+    }
+    if (deep)
+        this->node(node);
+}
+
+void AstValidator::local(Luau::AstLocal* local, const char* field, int index, const char* missing)
+{
+    if (!local)
+    {
+        if (missing)
+            fail(field, index, missing);
+        return;
+    }
+    if (forPrint && !local->name.value)
+        fail(field, index, "has no name");
+    child(local->annotation, field, index, nullptr);
+}
+
+void AstValidator::name(const Luau::AstName& name, const char* field, int index, const char* missing)
+{
+    if (forPrint && missing && !name.value)
+        fail(field, index, missing);
+}
+
+void validateAstNode(lua_State* L, const AstNodeData& handle, AstValidation mode)
+{
+    if (!handle.node || !handle.doc || !handle.doc->arena || !handle.doc->arena->mutated)
+        return;
+
+    AstValidator validator{L, mode != AstValidation::Node, mode == AstValidation::Print, int(FInt::LuauRecursionLimit)};
+    validator.node(handle.node);
+}
 
 struct DirectChildCollector : public Luau::AstVisitor
 {
@@ -115,450 +157,10 @@ struct DirectChildCollector : public Luau::AstVisitor
     }
 };
 
-#define LUAU_AST_NODE_BASE \
-    LUAU_AST_FIELD_RO(OrigLocation, location) \
-    LUAU_AST_FIELD_FN_RO(Cst, getNodeCst(handle, n))
-
-#define LUAU_AST_STAT_BASE \
-    LUAU_AST_NODE_BASE \
-    LUAU_AST_FIELD_RW(HasSemicolon, SetHasSemicolon, hasSemicolon)
-
-#define LUAU_REFLECT_AST_NODES(NODE) \
-    /* Statements */ \
-    NODE(AstStatBlock, "AstStatBlock", Stat, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstArray<Luau::AstStat*>{nullptr, 0}, false) \
-        LUAU_AST_STAT_BASE \
-        LUAU_AST_FIELD_RW(HasEnd, SetHasEnd, hasEnd) \
-        LUAU_AST_FIELD_RW(Body, SetBody, body)) \
-    NODE(AstStatIf, "AstStatIf", Stat, \
-        LUAU_NODE_DEFAULT(Luau::Location(), nullptr, nullptr, nullptr, std::nullopt, std::nullopt, Luau::Location()) \
-        LUAU_AST_STAT_BASE \
-        LUAU_AST_FIELD_RW(Condition, SetCondition, condition) \
-        LUAU_AST_FIELD_RW(ThenBody, SetThenBody, thenbody) \
-        LUAU_AST_FIELD_RW(ElseBody, SetElseBody, elsebody)) \
-    NODE(AstStatWhile, "AstStatWhile", Stat, \
-        LUAU_NODE_DEFAULT(Luau::Location(), nullptr, nullptr, false, Luau::Location(), Luau::Location()) \
-        LUAU_AST_STAT_BASE \
-        LUAU_AST_FIELD_RW(HasDo, SetHasDo, hasDo) \
-        LUAU_AST_FIELD_RW(Condition, SetCondition, condition) \
-        LUAU_AST_FIELD_RW(Body, SetBody, body)) \
-    NODE(AstStatRepeat, "AstStatRepeat", Stat, \
-        LUAU_NODE_DEFAULT(Luau::Location(), nullptr, nullptr, false, Luau::Location(), Luau::Location()) \
-        LUAU_AST_STAT_BASE \
-        LUAU_AST_FIELD_RW(Condition, SetCondition, condition) \
-        LUAU_AST_FIELD_RW(Body, SetBody, body)) \
-    NODE(AstStatBreak, "AstStatBreak", Stat, \
-        LUAU_NODE_DEFAULT(Luau::Location()) \
-        LUAU_AST_STAT_BASE) \
-    NODE(AstStatContinue, "AstStatContinue", Stat, \
-        LUAU_NODE_DEFAULT(Luau::Location()) \
-        LUAU_AST_STAT_BASE) \
-    NODE(AstStatReturn, "AstStatReturn", Stat, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstArray<Luau::AstExpr*>{nullptr, 0}, Luau::Location()) \
-        LUAU_AST_STAT_BASE \
-        LUAU_AST_FIELD_RW(List, SetList, list)) \
-    NODE(AstStatExpr, "AstStatExpr", Stat, \
-        LUAU_NODE_DEFAULT(Luau::Location(), nullptr) \
-        LUAU_AST_STAT_BASE \
-        LUAU_AST_FIELD_RW(Expr, SetExpr, expr)) \
-    NODE(AstStatLocal, "AstStatLocal", Stat, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstArray<Luau::AstLocal*>{nullptr, 0}, Luau::AstArray<Luau::AstExpr*>{nullptr, 0}, std::nullopt, false) \
-        LUAU_AST_STAT_BASE \
-        LUAU_AST_FIELD_RW(IsConst, SetIsConst, isConst) \
-        LUAU_AST_FIELD_RW(Exported, SetExported, isExported) \
-        LUAU_AST_FIELD_RW(Vars, SetVars, vars) \
-        LUAU_AST_FIELD_RW(Values, SetValues, values)) \
-    NODE(AstStatFor, "AstStatFor", Stat, \
-        LUAU_NODE_DEFAULT(Luau::Location(), nullptr, nullptr, nullptr, nullptr, nullptr, false, Luau::Location(), Luau::Location()) \
-        LUAU_AST_STAT_BASE \
-        LUAU_AST_FIELD_RW(HasDo, SetHasDo, hasDo) \
-        LUAU_AST_FIELD_RW(Var, SetVar, var) \
-        LUAU_AST_FIELD_RW(From, SetFrom, from) \
-        LUAU_AST_FIELD_RW(To, SetTo, to) \
-        LUAU_AST_FIELD_RW(Step, SetStep, step) \
-        LUAU_AST_FIELD_RW(Body, SetBody, body)) \
-    NODE(AstStatForIn, "AstStatForIn", Stat, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstArray<Luau::AstLocal*>{nullptr, 0}, Luau::AstArray<Luau::AstExpr*>{nullptr, 0}, nullptr, false, Luau::Location(), false, Luau::Location(), Luau::Location()) \
-        LUAU_AST_STAT_BASE \
-        LUAU_AST_FIELD_RW(HasIn, SetHasIn, hasIn) \
-        LUAU_AST_FIELD_RW(HasDo, SetHasDo, hasDo) \
-        LUAU_AST_FIELD_RW(Vars, SetVars, vars) \
-        LUAU_AST_FIELD_RW(Values, SetValues, values) \
-        LUAU_AST_FIELD_RW(Body, SetBody, body)) \
-    NODE(AstStatAssign, "AstStatAssign", Stat, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstArray<Luau::AstExpr*>{nullptr, 0}, Luau::AstArray<Luau::AstExpr*>{nullptr, 0}) \
-        LUAU_AST_STAT_BASE \
-        LUAU_AST_FIELD_RW(Vars, SetVars, vars) \
-        LUAU_AST_FIELD_RW(Values, SetValues, values)) \
-    NODE(AstStatCompoundAssign, "AstStatCompoundAssign", Stat, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstExprBinary::Op::Add, nullptr, nullptr) \
-        LUAU_AST_STAT_BASE \
-        LUAU_AST_FIELD_RW(Op, SetOp, op) \
-        LUAU_AST_FIELD_RW(Var, SetVar, var) \
-        LUAU_AST_FIELD_RW(Value, SetValue, value)) \
-    NODE(AstStatFunction, "AstStatFunction", Stat, \
-        LUAU_NODE_DEFAULT(Luau::Location(), nullptr, nullptr, Luau::Location()) \
-        LUAU_AST_STAT_BASE \
-        LUAU_AST_FIELD_RW(Name, SetName, name) \
-        LUAU_AST_FIELD_RW(Func, SetFunc, func)) \
-    NODE(AstStatLocalFunction, "AstStatLocalFunction", Stat, \
-        LUAU_NODE_DEFAULT(Luau::Location(), nullptr, nullptr, false, Luau::Position::missing(), Luau::Location(), Luau::Location()) \
-        LUAU_AST_STAT_BASE \
-        LUAU_AST_FIELD_RW(IsConst, SetIsConst, isConst) \
-        LUAU_AST_FIELD_RW(Name, SetName, name) \
-        LUAU_AST_FIELD_RW(Func, SetFunc, func)) \
-    NODE(AstStatTypeAlias, "AstStatTypeAlias", Stat, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstName(), Luau::Location(), Luau::AstArray<Luau::AstGenericType*>{nullptr, 0}, Luau::AstArray<Luau::AstGenericTypePack*>{nullptr, 0}, nullptr, false, Luau::Location()) \
-        LUAU_AST_STAT_BASE \
-        LUAU_AST_FIELD_RW(Name, SetName, name) \
-        LUAU_AST_FIELD_RW(Exported, SetExported, exported) \
-        LUAU_AST_FIELD_RW(Type, SetType, type) \
-        LUAU_AST_FIELD_RW(Generics, SetGenerics, generics) \
-        LUAU_AST_FIELD_RW(GenericPacks, SetGenericPacks, genericPacks)) \
-    NODE(AstStatTypeFunction, "AstStatTypeFunction", Stat, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstName(), Luau::Location(), nullptr, false, false) \
-        LUAU_AST_STAT_BASE \
-        LUAU_AST_FIELD_RW(Name, SetName, name) \
-        LUAU_AST_FIELD_RW(Exported, SetExported, exported) \
-        LUAU_AST_FIELD_RW(HasErrors, SetHasErrors, hasErrors) \
-        LUAU_AST_FIELD_RW(Body, SetBody, body)) \
-    NODE(AstStatDeclareGlobal, "AstStatDeclareGlobal", Stat, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstName(), Luau::Location(), nullptr, Luau::Location()) \
-        LUAU_AST_STAT_BASE \
-        LUAU_AST_FIELD_RW(Name, SetName, name) \
-        LUAU_AST_FIELD_RW(Type, SetType, type)) \
-    NODE(AstStatDeclareFunction, "AstStatDeclareFunction", Stat, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstArray<Luau::AstAttr*>{nullptr, 0}, Luau::AstName(), Luau::Location(), Luau::AstArray<Luau::AstGenericType*>{nullptr, 0}, Luau::AstArray<Luau::AstGenericTypePack*>{nullptr, 0}, Luau::AstTypeList{}, Luau::AstArray<Luau::AstArgumentName>{nullptr, 0}, false, Luau::Location(), nullptr, Luau::Location(), Luau::Location()) \
-        LUAU_AST_STAT_BASE \
-        LUAU_AST_FIELD_RW(Name, SetName, name) \
-        LUAU_AST_FIELD_RW(Vararg, SetVararg, vararg) \
-        LUAU_AST_FIELD_RW(Generics, SetGenerics, generics) \
-        LUAU_AST_FIELD_RW(GenericPacks, SetGenericPacks, genericPacks) \
-        LUAU_AST_FIELD_RW(Params, SetParams, params) \
-        LUAU_AST_FIELD_RW(ReturnTypes, SetReturnTypes, retTypes) \
-        LUAU_AST_FIELD_RW(Attributes, SetAttributes, attributes)) \
-    NODE(AstStatClass, "AstStatClass", Stat, \
-        LUAU_NODE_DEFAULT(Luau::Location(), nullptr, Luau::AstArray<Luau::AstClassMember>{nullptr, 0}, false, Luau::Location()) \
-        LUAU_AST_STAT_BASE \
-        LUAU_AST_FIELD_RW(Exported, SetExported, exported) \
-        LUAU_AST_FIELD_RW(Name, SetName, name) \
-        LUAU_AST_FIELD_RW(Members, SetMembers, members)) \
-    NODE(AstStatDeclareExternType, "AstStatDeclareExternType", Stat, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstName(), std::nullopt, Luau::AstArray<Luau::AstDeclaredExternTypeProperty>{nullptr, 0}, Luau::Location(), Luau::Location(), std::nullopt, nullptr) \
-        LUAU_AST_STAT_BASE \
-        LUAU_AST_FIELD_RW(Name, SetName, name) \
-        LUAU_AST_FIELD_RW(SuperName, SetSuperName, superName) \
-        LUAU_AST_FIELD_RW(Props, SetProps, props) \
-        LUAU_AST_FIELD_RW(Indexer, SetIndexer, indexer) \
-        LUAU_AST_FIELD_RW(Generics, SetGenerics, generics) \
-        LUAU_AST_FIELD_RW(GenericPacks, SetGenericPacks, genericPacks)) \
-    NODE(AstStatError, "AstStatError", Stat, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstArray<Luau::AstExpr*>{nullptr, 0}, Luau::AstArray<Luau::AstStat*>{nullptr, 0}, 0) \
-        LUAU_AST_STAT_BASE \
-        LUAU_AST_FIELD_RO(MessageIndex, messageIndex) \
-        LUAU_AST_FIELD_RO(Expressions, expressions) \
-        LUAU_AST_FIELD_RO(Statements, statements)) \
-    \
-    /* Expressions */ \
-    NODE(AstExprGroup, "AstExprGroup", Expr, \
-        LUAU_NODE_DEFAULT(Luau::Location(), nullptr) \
-        LUAU_AST_NODE_BASE \
-        LUAU_AST_FIELD_RW(Expr, SetExpr, expr)) \
-    NODE(AstExprConstantNil, "AstExprConstantNil", Expr, \
-        LUAU_NODE_DEFAULT(Luau::Location()) \
-        LUAU_AST_NODE_BASE) \
-    NODE(AstExprConstantBool, "AstExprConstantBool", Expr, \
-        LUAU_NODE_DEFAULT(Luau::Location(), false) \
-        LUAU_AST_NODE_BASE \
-        LUAU_AST_FIELD_RW(Value, SetValue, value)) \
-    NODE(AstExprConstantNumber, "AstExprConstantNumber", Expr, \
-        LUAU_NODE_DEFAULT(Luau::Location(), 0.0) \
-        LUAU_AST_NODE_BASE \
-        LUAU_AST_FIELD_RW(Value, SetValue, value)) \
-    NODE(AstExprConstantInteger, "AstExprConstantInteger", Expr, \
-        LUAU_NODE_DEFAULT(Luau::Location(), int64_t(0)) \
-        LUAU_AST_NODE_BASE \
-        LUAU_AST_FIELD_RW(Value, SetValue, value)) \
-    NODE(AstExprConstantString, "AstExprConstantString", Expr, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstArray<char>{nullptr, 0}, Luau::AstExprConstantString::QuoteStyle::QuotedSimple) \
-        LUAU_AST_NODE_BASE \
-        LUAU_AST_FIELD_RW(Value, SetValue, value) \
-        LUAU_AST_FIELD_RW(QuoteStyle, SetQuoteStyle, quoteStyle)) \
-    NODE(AstExprLocal, "AstExprLocal", Expr, \
-        LUAU_NODE_DEFAULT(Luau::Location(), nullptr, false) \
-        LUAU_AST_NODE_BASE \
-        LUAU_AST_FIELD_RW(Upvalue, SetUpvalue, upvalue) \
-        LUAU_AST_FIELD_RW(Local, SetLocal, local)) \
-    NODE(AstExprGlobal, "AstExprGlobal", Expr, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstName()) \
-        LUAU_AST_NODE_BASE \
-        LUAU_AST_FIELD_RW(Name, SetName, name)) \
-    NODE(AstExprVarargs, "AstExprVarargs", Expr, \
-        LUAU_NODE_DEFAULT(Luau::Location()) \
-        LUAU_AST_NODE_BASE) \
-    NODE(AstExprCall, "AstExprCall", Expr, \
-        LUAU_NODE_DEFAULT(Luau::Location(), nullptr, Luau::AstArray<Luau::AstExpr*>{nullptr, 0}, false, Luau::AstArray<Luau::AstTypeOrPack>{nullptr, 0}, Luau::Location()) \
-        LUAU_AST_NODE_BASE \
-        LUAU_AST_FIELD_RW(Self, SetSelf, self) \
-        LUAU_AST_FIELD_RW(Func, SetFunc, func) \
-        LUAU_AST_FIELD_RW(Args, SetArgs, args) \
-        LUAU_AST_FIELD_RW(TypeArguments, SetTypeArguments, typeArguments)) \
-    NODE(AstExprIndexName, "AstExprIndexName", Expr, \
-        LUAU_NODE_DEFAULT(Luau::Location(), nullptr, Luau::AstName(), Luau::Location(), Luau::Position::missing(), '.') \
-        LUAU_AST_NODE_BASE \
-        LUAU_AST_FIELD_RW(Index, SetIndex, index) \
-        LUAU_AST_FIELD_RW(Op, SetOp, op) \
-        LUAU_AST_FIELD_RW(Expr, SetExpr, expr)) \
-    NODE(AstExprIndexExpr, "AstExprIndexExpr", Expr, \
-        LUAU_NODE_DEFAULT(Luau::Location(), nullptr, nullptr) \
-        LUAU_AST_NODE_BASE \
-        LUAU_AST_FIELD_RW(Expr, SetExpr, expr) \
-        LUAU_AST_FIELD_RW(Index, SetIndex, index)) \
-    NODE(AstExprFunction, "AstExprFunction", Expr, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstArray<Luau::AstAttr*>{nullptr, 0}, Luau::AstArray<Luau::AstGenericType*>{nullptr, 0}, Luau::AstArray<Luau::AstGenericTypePack*>{nullptr, 0}, nullptr, Luau::AstArray<Luau::AstLocal*>{nullptr, 0}, Luau::AstArray<Luau::AstExpr*>{nullptr, 0}, false, Luau::Location(), nullptr, 0, Luau::AstName(), nullptr, nullptr, std::nullopt) \
-        LUAU_AST_NODE_BASE \
-        LUAU_AST_FIELD_RW(Vararg, SetVararg, vararg) \
-        LUAU_AST_FIELD_RW(DebugName, SetDebugName, debugname) \
-        LUAU_AST_FIELD_RW(Args, SetArgs, args) \
-        LUAU_AST_FIELD_RW(Body, SetBody, body) \
-        LUAU_AST_FIELD_RW(Generics, SetGenerics, generics) \
-        LUAU_AST_FIELD_RW(GenericPacks, SetGenericPacks, genericPacks) \
-        LUAU_AST_FIELD_RW(ReturnAnnotation, SetReturnAnnotation, returnAnnotation) \
-        LUAU_AST_FIELD_RW(Attributes, SetAttributes, attributes)) \
-    NODE(AstExprTable, "AstExprTable", Expr, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstArray<Luau::AstExprTable::Item>{nullptr, 0}) \
-        LUAU_AST_NODE_BASE \
-        LUAU_AST_FIELD_RW(Items, SetItems, items)) \
-    NODE(AstExprUnary, "AstExprUnary", Expr, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstExprUnary::Op::Not, nullptr) \
-        LUAU_AST_NODE_BASE \
-        LUAU_AST_FIELD_RW(Op, SetOp, op) \
-        LUAU_AST_FIELD_RW(Expr, SetExpr, expr)) \
-    NODE(AstExprBinary, "AstExprBinary", Expr, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstExprBinary::Op::Add, nullptr, nullptr) \
-        LUAU_AST_NODE_BASE \
-        LUAU_AST_FIELD_RW(Op, SetOp, op) \
-        LUAU_AST_FIELD_RW(Left, SetLeft, left) \
-        LUAU_AST_FIELD_RW(Right, SetRight, right)) \
-    NODE(AstExprTypeAssertion, "AstExprTypeAssertion", Expr, \
-        LUAU_NODE_DEFAULT(Luau::Location(), nullptr, nullptr) \
-        LUAU_AST_NODE_BASE \
-        LUAU_AST_FIELD_RW(Expr, SetExpr, expr) \
-        LUAU_AST_FIELD_RW(Annotation, SetAnnotation, annotation)) \
-    NODE(AstExprIfElse, "AstExprIfElse", Expr, \
-        LUAU_NODE_DEFAULT(Luau::Location(), nullptr, true, nullptr, true, nullptr, Luau::Location(), std::nullopt, std::nullopt) \
-        LUAU_AST_NODE_BASE \
-        LUAU_AST_FIELD_RW(HasElse, SetHasElse, hasElse) \
-        LUAU_AST_FIELD_RW(Condition, SetCondition, condition) \
-        LUAU_AST_FIELD_RW(TrueExpr, SetTrueExpr, trueExpr) \
-        LUAU_AST_FIELD_RW(FalseExpr, SetFalseExpr, falseExpr)) \
-    NODE(AstExprInterpString, "AstExprInterpString", Expr, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstArray<Luau::AstArray<char>>{nullptr, 0}, Luau::AstArray<Luau::AstExpr*>{nullptr, 0}) \
-        LUAU_AST_NODE_BASE \
-        LUAU_AST_FIELD_RW(Strings, SetStrings, strings) \
-        LUAU_AST_FIELD_RW(Expressions, SetExpressions, expressions)) \
-    NODE(AstExprInstantiate, "AstExprInstantiate", Expr, \
-        LUAU_NODE_DEFAULT(Luau::Location(), nullptr, Luau::AstArray<Luau::AstTypeOrPack>{nullptr, 0}) \
-        LUAU_AST_NODE_BASE \
-        LUAU_AST_FIELD_RW(Expr, SetExpr, expr) \
-        LUAU_AST_FIELD_RW(TypeArguments, SetTypeArguments, typeArguments)) \
-    NODE(AstExprError, "AstExprError", Expr, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstArray<Luau::AstExpr*>{nullptr, 0}, 0) \
-        LUAU_AST_NODE_BASE \
-        LUAU_AST_FIELD_RO(MessageIndex, messageIndex) \
-        LUAU_AST_FIELD_RO(Expressions, expressions)) \
-    \
-    /* Types */ \
-    NODE(AstTypeReference, "AstTypeReference", Type, \
-        LUAU_NODE_DEFAULT(Luau::Location(), std::nullopt, Luau::AstName(), std::nullopt, Luau::Location(), false, Luau::AstArray<Luau::AstTypeOrPack>{nullptr, 0}) \
-        LUAU_AST_NODE_BASE \
-        LUAU_AST_FIELD_RW(Name, SetName, name) \
-        LUAU_AST_FIELD_RW(Prefix, SetPrefix, prefix) \
-        LUAU_AST_FIELD_RW(HasParameterList, SetHasParameterList, hasParameterList) \
-        LUAU_AST_FIELD_RW(Parameters, SetParameters, parameters)) \
-    NODE(AstTypeTable, "AstTypeTable", Type, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstArray<Luau::AstTableProp>{nullptr, 0}, nullptr) \
-        LUAU_AST_NODE_BASE \
-        LUAU_AST_FIELD_RW(Props, SetProps, props) \
-        LUAU_AST_FIELD_RW(Indexer, SetIndexer, indexer)) \
-    NODE(AstTypeFunction, "AstTypeFunction", Type, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstArray<Luau::AstAttr*>{nullptr, 0}, Luau::AstArray<Luau::AstGenericType*>{nullptr, 0}, Luau::AstArray<Luau::AstGenericTypePack*>{nullptr, 0}, Luau::AstTypeList{}, Luau::AstArray<std::optional<Luau::AstArgumentName>>{nullptr, 0}, nullptr) \
-        LUAU_AST_NODE_BASE \
-        LUAU_AST_FIELD_RW(Generics, SetGenerics, generics) \
-        LUAU_AST_FIELD_RW(GenericPacks, SetGenericPacks, genericPacks) \
-        LUAU_AST_FIELD_RW(ArgTypes, SetArgTypes, argTypes) \
-        LUAU_AST_FIELD_RW(ReturnTypes, SetReturnTypes, returnTypes) \
-        LUAU_AST_FIELD_RW(Attributes, SetAttributes, attributes)) \
-    NODE(AstTypeTypeof, "AstTypeTypeof", Type, \
-        LUAU_NODE_DEFAULT(Luau::Location(), nullptr) \
-        LUAU_AST_NODE_BASE \
-        LUAU_AST_FIELD_RW(Expr, SetExpr, expr)) \
-    NODE(AstTypeOptional, "AstTypeOptional", Type, \
-        LUAU_NODE_DEFAULT(Luau::Location()) \
-        LUAU_AST_NODE_BASE) \
-    NODE(AstTypeUnion, "AstTypeUnion", Type, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstArray<Luau::AstType*>{nullptr, 0}) \
-        LUAU_AST_NODE_BASE \
-        LUAU_AST_FIELD_RW(Types, SetTypes, types)) \
-    NODE(AstTypeIntersection, "AstTypeIntersection", Type, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstArray<Luau::AstType*>{nullptr, 0}) \
-        LUAU_AST_NODE_BASE \
-        LUAU_AST_FIELD_RW(Types, SetTypes, types)) \
-    NODE(AstTypeSingletonBool, "AstTypeSingletonBool", Type, \
-        LUAU_NODE_DEFAULT(Luau::Location(), false) \
-        LUAU_AST_NODE_BASE \
-        LUAU_AST_FIELD_RW(Value, SetValue, value)) \
-    NODE(AstTypeSingletonString, "AstTypeSingletonString", Type, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstArray<char>{nullptr, 0}) \
-        LUAU_AST_NODE_BASE \
-        LUAU_AST_FIELD_RW(Value, SetValue, value)) \
-    NODE(AstTypeGroup, "AstTypeGroup", Type, \
-        LUAU_NODE_DEFAULT(Luau::Location(), nullptr) \
-        LUAU_AST_NODE_BASE \
-        LUAU_AST_FIELD_RW(Type, SetType, type)) \
-    NODE(AstTypeError, "AstTypeError", Type, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstArray<Luau::AstType*>{nullptr, 0}, false, 0) \
-        LUAU_AST_NODE_BASE \
-        LUAU_AST_FIELD_RO(IsMissing, isMissing) \
-        LUAU_AST_FIELD_RO(MessageIndex, messageIndex) \
-        LUAU_AST_FIELD_RO(Types, types)) \
-    \
-    /* Type Packs */ \
-    NODE(AstTypePackExplicit, "AstTypePackExplicit", TypePack, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstTypeList{}) \
-        LUAU_AST_NODE_BASE \
-        LUAU_AST_FIELD_RW(TypeList, SetTypeList, typeList)) \
-    NODE(AstTypePackVariadic, "AstTypePackVariadic", TypePack, \
-        LUAU_NODE_DEFAULT(Luau::Location(), nullptr) \
-        LUAU_AST_NODE_BASE \
-        LUAU_AST_FIELD_RW(VariadicType, SetVariadicType, variadicType)) \
-    NODE(AstTypePackGeneric, "AstTypePackGeneric", TypePack, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstName()) \
-        LUAU_AST_NODE_BASE \
-        LUAU_AST_FIELD_RW(Name, SetName, genericName)) \
-    \
-    /* Generics & Attributes */ \
-    NODE(AstGenericType, "AstGenericType", Generic, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstName(), nullptr) \
-        LUAU_AST_NODE_BASE \
-        LUAU_AST_FIELD_RW(Name, SetName, name) \
-        LUAU_AST_FIELD_RW(Type, SetType, defaultValue)) \
-    NODE(AstGenericTypePack, "AstGenericTypePack", Generic, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstName(), nullptr) \
-        LUAU_AST_NODE_BASE \
-        LUAU_AST_FIELD_RW(Name, SetName, name) \
-        LUAU_AST_FIELD_RW(Type, SetType, defaultValue)) \
-    NODE(AstAttr, "AstAttr", Attr, \
-        LUAU_NODE_DEFAULT(Luau::Location(), Luau::AstAttr::Type::Checked, Luau::AstArray<Luau::AstExpr*>{nullptr, 0}, Luau::AstName()) \
-        LUAU_AST_NODE_BASE \
-        LUAU_AST_FIELD_RW(Type, SetType, type) \
-        LUAU_AST_FIELD_RW(Name, SetName, name) \
-        LUAU_AST_FIELD_RW(Args, SetArgs, args))
-
-/* default ctor */
-#define LUAU_NODE_DEFAULT(...) return alloc.alloc<CurrentAstNode>(__VA_ARGS__);
-#define LUAU_AST_FIELD_RW(atomGet, atomSet, memberExpr)
-#define LUAU_AST_FIELD_RO(atomGet, memberExpr)
-#define LUAU_AST_FIELD_FN_RO(atomGet, expr)
-
-#define LUAU_GENERATE_AST_FACTORY(Class, KindStr, Cat, Fields) \
-    static ::Luau::AstNode* createDefault##Class(::Luau::Allocator& alloc) \
-    { \
-        using CurrentAstNode = ::Luau::Class; \
-        Fields \
-        return nullptr; \
-    }
-
-LUAU_REFLECT_AST_NODES(LUAU_GENERATE_AST_FACTORY)
-
-#undef LUAU_GENERATE_AST_FACTORY
-#undef LUAU_NODE_DEFAULT
-#undef LUAU_AST_FIELD_RW
-#undef LUAU_AST_FIELD_RO
-#undef LUAU_AST_FIELD_FN_RO
-
-/* methods */
-#define LUAU_NODE_DEFAULT(...)
-
-#define LUAU_AST_FIELD_RW(atomGet, atomSet, memberExpr) \
-    case ReflectAtom::atomGet: \
-        pushReflectValue(L, handle.doc, n->memberExpr); \
-        return true; \
-    case ReflectAtom::atomSet: \
-        readReflectValue(L, handle.doc, 2, n->memberExpr); \
-        lua_pushvalue(L, 1); \
-        return true;
-
-#define LUAU_AST_FIELD_RO(atomGet, memberExpr) \
-    case ReflectAtom::atomGet: \
-        pushReflectValue(L, handle.doc, n->memberExpr); \
-        return true;
-
-#define LUAU_AST_FIELD_FN_RO(atomGet, expr) \
-    case ReflectAtom::atomGet: \
-        pushReflectValue(L, handle.doc, expr); \
-        return true;
-
-#define LUAU_GENERATE_AST_HANDLER(Class, KindStr, Cat, Fields) \
-    static bool handle##Class##Methods(lua_State* L, AstNodeData& handle, ReflectAtom atom) \
-    { \
-        auto* n = static_cast<::Luau::Class*>(handle.node); \
-        switch (atom) \
-        { \
-        Fields \
-        default: return false; \
-        } \
-    }
-
-LUAU_REFLECT_AST_NODES(LUAU_GENERATE_AST_HANDLER)
-
-#undef LUAU_GENERATE_AST_HANDLER
-#undef LUAU_NODE_DEFAULT
-#undef LUAU_AST_FIELD_RW
-#undef LUAU_AST_FIELD_RO
-#undef LUAU_AST_FIELD_FN_RO
-
-/* properties */
-#define LUAU_NODE_DEFAULT(...)
-
-#define LUAU_AST_FIELD_RW(atomGet, atomSet, memberExpr) \
-    pushReflectValue(L, handle.doc, n->memberExpr); \
-    lua_setfield(L, -2, getAtomString(ReflectAtom::atomGet));
-
-#define LUAU_AST_FIELD_RO(atomGet, memberExpr) \
-    pushReflectValue(L, handle.doc, n->memberExpr); \
-    lua_setfield(L, -2, getAtomString(ReflectAtom::atomGet));
-
-#define LUAU_AST_FIELD_FN_RO(atomGet, expr) \
-    pushReflectValue(L, handle.doc, expr); \
-    lua_setfield(L, -2, getAtomString(ReflectAtom::atomGet));
-
-#define LUAU_GENERATE_AST_PROP_COLLECTOR(Class, KindStr, Cat, Fields) \
-    static void collect##Class##Props(lua_State* L, AstNodeData& handle) \
-    { \
-        auto* n = static_cast<::Luau::Class*>(handle.node); \
-        (void)n; \
-        Fields \
-    }
-
-LUAU_REFLECT_AST_NODES(LUAU_GENERATE_AST_PROP_COLLECTOR)
-
-#undef LUAU_GENERATE_AST_PROP_COLLECTOR
-#undef LUAU_NODE_DEFAULT
-#undef LUAU_AST_FIELD_RW
-#undef LUAU_AST_FIELD_RO
-#undef LUAU_AST_FIELD_FN_RO
-
-/* reg table */
 static void initializeDispatchTables()
 {
     static const bool initialized = []() {
-#define LUAU_REGISTER_AST_NODE(Class, KindStr, Cat, Fields) \
-        registerNodeClass<::Luau::Class>(KindStr, NodeCategory::Cat, handle##Class##Methods, collect##Class##Props, createDefault##Class);
-
-        LUAU_REFLECT_AST_NODES(LUAU_REGISTER_AST_NODE)
-
-#undef LUAU_REGISTER_AST_NODE
+        registerAstNodeClasses();
         return true;
     }();
     (void)initialized;
@@ -567,6 +169,7 @@ static void initializeDispatchTables()
 static int astNodeChildren(lua_State* L)
 {
     auto& handle = checkAstNode(L, 1);
+    validateAstNode(L, handle, AstValidation::Node);
     DirectChildCollector collector;
     handle.node->visit(&collector);
     pushArray(L, collector.children.size(), [&](size_t i) {
@@ -584,12 +187,12 @@ struct CallbackVisitor : public Luau::AstVisitor
     bool hasFilter = false;
     bool errorOccurred = false;
 
-    CallbackVisitor(lua_State* L, std::shared_ptr<AstDocumentState> doc, int callbackIndex, const AstFilterData& filter = {})
+    CallbackVisitor(lua_State* L, std::shared_ptr<AstDocumentState> doc, int callbackIndex, const AstFilterData& filter, bool hasFilter)
         : L(L)
         , doc(doc)
         , callbackIndex(callbackIndex)
         , filter(filter)
-        , hasFilter(!filter.empty())
+        , hasFilter(hasFilter)
     {
     }
 
@@ -640,7 +243,25 @@ static int astNodeWalk(lua_State* L)
 
     AstFilterData filter = extractAstFilter(L, 3);
 
-    CallbackVisitor visitor(L, handle.doc, 2, filter);
+    validateAstNode(L, handle, AstValidation::Walk);
+
+    struct WalkScope
+    {
+        AstAllocatorState& arena;
+
+        explicit WalkScope(AstAllocatorState& arena)
+            : arena(arena)
+        {
+            arena.activeWalks++;
+        }
+
+        ~WalkScope()
+        {
+            arena.activeWalks--;
+        }
+    } walkScope(*handle.doc->arena);
+
+    CallbackVisitor visitor(L, handle.doc, 2, filter, !lua_isnoneornil(L, 3));
     handle.node->visit(&visitor);
 
     if (visitor.errorOccurred)
@@ -704,7 +325,9 @@ static int astNodePrettyprint(lua_State* L)
         lua_pushliteral(L, "");
         return 1;
     }
-    std::string s = Luau::toString(handle.node);
+    validateAstNode(L, handle, AstValidation::Print);
+    Luau::AstStatBlock* root = handle.doc ? handle.doc->parseResult.root : nullptr;
+    std::string s = handle.node == root ? Luau::prettyPrintWithTypes(*root) : Luau::toString(handle.node);
     lua_pushlstring(L, s.data(), s.size());
     return 1;
 }

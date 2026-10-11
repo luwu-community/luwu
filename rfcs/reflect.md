@@ -1,7 +1,10 @@
 # Reflect
 
 Status: In-progress
-FFlag: This RFC implements a new optional library and as such does not have any fflags right now.
+FFlag: `reflect` is an optional library with the following fflag reqs:
+
+- `LuauUdataMetatablePinned` is needed to ensure userdata metatables are pinned and do not get GC'd during use
+- `OptLuwuReflectUseAtoms` can optionally be enabled to allow using Luwu native atoms. Assumes no `useratom` cb is enabled rn.
 
 ## Summary
 Implement a reflect library for luwu code to parse Luwu code into AST+CST build code transforms/documentation generators on top of Luwu

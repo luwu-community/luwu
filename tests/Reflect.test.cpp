@@ -15,6 +15,9 @@
 
 LUAU_FASTFLAG(LuauDirectFieldGet)
 LUAU_FASTFLAG(LuwuManagedReferences2)
+LUAU_FASTFLAG(LuauUdataMetatablePinned)
+LUAU_FASTFLAG(LuauCstAttr)
+LUAU_FASTFLAG(LuwuDefaultArguments)
 
 static int dostring(lua_State* L, const char* code)
 {
@@ -42,6 +45,7 @@ TEST_CASE("LazyAstTypeof")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
     ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
@@ -92,6 +96,7 @@ TEST_CASE("LazyAstProperties")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
     ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
@@ -142,6 +147,7 @@ TEST_CASE("LazyAstChildrenAndWalk")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
     ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
@@ -211,6 +217,7 @@ TEST_CASE("LazyAstParseExpr")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
     ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
@@ -247,6 +254,7 @@ TEST_CASE("LazyAstErrors")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
     ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
@@ -276,6 +284,7 @@ TEST_CASE("LazyCstData")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
     ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
@@ -356,6 +365,7 @@ TEST_CASE("LazyAstComments")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
     ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
@@ -391,6 +401,7 @@ TEST_CASE("LazyAstTableItems")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
     ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
@@ -465,6 +476,7 @@ TEST_CASE("AstTypeTableAndAstAux")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
     ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
@@ -525,6 +537,7 @@ TEST_CASE("TestFields")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
     ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
@@ -579,6 +592,7 @@ TEST_CASE("ParseReflectTypesFile")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
     ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
 
     std::ifstream file("Reflect/types.luau");
     if (!file.is_open())
@@ -613,6 +627,7 @@ TEST_CASE("ReflectUseAtoms")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
     ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
     ScopedFastFlag sff3{FFlag::OptLuwuReflectUseAtoms, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
@@ -706,6 +721,7 @@ TEST_CASE("ReflectUserdataId")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
     ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
     ScopedFastFlag sff3{FFlag::OptLuwuReflectUseAtoms, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
@@ -758,6 +774,7 @@ TEST_CASE("ReflectUserdataProtectedMetatable")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
     ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
     ScopedFastFlag sff3{FFlag::OptLuwuReflectUseAtoms, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
@@ -795,6 +812,7 @@ TEST_CASE("ReflectAstFilter")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
     ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
     ScopedFastFlag sff3{FFlag::OptLuwuReflectUseAtoms, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
@@ -822,7 +840,7 @@ TEST_CASE("ReflectAstFilter")
 
         -- Matches method
         local root = doc:root()
-        assert(callFilter:matches(root) == false)
+        assert(callFilter:match(root) == false)
 
         -- Walk with filter
         local calls = {}
@@ -833,8 +851,8 @@ TEST_CASE("ReflectAstFilter")
         assert(#calls == 2) -- print(...) and foo(x, 2)
         assert(calls[1].kind == "AstExprCall")
         assert(calls[2].kind == "AstExprCall")
-        assert(callFilter:matches(calls[1]) == true)
-        assert(callFilter:matches(calls[2]) == true)
+        assert(callFilter:match(calls[1]) == true)
+        assert(callFilter:match(calls[2]) == true)
 
         -- Category filter: stat
         local statFilter = reflect.filter("stat")
@@ -846,7 +864,7 @@ TEST_CASE("ReflectAstFilter")
         assert(#stats > 0)
         for _, s in stats do
             assert(s.category == "stat")
-            assert(statFilter:matches(s) == true)
+            assert(statFilter:match(s) == true)
         end
 
         -- Multi-kind filter
@@ -890,6 +908,7 @@ TEST_CASE("ReflectAstMutations")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
     ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
     ScopedFastFlag sff3{FFlag::OptLuwuReflectUseAtoms, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
@@ -1058,6 +1077,7 @@ TEST_CASE("ReflectProperties")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
     ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
@@ -1136,6 +1156,7 @@ TEST_CASE("AstAllocator")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
     ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
     ScopedFastFlag sff3{FFlag::OptLuwuReflectUseAtoms, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
@@ -1187,6 +1208,7 @@ TEST_CASE("AstAllocatorDefaultNode")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
     ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
     ScopedFastFlag sff3{FFlag::OptLuwuReflectUseAtoms, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
@@ -1298,6 +1320,7 @@ TEST_CASE("ReflectCommentTracking")
 {
     ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
     ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
@@ -1361,6 +1384,590 @@ TEST_CASE("ReflectCommentTracking")
         local exprTrailing = expr:trailingComments()
         assert(#exprTrailing == 1)
         assert(exprTrailing[1]:text() == "-- expr comment")
+    )LUA";
+
+    CHECK_EQ(dostring(L, script), 0);
+}
+
+TEST_CASE("ReflectRequiresPinnedUserdataMetatables")
+{
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, false};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    lua_pushcfunction(L, Luau::luaopen_reflect, "luaopen_reflect");
+    CHECK_NE(lua_pcall(L, 0, 1, 0), 0);
+    CHECK(std::string(lua_tostring(L, -1)).find("LuauUdataMetatablePinned") != std::string::npos);
+}
+
+TEST_CASE("ReflectMetatablesSurviveCollection")
+{
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    Luau::luaopen_reflect(L);
+    lua_setglobal(L, "reflect");
+
+    lua_gc(L, LUA_GCCOLLECT, 0);
+    lua_gc(L, LUA_GCCOLLECT, 0);
+
+    const char* script = R"LUA(
+        local root = reflect.allocator():parse("local x = 1"):root()
+        assert(root.kind == "AstStatBlock")
+        assert(root:body()[1]:vars()[1]:name() == "x")
+    )LUA";
+
+    CHECK_EQ(dostring(L, script), 0);
+}
+
+TEST_CASE("ReflectMalformedTreesRaiseErrors")
+{
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    Luau::luaopen_reflect(L);
+    lua_setglobal(L, "reflect");
+
+    const char* script = R"LUA(
+        local function fails(f, message)
+            local ok, err = pcall(f)
+            assert(not ok, "expected an error containing: " .. message)
+            assert(string.find(tostring(err), message, 1, true) ~= nil, tostring(err))
+        end
+
+        local alloc = reflect.allocator()
+        local function visitAll(node)
+            node:walk(function() return true end)
+        end
+
+        local ifStat = alloc:defaultnode("AstStatIf")
+        fails(function() visitAll(ifStat) end, "AstStatIf.condition is nil")
+        fails(function() return ifStat:children() end, "AstStatIf.condition is nil")
+        fails(function() return ifStat:prettyprint() end, "AstStatIf.condition is nil")
+
+        ifStat:setCondition(alloc:parseexpr("x")):setThenBody(alloc:defaultnode("AstStatBlock"))
+        assert(#ifStat:children() == 2)
+        visitAll(ifStat)
+        assert(ifStat:elsebody() == nil)
+
+        local parsedIf = alloc:parse("if x then y() end"):root():body()[1]
+        parsedIf:setCondition(nil)
+        fails(function() return parsedIf:children() end, "AstStatIf.condition is nil")
+        fails(function() visitAll(parsedIf) end, "AstStatIf.condition is nil")
+
+        local doc = alloc:parse("while true do if x then y() end end")
+        doc:root():body()[1]:body():body()[1]:setThenBody(nil)
+        fails(function() visitAll(doc:root()) end, "AstStatIf.thenbody is nil")
+        fails(function() return doc:root():prettyprint() end, "AstStatIf.thenbody is nil")
+
+        local global = alloc:defaultnode("AstExprGlobal")
+        visitAll(global)
+        fails(function() return global:prettyprint() end, "AstExprGlobal.name is nil")
+        assert(global:setName("g"):prettyprint() == "g")
+        fails(function() return alloc:defaultnode("AstExprLocal"):prettyprint() end, "AstExprLocal.local is nil")
+
+        local ref = alloc:parse("local v: Foo<number, string, boolean> = nil"):root():body()[1]:vars()[1]:annotation()
+        local params = ref:parameters()
+        ref:setParameters({ params[1], nil, params[3] })
+        fails(function() return ref:prettyprint() end, "AstTypeReference.parameters[2] is nil")
+
+        local tbl = alloc:parseexpr("{ x = 1 }")
+        local item = tbl:items()[1]
+        item:setKey(alloc:parseexpr("1 + 2"))
+        tbl:setItems({ item })
+        visitAll(tbl)
+        fails(function() return tbl:prettyprint() end, "is a record item whose key is not a string constant")
+        item:setKind("general")
+        tbl:setItems({ item })
+        assert(string.gsub(tbl:prettyprint(), "%s", "") == "{[1+2]=1}")
+    )LUA";
+
+    CHECK_EQ(dostring(L, script), 0);
+}
+
+TEST_CASE("ReflectCyclesAndDeepNesting")
+{
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    Luau::luaopen_reflect(L);
+    lua_setglobal(L, "reflect");
+
+    const char* script = R"LUA(
+        local function fails(f, message)
+            local ok, err = pcall(f)
+            assert(not ok, "expected an error containing: " .. message)
+            assert(string.find(tostring(err), message, 1, true) ~= nil, tostring(err))
+        end
+
+        local alloc = reflect.allocator()
+
+        local root = alloc:parse("do end"):root()
+        local block = root:body()[1]
+        block:setBody({ block })
+        fails(function() return root:prettyprint() end, "AstStatBlock is nested inside itself")
+        fails(function() root:walk(function() return true end) end, "AstStatBlock is nested inside itself")
+        assert(#root:children() == 1)
+
+        local bin = alloc:parseexpr("a + b")
+        local group = alloc:defaultnode("AstExprGroup"):setExpr(bin)
+        bin:setLeft(group)
+        fails(function() return group:prettyprint() end, "is nested inside itself")
+
+        local x = alloc:parseexpr("x")
+        local sum = alloc:parseexpr("a + b"):setLeft(x):setRight(x)
+        assert(string.gsub(sum:prettyprint(), "%s", "") == "x+x")
+        local shared = x
+        for i = 1, 64 do
+            shared = alloc:parseexpr("a + b"):setLeft(shared):setRight(shared)
+        end
+        assert(#shared:children() == 2)
+
+        local function nest(depth)
+            local expr = alloc:parseexpr("1")
+            for i = 1, depth do
+                expr = alloc:defaultnode("AstExprGroup"):setExpr(expr)
+            end
+            return expr
+        end
+        assert(#nest(100):prettyprint() == 201)
+        fails(function() return nest(5000):prettyprint() end, "nesting is deeper than the limit")
+        fails(function() nest(5000):walk(function() return true end) end, "nesting is deeper than the limit")
+    )LUA";
+
+    CHECK_EQ(dostring(L, script), 0);
+}
+
+TEST_CASE("ReflectCrossAllocatorAuxValues")
+{
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    Luau::luaopen_reflect(L);
+    lua_setglobal(L, "reflect");
+
+    const char* script = R"LUA(
+        local function fails(f, message)
+            local ok, err = pcall(f)
+            assert(not ok, "expected an error containing: " .. message)
+            assert(string.find(tostring(err), message, 1, true) ~= nil, tostring(err))
+        end
+
+        local a = reflect.allocator()
+        local b = reflect.allocator()
+
+        local tblA = a:parseexpr("{ 1 }")
+        local tblB = b:parseexpr("{ x = 'from b' }")
+        fails(function() tblA:setItems(tblB:items()) end, "cross-allocator")
+        assert(string.gsub(tblA:prettyprint(), "%s", "") == "{1}")
+
+        local refA = a:parse("local v: Foo<number> = nil"):root():body()[1]:vars()[1]:annotation()
+        local refB = b:parse("local w: Bar<string, boolean> = nil"):root():body()[1]:vars()[1]:annotation()
+        fails(function() refA:setParameters(refB:parameters()) end, "cross-allocator")
+
+        local typeA = a:parse("type T = { x: number, [string]: boolean }"):root():body()[1]:type()
+        local typeB = b:parse("type U = { y: string, [number]: string }"):root():body()[1]:type()
+        fails(function() typeA:setProps(typeB:props()) end, "cross-allocator")
+        fails(function() typeA:setIndexer(typeB:indexer()) end, "cross-allocator")
+        local fnA = a:parse("type F = (number) -> string"):root():body()[1]:type()
+        local fnB = b:parse("type G = (boolean, boolean) -> ()"):root():body()[1]:type()
+        fails(function() fnA:setArgTypes(fnB:argTypes()) end, "cross-allocator")
+
+        local tblA2 = a:parseexpr("{ y = 2 }")
+        tblA:setItems(tblA2:items())
+        assert(string.gsub(tblA:prettyprint(), "%s", "") == "{y=2}")
+        local typeA2 = a:parse("type V = { z: boolean }"):root():body()[1]:type()
+        typeA:setProps(typeA2:props())
+        assert(typeA:props()[1]:name() == "z")
+    )LUA";
+
+    CHECK_EQ(dostring(L, script), 0);
+}
+
+TEST_CASE("ReflectNoStructuralEditsDuringWalk")
+{
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    Luau::luaopen_reflect(L);
+    lua_setglobal(L, "reflect");
+
+    const char* script = R"LUA(
+        local function fails(f, message)
+            local ok, err = pcall(f)
+            assert(not ok, "expected an error containing: " .. message)
+            assert(string.find(tostring(err), message, 1, true) ~= nil, tostring(err))
+        end
+
+        local alloc = reflect.allocator()
+        local root = alloc:parse("if x then y = 1 end"):root()
+        local ifStat = root:body()[1]
+
+        local renamed = 0
+        root:walk(function(node)
+            if node.kind == "AstExprGlobal" then
+                node:setName(node:name() .. "_")
+                renamed += 1
+            end
+            return true
+        end)
+        assert(renamed == 2)
+        assert(ifStat:condition():name() == "x_")
+
+        fails(function()
+            root:walk(function(node)
+                if node.kind == "AstStatIf" then
+                    node:setCondition(alloc:parseexpr("z"))
+                end
+                return true
+            end)
+        end, "cannot change the structure of an AST while it is being walked")
+        assert(ifStat:condition():name() == "x_")
+
+        ifStat:setCondition(alloc:parseexpr("z"))
+        assert(ifStat:condition():name() == "z")
+    )LUA";
+
+    CHECK_EQ(dostring(L, script), 0);
+}
+
+TEST_CASE("ReflectDefaultNodesThatNeedAFlag")
+{
+    for (bool enabled : {false, true})
+    {
+        ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+        ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+        ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
+        ScopedFastFlag sffClasses{FFlag::LuwuClasses, enabled};
+        ScopedFastFlag sffCstAttr{FFlag::LuauCstAttr, enabled};
+        std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+        lua_State* L = globalState.get();
+        luaL_openlibs(L);
+
+        Luau::luaopen_reflect(L);
+        lua_setglobal(L, "reflect");
+
+        lua_pushboolean(L, enabled);
+        lua_setglobal(L, "enabled");
+
+        const char* script = R"LUA(
+            local alloc = reflect.allocator()
+            for kind, flag in { AstStatClass = "LuwuClasses", CstAttr = "LuauCstAttr", CstParametrizedAttr = "LuauCstAttr" } do
+                local ok, res = pcall(function() return alloc:defaultnode(kind) end)
+                assert(ok == enabled, kind)
+                if not ok then
+                    assert(string.find(res, "cannot create a default " .. kind .. ": FFlag " .. flag .. " is not enabled", 1, true) ~= nil, res)
+                end
+            end
+
+            if enabled then
+                local class = alloc:defaultnode("AstStatClass")
+                local prop = alloc:defaultnode("AstClassProperty"):setName("p")
+                local method = alloc:defaultnode("AstClassMethod"):setName("m")
+                class:setMembers({ prop, method })
+                assert(#class:members() == 2)
+                assert(class:members()[1]:name() == "p")
+                assert(class:members()[2]:name() == "m")
+
+                class:setName(alloc:defaultnode("AstLocal"):setName("C"))
+                local ok, err = pcall(function() return class:children() end)
+                assert(not ok and string.find(err, "AstStatClass.members[2] has no function", 1, true) ~= nil, err)
+            end
+        )LUA";
+
+        CHECK_EQ(dostring(L, script), 0);
+    }
+}
+
+TEST_CASE("ReflectEveryDefaultNodeIsSafeToUse")
+{
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    Luau::luaopen_reflect(L);
+    lua_setglobal(L, "reflect");
+
+    lua_newtable(L);
+    for (int i = 0; i < int(Luau::ReflectAtom::Count); i++)
+    {
+        lua_pushstring(L, Luau::getAtomString(Luau::ReflectAtom(i)));
+        lua_rawseti(L, -2, i + 1);
+    }
+    lua_setglobal(L, "atoms");
+
+    const char* script = R"LUA(
+        local alloc = reflect.allocator()
+        local made = 0
+
+        for _, name in atoms do
+            local ok, node = pcall(function() return alloc:defaultnode(name) end)
+            if not ok then
+                continue
+            end
+            made += 1
+
+            pcall(function() return tostring(node) end)
+            pcall(function() return node:properties() end)
+            if typeof(node) == "AstNode" then
+                pcall(function() return node:children() end)
+                pcall(function() node:walk(function() return true end) end)
+                pcall(function() return node:prettyprint() end)
+                local parent = alloc:defaultnode("AstStatExpr")
+                pcall(function() parent:setExpr(node) return parent:prettyprint() end)
+                local group = alloc:defaultnode("AstTypeGroup")
+                pcall(function() group:setType(node) return group:prettyprint() end)
+            end
+        end
+
+        assert(made > 100)
+    )LUA";
+
+    CHECK_EQ(dostring(L, script), 0);
+}
+
+TEST_CASE("ReflectOpenTwice")
+{
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    Luau::luaopen_reflect(L);
+    lua_setglobal(L, "first");
+    Luau::luaopen_reflect(L);
+    lua_setglobal(L, "second");
+
+    const char* script = R"LUA(
+        local doc = first.allocator():parse("local x = 1")
+        assert(second.filter("stat"):match(doc:root()))
+        assert(second.allocator():parse("return 1"):root().kind == "AstStatBlock")
+    )LUA";
+
+    CHECK_EQ(dostring(L, script), 0);
+}
+
+TEST_CASE("ReflectUseAtomsWithEmbedderAtoms")
+{
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
+    ScopedFastFlag sff3{FFlag::OptLuwuReflectUseAtoms, true};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    lua_callbacks(L)->useratom = [](lua_State*, const char*, size_t l) -> int16_t {
+        return int16_t(l);
+    };
+
+    Luau::luaopen_reflect(L);
+    lua_setglobal(L, "reflect");
+
+    const char* script = R"LUA(
+        local doc = reflect.allocator():parse("local x = 1")
+        local root = doc:root()
+        assert(root.kind == "AstStatBlock")
+        assert(doc:source() == "local x = 1")
+        assert(root:body()[1]:vars()[1]:name() == "x")
+        assert(#root:children() == 1)
+    )LUA";
+
+    CHECK_EQ(dostring(L, script), 0);
+}
+
+TEST_CASE("ReflectPrettyprintRoot")
+{
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    Luau::luaopen_reflect(L);
+    lua_setglobal(L, "reflect");
+
+    const char* script = R"LUA(
+        local alloc = reflect.allocator()
+        assert(alloc:parse("local x = 1 + 2"):root():prettyprint() == "local x = 1 + 2")
+        assert(alloc:parse("local x = 1\nif y then z() end"):root():prettyprint() == "local x = 1\nif y then z() end")
+        assert(alloc:parse(""):root():prettyprint() == "")
+
+        local doc = alloc:parse("if y then z() end")
+        assert(doc:root():body()[1]:prettyprint() == "if y then z() end")
+    )LUA";
+
+    CHECK_EQ(dostring(L, script), 0);
+}
+
+TEST_CASE("ReflectEmptyFilter")
+{
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    Luau::luaopen_reflect(L);
+    lua_setglobal(L, "reflect");
+
+    const char* script = R"LUA(
+        local root = reflect.allocator():parse("local x = 1"):root()
+        local empty = reflect.filter()
+        assert(not empty:match(root))
+
+        local visited = 0
+        root:walk(function()
+            visited += 1
+            return true
+        end, empty)
+        assert(visited == 0)
+
+        root:walk(function()
+            visited += 1
+            return true
+        end)
+        assert(visited == 3)
+    )LUA";
+
+    CHECK_EQ(dostring(L, script), 0);
+}
+
+TEST_CASE("ReflectPrettyprintDeclarations")
+{
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    Luau::luaopen_reflect(L);
+    lua_setglobal(L, "reflect");
+
+    const char* script = R"LUA(
+        local alloc = reflect.allocator()
+
+        local exact = {
+            "declare function foo(x: number, ...: string): boolean",
+            "declare function baz(): (number, string)",
+            "declare function quux(a: string)",
+            "declare extern type Empty with\nend",
+            "declare extern type Point extends Base with\n    x: number\n    read y: number\n    write z: number\n    function dot(self, other: Point): number\n    function scale(self, ...: number)\n    [number]: string\nend",
+            "local before = 1\ndeclare extern type Point with\n    x: number\nend\nlocal after = 2",
+            "type T = number?",
+        }
+        for _, source in exact do
+            local doc = alloc:parse(source)
+            assert(#doc:errors() == 0, source)
+            assert(doc:root():prettyprint() == source, doc:root():prettyprint())
+        end
+
+        local quoted = alloc:parse("declare extern type Named with\n    [\"two words\"]: string\nend")
+        local printed = quoted:root():prettyprint()
+        local reparsed = alloc:parse(printed)
+        assert(#reparsed:errors() == 0, printed)
+        assert(reparsed:root():body()[1]:props()[1]:name() == "two words")
+
+        local optional
+        alloc:parse("type T = number?"):root():walk(function(node)
+            if node.kind == "AstTypeOptional" then
+                optional = node
+            end
+            return true
+        end)
+        assert(optional:prettyprint() == "?")
+    )LUA";
+
+    CHECK_EQ(dostring(L, script), 0);
+}
+
+TEST_CASE("ReflectFunctionArgDefaults")
+{
+    ScopedFastFlag sff1{FFlag::LuauDirectFieldGet, true};
+    ScopedFastFlag sff2{FFlag::LuwuManagedReferences2, true};
+    ScopedFastFlag sffPinned{FFlag::LuauUdataMetatablePinned, true};
+    ScopedFastFlag sffDefaults{FFlag::LuwuDefaultArguments, true};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    Luau::luaopen_reflect(L);
+    lua_setglobal(L, "reflect");
+
+    const char* script = R"LUA(
+        local alloc = reflect.allocator()
+        local doc = alloc:parse("local function f(x, y = 2, z = x + 1) end")
+        assert(#doc:errors() == 0)
+
+        local fn = doc:root():body()[1]:func()
+        local defaults = fn:argsDefaults()
+        assert(#defaults == 3)
+        assert(defaults[1] == false)
+        assert(defaults[2].kind == "AstExprConstantNumber")
+        assert(defaults[3].kind == "AstExprBinary")
+        assert(doc:root():prettyprint() == "local function f(x, y = 2, z = x + 1) end")
+
+        local args = fn:args()
+        fn:setArgs({ args[1], args[2] })
+        local ok, err = pcall(function() return doc:root():prettyprint() end)
+        assert(not ok)
+        assert(string.find(err, "AstExprFunction.args has a different length", 1, true) ~= nil, err)
+
+        assert(fn:setArgsDefaults({ false, defaults[3] }) == fn)
+        assert(fn:argsDefaults()[1] == false)
+        assert(fn:argsDefaults()[2] == defaults[3])
+        assert(string.gsub(doc:root():prettyprint(), "%s", "") == "localfunctionf(x,y=x+1)end")
+
+        assert(not pcall(function() fn:setArgsDefaults({ false, doc:root() }) end))
+        local okCross, errCross = pcall(function() fn:setArgsDefaults({ false, reflect.allocator():parseexpr("1") }) end)
+        assert(not okCross)
+        assert(string.find(errCross, "cross-allocator", 1, true) ~= nil)
+
+        local plain = alloc:parse("local function g(a, b) end"):root():body()[1]:func()
+        assert(#plain:argsDefaults() == 2)
+        assert(plain:argsDefaults()[1] == false and plain:argsDefaults()[2] == false)
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);

@@ -3,9 +3,15 @@
 #include "Luau/ReflectCommon.h"
 
 LUAU_FASTFLAGVARIABLE(OptLuwuReflectUseAtoms)
+LUAU_FASTFLAG(LuauUdataMetatablePinned)
 
 namespace Luau
 {
+
+int16_t reflectUserAtom(lua_State* L, const char* s, size_t l)
+{
+    return int16_t(resolveGlobalReflectAtom(std::string_view(s, l)));
+}
 
 static int reflectAllocator(lua_State* L)
 {
@@ -15,26 +21,32 @@ static int reflectAllocator(lua_State* L)
 
 int luaopen_reflect(lua_State* L)
 {
-    if (FFlag::OptLuwuReflectUseAtoms)
+    if (!FFlag::LuauUdataMetatablePinned)
+        luaL_error(L, "reflect requires FFlag LuauUdataMetatablePinned to be enabled");
+
+    lua_getuserdatametatable(L, TagDocument);
+    bool registered = !lua_isnil(L, -1);
+    lua_pop(L, 1);
+
+    if (!registered)
     {
-        lua_Callbacks* cb = lua_callbacks(L);
-        if (!cb->useratom)
+        if (FFlag::OptLuwuReflectUseAtoms)
         {
-            cb->useratom = [](lua_State* L, const char* s, size_t l) -> int16_t {
-                return int16_t(resolveGlobalReflectAtom(std::string_view(s, l)));
-            };
+            lua_Callbacks* cb = lua_callbacks(L);
+            if (!cb->useratom)
+                cb->useratom = reflectUserAtom;
         }
+
+        registerAstAllocator(L);
+        registerAstDocument(L);
+        registerAstNode(L);
+        registerCstNode(L);
+        registerAstAux(L);
+        registerAstLocal(L);
+        registerAstFilter(L);
+
+        lua_setlightuserdataname(L, TagId, "Id");
     }
-
-    registerAstAllocator(L);
-    registerAstDocument(L);
-    registerAstNode(L);
-    registerCstNode(L);
-    registerAstAux(L);
-    registerAstLocal(L);
-    registerAstFilter(L);
-
-    lua_setlightuserdataname(L, TagId, "Id");
 
     // Module table
     lua_createtable(L, 0, 2);

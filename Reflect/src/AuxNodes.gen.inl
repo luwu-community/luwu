@@ -53,30 +53,34 @@ static bool dispatchAux(lua_State* L, AstAuxData& handle, ReflectAtom atom)
     {
         auto& n = handle.tableProp;
         (void)n;
+        static_assert(std::is_same_v<std::remove_const_t<decltype(n.name)>, Luau::AstName>, "schema type of AstTableProp.name does not match the C++ member");
+        static_assert(std::is_same_v<std::remove_const_t<decltype(n.location)>, Luau::Location>, "schema type of AstTableProp.origlocation does not match the C++ member");
+        static_assert(std::is_same_v<std::remove_const_t<decltype(n.type)>, Luau::AstType*>, "schema type of AstTableProp.type does not match the C++ member");
+        static_assert(std::is_same_v<std::remove_const_t<decltype(n.access)>, Luau::AstTableAccess>, "schema type of AstTableProp.access does not match the C++ member");
         switch (atom)
         {
         case ReflectAtom::Name:
-            pushReflectValue(L, handle.doc, n.name);
+            n.name.value ? lua_pushstring(L, n.name.value) : lua_pushnil(L);
             return true;
         case ReflectAtom::SetName:
-            readReflectValue(L, handle.doc, 2, n.name);
+            n.name = readName(L, handle.doc, 2);
             lua_pushvalue(L, 1);
             return true;
         case ReflectAtom::OrigLocation:
-            pushReflectValue(L, handle.doc, n.location);
+            pushLocation(L, handle.doc, n.location);
             return true;
         case ReflectAtom::Type:
-            pushReflectValue(L, handle.doc, n.type);
+            pushAstNode(L, handle.doc, n.type);
             return true;
         case ReflectAtom::SetType:
-            readReflectValue(L, handle.doc, 2, n.type);
+            n.type = readNode<Luau::AstType>(L, handle.doc, 2);
             lua_pushvalue(L, 1);
             return true;
         case ReflectAtom::Access:
-            pushReflectValue(L, handle.doc, n.access);
+            lua_pushstring(L, toString(n.access).c_str());
             return true;
         case ReflectAtom::SetAccess:
-            readReflectValue(L, handle.doc, 2, n.access);
+            n.access = readEnum<Luau::AstTableAccess>(L, 2);
             lua_pushvalue(L, 1);
             return true;
         default:
@@ -87,30 +91,34 @@ static bool dispatchAux(lua_State* L, AstAuxData& handle, ReflectAtom atom)
     {
         auto& n = handle.tableIndexer;
         (void)n;
+        static_assert(std::is_same_v<std::remove_const_t<decltype(n.location)>, Luau::Location>, "schema type of AstTableIndexer.origlocation does not match the C++ member");
+        static_assert(std::is_same_v<std::remove_const_t<decltype(n.indexType)>, Luau::AstType*>, "schema type of AstTableIndexer.indexType does not match the C++ member");
+        static_assert(std::is_same_v<std::remove_const_t<decltype(n.resultType)>, Luau::AstType*>, "schema type of AstTableIndexer.resultType does not match the C++ member");
+        static_assert(std::is_same_v<std::remove_const_t<decltype(n.access)>, Luau::AstTableAccess>, "schema type of AstTableIndexer.access does not match the C++ member");
         switch (atom)
         {
         case ReflectAtom::OrigLocation:
-            pushReflectValue(L, handle.doc, n.location);
+            pushLocation(L, handle.doc, n.location);
             return true;
         case ReflectAtom::IndexType:
-            pushReflectValue(L, handle.doc, n.indexType);
+            pushAstNode(L, handle.doc, n.indexType);
             return true;
         case ReflectAtom::SetIndexType:
-            readReflectValue(L, handle.doc, 2, n.indexType);
+            n.indexType = readNode<Luau::AstType>(L, handle.doc, 2);
             lua_pushvalue(L, 1);
             return true;
         case ReflectAtom::ResultType:
-            pushReflectValue(L, handle.doc, n.resultType);
+            pushAstNode(L, handle.doc, n.resultType);
             return true;
         case ReflectAtom::SetResultType:
-            readReflectValue(L, handle.doc, 2, n.resultType);
+            n.resultType = readNode<Luau::AstType>(L, handle.doc, 2);
             lua_pushvalue(L, 1);
             return true;
         case ReflectAtom::Access:
-            pushReflectValue(L, handle.doc, n.access);
+            lua_pushstring(L, toString(n.access).c_str());
             return true;
         case ReflectAtom::SetAccess:
-            readReflectValue(L, handle.doc, 2, n.access);
+            n.access = readEnum<Luau::AstTableAccess>(L, 2);
             lua_pushvalue(L, 1);
             return true;
         default:
@@ -121,37 +129,42 @@ static bool dispatchAux(lua_State* L, AstAuxData& handle, ReflectAtom atom)
     {
         auto& n = handle.declaredExternProp;
         (void)n;
+        static_assert(std::is_same_v<std::remove_const_t<decltype(n.name)>, Luau::AstName>, "schema type of AstDeclaredExternTypeProperty.name does not match the C++ member");
+        static_assert(std::is_same_v<std::remove_const_t<decltype(n.location)>, Luau::Location>, "schema type of AstDeclaredExternTypeProperty.origlocation does not match the C++ member");
+        static_assert(std::is_same_v<std::remove_const_t<decltype(n.ty)>, Luau::AstType*>, "schema type of AstDeclaredExternTypeProperty.type does not match the C++ member");
+        static_assert(std::is_same_v<std::remove_const_t<decltype(n.isMethod)>, bool>, "schema type of AstDeclaredExternTypeProperty.isMethod does not match the C++ member");
+        static_assert(std::is_same_v<std::remove_const_t<decltype(n.access)>, Luau::AstTableAccess>, "schema type of AstDeclaredExternTypeProperty.access does not match the C++ member");
         switch (atom)
         {
         case ReflectAtom::Name:
-            pushReflectValue(L, handle.doc, n.name);
+            n.name.value ? lua_pushstring(L, n.name.value) : lua_pushnil(L);
             return true;
         case ReflectAtom::SetName:
-            readReflectValue(L, handle.doc, 2, n.name);
+            n.name = readName(L, handle.doc, 2);
             lua_pushvalue(L, 1);
             return true;
         case ReflectAtom::OrigLocation:
-            pushReflectValue(L, handle.doc, n.location);
+            pushLocation(L, handle.doc, n.location);
             return true;
         case ReflectAtom::Type:
-            pushReflectValue(L, handle.doc, n.ty);
+            pushAstNode(L, handle.doc, n.ty);
             return true;
         case ReflectAtom::SetType:
-            readReflectValue(L, handle.doc, 2, n.ty);
+            n.ty = readNode<Luau::AstType>(L, handle.doc, 2);
             lua_pushvalue(L, 1);
             return true;
         case ReflectAtom::IsMethod:
-            pushReflectValue(L, handle.doc, n.isMethod);
+            lua_pushboolean(L, n.isMethod);
             return true;
         case ReflectAtom::SetIsMethod:
-            readReflectValue(L, handle.doc, 2, n.isMethod);
+            n.isMethod = lua_toboolean(L, 2) != 0;
             lua_pushvalue(L, 1);
             return true;
         case ReflectAtom::Access:
-            pushReflectValue(L, handle.doc, n.access);
+            lua_pushstring(L, toString(n.access).c_str());
             return true;
         case ReflectAtom::SetAccess:
-            readReflectValue(L, handle.doc, 2, n.access);
+            n.access = readEnum<Luau::AstTableAccess>(L, 2);
             lua_pushvalue(L, 1);
             return true;
         default:
@@ -162,20 +175,23 @@ static bool dispatchAux(lua_State* L, AstAuxData& handle, ReflectAtom atom)
     {
         auto& n = handle.classProp;
         (void)n;
+        static_assert(std::is_same_v<std::remove_const_t<decltype(n.name)>, Luau::AstName>, "schema type of AstClassProperty.name does not match the C++ member");
+        static_assert(std::is_same_v<std::remove_const_t<decltype(n.ty)>, Luau::AstType*>, "schema type of AstClassProperty.type does not match the C++ member");
+        static_assert(std::is_same_v<std::remove_const_t<decltype(n.defaultValue)>, Luau::AstExpr*>, "schema type of AstClassProperty.defaultValue does not match the C++ member");
         switch (atom)
         {
         case ReflectAtom::Name:
-            pushReflectValue(L, handle.doc, n.name);
+            n.name.value ? lua_pushstring(L, n.name.value) : lua_pushnil(L);
             return true;
         case ReflectAtom::SetName:
-            readReflectValue(L, handle.doc, 2, n.name);
+            n.name = readName(L, handle.doc, 2);
             lua_pushvalue(L, 1);
             return true;
         case ReflectAtom::Type:
-            pushReflectValue(L, handle.doc, n.ty);
+            pushAstNode(L, handle.doc, n.ty);
             return true;
         case ReflectAtom::SetType:
-            readReflectValue(L, handle.doc, 2, n.ty);
+            n.ty = readNode<Luau::AstType>(L, handle.doc, 2);
             lua_pushvalue(L, 1);
             return true;
         default:
@@ -186,20 +202,22 @@ static bool dispatchAux(lua_State* L, AstAuxData& handle, ReflectAtom atom)
     {
         auto& n = handle.classMethod;
         (void)n;
+        static_assert(std::is_same_v<std::remove_const_t<decltype(n.functionName)>, Luau::AstName>, "schema type of AstClassMethod.name does not match the C++ member");
+        static_assert(std::is_same_v<std::remove_const_t<decltype(n.function)>, Luau::AstExprFunction*>, "schema type of AstClassMethod.func does not match the C++ member");
         switch (atom)
         {
         case ReflectAtom::Name:
-            pushReflectValue(L, handle.doc, n.functionName);
+            n.functionName.value ? lua_pushstring(L, n.functionName.value) : lua_pushnil(L);
             return true;
         case ReflectAtom::SetName:
-            readReflectValue(L, handle.doc, 2, n.functionName);
+            n.functionName = readName(L, handle.doc, 2);
             lua_pushvalue(L, 1);
             return true;
         case ReflectAtom::Func:
-            pushReflectValue(L, handle.doc, n.function);
+            pushAstNode(L, handle.doc, n.function);
             return true;
         case ReflectAtom::SetFunc:
-            readReflectValue(L, handle.doc, 2, n.function);
+            n.function = readNode<Luau::AstExprFunction>(L, handle.doc, 2);
             lua_pushvalue(L, 1);
             return true;
         default:
@@ -210,24 +228,31 @@ static bool dispatchAux(lua_State* L, AstAuxData& handle, ReflectAtom atom)
     {
         auto& n = handle.comment;
         (void)n;
+        static_assert(std::is_same_v<std::remove_const_t<decltype(handle.comment.type)>, Luau::Lexeme::Type>, "schema type of AstComment.type does not match the C++ member");
+        static_assert(std::is_same_v<std::remove_const_t<decltype(handle.comment.text)>, std::string>, "schema type of AstComment.text does not match the C++ member");
+        static_assert(std::is_same_v<std::remove_const_t<decltype(handle.comment.location)>, Luau::Location>, "schema type of AstComment.origlocation does not match the C++ member");
         switch (atom)
         {
         case ReflectAtom::Type:
-            pushReflectValue(L, handle.doc, handle.comment.type);
+            lua_pushstring(L, toString(handle.comment.type).c_str());
             return true;
         case ReflectAtom::SetType:
-            readReflectValue(L, handle.doc, 2, handle.comment.type);
+            handle.comment.type = readEnum<Luau::Lexeme::Type>(L, 2);
             lua_pushvalue(L, 1);
             return true;
         case ReflectAtom::Text:
-            pushReflectValue(L, handle.doc, handle.comment.text);
+            lua_pushlstring(L, handle.comment.text.data(), handle.comment.text.size());
             return true;
         case ReflectAtom::SetText:
-            readReflectValue(L, handle.doc, 2, handle.comment.text);
+        {
+            size_t len = 0;
+            const char* str = luaL_checklstring(L, 2, &len);
+            handle.comment.text.assign(str, len);
+        }
             lua_pushvalue(L, 1);
             return true;
         case ReflectAtom::OrigLocation:
-            pushReflectValue(L, handle.doc, handle.comment.location);
+            pushLocation(L, handle.doc, handle.comment.location);
             return true;
         default:
             return false;
@@ -237,27 +262,30 @@ static bool dispatchAux(lua_State* L, AstAuxData& handle, ReflectAtom atom)
     {
         auto& n = handle.tableItem;
         (void)n;
+        static_assert(std::is_same_v<std::remove_const_t<decltype(n.key)>, Luau::AstExpr*>, "schema type of AstTableItem.key does not match the C++ member");
+        static_assert(std::is_same_v<std::remove_const_t<decltype(n.value)>, Luau::AstExpr*>, "schema type of AstTableItem.value does not match the C++ member");
+        static_assert(std::is_same_v<std::remove_const_t<decltype(n.kind)>, Luau::AstExprTable::Item::Kind>, "schema type of AstTableItem.kind does not match the C++ member");
         switch (atom)
         {
         case ReflectAtom::Key:
-            pushReflectValue(L, handle.doc, n.key);
+            pushAstNode(L, handle.doc, n.key);
             return true;
         case ReflectAtom::SetKey:
-            readReflectValue(L, handle.doc, 2, n.key);
+            n.key = readNode<Luau::AstExpr>(L, handle.doc, 2);
             lua_pushvalue(L, 1);
             return true;
         case ReflectAtom::Value:
-            pushReflectValue(L, handle.doc, n.value);
+            pushAstNode(L, handle.doc, n.value);
             return true;
         case ReflectAtom::SetValue:
-            readReflectValue(L, handle.doc, 2, n.value);
+            n.value = readNode<Luau::AstExpr>(L, handle.doc, 2);
             lua_pushvalue(L, 1);
             return true;
         case ReflectAtom::Kind:
-            pushReflectValue(L, handle.doc, n.kind);
+            lua_pushstring(L, toString(n.kind).c_str());
             return true;
         case ReflectAtom::SetKind:
-            readReflectValue(L, handle.doc, 2, n.kind);
+            n.kind = readEnum<Luau::AstExprTable::Item::Kind>(L, 2);
             lua_pushvalue(L, 1);
             return true;
         default:
@@ -268,20 +296,22 @@ static bool dispatchAux(lua_State* L, AstAuxData& handle, ReflectAtom atom)
     {
         auto& n = handle.typeList;
         (void)n;
+        static_assert(std::is_same_v<std::remove_const_t<decltype(n.types)>, Luau::AstArray<Luau::AstType*>>, "schema type of AstTypeList.types does not match the C++ member");
+        static_assert(std::is_same_v<std::remove_const_t<decltype(n.tailType)>, Luau::AstTypePack*>, "schema type of AstTypeList.tailType does not match the C++ member");
         switch (atom)
         {
         case ReflectAtom::Types:
-            pushReflectValue(L, handle.doc, n.types);
+            pushNodeArray(L, handle.doc, n.types);
             return true;
         case ReflectAtom::SetTypes:
-            readReflectValue(L, handle.doc, 2, n.types);
+            n.types = readNodeArray<Luau::AstType>(L, handle.doc, 2);
             lua_pushvalue(L, 1);
             return true;
         case ReflectAtom::TailType:
-            pushReflectValue(L, handle.doc, n.tailType);
+            pushAstNode(L, handle.doc, n.tailType);
             return true;
         case ReflectAtom::SetTailType:
-            readReflectValue(L, handle.doc, 2, n.tailType);
+            n.tailType = readNode<Luau::AstTypePack>(L, handle.doc, 2);
             lua_pushvalue(L, 1);
             return true;
         default:
@@ -292,22 +322,27 @@ static bool dispatchAux(lua_State* L, AstAuxData& handle, ReflectAtom atom)
     {
         auto& n = handle.cstTableItem;
         (void)n;
+        static_assert(std::is_same_v<std::remove_const_t<decltype(n.indexerOpenPosition)>, Luau::Position>, "schema type of CstTableItem.indexerOpenPosition does not match the C++ member");
+        static_assert(std::is_same_v<std::remove_const_t<decltype(n.indexerClosePosition)>, Luau::Position>, "schema type of CstTableItem.indexerClosePosition does not match the C++ member");
+        static_assert(std::is_same_v<std::remove_const_t<decltype(n.equalsPosition)>, Luau::Position>, "schema type of CstTableItem.equalsPosition does not match the C++ member");
+        static_assert(std::is_same_v<std::remove_const_t<decltype(n.separatorPosition)>, Luau::Position>, "schema type of CstTableItem.separatorPosition does not match the C++ member");
+        static_assert(std::is_same_v<std::remove_const_t<decltype(n.separator)>, Luau::CstExprTable::Separator>, "schema type of CstTableItem.separator does not match the C++ member");
         switch (atom)
         {
         case ReflectAtom::IndexerOpenPosition:
-            pushReflectValue(L, handle.doc, n.indexerOpenPosition);
+            pushPosition(L, handle.doc, n.indexerOpenPosition);
             return true;
         case ReflectAtom::IndexerClosePosition:
-            pushReflectValue(L, handle.doc, n.indexerClosePosition);
+            pushPosition(L, handle.doc, n.indexerClosePosition);
             return true;
         case ReflectAtom::EqualsPosition:
-            pushReflectValue(L, handle.doc, n.equalsPosition);
+            pushPosition(L, handle.doc, n.equalsPosition);
             return true;
         case ReflectAtom::SeparatorPosition:
-            pushReflectValue(L, handle.doc, n.separatorPosition);
+            pushPosition(L, handle.doc, n.separatorPosition);
             return true;
         case ReflectAtom::Separator:
-            pushReflectValue(L, handle.doc, n.separator);
+            lua_pushstring(L, toString(n.separator).c_str());
             return true;
         default:
             return false;
@@ -326,13 +361,13 @@ static void collectAuxProps(lua_State* L, AstAuxData& handle)
     {
         auto& n = handle.tableProp;
         (void)n;
-        pushReflectValue(L, handle.doc, n.name);
+        n.name.value ? lua_pushstring(L, n.name.value) : lua_pushnil(L);
         lua_setfield(L, -2, "name");
-        pushReflectValue(L, handle.doc, n.location);
+        pushLocation(L, handle.doc, n.location);
         lua_setfield(L, -2, "origlocation");
-        pushReflectValue(L, handle.doc, n.type);
+        pushAstNode(L, handle.doc, n.type);
         lua_setfield(L, -2, "type");
-        pushReflectValue(L, handle.doc, n.access);
+        lua_pushstring(L, toString(n.access).c_str());
         lua_setfield(L, -2, "access");
         break;
     }
@@ -340,13 +375,13 @@ static void collectAuxProps(lua_State* L, AstAuxData& handle)
     {
         auto& n = handle.tableIndexer;
         (void)n;
-        pushReflectValue(L, handle.doc, n.location);
+        pushLocation(L, handle.doc, n.location);
         lua_setfield(L, -2, "origlocation");
-        pushReflectValue(L, handle.doc, n.indexType);
+        pushAstNode(L, handle.doc, n.indexType);
         lua_setfield(L, -2, "indexType");
-        pushReflectValue(L, handle.doc, n.resultType);
+        pushAstNode(L, handle.doc, n.resultType);
         lua_setfield(L, -2, "resultType");
-        pushReflectValue(L, handle.doc, n.access);
+        lua_pushstring(L, toString(n.access).c_str());
         lua_setfield(L, -2, "access");
         break;
     }
@@ -354,15 +389,15 @@ static void collectAuxProps(lua_State* L, AstAuxData& handle)
     {
         auto& n = handle.declaredExternProp;
         (void)n;
-        pushReflectValue(L, handle.doc, n.name);
+        n.name.value ? lua_pushstring(L, n.name.value) : lua_pushnil(L);
         lua_setfield(L, -2, "name");
-        pushReflectValue(L, handle.doc, n.location);
+        pushLocation(L, handle.doc, n.location);
         lua_setfield(L, -2, "origlocation");
-        pushReflectValue(L, handle.doc, n.ty);
+        pushAstNode(L, handle.doc, n.ty);
         lua_setfield(L, -2, "type");
-        pushReflectValue(L, handle.doc, n.isMethod);
+        lua_pushboolean(L, n.isMethod);
         lua_setfield(L, -2, "isMethod");
-        pushReflectValue(L, handle.doc, n.access);
+        lua_pushstring(L, toString(n.access).c_str());
         lua_setfield(L, -2, "access");
         break;
     }
@@ -370,9 +405,9 @@ static void collectAuxProps(lua_State* L, AstAuxData& handle)
     {
         auto& n = handle.classProp;
         (void)n;
-        pushReflectValue(L, handle.doc, n.name);
+        n.name.value ? lua_pushstring(L, n.name.value) : lua_pushnil(L);
         lua_setfield(L, -2, "name");
-        pushReflectValue(L, handle.doc, n.ty);
+        pushAstNode(L, handle.doc, n.ty);
         lua_setfield(L, -2, "type");
         break;
     }
@@ -380,9 +415,9 @@ static void collectAuxProps(lua_State* L, AstAuxData& handle)
     {
         auto& n = handle.classMethod;
         (void)n;
-        pushReflectValue(L, handle.doc, n.functionName);
+        n.functionName.value ? lua_pushstring(L, n.functionName.value) : lua_pushnil(L);
         lua_setfield(L, -2, "name");
-        pushReflectValue(L, handle.doc, n.function);
+        pushAstNode(L, handle.doc, n.function);
         lua_setfield(L, -2, "func");
         break;
     }
@@ -390,11 +425,11 @@ static void collectAuxProps(lua_State* L, AstAuxData& handle)
     {
         auto& n = handle.comment;
         (void)n;
-        pushReflectValue(L, handle.doc, handle.comment.type);
+        lua_pushstring(L, toString(handle.comment.type).c_str());
         lua_setfield(L, -2, "type");
-        pushReflectValue(L, handle.doc, handle.comment.text);
+        lua_pushlstring(L, handle.comment.text.data(), handle.comment.text.size());
         lua_setfield(L, -2, "text");
-        pushReflectValue(L, handle.doc, handle.comment.location);
+        pushLocation(L, handle.doc, handle.comment.location);
         lua_setfield(L, -2, "origlocation");
         break;
     }
@@ -402,11 +437,11 @@ static void collectAuxProps(lua_State* L, AstAuxData& handle)
     {
         auto& n = handle.tableItem;
         (void)n;
-        pushReflectValue(L, handle.doc, n.key);
+        pushAstNode(L, handle.doc, n.key);
         lua_setfield(L, -2, "key");
-        pushReflectValue(L, handle.doc, n.value);
+        pushAstNode(L, handle.doc, n.value);
         lua_setfield(L, -2, "value");
-        pushReflectValue(L, handle.doc, n.kind);
+        lua_pushstring(L, toString(n.kind).c_str());
         lua_setfield(L, -2, "kind");
         break;
     }
@@ -414,9 +449,9 @@ static void collectAuxProps(lua_State* L, AstAuxData& handle)
     {
         auto& n = handle.typeList;
         (void)n;
-        pushReflectValue(L, handle.doc, n.types);
+        pushNodeArray(L, handle.doc, n.types);
         lua_setfield(L, -2, "types");
-        pushReflectValue(L, handle.doc, n.tailType);
+        pushAstNode(L, handle.doc, n.tailType);
         lua_setfield(L, -2, "tailType");
         break;
     }
@@ -424,15 +459,15 @@ static void collectAuxProps(lua_State* L, AstAuxData& handle)
     {
         auto& n = handle.cstTableItem;
         (void)n;
-        pushReflectValue(L, handle.doc, n.indexerOpenPosition);
+        pushPosition(L, handle.doc, n.indexerOpenPosition);
         lua_setfield(L, -2, "indexerOpenPosition");
-        pushReflectValue(L, handle.doc, n.indexerClosePosition);
+        pushPosition(L, handle.doc, n.indexerClosePosition);
         lua_setfield(L, -2, "indexerClosePosition");
-        pushReflectValue(L, handle.doc, n.equalsPosition);
+        pushPosition(L, handle.doc, n.equalsPosition);
         lua_setfield(L, -2, "equalsPosition");
-        pushReflectValue(L, handle.doc, n.separatorPosition);
+        pushPosition(L, handle.doc, n.separatorPosition);
         lua_setfield(L, -2, "separatorPosition");
-        pushReflectValue(L, handle.doc, n.separator);
+        lua_pushstring(L, toString(n.separator).c_str());
         lua_setfield(L, -2, "separator");
         break;
     }

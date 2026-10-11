@@ -2,6 +2,7 @@
 #pragma once
 
 #include "Luau/Reflect.h"
+#include "Luau/ReflectAtoms.gen.h"
 
 #include "lapix.h"
 #include "Luau/Ast.h"
@@ -24,369 +25,6 @@ LUAU_FASTFLAG(OptLuwuReflectUseAtoms)
 
 namespace Luau
 {
-
-#define LUAU_REFLECT_AST_NODE_KINDS(NODE) \
-    /* Statements */ \
-    NODE(AstStatBlock) \
-    NODE(AstStatIf) \
-    NODE(AstStatWhile) \
-    NODE(AstStatRepeat) \
-    NODE(AstStatBreak) \
-    NODE(AstStatContinue) \
-    NODE(AstStatReturn) \
-    NODE(AstStatExpr) \
-    NODE(AstStatLocal) \
-    NODE(AstStatFor) \
-    NODE(AstStatForIn) \
-    NODE(AstStatAssign) \
-    NODE(AstStatCompoundAssign) \
-    NODE(AstStatFunction) \
-    NODE(AstStatLocalFunction) \
-    NODE(AstStatTypeAlias) \
-    NODE(AstStatTypeFunction) \
-    NODE(AstStatDeclareGlobal) \
-    NODE(AstStatDeclareFunction) \
-    NODE(AstStatDeclareExternType) \
-    NODE(AstStatClass) \
-    NODE(AstStatError) \
-    /* Expressions */ \
-    NODE(AstExprGroup) \
-    NODE(AstExprConstantNil) \
-    NODE(AstExprConstantBool) \
-    NODE(AstExprConstantNumber) \
-    NODE(AstExprConstantInteger) \
-    NODE(AstExprConstantString) \
-    NODE(AstExprLocal) \
-    NODE(AstExprGlobal) \
-    NODE(AstExprVarargs) \
-    NODE(AstExprCall) \
-    NODE(AstExprIndexName) \
-    NODE(AstExprIndexExpr) \
-    NODE(AstExprFunction) \
-    NODE(AstExprTable) \
-    NODE(AstExprUnary) \
-    NODE(AstExprBinary) \
-    NODE(AstExprTypeAssertion) \
-    NODE(AstExprIfElse) \
-    NODE(AstExprInterpString) \
-    NODE(AstExprInstantiate) \
-    NODE(AstExprError) \
-    /* Types & Generics & Attributes */ \
-    NODE(AstTypeReference) \
-    NODE(AstTypeTable) \
-    NODE(AstTypeFunction) \
-    NODE(AstTypeTypeof) \
-    NODE(AstTypeOptional) \
-    NODE(AstTypeUnion) \
-    NODE(AstTypeIntersection) \
-    NODE(AstTypeSingletonBool) \
-    NODE(AstTypeSingletonString) \
-    NODE(AstTypeGroup) \
-    NODE(AstTypeError) \
-    NODE(AstTypePackExplicit) \
-    NODE(AstTypePackVariadic) \
-    NODE(AstTypePackGeneric) \
-    NODE(AstGenericType) \
-    NODE(AstGenericTypePack) \
-    NODE(AstAttr)
-
-#define LUAU_REFLECT_CST_NODE_KINDS(NODE) \
-    NODE(CstAttr) \
-    NODE(CstParametrizedAttr) \
-    NODE(CstExprGroup) \
-    NODE(CstExprConstantNumber) \
-    NODE(CstExprConstantInteger) \
-    NODE(CstExprConstantString) \
-    NODE(CstExprCall) \
-    NODE(CstExprIndexExpr) \
-    NODE(CstExprFunction) \
-    NODE(CstExprTable) \
-    NODE(CstExprOp) \
-    NODE(CstExprTypeAssertion) \
-    NODE(CstExprIfElse) \
-    NODE(CstExprInterpString) \
-    NODE(CstExprExplicitTypeInstantiation) \
-    NODE(CstStatDo) \
-    NODE(CstStatRepeat) \
-    NODE(CstStatReturn) \
-    NODE(CstStatLocal) \
-    NODE(CstStatFor) \
-    NODE(CstStatForIn) \
-    NODE(CstStatAssign) \
-    NODE(CstStatCompoundAssign) \
-    NODE(CstStatFunction) \
-    NODE(CstStatLocalFunction) \
-    NODE(CstGenericType) \
-    NODE(CstGenericTypePack) \
-    NODE(CstStatTypeAlias) \
-    NODE(CstStatTypeFunction) \
-    NODE(CstTypeReference) \
-    NODE(CstTypeTable) \
-    NODE(CstTypeFunction) \
-    NODE(CstTypeTypeof) \
-    NODE(CstTypeUnion) \
-    NODE(CstTypeIntersection) \
-    NODE(CstTypeSingletonString) \
-    NODE(CstTypeGroup) \
-    NODE(CstTypePackExplicit) \
-    NODE(CstTypePackGeneric)
-
-#define LUAU_REFLECT_LOCAL_NODE_KINDS(NODE) \
-    NODE(AstLocal)
-
-#define LUAU_REFLECT_AUX_NODE_KINDS(NODE) \
-    NODE(AstComment) \
-    NODE(AstTableItem) \
-    NODE(AstTableProp) \
-    NODE(AstTableIndexer) \
-    NODE(AstDeclaredExternTypeProperty) \
-    NODE(AstClassProperty) \
-    NODE(AstClassMethod) \
-    NODE(AstTypeList) \
-    NODE(CstTableItem)
-
-#define LUAU_REFLECT_KIND_ATOM(Kind) ATOM(Kind, #Kind)
-
-#define LUAU_REFLECT_ATOMS(ATOM, ATOM_RW) \
-    /* Special & Document & Allocator */ \
-    ATOM(Id, "id") \
-    ATOM(Matches, "matches") \
-    ATOM(Root, "root") \
-    ATOM(Source, "source") \
-    ATOM(Prettyprint, "prettyprint") \
-    ATOM(Walk, "walk") \
-    ATOM(Errors, "errors") \
-    ATOM(Comments, "comments") \
-    ATOM(LineOffsets, "lineOffsets") \
-    ATOM(Properties, "properties") \
-    ATOM(Allocator, "allocator") \
-    ATOM(Parse, "parse") \
-    ATOM(Parseexpr, "parseexpr") \
-    ATOM(Defaultnode, "defaultnode") \
-    \
-    /* Node Kind Atoms */ \
-    LUAU_REFLECT_AST_NODE_KINDS(LUAU_REFLECT_KIND_ATOM) \
-    LUAU_REFLECT_CST_NODE_KINDS(LUAU_REFLECT_KIND_ATOM) \
-    LUAU_REFLECT_LOCAL_NODE_KINDS(LUAU_REFLECT_KIND_ATOM) \
-    LUAU_REFLECT_AUX_NODE_KINDS(LUAU_REFLECT_KIND_ATOM) \
-    \
-    /* Category Atoms */ \
-    ATOM(CategoryStat, "stat") \
-    ATOM(CategoryExpr, "expr") \
-    ATOM(CategoryType, "type") \
-    ATOM(CategoryTypePack, "typePack") \
-    ATOM(CategoryGeneric, "generic") \
-    ATOM(CategoryAttr, "attr") \
-    \
-    /* Read-Write AST / CST / Aux Properties */ \
-    ATOM_RW(Body, "body", SetBody, "setBody") \
-    ATOM_RW(Condition, "condition", SetCondition, "setCondition") \
-    ATOM_RW(ThenBody, "thenbody", SetThenBody, "setThenBody") \
-    ATOM_RW(ElseBody, "elsebody", SetElseBody, "setElseBody") \
-    ATOM_RW(List, "list", SetList, "setList") \
-    ATOM_RW(Expr, "expr", SetExpr, "setExpr") \
-    ATOM_RW(Vars, "vars", SetVars, "setVars") \
-    ATOM_RW(Values, "values", SetValues, "setValues") \
-    ATOM_RW(Var, "var", SetVar, "setVar") \
-    ATOM_RW(From, "from", SetFrom, "setFrom") \
-    ATOM_RW(To, "to", SetTo, "setTo") \
-    ATOM_RW(Step, "step", SetStep, "setStep") \
-    ATOM_RW(Value, "value", SetValue, "setValue") \
-    ATOM_RW(Upvalue, "upvalue", SetUpvalue, "setUpvalue") \
-    ATOM_RW(Local, "local", SetLocal, "setLocal") \
-    ATOM_RW(Name, "name", SetName, "setName") \
-    ATOM_RW(Self, "self", SetSelf, "setSelf") \
-    ATOM_RW(Func, "func", SetFunc, "setFunc") \
-    ATOM_RW(Args, "args", SetArgs, "setArgs") \
-    ATOM_RW(Index, "index", SetIndex, "setIndex") \
-    ATOM_RW(Left, "left", SetLeft, "setLeft") \
-    ATOM_RW(Right, "right", SetRight, "setRight") \
-    ATOM_RW(Annotation, "annotation", SetAnnotation, "setAnnotation") \
-    ATOM_RW(HasElse, "hasElse", SetHasElse, "setHasElse") \
-    ATOM_RW(HasDo, "hasDo", SetHasDo, "setHasDo") \
-    ATOM_RW(HasIn, "hasIn", SetHasIn, "setHasIn") \
-    ATOM_RW(HasEnd, "hasEnd", SetHasEnd, "setHasEnd") \
-    ATOM_RW(IsConst, "isConst", SetIsConst, "setIsConst") \
-    ATOM_RW(Exported, "exported", SetExported, "setExported") \
-    ATOM_RW(TrueExpr, "trueExpr", SetTrueExpr, "setTrueExpr") \
-    ATOM_RW(FalseExpr, "falseExpr", SetFalseExpr, "setFalseExpr") \
-    ATOM_RW(HasErrors, "hasErrors", SetHasErrors, "setHasErrors") \
-    ATOM_RW(Generics, "generics", SetGenerics, "setGenerics") \
-    ATOM_RW(GenericPacks, "genericPacks", SetGenericPacks, "setGenericPacks") \
-    ATOM_RW(Params, "params", SetParams, "setParams") \
-    ATOM_RW(ReturnTypes, "returnTypes", SetReturnTypes, "setReturnTypes") \
-    ATOM_RW(Attributes, "attributes", SetAttributes, "setAttributes") \
-    ATOM_RW(SuperName, "superName", SetSuperName, "setSuperName") \
-    ATOM_RW(Props, "props", SetProps, "setProps") \
-    ATOM_RW(Indexer, "indexer", SetIndexer, "setIndexer") \
-    ATOM_RW(Members, "members", SetMembers, "setMembers") \
-    ATOM_RW(TypeArguments, "typeArguments", SetTypeArguments, "setTypeArguments") \
-    ATOM_RW(DebugName, "debugname", SetDebugName, "setDebugName") \
-    ATOM_RW(Vararg, "vararg", SetVararg, "setVararg") \
-    ATOM_RW(ReturnAnnotation, "returnAnnotation", SetReturnAnnotation, "setReturnAnnotation") \
-    ATOM_RW(Strings, "strings", SetStrings, "setStrings") \
-    ATOM_RW(Expressions, "expressions", SetExpressions, "setExpressions") \
-    ATOM_RW(Items, "items", SetItems, "setItems") \
-    ATOM_RW(Prefix, "prefix", SetPrefix, "setPrefix") \
-    ATOM_RW(HasParameterList, "hasParameterList", SetHasParameterList, "setHasParameterList") \
-    ATOM_RW(Parameters, "parameters", SetParameters, "setParameters") \
-    ATOM_RW(ArgTypes, "argTypes", SetArgTypes, "setArgTypes") \
-    ATOM_RW(Type, "type", SetType, "setType") \
-    ATOM_RW(Types, "types", SetTypes, "setTypes") \
-    ATOM_RW(TailType, "tailType", SetTailType, "setTailType") \
-    ATOM_RW(TypeList, "typeList", SetTypeList, "setTypeList") \
-    ATOM_RW(VariadicType, "variadicType", SetVariadicType, "setVariadicType") \
-    ATOM_RW(Op, "op", SetOp, "setOp") \
-    ATOM_RW(QuoteStyle, "quoteStyle", SetQuoteStyle, "setQuoteStyle") \
-    ATOM(OrigLocation, "origlocation") \
-    ATOM_RW(HasSemicolon, "hasSemicolon", SetHasSemicolon, "setHasSemicolon") \
-    ATOM_RW(Shadow, "shadow", SetShadow, "setShadow") \
-    ATOM_RW(Depth, "depth", SetDepth, "setDepth") \
-    ATOM_RW(Access, "access", SetAccess, "setAccess") \
-    ATOM_RW(IndexType, "indexType", SetIndexType, "setIndexType") \
-    ATOM_RW(ResultType, "resultType", SetResultType, "setResultType") \
-    ATOM_RW(IsMethod, "isMethod", SetIsMethod, "setIsMethod") \
-    ATOM_RW(Text, "text", SetText, "setText") \
-    ATOM_RW(LeadingComments, "leadingComments", SetLeadingComments, "setLeadingComments") \
-    ATOM_RW(TrailingComments, "trailingComments", SetTrailingComments, "setTrailingComments") \
-    ATOM_RW(Key, "key", SetKey, "setKey") \
-    ATOM_RW(Kind, "kind", SetKind, "setKind") \
-    ATOM_RW(Begin, "begin", SetBegin, "setBegin") \
-    ATOM_RW(End, "end", SetEnd, "setEnd") \
-    \
-    /* Read-Only AST Properties */ \
-    ATOM(Category, "category") \
-    ATOM(Children, "children") \
-    ATOM(Cst, "cst") \
-    ATOM(Statements, "statements") \
-    ATOM(MessageIndex, "messageIndex") \
-    ATOM(IsMissing, "isMissing") \
-    \
-    /* Read-Only CST Properties */ \
-    ATOM(HasAt, "hasAt") \
-    ATOM(OpenParenPosition, "openParenPosition") \
-    ATOM(CloseParenPosition, "closeParenPosition") \
-    ATOM(ArgsCommaPositions, "argsCommaPositions") \
-    ATOM(ClosePosition, "closePosition") \
-    ATOM(SourceString, "sourceString") \
-    ATOM(BlockDepth, "blockDepth") \
-    ATOM(OpenParens, "openParens") \
-    ATOM(CloseParens, "closeParens") \
-    ATOM(CommaPositions, "commaPositions") \
-    ATOM(OpenBracketPosition, "openBracketPosition") \
-    ATOM(CloseBracketPosition, "closeBracketPosition") \
-    ATOM(FunctionKeywordPosition, "functionKeywordPosition") \
-    ATOM(OpenGenericsPosition, "openGenericsPosition") \
-    ATOM(GenericsCommaPositions, "genericsCommaPositions") \
-    ATOM(CloseGenericsPosition, "closeGenericsPosition") \
-    ATOM(ArgsAnnotationColonPositions, "argsAnnotationColonPositions") \
-    ATOM(VarargAnnotationColonPosition, "varargAnnotationColonPosition") \
-    ATOM(ReturnSpecifierPosition, "returnSpecifierPosition") \
-    ATOM(OpPosition, "opPosition") \
-    ATOM(ThenPosition, "thenPosition") \
-    ATOM(ElsePosition, "elsePosition") \
-    ATOM(IsElseIf, "isElseIf") \
-    ATOM(StatsStartPosition, "statsStartPosition") \
-    ATOM(EndPosition, "endPosition") \
-    ATOM(UntilPosition, "untilPosition") \
-    ATOM(VarsAnnotationColonPositions, "varsAnnotationColonPositions") \
-    ATOM(VarsCommaPositions, "varsCommaPositions") \
-    ATOM(ValuesCommaPositions, "valuesCommaPositions") \
-    ATOM(AnnotationColonPosition, "annotationColonPosition") \
-    ATOM(EqualsPosition, "equalsPosition") \
-    ATOM(EndCommaPosition, "endCommaPosition") \
-    ATOM(StepCommaPosition, "stepCommaPosition") \
-    ATOM(LocalKeywordPosition, "localKeywordPosition") \
-    ATOM(DefaultEqualsPosition, "defaultEqualsPosition") \
-    ATOM(EllipsisPosition, "ellipsisPosition") \
-    ATOM(TypeKeywordPosition, "typeKeywordPosition") \
-    ATOM(GenericsOpenPosition, "genericsOpenPosition") \
-    ATOM(GenericsClosePosition, "genericsClosePosition") \
-    ATOM(PrefixPointPosition, "prefixPointPosition") \
-    ATOM(OpenParametersPosition, "openParametersPosition") \
-    ATOM(ParametersCommaPositions, "parametersCommaPositions") \
-    ATOM(CloseParametersPosition, "closeParametersPosition") \
-    ATOM(IsArray, "isArray") \
-    ATOM(OpenArgsPosition, "openArgsPosition") \
-    ATOM(ArgumentNameColonPositions, "argumentNameColonPositions") \
-    ATOM(ArgumentsCommaPositions, "argumentsCommaPositions") \
-    ATOM(CloseArgsPosition, "closeArgsPosition") \
-    ATOM(ReturnArrowPosition, "returnArrowPosition") \
-    ATOM(OpenPosition, "openPosition") \
-    ATOM(LeadingPosition, "leadingPosition") \
-    ATOM(SeparatorPositions, "separatorPositions") \
-    ATOM(OpenParenthesesPosition, "openParenthesesPosition") \
-    ATOM(CloseParenthesesPosition, "closeParenthesesPosition") \
-    \
-    /* Read-Only Aux Fields */ \
-    ATOM(IndexerOpenPosition, "indexerOpenPosition") \
-    ATOM(IndexerClosePosition, "indexerClosePosition") \
-    ATOM(SeparatorPosition, "separatorPosition") \
-    ATOM(Separator, "separator")
-
-enum class ReflectAtom : int16_t
-{
-    Unknown = -1,
-#define ATOM(variant, str) variant,
-#define ATOM_RW(variant, str, setVariant, setStr) variant, setVariant,
-    LUAU_REFLECT_ATOMS(ATOM, ATOM_RW)
-#undef ATOM
-#undef ATOM_RW
-    Count
-};
-
-inline const char* getAtomString(ReflectAtom atom)
-{
-    switch (atom)
-    {
-#define ATOM(variant, str) case ReflectAtom::variant: return str;
-#define ATOM_RW(variant, str, setVariant, setStr) case ReflectAtom::variant: return str; case ReflectAtom::setVariant: return setStr;
-    LUAU_REFLECT_ATOMS(ATOM, ATOM_RW)
-#undef ATOM
-#undef ATOM_RW
-    default: return "";
-    }
-}
-
-inline ReflectAtom resolveGlobalReflectAtom(std::string_view key)
-{
-    static const DenseHashMap2<std::string_view, ReflectAtom> s_atomMap = []() {
-        DenseHashMap2<std::string_view, ReflectAtom> map;
-#define ATOM(variant, str) map[str] = ReflectAtom::variant;
-#define ATOM_RW(variant, str, setVariant, setStr) map[str] = ReflectAtom::variant; map[setStr] = ReflectAtom::setVariant;
-        LUAU_REFLECT_ATOMS(ATOM, ATOM_RW)
-#undef ATOM
-#undef ATOM_RW
-        return map;
-    }();
-
-    if (const ReflectAtom* atom = s_atomMap.find(key))
-        return *atom;
-
-    return ReflectAtom::Unknown;
-}
-
-inline ReflectAtom resolveReflectAtom(int atomId, std::string_view key)
-{
-    if (atomId >= 0)
-    {
-        if (atomId < int(ReflectAtom::Count))
-            return ReflectAtom(atomId);
-        return ReflectAtom::Unknown;
-    }
-    return resolveGlobalReflectAtom(key);
-}
-
-inline ReflectAtom resolveReflectAtom(int atomId, const char* str, size_t len)
-{
-    if (atomId >= 0)
-    {
-        if (atomId < int(ReflectAtom::Count))
-            return ReflectAtom(atomId);
-        return ReflectAtom::Unknown;
-    }
-    return resolveGlobalReflectAtom(std::string_view(str, len));
-}
 
 /**
  * Reserved userdata tags for AST/CST reflection objects.
@@ -463,13 +101,15 @@ struct AstFilterData
     bool matches(Luau::AstNode* node) const;
     bool addKind(std::string_view kind);
     bool addCategory(std::string_view category);
-    bool empty() const { return classMask[0] == 0 && classMask[1] == 0 && categoryMask == 0; }
 };
 
 struct AstAllocatorState
 {
     Luau::Allocator allocator;
     Luau::AstNameTable names;
+
+    bool mutated = false;
+    int activeWalks = 0;
 
     AstAllocatorState()
         : allocator()
@@ -687,10 +327,10 @@ AstFilterData extractAstFilter(lua_State* L, int idx);
 
 const char* getAstAuxKind(const AstAuxData& handle);
 
-Luau::AstNode* createDefaultAstNode(std::string_view kind, Luau::Allocator& alloc);
-const Luau::CstNode* createDefaultCstNode(std::string_view kind, Luau::Allocator& alloc);
-Luau::AstLocal* createDefaultAstLocal(std::string_view kind, Luau::Allocator& alloc);
-bool createDefaultAstAux(std::string_view kind, const std::shared_ptr<AstDocumentState>& doc, AstAuxData& out);
+Luau::AstNode* createDefaultAstNode(lua_State* L, ReflectAtom atom, Luau::Allocator& alloc);
+const Luau::CstNode* createDefaultCstNode(lua_State* L, ReflectAtom atom, Luau::Allocator& alloc);
+Luau::AstLocal* createDefaultAstLocal(lua_State* L, ReflectAtom atom, Luau::Allocator& alloc);
+bool createDefaultAstAux(ReflectAtom atom, const std::shared_ptr<AstDocumentState>& doc, AstAuxData& out);
 void attachCommentsToAst(AstDocumentState& doc, Luau::AstNode* rootNode = nullptr);
 bool canNodeHoldComments(Luau::AstNode* node);
 
@@ -801,11 +441,18 @@ inline int pushCachedUserdataMethod(lua_State* L, int tag, const char* name, lua
     return 1;
 }
 
+int16_t reflectUserAtom(lua_State* L, const char* s, size_t l);
+
+inline bool reflectAtomsEnabled(lua_State* L)
+{
+    return FFlag::OptLuwuReflectUseAtoms && lua_callbacks(L)->useratom == reflectUserAtom;
+}
+
 inline ReflectAtom resolveIndexAtom(lua_State* L, const char*& outKeyStr)
 {
     int atomId = -1;
     size_t keyLen = 0;
-    const char* keyStr = lua_tolstringatom(L, 2, &keyLen, FFlag::OptLuwuReflectUseAtoms ? &atomId : nullptr);
+    const char* keyStr = lua_tolstringatom(L, 2, &keyLen, reflectAtomsEnabled(L) ? &atomId : nullptr);
     if (!keyStr)
     {
         outKeyStr = nullptr;
@@ -819,7 +466,7 @@ inline ReflectAtom resolveNamecallAtom(lua_State* L, const char*& outStr, size_t
 {
     int atomId = -1;
     size_t len = 0;
-    const char* str = lua_namecallwithlen(L, FFlag::OptLuwuReflectUseAtoms ? &atomId : nullptr, &len);
+    const char* str = lua_namecallwithlen(L, reflectAtomsEnabled(L) ? &atomId : nullptr, &len);
     if (!str)
         luaL_error(L, "missing method name in namecall");
     outStr = str;
@@ -926,13 +573,6 @@ inline void pushReflectPointerUserdata(lua_State* L, const std::shared_ptr<AstDo
     new (data) DataType{doc, node};
 }
 
-template<int TagValue, typename DataType, typename ValueType>
-inline void pushReflectValueUserdata(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, ValueType value)
-{
-    DataType* data = static_cast<DataType*>(lua_newuserdatataggedwithmetatable(L, sizeof(DataType), TagValue));
-    new (data) DataType{doc, value};
-}
-
 #define LUAU_REFLECT_RESOLVE_INDEX_ATOM() const char* keyStr = nullptr; ReflectAtom atom = resolveIndexAtom(L, keyStr); if (!keyStr) { lua_pushnil(L); return 1; }
 #define LUAU_REFLECT_RESOLVE_NAMECALL_ATOM() const char* str = nullptr; size_t len = 0; ReflectAtom atom = resolveNamecallAtom(L, str, len);
 
@@ -960,10 +600,6 @@ inline void pushReflectValueUserdata(lua_State* L, const std::shared_ptr<AstDocu
 
 #define LUAU_REFLECT_DEFINE_POINTER_USERDATA(pushName, checkName, dtorName, DataType, NodeType, TagValue, TypeNameStr) \
     void pushName(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, NodeType node) { pushReflectPointerUserdata<TagValue, DataType>(L, doc, node); } \
-    LUAU_REFLECT_DEFINE_USERDATA_BASIC(checkName, dtorName, DataType, TagValue, TypeNameStr)
-
-#define LUAU_REFLECT_DEFINE_VALUE_USERDATA(pushName, checkName, dtorName, DataType, ValueType, TagValue, TypeNameStr) \
-    void pushName(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, ValueType value) { pushValueUserdata<TagValue, DataType>(L, doc, value); } \
     LUAU_REFLECT_DEFINE_USERDATA_BASIC(checkName, dtorName, DataType, TagValue, TypeNameStr)
 
 #define LUAU_REFLECT_DEFINE_TOSTRING(funcName, TypeNameStr) \

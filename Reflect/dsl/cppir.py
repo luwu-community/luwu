@@ -386,6 +386,21 @@ class If(CppNode):
         return "\n".join(lines)
 
 
+class For(CppNode):
+    header: str
+    body: list[CppNode] = []
+
+    def render(self, indent: int = 0) -> str:
+        lines = [
+            f"{_indent(indent)}for ({self.header})",
+            f"{_indent(indent)}{{",
+        ]
+        if self.body:
+            lines.append(render_items(self.body, indent + 1))
+        lines.append(f"{_indent(indent)}}}")
+        return "\n".join(lines)
+
+
 class Function(CppNode):
     """C++ function definition or declaration."""
 

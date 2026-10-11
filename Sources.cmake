@@ -691,6 +691,11 @@ if(TARGET Luwu.Reflect)
         Reflect/include/Luau/Reflect.h
         Reflect/include/Luau/ReflectCommon.h
         Reflect/include/Luau/ReflectAstHandler.h
+        Reflect/include/Luau/ReflectAtoms.gen.h
+        Reflect/src/AstNodes.gen.inl
+        Reflect/src/CstNodes.gen.inl
+        Reflect/src/AuxNodes.gen.inl
+        Reflect/src/AstLocal.gen.inl
         Reflect/src/Reflect.cpp
         Reflect/src/AstAllocator.cpp
         Reflect/src/AstDocument.cpp

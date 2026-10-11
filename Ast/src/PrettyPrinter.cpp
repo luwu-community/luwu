@@ -36,6 +36,20 @@ bool isIdentifierChar(char c)
 const std::vector<std::string> keywords = {"and",   "break", "do",  "else", "elseif", "end",    "false", "for",  "function", "if",   "in",
                                            "local", "nil",   "not", "or",   "repeat", "return", "then",  "true", "until",    "while"};
 
+bool isPlainName(std::string_view s)
+{
+    if (s.empty() || !isIdentifierStartChar(s[0]))
+        return false;
+
+    for (char c : s)
+    {
+        if (!isIdentifierChar(c))
+            return false;
+    }
+
+    return std::find(keywords.begin(), keywords.end(), s) == keywords.end();
+}
+
 } // namespace
 
 namespace Luau
@@ -913,9 +927,117 @@ struct Printer
             advance(newPos);
     }
 
+    void visualizeDeclaredGenerics(const AstArray<AstGenericType*>& generics, const AstArray<AstGenericTypePack*>& genericPacks)
+    {
+        if (generics.size == 0 && genericPacks.size == 0)
+            return;
+
+        writer.symbol("<");
+        CommaSeparatorInserter comma(writer);
+
+        for (AstGenericType* generic : generics)
+        {
+            comma();
+
+            writer.advance(generic->location.begin);
+            writer.identifier(generic->name.value);
+
+            if (generic->defaultValue)
+            {
+                writer.maybeSpace(generic->defaultValue->location.begin, 2);
+                writer.symbol("=");
+                visualizeTypeAnnotation(*generic->defaultValue);
+            }
+        }
+
+        for (AstGenericTypePack* genericPack : genericPacks)
+        {
+            comma();
+
+            writer.advance(genericPack->location.begin);
+            writer.identifier(genericPack->name.value);
+            writer.symbol("...");
+
+            if (genericPack->defaultValue)
+            {
+                writer.maybeSpace(genericPack->defaultValue->location.begin, 2);
+                writer.symbol("=");
+                visualizeTypePackAnnotation(*genericPack->defaultValue, false);
+            }
+        }
+
+        writer.symbol(">");
+    }
+
+    template<typename NameAt>
+    void visualizeDeclaredSignature(const AstTypeList& params, bool hasSelf, const Location* varargLocation, AstTypePack& retTypes, NameAt nameAt)
+    {
+        writer.symbol("(");
+        CommaSeparatorInserter comma(writer);
+
+        if (hasSelf)
+        {
+            comma();
+            writer.identifier("self");
+        }
+
+        for (size_t i = 0; i < params.types.size; i++)
+        {
+            comma();
+
+            if (const AstArgumentName* name = nameAt(i))
+            {
+                writer.advance(name->second.begin);
+                writer.identifier(name->first.value);
+                writer.symbol(":");
+            }
+
+            visualizeTypeAnnotation(*params.types.data[i]);
+        }
+
+        if (params.tailType)
+        {
+            comma();
+
+            if (varargLocation)
+                advance(varargLocation->begin);
+            else
+                writer.space();
+
+            writer.symbol("...");
+            writer.symbol(":");
+            visualizeTypePackAnnotation(*params.tailType, true);
+        }
+
+        writer.symbol(")");
+
+        const AstTypePackExplicit* explicitReturn = retTypes.as<AstTypePackExplicit>();
+        if (explicitReturn && explicitReturn->typeList.types.size == 0 && !explicitReturn->typeList.tailType)
+            return;
+
+        writer.symbol(":");
+        visualizeTypePackAnnotation(retTypes, false, false, true);
+    }
+
+    void visualizeDeclaredAttributes(const AstArray<AstAttr*>& attributes)
+    {
+        if (FFlag::LuauCstAttr)
+        {
+            visualizeAttributes(attributes, nullptr);
+        }
+        else
+        {
+            for (AstAttr* attribute : attributes)
+                visualizeAttribute(*attribute);
+        }
+    }
+
     void visualize(AstStat& program)
     {
-        advance(program.location.begin);
+        if (const auto& externType = program.as<AstStatDeclareExternType>())
+            advance(externType->declareLocation.begin);
+        else
+            advance(program.location.begin);
 
         if (const auto& block = program.as<AstStatBlock>())
         {
@@ -1384,6 +1506,116 @@ struct Printer
 
             writer.symbol(":");
             visualizeTypeAnnotation(*a->type);
+        }
+        else if (const auto& a = program.as<AstStatDeclareFunction>())
+        {
+            visualizeDeclaredAttributes(a->attributes);
+
+            writer.advance(a->declareLocation.begin);
+            writer.keyword("declare");
+            writer.advance(a->functionLocation.begin);
+            writer.keyword("function");
+            writer.advance(a->nameLocation.begin);
+            writer.identifier(a->name.value);
+
+            visualizeDeclaredGenerics(a->generics, a->genericPacks);
+            visualizeDeclaredSignature(
+                a->params,
+                false,
+                a->vararg ? &a->varargLocation : nullptr,
+                *a->retTypes,
+                [&](size_t i) -> const AstArgumentName*
+                {
+                    return i < a->paramNames.size ? &a->paramNames.data[i] : nullptr;
+                }
+            );
+        }
+        else if (const auto& a = program.as<AstStatDeclareExternType>())
+        {
+            writer.advance(a->declareLocation.begin);
+            writer.keyword("declare");
+            writer.keyword("extern");
+            writer.advance(a->classLocation.begin);
+            writer.keyword("type");
+            writer.advance(a->location.begin);
+            writer.identifier(a->name.value);
+
+            visualizeDeclaredGenerics(a->generics, a->genericPacks);
+            if (a->generics.size > 0 || a->genericPacks.size > 0)
+                writer.space();
+
+            if (a->superName)
+            {
+                if (a->extendsLocation)
+                    writer.advance(a->extendsLocation->begin);
+                writer.keyword("extends");
+                writer.identifier(a->superName->value);
+            }
+
+            writer.keyword("with");
+
+            for (const AstDeclaredExternTypeProperty& prop : a->props)
+            {
+                const AstTypeFunction* method = prop.isMethod ? prop.ty->as<AstTypeFunction>() : nullptr;
+
+                if (method)
+                {
+                    visualizeDeclaredAttributes(method->attributes);
+
+                    writer.advance(prop.location.begin);
+                    writer.keyword("function");
+                    writer.advance(prop.nameLocation.begin);
+                    writer.identifier(prop.name.value);
+
+                    visualizeDeclaredGenerics(method->generics, method->genericPacks);
+                    visualizeDeclaredSignature(
+                        method->argTypes,
+                        true,
+                        nullptr,
+                        *method->returnTypes,
+                        [&](size_t i) -> const AstArgumentName*
+                        {
+                            return i < method->argNames.size && method->argNames.data[i] ? &*method->argNames.data[i] : nullptr;
+                        }
+                    );
+                }
+                else if (isPlainName(prop.name.value))
+                {
+                    if (prop.access != AstTableAccess::ReadWrite)
+                    {
+                        const bool read = prop.access == AstTableAccess::Read;
+                        advanceBefore(prop.nameLocation.begin, read ? 5 : 6);
+                        writer.keyword(read ? "read" : "write");
+                    }
+
+                    writer.advance(prop.nameLocation.begin);
+                    writer.identifier(prop.name.value);
+                    writer.symbol(":");
+                    visualizeTypeAnnotation(*prop.ty);
+                }
+                else
+                {
+                    writer.advance(prop.location.begin);
+                    writer.symbol("[");
+                    writer.advance(prop.nameLocation.begin);
+                    writer.string(prop.name.value);
+                    writer.symbol("]");
+                    writer.symbol(":");
+                    visualizeTypeAnnotation(*prop.ty);
+                }
+            }
+
+            if (a->indexer)
+            {
+                writer.advance(a->indexer->location.begin);
+                writer.symbol("[");
+                visualizeTypeAnnotation(*a->indexer->indexType);
+                writer.symbol("]");
+                writer.symbol(":");
+                visualizeTypeAnnotation(*a->indexer->resultType);
+            }
+
+            writeEnd(program.location);
         }
         else if (const auto& c = program.as<AstStatClass>(); c && FFlag::LuwuClasses)
         {
@@ -2275,6 +2507,10 @@ struct Printer
         else if (typeAnnotation.is<AstTypeError>())
         {
             writer.symbol("%error-type%");
+        }
+        else if (typeAnnotation.is<AstTypeOptional>())
+        {
+            writer.symbol("?");
         }
         else
         {

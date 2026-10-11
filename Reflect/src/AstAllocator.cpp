@@ -74,21 +74,23 @@ static int astAllocatorDefaultnode(lua_State* L)
     auto& handle = checkAstAllocator(L, 1);
     size_t len = 0;
     const char* str = luaL_checklstring(L, 2, &len);
-    std::string_view kind(str, len);
+    ReflectAtom kind = resolveGlobalReflectAtom(std::string_view(str, len));
 
     auto doc = std::make_shared<AstDocumentState>(handle.state);
 
-    if (Luau::AstNode* node = createDefaultAstNode(kind, handle.state->allocator))
+    handle.state->mutated = true;
+
+    if (Luau::AstNode* node = createDefaultAstNode(L, kind, handle.state->allocator))
     {
         pushAstNode(L, doc, node);
         return 1;
     }
-    if (const Luau::CstNode* cst = createDefaultCstNode(kind, handle.state->allocator))
+    if (const Luau::CstNode* cst = createDefaultCstNode(L, kind, handle.state->allocator))
     {
         pushCstNode(L, doc, cst);
         return 1;
     }
-    if (Luau::AstLocal* local = createDefaultAstLocal(kind, handle.state->allocator))
+    if (Luau::AstLocal* local = createDefaultAstLocal(L, kind, handle.state->allocator))
     {
         pushAstLocal(L, doc, local);
         return 1;

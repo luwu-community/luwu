@@ -71,7 +71,7 @@ AstFilterData extractAstFilter(lua_State* L, int idx)
     return checkAstFilter(L, idx);
 }
 
-static int astFilterMatchesMethod(lua_State* L)
+static int astFilterMatchMethod(lua_State* L)
 {
     auto& handle = checkAstFilter(L, 1);
     auto& nodeHandle = checkAstNode(L, 2);
@@ -79,9 +79,9 @@ static int astFilterMatchesMethod(lua_State* L)
     return 1;
 }
 
-static int astFilterMatchesTrampoline(lua_State* L)
+static int astFilterMatchTrampoline(lua_State* L)
 {
-    return astFilterMatchesMethod(L);
+    return astFilterMatchMethod(L);
 }
 
 static int astFilterIndex(lua_State* L)
@@ -99,8 +99,8 @@ static int astFilterIndex(lua_State* L)
         lua_pushstring(L, "AstFilter");
         return 1;
 
-    case ReflectAtom::Matches:
-        return pushCachedUserdataMethod(L, TagFilter, "matches", astFilterMatchesTrampoline);
+    case ReflectAtom::Match:
+        return pushCachedUserdataMethod(L, TagFilter, "match", astFilterMatchTrampoline);
 
     default:
         break;
@@ -116,8 +116,8 @@ static int astFilterNamecall(lua_State* L)
 
     switch (atom)
     {
-    case ReflectAtom::Matches:
-        return astFilterMatchesMethod(L);
+    case ReflectAtom::Match:
+        return astFilterMatchMethod(L);
 
     default:
         break;

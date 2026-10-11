@@ -8,242 +8,55 @@
 namespace Luau
 {
 
-inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, bool val)
+inline void checkSameAllocator(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const std::shared_ptr<AstDocumentState>& other, const char* what)
 {
-    lua_pushboolean(L, val);
+    if (doc && other && other->allocator() != doc->allocator())
+        luaL_error(L, "cross-allocator %s assignment is not permitted", what);
 }
 
-inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, char val)
+inline void beginReflectWrite(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, bool structural)
 {
-    lua_pushlstring(L, &val, 1);
+    AstAllocatorState& arena = *doc->arena;
+    if (structural && arena.activeWalks > 0)
+        luaL_error(L, "cannot change the structure of an AST while it is being walked");
+    arena.mutated = true;
 }
 
-template<typename T, typename = std::enable_if_t<std::is_integral_v<T> && !std::is_same_v<T, bool> && !std::is_same_v<T, char>>>
-inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, T val)
+inline Luau::AstName readName(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int idx)
 {
-    if constexpr (sizeof(T) == 8)
-        lua_pushinteger64(L, static_cast<int64_t>(val));
-    else
-        lua_pushinteger(L, static_cast<int>(val));
+    if (lua_isnil(L, idx))
+        return Luau::AstName();
+    size_t len = 0;
+    const char* s = luaL_checklstring(L, idx, &len);
+    return doc->names() ? doc->names()->getOrAdd(s, len) : Luau::AstName(s);
 }
 
-inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, double val)
-{
-    lua_pushnumber(L, val);
-}
-
-inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstName& val)
-{
-    if (val.value)
-        lua_pushstring(L, val.value);
-    else
-        lua_pushnil(L);
-}
-
-template<typename T>
-inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const std::optional<T>& val)
-{
-    if (val)
-        pushReflectValue(L, doc, *val);
-    else
-        lua_pushnil(L);
-}
-
-inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstArray<char>& val)
-{
-    lua_pushlstring(L, val.data, val.size);
-}
-
-inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const std::string& val)
-{
-    lua_pushlstring(L, val.data(), val.size());
-}
-
-template<typename T>
-inline std::enable_if_t<std::is_enum_v<T>> pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, T val)
-{
-    lua_pushstring(L, toString(val).c_str());
-}
-
-inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstTableIndexer* indexer)
-{
-    if (indexer)
-        pushAstAux(L, doc, *indexer);
-    else
-        lua_pushnil(L);
-}
-
-inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, Luau::AstNode* val)
-{
-    if (val)
-        pushAstNode(L, doc, val);
-    else
-        lua_pushnil(L);
-}
-
-inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, Luau::AstLocal* val)
-{
-    if (val)
-        pushAstLocal(L, doc, val);
-    else
-        lua_pushnil(L);
-}
-
-inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstTypeOrPack& val)
-{
-    pushTypeOrPack(L, doc, val);
-}
-
-inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstTypeList& val)
-{
-    pushAstAux(L, doc, val);
-}
-
-template<typename T, typename = std::enable_if_t<std::is_base_of_v<Luau::AstNode, T>>>
-inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstArray<T*>& array)
-{
-    pushNodeArray(L, doc, array);
-}
-
-inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstArray<Luau::AstLocal*>& array)
-{
-    pushLocalArray(L, doc, array);
-}
-
-inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstExprTable::Item& val)
-{
-    pushAstAux(L, doc, val);
-}
-
-inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::CstExprTable::Item& val)
-{
-    pushAstAux(L, doc, val);
-}
-
-inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstTableProp& val)
-{
-    pushAstAux(L, doc, val);
-}
-
-inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstDeclaredExternTypeProperty& val)
-{
-    pushAstAux(L, doc, val);
-}
-
-inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstClassProperty& val)
-{
-    pushAstAux(L, doc, val);
-}
-
-inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstClassMember& member)
-{
-    if (const auto* p = Luau::get_if<Luau::AstClassProperty>(&member))
-        pushAstAux(L, doc, *p);
-    else if (const auto* m = Luau::get_if<Luau::AstClassMethod>(&member))
-        pushAstAux(L, doc, *m);
-    else
-        lua_pushnil(L);
-}
-
-template<typename T>
-inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstArray<T>& val)
-{
-    pushArray(L, val.size, [&](size_t i) {
-        pushReflectValue(L, doc, val.data[i]);
-    });
-}
-
-inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::Position& val)
-{
-    pushPosition(L, doc, val);
-}
-
-inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::Location& val)
-{
-    pushLocation(L, doc, val);
-}
-
-inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, Luau::Position& out)
-{
-    if (lua_isnil(L, argIdx))
-    {
-        out = Luau::Position::missing();
-        return;
-    }
-    if (!lua_isvector(L, argIdx))
-        luaL_typeerror(L, argIdx, "vector");
-    const LUA_VECTOR_TYPE* v = lua_tovector(L, argIdx);
-    unsigned line = v[0] >= 1.0f ? unsigned(v[0] - 1.0f) : 0;
-    unsigned col = v[1] >= 1.0f ? unsigned(v[1] - 1.0f) : 0;
-    out = Luau::Position{line, col};
-}
-
-inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, Luau::Location& out)
-{
-    if (!lua_istable(L, argIdx))
-        luaL_typeerror(L, argIdx, "table");
-    lua_getfield(L, argIdx, "begin");
-    readReflectValue(L, doc, -1, out.begin);
-    lua_pop(L, 1);
-    lua_getfield(L, argIdx, "end");
-    readReflectValue(L, doc, -1, out.end);
-    lua_pop(L, 1);
-}
-
-inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, bool& out)
-{
-    out = (lua_toboolean(L, argIdx) != 0);
-}
-
-template<typename T, typename = std::enable_if_t<std::is_integral_v<T> && !std::is_same_v<T, bool> && !std::is_same_v<T, char>>>
-inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, T& out)
-{
-    if constexpr (sizeof(T) == 8)
-    {
-        if (lua_isnumber(L, argIdx))
-            out = static_cast<T>(lua_tointeger(L, argIdx));
-        else
-            out = static_cast<T>(luaL_checkinteger64(L, argIdx));
-    }
-    else
-    {
-        out = static_cast<T>(luaL_checkinteger(L, argIdx));
-    }
-}
-
-inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, double& out)
-{
-    out = luaL_checknumber(L, argIdx);
-}
-
-inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, Luau::AstName& out)
-{
-    if (lua_isnil(L, argIdx))
-    {
-        out = Luau::AstName();
-    }
-    else
-    {
-        size_t len = 0;
-        const char* s = luaL_checklstring(L, argIdx, &len);
-        out = doc->names() ? doc->names()->getOrAdd(s, len) : Luau::AstName(s);
-    }
-}
-
-inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, Luau::AstArray<char>& out)
+inline Luau::AstArray<char> readString(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int idx)
 {
     size_t len = 0;
-    const char* s = luaL_checklstring(L, argIdx, &len);
+    const char* s = luaL_checklstring(L, idx, &len);
     char* copy = static_cast<char*>(doc->allocator()->allocate(len));
     std::memcpy(copy, s, len);
-    out = Luau::AstArray<char>{copy, len};
+    return Luau::AstArray<char>{copy, len};
 }
 
-inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, std::string& out)
+inline char readChar(lua_State* L, int idx)
 {
     size_t len = 0;
-    const char* str = luaL_checklstring(L, argIdx, &len);
-    out.assign(str, len);
+    const char* s = luaL_checklstring(L, idx, &len);
+    if (len != 1)
+        luaL_error(L, "expected single character for op");
+    return s[0];
+}
+
+template<typename T>
+inline T readEnum(lua_State* L, int idx)
+{
+    size_t len = 0;
+    const char* str = luaL_checklstring(L, idx, &len);
+    if (auto res = Luau::fromString<T>(std::string_view(str, len)))
+        return *res;
+    luaL_error(L, "invalid enum value '%.*s'", int(len), str);
 }
 
 template<typename T>
@@ -269,38 +82,32 @@ inline T* castAstNode(Luau::AstNode* node)
         return node->as<T>();
 }
 
-template<typename T, typename = std::enable_if_t<std::is_base_of_v<Luau::AstNode, T>>>
-inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, T*& out)
+template<typename T>
+inline T* readNode(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int idx)
 {
-    if (lua_isnil(L, argIdx))
-    {
-        out = nullptr;
-        return;
-    }
-    auto& nodeData = checkAstNode(L, argIdx);
+    if (lua_isnil(L, idx))
+        return nullptr;
+    auto& nodeData = checkAstNode(L, idx);
     if (!nodeData.node)
-        luaL_typeerror(L, argIdx, "AstNode");
+        luaL_typeerror(L, idx, "AstNode");
     if (doc && nodeData.doc && nodeData.doc->allocator() != doc->allocator())
         luaL_error(L, "cross-allocator AST node assignment is not permitted");
     T* casted = castAstNode<T>(nodeData.node);
     if (!casted)
-        luaL_error(L, "invalid AstNode subtype at argument #%d", argIdx);
-    out = casted;
+        luaL_error(L, "invalid AstNode subtype at argument #%d", idx);
+    return casted;
 }
 
-inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, Luau::AstLocal*& out)
+inline Luau::AstLocal* readLocal(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int idx)
 {
-    if (lua_isnil(L, argIdx))
-    {
-        out = nullptr;
-        return;
-    }
-    auto& handle = checkAstLocal(L, argIdx);
+    if (lua_isnil(L, idx))
+        return nullptr;
+    auto& handle = checkAstLocal(L, idx);
     if (!handle.local)
-        luaL_typeerror(L, argIdx, "AstLocal");
+        luaL_typeerror(L, idx, "AstLocal");
     if (doc && handle.doc && handle.doc->allocator() != doc->allocator())
         luaL_error(L, "cross-allocator AstLocal assignment is not permitted");
-    out = handle.local;
+    return handle.local;
 }
 
 // Luwu will pass a table to the setter so we need to allocate space for the passed table when reading from luau
@@ -313,16 +120,16 @@ inline Luau::AstArray<T> readArray(lua_State* L, const std::shared_ptr<AstDocume
     for (int i = 1; i <= len; i++)
     {
         lua_rawgeti(L, argIdx, i);
-        buffer[i - 1] = readElem(i);
+        new (&buffer[i - 1]) T(readElem(i));
         lua_pop(L, 1);
     }
     return Luau::AstArray<T>{buffer, size_t(len)};
 }
 
-template<typename T, typename = std::enable_if_t<std::is_base_of_v<Luau::AstNode, T>>>
-inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, Luau::AstArray<T*>& out)
+template<typename T>
+inline Luau::AstArray<T*> readNodeArray(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int idx)
 {
-    out = readArray<T*>(L, doc, argIdx, [&](int i) {
+    return readArray<T*>(L, doc, idx, [&](int i) {
         auto& nodeData = checkAstNode(L, -1);
         if (doc && nodeData.doc && nodeData.doc->allocator() != doc->allocator())
             luaL_error(L, "cross-allocator AST node assignment is not permitted at table index %d", i);
@@ -333,132 +140,85 @@ inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentStat
     });
 }
 
-inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, std::optional<Luau::AstName>& out)
-{
-    if (lua_isnil(L, argIdx))
-    {
-        out = std::nullopt;
-    }
-    else
-    {
-        Luau::AstName name;
-        readReflectValue(L, doc, argIdx, name);
-        out = name;
-    }
-}
-
-inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, Luau::AstTypeList& out)
-{
-    auto& aux = checkAstAux(L, argIdx);
-    if (aux.kind != Aux_TypeList)
-        luaL_typeerror(L, argIdx, "AstTypeList");
-    out = aux.typeList;
-}
-
-inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, Luau::AstTableIndexer*& out)
-{
-    if (lua_isnil(L, argIdx))
-    {
-        out = nullptr;
-        return;
-    }
-    auto& aux = checkAstAux(L, argIdx);
-    if (aux.kind != Aux_TableIndexer)
-        luaL_typeerror(L, argIdx, "AstTableIndexer");
-    auto* copy = static_cast<Luau::AstTableIndexer*>(doc->allocator()->allocate(sizeof(Luau::AstTableIndexer)));
-    *copy = aux.tableIndexer;
-    out = copy;
-}
-
-inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, Luau::AstTableProp& out)
-{
-    auto& aux = checkAstAux(L, argIdx);
-    if (aux.kind != Aux_TableProp)
-        luaL_typeerror(L, argIdx, "AstTableProp");
-    out = aux.tableProp;
-}
-
-inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, Luau::AstDeclaredExternTypeProperty& out)
-{
-    auto& aux = checkAstAux(L, argIdx);
-    if (aux.kind != Aux_DeclaredExternTypeProperty)
-        luaL_typeerror(L, argIdx, "AstDeclaredExternTypeProperty");
-    out = aux.declaredExternProp;
-}
-
-inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, Luau::AstClassMember& out)
-{
-    auto& aux = checkAstAux(L, argIdx);
-    if (aux.kind == Aux_ClassProperty)
-        out = Luau::AstClassMember(aux.classProp);
-    else if (aux.kind == Aux_ClassMethod)
-        out = Luau::AstClassMethod(aux.classMethod);
-    else
-        luaL_error(L, "expected AstClassProperty or AstClassMethod at argument #%d", argIdx);
-}
-
-inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, Luau::AstExprTable::Item& out)
-{
-    auto& aux = checkAstAux(L, argIdx);
-    if (aux.kind != Aux_TableItem)
-        luaL_typeerror(L, argIdx, "AstTableItem");
-    out = aux.tableItem;
-}
-
-inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, Luau::AstTypeOrPack& out)
-{
-    if (lua_isnil(L, argIdx))
-    {
-        out = Luau::AstTypeOrPack{};
-        return;
-    }
-    auto& nodeData = checkAstNode(L, argIdx);
-    if (!nodeData.node)
-        luaL_typeerror(L, argIdx, "AstNode");
-    if (auto* t = nodeData.node->asType())
-        out = Luau::AstTypeOrPack{t, nullptr};
-    else if (auto* tp = castAstNode<Luau::AstTypePack>(nodeData.node))
-        out = Luau::AstTypeOrPack{nullptr, tp};
-    else
-        luaL_error(L, "expected AstType or AstTypePack at argument #%d", argIdx);
-}
-
 template<typename T>
-inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, Luau::AstArray<T>& out)
+inline Luau::AstArray<T*> readOptionalNodeArray(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int idx)
 {
-    out = readArray<T>(L, doc, argIdx, [&](int) {
-        T item{};
-        readReflectValue(L, doc, -1, item);
-        return item;
+    return readArray<T*>(L, doc, idx, [&](int i) -> T* {
+        if (lua_isboolean(L, -1) && !lua_toboolean(L, -1))
+            return nullptr;
+        auto& nodeData = checkAstNode(L, -1);
+        if (doc && nodeData.doc && nodeData.doc->allocator() != doc->allocator())
+            luaL_error(L, "cross-allocator AST node assignment is not permitted at table index %d", i);
+        T* casted = castAstNode<T>(nodeData.node);
+        if (!casted)
+            luaL_error(L, "invalid AstNode subtype at table index %d", i);
+        return casted;
+    });
+}
+
+inline Luau::AstArray<Luau::AstLocal*> readLocalArray(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int idx)
+{
+    return readArray<Luau::AstLocal*>(L, doc, idx, [&](int) {
+        return readLocal(L, doc, -1);
+    });
+}
+
+inline Luau::AstArray<Luau::AstTypeOrPack> readTypeOrPackArray(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int idx)
+{
+    return readArray<Luau::AstTypeOrPack>(L, doc, idx, [&](int) {
+        if (lua_isnil(L, -1))
+            return Luau::AstTypeOrPack{};
+        auto& nodeData = checkAstNode(L, -1);
+        if (!nodeData.node)
+            luaL_typeerror(L, -1, "AstNode");
+        checkSameAllocator(L, doc, nodeData.doc, "AST node");
+        if (auto* t = nodeData.node->asType())
+            return Luau::AstTypeOrPack{t, nullptr};
+        if (auto* tp = castAstNode<Luau::AstTypePack>(nodeData.node))
+            return Luau::AstTypeOrPack{nullptr, tp};
+        luaL_error(L, "expected AstType or AstTypePack at argument #%d", -1);
     });
 }
 
 template<typename T>
-inline std::enable_if_t<std::is_enum_v<T>> readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, T& out)
+inline T readAux(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int idx, AstAuxKind kind, T AstAuxData::* member, const char* name)
 {
-    size_t len = 0;
-    const char* str = luaL_checklstring(L, argIdx, &len);
-    if (auto res = Luau::fromString<T>(std::string_view(str, len)))
-        out = *res;
-    else
-        luaL_error(L, "invalid enum value '%.*s'", int(len), str);
+    auto& aux = checkAstAux(L, idx);
+    if (aux.kind != kind)
+        luaL_typeerror(L, idx, name);
+    checkSameAllocator(L, doc, aux.doc, name);
+    return aux.*member;
 }
 
-inline void readReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int argIdx, char& out)
+inline Luau::AstClassMember readClassMember(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, int idx)
 {
-    size_t len = 0;
-    const char* s = luaL_checklstring(L, argIdx, &len);
-    if (len != 1)
-        luaL_error(L, "expected single character for op");
-    out = s[0];
+    auto& aux = checkAstAux(L, idx);
+    if (aux.kind == Aux_ClassProperty)
+    {
+        checkSameAllocator(L, doc, aux.doc, "AstClassProperty");
+        Luau::AstClassProperty prop = aux.classProp;
+        if (prop.ty && !prop.typeColonLocation)
+            prop.typeColonLocation = prop.ty->location;
+        return Luau::AstClassMember(prop);
+    }
+    if (aux.kind == Aux_ClassMethod)
+    {
+        checkSameAllocator(L, doc, aux.doc, "AstClassMethod");
+        return Luau::AstClassMember(aux.classMethod);
+    }
+    luaL_error(L, "expected AstClassProperty or AstClassMethod at argument #%d", idx);
 }
 
-inline void pushReflectValue(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::CstNode* val)
+inline void pushClassMembers(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::AstArray<Luau::AstClassMember>& members)
 {
-    if (val)
-        pushCstNode(L, doc, val);
-    else
-        lua_pushnil(L);
+    pushArray(L, members.size, [&](size_t i) {
+        if (const auto* p = Luau::get_if<Luau::AstClassProperty>(&members.data[i]))
+            pushAstAux(L, doc, *p);
+        else if (const auto* m = Luau::get_if<Luau::AstClassMethod>(&members.data[i]))
+            pushAstAux(L, doc, *m);
+        else
+            lua_pushnil(L);
+    });
 }
 
 inline const Luau::CstNode* getNodeCst(const AstNodeData& handle, const Luau::AstNode* n)
@@ -470,5 +230,32 @@ inline const Luau::CstNode* getNodeCst(const AstNodeData& handle, const Luau::As
     return nullptr;
 }
 
-} // namespace Luau
+struct AstValidator
+{
+    lua_State* L;
+    bool deep;
+    bool forPrint;
+    int maxDepth;
 
+    int depth = 0;
+    int tallestChild = 0;
+    const char* kind = "AstNode";
+    DenseHashMap2<const Luau::AstNode*, int> heights;
+
+    void node(Luau::AstNode* node);
+    void child(Luau::AstNode* node, const char* field, int index, const char* missing);
+    void local(Luau::AstLocal* local, const char* field, int index, const char* missing);
+    void name(const Luau::AstName& name, const char* field, int index, const char* missing);
+    [[noreturn]] void fail(const char* field, int index, const char* problem);
+};
+
+enum class AstValidation
+{
+    Node,
+    Walk,
+    Print
+};
+
+void validateAstNode(lua_State* L, const AstNodeData& handle, AstValidation mode);
+
+} // namespace Luau

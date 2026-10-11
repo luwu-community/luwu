@@ -7,6 +7,9 @@
 #include "Luau/ReflectCommon.h"
 #include "Luau/ReflectAstHandler.h"
 
+LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuDefaultArguments)
+
 namespace Luau
 {
 
@@ -17,7 +20,7 @@ struct AstNodeClassInfo
     NodeCategory categoryEnum = NodeCategory::Unknown;
     bool (*methodHandler)(lua_State* L, AstNodeData& handle, ReflectAtom atom) = nullptr;
     void (*propCollector)(lua_State* L, AstNodeData& handle) = nullptr;
-    Luau::AstNode* (*factory)(Luau::Allocator& alloc) = nullptr;
+    void (*validator)(AstValidator& v, Luau::AstNode* node) = nullptr;
     bool canHoldComments = false;
 };
 
@@ -29,7 +32,7 @@ static void registerNodeClass(
     NodeCategory category,
     bool (*methodHandler)(lua_State* L, AstNodeData& handle, ReflectAtom atom) = nullptr,
     void (*propCollector)(lua_State* L, AstNodeData& handle) = nullptr,
-    Luau::AstNode* (*factory)(Luau::Allocator& alloc) = nullptr
+    void (*validator)(AstValidator& v, Luau::AstNode* node) = nullptr
 )
 {
     int idx = T::ClassIndex();
@@ -38,10 +41,10 @@ static void registerNodeClass(
         s_nodeClassTable.resize(idx + 1, AstNodeClassInfo{"AstNode", "unknown", NodeCategory::Unknown, nullptr, nullptr, nullptr, false});
     }
     bool canHoldComments = (category == NodeCategory::Stat);
-    s_nodeClassTable[idx] = AstNodeClassInfo{kind, categoryToString(category), category, methodHandler, propCollector, factory, canHoldComments};
+    s_nodeClassTable[idx] = AstNodeClassInfo{kind, categoryToString(category), category, methodHandler, propCollector, validator, canHoldComments};
 }
 
-Luau::AstNode* createDefaultAstNode(ReflectAtom atom, Luau::Allocator& alloc)
+Luau::AstNode* createDefaultAstNode(lua_State* L, ReflectAtom atom, Luau::Allocator& alloc)
 {
     switch (atom)
     {
@@ -84,6 +87,10 @@ Luau::AstNode* createDefaultAstNode(ReflectAtom atom, Luau::Allocator& alloc)
     case ReflectAtom::AstStatDeclareFunction:
         return alloc.alloc<Luau::AstStatDeclareFunction>(Luau::Location(), Luau::AstArray<Luau::AstAttr*>{nullptr, 0}, Luau::AstName(), Luau::Location(), Luau::AstArray<Luau::AstGenericType*>{nullptr, 0}, Luau::AstArray<Luau::AstGenericTypePack*>{nullptr, 0}, Luau::AstTypeList{}, Luau::AstArray<Luau::AstArgumentName>{nullptr, 0}, false, Luau::Location(), nullptr, Luau::Location(), Luau::Location());
     case ReflectAtom::AstStatClass:
+        if (!FFlag::LuwuClasses)
+        {
+            luaL_error(L, "cannot create a default AstStatClass: FFlag LuwuClasses is not enabled");
+        }
         return alloc.alloc<Luau::AstStatClass>(Luau::Location(), nullptr, Luau::AstArray<Luau::AstClassMember>{nullptr, 0}, false, Luau::Location());
     case ReflectAtom::AstStatDeclareExternType:
         return alloc.alloc<Luau::AstStatDeclareExternType>(Luau::Location(), Luau::AstName(), std::nullopt, Luau::AstArray<Luau::AstDeclaredExternTypeProperty>{nullptr, 0}, Luau::Location(), Luau::Location(), std::nullopt, nullptr);
@@ -170,41 +177,45 @@ Luau::AstNode* createDefaultAstNode(ReflectAtom atom, Luau::Allocator& alloc)
     }
 }
 
-static Luau::AstNode* createDefaultAstStatBlock(Luau::Allocator& alloc)
-{
-    return alloc.alloc<Luau::AstStatBlock>(Luau::Location(), Luau::AstArray<Luau::AstStat*>{nullptr, 0}, false);
-}
-
 static bool handleAstStatBlockMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstStatBlock*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstStatBlock.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstStatBlock.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->hasSemicolon)>, bool>, "schema type of AstStatBlock.hasSemicolon does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->hasEnd)>, bool>, "schema type of AstStatBlock.hasEnd does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->body)>, Luau::AstArray<Luau::AstStat*>>, "schema type of AstStatBlock.body does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::HasSemicolon:
-        pushReflectValue(L, handle.doc, n->hasSemicolon);
+        lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        readReflectValue(L, handle.doc, 2, n->hasSemicolon);
+        beginReflectWrite(L, handle.doc, false);
+        n->hasSemicolon = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasEnd:
-        pushReflectValue(L, handle.doc, n->hasEnd);
+        lua_pushboolean(L, n->hasEnd);
         return true;
     case ReflectAtom::SetHasEnd:
-        readReflectValue(L, handle.doc, 2, n->hasEnd);
+        beginReflectWrite(L, handle.doc, false);
+        n->hasEnd = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Body:
-        pushReflectValue(L, handle.doc, n->body);
+        pushNodeArray(L, handle.doc, n->body);
         return true;
     case ReflectAtom::SetBody:
-        readReflectValue(L, handle.doc, 2, n->body);
+        beginReflectWrite(L, handle.doc, true);
+        n->body = readNodeArray<Luau::AstStat>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -216,60 +227,76 @@ static void collectAstStatBlockProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstStatBlock*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->hasSemicolon);
+    lua_pushboolean(L, n->hasSemicolon);
     lua_setfield(L, -2, "hasSemicolon");
-    pushReflectValue(L, handle.doc, n->hasEnd);
+    lua_pushboolean(L, n->hasEnd);
     lua_setfield(L, -2, "hasEnd");
-    pushReflectValue(L, handle.doc, n->body);
+    pushNodeArray(L, handle.doc, n->body);
     lua_setfield(L, -2, "body");
 }
 
-static Luau::AstNode* createDefaultAstStatIf(Luau::Allocator& alloc)
+static void validateAstStatBlock(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstStatIf>(Luau::Location(), nullptr, nullptr, nullptr, std::nullopt, std::nullopt, Luau::Location());
+    auto* n = static_cast<Luau::AstStatBlock*>(node);
+    (void)n;
+    for (size_t i = 0; i < n->body.size; i++)
+    {
+        v.child(n->body.data[i], "body", int(i), "is nil");
+    }
 }
 
 static bool handleAstStatIfMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstStatIf*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstStatIf.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstStatIf.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->hasSemicolon)>, bool>, "schema type of AstStatIf.hasSemicolon does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->condition)>, Luau::AstExpr*>, "schema type of AstStatIf.condition does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->thenbody)>, Luau::AstStatBlock*>, "schema type of AstStatIf.thenbody does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->elsebody)>, Luau::AstStat*>, "schema type of AstStatIf.elsebody does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::HasSemicolon:
-        pushReflectValue(L, handle.doc, n->hasSemicolon);
+        lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        readReflectValue(L, handle.doc, 2, n->hasSemicolon);
+        beginReflectWrite(L, handle.doc, false);
+        n->hasSemicolon = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Condition:
-        pushReflectValue(L, handle.doc, n->condition);
+        pushAstNode(L, handle.doc, n->condition);
         return true;
     case ReflectAtom::SetCondition:
-        readReflectValue(L, handle.doc, 2, n->condition);
+        beginReflectWrite(L, handle.doc, true);
+        n->condition = readNode<Luau::AstExpr>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::ThenBody:
-        pushReflectValue(L, handle.doc, n->thenbody);
+        pushAstNode(L, handle.doc, n->thenbody);
         return true;
     case ReflectAtom::SetThenBody:
-        readReflectValue(L, handle.doc, 2, n->thenbody);
+        beginReflectWrite(L, handle.doc, true);
+        n->thenbody = readNode<Luau::AstStatBlock>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::ElseBody:
-        pushReflectValue(L, handle.doc, n->elsebody);
+        pushAstNode(L, handle.doc, n->elsebody);
         return true;
     case ReflectAtom::SetElseBody:
-        readReflectValue(L, handle.doc, 2, n->elsebody);
+        beginReflectWrite(L, handle.doc, true);
+        n->elsebody = readNode<Luau::AstStat>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -281,62 +308,77 @@ static void collectAstStatIfProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstStatIf*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->hasSemicolon);
+    lua_pushboolean(L, n->hasSemicolon);
     lua_setfield(L, -2, "hasSemicolon");
-    pushReflectValue(L, handle.doc, n->condition);
+    pushAstNode(L, handle.doc, n->condition);
     lua_setfield(L, -2, "condition");
-    pushReflectValue(L, handle.doc, n->thenbody);
+    pushAstNode(L, handle.doc, n->thenbody);
     lua_setfield(L, -2, "thenbody");
-    pushReflectValue(L, handle.doc, n->elsebody);
+    pushAstNode(L, handle.doc, n->elsebody);
     lua_setfield(L, -2, "elsebody");
 }
 
-static Luau::AstNode* createDefaultAstStatWhile(Luau::Allocator& alloc)
+static void validateAstStatIf(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstStatWhile>(Luau::Location(), nullptr, nullptr, false, Luau::Location(), Luau::Location());
+    auto* n = static_cast<Luau::AstStatIf*>(node);
+    (void)n;
+    v.child(n->condition, "condition", -1, "is nil");
+    v.child(n->thenbody, "thenbody", -1, "is nil");
+    v.child(n->elsebody, "elsebody", -1, nullptr);
 }
 
 static bool handleAstStatWhileMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstStatWhile*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstStatWhile.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstStatWhile.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->hasSemicolon)>, bool>, "schema type of AstStatWhile.hasSemicolon does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->hasDo)>, bool>, "schema type of AstStatWhile.hasDo does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->condition)>, Luau::AstExpr*>, "schema type of AstStatWhile.condition does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->body)>, Luau::AstStatBlock*>, "schema type of AstStatWhile.body does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::HasSemicolon:
-        pushReflectValue(L, handle.doc, n->hasSemicolon);
+        lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        readReflectValue(L, handle.doc, 2, n->hasSemicolon);
+        beginReflectWrite(L, handle.doc, false);
+        n->hasSemicolon = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasDo:
-        pushReflectValue(L, handle.doc, n->hasDo);
+        lua_pushboolean(L, n->hasDo);
         return true;
     case ReflectAtom::SetHasDo:
-        readReflectValue(L, handle.doc, 2, n->hasDo);
+        beginReflectWrite(L, handle.doc, false);
+        n->hasDo = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Condition:
-        pushReflectValue(L, handle.doc, n->condition);
+        pushAstNode(L, handle.doc, n->condition);
         return true;
     case ReflectAtom::SetCondition:
-        readReflectValue(L, handle.doc, 2, n->condition);
+        beginReflectWrite(L, handle.doc, true);
+        n->condition = readNode<Luau::AstExpr>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Body:
-        pushReflectValue(L, handle.doc, n->body);
+        pushAstNode(L, handle.doc, n->body);
         return true;
     case ReflectAtom::SetBody:
-        readReflectValue(L, handle.doc, 2, n->body);
+        beginReflectWrite(L, handle.doc, true);
+        n->body = readNode<Luau::AstStatBlock>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -348,55 +390,67 @@ static void collectAstStatWhileProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstStatWhile*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->hasSemicolon);
+    lua_pushboolean(L, n->hasSemicolon);
     lua_setfield(L, -2, "hasSemicolon");
-    pushReflectValue(L, handle.doc, n->hasDo);
+    lua_pushboolean(L, n->hasDo);
     lua_setfield(L, -2, "hasDo");
-    pushReflectValue(L, handle.doc, n->condition);
+    pushAstNode(L, handle.doc, n->condition);
     lua_setfield(L, -2, "condition");
-    pushReflectValue(L, handle.doc, n->body);
+    pushAstNode(L, handle.doc, n->body);
     lua_setfield(L, -2, "body");
 }
 
-static Luau::AstNode* createDefaultAstStatRepeat(Luau::Allocator& alloc)
+static void validateAstStatWhile(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstStatRepeat>(Luau::Location(), nullptr, nullptr, false, Luau::Location(), Luau::Location());
+    auto* n = static_cast<Luau::AstStatWhile*>(node);
+    (void)n;
+    v.child(n->condition, "condition", -1, "is nil");
+    v.child(n->body, "body", -1, "is nil");
 }
 
 static bool handleAstStatRepeatMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstStatRepeat*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstStatRepeat.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstStatRepeat.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->hasSemicolon)>, bool>, "schema type of AstStatRepeat.hasSemicolon does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->condition)>, Luau::AstExpr*>, "schema type of AstStatRepeat.condition does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->body)>, Luau::AstStatBlock*>, "schema type of AstStatRepeat.body does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::HasSemicolon:
-        pushReflectValue(L, handle.doc, n->hasSemicolon);
+        lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        readReflectValue(L, handle.doc, 2, n->hasSemicolon);
+        beginReflectWrite(L, handle.doc, false);
+        n->hasSemicolon = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Condition:
-        pushReflectValue(L, handle.doc, n->condition);
+        pushAstNode(L, handle.doc, n->condition);
         return true;
     case ReflectAtom::SetCondition:
-        readReflectValue(L, handle.doc, 2, n->condition);
+        beginReflectWrite(L, handle.doc, true);
+        n->condition = readNode<Luau::AstExpr>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Body:
-        pushReflectValue(L, handle.doc, n->body);
+        pushAstNode(L, handle.doc, n->body);
         return true;
     case ReflectAtom::SetBody:
-        readReflectValue(L, handle.doc, 2, n->body);
+        beginReflectWrite(L, handle.doc, true);
+        n->body = readNode<Luau::AstStatBlock>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -408,39 +462,47 @@ static void collectAstStatRepeatProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstStatRepeat*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->hasSemicolon);
+    lua_pushboolean(L, n->hasSemicolon);
     lua_setfield(L, -2, "hasSemicolon");
-    pushReflectValue(L, handle.doc, n->condition);
+    pushAstNode(L, handle.doc, n->condition);
     lua_setfield(L, -2, "condition");
-    pushReflectValue(L, handle.doc, n->body);
+    pushAstNode(L, handle.doc, n->body);
     lua_setfield(L, -2, "body");
 }
 
-static Luau::AstNode* createDefaultAstStatBreak(Luau::Allocator& alloc)
+static void validateAstStatRepeat(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstStatBreak>(Luau::Location());
+    auto* n = static_cast<Luau::AstStatRepeat*>(node);
+    (void)n;
+    v.child(n->condition, "condition", -1, "is nil");
+    v.child(n->body, "body", -1, "is nil");
 }
 
 static bool handleAstStatBreakMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstStatBreak*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstStatBreak.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstStatBreak.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->hasSemicolon)>, bool>, "schema type of AstStatBreak.hasSemicolon does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::HasSemicolon:
-        pushReflectValue(L, handle.doc, n->hasSemicolon);
+        lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        readReflectValue(L, handle.doc, 2, n->hasSemicolon);
+        beginReflectWrite(L, handle.doc, false);
+        n->hasSemicolon = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -452,35 +514,41 @@ static void collectAstStatBreakProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstStatBreak*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->hasSemicolon);
+    lua_pushboolean(L, n->hasSemicolon);
     lua_setfield(L, -2, "hasSemicolon");
 }
 
-static Luau::AstNode* createDefaultAstStatContinue(Luau::Allocator& alloc)
+static void validateAstStatBreak(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstStatContinue>(Luau::Location());
+    auto* n = static_cast<Luau::AstStatBreak*>(node);
+    (void)n;
 }
 
 static bool handleAstStatContinueMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstStatContinue*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstStatContinue.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstStatContinue.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->hasSemicolon)>, bool>, "schema type of AstStatContinue.hasSemicolon does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::HasSemicolon:
-        pushReflectValue(L, handle.doc, n->hasSemicolon);
+        lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        readReflectValue(L, handle.doc, 2, n->hasSemicolon);
+        beginReflectWrite(L, handle.doc, false);
+        n->hasSemicolon = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -492,42 +560,50 @@ static void collectAstStatContinueProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstStatContinue*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->hasSemicolon);
+    lua_pushboolean(L, n->hasSemicolon);
     lua_setfield(L, -2, "hasSemicolon");
 }
 
-static Luau::AstNode* createDefaultAstStatReturn(Luau::Allocator& alloc)
+static void validateAstStatContinue(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstStatReturn>(Luau::Location(), Luau::AstArray<Luau::AstExpr*>{nullptr, 0}, Luau::Location());
+    auto* n = static_cast<Luau::AstStatContinue*>(node);
+    (void)n;
 }
 
 static bool handleAstStatReturnMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstStatReturn*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstStatReturn.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstStatReturn.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->hasSemicolon)>, bool>, "schema type of AstStatReturn.hasSemicolon does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->list)>, Luau::AstArray<Luau::AstExpr*>>, "schema type of AstStatReturn.list does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::HasSemicolon:
-        pushReflectValue(L, handle.doc, n->hasSemicolon);
+        lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        readReflectValue(L, handle.doc, 2, n->hasSemicolon);
+        beginReflectWrite(L, handle.doc, false);
+        n->hasSemicolon = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::List:
-        pushReflectValue(L, handle.doc, n->list);
+        pushNodeArray(L, handle.doc, n->list);
         return true;
     case ReflectAtom::SetList:
-        readReflectValue(L, handle.doc, 2, n->list);
+        beginReflectWrite(L, handle.doc, true);
+        n->list = readNodeArray<Luau::AstExpr>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -539,44 +615,56 @@ static void collectAstStatReturnProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstStatReturn*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->hasSemicolon);
+    lua_pushboolean(L, n->hasSemicolon);
     lua_setfield(L, -2, "hasSemicolon");
-    pushReflectValue(L, handle.doc, n->list);
+    pushNodeArray(L, handle.doc, n->list);
     lua_setfield(L, -2, "list");
 }
 
-static Luau::AstNode* createDefaultAstStatExpr(Luau::Allocator& alloc)
+static void validateAstStatReturn(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstStatExpr>(Luau::Location(), nullptr);
+    auto* n = static_cast<Luau::AstStatReturn*>(node);
+    (void)n;
+    for (size_t i = 0; i < n->list.size; i++)
+    {
+        v.child(n->list.data[i], "list", int(i), "is nil");
+    }
 }
 
 static bool handleAstStatExprMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstStatExpr*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstStatExpr.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstStatExpr.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->hasSemicolon)>, bool>, "schema type of AstStatExpr.hasSemicolon does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->expr)>, Luau::AstExpr*>, "schema type of AstStatExpr.expr does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::HasSemicolon:
-        pushReflectValue(L, handle.doc, n->hasSemicolon);
+        lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        readReflectValue(L, handle.doc, 2, n->hasSemicolon);
+        beginReflectWrite(L, handle.doc, false);
+        n->hasSemicolon = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Expr:
-        pushReflectValue(L, handle.doc, n->expr);
+        pushAstNode(L, handle.doc, n->expr);
         return true;
     case ReflectAtom::SetExpr:
-        readReflectValue(L, handle.doc, 2, n->expr);
+        beginReflectWrite(L, handle.doc, true);
+        n->expr = readNode<Luau::AstExpr>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -588,65 +676,80 @@ static void collectAstStatExprProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstStatExpr*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->hasSemicolon);
+    lua_pushboolean(L, n->hasSemicolon);
     lua_setfield(L, -2, "hasSemicolon");
-    pushReflectValue(L, handle.doc, n->expr);
+    pushAstNode(L, handle.doc, n->expr);
     lua_setfield(L, -2, "expr");
 }
 
-static Luau::AstNode* createDefaultAstStatLocal(Luau::Allocator& alloc)
+static void validateAstStatExpr(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstStatLocal>(Luau::Location(), Luau::AstArray<Luau::AstLocal*>{nullptr, 0}, Luau::AstArray<Luau::AstExpr*>{nullptr, 0}, std::nullopt, false);
+    auto* n = static_cast<Luau::AstStatExpr*>(node);
+    (void)n;
+    v.child(n->expr, "expr", -1, "is nil");
 }
 
 static bool handleAstStatLocalMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstStatLocal*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstStatLocal.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstStatLocal.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->hasSemicolon)>, bool>, "schema type of AstStatLocal.hasSemicolon does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->isConst)>, bool>, "schema type of AstStatLocal.isConst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->isExported)>, bool>, "schema type of AstStatLocal.exported does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->vars)>, Luau::AstArray<Luau::AstLocal*>>, "schema type of AstStatLocal.vars does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->values)>, Luau::AstArray<Luau::AstExpr*>>, "schema type of AstStatLocal.values does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::HasSemicolon:
-        pushReflectValue(L, handle.doc, n->hasSemicolon);
+        lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        readReflectValue(L, handle.doc, 2, n->hasSemicolon);
+        beginReflectWrite(L, handle.doc, false);
+        n->hasSemicolon = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::IsConst:
-        pushReflectValue(L, handle.doc, n->isConst);
+        lua_pushboolean(L, n->isConst);
         return true;
     case ReflectAtom::SetIsConst:
-        readReflectValue(L, handle.doc, 2, n->isConst);
+        beginReflectWrite(L, handle.doc, false);
+        n->isConst = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Exported:
-        pushReflectValue(L, handle.doc, n->isExported);
+        lua_pushboolean(L, n->isExported);
         return true;
     case ReflectAtom::SetExported:
-        readReflectValue(L, handle.doc, 2, n->isExported);
+        beginReflectWrite(L, handle.doc, false);
+        n->isExported = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Vars:
-        pushReflectValue(L, handle.doc, n->vars);
+        pushLocalArray(L, handle.doc, n->vars);
         return true;
     case ReflectAtom::SetVars:
-        readReflectValue(L, handle.doc, 2, n->vars);
+        beginReflectWrite(L, handle.doc, true);
+        n->vars = readLocalArray(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Values:
-        pushReflectValue(L, handle.doc, n->values);
+        pushNodeArray(L, handle.doc, n->values);
         return true;
     case ReflectAtom::SetValues:
-        readReflectValue(L, handle.doc, 2, n->values);
+        beginReflectWrite(L, handle.doc, true);
+        n->values = readNodeArray<Luau::AstExpr>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -658,85 +761,111 @@ static void collectAstStatLocalProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstStatLocal*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->hasSemicolon);
+    lua_pushboolean(L, n->hasSemicolon);
     lua_setfield(L, -2, "hasSemicolon");
-    pushReflectValue(L, handle.doc, n->isConst);
+    lua_pushboolean(L, n->isConst);
     lua_setfield(L, -2, "isConst");
-    pushReflectValue(L, handle.doc, n->isExported);
+    lua_pushboolean(L, n->isExported);
     lua_setfield(L, -2, "exported");
-    pushReflectValue(L, handle.doc, n->vars);
+    pushLocalArray(L, handle.doc, n->vars);
     lua_setfield(L, -2, "vars");
-    pushReflectValue(L, handle.doc, n->values);
+    pushNodeArray(L, handle.doc, n->values);
     lua_setfield(L, -2, "values");
 }
 
-static Luau::AstNode* createDefaultAstStatFor(Luau::Allocator& alloc)
+static void validateAstStatLocal(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstStatFor>(Luau::Location(), nullptr, nullptr, nullptr, nullptr, nullptr, false, Luau::Location(), Luau::Location());
+    auto* n = static_cast<Luau::AstStatLocal*>(node);
+    (void)n;
+    for (size_t i = 0; i < n->vars.size; i++)
+    {
+        v.local(n->vars.data[i], "vars", int(i), "is nil");
+    }
+    for (size_t i = 0; i < n->values.size; i++)
+    {
+        v.child(n->values.data[i], "values", int(i), "is nil");
+    }
 }
 
 static bool handleAstStatForMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstStatFor*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstStatFor.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstStatFor.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->hasSemicolon)>, bool>, "schema type of AstStatFor.hasSemicolon does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->hasDo)>, bool>, "schema type of AstStatFor.hasDo does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->var)>, Luau::AstLocal*>, "schema type of AstStatFor.var does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->from)>, Luau::AstExpr*>, "schema type of AstStatFor.from does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->to)>, Luau::AstExpr*>, "schema type of AstStatFor.to does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->step)>, Luau::AstExpr*>, "schema type of AstStatFor.step does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->body)>, Luau::AstStatBlock*>, "schema type of AstStatFor.body does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::HasSemicolon:
-        pushReflectValue(L, handle.doc, n->hasSemicolon);
+        lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        readReflectValue(L, handle.doc, 2, n->hasSemicolon);
+        beginReflectWrite(L, handle.doc, false);
+        n->hasSemicolon = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasDo:
-        pushReflectValue(L, handle.doc, n->hasDo);
+        lua_pushboolean(L, n->hasDo);
         return true;
     case ReflectAtom::SetHasDo:
-        readReflectValue(L, handle.doc, 2, n->hasDo);
+        beginReflectWrite(L, handle.doc, false);
+        n->hasDo = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Var:
-        pushReflectValue(L, handle.doc, n->var);
+        pushAstLocal(L, handle.doc, n->var);
         return true;
     case ReflectAtom::SetVar:
-        readReflectValue(L, handle.doc, 2, n->var);
+        beginReflectWrite(L, handle.doc, true);
+        n->var = readLocal(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::From:
-        pushReflectValue(L, handle.doc, n->from);
+        pushAstNode(L, handle.doc, n->from);
         return true;
     case ReflectAtom::SetFrom:
-        readReflectValue(L, handle.doc, 2, n->from);
+        beginReflectWrite(L, handle.doc, true);
+        n->from = readNode<Luau::AstExpr>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::To:
-        pushReflectValue(L, handle.doc, n->to);
+        pushAstNode(L, handle.doc, n->to);
         return true;
     case ReflectAtom::SetTo:
-        readReflectValue(L, handle.doc, 2, n->to);
+        beginReflectWrite(L, handle.doc, true);
+        n->to = readNode<Luau::AstExpr>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Step:
-        pushReflectValue(L, handle.doc, n->step);
+        pushAstNode(L, handle.doc, n->step);
         return true;
     case ReflectAtom::SetStep:
-        readReflectValue(L, handle.doc, 2, n->step);
+        beginReflectWrite(L, handle.doc, true);
+        n->step = readNode<Luau::AstExpr>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Body:
-        pushReflectValue(L, handle.doc, n->body);
+        pushAstNode(L, handle.doc, n->body);
         return true;
     case ReflectAtom::SetBody:
-        readReflectValue(L, handle.doc, 2, n->body);
+        beginReflectWrite(L, handle.doc, true);
+        n->body = readNode<Luau::AstStatBlock>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -748,82 +877,103 @@ static void collectAstStatForProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstStatFor*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->hasSemicolon);
+    lua_pushboolean(L, n->hasSemicolon);
     lua_setfield(L, -2, "hasSemicolon");
-    pushReflectValue(L, handle.doc, n->hasDo);
+    lua_pushboolean(L, n->hasDo);
     lua_setfield(L, -2, "hasDo");
-    pushReflectValue(L, handle.doc, n->var);
+    pushAstLocal(L, handle.doc, n->var);
     lua_setfield(L, -2, "var");
-    pushReflectValue(L, handle.doc, n->from);
+    pushAstNode(L, handle.doc, n->from);
     lua_setfield(L, -2, "from");
-    pushReflectValue(L, handle.doc, n->to);
+    pushAstNode(L, handle.doc, n->to);
     lua_setfield(L, -2, "to");
-    pushReflectValue(L, handle.doc, n->step);
+    pushAstNode(L, handle.doc, n->step);
     lua_setfield(L, -2, "step");
-    pushReflectValue(L, handle.doc, n->body);
+    pushAstNode(L, handle.doc, n->body);
     lua_setfield(L, -2, "body");
 }
 
-static Luau::AstNode* createDefaultAstStatForIn(Luau::Allocator& alloc)
+static void validateAstStatFor(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstStatForIn>(Luau::Location(), Luau::AstArray<Luau::AstLocal*>{nullptr, 0}, Luau::AstArray<Luau::AstExpr*>{nullptr, 0}, nullptr, false, Luau::Location(), false, Luau::Location(), Luau::Location());
+    auto* n = static_cast<Luau::AstStatFor*>(node);
+    (void)n;
+    v.local(n->var, "var", -1, "is nil");
+    v.child(n->from, "from", -1, "is nil");
+    v.child(n->to, "to", -1, "is nil");
+    v.child(n->step, "step", -1, nullptr);
+    v.child(n->body, "body", -1, "is nil");
 }
 
 static bool handleAstStatForInMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstStatForIn*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstStatForIn.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstStatForIn.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->hasSemicolon)>, bool>, "schema type of AstStatForIn.hasSemicolon does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->hasIn)>, bool>, "schema type of AstStatForIn.hasIn does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->hasDo)>, bool>, "schema type of AstStatForIn.hasDo does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->vars)>, Luau::AstArray<Luau::AstLocal*>>, "schema type of AstStatForIn.vars does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->values)>, Luau::AstArray<Luau::AstExpr*>>, "schema type of AstStatForIn.values does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->body)>, Luau::AstStatBlock*>, "schema type of AstStatForIn.body does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::HasSemicolon:
-        pushReflectValue(L, handle.doc, n->hasSemicolon);
+        lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        readReflectValue(L, handle.doc, 2, n->hasSemicolon);
+        beginReflectWrite(L, handle.doc, false);
+        n->hasSemicolon = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasIn:
-        pushReflectValue(L, handle.doc, n->hasIn);
+        lua_pushboolean(L, n->hasIn);
         return true;
     case ReflectAtom::SetHasIn:
-        readReflectValue(L, handle.doc, 2, n->hasIn);
+        beginReflectWrite(L, handle.doc, false);
+        n->hasIn = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasDo:
-        pushReflectValue(L, handle.doc, n->hasDo);
+        lua_pushboolean(L, n->hasDo);
         return true;
     case ReflectAtom::SetHasDo:
-        readReflectValue(L, handle.doc, 2, n->hasDo);
+        beginReflectWrite(L, handle.doc, false);
+        n->hasDo = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Vars:
-        pushReflectValue(L, handle.doc, n->vars);
+        pushLocalArray(L, handle.doc, n->vars);
         return true;
     case ReflectAtom::SetVars:
-        readReflectValue(L, handle.doc, 2, n->vars);
+        beginReflectWrite(L, handle.doc, true);
+        n->vars = readLocalArray(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Values:
-        pushReflectValue(L, handle.doc, n->values);
+        pushNodeArray(L, handle.doc, n->values);
         return true;
     case ReflectAtom::SetValues:
-        readReflectValue(L, handle.doc, 2, n->values);
+        beginReflectWrite(L, handle.doc, true);
+        n->values = readNodeArray<Luau::AstExpr>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Body:
-        pushReflectValue(L, handle.doc, n->body);
+        pushAstNode(L, handle.doc, n->body);
         return true;
     case ReflectAtom::SetBody:
-        readReflectValue(L, handle.doc, 2, n->body);
+        beginReflectWrite(L, handle.doc, true);
+        n->body = readNode<Luau::AstStatBlock>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -835,59 +985,78 @@ static void collectAstStatForInProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstStatForIn*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->hasSemicolon);
+    lua_pushboolean(L, n->hasSemicolon);
     lua_setfield(L, -2, "hasSemicolon");
-    pushReflectValue(L, handle.doc, n->hasIn);
+    lua_pushboolean(L, n->hasIn);
     lua_setfield(L, -2, "hasIn");
-    pushReflectValue(L, handle.doc, n->hasDo);
+    lua_pushboolean(L, n->hasDo);
     lua_setfield(L, -2, "hasDo");
-    pushReflectValue(L, handle.doc, n->vars);
+    pushLocalArray(L, handle.doc, n->vars);
     lua_setfield(L, -2, "vars");
-    pushReflectValue(L, handle.doc, n->values);
+    pushNodeArray(L, handle.doc, n->values);
     lua_setfield(L, -2, "values");
-    pushReflectValue(L, handle.doc, n->body);
+    pushAstNode(L, handle.doc, n->body);
     lua_setfield(L, -2, "body");
 }
 
-static Luau::AstNode* createDefaultAstStatAssign(Luau::Allocator& alloc)
+static void validateAstStatForIn(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstStatAssign>(Luau::Location(), Luau::AstArray<Luau::AstExpr*>{nullptr, 0}, Luau::AstArray<Luau::AstExpr*>{nullptr, 0});
+    auto* n = static_cast<Luau::AstStatForIn*>(node);
+    (void)n;
+    for (size_t i = 0; i < n->vars.size; i++)
+    {
+        v.local(n->vars.data[i], "vars", int(i), "is nil");
+    }
+    for (size_t i = 0; i < n->values.size; i++)
+    {
+        v.child(n->values.data[i], "values", int(i), "is nil");
+    }
+    v.child(n->body, "body", -1, "is nil");
 }
 
 static bool handleAstStatAssignMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstStatAssign*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstStatAssign.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstStatAssign.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->hasSemicolon)>, bool>, "schema type of AstStatAssign.hasSemicolon does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->vars)>, Luau::AstArray<Luau::AstExpr*>>, "schema type of AstStatAssign.vars does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->values)>, Luau::AstArray<Luau::AstExpr*>>, "schema type of AstStatAssign.values does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::HasSemicolon:
-        pushReflectValue(L, handle.doc, n->hasSemicolon);
+        lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        readReflectValue(L, handle.doc, 2, n->hasSemicolon);
+        beginReflectWrite(L, handle.doc, false);
+        n->hasSemicolon = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Vars:
-        pushReflectValue(L, handle.doc, n->vars);
+        pushNodeArray(L, handle.doc, n->vars);
         return true;
     case ReflectAtom::SetVars:
-        readReflectValue(L, handle.doc, 2, n->vars);
+        beginReflectWrite(L, handle.doc, true);
+        n->vars = readNodeArray<Luau::AstExpr>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Values:
-        pushReflectValue(L, handle.doc, n->values);
+        pushNodeArray(L, handle.doc, n->values);
         return true;
     case ReflectAtom::SetValues:
-        readReflectValue(L, handle.doc, 2, n->values);
+        beginReflectWrite(L, handle.doc, true);
+        n->values = readNodeArray<Luau::AstExpr>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -899,60 +1068,80 @@ static void collectAstStatAssignProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstStatAssign*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->hasSemicolon);
+    lua_pushboolean(L, n->hasSemicolon);
     lua_setfield(L, -2, "hasSemicolon");
-    pushReflectValue(L, handle.doc, n->vars);
+    pushNodeArray(L, handle.doc, n->vars);
     lua_setfield(L, -2, "vars");
-    pushReflectValue(L, handle.doc, n->values);
+    pushNodeArray(L, handle.doc, n->values);
     lua_setfield(L, -2, "values");
 }
 
-static Luau::AstNode* createDefaultAstStatCompoundAssign(Luau::Allocator& alloc)
+static void validateAstStatAssign(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstStatCompoundAssign>(Luau::Location(), Luau::AstExprBinary::Op::Add, nullptr, nullptr);
+    auto* n = static_cast<Luau::AstStatAssign*>(node);
+    (void)n;
+    for (size_t i = 0; i < n->vars.size; i++)
+    {
+        v.child(n->vars.data[i], "vars", int(i), "is nil");
+    }
+    for (size_t i = 0; i < n->values.size; i++)
+    {
+        v.child(n->values.data[i], "values", int(i), "is nil");
+    }
 }
 
 static bool handleAstStatCompoundAssignMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstStatCompoundAssign*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstStatCompoundAssign.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstStatCompoundAssign.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->hasSemicolon)>, bool>, "schema type of AstStatCompoundAssign.hasSemicolon does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->op)>, Luau::AstExprBinary::Op>, "schema type of AstStatCompoundAssign.op does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->var)>, Luau::AstExpr*>, "schema type of AstStatCompoundAssign.var does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->value)>, Luau::AstExpr*>, "schema type of AstStatCompoundAssign.value does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::HasSemicolon:
-        pushReflectValue(L, handle.doc, n->hasSemicolon);
+        lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        readReflectValue(L, handle.doc, 2, n->hasSemicolon);
+        beginReflectWrite(L, handle.doc, false);
+        n->hasSemicolon = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Op:
-        pushReflectValue(L, handle.doc, n->op);
+        lua_pushstring(L, toString(n->op).c_str());
         return true;
     case ReflectAtom::SetOp:
-        readReflectValue(L, handle.doc, 2, n->op);
+        beginReflectWrite(L, handle.doc, false);
+        n->op = readEnum<Luau::AstExprBinary::Op>(L, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Var:
-        pushReflectValue(L, handle.doc, n->var);
+        pushAstNode(L, handle.doc, n->var);
         return true;
     case ReflectAtom::SetVar:
-        readReflectValue(L, handle.doc, 2, n->var);
+        beginReflectWrite(L, handle.doc, true);
+        n->var = readNode<Luau::AstExpr>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Value:
-        pushReflectValue(L, handle.doc, n->value);
+        pushAstNode(L, handle.doc, n->value);
         return true;
     case ReflectAtom::SetValue:
-        readReflectValue(L, handle.doc, 2, n->value);
+        beginReflectWrite(L, handle.doc, true);
+        n->value = readNode<Luau::AstExpr>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -964,55 +1153,67 @@ static void collectAstStatCompoundAssignProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstStatCompoundAssign*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->hasSemicolon);
+    lua_pushboolean(L, n->hasSemicolon);
     lua_setfield(L, -2, "hasSemicolon");
-    pushReflectValue(L, handle.doc, n->op);
+    lua_pushstring(L, toString(n->op).c_str());
     lua_setfield(L, -2, "op");
-    pushReflectValue(L, handle.doc, n->var);
+    pushAstNode(L, handle.doc, n->var);
     lua_setfield(L, -2, "var");
-    pushReflectValue(L, handle.doc, n->value);
+    pushAstNode(L, handle.doc, n->value);
     lua_setfield(L, -2, "value");
 }
 
-static Luau::AstNode* createDefaultAstStatFunction(Luau::Allocator& alloc)
+static void validateAstStatCompoundAssign(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstStatFunction>(Luau::Location(), nullptr, nullptr, Luau::Location());
+    auto* n = static_cast<Luau::AstStatCompoundAssign*>(node);
+    (void)n;
+    v.child(n->var, "var", -1, "is nil");
+    v.child(n->value, "value", -1, "is nil");
 }
 
 static bool handleAstStatFunctionMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstStatFunction*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstStatFunction.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstStatFunction.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->hasSemicolon)>, bool>, "schema type of AstStatFunction.hasSemicolon does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->name)>, Luau::AstExpr*>, "schema type of AstStatFunction.name does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->func)>, Luau::AstExprFunction*>, "schema type of AstStatFunction.func does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::HasSemicolon:
-        pushReflectValue(L, handle.doc, n->hasSemicolon);
+        lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        readReflectValue(L, handle.doc, 2, n->hasSemicolon);
+        beginReflectWrite(L, handle.doc, false);
+        n->hasSemicolon = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Name:
-        pushReflectValue(L, handle.doc, n->name);
+        pushAstNode(L, handle.doc, n->name);
         return true;
     case ReflectAtom::SetName:
-        readReflectValue(L, handle.doc, 2, n->name);
+        beginReflectWrite(L, handle.doc, true);
+        n->name = readNode<Luau::AstExpr>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Func:
-        pushReflectValue(L, handle.doc, n->func);
+        pushAstNode(L, handle.doc, n->func);
         return true;
     case ReflectAtom::SetFunc:
-        readReflectValue(L, handle.doc, 2, n->func);
+        beginReflectWrite(L, handle.doc, true);
+        n->func = readNode<Luau::AstExprFunction>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -1024,60 +1225,74 @@ static void collectAstStatFunctionProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstStatFunction*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->hasSemicolon);
+    lua_pushboolean(L, n->hasSemicolon);
     lua_setfield(L, -2, "hasSemicolon");
-    pushReflectValue(L, handle.doc, n->name);
+    pushAstNode(L, handle.doc, n->name);
     lua_setfield(L, -2, "name");
-    pushReflectValue(L, handle.doc, n->func);
+    pushAstNode(L, handle.doc, n->func);
     lua_setfield(L, -2, "func");
 }
 
-static Luau::AstNode* createDefaultAstStatLocalFunction(Luau::Allocator& alloc)
+static void validateAstStatFunction(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstStatLocalFunction>(Luau::Location(), nullptr, nullptr, false, Luau::Position::missing(), Luau::Location(), Luau::Location());
+    auto* n = static_cast<Luau::AstStatFunction*>(node);
+    (void)n;
+    v.child(n->name, "name", -1, "is nil");
+    v.child(n->func, "func", -1, "is nil");
 }
 
 static bool handleAstStatLocalFunctionMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstStatLocalFunction*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstStatLocalFunction.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstStatLocalFunction.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->hasSemicolon)>, bool>, "schema type of AstStatLocalFunction.hasSemicolon does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->isConst)>, bool>, "schema type of AstStatLocalFunction.isConst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->name)>, Luau::AstLocal*>, "schema type of AstStatLocalFunction.name does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->func)>, Luau::AstExprFunction*>, "schema type of AstStatLocalFunction.func does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::HasSemicolon:
-        pushReflectValue(L, handle.doc, n->hasSemicolon);
+        lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        readReflectValue(L, handle.doc, 2, n->hasSemicolon);
+        beginReflectWrite(L, handle.doc, false);
+        n->hasSemicolon = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::IsConst:
-        pushReflectValue(L, handle.doc, n->isConst);
+        lua_pushboolean(L, n->isConst);
         return true;
     case ReflectAtom::SetIsConst:
-        readReflectValue(L, handle.doc, 2, n->isConst);
+        beginReflectWrite(L, handle.doc, false);
+        n->isConst = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Name:
-        pushReflectValue(L, handle.doc, n->name);
+        pushAstLocal(L, handle.doc, n->name);
         return true;
     case ReflectAtom::SetName:
-        readReflectValue(L, handle.doc, 2, n->name);
+        beginReflectWrite(L, handle.doc, true);
+        n->name = readLocal(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Func:
-        pushReflectValue(L, handle.doc, n->func);
+        pushAstNode(L, handle.doc, n->func);
         return true;
     case ReflectAtom::SetFunc:
-        readReflectValue(L, handle.doc, 2, n->func);
+        beginReflectWrite(L, handle.doc, true);
+        n->func = readNode<Luau::AstExprFunction>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -1089,76 +1304,94 @@ static void collectAstStatLocalFunctionProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstStatLocalFunction*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->hasSemicolon);
+    lua_pushboolean(L, n->hasSemicolon);
     lua_setfield(L, -2, "hasSemicolon");
-    pushReflectValue(L, handle.doc, n->isConst);
+    lua_pushboolean(L, n->isConst);
     lua_setfield(L, -2, "isConst");
-    pushReflectValue(L, handle.doc, n->name);
+    pushAstLocal(L, handle.doc, n->name);
     lua_setfield(L, -2, "name");
-    pushReflectValue(L, handle.doc, n->func);
+    pushAstNode(L, handle.doc, n->func);
     lua_setfield(L, -2, "func");
 }
 
-static Luau::AstNode* createDefaultAstStatTypeAlias(Luau::Allocator& alloc)
+static void validateAstStatLocalFunction(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstStatTypeAlias>(Luau::Location(), Luau::AstName(), Luau::Location(), Luau::AstArray<Luau::AstGenericType*>{nullptr, 0}, Luau::AstArray<Luau::AstGenericTypePack*>{nullptr, 0}, nullptr, false, Luau::Location());
+    auto* n = static_cast<Luau::AstStatLocalFunction*>(node);
+    (void)n;
+    v.local(n->name, "name", -1, "is nil");
+    v.child(n->func, "func", -1, "is nil");
 }
 
 static bool handleAstStatTypeAliasMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstStatTypeAlias*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstStatTypeAlias.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstStatTypeAlias.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->hasSemicolon)>, bool>, "schema type of AstStatTypeAlias.hasSemicolon does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->name)>, Luau::AstName>, "schema type of AstStatTypeAlias.name does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->exported)>, bool>, "schema type of AstStatTypeAlias.exported does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->type)>, Luau::AstType*>, "schema type of AstStatTypeAlias.type does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->generics)>, Luau::AstArray<Luau::AstGenericType*>>, "schema type of AstStatTypeAlias.generics does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->genericPacks)>, Luau::AstArray<Luau::AstGenericTypePack*>>, "schema type of AstStatTypeAlias.genericPacks does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::HasSemicolon:
-        pushReflectValue(L, handle.doc, n->hasSemicolon);
+        lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        readReflectValue(L, handle.doc, 2, n->hasSemicolon);
+        beginReflectWrite(L, handle.doc, false);
+        n->hasSemicolon = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Name:
-        pushReflectValue(L, handle.doc, n->name);
+        n->name.value ? lua_pushstring(L, n->name.value) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetName:
-        readReflectValue(L, handle.doc, 2, n->name);
+        beginReflectWrite(L, handle.doc, false);
+        n->name = readName(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Exported:
-        pushReflectValue(L, handle.doc, n->exported);
+        lua_pushboolean(L, n->exported);
         return true;
     case ReflectAtom::SetExported:
-        readReflectValue(L, handle.doc, 2, n->exported);
+        beginReflectWrite(L, handle.doc, false);
+        n->exported = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Type:
-        pushReflectValue(L, handle.doc, n->type);
+        pushAstNode(L, handle.doc, n->type);
         return true;
     case ReflectAtom::SetType:
-        readReflectValue(L, handle.doc, 2, n->type);
+        beginReflectWrite(L, handle.doc, true);
+        n->type = readNode<Luau::AstType>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Generics:
-        pushReflectValue(L, handle.doc, n->generics);
+        pushNodeArray(L, handle.doc, n->generics);
         return true;
     case ReflectAtom::SetGenerics:
-        readReflectValue(L, handle.doc, 2, n->generics);
+        beginReflectWrite(L, handle.doc, true);
+        n->generics = readNodeArray<Luau::AstGenericType>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::GenericPacks:
-        pushReflectValue(L, handle.doc, n->genericPacks);
+        pushNodeArray(L, handle.doc, n->genericPacks);
         return true;
     case ReflectAtom::SetGenericPacks:
-        readReflectValue(L, handle.doc, 2, n->genericPacks);
+        beginReflectWrite(L, handle.doc, true);
+        n->genericPacks = readNodeArray<Luau::AstGenericTypePack>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -1170,73 +1403,97 @@ static void collectAstStatTypeAliasProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstStatTypeAlias*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->hasSemicolon);
+    lua_pushboolean(L, n->hasSemicolon);
     lua_setfield(L, -2, "hasSemicolon");
-    pushReflectValue(L, handle.doc, n->name);
+    n->name.value ? lua_pushstring(L, n->name.value) : lua_pushnil(L);
     lua_setfield(L, -2, "name");
-    pushReflectValue(L, handle.doc, n->exported);
+    lua_pushboolean(L, n->exported);
     lua_setfield(L, -2, "exported");
-    pushReflectValue(L, handle.doc, n->type);
+    pushAstNode(L, handle.doc, n->type);
     lua_setfield(L, -2, "type");
-    pushReflectValue(L, handle.doc, n->generics);
+    pushNodeArray(L, handle.doc, n->generics);
     lua_setfield(L, -2, "generics");
-    pushReflectValue(L, handle.doc, n->genericPacks);
+    pushNodeArray(L, handle.doc, n->genericPacks);
     lua_setfield(L, -2, "genericPacks");
 }
 
-static Luau::AstNode* createDefaultAstStatTypeFunction(Luau::Allocator& alloc)
+static void validateAstStatTypeAlias(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstStatTypeFunction>(Luau::Location(), Luau::AstName(), Luau::Location(), nullptr, false, false);
+    auto* n = static_cast<Luau::AstStatTypeAlias*>(node);
+    (void)n;
+    v.name(n->name, "name", -1, "is nil");
+    v.child(n->type, "type", -1, "is nil");
+    for (size_t i = 0; i < n->generics.size; i++)
+    {
+        v.child(n->generics.data[i], "generics", int(i), "is nil");
+    }
+    for (size_t i = 0; i < n->genericPacks.size; i++)
+    {
+        v.child(n->genericPacks.data[i], "genericPacks", int(i), "is nil");
+    }
 }
 
 static bool handleAstStatTypeFunctionMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstStatTypeFunction*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstStatTypeFunction.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstStatTypeFunction.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->hasSemicolon)>, bool>, "schema type of AstStatTypeFunction.hasSemicolon does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->name)>, Luau::AstName>, "schema type of AstStatTypeFunction.name does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->exported)>, bool>, "schema type of AstStatTypeFunction.exported does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->hasErrors)>, bool>, "schema type of AstStatTypeFunction.hasErrors does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->body)>, Luau::AstExprFunction*>, "schema type of AstStatTypeFunction.body does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::HasSemicolon:
-        pushReflectValue(L, handle.doc, n->hasSemicolon);
+        lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        readReflectValue(L, handle.doc, 2, n->hasSemicolon);
+        beginReflectWrite(L, handle.doc, false);
+        n->hasSemicolon = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Name:
-        pushReflectValue(L, handle.doc, n->name);
+        n->name.value ? lua_pushstring(L, n->name.value) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetName:
-        readReflectValue(L, handle.doc, 2, n->name);
+        beginReflectWrite(L, handle.doc, false);
+        n->name = readName(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Exported:
-        pushReflectValue(L, handle.doc, n->exported);
+        lua_pushboolean(L, n->exported);
         return true;
     case ReflectAtom::SetExported:
-        readReflectValue(L, handle.doc, 2, n->exported);
+        beginReflectWrite(L, handle.doc, false);
+        n->exported = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasErrors:
-        pushReflectValue(L, handle.doc, n->hasErrors);
+        lua_pushboolean(L, n->hasErrors);
         return true;
     case ReflectAtom::SetHasErrors:
-        readReflectValue(L, handle.doc, 2, n->hasErrors);
+        beginReflectWrite(L, handle.doc, false);
+        n->hasErrors = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Body:
-        pushReflectValue(L, handle.doc, n->body);
+        pushAstNode(L, handle.doc, n->body);
         return true;
     case ReflectAtom::SetBody:
-        readReflectValue(L, handle.doc, 2, n->body);
+        beginReflectWrite(L, handle.doc, true);
+        n->body = readNode<Luau::AstExprFunction>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -1248,57 +1505,69 @@ static void collectAstStatTypeFunctionProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstStatTypeFunction*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->hasSemicolon);
+    lua_pushboolean(L, n->hasSemicolon);
     lua_setfield(L, -2, "hasSemicolon");
-    pushReflectValue(L, handle.doc, n->name);
+    n->name.value ? lua_pushstring(L, n->name.value) : lua_pushnil(L);
     lua_setfield(L, -2, "name");
-    pushReflectValue(L, handle.doc, n->exported);
+    lua_pushboolean(L, n->exported);
     lua_setfield(L, -2, "exported");
-    pushReflectValue(L, handle.doc, n->hasErrors);
+    lua_pushboolean(L, n->hasErrors);
     lua_setfield(L, -2, "hasErrors");
-    pushReflectValue(L, handle.doc, n->body);
+    pushAstNode(L, handle.doc, n->body);
     lua_setfield(L, -2, "body");
 }
 
-static Luau::AstNode* createDefaultAstStatDeclareGlobal(Luau::Allocator& alloc)
+static void validateAstStatTypeFunction(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstStatDeclareGlobal>(Luau::Location(), Luau::AstName(), Luau::Location(), nullptr, Luau::Location());
+    auto* n = static_cast<Luau::AstStatTypeFunction*>(node);
+    (void)n;
+    v.name(n->name, "name", -1, "is nil");
+    v.child(n->body, "body", -1, "is nil");
 }
 
 static bool handleAstStatDeclareGlobalMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstStatDeclareGlobal*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstStatDeclareGlobal.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstStatDeclareGlobal.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->hasSemicolon)>, bool>, "schema type of AstStatDeclareGlobal.hasSemicolon does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->name)>, Luau::AstName>, "schema type of AstStatDeclareGlobal.name does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->type)>, Luau::AstType*>, "schema type of AstStatDeclareGlobal.type does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::HasSemicolon:
-        pushReflectValue(L, handle.doc, n->hasSemicolon);
+        lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        readReflectValue(L, handle.doc, 2, n->hasSemicolon);
+        beginReflectWrite(L, handle.doc, false);
+        n->hasSemicolon = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Name:
-        pushReflectValue(L, handle.doc, n->name);
+        n->name.value ? lua_pushstring(L, n->name.value) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetName:
-        readReflectValue(L, handle.doc, 2, n->name);
+        beginReflectWrite(L, handle.doc, false);
+        n->name = readName(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Type:
-        pushReflectValue(L, handle.doc, n->type);
+        pushAstNode(L, handle.doc, n->type);
         return true;
     case ReflectAtom::SetType:
-        readReflectValue(L, handle.doc, 2, n->type);
+        beginReflectWrite(L, handle.doc, true);
+        n->type = readNode<Luau::AstType>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -1310,88 +1579,110 @@ static void collectAstStatDeclareGlobalProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstStatDeclareGlobal*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->hasSemicolon);
+    lua_pushboolean(L, n->hasSemicolon);
     lua_setfield(L, -2, "hasSemicolon");
-    pushReflectValue(L, handle.doc, n->name);
+    n->name.value ? lua_pushstring(L, n->name.value) : lua_pushnil(L);
     lua_setfield(L, -2, "name");
-    pushReflectValue(L, handle.doc, n->type);
+    pushAstNode(L, handle.doc, n->type);
     lua_setfield(L, -2, "type");
 }
 
-static Luau::AstNode* createDefaultAstStatDeclareFunction(Luau::Allocator& alloc)
+static void validateAstStatDeclareGlobal(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstStatDeclareFunction>(Luau::Location(), Luau::AstArray<Luau::AstAttr*>{nullptr, 0}, Luau::AstName(), Luau::Location(), Luau::AstArray<Luau::AstGenericType*>{nullptr, 0}, Luau::AstArray<Luau::AstGenericTypePack*>{nullptr, 0}, Luau::AstTypeList{}, Luau::AstArray<Luau::AstArgumentName>{nullptr, 0}, false, Luau::Location(), nullptr, Luau::Location(), Luau::Location());
+    auto* n = static_cast<Luau::AstStatDeclareGlobal*>(node);
+    (void)n;
+    v.name(n->name, "name", -1, "is nil");
+    v.child(n->type, "type", -1, "is nil");
 }
 
 static bool handleAstStatDeclareFunctionMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstStatDeclareFunction*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstStatDeclareFunction.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstStatDeclareFunction.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->hasSemicolon)>, bool>, "schema type of AstStatDeclareFunction.hasSemicolon does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->name)>, Luau::AstName>, "schema type of AstStatDeclareFunction.name does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->vararg)>, bool>, "schema type of AstStatDeclareFunction.vararg does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->generics)>, Luau::AstArray<Luau::AstGenericType*>>, "schema type of AstStatDeclareFunction.generics does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->genericPacks)>, Luau::AstArray<Luau::AstGenericTypePack*>>, "schema type of AstStatDeclareFunction.genericPacks does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->params)>, Luau::AstTypeList>, "schema type of AstStatDeclareFunction.params does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->retTypes)>, Luau::AstTypePack*>, "schema type of AstStatDeclareFunction.returnTypes does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->attributes)>, Luau::AstArray<Luau::AstAttr*>>, "schema type of AstStatDeclareFunction.attributes does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::HasSemicolon:
-        pushReflectValue(L, handle.doc, n->hasSemicolon);
+        lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        readReflectValue(L, handle.doc, 2, n->hasSemicolon);
+        beginReflectWrite(L, handle.doc, false);
+        n->hasSemicolon = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Name:
-        pushReflectValue(L, handle.doc, n->name);
+        n->name.value ? lua_pushstring(L, n->name.value) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetName:
-        readReflectValue(L, handle.doc, 2, n->name);
+        beginReflectWrite(L, handle.doc, false);
+        n->name = readName(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Vararg:
-        pushReflectValue(L, handle.doc, n->vararg);
+        lua_pushboolean(L, n->vararg);
         return true;
     case ReflectAtom::SetVararg:
-        readReflectValue(L, handle.doc, 2, n->vararg);
+        beginReflectWrite(L, handle.doc, false);
+        n->vararg = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Generics:
-        pushReflectValue(L, handle.doc, n->generics);
+        pushNodeArray(L, handle.doc, n->generics);
         return true;
     case ReflectAtom::SetGenerics:
-        readReflectValue(L, handle.doc, 2, n->generics);
+        beginReflectWrite(L, handle.doc, true);
+        n->generics = readNodeArray<Luau::AstGenericType>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::GenericPacks:
-        pushReflectValue(L, handle.doc, n->genericPacks);
+        pushNodeArray(L, handle.doc, n->genericPacks);
         return true;
     case ReflectAtom::SetGenericPacks:
-        readReflectValue(L, handle.doc, 2, n->genericPacks);
+        beginReflectWrite(L, handle.doc, true);
+        n->genericPacks = readNodeArray<Luau::AstGenericTypePack>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Params:
-        pushReflectValue(L, handle.doc, n->params);
+        pushAstAux(L, handle.doc, n->params);
         return true;
     case ReflectAtom::SetParams:
-        readReflectValue(L, handle.doc, 2, n->params);
+        beginReflectWrite(L, handle.doc, true);
+        n->params = readAux(L, handle.doc, 2, Aux_TypeList, &AstAuxData::typeList, "AstTypeList");
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::ReturnTypes:
-        pushReflectValue(L, handle.doc, n->retTypes);
+        pushAstNode(L, handle.doc, n->retTypes);
         return true;
     case ReflectAtom::SetReturnTypes:
-        readReflectValue(L, handle.doc, 2, n->retTypes);
+        beginReflectWrite(L, handle.doc, true);
+        n->retTypes = readNode<Luau::AstTypePack>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Attributes:
-        pushReflectValue(L, handle.doc, n->attributes);
+        pushNodeArray(L, handle.doc, n->attributes);
         return true;
     case ReflectAtom::SetAttributes:
-        readReflectValue(L, handle.doc, 2, n->attributes);
+        beginReflectWrite(L, handle.doc, true);
+        n->attributes = readNodeArray<Luau::AstAttr>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -1403,70 +1694,107 @@ static void collectAstStatDeclareFunctionProps(lua_State* L, AstNodeData& handle
 {
     auto* n = static_cast<Luau::AstStatDeclareFunction*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->hasSemicolon);
+    lua_pushboolean(L, n->hasSemicolon);
     lua_setfield(L, -2, "hasSemicolon");
-    pushReflectValue(L, handle.doc, n->name);
+    n->name.value ? lua_pushstring(L, n->name.value) : lua_pushnil(L);
     lua_setfield(L, -2, "name");
-    pushReflectValue(L, handle.doc, n->vararg);
+    lua_pushboolean(L, n->vararg);
     lua_setfield(L, -2, "vararg");
-    pushReflectValue(L, handle.doc, n->generics);
+    pushNodeArray(L, handle.doc, n->generics);
     lua_setfield(L, -2, "generics");
-    pushReflectValue(L, handle.doc, n->genericPacks);
+    pushNodeArray(L, handle.doc, n->genericPacks);
     lua_setfield(L, -2, "genericPacks");
-    pushReflectValue(L, handle.doc, n->params);
+    pushAstAux(L, handle.doc, n->params);
     lua_setfield(L, -2, "params");
-    pushReflectValue(L, handle.doc, n->retTypes);
+    pushAstNode(L, handle.doc, n->retTypes);
     lua_setfield(L, -2, "returnTypes");
-    pushReflectValue(L, handle.doc, n->attributes);
+    pushNodeArray(L, handle.doc, n->attributes);
     lua_setfield(L, -2, "attributes");
 }
 
-static Luau::AstNode* createDefaultAstStatClass(Luau::Allocator& alloc)
+static void validateAstStatDeclareFunction(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstStatClass>(Luau::Location(), nullptr, Luau::AstArray<Luau::AstClassMember>{nullptr, 0}, false, Luau::Location());
+    auto* n = static_cast<Luau::AstStatDeclareFunction*>(node);
+    (void)n;
+    v.name(n->name, "name", -1, "is nil");
+    for (size_t i = 0; i < n->generics.size; i++)
+    {
+        v.child(n->generics.data[i], "generics", int(i), "is nil");
+    }
+    for (size_t i = 0; i < n->genericPacks.size; i++)
+    {
+        v.child(n->genericPacks.data[i], "genericPacks", int(i), "is nil");
+    }
+    {
+        const auto& item = n->params;
+        for (size_t j = 0; j < item.types.size; j++)
+        {
+            v.child(item.types.data[j], "params", int(j), "is nil");
+        }
+        v.child(item.tailType, "params", -1, nullptr);
+    }
+    v.child(n->retTypes, "returnTypes", -1, "is nil");
+    for (size_t i = 0; i < n->attributes.size; i++)
+    {
+        v.child(n->attributes.data[i], "attributes", int(i), "is nil");
+    }
 }
 
 static bool handleAstStatClassMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstStatClass*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstStatClass.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstStatClass.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->hasSemicolon)>, bool>, "schema type of AstStatClass.hasSemicolon does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->exported)>, bool>, "schema type of AstStatClass.exported does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->name)>, Luau::AstLocal*>, "schema type of AstStatClass.name does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->members)>, Luau::AstArray<Luau::AstClassMember>>, "schema type of AstStatClass.members does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->generics)>, Luau::AstArray<Luau::AstGenericType*>>, "schema type of AstStatClass.generics does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->genericPacks)>, Luau::AstArray<Luau::AstGenericTypePack*>>, "schema type of AstStatClass.genericPacks does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->primaryConstructor)>, Luau::AstClassPrimaryConstructor*>, "schema type of AstStatClass.primaryConstructor does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::HasSemicolon:
-        pushReflectValue(L, handle.doc, n->hasSemicolon);
+        lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        readReflectValue(L, handle.doc, 2, n->hasSemicolon);
+        beginReflectWrite(L, handle.doc, false);
+        n->hasSemicolon = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Exported:
-        pushReflectValue(L, handle.doc, n->exported);
+        lua_pushboolean(L, n->exported);
         return true;
     case ReflectAtom::SetExported:
-        readReflectValue(L, handle.doc, 2, n->exported);
+        beginReflectWrite(L, handle.doc, false);
+        n->exported = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Name:
-        pushReflectValue(L, handle.doc, n->name);
+        pushAstLocal(L, handle.doc, n->name);
         return true;
     case ReflectAtom::SetName:
-        readReflectValue(L, handle.doc, 2, n->name);
+        beginReflectWrite(L, handle.doc, true);
+        n->name = readLocal(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Members:
-        pushReflectValue(L, handle.doc, n->members);
+        pushClassMembers(L, handle.doc, n->members);
         return true;
     case ReflectAtom::SetMembers:
-        readReflectValue(L, handle.doc, 2, n->members);
+        beginReflectWrite(L, handle.doc, true);
+        n->members = readArray<Luau::AstClassMember>(L, handle.doc, 2, [&](int) { return readClassMember(L, handle.doc, -1); });
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -1478,83 +1806,128 @@ static void collectAstStatClassProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstStatClass*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->hasSemicolon);
+    lua_pushboolean(L, n->hasSemicolon);
     lua_setfield(L, -2, "hasSemicolon");
-    pushReflectValue(L, handle.doc, n->exported);
+    lua_pushboolean(L, n->exported);
     lua_setfield(L, -2, "exported");
-    pushReflectValue(L, handle.doc, n->name);
+    pushAstLocal(L, handle.doc, n->name);
     lua_setfield(L, -2, "name");
-    pushReflectValue(L, handle.doc, n->members);
+    pushClassMembers(L, handle.doc, n->members);
     lua_setfield(L, -2, "members");
 }
 
-static Luau::AstNode* createDefaultAstStatDeclareExternType(Luau::Allocator& alloc)
+static void validateAstStatClass(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstStatDeclareExternType>(Luau::Location(), Luau::AstName(), std::nullopt, Luau::AstArray<Luau::AstDeclaredExternTypeProperty>{nullptr, 0}, Luau::Location(), Luau::Location(), std::nullopt, nullptr);
+    auto* n = static_cast<Luau::AstStatClass*>(node);
+    (void)n;
+    v.local(n->name, "name", -1, "is nil");
+    for (size_t i = 0; i < n->members.size; i++)
+    {
+        if (const auto* prop = Luau::get_if<Luau::AstClassProperty>(&n->members.data[i]))
+        {
+            const auto& item = *prop;
+            v.name(item.name, "members", int(i), "has no name");
+            v.child(item.ty, "members", int(i), nullptr);
+            v.child(item.defaultValue, "members", int(i), nullptr);
+        }
+        if (const auto* method = Luau::get_if<Luau::AstClassMethod>(&n->members.data[i]))
+        {
+            const auto& item = *method;
+            v.name(item.functionName, "members", int(i), "has no name");
+            v.child(item.function, "members", int(i), "has no function");
+        }
+    }
+    for (size_t i = 0; i < n->generics.size; i++)
+    {
+        v.child(n->generics.data[i], "generics", int(i), "is nil");
+    }
+    for (size_t i = 0; i < n->genericPacks.size; i++)
+    {
+        v.child(n->genericPacks.data[i], "genericPacks", int(i), "is nil");
+    }
+    for (size_t i = 0; n->primaryConstructor && i < n->primaryConstructor->args.size; i++) v.local(n->primaryConstructor->args.data[i], "primaryConstructor", int(i), "is nil");
+    for (size_t i = 0; n->primaryConstructor && i < n->primaryConstructor->argsDefaults.size; i++) v.child(n->primaryConstructor->argsDefaults.data[i], "primaryConstructor", int(i), nullptr);
 }
 
 static bool handleAstStatDeclareExternTypeMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstStatDeclareExternType*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstStatDeclareExternType.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstStatDeclareExternType.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->hasSemicolon)>, bool>, "schema type of AstStatDeclareExternType.hasSemicolon does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->name)>, Luau::AstName>, "schema type of AstStatDeclareExternType.name does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->superName)>, std::optional<Luau::AstName>>, "schema type of AstStatDeclareExternType.superName does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->props)>, Luau::AstArray<Luau::AstDeclaredExternTypeProperty>>, "schema type of AstStatDeclareExternType.props does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->indexer)>, Luau::AstTableIndexer*>, "schema type of AstStatDeclareExternType.indexer does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->generics)>, Luau::AstArray<Luau::AstGenericType*>>, "schema type of AstStatDeclareExternType.generics does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->genericPacks)>, Luau::AstArray<Luau::AstGenericTypePack*>>, "schema type of AstStatDeclareExternType.genericPacks does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::HasSemicolon:
-        pushReflectValue(L, handle.doc, n->hasSemicolon);
+        lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        readReflectValue(L, handle.doc, 2, n->hasSemicolon);
+        beginReflectWrite(L, handle.doc, false);
+        n->hasSemicolon = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Name:
-        pushReflectValue(L, handle.doc, n->name);
+        n->name.value ? lua_pushstring(L, n->name.value) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetName:
-        readReflectValue(L, handle.doc, 2, n->name);
+        beginReflectWrite(L, handle.doc, false);
+        n->name = readName(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::SuperName:
-        pushReflectValue(L, handle.doc, n->superName);
+        (n->superName && n->superName->value) ? lua_pushstring(L, n->superName->value) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetSuperName:
-        readReflectValue(L, handle.doc, 2, n->superName);
+        beginReflectWrite(L, handle.doc, false);
+        n->superName = lua_isnil(L, 2) ? std::nullopt : std::optional<Luau::AstName>(readName(L, handle.doc, 2));
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Props:
-        pushReflectValue(L, handle.doc, n->props);
+        pushArray(L, n->props.size, [&](size_t i) { pushAstAux(L, handle.doc, n->props.data[i]); });
         return true;
     case ReflectAtom::SetProps:
-        readReflectValue(L, handle.doc, 2, n->props);
+        beginReflectWrite(L, handle.doc, true);
+        n->props = readArray<Luau::AstDeclaredExternTypeProperty>(L, handle.doc, 2, [&](int) { return readAux(L, handle.doc, -1, Aux_DeclaredExternTypeProperty, &AstAuxData::declaredExternProp, "AstDeclaredExternTypeProperty"); });
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Indexer:
-        pushReflectValue(L, handle.doc, n->indexer);
+        n->indexer ? pushAstAux(L, handle.doc, *n->indexer) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetIndexer:
-        readReflectValue(L, handle.doc, 2, n->indexer);
+        beginReflectWrite(L, handle.doc, true);
+        n->indexer = lua_isnil(L, 2) ? nullptr : handle.doc->allocator()->alloc<Luau::AstTableIndexer>(readAux(L, handle.doc, 2, Aux_TableIndexer, &AstAuxData::tableIndexer, "AstTableIndexer"));
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Generics:
-        pushReflectValue(L, handle.doc, n->generics);
+        pushNodeArray(L, handle.doc, n->generics);
         return true;
     case ReflectAtom::SetGenerics:
-        readReflectValue(L, handle.doc, 2, n->generics);
+        beginReflectWrite(L, handle.doc, true);
+        n->generics = readNodeArray<Luau::AstGenericType>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::GenericPacks:
-        pushReflectValue(L, handle.doc, n->genericPacks);
+        pushNodeArray(L, handle.doc, n->genericPacks);
         return true;
     case ReflectAtom::SetGenericPacks:
-        readReflectValue(L, handle.doc, 2, n->genericPacks);
+        beginReflectWrite(L, handle.doc, true);
+        n->genericPacks = readNodeArray<Luau::AstGenericTypePack>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -1566,57 +1939,91 @@ static void collectAstStatDeclareExternTypeProps(lua_State* L, AstNodeData& hand
 {
     auto* n = static_cast<Luau::AstStatDeclareExternType*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->hasSemicolon);
+    lua_pushboolean(L, n->hasSemicolon);
     lua_setfield(L, -2, "hasSemicolon");
-    pushReflectValue(L, handle.doc, n->name);
+    n->name.value ? lua_pushstring(L, n->name.value) : lua_pushnil(L);
     lua_setfield(L, -2, "name");
-    pushReflectValue(L, handle.doc, n->superName);
+    (n->superName && n->superName->value) ? lua_pushstring(L, n->superName->value) : lua_pushnil(L);
     lua_setfield(L, -2, "superName");
-    pushReflectValue(L, handle.doc, n->props);
+    pushArray(L, n->props.size, [&](size_t i) { pushAstAux(L, handle.doc, n->props.data[i]); });
     lua_setfield(L, -2, "props");
-    pushReflectValue(L, handle.doc, n->indexer);
+    n->indexer ? pushAstAux(L, handle.doc, *n->indexer) : lua_pushnil(L);
     lua_setfield(L, -2, "indexer");
-    pushReflectValue(L, handle.doc, n->generics);
+    pushNodeArray(L, handle.doc, n->generics);
     lua_setfield(L, -2, "generics");
-    pushReflectValue(L, handle.doc, n->genericPacks);
+    pushNodeArray(L, handle.doc, n->genericPacks);
     lua_setfield(L, -2, "genericPacks");
 }
 
-static Luau::AstNode* createDefaultAstStatError(Luau::Allocator& alloc)
+static void validateAstStatDeclareExternType(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstStatError>(Luau::Location(), Luau::AstArray<Luau::AstExpr*>{nullptr, 0}, Luau::AstArray<Luau::AstStat*>{nullptr, 0}, 0);
+    auto* n = static_cast<Luau::AstStatDeclareExternType*>(node);
+    (void)n;
+    v.name(n->name, "name", -1, "is nil");
+    if (n->superName)
+    {
+        v.name(*n->superName, "superName", -1, "is nil");
+    }
+    for (size_t i = 0; i < n->props.size; i++)
+    {
+        const auto& item = n->props.data[i];
+        v.name(item.name, "props", int(i), "has no name");
+        v.child(item.ty, "props", int(i), "has no type");
+    }
+    if (n->indexer)
+    {
+        const auto& item = *n->indexer;
+        v.child(item.indexType, "indexer", -1, "has no index type");
+        v.child(item.resultType, "indexer", -1, "has no result type");
+    }
+    for (size_t i = 0; i < n->generics.size; i++)
+    {
+        v.child(n->generics.data[i], "generics", int(i), "is nil");
+    }
+    for (size_t i = 0; i < n->genericPacks.size; i++)
+    {
+        v.child(n->genericPacks.data[i], "genericPacks", int(i), "is nil");
+    }
 }
 
 static bool handleAstStatErrorMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstStatError*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstStatError.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstStatError.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->hasSemicolon)>, bool>, "schema type of AstStatError.hasSemicolon does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->messageIndex)>, unsigned int>, "schema type of AstStatError.messageIndex does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->expressions)>, Luau::AstArray<Luau::AstExpr*>>, "schema type of AstStatError.expressions does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->statements)>, Luau::AstArray<Luau::AstStat*>>, "schema type of AstStatError.statements does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::HasSemicolon:
-        pushReflectValue(L, handle.doc, n->hasSemicolon);
+        lua_pushboolean(L, n->hasSemicolon);
         return true;
     case ReflectAtom::SetHasSemicolon:
-        readReflectValue(L, handle.doc, 2, n->hasSemicolon);
+        beginReflectWrite(L, handle.doc, false);
+        n->hasSemicolon = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::MessageIndex:
-        pushReflectValue(L, handle.doc, n->messageIndex);
+        lua_pushinteger(L, int(n->messageIndex));
         return true;
     case ReflectAtom::Expressions:
-        pushReflectValue(L, handle.doc, n->expressions);
+        pushNodeArray(L, handle.doc, n->expressions);
         return true;
     case ReflectAtom::Statements:
-        pushReflectValue(L, handle.doc, n->statements);
+        pushNodeArray(L, handle.doc, n->statements);
         return true;
     default:
         return false;
@@ -1627,41 +2034,55 @@ static void collectAstStatErrorProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstStatError*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->hasSemicolon);
+    lua_pushboolean(L, n->hasSemicolon);
     lua_setfield(L, -2, "hasSemicolon");
-    pushReflectValue(L, handle.doc, n->messageIndex);
+    lua_pushinteger(L, int(n->messageIndex));
     lua_setfield(L, -2, "messageIndex");
-    pushReflectValue(L, handle.doc, n->expressions);
+    pushNodeArray(L, handle.doc, n->expressions);
     lua_setfield(L, -2, "expressions");
-    pushReflectValue(L, handle.doc, n->statements);
+    pushNodeArray(L, handle.doc, n->statements);
     lua_setfield(L, -2, "statements");
 }
 
-static Luau::AstNode* createDefaultAstExprGroup(Luau::Allocator& alloc)
+static void validateAstStatError(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstExprGroup>(Luau::Location(), nullptr);
+    auto* n = static_cast<Luau::AstStatError*>(node);
+    (void)n;
+    for (size_t i = 0; i < n->expressions.size; i++)
+    {
+        v.child(n->expressions.data[i], "expressions", int(i), "is nil");
+    }
+    for (size_t i = 0; i < n->statements.size; i++)
+    {
+        v.child(n->statements.data[i], "statements", int(i), "is nil");
+    }
 }
 
 static bool handleAstExprGroupMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstExprGroup*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstExprGroup.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstExprGroup.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->expr)>, Luau::AstExpr*>, "schema type of AstExprGroup.expr does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::Expr:
-        pushReflectValue(L, handle.doc, n->expr);
+        pushAstNode(L, handle.doc, n->expr);
         return true;
     case ReflectAtom::SetExpr:
-        readReflectValue(L, handle.doc, 2, n->expr);
+        beginReflectWrite(L, handle.doc, true);
+        n->expr = readNode<Luau::AstExpr>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -1673,29 +2094,34 @@ static void collectAstExprGroupProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstExprGroup*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->expr);
+    pushAstNode(L, handle.doc, n->expr);
     lua_setfield(L, -2, "expr");
 }
 
-static Luau::AstNode* createDefaultAstExprConstantNil(Luau::Allocator& alloc)
+static void validateAstExprGroup(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstExprConstantNil>(Luau::Location());
+    auto* n = static_cast<Luau::AstExprGroup*>(node);
+    (void)n;
+    v.child(n->expr, "expr", -1, "is nil");
 }
 
 static bool handleAstExprConstantNilMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstExprConstantNil*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstExprConstantNil.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstExprConstantNil.cst does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     default:
         return false;
@@ -1706,33 +2132,39 @@ static void collectAstExprConstantNilProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstExprConstantNil*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
 }
 
-static Luau::AstNode* createDefaultAstExprConstantBool(Luau::Allocator& alloc)
+static void validateAstExprConstantNil(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstExprConstantBool>(Luau::Location(), false);
+    auto* n = static_cast<Luau::AstExprConstantNil*>(node);
+    (void)n;
 }
 
 static bool handleAstExprConstantBoolMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstExprConstantBool*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstExprConstantBool.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstExprConstantBool.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->value)>, bool>, "schema type of AstExprConstantBool.value does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::Value:
-        pushReflectValue(L, handle.doc, n->value);
+        lua_pushboolean(L, n->value);
         return true;
     case ReflectAtom::SetValue:
-        readReflectValue(L, handle.doc, 2, n->value);
+        beginReflectWrite(L, handle.doc, false);
+        n->value = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -1744,35 +2176,41 @@ static void collectAstExprConstantBoolProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstExprConstantBool*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->value);
+    lua_pushboolean(L, n->value);
     lua_setfield(L, -2, "value");
 }
 
-static Luau::AstNode* createDefaultAstExprConstantNumber(Luau::Allocator& alloc)
+static void validateAstExprConstantBool(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstExprConstantNumber>(Luau::Location(), 0.0);
+    auto* n = static_cast<Luau::AstExprConstantBool*>(node);
+    (void)n;
 }
 
 static bool handleAstExprConstantNumberMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstExprConstantNumber*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstExprConstantNumber.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstExprConstantNumber.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->value)>, double>, "schema type of AstExprConstantNumber.value does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::Value:
-        pushReflectValue(L, handle.doc, n->value);
+        lua_pushnumber(L, n->value);
         return true;
     case ReflectAtom::SetValue:
-        readReflectValue(L, handle.doc, 2, n->value);
+        beginReflectWrite(L, handle.doc, false);
+        n->value = luaL_checknumber(L, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -1784,35 +2222,41 @@ static void collectAstExprConstantNumberProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstExprConstantNumber*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->value);
+    lua_pushnumber(L, n->value);
     lua_setfield(L, -2, "value");
 }
 
-static Luau::AstNode* createDefaultAstExprConstantInteger(Luau::Allocator& alloc)
+static void validateAstExprConstantNumber(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstExprConstantInteger>(Luau::Location(), int64_t(0));
+    auto* n = static_cast<Luau::AstExprConstantNumber*>(node);
+    (void)n;
 }
 
 static bool handleAstExprConstantIntegerMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstExprConstantInteger*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstExprConstantInteger.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstExprConstantInteger.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->value)>, int64_t>, "schema type of AstExprConstantInteger.value does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::Value:
-        pushReflectValue(L, handle.doc, n->value);
+        lua_pushinteger64(L, int64_t(n->value));
         return true;
     case ReflectAtom::SetValue:
-        readReflectValue(L, handle.doc, 2, n->value);
+        beginReflectWrite(L, handle.doc, false);
+        n->value = lua_isnumber(L, 2) ? int64_t(lua_tointeger(L, 2)) : int64_t(luaL_checkinteger64(L, 2));
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -1824,42 +2268,50 @@ static void collectAstExprConstantIntegerProps(lua_State* L, AstNodeData& handle
 {
     auto* n = static_cast<Luau::AstExprConstantInteger*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->value);
+    lua_pushinteger64(L, int64_t(n->value));
     lua_setfield(L, -2, "value");
 }
 
-static Luau::AstNode* createDefaultAstExprConstantString(Luau::Allocator& alloc)
+static void validateAstExprConstantInteger(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstExprConstantString>(Luau::Location(), Luau::AstArray<char>{nullptr, 0}, Luau::AstExprConstantString::QuoteStyle::QuotedSimple);
+    auto* n = static_cast<Luau::AstExprConstantInteger*>(node);
+    (void)n;
 }
 
 static bool handleAstExprConstantStringMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstExprConstantString*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstExprConstantString.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstExprConstantString.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->value)>, Luau::AstArray<char>>, "schema type of AstExprConstantString.value does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->quoteStyle)>, Luau::AstExprConstantString::QuoteStyle>, "schema type of AstExprConstantString.quoteStyle does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::Value:
-        pushReflectValue(L, handle.doc, n->value);
+        lua_pushlstring(L, n->value.data ? n->value.data : "", n->value.size);
         return true;
     case ReflectAtom::SetValue:
-        readReflectValue(L, handle.doc, 2, n->value);
+        beginReflectWrite(L, handle.doc, false);
+        n->value = readString(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::QuoteStyle:
-        pushReflectValue(L, handle.doc, n->quoteStyle);
+        lua_pushstring(L, toString(n->quoteStyle).c_str());
         return true;
     case ReflectAtom::SetQuoteStyle:
-        readReflectValue(L, handle.doc, 2, n->quoteStyle);
+        beginReflectWrite(L, handle.doc, false);
+        n->quoteStyle = readEnum<Luau::AstExprConstantString::QuoteStyle>(L, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -1871,44 +2323,52 @@ static void collectAstExprConstantStringProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstExprConstantString*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->value);
+    lua_pushlstring(L, n->value.data ? n->value.data : "", n->value.size);
     lua_setfield(L, -2, "value");
-    pushReflectValue(L, handle.doc, n->quoteStyle);
+    lua_pushstring(L, toString(n->quoteStyle).c_str());
     lua_setfield(L, -2, "quoteStyle");
 }
 
-static Luau::AstNode* createDefaultAstExprLocal(Luau::Allocator& alloc)
+static void validateAstExprConstantString(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstExprLocal>(Luau::Location(), nullptr, false);
+    auto* n = static_cast<Luau::AstExprConstantString*>(node);
+    (void)n;
 }
 
 static bool handleAstExprLocalMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstExprLocal*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstExprLocal.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstExprLocal.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->upvalue)>, bool>, "schema type of AstExprLocal.upvalue does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->local)>, Luau::AstLocal*>, "schema type of AstExprLocal.local does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::Upvalue:
-        pushReflectValue(L, handle.doc, n->upvalue);
+        lua_pushboolean(L, n->upvalue);
         return true;
     case ReflectAtom::SetUpvalue:
-        readReflectValue(L, handle.doc, 2, n->upvalue);
+        beginReflectWrite(L, handle.doc, false);
+        n->upvalue = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Local:
-        pushReflectValue(L, handle.doc, n->local);
+        pushAstLocal(L, handle.doc, n->local);
         return true;
     case ReflectAtom::SetLocal:
-        readReflectValue(L, handle.doc, 2, n->local);
+        beginReflectWrite(L, handle.doc, true);
+        n->local = readLocal(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -1920,37 +2380,44 @@ static void collectAstExprLocalProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstExprLocal*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->upvalue);
+    lua_pushboolean(L, n->upvalue);
     lua_setfield(L, -2, "upvalue");
-    pushReflectValue(L, handle.doc, n->local);
+    pushAstLocal(L, handle.doc, n->local);
     lua_setfield(L, -2, "local");
 }
 
-static Luau::AstNode* createDefaultAstExprGlobal(Luau::Allocator& alloc)
+static void validateAstExprLocal(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstExprGlobal>(Luau::Location(), Luau::AstName());
+    auto* n = static_cast<Luau::AstExprLocal*>(node);
+    (void)n;
+    v.local(n->local, "local", -1, "is nil");
 }
 
 static bool handleAstExprGlobalMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstExprGlobal*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstExprGlobal.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstExprGlobal.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->name)>, Luau::AstName>, "schema type of AstExprGlobal.name does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::Name:
-        pushReflectValue(L, handle.doc, n->name);
+        n->name.value ? lua_pushstring(L, n->name.value) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetName:
-        readReflectValue(L, handle.doc, 2, n->name);
+        beginReflectWrite(L, handle.doc, false);
+        n->name = readName(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -1962,29 +2429,34 @@ static void collectAstExprGlobalProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstExprGlobal*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->name);
+    n->name.value ? lua_pushstring(L, n->name.value) : lua_pushnil(L);
     lua_setfield(L, -2, "name");
 }
 
-static Luau::AstNode* createDefaultAstExprVarargs(Luau::Allocator& alloc)
+static void validateAstExprGlobal(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstExprVarargs>(Luau::Location());
+    auto* n = static_cast<Luau::AstExprGlobal*>(node);
+    (void)n;
+    v.name(n->name, "name", -1, "is nil");
 }
 
 static bool handleAstExprVarargsMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstExprVarargs*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstExprVarargs.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstExprVarargs.cst does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     default:
         return false;
@@ -1995,54 +2467,66 @@ static void collectAstExprVarargsProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstExprVarargs*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
 }
 
-static Luau::AstNode* createDefaultAstExprCall(Luau::Allocator& alloc)
+static void validateAstExprVarargs(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstExprCall>(Luau::Location(), nullptr, Luau::AstArray<Luau::AstExpr*>{nullptr, 0}, false, Luau::AstArray<Luau::AstTypeOrPack>{nullptr, 0}, Luau::Location());
+    auto* n = static_cast<Luau::AstExprVarargs*>(node);
+    (void)n;
 }
 
 static bool handleAstExprCallMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstExprCall*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstExprCall.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstExprCall.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->self)>, bool>, "schema type of AstExprCall.self does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->func)>, Luau::AstExpr*>, "schema type of AstExprCall.func does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->args)>, Luau::AstArray<Luau::AstExpr*>>, "schema type of AstExprCall.args does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->typeArguments)>, Luau::AstArray<Luau::AstTypeOrPack>>, "schema type of AstExprCall.typeArguments does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::Self:
-        pushReflectValue(L, handle.doc, n->self);
+        lua_pushboolean(L, n->self);
         return true;
     case ReflectAtom::SetSelf:
-        readReflectValue(L, handle.doc, 2, n->self);
+        beginReflectWrite(L, handle.doc, false);
+        n->self = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Func:
-        pushReflectValue(L, handle.doc, n->func);
+        pushAstNode(L, handle.doc, n->func);
         return true;
     case ReflectAtom::SetFunc:
-        readReflectValue(L, handle.doc, 2, n->func);
+        beginReflectWrite(L, handle.doc, true);
+        n->func = readNode<Luau::AstExpr>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Args:
-        pushReflectValue(L, handle.doc, n->args);
+        pushNodeArray(L, handle.doc, n->args);
         return true;
     case ReflectAtom::SetArgs:
-        readReflectValue(L, handle.doc, 2, n->args);
+        beginReflectWrite(L, handle.doc, true);
+        n->args = readNodeArray<Luau::AstExpr>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::TypeArguments:
-        pushReflectValue(L, handle.doc, n->typeArguments);
+        pushTypeOrPackArray(L, handle.doc, n->typeArguments);
         return true;
     case ReflectAtom::SetTypeArguments:
-        readReflectValue(L, handle.doc, 2, n->typeArguments);
+        beginReflectWrite(L, handle.doc, true);
+        n->typeArguments = readTypeOrPackArray(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -2054,55 +2538,74 @@ static void collectAstExprCallProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstExprCall*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->self);
+    lua_pushboolean(L, n->self);
     lua_setfield(L, -2, "self");
-    pushReflectValue(L, handle.doc, n->func);
+    pushAstNode(L, handle.doc, n->func);
     lua_setfield(L, -2, "func");
-    pushReflectValue(L, handle.doc, n->args);
+    pushNodeArray(L, handle.doc, n->args);
     lua_setfield(L, -2, "args");
-    pushReflectValue(L, handle.doc, n->typeArguments);
+    pushTypeOrPackArray(L, handle.doc, n->typeArguments);
     lua_setfield(L, -2, "typeArguments");
 }
 
-static Luau::AstNode* createDefaultAstExprIndexName(Luau::Allocator& alloc)
+static void validateAstExprCall(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstExprIndexName>(Luau::Location(), nullptr, Luau::AstName(), Luau::Location(), Luau::Position::missing(), '.');
+    auto* n = static_cast<Luau::AstExprCall*>(node);
+    (void)n;
+    v.child(n->func, "func", -1, "is nil");
+    for (size_t i = 0; i < n->args.size; i++)
+    {
+        v.child(n->args.data[i], "args", int(i), "is nil");
+    }
+    for (size_t i = 0; i < n->typeArguments.size; i++)
+    {
+        v.child(n->typeArguments.data[i].type ? static_cast<Luau::AstNode*>(n->typeArguments.data[i].type) : static_cast<Luau::AstNode*>(n->typeArguments.data[i].typePack), "typeArguments", int(i), "is nil");
+    }
 }
 
 static bool handleAstExprIndexNameMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstExprIndexName*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstExprIndexName.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstExprIndexName.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->index)>, Luau::AstName>, "schema type of AstExprIndexName.index does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->op)>, char>, "schema type of AstExprIndexName.op does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->expr)>, Luau::AstExpr*>, "schema type of AstExprIndexName.expr does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::Index:
-        pushReflectValue(L, handle.doc, n->index);
+        n->index.value ? lua_pushstring(L, n->index.value) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetIndex:
-        readReflectValue(L, handle.doc, 2, n->index);
+        beginReflectWrite(L, handle.doc, false);
+        n->index = readName(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Op:
-        pushReflectValue(L, handle.doc, n->op);
+        lua_pushlstring(L, &n->op, 1);
         return true;
     case ReflectAtom::SetOp:
-        readReflectValue(L, handle.doc, 2, n->op);
+        beginReflectWrite(L, handle.doc, false);
+        n->op = readChar(L, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Expr:
-        pushReflectValue(L, handle.doc, n->expr);
+        pushAstNode(L, handle.doc, n->expr);
         return true;
     case ReflectAtom::SetExpr:
-        readReflectValue(L, handle.doc, 2, n->expr);
+        beginReflectWrite(L, handle.doc, true);
+        n->expr = readNode<Luau::AstExpr>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -2114,46 +2617,56 @@ static void collectAstExprIndexNameProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstExprIndexName*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->index);
+    n->index.value ? lua_pushstring(L, n->index.value) : lua_pushnil(L);
     lua_setfield(L, -2, "index");
-    pushReflectValue(L, handle.doc, n->op);
+    lua_pushlstring(L, &n->op, 1);
     lua_setfield(L, -2, "op");
-    pushReflectValue(L, handle.doc, n->expr);
+    pushAstNode(L, handle.doc, n->expr);
     lua_setfield(L, -2, "expr");
 }
 
-static Luau::AstNode* createDefaultAstExprIndexExpr(Luau::Allocator& alloc)
+static void validateAstExprIndexName(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstExprIndexExpr>(Luau::Location(), nullptr, nullptr);
+    auto* n = static_cast<Luau::AstExprIndexName*>(node);
+    (void)n;
+    v.name(n->index, "index", -1, "is nil");
+    v.child(n->expr, "expr", -1, "is nil");
 }
 
 static bool handleAstExprIndexExprMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstExprIndexExpr*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstExprIndexExpr.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstExprIndexExpr.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->expr)>, Luau::AstExpr*>, "schema type of AstExprIndexExpr.expr does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->index)>, Luau::AstExpr*>, "schema type of AstExprIndexExpr.index does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::Expr:
-        pushReflectValue(L, handle.doc, n->expr);
+        pushAstNode(L, handle.doc, n->expr);
         return true;
     case ReflectAtom::SetExpr:
-        readReflectValue(L, handle.doc, 2, n->expr);
+        beginReflectWrite(L, handle.doc, true);
+        n->expr = readNode<Luau::AstExpr>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Index:
-        pushReflectValue(L, handle.doc, n->index);
+        pushAstNode(L, handle.doc, n->index);
         return true;
     case ReflectAtom::SetIndex:
-        readReflectValue(L, handle.doc, 2, n->index);
+        beginReflectWrite(L, handle.doc, true);
+        n->index = readNode<Luau::AstExpr>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -2165,86 +2678,118 @@ static void collectAstExprIndexExprProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstExprIndexExpr*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->expr);
+    pushAstNode(L, handle.doc, n->expr);
     lua_setfield(L, -2, "expr");
-    pushReflectValue(L, handle.doc, n->index);
+    pushAstNode(L, handle.doc, n->index);
     lua_setfield(L, -2, "index");
 }
 
-static Luau::AstNode* createDefaultAstExprFunction(Luau::Allocator& alloc)
+static void validateAstExprIndexExpr(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstExprFunction>(Luau::Location(), Luau::AstArray<Luau::AstAttr*>{nullptr, 0}, Luau::AstArray<Luau::AstGenericType*>{nullptr, 0}, Luau::AstArray<Luau::AstGenericTypePack*>{nullptr, 0}, nullptr, Luau::AstArray<Luau::AstLocal*>{nullptr, 0}, Luau::AstArray<Luau::AstExpr*>{nullptr, 0}, false, Luau::Location(), nullptr, 0, Luau::AstName(), nullptr, nullptr, std::nullopt);
+    auto* n = static_cast<Luau::AstExprIndexExpr*>(node);
+    (void)n;
+    v.child(n->expr, "expr", -1, "is nil");
+    v.child(n->index, "index", -1, "is nil");
 }
 
 static bool handleAstExprFunctionMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstExprFunction*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstExprFunction.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstExprFunction.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->vararg)>, bool>, "schema type of AstExprFunction.vararg does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->debugname)>, Luau::AstName>, "schema type of AstExprFunction.debugname does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->args)>, Luau::AstArray<Luau::AstLocal*>>, "schema type of AstExprFunction.args does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->body)>, Luau::AstStatBlock*>, "schema type of AstExprFunction.body does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->generics)>, Luau::AstArray<Luau::AstGenericType*>>, "schema type of AstExprFunction.generics does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->genericPacks)>, Luau::AstArray<Luau::AstGenericTypePack*>>, "schema type of AstExprFunction.genericPacks does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->returnAnnotation)>, Luau::AstTypePack*>, "schema type of AstExprFunction.returnAnnotation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->attributes)>, Luau::AstArray<Luau::AstAttr*>>, "schema type of AstExprFunction.attributes does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->argsDefaults)>, Luau::AstArray<Luau::AstExpr*>>, "schema type of AstExprFunction.argsDefaults does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->varargAnnotation)>, Luau::AstTypePack*>, "schema type of AstExprFunction.varargAnnotation does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::Vararg:
-        pushReflectValue(L, handle.doc, n->vararg);
+        lua_pushboolean(L, n->vararg);
         return true;
     case ReflectAtom::SetVararg:
-        readReflectValue(L, handle.doc, 2, n->vararg);
+        beginReflectWrite(L, handle.doc, false);
+        n->vararg = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::DebugName:
-        pushReflectValue(L, handle.doc, n->debugname);
+        n->debugname.value ? lua_pushstring(L, n->debugname.value) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetDebugName:
-        readReflectValue(L, handle.doc, 2, n->debugname);
+        beginReflectWrite(L, handle.doc, false);
+        n->debugname = readName(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Args:
-        pushReflectValue(L, handle.doc, n->args);
+        pushLocalArray(L, handle.doc, n->args);
         return true;
     case ReflectAtom::SetArgs:
-        readReflectValue(L, handle.doc, 2, n->args);
+        beginReflectWrite(L, handle.doc, true);
+        n->args = readLocalArray(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Body:
-        pushReflectValue(L, handle.doc, n->body);
+        pushAstNode(L, handle.doc, n->body);
         return true;
     case ReflectAtom::SetBody:
-        readReflectValue(L, handle.doc, 2, n->body);
+        beginReflectWrite(L, handle.doc, true);
+        n->body = readNode<Luau::AstStatBlock>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Generics:
-        pushReflectValue(L, handle.doc, n->generics);
+        pushNodeArray(L, handle.doc, n->generics);
         return true;
     case ReflectAtom::SetGenerics:
-        readReflectValue(L, handle.doc, 2, n->generics);
+        beginReflectWrite(L, handle.doc, true);
+        n->generics = readNodeArray<Luau::AstGenericType>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::GenericPacks:
-        pushReflectValue(L, handle.doc, n->genericPacks);
+        pushNodeArray(L, handle.doc, n->genericPacks);
         return true;
     case ReflectAtom::SetGenericPacks:
-        readReflectValue(L, handle.doc, 2, n->genericPacks);
+        beginReflectWrite(L, handle.doc, true);
+        n->genericPacks = readNodeArray<Luau::AstGenericTypePack>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::ReturnAnnotation:
-        pushReflectValue(L, handle.doc, n->returnAnnotation);
+        pushAstNode(L, handle.doc, n->returnAnnotation);
         return true;
     case ReflectAtom::SetReturnAnnotation:
-        readReflectValue(L, handle.doc, 2, n->returnAnnotation);
+        beginReflectWrite(L, handle.doc, true);
+        n->returnAnnotation = readNode<Luau::AstTypePack>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Attributes:
-        pushReflectValue(L, handle.doc, n->attributes);
+        pushNodeArray(L, handle.doc, n->attributes);
         return true;
     case ReflectAtom::SetAttributes:
-        readReflectValue(L, handle.doc, 2, n->attributes);
+        beginReflectWrite(L, handle.doc, true);
+        n->attributes = readNodeArray<Luau::AstAttr>(L, handle.doc, 2);
+        lua_pushvalue(L, 1);
+        return true;
+    case ReflectAtom::ArgsDefaults:
+        pushArray(L, n->argsDefaults.size, [&](size_t i) { n->argsDefaults.data[i] ? pushAstNode(L, handle.doc, n->argsDefaults.data[i]) : lua_pushboolean(L, false); });
+        return true;
+    case ReflectAtom::SetArgsDefaults:
+        beginReflectWrite(L, handle.doc, true);
+        n->argsDefaults = readOptionalNodeArray<Luau::AstExpr>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -2256,49 +2801,81 @@ static void collectAstExprFunctionProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstExprFunction*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->vararg);
+    lua_pushboolean(L, n->vararg);
     lua_setfield(L, -2, "vararg");
-    pushReflectValue(L, handle.doc, n->debugname);
+    n->debugname.value ? lua_pushstring(L, n->debugname.value) : lua_pushnil(L);
     lua_setfield(L, -2, "debugname");
-    pushReflectValue(L, handle.doc, n->args);
+    pushLocalArray(L, handle.doc, n->args);
     lua_setfield(L, -2, "args");
-    pushReflectValue(L, handle.doc, n->body);
+    pushAstNode(L, handle.doc, n->body);
     lua_setfield(L, -2, "body");
-    pushReflectValue(L, handle.doc, n->generics);
+    pushNodeArray(L, handle.doc, n->generics);
     lua_setfield(L, -2, "generics");
-    pushReflectValue(L, handle.doc, n->genericPacks);
+    pushNodeArray(L, handle.doc, n->genericPacks);
     lua_setfield(L, -2, "genericPacks");
-    pushReflectValue(L, handle.doc, n->returnAnnotation);
+    pushAstNode(L, handle.doc, n->returnAnnotation);
     lua_setfield(L, -2, "returnAnnotation");
-    pushReflectValue(L, handle.doc, n->attributes);
+    pushNodeArray(L, handle.doc, n->attributes);
     lua_setfield(L, -2, "attributes");
+    pushArray(L, n->argsDefaults.size, [&](size_t i) { n->argsDefaults.data[i] ? pushAstNode(L, handle.doc, n->argsDefaults.data[i]) : lua_pushboolean(L, false); });
+    lua_setfield(L, -2, "argsDefaults");
 }
 
-static Luau::AstNode* createDefaultAstExprTable(Luau::Allocator& alloc)
+static void validateAstExprFunction(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstExprTable>(Luau::Location(), Luau::AstArray<Luau::AstExprTable::Item>{nullptr, 0});
+    auto* n = static_cast<Luau::AstExprFunction*>(node);
+    (void)n;
+    for (size_t i = 0; i < n->args.size; i++)
+    {
+        v.local(n->args.data[i], "args", int(i), "is nil");
+    }
+    v.child(n->body, "body", -1, "is nil");
+    for (size_t i = 0; i < n->generics.size; i++)
+    {
+        v.child(n->generics.data[i], "generics", int(i), "is nil");
+    }
+    for (size_t i = 0; i < n->genericPacks.size; i++)
+    {
+        v.child(n->genericPacks.data[i], "genericPacks", int(i), "is nil");
+    }
+    v.child(n->returnAnnotation, "returnAnnotation", -1, nullptr);
+    for (size_t i = 0; i < n->attributes.size; i++)
+    {
+        v.child(n->attributes.data[i], "attributes", int(i), "is nil");
+    }
+    for (size_t i = 0; i < n->argsDefaults.size; i++)
+    {
+        v.child(n->argsDefaults.data[i], "argsDefaults", int(i), nullptr);
+    }
+    v.child(n->varargAnnotation, "varargAnnotation", -1, nullptr);
+    if (v.forPrint && FFlag::LuwuDefaultArguments && n->argsDefaults.size != n->args.size) v.fail("args", -1, "has a different length than the function's default-argument list");
 }
 
 static bool handleAstExprTableMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstExprTable*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstExprTable.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstExprTable.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->items)>, Luau::AstArray<Luau::AstExprTable::Item>>, "schema type of AstExprTable.items does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::Items:
-        pushReflectValue(L, handle.doc, n->items);
+        pushArray(L, n->items.size, [&](size_t i) { pushAstAux(L, handle.doc, n->items.data[i]); });
         return true;
     case ReflectAtom::SetItems:
-        readReflectValue(L, handle.doc, 2, n->items);
+        beginReflectWrite(L, handle.doc, true);
+        n->items = readArray<Luau::AstExprTable::Item>(L, handle.doc, 2, [&](int) { return readAux(L, handle.doc, -1, Aux_TableItem, &AstAuxData::tableItem, "AstTableItem"); });
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -2310,42 +2887,58 @@ static void collectAstExprTableProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstExprTable*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->items);
+    pushArray(L, n->items.size, [&](size_t i) { pushAstAux(L, handle.doc, n->items.data[i]); });
     lua_setfield(L, -2, "items");
 }
 
-static Luau::AstNode* createDefaultAstExprUnary(Luau::Allocator& alloc)
+static void validateAstExprTable(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstExprUnary>(Luau::Location(), Luau::AstExprUnary::Op::Not, nullptr);
+    auto* n = static_cast<Luau::AstExprTable*>(node);
+    (void)n;
+    for (size_t i = 0; i < n->items.size; i++)
+    {
+        const auto& item = n->items.data[i];
+        v.child(item.key, "items", int(i), nullptr);
+        v.child(item.value, "items", int(i), "has no value");
+        if (item.kind != Luau::AstExprTable::Item::Kind::List && !item.key) v.fail("items", int(i), "has no key");
+        if (v.forPrint && item.kind == Luau::AstExprTable::Item::Kind::Record && !item.key->is<Luau::AstExprConstantString>()) v.fail("items", int(i), "is a record item whose key is not a string constant");
+    }
 }
 
 static bool handleAstExprUnaryMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstExprUnary*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstExprUnary.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstExprUnary.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->op)>, Luau::AstExprUnary::Op>, "schema type of AstExprUnary.op does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->expr)>, Luau::AstExpr*>, "schema type of AstExprUnary.expr does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::Op:
-        pushReflectValue(L, handle.doc, n->op);
+        lua_pushstring(L, toString(n->op).c_str());
         return true;
     case ReflectAtom::SetOp:
-        readReflectValue(L, handle.doc, 2, n->op);
+        beginReflectWrite(L, handle.doc, false);
+        n->op = readEnum<Luau::AstExprUnary::Op>(L, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Expr:
-        pushReflectValue(L, handle.doc, n->expr);
+        pushAstNode(L, handle.doc, n->expr);
         return true;
     case ReflectAtom::SetExpr:
-        readReflectValue(L, handle.doc, 2, n->expr);
+        beginReflectWrite(L, handle.doc, true);
+        n->expr = readNode<Luau::AstExpr>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -2357,51 +2950,62 @@ static void collectAstExprUnaryProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstExprUnary*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->op);
+    lua_pushstring(L, toString(n->op).c_str());
     lua_setfield(L, -2, "op");
-    pushReflectValue(L, handle.doc, n->expr);
+    pushAstNode(L, handle.doc, n->expr);
     lua_setfield(L, -2, "expr");
 }
 
-static Luau::AstNode* createDefaultAstExprBinary(Luau::Allocator& alloc)
+static void validateAstExprUnary(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstExprBinary>(Luau::Location(), Luau::AstExprBinary::Op::Add, nullptr, nullptr);
+    auto* n = static_cast<Luau::AstExprUnary*>(node);
+    (void)n;
+    v.child(n->expr, "expr", -1, "is nil");
 }
 
 static bool handleAstExprBinaryMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstExprBinary*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstExprBinary.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstExprBinary.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->op)>, Luau::AstExprBinary::Op>, "schema type of AstExprBinary.op does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->left)>, Luau::AstExpr*>, "schema type of AstExprBinary.left does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->right)>, Luau::AstExpr*>, "schema type of AstExprBinary.right does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::Op:
-        pushReflectValue(L, handle.doc, n->op);
+        lua_pushstring(L, toString(n->op).c_str());
         return true;
     case ReflectAtom::SetOp:
-        readReflectValue(L, handle.doc, 2, n->op);
+        beginReflectWrite(L, handle.doc, false);
+        n->op = readEnum<Luau::AstExprBinary::Op>(L, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Left:
-        pushReflectValue(L, handle.doc, n->left);
+        pushAstNode(L, handle.doc, n->left);
         return true;
     case ReflectAtom::SetLeft:
-        readReflectValue(L, handle.doc, 2, n->left);
+        beginReflectWrite(L, handle.doc, true);
+        n->left = readNode<Luau::AstExpr>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Right:
-        pushReflectValue(L, handle.doc, n->right);
+        pushAstNode(L, handle.doc, n->right);
         return true;
     case ReflectAtom::SetRight:
-        readReflectValue(L, handle.doc, 2, n->right);
+        beginReflectWrite(L, handle.doc, true);
+        n->right = readNode<Luau::AstExpr>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -2413,46 +3017,56 @@ static void collectAstExprBinaryProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstExprBinary*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->op);
+    lua_pushstring(L, toString(n->op).c_str());
     lua_setfield(L, -2, "op");
-    pushReflectValue(L, handle.doc, n->left);
+    pushAstNode(L, handle.doc, n->left);
     lua_setfield(L, -2, "left");
-    pushReflectValue(L, handle.doc, n->right);
+    pushAstNode(L, handle.doc, n->right);
     lua_setfield(L, -2, "right");
 }
 
-static Luau::AstNode* createDefaultAstExprTypeAssertion(Luau::Allocator& alloc)
+static void validateAstExprBinary(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstExprTypeAssertion>(Luau::Location(), nullptr, nullptr);
+    auto* n = static_cast<Luau::AstExprBinary*>(node);
+    (void)n;
+    v.child(n->left, "left", -1, "is nil");
+    v.child(n->right, "right", -1, "is nil");
 }
 
 static bool handleAstExprTypeAssertionMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstExprTypeAssertion*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstExprTypeAssertion.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstExprTypeAssertion.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->expr)>, Luau::AstExpr*>, "schema type of AstExprTypeAssertion.expr does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->annotation)>, Luau::AstType*>, "schema type of AstExprTypeAssertion.annotation does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::Expr:
-        pushReflectValue(L, handle.doc, n->expr);
+        pushAstNode(L, handle.doc, n->expr);
         return true;
     case ReflectAtom::SetExpr:
-        readReflectValue(L, handle.doc, 2, n->expr);
+        beginReflectWrite(L, handle.doc, true);
+        n->expr = readNode<Luau::AstExpr>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Annotation:
-        pushReflectValue(L, handle.doc, n->annotation);
+        pushAstNode(L, handle.doc, n->annotation);
         return true;
     case ReflectAtom::SetAnnotation:
-        readReflectValue(L, handle.doc, 2, n->annotation);
+        beginReflectWrite(L, handle.doc, true);
+        n->annotation = readNode<Luau::AstType>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -2464,58 +3078,72 @@ static void collectAstExprTypeAssertionProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstExprTypeAssertion*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->expr);
+    pushAstNode(L, handle.doc, n->expr);
     lua_setfield(L, -2, "expr");
-    pushReflectValue(L, handle.doc, n->annotation);
+    pushAstNode(L, handle.doc, n->annotation);
     lua_setfield(L, -2, "annotation");
 }
 
-static Luau::AstNode* createDefaultAstExprIfElse(Luau::Allocator& alloc)
+static void validateAstExprTypeAssertion(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstExprIfElse>(Luau::Location(), nullptr, true, nullptr, true, nullptr, Luau::Location(), std::nullopt, std::nullopt);
+    auto* n = static_cast<Luau::AstExprTypeAssertion*>(node);
+    (void)n;
+    v.child(n->expr, "expr", -1, "is nil");
+    v.child(n->annotation, "annotation", -1, "is nil");
 }
 
 static bool handleAstExprIfElseMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstExprIfElse*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstExprIfElse.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstExprIfElse.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->hasElse)>, bool>, "schema type of AstExprIfElse.hasElse does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->condition)>, Luau::AstExpr*>, "schema type of AstExprIfElse.condition does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->trueExpr)>, Luau::AstExpr*>, "schema type of AstExprIfElse.trueExpr does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->falseExpr)>, Luau::AstExpr*>, "schema type of AstExprIfElse.falseExpr does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::HasElse:
-        pushReflectValue(L, handle.doc, n->hasElse);
+        lua_pushboolean(L, n->hasElse);
         return true;
     case ReflectAtom::SetHasElse:
-        readReflectValue(L, handle.doc, 2, n->hasElse);
+        beginReflectWrite(L, handle.doc, false);
+        n->hasElse = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Condition:
-        pushReflectValue(L, handle.doc, n->condition);
+        pushAstNode(L, handle.doc, n->condition);
         return true;
     case ReflectAtom::SetCondition:
-        readReflectValue(L, handle.doc, 2, n->condition);
+        beginReflectWrite(L, handle.doc, true);
+        n->condition = readNode<Luau::AstExpr>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::TrueExpr:
-        pushReflectValue(L, handle.doc, n->trueExpr);
+        pushAstNode(L, handle.doc, n->trueExpr);
         return true;
     case ReflectAtom::SetTrueExpr:
-        readReflectValue(L, handle.doc, 2, n->trueExpr);
+        beginReflectWrite(L, handle.doc, true);
+        n->trueExpr = readNode<Luau::AstExpr>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::FalseExpr:
-        pushReflectValue(L, handle.doc, n->falseExpr);
+        pushAstNode(L, handle.doc, n->falseExpr);
         return true;
     case ReflectAtom::SetFalseExpr:
-        readReflectValue(L, handle.doc, 2, n->falseExpr);
+        beginReflectWrite(L, handle.doc, true);
+        n->falseExpr = readNode<Luau::AstExpr>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -2527,48 +3155,59 @@ static void collectAstExprIfElseProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstExprIfElse*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->hasElse);
+    lua_pushboolean(L, n->hasElse);
     lua_setfield(L, -2, "hasElse");
-    pushReflectValue(L, handle.doc, n->condition);
+    pushAstNode(L, handle.doc, n->condition);
     lua_setfield(L, -2, "condition");
-    pushReflectValue(L, handle.doc, n->trueExpr);
+    pushAstNode(L, handle.doc, n->trueExpr);
     lua_setfield(L, -2, "trueExpr");
-    pushReflectValue(L, handle.doc, n->falseExpr);
+    pushAstNode(L, handle.doc, n->falseExpr);
     lua_setfield(L, -2, "falseExpr");
 }
 
-static Luau::AstNode* createDefaultAstExprInterpString(Luau::Allocator& alloc)
+static void validateAstExprIfElse(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstExprInterpString>(Luau::Location(), Luau::AstArray<Luau::AstArray<char>>{nullptr, 0}, Luau::AstArray<Luau::AstExpr*>{nullptr, 0});
+    auto* n = static_cast<Luau::AstExprIfElse*>(node);
+    (void)n;
+    v.child(n->condition, "condition", -1, "is nil");
+    v.child(n->trueExpr, "trueExpr", -1, "is nil");
+    v.child(n->falseExpr, "falseExpr", -1, "is nil");
 }
 
 static bool handleAstExprInterpStringMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstExprInterpString*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstExprInterpString.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstExprInterpString.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->strings)>, Luau::AstArray<Luau::AstArray<char>>>, "schema type of AstExprInterpString.strings does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->expressions)>, Luau::AstArray<Luau::AstExpr*>>, "schema type of AstExprInterpString.expressions does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::Strings:
-        pushReflectValue(L, handle.doc, n->strings);
+        pushArray(L, n->strings.size, [&](size_t i) { lua_pushlstring(L, n->strings.data[i].data ? n->strings.data[i].data : "", n->strings.data[i].size); });
         return true;
     case ReflectAtom::SetStrings:
-        readReflectValue(L, handle.doc, 2, n->strings);
+        beginReflectWrite(L, handle.doc, false);
+        n->strings = readArray<Luau::AstArray<char>>(L, handle.doc, 2, [&](int) { return readString(L, handle.doc, -1); });
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Expressions:
-        pushReflectValue(L, handle.doc, n->expressions);
+        pushNodeArray(L, handle.doc, n->expressions);
         return true;
     case ReflectAtom::SetExpressions:
-        readReflectValue(L, handle.doc, 2, n->expressions);
+        beginReflectWrite(L, handle.doc, true);
+        n->expressions = readNodeArray<Luau::AstExpr>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -2580,44 +3219,56 @@ static void collectAstExprInterpStringProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstExprInterpString*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->strings);
+    pushArray(L, n->strings.size, [&](size_t i) { lua_pushlstring(L, n->strings.data[i].data ? n->strings.data[i].data : "", n->strings.data[i].size); });
     lua_setfield(L, -2, "strings");
-    pushReflectValue(L, handle.doc, n->expressions);
+    pushNodeArray(L, handle.doc, n->expressions);
     lua_setfield(L, -2, "expressions");
 }
 
-static Luau::AstNode* createDefaultAstExprInstantiate(Luau::Allocator& alloc)
+static void validateAstExprInterpString(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstExprInstantiate>(Luau::Location(), nullptr, Luau::AstArray<Luau::AstTypeOrPack>{nullptr, 0});
+    auto* n = static_cast<Luau::AstExprInterpString*>(node);
+    (void)n;
+    for (size_t i = 0; i < n->expressions.size; i++)
+    {
+        v.child(n->expressions.data[i], "expressions", int(i), "is nil");
+    }
 }
 
 static bool handleAstExprInstantiateMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstExprInstantiate*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstExprInstantiate.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstExprInstantiate.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->expr)>, Luau::AstExpr*>, "schema type of AstExprInstantiate.expr does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->typeArguments)>, Luau::AstArray<Luau::AstTypeOrPack>>, "schema type of AstExprInstantiate.typeArguments does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::Expr:
-        pushReflectValue(L, handle.doc, n->expr);
+        pushAstNode(L, handle.doc, n->expr);
         return true;
     case ReflectAtom::SetExpr:
-        readReflectValue(L, handle.doc, 2, n->expr);
+        beginReflectWrite(L, handle.doc, true);
+        n->expr = readNode<Luau::AstExpr>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::TypeArguments:
-        pushReflectValue(L, handle.doc, n->typeArguments);
+        pushTypeOrPackArray(L, handle.doc, n->typeArguments);
         return true;
     case ReflectAtom::SetTypeArguments:
-        readReflectValue(L, handle.doc, 2, n->typeArguments);
+        beginReflectWrite(L, handle.doc, true);
+        n->typeArguments = readTypeOrPackArray(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -2629,37 +3280,48 @@ static void collectAstExprInstantiateProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstExprInstantiate*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->expr);
+    pushAstNode(L, handle.doc, n->expr);
     lua_setfield(L, -2, "expr");
-    pushReflectValue(L, handle.doc, n->typeArguments);
+    pushTypeOrPackArray(L, handle.doc, n->typeArguments);
     lua_setfield(L, -2, "typeArguments");
 }
 
-static Luau::AstNode* createDefaultAstExprError(Luau::Allocator& alloc)
+static void validateAstExprInstantiate(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstExprError>(Luau::Location(), Luau::AstArray<Luau::AstExpr*>{nullptr, 0}, 0);
+    auto* n = static_cast<Luau::AstExprInstantiate*>(node);
+    (void)n;
+    v.child(n->expr, "expr", -1, "is nil");
+    for (size_t i = 0; i < n->typeArguments.size; i++)
+    {
+        v.child(n->typeArguments.data[i].type ? static_cast<Luau::AstNode*>(n->typeArguments.data[i].type) : static_cast<Luau::AstNode*>(n->typeArguments.data[i].typePack), "typeArguments", int(i), "is nil");
+    }
 }
 
 static bool handleAstExprErrorMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstExprError*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstExprError.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstExprError.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->messageIndex)>, unsigned int>, "schema type of AstExprError.messageIndex does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->expressions)>, Luau::AstArray<Luau::AstExpr*>>, "schema type of AstExprError.expressions does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::MessageIndex:
-        pushReflectValue(L, handle.doc, n->messageIndex);
+        lua_pushinteger(L, int(n->messageIndex));
         return true;
     case ReflectAtom::Expressions:
-        pushReflectValue(L, handle.doc, n->expressions);
+        pushNodeArray(L, handle.doc, n->expressions);
         return true;
     default:
         return false;
@@ -2670,58 +3332,74 @@ static void collectAstExprErrorProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstExprError*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->messageIndex);
+    lua_pushinteger(L, int(n->messageIndex));
     lua_setfield(L, -2, "messageIndex");
-    pushReflectValue(L, handle.doc, n->expressions);
+    pushNodeArray(L, handle.doc, n->expressions);
     lua_setfield(L, -2, "expressions");
 }
 
-static Luau::AstNode* createDefaultAstTypeReference(Luau::Allocator& alloc)
+static void validateAstExprError(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstTypeReference>(Luau::Location(), std::nullopt, Luau::AstName(), std::nullopt, Luau::Location(), false, Luau::AstArray<Luau::AstTypeOrPack>{nullptr, 0});
+    auto* n = static_cast<Luau::AstExprError*>(node);
+    (void)n;
+    for (size_t i = 0; i < n->expressions.size; i++)
+    {
+        v.child(n->expressions.data[i], "expressions", int(i), "is nil");
+    }
 }
 
 static bool handleAstTypeReferenceMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstTypeReference*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstTypeReference.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstTypeReference.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->name)>, Luau::AstName>, "schema type of AstTypeReference.name does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->prefix)>, std::optional<Luau::AstName>>, "schema type of AstTypeReference.prefix does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->hasParameterList)>, bool>, "schema type of AstTypeReference.hasParameterList does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->parameters)>, Luau::AstArray<Luau::AstTypeOrPack>>, "schema type of AstTypeReference.parameters does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::Name:
-        pushReflectValue(L, handle.doc, n->name);
+        n->name.value ? lua_pushstring(L, n->name.value) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetName:
-        readReflectValue(L, handle.doc, 2, n->name);
+        beginReflectWrite(L, handle.doc, false);
+        n->name = readName(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Prefix:
-        pushReflectValue(L, handle.doc, n->prefix);
+        (n->prefix && n->prefix->value) ? lua_pushstring(L, n->prefix->value) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetPrefix:
-        readReflectValue(L, handle.doc, 2, n->prefix);
+        beginReflectWrite(L, handle.doc, false);
+        n->prefix = lua_isnil(L, 2) ? std::nullopt : std::optional<Luau::AstName>(readName(L, handle.doc, 2));
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::HasParameterList:
-        pushReflectValue(L, handle.doc, n->hasParameterList);
+        lua_pushboolean(L, n->hasParameterList);
         return true;
     case ReflectAtom::SetHasParameterList:
-        readReflectValue(L, handle.doc, 2, n->hasParameterList);
+        beginReflectWrite(L, handle.doc, false);
+        n->hasParameterList = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Parameters:
-        pushReflectValue(L, handle.doc, n->parameters);
+        pushTypeOrPackArray(L, handle.doc, n->parameters);
         return true;
     case ReflectAtom::SetParameters:
-        readReflectValue(L, handle.doc, 2, n->parameters);
+        beginReflectWrite(L, handle.doc, true);
+        n->parameters = readTypeOrPackArray(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -2733,48 +3411,65 @@ static void collectAstTypeReferenceProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstTypeReference*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->name);
+    n->name.value ? lua_pushstring(L, n->name.value) : lua_pushnil(L);
     lua_setfield(L, -2, "name");
-    pushReflectValue(L, handle.doc, n->prefix);
+    (n->prefix && n->prefix->value) ? lua_pushstring(L, n->prefix->value) : lua_pushnil(L);
     lua_setfield(L, -2, "prefix");
-    pushReflectValue(L, handle.doc, n->hasParameterList);
+    lua_pushboolean(L, n->hasParameterList);
     lua_setfield(L, -2, "hasParameterList");
-    pushReflectValue(L, handle.doc, n->parameters);
+    pushTypeOrPackArray(L, handle.doc, n->parameters);
     lua_setfield(L, -2, "parameters");
 }
 
-static Luau::AstNode* createDefaultAstTypeTable(Luau::Allocator& alloc)
+static void validateAstTypeReference(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstTypeTable>(Luau::Location(), Luau::AstArray<Luau::AstTableProp>{nullptr, 0}, nullptr);
+    auto* n = static_cast<Luau::AstTypeReference*>(node);
+    (void)n;
+    v.name(n->name, "name", -1, "is nil");
+    if (n->prefix)
+    {
+        v.name(*n->prefix, "prefix", -1, "is nil");
+    }
+    for (size_t i = 0; i < n->parameters.size; i++)
+    {
+        v.child(n->parameters.data[i].type ? static_cast<Luau::AstNode*>(n->parameters.data[i].type) : static_cast<Luau::AstNode*>(n->parameters.data[i].typePack), "parameters", int(i), "is nil");
+    }
 }
 
 static bool handleAstTypeTableMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstTypeTable*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstTypeTable.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstTypeTable.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->props)>, Luau::AstArray<Luau::AstTableProp>>, "schema type of AstTypeTable.props does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->indexer)>, Luau::AstTableIndexer*>, "schema type of AstTypeTable.indexer does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::Props:
-        pushReflectValue(L, handle.doc, n->props);
+        pushArray(L, n->props.size, [&](size_t i) { pushAstAux(L, handle.doc, n->props.data[i]); });
         return true;
     case ReflectAtom::SetProps:
-        readReflectValue(L, handle.doc, 2, n->props);
+        beginReflectWrite(L, handle.doc, true);
+        n->props = readArray<Luau::AstTableProp>(L, handle.doc, 2, [&](int) { return readAux(L, handle.doc, -1, Aux_TableProp, &AstAuxData::tableProp, "AstTableProp"); });
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Indexer:
-        pushReflectValue(L, handle.doc, n->indexer);
+        n->indexer ? pushAstAux(L, handle.doc, *n->indexer) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetIndexer:
-        readReflectValue(L, handle.doc, 2, n->indexer);
+        beginReflectWrite(L, handle.doc, true);
+        n->indexer = lua_isnil(L, 2) ? nullptr : handle.doc->allocator()->alloc<Luau::AstTableIndexer>(readAux(L, handle.doc, 2, Aux_TableIndexer, &AstAuxData::tableIndexer, "AstTableIndexer"));
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -2786,65 +3481,91 @@ static void collectAstTypeTableProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstTypeTable*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->props);
+    pushArray(L, n->props.size, [&](size_t i) { pushAstAux(L, handle.doc, n->props.data[i]); });
     lua_setfield(L, -2, "props");
-    pushReflectValue(L, handle.doc, n->indexer);
+    n->indexer ? pushAstAux(L, handle.doc, *n->indexer) : lua_pushnil(L);
     lua_setfield(L, -2, "indexer");
 }
 
-static Luau::AstNode* createDefaultAstTypeFunction(Luau::Allocator& alloc)
+static void validateAstTypeTable(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstTypeFunction>(Luau::Location(), Luau::AstArray<Luau::AstAttr*>{nullptr, 0}, Luau::AstArray<Luau::AstGenericType*>{nullptr, 0}, Luau::AstArray<Luau::AstGenericTypePack*>{nullptr, 0}, Luau::AstTypeList{}, Luau::AstArray<std::optional<Luau::AstArgumentName>>{nullptr, 0}, nullptr);
+    auto* n = static_cast<Luau::AstTypeTable*>(node);
+    (void)n;
+    for (size_t i = 0; i < n->props.size; i++)
+    {
+        const auto& item = n->props.data[i];
+        v.name(item.name, "props", int(i), "has no name");
+        v.child(item.type, "props", int(i), "has no type");
+    }
+    if (n->indexer)
+    {
+        const auto& item = *n->indexer;
+        v.child(item.indexType, "indexer", -1, "has no index type");
+        v.child(item.resultType, "indexer", -1, "has no result type");
+    }
 }
 
 static bool handleAstTypeFunctionMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstTypeFunction*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstTypeFunction.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstTypeFunction.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->generics)>, Luau::AstArray<Luau::AstGenericType*>>, "schema type of AstTypeFunction.generics does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->genericPacks)>, Luau::AstArray<Luau::AstGenericTypePack*>>, "schema type of AstTypeFunction.genericPacks does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->argTypes)>, Luau::AstTypeList>, "schema type of AstTypeFunction.argTypes does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->returnTypes)>, Luau::AstTypePack*>, "schema type of AstTypeFunction.returnTypes does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->attributes)>, Luau::AstArray<Luau::AstAttr*>>, "schema type of AstTypeFunction.attributes does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::Generics:
-        pushReflectValue(L, handle.doc, n->generics);
+        pushNodeArray(L, handle.doc, n->generics);
         return true;
     case ReflectAtom::SetGenerics:
-        readReflectValue(L, handle.doc, 2, n->generics);
+        beginReflectWrite(L, handle.doc, true);
+        n->generics = readNodeArray<Luau::AstGenericType>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::GenericPacks:
-        pushReflectValue(L, handle.doc, n->genericPacks);
+        pushNodeArray(L, handle.doc, n->genericPacks);
         return true;
     case ReflectAtom::SetGenericPacks:
-        readReflectValue(L, handle.doc, 2, n->genericPacks);
+        beginReflectWrite(L, handle.doc, true);
+        n->genericPacks = readNodeArray<Luau::AstGenericTypePack>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::ArgTypes:
-        pushReflectValue(L, handle.doc, n->argTypes);
+        pushAstAux(L, handle.doc, n->argTypes);
         return true;
     case ReflectAtom::SetArgTypes:
-        readReflectValue(L, handle.doc, 2, n->argTypes);
+        beginReflectWrite(L, handle.doc, true);
+        n->argTypes = readAux(L, handle.doc, 2, Aux_TypeList, &AstAuxData::typeList, "AstTypeList");
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::ReturnTypes:
-        pushReflectValue(L, handle.doc, n->returnTypes);
+        pushAstNode(L, handle.doc, n->returnTypes);
         return true;
     case ReflectAtom::SetReturnTypes:
-        readReflectValue(L, handle.doc, 2, n->returnTypes);
+        beginReflectWrite(L, handle.doc, true);
+        n->returnTypes = readNode<Luau::AstTypePack>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Attributes:
-        pushReflectValue(L, handle.doc, n->attributes);
+        pushNodeArray(L, handle.doc, n->attributes);
         return true;
     case ReflectAtom::SetAttributes:
-        readReflectValue(L, handle.doc, 2, n->attributes);
+        beginReflectWrite(L, handle.doc, true);
+        n->attributes = readNodeArray<Luau::AstAttr>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -2856,43 +3577,70 @@ static void collectAstTypeFunctionProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstTypeFunction*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->generics);
+    pushNodeArray(L, handle.doc, n->generics);
     lua_setfield(L, -2, "generics");
-    pushReflectValue(L, handle.doc, n->genericPacks);
+    pushNodeArray(L, handle.doc, n->genericPacks);
     lua_setfield(L, -2, "genericPacks");
-    pushReflectValue(L, handle.doc, n->argTypes);
+    pushAstAux(L, handle.doc, n->argTypes);
     lua_setfield(L, -2, "argTypes");
-    pushReflectValue(L, handle.doc, n->returnTypes);
+    pushAstNode(L, handle.doc, n->returnTypes);
     lua_setfield(L, -2, "returnTypes");
-    pushReflectValue(L, handle.doc, n->attributes);
+    pushNodeArray(L, handle.doc, n->attributes);
     lua_setfield(L, -2, "attributes");
 }
 
-static Luau::AstNode* createDefaultAstTypeTypeof(Luau::Allocator& alloc)
+static void validateAstTypeFunction(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstTypeTypeof>(Luau::Location(), nullptr);
+    auto* n = static_cast<Luau::AstTypeFunction*>(node);
+    (void)n;
+    for (size_t i = 0; i < n->generics.size; i++)
+    {
+        v.child(n->generics.data[i], "generics", int(i), "is nil");
+    }
+    for (size_t i = 0; i < n->genericPacks.size; i++)
+    {
+        v.child(n->genericPacks.data[i], "genericPacks", int(i), "is nil");
+    }
+    {
+        const auto& item = n->argTypes;
+        for (size_t j = 0; j < item.types.size; j++)
+        {
+            v.child(item.types.data[j], "argTypes", int(j), "is nil");
+        }
+        v.child(item.tailType, "argTypes", -1, nullptr);
+    }
+    v.child(n->returnTypes, "returnTypes", -1, "is nil");
+    for (size_t i = 0; i < n->attributes.size; i++)
+    {
+        v.child(n->attributes.data[i], "attributes", int(i), "is nil");
+    }
 }
 
 static bool handleAstTypeTypeofMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstTypeTypeof*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstTypeTypeof.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstTypeTypeof.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->expr)>, Luau::AstExpr*>, "schema type of AstTypeTypeof.expr does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::Expr:
-        pushReflectValue(L, handle.doc, n->expr);
+        pushAstNode(L, handle.doc, n->expr);
         return true;
     case ReflectAtom::SetExpr:
-        readReflectValue(L, handle.doc, 2, n->expr);
+        beginReflectWrite(L, handle.doc, true);
+        n->expr = readNode<Luau::AstExpr>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -2904,29 +3652,34 @@ static void collectAstTypeTypeofProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstTypeTypeof*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->expr);
+    pushAstNode(L, handle.doc, n->expr);
     lua_setfield(L, -2, "expr");
 }
 
-static Luau::AstNode* createDefaultAstTypeOptional(Luau::Allocator& alloc)
+static void validateAstTypeTypeof(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstTypeOptional>(Luau::Location());
+    auto* n = static_cast<Luau::AstTypeTypeof*>(node);
+    (void)n;
+    v.child(n->expr, "expr", -1, "is nil");
 }
 
 static bool handleAstTypeOptionalMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstTypeOptional*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstTypeOptional.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstTypeOptional.cst does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     default:
         return false;
@@ -2937,33 +3690,39 @@ static void collectAstTypeOptionalProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstTypeOptional*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
 }
 
-static Luau::AstNode* createDefaultAstTypeUnion(Luau::Allocator& alloc)
+static void validateAstTypeOptional(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstTypeUnion>(Luau::Location(), Luau::AstArray<Luau::AstType*>{nullptr, 0});
+    auto* n = static_cast<Luau::AstTypeOptional*>(node);
+    (void)n;
 }
 
 static bool handleAstTypeUnionMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstTypeUnion*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstTypeUnion.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstTypeUnion.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->types)>, Luau::AstArray<Luau::AstType*>>, "schema type of AstTypeUnion.types does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::Types:
-        pushReflectValue(L, handle.doc, n->types);
+        pushNodeArray(L, handle.doc, n->types);
         return true;
     case ReflectAtom::SetTypes:
-        readReflectValue(L, handle.doc, 2, n->types);
+        beginReflectWrite(L, handle.doc, true);
+        n->types = readNodeArray<Luau::AstType>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -2975,35 +3734,45 @@ static void collectAstTypeUnionProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstTypeUnion*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->types);
+    pushNodeArray(L, handle.doc, n->types);
     lua_setfield(L, -2, "types");
 }
 
-static Luau::AstNode* createDefaultAstTypeIntersection(Luau::Allocator& alloc)
+static void validateAstTypeUnion(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstTypeIntersection>(Luau::Location(), Luau::AstArray<Luau::AstType*>{nullptr, 0});
+    auto* n = static_cast<Luau::AstTypeUnion*>(node);
+    (void)n;
+    for (size_t i = 0; i < n->types.size; i++)
+    {
+        v.child(n->types.data[i], "types", int(i), "is nil");
+    }
 }
 
 static bool handleAstTypeIntersectionMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstTypeIntersection*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstTypeIntersection.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstTypeIntersection.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->types)>, Luau::AstArray<Luau::AstType*>>, "schema type of AstTypeIntersection.types does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::Types:
-        pushReflectValue(L, handle.doc, n->types);
+        pushNodeArray(L, handle.doc, n->types);
         return true;
     case ReflectAtom::SetTypes:
-        readReflectValue(L, handle.doc, 2, n->types);
+        beginReflectWrite(L, handle.doc, true);
+        n->types = readNodeArray<Luau::AstType>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -3015,35 +3784,45 @@ static void collectAstTypeIntersectionProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstTypeIntersection*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->types);
+    pushNodeArray(L, handle.doc, n->types);
     lua_setfield(L, -2, "types");
 }
 
-static Luau::AstNode* createDefaultAstTypeSingletonBool(Luau::Allocator& alloc)
+static void validateAstTypeIntersection(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstTypeSingletonBool>(Luau::Location(), false);
+    auto* n = static_cast<Luau::AstTypeIntersection*>(node);
+    (void)n;
+    for (size_t i = 0; i < n->types.size; i++)
+    {
+        v.child(n->types.data[i], "types", int(i), "is nil");
+    }
 }
 
 static bool handleAstTypeSingletonBoolMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstTypeSingletonBool*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstTypeSingletonBool.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstTypeSingletonBool.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->value)>, bool>, "schema type of AstTypeSingletonBool.value does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::Value:
-        pushReflectValue(L, handle.doc, n->value);
+        lua_pushboolean(L, n->value);
         return true;
     case ReflectAtom::SetValue:
-        readReflectValue(L, handle.doc, 2, n->value);
+        beginReflectWrite(L, handle.doc, false);
+        n->value = lua_toboolean(L, 2) != 0;
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -3055,35 +3834,41 @@ static void collectAstTypeSingletonBoolProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstTypeSingletonBool*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->value);
+    lua_pushboolean(L, n->value);
     lua_setfield(L, -2, "value");
 }
 
-static Luau::AstNode* createDefaultAstTypeSingletonString(Luau::Allocator& alloc)
+static void validateAstTypeSingletonBool(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstTypeSingletonString>(Luau::Location(), Luau::AstArray<char>{nullptr, 0});
+    auto* n = static_cast<Luau::AstTypeSingletonBool*>(node);
+    (void)n;
 }
 
 static bool handleAstTypeSingletonStringMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstTypeSingletonString*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstTypeSingletonString.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstTypeSingletonString.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->value)>, Luau::AstArray<char>>, "schema type of AstTypeSingletonString.value does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::Value:
-        pushReflectValue(L, handle.doc, n->value);
+        lua_pushlstring(L, n->value.data ? n->value.data : "", n->value.size);
         return true;
     case ReflectAtom::SetValue:
-        readReflectValue(L, handle.doc, 2, n->value);
+        beginReflectWrite(L, handle.doc, false);
+        n->value = readString(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -3095,35 +3880,41 @@ static void collectAstTypeSingletonStringProps(lua_State* L, AstNodeData& handle
 {
     auto* n = static_cast<Luau::AstTypeSingletonString*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->value);
+    lua_pushlstring(L, n->value.data ? n->value.data : "", n->value.size);
     lua_setfield(L, -2, "value");
 }
 
-static Luau::AstNode* createDefaultAstTypeGroup(Luau::Allocator& alloc)
+static void validateAstTypeSingletonString(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstTypeGroup>(Luau::Location(), nullptr);
+    auto* n = static_cast<Luau::AstTypeSingletonString*>(node);
+    (void)n;
 }
 
 static bool handleAstTypeGroupMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstTypeGroup*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstTypeGroup.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstTypeGroup.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->type)>, Luau::AstType*>, "schema type of AstTypeGroup.type does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::Type:
-        pushReflectValue(L, handle.doc, n->type);
+        pushAstNode(L, handle.doc, n->type);
         return true;
     case ReflectAtom::SetType:
-        readReflectValue(L, handle.doc, 2, n->type);
+        beginReflectWrite(L, handle.doc, true);
+        n->type = readNode<Luau::AstType>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -3135,38 +3926,46 @@ static void collectAstTypeGroupProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstTypeGroup*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->type);
+    pushAstNode(L, handle.doc, n->type);
     lua_setfield(L, -2, "type");
 }
 
-static Luau::AstNode* createDefaultAstTypeError(Luau::Allocator& alloc)
+static void validateAstTypeGroup(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstTypeError>(Luau::Location(), Luau::AstArray<Luau::AstType*>{nullptr, 0}, false, 0);
+    auto* n = static_cast<Luau::AstTypeGroup*>(node);
+    (void)n;
+    v.child(n->type, "type", -1, "is nil");
 }
 
 static bool handleAstTypeErrorMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstTypeError*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstTypeError.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstTypeError.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->isMissing)>, bool>, "schema type of AstTypeError.isMissing does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->messageIndex)>, unsigned int>, "schema type of AstTypeError.messageIndex does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->types)>, Luau::AstArray<Luau::AstType*>>, "schema type of AstTypeError.types does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::IsMissing:
-        pushReflectValue(L, handle.doc, n->isMissing);
+        lua_pushboolean(L, n->isMissing);
         return true;
     case ReflectAtom::MessageIndex:
-        pushReflectValue(L, handle.doc, n->messageIndex);
+        lua_pushinteger(L, int(n->messageIndex));
         return true;
     case ReflectAtom::Types:
-        pushReflectValue(L, handle.doc, n->types);
+        pushNodeArray(L, handle.doc, n->types);
         return true;
     default:
         return false;
@@ -3177,39 +3976,49 @@ static void collectAstTypeErrorProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstTypeError*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->isMissing);
+    lua_pushboolean(L, n->isMissing);
     lua_setfield(L, -2, "isMissing");
-    pushReflectValue(L, handle.doc, n->messageIndex);
+    lua_pushinteger(L, int(n->messageIndex));
     lua_setfield(L, -2, "messageIndex");
-    pushReflectValue(L, handle.doc, n->types);
+    pushNodeArray(L, handle.doc, n->types);
     lua_setfield(L, -2, "types");
 }
 
-static Luau::AstNode* createDefaultAstTypePackExplicit(Luau::Allocator& alloc)
+static void validateAstTypeError(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstTypePackExplicit>(Luau::Location(), Luau::AstTypeList{});
+    auto* n = static_cast<Luau::AstTypeError*>(node);
+    (void)n;
+    for (size_t i = 0; i < n->types.size; i++)
+    {
+        v.child(n->types.data[i], "types", int(i), "is nil");
+    }
 }
 
 static bool handleAstTypePackExplicitMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstTypePackExplicit*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstTypePackExplicit.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstTypePackExplicit.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->typeList)>, Luau::AstTypeList>, "schema type of AstTypePackExplicit.typeList does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::TypeList:
-        pushReflectValue(L, handle.doc, n->typeList);
+        pushAstAux(L, handle.doc, n->typeList);
         return true;
     case ReflectAtom::SetTypeList:
-        readReflectValue(L, handle.doc, 2, n->typeList);
+        beginReflectWrite(L, handle.doc, true);
+        n->typeList = readAux(L, handle.doc, 2, Aux_TypeList, &AstAuxData::typeList, "AstTypeList");
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -3221,35 +4030,49 @@ static void collectAstTypePackExplicitProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstTypePackExplicit*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->typeList);
+    pushAstAux(L, handle.doc, n->typeList);
     lua_setfield(L, -2, "typeList");
 }
 
-static Luau::AstNode* createDefaultAstTypePackVariadic(Luau::Allocator& alloc)
+static void validateAstTypePackExplicit(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstTypePackVariadic>(Luau::Location(), nullptr);
+    auto* n = static_cast<Luau::AstTypePackExplicit*>(node);
+    (void)n;
+    {
+        const auto& item = n->typeList;
+        for (size_t j = 0; j < item.types.size; j++)
+        {
+            v.child(item.types.data[j], "typeList", int(j), "is nil");
+        }
+        v.child(item.tailType, "typeList", -1, nullptr);
+    }
 }
 
 static bool handleAstTypePackVariadicMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstTypePackVariadic*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstTypePackVariadic.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstTypePackVariadic.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->variadicType)>, Luau::AstType*>, "schema type of AstTypePackVariadic.variadicType does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::VariadicType:
-        pushReflectValue(L, handle.doc, n->variadicType);
+        pushAstNode(L, handle.doc, n->variadicType);
         return true;
     case ReflectAtom::SetVariadicType:
-        readReflectValue(L, handle.doc, 2, n->variadicType);
+        beginReflectWrite(L, handle.doc, true);
+        n->variadicType = readNode<Luau::AstType>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -3261,35 +4084,42 @@ static void collectAstTypePackVariadicProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstTypePackVariadic*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->variadicType);
+    pushAstNode(L, handle.doc, n->variadicType);
     lua_setfield(L, -2, "variadicType");
 }
 
-static Luau::AstNode* createDefaultAstTypePackGeneric(Luau::Allocator& alloc)
+static void validateAstTypePackVariadic(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstTypePackGeneric>(Luau::Location(), Luau::AstName());
+    auto* n = static_cast<Luau::AstTypePackVariadic*>(node);
+    (void)n;
+    v.child(n->variadicType, "variadicType", -1, "is nil");
 }
 
 static bool handleAstTypePackGenericMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstTypePackGeneric*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstTypePackGeneric.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstTypePackGeneric.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->genericName)>, Luau::AstName>, "schema type of AstTypePackGeneric.name does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::Name:
-        pushReflectValue(L, handle.doc, n->genericName);
+        n->genericName.value ? lua_pushstring(L, n->genericName.value) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetName:
-        readReflectValue(L, handle.doc, 2, n->genericName);
+        beginReflectWrite(L, handle.doc, false);
+        n->genericName = readName(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -3301,42 +4131,51 @@ static void collectAstTypePackGenericProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstTypePackGeneric*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->genericName);
+    n->genericName.value ? lua_pushstring(L, n->genericName.value) : lua_pushnil(L);
     lua_setfield(L, -2, "name");
 }
 
-static Luau::AstNode* createDefaultAstGenericType(Luau::Allocator& alloc)
+static void validateAstTypePackGeneric(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstGenericType>(Luau::Location(), Luau::AstName(), nullptr);
+    auto* n = static_cast<Luau::AstTypePackGeneric*>(node);
+    (void)n;
+    v.name(n->genericName, "name", -1, "is nil");
 }
 
 static bool handleAstGenericTypeMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstGenericType*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstGenericType.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstGenericType.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->name)>, Luau::AstName>, "schema type of AstGenericType.name does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->defaultValue)>, Luau::AstType*>, "schema type of AstGenericType.type does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::Name:
-        pushReflectValue(L, handle.doc, n->name);
+        n->name.value ? lua_pushstring(L, n->name.value) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetName:
-        readReflectValue(L, handle.doc, 2, n->name);
+        beginReflectWrite(L, handle.doc, false);
+        n->name = readName(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Type:
-        pushReflectValue(L, handle.doc, n->defaultValue);
+        pushAstNode(L, handle.doc, n->defaultValue);
         return true;
     case ReflectAtom::SetType:
-        readReflectValue(L, handle.doc, 2, n->defaultValue);
+        beginReflectWrite(L, handle.doc, true);
+        n->defaultValue = readNode<Luau::AstType>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -3348,44 +4187,54 @@ static void collectAstGenericTypeProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstGenericType*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->name);
+    n->name.value ? lua_pushstring(L, n->name.value) : lua_pushnil(L);
     lua_setfield(L, -2, "name");
-    pushReflectValue(L, handle.doc, n->defaultValue);
+    pushAstNode(L, handle.doc, n->defaultValue);
     lua_setfield(L, -2, "type");
 }
 
-static Luau::AstNode* createDefaultAstGenericTypePack(Luau::Allocator& alloc)
+static void validateAstGenericType(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstGenericTypePack>(Luau::Location(), Luau::AstName(), nullptr);
+    auto* n = static_cast<Luau::AstGenericType*>(node);
+    (void)n;
+    v.name(n->name, "name", -1, "is nil");
+    v.child(n->defaultValue, "type", -1, nullptr);
 }
 
 static bool handleAstGenericTypePackMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstGenericTypePack*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstGenericTypePack.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstGenericTypePack.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->name)>, Luau::AstName>, "schema type of AstGenericTypePack.name does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->defaultValue)>, Luau::AstTypePack*>, "schema type of AstGenericTypePack.type does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::Name:
-        pushReflectValue(L, handle.doc, n->name);
+        n->name.value ? lua_pushstring(L, n->name.value) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetName:
-        readReflectValue(L, handle.doc, 2, n->name);
+        beginReflectWrite(L, handle.doc, false);
+        n->name = readName(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Type:
-        pushReflectValue(L, handle.doc, n->defaultValue);
+        pushAstNode(L, handle.doc, n->defaultValue);
         return true;
     case ReflectAtom::SetType:
-        readReflectValue(L, handle.doc, 2, n->defaultValue);
+        beginReflectWrite(L, handle.doc, true);
+        n->defaultValue = readNode<Luau::AstTypePack>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -3397,51 +4246,63 @@ static void collectAstGenericTypePackProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstGenericTypePack*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->name);
+    n->name.value ? lua_pushstring(L, n->name.value) : lua_pushnil(L);
     lua_setfield(L, -2, "name");
-    pushReflectValue(L, handle.doc, n->defaultValue);
+    pushAstNode(L, handle.doc, n->defaultValue);
     lua_setfield(L, -2, "type");
 }
 
-static Luau::AstNode* createDefaultAstAttr(Luau::Allocator& alloc)
+static void validateAstGenericTypePack(AstValidator& v, Luau::AstNode* node)
 {
-    return alloc.alloc<Luau::AstAttr>(Luau::Location(), Luau::AstAttr::Type::Checked, Luau::AstArray<Luau::AstExpr*>{nullptr, 0}, Luau::AstName());
+    auto* n = static_cast<Luau::AstGenericTypePack*>(node);
+    (void)n;
+    v.name(n->name, "name", -1, "is nil");
+    v.child(n->defaultValue, "type", -1, nullptr);
 }
 
 static bool handleAstAttrMethods(lua_State* L, AstNodeData& handle, ReflectAtom atom)
 {
     auto* n = static_cast<Luau::AstAttr*>(handle.node);
+    (void)n;
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->location)>, Luau::Location>, "schema type of AstAttr.origlocation does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(getNodeCst(handle, n))>, const Luau::CstNode*>, "schema type of AstAttr.cst does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->type)>, Luau::AstAttr::Type>, "schema type of AstAttr.type does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->name)>, Luau::AstName>, "schema type of AstAttr.name does not match the C++ member");
+    static_assert(std::is_same_v<std::remove_const_t<decltype(n->args)>, Luau::AstArray<Luau::AstExpr*>>, "schema type of AstAttr.args does not match the C++ member");
     switch (atom)
     {
     case ReflectAtom::OrigLocation:
-        pushReflectValue(L, handle.doc, n->location);
+        pushLocation(L, handle.doc, n->location);
         return true;
     case ReflectAtom::Cst:
-        pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+        pushCstNode(L, handle.doc, getNodeCst(handle, n));
         return true;
     case ReflectAtom::Type:
-        pushReflectValue(L, handle.doc, n->type);
+        lua_pushstring(L, toString(n->type).c_str());
         return true;
     case ReflectAtom::SetType:
-        readReflectValue(L, handle.doc, 2, n->type);
+        beginReflectWrite(L, handle.doc, false);
+        n->type = readEnum<Luau::AstAttr::Type>(L, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Name:
-        pushReflectValue(L, handle.doc, n->name);
+        n->name.value ? lua_pushstring(L, n->name.value) : lua_pushnil(L);
         return true;
     case ReflectAtom::SetName:
-        readReflectValue(L, handle.doc, 2, n->name);
+        beginReflectWrite(L, handle.doc, false);
+        n->name = readName(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     case ReflectAtom::Args:
-        pushReflectValue(L, handle.doc, n->args);
+        pushNodeArray(L, handle.doc, n->args);
         return true;
     case ReflectAtom::SetArgs:
-        readReflectValue(L, handle.doc, 2, n->args);
+        beginReflectWrite(L, handle.doc, true);
+        n->args = readNodeArray<Luau::AstExpr>(L, handle.doc, 2);
         lua_pushvalue(L, 1);
         return true;
     default:
@@ -3453,80 +4314,91 @@ static void collectAstAttrProps(lua_State* L, AstNodeData& handle)
 {
     auto* n = static_cast<Luau::AstAttr*>(handle.node);
     (void)n;
-    pushReflectValue(L, handle.doc, n->location);
+    pushLocation(L, handle.doc, n->location);
     lua_setfield(L, -2, "origlocation");
-    pushReflectValue(L, handle.doc, getNodeCst(handle, n));
+    pushCstNode(L, handle.doc, getNodeCst(handle, n));
     lua_setfield(L, -2, "cst");
-    pushReflectValue(L, handle.doc, n->type);
+    lua_pushstring(L, toString(n->type).c_str());
     lua_setfield(L, -2, "type");
-    pushReflectValue(L, handle.doc, n->name);
+    n->name.value ? lua_pushstring(L, n->name.value) : lua_pushnil(L);
     lua_setfield(L, -2, "name");
-    pushReflectValue(L, handle.doc, n->args);
+    pushNodeArray(L, handle.doc, n->args);
     lua_setfield(L, -2, "args");
+}
+
+static void validateAstAttr(AstValidator& v, Luau::AstNode* node)
+{
+    auto* n = static_cast<Luau::AstAttr*>(node);
+    (void)n;
+    v.name(n->name, "name", -1, "is nil");
+    for (size_t i = 0; i < n->args.size; i++)
+    {
+        v.child(n->args.data[i], "args", int(i), "is nil");
+    }
 }
 
 static void registerAstNodeClasses()
 {
-    registerNodeClass<Luau::AstStatBlock>("AstStatBlock", NodeCategory::Stat, handleAstStatBlockMethods, collectAstStatBlockProps, createDefaultAstStatBlock);
-    registerNodeClass<Luau::AstStatIf>("AstStatIf", NodeCategory::Stat, handleAstStatIfMethods, collectAstStatIfProps, createDefaultAstStatIf);
-    registerNodeClass<Luau::AstStatWhile>("AstStatWhile", NodeCategory::Stat, handleAstStatWhileMethods, collectAstStatWhileProps, createDefaultAstStatWhile);
-    registerNodeClass<Luau::AstStatRepeat>("AstStatRepeat", NodeCategory::Stat, handleAstStatRepeatMethods, collectAstStatRepeatProps, createDefaultAstStatRepeat);
-    registerNodeClass<Luau::AstStatBreak>("AstStatBreak", NodeCategory::Stat, handleAstStatBreakMethods, collectAstStatBreakProps, createDefaultAstStatBreak);
-    registerNodeClass<Luau::AstStatContinue>("AstStatContinue", NodeCategory::Stat, handleAstStatContinueMethods, collectAstStatContinueProps, createDefaultAstStatContinue);
-    registerNodeClass<Luau::AstStatReturn>("AstStatReturn", NodeCategory::Stat, handleAstStatReturnMethods, collectAstStatReturnProps, createDefaultAstStatReturn);
-    registerNodeClass<Luau::AstStatExpr>("AstStatExpr", NodeCategory::Stat, handleAstStatExprMethods, collectAstStatExprProps, createDefaultAstStatExpr);
-    registerNodeClass<Luau::AstStatLocal>("AstStatLocal", NodeCategory::Stat, handleAstStatLocalMethods, collectAstStatLocalProps, createDefaultAstStatLocal);
-    registerNodeClass<Luau::AstStatFor>("AstStatFor", NodeCategory::Stat, handleAstStatForMethods, collectAstStatForProps, createDefaultAstStatFor);
-    registerNodeClass<Luau::AstStatForIn>("AstStatForIn", NodeCategory::Stat, handleAstStatForInMethods, collectAstStatForInProps, createDefaultAstStatForIn);
-    registerNodeClass<Luau::AstStatAssign>("AstStatAssign", NodeCategory::Stat, handleAstStatAssignMethods, collectAstStatAssignProps, createDefaultAstStatAssign);
-    registerNodeClass<Luau::AstStatCompoundAssign>("AstStatCompoundAssign", NodeCategory::Stat, handleAstStatCompoundAssignMethods, collectAstStatCompoundAssignProps, createDefaultAstStatCompoundAssign);
-    registerNodeClass<Luau::AstStatFunction>("AstStatFunction", NodeCategory::Stat, handleAstStatFunctionMethods, collectAstStatFunctionProps, createDefaultAstStatFunction);
-    registerNodeClass<Luau::AstStatLocalFunction>("AstStatLocalFunction", NodeCategory::Stat, handleAstStatLocalFunctionMethods, collectAstStatLocalFunctionProps, createDefaultAstStatLocalFunction);
-    registerNodeClass<Luau::AstStatTypeAlias>("AstStatTypeAlias", NodeCategory::Stat, handleAstStatTypeAliasMethods, collectAstStatTypeAliasProps, createDefaultAstStatTypeAlias);
-    registerNodeClass<Luau::AstStatTypeFunction>("AstStatTypeFunction", NodeCategory::Stat, handleAstStatTypeFunctionMethods, collectAstStatTypeFunctionProps, createDefaultAstStatTypeFunction);
-    registerNodeClass<Luau::AstStatDeclareGlobal>("AstStatDeclareGlobal", NodeCategory::Stat, handleAstStatDeclareGlobalMethods, collectAstStatDeclareGlobalProps, createDefaultAstStatDeclareGlobal);
-    registerNodeClass<Luau::AstStatDeclareFunction>("AstStatDeclareFunction", NodeCategory::Stat, handleAstStatDeclareFunctionMethods, collectAstStatDeclareFunctionProps, createDefaultAstStatDeclareFunction);
-    registerNodeClass<Luau::AstStatClass>("AstStatClass", NodeCategory::Stat, handleAstStatClassMethods, collectAstStatClassProps, createDefaultAstStatClass);
-    registerNodeClass<Luau::AstStatDeclareExternType>("AstStatDeclareExternType", NodeCategory::Stat, handleAstStatDeclareExternTypeMethods, collectAstStatDeclareExternTypeProps, createDefaultAstStatDeclareExternType);
-    registerNodeClass<Luau::AstStatError>("AstStatError", NodeCategory::Stat, handleAstStatErrorMethods, collectAstStatErrorProps, createDefaultAstStatError);
-    registerNodeClass<Luau::AstExprGroup>("AstExprGroup", NodeCategory::Expr, handleAstExprGroupMethods, collectAstExprGroupProps, createDefaultAstExprGroup);
-    registerNodeClass<Luau::AstExprConstantNil>("AstExprConstantNil", NodeCategory::Expr, handleAstExprConstantNilMethods, collectAstExprConstantNilProps, createDefaultAstExprConstantNil);
-    registerNodeClass<Luau::AstExprConstantBool>("AstExprConstantBool", NodeCategory::Expr, handleAstExprConstantBoolMethods, collectAstExprConstantBoolProps, createDefaultAstExprConstantBool);
-    registerNodeClass<Luau::AstExprConstantNumber>("AstExprConstantNumber", NodeCategory::Expr, handleAstExprConstantNumberMethods, collectAstExprConstantNumberProps, createDefaultAstExprConstantNumber);
-    registerNodeClass<Luau::AstExprConstantInteger>("AstExprConstantInteger", NodeCategory::Expr, handleAstExprConstantIntegerMethods, collectAstExprConstantIntegerProps, createDefaultAstExprConstantInteger);
-    registerNodeClass<Luau::AstExprConstantString>("AstExprConstantString", NodeCategory::Expr, handleAstExprConstantStringMethods, collectAstExprConstantStringProps, createDefaultAstExprConstantString);
-    registerNodeClass<Luau::AstExprLocal>("AstExprLocal", NodeCategory::Expr, handleAstExprLocalMethods, collectAstExprLocalProps, createDefaultAstExprLocal);
-    registerNodeClass<Luau::AstExprGlobal>("AstExprGlobal", NodeCategory::Expr, handleAstExprGlobalMethods, collectAstExprGlobalProps, createDefaultAstExprGlobal);
-    registerNodeClass<Luau::AstExprVarargs>("AstExprVarargs", NodeCategory::Expr, handleAstExprVarargsMethods, collectAstExprVarargsProps, createDefaultAstExprVarargs);
-    registerNodeClass<Luau::AstExprCall>("AstExprCall", NodeCategory::Expr, handleAstExprCallMethods, collectAstExprCallProps, createDefaultAstExprCall);
-    registerNodeClass<Luau::AstExprIndexName>("AstExprIndexName", NodeCategory::Expr, handleAstExprIndexNameMethods, collectAstExprIndexNameProps, createDefaultAstExprIndexName);
-    registerNodeClass<Luau::AstExprIndexExpr>("AstExprIndexExpr", NodeCategory::Expr, handleAstExprIndexExprMethods, collectAstExprIndexExprProps, createDefaultAstExprIndexExpr);
-    registerNodeClass<Luau::AstExprFunction>("AstExprFunction", NodeCategory::Expr, handleAstExprFunctionMethods, collectAstExprFunctionProps, createDefaultAstExprFunction);
-    registerNodeClass<Luau::AstExprTable>("AstExprTable", NodeCategory::Expr, handleAstExprTableMethods, collectAstExprTableProps, createDefaultAstExprTable);
-    registerNodeClass<Luau::AstExprUnary>("AstExprUnary", NodeCategory::Expr, handleAstExprUnaryMethods, collectAstExprUnaryProps, createDefaultAstExprUnary);
-    registerNodeClass<Luau::AstExprBinary>("AstExprBinary", NodeCategory::Expr, handleAstExprBinaryMethods, collectAstExprBinaryProps, createDefaultAstExprBinary);
-    registerNodeClass<Luau::AstExprTypeAssertion>("AstExprTypeAssertion", NodeCategory::Expr, handleAstExprTypeAssertionMethods, collectAstExprTypeAssertionProps, createDefaultAstExprTypeAssertion);
-    registerNodeClass<Luau::AstExprIfElse>("AstExprIfElse", NodeCategory::Expr, handleAstExprIfElseMethods, collectAstExprIfElseProps, createDefaultAstExprIfElse);
-    registerNodeClass<Luau::AstExprInterpString>("AstExprInterpString", NodeCategory::Expr, handleAstExprInterpStringMethods, collectAstExprInterpStringProps, createDefaultAstExprInterpString);
-    registerNodeClass<Luau::AstExprInstantiate>("AstExprInstantiate", NodeCategory::Expr, handleAstExprInstantiateMethods, collectAstExprInstantiateProps, createDefaultAstExprInstantiate);
-    registerNodeClass<Luau::AstExprError>("AstExprError", NodeCategory::Expr, handleAstExprErrorMethods, collectAstExprErrorProps, createDefaultAstExprError);
-    registerNodeClass<Luau::AstTypeReference>("AstTypeReference", NodeCategory::Type, handleAstTypeReferenceMethods, collectAstTypeReferenceProps, createDefaultAstTypeReference);
-    registerNodeClass<Luau::AstTypeTable>("AstTypeTable", NodeCategory::Type, handleAstTypeTableMethods, collectAstTypeTableProps, createDefaultAstTypeTable);
-    registerNodeClass<Luau::AstTypeFunction>("AstTypeFunction", NodeCategory::Type, handleAstTypeFunctionMethods, collectAstTypeFunctionProps, createDefaultAstTypeFunction);
-    registerNodeClass<Luau::AstTypeTypeof>("AstTypeTypeof", NodeCategory::Type, handleAstTypeTypeofMethods, collectAstTypeTypeofProps, createDefaultAstTypeTypeof);
-    registerNodeClass<Luau::AstTypeOptional>("AstTypeOptional", NodeCategory::Type, handleAstTypeOptionalMethods, collectAstTypeOptionalProps, createDefaultAstTypeOptional);
-    registerNodeClass<Luau::AstTypeUnion>("AstTypeUnion", NodeCategory::Type, handleAstTypeUnionMethods, collectAstTypeUnionProps, createDefaultAstTypeUnion);
-    registerNodeClass<Luau::AstTypeIntersection>("AstTypeIntersection", NodeCategory::Type, handleAstTypeIntersectionMethods, collectAstTypeIntersectionProps, createDefaultAstTypeIntersection);
-    registerNodeClass<Luau::AstTypeSingletonBool>("AstTypeSingletonBool", NodeCategory::Type, handleAstTypeSingletonBoolMethods, collectAstTypeSingletonBoolProps, createDefaultAstTypeSingletonBool);
-    registerNodeClass<Luau::AstTypeSingletonString>("AstTypeSingletonString", NodeCategory::Type, handleAstTypeSingletonStringMethods, collectAstTypeSingletonStringProps, createDefaultAstTypeSingletonString);
-    registerNodeClass<Luau::AstTypeGroup>("AstTypeGroup", NodeCategory::Type, handleAstTypeGroupMethods, collectAstTypeGroupProps, createDefaultAstTypeGroup);
-    registerNodeClass<Luau::AstTypeError>("AstTypeError", NodeCategory::Type, handleAstTypeErrorMethods, collectAstTypeErrorProps, createDefaultAstTypeError);
-    registerNodeClass<Luau::AstTypePackExplicit>("AstTypePackExplicit", NodeCategory::TypePack, handleAstTypePackExplicitMethods, collectAstTypePackExplicitProps, createDefaultAstTypePackExplicit);
-    registerNodeClass<Luau::AstTypePackVariadic>("AstTypePackVariadic", NodeCategory::TypePack, handleAstTypePackVariadicMethods, collectAstTypePackVariadicProps, createDefaultAstTypePackVariadic);
-    registerNodeClass<Luau::AstTypePackGeneric>("AstTypePackGeneric", NodeCategory::TypePack, handleAstTypePackGenericMethods, collectAstTypePackGenericProps, createDefaultAstTypePackGeneric);
-    registerNodeClass<Luau::AstGenericType>("AstGenericType", NodeCategory::Generic, handleAstGenericTypeMethods, collectAstGenericTypeProps, createDefaultAstGenericType);
-    registerNodeClass<Luau::AstGenericTypePack>("AstGenericTypePack", NodeCategory::Generic, handleAstGenericTypePackMethods, collectAstGenericTypePackProps, createDefaultAstGenericTypePack);
-    registerNodeClass<Luau::AstAttr>("AstAttr", NodeCategory::Attr, handleAstAttrMethods, collectAstAttrProps, createDefaultAstAttr);
+    registerNodeClass<Luau::AstStatBlock>("AstStatBlock", NodeCategory::Stat, handleAstStatBlockMethods, collectAstStatBlockProps, validateAstStatBlock);
+    registerNodeClass<Luau::AstStatIf>("AstStatIf", NodeCategory::Stat, handleAstStatIfMethods, collectAstStatIfProps, validateAstStatIf);
+    registerNodeClass<Luau::AstStatWhile>("AstStatWhile", NodeCategory::Stat, handleAstStatWhileMethods, collectAstStatWhileProps, validateAstStatWhile);
+    registerNodeClass<Luau::AstStatRepeat>("AstStatRepeat", NodeCategory::Stat, handleAstStatRepeatMethods, collectAstStatRepeatProps, validateAstStatRepeat);
+    registerNodeClass<Luau::AstStatBreak>("AstStatBreak", NodeCategory::Stat, handleAstStatBreakMethods, collectAstStatBreakProps, validateAstStatBreak);
+    registerNodeClass<Luau::AstStatContinue>("AstStatContinue", NodeCategory::Stat, handleAstStatContinueMethods, collectAstStatContinueProps, validateAstStatContinue);
+    registerNodeClass<Luau::AstStatReturn>("AstStatReturn", NodeCategory::Stat, handleAstStatReturnMethods, collectAstStatReturnProps, validateAstStatReturn);
+    registerNodeClass<Luau::AstStatExpr>("AstStatExpr", NodeCategory::Stat, handleAstStatExprMethods, collectAstStatExprProps, validateAstStatExpr);
+    registerNodeClass<Luau::AstStatLocal>("AstStatLocal", NodeCategory::Stat, handleAstStatLocalMethods, collectAstStatLocalProps, validateAstStatLocal);
+    registerNodeClass<Luau::AstStatFor>("AstStatFor", NodeCategory::Stat, handleAstStatForMethods, collectAstStatForProps, validateAstStatFor);
+    registerNodeClass<Luau::AstStatForIn>("AstStatForIn", NodeCategory::Stat, handleAstStatForInMethods, collectAstStatForInProps, validateAstStatForIn);
+    registerNodeClass<Luau::AstStatAssign>("AstStatAssign", NodeCategory::Stat, handleAstStatAssignMethods, collectAstStatAssignProps, validateAstStatAssign);
+    registerNodeClass<Luau::AstStatCompoundAssign>("AstStatCompoundAssign", NodeCategory::Stat, handleAstStatCompoundAssignMethods, collectAstStatCompoundAssignProps, validateAstStatCompoundAssign);
+    registerNodeClass<Luau::AstStatFunction>("AstStatFunction", NodeCategory::Stat, handleAstStatFunctionMethods, collectAstStatFunctionProps, validateAstStatFunction);
+    registerNodeClass<Luau::AstStatLocalFunction>("AstStatLocalFunction", NodeCategory::Stat, handleAstStatLocalFunctionMethods, collectAstStatLocalFunctionProps, validateAstStatLocalFunction);
+    registerNodeClass<Luau::AstStatTypeAlias>("AstStatTypeAlias", NodeCategory::Stat, handleAstStatTypeAliasMethods, collectAstStatTypeAliasProps, validateAstStatTypeAlias);
+    registerNodeClass<Luau::AstStatTypeFunction>("AstStatTypeFunction", NodeCategory::Stat, handleAstStatTypeFunctionMethods, collectAstStatTypeFunctionProps, validateAstStatTypeFunction);
+    registerNodeClass<Luau::AstStatDeclareGlobal>("AstStatDeclareGlobal", NodeCategory::Stat, handleAstStatDeclareGlobalMethods, collectAstStatDeclareGlobalProps, validateAstStatDeclareGlobal);
+    registerNodeClass<Luau::AstStatDeclareFunction>("AstStatDeclareFunction", NodeCategory::Stat, handleAstStatDeclareFunctionMethods, collectAstStatDeclareFunctionProps, validateAstStatDeclareFunction);
+    registerNodeClass<Luau::AstStatClass>("AstStatClass", NodeCategory::Stat, handleAstStatClassMethods, collectAstStatClassProps, validateAstStatClass);
+    registerNodeClass<Luau::AstStatDeclareExternType>("AstStatDeclareExternType", NodeCategory::Stat, handleAstStatDeclareExternTypeMethods, collectAstStatDeclareExternTypeProps, validateAstStatDeclareExternType);
+    registerNodeClass<Luau::AstStatError>("AstStatError", NodeCategory::Stat, handleAstStatErrorMethods, collectAstStatErrorProps, validateAstStatError);
+    registerNodeClass<Luau::AstExprGroup>("AstExprGroup", NodeCategory::Expr, handleAstExprGroupMethods, collectAstExprGroupProps, validateAstExprGroup);
+    registerNodeClass<Luau::AstExprConstantNil>("AstExprConstantNil", NodeCategory::Expr, handleAstExprConstantNilMethods, collectAstExprConstantNilProps, validateAstExprConstantNil);
+    registerNodeClass<Luau::AstExprConstantBool>("AstExprConstantBool", NodeCategory::Expr, handleAstExprConstantBoolMethods, collectAstExprConstantBoolProps, validateAstExprConstantBool);
+    registerNodeClass<Luau::AstExprConstantNumber>("AstExprConstantNumber", NodeCategory::Expr, handleAstExprConstantNumberMethods, collectAstExprConstantNumberProps, validateAstExprConstantNumber);
+    registerNodeClass<Luau::AstExprConstantInteger>("AstExprConstantInteger", NodeCategory::Expr, handleAstExprConstantIntegerMethods, collectAstExprConstantIntegerProps, validateAstExprConstantInteger);
+    registerNodeClass<Luau::AstExprConstantString>("AstExprConstantString", NodeCategory::Expr, handleAstExprConstantStringMethods, collectAstExprConstantStringProps, validateAstExprConstantString);
+    registerNodeClass<Luau::AstExprLocal>("AstExprLocal", NodeCategory::Expr, handleAstExprLocalMethods, collectAstExprLocalProps, validateAstExprLocal);
+    registerNodeClass<Luau::AstExprGlobal>("AstExprGlobal", NodeCategory::Expr, handleAstExprGlobalMethods, collectAstExprGlobalProps, validateAstExprGlobal);
+    registerNodeClass<Luau::AstExprVarargs>("AstExprVarargs", NodeCategory::Expr, handleAstExprVarargsMethods, collectAstExprVarargsProps, validateAstExprVarargs);
+    registerNodeClass<Luau::AstExprCall>("AstExprCall", NodeCategory::Expr, handleAstExprCallMethods, collectAstExprCallProps, validateAstExprCall);
+    registerNodeClass<Luau::AstExprIndexName>("AstExprIndexName", NodeCategory::Expr, handleAstExprIndexNameMethods, collectAstExprIndexNameProps, validateAstExprIndexName);
+    registerNodeClass<Luau::AstExprIndexExpr>("AstExprIndexExpr", NodeCategory::Expr, handleAstExprIndexExprMethods, collectAstExprIndexExprProps, validateAstExprIndexExpr);
+    registerNodeClass<Luau::AstExprFunction>("AstExprFunction", NodeCategory::Expr, handleAstExprFunctionMethods, collectAstExprFunctionProps, validateAstExprFunction);
+    registerNodeClass<Luau::AstExprTable>("AstExprTable", NodeCategory::Expr, handleAstExprTableMethods, collectAstExprTableProps, validateAstExprTable);
+    registerNodeClass<Luau::AstExprUnary>("AstExprUnary", NodeCategory::Expr, handleAstExprUnaryMethods, collectAstExprUnaryProps, validateAstExprUnary);
+    registerNodeClass<Luau::AstExprBinary>("AstExprBinary", NodeCategory::Expr, handleAstExprBinaryMethods, collectAstExprBinaryProps, validateAstExprBinary);
+    registerNodeClass<Luau::AstExprTypeAssertion>("AstExprTypeAssertion", NodeCategory::Expr, handleAstExprTypeAssertionMethods, collectAstExprTypeAssertionProps, validateAstExprTypeAssertion);
+    registerNodeClass<Luau::AstExprIfElse>("AstExprIfElse", NodeCategory::Expr, handleAstExprIfElseMethods, collectAstExprIfElseProps, validateAstExprIfElse);
+    registerNodeClass<Luau::AstExprInterpString>("AstExprInterpString", NodeCategory::Expr, handleAstExprInterpStringMethods, collectAstExprInterpStringProps, validateAstExprInterpString);
+    registerNodeClass<Luau::AstExprInstantiate>("AstExprInstantiate", NodeCategory::Expr, handleAstExprInstantiateMethods, collectAstExprInstantiateProps, validateAstExprInstantiate);
+    registerNodeClass<Luau::AstExprError>("AstExprError", NodeCategory::Expr, handleAstExprErrorMethods, collectAstExprErrorProps, validateAstExprError);
+    registerNodeClass<Luau::AstTypeReference>("AstTypeReference", NodeCategory::Type, handleAstTypeReferenceMethods, collectAstTypeReferenceProps, validateAstTypeReference);
+    registerNodeClass<Luau::AstTypeTable>("AstTypeTable", NodeCategory::Type, handleAstTypeTableMethods, collectAstTypeTableProps, validateAstTypeTable);
+    registerNodeClass<Luau::AstTypeFunction>("AstTypeFunction", NodeCategory::Type, handleAstTypeFunctionMethods, collectAstTypeFunctionProps, validateAstTypeFunction);
+    registerNodeClass<Luau::AstTypeTypeof>("AstTypeTypeof", NodeCategory::Type, handleAstTypeTypeofMethods, collectAstTypeTypeofProps, validateAstTypeTypeof);
+    registerNodeClass<Luau::AstTypeOptional>("AstTypeOptional", NodeCategory::Type, handleAstTypeOptionalMethods, collectAstTypeOptionalProps, validateAstTypeOptional);
+    registerNodeClass<Luau::AstTypeUnion>("AstTypeUnion", NodeCategory::Type, handleAstTypeUnionMethods, collectAstTypeUnionProps, validateAstTypeUnion);
+    registerNodeClass<Luau::AstTypeIntersection>("AstTypeIntersection", NodeCategory::Type, handleAstTypeIntersectionMethods, collectAstTypeIntersectionProps, validateAstTypeIntersection);
+    registerNodeClass<Luau::AstTypeSingletonBool>("AstTypeSingletonBool", NodeCategory::Type, handleAstTypeSingletonBoolMethods, collectAstTypeSingletonBoolProps, validateAstTypeSingletonBool);
+    registerNodeClass<Luau::AstTypeSingletonString>("AstTypeSingletonString", NodeCategory::Type, handleAstTypeSingletonStringMethods, collectAstTypeSingletonStringProps, validateAstTypeSingletonString);
+    registerNodeClass<Luau::AstTypeGroup>("AstTypeGroup", NodeCategory::Type, handleAstTypeGroupMethods, collectAstTypeGroupProps, validateAstTypeGroup);
+    registerNodeClass<Luau::AstTypeError>("AstTypeError", NodeCategory::Type, handleAstTypeErrorMethods, collectAstTypeErrorProps, validateAstTypeError);
+    registerNodeClass<Luau::AstTypePackExplicit>("AstTypePackExplicit", NodeCategory::TypePack, handleAstTypePackExplicitMethods, collectAstTypePackExplicitProps, validateAstTypePackExplicit);
+    registerNodeClass<Luau::AstTypePackVariadic>("AstTypePackVariadic", NodeCategory::TypePack, handleAstTypePackVariadicMethods, collectAstTypePackVariadicProps, validateAstTypePackVariadic);
+    registerNodeClass<Luau::AstTypePackGeneric>("AstTypePackGeneric", NodeCategory::TypePack, handleAstTypePackGenericMethods, collectAstTypePackGenericProps, validateAstTypePackGeneric);
+    registerNodeClass<Luau::AstGenericType>("AstGenericType", NodeCategory::Generic, handleAstGenericTypeMethods, collectAstGenericTypeProps, validateAstGenericType);
+    registerNodeClass<Luau::AstGenericTypePack>("AstGenericTypePack", NodeCategory::Generic, handleAstGenericTypePackMethods, collectAstGenericTypePackProps, validateAstGenericTypePack);
+    registerNodeClass<Luau::AstAttr>("AstAttr", NodeCategory::Attr, handleAstAttrMethods, collectAstAttrProps, validateAstAttr);
 }
 
 } // namespace Luau

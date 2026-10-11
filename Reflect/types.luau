@@ -355,6 +355,7 @@ export type CstTypeIntersection = CstNodeCommon & {
 
 export type CstTypeSingletonString = CstNodeCommon & {
     read kind: "CstTypeSingletonString",
+    read quoteStyle: (self: CstTypeSingletonString) -> ("single" | "double" | "raw" | "interp"),
     read sourceString: (self: CstTypeSingletonString) -> string,
     read blockDepth: (self: CstTypeSingletonString) -> number,
 }
@@ -738,6 +739,8 @@ export type AstExprFunction = AstExprCommon & {
     read setDebugName: (self: AstExprFunction, debugname: string) -> AstExprFunction,
     read args: (self: AstExprFunction) -> {AstLocal},
     read setArgs: (self: AstExprFunction, args: {AstLocal}) -> AstExprFunction,
+    read argsDefaults: (self: AstExprFunction) -> {AstNode | false},
+    read setArgsDefaults: (self: AstExprFunction, argsDefaults: {AstNode | false}) -> AstExprFunction,
     read body: (self: AstExprFunction) -> AstStatBlock,
     read setBody: (self: AstExprFunction, body: AstStatBlock) -> AstExprFunction,
     read generics: (self: AstExprFunction) -> {AstGenericType},
@@ -975,7 +978,7 @@ export type AstNode =
 export type AstFilter = {
     read id: Id,
     read kind: "AstFilter",
-    read matches: (self: AstFilter, node: AstNode) -> boolean,
+    read match: (self: AstFilter, node: AstNode) -> boolean,
 }
 
 export type AstAllocator = {
