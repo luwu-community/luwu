@@ -124,7 +124,7 @@ local x: Account = 5
 
     CHECK_EQ(
         toString(result.errors[0]),
-        "Expected this to be 'Account', but was given 'x: number'\n"
+        "Expected 'x' to be 'Account', but was given 'number'\n"
         "\n"
         "'number' is unrelated to 'Account'."
     );
@@ -194,7 +194,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "unary_op_type_function_errors_in_explained_e
             "Operator '-' could not be applied to operand of type string; there is no corresponding overload for __unm", toString(result.errors[0])
         );
 
-        CHECK_EQ("Expected this to be 'number', but was given 'string'", toString(result.errors[1]));
+        CHECK_EQ("Expected 'x' to be 'number', but was given 'string'", toString(result.errors[1]));
     }
     else
     {

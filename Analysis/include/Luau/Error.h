@@ -104,8 +104,8 @@ struct TypeMismatch
     std::optional<std::string> givenName;
     std::optional<std::string> wantedExpansion;
     std::optional<std::string> givenExpansion;
-    // The variable the given value was read from, which the reason's paths are rooted at: printed with its
-    // type, `'settings: Settings'`, so the name in the paths leads to a type.
+    // The name the given value has in the code: the variable it was read from, or where a literal is being put. The
+    // message calls the value by it (`Expected 'settings' to be`), and the reason's paths start at it.
     std::optional<std::string> givenVariable;
     // Luwu (helpful subtyping errors): the `where` block under the two types. When it isn't empty,
     // `wantedName` and `givenName` hold the two types printed with these names.
@@ -585,6 +585,18 @@ struct ConstructorReadByName
     bool operator==(const ConstructorReadByName& rhs) const;
 };
 
+// Luwu (helpful subtyping errors): something written where a similar thing was almost certainly meant, when that is the
+// whole problem: a property of a table literal named like one the expected table has and the literal leaves out (table
+// types aren't exact, so an optional one is otherwise never reported, and the value is never read), a string one typo
+// from an expected one (`"LeftCtrl"` for `"LeftControl"`), or a table whose one problem is a misspelled property.
+struct Typo
+{
+    Name written;
+    Name meant;
+
+    bool operator==(const Typo& rhs) const;
+};
+
 struct PropertyAccessViolation
 {
     TypeId table;
@@ -713,8 +725,17 @@ struct MultipleNonviableOverloads
 {
     size_t attemptedArgCount;
 
+    // Luwu (helpful subtyping errors): the function called, as the code names it (empty when it has no name), and every
+    // overload's signature, listed by number in the one error. Upstream reports the list as a second error,
+    // "Available overloads: ...", all on one line.
+    std::string callee;
+    std::vector<std::string> overloads;
+
     bool operator==(const MultipleNonviableOverloads& rhs) const;
 };
+
+// Luwu (helpful subtyping errors): overloads one per line, numbered as an explanation numbers them: `  • #2 '(sig)'`.
+std::string numberedOverloads(const std::vector<std::string>& signatures);
 
 // Error where a type alias violates the recursive restraint, ie when a type alias T<A> has T with different arguments on the RHS.
 struct RecursiveRestraintViolation
@@ -866,7 +887,8 @@ using TypeErrorData = Variant<
     TypeInstantiationCountMismatch,
     AmbiguousFunctionCall,
     UninstantiableClass,
-    ConstructorReadByName>;
+    ConstructorReadByName,
+    Typo>;
 
 struct TypeErrorSummary
 {
