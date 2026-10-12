@@ -7902,8 +7902,20 @@ TEST_CASE_FIXTURE(Fixture, "destructuring_without_the_flag_says_how_to_enable_it
 {
     ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, false};
 
-    matchParseError("local .{x} = t", "Destructuring is a Luwu feature; enable the 'LuwuDestructuring' fast flag to use it");
-    matchParseError("const .{x} = t", "Destructuring is a Luwu feature; enable the 'LuwuDestructuring' fast flag to use it");
+    matchParseError("local .{x} = t", "attempt to use disabled Luwu feature destructuring; enable via FFlag 'LuwuDestructuring'");
+    matchParseError("const .{x} = t", "attempt to use disabled Luwu feature destructuring; enable via FFlag 'LuwuDestructuring'");
+}
+
+TEST_CASE_FIXTURE(Fixture, "destructuring_is_an_error_in_a_luau_module")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    ParseOptions luau;
+    luau.language = Language::Luau;
+
+    ParseResult result = tryParse("local .{x} = t", luau);
+    REQUIRE(!result.errors.empty());
+    CHECK_EQ(result.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: destructuring");
 }
 
 TEST_SUITE_END();
