@@ -7847,6 +7847,20 @@ TEST_CASE_FIXTURE(Fixture, "dot_table_mistakes_get_one_error_that_names_the_fix"
     matchOnlyDestructuringError(*this, "local t = .{a b}", "Expected ',' after table constructor element");
 }
 
+// Luwu Destructuring (rfcs/destructuring.md): a `.` with no `{` after it yet is one error, and the next line still parses
+TEST_CASE_FIXTURE(Fixture, "a_bare_dot_is_a_dot_table_missing_its_brace")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    ParseResult result = tryParse(R"(
+local cat = .
+local unrelated = 1
+)");
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "Expected '{' after '.': '.{x, y}' builds a table from the locals 'x' and 'y'");
+    REQUIRE_EQ(result.root->body.size, 2);
+}
+
 TEST_CASE_FIXTURE(Fixture, "dot_tables_need_luwu_destructuring")
 {
     ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, false};

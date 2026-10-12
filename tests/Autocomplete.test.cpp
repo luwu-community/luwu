@@ -5909,4 +5909,29 @@ TEST_CASE_FIXTURE(ACFixture, "destructuring_hidden_local_is_not_suggested")
     CHECK(!ac.entryMap.count(kDestructuredLocalName));
 }
 
+// Luwu Destructuring (rfcs/destructuring.md): a `.` alone where an expression goes starts a `.{...}` table, so nothing
+// is offered after it, not every global
+TEST_CASE_FIXTURE(ACFixture, "a_bare_dot_in_an_expression_completes_nothing")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    check(R"(
+        local alpha = 1
+        local cat = .@1
+        local unrelated = 2
+    )");
+
+    auto ac = autocomplete('1');
+    CHECK(ac.entryMap.empty());
+
+    // inside the braces, names are offered again
+    check(R"(
+        local alpha = 1
+        local cat = .{@1}
+    )");
+
+    ac = autocomplete('1');
+    CHECK(ac.entryMap.count("alpha"));
+}
+
 TEST_SUITE_END();

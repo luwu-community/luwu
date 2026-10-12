@@ -717,6 +717,11 @@ struct Printer
             if (dotTable)
             {
                 writer.symbol(".");
+
+                // a `.` with no `{` typed after it yet
+                if (!cstTable->openBracePosition.hasValue())
+                    return;
+
                 advance(cstTable->openBracePosition);
             }
 
