@@ -577,7 +577,7 @@ local b: B = a
             "smaller type, causing data loss.\n\n"
             "Help[read/write mismatch]:\n"
             "- if nothing writes to 'x', mark it as 'read x: BaseClass' in 'B'\n"
-            "- if it reads and writes, make a 'BaseClass' version of your data or mark the additional fields as optional",
+            "- if it reads and writes, make a 'BaseClass' version of your data or mark the additional properties as optional",
             toString(result.errors.at(0))
         );
     }

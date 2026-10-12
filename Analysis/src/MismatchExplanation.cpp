@@ -3,6 +3,7 @@
 
 #include "Luau/Error.h"
 #include "Luau/MismatchWording.h"
+#include "Luau/RepeatedTypeNames.h"
 #include "Luau/Scope.h"
 #include "Luau/Subtyping.h"
 #include "Luau/ToString.h"
@@ -52,6 +53,12 @@ constexpr size_t kMaxSpelledOutWidth = 240;
 constexpr size_t kMaxSpellingCandidates = 256;
 // Strings longer than this aren't checked for typos: the edit distance is quadratic in their length.
 constexpr size_t kMaxSpellingLength = 128;
+// Aliases a message mentions without showing them (`Address` in `type Customer = { billing: Address }`) that
+// it declares, past the ones it names itself: the rest of a long chain is more than a reader needs.
+constexpr size_t kMaxMentionedAliases = 4;
+// A mentioned alias longer than this isn't declared: a type that large is one the reader knows by its name,
+// and its declaration would bury the message.
+constexpr size_t kMaxMentionedAliasWidth = 240;
 // How long a printed type may get before `ToString` truncates it.
 constexpr size_t kTypeWidth = 120;
 constexpr size_t kFunctionTypeWidth = 160;
@@ -144,6 +151,13 @@ std::optional<std::string> aliasName(TypeId ty)
     if (const IntersectionType* i = get<IntersectionType>(ty))
         return i->name;
     return std::nullopt;
+}
+
+// A table literal held in a local, which prints as the local's name: its `syntheticName` isn't a type.
+bool printsAsLocalName(TypeId ty)
+{
+    const TableType* table = get<TableType>(follow(ty));
+    return table && table->syntheticName && !table->name;
 }
 
 bool isIdentifier(const std::string& s)
@@ -323,6 +337,11 @@ struct Differ
 
     std::vector<std::string> helps;
 
+    // Types the message prints by a name rather than spelled out (`where type Animal = ...`).
+    const DenseHashMap<TypeId, std::string>* names = nullptr;
+    // Every type displayed, for finding the ones the message repeats.
+    std::vector<PrintedType>* printed = nullptr;
+
     Differ(NotNull<Subtyping> subtyping, NotNull<Scope> scope, NotNull<BuiltinTypes> builtinTypes, NotNull<Budget> budget)
         : subtyping(subtyping)
         , scope(scope)
@@ -336,7 +355,16 @@ struct Differ
     {
         Differ d{subtyping, scope, builtinTypes, budget};
         d.allowance = trialAllowance;
+        d.names = names;
+        d.printed = printed;
         return d;
+    }
+
+    ToStringOptions printing(size_t width) const
+    {
+        ToStringOptions options = printOptions(width);
+        options.repeatedTypeNames = names;
+        return options;
     }
 
     // The whole message is out of budget: stop comparing anything more.
@@ -364,9 +392,11 @@ struct Differ
     // whole, which prints cycles.
     std::string display(TypeId ty)
     {
+        if (printed)
+            printed->push_back(PrintedType{ty, std::nullopt});
         std::vector<TypeId> walking;
         std::optional<std::string> shown = displayWalk(ty, walking);
-        return shown ? *shown : toString(ty, printOptions(kTypeWidth));
+        return shown ? *shown : toString(ty, printing(kTypeWidth));
     }
 
     // Members joined by `separator` in the order `#n` counts them, a `nil` member as a trailing `?`. Past
@@ -441,6 +471,8 @@ struct Differ
         ty = follow(ty);
         if (std::optional<std::string> name = aliasName(ty))
             return name;
+        if (const std::string* name = names ? names->find(ty) : nullptr)
+            return *name;
 
         bool cycles = std::find(walking.begin(), walking.end(), ty) != walking.end();
         if (cycles || walking.size() >= size_t(kMaxWalkDepth))
@@ -469,14 +501,16 @@ struct Differ
                 false
             );
         else
-            shown = toString(ty, printOptions(kTypeWidth));
+            shown = toString(ty, printing(kTypeWidth));
         walking.pop_back();
         return shown;
     }
 
     std::string display(TypePackId tp)
     {
-        std::string s = toString(tp, printOptions(kTypeWidth));
+        if (printed)
+            appendPrintedPack(*printed, tp);
+        std::string s = toString(tp, printing(kTypeWidth));
         return s.empty() ? "()" : s;
     }
 
@@ -484,7 +518,9 @@ struct Differ
     // about one of its parameters refers to.
     std::string displayFunction(TypeId ty)
     {
-        ToStringOptions options = printOptions(kFunctionTypeWidth);
+        if (printed)
+            printed->push_back(PrintedType{ty, std::nullopt});
+        ToStringOptions options = printing(kFunctionTypeWidth);
         options.functionTypeArguments = true;
         return toString(ty, options);
     }
@@ -506,6 +542,55 @@ struct Differ
         if (const UnionType* u = get<UnionType>(follow(sub)); u && kind == Difference::Kind::CouldBeNil && aliasName(sub))
             d.subMeaning = expansion(u->options, " | ", kTypeWidth);
         push(std::move(d), sub, super);
+    }
+
+    // The element type of a plain array `{T}`: number keys, no named fields.
+    std::optional<TypeId> arrayElement(TypeId ty)
+    {
+        const TableType* table = get<TableType>(follow(ty));
+        bool plainArray = table && table->props.empty() && table->indexer && follow(table->indexer->indexType) == follow(builtinTypes->numberType);
+        if (!plainArray)
+            return std::nullopt;
+        return table->indexer->indexResultType;
+    }
+
+    // The key type of a plain map `{ [K]: V }` keyed by anything but numbers.
+    std::optional<TypeId> mapKey(TypeId ty)
+    {
+        const TableType* table = get<TableType>(follow(ty));
+        bool plainMap = table && table->props.empty() && table->indexer && follow(table->indexer->indexType) != follow(builtinTypes->numberType);
+        if (!plainMap)
+            return std::nullopt;
+        return table->indexer->indexType;
+    }
+
+    // A plain map spelled out, `{ [string]: boolean }`, even when it has an alias: the alias doesn't say it's a
+    // map.
+    std::string mapDisplay(TypeId ty)
+    {
+        const TableType* table = get<TableType>(follow(ty));
+        LUAU_ASSERT(table && table->indexer);
+        if (!table || !table->indexer)
+            return display(ty);
+        return "{ [" + display(table->indexer->indexType) + "]: " + display(table->indexer->indexResultType) + " }";
+    }
+
+    // `sub` is an array of what `super` expects, or one element of the array `super` expects: the
+    // reader passed a list where one value goes, or the reverse. Nullopt for anything else, and for an
+    // `any` or `unknown` element, which fits everything and so says nothing about intent.
+    std::optional<std::pair<Difference::Kind, TypeId>> arrayNesting(TypeId sub, TypeId super)
+    {
+        auto isTop = [](TypeId ty)
+        {
+            ty = follow(ty);
+            return get<AnyType>(ty) || get<UnknownType>(ty);
+        };
+
+        if (std::optional<TypeId> element = arrayElement(sub); element && !isTop(*element) && fits(*element, super))
+            return std::make_pair(Difference::Kind::ArrayOfExpected, *element);
+        if (std::optional<TypeId> element = arrayElement(super); element && !isTop(*element) && fits(sub, *element))
+            return std::make_pair(Difference::Kind::ElementOfExpected, *element);
+        return std::nullopt;
     }
 
     // A property of `ty` as a reader of it sees it, following the table part of a metatable and each
@@ -698,6 +783,17 @@ struct Differ
 
     void diffUnlessEqual(TypeId sub, TypeId super, const DiffPath& path, int depth)
     {
+        // Comparing an array with one of its elements field by field would list every field of the
+        // element as a difference; what's wrong is the braces around it.
+        if (std::optional<std::pair<Difference::Kind, TypeId>> nesting = arrayNesting(sub, super))
+        {
+            Difference d{nesting->first, path, display(sub), display(super)};
+            if (nesting->first == Difference::Kind::ElementOfExpected)
+                d.element = display(nesting->second);
+            push(std::move(d), sub, super);
+            return;
+        }
+
         if (const UnionType* subUnion = get<UnionType>(sub))
         {
             diffGivenUnion(sub, subUnion, super, path, depth);
@@ -1189,6 +1285,28 @@ struct Differ
 
 // A parameter that doesn't take the `nil` the expected type can pass it. Parameters are where a
 // narrower type is wrong, and a value is where it's right.
+// Whether `d`'s bullet says both what was expected and what was given (`expected 'number', got 'string'`,
+// a missing property with its type), rather than leaving one of them to the two types above it.
+bool saysBothTypes(const Difference& d)
+{
+    switch (d.kind)
+    {
+    case Difference::Kind::ArrayOfExpected:
+    case Difference::Kind::ElementOfExpected:
+        return false;
+    case Difference::Kind::Mismatch:
+    case Difference::Kind::MismatchExactly:
+    case Difference::Kind::Missing:
+    case Difference::Kind::CouldBeNil:
+    case Difference::Kind::NothingPassed:
+    case Difference::Kind::NothingReturned:
+    case Difference::Kind::ExtraPassed:
+    case Difference::Kind::NotAMap:
+        return true;
+    }
+    return true;
+}
+
 bool isNarrowedParameter(const Difference& d)
 {
     bool inFunction = d.anchor && d.anchor->at < d.path.size();
@@ -1296,6 +1414,7 @@ std::vector<Line> bullets(const std::vector<Difference>& differences, Rendering&
         lines.push_back(andMore(total - lines.size(), true));
     return lines;
 }
+
 
 // Close enough that the reader most likely meant it: a few differences, or most of it agreeing.
 bool isNear(size_t differences, int matched)
@@ -1409,7 +1528,7 @@ bool describeEmptyTableForUnion(
         size_t shownCommon = std::min(commonLines.size(), kMaxBullets);
         lines.insert(lines.end(), commonLines.begin(), commonLines.begin() + shownCommon);
         if (commonLines.size() > shownCommon)
-            lines.push_back(andMore(commonLines.size() - shownCommon, true, "fields"));
+            lines.push_back(andMore(commonLines.size() - shownCommon, true, "properties"));
     }
 
     auto isCommon = [&](const std::string& name)
@@ -1490,17 +1609,127 @@ std::string declaredExpansion(Differ& differ, TypeId ty, const std::set<size_t>&
     return unionSummary(members.size(), optional, listed);
 }
 
-} // namespace
+// What follows `type X =` for a table the header prints by its alias alone: what the paths below
+// point into, so the reader doesn't have to go find the declaration to follow them. Nullopt for anything
+// else.
+std::optional<std::string> aliasedTableExpansion(const Differ& differ, TypeId ty, const PropertyFocus* focus)
+{
+    ty = follow(ty);
+    if (!get<TableType>(ty) || !aliasName(ty))
+        return std::nullopt;
+    ToStringOptions options = blockPrinting(differ.printing(kMaxSpelledOutWidth));
+    options.alwaysExpandRootAlias = true;
+    options.propertyFocus = focus;
+    return toString(ty, options);
+}
 
-std::optional<MismatchExplanation> explainMismatch(
+// The table `ToString` prints for `ty`: the table part of a metatable type, the `T` of a `T?`.
+std::optional<TypeId> printedTable(TypeId ty)
+{
+    ty = follow(withoutNil(ty));
+    if (const MetatableType* metatable = get<MetatableType>(ty))
+        ty = follow(metatable->table);
+    if (get<TableType>(ty))
+        return ty;
+    return std::nullopt;
+}
+
+// For each table on the way to a place the reason points at, on both sides, the properties the way goes
+// through: what a large table printed as a block shows first.
+PropertyFocus focusOf(const std::vector<Difference>& differences, TypeId given, TypeId expected)
+{
+    PropertyFocus focus{nullptr};
+    auto note = [&](std::optional<TypeId> table, const std::string& name)
+    {
+        if (!table)
+            return;
+        std::vector<std::string>& names = focus[*table];
+        if (std::find(names.begin(), names.end(), name) == names.end())
+            names.push_back(name);
+    };
+    auto property = [](std::optional<TypeId> table, const std::string& name) -> std::optional<TypeId>
+    {
+        if (!table)
+            return std::nullopt;
+        const TableType* t = get<TableType>(*table);
+        auto it = t->props.find(name);
+        if (it == t->props.end())
+            return std::nullopt;
+        return it->second.readTy;
+    };
+    auto element = [](std::optional<TypeId> table) -> std::optional<TypeId>
+    {
+        const TableType* t = table ? get<TableType>(*table) : nullptr;
+        if (!t || !t->indexer)
+            return std::nullopt;
+        return t->indexer->indexResultType;
+    };
+    auto member = [](std::optional<TypeId> ty, size_t number) -> std::optional<TypeId>
+    {
+        if (!ty)
+            return std::nullopt;
+        TypeId followed = follow(*ty);
+        std::vector<TypeId> members;
+        if (const UnionType* u = get<UnionType>(followed))
+            members = numberedMembers(u->options);
+        else if (const IntersectionType* intersection = get<IntersectionType>(followed))
+            members = intersection->parts;
+        if (number == 0 || number > members.size())
+            return std::nullopt;
+        return members[number - 1];
+    };
+
+    for (const Difference& d : differences)
+    {
+        std::optional<TypeId> g = given;
+        std::optional<TypeId> e = expected;
+        for (const Segment& segment : d.path)
+        {
+            bool intoFunction = segment.kind == Segment::Kind::Parameter || segment.kind == Segment::Kind::Return;
+            if (intoFunction)
+                break;
+            // `#2` picks a member of the expected union; the given side stays where it is.
+            if (segment.kind == Segment::Kind::Member)
+            {
+                e = member(e, segment.index);
+                continue;
+            }
+            std::optional<TypeId> givenTable = g ? printedTable(*g) : std::nullopt;
+            std::optional<TypeId> expectedTable = e ? printedTable(*e) : std::nullopt;
+            // A property missing under a similar name: the misspelled one is what the help points at.
+            bool lastSegment = &segment == &d.path.back();
+            if (lastSegment && d.kind == Difference::Kind::Missing && d.similarName)
+                note(givenTable, *d.similarName);
+            if (segment.kind == Segment::Kind::Property)
+            {
+                note(givenTable, segment.name);
+                note(expectedTable, segment.name);
+                g = property(givenTable, segment.name);
+                e = property(expectedTable, segment.name);
+            }
+            else
+            {
+                g = element(givenTable);
+                e = element(expectedTable);
+            }
+        }
+    }
+    return focus;
+}
+
+// `explainMismatch`, printing the types in `names` by name, and noting every type it prints in `printed`
+// when given one.
+std::optional<MismatchExplanation> explainOnce(
     TypeId given,
     TypeId expected,
     NotNull<Subtyping> subtyping,
     NotNull<Scope> scope,
     NotNull<BuiltinTypes> builtinTypes,
-    std::optional<std::string> callee,
+    const std::optional<std::string>& callee,
     std::string_view arrival,
-    std::optional<std::string> variable
+    const std::optional<std::string>& variable,
+    const DenseHashMap<TypeId, std::string>* names,
+    std::vector<PrintedType>* printed
 )
 {
     given = follow(given);
@@ -1557,11 +1786,53 @@ std::optional<MismatchExplanation> explainMismatch(
 
     Budget budget;
     Differ differ{subtyping, scope, builtinTypes, NotNull{&budget}};
+    differ.names = names;
+    differ.printed = printed;
+
+    // Makes the header's two types something the reason's paths can be followed into: the variable the
+    // paths are rooted at goes with its type (`'settings: Settings'`), and, when `declareAliases`, an aliased
+    // table is declared in the `where` block under the two types. No declarations when both sides have the
+    // same name, which the header has to tell apart some other way.
+    auto nameHeaderTypes = [&](bool declareAliases)
+    {
+        if (explanation.standalone)
+            return;
+        if (variable && rendering.givenRoot == *variable)
+            explanation.givenVariable = variable;
+
+        if (printsAsLocalName(given) && !explanation.givenName)
+        {
+            ToStringOptions options = differ.printing(kTypeWidth);
+            options.ignoreSyntheticName = true;
+            explanation.givenName = toString(given, options);
+        }
+
+        std::optional<std::string> givenTableAlias = aliasName(given);
+        if (!declareAliases || (givenTableAlias && givenTableAlias == aliasName(expected)))
+            return;
+        // `Recipe?` is declared as its `Recipe`.
+        for (TypeId ty : {withoutNil(expected), withoutNil(given)})
+        {
+            if (std::optional<std::string> expansion = aliasedTableExpansion(differ, ty, &explanation.propertyFocus))
+                explanation.whereDeclarations.push_back(NamedTypeDeclaration{*aliasName(ty), *expansion});
+        }
+    };
 
     // A string that is one typo away from one of the strings expected needs nothing but the correction.
     if (std::optional<std::string> suggestion = misspelledSingleton(given, expected))
     {
         explanation.reason = paragraph(misspelledStringHelp(*suggestion));
+        return explanation;
+    }
+
+    // The whole value is an array of what's expected, or one element of the expected array: a path
+    // would be empty, so this is one sentence.
+    if (std::optional<std::pair<Difference::Kind, TypeId>> nesting = differ.arrayNesting(given, expectedCore))
+    {
+        std::string subject = variable ? quoted(*variable) : "The given value";
+        bool givenIsArray = nesting->first == Difference::Kind::ArrayOfExpected;
+        explanation.reason = paragraph(arrayNestingSentence(subject, givenIsArray, variable));
+        nameHeaderTypes(true);
         return explanation;
     }
 
@@ -1836,38 +2107,6 @@ std::optional<MismatchExplanation> explainMismatch(
             else
                 header = pathsHeader(arrival, located.size());
             lines = bullets(located, rendering, callee, kMaxBullets);
-
-            // Every difference is in the root function's parameters, or every one is in its returns:
-            // say which, and print only that part of the two function types.
-            const FunctionType* givenFunction = get<FunctionType>(given);
-            const FunctionType* expectedFunction = get<FunctionType>(expected);
-            if (givenFunction && expectedFunction)
-            {
-                auto allAt = [&](Segment::Kind kind)
-                {
-                    return std::all_of(
-                        located.begin(),
-                        located.end(),
-                        [kind](const Difference& d)
-                        {
-                            return d.path[0].kind == kind;
-                        }
-                    );
-                };
-
-                if (allAt(Segment::Kind::Parameter))
-                {
-                    explanation.contextVerb = mismatchContextFunctionTakes;
-                    explanation.contextWantedDisplay = differ.display(expectedFunction->argTypes);
-                    explanation.contextGivenDisplay = differ.display(givenFunction->argTypes);
-                }
-                else if (allAt(Segment::Kind::Return))
-                {
-                    explanation.contextVerb = mismatchContextFunctionReturns;
-                    explanation.contextWantedDisplay = differ.display(expectedFunction->retTypes);
-                    explanation.contextGivenDisplay = differ.display(givenFunction->retTypes);
-                }
-            }
             shownDifferences = std::move(located);
         }
     }
@@ -1879,7 +2118,24 @@ std::optional<MismatchExplanation> explainMismatch(
         bool involvesStructure = isStructured(shapeOf(givenCore)) || isStructured(shapeOf(expectedCore));
         if (involvesStructure)
         {
-            explanation.reason = paragraph(unrelatedSentence(givenAlias, printedGiven, differ.display(expectedCore)));
+            // An array where a map is expected, or the reverse, is said as just that: the two printed types
+            // differ only in their brackets, which is easy to miss.
+            std::optional<TypeId> expectedKey = differ.mapKey(expectedCore);
+            std::optional<TypeId> givenKey = differ.mapKey(givenCore);
+            bool arrayForMap = differ.arrayElement(givenCore) && expectedKey;
+            bool mapForArray = givenKey && differ.arrayElement(expectedCore);
+            if (arrayForMap || mapForArray)
+            {
+                TypeId mapType = arrayForMap ? expectedCore : givenCore;
+                TypeId arrayType = arrayForMap ? givenCore : expectedCore;
+                std::string element = differ.display(*differ.arrayElement(arrayType));
+                std::string map = differ.mapDisplay(mapType);
+                explanation.reason = paragraph(arrayAndMapSentence(variable, arrayForMap, map, element));
+            }
+            else
+                explanation.reason = paragraph(unrelatedSentence(givenAlias, printedGiven, differ.display(expectedCore)));
+            // The array-and-map sentence spells both types out itself.
+            nameHeaderTypes(!(arrayForMap || mapForArray));
             return explanation;
         }
     }
@@ -1928,8 +2184,231 @@ std::optional<MismatchExplanation> explainMismatch(
         explanation.standalone = true;
     }
 
+    // A bullet that says both what was expected and what was given needs neither type spelled out to be
+    // read: spelling them out would say it all again. One that says only one side (`is an array where a
+    // single 'T' is expected`), or a reason with no bullets, needs them.
+    bool everyBulletSaysBoth = !shownDifferences.empty() && std::all_of(shownDifferences.begin(), shownDifferences.end(), saysBothTypes);
+    explanation.propertyFocus = focusOf(shownDifferences, given, expected);
+    for (const Difference& d : shownDifferences)
+    {
+        // What an alias allows only matters where a value doesn't fit it. A `nil` that could arrive, or an
+        // array where one value goes, is wrong whatever the alias holds.
+        bool doesNotFit = d.kind == Difference::Kind::Mismatch || d.kind == Difference::Kind::MismatchExactly;
+        if (!doesNotFit)
+            continue;
+        explanation.bulletTypes.push_back(d.sub);
+        explanation.bulletTypes.push_back(d.super);
+    }
+    explanation.bulletsSayBothTypes = everyBulletSaysBoth;
+    if (!explanation.reason.empty())
+        nameHeaderTypes(!everyBulletSaysBoth);
+
     explanation.notation = rendering.notation;
     return explanation;
+}
+
+// Whether the given type prints as only the context for the bullets: a table they say everything about, with no
+// alias to print it by. It's printed on one line, cut down to what they point into (`givenContextPrinting`).
+bool givenIsContext(const MismatchExplanation& explanation, TypeId given)
+{
+    return explanation.bulletsSayBothTypes && printedTable(given) && !aliasName(withoutNil(given));
+}
+
+// How a given table that's only context prints: `config: { tls: { port: string, … }, … }`. Without the names of
+// repeated types: the places themselves, not names declared in full below them.
+ToStringOptions givenContextPrinting(const MismatchExplanation& explanation, ToStringOptions header)
+{
+    header.repeatedTypeNames = nullptr;
+    header.propertyFocus = &explanation.propertyFocus;
+    header.onlyFocusedProperties = true;
+    header.identifyByConventionalNames = !explanation.givenVariable;
+    return header;
+}
+
+// Everything the message prints, as `ErrorConverter` will print it, for finding what it repeats.
+std::string printedMessage(const MismatchExplanation& explanation, TypeId given, TypeId expected, ToStringOptions header)
+{
+    std::string text;
+    auto add = [&](const std::optional<std::string>& part)
+    {
+        if (part)
+            text += *part + "\n";
+    };
+    add(explanation.wantedName ? explanation.wantedName : toString(expected, header));
+    // The given table as `printHeader` will print it: cut down to what the bullets point into when they say
+    // both types, and a table literal held in a local in full, not as the explanation's own `givenName` for it,
+    // which is cut off where the reason would cut it and can hide a repeat.
+    if (givenIsContext(explanation, given))
+    {
+        ToStringOptions trimmed = givenContextPrinting(explanation, header);
+        trimmed.ignoreSyntheticName = printsAsLocalName(given);
+        add(toString(given, trimmed));
+    }
+    else if (printsAsLocalName(given))
+    {
+        ToStringOptions literal = header;
+        literal.ignoreSyntheticName = true;
+        add(toString(given, literal));
+    }
+    else
+        add(explanation.givenName ? explanation.givenName : toString(given, header));
+    // An aliased union's members are listed under it by number (`#1 = ...`) so the `Drop#1` lines in the
+    // reason can be matched to them. Each is printed twice by design, which isn't a repeat to name away.
+    if (!get<UnionType>(expected))
+        add(explanation.wantedExpansion);
+    if (!get<UnionType>(given))
+        add(explanation.givenExpansion);
+    for (const NamedTypeDeclaration& declaration : explanation.whereDeclarations)
+        add(declaration.expansion);
+    text += explanation.reason;
+    return text;
+}
+
+} // namespace
+
+std::optional<MismatchExplanation> explainMismatch(
+    TypeId given,
+    TypeId expected,
+    NotNull<Subtyping> subtyping,
+    NotNull<Scope> scope,
+    NotNull<BuiltinTypes> builtinTypes,
+    std::optional<std::string> callee,
+    std::string_view arrival,
+    std::optional<std::string> variable
+)
+{
+    given = follow(given);
+    expected = follow(expected);
+
+    std::vector<PrintedType> printed{{expected, std::nullopt}, {given, variable}};
+    std::optional<MismatchExplanation> plain =
+        explainOnce(given, expected, subtyping, scope, builtinTypes, callee, arrival, variable, nullptr, &printed);
+    // A standalone reason prints neither type, so it has no `where` block to put names in.
+    if (!plain || plain->standalone)
+        return plain;
+
+    // How `ErrorConverter` prints the types of an explained mismatch.
+    ToStringOptions header;
+    header.sortUnionMembers = false;
+
+    // The two types as the message shows them: a large table a field per line, and a repeated type by its
+    // name.
+    auto printHeader = [&](MismatchExplanation& explanation, const RepeatedTypeNames* names)
+    {
+        ToStringOptions block = blockPrinting(header);
+        block.propertyFocus = &explanation.propertyFocus;
+        if (names)
+            block.repeatedTypeNames = &names->names;
+        // Set only where it differs from how `ErrorConverter` prints the type anyway: errors are compared by
+        // these fields, and an error that says the same thing should compare equal.
+        if (std::string wanted = toString(expected, block); !explanation.wantedName && wanted != toString(expected, header))
+            explanation.wantedName = std::move(wanted);
+        // A given table the bullets already say everything about is printed on one line, cut down to what they
+        // point into, as a way to find those places in it.
+        ToStringOptions givenOptions = givenIsContext(explanation, given) ? givenContextPrinting(explanation, header) : block;
+        if (printsAsLocalName(given))
+        {
+            givenOptions.ignoreSyntheticName = true;
+            explanation.givenName = toString(given, givenOptions);
+        }
+        else if (std::string shown = toString(given, givenOptions); !explanation.givenName && shown != toString(given, header))
+            explanation.givenName = std::move(shown);
+    };
+
+    // Declares the short aliases a bullet says were expected or given (`expected 'Method', got '"PATCH"'`),
+    // which say nothing about what's wrong until the reader knows what they stand for. Not an alias that only
+    // appears inside a larger type (`Stack` in `(string) -> Stack?`): what's wrong there is elsewhere. Only
+    // tables, unions and intersections, whose names don't say what they stand for.
+    auto declareMentionedAliases = [&](MismatchExplanation& explanation)
+    {
+        std::unordered_set<std::string> declared;
+        for (const NamedTypeDeclaration& declaration : explanation.whereDeclarations)
+            declared.insert(declaration.name);
+
+        // The two types' own aliases (`Recipe` of a `Recipe?`) are spelled out, or not, by `nameHeaderTypes`.
+        std::optional<std::string> givenAlias = aliasName(withoutNil(given));
+        std::optional<std::string> expectedAlias = aliasName(withoutNil(expected));
+        if (givenAlias)
+            declared.insert(*givenAlias);
+        if (expectedAlias)
+            declared.insert(*expectedAlias);
+
+        ToStringOptions expansionOptions = blockPrinting(header);
+        expansionOptions.propertyFocus = &explanation.propertyFocus;
+        expansionOptions.alwaysExpandRootAlias = true;
+        ToStringOptions oneLine = header;
+        oneLine.alwaysExpandRootAlias = true;
+        size_t added = 0;
+        for (const auto& alias : aliasesReachableFrom({expected, given}))
+        {
+            const std::string& name = alias.first;
+            TypeId ty = alias.second;
+            if (added == kMaxMentionedAliases)
+                break;
+            TypeId aliased = follow(ty);
+            const TableType* table = get<TableType>(aliased);
+            bool declarable = (table && table->instantiatedTypeParams.empty() && table->instantiatedTypePackParams.empty()) ||
+                              get<UnionType>(aliased) || get<IntersectionType>(aliased);
+            bool isABulletType = std::any_of(
+                explanation.bulletTypes.begin(),
+                explanation.bulletTypes.end(),
+                [&](const std::string& shown)
+                {
+                    return shown == name || shown == name + "?";
+                }
+            );
+            if (!declarable || declared.count(name) || !isABulletType)
+                continue;
+            if (toString(aliased, oneLine).size() > kMaxMentionedAliasWidth)
+                continue;
+            explanation.whereDeclarations.push_back(NamedTypeDeclaration{name, toString(aliased, expansionOptions)});
+            declared.insert(name);
+            ++added;
+        }
+    };
+
+    // Two types that print alike are told apart by where they're from; one name for both would hide that.
+    if (toString(given, header) == toString(expected, header))
+    {
+        printHeader(*plain, nullptr);
+        declareMentionedAliases(*plain);
+        return plain;
+    }
+
+    std::string message = printedMessage(*plain, given, expected, header);
+    ToStringOptions focused = header;
+    focused.propertyFocus = &plain->propertyFocus;
+    RepeatedTypeNames names = nameRepeatedTypes(printed, message, focused, scope.get());
+    std::optional<MismatchExplanation> named;
+    if (!names.empty())
+        named = explainOnce(given, expected, subtyping, scope, builtinTypes, callee, arrival, variable, &names.names, nullptr);
+    if (!named)
+    {
+        printHeader(*plain, nullptr);
+        declareMentionedAliases(*plain);
+        return plain;
+    }
+
+    printHeader(*named, &names);
+    header.repeatedTypeNames = &names.names;
+
+    // A name whose type the message prints nowhere would declare something it never refers to: a type cut off
+    // in one place and not another can be counted twice and printed once, and a given table cut down to what
+    // the bullets point into leaves out the rest.
+    std::string namedMessage = named->wantedName ? *named->wantedName : toString(expected, header);
+    namedMessage += "\n" + (named->givenName ? *named->givenName : toString(given, header)) + "\n" + named->reason + "\n";
+    namedMessage += named->wantedExpansion.value_or("") + "\n" + named->givenExpansion.value_or("") + "\n";
+    for (const NamedTypeDeclaration& declaration : named->whereDeclarations)
+        namedMessage += declaration.expansion + "\n";
+    for (const NamedTypeDeclaration& declaration : names.declarations)
+        namedMessage += declaration.expansion + "\n";
+    for (NamedTypeDeclaration& declaration : names.declarations)
+    {
+        if (mentionsName(namedMessage, declaration.name))
+            named->whereDeclarations.push_back(std::move(declaration));
+    }
+    declareMentionedAliases(*named);
+    return named;
 }
 
 } // namespace Luau

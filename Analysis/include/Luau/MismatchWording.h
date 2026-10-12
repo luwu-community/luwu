@@ -112,6 +112,10 @@ struct Difference
         // A table with named fields and no indexer, where a map is expected: Luau doesn't treat one
         // as the other even when every field would fit.
         NotAMap,
+        // `sub` is an array of values that fit `super` (`{T}` where `T` is expected).
+        ArrayOfExpected,
+        // `sub` fits the element of the array `super` (`T` where `{T}` is expected).
+        ElementOfExpected,
     };
 
     Kind kind;
@@ -131,6 +135,8 @@ struct Difference
     // For `CouldBeNil`, what an aliased `sub` stands for (`Slot` is `Stack?`): an alias hides the `nil`
     // the sentence is about.
     std::optional<std::string> subMeaning;
+    // For `ElementOfExpected`, the element type of the array expected.
+    std::optional<std::string> element;
 };
 
 // The names paths hang off, and what the text rendered so far needs a legend for. Every piece of text
@@ -248,6 +254,13 @@ std::string taggedMatchHeader(
 // `'Json' is unrelated to 'ServerConfig'.`, naming each type by its alias, or by its printed form
 // when that's short.
 std::string unrelatedSentence(const std::optional<std::string>& givenAlias, const std::string& printedGiven, const std::string& printedExpected);
+// `'animals' is an array where a single value is expected.` when the whole given value is an array of
+// what's expected (`givenIsArray`), else that it's one element of the expected array.
+// `variable` is the name the value was read from, for the exact `{ x }` to pass instead.
+// `permissions: expected a map of '{ [string]: boolean }', got an array of 'string'`, or the reverse when the given
+// value is the map. `map` is the map spelled out, `element` the array's element type.
+std::string arrayAndMapSentence(const std::optional<std::string>& variable, bool givenIsArray, const std::string& map, const std::string& element);
+std::string arrayNestingSentence(const std::string& subject, bool givenIsArray, const std::optional<std::string>& variable);
 
 // Lines about one member of a given union, labelled `Drop#2 = type`.
 Line memberDetailLine(const std::string& label, const std::string& type, bool near, size_t paths);

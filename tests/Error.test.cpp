@@ -122,7 +122,12 @@ local x: Account = 5
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
 
-    CHECK_EQ("Expected this to be 'Account', but was given 'number'\n\n'number' is unrelated to 'Account'.", toString(result.errors[0]));
+    CHECK_EQ(
+        toString(result.errors[0]),
+        "Expected this to be 'Account', but was given 'x: number'\n"
+        "\n"
+        "'number' is unrelated to 'Account'."
+    );
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "binary_op_type_function_errors")

@@ -10,6 +10,8 @@
 #include "Luau/Variant.h"
 
 #include <set>
+#include <string>
+#include <vector>
 
 namespace Luau
 {
@@ -38,6 +40,20 @@ std::string mismatchNotationLegend(uint8_t notation);
 // parameters and in its return values. The renderer words the rest of the message by which one it is.
 inline constexpr const char* mismatchContextFunctionTakes = "this function to take";
 inline constexpr const char* mismatchContextFunctionReturns = "this function to return";
+
+// Luwu (helpful subtyping errors): `type Animal = { ... }` under an expected/got message, for a type the
+// message would otherwise print several times. The name is made up for the message (or is an alias in
+// scope with the same structure), and the message prints it in every place the type appears.
+struct NamedTypeDeclaration
+{
+    std::string name;
+    std::string expansion;
+
+    bool operator==(const NamedTypeDeclaration& rhs) const
+    {
+        return name == rhs.name && expansion == rhs.expansion;
+    }
+};
 
 struct TypeMismatch
 {
@@ -88,6 +104,12 @@ struct TypeMismatch
     std::optional<std::string> givenName;
     std::optional<std::string> wantedExpansion;
     std::optional<std::string> givenExpansion;
+    // The variable the given value was read from, which the reason's paths are rooted at: printed with its
+    // type, `'settings: Settings'`, so the name in the paths leads to a type.
+    std::optional<std::string> givenVariable;
+    // Luwu (helpful subtyping errors): the `where` block under the two types. When it isn't empty,
+    // `wantedName` and `givenName` hold the two types printed with these names.
+    std::vector<NamedTypeDeclaration> whereDeclarations;
 
     // Luwu (helpful subtyping errors): explained by `explainMismatch`. Such a message prints union members in the
     // order they were written, not sorted, because the reason numbers them (`Drop#2`) and the numbers have
@@ -430,6 +452,12 @@ struct TypePackMismatch
 
     // Luwu (helpful subtyping errors): see TypeMismatch::overrideMessage.
     std::optional<std::string> overrideMessage;
+
+    // Luwu (helpful subtyping errors): see TypeMismatch::whereDeclarations. When it isn't empty, these hold
+    // the two packs printed with its names.
+    std::optional<std::string> wantedName;
+    std::optional<std::string> givenName;
+    std::vector<NamedTypeDeclaration> whereDeclarations;
 
     bool operator==(const TypePackMismatch& rhs) const;
 };

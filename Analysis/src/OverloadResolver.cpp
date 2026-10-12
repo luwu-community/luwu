@@ -314,6 +314,42 @@ static Path argumentPackPath(const SubtypingReasoning& reason)
     return path;
 }
 
+// Luwu: `ty` is `none`, or a union with a `none` member. An argument is reported whole (see
+// `pathUpToUnionOrIntersectionMember`), so an optional one arrives as `none | string`, not as its `none`.
+static bool mayBeNone(TypeId ty)
+{
+    ty = follow(ty);
+    if (Luau::isNone(ty))
+        return true;
+    const UnionType* u = get<UnionType>(ty);
+    return u && std::any_of(
+                    u->options.begin(),
+                    u->options.end(),
+                    [](TypeId option)
+                    {
+                        return Luau::isNone(follow(option));
+                    }
+                );
+}
+
+// Luwu: `path` up to the first step into a member of a union or intersection. A `Player?` argument where a
+// `Player` is expected fails on its `nil` member, and walking all the way in reports "got 'nil'", which is not
+// what was passed. Ported from upstream 0.742 (`truncatePathAtUnionOrIntersection`, behind their
+// `LuauCallErrorReportingRecoversArgumentLocationsForPacks`), after Luwu diverged.
+static Path pathUpToUnionOrIntersectionMember(const Path& path)
+{
+    Path result;
+    for (const auto& component : path.components)
+    {
+        const TypePath::Index* index = get_if<TypePath::Index>(&component);
+        bool intoMember = index && (index->variant == TypePath::Index::Variant::Union || index->variant == TypePath::Index::Variant::Intersection);
+        if (intoMember)
+            break;
+        result.components.push_back(component);
+    }
+    return result;
+}
+
 static ArgumentMismatchSides traverseArgumentMismatch(
     const SubtypingReasoning& reason,
     TypeId fnTy,
@@ -322,7 +358,9 @@ static ArgumentMismatchSides traverseArgumentMismatch(
     NotNull<TypeArena> arena
 )
 {
-    return {traverse(argPack, argumentPackPath(reason), builtinTypes, arena), traverse(fnTy, reason.subPath, builtinTypes, arena)};
+    Path givenPath = pathUpToUnionOrIntersectionMember(argumentPackPath(reason));
+    Path wantedPath = pathUpToUnionOrIntersectionMember(reason.subPath);
+    return {traverse(argPack, givenPath, builtinTypes, arena), traverse(fnTy, wantedPath, builtinTypes, arena)};
 }
 
 // Luwu (helpful subtyping errors): the path up to a variadic's element (`tail().variadic()`), when there is one.
@@ -793,7 +831,7 @@ void OverloadResolver::maybeEmplaceError(
         case ErrorSuppression::DoNotSuppress:
             // A `none` branch of an optional argument/self type reaching here means the caller never
             // narrowed/checked it before using it somewhere that expects a concrete value.
-            if (Luau::isNone(*givenType) && !Luau::isNone(follow(*wantedType)))
+            if (mayBeNone(*givenType) && !Luau::isNone(follow(*wantedType)))
             {
                 errors->emplace_back(
                     argLocation,

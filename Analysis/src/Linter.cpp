@@ -2073,12 +2073,14 @@ private:
             {
                 int& line = names[&expr->value];
 
+                // Luwu: a table has properties, not fields (a class's members are its fields). Upstream's
+                // TableLiteral warnings say "Table field" and "Table type field".
                 if (line)
                     emitWarning(
                         *context,
                         LintWarning::Code_TableLiteral,
                         expr->location,
-                        "Table field '%.*s' is a duplicate; previously defined at line %d",
+                        "Table property '%.*s' is a duplicate; previously defined at line %d",
                         int(expr->value.size),
                         expr->value.data,
                         line
@@ -2156,7 +2158,7 @@ private:
                             *context,
                             LintWarning::Code_TableLiteral,
                             item.location,
-                            "Table type field '%s' is a duplicate; previously defined at line %d",
+                            "Table type property '%s' is a duplicate; previously defined at line %d",
                             item.name.value,
                             rec->location.begin.line + 1
                         );
@@ -2165,7 +2167,7 @@ private:
                             *context,
                             LintWarning::Code_TableLiteral,
                             item.location,
-                            "Table type field '%s' is already read-write; previously defined at line %d",
+                            "Table type property '%s' is already read-write; previously defined at line %d",
                             item.name.value,
                             rec->location.begin.line + 1
                         );
@@ -2174,7 +2176,7 @@ private:
                             *context,
                             LintWarning::Code_TableLiteral,
                             rec->location,
-                            "Table type field '%s' already has a read type defined at line %d",
+                            "Table type property '%s' already has a read type defined at line %d",
                             item.name.value,
                             rec->location.begin.line + 1
                         );
@@ -2183,7 +2185,7 @@ private:
                             *context,
                             LintWarning::Code_TableLiteral,
                             rec->location,
-                            "Table type field '%s' already has a write type defined at line %d",
+                            "Table type property '%s' already has a write type defined at line %d",
                             item.name.value,
                             rec->location.begin.line + 1
                         );
@@ -2208,7 +2210,7 @@ private:
                     *context,
                     LintWarning::Code_TableLiteral,
                     item.location,
-                    "Table type field '%s' is a duplicate; previously defined at line %d",
+                    "Table type property '%s' is a duplicate; previously defined at line %d",
                     item.name.value,
                     line
                 );
