@@ -6,6 +6,7 @@
 #include "Fixture.h"
 
 #include "Luau/Error.h"
+#include "Luau/Linter.h"
 #include "Luau/StringUtils.h"
 
 #include "doctest.h"
@@ -53,9 +54,10 @@ struct Typewriter
     };
     std::vector<Closer> pendingClosers;
 
-    void type(char c)
+    // `rest` is what will be typed after `c`
+    void type(char c, const std::string& rest)
     {
-        if (stepOverCloser(c))
+        if (stepOverCloser(c, rest))
             return;
 
         buffer.insert(cursor, 1, c);
@@ -67,19 +69,33 @@ struct Typewriter
                 insertCloser(std::string(1, pair[1]));
         }
 
-        // Like luwu-lsp's autocompleteEnd: Enter after a block opener inserts its `end`
+        // Like luwu-lsp's autocompleteEnd: Enter after a block opener leaves the cursor on the new line and puts `end` on
+        // the line after it, indented like the opener
         if (autocompleteEnd && c == '\n' && hasUnclosedBlock(fixture.tryParse(buffer)))
-            insertCloser("end");
+            insertCloser("\n" + indentationOfLineBefore(cursor - 1) + "end");
     }
 
 private:
+    // The leading whitespace of the line that ends at `newline`
+    std::string indentationOfLineBefore(size_t newline) const
+    {
+        size_t lineStart = newline;
+        while (lineStart > 0 && buffer[lineStart - 1] != '\n')
+            lineStart--;
+
+        size_t end = lineStart;
+        while (end < newline && (buffer[end] == ' ' || buffer[end] == '\t'))
+            end++;
+        return buffer.substr(lineStart, end - lineStart);
+    }
+
     void insertCloser(const std::string& text)
     {
         buffer.insert(cursor, text);
         pendingClosers.push_back({text, 0});
     }
 
-    bool stepOverCloser(char c)
+    bool stepOverCloser(char c, const std::string& rest)
     {
         if (pendingClosers.empty())
             return false;
@@ -87,6 +103,12 @@ private:
         Closer& closer = pendingClosers.back();
         bool matches = closer.text[closer.typed] == c && cursor < buffer.size() && buffer[cursor] == c;
         if (!matches)
+            return false;
+
+        // Enter always adds a line in an editor. It only moves onto an inserted `end` line when that `end` is what the
+        // user types next; otherwise it's a new line inside the block.
+        bool entersEndLine = c == '\n' && closer.typed == 0;
+        if (entersEndLine && rest.compare(0, closer.text.size() - 1, closer.text, 1, std::string::npos) != 0)
             return false;
 
         cursor++;
@@ -116,17 +138,80 @@ Position positionOf(const std::string& source, size_t offset)
     return Position{line, column};
 }
 
-// What's wrong with `source` after one keystroke. `untouched` is where the code after the cursor starts.
-std::vector<std::string> problemsAfterKeystroke(Fixture& fixture, const std::string& source, Position untouched)
+// Whether `message` is one a case expects alongside another, like a second span pointing at the real problem
+bool isIntentional(const std::string& message, const std::vector<std::string>& intentional)
+{
+    for (const std::string& expected : intentional)
+    {
+        if (message.find(expected) != std::string::npos)
+            return true;
+    }
+    return false;
+}
+
+// Type errors in `source` from `typeErrorsFrom` on, and lint warnings from `lintsFrom` on, with the file checked and
+// linted the way luwu-lsp does
+std::vector<std::string> problemsFrom(
+    Fixture& fixture,
+    const std::string& source,
+    Position typeErrorsFrom,
+    Position lintsFrom,
+    const std::vector<std::string>& intentional
+)
 {
     std::vector<std::string> problems;
 
-    // A block whose `end` isn't typed yet gets one error, and holds the code after it until then, so type errors there
-    // aren't the keystroke's fault
+    FrontendOptions options = fixture.getFrontend().options;
+    options.runLintChecks = true;
+    CheckResult checked = fixture.check(source, options);
+
+    for (const TypeError& error : checked.errors)
+    {
+        std::string message = toString(error);
+        bool reported = !get<SyntaxError>(error) && typeErrorsFrom <= error.location.begin && !isIntentional(message, intentional);
+        if (reported)
+            problems.push_back(format("type error at %s: %s", toString(error.location).c_str(), message.c_str()));
+    }
+
+    for (const std::vector<LintWarning>* warnings : {&checked.lintResult.errors, &checked.lintResult.warnings})
+    {
+        for (const LintWarning& warning : *warnings)
+        {
+            if (lintsFrom <= warning.location.begin && !isIntentional(warning.text, intentional))
+            {
+                problems.push_back(format(
+                    "lint at %s: %s: %s", toString(warning.location).c_str(), LintWarning::getName(warning.code), warning.text.c_str()
+                ));
+            }
+        }
+    }
+
+    return problems;
+}
+
+// What's wrong with `source` after one keystroke. `untouched` is where the code after the cursor starts.
+std::vector<std::string> problemsAfterKeystroke(
+    Fixture& fixture,
+    const std::string& source,
+    Position untouched,
+    const std::vector<std::string>& intentional
+)
+{
+    std::vector<std::string> problems;
+
+    // A block whose `end` isn't typed yet gets one error, and holds the code after it until then, so type errors and
+    // lints there aren't the keystroke's fault
     ParseResult parsed = fixture.tryParse(source);
     bool unclosedBlock = hasUnclosedBlock(parsed);
     size_t allowedErrors = unclosedBlock ? 2 : 1;
-    if (parsed.errors.size() > allowedErrors)
+    size_t errors = 0;
+    for (const ParseError& error : parsed.errors)
+    {
+        if (!isIntentional(error.getMessage(), intentional))
+            errors++;
+    }
+
+    if (errors > allowedErrors)
     {
         for (const ParseError& error : parsed.errors)
             problems.push_back(format("parse error at %s: %s", toString(error.getLocation()).c_str(), error.getMessage().c_str()));
@@ -135,23 +220,18 @@ std::vector<std::string> problemsAfterKeystroke(Fixture& fixture, const std::str
     if (unclosedBlock)
         return problems;
 
-    CheckResult checked = fixture.check(source);
-    for (const TypeError& error : checked.errors)
-    {
-        bool cascades = !get<SyntaxError>(error) && untouched <= error.location.begin;
-        if (cascades)
-            problems.push_back(format("type error after the cursor at %s: %s", toString(error.location).c_str(), toString(error).c_str()));
-    }
+    for (const std::string& problem : problemsFrom(fixture, source, untouched, untouched, intentional))
+        problems.push_back("after the cursor, " + problem);
 
     return problems;
 }
 
-std::string errorsIn(Fixture& fixture, const std::string& source)
+std::string joined(const std::vector<std::string>& lines)
 {
-    std::string errors;
-    for (const TypeError& error : fixture.check(source).errors)
-        errors += toString(error.location) + ": " + toString(error) + "\n";
-    return errors;
+    std::string result;
+    for (const std::string& line : lines)
+        result += line + "\n";
+    return result;
 }
 
 } // namespace
@@ -161,18 +241,20 @@ std::string typewrite(
     const std::string& before,
     const std::string& text,
     const std::string& after,
-    bool autocompleteEnd
+    bool autocompleteEnd,
+    const std::vector<std::string>& intentional
 )
 {
     Typewriter writer{fixture, autocompleteEnd, before + after, before.size(), {}};
     std::string report;
 
-    for (char c : text)
+    for (size_t i = 0; i < text.size(); ++i)
     {
-        writer.type(c);
+        char c = text[i];
+        writer.type(c, text.substr(i + 1));
 
         size_t untouchedOffset = writer.buffer.size() - after.size();
-        std::vector<std::string> problems = problemsAfterKeystroke(fixture, writer.buffer, positionOf(writer.buffer, untouchedOffset));
+        std::vector<std::string> problems = problemsAfterKeystroke(fixture, writer.buffer, positionOf(writer.buffer, untouchedOffset), intentional);
         if (problems.empty())
             continue;
 
@@ -184,16 +266,25 @@ std::string typewrite(
     return report;
 }
 
-void checkTypewriting(Fixture& fixture, const std::string& before, const std::string& text, const std::string& after)
+void checkTypewriting(
+    Fixture& fixture,
+    const std::string& before,
+    const std::string& text,
+    const std::string& after,
+    const std::vector<std::string>& intentional
+)
 {
+    // No type errors anywhere, and no lints in `after`. `before` may lint: it can declare what only `text` uses.
+    std::string untyped = before + after;
     std::string finished = before + text + after;
     INFO(finished);
-    REQUIRE_EQ("", errorsIn(fixture, before + after));
-    REQUIRE_EQ("", errorsIn(fixture, finished));
+    REQUIRE_EQ("", joined(problemsFrom(fixture, untyped, Position{0, 0}, positionOf(untyped, before.size()), {})));
+    REQUIRE_EQ("", joined(problemsFrom(fixture, finished, Position{0, 0}, positionOf(finished, before.size() + text.size()), {})));
     for (bool autocompleteEnd : {true, false})
     {
-        INFO("autocompleteEnd: " << (autocompleteEnd ? "on" : "off"));
-        CHECK_EQ("", typewrite(fixture, before, text, after, autocompleteEnd));
+        std::string mode = autocompleteEnd ? "autocompleteEnd on" : "autocompleteEnd off";
+        INFO(mode);
+        CHECK_EQ("", typewrite(fixture, before, text, after, autocompleteEnd, intentional));
     }
 }
 
