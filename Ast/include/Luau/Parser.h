@@ -51,6 +51,17 @@ private:
     size_t size_;
 };
 
+// Luwu: a piece of Luwu-only syntax, named the way error messages name it.
+struct LuwuFeature
+{
+    // As it reads in the middle of a sentence: "classes", "'do' expressions"
+    const char* name;
+    // Whether `name` takes "are" rather than "is"
+    bool plural;
+    // The FFlag that turns it on
+    const char* flag;
+};
+
 class Parser
 {
     template<typename Node, typename F>
@@ -579,6 +590,12 @@ private:
         ...
     ) LUAU_PRINTF_ATTR(5, 6);
     AstExprError* reportExprError(const Location& location, const AstArray<AstExpr*>& expressions, const char* format, ...) LUAU_PRINTF_ATTR(4, 5);
+
+    // Luwu: reports `feature` where it can't be used, in a Luau module or with its FFlag off (`enabled`). Returns
+    // whether it can be used. The syntax is parsed either way, so the rest of the module still checks.
+    bool checkLuwuFeature(const Location& location, const LuwuFeature& feature, bool enabled);
+    // Luwu: the statement for a Luwu-only one that can't be used, after reporting why (see checkLuwuFeature).
+    AstStatError* reportLuwuFeatureStat(const Location& location, const AstArray<AstExpr*>& expressions, const LuwuFeature& feature);
     AstStatClass* getMatchingClass(AstExpr* expr);
     bool isExprLValue(AstExpr* expr);
     AstExprError* reportLValueError(AstExpr* expr);

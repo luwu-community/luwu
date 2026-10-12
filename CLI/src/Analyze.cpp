@@ -273,22 +273,12 @@ struct CliConfigResolver : Luau::ConfigResolver
     // Luwu: one copy of a directory's config per language, since a `.luau` and a `.luwu` file there share everything else.
     mutable std::map<std::pair<std::string, Luau::Language>, Luau::Config> languageConfigCache;
 
-    // Luwu: a module's language is its file extension's. A name that isn't a Luau or Lua file is Luwu.
-    static Luau::Language languageOf(const Luau::ModuleName& name)
-    {
-        if (hasFileExtension(name, {".luau"}))
-            return Luau::Language::Luau;
-        if (hasFileExtension(name, {".lua"}))
-            return Luau::Language::Lua;
-        return Luau::Language::Luwu;
-    }
-
     const Luau::Config& getConfig(const Luau::ModuleName& name, const Luau::TypeCheckLimits& limits) const override
     {
         std::optional<std::string> path = getParentPath(name);
         const Luau::Config& directoryConfig = path ? readConfigRec(*path, limits) : defaultConfig;
 
-        Luau::Language language = languageOf(name);
+        Luau::Language language = languageOfPath(name);
         if (directoryConfig.language == language)
             return directoryConfig;
 
