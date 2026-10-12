@@ -176,4 +176,32 @@ do
     end)
     assert(not ok and string.find(err, "attempt to index number"))
 end
+-- `.{x, y = v}` builds `{x = x, y = v}`
+class Point
+    x: number
+    y: number
+end
+
+do
+    local name, age = "ann", 19
+    local person = .{name, age, id = 7}
+    assert(person.name == "ann" and person.age == 19 and person.id == 7)
+    assert(#person == 0)
+
+    -- and destructures back into the same names
+    local .{name as n, age as a} = .{name, age}
+    assert(n == "ann" and a == 19)
+
+    -- `f.{x}` calls `f` with it, so a POD class constructs from locals of its field names
+    local x, y = 3, 4
+    local p = Point.{x, y}
+    assert(p.x == 3 and p.y == 4)
+
+    local function wrap(t)
+        return t
+    end
+    local wrapped = wrap .{p, inner = .{x}}
+    assert(wrapped.p == p and wrapped.inner.x == 3)
+end
+
 return "OK"

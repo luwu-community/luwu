@@ -43,6 +43,48 @@ A `local` or `const` bound to a class a required module exports also brings in t
 so `const geometry.{Point} = require("./geometry")` and `local Point = geometry.Point` both make `Point` usable as a
 type without a separate `type .{Point} = geometry`. A type already declared under that name in the same scope wins.
 
+<!-- WIP: agent-written draft of `.{...}` construction. Audit the wording before it leaves WIP. -->
+
+### Building tables with `.{...}`
+
+`.{...}` also works on the right-hand side, where it builds a table instead of taking one apart. A bare name becomes a
+field of the same name holding that name's value, and `key = value` works like in any table:
+
+```luwu
+local name, email = "ann", "ann@example.com"
+local user = .{name, email, created = os.time()}
+-- local user = { name = name, email = email, created = os.time() }
+
+return .{new, parse, from_string} -- module exports without writing every name twice
+```
+
+There are no list items in `.{...}`: a bare name is always a field, so `.{x}` can never quietly become an array the way
+`{x}` would. Use `{...}` for list items and `[key]` fields. `as` only renames when destructuring; to build a field
+under another name, write `key = value`.
+
+Like `{...}` and strings, `.{...}` can be a function's only argument without parentheses, so a POD class constructs
+straight from locals named after its fields:
+
+```luwu
+class Color
+    r: number
+    g: number
+    b: number
+end
+
+local r, g, b = 255, 128, 0
+local orange = Color.{r, g, b} -- Color { r = r, g = g, b = b }
+```
+
+This compiles exactly like `Color { r = r, g = g, b = b }`. It's for classes without a primary constructor, which take
+their fields as a table; a primary constructor takes positional arguments.
+
+The same `.{x, y}` means the same fields on both sides: `local .{x, y} = p` takes them out of `p`, and `Point.{x, y}`
+puts them into a new `Point`. Since `name.{...}` on the right-hand side is a call, `t.{x, y}` can't also mean "a new
+table with `t`'s `x` and `y`".
+
+<!-- /WIP -->
+
 ## Compatibility
 
 This is not compatible with Luau 0.730, but may be partially compatible with upstream Luau because it's based on VIG's RFC.

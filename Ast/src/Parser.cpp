@@ -60,6 +60,8 @@ const LuwuFeature kDefaultArgumentsFeature{"default arguments", /* plural= */ tr
 // Luwu Destructuring (rfcs/destructuring.md): destructuring always declares new locals, never assigns existing ones.
 const char* const kDestructuringNeedsKeywordError = "Destructuring declares new locals; start it with 'local' or 'const'";
 const LuwuFeature kDestructuringFeature{"destructuring", /* plural= */ false, "LuwuDestructuring"};
+const LuwuFeature kDotTableFeature{"'.{...}' table constructors", /* plural= */ true, "LuwuDestructuring"};
+const char* const kDotTableFieldError = "Fields in '.{...}' are names or 'key = value'; use '{...}' for list items and '[key]' fields";
 
 // Luwu Classes (rfcs/classes): class members may not be named after the keywords that appear in the
 // class header or in front of a member. This keeps those positions unambiguous, and leaves room to give
@@ -1782,10 +1784,35 @@ bool Parser::destructuringFollows()
     return lexer.current().type == Lexeme::Name && lexer.lookahead().type == '.';
 }
 
-// Luwu Destructuring (rfcs/destructuring.md): `.{`, which starts a pattern wherever it appears.
+// Luwu Destructuring (rfcs/destructuring.md): `.{`, which starts a pattern where a binding goes and a `.{x}` table
+// (parseDotTableConstructor) where an expression goes.
 bool Parser::destructurePatternFollows()
 {
     return lexer.current().type == '.' && lexer.lookahead().type == '{';
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): whether the `.{...}` at the current token is followed by `=`, `:` or `,`,
+// i.e. `name.{x} = t` is a declaration missing its keyword rather than the call `name.{x}`. Only a statement that starts
+// with `name.{` asks, and it scans a copy of the lexer, so the parser itself never backtracks.
+bool Parser::destructuringAssignmentFollows()
+{
+    Lexer scan = lexer;
+    scan.next(); // .
+
+    int depth = 0;
+    for (Lexeme::Type type = scan.current().type; type != Lexeme::Eof; type = scan.next().type)
+    {
+        if (type == '{')
+            depth++;
+        else if (type == '}')
+            depth--;
+
+        if (depth == 0)
+            break;
+    }
+
+    Lexeme::Type after = scan.next().type;
+    return after == '=' || after == ':' || after == ',';
 }
 
 // Luwu Destructuring (rfcs/destructuring.md): the declaration desugars to one `local`/`const` per binding, in
@@ -5359,15 +5386,22 @@ AstExpr* Parser::parsePrimaryExpr(bool asStatement)
 
     while (true)
     {
-        if (lexer.current().type == '.')
+        if (destructurePatternFollows())
         {
-            // Luwu Destructuring (rfcs/destructuring.md): `const .{` starts a destructuring declaration, and
-            // `name.{` at the start of a statement is one missing its keyword. `.{` can't index anything.
+            // Luwu Destructuring (rfcs/destructuring.md): `f.{x}` calls `f` with a `.{x}` table, like `f{x = x}`. At the
+            // start of a statement, `const .{` starts a destructuring declaration, and `name.{x} = t` is one missing
+            // its keyword.
+            AstName name = getIdentifier(expr);
             bool bareName = expr->is<AstExprGlobal>() || expr->is<AstExprLocal>();
-            bool startsDestructuring = asStatement && bareName && destructurePatternFollows();
+            bool declarationKeyword = name == "const" || name == "type";
+            bool startsDestructuring = asStatement && bareName && (declarationKeyword || destructuringAssignmentFollows());
             if (startsDestructuring)
                 break;
 
+            expr = parseFunctionArgs(expr, false);
+        }
+        else if (lexer.current().type == '.')
+        {
             Position opPosition = lexer.current().location.begin;
             nextLexeme();
 
@@ -5723,6 +5757,10 @@ AstExpr* Parser::parseSimpleExpr()
     {
         return parseTableConstructor();
     }
+    else if (destructurePatternFollows())
+    {
+        return parseDotTableConstructor();
+    }
     else if (lexer.current().type == Lexeme::ReservedIf)
     {
         return parseIfElseExpr();
@@ -5809,10 +5847,10 @@ AstExpr* Parser::parseFunctionArgs(AstExpr* func, bool self)
             );
         return node;
     }
-    else if (lexer.current().type == '{')
+    else if (lexer.current().type == '{' || destructurePatternFollows())
     {
         Position argStart = lexer.current().location.end;
-        AstExpr* expr = parseTableConstructor();
+        AstExpr* expr = lexer.current().type == '{' ? parseTableConstructor() : parseDotTableConstructor();
         Position argEnd = lexer.previousLocation().end;
 
         AstExprCall* node = allocator.alloc<AstExprCall>(
@@ -5997,6 +6035,131 @@ AstExpr* Parser::parseTableConstructor()
     AstExprTable* node = allocator.alloc<AstExprTable>(Location(start, end), copy(items));
     if (options.storeCstData)
         cstNodeMap[node] = allocator.alloc<CstExprTable>(copy(cstItems));
+    return node;
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): `.{x, y = v}` is `{x = x, y = v}`, building a table the way
+// `local .{x, y} = t` takes one apart. A bare name is a field named after it, so `.{x}` is never an array.
+AstExpr* Parser::parseDotTableConstructor()
+{
+    Location start = lexer.current().location;
+    nextLexeme(); // .
+
+    Position openBracePosition = lexer.current().location.begin;
+    checkLuwuFeature(Location(start, lexer.current().location), kDotTableFeature, FFlag::LuwuDestructuring);
+
+    TempVector<AstExprTable::Item> items(scratchItem);
+    TempVector<CstExprTable::Item> cstItems(scratchCstItem);
+
+    auto fieldKey = [this](AstName name, const Location& location) -> AstExpr*
+    {
+        AstArray<char> nameString{const_cast<char*>(name.value), strlen(name.value)};
+        return allocator.alloc<AstExprConstantString>(location, nameString, AstExprConstantString::QuoteStyle::Unquoted);
+    };
+
+    MatchLexeme matchBrace = lexer.current();
+    expectAndConsume('{', "table literal");
+
+    while (lexer.current().type != '}')
+    {
+        bool nameFollows = lexer.current().type == Lexeme::Name;
+        bool explicitValue = nameFollows && lexer.lookahead().type == '=';
+        bool renaming = nameFollows && lexer.lookahead().type == Lexeme::Name && AstName(lexer.lookahead().name) == "as";
+        Position equalsPosition = Position::missing();
+
+        if (explicitValue || renaming)
+        {
+            Name name = parseName("table field");
+
+            AstExpr* value = nullptr;
+            if (explicitValue)
+            {
+                equalsPosition = lexer.current().location.begin;
+                nextLexeme();
+                value = parseExpr();
+            }
+            else
+            {
+                nextLexeme(); // as
+                Name target = parseName("table field");
+                report(
+                    Location(name.location, target.location),
+                    "'as' renames only when destructuring; to build the field '%s' from '%s', write '%s = %s'",
+                    target.name.value,
+                    name.name.value,
+                    target.name.value,
+                    name.name.value
+                );
+                value = allocator.alloc<AstExprError>(name.location, AstArray<AstExpr*>{}, unsigned(parseErrors.size() - 1));
+            }
+
+            AstExpr* key = fieldKey(name.name, name.location);
+
+            if (AstExprFunction* func = value->as<AstExprFunction>())
+                func->debugname = name.name;
+
+            items.push_back({AstExprTable::Item::Kind::Record, key, value});
+        }
+        else if (lexer.current().type == '[')
+        {
+            Position keyStart = lexer.current().location.begin;
+            MatchLexeme matchBracket = lexer.current();
+            nextLexeme();
+
+            AstExpr* key = parseExpr();
+            expectMatchAndConsume(']', matchBracket);
+            expectAndConsume('=', "table field");
+            AstExpr* value = parseExpr();
+
+            report(Location(keyStart, value->location.end), "%s", kDotTableFieldError);
+            items.push_back({AstExprTable::Item::Kind::General, key, value});
+        }
+        else
+        {
+            AstExpr* value = parseExpr();
+
+            if (nameFollows && (value->is<AstExprLocal>() || value->is<AstExprGlobal>()))
+            {
+                items.push_back({AstExprTable::Item::Kind::Record, fieldKey(getIdentifier(value), value->location), value});
+            }
+            else
+            {
+                report(value->location, "%s", kDotTableFieldError);
+                items.push_back({AstExprTable::Item::Kind::List, nullptr, value});
+            }
+        }
+
+        if (options.storeCstData)
+        {
+            CstExprTable::Separator separator = tableSeparator();
+            Position separatorPosition = separator == CstExprTable::Separator::Missing ? Position::missing() : lexer.current().location.begin;
+            cstItems.push_back({Position::missing(), Position::missing(), equalsPosition, separator, separatorPosition});
+        }
+
+        if (lexer.current().type == ',' || lexer.current().type == ';')
+            nextLexeme();
+        else if (lexer.current().type == Lexeme::Name)
+            report(lexer.current().location, "Expected ',' after table constructor element");
+        else if (lexer.current().type != '}')
+            break;
+    }
+
+    Location end = lexer.current().location;
+
+    if (!expectMatchAndConsume('}', matchBrace))
+        end = lexer.previousLocation();
+
+    AstExprTable* node = allocator.alloc<AstExprTable>(Location(start, end), copy(items));
+    node->luwuOnly = true;
+
+    if (options.storeCstData)
+    {
+        CstExprTable* cstNode = allocator.alloc<CstExprTable>(copy(cstItems));
+        cstNode->dotPosition = start.begin;
+        cstNode->openBracePosition = openBracePosition;
+        cstNodeMap[node] = cstNode;
+    }
+
     return node;
 }
 
