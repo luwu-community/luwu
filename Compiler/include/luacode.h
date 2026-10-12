@@ -68,6 +68,10 @@ struct lua_CompileOptions
 
     // null-terminated array of library functions that should not be compiled into a built-in fastcall ("name" "lib.name")
     const char* const* disabledBuiltins;
+
+    // Luwu: nonzero when the source is a Luau or Lua module (a `.luau` or `.lua` file) rather than Luwu. Luwu syntax in
+    // it is then a compile error, even when its FFlag is on. Upstream has no such option.
+    int luauModule;
 };
 
 // compile source to bytecode; when source compilation fails, the resulting bytecode contains the encoded error. use free() to destroy

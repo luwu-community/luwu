@@ -16,6 +16,8 @@ std::optional<std::string> readFile(const std::string& name);
 std::optional<std::string> readStdin();
 
 bool hasFileExtension(std::string_view name, const std::vector<std::string>& extensions);
+// Luwu: whether a source file is a Luau or Lua module rather than Luwu, going by its extension.
+bool isLuauModulePath(std::string_view path);
 
 bool isAbsolutePath(std::string_view path);
 bool isFile(const std::string& path);

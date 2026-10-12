@@ -8599,11 +8599,20 @@ void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, A
     bytecode.finalize();
 }
 
+// Luwu: the parse options for compiling source, which also say whether it's a Luau module.
+static ParseOptions compileParseOptions(const CompileOptions& options, const ParseOptions& parseOptions)
+{
+    ParseOptions result = parseOptions;
+    if (options.luauModule)
+        result.luauModule = true;
+    return result;
+}
+
 void compileOrThrow(BytecodeBuilder& bytecode, const std::string& source, const CompileOptions& options, const ParseOptions& parseOptions)
 {
     Allocator allocator;
     AstNameTable names(allocator);
-    ParseResult result = Parser::parse(source.c_str(), source.size(), names, allocator, parseOptions);
+    ParseResult result = Parser::parse(source.c_str(), source.size(), names, allocator, compileParseOptions(options, parseOptions));
 
     if (!result.errors.empty())
         throw ParseErrors(result.errors);
@@ -8617,7 +8626,7 @@ std::string compile(const std::string& source, const CompileOptions& options, co
 
     Allocator allocator;
     AstNameTable names(allocator);
-    ParseResult result = Parser::parse(source.c_str(), source.size(), names, allocator, parseOptions);
+    ParseResult result = Parser::parse(source.c_str(), source.size(), names, allocator, compileParseOptions(options, parseOptions));
 
     if (!result.errors.empty())
     {

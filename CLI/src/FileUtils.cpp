@@ -163,6 +163,11 @@ std::optional<std::string> resolvePath(std::string_view path, std::string_view b
     return normalizePath(joinPaths(*baseFilePathParent, path));
 }
 
+bool isLuauModulePath(std::string_view path)
+{
+    return hasFileExtension(path, {".luau", ".lua"});
+}
+
 bool hasFileExtension(std::string_view name, const std::vector<std::string>& extensions)
 {
     for (const std::string& extension : extensions)

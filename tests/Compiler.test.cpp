@@ -13982,6 +13982,22 @@ RETURN R3 1
     );
 }
 
+TEST_CASE("LuwuSyntaxInALuauModuleDoesNotCompile")
+{
+    ScopedFastFlag luwuDefaultArguments{FFlag::LuwuDefaultArguments, true};
+
+    Luau::CompileOptions options;
+    options.luauModule = 1;
+
+    std::string bytecode = Luau::compile("local function f(x = 1) return x end", options);
+    REQUIRE(!bytecode.empty());
+    CHECK_EQ(bytecode[0], 0);
+    CHECK_EQ(bytecode.substr(1), ":1: attempt to use a Luwu-only feature in a Luau module: default arguments");
+
+    // the same source is fine as Luwu
+    CHECK_NE(Luau::compile("local function f(x = 1) return x end")[0], 0);
+}
+
 TEST_SUITE_END();
 
 // Compiler B (classes review) begin
