@@ -587,4 +587,26 @@ TEST_CASE_FIXTURE(Fixture, "typeof_local_in_type_pack_no_crash")
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
+TEST_CASE_FIXTURE(BuiltinsFixture, "generics_not_given_explicitly_are_inferred_from_the_arguments")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+
+    // `M` isn't given, so it's the methods table, as it would be with no type arguments at all
+    CheckResult result = check(R"(
+        --!strict
+        local function attach<T, M>(arr: { T }, methods: M)
+            return setmetatable(arr, { __index = methods })
+        end
+
+        local lines = attach<<string>>({}, {
+            push = function(self, msg: string)
+                table.insert(self, "-" .. msg)
+            end,
+        })
+        lines:push("meow")
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
 TEST_SUITE_END();

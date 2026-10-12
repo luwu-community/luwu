@@ -1170,24 +1170,7 @@ struct NonStrictTypeChecker
 
     Scope* findInnermostScope(Location location) const
     {
-        Scope* bestScope = module->getModuleScope().get();
-
-        bool didNarrow;
-        do
-        {
-            didNarrow = false;
-            for (auto scope : bestScope->children)
-            {
-                if (scope->location.encloses(location))
-                {
-                    bestScope = scope.get();
-                    didNarrow = true;
-                    break;
-                }
-            }
-        } while (didNarrow && bestScope->children.size() > 0);
-
-        return bestScope;
+        return module->getModuleScope()->findNarrowestScopeContaining(location).get();
     }
 
     std::optional<TypePackId> lookupPackAnnotation(AstTypePack* annotation) const

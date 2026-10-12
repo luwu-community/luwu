@@ -211,6 +211,28 @@ static bool signatureNamesSelf(AstExprFunction* fn)
     return names.found;
 }
 
+// Luwu doc references: the first table or function type written as an argument of a user-defined type function call
+// (`Freeze<{ ... }>`), or null
+static AstType* typeFunctionLiteralArgument(const Scope& scope, AstType* annotation)
+{
+    AstTypeReference* call = annotation->as<AstTypeReference>();
+    if (!call || call->prefix || call->parameters.size == 0)
+        return nullptr;
+
+    std::optional<TypeFun> callee = scope.lookupType(call->name.value);
+    const TypeFunctionInstanceType* function = callee ? get<TypeFunctionInstanceType>(follow(callee->type)) : nullptr;
+    if (!function || !function->userFuncData.definition)
+        return nullptr;
+
+    for (const AstTypeOrPack& param : call->parameters)
+    {
+        if (param.type && (param.type->is<AstTypeTable>() || param.type->is<AstTypeFunction>()))
+            return param.type;
+    }
+
+    return nullptr;
+}
+
 static bool isValidClassMetamethod(const Name& name)
 {
     return name == "__call" || name == "__concat" || name == "__unm" || name == "__add" || name == "__sub" || name == "__mul" || name == "__div" ||
@@ -3348,28 +3370,6 @@ static std::string nodiscardReasonOf(const AstAttr* attr)
 
     const AstExprConstantString* reason = attr->args.data[0]->as<AstExprConstantString>();
     return reason ? std::string(reason->value.data, reason->value.size) : std::string();
-}
-
-// Luwu doc references: the first table or function type written as an argument of a user-defined type function call
-// (`Freeze<{ ... }>`), or null
-static AstType* typeFunctionLiteralArgument(const Scope& scope, AstType* annotation)
-{
-    AstTypeReference* call = annotation->as<AstTypeReference>();
-    if (!call || call->prefix || call->parameters.size == 0)
-        return nullptr;
-
-    std::optional<TypeFun> callee = scope.lookupType(call->name.value);
-    const TypeFunctionInstanceType* function = callee ? get<TypeFunctionInstanceType>(follow(callee->type)) : nullptr;
-    if (!function || !function->userFuncData.definition)
-        return nullptr;
-
-    for (const AstTypeOrPack& param : call->parameters)
-    {
-        if (param.type && (param.type->is<AstTypeTable>() || param.type->is<AstTypeFunction>()))
-            return param.type;
-    }
-
-    return nullptr;
 }
 
 static void propagateDeprecatedAttributeToConstraint(ConstraintV& c, const AstExprFunction* func)
