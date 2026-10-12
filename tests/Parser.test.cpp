@@ -7623,8 +7623,24 @@ TEST_CASE_FIXTURE(Fixture, "push_and_pop_need_their_flag")
 {
     ScopedFastFlag poperators{FFlag::DebugLuwuPoperators, false};
 
-    matchParseError("t <+ 1", "'<+' is a Luwu feature; enable the 'DebugLuwuPoperators' fast flag to use it", Location{{0, 2}, {0, 4}});
-    matchParseError("local x = <-t", "'<-' is a Luwu feature; enable the 'DebugLuwuPoperators' fast flag to use it", Location{{0, 10}, {0, 12}});
+    matchParseError("t <+ 1", "attempt to use disabled Luwu feature push operator '<+'; enable via FFlag 'DebugLuwuPoperators'", Location{{0, 2}, {0, 4}});
+    matchParseError("local x = <-t", "attempt to use disabled Luwu feature pop operator '<-'; enable via FFlag 'DebugLuwuPoperators'", Location{{0, 10}, {0, 12}});
+}
+
+TEST_CASE_FIXTURE(Fixture, "push_and_pop_are_errors_in_a_luau_module")
+{
+    ScopedFastFlag poperators{FFlag::DebugLuwuPoperators, true};
+
+    ParseOptions luau;
+    luau.language = Language::Luau;
+
+    ParseResult push = tryParse("t <+ 1", luau);
+    REQUIRE(!push.errors.empty());
+    CHECK_EQ(push.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: push operator '<+'");
+
+    ParseResult pop = tryParse("local x = <-t", luau);
+    REQUIRE(!pop.errors.empty());
+    CHECK_EQ(pop.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: pop operator '<-'");
 }
 
 // TODO unit tests for various parse errors.
