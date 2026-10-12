@@ -3090,10 +3090,12 @@ AstStat* Parser::parseCompoundAssignment(AstExpr* initial, AstExprBinary::Op op)
     return node;
 }
 
+const LuwuFeature kPushFeature{"push operator '<+'", /* plural= */ false, "DebugLuwuPoperators"};
+const LuwuFeature kPopFeature{"pop operator '<-'", /* plural= */ false, "DebugLuwuPoperators"};
+
 AstStat* Parser::parsePush(AstExpr* target)
 {
-    if (!FFlag::DebugLuwuPoperators)
-        report(lexer.current().location, "'<+' is a Luwu feature; enable the 'DebugLuwuPoperators' fast flag to use it");
+    checkLuwuFeature(lexer.current().location, kPushFeature, FFlag::DebugLuwuPoperators);
 
     // A push changes the container, not the variable holding it, so a `const` variable can be pushed to
     bool variableOrField =
@@ -3176,8 +3178,7 @@ AstExpr* Parser::parsePop(unsigned int unaryPriority)
     Location op = Location(start, lexer.current().location);
     nextLexeme();
 
-    if (!FFlag::DebugLuwuPoperators)
-        report(op, "'<-' is a Luwu feature; enable the 'DebugLuwuPoperators' fast flag to use it");
+    checkLuwuFeature(op, kPopFeature, FFlag::DebugLuwuPoperators);
 
     AstExpr* container = parseExpr(unaryPriority);
 
