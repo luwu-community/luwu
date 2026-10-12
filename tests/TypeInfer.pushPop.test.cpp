@@ -108,6 +108,29 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "only_arrays_and_values_with_the_metamethod_c
     CHECK_EQ(toString(result.errors[4]), "Expected '<-' to pop from a container, got 'number' instead");
 }
 
+// A table literal pushed into a container with a declared element type is checked like an annotated local's value, so
+// it can leave out optional fields, as `table.insert` allows
+TEST_CASE_FIXTURE(BuiltinsFixture, "pushed_table_literals_are_checked_against_the_element_type")
+{
+    ScopedFastFlag poperators{FFlag::DebugLuwuPoperators, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        type Comment = { prefix: string, message: string, location: ("above" | "side")? }
+        const comments: { Comment } = {}
+        comments <+ { message = "meow", prefix = "---" }
+        comments <+ { message = "meow", prefix = "---", location = "side" }
+        table.insert(comments, { message = "meow", prefix = "---" })
+        comments <+ { message = 1, prefix = "---" }
+    )");
+
+    if (FFlag::DebugLuauForceOldSolver)
+        return;
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 7);
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "push_and_pop_metamethods_are_checked_and_typed")
 {
     ScopedFastFlag poperators{FFlag::DebugLuwuPoperators, true};

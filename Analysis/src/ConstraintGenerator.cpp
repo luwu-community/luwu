@@ -2164,7 +2164,16 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatPush* push)
     InConditionalContext inContext(&typeContext, TypeContext::Default);
 
     TypeId containerType = check(scope, push->target).ty;
-    TypePackId valuesPack = checkPack(scope, push->values).tp;
+
+    // A container with a declared element type (`const comments: { Comment } = {}`) is what each value is checked
+    // against, so a table literal is inferred against it like an annotated local's value is.
+    std::optional<TypeId> elementType;
+    const TableType* containerTable = get<TableType>(follow(containerType));
+    if (containerTable && containerTable->indexer && follow(containerTable->indexer->indexType) == builtinTypes->numberType)
+        elementType = containerTable->indexer->indexResultType;
+
+    std::vector<std::optional<TypeId>> expectedTypes(push->values.size, elementType);
+    TypePackId valuesPack = checkPack(scope, push->values, expectedTypes).tp;
 
     addConstraint(scope, push->location, PushConstraint{containerType, valuesPack});
 
