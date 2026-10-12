@@ -133,7 +133,7 @@ struct AstTreeState
     NodeCommentMap nodeComments;
     NodeCommentMap parsedComments;
     DenseHashMap2<const void*, bool> explicitVisibility;
-    DenseHashMap2<const Luau::AstNode*, int> untainted;
+    DenseHashMap2<const Luau::AstNode*, bool> untainted;
 
     uint64_t structureEdits = 0;
     uint64_t edits = 0;

@@ -3,6 +3,8 @@
 #include "Luau/ReflectCommon.h"
 #include "Luau/StringUtils.h"
 
+#include <algorithm>
+#include <deque>
 #include <limits>
 #include <math.h>
 
@@ -89,15 +91,20 @@ bool isRightAssociative(AstExprBinary::Op op)
     return op == AstExprBinary::Pow || op == AstExprBinary::Concat;
 }
 
-bool endsOpen(AstExpr& expr)
+bool endsOpen(AstExpr& first)
 {
-    if (expr.is<AstExprIfElse>())
-        return true;
-    if (auto binary = expr.as<AstExprBinary>())
-        return endsOpen(*binary->right);
-    if (auto unary = expr.as<AstExprUnary>())
-        return endsOpen(*unary->expr);
-    return false;
+    AstExpr* expr = &first;
+    for (;;)
+    {
+        if (expr->is<AstExprIfElse>())
+            return true;
+        if (auto binary = expr->as<AstExprBinary>())
+            expr = binary->right;
+        else if (auto unary = expr->as<AstExprUnary>())
+            expr = unary->expr;
+        else
+            return false;
+    }
 }
 
 bool operandNeedsParens(AstExpr& child, AstExprBinary::Op parentOp, bool isRight)
@@ -271,6 +278,28 @@ struct ReflectFormatter
 
     const AstTreeState& tree;
 
+    enum class TaskKind : uint8_t
+    {
+        Text,
+        Newline,
+        Indent,
+        Dedent,
+        Expr,
+        Type,
+        TypePack,
+        Stat,
+        Unsupported,
+    };
+
+    struct Task
+    {
+        TaskKind kind;
+        bool forVarArg;
+        bool asReturn;
+        void* target;
+        size_t size;
+    };
+
     std::string out;
     int indent = 0;
     bool lineStart = true;
@@ -278,7 +307,16 @@ struct ReflectFormatter
     const NodeCommentMap* fallbackComments;
     std::string error;
 
-    void write(std::string_view s)
+    std::vector<Task> tasks;
+    size_t handlerBase = 0;
+    std::deque<std::string> owned;
+
+    bool immediate() const
+    {
+        return tasks.size() == handlerBase;
+    }
+
+    void put(std::string_view s)
     {
         if (s.empty())
             return;
@@ -292,15 +330,145 @@ struct ReflectFormatter
         out.append(s.data(), s.size());
     }
 
+    void write(std::string_view s)
+    {
+        if (immediate())
+            put(s);
+        else
+            tasks.push_back({TaskKind::Text, false, false, const_cast<char*>(s.data()), s.size()});
+    }
+
+    void writeOwned(std::string s)
+    {
+        if (immediate())
+        {
+            put(s);
+            return;
+        }
+
+        owned.push_back(std::move(s));
+        tasks.push_back({TaskKind::Text, false, false, owned.back().data(), owned.back().size()});
+    }
+
     void newline()
     {
-        out += '\n';
-        lineStart = true;
+        if (immediate())
+        {
+            out += '\n';
+            lineStart = true;
+        }
+        else
+            tasks.push_back({TaskKind::Newline, false, false, nullptr, 0});
+    }
+
+    void indentMore()
+    {
+        if (immediate())
+            indent++;
+        else
+            tasks.push_back({TaskKind::Indent, false, false, nullptr, 0});
+    }
+
+    void indentLess()
+    {
+        if (immediate())
+            indent--;
+        else
+            tasks.push_back({TaskKind::Dedent, false, false, nullptr, 0});
+    }
+
+    static bool isLeaf(AstExpr& value)
+    {
+        return value.is<AstExprLocal>() || value.is<AstExprGlobal>() || value.is<AstExprConstantNumber>() || value.is<AstExprConstantString>() ||
+               value.is<AstExprConstantBool>() || value.is<AstExprConstantNil>() || value.is<AstExprConstantInteger>() || value.is<AstExprVarargs>();
+    }
+
+    static bool isLeaf(AstType& value)
+    {
+        if (auto reference = value.as<AstTypeReference>())
+            return reference->parameters.size == 0;
+        return value.is<AstTypeSingletonBool>() || value.is<AstTypeSingletonString>();
+    }
+
+    void expr(AstExpr& value)
+    {
+        if (immediate() && isLeaf(value))
+            printExpr(value);
+        else
+            tasks.push_back({TaskKind::Expr, false, false, &value, 0});
+    }
+
+    void type(AstType& value)
+    {
+        if (immediate() && isLeaf(value))
+            printType(value);
+        else
+            tasks.push_back({TaskKind::Type, false, false, &value, 0});
+    }
+
+    void typePack(AstTypePack& pack, bool forVarArg, bool asReturn = false)
+    {
+        tasks.push_back({TaskKind::TypePack, forVarArg, asReturn, &pack, 0});
+    }
+
+    void statement(AstStat& value)
+    {
+        tasks.push_back({TaskKind::Stat, false, false, &value, 0});
+    }
+
+    void run()
+    {
+        std::reverse(tasks.begin(), tasks.end());
+
+        while (!tasks.empty())
+        {
+            Task task = tasks.back();
+            tasks.pop_back();
+            handlerBase = tasks.size();
+
+            switch (task.kind)
+            {
+            case TaskKind::Text:
+                put(std::string_view(static_cast<const char*>(task.target), task.size));
+                break;
+            case TaskKind::Newline:
+                out += '\n';
+                lineStart = true;
+                break;
+            case TaskKind::Indent:
+                indent++;
+                break;
+            case TaskKind::Dedent:
+                indent--;
+                break;
+            case TaskKind::Expr:
+                printExpr(*static_cast<AstExpr*>(task.target));
+                break;
+            case TaskKind::Type:
+                printType(*static_cast<AstType*>(task.target));
+                break;
+            case TaskKind::TypePack:
+                printTypePack(*static_cast<AstTypePack*>(task.target), task.forVarArg, task.asReturn);
+                break;
+            case TaskKind::Stat:
+                printStatement(*static_cast<AstStat*>(task.target));
+                break;
+            case TaskKind::Unsupported:
+                if (error.empty())
+                    error = std::string("cannot print ") + getNodeKind(static_cast<AstNode*>(task.target));
+                break;
+            }
+
+            if (tasks.size() > handlerBase)
+                std::reverse(tasks.begin() + handlerBase, tasks.end());
+        }
     }
 
     void unsupported(AstNode* node)
     {
-        if (error.empty())
+        if (!immediate())
+            tasks.push_back({TaskKind::Unsupported, false, false, node, 0});
+        else if (error.empty())
             error = std::string("cannot print ") + getNodeKind(node);
     }
 
@@ -352,7 +520,7 @@ struct ReflectFormatter
     void quoted(std::string_view s)
     {
         write("\"");
-        write(escape(s));
+        writeOwned(escape(s));
         write("\"");
     }
 
@@ -475,7 +643,7 @@ struct ReflectFormatter
         write(">");
     }
 
-    void typePack(AstTypePack& pack, bool forVarArg, bool asReturn = false)
+    void printTypePack(AstTypePack& pack, bool forVarArg, bool asReturn)
     {
         if (auto variadic = pack.as<AstTypePackVariadic>())
         {
@@ -542,7 +710,7 @@ struct ReflectFormatter
             write(")");
     }
 
-    void type(AstType& value)
+    void printType(AstType& value)
     {
         if (auto reference = value.as<AstTypeReference>())
         {
@@ -661,7 +829,7 @@ struct ReflectFormatter
         if (multiline)
         {
             newline();
-            indent++;
+            indentMore();
         }
 
         size_t written = 0;
@@ -699,7 +867,7 @@ struct ReflectFormatter
         }
 
         if (multiline)
-            indent--;
+            indentLess();
         write(multiline ? "}" : " }");
     }
 
@@ -731,12 +899,12 @@ struct ReflectFormatter
             write("0/0");
         else if (value <= std::numeric_limits<int>::max() && value >= std::numeric_limits<int>::min() && double(int(value)) == value &&
                  !(value == 0.0 && signbit(value)))
-            write(std::to_string(int(value)));
+            writeOwned(std::to_string(int(value)));
         else
         {
             char buffer[100];
             size_t len = snprintf(buffer, sizeof(buffer), "%.17g", value);
-            write(std::string_view{buffer, len});
+            writeOwned(std::string(buffer, len));
         }
     }
 
@@ -805,36 +973,42 @@ struct ReflectFormatter
 
         write("{");
         newline();
-        indent++;
+        indentMore();
         for (const AstExprTable::Item& item : value.items)
         {
             tableItem(item);
             write(",");
             newline();
         }
-        indent--;
+        indentLess();
         write("}");
     }
 
-    void ifElse(AstExprIfElse& value)
+    void ifElse(AstExprIfElse& first)
     {
-        expr(*value.condition);
-        write(" then ");
-        expr(*value.trueExpr);
+        AstExprIfElse* value = &first;
 
-        if (auto chained = value.falseExpr->as<AstExprIfElse>())
+        for (;;)
         {
-            write(" elseif ");
-            ifElse(*chained);
-        }
-        else
-        {
-            write(" else ");
-            expr(*value.falseExpr);
+            expr(*value->condition);
+            write(" then ");
+            expr(*value->trueExpr);
+
+            if (auto chained = value->falseExpr->as<AstExprIfElse>())
+            {
+                write(" elseif ");
+                value = chained;
+            }
+            else
+            {
+                write(" else ");
+                expr(*value->falseExpr);
+                break;
+            }
         }
     }
 
-    void expr(AstExpr& value)
+    void printExpr(AstExpr& value)
     {
         if (auto group = value.as<AstExprGroup>())
         {
@@ -862,7 +1036,7 @@ struct ReflectFormatter
                 len = snprintf(buffer, sizeof(buffer), "%lldi", (long long)constantInteger->value);
             else
                 len = snprintf(buffer, sizeof(buffer), "0x%llxi", (unsigned long long)constantInteger->value);
-            write(std::string_view{buffer, len});
+            writeOwned(std::string(buffer, len));
         }
         else if (auto constantString = value.as<AstExprConstantString>())
         {
@@ -898,7 +1072,7 @@ struct ReflectFormatter
         else if (auto indexName = value.as<AstExprIndexName>())
         {
             prefix(*indexName->expr);
-            write(std::string(1, indexName->op));
+            writeOwned(std::string(1, indexName->op));
             name(indexName->index);
         }
         else if (auto indexExpr = value.as<AstExprIndexExpr>())
@@ -938,7 +1112,7 @@ struct ReflectFormatter
         {
             wrapped(*binary->left, operandNeedsParens(*binary->left, binary->op, false));
             write(" ");
-            write(toString(binary->op));
+            writeOwned(toString(binary->op));
             write(" ");
             wrapped(*binary->right, operandNeedsParens(*binary->right, binary->op, true));
         }
@@ -960,7 +1134,7 @@ struct ReflectFormatter
             for (size_t i = 0; i < interp->strings.size; i++)
             {
                 const AstArray<char>& piece = interp->strings.data[i];
-                write(escape(std::string_view(piece.data, piece.size), true));
+                writeOwned(escape(std::string_view(piece.data, piece.size), true));
 
                 if (i < interp->expressions.size)
                 {
@@ -1085,45 +1259,55 @@ struct ReflectFormatter
         typePack(retTypes, false, true);
     }
 
-    void ifStatement(AstStatIf& value)
+    void ifStatement(AstStatIf& first)
     {
-        expr(*value.condition);
-        write(" then");
-        newline();
-        body(*value.thenbody);
+        std::vector<const ClassifiedNodeComments*> chainedComments;
+        AstStatIf* value = &first;
 
-        if (!value.elsebody)
+        for (;;)
         {
-            write("end");
-        }
-        else if (auto chained = value.elsebody->as<AstStatIf>())
-        {
-            const ClassifiedNodeComments* attached = commentsFor(chained);
-
-            if (attached)
-            {
-                indent++;
-                ownLineComments(attached->leading);
-                indent--;
-            }
-
-            write("elseif ");
-            ifStatement(*chained);
-
-            if (attached)
-                sameLineComments(attached->trailing);
-        }
-        else if (auto elseBlock = value.elsebody->as<AstStatBlock>())
-        {
-            write("else");
+            expr(*value->condition);
+            write(" then");
             newline();
-            body(*elseBlock);
-            write("end");
+            body(*value->thenbody);
+
+            if (!value->elsebody)
+            {
+                write("end");
+                break;
+            }
+            else if (auto chained = value->elsebody->as<AstStatIf>())
+            {
+                const ClassifiedNodeComments* attached = commentsFor(chained);
+
+                if (attached)
+                {
+                    indentMore();
+                    ownLineComments(attached->leading);
+                    indentLess();
+                    chainedComments.push_back(attached);
+                }
+
+                write("elseif ");
+                value = chained;
+            }
+            else if (auto elseBlock = value->elsebody->as<AstStatBlock>())
+            {
+                write("else");
+                newline();
+                body(*elseBlock);
+                write("end");
+                break;
+            }
+            else
+            {
+                unsupported(value->elsebody);
+                break;
+            }
         }
-        else
-        {
-            unsupported(value.elsebody);
-        }
+
+        for (size_t i = chainedComments.size(); i > 0; i--)
+            sameLineComments(chainedComments[i - 1]->trailing);
     }
 
     void localKeyword(bool exported, bool isConst)
@@ -1242,7 +1426,7 @@ struct ReflectFormatter
         }
 
         newline();
-        indent++;
+        indentMore();
 
         for (const AstClassMember& member : value.members)
         {
@@ -1278,7 +1462,7 @@ struct ReflectFormatter
             newline();
         }
 
-        indent--;
+        indentLess();
         write("end");
     }
 
@@ -1296,7 +1480,7 @@ struct ReflectFormatter
 
         write(" with");
         newline();
-        indent++;
+        indentMore();
 
         for (const AstDeclaredExternTypeProperty& prop : value.props)
         {
@@ -1337,11 +1521,11 @@ struct ReflectFormatter
             newline();
         }
 
-        indent--;
+        indentLess();
         write("end");
     }
 
-    void statement(AstStat& value)
+    void printStatement(AstStat& value)
     {
         if (auto block = value.as<AstStatBlock>())
         {
@@ -1620,9 +1804,9 @@ struct ReflectFormatter
 
     void body(AstStatBlock& block, bool withBlockComments = true)
     {
-        indent++;
+        indentMore();
         statements(block, withBlockComments);
-        indent--;
+        indentLess();
     }
 };
 
@@ -1672,6 +1856,8 @@ std::string reflectPrettyPrint(Luau::AstNode* node, bool asProgram, const AstTre
         formatter.typePack(*static_cast<AstTypePack*>(node), false);
     else
         formatter.unsupported(node);
+
+    formatter.run();
 
     while (!formatter.out.empty() && formatter.out.back() == '\n')
         formatter.out.pop_back();

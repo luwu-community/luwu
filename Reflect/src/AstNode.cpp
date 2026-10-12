@@ -7,8 +7,6 @@
 
 #include "AstNodes.gen.inl"
 
-LUAU_FASTINT(LuauRecursionLimit)
-
 namespace Luau
 {
 
@@ -57,59 +55,54 @@ const char* getNodeKind(Luau::AstNode* node)
     return node ? astNodeClass(node)->kind : "nil";
 }
 
-static const int kRecursionLevelsPerCStackUnit = 4;
-static const int kFreeCStackUnits = 16;
-
-static int availableDepth(lua_State* L)
+void AstValidator::node(Luau::AstNode* root)
 {
-    int limit = int(FInt::LuauRecursionLimit);
-    int charged = std::max(0, lua_cstackdepth(L) - kFreeCStackUnits) * kRecursionLevelsPerCStackUnit;
-    return std::max(0, limit - charged);
-}
-
-void AstValidator::tooDeep()
-{
-    if (maxDepth < int(FInt::LuauRecursionLimit))
-        luaL_error(L, "C stack overflow");
-    luaL_error(L, "malformed AST: nesting is deeper than the limit of %d", maxDepth);
-}
-
-void AstValidator::node(Luau::AstNode* node)
-{
-    const int* known = heights.find(node);
-    if (!known && untainted)
-        known = untainted->find(node);
-
-    if (known)
+    struct Frame
     {
-        if (*known < 0)
-            luaL_error(L, "malformed AST: %s is nested inside itself", getNodeKind(node));
-        if (depth + *known > maxDepth)
-            tooDeep();
-        tallestChild = std::max(tallestChild, *known);
-        return;
+        Luau::AstNode* node;
+        size_t first;
+        size_t next;
+    };
+
+    std::vector<Frame> frames;
+    Luau::AstNode* current = root;
+
+    for (;;)
+    {
+        const bool* known = finished.find(current);
+        if (known && !*known)
+            luaL_error(L, "malformed AST: %s is nested inside itself", getNodeKind(current));
+
+        if (!known && !(untainted && untainted->contains(current)))
+        {
+            finished[current] = false;
+            kind = getNodeKind(current);
+
+            size_t first = found.size();
+            if (auto validator = astNodeClass(current)->validator)
+                validator(*this, current);
+
+            frames.push_back({current, first, first});
+        }
+
+        for (;;)
+        {
+            if (frames.empty())
+                return;
+
+            Frame& top = frames.back();
+            if (top.next < found.size())
+            {
+                current = found[top.next++];
+                break;
+            }
+
+            finished[top.node] = true;
+            order.push_back(top.node);
+            found.resize(top.first);
+            frames.pop_back();
+        }
     }
-
-    if (depth >= maxDepth)
-        tooDeep();
-
-    heights[node] = -1;
-
-    const char* outerKind = kind;
-    int outerTallestChild = tallestChild;
-    kind = getNodeKind(node);
-    tallestChild = 0;
-    depth++;
-
-    if (auto validator = astNodeClass(node)->validator)
-        validator(*this, node);
-
-    depth--;
-    int height = tallestChild + 1;
-    heights[node] = height;
-    order.push_back(node);
-    kind = outerKind;
-    tallestChild = std::max(outerTallestChild, height);
 }
 
 void AstValidator::fail(const char* field, int index, const char* problem)
@@ -128,7 +121,7 @@ void AstValidator::child(Luau::AstNode* node, const char* field, int index, cons
         return;
     }
     if (deep)
-        this->node(node);
+        found.push_back(node);
 }
 
 void AstValidator::local(Luau::AstLocal* local, const char* field, int index, const char* missing)
@@ -163,16 +156,16 @@ static int astNodeUntaint(lua_State* L)
 
     if (isTainted(*handle.doc, handle.node()))
     {
-        AstValidator validator{L, true, false, availableDepth(L)};
+        AstValidator validator{L, true, false};
         validator.untainted = &tree.untainted;
         validator.node(handle.node());
 
         if (tree.untainted.empty())
-            tree.untainted = std::move(validator.heights);
+            tree.untainted = std::move(validator.finished);
         else
         {
             for (const Luau::AstNode* visited : validator.order)
-                tree.untainted[visited] = *validator.heights.find(visited);
+                tree.untainted[visited] = true;
         }
     }
 
@@ -207,7 +200,7 @@ static int astNodeChildren(lua_State* L)
     auto& handle = checkAstNode(L, 1);
     if (isTainted(*handle.doc, handle.node()))
     {
-        AstValidator validator{L, false, false, int(FInt::LuauRecursionLimit)};
+        AstValidator validator{L, false, false};
         validator.node(handle.node());
     }
     std::vector<Luau::AstNode*> children;
@@ -329,10 +322,9 @@ static int astNodePrettyprint(lua_State* L)
     AstTreeState& tree = treeOf(*handle.doc);
     Luau::AstNode* node = handle.node();
 
-    int maxDepth = availableDepth(L);
-    if (isEdited(*handle.doc) || maxDepth < int(FInt::LuauRecursionLimit))
+    if (isEdited(*handle.doc))
     {
-        AstValidator validator{L, true, true, maxDepth};
+        AstValidator validator{L, true, true};
         validator.node(node);
     }
 
@@ -358,57 +350,90 @@ struct CommentAttacher
     {
     }
 
-    void attach(Luau::AstNode* node, bool statementBlock)
+    enum class Step : uint8_t
     {
-        NodeCategory category = getNodeCategory(node);
-        if (category == NodeCategory::Type || category == NodeCategory::TypePack)
-            return;
+        Visit,
+        VisitStatementBlock,
+        AfterStatement,
+        AfterBlock,
+    };
 
-        auto block = node->as<AstStatBlock>();
+    struct Pending
+    {
+        Luau::AstNode* node;
+        Step step;
+    };
 
-        if (canNodeHoldComments(node) && !(block && block->body.size > 0))
+    std::vector<Pending> pending;
+
+    void attach(Luau::AstNode* root)
+    {
+        pending.push_back({root, Step::Visit});
+
+        while (!pending.empty())
         {
-            while (cursor < comments.size() && comments[cursor]->location.end <= node->location.begin)
-            {
-                out[node].leading.push_back(comments[cursor++]);
-            }
+            Pending current = pending.back();
+            pending.pop_back();
+            Luau::AstNode* node = current.node;
 
-            if (cursor < comments.size() && comments[cursor]->location.begin.line == node->location.end.line)
+            if (current.step == Step::AfterStatement)
             {
-                out[node].trailing.push_back(comments[cursor++]);
-            }
-        }
-
-        if (block)
-        {
-            for (Luau::AstStat* stat : block->body)
-            {
-                attach(stat, stat->is<AstStatBlock>());
-
-                while (cursor < comments.size() && stat->location.end <= comments[cursor]->location.begin &&
-                       comments[cursor]->location.begin.line == stat->location.end.line)
+                while (cursor < comments.size() && node->location.end <= comments[cursor]->location.begin &&
+                       comments[cursor]->location.begin.line == node->location.end.line)
                 {
-                    out[stat].trailing.push_back(comments[cursor++]);
+                    out[node].trailing.push_back(comments[cursor++]);
+                }
+                continue;
+            }
+
+            if (current.step == Step::AfterBlock)
+            {
+                while (cursor < comments.size() && comments[cursor]->location.end <= node->location.end)
+                {
+                    out[node].trailing.push_back(comments[cursor++]);
+                }
+                continue;
+            }
+
+            NodeCategory category = getNodeCategory(node);
+            if (category == NodeCategory::Type || category == NodeCategory::TypePack)
+                continue;
+
+            auto block = node->as<AstStatBlock>();
+
+            if (canNodeHoldComments(node) && !(block && block->body.size > 0))
+            {
+                while (cursor < comments.size() && comments[cursor]->location.end <= node->location.begin)
+                {
+                    out[node].leading.push_back(comments[cursor++]);
+                }
+
+                if (cursor < comments.size() && comments[cursor]->location.begin.line == node->location.end.line)
+                {
+                    out[node].trailing.push_back(comments[cursor++]);
                 }
             }
 
-            if (!statementBlock)
+            if (block)
             {
-                while (cursor < comments.size() && comments[cursor]->location.end <= block->location.end)
+                if (current.step != Step::VisitStatementBlock)
+                    pending.push_back({block, Step::AfterBlock});
+
+                for (size_t i = block->body.size; i > 0; i--)
                 {
-                    out[block].trailing.push_back(comments[cursor++]);
+                    Luau::AstStat* stat = block->body.data[i - 1];
+                    pending.push_back({stat, Step::AfterStatement});
+                    pending.push_back({stat, stat->is<AstStatBlock>() ? Step::VisitStatementBlock : Step::Visit});
                 }
+
+                continue;
             }
 
-            return;
+            scratch.clear();
+            collectAstChildren(node, scratch);
+            for (size_t i = scratch.size(); i > 0; i--)
+                pending.push_back({scratch[i - 1], Step::Visit});
         }
-
-        size_t base = scratch.size();
-        collectAstChildren(node, scratch);
-        size_t end = scratch.size();
-        for (size_t i = base; i < end; i++)
-            attach(scratch[i], false);
-        scratch.resize(base);
     }
 };
 
@@ -420,7 +445,7 @@ static void collectNodeComments(AstDocumentState& doc, Luau::AstNode* rootNode, 
         return;
 
     CommentAttacher attacher(comments, out);
-    attacher.attach(root, false);
+    attacher.attach(root);
 
     while (attacher.cursor < comments.size())
     {

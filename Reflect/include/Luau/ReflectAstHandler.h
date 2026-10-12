@@ -377,21 +377,18 @@ struct AstValidator
     lua_State* L;
     bool deep;
     bool forPrint;
-    int maxDepth;
 
-    int depth = 0;
-    int tallestChild = 0;
     const char* kind = "AstNode";
-    DenseHashMap2<const Luau::AstNode*, int> heights;
+    DenseHashMap2<const Luau::AstNode*, bool> finished;
     std::vector<const Luau::AstNode*> order;
-    const DenseHashMap2<const Luau::AstNode*, int>* untainted = nullptr;
+    std::vector<Luau::AstNode*> found;
+    const DenseHashMap2<const Luau::AstNode*, bool>* untainted = nullptr;
 
-    void node(Luau::AstNode* node);
+    void node(Luau::AstNode* root);
     void child(Luau::AstNode* node, const char* field, int index, const char* missing);
     void local(Luau::AstLocal* local, const char* field, int index, const char* missing);
     void name(const Luau::AstName& name, const char* field, int index, const char* missing);
     [[noreturn]] void fail(const char* field, int index, const char* problem);
-    [[noreturn]] void tooDeep();
 };
 
 } // namespace Luau

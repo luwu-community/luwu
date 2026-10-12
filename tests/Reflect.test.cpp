@@ -1615,8 +1615,13 @@ TEST_CASE("ReflectCyclesAndDeepNesting")
             return expr
         end
         assert(#nest(100):untaint():prettyprint() == 201)
-        fails(function() return nest(5000):untaint() end, "nesting is deeper than the limit")
         fails(function() nest(5000):walk(function() return true end) end, "tainted AST")
+        local veryDeep = nest(50000):untaint()
+        assert(veryDeep:tainted() == false)
+        assert(#veryDeep:prettyprint() == 100001)
+        local veryDeepCount = 0
+        veryDeep:walk(function() veryDeepCount += 1 return true end)
+        assert(veryDeepCount == 50001)
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);
@@ -3107,14 +3112,20 @@ TEST_CASE("ReflectNestedWalksAreBounded")
         end)
         assert(viaCoroutine == true, tostring(coroutineErr))
 
-        local nestedLevels, printedAtBottom, printErrAtBottom = 0, nil, nil
+        local nestedLevels, printedAtBottom, untaintedAtBottom = 0, nil, nil
         local function nestUntilRefused()
             nestedLevels += 1
             deep:walk(function(node)
                 if node.kind == "AstExprGlobal" then
                     local nestedOk = pcall(nestUntilRefused)
                     if not nestedOk and printedAtBottom == nil then
-                        printedAtBottom, printErrAtBottom = pcall(function() return deep:prettyprint() end)
+                        printedAtBottom = #deep:prettyprint()
+                        local separate = reflect.allocator()
+                        local rebuilt = separate:parse("x()"):root():body()[1]
+                        for i = 1, 900 do
+                            rebuilt = separate:defaultnode("AstStatBlock"):setBody({ rebuilt })
+                        end
+                        untaintedAtBottom = rebuilt:untaint():tainted() == false and #rebuilt:prettyprint() > 1000
                     end
                 end
                 return true
@@ -3122,7 +3133,8 @@ TEST_CASE("ReflectNestedWalksAreBounded")
         end
         pcall(nestUntilRefused)
         assert(nestedLevels > 50)
-        assert(printedAtBottom == false and string.find(tostring(printErrAtBottom), "C stack overflow", 1, true) ~= nil, tostring(printErrAtBottom))
+        assert(printedAtBottom ~= nil and printedAtBottom > 1000)
+        assert(untaintedAtBottom == true)
 
         local shallow = alloc:parse("local a = 1"):root()
         local shallowRestarts = 0
