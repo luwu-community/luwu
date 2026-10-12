@@ -2781,7 +2781,9 @@ TEST_CASE_FIXTURE(Fixture, "destructured_loop_bindings_lint_like_the_names_they_
     // The fields are written in the loop's header, not as statements of its body, so only the unused one warns
     LintResult result = lint(R"(
 local people = {}
-for _, .{name, unused} in people do print(name) end
+for _, .{name, unused} in people do
+    print(name)
+end
 )");
 
     REQUIRE_EQ(result.warnings.size(), 1);
