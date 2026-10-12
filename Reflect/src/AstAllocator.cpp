@@ -4,10 +4,17 @@
 namespace Luau
 {
 
-void pushAstAllocator(lua_State* L, std::shared_ptr<AstAllocatorState> state)
+void pushAstAllocator(lua_State* L, std::shared_ptr<AstAllocatorState> state, std::shared_ptr<AstTreeState> tree)
 {
     AstAllocatorData* data = static_cast<AstAllocatorData*>(lua_newuserdatataggedwithmetatable(L, sizeof(AstAllocatorData), TagAllocator));
-    new (data) AstAllocatorData{std::move(state)};
+    new (data) AstAllocatorData{std::move(state), std::move(tree)};
+}
+
+static void markParsed(AstDocumentState& doc)
+{
+    doc.parsed = true;
+    doc.parsedAtStructureEdits = doc.tree->structureEdits;
+    doc.parsedAtEdits = doc.tree->edits;
 }
 
 LUAU_REFLECT_DEFINE_USERDATA_BASIC(checkAstAllocator, astAllocatorDtor, AstAllocatorData, TagAllocator, "AstAllocator")
@@ -20,7 +27,7 @@ static int astAllocatorParse(lua_State* L)
     bool includeCst = lua_isboolean(L, 3) ? lua_toboolean(L, 3) : false;
     bool processComments = lua_isboolean(L, 4) ? lua_toboolean(L, 4) : false;
 
-    auto doc = std::make_shared<AstDocumentState>(handle.state);
+    auto doc = std::make_shared<AstDocumentState>(handle.state, handle.tree);
     doc->source.assign(src, len);
     doc->lineOffsets = computeLineOffsets(doc->source);
 
@@ -37,6 +44,7 @@ static int astAllocatorParse(lua_State* L)
         recordParsedComments(*doc);
 
     recordExplicitVisibility(*doc);
+    markParsed(*doc);
 
     pushAstDocument(L, std::move(doc));
     return 1;
@@ -50,7 +58,7 @@ static int astAllocatorParseExpr(lua_State* L)
     bool includeCst = lua_isboolean(L, 3) ? lua_toboolean(L, 3) : false;
     bool processComments = lua_isboolean(L, 4) ? lua_toboolean(L, 4) : false;
 
-    auto doc = std::make_shared<AstDocumentState>(handle.state);
+    auto doc = std::make_shared<AstDocumentState>(handle.state, handle.tree);
     doc->source.assign(src, len);
     doc->lineOffsets = computeLineOffsets(doc->source);
 
@@ -76,6 +84,8 @@ static int astAllocatorParseExpr(lua_State* L)
             recordParsedComments(*doc, result.root);
     }
 
+    markParsed(*doc);
+
     pushAstNode(L, doc, result.root);
     return 1;
 }
@@ -87,12 +97,10 @@ static int astAllocatorDefaultnode(lua_State* L)
     const char* str = luaL_checklstring(L, 2, &len);
     ReflectAtom kind = resolveGlobalReflectAtom(std::string_view(str, len));
 
-    auto doc = std::make_shared<AstDocumentState>(handle.state);
-    doc->tree->edited = true;
+    auto doc = std::make_shared<AstDocumentState>(handle.state, handle.tree);
 
     if (Luau::AstNode* node = createDefaultAstNode(L, kind, handle.state->allocator))
     {
-        doc->tree->tainted = true;
         pushAstNode(L, doc, node);
         return 1;
     }

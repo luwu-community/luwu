@@ -4,63 +4,6 @@
 namespace Luau
 {
 
-template<typename Map>
-static void mergeTreeMap(Map& into, Map& from)
-{
-    if (from.empty())
-        return;
-
-    if (into.empty())
-    {
-        into = std::move(from);
-        return;
-    }
-
-    size_t capacity = 16;
-    while (capacity < (into.size() + from.size()) * 2)
-        capacity *= 2;
-
-    Map merged(capacity);
-    for (auto& [key, value] : into)
-        merged[key] = std::move(value);
-    for (auto& [key, value] : from)
-        merged[key] = std::move(value);
-    into = std::move(merged);
-}
-
-static size_t treeStateSize(const AstTreeState& tree)
-{
-    return tree.nodeComments.size() + tree.parsedComments.size() + tree.explicitVisibility.size() + tree.untainted.size();
-}
-
-void joinDocuments(AstDocumentState& doc, AstDocumentState& other)
-{
-    treeOf(doc);
-    treeOf(other);
-    if (doc.tree == other.tree)
-        return;
-
-    std::shared_ptr<AstTreeState> into = doc.tree;
-    std::shared_ptr<AstTreeState> from = other.tree;
-    if (treeStateSize(*from) > treeStateSize(*into))
-        std::swap(into, from);
-
-    mergeTreeMap(into->nodeComments, from->nodeComments);
-    mergeTreeMap(into->parsedComments, from->parsedComments);
-    mergeTreeMap(into->explicitVisibility, from->explicitVisibility);
-    mergeTreeMap(into->untainted, from->untainted);
-
-    into->tainted = into->tainted || from->tainted;
-    into->edited = into->edited || from->edited;
-    into->activeWalks += from->activeWalks;
-
-    from->nodeComments = NodeCommentMap{};
-    from->parsedComments = NodeCommentMap{};
-    from->explicitVisibility = DenseHashMap2<const void*, bool>{};
-    from->untainted = DenseHashMap2<const Luau::AstNode*, int>{};
-    from->forward = into;
-}
-
 void pushAstDocument(lua_State* L, std::shared_ptr<AstDocumentState> doc)
 {
     AstDocumentData* data = static_cast<AstDocumentData*>(lua_newuserdatataggedwithmetatable(L, sizeof(AstDocumentData), TagDocument));
@@ -152,7 +95,7 @@ static int astDocLines(lua_State* L)
 static int astDocAllocator(lua_State* L)
 {
     auto& handle = checkAstDocument(L, 1);
-    pushAstAllocator(L, handle.doc->arena);
+    pushAstAllocator(L, handle.doc->arena, handle.doc->tree);
     return 1;
 }
 
@@ -165,7 +108,7 @@ static int astDocProperties(lua_State* L)
     lua_pushlightuserdatatagged(L, (void*)doc.get(), TagId);
     lua_setfield(L, -2, "id");
 
-    pushAstAllocator(L, doc->arena);
+    pushAstAllocator(L, doc->arena, doc->tree);
     lua_setfield(L, -2, "allocator");
 
     pushAstNode(L, doc, doc->parseResult.root);

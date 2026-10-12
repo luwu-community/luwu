@@ -15,7 +15,7 @@ int16_t reflectUserAtom(lua_State* L, const char* s, size_t l)
 
 static int reflectAllocator(lua_State* L)
 {
-    pushAstAllocator(L, std::make_shared<AstAllocatorState>());
+    pushAstAllocator(L, std::make_shared<AstAllocatorState>(), std::make_shared<AstTreeState>());
     return 1;
 }
 

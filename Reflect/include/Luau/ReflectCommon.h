@@ -130,15 +130,13 @@ struct AstAllocatorState
 
 struct AstTreeState
 {
-    std::shared_ptr<AstTreeState> forward;
-
     NodeCommentMap nodeComments;
     NodeCommentMap parsedComments;
     DenseHashMap2<const void*, bool> explicitVisibility;
     DenseHashMap2<const Luau::AstNode*, int> untainted;
 
-    bool tainted = false;
-    bool edited = false;
+    uint64_t structureEdits = 0;
+    uint64_t edits = 0;
     int activeWalks = 0;
 };
 
@@ -211,25 +209,26 @@ inline void copyExplicitVisibility(AstTreeState& tree, const void* from, const v
 struct AstAllocatorData
 {
     std::shared_ptr<AstAllocatorState> state;
+    std::shared_ptr<AstTreeState> tree;
 };
 
 struct AstDocumentState
 {
     std::string source;
     std::shared_ptr<AstAllocatorState> arena;
-    std::shared_ptr<AstTreeState> tree = std::make_shared<AstTreeState>();
+    std::shared_ptr<AstTreeState> tree;
     Luau::ParseResult parseResult;
     std::vector<size_t> lineOffsets;
     std::vector<ReflectComment*> comments;
     bool commentsExtracted = false;
 
-    AstDocumentState()
-        : arena(std::make_shared<AstAllocatorState>())
-    {
-    }
+    bool parsed = false;
+    uint64_t parsedAtStructureEdits = 0;
+    uint64_t parsedAtEdits = 0;
 
-    explicit AstDocumentState(std::shared_ptr<AstAllocatorState> arena)
+    AstDocumentState(std::shared_ptr<AstAllocatorState> arena, std::shared_ptr<AstTreeState> tree)
         : arena(std::move(arena))
+        , tree(std::move(tree))
     {
     }
 
@@ -239,17 +238,21 @@ struct AstDocumentState
 
 inline AstTreeState& treeOf(AstDocumentState& doc)
 {
-    while (doc.tree->forward)
-        doc.tree = doc.tree->forward;
     return *doc.tree;
 }
 
-inline bool isTainted(const AstTreeState& tree, const Luau::AstNode* node)
+inline bool isTainted(const AstDocumentState& doc, const Luau::AstNode* node)
 {
-    return tree.tainted && !tree.untainted.contains(node);
+    if (doc.parsed && doc.parsedAtStructureEdits == doc.tree->structureEdits)
+        return false;
+    return !doc.tree->untainted.contains(node);
 }
 
-void joinDocuments(AstDocumentState& doc, AstDocumentState& other);
+inline bool isEdited(const AstDocumentState& doc)
+{
+    return !doc.parsed || doc.parsedAtEdits != doc.tree->edits;
+}
+
 
 struct AstDocumentData
 {
@@ -350,7 +353,7 @@ inline const std::vector<ReflectComment*>& documentComments(AstDocumentState& do
 }
 
 // Push helpers
-void pushAstAllocator(lua_State* L, std::shared_ptr<AstAllocatorState> state);
+void pushAstAllocator(lua_State* L, std::shared_ptr<AstAllocatorState> state, std::shared_ptr<AstTreeState> tree);
 void pushAstDocument(lua_State* L, std::shared_ptr<AstDocumentState> doc);
 void pushAstNode(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, Luau::AstNode* node);
 void pushCstNode(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const Luau::CstNode* node);

@@ -150,7 +150,7 @@ void AstValidator::name(const Luau::AstName& name, const char* field, int index,
 
 static void requireUntainted(lua_State* L, const AstItem& handle, const char* action)
 {
-    if (isTainted(treeOf(*handle.doc), handle.node()))
+    if (isTainted(*handle.doc, handle.node()))
         luaL_error(L, "cannot %s a tainted AST; call :untaint() on it first", action);
 }
 
@@ -159,7 +159,7 @@ static int astNodeUntaint(lua_State* L)
     auto& handle = checkAstNode(L, 1);
     AstTreeState& tree = treeOf(*handle.doc);
 
-    if (isTainted(tree, handle.node()))
+    if (isTainted(*handle.doc, handle.node()))
     {
         AstValidator validator{L, true, false, availableDepth(L)};
         validator.untainted = &tree.untainted;
@@ -181,7 +181,7 @@ static int astNodeUntaint(lua_State* L)
 static int astNodeTainted(lua_State* L)
 {
     auto& handle = checkAstNode(L, 1);
-    lua_pushboolean(L, isTainted(treeOf(*handle.doc), handle.node()));
+    lua_pushboolean(L, isTainted(*handle.doc, handle.node()));
     return 1;
 }
 
@@ -225,7 +225,7 @@ void initializeAstNodeClasses()
 static int astNodeChildren(lua_State* L)
 {
     auto& handle = checkAstNode(L, 1);
-    if (isTainted(treeOf(*handle.doc), handle.node()))
+    if (isTainted(*handle.doc, handle.node()))
     {
         AstValidator validator{L, false, false, int(FInt::LuauRecursionLimit)};
         validator.node(handle.node());
@@ -314,19 +314,19 @@ static int astNodeWalk(lua_State* L)
 
     struct WalkScope
     {
-        std::shared_ptr<AstDocumentState> doc;
+        std::shared_ptr<AstTreeState> tree;
 
-        explicit WalkScope(std::shared_ptr<AstDocumentState> doc)
-            : doc(std::move(doc))
+        explicit WalkScope(std::shared_ptr<AstTreeState> tree)
+            : tree(std::move(tree))
         {
-            treeOf(*this->doc).activeWalks++;
+            this->tree->activeWalks++;
         }
 
         ~WalkScope()
         {
-            treeOf(*doc).activeWalks--;
+            tree->activeWalks--;
         }
-    } walkScope(handle.doc);
+    } walkScope(handle.doc->tree);
 
     CallbackVisitor visitor(L, handle.doc, 2, filter, !lua_isnoneornil(L, 3));
     handle.node()->visit(&visitor);
@@ -385,7 +385,7 @@ static int astNodePrettyprint(lua_State* L)
     Luau::AstNode* node = handle.node();
 
     int maxDepth = availableDepth(L);
-    if (tree.edited || maxDepth < int(FInt::LuauRecursionLimit))
+    if (isEdited(*handle.doc) || maxDepth < int(FInt::LuauRecursionLimit))
     {
         AstValidator validator{L, true, true, maxDepth};
         validator.node(node);
@@ -582,7 +582,7 @@ static int astNodeSetComments(lua_State* L, bool trailing)
     parseCommentArray(L, handle, 2, list);
 
     AstTreeState& tree = treeOf(*handle.doc);
-    tree.edited = true;
+    tree.edits++;
     ClassifiedNodeComments& comments = tree.nodeComments[handle.node()];
     (trailing ? comments.trailing : comments.leading) = std::move(list);
     lua_pushvalue(L, 1);

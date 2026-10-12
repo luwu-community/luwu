@@ -8,17 +8,10 @@
 namespace Luau
 {
 
-inline void joinDocuments(const std::shared_ptr<AstDocumentState>& doc, const std::shared_ptr<AstDocumentState>& other)
-{
-    if (doc && other && doc != other)
-        joinDocuments(*doc, *other);
-}
-
 inline void checkSameAllocator(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, const std::shared_ptr<AstDocumentState>& other, const char* what)
 {
     if (doc && other && other->allocator() != doc->allocator())
         luaL_error(L, "cross-allocator %s assignment is not permitted", what);
-    joinDocuments(doc, other);
 }
 
 enum class ReflectWrite
@@ -37,10 +30,10 @@ inline void beginReflectWrite(lua_State* L, const std::shared_ptr<AstDocumentSta
 inline void finishReflectWrite(const std::shared_ptr<AstDocumentState>& doc, ReflectWrite write)
 {
     AstTreeState& tree = treeOf(*doc);
-    tree.edited = true;
+    tree.edits++;
     if (write != ReflectWrite::Value)
     {
-        tree.tainted = true;
+        tree.structureEdits++;
         tree.untainted.clear();
     }
 }
@@ -115,7 +108,6 @@ inline T* readNode(lua_State* L, const std::shared_ptr<AstDocumentState>& doc, i
     auto& nodeData = checkAstNode(L, idx);
     if (doc && nodeData.doc && nodeData.doc->allocator() != doc->allocator())
         luaL_error(L, "cross-allocator AST node assignment is not permitted");
-    joinDocuments(doc, nodeData.doc);
     T* casted = castAstNode<T>(nodeData.node());
     if (!casted)
         luaL_error(L, "invalid AstNode subtype at argument #%d", idx);
@@ -129,7 +121,6 @@ inline Luau::AstLocal* readLocal(lua_State* L, const std::shared_ptr<AstDocument
     auto& handle = checkItem<Luau::AstLocal>(L, idx);
     if (doc && handle.doc && handle.doc->allocator() != doc->allocator())
         luaL_error(L, "cross-allocator AstLocal assignment is not permitted");
-    joinDocuments(doc, handle.doc);
     return static_cast<Luau::AstLocal*>(handle.target);
 }
 
@@ -156,7 +147,6 @@ inline Luau::AstArray<T*> readNodeArray(lua_State* L, const std::shared_ptr<AstD
         auto& nodeData = checkAstNode(L, -1);
         if (doc && nodeData.doc && nodeData.doc->allocator() != doc->allocator())
             luaL_error(L, "cross-allocator AST node assignment is not permitted at table index %d", i);
-        joinDocuments(doc, nodeData.doc);
         T* casted = castAstNode<T>(nodeData.node());
         if (!casted)
             luaL_error(L, "invalid AstNode subtype at table index %d", i);
@@ -173,7 +163,6 @@ inline Luau::AstArray<T*> readOptionalNodeArray(lua_State* L, const std::shared_
         auto& nodeData = checkAstNode(L, -1);
         if (doc && nodeData.doc && nodeData.doc->allocator() != doc->allocator())
             luaL_error(L, "cross-allocator AST node assignment is not permitted at table index %d", i);
-        joinDocuments(doc, nodeData.doc);
         T* casted = castAstNode<T>(nodeData.node());
         if (!casted)
             luaL_error(L, "invalid AstNode subtype at table index %d", i);

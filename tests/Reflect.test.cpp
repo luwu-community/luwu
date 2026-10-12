@@ -1498,10 +1498,14 @@ TEST_CASE("ReflectMalformedTreesRaiseErrors")
         visitAll(failed)
         assert(failed:prettyprint() == "local a = 1")
 
-        local untouched = alloc:parse("local keep = 1")
+        local sameAllocator = alloc:parse("local keep = 1")
+        local otherAllocator = reflect.allocator():parse("local far = 1")
         failed:setBody({})
-        visitAll(untouched:root())
         fails(function() visitAll(failed) end, "tainted AST")
+        fails(function() visitAll(sameAllocator:root()) end, "tainted AST")
+        visitAll(sameAllocator:root():untaint())
+        visitAll(otherAllocator:root())
+        visitAll(alloc:parse("local later = 1"):root())
 
         local global = alloc:defaultnode("AstExprGlobal")
         fails(function() visitAll(global) end, "tainted AST")
@@ -2665,15 +2669,25 @@ TEST_CASE("ReflectTaintAndDocuments")
 
         local first = alloc:parse("while x do y() end"):root()
         local second = alloc:parse("z()"):root()
+        local separate = reflect.allocator():parse("w()"):root()
+        fails(function()
+            first:walk(function(node)
+                if node.kind == "AstStatWhile" then
+                    second:setBody({})
+                end
+                return true
+            end)
+        end, "cannot change the structure of an AST while it is being walked")
         first:walk(function(node)
             if node.kind == "AstStatWhile" then
-                second:setBody({})
+                separate:setBody({})
             end
             return true
         end)
-        fails(function() return visitAll(second) end, "tainted AST")
+        fails(function() return visitAll(separate) end, "tainted AST")
         assert(visitAll(first) == 7)
-        assert(visitAll(second:untaint()) == 1)
+        assert(visitAll(second) == 4)
+        assert(visitAll(separate:untaint()) == 1)
 
         local host = alloc:parse("do end"):root()
         local guest = alloc:parse("local n = 1"):root()
@@ -2707,18 +2721,15 @@ TEST_CASE("ReflectTaintAndDocuments")
         guest:setBody({})
 
         local walked = alloc:parse("local p = q"):root()
-        local sink = alloc:parse(""):root()
         fails(function()
             walked:walk(function(node)
                 if node.kind == "AstStatLocal" then
-                    sink:setBody({ node })
                     error("stop")
                 end
                 return true
             end)
         end, "stop")
         walked:setBody({})
-        sink:setBody({})
         assert(visitAll(walked:untaint()) == 1)
 
         local inside = alloc:parse("local r = s"):root()
@@ -2775,6 +2786,31 @@ TEST_CASE("ReflectTaintAndDocuments")
         assert(left:untaint():prettyprint() == "-- left\none()\n-- right\ntwo()")
         assert(right:untaint():prettyprint() == "-- right\ntwo()")
 
+        local chained = alloc:parseexpr("1")
+        local handles = {}
+        for i = 1, 200000 do
+            local outer = alloc:defaultnode("AstExprGroup")
+            outer:setExpr(chained)
+            handles[i] = chained
+            chained = outer
+        end
+        assert(handles[1]:tainted() == true)
+        assert(handles[100000]:tainted() == true)
+        chained = nil
+        handles = nil
+
+        local gathered = alloc:parse(""):root()
+        local pieces = {}
+        for i = 1, 3000 do
+            pieces[i] = alloc:parse("-- note " .. i .. "\ncall" .. i .. "()", false, true):root():body()[1]
+        end
+        gathered:setBody(pieces)
+        local gatheredText = gathered:untaint():prettyprint()
+        assert(string.sub(gatheredText, 1, 9) == "-- note 1")
+        assert(string.find(gatheredText, "-- note 1500\ncall1500()", 1, true) ~= nil)
+        assert(string.find(gatheredText, "-- note 3000\ncall3000()", 1, true) ~= nil)
+        assert(#pieces[3000]:leadingComments() == 1)
+
         local many = alloc:parse("-- a\none()\n-- b\ntwo()\n-- c\nthree()", false, true):root()
         local more = alloc:parse("-- d\nfour()\n-- e\nfive()\n-- f\nsix()\n-- g\nseven()", false, true):root()
         local combined = many:body()
@@ -2786,6 +2822,7 @@ TEST_CASE("ReflectTaintAndDocuments")
     )LUA";
 
     CHECK_EQ(dostring(L, script), 0);
+    lua_gc(L, LUA_GCCOLLECT, 0);
 }
 
 TEST_CASE("ReflectExposesEveryMember")

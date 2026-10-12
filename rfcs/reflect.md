@@ -60,9 +60,10 @@ Not all Luau AST's are structurally valid (and in general, most probably aren't)
 
 - Documents parsed from Luau source code starts untained.
 - Nodes created with `defaultnode` starts tainted
-- Editing a node (in a way that can make a valid AST an invalid one) taints the entire document
-- "Committing" a node validates the structure starting from the given node and untaints all nodes reachable from said node.
-- It is not allowed to walk or pretty print from a tainted node. Allowing this tends to crash the Luwu parser with a segmentation fault etc.
+- A successful structural edit to a node taints the entire allocator the node is allocated within. A structural edit is one that could make a valid AST into an invalid one and broadly includes all setters which accept, nodes, lists or locals
+- Untainting a node validates the structure starting from the given node and untaints all nodes reachable from said node. If validation fails, no node is untained
+- It is not allowed to walk or pretty print from a tainted node. Allowing this is both non-sensical semantically and also tends to crash the Luwu parser (visitors/pretty-printer) with a segmentation fault etc. Note that `node:children()` etc is still perfectly allowed on tainted nodes and that `node:prettyprint()` could still fail (just because one has a valid AST does not mean they have a semantically valid tree...)
+- `node:tainted()` returns if a node is tainted or not.
 
 ### Node Walking
 
