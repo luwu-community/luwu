@@ -511,6 +511,7 @@ if(TARGET Luwu.UnitTest)
         tests/BytecodeCompiler.test.cpp
         tests/ClassFixture.cpp
         tests/ClassFixture.h
+        tests/ClassesFixture.h
         tests/CodeAllocator.test.cpp
         tests/Compiler.test.cpp
         tests/Config.test.cpp
