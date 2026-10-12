@@ -3015,6 +3015,11 @@ TEST_CASE("ReflectNestedWalksAreBounded")
     Luau::luaopen_reflect(L);
     lua_setglobal(L, "reflect");
 
+#if defined(LUAU_ENABLE_ASAN) || defined(_NOOPT) || defined(_DEBUG)
+    lua_pushboolean(L, true);
+    lua_setglobal(L, "limitedstack");
+#endif
+
     const char* script = R"LUA(
         local alloc = reflect.allocator()
 
@@ -3035,42 +3040,45 @@ TEST_CASE("ReflectNestedWalksAreBounded")
         walkFunctions(nested)
         assert(deepest == 5)
 
-        local deep = alloc:parse(string.rep("do ", 900) .. "x()" .. string.rep(" end", 900)):root()
+        local parsedDepth = if limitedstack then 200 else 900
+        local deep = alloc:parse(string.rep("do ", parsedDepth) .. "x()" .. string.rep(" end", parsedDepth)):root()
         local count = 0
         deep:walk(function()
             count += 1
             return true
         end)
-        assert(count == 904)
+        assert(count == parsedDepth + 4)
 
-        local restarts = 0
-        local function walkAgain()
-            restarts += 1
-            deep:walk(function(node)
-                if node.kind == "AstExprGlobal" then
-                    walkAgain()
-                end
+        if not limitedstack then
+            local restarts = 0
+            local function walkAgain()
+                restarts += 1
+                deep:walk(function(node)
+                    if node.kind == "AstExprGlobal" then
+                        walkAgain()
+                    end
+                    return true
+                end)
+            end
+            local ok, err = pcall(walkAgain)
+            assert(not ok and string.find(tostring(err), "C stack overflow", 1, true) ~= nil, tostring(err))
+            assert(restarts > 50)
+
+            count = 0
+            deep:walk(function()
+                count += 1
                 return true
             end)
-        end
-        local ok, err = pcall(walkAgain)
-        assert(not ok and string.find(tostring(err), "C stack overflow", 1, true) ~= nil, tostring(err))
-        assert(restarts > 50)
+            assert(count == parsedDepth + 4)
 
-        count = 0
-        deep:walk(function()
-            count += 1
-            return true
-        end)
-        assert(count == 904)
-
-        local function pcallChain(n)
-            if n == 0 then
-                return true
+            local function pcallChain(n)
+                if n == 0 then
+                    return true
+                end
+                return select(2, pcall(pcallChain, n - 1))
             end
-            return select(2, pcall(pcallChain, n - 1))
+            assert(pcallChain(150) == true)
         end
-        assert(pcallChain(150) == true)
 
         local descents = 0
         local function descend(node)
@@ -3083,9 +3091,10 @@ TEST_CASE("ReflectNestedWalksAreBounded")
                 return true
             end)
         end
-        local moderate = alloc:parse(string.rep("do ", 60) .. "x()" .. string.rep(" end", 60)):root()
+        local moderateDepth = if limitedstack then 30 else 60
+        local moderate = alloc:parse(string.rep("do ", moderateDepth) .. "x()" .. string.rep(" end", moderateDepth)):root()
         descend(moderate)
-        assert(descents == 61)
+        assert(descents == moderateDepth + 1)
 
         local printed, untainted, printErr
         deep:walk(function(node)
@@ -3112,12 +3121,13 @@ TEST_CASE("ReflectNestedWalksAreBounded")
         end)
         assert(viaCoroutine == true, tostring(coroutineErr))
 
+        local nestedLimit = if limitedstack then 20 else math.huge
         local nestedLevels, printedAtBottom, untaintedAtBottom = 0, nil, nil
         local function nestUntilRefused()
             nestedLevels += 1
             deep:walk(function(node)
                 if node.kind == "AstExprGlobal" then
-                    local nestedOk = pcall(nestUntilRefused)
+                    local nestedOk = nestedLevels < nestedLimit and pcall(nestUntilRefused)
                     if not nestedOk and printedAtBottom == nil then
                         printedAtBottom = #deep:prettyprint()
                         local separate = reflect.allocator()
@@ -3132,7 +3142,7 @@ TEST_CASE("ReflectNestedWalksAreBounded")
             end)
         end
         pcall(nestUntilRefused)
-        assert(nestedLevels > 50)
+        assert(nestedLevels == nestedLimit or nestedLevels > 50)
         assert(printedAtBottom ~= nil and printedAtBottom > 1000)
         assert(untaintedAtBottom == true)
 
