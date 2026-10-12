@@ -28,6 +28,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_tables_and_calls")
     checkTypewriting(*this, before, "local t = { a = a, b = { c = b } }", kAfter);
     checkTypewriting(*this, before, "local w = wrap({ a, b })", kAfter);
     checkTypewriting(*this, before, "print(string.format(\"%d\", a))", kAfter);
+    checkTypewriting(*this, before, "local s = (\"abc\"):upper()", kAfter);
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "typing_blocks")
@@ -84,9 +85,7 @@ local value: unknown = nil
 )";
     checkTypewriting(*this, before, "local p = Point { x = 1, y = 2 }", kAfter);
     checkTypewriting(*this, before, "local c = Cat(\"Taz\", 3)", kAfter);
-    // A method call with its name not typed yet (`p:`) reports the missing name and the missing arguments. That's
-    // upstream's parser, for any `obj:`, not something classes cause.
-    checkTypewriting(*this, before, "local n = Point { x = 1, y = 2 }:length()", kAfter, {"when parsing function call"});
+    checkTypewriting(*this, before, "local n = Point { x = 1, y = 2 }:length()", kAfter);
     checkTypewriting(*this, before, "print(Cat(\"Taz\", 3).name)", kAfter);
     checkTypewriting(*this, before, "if class.isinstance(value, Cat) then\n    print(value.name)\nend", kAfter);
 }

@@ -5331,6 +5331,18 @@ TEST_CASE_FIXTURE(Fixture, "classes_nested_and_repeated")
     CHECK_EQ("Cannot declare class 'Foo' inside another statement or expression", result.errors[0].getMessage());
 }
 
+// Luwu: `obj:` with no method name yet reports only the missing name, not the missing arguments too. Found by the
+// typewriter tests.
+TEST_CASE_FIXTURE(Fixture, "method_call_missing_its_name_reports_one_error")
+{
+    ParseResult result = tryParse(R"(
+local n = obj:
+local unrelated = 1
+)");
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "Expected identifier when parsing method name, got 'local'");
+}
+
 // Luwu: a block missing its `then` or `do` names its own keyword in the "Expected 'end'" error, not the token that stood
 // where the `then` or `do` should have been. Found by the typewriter tests.
 TEST_CASE_FIXTURE(Fixture, "block_missing_then_or_do_names_its_keyword_in_the_end_error")
@@ -5934,12 +5946,14 @@ local a = b:do
     )");
     CHECK_EQ(2, result.errors.size());
 
+    // Luwu: only the missing method name; upstream also reports the missing arguments at the same `do`
     result = tryParse(R"(
 local b
 local a = b:
 do end
     )");
-    CHECK_EQ(2, result.errors.size());
+    REQUIRE_EQ(1, result.errors.size());
+    CHECK_EQ(result.errors[0].getMessage(), "Expected identifier when parsing method name, got 'do'");
 }
 
 TEST_CASE_FIXTURE(Fixture, "recover_type_index_name_keyword")

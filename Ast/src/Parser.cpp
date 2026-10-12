@@ -4715,6 +4715,17 @@ AstExpr* Parser::parseMethodCall(Position start, AstExpr* expr)
         typeArguments = parseTypeInstantiationExpr(cstTypeArguments);
     }
 
+    // Luwu: `obj:` with no method name yet already reported that, so it doesn't also report the missing arguments.
+    // The error node is the one parseFunctionArgs would build, so autocomplete still sees `obj:` as a method call.
+    // Upstream reports both, at the same token.
+    Lexeme::Type next = lexer.current().type;
+    bool argumentsFollow = next == '(' || next == '{' || next == Lexeme::RawString || next == Lexeme::QuotedString;
+    if (index.name == nameError && !argumentsFollow)
+    {
+        Location location(func->location.begin, lexer.current().location.begin);
+        return allocator.alloc<AstExprError>(location, copy({func}), unsigned(parseErrors.size() - 1));
+    }
+
     expr = parseFunctionArgs(func, true);
 
     if (options.storeCstData)
