@@ -3085,6 +3085,9 @@ return f
 
 TEST_CASE_FIXTURE(Fixture, "StyleGroupTurnsOffItsParts")
 {
+    // With do expressions on, a Luwu file's one-line guard is a LuaGuard instead
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, false};
+
     LintResult result = lint(R"(--!nolint Style
 local t = {}
 if t.a then print(1) end
