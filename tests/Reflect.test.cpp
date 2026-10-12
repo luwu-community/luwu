@@ -3050,7 +3050,7 @@ TEST_CASE("ReflectNestedWalksAreBounded")
         end
         local ok, err = pcall(walkAgain)
         assert(not ok and string.find(tostring(err), "C stack overflow", 1, true) ~= nil, tostring(err))
-        assert(restarts == 2)
+        assert(restarts > 50)
 
         count = 0
         deep:walk(function()
@@ -3090,7 +3090,7 @@ TEST_CASE("ReflectNestedWalksAreBounded")
             end
             return true
         end)
-        assert(printed == false and string.find(tostring(printErr), "C stack overflow", 1, true) ~= nil, tostring(printErr))
+        assert(printed == true, tostring(printErr))
         assert(untainted == true)
         assert(#deep:prettyprint() > 1000)
 
@@ -3105,7 +3105,24 @@ TEST_CASE("ReflectNestedWalksAreBounded")
             end
             return true
         end)
-        assert(viaCoroutine == false and string.find(tostring(coroutineErr), "C stack overflow", 1, true) ~= nil)
+        assert(viaCoroutine == true, tostring(coroutineErr))
+
+        local nestedLevels, printedAtBottom, printErrAtBottom = 0, nil, nil
+        local function nestUntilRefused()
+            nestedLevels += 1
+            deep:walk(function(node)
+                if node.kind == "AstExprGlobal" then
+                    local nestedOk = pcall(nestUntilRefused)
+                    if not nestedOk and printedAtBottom == nil then
+                        printedAtBottom, printErrAtBottom = pcall(function() return deep:prettyprint() end)
+                    end
+                end
+                return true
+            end)
+        end
+        pcall(nestUntilRefused)
+        assert(nestedLevels > 50)
+        assert(printedAtBottom == false and string.find(tostring(printErrAtBottom), "C stack overflow", 1, true) ~= nil, tostring(printErrAtBottom))
 
         local shallow = alloc:parse("local a = 1"):root()
         local shallowRestarts = 0
@@ -3126,65 +3143,126 @@ TEST_CASE("ReflectNestedWalksAreBounded")
     CHECK(lua_cstackdepth(L) == 0);
 }
 
-TEST_CASE("AstVisitorTracksDepth")
+TEST_CASE("ReflectWalkMatchesTheCoreVisitor")
 {
-    struct DepthRecorder : Luau::AstVisitor
-    {
-        std::vector<std::pair<std::string, int>> seen;
-        int deepest = 0;
-
-        bool visit(Luau::AstNode* node) override
-        {
-            seen.emplace_back(Luau::getNodeKind(node), depth);
-            deepest = std::max(deepest, depth);
-            return true;
-        }
-    };
-
-    Luau::Allocator allocator;
-    Luau::AstNameTable names(allocator);
-
-    std::string source = "local x = ((1))\nwhile x do y(z) end";
-    Luau::ParseResult result = Luau::Parser::parse(source.data(), source.size(), names, allocator);
-    REQUIRE(result.errors.empty());
+    ScopedFastFlag sffClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag sffDefaults{FFlag::LuwuDefaultArguments, true};
 
     Luau::initializeAstNodeClasses();
 
-    DepthRecorder recorder;
-    result.root->visit(&recorder);
-
-    std::vector<std::pair<std::string, int>> expected = {
-        {"AstStatBlock", 1},
-        {"AstStatLocal", 2},
-        {"AstExprGroup", 3},
-        {"AstExprGroup", 4},
-        {"AstExprConstantNumber", 5},
-        {"AstStatWhile", 2},
-        {"AstExprLocal", 3},
-        {"AstStatBlock", 3},
-        {"AstStatExpr", 4},
-        {"AstExprCall", 5},
-        {"AstExprGlobal", 6},
-        {"AstExprGlobal", 6},
-    };
-    CHECK(recorder.seen == expected);
-    CHECK(recorder.deepest == 6);
-    CHECK(recorder.depth == 0);
-
-    std::optional<std::string> ast = readReflectSourceFile("Ast/src/Ast.cpp");
-    REQUIRE_MESSAGE(ast, "cannot find Ast/src/Ast.cpp from the working directory");
-
-    auto countOf = [&](const std::string& needle)
+    struct Recorder : Luau::AstVisitor
     {
-        size_t count = 0;
-        for (size_t at = ast->find(needle); at != std::string::npos; at = ast->find(needle, at + needle.size()))
-            count++;
-        return count;
+        std::vector<Luau::AstNode*> seen;
+
+        bool visit(Luau::AstNode* node) override
+        {
+            seen.push_back(node);
+            return true;
+        }
+
+        bool visit(Luau::AstType* node) override
+        {
+            return visit(static_cast<Luau::AstNode*>(node));
+        }
+
+        bool visit(Luau::AstTypePack* node) override
+        {
+            return visit(static_cast<Luau::AstNode*>(node));
+        }
     };
 
-    size_t visitFunctions = countOf("::visit(AstVisitor* visitor)\n{");
-    CHECK(visitFunctions >= 60);
-    CHECK(countOf("::visit(AstVisitor* visitor)\n{\n    AstVisitDepth visitDepth(visitor);\n") == visitFunctions);
+    size_t nodes = 0;
+    std::set<std::string> kinds;
+
+    auto check = [&](const std::string& label, const std::string& source)
+    {
+        Luau::Allocator allocator;
+        Luau::AstNameTable names(allocator);
+        Luau::ParseOptions options;
+        options.allowDeclarationSyntax = true;
+
+        Luau::ParseResult result = Luau::Parser::parse(source.data(), source.size(), names, allocator, options);
+        REQUIRE_MESSAGE(result.root, label);
+
+        Recorder recorder;
+        result.root->visit(&recorder);
+
+        std::vector<Luau::AstNode*> walked;
+        std::vector<Luau::AstNode*> pending{result.root};
+        std::vector<Luau::AstNode*> children;
+        while (!pending.empty())
+        {
+            Luau::AstNode* node = pending.back();
+            pending.pop_back();
+            walked.push_back(node);
+            kinds.insert(Luau::getNodeKind(node));
+
+            children.clear();
+            Luau::collectAstChildren(node, children);
+            pending.insert(pending.end(), children.rbegin(), children.rend());
+        }
+
+        CHECK_MESSAGE(walked == recorder.seen, label);
+        nodes += walked.size();
+    };
+
+    check("statements and expressions", R"LUA(
+        local a, b: number = 1, "two"
+        local t = { 1, k = 2, [3] = function(x: number, y: string = "d", ...: string): (number, string) return x, ... end }
+        if a then b() elseif c then d() else e() end
+        for i: number = 1, 10, 2 do print(i) end
+        for k: string, v in pairs(t) do continue end
+        while true do break end
+        repeat a += 1 until a > 10
+        do local inner = `x{a}y{b}z` end
+        function M.sub:method<T>(p: T, q: number?): T return if p then p else q :: any end
+        local function lf<T...>(...: T...): ...number return ... end
+        local v = -a ^ 2 + (a or b) and not c
+        a.b, c[1] = f(1, 2), g "s"
+        return a
+    )LUA");
+
+    check("types", R"LUA(
+        type Pair<K, V = string, P... = ...number> = { read key: K, value: V, [number]: boolean }
+        type Fn = <T>(name: string, ...number) -> (boolean, string)
+        type U = "a" | "b" | nil | true
+        type I = { a: number } & { b: string }
+        type O = (() -> ())?
+        type Q = typeof(a.b) | Mod.Thing<number, ...string>
+        export type Arr = { number }
+        type function tf(x) return x end
+    )LUA");
+
+    check("declarations", R"LUA(
+        declare function foo<T>(a: number, b: string, ...: T): boolean
+        declare x: number
+        declare extern type E extends B with
+            p: number
+            [string]: number
+            function m(self, q: string): number
+        end
+    )LUA");
+
+    check("classes", R"LUA(
+        class P<T> private (public const key: string, private secret: T = nil)
+            public count: number = 0
+            private function bump(self) self.count += 1 end
+            public @native function get(self): string return self.key end
+        end
+        @checked local function g(x, y = 2) return x + y end
+    )LUA");
+
+    check("errors", "local = 1\nif then end\nlocal x: = \nf(,)\ntype T = { a: }\n");
+
+    for (const char* file : {"Reflect/types.luau", "tests/conformance/basic.luau", "tests/conformance/types.luau", "tests/conformance/tables.luau"})
+    {
+        std::optional<std::string> source = readReflectSourceFile(file);
+        REQUIRE_MESSAGE(source, "cannot find " << std::string(file) << " from the working directory");
+        check(file, *source);
+    }
+
+    CHECK(nodes > 15000);
+    CHECK(kinds.size() > 50);
 }
 
 static void collectDeclaredMembers(const std::string& source, ReflectMemberSet& members)
@@ -3314,7 +3392,7 @@ TEST_CASE("ReflectSchemaCoversEveryAstMember")
         exposedAnywhere.insert(names.begin(), names.end());
 
     const std::set<std::string> baseClasses = {"AstNode", "AstExpr", "AstStat", "AstType", "AstTypePack", "CstNode"};
-    const std::set<std::string> notReflected = {"AstName", "AstArray", "AstTypeOrPack", "AstVisitor", "AstVisitDepth", "AstRtti", "CstRtti", "AstAttr::DeprecatedInfo"};
+    const std::set<std::string> notReflected = {"AstName", "AstArray", "AstTypeOrPack", "AstVisitor", "AstRtti", "CstRtti", "AstAttr::DeprecatedInfo"};
     const std::set<std::string> internal = {"AstNode.classIndex", "CstNode.classIndex", "AstStatRepeat.DEPRECATED_hasUntil"};
     const std::map<std::string, std::string> schemaNames = {
         {"AstExprTable::Item", "AstTableItem"},

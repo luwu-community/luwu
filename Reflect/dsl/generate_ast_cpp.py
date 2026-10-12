@@ -239,6 +239,8 @@ class NodeDef(BaseModel):
 
     cpp: Optional[str] = None
     display: Optional[str] = None
+    walk: list[str] = []
+    unwalked: list[str] = []
 
     @field_validator("fields", mode="before")
     @classmethod
@@ -415,6 +417,7 @@ AST_NODES_USERDATA = UserdataDef(
         # Statements
         NodeDef(
             name="AstStatBlock",
+            walk=["body"],
             category="Stat",
             base="AstStat",
             factory=FactoryDef(
@@ -425,6 +428,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstStatIf",
+            walk=["condition", "thenbody", "elsebody"],
             category="Stat",
             base="AstStat",
             factory=FactoryDef(
@@ -450,6 +454,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstStatWhile",
+            walk=["condition", "body"],
             category="Stat",
             base="AstStat",
             factory=FactoryDef(
@@ -471,6 +476,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstStatRepeat",
+            walk=["body", "condition"],
             category="Stat",
             base="AstStat",
             factory=FactoryDef(
@@ -506,6 +512,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstStatReturn",
+            walk=["list"],
             category="Stat",
             base="AstStat",
             factory=FactoryDef(
@@ -523,6 +530,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstStatExpr",
+            walk=["expr"],
             category="Stat",
             base="AstStat",
             factory=FactoryDef(strategy="alloc", args=["Luau::Location()", "nullptr"]),
@@ -530,6 +538,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstStatLocal",
+            walk=["vars", "values"],
             category="Stat",
             base="AstStat",
             factory=FactoryDef(
@@ -553,6 +562,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstStatFor",
+            walk=["var", "from", "to", "step", "body"],
             category="Stat",
             base="AstStat",
             factory=FactoryDef(
@@ -582,6 +592,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstStatForIn",
+            walk=["vars", "values", "body"],
             category="Stat",
             base="AstStat",
             factory=FactoryDef(
@@ -611,6 +622,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstStatAssign",
+            walk=["vars", "values"],
             category="Stat",
             base="AstStat",
             factory=FactoryDef(
@@ -625,6 +637,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstStatCompoundAssign",
+            walk=["var", "value"],
             category="Stat",
             base="AstStat",
             factory=FactoryDef(
@@ -635,6 +648,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstStatFunction",
+            walk=["name", "func"],
             category="Stat",
             base="AstStat",
             factory=FactoryDef(
@@ -653,6 +667,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstStatLocalFunction",
+            walk=["func"],
             category="Stat",
             base="AstStat",
             factory=FactoryDef(
@@ -676,6 +691,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstStatTypeAlias",
+            walk=["generics", "genericPacks", "type"],
             category="Stat",
             base="AstStat",
             factory=FactoryDef(
@@ -703,6 +719,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstStatTypeFunction",
+            walk=["body"],
             category="Stat",
             base="AstStat",
             factory=FactoryDef(
@@ -719,6 +736,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstStatDeclareGlobal",
+            walk=["type"],
             category="Stat",
             base="AstStat",
             factory=FactoryDef(
@@ -739,6 +757,8 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstStatDeclareFunction",
+            walk=["params", "returnTypes"],
+            unwalked=["generics", "genericPacks", "attributes"],
             category="Stat",
             base="AstStat",
             factory=FactoryDef(
@@ -777,6 +797,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstStatClass",
+            walk=["generics", "genericPacks", "primaryConstructor", "members"],
             category="Stat",
             base="AstStat",
             factory=FactoryDef(
@@ -810,6 +831,8 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstStatDeclareExternType",
+            walk=["props"],
+            unwalked=["indexer", "generics", "genericPacks"],
             category="Stat",
             base="AstStat",
             factory=FactoryDef(
@@ -839,6 +862,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstStatError",
+            walk=["expressions", "statements"],
             category="Stat",
             base="AstStat",
             factory=FactoryDef(
@@ -859,6 +883,7 @@ AST_NODES_USERDATA = UserdataDef(
         # Expressions
         NodeDef(
             name="AstExprGroup",
+            walk=["expr"],
             category="Expr",
             base="AstNode",
             factory=FactoryDef(strategy="alloc", args=["Luau::Location()", "nullptr"]),
@@ -935,6 +960,8 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstExprCall",
+            walk=["func", "args"],
+            unwalked=["typeArguments"],
             category="Expr",
             base="AstNode",
             factory=FactoryDef(
@@ -958,6 +985,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstExprIndexName",
+            walk=["expr"],
             category="Expr",
             base="AstNode",
             factory=FactoryDef(
@@ -979,6 +1007,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstExprIndexExpr",
+            walk=["expr", "index"],
             category="Expr",
             base="AstNode",
             factory=FactoryDef(strategy="alloc", args=["Luau::Location()", "nullptr", "nullptr"]),
@@ -986,6 +1015,8 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstExprFunction",
+            walk=["args", "argsDefaults", "varargAnnotation", "returnAnnotation", "body"],
+            unwalked=["generics", "genericPacks", "attributes"],
             category="Expr",
             base="AstNode",
             factory=FactoryDef(
@@ -1027,6 +1058,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstExprTable",
+            walk=["items"],
             category="Expr",
             base="AstNode",
             factory=FactoryDef(
@@ -1037,6 +1069,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstExprUnary",
+            walk=["expr"],
             category="Expr",
             base="AstNode",
             factory=FactoryDef(
@@ -1047,6 +1080,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstExprBinary",
+            walk=["left", "right"],
             category="Expr",
             base="AstNode",
             factory=FactoryDef(
@@ -1057,6 +1091,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstExprTypeAssertion",
+            walk=["expr", "annotation"],
             category="Expr",
             base="AstNode",
             factory=FactoryDef(strategy="alloc", args=["Luau::Location()", "nullptr", "nullptr"]),
@@ -1064,6 +1099,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstExprIfElse",
+            walk=["condition", "trueExpr", "falseExpr"],
             category="Expr",
             base="AstNode",
             factory=FactoryDef(
@@ -1093,6 +1129,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstExprInterpString",
+            walk=["expressions"],
             category="Expr",
             base="AstNode",
             factory=FactoryDef(
@@ -1107,6 +1144,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstExprInstantiate",
+            walk=["expr", "typeArguments"],
             category="Expr",
             base="AstNode",
             factory=FactoryDef(
@@ -1117,6 +1155,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstExprError",
+            walk=["expressions"],
             category="Expr",
             base="AstNode",
             factory=FactoryDef(
@@ -1131,6 +1170,7 @@ AST_NODES_USERDATA = UserdataDef(
         # Types, TypePacks, Generics, Attr
         NodeDef(
             name="AstTypeReference",
+            walk=["parameters"],
             category="Type",
             base="AstNode",
             factory=FactoryDef(
@@ -1157,6 +1197,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstTypeTable",
+            walk=["props", "indexer"],
             category="Type",
             base="AstNode",
             factory=FactoryDef(
@@ -1170,6 +1211,8 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstTypeFunction",
+            walk=["argTypes", "returnTypes"],
+            unwalked=["generics", "genericPacks", "attributes"],
             category="Type",
             base="AstNode",
             factory=FactoryDef(
@@ -1196,6 +1239,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstTypeTypeof",
+            walk=["expr"],
             category="Type",
             base="AstNode",
             factory=FactoryDef(strategy="alloc", args=["Luau::Location()", "nullptr"]),
@@ -1210,6 +1254,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstTypeUnion",
+            walk=["types"],
             category="Type",
             base="AstNode",
             factory=FactoryDef(
@@ -1220,6 +1265,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstTypeIntersection",
+            walk=["types"],
             category="Type",
             base="AstNode",
             factory=FactoryDef(
@@ -1247,6 +1293,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstTypeGroup",
+            walk=["type"],
             category="Type",
             base="AstNode",
             factory=FactoryDef(strategy="alloc", args=["Luau::Location()", "nullptr"]),
@@ -1254,6 +1301,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstTypeError",
+            walk=["types"],
             category="Type",
             base="AstNode",
             factory=FactoryDef(
@@ -1268,6 +1316,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstTypePackExplicit",
+            walk=["typeList"],
             category="TypePack",
             base="AstNode",
             factory=FactoryDef(strategy="alloc", args=["Luau::Location()", "Luau::AstTypeList{}"]),
@@ -1275,6 +1324,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstTypePackVariadic",
+            walk=["variadicType"],
             category="TypePack",
             base="AstNode",
             factory=FactoryDef(strategy="alloc", args=["Luau::Location()", "nullptr"]),
@@ -1289,6 +1339,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstGenericType",
+            walk=["type"],
             category="Generic",
             base="AstNode",
             factory=FactoryDef(strategy="alloc", args=["Luau::Location()", "Luau::AstName()", "nullptr"]),
@@ -1296,6 +1347,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstGenericTypePack",
+            walk=["type"],
             category="Generic",
             base="AstNode",
             factory=FactoryDef(strategy="alloc", args=["Luau::Location()", "Luau::AstName()", "nullptr"]),
@@ -1303,6 +1355,7 @@ AST_NODES_USERDATA = UserdataDef(
         ),
         NodeDef(
             name="AstAttr",
+            unwalked=["args"],
             category="Attr",
             base="AstNode",
             factory=FactoryDef(
@@ -1729,6 +1782,7 @@ CST_NODES_USERDATA = UserdataDef(
 PLAIN_ITEMS: list[NodeDef] = [
     NodeDef(
         name="AstTableProp",
+        walk=["type"],
         category="aux",
         cpp="Luau::AstTableProp",
         display="name",
@@ -1751,6 +1805,7 @@ PLAIN_ITEMS: list[NodeDef] = [
     ),
     NodeDef(
         name="AstTableIndexer",
+        walk=["indexType", "resultType"],
         category="aux",
         cpp="Luau::AstTableIndexer",
         factory=FactoryDef(
@@ -1772,6 +1827,7 @@ PLAIN_ITEMS: list[NodeDef] = [
     ),
     NodeDef(
         name="AstDeclaredExternTypeProperty",
+        walk=["type"],
         category="aux",
         cpp="Luau::AstDeclaredExternTypeProperty",
         display="name",
@@ -1796,6 +1852,7 @@ PLAIN_ITEMS: list[NodeDef] = [
     ),
     NodeDef(
         name="AstClassProperty",
+        walk=["type", "defaultValue"],
         category="aux",
         cpp="Luau::AstClassProperty",
         display="name",
@@ -1825,6 +1882,7 @@ PLAIN_ITEMS: list[NodeDef] = [
     ),
     NodeDef(
         name="AstClassMethod",
+        walk=["func"],
         category="aux",
         cpp="Luau::AstClassMethod",
         display="name",
@@ -1850,6 +1908,7 @@ PLAIN_ITEMS: list[NodeDef] = [
     ),
     NodeDef(
         name="AstClassPrimaryConstructor",
+        walk=["args", "argsDefaults"],
         category="aux",
         cpp="Luau::AstClassPrimaryConstructor",
         factory=FactoryDef(
@@ -1925,6 +1984,7 @@ PLAIN_ITEMS: list[NodeDef] = [
     ),
     NodeDef(
         name="AstTableItem",
+        walk=["key", "value"],
         category="aux",
         cpp="Luau::AstExprTable::Item",
         factory=FactoryDef(
@@ -1946,6 +2006,7 @@ PLAIN_ITEMS: list[NodeDef] = [
     ),
     NodeDef(
         name="AstTypeList",
+        walk=["types", "tailType"],
         category="aux",
         cpp="Luau::AstTypeList",
         factory=FactoryDef(
@@ -2041,6 +2102,7 @@ PLAIN_ITEMS: list[NodeDef] = [
     ),
     NodeDef(
         name="AstLocal",
+        unwalked=["annotation"],
         category="local",
         cpp="Luau::AstLocal",
         display="name",
@@ -2377,6 +2439,106 @@ class CppGenerator:
             ]
         return []
 
+    WALKED_KINDS = {"node", "nodes", "opt_nodes", "type_or_packs", "item", "item_ptr", "item_list", "class_members"}
+
+    def _has_children(self, node: NodeDef) -> bool:
+        return len(node.walk) > 0
+
+    def _check_walk(self, node: NodeDef) -> None:
+        names = {f.name for f in node.fields}
+        for name in [*node.walk, *node.unwalked]:
+            if name not in names:
+                raise ValueError(f"{node.name}: walk names an unknown field '{name}'")
+        for f in node.fields:
+            k = f.type.kind
+            bearing = k in ("node", "nodes", "opt_nodes", "type_or_packs", "class_members")
+            if k in ("item", "item_ptr", "item_list") and f.type.arg:
+                bearing = self._has_children(self._item(f.type.arg))
+            if bearing and f.name not in node.walk and f.name not in node.unwalked:
+                raise ValueError(f"{node.name}.{f.name} holds child nodes but is in neither walk nor unwalked")
+
+    def _walk_item(self, item: NodeDef, base: str) -> list[CppNode]:
+        steps: list[CppNode] = []
+        by_name = {f.name: f for f in item.fields}
+        for name in item.walk:
+            f = by_name[name]
+            member = f.member_expr
+            if member.startswith("n."):
+                member = member[2:]
+            steps.extend(self._walk_field(f, f"{base}{member}"))
+        return steps
+
+    def _walk_field(self, f: FieldDef, e: str) -> list[CppNode]:
+        k = f.type.kind
+        if k == "node":
+            return [If(cond=e, then_body=[Raw(text=f"out.push_back({e});")])]
+        if k in ("nodes", "opt_nodes"):
+            return [For(header=f"auto* child : {e}", body=[If(cond="child", then_body=[Raw(text="out.push_back(child);")])])]
+        if k == "type_or_packs":
+            return [
+                For(
+                    header=f"const Luau::AstTypeOrPack& child : {e}",
+                    body=[
+                        If(
+                            cond="child.type",
+                            then_body=[Raw(text="out.push_back(child.type);")],
+                            else_body=[If(cond="child.typePack", then_body=[Raw(text="out.push_back(child.typePack);")])],
+                        )
+                    ],
+                )
+            ]
+        if k == "local":
+            return [If(cond=f"{e} && {e}->annotation", then_body=[Raw(text=f"out.push_back({e}->annotation);")])]
+        if k == "locals":
+            return [
+                For(
+                    header=f"Luau::AstLocal* local : {e}",
+                    body=[If(cond="local && local->annotation", then_body=[Raw(text="out.push_back(local->annotation);")])],
+                )
+            ]
+        if k == "item" and f.type.arg:
+            return self._walk_item(self._item(f.type.arg), f"{e}.")
+        if k == "item_ptr" and f.type.arg:
+            return [If(cond=e, then_body=self._walk_item(self._item(f.type.arg), f"{e}->"))]
+        if k == "item_list" and f.type.arg:
+            return [For(header=f"const auto& element : {e}", body=self._walk_item(self._item(f.type.arg), "element."))]
+        if k == "class_members":
+            return [
+                For(
+                    header=f"const Luau::AstClassMember& member : {e}",
+                    body=[
+                        If(
+                            cond="const auto* prop = Luau::get_if<Luau::AstClassProperty>(&member)",
+                            then_body=self._walk_item(self._item("AstClassProperty"), "prop->"),
+                            else_body=[
+                                If(
+                                    cond="const auto* method = Luau::get_if<Luau::AstClassMethod>(&member)",
+                                    then_body=self._walk_item(self._item("AstClassMethod"), "method->"),
+                                )
+                            ],
+                        )
+                    ],
+                )
+            ]
+        raise ValueError(f"Field cannot be walked: {f.name} ({k})")
+
+    def _children_function(self, node: NodeDef) -> CppNode:
+        by_name = {f.name: f for f in node.fields}
+        body: list[CppNode] = [Raw(text=f"auto* n = static_cast<Luau::{node.name}*>(node);")]
+        for name in node.walk:
+            f = by_name[name]
+            body.extend(self._walk_field(f, f"n->{f.member_expr}"))
+        return Function(
+            name=f"children{node.name}",
+            return_type=VOID,
+            is_static=True,
+            params=[
+                Type(name="Luau::AstNode").ptr().param("node"),
+                TemplateType(name="std::vector", args=[Type(name="Luau::AstNode").ptr()]).ref().param("out"),
+            ],
+            body=body,
+        )
+
     def _method_cases(self, ud: UserdataDef, fields: list[FieldDef], prefix: str) -> list[SwitchCase]:
         cases = []
         for f in fields:
@@ -2657,6 +2819,14 @@ class CppGenerator:
                 )
             )
 
+        if ud.mutable:
+            for item in self._plain_items():
+                self._check_walk(item)
+            for node in ud.nodes:
+                self._check_walk(node)
+                if node.walk:
+                    ns_items.append(self._children_function(node))
+
         reg_calls = []
         for node in ud.nodes:
             cat_arg = f"NodeCategory::{node.category}, " if node.category else ""
@@ -2665,6 +2835,8 @@ class CppGenerator:
                 f'{ud.register_func}<Luau::{node.name}>("{node.name}", {cat_arg}'
                 f"handle{node.name}Methods, collect{node.name}Props{validator_arg});"
             )
+            if ud.mutable and node.walk:
+                reg_calls.append(f"{table}[Luau::{node.name}::ClassIndex()].children = children{node.name};")
 
         ns_items.append(
             Function(

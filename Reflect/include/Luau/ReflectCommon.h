@@ -281,6 +281,7 @@ struct AstItemClass
     void (*validator)(AstValidator& v, Luau::AstNode* node) = nullptr;
     void (*create)(lua_State* L, const std::shared_ptr<AstDocumentState>& doc) = nullptr;
     void (*label)(lua_State* L, AstItem& handle) = nullptr;
+    void (*children)(Luau::AstNode* node, std::vector<Luau::AstNode*>& out) = nullptr;
 };
 
 struct AstItem
@@ -390,6 +391,7 @@ inline void pushAstItem(lua_State* L, const std::shared_ptr<AstDocumentState>& d
 }
 
 const AstItemClass* astNodeClass(Luau::AstNode* node);
+void collectAstChildren(Luau::AstNode* node, std::vector<Luau::AstNode*>& out);
 const AstItemClass* cstNodeClass(const Luau::CstNode* node);
 const AstItemClass* plainItemClass(ReflectAtom atom);
 

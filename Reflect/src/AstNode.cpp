@@ -57,12 +57,14 @@ const char* getNodeKind(Luau::AstNode* node)
     return node ? astNodeClass(node)->kind : "nil";
 }
 
-static const int kVisitLevelsPerCStackUnit = 8;
+static const int kRecursionLevelsPerCStackUnit = 4;
+static const int kFreeCStackUnits = 16;
 
 static int availableDepth(lua_State* L)
 {
-    int budget = (lua_cstacklimit(L) - lua_cstackdepth(L)) * kVisitLevelsPerCStackUnit;
-    return std::min(int(FInt::LuauRecursionLimit), budget);
+    int limit = int(FInt::LuauRecursionLimit);
+    int charged = std::max(0, lua_cstackdepth(L) - kFreeCStackUnits) * kRecursionLevelsPerCStackUnit;
+    return std::max(0, limit - charged);
 }
 
 void AstValidator::tooDeep()
@@ -185,33 +187,11 @@ static int astNodeTainted(lua_State* L)
     return 1;
 }
 
-struct DirectChildCollector : public Luau::AstVisitor
+void collectAstChildren(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
 {
-    std::vector<Luau::AstNode*> children;
-    bool isRoot = true;
-
-    bool visit(Luau::AstNode* node) override
-    {
-        if (isRoot)
-        {
-            isRoot = false;
-            return true;
-        }
-        children.push_back(node);
-        return false;
-    }
-
-    // By default visiting type annotations is disabled; we override this so visitor inspects these nodes
-    bool visit(Luau::AstType* node) override
-    {
-        return visit(static_cast<Luau::AstNode*>(node));
-    }
-
-    bool visit(Luau::AstTypePack* node) override
-    {
-        return visit(static_cast<Luau::AstNode*>(node));
-    }
-};
+    if (auto children = astNodeClass(node)->children)
+        children(node, out);
+}
 
 void initializeAstNodeClasses()
 {
@@ -230,78 +210,13 @@ static int astNodeChildren(lua_State* L)
         AstValidator validator{L, false, false, int(FInt::LuauRecursionLimit)};
         validator.node(handle.node());
     }
-    DirectChildCollector collector;
-    handle.node()->visit(&collector);
-    pushArray(L, collector.children.size(), [&](size_t i) {
-        pushAstNode(L, handle.doc, collector.children[i]);
+    std::vector<Luau::AstNode*> children;
+    collectAstChildren(handle.node(), children);
+    pushArray(L, children.size(), [&](size_t i) {
+        pushAstNode(L, handle.doc, children[i]);
     });
     return 1;
 }
-
-struct CallbackVisitor : public Luau::AstVisitor
-{
-    lua_State* L;
-    std::shared_ptr<AstDocumentState> doc;
-    int callbackIndex;
-    AstFilterData filter;
-    bool hasFilter = false;
-    bool errorOccurred = false;
-
-    CallbackVisitor(lua_State* L, std::shared_ptr<AstDocumentState> doc, int callbackIndex, const AstFilterData& filter, bool hasFilter)
-        : L(L)
-        , doc(doc)
-        , callbackIndex(callbackIndex)
-        , filter(filter)
-        , hasFilter(hasFilter)
-    {
-    }
-
-    bool visit(Luau::AstNode* node) override
-    {
-        if (errorOccurred || !node)
-            return false;
-
-        if (hasFilter && !filter.matches(node))
-            return true;
-
-        int reserved = depth / kVisitLevelsPerCStackUnit;
-        if (reserved > 0)
-            lua_cstackreserve(L, reserved);
-
-        lua_pushvalue(L, callbackIndex);
-        pushAstNode(L, doc, node);
-
-        int status = lua_pcall(L, 1, 1, 0);
-        if (reserved > 0)
-            lua_cstackrelease(L, reserved);
-
-        if (status != 0)
-        {
-            errorOccurred = true;
-            return false;
-        }
-
-        if (lua_isboolean(L, -1) && !lua_toboolean(L, -1))
-        {
-            lua_pop(L, 1);
-            return false;
-        }
-
-        lua_pop(L, 1);
-        return true;
-    }
-
-    // By default visiting type annotations is disabled; we override this so visitor inspects these nodes
-    bool visit(Luau::AstType* node) override
-    {
-        return visit(static_cast<Luau::AstNode*>(node));
-    }
-
-    bool visit(Luau::AstTypePack* node) override
-    {
-        return visit(static_cast<Luau::AstNode*>(node));
-    }
-};
 
 static int astNodeWalk(lua_State* L)
 {
@@ -309,6 +224,7 @@ static int astNodeWalk(lua_State* L)
     luaL_checktype(L, 2, LUA_TFUNCTION);
 
     AstFilterData filter = extractAstFilter(L, 3);
+    bool hasFilter = !lua_isnoneornil(L, 3);
 
     requireUntainted(L, handle, "walk");
 
@@ -328,10 +244,39 @@ static int astNodeWalk(lua_State* L)
         }
     } walkScope(handle.doc->tree);
 
-    CallbackVisitor visitor(L, handle.doc, 2, filter, !lua_isnoneornil(L, 3));
-    handle.node()->visit(&visitor);
+    std::vector<Luau::AstNode*> pending;
+    pending.push_back(handle.node());
 
-    if (visitor.errorOccurred)
+    bool errorOccurred = false;
+
+    while (!pending.empty())
+    {
+        Luau::AstNode* node = pending.back();
+        pending.pop_back();
+
+        if (!hasFilter || filter.matches(node))
+        {
+            lua_pushvalue(L, 2);
+            pushAstNode(L, handle.doc, node);
+
+            if (lua_pcall(L, 1, 1, 0) != 0)
+            {
+                errorOccurred = true;
+                break;
+            }
+
+            bool descend = !(lua_isboolean(L, -1) && !lua_toboolean(L, -1));
+            lua_pop(L, 1);
+            if (!descend)
+                continue;
+        }
+
+        size_t first = pending.size();
+        collectAstChildren(node, pending);
+        std::reverse(pending.begin() + first, pending.end());
+    }
+
+    if (errorOccurred)
         lua_error(L);
 
     return 0;
@@ -400,12 +345,12 @@ static int astNodePrettyprint(lua_State* L)
     return 1;
 }
 
-struct CommentAttacher : public Luau::AstVisitor
+struct CommentAttacher
 {
     const std::vector<ReflectComment*>& comments;
     NodeCommentMap& out;
     size_t cursor = 0;
-    bool statementBlock = false;
+    std::vector<Luau::AstNode*> scratch;
 
     CommentAttacher(const std::vector<ReflectComment*>& comments, NodeCommentMap& out)
         : comments(comments)
@@ -413,58 +358,57 @@ struct CommentAttacher : public Luau::AstVisitor
     {
     }
 
-    bool visit(Luau::AstNode* node) override
+    void attach(Luau::AstNode* node, bool statementBlock)
     {
-        if (!canNodeHoldComments(node))
-            return true;
+        NodeCategory category = getNodeCategory(node);
+        if (category == NodeCategory::Type || category == NodeCategory::TypePack)
+            return;
 
-        if (auto block = node->as<AstStatBlock>())
+        auto block = node->as<AstStatBlock>();
+
+        if (canNodeHoldComments(node) && !(block && block->body.size > 0))
         {
-            if (block->body.size > 0)
-                return true;
-        }
-
-        while (cursor < comments.size() && comments[cursor]->location.end <= node->location.begin)
-        {
-            out[node].leading.push_back(comments[cursor++]);
-        }
-
-        if (cursor < comments.size() && comments[cursor]->location.begin.line == node->location.end.line)
-        {
-            out[node].trailing.push_back(comments[cursor++]);
-        }
-
-        return true;
-    }
-
-    bool visit(Luau::AstStatBlock* block) override
-    {
-        bool isStatement = statementBlock;
-        statementBlock = false;
-
-        visit(static_cast<Luau::AstNode*>(block));
-
-        for (Luau::AstStat* stat : block->body)
-        {
-            statementBlock = stat->is<AstStatBlock>();
-            stat->visit(this);
-
-            while (cursor < comments.size() && stat->location.end <= comments[cursor]->location.begin &&
-                   comments[cursor]->location.begin.line == stat->location.end.line)
+            while (cursor < comments.size() && comments[cursor]->location.end <= node->location.begin)
             {
-                out[stat].trailing.push_back(comments[cursor++]);
+                out[node].leading.push_back(comments[cursor++]);
+            }
+
+            if (cursor < comments.size() && comments[cursor]->location.begin.line == node->location.end.line)
+            {
+                out[node].trailing.push_back(comments[cursor++]);
             }
         }
 
-        if (!isStatement)
+        if (block)
         {
-            while (cursor < comments.size() && comments[cursor]->location.end <= block->location.end)
+            for (Luau::AstStat* stat : block->body)
             {
-                out[block].trailing.push_back(comments[cursor++]);
+                attach(stat, stat->is<AstStatBlock>());
+
+                while (cursor < comments.size() && stat->location.end <= comments[cursor]->location.begin &&
+                       comments[cursor]->location.begin.line == stat->location.end.line)
+                {
+                    out[stat].trailing.push_back(comments[cursor++]);
+                }
             }
+
+            if (!statementBlock)
+            {
+                while (cursor < comments.size() && comments[cursor]->location.end <= block->location.end)
+                {
+                    out[block].trailing.push_back(comments[cursor++]);
+                }
+            }
+
+            return;
         }
 
-        return false;
+        size_t base = scratch.size();
+        collectAstChildren(node, scratch);
+        size_t end = scratch.size();
+        for (size_t i = base; i < end; i++)
+            attach(scratch[i], false);
+        scratch.resize(base);
     }
 };
 
@@ -476,7 +420,7 @@ static void collectNodeComments(AstDocumentState& doc, Luau::AstNode* rootNode, 
         return;
 
     CommentAttacher attacher(comments, out);
-    root->visit(&attacher);
+    attacher.attach(root, false);
 
     while (attacher.cursor < comments.size())
     {

@@ -5511,31 +5511,753 @@ static void validateAstAttr(AstValidator& v, Luau::AstNode* node)
     }
 }
 
+static void childrenAstStatBlock(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstStatBlock*>(node);
+    for (auto* child : n->body)
+    {
+        if (child)
+        {
+            out.push_back(child);
+        }
+    }
+}
+
+static void childrenAstStatIf(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstStatIf*>(node);
+    if (n->condition)
+    {
+        out.push_back(n->condition);
+    }
+    if (n->thenbody)
+    {
+        out.push_back(n->thenbody);
+    }
+    if (n->elsebody)
+    {
+        out.push_back(n->elsebody);
+    }
+}
+
+static void childrenAstStatWhile(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstStatWhile*>(node);
+    if (n->condition)
+    {
+        out.push_back(n->condition);
+    }
+    if (n->body)
+    {
+        out.push_back(n->body);
+    }
+}
+
+static void childrenAstStatRepeat(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstStatRepeat*>(node);
+    if (n->body)
+    {
+        out.push_back(n->body);
+    }
+    if (n->condition)
+    {
+        out.push_back(n->condition);
+    }
+}
+
+static void childrenAstStatReturn(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstStatReturn*>(node);
+    for (auto* child : n->list)
+    {
+        if (child)
+        {
+            out.push_back(child);
+        }
+    }
+}
+
+static void childrenAstStatExpr(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstStatExpr*>(node);
+    if (n->expr)
+    {
+        out.push_back(n->expr);
+    }
+}
+
+static void childrenAstStatLocal(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstStatLocal*>(node);
+    for (Luau::AstLocal* local : n->vars)
+    {
+        if (local && local->annotation)
+        {
+            out.push_back(local->annotation);
+        }
+    }
+    for (auto* child : n->values)
+    {
+        if (child)
+        {
+            out.push_back(child);
+        }
+    }
+}
+
+static void childrenAstStatFor(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstStatFor*>(node);
+    if (n->var && n->var->annotation)
+    {
+        out.push_back(n->var->annotation);
+    }
+    if (n->from)
+    {
+        out.push_back(n->from);
+    }
+    if (n->to)
+    {
+        out.push_back(n->to);
+    }
+    if (n->step)
+    {
+        out.push_back(n->step);
+    }
+    if (n->body)
+    {
+        out.push_back(n->body);
+    }
+}
+
+static void childrenAstStatForIn(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstStatForIn*>(node);
+    for (Luau::AstLocal* local : n->vars)
+    {
+        if (local && local->annotation)
+        {
+            out.push_back(local->annotation);
+        }
+    }
+    for (auto* child : n->values)
+    {
+        if (child)
+        {
+            out.push_back(child);
+        }
+    }
+    if (n->body)
+    {
+        out.push_back(n->body);
+    }
+}
+
+static void childrenAstStatAssign(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstStatAssign*>(node);
+    for (auto* child : n->vars)
+    {
+        if (child)
+        {
+            out.push_back(child);
+        }
+    }
+    for (auto* child : n->values)
+    {
+        if (child)
+        {
+            out.push_back(child);
+        }
+    }
+}
+
+static void childrenAstStatCompoundAssign(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstStatCompoundAssign*>(node);
+    if (n->var)
+    {
+        out.push_back(n->var);
+    }
+    if (n->value)
+    {
+        out.push_back(n->value);
+    }
+}
+
+static void childrenAstStatFunction(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstStatFunction*>(node);
+    if (n->name)
+    {
+        out.push_back(n->name);
+    }
+    if (n->func)
+    {
+        out.push_back(n->func);
+    }
+}
+
+static void childrenAstStatLocalFunction(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstStatLocalFunction*>(node);
+    if (n->func)
+    {
+        out.push_back(n->func);
+    }
+}
+
+static void childrenAstStatTypeAlias(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstStatTypeAlias*>(node);
+    for (auto* child : n->generics)
+    {
+        if (child)
+        {
+            out.push_back(child);
+        }
+    }
+    for (auto* child : n->genericPacks)
+    {
+        if (child)
+        {
+            out.push_back(child);
+        }
+    }
+    if (n->type)
+    {
+        out.push_back(n->type);
+    }
+}
+
+static void childrenAstStatTypeFunction(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstStatTypeFunction*>(node);
+    if (n->body)
+    {
+        out.push_back(n->body);
+    }
+}
+
+static void childrenAstStatDeclareGlobal(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstStatDeclareGlobal*>(node);
+    if (n->type)
+    {
+        out.push_back(n->type);
+    }
+}
+
+static void childrenAstStatDeclareFunction(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstStatDeclareFunction*>(node);
+    for (auto* child : n->params.types)
+    {
+        if (child)
+        {
+            out.push_back(child);
+        }
+    }
+    if (n->params.tailType)
+    {
+        out.push_back(n->params.tailType);
+    }
+    if (n->retTypes)
+    {
+        out.push_back(n->retTypes);
+    }
+}
+
+static void childrenAstStatClass(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstStatClass*>(node);
+    for (auto* child : n->generics)
+    {
+        if (child)
+        {
+            out.push_back(child);
+        }
+    }
+    for (auto* child : n->genericPacks)
+    {
+        if (child)
+        {
+            out.push_back(child);
+        }
+    }
+    if (n->primaryConstructor)
+    {
+        for (Luau::AstLocal* local : n->primaryConstructor->args)
+        {
+            if (local && local->annotation)
+            {
+                out.push_back(local->annotation);
+            }
+        }
+        for (auto* child : n->primaryConstructor->argsDefaults)
+        {
+            if (child)
+            {
+                out.push_back(child);
+            }
+        }
+    }
+    for (const Luau::AstClassMember& member : n->members)
+    {
+        if (const auto* prop = Luau::get_if<Luau::AstClassProperty>(&member))
+        {
+            if (prop->ty)
+            {
+                out.push_back(prop->ty);
+            }
+            if (prop->defaultValue)
+            {
+                out.push_back(prop->defaultValue);
+            }
+        }
+        else
+        {
+            if (const auto* method = Luau::get_if<Luau::AstClassMethod>(&member))
+            {
+                if (method->function)
+                {
+                    out.push_back(method->function);
+                }
+            }
+        }
+    }
+}
+
+static void childrenAstStatDeclareExternType(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstStatDeclareExternType*>(node);
+    for (const auto& element : n->props)
+    {
+        if (element.ty)
+        {
+            out.push_back(element.ty);
+        }
+    }
+}
+
+static void childrenAstStatError(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstStatError*>(node);
+    for (auto* child : n->expressions)
+    {
+        if (child)
+        {
+            out.push_back(child);
+        }
+    }
+    for (auto* child : n->statements)
+    {
+        if (child)
+        {
+            out.push_back(child);
+        }
+    }
+}
+
+static void childrenAstExprGroup(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstExprGroup*>(node);
+    if (n->expr)
+    {
+        out.push_back(n->expr);
+    }
+}
+
+static void childrenAstExprCall(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstExprCall*>(node);
+    if (n->func)
+    {
+        out.push_back(n->func);
+    }
+    for (auto* child : n->args)
+    {
+        if (child)
+        {
+            out.push_back(child);
+        }
+    }
+}
+
+static void childrenAstExprIndexName(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstExprIndexName*>(node);
+    if (n->expr)
+    {
+        out.push_back(n->expr);
+    }
+}
+
+static void childrenAstExprIndexExpr(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstExprIndexExpr*>(node);
+    if (n->expr)
+    {
+        out.push_back(n->expr);
+    }
+    if (n->index)
+    {
+        out.push_back(n->index);
+    }
+}
+
+static void childrenAstExprFunction(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstExprFunction*>(node);
+    for (Luau::AstLocal* local : n->args)
+    {
+        if (local && local->annotation)
+        {
+            out.push_back(local->annotation);
+        }
+    }
+    for (auto* child : n->argsDefaults)
+    {
+        if (child)
+        {
+            out.push_back(child);
+        }
+    }
+    if (n->varargAnnotation)
+    {
+        out.push_back(n->varargAnnotation);
+    }
+    if (n->returnAnnotation)
+    {
+        out.push_back(n->returnAnnotation);
+    }
+    if (n->body)
+    {
+        out.push_back(n->body);
+    }
+}
+
+static void childrenAstExprTable(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstExprTable*>(node);
+    for (const auto& element : n->items)
+    {
+        if (element.key)
+        {
+            out.push_back(element.key);
+        }
+        if (element.value)
+        {
+            out.push_back(element.value);
+        }
+    }
+}
+
+static void childrenAstExprUnary(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstExprUnary*>(node);
+    if (n->expr)
+    {
+        out.push_back(n->expr);
+    }
+}
+
+static void childrenAstExprBinary(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstExprBinary*>(node);
+    if (n->left)
+    {
+        out.push_back(n->left);
+    }
+    if (n->right)
+    {
+        out.push_back(n->right);
+    }
+}
+
+static void childrenAstExprTypeAssertion(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstExprTypeAssertion*>(node);
+    if (n->expr)
+    {
+        out.push_back(n->expr);
+    }
+    if (n->annotation)
+    {
+        out.push_back(n->annotation);
+    }
+}
+
+static void childrenAstExprIfElse(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstExprIfElse*>(node);
+    if (n->condition)
+    {
+        out.push_back(n->condition);
+    }
+    if (n->trueExpr)
+    {
+        out.push_back(n->trueExpr);
+    }
+    if (n->falseExpr)
+    {
+        out.push_back(n->falseExpr);
+    }
+}
+
+static void childrenAstExprInterpString(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstExprInterpString*>(node);
+    for (auto* child : n->expressions)
+    {
+        if (child)
+        {
+            out.push_back(child);
+        }
+    }
+}
+
+static void childrenAstExprInstantiate(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstExprInstantiate*>(node);
+    if (n->expr)
+    {
+        out.push_back(n->expr);
+    }
+    for (const Luau::AstTypeOrPack& child : n->typeArguments)
+    {
+        if (child.type)
+        {
+            out.push_back(child.type);
+        }
+        else
+        {
+            if (child.typePack)
+            {
+                out.push_back(child.typePack);
+            }
+        }
+    }
+}
+
+static void childrenAstExprError(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstExprError*>(node);
+    for (auto* child : n->expressions)
+    {
+        if (child)
+        {
+            out.push_back(child);
+        }
+    }
+}
+
+static void childrenAstTypeReference(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstTypeReference*>(node);
+    for (const Luau::AstTypeOrPack& child : n->parameters)
+    {
+        if (child.type)
+        {
+            out.push_back(child.type);
+        }
+        else
+        {
+            if (child.typePack)
+            {
+                out.push_back(child.typePack);
+            }
+        }
+    }
+}
+
+static void childrenAstTypeTable(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstTypeTable*>(node);
+    for (const auto& element : n->props)
+    {
+        if (element.type)
+        {
+            out.push_back(element.type);
+        }
+    }
+    if (n->indexer)
+    {
+        if (n->indexer->indexType)
+        {
+            out.push_back(n->indexer->indexType);
+        }
+        if (n->indexer->resultType)
+        {
+            out.push_back(n->indexer->resultType);
+        }
+    }
+}
+
+static void childrenAstTypeFunction(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstTypeFunction*>(node);
+    for (auto* child : n->argTypes.types)
+    {
+        if (child)
+        {
+            out.push_back(child);
+        }
+    }
+    if (n->argTypes.tailType)
+    {
+        out.push_back(n->argTypes.tailType);
+    }
+    if (n->returnTypes)
+    {
+        out.push_back(n->returnTypes);
+    }
+}
+
+static void childrenAstTypeTypeof(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstTypeTypeof*>(node);
+    if (n->expr)
+    {
+        out.push_back(n->expr);
+    }
+}
+
+static void childrenAstTypeUnion(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstTypeUnion*>(node);
+    for (auto* child : n->types)
+    {
+        if (child)
+        {
+            out.push_back(child);
+        }
+    }
+}
+
+static void childrenAstTypeIntersection(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstTypeIntersection*>(node);
+    for (auto* child : n->types)
+    {
+        if (child)
+        {
+            out.push_back(child);
+        }
+    }
+}
+
+static void childrenAstTypeGroup(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstTypeGroup*>(node);
+    if (n->type)
+    {
+        out.push_back(n->type);
+    }
+}
+
+static void childrenAstTypeError(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstTypeError*>(node);
+    for (auto* child : n->types)
+    {
+        if (child)
+        {
+            out.push_back(child);
+        }
+    }
+}
+
+static void childrenAstTypePackExplicit(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstTypePackExplicit*>(node);
+    for (auto* child : n->typeList.types)
+    {
+        if (child)
+        {
+            out.push_back(child);
+        }
+    }
+    if (n->typeList.tailType)
+    {
+        out.push_back(n->typeList.tailType);
+    }
+}
+
+static void childrenAstTypePackVariadic(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstTypePackVariadic*>(node);
+    if (n->variadicType)
+    {
+        out.push_back(n->variadicType);
+    }
+}
+
+static void childrenAstGenericType(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstGenericType*>(node);
+    if (n->defaultValue)
+    {
+        out.push_back(n->defaultValue);
+    }
+}
+
+static void childrenAstGenericTypePack(Luau::AstNode* node, std::vector<Luau::AstNode*>& out)
+{
+    auto* n = static_cast<Luau::AstGenericTypePack*>(node);
+    if (n->defaultValue)
+    {
+        out.push_back(n->defaultValue);
+    }
+}
+
 static void registerAstNodeClasses()
 {
     registerNodeClass<Luau::AstStatBlock>("AstStatBlock", NodeCategory::Stat, handleAstStatBlockMethods, collectAstStatBlockProps, validateAstStatBlock);
+    s_nodeClassTable[Luau::AstStatBlock::ClassIndex()].children = childrenAstStatBlock;
     registerNodeClass<Luau::AstStatIf>("AstStatIf", NodeCategory::Stat, handleAstStatIfMethods, collectAstStatIfProps, validateAstStatIf);
+    s_nodeClassTable[Luau::AstStatIf::ClassIndex()].children = childrenAstStatIf;
     registerNodeClass<Luau::AstStatWhile>("AstStatWhile", NodeCategory::Stat, handleAstStatWhileMethods, collectAstStatWhileProps, validateAstStatWhile);
+    s_nodeClassTable[Luau::AstStatWhile::ClassIndex()].children = childrenAstStatWhile;
     registerNodeClass<Luau::AstStatRepeat>("AstStatRepeat", NodeCategory::Stat, handleAstStatRepeatMethods, collectAstStatRepeatProps, validateAstStatRepeat);
+    s_nodeClassTable[Luau::AstStatRepeat::ClassIndex()].children = childrenAstStatRepeat;
     registerNodeClass<Luau::AstStatBreak>("AstStatBreak", NodeCategory::Stat, handleAstStatBreakMethods, collectAstStatBreakProps, validateAstStatBreak);
     registerNodeClass<Luau::AstStatContinue>("AstStatContinue", NodeCategory::Stat, handleAstStatContinueMethods, collectAstStatContinueProps, validateAstStatContinue);
     registerNodeClass<Luau::AstStatReturn>("AstStatReturn", NodeCategory::Stat, handleAstStatReturnMethods, collectAstStatReturnProps, validateAstStatReturn);
+    s_nodeClassTable[Luau::AstStatReturn::ClassIndex()].children = childrenAstStatReturn;
     registerNodeClass<Luau::AstStatExpr>("AstStatExpr", NodeCategory::Stat, handleAstStatExprMethods, collectAstStatExprProps, validateAstStatExpr);
+    s_nodeClassTable[Luau::AstStatExpr::ClassIndex()].children = childrenAstStatExpr;
     registerNodeClass<Luau::AstStatLocal>("AstStatLocal", NodeCategory::Stat, handleAstStatLocalMethods, collectAstStatLocalProps, validateAstStatLocal);
+    s_nodeClassTable[Luau::AstStatLocal::ClassIndex()].children = childrenAstStatLocal;
     registerNodeClass<Luau::AstStatFor>("AstStatFor", NodeCategory::Stat, handleAstStatForMethods, collectAstStatForProps, validateAstStatFor);
+    s_nodeClassTable[Luau::AstStatFor::ClassIndex()].children = childrenAstStatFor;
     registerNodeClass<Luau::AstStatForIn>("AstStatForIn", NodeCategory::Stat, handleAstStatForInMethods, collectAstStatForInProps, validateAstStatForIn);
+    s_nodeClassTable[Luau::AstStatForIn::ClassIndex()].children = childrenAstStatForIn;
     registerNodeClass<Luau::AstStatAssign>("AstStatAssign", NodeCategory::Stat, handleAstStatAssignMethods, collectAstStatAssignProps, validateAstStatAssign);
+    s_nodeClassTable[Luau::AstStatAssign::ClassIndex()].children = childrenAstStatAssign;
     registerNodeClass<Luau::AstStatCompoundAssign>("AstStatCompoundAssign", NodeCategory::Stat, handleAstStatCompoundAssignMethods, collectAstStatCompoundAssignProps, validateAstStatCompoundAssign);
+    s_nodeClassTable[Luau::AstStatCompoundAssign::ClassIndex()].children = childrenAstStatCompoundAssign;
     registerNodeClass<Luau::AstStatFunction>("AstStatFunction", NodeCategory::Stat, handleAstStatFunctionMethods, collectAstStatFunctionProps, validateAstStatFunction);
+    s_nodeClassTable[Luau::AstStatFunction::ClassIndex()].children = childrenAstStatFunction;
     registerNodeClass<Luau::AstStatLocalFunction>("AstStatLocalFunction", NodeCategory::Stat, handleAstStatLocalFunctionMethods, collectAstStatLocalFunctionProps, validateAstStatLocalFunction);
+    s_nodeClassTable[Luau::AstStatLocalFunction::ClassIndex()].children = childrenAstStatLocalFunction;
     registerNodeClass<Luau::AstStatTypeAlias>("AstStatTypeAlias", NodeCategory::Stat, handleAstStatTypeAliasMethods, collectAstStatTypeAliasProps, validateAstStatTypeAlias);
+    s_nodeClassTable[Luau::AstStatTypeAlias::ClassIndex()].children = childrenAstStatTypeAlias;
     registerNodeClass<Luau::AstStatTypeFunction>("AstStatTypeFunction", NodeCategory::Stat, handleAstStatTypeFunctionMethods, collectAstStatTypeFunctionProps, validateAstStatTypeFunction);
+    s_nodeClassTable[Luau::AstStatTypeFunction::ClassIndex()].children = childrenAstStatTypeFunction;
     registerNodeClass<Luau::AstStatDeclareGlobal>("AstStatDeclareGlobal", NodeCategory::Stat, handleAstStatDeclareGlobalMethods, collectAstStatDeclareGlobalProps, validateAstStatDeclareGlobal);
+    s_nodeClassTable[Luau::AstStatDeclareGlobal::ClassIndex()].children = childrenAstStatDeclareGlobal;
     registerNodeClass<Luau::AstStatDeclareFunction>("AstStatDeclareFunction", NodeCategory::Stat, handleAstStatDeclareFunctionMethods, collectAstStatDeclareFunctionProps, validateAstStatDeclareFunction);
+    s_nodeClassTable[Luau::AstStatDeclareFunction::ClassIndex()].children = childrenAstStatDeclareFunction;
     registerNodeClass<Luau::AstStatClass>("AstStatClass", NodeCategory::Stat, handleAstStatClassMethods, collectAstStatClassProps, validateAstStatClass);
+    s_nodeClassTable[Luau::AstStatClass::ClassIndex()].children = childrenAstStatClass;
     registerNodeClass<Luau::AstStatDeclareExternType>("AstStatDeclareExternType", NodeCategory::Stat, handleAstStatDeclareExternTypeMethods, collectAstStatDeclareExternTypeProps, validateAstStatDeclareExternType);
+    s_nodeClassTable[Luau::AstStatDeclareExternType::ClassIndex()].children = childrenAstStatDeclareExternType;
     registerNodeClass<Luau::AstStatError>("AstStatError", NodeCategory::Stat, handleAstStatErrorMethods, collectAstStatErrorProps, validateAstStatError);
+    s_nodeClassTable[Luau::AstStatError::ClassIndex()].children = childrenAstStatError;
     registerNodeClass<Luau::AstExprGroup>("AstExprGroup", NodeCategory::Expr, handleAstExprGroupMethods, collectAstExprGroupProps, validateAstExprGroup);
+    s_nodeClassTable[Luau::AstExprGroup::ClassIndex()].children = childrenAstExprGroup;
     registerNodeClass<Luau::AstExprConstantNil>("AstExprConstantNil", NodeCategory::Expr, handleAstExprConstantNilMethods, collectAstExprConstantNilProps, validateAstExprConstantNil);
     registerNodeClass<Luau::AstExprConstantBool>("AstExprConstantBool", NodeCategory::Expr, handleAstExprConstantBoolMethods, collectAstExprConstantBoolProps, validateAstExprConstantBool);
     registerNodeClass<Luau::AstExprConstantNumber>("AstExprConstantNumber", NodeCategory::Expr, handleAstExprConstantNumberMethods, collectAstExprConstantNumberProps, validateAstExprConstantNumber);
@@ -5545,33 +6267,57 @@ static void registerAstNodeClasses()
     registerNodeClass<Luau::AstExprGlobal>("AstExprGlobal", NodeCategory::Expr, handleAstExprGlobalMethods, collectAstExprGlobalProps, validateAstExprGlobal);
     registerNodeClass<Luau::AstExprVarargs>("AstExprVarargs", NodeCategory::Expr, handleAstExprVarargsMethods, collectAstExprVarargsProps, validateAstExprVarargs);
     registerNodeClass<Luau::AstExprCall>("AstExprCall", NodeCategory::Expr, handleAstExprCallMethods, collectAstExprCallProps, validateAstExprCall);
+    s_nodeClassTable[Luau::AstExprCall::ClassIndex()].children = childrenAstExprCall;
     registerNodeClass<Luau::AstExprIndexName>("AstExprIndexName", NodeCategory::Expr, handleAstExprIndexNameMethods, collectAstExprIndexNameProps, validateAstExprIndexName);
+    s_nodeClassTable[Luau::AstExprIndexName::ClassIndex()].children = childrenAstExprIndexName;
     registerNodeClass<Luau::AstExprIndexExpr>("AstExprIndexExpr", NodeCategory::Expr, handleAstExprIndexExprMethods, collectAstExprIndexExprProps, validateAstExprIndexExpr);
+    s_nodeClassTable[Luau::AstExprIndexExpr::ClassIndex()].children = childrenAstExprIndexExpr;
     registerNodeClass<Luau::AstExprFunction>("AstExprFunction", NodeCategory::Expr, handleAstExprFunctionMethods, collectAstExprFunctionProps, validateAstExprFunction);
+    s_nodeClassTable[Luau::AstExprFunction::ClassIndex()].children = childrenAstExprFunction;
     registerNodeClass<Luau::AstExprTable>("AstExprTable", NodeCategory::Expr, handleAstExprTableMethods, collectAstExprTableProps, validateAstExprTable);
+    s_nodeClassTable[Luau::AstExprTable::ClassIndex()].children = childrenAstExprTable;
     registerNodeClass<Luau::AstExprUnary>("AstExprUnary", NodeCategory::Expr, handleAstExprUnaryMethods, collectAstExprUnaryProps, validateAstExprUnary);
+    s_nodeClassTable[Luau::AstExprUnary::ClassIndex()].children = childrenAstExprUnary;
     registerNodeClass<Luau::AstExprBinary>("AstExprBinary", NodeCategory::Expr, handleAstExprBinaryMethods, collectAstExprBinaryProps, validateAstExprBinary);
+    s_nodeClassTable[Luau::AstExprBinary::ClassIndex()].children = childrenAstExprBinary;
     registerNodeClass<Luau::AstExprTypeAssertion>("AstExprTypeAssertion", NodeCategory::Expr, handleAstExprTypeAssertionMethods, collectAstExprTypeAssertionProps, validateAstExprTypeAssertion);
+    s_nodeClassTable[Luau::AstExprTypeAssertion::ClassIndex()].children = childrenAstExprTypeAssertion;
     registerNodeClass<Luau::AstExprIfElse>("AstExprIfElse", NodeCategory::Expr, handleAstExprIfElseMethods, collectAstExprIfElseProps, validateAstExprIfElse);
+    s_nodeClassTable[Luau::AstExprIfElse::ClassIndex()].children = childrenAstExprIfElse;
     registerNodeClass<Luau::AstExprInterpString>("AstExprInterpString", NodeCategory::Expr, handleAstExprInterpStringMethods, collectAstExprInterpStringProps, validateAstExprInterpString);
+    s_nodeClassTable[Luau::AstExprInterpString::ClassIndex()].children = childrenAstExprInterpString;
     registerNodeClass<Luau::AstExprInstantiate>("AstExprInstantiate", NodeCategory::Expr, handleAstExprInstantiateMethods, collectAstExprInstantiateProps, validateAstExprInstantiate);
+    s_nodeClassTable[Luau::AstExprInstantiate::ClassIndex()].children = childrenAstExprInstantiate;
     registerNodeClass<Luau::AstExprError>("AstExprError", NodeCategory::Expr, handleAstExprErrorMethods, collectAstExprErrorProps, validateAstExprError);
+    s_nodeClassTable[Luau::AstExprError::ClassIndex()].children = childrenAstExprError;
     registerNodeClass<Luau::AstTypeReference>("AstTypeReference", NodeCategory::Type, handleAstTypeReferenceMethods, collectAstTypeReferenceProps, validateAstTypeReference);
+    s_nodeClassTable[Luau::AstTypeReference::ClassIndex()].children = childrenAstTypeReference;
     registerNodeClass<Luau::AstTypeTable>("AstTypeTable", NodeCategory::Type, handleAstTypeTableMethods, collectAstTypeTableProps, validateAstTypeTable);
+    s_nodeClassTable[Luau::AstTypeTable::ClassIndex()].children = childrenAstTypeTable;
     registerNodeClass<Luau::AstTypeFunction>("AstTypeFunction", NodeCategory::Type, handleAstTypeFunctionMethods, collectAstTypeFunctionProps, validateAstTypeFunction);
+    s_nodeClassTable[Luau::AstTypeFunction::ClassIndex()].children = childrenAstTypeFunction;
     registerNodeClass<Luau::AstTypeTypeof>("AstTypeTypeof", NodeCategory::Type, handleAstTypeTypeofMethods, collectAstTypeTypeofProps, validateAstTypeTypeof);
+    s_nodeClassTable[Luau::AstTypeTypeof::ClassIndex()].children = childrenAstTypeTypeof;
     registerNodeClass<Luau::AstTypeOptional>("AstTypeOptional", NodeCategory::Type, handleAstTypeOptionalMethods, collectAstTypeOptionalProps, validateAstTypeOptional);
     registerNodeClass<Luau::AstTypeUnion>("AstTypeUnion", NodeCategory::Type, handleAstTypeUnionMethods, collectAstTypeUnionProps, validateAstTypeUnion);
+    s_nodeClassTable[Luau::AstTypeUnion::ClassIndex()].children = childrenAstTypeUnion;
     registerNodeClass<Luau::AstTypeIntersection>("AstTypeIntersection", NodeCategory::Type, handleAstTypeIntersectionMethods, collectAstTypeIntersectionProps, validateAstTypeIntersection);
+    s_nodeClassTable[Luau::AstTypeIntersection::ClassIndex()].children = childrenAstTypeIntersection;
     registerNodeClass<Luau::AstTypeSingletonBool>("AstTypeSingletonBool", NodeCategory::Type, handleAstTypeSingletonBoolMethods, collectAstTypeSingletonBoolProps, validateAstTypeSingletonBool);
     registerNodeClass<Luau::AstTypeSingletonString>("AstTypeSingletonString", NodeCategory::Type, handleAstTypeSingletonStringMethods, collectAstTypeSingletonStringProps, validateAstTypeSingletonString);
     registerNodeClass<Luau::AstTypeGroup>("AstTypeGroup", NodeCategory::Type, handleAstTypeGroupMethods, collectAstTypeGroupProps, validateAstTypeGroup);
+    s_nodeClassTable[Luau::AstTypeGroup::ClassIndex()].children = childrenAstTypeGroup;
     registerNodeClass<Luau::AstTypeError>("AstTypeError", NodeCategory::Type, handleAstTypeErrorMethods, collectAstTypeErrorProps, validateAstTypeError);
+    s_nodeClassTable[Luau::AstTypeError::ClassIndex()].children = childrenAstTypeError;
     registerNodeClass<Luau::AstTypePackExplicit>("AstTypePackExplicit", NodeCategory::TypePack, handleAstTypePackExplicitMethods, collectAstTypePackExplicitProps, validateAstTypePackExplicit);
+    s_nodeClassTable[Luau::AstTypePackExplicit::ClassIndex()].children = childrenAstTypePackExplicit;
     registerNodeClass<Luau::AstTypePackVariadic>("AstTypePackVariadic", NodeCategory::TypePack, handleAstTypePackVariadicMethods, collectAstTypePackVariadicProps, validateAstTypePackVariadic);
+    s_nodeClassTable[Luau::AstTypePackVariadic::ClassIndex()].children = childrenAstTypePackVariadic;
     registerNodeClass<Luau::AstTypePackGeneric>("AstTypePackGeneric", NodeCategory::TypePack, handleAstTypePackGenericMethods, collectAstTypePackGenericProps, validateAstTypePackGeneric);
     registerNodeClass<Luau::AstGenericType>("AstGenericType", NodeCategory::Generic, handleAstGenericTypeMethods, collectAstGenericTypeProps, validateAstGenericType);
+    s_nodeClassTable[Luau::AstGenericType::ClassIndex()].children = childrenAstGenericType;
     registerNodeClass<Luau::AstGenericTypePack>("AstGenericTypePack", NodeCategory::Generic, handleAstGenericTypePackMethods, collectAstGenericTypePackProps, validateAstGenericTypePack);
+    s_nodeClassTable[Luau::AstGenericTypePack::ClassIndex()].children = childrenAstGenericTypePack;
     registerNodeClass<Luau::AstAttr>("AstAttr", NodeCategory::Attr, handleAstAttrMethods, collectAstAttrProps, validateAstAttr);
 }
 
