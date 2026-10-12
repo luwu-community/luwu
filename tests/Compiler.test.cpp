@@ -36,6 +36,7 @@ LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
+LUAU_FASTFLAG(LuwuDestructuring)
 
 using namespace Luau;
 
@@ -12033,6 +12034,28 @@ end
     std::string outsideGuard = compileFunction(source, 4, 1);
     CHECK(outsideGuard.find("FIELDS") == std::string::npos);
     CHECK(outsideGuard.find("INIT") != std::string::npos);
+}
+
+TEST_CASE("ClassPodConstructionFromDotTable")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuClasses, true}, {FFlag::LuwuDestructuring, true}};
+
+    // rfcs/destructuring.md: `Color.{r, g, b}` is the call `Color{r = r, g = g, b = b}`, so a POD class constructs
+    // at the call site like the table form does
+    const char* source = R"(
+class Color
+    r: number
+    g: number
+    b: number
+end
+
+function make(r, g, b)
+    local c = Color .{r, g, b}
+    return c
+end
+)";
+
+    CHECK(compileFunction(source, 0, 1).find("FIELDS") != std::string::npos);
 }
 
 TEST_CASE("ClassPrimaryConstructorFieldsFormInsideAnotherClass")

@@ -7761,6 +7761,101 @@ TEST_CASE_FIXTURE(Fixture, "destructuring_mistakes_get_one_error_that_names_the_
     );
 }
 
+// Luwu Destructuring (rfcs/destructuring.md): `.{x, y = v}` builds `{x = x, y = v}`
+TEST_CASE_FIXTURE(Fixture, "dot_tables_name_their_fields_after_bare_names")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    AstStatBlock* block = parse(R"(
+local x = 1
+return .{x, y = 2, z}
+    )");
+    REQUIRE(block);
+    REQUIRE_EQ(block->body.size, 2);
+
+    AstStatReturn* ret = block->body.data[1]->as<AstStatReturn>();
+    REQUIRE(ret);
+    REQUIRE_EQ(ret->list.size, 1);
+    AstExprTable* table = ret->list.data[0]->as<AstExprTable>();
+    REQUIRE(table);
+    CHECK(table->luwuOnly);
+    REQUIRE_EQ(table->items.size, 3);
+
+    const char* keys[] = {"x", "y", "z"};
+    for (size_t i = 0; i < 3; ++i)
+    {
+        const AstExprTable::Item& item = table->items.data[i];
+        CHECK(item.kind == AstExprTable::Item::Kind::Record);
+        AstExprConstantString* key = item.key->as<AstExprConstantString>();
+        REQUIRE(key);
+        CHECK_EQ(std::string(key->value.data, key->value.size), keys[i]);
+    }
+
+    // a bare name reads the local or global of that name
+    CHECK(table->items.data[0].value->is<AstExprLocal>());
+    CHECK(table->items.data[1].value->is<AstExprConstantNumber>());
+    CHECK(table->items.data[2].value->is<AstExprGlobal>());
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): `f.{x}` is a call like `f{x = x}`, except where a statement starting
+// with it is a destructuring declaration missing its keyword
+TEST_CASE_FIXTURE(Fixture, "dot_tables_are_call_arguments")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    AstStatBlock* block = parse(R"(
+local c = Color .{r, g}
+register.{name, handler}
+obj:configure .{width}
+local nested = make.{inner = wrap.{a}}
+    )");
+    REQUIRE(block);
+    REQUIRE_EQ(block->body.size, 4);
+
+    AstStatLocal* local = block->body.data[0]->as<AstStatLocal>();
+    REQUIRE(local);
+    REQUIRE_EQ(local->values.size, 1);
+    AstExprCall* call = local->values.data[0]->as<AstExprCall>();
+    REQUIRE(call);
+    REQUIRE_EQ(call->args.size, 1);
+    CHECK(call->args.data[0]->is<AstExprTable>());
+
+    AstStatExpr* statement = block->body.data[1]->as<AstStatExpr>();
+    REQUIRE(statement);
+    CHECK(statement->expr->is<AstExprCall>());
+
+    AstStatExpr* method = block->body.data[2]->as<AstStatExpr>();
+    REQUIRE(method);
+    AstExprCall* methodCall = method->expr->as<AstExprCall>();
+    REQUIRE(methodCall);
+    CHECK(methodCall->self);
+
+    // `fs.{path} = t` is still a declaration missing 'local'
+    matchOnlyDestructuringError(*this, "fs.{path} = t", "Destructuring declares new locals; start it with 'local' or 'const'");
+    matchOnlyDestructuringError(*this, "fs.{path}: Fs = t", "Destructuring declares new locals; start it with 'local' or 'const'");
+}
+
+TEST_CASE_FIXTURE(Fixture, "dot_table_mistakes_get_one_error_that_names_the_fix")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    matchOnlyDestructuringError(
+        *this, "local t = .{a as b}", "'as' renames only when destructuring; to build the field 'b' from 'a', write 'b = a'"
+    );
+    for (const char* source : {"local t = .{1}", "local t = .{self.x}", "local t = .{f()}", "local t = .{[k] = v}"})
+        matchOnlyDestructuringError(*this, source, "Fields in '.{...}' are names or 'key = value'; use '{...}' for list items and '[key]' fields");
+    matchOnlyDestructuringError(*this, "local t = .{a b}", "Expected ',' after table constructor element");
+}
+
+TEST_CASE_FIXTURE(Fixture, "dot_tables_need_luwu_destructuring")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, false};
+
+    ParseResult result = tryParse("local t = .{x}");
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "attempt to use disabled Luwu feature '.{...}' table constructors; enable via FFlag 'LuwuDestructuring'");
+}
+
 TEST_CASE_FIXTURE(Fixture, "destructuring_for_in_bindings_start_the_body_with_their_fields")
 {
     ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};

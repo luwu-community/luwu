@@ -255,6 +255,24 @@ local .{alpha, beta as b} = value
     CHECK_EQ(std::string("b"), onName.getLocal()->name.value);
 }
 
+// Luwu Destructuring (rfcs/destructuring.md): a bare name in `.{x}` is both the key and the value, so the cursor finds
+// the value (the local), not the key's string
+TEST_CASE_FIXTURE(Fixture, "expr_or_local_on_a_bare_name_in_a_dot_table")
+{
+    ScopedFastFlag destructuring{FFlag::LuwuDestructuring, true};
+
+    check(R"(
+local alpha = 1
+local t = .{alpha}
+    )");
+
+    ExprOrLocal onName = findExprOrLocalAtPosition(*getMainSourceModule(), Position(2, 13));
+    REQUIRE(onName.getExpr());
+    AstExprLocal* read = onName.getExpr()->as<AstExprLocal>();
+    REQUIRE(read);
+    CHECK_EQ(std::string("alpha"), read->local->name.value);
+}
+
 TEST_CASE_FIXTURE(Fixture, "ast_ancestry_at_eof")
 {
     check(R"(

@@ -2279,6 +2279,18 @@ local .{x: number, y as py: string, pos.{a}: Vec2, tar as .{gz}: Archive}: Whole
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
 }
 
+TEST_CASE("prettyPrint_dot_tables")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    std::string code = R"(
+local t = .{x, y = 2; z}
+local c = Color . { r, g = 0 }
+obj:configure.{ inner = .{a}, b, }
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+}
+
 TEST_CASE("prettyPrint_destructured_loop_bindings")
 {
     ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};

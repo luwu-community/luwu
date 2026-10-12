@@ -711,19 +711,30 @@ struct Printer
         }
         else if (const auto& a = expr.as<AstExprTable>())
         {
+            // Luwu Destructuring (rfcs/destructuring.md): a `.{x, y}` table prints its bare names back as written
+            const CstExprTable* cstTable = lookupCstNode<CstExprTable>(a);
+            bool dotTable = cstTable && cstTable->dotPosition.hasValue();
+            if (dotTable)
+            {
+                writer.symbol(".");
+                advance(cstTable->openBracePosition);
+            }
+
             writer.symbol("{");
 
             const CstExprTable::Item* cstItem = nullptr;
-            if (const auto cstNode = lookupCstNode<CstExprTable>(a))
+            if (cstTable)
             {
-                LUAU_ASSERT(cstNode->items.size == a->items.size);
-                cstItem = cstNode->items.begin();
+                LUAU_ASSERT(cstTable->items.size == a->items.size);
+                cstItem = cstTable->items.begin();
             }
 
             bool first = true;
 
             for (const auto& item : a->items)
             {
+                bool barePunnedName = dotTable && item.kind == AstExprTable::Item::Kind::Record && item.key->location == item.value->location;
+
                 if (!cstItem)
                 {
                     if (first)
@@ -744,6 +755,9 @@ struct Printer
                     advance(item.key->location.begin);
 
                     writer.identifier(std::string_view(value.data, value.size));
+
+                    if (barePunnedName)
+                        break;
 
                     if (cstItem)
                         advance(cstItem->equalsPosition);
@@ -781,8 +795,11 @@ struct Printer
                     LUAU_ASSERT(!"Unknown table item kind");
                 }
 
-                advance(item.value->location.begin);
-                visualize(*item.value);
+                if (!barePunnedName)
+                {
+                    advance(item.value->location.begin);
+                    visualize(*item.value);
+                }
 
                 if (cstItem)
                 {

@@ -210,6 +210,7 @@ private:
 
     bool destructuringFollows();
     bool destructurePatternFollows();
+    bool destructuringAssignmentFollows();
     AstStat* parseDestructuring(const Location& start, const Location& keywordLocation, bool isConst, std::optional<Name> name = {});
     void parseDestructurePattern(DestructureTarget& target);
     struct DestructureField;
@@ -433,6 +434,11 @@ private:
     // field ::= `[' exp `]' `=' exp | Name `=' exp | exp
     // fieldsep ::= `,' | `;'
     AstExpr* parseTableConstructor();
+
+    // Luwu Destructuring (rfcs/destructuring.md):
+    // dottable ::= `.' `{' [dotfield {fieldsep dotfield} [fieldsep]] `}'
+    // dotfield ::= Name | Name `=' exp
+    AstExpr* parseDotTableConstructor();
 
     // TODO: Add grammar rules here?
     AstExpr* parseIfElseExpr();
