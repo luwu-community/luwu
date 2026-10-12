@@ -61,6 +61,7 @@ const LuwuFeature kDefaultArgumentsFeature{"default arguments", /* plural= */ tr
 const char* const kDestructuringNeedsKeywordError = "Destructuring declares new locals; start it with 'local' or 'const'";
 const LuwuFeature kDestructuringFeature{"destructuring", /* plural= */ false, "LuwuDestructuring"};
 const LuwuFeature kDotTableFeature{"'.{...}' table constructors", /* plural= */ true, "LuwuDestructuring"};
+const char* const kDotTableMissingBraceError = "Expected '{' after '.': '.{x, y}' builds a table from the locals 'x' and 'y'";
 const char* const kDotTableFieldError = "Fields in '.{...}' are names or 'key = value'; use '{...}' for list items and '[key]' fields";
 
 // Luwu Classes (rfcs/classes): class members may not be named after the keywords that appear in the
@@ -1789,6 +1790,14 @@ bool Parser::destructuringFollows()
 bool Parser::destructurePatternFollows()
 {
     return lexer.current().type == '.' && lexer.lookahead().type == '{';
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): a `.` where an expression goes, with no `{` after it yet. Only in Luwu
+// code with destructuring on; anywhere else it's the stray `.` it always was.
+bool Parser::dotTableMissingBraceFollows()
+{
+    bool dotTablesAvailable = FFlag::LuwuDestructuring && options.language == Language::Luwu;
+    return dotTablesAvailable && lexer.current().type == '.' && lexer.lookahead().type != '{';
 }
 
 // Luwu Destructuring (rfcs/destructuring.md): whether the `.{...}` at the current token is followed by `=`, `:` or `,`,
@@ -5757,7 +5766,7 @@ AstExpr* Parser::parseSimpleExpr()
     {
         return parseTableConstructor();
     }
-    else if (destructurePatternFollows())
+    else if (destructurePatternFollows() || dotTableMissingBraceFollows())
     {
         return parseDotTableConstructor();
     }
@@ -6047,6 +6056,23 @@ AstExpr* Parser::parseDotTableConstructor()
 
     Position openBracePosition = lexer.current().location.begin;
     checkLuwuFeature(Location(start, lexer.current().location), kDotTableFeature, FFlag::LuwuDestructuring);
+
+    // A `.` alone where an expression goes is a `.{...}` table whose `{` isn't typed yet. It becomes an empty table at
+    // the `.`, so the rest of the statement still parses and autocomplete knows not to offer expressions there.
+    if (lexer.current().type != '{')
+    {
+        report(start, "%s", kDotTableMissingBraceError);
+
+        AstExprTable* node = allocator.alloc<AstExprTable>(start, AstArray<AstExprTable::Item>{nullptr, 0});
+        node->luwuOnly = true;
+        if (options.storeCstData)
+        {
+            CstExprTable* cstNode = allocator.alloc<CstExprTable>(AstArray<CstExprTable::Item>{nullptr, 0});
+            cstNode->dotPosition = start.begin;
+            cstNodeMap[node] = cstNode;
+        }
+        return node;
+    }
 
     TempVector<AstExprTable::Item> items(scratchItem);
     TempVector<CstExprTable::Item> cstItems(scratchCstItem);

@@ -2314,6 +2314,17 @@ AutocompleteResult autocomplete_(
 
     AstNode* node = ancestry.back();
 
+    // Luwu Destructuring (rfcs/destructuring.md): a `.` alone where an expression goes is a `.{...}` table with its `{`
+    // still to come (the parser's empty table, one character wide). Nothing typed there next is an expression, so
+    // offer nothing; upstream offered every global.
+    if (const AstExprTable* table = node->as<AstExprTable>())
+    {
+        bool bareDot = table->luwuOnly && table->items.size == 0 && table->location.begin.line == table->location.end.line &&
+                       table->location.end.column == table->location.begin.column + 1;
+        if (bareDot)
+            return {{}, ancestry, AutocompleteContext::Unknown};
+    }
+
     AstExprConstantNil dummy{Location{}};
     AstNode* parent = ancestry.size() >= 2 ? ancestry.rbegin()[1] : &dummy;
 
