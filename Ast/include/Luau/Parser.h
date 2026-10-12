@@ -123,7 +123,9 @@ private:
     AstStat* parseIf();
 
     // Luwu If Local (rfcs/if-local.md)
-    AstExpr* parseIfCondition(AstArray<AstIfClause>& clauses);
+    AstExpr* parseIfCondition(AstArray<AstIfClause>& clauses, const char* head = "if");
+    AstArray<AstIfClause> parseLoopWhenChain(Location& whenLocation, bool inComprehension = false);
+    AstStatBlock* wrapInWhenGuard(const AstArray<AstIfClause>& when, const Location& whenLocation, AstStatBlock* body, AstStatIf*& guard);
     void parseIfBindingClause(std::vector<AstIfClause>& chain, const std::optional<Location>& whenLocation);
     bool ifBindingFollows();
     bool whenFollows();
@@ -408,10 +410,15 @@ private:
     static std::optional<AstExprBinary::Op> parseBinaryOp(const Lexeme& l);
     static std::optional<AstExprBinary::Op> parseCompoundOp(const Lexeme& l);
 
+public:
     struct BinaryOpPriority
     {
         unsigned char left, right;
     };
+
+private:
+    AstExpr* parseBinaryTail(AstExpr* expr, const Location& start, unsigned int limit);
+    AstStat* parseOrLeaveStatement(AstExpr* first, const Location& start);
 
     std::optional<AstExprUnary::Op> checkUnaryConfusables();
     std::optional<AstExprBinary::Op> checkBinaryConfusables(const BinaryOpPriority binaryPriority[], unsigned int limit);

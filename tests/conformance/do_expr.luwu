@@ -627,4 +627,45 @@ do
     assert(after - before < 64, `grew by {after - before}KB`)
 end
 
+-- `x or return`, `x or break` and `x or continue` as statements
+do
+    local function f(x)
+        x or return "none"
+        return x .. "!"
+    end
+    assert(f(nil) == "none" and f(false) == "none" and f("a") == "a!")
+
+    local function g(a, b)
+        a and b or (return "no", "pair")
+        a ~= 1 or do
+            local msg = "one"
+            return msg
+        return "ok"
+    end
+    local p, q = g(1, nil)
+    assert(p == "no" and q == "pair")
+    assert(g(1, 2) == "one" and g(2, 3) == "ok")
+
+    local out = {}
+    for _, s in { "a1", "b", "a2", "stop", "a3" } do
+        s ~= "stop" or break
+        string.find(s, "^a") or continue
+        table.insert(out, s)
+    end
+    assert(table.concat(out, ",") == "a1,a2")
+
+    -- the operand runs exactly once, and the statement's leave only runs when it is falsy
+    local calls = 0
+    local function count(v)
+        calls += 1
+        return v
+    end
+    local function h(v)
+        count(v) or return "left"
+        return "stayed"
+    end
+    assert(h(true) == "stayed" and calls == 1)
+    assert(h(nil) == "left" and calls == 2)
+end
+
 return "OK"

@@ -20,7 +20,9 @@ LUAU_DYNAMIC_FASTINT(LuauSubtypingRecursionLimit)
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
+LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuwuIfLocal)
+LUAU_FASTFLAG(LuwuTableComprehensions)
 LUAU_FASTFLAG(DebugLuwuDoExpr)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(LuauExportValueSyntax)
@@ -714,7 +716,9 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_for_middle_keywords")
     )");
 
     auto ac6 = autocomplete('1');
-    CHECK_EQ(ac6.entryMap.size(), 1);
+    // Luwu If Local (rfcs/if-local.md): a loop's header can also be followed by a `when` chain
+    CHECK_EQ(ac6.entryMap.size(), FFlag::LuwuIfLocal ? 2 : 1);
+    CHECK_EQ(ac6.entryMap.count("when"), FFlag::LuwuIfLocal ? 1 : 0);
     CHECK_EQ(ac6.entryMap.count("do"), 1);
     CHECK_EQ(ac6.context, AutocompleteContext::Keyword);
 
@@ -786,7 +790,9 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_for_in_middle_keywords")
     )");
 
     auto ac4 = autocomplete('1');
-    CHECK_EQ(ac4.entryMap.size(), 1);
+    // Luwu If Local (rfcs/if-local.md): a loop's header can also be followed by a `when` chain
+    CHECK_EQ(ac4.entryMap.size(), FFlag::LuwuIfLocal ? 2 : 1);
+    CHECK_EQ(ac4.entryMap.count("when"), FFlag::LuwuIfLocal ? 1 : 0);
     CHECK_EQ(ac4.entryMap.count("do"), 1);
     CHECK_EQ(ac4.context, AutocompleteContext::Keyword);
 
@@ -795,7 +801,8 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_for_in_middle_keywords")
     )");
 
     auto ac5 = autocomplete('1');
-    CHECK_EQ(ac5.entryMap.size(), 1);
+    CHECK_EQ(ac5.entryMap.size(), FFlag::LuwuIfLocal ? 2 : 1);
+    CHECK_EQ(ac5.entryMap.count("when"), FFlag::LuwuIfLocal ? 1 : 0);
     CHECK_EQ(ac5.entryMap.count("do"), 1);
     CHECK_EQ(ac5.context, AutocompleteContext::Keyword);
 
@@ -838,7 +845,9 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_while_middle_keywords")
     )");
 
     auto ac2 = autocomplete('1');
-    CHECK_EQ(3, ac2.entryMap.size());
+    // Luwu If Local (rfcs/if-local.md): a loop's header can also be followed by a `when` chain
+    CHECK_EQ(FFlag::LuwuIfLocal ? 4 : 3, ac2.entryMap.size());
+    CHECK_EQ(ac2.entryMap.count("when"), FFlag::LuwuIfLocal ? 1 : 0);
     CHECK_EQ(ac2.entryMap.count("do"), 1);
     CHECK_EQ(ac2.entryMap.count("and"), 1);
     CHECK_EQ(ac2.entryMap.count("or"), 1);
@@ -857,7 +866,8 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_while_middle_keywords")
     )");
 
     auto ac4 = autocomplete('1');
-    CHECK_EQ(3, ac4.entryMap.size());
+    CHECK_EQ(FFlag::LuwuIfLocal ? 4 : 3, ac4.entryMap.size());
+    CHECK_EQ(ac4.entryMap.count("when"), FFlag::LuwuIfLocal ? 1 : 0);
     CHECK_EQ(ac4.entryMap.count("do"), 1);
     CHECK_EQ(ac4.entryMap.count("and"), 1);
     CHECK_EQ(ac4.entryMap.count("or"), 1);
@@ -912,6 +922,61 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_if_local_keywords")
 
     auto ac4 = autocomplete('1');
     CHECK_EQ(ac4.entryMap.count("abc"), 1);
+}
+
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_loop_when_keywords")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuTableComprehensions, true},
+    };
+
+    struct Case
+    {
+        const char* source;
+        std::vector<const char*> expected;
+    };
+
+    const Case cases[] = {
+        {"for i = 1, 10 @1", {"do", "when"}},
+        {"for _, v in xs @1", {"do", "when"}},
+        {"for _, v in xs when v > 1 @1", {"do", "when"}},
+        {"for i = 1, 10 when local j = i @1", {"do", "when"}},
+        {"while   @1", {"local", "const"}},
+        {"while x @1", {"do", "when"}},
+        {"while local x = f() @1", {"do", "when"}},
+        {"while local x = f() when x > 1 @1", {"do", "when"}},
+        {"local t = { for _, v in xs @1 }", {"give", "when", "for"}},
+        {"local t = { for _, v in xs when v > 1 @1 }", {"give", "when", "for"}},
+    };
+
+    for (const Case& c : cases)
+    {
+        check(c.source);
+        AutocompleteResult ac = autocomplete('1');
+        INFO(std::string(c.source));
+
+        for (const char* keyword : c.expected)
+        {
+            INFO(std::string(keyword));
+            CHECK_EQ(ac.entryMap.count(keyword), 1);
+        }
+    }
+
+    // a binding in a loop's chain is visible to the clauses after it and to the body
+    check(R"(
+        local function f() return 1 end
+        while local abc = f() when ab@1
+    )");
+    CHECK_EQ(autocomplete('1').entryMap.count("abc"), 1);
+
+    check(R"(
+        local function f() return 1 end
+        for i = 1, 2 when local abc = f() do
+            print(ab@1)
+        end
+    )");
+    CHECK_EQ(autocomplete('1').entryMap.count("abc"), 1);
 }
 
 // Luwu Do Expressions (rfcs/do-expressions.md)

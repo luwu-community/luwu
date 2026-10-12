@@ -896,7 +896,7 @@ struct Printer
                         visualize(*range->step);
                     }
 
-                    body = range->body;
+                    body = visualizeLoopWhen(*range->body, range->whenGuard);
                     doLocation = range->doLocation;
                 }
                 else
@@ -926,26 +926,13 @@ struct Printer
                         visualize(*value);
                     }
 
-                    body = generic->body;
+                    body = visualizeLoopWhen(*generic->body, generic->whenGuard);
                     doLocation = generic->doLocation;
                 }
 
-                LUAU_ASSERT(body->body.size == 1);
-                stat = body->body.data[0];
-
-                if (AstStatIf* guard = stat->as<AstStatIf>())
-                {
-                    // a single plain `when` is stored as an ordinary condition, and its `when` is the if's keyword
-                    if (guard->clauses.size == 0)
-                    {
-                        advance(guard->ifLocation.begin);
-                        writer.keyword("when");
-                    }
-
-                    visualizeIfCondition(*guard->condition, guard->clauses);
-                    LUAU_ASSERT(guard->thenbody->body.size == 1);
-                    stat = guard->thenbody->body.data[0];
-                }
+                // the clause's next `for` or the item, after any destructured fields
+                LUAU_ASSERT(body->body.size >= 1);
+                stat = body->body.data[body->body.size - 1];
             }
 
             advance(doLocation.begin);
@@ -1109,7 +1096,7 @@ struct Printer
         else if (const auto& a = program.as<AstStatWhile>())
         {
             writer.keyword("while");
-            visualize(*a->condition);
+            visualizeIfCondition(*a->condition, a->clauses);
             // TODO: what if 'hasDo = false'?
             advance(a->doLocation.begin);
             writer.keyword("do");
@@ -1245,9 +1232,11 @@ struct Printer
 
                 visualize(*a->step);
             }
+
+            AstStatBlock* body = visualizeLoopWhen(*a->body, a->whenGuard);
             advance(a->doLocation.begin);
             writer.keyword("do");
-            visualizeBlock(*a->body);
+            visualizeBlock(*body);
 
             advance(a->body->location.end);
             writer.keyword("end");
@@ -1282,10 +1271,11 @@ struct Printer
                 visualize(*val);
             }
 
+            AstStatBlock* body = visualizeLoopWhen(*a->body, a->whenGuard);
             advance(a->doLocation.begin);
             writer.keyword("do");
 
-            visualizeBlock(*a->body);
+            visualizeBlock(*body);
 
             advance(a->body->location.end);
             writer.keyword("end");
@@ -1964,8 +1954,26 @@ struct Printer
             LUAU_ASSERT(!"visualizeBlock was expecting an AstStatBlock");
     }
 
+    // Luwu If Local (rfcs/if-local.md): prints a loop's `when` chain, if its body holds one (AstStatFor::whenGuard),
+    // and returns the block as written.
+    AstStatBlock* visualizeLoopWhen(AstStatBlock& body, AstStatIf* guard)
+    {
+        if (!guard)
+            return &body;
+
+        // a single plain `when` is stored as an ordinary condition, and its `when` is the if's keyword
+        if (guard->clauses.size == 0)
+        {
+            advance(guard->ifLocation.begin);
+            writer.keyword("when");
+        }
+
+        visualizeIfCondition(*guard->condition, guard->clauses);
+        return guard->thenbody;
+    }
+
     // Luwu If Local (rfcs/if-local.md): a `when` chain prints clause by clause. A binding prints through its
-    // declaration, which also prints a destructuring pattern back as written.
+    // declaration.
     void visualizeIfCondition(AstExpr& condition, const AstArray<AstIfClause>& clauses)
     {
         if (clauses.size == 0)
@@ -1976,9 +1984,6 @@ struct Printer
 
         for (const AstIfClause& clause : clauses)
         {
-            if (clause.declaration && clause.declaration->destructuredFrom)
-                continue;
-
             if (clause.whenLocation)
             {
                 advance(clause.whenLocation->begin);

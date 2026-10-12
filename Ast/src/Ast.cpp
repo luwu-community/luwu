@@ -632,6 +632,54 @@ void AstExprIfElse::visit(AstVisitor* visitor)
     }
 }
 
+bool AstExprDo::alwaysLeaves() const
+{
+    if (shorthand)
+        return true;
+
+    struct GiveFinder : AstVisitor
+    {
+        bool found = false;
+
+        bool visit(AstStatGive*) override
+        {
+            found = true;
+            return false;
+        }
+
+        // a nested `do` expression's gives are its own, and a function's body is another function
+        bool visit(AstExprDo*) override
+        {
+            return false;
+        }
+
+        bool visit(AstExprFunction*) override
+        {
+            return false;
+        }
+    };
+
+    GiveFinder finder;
+    for (AstStat* stat : body->body)
+        stat->visit(&finder);
+
+    return !finder.found;
+}
+
+AstExprBinary* asOrLeave(AstExpr* expr)
+{
+    AstExprBinary* binary = expr->as<AstExprBinary>();
+    if (!binary || binary->op != AstExprBinary::Or)
+        return nullptr;
+
+    AstExpr* right = binary->right;
+    while (AstExprGroup* group = right->as<AstExprGroup>())
+        right = group->expr;
+
+    AstExprDo* leave = right->as<AstExprDo>();
+    return leave && leave->alwaysLeaves() ? binary : nullptr;
+}
+
 AstExprDo::AstExprDo(const Location& location, AstStatBlock* body)
     : AstExpr(ClassIndex(), location)
     , body(body)
@@ -786,11 +834,21 @@ AstStatWhile::AstStatWhile(
 {
 }
 
+Location AstStatWhile::conditionLocation() const
+{
+    return ifConditionLocation(condition, clauses);
+}
+
+void AstStatWhile::visitCondition(AstVisitor* visitor)
+{
+    visitIfCondition(condition, clauses, visitor);
+}
+
 void AstStatWhile::visit(AstVisitor* visitor)
 {
     if (visitor->visit(this))
     {
-        condition->visit(visitor);
+        visitCondition(visitor);
         body->visit(visitor);
     }
 }

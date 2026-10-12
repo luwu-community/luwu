@@ -313,6 +313,10 @@ struct CostVisitor : AstVisitor
     {
         Cost condition = model(node->condition);
 
+        // Luwu If Local (rfcs/if-local.md): every clause of a `when` chain runs per iteration, and each adds a test
+        for (size_t i = 1; i < node->clauses.size; ++i)
+            condition += model(node->clauses.data[i].expr) + 1;
+
         loop(node->body, condition);
         return false;
     }

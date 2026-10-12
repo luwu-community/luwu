@@ -558,7 +558,7 @@ const AstStat* TypeChecker2::getFallthrough(const AstStat* node)
 
     if (const AstStatWhile* stat = node->as<AstStatWhile>())
     {
-        if (AstExprConstantBool* expr = stat->condition->as<AstExprConstantBool>())
+        if (AstExprConstantBool* expr = stat->clauses.size == 0 ? stat->condition->as<AstExprConstantBool>() : nullptr)
         {
             if (expr->value && !hasBreak(stat->body))
                 return nullptr;
@@ -843,7 +843,10 @@ void TypeChecker2::visit(AstStatIf* ifStatement)
 
 void TypeChecker2::visit(AstStatWhile* whileStatement)
 {
-    visit(whileStatement->condition, ValueContext::RValue);
+    if (whileStatement->clauses.size != 0)
+        visitIfCondition(whileStatement->condition, whileStatement->clauses);
+    else
+        visit(whileStatement->condition, ValueContext::RValue);
     visit(whileStatement->body);
 }
 

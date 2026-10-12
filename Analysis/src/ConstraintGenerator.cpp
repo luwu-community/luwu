@@ -3025,6 +3025,7 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStat* stat)
     else if (auto e = stat->as<AstStatExpr>())
     {
         checkPack(scope, e->expr);
+        applyOrLeaveRefinements(scope, AstArray<AstExpr*>{&e->expr, 1});
 
         if (auto call = e->expr->as<AstExprCall>(); call && doesCallError(call))
             return ControlFlow::Throws;
@@ -3137,6 +3138,7 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatLocal* stat
     Checkpoint start = checkpoint(this);
     TypePackId rvaluePack = checkPack(scope, statLocal->values, expectedTypes).tp;
     Checkpoint end = checkpoint(this);
+    applyOrLeaveRefinements(scope, statLocal->values);
 
     std::vector<TypeId> deferredTypes;
     auto [head, tail] = flatten(rvaluePack);
@@ -3360,6 +3362,21 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatForIn* forI
 
 ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatWhile* while_)
 {
+    // Luwu If Local (rfcs/if-local.md): `while local x = f() when c do`, checked like an `if`'s chain
+    if (while_->clauses.size != 0)
+    {
+        ScopePtr chainScope = ifClausesScope(while_->clauses, while_->body, scope);
+        checkIfClauses(chainScope, while_->clauses);
+
+        ScopePtr whileScope = childScope(while_, chainScope);
+        visit(whileScope, while_->body);
+
+        chainScope->inheritAssignments(whileScope);
+        scope->inheritAssignments(chainScope);
+
+        return ControlFlow::None;
+    }
+
     if (FFlag::DebugLuauCFG)
     {
         check(scope, while_->condition);
@@ -3623,9 +3640,25 @@ static void bindFreeType(TypeId a, TypeId b)
         emplaceType<BoundType>(asMutable(b), a);
 }
 
+// Luwu Do Expressions (rfcs/do-expressions.md): every value of a statement runs, so after a value that is `x or return`
+// (asOrLeave), `x` is truthy.
+void ConstraintGenerator::applyOrLeaveRefinements(const ScopePtr& scope, const AstArray<AstExpr*>& values)
+{
+    for (AstExpr* value : values)
+    {
+        AstExprBinary* orLeave = asOrLeave(value);
+        if (!orLeave)
+            continue;
+
+        if (RefinementId* refinement = orLeaveRefinements.find(orLeave->right); refinement && *refinement)
+            applyRefinements(scope, value->location, *refinement);
+    }
+}
+
 ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatAssign* assign)
 {
     TypePackId resultPack = checkPack(scope, assign->values).tp;
+    applyOrLeaveRefinements(scope, assign->values);
 
     std::vector<TypeId> valueTypes;
     valueTypes.reserve(assign->vars.size);
@@ -6058,6 +6091,17 @@ std::tuple<TypeId, TypeId, RefinementId> ConstraintGenerator::checkBinary(
         ScopePtr rightScope = childScope(right, scope);
         applyRefinements(rightScope, right->location, refinementArena.negation(leftRefinement));
         auto [rightType, rightRefinement] = check(rightScope, right, expectedType);
+
+        // Luwu Do Expressions (rfcs/do-expressions.md): `x or return` only has a value when `x` is truthy
+        AstExpr* leaveOperand = right;
+        while (AstExprGroup* group = leaveOperand->as<AstExprGroup>())
+            leaveOperand = group->expr;
+
+        if (AstExprDo* leave = leaveOperand->as<AstExprDo>(); leave && leave->alwaysLeaves())
+        {
+            orLeaveRefinements[right] = leftRefinement;
+            return {leftType, rightType, leftRefinement};
+        }
 
         return {leftType, rightType, refinementArena.disjunction(leftRefinement, rightRefinement)};
     }

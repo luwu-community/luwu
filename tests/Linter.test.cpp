@@ -161,6 +161,9 @@ TEST_CASE_FIXTURE(Fixture, "MultilineBlock")
 if true then print(1) print(2) print(3) end
 )");
 
+    // Luwu: OneLineStatement also reports the one-line `if`
+    result.warnings = warningsWithCode(result, LintWarning::Code_SameLineStatement);
+
     REQUIRE(1 == result.warnings.size());
     CHECK_EQ(result.warnings[0].text, "A new statement is on the same line; add semi-colon on previous statement to silence");
 }
@@ -300,6 +303,9 @@ end
 return bar() + baz()
 )");
 
+    // Luwu: OneLineStatement also reports the one-line `if`
+    result.warnings = warningsWithCode(result, LintWarning::Code_GlobalUsedAsLocal);
+
     REQUIRE(0 == result.warnings.size());
 }
 
@@ -323,6 +329,9 @@ end
 return bar() + baz() + read()
 )");
 
+    // Luwu: OneLineStatement also reports the one-line `if`
+    result.warnings = warningsWithCode(result, LintWarning::Code_GlobalUsedAsLocal);
+
     REQUIRE(0 == result.warnings.size());
 }
 
@@ -339,6 +348,9 @@ function baz() bar = 0 end
 
 return foo() + baz()
 )");
+
+    // Luwu: OneLineStatement also reports the one-line function
+    result.warnings = warningsWithCode(result, LintWarning::Code_GlobalUsedAsLocal);
 
     REQUIRE(0 == result.warnings.size());
 }
@@ -438,7 +450,9 @@ class Cat
     public x: number = 2
 end
 local function f()
-    local function Cat() return 3 end
+    local function Cat()
+        return 3
+    end
     return Cat()
 end
 class Dog
@@ -636,6 +650,9 @@ end
 
 print("hi!")
 )");
+
+    // Luwu: OneLineStatement also reports the one-line `do` block
+    result.warnings = warningsWithCode(result, LintWarning::Code_UnreachableCode);
 
     REQUIRE(1 == result.warnings.size());
     CHECK_EQ(result.warnings[0].location.begin.line, 3);
@@ -2922,6 +2939,298 @@ print(a)
     CHECK_EQ(shadow[0].text, "Variable 'a' shadows previous declaration at line 3");
 }
 
+TEST_CASE_FIXTURE(Fixture, "LintsSeeLoopWhenChains")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuIfLocal, true},
+    };
+
+    LintResult result = lint(R"(
+local function f(): number? return 1 end
+local people = {}
+
+for _, name in people when name do print(name) end
+while local x = f() do print(x) end
+while local y = f() do end
+for i = 1, 3 when i > 1 do print(i) end
+)");
+
+    // the `when` chain is written in the loop's header, not as a statement of its body
+    CHECK(warningsWithCode(result, LintWarning::Code_SameLineStatement).empty());
+
+    std::vector<LintWarning> unused = warningsWithCode(result, LintWarning::Code_LocalUnused);
+    REQUIRE_EQ(unused.size(), 1);
+    CHECK_EQ(unused[0].text, "Variable 'y' is never used; prefix with '_' to silence");
+
+    // a `while local` loop ends when its binding is falsy
+    CHECK(warningsWithCode(result, LintWarning::Code_ForeverLoop).empty());
+}
+
+TEST_CASE_FIXTURE(Fixture, "OneLineStatement")
+{
+    LintResult result = lint(R"(
+local t = {}
+local function f() return 1 end
+if t.a then print(1) end
+while t.b do t.b = nil end
+for i = 1, 3 do print(i) end
+repeat t.c = nil until true
+do local z = 1 print(z) end
+if t.a then
+    print(1)
+end
+-- not reported: empty bodies, callbacks, an `if` broken over lines
+while t.d do end
+local function noop() end
+table.sort(t, function(a, b) return a < b end)
+return f, noop
+)");
+
+    std::vector<LintWarning> warnings = warningsWithCode(result, LintWarning::Code_OneLineStatement);
+    REQUIRE_EQ(warnings.size(), 6);
+    CHECK_EQ(warnings[0].text, "Split this function over several lines, with its body and 'end' on their own lines");
+    CHECK_EQ(warnings[1].location.begin.line, 3);
+    CHECK_EQ(warnings[2].location.begin.line, 4);
+    CHECK_EQ(warnings[3].location.begin.line, 5);
+    CHECK_EQ(warnings[4].location.begin.line, 6);
+    CHECK_EQ(warnings[5].text, "Split this 'do' block over several lines, with its body and 'end' on their own lines");
+}
+
+TEST_CASE_FIXTURE(Fixture, "LuaGuard")
+{
+    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+
+    LintResult result = lint(R"(
+local function f(x, y, t)
+    if not x then return end
+    if x == y then return 1 end
+    if x > 1 then return end
+    if x == 2 then return x, y end
+    for _, v in t do
+        if not v.ok then continue end
+        print(v)
+    end
+    if not y then
+        return
+    end
+    y or return
+    return x
+end
+return f
+)");
+
+    // a guard gets its own lint, not OneLineStatement, and in a Luwu file only LuaGuard
+    CHECK(warningsWithCode(result, LintWarning::Code_OneLineStatement).empty());
+    CHECK(warningsWithCode(result, LintWarning::Code_OneLineGuard).empty());
+
+    std::vector<LintWarning> warnings = warningsWithCode(result, LintWarning::Code_LuaGuard);
+    REQUIRE_EQ(warnings.size(), 5);
+    CHECK_EQ(warnings[0].text, "Replace this with 'x or return;'");
+    CHECK_EQ(warnings[1].text, "Replace this with 'x ~= y or return 1'");
+    CHECK_EQ(warnings[2].text, "Replace this with 'not (x > 1) or return;'");
+    // several values need parentheses
+    CHECK_EQ(warnings[3].text, "Replace this with 'x ~= 2 or (return x, y)'");
+    CHECK_EQ(warnings[4].text, "Replace this with 'v.ok or continue'");
+    // the warning covers the whole statement it replaces
+    CHECK_EQ(warnings[0].location, Location(Position(2, 4), Position(2, 28)));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "OneLineGuardInALuauFileOnlySuggestsThreeLines")
+{
+    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+
+    fileResolver.source["game/a"] = "local function f(x)\n    if not x then return end\n    return x\nend\nreturn f\n";
+    configResolver.configFiles["game/a"].language = Language::Luau;
+
+    std::vector<LintWarning> warnings;
+    for (const LintWarning& warning : lintModule("game/a").warnings)
+        if (warning.code == LintWarning::Code_OneLineGuard)
+            warnings.push_back(warning);
+
+    REQUIRE_EQ(warnings.size(), 1);
+    CHECK_EQ(
+        warnings[0].text,
+        "Put the 'return' on its own line, so it isn't hidden at the end of this one"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "InlineOrLeave")
+{
+    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+
+    LintResult result = lint(R"(
+local function f(x, path)
+    local a = 1
+    local b = 2
+    local found = locate_the_thing_we_are_looking_for(path, x, "with a long argument") or return nil
+    local c = 3
+    local d = 4
+    local short = x or return nil
+    local e = 5
+    local broken = locate_the_thing_we_are_looking_for(path, x, "with a long argument")
+        or return nil
+    return a, b, c, d, e, found, short, broken
+end
+return f
+)");
+
+    std::vector<LintWarning> warnings = warningsWithCode(result, LintWarning::Code_InlineOrLeave);
+    REQUIRE_EQ(warnings.size(), 1);
+    CHECK_EQ(warnings[0].location.begin.line, 4);
+    CHECK_EQ(
+        warnings[0].text,
+        "Move 'or return' to its own line, indented; it's easy to miss at the end of a line this long"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "StyleGroupTurnsOffItsParts")
+{
+    LintResult result = lint(R"(--!nolint Style
+local t = {}
+if t.a then print(1) end
+local function f(x)
+    if not x then return end
+    return x
+end
+print(1) print(2)
+return f
+)");
+
+    for (LintWarning::Code code : {LintWarning::Code_OneLineStatement, LintWarning::Code_OneLineGuard, LintWarning::Code_SameLineStatement})
+        CHECK(warningsWithCode(result, code).empty());
+
+    // and a part can be turned off alone
+    LintResult part = lint(R"(--!nolint OneLineStatement
+local t = {}
+if t.a then print(1) end
+local function f(x)
+    if not x then return end
+    return x
+end
+return f
+)");
+
+    CHECK(warningsWithCode(part, LintWarning::Code_OneLineStatement).empty());
+    CHECK_EQ(warningsWithCode(part, LintWarning::Code_OneLineGuard).size(), 1);
+}
+
+TEST_CASE_FIXTURE(Fixture, "MultiLineStatementSeesWhenChains")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuTableComprehensions, true},
+    };
+
+    // each `when`, binding keyword or loop guard below starts a line no further right than its statement
+    LintResult result = lint(R"(
+local function f(): number? return 1 end
+local t = {}
+if
+const a = f()
+then
+end
+if local b = f()
+when b > 1 then
+end
+while local c = f()
+when c > 1 do
+    break
+end
+for _, v in t
+when v do
+end
+local xs = { for _, v in t
+when v give v }
+if
+    const d = f()
+    when d > 1
+then
+end
+return xs
+)");
+
+    std::vector<LintWarning> warnings = warningsWithCode(result, LintWarning::Code_MultiLineStatement);
+    REQUIRE_EQ(warnings.size(), 5);
+    CHECK_EQ(warnings[0].location.begin.line, 4);
+    CHECK_EQ(warnings[1].location.begin.line, 8);
+    CHECK_EQ(warnings[2].location.begin.line, 11);
+    CHECK_EQ(warnings[3].location.begin.line, 15);
+    CHECK_EQ(warnings[4].location.begin.line, 18);
+}
+
+TEST_CASE_FIXTURE(Fixture, "OrReturnComma")
+{
+    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+
+    LintResult result = lint(R"(
+local function f(x, a, b)
+    local q, r = x or return a, b
+    print(x or return a, b)
+    local v, w = if a then b else return a, x
+    -- not reported: parenthesized either way, or the last value
+    local s, t = (x or return a), b
+    local u = x or (return a, b)
+    local y = b, x or return a
+    return q, r, s, t, u, v, w, y
+end
+return f
+)");
+
+    std::vector<LintWarning> warnings = warningsWithCode(result, LintWarning::Code_OrReturnComma);
+    REQUIRE_EQ(warnings.size(), 3);
+    CHECK_EQ(warnings[0].location, Location(Position(2, 32), Position(2, 33)));
+    CHECK_EQ(warnings[0].text, "'b' is assigned to 'r', not part of 'or return'; to return both, write 'or (return a, b)'");
+    CHECK_EQ(warnings[1].text, "'b' is the next argument, not part of 'or return'; to return both, write 'or (return a, b)'");
+    CHECK_EQ(warnings[2].text, "'x' is assigned to 'w', not part of 'else return'; to return both, write 'else (return a, x)'");
+}
+
+TEST_CASE_FIXTURE(Fixture, "BindingSwallowsCondition")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuIfLocal, true},
+    };
+
+    LintResult result = lint(R"(
+local Admin = 1
+local function perms(id) return 1 end
+local function find(id) return { name = "a" } end
+local t = {}
+
+if
+    const name = find(1)
+    when const perms = perms(1)
+    and perms == Admin
+then
+    print(name, perms)
+end
+
+if local x = find(1) and x.name then print(x) end
+while local n = t.count and n > 0 do print(n) end
+local v = if local ok = find(1) and not t.closed then ok else nil
+
+-- not flagged: the `and` is the value, as in Lua's `a and a.b`
+if local user = find(1) and find(2) then print(user) end
+if local field = t.inner and t.inner.field then print(field) end
+if local fallback = t.value or 0 then print(fallback) end
+if local grouped = (find(1) and t.flag == 1) then print(grouped) end
+)");
+
+    std::vector<LintWarning> warnings = warningsWithCode(result, LintWarning::Code_BindingSwallowsCondition);
+    REQUIRE_EQ(warnings.size(), 4);
+
+    CHECK_EQ(warnings[0].location.begin.line, 9);
+    CHECK_EQ(
+        warnings[0].text,
+        "This 'and' is part of 'perms''s value, so the 'perms' in it isn't the binding; use 'when' to test the binding"
+    );
+    CHECK_EQ(warnings[1].location.begin.line, 14);
+    CHECK_EQ(warnings[2].location.begin.line, 15);
+    CHECK_EQ(
+        warnings[3].text,
+        "This 'and' makes 'ok' a boolean that is always true in the branch; use 'when' to add a condition"
+    );
+}
+
 // Luwu Do Expressions (rfcs/do-expressions.md)
 TEST_CASE_FIXTURE(Fixture, "ReturnOnNextLine")
 {
@@ -2966,7 +3275,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "KeywordShadowAndBuiltinShadow")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuIfLocal, true},
-        {FFlag::LuwuDestructuring, true},
     };
 
     LintResult result = lint(R"(
@@ -2978,7 +3286,7 @@ for _, type in {} do end
 local function f(typeof, ok) return typeof, ok end
 local print = print
 if local table = {} then end
-local .{string} = { string = "s" }
+local string = "s"
 local export = 1
 local function g(const) return const end
 
@@ -3417,7 +3725,9 @@ if both ~= none then end -- ok
 local neither = 5
 if neither ~= nil then end -- ok: a different mistake, not this one
 
-local function _untyped(u) return u ~= nil end -- ok: unknown
+local function _untyped(u) -- ok: unknown
+    return u ~= nil
+end
 local a: any = nil
 if a ~= none then end -- ok
 )");
@@ -4178,7 +4488,10 @@ for i = 1, 10, 2 do print(i) end
 for i = #t, 1, -1 do print(i) end
 )");
 
-    REQUIRE_EQ(countWarnings(result, LintWarning::Code_ForRange), 4);
+    // Luwu: OneLineStatement also reports each one-line loop
+    result.warnings = warningsWithCode(result, LintWarning::Code_ForRange);
+
+    REQUIRE_EQ(result.warnings.size(), 4);
     CHECK_EQ(
         result.warnings[0].text,
         "For loop counts down but ends above where it starts, so it never runs; did you mean to swap the bounds?"
@@ -4194,7 +4507,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "OptimizationHintLoopPartsAreSilencedOverTheB
     ScopedFastFlag attributes{FFlag::LuwuAttributesEverywhere, true};
 
     LintResult result = lint(R"(
-local function f(lines: { string }, queue: { number })
+local function f(lines: { string }, _queue: { number })
     @[nolint(LoopConcat)]
     local quiet = ""
     @[nolint(OptimizationHint)]
@@ -4335,6 +4648,18 @@ return build, quiet, loud, Cat, Quiet, typo
     // - `Quiet.loudAgain`: on again inside a class that turns it off
     // - `typo`: not a lint, with a suggestion
     // - `inner`'s bare `@[nolint]` is reported by BareNolint
+    // Luwu: OneLineStatement also reports the one-line loops; this test is about the scopes, so those are left out
+    result.warnings.erase(
+        std::remove_if(
+            result.warnings.begin(),
+            result.warnings.end(),
+            [](const LintWarning& warning)
+            {
+                return warning.code == LintWarning::Code_OneLineStatement;
+            }
+        ),
+        result.warnings.end()
+    );
     REQUIRE(5 == result.warnings.size());
     CHECK_EQ(result.warnings[0].code, LintWarning::Code_LoopConcat);
     CHECK_EQ(3, result.warnings[0].location.begin.line);
@@ -4866,4 +5191,48 @@ end
         "  - Return 'Self' here so the type checker knows to use the class type instead of the trait type"
     );
 }
+TEST_CASE_FIXTURE(Fixture, "UnusedParametersOfNamedLocalFunctions")
+{
+    // a named local function's parameter that's never read, usually because the body uses another variable; a
+    // callback's parameters aren't reported, since it often has to take ones it ignores
+    LintResult result = lint(R"(
+local out = { 1 }
+local function recurse(tab: { number }, _depth: number)
+    for _, v in out do
+        print(v)
+    end
+end
+recurse({}, 0)
+table.sort({ 1 }, function(a, b) return true end)
+)");
+
+    REQUIRE_EQ(result.warnings.size(), 1);
+    CHECK_EQ(result.warnings[0].code, LintWarning::Code_LocalUnused);
+    CHECK_EQ(result.warnings[0].text, "Parameter 'tab' is never used; prefix with '_' to silence");
+}
+
+TEST_CASE_FIXTURE(Fixture, "LoopsThatReadNoneOfTheirVariables")
+{
+    // only a loop that reads nothing it gives is reported; an unused key or index alone is routine
+    LintResult result = lint(R"(
+local function push(self: { string }, msg: string, ...: string)
+    for _, m in { msg, ... } do
+        table.insert(self, msg)
+    end
+    for i, v in self do
+        print(v)
+    end
+    for k, v in self do
+        print(k)
+    end
+end
+push({}, "x")
+)");
+
+    REQUIRE_EQ(result.warnings.size(), 1);
+    CHECK_EQ(result.warnings[0].code, LintWarning::Code_LocalUnused);
+    CHECK_EQ(result.warnings[0].text, "Loop variable 'm' is never used; prefix with '_' to silence");
+    CHECK_EQ(result.warnings[0].location.begin.line, 2);
+}
+
 TEST_SUITE_END();

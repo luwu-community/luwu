@@ -163,7 +163,7 @@ const AstStat* getFallthrough(const AstStat* node)
     }
     else if (const AstStatWhile* stat = node->as<AstStatWhile>())
     {
-        if (AstExprConstantBool* expr = stat->condition->as<AstExprConstantBool>())
+        if (AstExprConstantBool* expr = stat->clauses.size == 0 ? stat->condition->as<AstExprConstantBool>() : nullptr)
         {
             if (expr->value && !hasBreak(stat->body))
                 return nullptr;
@@ -789,6 +789,15 @@ ErrorVec TypeChecker::canUnify(TypePackId subTy, TypePackId superTy, const Scope
 
 ControlFlow TypeChecker::check(const ScopePtr& scope, const AstStatWhile& statement)
 {
+    // Luwu If Local (rfcs/if-local.md)
+    if (statement.clauses.size != 0)
+    {
+        ScopePtr whileScope = childScope(scope, Location{statement.condition->location, statement.body->location});
+        checkIfClausesOldSolver(*this, whileScope, statement.clauses);
+        check(whileScope, *statement.body);
+        return ControlFlow::None;
+    }
+
     WithPredicate<TypeId> result = checkExpr(scope, *statement.condition);
 
     ScopePtr whileScope = childScope(scope, statement.body->location);

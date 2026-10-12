@@ -5101,7 +5101,7 @@ struct Compiler
         }
     };
 
-    bool regionWritesLocal(AstStat* region, AstLocal* local)
+    bool regionWritesLocal(AstNode* region, AstLocal* local)
     {
         LocalWriteVisitor visitor(local);
         region->visit(&visitor);
@@ -5231,6 +5231,18 @@ struct Compiler
         AstStatExpr* statExpr = stat->as<AstStatExpr>();
         if (!statExpr)
             return nullptr;
+
+        // Luwu Do Expressions (rfcs/do-expressions.md): `class.isinstance(c, C) or return` leaves when the check fails,
+        // so it proves `c` for the rest of the block just as the assert does
+        if (AstExprBinary* orLeave = asOrLeave(statExpr->expr))
+        {
+            AstStatClass* decl = matchIsinstanceCall(orLeave->left, local);
+
+            if (!decl || bodyWritesLocal(body, index + 1, local))
+                return nullptr;
+
+            return decl;
+        }
 
         AstExprCall* call = statExpr->expr->as<AstExprCall>();
         if (!call || call->args.size == 0)
@@ -5838,10 +5850,21 @@ struct Compiler
     // Luwu If Local (rfcs/if-local.md): emits a `when` chain's clauses in order, adding a jump to `elseJumps` after
     // each one, taken when it fails. A binding gets a register of its own and stays pushed as a local; the caller
     // closes and pops the chain's locals (from `oldLocals`) after the branch.
-    void compileIfClauses(const AstArray<AstIfClause>& clauses, std::vector<size_t>& elseJumps)
+    //
+    // A plain `class.isinstance(c, C)` clause proves `c` for the clauses after it and for `branch`, as the condition
+    // of an ordinary `if` proves it for its body (matchIsinstanceProvenLocal), unless one of them writes `c`. The
+    // proofs go to `proofs`, and the caller puts the previous entries back after compiling the branch.
+    void compileIfClauses(
+        const AstArray<AstIfClause>& clauses,
+        std::vector<size_t>& elseJumps,
+        AstNode* branch = nullptr,
+        std::vector<AssertProof>* proofs = nullptr
+    )
     {
-        for (const AstIfClause& clause : clauses)
+        for (size_t i = 0; i < clauses.size; ++i)
         {
+            const AstIfClause& clause = clauses.data[i];
+
             if (clause.local)
             {
                 uint8_t reg = allocReg(clause.expr, 1u);
@@ -5856,8 +5879,30 @@ struct Compiler
             else
             {
                 compileConditionValue(clause.expr, nullptr, elseJumps, false);
+
+                if (proofs)
+                    noteChainIsinstanceProof(clauses, i, branch, *proofs);
             }
         }
+    }
+
+    void noteChainIsinstanceProof(const AstArray<AstIfClause>& clauses, size_t index, AstNode* branch, std::vector<AssertProof>& proofs)
+    {
+        AstLocal* local = nullptr;
+        AstStatClass* decl = matchIsinstanceCall(clauses.data[index].expr, local);
+        if (!decl || (branch && regionWritesLocal(branch, local)))
+            return;
+
+        for (size_t j = index + 1; j < clauses.size; ++j)
+        {
+            AstNode* later = clauses.data[j].declaration ? static_cast<AstNode*>(clauses.data[j].declaration) : clauses.data[j].expr;
+            if (regionWritesLocal(later, local))
+                return;
+        }
+
+        AstStatClass** existing = isinstanceProvenLocals.find(local);
+        proofs.push_back({local, existing ? *existing : nullptr});
+        isinstanceProvenLocals[local] = decl;
     }
 
     // Luwu If Local (rfcs/if-local.md): the lowest register among the captured locals from `start` up, or -1. A
@@ -5889,8 +5934,10 @@ struct Compiler
         {
             RegScope rs(this);
 
-            compileIfClauses(expr->clauses, elseJump);
+            std::vector<AssertProof> proofs;
+            compileIfClauses(expr->clauses, elseJump, expr->trueExpr, &proofs);
             compileExpr(expr->trueExpr, target, targetTemp);
+            restoreAssertProofs(proofs);
 
             closeReg = capturedLocalsReg(oldLocals);
             closeLocals(oldLocals);
@@ -6031,7 +6078,7 @@ struct Compiler
         if (!range || expr->item->key)
             return false;
 
-        AstStatIf* guard = range->body->body.data[0]->as<AstStatIf>();
+        AstStatIf* guard = range->whenGuard;
         if (guard)
         {
             // a binding needs a register, so it can't fold away
@@ -7512,8 +7559,10 @@ struct Compiler
         {
             RegScope rs(this);
 
-            compileIfClauses(stat->clauses, elseJump);
+            std::vector<AssertProof> proofs;
+            compileIfClauses(stat->clauses, elseJump, stat->thenbody, &proofs);
             compileStat(stat->thenbody);
+            restoreAssertProofs(proofs);
 
             closeReg = capturedLocalsReg(oldLocals);
 
@@ -7654,8 +7703,83 @@ struct Compiler
         }
     }
 
+    // Luwu If Local (rfcs/if-local.md): `while local x = f() when c do`. The chain runs before every iteration, and its
+    // bindings are locals of the iteration: closed (if captured) and popped before jumping back, so a closure in the
+    // body captures that iteration's value, as with a `for` variable. A failing clause leaves the loop through a
+    // CLOSEUPVALS when a later clause captured an earlier binding (see capturedLocalsReg).
+    void compileStatWhileClauses(AstStatWhile* stat)
+    {
+        size_t oldJumps = loopJumps.size();
+        size_t oldLocals = localStack.size();
+
+        loops.push_back({oldLocals, oldLocals, nullptr});
+        hasLoops = true;
+
+        size_t loopLabel = bytecode.emitLabel();
+
+        std::vector<size_t> elseJump;
+        int closeReg = -1;
+        size_t contLabel = 0;
+
+        {
+            RegScope rs(this);
+
+            std::vector<AssertProof> proofs;
+            loops.back().compilingHeader = true;
+            compileIfClauses(stat->clauses, elseJump, stat->body, &proofs);
+            loops.back().compilingHeader = false;
+
+            compileStat(stat->body);
+            restoreAssertProofs(proofs);
+
+            contLabel = bytecode.emitLabel();
+
+            closeReg = capturedLocalsReg(oldLocals);
+            closeLocals(oldLocals);
+            popLocals(oldLocals);
+        }
+
+        size_t backLabel = bytecode.emitLabel();
+
+        setDebugLine(stat->condition);
+
+        bytecode.emitAD(LOP_JUMPBACK, 0, 0);
+
+        size_t endLabel = bytecode.emitLabel();
+
+        if (closeReg >= 0)
+            bytecode.emitABC(LOP_CLOSEUPVALS, uint8_t(closeReg), 0, 0);
+
+        patchJump(stat, backLabel, loopLabel);
+        patchJumps(stat, elseJump, endLabel);
+
+        patchLoopJumps(stat, oldJumps, endLabel, contLabel);
+
+        loops.pop_back();
+    }
+
+    // Luwu Do Expressions (rfcs/do-expressions.md): `x or return v` as a statement compiles as the
+    // `if not x then return v end` it replaces, with every shortcut an `if` gets (a `break` or `continue` body is a
+    // single jump to the loop's exit or continue label).
+    void compileStatOrLeave(AstStatExpr* stat, AstExprBinary* orLeave)
+    {
+        AstExpr* right = orLeave->right;
+        while (AstExprGroup* group = right->as<AstExprGroup>())
+            right = group->expr;
+
+        AstExprDo* leave = right->as<AstExprDo>();
+        LUAU_ASSERT(leave);
+
+        AstExprUnary notLeft(orLeave->left->location, AstExprUnary::Op::Not, orLeave->left);
+        AstStatIf guard(stat->location, &notLeft, leave->body, nullptr, std::nullopt, std::nullopt, stat->location);
+        compileStatIf(&guard);
+    }
+
     void compileStatWhile(AstStatWhile* stat)
     {
+        if (stat->clauses.size != 0)
+            return compileStatWhileClauses(stat);
+
         // Optimization: condition is always false => there's no loop!
         if (isConstantFalse(stat->condition))
             return;
@@ -8642,6 +8766,10 @@ struct Compiler
                     compileAssertIsinstanceRecheck(fusedIsinstance, assertSkip);
                     patchJumps(stat, assertSkip, bytecode.emitLabel());
                 }
+            }
+            else if (AstExprBinary* orLeave = asOrLeave(stat->expr))
+            {
+                compileStatOrLeave(stat, orLeave);
             }
             else
             {

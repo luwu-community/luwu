@@ -8283,41 +8283,6 @@ TEST_CASE_FIXTURE(Fixture, "if_const_still_reads_a_variable_named_const")
     }
 }
 
-TEST_CASE_FIXTURE(Fixture, "if_local_destructures_into_one_clause_per_name")
-{
-    ScopedFastFlag sffs[] = {
-        {FFlag::LuwuIfLocal, true},
-        {FFlag::LuwuDestructuring, true},
-    };
-
-    AstStatBlock* block = parse(R"(
-        if const .{x, y} = p when x > y then
-        end
-    )");
-
-    AstStatIf* stat = block->body.data[0]->as<AstStatIf>();
-    REQUIRE(stat);
-    REQUIRE_EQ(stat->clauses.size, 4);
-
-    AstStatLocal* source = stat->clauses.data[0].declaration;
-    REQUIRE(source);
-    CHECK(source->destructure);
-    CHECK(source->keywordLocation);
-    CHECK_EQ(std::string(source->vars.data[0]->name.value), kDestructuredLocalName);
-
-    for (size_t i = 1; i < 3; ++i)
-    {
-        AstStatLocal* field = stat->clauses.data[i].declaration;
-        REQUIRE(field);
-        CHECK_EQ(field->destructuredFrom, source);
-        CHECK(field->vars.data[0]->isConst);
-        CHECK(!stat->clauses.data[i].whenLocation);
-    }
-
-    CHECK(!stat->clauses.data[3].declaration);
-    CHECK(stat->clauses.data[3].whenLocation);
-}
-
 TEST_CASE_FIXTURE(Fixture, "if_local_mistakes_get_one_error")
 {
     ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
@@ -8344,6 +8309,92 @@ TEST_CASE_FIXTURE(Fixture, "if_local_without_the_flag_says_how_to_enable_it")
     matchParseError("if local a = f() then end", message);
     matchParseError("if a when b then end", message);
     matchParseError("local x = if const a = f() then a else nil", message);
+}
+
+TEST_CASE_FIXTURE(Fixture, "for_when_is_stored_as_a_guard_around_the_body")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    AstStatBlock* block = parse(R"(
+        for i = 1, 10 when i > 2 do
+            print(i)
+        end
+        for _, v in xs when local w = v.inner when w > 1 do
+            print(w)
+        end
+    )");
+
+    REQUIRE_EQ(block->body.size, 2);
+
+    AstStatFor* range = block->body.data[0]->as<AstStatFor>();
+    REQUIRE(range);
+    REQUIRE(range->whenGuard);
+    CHECK(range->luwuOnly);
+    CHECK(range->whenGuard->isWhenGuard);
+    REQUIRE_EQ(range->body->body.size, 1);
+    CHECK_EQ(range->body->body.data[0], range->whenGuard);
+    // a single plain `when` is the guard's own condition
+    CHECK_EQ(range->whenGuard->clauses.size, 0);
+    CHECK(range->whenGuard->condition->is<AstExprBinary>());
+    CHECK_EQ(calledWithLocal(range->whenGuard->thenbody->body.data[0])->local, range->var);
+
+    AstStatForIn* generic = block->body.data[1]->as<AstStatForIn>();
+    REQUIRE(generic);
+    REQUIRE(generic->whenGuard);
+    REQUIRE_EQ(generic->whenGuard->clauses.size, 2);
+    const AstIfClause& w = generic->whenGuard->clauses.data[0];
+    REQUIRE(w.declaration);
+    // the binding reads the loop variable, and the body reads the binding
+    CHECK_EQ(w.expr->as<AstExprIndexName>()->expr->as<AstExprLocal>()->local, generic->vars.data[1]);
+    CHECK_EQ(calledWithLocal(generic->whenGuard->thenbody->body.data[0])->local, w.local);
+}
+
+TEST_CASE_FIXTURE(Fixture, "while_local_parses_a_when_chain")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    AstStatBlock* block = parse(R"(
+        local line = 1
+        while local line = read() when line ~= "" do
+            print(line)
+        end
+        print(line)
+        while ready when const job = pop() do end
+        while running do end
+    )");
+
+    REQUIRE_EQ(block->body.size, 5);
+    AstLocal* outer = block->body.data[0]->as<AstStatLocal>()->vars.data[0];
+
+    AstStatWhile* first = block->body.data[1]->as<AstStatWhile>();
+    REQUIRE(first);
+    CHECK(first->luwuOnly);
+    REQUIRE_EQ(first->clauses.size, 2);
+    AstLocal* inner = first->clauses.data[0].local;
+    REQUIRE(inner);
+    CHECK_EQ(first->condition, first->clauses.data[0].expr);
+    CHECK_EQ(calledWithLocal(first->body->body.data[0])->local, inner);
+    // the binding ends with the loop
+    CHECK_EQ(calledWithLocal(block->body.data[2])->local, outer);
+
+    AstStatWhile* second = block->body.data[3]->as<AstStatWhile>();
+    REQUIRE(second);
+    REQUIRE_EQ(second->clauses.size, 2);
+    CHECK(!second->clauses.data[0].declaration);
+    CHECK(second->clauses.data[1].declaration);
+
+    AstStatWhile* plain = block->body.data[4]->as<AstStatWhile>();
+    REQUIRE(plain);
+    CHECK_EQ(plain->clauses.size, 0);
+    CHECK(!plain->luwuOnly);
+}
+
+TEST_CASE_FIXTURE(Fixture, "loop_when_without_the_flag_says_how_to_enable_it")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, false};
+
+    matchParseError("for i = 1, 2 when i > 1 do end", "'when' on a loop is a Luwu feature; enable the 'LuwuIfLocal' fast flag to use it");
+    matchParseError("while local x = f() do end", "'while local' and 'when' are Luwu features; enable the 'LuwuIfLocal' fast flag to use them");
 }
 
 // Luwu Table Comprehensions (rfcs/table-comprehensions.md)
@@ -8563,7 +8614,8 @@ TEST_CASE_FIXTURE(Fixture, "do_expression_mistakes_get_one_error")
     matchOnlyDoExprError(
         *this,
         "local x = a or return",
-        "'or return' with no value must be parenthesized, 'or (return)', so a value on the next line isn't read as the value to return"
+        "'or return' with no value must be parenthesized, 'or (return)', or end its statement with ';', so a value on the next "
+        "line isn't read as the value to return"
     );
     matchOnlyDoExprError(*this, "local x = do if a then give 1, 2 end give 3", "'give' gives exactly one value");
     matchOnlyDoExprError(*this, "local x = do give", "Expected a value after 'give'");
@@ -8685,6 +8737,100 @@ TEST_CASE_FIXTURE(Fixture, "give_and_continue_are_keywords_only_in_do_expression
     AstStatGive* give = expr->body->body.data[0]->as<AstStatGive>();
     REQUIRE(give);
     CHECK(give->value->is<AstExprCall>());
+}
+
+TEST_CASE_FIXTURE(Fixture, "or_leave_statements")
+{
+    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+
+    AstStatBlock* block = parse(R"(
+        local function f(x, s)
+            x or return nil
+            ok and valid or (return "no", "pair")
+            for _, v in s do
+                string.find(v, "^a") or continue
+                v ~= "stop" or break
+            end
+            x or do
+                print("x")
+                return 1
+        end
+    )");
+
+    AstStatBlock* body = block->body.data[0]->as<AstStatLocalFunction>()->func->body;
+    REQUIRE_EQ(body->body.size, 4);
+
+    for (size_t i : {size_t(0), size_t(1), size_t(3)})
+    {
+        AstStatExpr* stat = body->body.data[i]->as<AstStatExpr>();
+        REQUIRE(stat);
+        CHECK(stat->luwuOnly);
+        CHECK(asOrLeave(stat->expr));
+    }
+
+    // `ok and valid or ...` is `(ok and valid) or ...`
+    AstExprBinary* andOr = body->body.data[1]->as<AstStatExpr>()->expr->as<AstExprBinary>();
+    CHECK(andOr->left->is<AstExprBinary>());
+
+    AstStatBlock* loopBody = body->body.data[2]->as<AstStatForIn>()->body;
+    REQUIRE_EQ(loopBody->body.size, 2);
+    CHECK(asOrLeave(loopBody->body.data[0]->as<AstStatExpr>()->expr));
+    CHECK(asOrLeave(loopBody->body.data[1]->as<AstStatExpr>()->expr));
+}
+
+TEST_CASE_FIXTURE(Fixture, "or_continue_statement_is_the_keyword_even_where_continue_is_a_name")
+{
+    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+
+    // `continue` names a variable here, so `x or continue` in an expression reads it; a statement has no value to read
+    // it into, so there it is the keyword
+    AstStatBlock* block = parse(R"(
+        continue = 1
+        for _, v in t do
+            local a = v or continue
+            v or continue
+        end
+    )");
+
+    REQUIRE_EQ(block->body.size, 2);
+    AstStatForIn* loop = block->body.data[1]->as<AstStatForIn>();
+    REQUIRE(loop);
+    AstStatBlock* loopBody = loop->body;
+    REQUIRE_EQ(loopBody->body.size, 2);
+    AstExprBinary* value = loopBody->body.data[0]->as<AstStatLocal>()->values.data[0]->as<AstExprBinary>();
+    REQUIRE(value);
+    CHECK(value->right->is<AstExprGlobal>());
+    CHECK(asOrLeave(loopBody->body.data[1]->as<AstStatExpr>()->expr));
+}
+
+TEST_CASE_FIXTURE(Fixture, "expression_statements_that_dont_leave_get_one_error")
+{
+    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+
+    const char* message =
+        "Incomplete statement: expected assignment, a function call, or an expression ending in 'or return', 'or break' or 'or continue'";
+    matchOnlyIfLocalError(*this, "local x, y\nx or y", message);
+    matchOnlyIfLocalError(*this, "local a, b\na + b", message);
+    matchOnlyIfLocalError(*this, "local x\nx or do give 1", message);
+    matchOnlyIfLocalError(*this, "local x\nf() or x", message);
+    // nothing around a statement can take a second value
+    matchOnlyIfLocalError(
+        *this,
+        "local function f(x, a, b)\n    x or return a, b\n    return x\nend",
+        "'or return' returns one value unless parenthesized: 'x or (return a, b)'"
+    );
+
+    // a statement keyword can't be the value of a bare `or return`
+    matchOnlyIfLocalError(
+        *this,
+        "local x\nx or return\nlocal y = 1",
+        "'or return' with no value must be parenthesized, 'or (return)', or end its statement with ';', so a value on the next line "
+        "isn't read as the value to return"
+    );
+
+    // a `;` ends a bare `or return` as a statement or as a declaration's value
+    ParseResult semicolons = tryParse("local function f(x)\n    x or return;\n    const y = f(x) or return;\n    return y\nend");
+    CHECK(semicolons.errors.empty());
 }
 
 TEST_CASE_FIXTURE(Fixture, "or_return_and_or_break_are_do_expressions")
@@ -8825,7 +8971,8 @@ TEST_CASE_FIXTURE(Fixture, "if_else_expression_arms_can_leave")
     matchOnlyDoExprError(
         *this,
         "local function f(x) local v = if x then x else return end",
-        "'else return' with no value must be parenthesized, 'else (return)', so a value on the next line isn't read as the value to return"
+        "'else return' with no value must be parenthesized, 'else (return)', or end its statement with ';', so a value on the next "
+        "line isn't read as the value to return"
     );
 }
 

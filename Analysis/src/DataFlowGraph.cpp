@@ -566,7 +566,11 @@ ControlFlow DataFlowGraphBuilder::visit(AstStatWhile* w)
     ControlFlow cf;
     {
         PushScope ps{scopeStack, whileScope};
-        visitExpr(w->condition);
+        // Luwu If Local (rfcs/if-local.md): a `when` chain's bindings are declared in the loop's scope
+        if (w->clauses.size == 0)
+            visitExpr(w->condition);
+        else
+            visitIfClauses(w->clauses);
         cf = visit(w->body);
     }
 

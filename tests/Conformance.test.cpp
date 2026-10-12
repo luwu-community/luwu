@@ -6510,11 +6510,22 @@ TEST_CASE("IfLocal")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuIfLocal, true},
-        {FFlag::LuwuDestructuring, true},
         {FFlag::LuwuNonePrimitive, true},
     };
 
     runConformance("if_local.luwu");
+}
+
+// Luwu If Local (rfcs/if-local.md): `when` chains on `for` and `while`, and destructured `for` bindings
+TEST_CASE("LoopWhenChains")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuTableComprehensions, true},
+        {FFlag::DebugLuwuDoExpr, true},
+    };
+
+    runConformance("loop_when.luwu");
 }
 
 TEST_CASE("DoExpressions")

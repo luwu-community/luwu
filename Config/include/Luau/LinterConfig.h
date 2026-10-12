@@ -93,6 +93,14 @@ struct LintWarning
         Code_KeywordShadow = 61,           // Luwu: a binding named after a contextual keyword (`class`, `continue`, ...)
         Code_BuiltinShadow = 62,           // Luwu: a binding that hides a builtin global (`type`, `typeof`, `table`, ...)
         Code_LuwuOnlyApi = 63,             // Luwu: a Luwu-only library function (`table.drop`) used in a `.luau` file
+        Code_BindingSwallowsCondition = 64, // Luwu: `if local x = f() and x > 1`, where the `and` is part of the bound value
+        Code_Style = 65,                   // Luwu: the group of layout lints; turning it off turns off all of its parts
+        // Luwu: parts of Style that can be turned off on their own (ConstLocal, SameLineStatement and MultiLineStatement too)
+        Code_OneLineStatement = 66,        // `if x then y end`, `while c do f() end`, `function f() return 1 end` on one line
+        Code_OneLineGuard = 67,            // `if not x then return end` on one line, in a Luau file
+        Code_InlineOrLeave = 68,           // `x or return` ending a line much longer than the lines around it
+        Code_LuaGuard = 69,                // `if not x then return end` on one line, in a Luwu file, which can write `x or return`
+        Code_OrReturnComma = 70,           // Luwu: `f(x or return a, b)`, where `b` is the next argument, not a second return value
 
         Code__Count
     };
@@ -200,6 +208,13 @@ inline constexpr const char* kWarningNames[] = {
     "KeywordShadow",
     "BuiltinShadow",
     "LuwuOnlyApi",
+    "BindingSwallowsCondition",
+    "Style",
+    "OneLineStatement",
+    "OneLineGuard",
+    "InlineOrLeave",
+    "LuaGuard",
+    "OrReturnComma",
 };
 // clang-format on
 

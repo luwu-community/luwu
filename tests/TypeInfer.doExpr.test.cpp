@@ -172,4 +172,51 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "do_expression_in_the_old_solver")
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
+TEST_CASE_FIXTURE(BuiltinsFixture, "an_or_leave_statement_narrows_its_operand_for_the_rest_of_the_block")
+{
+    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        local function f(x: string?, y: number?, z: boolean?, t: { string? }): string
+            x or return ""
+            local s: string = x
+
+            local n = y or return ""
+            local m: number = y
+
+            local w: boolean? = nil
+            w = z or return ""
+            local b: boolean = z
+
+            for _, v in t do
+                v or continue
+                local u: string = v
+            end
+
+            return s
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "an_or_leave_inside_another_expression_narrows_nothing_after_it")
+{
+    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+
+    // the `or` only runs when `c` is truthy, so `x` may still be nil after the statement
+    CheckResult result = check(R"(
+        --!strict
+        local function f(x: string?, c: boolean): string
+            local a = c and (x or return "")
+            local s: string = x
+            return s
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 4);
+}
+
 TEST_SUITE_END();

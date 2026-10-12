@@ -876,6 +876,12 @@ const function generate(seed: number): (string, string)
                     "assert_msg",
                     "assert_rebind",
                     "assert_closure",
+                    "chain",
+                    "chain_rebind_clause",
+                    "chain_rebind_body",
+                    "chain_loops",
+                    "or_return",
+                    "or_return_rebind",
                 })
                 if form == "fused" then
                     op("isa", { `local x = pick({make}, {r2}.make())`, `if class.isinstance(x, {r}) then`, `    return {read}`, "end", "return false" })
@@ -951,6 +957,80 @@ const function generate(seed: number): (string, string)
                             "    return got",
                             "end",
                             "return -1",
+                        })
+                    end
+                elseif string.find(form, "^chain") or string.find(form, "^or_return") then
+                    -- Luwu If Local and Do Expressions: a `class.isinstance` part of a `when` chain proves its local for the
+                    -- parts after it and the branch, and `class.isinstance(x, C) or return` proves it for the rest of the
+                    -- block. A write in a later part, in the branch or after the guard must unprove it, as for an `if`.
+                    const m = rng.pick(instance_methods(c, true))
+                    const use = if m then `x:{m.name}()` else read
+                    const elsewhere = filter(classes, function(o)
+                        return o ~= c
+                    end)
+                    const other = if #elsewhere > 0 and rng.chance(0.75)
+                        then `{ref(rng.pick(elsewhere), c)}.make()`
+                        else rng.pick({ "tbl", "nil", "legacy" })
+
+                    if form == "chain" then
+                        op("isa_chain", {
+                            `if local x = pick({make}, {r2}.make()) when class.isinstance(x, {r}) when local d = x:describe() then`,
+                            `    local got = {use}`,
+                            "    return got, d",
+                            "end",
+                            `local v = if local x = pick({r2}.make(), {make}) when class.isinstance(x, {r}) then {read} else -1`,
+                            "return v",
+                        })
+                    elseif form == "chain_rebind_clause" then
+                        op("isa_chain_rebind_clause", {
+                            `if local x = pick({make}, {r2}.make()) when class.isinstance(x, {r}) when (do x = {other} give true) then`,
+                            `    local got = {use}`,
+                            "    return got",
+                            "end",
+                            "return -1",
+                        })
+                    elseif form == "chain_rebind_body" then
+                        op("isa_chain_rebind_body", {
+                            `local y = pick({make}, {r2}.make())`,
+                            `if local x = y when class.isinstance(x, {r}) then`,
+                            `    x = {other}`,
+                            `    local got = {use}`,
+                            "    return got",
+                            "end",
+                            "return -1",
+                        })
+                    elseif form == "chain_loops" then
+                        op("isa_chain_loops", {
+                            "local out = {}",
+                            `local xs = \{ {make}, {r2}.make(), {make} }`,
+                            `for _, x in xs when local ok = x when class.isinstance(x, {r}) do`,
+                            `    local got = {use}`,
+                            "    table.insert(out, tostring(norm(got)))",
+                            "end",
+                            `while local x = table.remove(xs) when class.isinstance(x, {r}) do`,
+                            `    local got = {use}`,
+                            "    table.insert(out, tostring(norm(got)))",
+                            "end",
+                            "return table.concat(out, ',')",
+                        })
+                    elseif form == "or_return" then
+                        op("isa_or_return", {
+                            "local function f(x)",
+                            `    class.isinstance(x, {r}) or return -1`,
+                            `    local got = {use}`,
+                            "    return got",
+                            "end",
+                            `return f(pick({make}, {r2}.make())), f(pick({r2}.make(), tbl))`,
+                        })
+                    else
+                        op("isa_or_return_rebind", {
+                            "local function f(x)",
+                            `    class.isinstance(x, {r}) or return -1`,
+                            `    x = {other}`,
+                            `    local got = {use}`,
+                            "    return got",
+                            "end",
+                            `return f(pick({make}, {r2}.make()))`,
                         })
                     end
                 elseif form == "assert" or form == "assert_msg" or form == "assert_rebind" or form == "assert_closure" then

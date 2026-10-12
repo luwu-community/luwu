@@ -1460,6 +1460,77 @@ L2: RETURN R0 1
 )");
 }
 
+TEST_CASE("LoopWhenChains")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    // `while local` compiles exactly like the `while true` loop it replaces
+    std::string whileLocal = compileFunction0(R"(
+while local x = r() when x > 1 do
+    print(x)
+end
+)");
+    std::string handWritten = compileFunction0(R"(
+while true do
+    local x = r()
+    if not x then break end
+    if not (x > 1) then break end
+    print(x)
+end
+)");
+    CHECK_EQ(whileLocal, handWritten);
+    CHECK_EQ("\n" + whileLocal, R"(
+L0: GETIMPORT R0 1 [r]
+CALL R0 0 1
+JUMPIFNOT R0 L1
+LOADN R1 1
+JUMPIFNOTLT R1 R0 L1
+GETIMPORT R1 3 [print]
+MOVE R2 R0
+CALL R1 1 0
+JUMPBACK L0
+L1: RETURN R0 0
+)");
+
+    // a written binding captured by a later clause is closed on the way out of the loop, and at the end of every pass
+    CHECK_EQ("\n" + compileFunction(R"(
+while local x = r() when g(function() x = nil end) do
+end
+)", 1), R"(
+L0: GETIMPORT R0 1 [r]
+CALL R0 0 1
+JUMPIFNOT R0 L1
+GETIMPORT R1 3 [g]
+NEWCLOSURE R2 P0
+CAPTURE REF R0
+CALL R1 1 1
+JUMPIFNOT R1 L1
+CLOSEUPVALS R0
+JUMPBACK L0
+L1: CLOSEUPVALS R0
+RETURN R0 0
+)");
+
+    // `for ... when` is the loop with an `if` around its body
+    CHECK_EQ(compileFunction0("for _, v in xs when v > 1 do print(v) end"), compileFunction0("for _, v in xs do if v > 1 then print(v) end end"));
+}
+
+TEST_CASE("OrLeaveStatement")
+{
+    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+
+    // `x or return v` compiles as the `if not x then return v end` it replaces, shortcuts included
+    CHECK_EQ(compileFunction0("local x = ... x or return 1 return x"), compileFunction0("local x = ... if not x then return 1 end return x"));
+    CHECK_EQ(
+        compileFunction0("for _, v in t do v ~= 0 or break print(v) end"),
+        compileFunction0("for _, v in t do if not (v ~= 0) then break end print(v) end")
+    );
+    CHECK_EQ(
+        compileFunction0("for _, v in t do v or continue print(v) end"),
+        compileFunction0("for _, v in t do if not v then continue end print(v) end")
+    );
+}
+
 TEST_CASE("IfLocal")
 {
     ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
@@ -11975,6 +12046,91 @@ end
         CHECK_MESSAGE(code.find("CHECKSELFCLASS") == std::string::npos, "function " << f << " kept a check a proven receiver does not need");
         CHECK_MESSAGE(code.find("GETOBJECTMEMBER") != std::string::npos, "function " << f << " did not reach the object path");
     }
+}
+
+TEST_CASE("ClassIsinstanceProofInAWhenChain")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuIfLocal, true},
+    };
+
+    // A `class.isinstance(c, C)` clause of a `when` chain proves `c` for the clauses after it and for the branch,
+    // exactly as an `if` condition proves it for its body. A write in a later clause or in the branch cancels it.
+    const char* source = R"(
+class Cat(public name: string)
+    public function meow(self): string
+        return self.name
+    end
+end
+
+function chain(x: unknown, flag): string
+    if local c = x when class.isinstance(c, Cat) when flag then
+        local r = c:meow()
+        return r
+    end
+    return ""
+end
+
+function expression(x: unknown): string
+    local r = if local c = x when class.isinstance(c, Cat) then c.name else ""
+    return r
+end
+
+function loop(xs): string
+    local out = ""
+    for _, v in xs when local ok = v when class.isinstance(v, Cat) do
+        local r = v:meow()
+        out ..= r
+    end
+    while local c = table.remove(xs) when class.isinstance(c, Cat) do
+        local r = c:meow()
+        out ..= r
+    end
+    return out
+end
+
+function writeInLaterClause(x: unknown, other): string
+    if local c = x when class.isinstance(c, Cat) when (do c = other give true) then
+        local r = c:meow()
+        return r
+    end
+    return ""
+end
+
+function writeInBranch(x: unknown, other): string
+    if local c = x when class.isinstance(c, Cat) then
+        c = other
+        local r = c:meow()
+        return r
+    end
+    return ""
+end
+)";
+
+    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+
+    Luau::BytecodeBuilder bcb;
+    bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code);
+
+    Luau::CompileOptions options;
+    options.optimizationLevel = 2;
+
+    Luau::compileOrThrow(bcb, source, options);
+
+    // 0 is meow
+    for (int f : {1, 3})
+    {
+        std::string code = bcb.dumpFunction(f);
+
+        CHECK_MESSAGE(code.find("NAMECALL") == std::string::npos, "function " << f << " did not inline");
+        CHECK_MESSAGE(code.find("CHECKSELFCLASS") == std::string::npos, "function " << f << " kept a check a proven receiver does not need");
+    }
+
+    CHECK_MESSAGE(bcb.dumpFunction(2).find("GETOBJECTMEMBER") != std::string::npos, "the expression form did not reach the object path");
+
+    for (int f : {4, 5})
+        CHECK_MESSAGE(bcb.dumpFunction(f).find("NAMECALL") != std::string::npos, "function " << f << " inlined past a write it cannot see");
 }
 
 TEST_CASE("ClassAssertIsinstanceProvesTheRestOfTheBlock")

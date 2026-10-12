@@ -929,6 +929,10 @@ public:
     // condition has to go through the clauses instead.
     AstArray<AstIfClause> clauses{nullptr, 0};
 
+    // Luwu If Local (rfcs/if-local.md): this `if` is a loop's `when` chain (AstStatFor::whenGuard), not one written
+    // as an `if`. It has no `then`, no `else` and no `end` of its own.
+    bool isWhenGuard = false;
+
     // Visits the condition: `condition`, or every clause of the `when` chain (a binding's declaration, or a
     // plain condition).
     void visitCondition(AstVisitor* visitor);
@@ -960,6 +964,16 @@ public:
 
     // Location of the leading 'while' keyword token only.
     Location whileLocation;
+
+    // Luwu If Local (rfcs/if-local.md): the condition's `when` chain (`while local x = f() when x.ok do`), checked
+    // before every iteration; the loop ends when a clause fails. Empty for an ordinary condition. When it is set,
+    // `condition` is the first clause's expression, as for AstStatIf::clauses.
+    AstArray<AstIfClause> clauses{nullptr, 0};
+
+    // Visits the condition: `condition`, or every clause of the `when` chain.
+    void visitCondition(AstVisitor* visitor);
+    // Where the condition is written: `condition`, or the whole `when` chain.
+    Location conditionLocation() const;
 };
 
 class AstStatRepeat : public AstStat
@@ -1128,6 +1142,11 @@ public:
 
     // Location of the leading 'for' keyword token only.
     Location forLocation;
+
+    // Luwu If Local (rfcs/if-local.md): the `if` holding the loop's `when` chain (`for i = 1, n when i % 2 == 0 do`),
+    // or null. It is then the only statement of `body`, and the loop's block as written is its `thenbody`: a
+    // failing chain skips the iteration. Table comprehensions store their `when`s the same way.
+    AstStatIf* whenGuard = nullptr;
 };
 
 class AstStatForIn : public AstStat
@@ -1161,6 +1180,10 @@ public:
 
     // Location of the leading 'for' keyword token only.
     Location forLocation;
+
+    // Luwu If Local (rfcs/if-local.md): see AstStatFor::whenGuard. With destructured bindings, `body` starts with
+    // their fields and the guard follows them.
+    AstStatIf* whenGuard = nullptr;
 };
 
 class AstStatAssign : public AstStat
@@ -1802,15 +1825,24 @@ public:
     // Written as `x or return v` or `x or break` rather than with `do`: the body is that one statement
     // (see Parser::parseOrLeave).
     bool shorthand = false;
+
+    // Does every path leave it with `return`, `break` or `continue`, so it never has a value? True for the shorthand,
+    // and for a `do` expression with no `give` of its own.
+    bool alwaysLeaves() const;
 };
+
+// Luwu Do Expressions (rfcs/do-expressions.md): `expr` as `x or <leave>`, an `or` whose right operand (parenthesized
+// or not) always leaves (AstExprDo::alwaysLeaves), or null. As a whole statement, or as a declaration's or assignment's
+// value, it only completes when `x` is truthy.
+class AstExprBinary* asOrLeave(AstExpr* expr);
 
 // Luwu Table Comprehensions (rfcs/table-comprehensions.md): `{ for ... in ... when ... give item }`, a table built by
 // a loop. It is stored as the loop it runs: `loop` is an ordinary AstStatFor or AstStatForIn, so every pass that
-// handles loops and if-local chains handles a comprehension through that code. A clause's `when` chain is an
-// AstStatIf with no else that is the only statement of its loop's body: an ordinary condition for a single plain
-// `when`, the chain's `clauses` otherwise. A following `for` clause is the only statement of the previous clause's
-// body (or of its `when` if), and the innermost body holds `item`, an AstStatComprehensionItem, as its only
-// statement. The loops' `doLocation` is the `give`.
+// handles loops and if-local chains handles a comprehension through that code. A clause's `when` chain is the
+// loop's `whenGuard` (an ordinary condition for a single plain `when`, the chain's `clauses` otherwise), the last
+// statement of its body; destructured bindings' fields come before it. A following `for` clause is the last statement
+// of the previous clause's body (or the only one of its `when` if), and the innermost body ends with `item`, an
+// AstStatComprehensionItem. The loops' `doLocation` is the `give`.
 class AstExprTableComprehension : public AstExpr
 {
 public:

@@ -29,6 +29,7 @@ LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuIfLocal)
+LUAU_FASTFLAG(LuwuTableComprehensions)
 LUAU_FASTFLAG(DebugLuwuDoExpr)
 LUAU_FASTFLAGVARIABLE(DebugLuauMagicVariableNames)
 LUAU_FASTFLAGVARIABLE(LuauAutocompleteConst)
@@ -1713,7 +1714,7 @@ static AutocompleteEntryMap autocompleteStatement(
     if (ancestry.size() >= 2)
     {
         AstNode* parent = ancestry.rbegin()[1];
-        if (AstStatIf* statIf = parent->as<AstStatIf>())
+        if (AstStatIf* statIf = parent->as<AstStatIf>(); statIf && !statIf->isWhenGuard)
         {
             if (!statIf->elsebody || (statIf->elseLocation && statIf->elseLocation->containsClosed(position)))
             {
@@ -2187,7 +2188,92 @@ static AutocompleteResult autocompleteWhileLoopKeywords(std::vector<AstNode*> an
     ret["do"] = {AutocompleteEntryKind::Keyword};
     ret["and"] = {AutocompleteEntryKind::Keyword};
     ret["or"] = {AutocompleteEntryKind::Keyword};
+
+    // Luwu If Local (rfcs/if-local.md)
+    if (FFlag::LuwuIfLocal)
+        ret["when"] = {AutocompleteEntryKind::Keyword};
     return {std::move(ret), std::move(ancestry), AutocompleteContext::Keyword};
+}
+
+// Luwu If Local (rfcs/if-local.md): the keywords after a loop's header, when the cursor is past its last part (the
+// bounds, the values, the condition or the last clause of its `when` chain) and before its `do`: `do` and `when`, or for
+// a table comprehension's clause `give`, `when` and `for`. Nothing when the cursor isn't there, or the part before it
+// is unfinished.
+static std::optional<AutocompleteResult> autocompleteLoopHeaderKeywords(const std::vector<AstNode*>& ancestry, Position position)
+{
+    for (auto it = ancestry.rbegin(); it != ancestry.rend(); ++it)
+    {
+        AstNode* node = *it;
+        if (node->is<AstExprFunction>())
+            return std::nullopt;
+
+        AstExpr* last = nullptr;
+        AstStatIf* guard = nullptr;
+        bool hasDo = false;
+        Location doLocation;
+
+        if (AstStatFor* loop = node->as<AstStatFor>())
+        {
+            last = loop->step ? loop->step : loop->to;
+            guard = loop->whenGuard;
+            hasDo = loop->hasDo;
+            doLocation = loop->doLocation;
+        }
+        else if (AstStatForIn* loop = node->as<AstStatForIn>(); loop && loop->values.size != 0)
+        {
+            last = loop->values.data[loop->values.size - 1];
+            guard = loop->whenGuard;
+            hasDo = loop->hasDo;
+            doLocation = loop->doLocation;
+        }
+        else if (AstStatWhile* loop = node->as<AstStatWhile>(); loop && loop->clauses.size != 0)
+        {
+            // an ordinary `while` condition has its own completions below; this only covers a `when` chain
+            last = loop->clauses.data[loop->clauses.size - 1].expr;
+            hasDo = loop->hasDo;
+            doLocation = loop->doLocation;
+        }
+        else
+        {
+            continue;
+        }
+
+        Position end = guard ? guard->conditionLocation().end : last->location.end;
+        if (guard && guard->clauses.size != 0)
+            last = guard->clauses.data[guard->clauses.size - 1].expr;
+        else if (guard)
+            last = guard->condition;
+
+        bool inHeaderTail = position > end && (!hasDo || position <= doLocation.begin);
+        if (!inHeaderTail || last->is<AstExprError>())
+            return std::nullopt;
+
+        bool inComprehension = std::any_of(
+            ancestry.begin(),
+            ancestry.end(),
+            [](AstNode* n)
+            {
+                return n->is<AstExprTableComprehension>();
+            }
+        );
+
+        AutocompleteEntryMap ret;
+        ret["when"] = {AutocompleteEntryKind::Keyword};
+
+        if (inComprehension && !node->is<AstStatWhile>())
+        {
+            ret["give"] = {AutocompleteEntryKind::Keyword};
+            ret["for"] = {AutocompleteEntryKind::Keyword};
+        }
+        else
+        {
+            ret["do"] = {AutocompleteEntryKind::Keyword};
+        }
+
+        return AutocompleteResult{std::move(ret), ancestry, AutocompleteContext::Keyword};
+    }
+
+    return std::nullopt;
 }
 
 // Builds the argument parameter list string (what goes between the parentheses of a function expression).
@@ -2442,6 +2528,13 @@ AutocompleteResult autocomplete_(
         return {std::move(result), ancestry, AutocompleteContext::HotComment};
     }
 
+    // Luwu If Local (rfcs/if-local.md): `for ... when ... do`, `while local ... when ... do` and comprehension clauses
+    if (FFlag::LuwuIfLocal || FFlag::LuwuTableComprehensions)
+    {
+        if (std::optional<AutocompleteResult> loopKeywords = autocompleteLoopHeaderKeywords(ancestry, position))
+            return std::move(*loopKeywords);
+    }
+
     AstNode* node = ancestry.back();
 
     AstExprConstantNil dummy{Location{}};
@@ -2546,13 +2639,24 @@ AutocompleteResult autocomplete_(
 
     else if (AstStatWhile* statWhile = parent->as<AstStatWhile>(); node->is<AstStatBlock>() && statWhile)
     {
-        if (!statWhile->hasDo && !statWhile->condition->is<AstStatError>() && position > statWhile->condition->location.end)
+        if (!statWhile->hasDo && !statWhile->condition->is<AstStatError>() && position > statWhile->conditionLocation().end)
         {
             return autocompleteWhileLoopKeywords(ancestry);
         }
 
         if (!statWhile->hasDo || position < statWhile->doLocation.begin)
-            return autocompleteExpression(*module, builtinTypes, typeArena, ancestry, scopeAtPosition, position);
+        {
+            AutocompleteResult result = autocompleteExpression(*module, builtinTypes, typeArena, ancestry, scopeAtPosition, position);
+
+            // Luwu If Local (rfcs/if-local.md): a condition can start with a binding
+            if (FFlag::LuwuIfLocal && statWhile->clauses.size == 0 && statWhile->condition->is<AstExprError>())
+            {
+                result.entryMap["local"] = {AutocompleteEntryKind::Keyword};
+                result.entryMap["const"] = {AutocompleteEntryKind::Keyword};
+            }
+
+            return result;
+        }
 
         if (statWhile->hasDo && position > statWhile->doLocation.end)
             return {autocompleteStatement(*module, ancestry, scopeAtPosition, position), ancestry, AutocompleteContext::Statement};
@@ -2560,7 +2664,7 @@ AutocompleteResult autocomplete_(
 
     else if (AstStatWhile* statWhile = extractStat<AstStatWhile>(ancestry);
              (statWhile && (!statWhile->hasDo || statWhile->doLocation.containsClosed(position)) && statWhile->condition &&
-              !statWhile->condition->location.containsClosed(position)))
+              !statWhile->conditionLocation().containsClosed(position)))
     {
         return autocompleteWhileLoopKeywords(ancestry);
     }

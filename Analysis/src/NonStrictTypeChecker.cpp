@@ -387,7 +387,7 @@ struct NonStrictTypeChecker
 
     NonStrictContext visit(AstStatWhile* whileStatement)
     {
-        NonStrictContext condition = visit(whileStatement->condition, ValueContext::RValue);
+        NonStrictContext condition = visitIfCondition(whileStatement->condition, whileStatement->clauses);
         NonStrictContext body = visit(whileStatement->body);
         return NonStrictContext::disjunction(builtinTypes, arena, condition, body);
     }

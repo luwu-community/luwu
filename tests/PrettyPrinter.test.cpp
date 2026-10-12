@@ -15,6 +15,7 @@ LUAU_FASTFLAG(LuwuIfLocal)
 LUAU_FASTFLAG(DebugLuwuDoExpr)
 LUAU_FASTFLAG(LuwuTableComprehensions)
 LUAU_FASTFLAG(LuwuTableFunctionFields)
+LUAU_FASTFLAG(LuwuTableFunctionFields)
 LUAU_FASTFLAG(LuauTableEntriesDontNeedToMatchIndent)
 LUAU_FASTFLAG(LuauCstAttr)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
@@ -2334,7 +2335,6 @@ TEST_CASE("prettyPrint_if_local")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuIfLocal, true},
-        {FFlag::LuwuDestructuring, true},
     };
 
     std::string code = R"(
@@ -2342,10 +2342,38 @@ if local a = f() when a > 1 when const b: number = g(a) then
     print(a, b)
 elseif ready when local  c = h() then
     print(c)
-elseif const .{x, y as py} = p when x then
+elseif const x = p when x then
 else
 end
 local v = if const a = f() then a elseif local b = g() when b then b else nil
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+}
+
+TEST_CASE("prettyPrint_loop_when_chains")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuTableComprehensions, true},
+        {FFlag::DebugLuwuDoExpr, true},
+    };
+
+    std::string code = R"(
+x  or return nil
+for _, v in t do v or continue; ok and  valid or (return 1, 2) end
+for i = 1,  10 when i % 2 == 0 do
+    print(i)
+end
+for _, v in  xs when local  w = v.inner when w > 1 do print(w) end
+for _ , person: Person in people when person.age > 18 do
+    print(name)
+end
+while local line = read() when line ~= "" do
+    print(line)
+end
+while  ready when const job = queue:pop() do end
+while running do end
+local a = { for _, p in points when p.x > 0 give p.x + p.y }
     )";
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
 }

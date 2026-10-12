@@ -15,12 +15,14 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <climits>
 #include <unordered_set>
 
 LUAU_FASTINTVARIABLE(LuauSuggestionDistance, 4)
 LUAU_FASTFLAGVARIABLE(LuauFunctionUnusedRecursiveLinting)
 LUAU_FASTFLAG(DebugLuwuDoExpr)
+LUAU_FASTFLAG(LuwuIfLocal)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 LUAU_FASTFLAGVARIABLE(LuwuTableRemoveFootgunLint)
 LUAU_FASTFLAG(LuwuClasses)
@@ -30,6 +32,41 @@ LUAU_FASTFLAG(LuwuNonePrimitive)
 
 namespace Luau
 {
+
+// Luwu: the group a lint is part of, or Code_Unknown. A part follows its group: it's on only where the group is on too,
+// so turning the group off turns all its parts off, and each part can still be turned off alone.
+static LintWarning::Code lintGroupOf(LintWarning::Code code)
+{
+    switch (code)
+    {
+    case LintWarning::Code_LoopConcat:
+    case LintWarning::Code_InefficientTableInsert:
+    case LintWarning::Code_InefficientTableRemove:
+    case LintWarning::Code_MethodsNotInlined:
+    case LintWarning::Code_FloorDivision:
+    case LintWarning::Code_FenvDeoptimization:
+        return LintWarning::Code_OptimizationHint;
+    case LintWarning::Code_Pairs:
+    case LintWarning::Code_Ipairs:
+        return LintWarning::Code_LuaIterators;
+    case LintWarning::Code_ConstLocal:
+    case LintWarning::Code_SameLineStatement:
+    case LintWarning::Code_MultiLineStatement:
+    case LintWarning::Code_OneLineStatement:
+    case LintWarning::Code_OneLineGuard:
+    case LintWarning::Code_InlineOrLeave:
+    case LintWarning::Code_LuaGuard:
+        return LintWarning::Code_Style;
+    default:
+        return LintWarning::Code_Unknown;
+    }
+}
+
+static bool lintEnabledIn(const LintMask& mask, LintWarning::Code code)
+{
+    LintWarning::Code group = lintGroupOf(code);
+    return mask.test(code) && (group == LintWarning::Code_Unknown || mask.test(group));
+}
 
 struct LintContext
 {
@@ -64,9 +101,10 @@ struct LintContext
     {
     }
 
+    // A lint is on when it and its group (lintGroupOf) are
     bool warningEnabled(LintWarning::Code code)
     {
-        return options.warningMask.test(code);
+        return lintEnabledIn(options.warningMask, code);
     }
 
     std::optional<TypeId> getType(AstExpr* expr)
@@ -528,7 +566,7 @@ private:
     bool visit(AstStatWhile* node) override
     {
         HoldConditionalExecution ce(*this);
-        node->condition->visit(this);
+        node->visitCondition(this);
         node->body->visit(this);
 
         return false;
@@ -676,6 +714,10 @@ private:
             if (node->body.data[i - 1]->hasSemicolon)
                 continue;
 
+            // A loop's destructured fields and its `when` chain are written in the loop's header, before its body
+            if (AstStatIf* guard = node->body.data[i]->as<AstStatIf>(); guard && guard->isWhenGuard)
+                continue;
+
             // Luwu: a half-typed statement (`local t =`) ends on the next statement's line because the parser gave up
             // there. Upstream reports the untouched next line.
             if (containsParseError(node->body.data[i - 1]))
@@ -753,32 +795,126 @@ private:
 
     std::vector<Statement> stack;
 
-    bool visit(AstExpr* node) override
+    // Something in the statement that starts at `location`: flagged when it starts a later line no further right than the
+    // statement does
+    void checkStart(const Location& location)
     {
         Statement& top = stack.back();
 
+        if (top.flagged || location.begin.line <= top.lastLine)
+            return;
+
+        top.lastLine = location.begin.line;
+
+        if (location.begin.column <= top.start.begin.column)
+        {
+            emitWarning(*context, LintWarning::Code_MultiLineStatement, location, "Statement spans multiple lines; use indentation to silence");
+
+            top.flagged = true;
+        }
+    }
+
+    bool visit(AstExpr* node) override
+    {
         // Luwu: an error expression sits where the parser gave up, often on the next line (`local t =` with nothing
         // after it), so it says nothing about how the statement was laid out. Upstream reports the untouched next line.
-        if (!top.flagged && !node->is<AstExprError>())
-        {
-            Location location = node->location;
-
-            if (location.begin.line > top.lastLine)
-            {
-                top.lastLine = location.begin.line;
-
-                if (location.begin.column <= top.start.begin.column)
-                {
-                    emitWarning(
-                        *context, LintWarning::Code_MultiLineStatement, location, "Statement spans multiple lines; use indentation to silence"
-                    );
-
-                    top.flagged = true;
-                }
-            }
-        }
+        if (!node->is<AstExprError>())
+            checkStart(node->location);
 
         return true;
+    }
+
+    // Luwu If Local (rfcs/if-local.md): a `when` chain's clauses start with their `when` or their binding's keyword, not
+    // with an expression, so those are checked too. A plain condition that isn't a chain is visited as usual.
+    void visitCondition(AstExpr* condition, const AstArray<AstIfClause>& clauses)
+    {
+        if (clauses.size == 0)
+        {
+            condition->visit(this);
+            return;
+        }
+
+        for (const AstIfClause& clause : clauses)
+        {
+            if (clause.whenLocation)
+                checkStart(*clause.whenLocation);
+            else if (clause.declaration && clause.declaration->keywordLocation)
+                checkStart(*clause.declaration->keywordLocation);
+
+            if (clause.declaration)
+                clause.declaration->visit(this);
+            else
+                clause.expr->visit(this);
+        }
+    }
+
+    bool visit(AstStatIf* node) override
+    {
+        visitCondition(node->condition, node->clauses);
+        node->thenbody->visit(this);
+
+        if (node->elsebody)
+            node->elsebody->visit(this);
+
+        return false;
+    }
+
+    bool visit(AstExprIfElse* node) override
+    {
+        checkStart(node->location);
+        visitCondition(node->condition, node->clauses);
+        node->trueExpr->visit(this);
+        node->falseExpr->visit(this);
+
+        return false;
+    }
+
+    bool visit(AstStatWhile* node) override
+    {
+        visitCondition(node->condition, node->clauses);
+        node->body->visit(this);
+
+        return false;
+    }
+
+    // A loop's destructured fields and `when` chain are part of its header (AstStatForIn::destructure,
+    // AstStatFor::whenGuard): the chain is checked as part of the loop's statement, and the block as written as its body.
+    void visitLoopBody(AstStatBlock* body, AstStatIf* guard)
+    {
+        if (!guard)
+        {
+            body->visit(this);
+            return;
+        }
+
+        // a single plain `when` is the guard's own condition, and the guard's keyword is that `when`
+        if (guard->clauses.size == 0)
+            checkStart(guard->ifLocation);
+
+        visitCondition(guard->condition, guard->clauses);
+        guard->thenbody->visit(this);
+    }
+
+    bool visit(AstStatFor* node) override
+    {
+        node->from->visit(this);
+        node->to->visit(this);
+        if (node->step)
+            node->step->visit(this);
+
+        visitLoopBody(node->body, node->whenGuard);
+
+        return false;
+    }
+
+    bool visit(AstStatForIn* node) override
+    {
+        for (AstExpr* value : node->values)
+            value->visit(this);
+
+        visitLoopBody(node->body, node->whenGuard);
+
+        return false;
     }
 
     bool visit(AstExprTable* node) override
@@ -866,6 +1002,9 @@ private:
         bool used;
         bool softUsed;
         bool arg;
+        // Luwu: "Parameter" for a named local function's parameter, reported when it's never read (a callback often has
+        // to take ones it ignores, so only these)
+        const char* unusedKind = nullptr;
     };
 
     struct Global
@@ -876,6 +1015,7 @@ private:
     };
 
     DenseHashMap<AstLocal*, Local> locals;
+    std::vector<AstStatForIn*> forInLoops;
     DenseHashMap<AstName, AstLocal*> imports;
     DenseHashMap<AstName, Global> globals;
     DenseHashMap<AstName, AstStatClass*> classes;
@@ -890,6 +1030,8 @@ private:
 
     void report()
     {
+        reportUnusedLoopVariables();
+
         for (auto& l : locals)
         {
             // Luwu: a local the parser declared in place of a missing name (`local` with nothing after it). Upstream
@@ -906,6 +1048,16 @@ private:
             }
             else if (l.second.defined)
                 reportUnusedLocal(l.first, l.second);
+            else if (l.second.unusedKind && l.first->name.value[0] != '_')
+                // Luwu: `recurse(tab)` iterating an upvalue instead of `tab`: a name written and then not the one used
+                emitWarning(
+                    *context,
+                    LintWarning::Code_LocalUnused,
+                    l.first->location,
+                    "%s '%s' is never used; prefix with '_' to silence",
+                    l.second.unusedKind,
+                    l.first->name.value
+                );
         }
     }
 
@@ -929,6 +1081,33 @@ private:
             (*cls)->name->location.begin.line + 1
         );
         return true;
+    }
+
+    // Luwu: a `for ... in` loop that reads none of its variables, though it named one (`for _, m in {msg, ...}` with the
+    // body using `msg`). An unused key or index alone is routine (`for i, v in ipairs(t)`), so only the last named one
+    // is reported, and only when nothing the loop gives is used.
+    void reportUnusedLoopVariables()
+    {
+        for (AstStatForIn* loop : forInLoops)
+        {
+            AstLocal* named = nullptr;
+            bool anyUsed = false;
+            for (AstLocal* var : loop->vars)
+            {
+                const Local* info = locals.find(var);
+                anyUsed = anyUsed || (info && info->used);
+                if (var->name.value[0] != '_')
+                    named = var;
+            }
+            if (named && !anyUsed)
+                emitWarning(
+                    *context,
+                    LintWarning::Code_LocalUnused,
+                    named->location,
+                    "Loop variable '%s' is never used; prefix with '_' to silence",
+                    named->name.value
+                );
+        }
     }
 
     void reportUsedLocal(AstLocal* local, const Local& info)
@@ -1070,6 +1249,16 @@ private:
         l.defined = node;
         l.function.emplace(node->location);
 
+        for (AstLocal* arg : node->func->args)
+            locals[arg].unusedKind = "Parameter";
+
+        return true;
+    }
+
+    // Luwu: `for ... in` loops whose named variables might all go unread (reported in report())
+    bool visit(AstStatForIn* node) override
+    {
+        forInLoops.push_back(node);
         return true;
     }
 
@@ -3866,7 +4055,14 @@ private:
 
     bool visit(AstStatWhile* node) override
     {
-        markCondition(node->condition);
+        // Luwu If Local (rfcs/if-local.md): a binding's value isn't a condition
+        if (node->clauses.size == 0)
+            markCondition(node->condition);
+
+        for (const AstIfClause& clause : node->clauses)
+            if (!clause.declaration)
+                markCondition(clause.expr);
+
         return true;
     }
 
@@ -4203,6 +4399,621 @@ private:
     }
 };
 
+// Luwu If Local (rfcs/if-local.md): BindingSwallowsCondition. In `if local x = f() and x > 1 then`, the `and` is part of
+// the value bound to `x`, not a second condition of the chain. Two shapes are almost always meant as `when`:
+// - the right side of an `and`/`or` names the binding, which can't see itself in its own value, so that name reads
+//   whatever it means outside (`when const perms = perms(id) and perms == Admin`);
+// - the right side of an `and` is a comparison or a `not`, so the value is a boolean and the binding is always `true`
+//   inside the branch.
+// A parenthesized value is left alone: the parentheses say the `and` was meant.
+class LintBindingSwallowsCondition : AstVisitor
+{
+public:
+    LUAU_NOINLINE static void process(LintContext& context)
+    {
+        LintBindingSwallowsCondition pass;
+        pass.context = &context;
+
+        context.root->visit(&pass);
+    }
+
+private:
+    LintContext* context;
+
+    struct NameFinder : AstVisitor
+    {
+        AstName name;
+        bool found = false;
+
+        bool visit(AstExprLocal* node) override
+        {
+            found |= node->local->name == name;
+            return false;
+        }
+
+        bool visit(AstExprGlobal* node) override
+        {
+            found |= node->name == name;
+            return false;
+        }
+
+        // a function's body is another scope, where the name may well be meant
+        bool visit(AstExprFunction*) override
+        {
+            return false;
+        }
+    };
+
+    static bool isBooleanSyntax(AstExpr* expr)
+    {
+        if (AstExprBinary* binary = expr->as<AstExprBinary>())
+        {
+            switch (binary->op)
+            {
+            case AstExprBinary::CompareEq:
+            case AstExprBinary::CompareNe:
+            case AstExprBinary::CompareLt:
+            case AstExprBinary::CompareLe:
+            case AstExprBinary::CompareGt:
+            case AstExprBinary::CompareGe:
+                return true;
+            default:
+                return false;
+            }
+        }
+
+        AstExprUnary* unary = expr->as<AstExprUnary>();
+        return unary && unary->op == AstExprUnary::Op::Not;
+    }
+
+    void checkClauses(const AstArray<AstIfClause>& clauses)
+    {
+        for (const AstIfClause& clause : clauses)
+        {
+            if (clause.declaration)
+                checkBinding(clause.local, clause.expr);
+        }
+    }
+
+    void checkBinding(AstLocal* local, AstExpr* value)
+    {
+        AstExprBinary* binary = value->as<AstExprBinary>();
+        bool logical = binary && (binary->op == AstExprBinary::And || binary->op == AstExprBinary::Or);
+        if (!logical)
+            return;
+
+        NameFinder finder;
+        finder.name = local->name;
+        binary->right->visit(&finder);
+
+        const char* op = binary->op == AstExprBinary::And ? "and" : "or";
+
+        if (finder.found)
+        {
+            emitWarning(
+                *context,
+                LintWarning::Code_BindingSwallowsCondition,
+                binary->right->location,
+                "This '%s' is part of '%s''s value, so the '%s' in it isn't the binding; use 'when' to test the binding",
+                op,
+                local->name.value,
+                local->name.value
+            );
+            return;
+        }
+
+        if (binary->op == AstExprBinary::And && isBooleanSyntax(binary->right))
+        {
+            emitWarning(
+                *context,
+                LintWarning::Code_BindingSwallowsCondition,
+                binary->right->location,
+                "This 'and' makes '%s' a boolean that is always true in the branch; use 'when' to add a condition",
+                local->name.value
+            );
+        }
+    }
+
+    bool visit(AstStatIf* node) override
+    {
+        checkClauses(node->clauses);
+        return true;
+    }
+
+    bool visit(AstExprIfElse* node) override
+    {
+        checkClauses(node->clauses);
+        return true;
+    }
+
+    bool visit(AstStatWhile* node) override
+    {
+        checkClauses(node->clauses);
+        return true;
+    }
+};
+
+// Luwu: the Style lints about where lines break.
+// - OneLineStatement: a statement with a body (`if`, a loop, `do`, a function statement) written on one line. A function
+//   expression is left alone: a one-line callback is ordinary.
+// - OneLineGuard and LuaGuard: the one-line `if not x then return end`. A Luau file gets OneLineGuard, which asks for
+//   three lines; a Luwu file gets LuaGuard, which asks for `x or return`. Only one of them reports a guard.
+// - InlineOrLeave: `x or return` at the end of a line much longer than the lines around it, where the exit is easy to
+//   miss.
+class LintStyle : AstVisitor
+{
+public:
+    struct Enabled
+    {
+        bool oneLineStatement = false;
+        bool oneLineGuard = false;
+        bool luaGuard = false;
+        bool inlineOrLeave = false;
+    };
+
+    LUAU_NOINLINE static void process(LintContext& context, Enabled enabled)
+    {
+        LintStyle pass;
+        pass.context = &context;
+        pass.enabled = enabled;
+
+        if (enabled.inlineOrLeave)
+        {
+            LineWidths widths;
+            context.root->visit(&widths);
+            pass.lineWidths = std::move(widths.widths);
+        }
+
+        context.root->visit(&pass);
+    }
+
+private:
+    LintContext* context;
+    Enabled enabled;
+
+    // How far each line reaches: the furthest end of any node ending on it. Comments and blank lines aren't nodes, so
+    // a line with only those has no entry.
+    std::map<unsigned, unsigned> lineWidths;
+
+    struct LineWidths : AstVisitor
+    {
+        std::map<unsigned, unsigned> widths;
+
+        bool visit(AstNode* node) override
+        {
+            unsigned& width = widths[node->location.end.line];
+            width = std::max(width, node->location.end.column);
+            return true;
+        }
+    };
+
+    // Comprehension loops are written inside an expression, where one line is the point
+    int comprehensionDepth = 0;
+
+    // The `elseif`s seen so far: each is the `else` of the `if` before it, and is checked as part of that statement
+    std::unordered_set<AstStatIf*> elseifs;
+
+    static bool isOneLine(AstNode* node)
+    {
+        return node->location.begin.line == node->location.end.line;
+    }
+
+    void reportOneLineStatement(AstNode* node, const char* what)
+    {
+        emitWarning(
+            *context,
+            LintWarning::Code_OneLineStatement,
+            node->location,
+            "Split this %s over several lines, with its body and 'end' on their own lines",
+            what
+        );
+    }
+
+    void checkBlock(AstNode* node, AstStatBlock* body, const char* what)
+    {
+        if (enabled.oneLineStatement && comprehensionDepth == 0 && body->body.size != 0 && isOneLine(node))
+            reportOneLineStatement(node, what);
+    }
+
+    static const char* leaveKeyword(AstStat* stat)
+    {
+        if (stat->is<AstStatReturn>())
+            return "return";
+        if (stat->is<AstStatBreak>())
+            return "break";
+        if (stat->is<AstStatContinue>())
+            return "continue";
+        return nullptr;
+    }
+
+    // The condition `x or return` needs for the guard `if <condition> then return end`: `not x` gives `x`, `==` and `~=`
+    // swap, and anything else is negated with `not`
+    static std::string negatedCondition(AstExpr* condition)
+    {
+        while (AstExprGroup* group = condition->as<AstExprGroup>())
+            condition = group->expr;
+
+        if (AstExprUnary* unary = condition->as<AstExprUnary>(); unary && unary->op == AstExprUnary::Op::Not)
+            return toString(unary->expr);
+
+        AstExprBinary* binary = condition->as<AstExprBinary>();
+        bool equality = binary && (binary->op == AstExprBinary::CompareEq || binary->op == AstExprBinary::CompareNe);
+        if (equality)
+        {
+            const char* op = binary->op == AstExprBinary::CompareEq ? " ~= " : " == ";
+            return toString(binary->left) + op + toString(binary->right);
+        }
+
+        // `not` binds tighter than any binary operator
+        if (binary)
+            return "not (" + toString(condition) + ")";
+
+        return "not " + toString(condition);
+    }
+
+    // How `leave` is written after `or`: a bare `return` needs a `;` and several values need parentheses, or the parser
+    // would read on past them
+    static std::string orLeaveForm(AstStat* leave)
+    {
+        AstStatReturn* ret = leave->as<AstStatReturn>();
+        if (!ret)
+            return toString(leave);
+
+        if (ret->list.size == 0)
+            return "return;";
+
+        if (ret->list.size > 1)
+            return "(" + toString(leave) + ")";
+
+        return toString(leave);
+    }
+
+    // Reports a one-line guard (OneLineGuard or LuaGuard, by the file's language). Returns whether `node` is one, so
+    // OneLineStatement leaves it to these.
+    bool checkGuard(AstStatIf* node)
+    {
+        // A suggestion longer than this is described instead of quoted
+        constexpr size_t kMaxSuggestionLength = 80;
+
+        bool guardShape = !node->elsebody && node->thenbody->body.size == 1 && leaveKeyword(node->thenbody->body.data[0]);
+        if (!guardShape || !isOneLine(node))
+            return false;
+
+        AstStat* leave = node->thenbody->body.data[0];
+        const char* keyword = leaveKeyword(leave);
+        bool luwuFile = !context->module || context->module->language == Language::Luwu;
+
+        // `or return` needs the do expression flag
+        if (luwuFile && FFlag::DebugLuwuDoExpr)
+        {
+            if (!enabled.luaGuard)
+                return true;
+
+            std::string suggestion = negatedCondition(node->condition) + " or " + orLeaveForm(leave);
+            if (suggestion.size() <= kMaxSuggestionLength)
+                emitWarning(*context, LintWarning::Code_LuaGuard, node->location, "Replace this with '%s'", suggestion.c_str());
+            else
+                emitWarning(
+                    *context,
+                    LintWarning::Code_LuaGuard,
+                    node->location,
+                    "Replace this with '<negated condition> or %s'",
+                    keyword
+                );
+
+            return true;
+        }
+
+        if (enabled.oneLineGuard)
+            emitWarning(
+                *context,
+                LintWarning::Code_OneLineGuard,
+                node->location,
+                "Put the '%s' on its own line, so it isn't hidden at the end of this one",
+                keyword
+            );
+
+        return true;
+    }
+
+    // The `or return` of a statement's whole value (asOrLeave), when it ends a line much longer than the lines around the
+    // statement
+    void checkInlineOrLeave(AstStat* stat, AstExpr* value)
+    {
+        // A line shorter than this reads fine whatever its neighbors look like
+        constexpr unsigned kMinWidth = 60;
+        // How much longer than the longest nearby line it has to be, in columns and as a ratio (3/2)
+        constexpr unsigned kMinExtraColumns = 30;
+        constexpr unsigned kRatioNumerator = 3;
+        constexpr unsigned kRatioDenominator = 2;
+        // The nearby lines: this many on each side, among the lines with code, outside the statement
+        constexpr int kNeighbors = 2;
+
+        AstExprBinary* orLeave = asOrLeave(value);
+        if (!orLeave)
+            return;
+
+        AstExpr* right = orLeave->right;
+        while (AstExprGroup* group = right->as<AstExprGroup>())
+            right = group->expr;
+
+        // broken before the `or` already
+        unsigned line = right->location.begin.line;
+        if (line != orLeave->left->location.end.line)
+            return;
+
+        auto it = lineWidths.find(line);
+        if (it == lineWidths.end() || it->second < kMinWidth)
+            return;
+
+        unsigned width = it->second;
+        unsigned nearby = 0;
+
+        auto above = lineWidths.lower_bound(stat->location.begin.line);
+        for (int i = 0; i < kNeighbors && above != lineWidths.begin(); ++i)
+        {
+            --above;
+            nearby = std::max(nearby, above->second);
+        }
+
+        auto below = lineWidths.upper_bound(stat->location.end.line);
+        for (int i = 0; i < kNeighbors && below != lineWidths.end(); ++i, ++below)
+            nearby = std::max(nearby, below->second);
+
+        bool muchLonger = nearby != 0 && width >= nearby + kMinExtraColumns && width * kRatioDenominator >= nearby * kRatioNumerator;
+        if (!muchLonger)
+            return;
+
+        const char* keyword = "return";
+        if (AstExprDo* leave = right->as<AstExprDo>(); leave && leave->body->body.size != 0)
+        {
+            AstStat* last = leave->body->body.data[leave->body->body.size - 1];
+            if (const char* k = leaveKeyword(last))
+                keyword = k;
+        }
+
+        emitWarning(
+            *context,
+            LintWarning::Code_InlineOrLeave,
+            right->location,
+            "Move 'or %s' to its own line, indented; it's easy to miss at the end of a line this long",
+            keyword
+        );
+    }
+
+    bool visit(AstStatIf* node) override
+    {
+        if (AstStatIf* elseif = node->elsebody ? node->elsebody->as<AstStatIf>() : nullptr)
+            elseifs.insert(elseif);
+
+        bool checked = node->isWhenGuard || elseifs.count(node) != 0;
+        if (!checked && !checkGuard(node))
+            checkBlock(node, node->thenbody, "'if' statement");
+
+        return true;
+    }
+
+    bool visit(AstStatWhile* node) override
+    {
+        checkBlock(node, node->body, "'while' loop");
+        return true;
+    }
+
+    bool visit(AstStatRepeat* node) override
+    {
+        checkBlock(node, node->body, "'repeat' loop");
+        return true;
+    }
+
+    bool visit(AstStatFor* node) override
+    {
+        checkBlock(node, node->body, "'for' loop");
+        return true;
+    }
+
+    bool visit(AstStatForIn* node) override
+    {
+        checkBlock(node, node->body, "'for' loop");
+        return true;
+    }
+
+    bool visit(AstStatFunction* node) override
+    {
+        checkBlock(node, node->func->body, "function");
+        return true;
+    }
+
+    bool visit(AstStatLocalFunction* node) override
+    {
+        checkBlock(node, node->func->body, "function");
+        return true;
+    }
+
+    bool visit(AstStatBlock* node) override
+    {
+        for (AstStat* stat : node->body)
+        {
+            // a `do ... end` block is a statement of the block around it
+            if (AstStatBlock* block = stat->as<AstStatBlock>())
+                checkBlock(block, block, "'do' block");
+
+            if (!enabled.inlineOrLeave)
+                continue;
+
+            if (AstStatExpr* expr = stat->as<AstStatExpr>())
+                checkInlineOrLeave(stat, expr->expr);
+            else if (AstStatLocal* local = stat->as<AstStatLocal>())
+                for (AstExpr* value : local->values)
+                    checkInlineOrLeave(stat, value);
+            else if (AstStatAssign* assign = stat->as<AstStatAssign>())
+                for (AstExpr* value : assign->values)
+                    checkInlineOrLeave(stat, value);
+        }
+
+        return true;
+    }
+
+    bool visit(AstExprTableComprehension* node) override
+    {
+        comprehensionDepth++;
+        node->loop->visit(this);
+        comprehensionDepth--;
+        return false;
+    }
+
+    // a function expression's body is a new place where blocks are written as statements again
+    bool visit(AstExprFunction* node) override
+    {
+        int outer = comprehensionDepth;
+        comprehensionDepth = 0;
+        node->body->visit(this);
+        comprehensionDepth = outer;
+        return false;
+    }
+};
+
+// Luwu Do Expressions (rfcs/do-expressions.md): OrReturnComma. An unparenthesized `or return a` takes one value, so in
+// `local p, q = x or return a, b` or `f(x or return a, b)` the `b` is the list's next value, not a second value to
+// return. Parenthesizing either reading silences it: `(x or return a), b` or `x or (return a, b)`.
+class LintOrReturnComma : AstVisitor
+{
+public:
+    LUAU_NOINLINE static void process(LintContext& context)
+    {
+        LintOrReturnComma pass;
+        pass.context = &context;
+
+        context.root->visit(&pass);
+    }
+
+private:
+    LintContext* context;
+
+    struct BareReturn
+    {
+        // `or` or `else`
+        const char* introducer = nullptr;
+        AstStatReturn* ret = nullptr;
+    };
+
+    // The unparenthesized `return` with a value that `expr` ends in, after `or` or `else`
+    static std::optional<BareReturn> bareReturnOf(AstExpr* expr)
+    {
+        AstExpr* leave = nullptr;
+        BareReturn result;
+        if (AstExprBinary* binary = expr->as<AstExprBinary>(); binary && binary->op == AstExprBinary::Or)
+        {
+            leave = binary->right;
+            result.introducer = "or";
+        }
+        else if (AstExprIfElse* ifElse = expr->as<AstExprIfElse>())
+        {
+            leave = ifElse->falseExpr;
+            result.introducer = "else";
+        }
+
+        AstExprDo* shorthand = leave ? leave->as<AstExprDo>() : nullptr;
+        if (!shorthand || !shorthand->shorthand || shorthand->body->body.size != 1)
+            return std::nullopt;
+
+        result.ret = shorthand->body->body.data[0]->as<AstStatReturn>();
+        if (!result.ret || result.ret->list.size == 0)
+            return std::nullopt;
+
+        return result;
+    }
+
+    // `expr` as written, or `fallback` when that's too long to quote in a message
+    static std::string quote(AstNode* expr, const char* fallback)
+    {
+        constexpr size_t kMaxQuoteLength = 30;
+
+        std::string text = toString(expr);
+        return text.size() <= kMaxQuoteLength ? text : fallback;
+    }
+
+    // `describe(i)` says where the value after `list[i]` goes instead: "assigned to 'r'", "the next argument"
+    template<typename Describe>
+    void checkList(const AstArray<AstExpr*>& list, Describe describe)
+    {
+        // the last value has no comma after it
+        for (size_t i = 0; i + 1 < list.size; ++i)
+        {
+            std::optional<BareReturn> bare = bareReturnOf(list.data[i]);
+            if (!bare)
+                continue;
+
+            AstExpr* next = list.data[i + 1];
+            std::string returned = bare->ret->list.size == 1 ? quote(bare->ret->list.data[0], "...") : "...";
+
+            emitWarning(
+                *context,
+                LintWarning::Code_OrReturnComma,
+                next->location,
+                "'%s' is %s, not part of '%s return'; to return both, write '%s (return %s, %s)'",
+                quote(next, "this").c_str(),
+                describe(i + 1).c_str(),
+                bare->introducer,
+                bare->introducer,
+                returned.c_str(),
+                quote(next, "...").c_str()
+            );
+        }
+    }
+
+    bool visit(AstStatLocal* node) override
+    {
+        checkList(
+            node->values,
+            [&](size_t index)
+            {
+                if (index < node->vars.size)
+                    return format("assigned to '%s'", node->vars.data[index]->name.value);
+                return std::string("dropped");
+            }
+        );
+        return true;
+    }
+
+    bool visit(AstStatAssign* node) override
+    {
+        checkList(
+            node->values,
+            [&](size_t index)
+            {
+                if (index < node->vars.size)
+                    return "assigned to '" + quote(node->vars.data[index], "the next variable") + "'";
+                return std::string("dropped");
+            }
+        );
+        return true;
+    }
+
+    bool visit(AstStatReturn* node) override
+    {
+        checkList(
+            node->list,
+            [](size_t)
+            {
+                return std::string("the next value of the outer 'return'");
+            }
+        );
+        return true;
+    }
+
+    bool visit(AstExprCall* node) override
+    {
+        checkList(
+            node->args,
+            [](size_t)
+            {
+                return std::string("the next argument");
+            }
+        );
+        return true;
+    }
+};
+
 // Luwu Do Expressions (rfcs/do-expressions.md): ReturnOnNextLine and OrContinue
 class LintDoExpressions : AstVisitor
 {
@@ -4242,7 +5053,7 @@ private:
 
     bool visit(AstStatWhile* node) override
     {
-        node->condition->visit(this);
+        node->visitCondition(this);
         return visitLoopBody(node->body);
     }
 
@@ -4749,7 +5560,9 @@ private:
 
     bool visit(AstStatWhile* node) override
     {
-        conditions[unparenthesized(node->condition)] = "while";
+        // Luwu If Local (rfcs/if-local.md): as for `if`
+        if (node->clauses.size == 0)
+            conditions[unparenthesized(node->condition)] = "while";
         return true;
     }
 
@@ -5390,7 +6203,7 @@ private:
 
     bool visit(AstStatWhile* node) override
     {
-        node->condition->visit(this);
+        node->visitCondition(this);
         LoopScope scope{this, node};
         node->body->visit(this);
         return false;
@@ -6038,7 +6851,7 @@ private:
 
         bool visit(AstStatWhile* node) override
         {
-            node->condition->visit(this);
+            node->visitCondition(this);
             return visitLoopBody(node->body);
         }
 
@@ -6683,7 +7496,9 @@ private:
 
     bool visit(AstStatWhile* node) override
     {
-        checkForeverLoop(node, node->condition, node->body);
+        // Luwu If Local (rfcs/if-local.md): a `when` chain can fail even when its first clause is constant
+        if (node->clauses.size == 0)
+            checkForeverLoop(node, node->condition, node->body);
         checkUselessLoop(node, node->body, /* takesFirstItem */ false);
         return true;
     }
@@ -6926,7 +7741,13 @@ private:
 
     bool visit(AstStatWhile* node) override
     {
-        checkCondition(node->condition);
+        // Luwu If Local (rfcs/if-local.md): as for `if`
+        if (node->clauses.size == 0)
+            checkCondition(node->condition);
+
+        for (const AstIfClause& clause : node->clauses)
+            checkCondition(clause.expr);
+
         return true;
     }
 
@@ -7539,7 +8360,7 @@ private:
         // A `break` or `continue` inside a nested loop leaves that loop, not the block being looked at
         bool visit(AstStatWhile* node) override
         {
-            node->condition->visit(this);
+            node->visitCondition(this);
             ++loopDepth;
             node->body->visit(this);
             --loopDepth;
@@ -7690,33 +8511,6 @@ private:
 static bool isBareNolint(const HotComment& hc)
 {
     return hc.header && hc.content.compare(0, 6, "nolint") == 0 && hc.content.find_first_not_of(" \t", 6) == std::string::npos;
-}
-
-// Luwu: the group a lint is part of, or Code_Unknown. A part follows its group: it's on only where the group is on too,
-// so turning the group off turns all its parts off, and each part can still be turned off alone.
-static LintWarning::Code lintGroupOf(LintWarning::Code code)
-{
-    switch (code)
-    {
-    case LintWarning::Code_LoopConcat:
-    case LintWarning::Code_InefficientTableInsert:
-    case LintWarning::Code_InefficientTableRemove:
-    case LintWarning::Code_MethodsNotInlined:
-    case LintWarning::Code_FloorDivision:
-    case LintWarning::Code_FenvDeoptimization:
-        return LintWarning::Code_OptimizationHint;
-    case LintWarning::Code_Pairs:
-    case LintWarning::Code_Ipairs:
-        return LintWarning::Code_LuaIterators;
-    default:
-        return LintWarning::Code_Unknown;
-    }
-}
-
-static bool lintEnabledIn(const LintMask& mask, LintWarning::Code code)
-{
-    LintWarning::Code group = lintGroupOf(code);
-    return mask.test(code) && (group == LintWarning::Code_Unknown || mask.test(group));
 }
 
 // Luwu: `@[nolint(...)]` or `@[lint(...)]` on a function, class or class field: the lints it turns off or on within
@@ -8058,6 +8852,20 @@ std::vector<LintWarning> lint(
     nameShadow.builtin = context.warningEnabled(LintWarning::Code_BuiltinShadow);
     if (nameShadow.keyword || nameShadow.builtin)
         LintNameShadow::process(context, nameShadow);
+
+    if (FFlag::LuwuIfLocal && context.warningEnabled(LintWarning::Code_BindingSwallowsCondition))
+        LintBindingSwallowsCondition::process(context);
+
+    LintStyle::Enabled style;
+    style.oneLineStatement = context.warningEnabled(LintWarning::Code_OneLineStatement);
+    style.oneLineGuard = context.warningEnabled(LintWarning::Code_OneLineGuard);
+    style.luaGuard = context.warningEnabled(LintWarning::Code_LuaGuard);
+    style.inlineOrLeave = FFlag::DebugLuwuDoExpr && context.warningEnabled(LintWarning::Code_InlineOrLeave);
+    if (style.oneLineStatement || style.oneLineGuard || style.luaGuard || style.inlineOrLeave)
+        LintStyle::process(context, style);
+
+    if (FFlag::DebugLuwuDoExpr && context.warningEnabled(LintWarning::Code_OrReturnComma))
+        LintOrReturnComma::process(context);
 
     LintDoExpressions::Enabled doExpressions;
     doExpressions.returnOnNextLine = context.warningEnabled(LintWarning::Code_ReturnOnNextLine);
