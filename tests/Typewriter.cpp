@@ -28,6 +28,15 @@ bool isUnclosedBlock(const ParseError& error)
     return error.getMessage().rfind("Expected 'end' (to close", 0) == 0;
 }
 
+// A parse error that only says a block isn't finished yet: its `end` is missing, or its header is still being typed
+// (`if x` before `then`). Each block being typed reports these whatever the keystroke.
+bool isUnfinishedBlock(const ParseError& error)
+{
+    const std::string& message = error.getMessage();
+    bool headerInProgress = message.rfind("Expected 'then' when parsing", 0) == 0 || message.rfind("Expected 'do' when parsing", 0) == 0;
+    return isUnclosedBlock(error) || headerInProgress;
+}
+
 bool hasUnclosedBlock(const ParseResult& parsed)
 {
     for (const ParseError& error : parsed.errors)
@@ -199,25 +208,26 @@ std::vector<std::string> problemsAfterKeystroke(
 {
     std::vector<std::string> problems;
 
-    // A block whose `end` isn't typed yet gets one error, and holds the code after it until then, so type errors and
-    // lints there aren't the keystroke's fault
+    // An unfinished block's own errors don't count, and the block holds the code after it until its `end` is typed,
+    // so type errors and lints there aren't the keystroke's fault
     ParseResult parsed = fixture.tryParse(source);
-    bool unclosedBlock = hasUnclosedBlock(parsed);
-    size_t allowedErrors = unclosedBlock ? 2 : 1;
+    bool unfinishedBlock = false;
     size_t errors = 0;
     for (const ParseError& error : parsed.errors)
     {
-        if (!isIntentional(error.getMessage(), intentional))
+        if (isUnfinishedBlock(error))
+            unfinishedBlock = true;
+        else if (!isIntentional(error.getMessage(), intentional))
             errors++;
     }
 
-    if (errors > allowedErrors)
+    if (errors > 1)
     {
         for (const ParseError& error : parsed.errors)
             problems.push_back(format("parse error at %s: %s", toString(error.getLocation()).c_str(), error.getMessage().c_str()));
     }
 
-    if (unclosedBlock)
+    if (unfinishedBlock)
         return problems;
 
     for (const std::string& problem : problemsFrom(fixture, source, untouched, untouched, intentional))

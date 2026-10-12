@@ -19,9 +19,9 @@ struct Fixture;
 //
 // Like the editor, typing an opener (`(`, `[`, `{`, a quote) inserts its closer, and with `autocompleteEnd` (luwu-lsp's
 // setting of that name), Enter after a block opener puts its `end` on the line after the cursor, indented like the
-// opener; typing the closer steps over it. So write blocks over several lines, the way they're typed. Until a block's
-// `end` is in, the block holds the code after it, so it may add one "Expected 'end'" error and the code after the
-// cursor isn't checked or linted.
+// opener; typing the closer steps over it. So write blocks over several lines, the way they're typed. A block that
+// isn't finished (no `end` yet, or a header still being typed, `if x` before `then`) reports that on its own, which
+// doesn't count, and it holds the code after it, so that code isn't checked or linted until then.
 //
 // Returns a report of every failing keystroke, with what had been typed and the errors, or "" when none failed.
 std::string typewrite(
