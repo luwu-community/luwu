@@ -108,6 +108,8 @@ struct TestFileResolver
     std::unordered_map<ModuleName, std::string> source;
     std::unordered_map<ModuleName, SourceCode::Type> sourceTypes;
     std::unordered_map<ModuleName, std::string> environments;
+    // Luwu: `require("game/A")` names the module `game/A` directly (doc comment bindings' tests)
+    bool resolveStringRequires = false;
 };
 
 struct TestConfigResolver : ConfigResolver

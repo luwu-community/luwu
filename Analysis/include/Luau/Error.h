@@ -614,6 +614,15 @@ struct Typo
     bool operator==(const Typo& rhs) const;
 };
 
+// Luwu doc references: code in a doc comment that doesn't parse, or isn't allowed there (`[f = function() end]`). Its own
+// kind rather than a SyntaxError: the module itself parsed and runs, and nothing should mistake this for a broken file.
+struct DocSyntaxError
+{
+    std::string message;
+
+    bool operator==(const DocSyntaxError& rhs) const;
+};
+
 struct PropertyAccessViolation
 {
     TypeId table;
@@ -905,7 +914,8 @@ using TypeErrorData = Variant<
     AmbiguousFunctionCall,
     UninstantiableClass,
     ConstructorReadByName,
-    Typo>;
+    Typo,
+    DocSyntaxError>;
 
 struct TypeErrorSummary
 {
@@ -926,6 +936,9 @@ struct TypeError
     Location location;
     ModuleName moduleName;
     TypeErrorData data;
+    // Luwu doc references: reported on code in a doc comment (`[fs.file.raed]`), which the module doesn't run. Tools
+    // label these apart from errors in the code (`DocTypeError`, `DocSyntaxError`).
+    bool inDocComment = false;
 
     static int minCode();
     int code() const;

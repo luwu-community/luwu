@@ -192,7 +192,12 @@ static TypeId shallowClone(TypeId ty, TypeArena& dest, const TxnLog* log, bool t
 
     TypeId resTy = visit(go, ty->ty);
     if (resTy != ty)
+    {
         asMutable(resTy)->documentationSymbol = ty->documentationSymbol;
+        // Luwu: only ever adds metadata; a replacement can be an existing type that has its own
+        if (ty->metadata)
+            asMutable(resTy)->metadata = ty->metadata;
+    }
 
     return resTy;
 }

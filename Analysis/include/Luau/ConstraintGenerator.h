@@ -189,6 +189,9 @@ struct ConstraintGenerator
 
     bool recursionLimitMet = false;
 
+    // Luwu: the module's comments, for the `comments` metadata of the types it declares (attachDeclarationComments)
+    const std::vector<SourceComment>* sourceComments = nullptr;
+
     NotNull<ConstraintGraph> cgraph;
 
     CFG::TypeStateMap* typestate = nullptr;
@@ -417,6 +420,10 @@ private:
     ControlFlow visit(const ScopePtr& scope, AstStatDeclareGlobal* declareGlobal);
     ControlFlow visit(const ScopePtr& scope, AstStatDeclareClass* declaredClass);
     void visitClass(const ScopePtr& scope, AstStatClass* statClass, bool declared);
+
+    void attachDeclarationComments(TypeId ty, const Location& declaration);
+    // Luwu doc references: the comments around a declaration as metadata (`comments`), or null when there are none
+    std::shared_ptr<TypeMetadataTable> declarationComments(const Location& declaration);
     ControlFlow visit(const ScopePtr& scope, AstStatDeclareExternType* declaredExternType);
     ControlFlow visit(const ScopePtr& scope, AstStatDeclareFunction* global);
     ControlFlow visit(const ScopePtr& scope, AstStatClass* statClass);

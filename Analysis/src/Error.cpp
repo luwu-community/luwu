@@ -1509,6 +1509,11 @@ struct ErrorConverter
         return "Did you mean '" + e.meant + "' instead of '" + e.written + "'?";
     }
 
+    std::string operator()(const DocSyntaxError& e) const
+    {
+        return e.message;
+    }
+
     std::string operator()(const ConstructorReadByName& e) const
     {
         return "Cannot read '__init' of class '" + e.className + "'; constructing the class with '" + e.className +
@@ -1921,6 +1926,11 @@ bool UninstantiableClass::operator==(const UninstantiableClass& rhs) const
 bool Typo::operator==(const Typo& rhs) const
 {
     return written == rhs.written && meant == rhs.meant;
+}
+
+bool DocSyntaxError::operator==(const DocSyntaxError& rhs) const
+{
+    return message == rhs.message;
 }
 
 bool ConstructorReadByName::operator==(const ConstructorReadByName& rhs) const
@@ -2502,6 +2512,9 @@ void copyError(T& e, TypeArena& destArena, CloneState& cloneState)
     else if constexpr (std::is_same_v<T, ConstructorReadByName>)
         e.table = clone(e.table);
     else if constexpr (std::is_same_v<T, Typo>)
+    {
+    }
+    else if constexpr (std::is_same_v<T, DocSyntaxError>)
     {
     }
     else if constexpr (std::is_same_v<T, UninitializableClassField>)
