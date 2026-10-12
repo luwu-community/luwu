@@ -132,6 +132,26 @@ if true then print(1) print(2) print(3) end
     CHECK_EQ(result.warnings[0].text, "A new statement is on the same line; add semi-colon on previous statement to silence");
 }
 
+// Luwu: a half-typed statement doesn't make the untouched line after it lint. Found by the typewriter tests.
+TEST_CASE_FIXTURE(Fixture, "HalfTypedStatementsDontLintTheNextLine")
+{
+    // the parser's placeholder for the missing name isn't a variable
+    LintResult missingName = lint(R"(
+local
+local unrelated = 1
+print(unrelated)
+)");
+    CHECK_EQ(0, missingName.warnings.size());
+
+    // the missing value's error expression sits on the next line, where the parser gave up
+    LintResult missingValue = lint(R"(
+local t =
+local unrelated = 1
+print(t, unrelated)
+)");
+    CHECK_EQ(0, missingValue.warnings.size());
+}
+
 TEST_CASE_FIXTURE(Fixture, "MultilineBlockSemicolonsWhitelisted")
 {
     LintResult result = lint(R"(
