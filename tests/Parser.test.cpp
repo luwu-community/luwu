@@ -24,7 +24,7 @@ LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuIfLocal)
-LUAU_FASTFLAG(DebugLuwuDoExpr)
+LUAU_FASTFLAG(LuwuDoExpr)
 LUAU_FASTFLAG(LuwuTableComprehensions)
 LUAU_FASTFLAG(LuwuTableFunctionFields)
 LUAU_FASTFLAG(LuwuDeclareStatements)
@@ -8367,7 +8367,7 @@ TEST_CASE_FIXTURE(Fixture, "if_local_without_the_flag_says_how_to_enable_it")
 {
     ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, false};
 
-    const char* message = "'if local' and 'when' are Luwu features; enable the 'LuwuIfLocal' fast flag to use them";
+    const char* message = "attempt to use disabled Luwu feature 'if local' and 'when'; enable via FFlag 'LuwuIfLocal'";
     matchParseError("if local a = f() then end", message);
     matchParseError("if a when b then end", message);
     matchParseError("local x = if const a = f() then a else nil", message);
@@ -8455,8 +8455,8 @@ TEST_CASE_FIXTURE(Fixture, "loop_when_without_the_flag_says_how_to_enable_it")
 {
     ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, false};
 
-    matchParseError("for i = 1, 2 when i > 1 do end", "'when' on a loop is a Luwu feature; enable the 'LuwuIfLocal' fast flag to use it");
-    matchParseError("while local x = f() do end", "'while local' and 'when' are Luwu features; enable the 'LuwuIfLocal' fast flag to use them");
+    matchParseError("for i = 1, 2 when i > 1 do end", "attempt to use disabled Luwu feature 'when' on a loop; enable via FFlag 'LuwuIfLocal'");
+    matchParseError("while local x = f() do end", "attempt to use disabled Luwu feature 'while local' and 'when'; enable via FFlag 'LuwuIfLocal'");
 }
 
 // Luwu Table Comprehensions (rfcs/table-comprehensions.md)
@@ -8535,7 +8535,7 @@ TEST_CASE_FIXTURE(Fixture, "table_comprehension_needs_its_flag")
     ScopedFastFlag comprehensions{FFlag::LuwuTableComprehensions, false};
 
     matchParseError(
-        "local a = { for _, v in xs give v }", "Table comprehensions are a Luwu feature; enable the 'LuwuTableComprehensions' fast flag to use them"
+        "local a = { for _, v in xs give v }", "attempt to use disabled Luwu feature table comprehensions; enable via FFlag 'LuwuTableComprehensions'"
     );
 }
 
@@ -8580,7 +8580,7 @@ TEST_CASE_FIXTURE(Fixture, "table_function_fields_need_their_flag")
 
     matchParseError(
         "local t = { function foo() end }",
-        "Named functions in table literals are a Luwu feature; enable the 'LuwuTableFunctionFields' fast flag to use them"
+        "attempt to use disabled Luwu feature named functions in table literals; enable via FFlag 'LuwuTableFunctionFields'"
     );
 }
 
@@ -8597,7 +8597,7 @@ static AstExprDo* doExprValue(AstStatBlock* block, size_t index)
 
 TEST_CASE_FIXTURE(Fixture, "do_expression_ends_at_its_terminator")
 {
-    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
     AstStatBlock* block = parse(R"(
         local x = do
@@ -8629,7 +8629,7 @@ TEST_CASE_FIXTURE(Fixture, "do_expression_ends_at_its_terminator")
 
 TEST_CASE_FIXTURE(Fixture, "do_expression_terminators")
 {
-    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
     for (const char* source : {
              "local x = do give 1",
@@ -8658,7 +8658,7 @@ static void matchOnlyDoExprError(Fixture& fixture, const std::string& source, co
 TEST_CASE_FIXTURE(Fixture, "do_expression_mistakes_get_one_error")
 {
     ScopedFastFlag sffs[] = {
-        {FFlag::DebugLuwuDoExpr, true},
+        {FFlag::LuwuDoExpr, true},
         {FFlag::LuwuDefaultArguments, true},
     };
 
@@ -8690,7 +8690,7 @@ TEST_CASE_FIXTURE(Fixture, "do_expression_mistakes_get_one_error")
 
 TEST_CASE_FIXTURE(Fixture, "malformed_do_expressions_do_not_cascade")
 {
-    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
     const std::string mustEnd = "A 'do' expression must end with 'give <value>', 'return', 'break' or 'continue'";
     matchOnlyDoExprError(*this, "local x = do", mustEnd);
@@ -8714,7 +8714,7 @@ TEST_CASE_FIXTURE(Fixture, "malformed_do_expressions_do_not_cascade")
 // left alone
 TEST_CASE_FIXTURE(Fixture, "incomplete_expression_errors_go_on_the_keyword")
 {
-    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
     ParseResult result = tryParse("local x = do\n    local a = 1\nprint(x)");
     REQUIRE_EQ(result.errors.size(), 1);
@@ -8741,7 +8741,7 @@ TEST_CASE_FIXTURE(Fixture, "incomplete_expression_errors_go_on_the_keyword")
 
 TEST_CASE_FIXTURE(Fixture, "an_end_after_an_expression_that_takes_none_gets_one_error")
 {
-    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
     const std::string ifElse = "An if-else expression doesn't end with 'end'; this 'end' closes the block around it instead";
     const std::string doEnd = "A 'do' expression doesn't end with 'end'; this 'end' closes the block around it instead";
@@ -8780,7 +8780,7 @@ TEST_CASE_FIXTURE(Fixture, "an_end_after_an_expression_that_takes_none_gets_one_
 
 TEST_CASE_FIXTURE(Fixture, "give_and_continue_are_keywords_only_in_do_expression_variable_positions")
 {
-    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
     for (const char* source : {
              "local x = do local t = { give = 1, continue = 2 } t.give = 3 give t:continue()",
@@ -8803,7 +8803,7 @@ TEST_CASE_FIXTURE(Fixture, "give_and_continue_are_keywords_only_in_do_expression
 
 TEST_CASE_FIXTURE(Fixture, "or_leave_statements")
 {
-    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
     AstStatBlock* block = parse(R"(
         local function f(x, s)
@@ -8842,7 +8842,7 @@ TEST_CASE_FIXTURE(Fixture, "or_leave_statements")
 
 TEST_CASE_FIXTURE(Fixture, "or_continue_statement_is_the_keyword_even_where_continue_is_a_name")
 {
-    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
     // `continue` names a variable here, so `x or continue` in an expression reads it; a statement has no value to read
     // it into, so there it is the keyword
@@ -8867,7 +8867,7 @@ TEST_CASE_FIXTURE(Fixture, "or_continue_statement_is_the_keyword_even_where_cont
 
 TEST_CASE_FIXTURE(Fixture, "expression_statements_that_dont_leave_get_one_error")
 {
-    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
     const char* message =
         "Incomplete statement: expected assignment, a function call, or an expression ending in 'or return', 'or break' or 'or continue'";
@@ -8897,7 +8897,7 @@ TEST_CASE_FIXTURE(Fixture, "expression_statements_that_dont_leave_get_one_error"
 
 TEST_CASE_FIXTURE(Fixture, "or_return_and_or_break_are_do_expressions")
 {
-    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
     AstStatBlock* block = parse(R"(
         local function f()
@@ -8940,7 +8940,7 @@ TEST_CASE_FIXTURE(Fixture, "or_return_and_or_break_are_do_expressions")
 // Luau's meaning, a read of the variable
 TEST_CASE_FIXTURE(Fixture, "or_continue_is_the_shorthand_unless_the_module_names_continue")
 {
-    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
     auto orRight = [](AstStatBlock* loopBody) -> AstExpr*
     {
@@ -8989,7 +8989,7 @@ TEST_CASE_FIXTURE(Fixture, "or_continue_is_the_shorthand_unless_the_module_names
 
 TEST_CASE_FIXTURE(Fixture, "if_else_expression_arms_can_leave")
 {
-    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
     AstStatBlock* block = parse(R"(
         local function f(x)
@@ -9040,17 +9040,54 @@ TEST_CASE_FIXTURE(Fixture, "if_else_expression_arms_can_leave")
 
 TEST_CASE_FIXTURE(Fixture, "do_expression_without_the_flag_says_how_to_enable_it")
 {
-    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, false};
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, false};
 
-    matchParseError("local x = do give 1", "'do' expressions are a Luwu feature; enable the 'DebugLuwuDoExpr' fast flag to use them");
+    matchParseError("local x = do give 1", "attempt to use disabled Luwu feature 'do' expressions; enable via FFlag 'LuwuDoExpr'");
     matchParseError(
         "local function f() local x = y or return 1 end",
-        "'or return', 'or break' and 'or continue' are Luwu features; enable the 'DebugLuwuDoExpr' fast flag to use them"
+        "attempt to use disabled Luwu feature 'or return', 'or break' and 'or continue'; enable via FFlag 'LuwuDoExpr'"
     );
 
     // without the flag, `give` and `continue` outside a do expression are untouched
     ParseResult result = tryParse("local give = 1 for i = 1, 2 do local continue = give end");
     CHECK(result.errors.empty());
+}
+
+TEST_CASE_FIXTURE(Fixture, "expressive_control_flow_is_an_error_in_a_luau_module")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDoExpr, true},
+        {FFlag::LuwuTableComprehensions, true},
+        {FFlag::LuwuTableFunctionFields, true},
+    };
+
+    ParseOptions luau;
+    luau.language = Language::Luau;
+
+    ParseResult ifLocal = tryParse("if local a = f() then end", luau);
+    REQUIRE(!ifLocal.errors.empty());
+    CHECK_EQ(ifLocal.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: 'if local' and 'when'");
+
+    ParseResult loopWhen = tryParse("for i = 1, 2 when i > 1 do end", luau);
+    REQUIRE(!loopWhen.errors.empty());
+    CHECK_EQ(loopWhen.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: 'when' on a loop");
+
+    ParseResult doExpr = tryParse("local x = do give 1", luau);
+    REQUIRE(!doExpr.errors.empty());
+    CHECK_EQ(doExpr.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: 'do' expressions");
+
+    ParseResult orReturn = tryParse("local function f() local x = y or return 1 end", luau);
+    REQUIRE(!orReturn.errors.empty());
+    CHECK_EQ(orReturn.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: 'or return', 'or break' and 'or continue'");
+
+    ParseResult comprehension = tryParse("local a = { for _, v in xs give v }", luau);
+    REQUIRE(!comprehension.errors.empty());
+    CHECK_EQ(comprehension.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: table comprehensions");
+
+    ParseResult functionField = tryParse("local t = { function foo() end }", luau);
+    REQUIRE(!functionField.errors.empty());
+    CHECK_EQ(functionField.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: named functions in table literals");
 }
 
 // Parses as ordinary source, the way the compiler and the Frontend do, rather than as a definition file.

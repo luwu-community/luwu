@@ -14,7 +14,7 @@ LUAU_FASTFLAG(LuauCstAttr)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuIfLocal)
-LUAU_FASTFLAG(DebugLuwuDoExpr)
+LUAU_FASTFLAG(LuwuDoExpr)
 LUAU_FASTFLAG(LuwuTableComprehensions)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuauSolverV2)
@@ -2998,7 +2998,7 @@ return f, noop
 
 TEST_CASE_FIXTURE(Fixture, "LuaGuard")
 {
-    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
     LintResult result = lint(R"(
 local function f(x, y, t)
@@ -3037,7 +3037,7 @@ return f
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "OneLineGuardInALuauFileOnlySuggestsThreeLines")
 {
-    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
     fileResolver.source["game/a"] = "local function f(x)\n    if not x then return end\n    return x\nend\nreturn f\n";
     configResolver.configFiles["game/a"].language = Language::Luau;
@@ -3056,7 +3056,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "OneLineGuardInALuauFileOnlySuggestsThreeLine
 
 TEST_CASE_FIXTURE(Fixture, "InlineOrLeave")
 {
-    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
     LintResult result = lint(R"(
 local function f(x, path)
@@ -3160,7 +3160,7 @@ return xs
 
 TEST_CASE_FIXTURE(Fixture, "OrReturnComma")
 {
-    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
     LintResult result = lint(R"(
 local function f(x, a, b)
@@ -3234,7 +3234,7 @@ if local grouped = (find(1) and t.flag == 1) then print(grouped) end
 // Luwu Do Expressions (rfcs/do-expressions.md)
 TEST_CASE_FIXTURE(Fixture, "ReturnOnNextLine")
 {
-    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
     LintResult result = lint(R"(
 local function maybe() return nil end
@@ -3335,7 +3335,7 @@ return t, f, print, p, export, g
 
 TEST_CASE_FIXTURE(Fixture, "OrContinue")
 {
-    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
     // A module that never uses `continue` as a name gets the shorthand, so there is nothing to warn about
     LintResult shorthand = lint(R"(
@@ -3370,7 +3370,7 @@ local y = maybe() or continue
 
 TEST_CASE_FIXTURE(Fixture, "UnreachableCodeAfterGive")
 {
-    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
     LintResult result = lint(R"(
 local function maybe() return nil end
@@ -4922,7 +4922,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "LoopLintsSeeTableComprehensions")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuTableComprehensions, true},
-        {FFlag::DebugLuwuDoExpr, true},
+        {FFlag::LuwuDoExpr, true},
     };
 
     LintResult result = lint(R"(

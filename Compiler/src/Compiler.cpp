@@ -35,7 +35,7 @@ LUAU_FASTINTVARIABLE(LuauCompileInlineThresholdMaxBoost, 300)
 LUAU_FASTINTVARIABLE(LuauCompileInlineDepth, 5)
 
 LUAU_FASTFLAGVARIABLE(LuauCompileIifeInline)
-LUAU_FASTFLAG(DebugLuwuDoExpr)
+LUAU_FASTFLAG(LuwuDoExpr)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAGVARIABLE(LuauCompileStringInterpTargetTop)
@@ -9998,7 +9998,7 @@ struct Compiler
             // Luwu Do Expressions (rfcs/do-expressions.md): a `do` expression can `return` from anywhere inside an
             // expression, so every expression has to be searched. Upstream skips them: there, a `return` is only ever a
             // statement of the function's own blocks.
-            return FFlag::DebugLuwuDoExpr;
+            return FFlag::LuwuDoExpr;
         }
 
         // A nested function's returns are its own

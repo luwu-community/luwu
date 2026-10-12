@@ -21,7 +21,7 @@
 
 LUAU_FASTINTVARIABLE(LuauSuggestionDistance, 4)
 LUAU_FASTFLAGVARIABLE(LuauFunctionUnusedRecursiveLinting)
-LUAU_FASTFLAG(DebugLuwuDoExpr)
+LUAU_FASTFLAG(LuwuDoExpr)
 LUAU_FASTFLAG(LuwuIfLocal)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 LUAU_FASTFLAGVARIABLE(LuwuTableRemoveFootgunLint)
@@ -4684,7 +4684,7 @@ private:
         bool luwuFile = !context->module || context->module->language == Language::Luwu;
 
         // `or return` needs the do expression flag
-        if (luwuFile && FFlag::DebugLuwuDoExpr)
+        if (luwuFile && FFlag::LuwuDoExpr)
         {
             if (!enabled.luaGuard)
                 return true;
@@ -8860,17 +8860,17 @@ std::vector<LintWarning> lint(
     style.oneLineStatement = context.warningEnabled(LintWarning::Code_OneLineStatement);
     style.oneLineGuard = context.warningEnabled(LintWarning::Code_OneLineGuard);
     style.luaGuard = context.warningEnabled(LintWarning::Code_LuaGuard);
-    style.inlineOrLeave = FFlag::DebugLuwuDoExpr && context.warningEnabled(LintWarning::Code_InlineOrLeave);
+    style.inlineOrLeave = FFlag::LuwuDoExpr && context.warningEnabled(LintWarning::Code_InlineOrLeave);
     if (style.oneLineStatement || style.oneLineGuard || style.luaGuard || style.inlineOrLeave)
         LintStyle::process(context, style);
 
-    if (FFlag::DebugLuwuDoExpr && context.warningEnabled(LintWarning::Code_OrReturnComma))
+    if (FFlag::LuwuDoExpr && context.warningEnabled(LintWarning::Code_OrReturnComma))
         LintOrReturnComma::process(context);
 
     LintDoExpressions::Enabled doExpressions;
     doExpressions.returnOnNextLine = context.warningEnabled(LintWarning::Code_ReturnOnNextLine);
     doExpressions.orContinue = context.warningEnabled(LintWarning::Code_OrContinue);
-    if (FFlag::DebugLuwuDoExpr && (doExpressions.returnOnNextLine || doExpressions.orContinue))
+    if (FFlag::LuwuDoExpr && (doExpressions.returnOnNextLine || doExpressions.orContinue))
         LintDoExpressions::process(context, doExpressions);
 
     if (FFlag::LuwuNonePrimitive && context.warningEnabled(LintWarning::Code_NilNoneComparison))

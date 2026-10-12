@@ -24,7 +24,7 @@ LUAU_FASTINT(LuauCompileLoopUnrollThreshold)
 LUAU_FASTINT(LuauCompileLoopUnrollThresholdMaxBoost)
 LUAU_FASTINT(LuauRecursionLimit)
 LUAU_FASTFLAG(LuwuIfLocal)
-LUAU_FASTFLAG(DebugLuwuDoExpr)
+LUAU_FASTFLAG(LuwuDoExpr)
 LUAU_FASTFLAG(LuwuTableComprehensions)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuauIntegerFastcalls)
@@ -1517,7 +1517,7 @@ RETURN R0 0
 
 TEST_CASE("OrLeaveStatement")
 {
-    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
     // `x or return v` compiles as the `if not x then return v end` it replaces, shortcuts included
     CHECK_EQ(compileFunction0("local x = ... x or return 1 return x"), compileFunction0("local x = ... if not x then return 1 end return x"));
@@ -1796,7 +1796,7 @@ RETURN R0 0
 
 TEST_CASE("DoExpression")
 {
-    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
     // each give compiles into the target and jumps to the end; the block's own locals are registers above it
     CHECK_EQ("\n" + compileFunction0(R"(
@@ -1885,7 +1885,7 @@ L2: RETURN R0 0
 // whatever its size, nesting or the register pressure around it. Nothing here may create a closure or a call.
 TEST_CASE("DoExpressionAlwaysCompilesInPlace")
 {
-    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
     auto compileAll = [](const std::string& source, int optimizationLevel)
     {
@@ -12108,7 +12108,7 @@ function writeInBranch(x: unknown, other): string
 end
 )";
 
-    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
     Luau::BytecodeBuilder bcb;
     bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code);

@@ -30,7 +30,7 @@ LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuIfLocal)
 LUAU_FASTFLAG(LuwuTableComprehensions)
-LUAU_FASTFLAG(DebugLuwuDoExpr)
+LUAU_FASTFLAG(LuwuDoExpr)
 LUAU_FASTFLAGVARIABLE(DebugLuauMagicVariableNames)
 LUAU_FASTFLAGVARIABLE(LuauAutocompleteConst)
 LUAU_FASTFLAGVARIABLE(LuauAutocompleteExport)
@@ -1671,7 +1671,7 @@ static AutocompleteEntryMap autocompleteStatement(
         }
     }
 
-    if (FFlag::DebugLuwuDoExpr && isInDoExprBody(ancestry))
+    if (FFlag::LuwuDoExpr && isInDoExprBody(ancestry))
         result.emplace("give", AutocompleteEntry{AutocompleteEntryKind::Keyword});
 
     // classes and traits can only exist in top level code of a module so only

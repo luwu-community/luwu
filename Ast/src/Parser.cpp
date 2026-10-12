@@ -39,7 +39,7 @@ LUAU_FASTFLAGVARIABLE(LuwuAttributesEverywhere)
 // statements and expressions. A language feature still in progress.
 LUAU_FASTFLAGVARIABLE(LuwuIfLocal)
 // Luwu Do Expressions (rfcs/do-expressions.md): `do ... give exp` expressions. Experimental.
-LUAU_FASTFLAGVARIABLE(DebugLuwuDoExpr)
+LUAU_FASTFLAGVARIABLE(LuwuDoExpr)
 LUAU_FASTFLAG(LuwuTableComprehensions)
 // Luwu: `{ function foo() end }` in a table literal, meaning `{ foo = function() end }`.
 LUAU_FASTFLAGVARIABLE(LuwuTableFunctionFields)
@@ -1054,18 +1054,16 @@ AstExpr* Parser::parseIfCondition(AstArray<AstIfClause>& clauses, const char* he
     }
 
     // On the first keyword only Luwu has: the first binding's `local`/`const`, or the first `when`
-    if (!FFlag::LuwuIfLocal)
-    {
-        const AstIfClause& first = chain.front();
-        Location keyword = start;
+    const AstIfClause& first = chain.front();
+    Location keyword = start;
 
-        if (first.declaration && first.declaration->keywordLocation)
-            keyword = *first.declaration->keywordLocation;
-        else if (chain.size() > 1 && chain[1].whenLocation)
-            keyword = *chain[1].whenLocation;
+    if (first.declaration && first.declaration->keywordLocation)
+        keyword = *first.declaration->keywordLocation;
+    else if (chain.size() > 1 && chain[1].whenLocation)
+        keyword = *chain[1].whenLocation;
 
-        report(keyword, "'%s local' and 'when' are Luwu features; enable the 'LuwuIfLocal' fast flag to use them", head);
-    }
+    std::string name = format("'%s local' and 'when'", head);
+    checkLuwuFeature(keyword, LuwuFeature{name.c_str(), /* plural= */ true, "LuwuIfLocal"}, FFlag::LuwuIfLocal);
 
     clauses = copy(chain.data(), chain.size());
     return clauses.data[0].expr;
@@ -1166,6 +1164,8 @@ bool Parser::whenFollows()
 // Luwu If Local (rfcs/if-local.md): the `when` chain after a `for` clause's header, in a loop statement or a table
 // comprehension: every clause starts with `when`. Returns an empty array without one; `whenLocation` is the first
 // `when`. A comprehension's chain is part of the comprehension, which its own flag gates.
+const LuwuFeature kLoopWhenFeature{"'when' on a loop", /* plural= */ false, "LuwuIfLocal"};
+
 AstArray<AstIfClause> Parser::parseLoopWhenChain(Location& whenLocation, bool inComprehension)
 {
     if (!whenFollows())
@@ -1173,8 +1173,9 @@ AstArray<AstIfClause> Parser::parseLoopWhenChain(Location& whenLocation, bool in
 
     whenLocation = lexer.current().location;
 
-    if (!FFlag::LuwuIfLocal && !inComprehension)
-        report(whenLocation, "'when' on a loop is a Luwu feature; enable the 'LuwuIfLocal' fast flag to use it");
+    if (!inComprehension)
+        checkLuwuFeature(whenLocation, kLoopWhenFeature, FFlag::LuwuIfLocal);
+
     std::vector<AstIfClause> chain;
 
     while (whenFollows())
@@ -6792,6 +6793,8 @@ CstExprTable::Separator Parser::tableSeparator()
         return CstExprTable::Separator::Missing;
 }
 
+const LuwuFeature kTableFunctionFieldsFeature{"named functions in table literals", /* plural= */ true, "LuwuTableFunctionFields"};
+
 // tableconstructor ::= `{' [fieldlist] `}'
 // fieldlist ::= field {fieldsep field} [fieldsep]
 // field ::= `[' exp `]' `=' exp | Name `=' exp | exp
@@ -6912,11 +6915,7 @@ AstExpr* Parser::parseTableConstructor()
 
             Name name = parseName("function name");
 
-            if (!FFlag::LuwuTableFunctionFields)
-                report(
-                    Location(matchFunction.location, name.location),
-                    "Named functions in table literals are a Luwu feature; enable the 'LuwuTableFunctionFields' fast flag to use them"
-                );
+            checkLuwuFeature(Location(matchFunction.location, name.location), kTableFunctionFieldsFeature, FFlag::LuwuTableFunctionFields);
 
             AstArray<AstAttr*> functionAttributes{nullptr, 0};
             TempVector<CstAttrList*>* functionCstAttrLists = nullptr;
@@ -7003,13 +7002,11 @@ AstExpr* Parser::parseTableConstructor()
 // item ::= exp | `[' exp `]' `=' exp | `[' exp `]' compoundop exp
 // Starts at `for`; `start` and `matchBrace` are the `{`. Builds the loop the comprehension runs (see
 // AstExprTableComprehension) and consumes the closing `}`.
+const LuwuFeature kTableComprehensionsFeature{"table comprehensions", /* plural= */ true, "LuwuTableComprehensions"};
+
 AstExpr* Parser::parseTableComprehension(const Location& start, const MatchLexeme& matchBrace)
 {
-    if (!FFlag::LuwuTableComprehensions)
-        report(
-            lexer.current().location,
-            "Table comprehensions are a Luwu feature; enable the 'LuwuTableComprehensions' fast flag to use them"
-        );
+    checkLuwuFeature(lexer.current().location, kTableComprehensionsFeature, FFlag::LuwuTableComprehensions);
 
     struct Clause
     {
@@ -7476,8 +7473,7 @@ AstExpr* Parser::parseDoExpr()
         noteStrayEnd("A 'do' expression", /* reported= */ false);
 
     // On the `do` alone, like every error about the expression as a whole
-    if (!FFlag::DebugLuwuDoExpr)
-        report(start, "'do' expressions are a Luwu feature; enable the 'DebugLuwuDoExpr' fast flag to use them");
+    checkLuwuFeature(start, LuwuFeature{"'do' expressions", /* plural= */ true, "LuwuDoExpr"}, FFlag::LuwuDoExpr);
 
     AstExprDo* node = allocator.alloc<AstExprDo>(location, body);
     node->luwuOnly = true;
@@ -7504,7 +7500,7 @@ bool Parser::orLeaveFollows()
 // variable named `continue`, which a module that never names it can't be relying on.
 bool Parser::orContinueFollows()
 {
-    if (!FFlag::DebugLuwuDoExpr || functionStack.back().loopDepth == 0)
+    if (!FFlag::LuwuDoExpr || functionStack.back().loopDepth == 0)
         return false;
 
     if (lexer.current().type != Lexeme::Name || AstName(lexer.current().name) != "continue")
@@ -7612,14 +7608,8 @@ AstExpr* Parser::parseOrLeave(const char* introducer)
     expr->shorthand = true;
     expr->luwuOnly = true;
 
-    if (!FFlag::DebugLuwuDoExpr)
-        report(
-            keyword,
-            "'%s return', '%s break' and '%s continue' are Luwu features; enable the 'DebugLuwuDoExpr' fast flag to use them",
-            introducer,
-            introducer,
-            introducer
-        );
+    std::string leaveName = format("'%s return', '%s break' and '%s continue'", introducer, introducer, introducer);
+    checkLuwuFeature(keyword, LuwuFeature{leaveName.c_str(), /* plural= */ true, "LuwuDoExpr"}, FFlag::LuwuDoExpr);
 
     if (!matchParen)
         return expr;
@@ -7677,7 +7667,7 @@ AstStat* Parser::parseOrLeaveStatement(AstExpr* first, const Location& start)
             expr->location, copy({expr}), {}, "Incomplete statement: to give a value from a 'do' expression, write 'give <value>'"
         );
 
-    if (FFlag::DebugLuwuDoExpr)
+    if (FFlag::LuwuDoExpr)
         return reportStatError(
             expr->location,
             copy({expr}),
