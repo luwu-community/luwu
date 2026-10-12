@@ -5324,4 +5324,27 @@ TEST_CASE_FIXTURE(ClassesFixture, "trait_parameter_named_self_wins")
     LUAU_REQUIRE_NO_ERRORS(result);
     CHECK_EQ("Thing", toString(requireType("t")));
 }
+TEST_CASE_FIXTURE(ClassesFixture, "method_call_on_a_union_of_classes")
+{
+    CheckResult result = check(R"(
+        --!strict
+        class Cat(public name: string)
+            public function speak(self): string
+                return "meow"
+            end
+        end
+        class Dog(public name: string)
+            public function speak(self): string
+                return "woof"
+            end
+        end
+
+        local function talk(pet: Cat | Dog): string
+            return pet:speak()
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
 TEST_SUITE_END();
