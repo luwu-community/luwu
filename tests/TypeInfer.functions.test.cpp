@@ -3635,6 +3635,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "oss_2125")
         export type function CombineTableAndSetIndexer(a: type, b: type, c: type)
             local t = {}
 
+            assert(a:is("table"))
             for key, value in a:properties() do
                 t[key] = value.read
             end

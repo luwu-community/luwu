@@ -199,9 +199,53 @@ static int evaluateTypeAliasCall(lua_State* L)
         freezer.run(serializedTy);
     }
 
-    allocTypeUserData(L, serializedTy->type, /* frozen */ true);
+    allocTypeUserDataCopy(L, serializedTy, /* frozen */ true);
     return 1;
 }
+
+// Luwu doc references: metadata the run set on a class, object or trait (shared types) goes on the call's own type, which
+// the solver binds to the result and keeps the metadata through that. An error when it was set on one that isn't returned.
+static std::optional<std::string> applyNominalMetadata(TypeId instance, TypeFunctionTypeId result, TypeFunctionRuntimeBuilderState* state)
+{
+    for (TypeFunctionTypeId documented : state->ctx->typeFunctionRuntime->nominalMetadata)
+    {
+        if (documented != result)
+        {
+            const TypeFunctionExternType* nominal = get<TypeFunctionExternType>(documented);
+            std::string name = nominal && nominal->externTy ? toString(nominal->externTy) : "type";
+            return format(
+                "type.setmetadata: '%s' is shared by every use of it, so its metadata only applies when the type function returns it",
+                name.c_str()
+            );
+        }
+    }
+
+    if (!state->ctx->typeFunctionRuntime->nominalMetadata.empty())
+        asMutable(instance)->metadata = deserializeMetadata(result, state);
+    return std::nullopt;
+}
+
+// Luwu: whether a type is or contains an error type
+struct ErrorTypeFinder : TypeOnceVisitor
+{
+    bool found = false;
+
+    ErrorTypeFinder()
+        : TypeOnceVisitor("ErrorTypeFinder", /* skipBoundTypes */ true)
+    {
+    }
+
+    bool visit(TypeId ty) override
+    {
+        return !found;
+    }
+
+    bool visit(TypeId ty, const ErrorType&) override
+    {
+        found = true;
+        return false;
+    }
+};
 
 TypeFunctionReductionResult<TypeId> userDefinedTypeFunction(
     TypeId instance,
@@ -243,6 +287,18 @@ TypeFunctionReductionResult<TypeId> userDefinedTypeFunction(
 
     if (!check.blockingTypes.empty())
         return {std::nullopt, Reduction::MaybeOk, check.blockingTypes, {}};
+
+    // Luwu: an argument that is or contains an error (an unknown type, a misused `literal<T>`, ...) was reported where it
+    // is written. The call is an error too, quietly, as any other use of an error type is: a second message about it
+    // would only repeat the first. Upstream tries to pass it in and reports "Type functions do not currently support
+    // types of the form '*error-type*'".
+    for (TypeId typeParam : typeParams)
+    {
+        ErrorTypeFinder finder;
+        finder.traverse(typeParam);
+        if (finder.found)
+            return {ctx->builtins->errorType, Reduction::MaybeOk, {}, {}};
+    }
 
     // Ensure that whole type function environment is registered
     for (auto& [name, definition] : typeFunction->userFuncData.environmentFunction)
@@ -339,7 +395,7 @@ TypeFunctionReductionResult<TypeId> userDefinedTypeFunction(
                             freezer.run(serializedTy);
                         }
 
-                        allocTypeUserData(L, serializedTy->type, /* frozen */ true);
+                        allocTypeUserDataCopy(L, serializedTy, /* frozen */ true);
                         lua_setfield(L, -2, name.c_str());
                     }
                 }
@@ -392,7 +448,7 @@ TypeFunctionReductionResult<TypeId> userDefinedTypeFunction(
         if (!serializedTy)
             return {std::nullopt, Reduction::Erroneous, {}, {}, "Complexity limit reached when passing a type to a type function"};
 
-        allocTypeUserData(L, serializedTy->type);
+        allocTypeUserDataCopy(L, serializedTy);
     }
 
     // Set up an interrupt handler for type functions to respect type checking limits and LSP cancellation requests.
@@ -407,6 +463,7 @@ TypeFunctionReductionResult<TypeId> userDefinedTypeFunction(
     };
 
     ctx->typeFunctionRuntime->messages.clear();
+    ctx->typeFunctionRuntime->nominalMetadata.clear();
 
     if (FFlag::LuauTypeFunctionStructuredErrors)
     {
@@ -434,6 +491,10 @@ TypeFunctionReductionResult<TypeId> userDefinedTypeFunction(
 
     TypeFunctionTypeId retTypeFunctionTypeId = getTypeUserData(L, 1);
 
+    // Luwu: `return types.error(message)` reports exactly `message`
+    if (const TypeFunctionErrorType* error = get<TypeFunctionErrorType>(retTypeFunctionTypeId))
+        return {std::nullopt, Reduction::Erroneous, {}, {}, error->message, ctx->typeFunctionRuntime->messages};
+
     if (FFlag::LuauTypeFunctionStructuredErrors)
     {
         // No errors should be present here since we should've returned already if any were raised during serialization.
@@ -444,6 +505,9 @@ TypeFunctionReductionResult<TypeId> userDefinedTypeFunction(
         // At least 1 error occurred while deserializing
         if (!runtimeBuilder->errors.empty())
             return {std::nullopt, Reduction::Erroneous, {}, {}, toString(runtimeBuilder->errors.front()), ctx->typeFunctionRuntime->messages};
+
+        if (std::optional<std::string> error = applyNominalMetadata(instance, retTypeFunctionTypeId, runtimeBuilder.get()))
+            return {std::nullopt, Reduction::Erroneous, {}, {}, std::move(error), ctx->typeFunctionRuntime->messages};
 
         return {retTypeId, Reduction::MaybeOk, {}, {}, std::nullopt, ctx->typeFunctionRuntime->messages};
     }
@@ -457,6 +521,9 @@ TypeFunctionReductionResult<TypeId> userDefinedTypeFunction(
         // At least 1 error occurred while deserializing
         if (runtimeBuilder->errors_DEPRECATED.size() > 0)
             return {std::nullopt, Reduction::Erroneous, {}, {}, runtimeBuilder->errors_DEPRECATED.front(), ctx->typeFunctionRuntime->messages};
+
+        if (std::optional<std::string> error = applyNominalMetadata(instance, retTypeFunctionTypeId, runtimeBuilder.get()))
+            return {std::nullopt, Reduction::Erroneous, {}, {}, std::move(error), ctx->typeFunctionRuntime->messages};
 
         return {retTypeId, Reduction::MaybeOk, {}, {}, std::nullopt, ctx->typeFunctionRuntime->messages};
     }

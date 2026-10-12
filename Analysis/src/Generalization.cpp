@@ -924,6 +924,36 @@ void collapseFreeTypeCycles(
 } // namespace
 
 
+// Luwu: a free type settling to its upper bound has to fit what flowed into it. An unsealed table literal among those
+// (alone, in a union, or as a metatable's table) without an indexer takes the bound's, as Unifier2 does when the two
+// meet directly. They didn't meet when the free type was still free at the call: `u:push("x")` through a metatable,
+// with `push`'s `self` only inferred `{ string }` from its body afterwards.
+static void extendUnsealedLowerBounds(TypeId lowerBound, TypeId upperBound)
+{
+    const TableType* bound = get<TableType>(follow(upperBound));
+    if (!bound || !bound->indexer)
+        return;
+
+    auto extend = [&](TypeId ty)
+    {
+        ty = follow(ty);
+        if (const MetatableType* withMetatable = get<MetatableType>(ty))
+            ty = follow(withMetatable->table);
+        TableType* literal = getMutable<TableType>(ty);
+        if (literal && literal->state == TableState::Unsealed && !literal->indexer)
+            literal->indexer = TableIndexer{bound->indexer->indexType, bound->indexer->indexResultType};
+    };
+
+    lowerBound = follow(lowerBound);
+    if (const UnionType* options = get<UnionType>(lowerBound))
+    {
+        for (TypeId option : options->options)
+            extend(option);
+    }
+    else
+        extend(lowerBound);
+}
+
 GeneralizationResult<TypeId> generalizeType(
     NotNull<TypeArena> arena,
     NotNull<BuiltinTypes> builtinTypes,
@@ -1040,7 +1070,10 @@ GeneralizationResult<TypeId> generalizeType(
         }
 
         if (follow(ub) != freeTy)
+        {
+            extendUnsealedLowerBounds(ft->lowerBound, ub);
             emplaceType<BoundType>(asMutable(freeTy), ub);
+        }
         else if (!isWithinFunction || params.useCount == 1)
         {
             // If we have some free type:

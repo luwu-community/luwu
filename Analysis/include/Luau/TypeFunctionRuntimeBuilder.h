@@ -39,4 +39,7 @@ TypeFunctionTypePackId serialize(TypePackId tp, TypeFunctionRuntimeBuilderState*
 TypeId deserialize(TypeFunctionTypeId ty, TypeFunctionRuntimeBuilderState* state);
 TypePackId deserialize(TypeFunctionTypePackId tp, TypeFunctionRuntimeBuilderState* state);
 
+// Luwu doc references: a runtime type's metadata, with the type function call as where its doc comments were written
+std::shared_ptr<const TypeMetadataTable> deserializeMetadata(TypeFunctionTypeId ty, TypeFunctionRuntimeBuilderState* state);
+
 } // namespace Luau
