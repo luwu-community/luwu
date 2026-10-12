@@ -85,7 +85,7 @@ LUAU_FASTFLAG(LuauCustomYieldablePcalls)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuIfLocal)
-LUAU_FASTFLAG(DebugLuwuDoExpr)
+LUAU_FASTFLAG(LuwuDoExpr)
 LUAU_FASTFLAG(LuwuTableComprehensions)
 LUAU_FASTFLAG(LuwuTableFunctionFields)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
@@ -6570,7 +6570,7 @@ TEST_CASE("LoopWhenChains")
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuIfLocal, true},
         {FFlag::LuwuTableComprehensions, true},
-        {FFlag::DebugLuwuDoExpr, true},
+        {FFlag::LuwuDoExpr, true},
     };
 
     runConformance("loop_when.luwu");
@@ -6579,7 +6579,7 @@ TEST_CASE("LoopWhenChains")
 TEST_CASE("DoExpressions")
 {
     ScopedFastFlag sffs[] = {
-        {FFlag::DebugLuwuDoExpr, true},
+        {FFlag::LuwuDoExpr, true},
         {FFlag::LuwuIfLocal, true},
         {FFlag::LuwuDefaultArguments, true},
         {FFlag::LuwuNonePrimitive, true},
@@ -6592,7 +6592,7 @@ TEST_CASE("TableComprehensions")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuTableComprehensions, true},
-        {FFlag::DebugLuwuDoExpr, true},
+        {FFlag::LuwuDoExpr, true},
         {FFlag::LuwuIfLocal, true},
     };
 
@@ -6609,7 +6609,7 @@ TEST_CASE("TableFunctionFields")
 TEST_CASE("DoExpressionsCursed")
 {
     ScopedFastFlag sffs[] = {
-        {FFlag::DebugLuwuDoExpr, true},
+        {FFlag::LuwuDoExpr, true},
         {FFlag::LuwuIfLocal, true},
     };
 

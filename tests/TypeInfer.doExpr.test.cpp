@@ -5,7 +5,7 @@
 
 #include "ScopedFlags.h"
 
-LUAU_FASTFLAG(DebugLuwuDoExpr)
+LUAU_FASTFLAG(LuwuDoExpr)
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 
 using namespace Luau;
@@ -15,7 +15,7 @@ TEST_SUITE_BEGIN("TypeInferDoExpr");
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "do_expression_type_is_the_union_of_its_gives")
 {
-    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
     CheckResult result = check(R"(
         --!strict
@@ -35,7 +35,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "do_expression_type_is_the_union_of_its_gives
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "a_do_expression_that_never_gives_is_never")
 {
-    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
     CheckResult result = check(R"(
         --!strict
@@ -61,7 +61,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_do_expression_that_never_gives_is_never")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "do_expression_returns_are_the_function_s_returns")
 {
-    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
     CheckResult result = check(R"(
         --!strict
@@ -77,7 +77,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "do_expression_returns_are_the_function_s_ret
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "an_early_give_refines_the_rest_of_the_block")
 {
-    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
     CheckResult result = check(R"(
         --!strict
@@ -96,7 +96,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "an_early_give_refines_the_rest_of_the_block"
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "assignments_on_the_way_to_a_give_are_seen_after_the_expression")
 {
-    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
     CheckResult result = check(R"(
         --!strict
@@ -119,7 +119,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "assignments_on_the_way_to_a_give_are_seen_af
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "the_expected_type_flows_into_give")
 {
-    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
     CheckResult result = check(R"(
         --!strict
@@ -137,7 +137,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "the_expected_type_flows_into_give")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "do_expression_locals_are_scoped_to_the_block")
 {
-    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
     CheckResult result = check(R"(
         local v = do
@@ -155,7 +155,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "do_expression_locals_are_scoped_to_the_block
 TEST_CASE_FIXTURE(BuiltinsFixture, "do_expression_in_the_old_solver")
 {
     ScopedFastFlag sffs[] = {
-        {FFlag::DebugLuwuDoExpr, true},
+        {FFlag::LuwuDoExpr, true},
         {FFlag::DebugLuauForceOldSolver, true},
     };
 
@@ -174,7 +174,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "do_expression_in_the_old_solver")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "an_or_leave_statement_narrows_its_operand_for_the_rest_of_the_block")
 {
-    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
     CheckResult result = check(R"(
         --!strict
@@ -203,7 +203,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "an_or_leave_statement_narrows_its_operand_fo
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "an_or_leave_inside_another_expression_narrows_nothing_after_it")
 {
-    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
     // the `or` only runs when `c` is truthy, so `x` may still be nil after the statement
     CheckResult result = check(R"(

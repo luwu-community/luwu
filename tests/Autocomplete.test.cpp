@@ -23,7 +23,7 @@ LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuwuIfLocal)
 LUAU_FASTFLAG(LuwuTableComprehensions)
-LUAU_FASTFLAG(DebugLuwuDoExpr)
+LUAU_FASTFLAG(LuwuDoExpr)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
@@ -982,7 +982,7 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_loop_when_keywords")
 // Luwu Do Expressions (rfcs/do-expressions.md)
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_give_inside_do_expressions")
 {
-    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
     check(R"(
         local x = do

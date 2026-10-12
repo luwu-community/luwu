@@ -12,7 +12,7 @@ LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuwuNoinlineAttribute)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuIfLocal)
-LUAU_FASTFLAG(DebugLuwuDoExpr)
+LUAU_FASTFLAG(LuwuDoExpr)
 LUAU_FASTFLAG(LuwuTableComprehensions)
 LUAU_FASTFLAG(LuwuTableFunctionFields)
 LUAU_FASTFLAG(LuwuTableFunctionFields)
@@ -2355,7 +2355,7 @@ TEST_CASE("prettyPrint_loop_when_chains")
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuIfLocal, true},
         {FFlag::LuwuTableComprehensions, true},
-        {FFlag::DebugLuwuDoExpr, true},
+        {FFlag::LuwuDoExpr, true},
     };
 
     std::string code = R"(
@@ -2380,7 +2380,7 @@ local a = { for _, p in points when p.x > 0 give p.x + p.y }
 
 TEST_CASE("prettyPrint_do_expressions")
 {
-    ScopedFastFlag doExpr{FFlag::DebugLuwuDoExpr, true};
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
     std::string code = R"(
 local x = do

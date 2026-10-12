@@ -41,7 +41,7 @@ const FLAGS = "--fflags="
         "LuwuNonePrimitive=true",
         "LuwuTraits=true",
         "LuwuIfLocal=true",
-        "DebugLuwuDoExpr=true",
+        "LuwuDoExpr=true",
         "LuwuTableComprehensions=true",
     }, ",")
 -- Acting on a receiver's declared type is opt-in (see Compiler.cpp): every generated file says `--!trust`,
