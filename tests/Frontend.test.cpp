@@ -965,13 +965,20 @@ TEST_CASE_FIXTURE(FrontendFixture, "it_should_be_safe_to_stringify_explained_err
 
     CheckResult result = fe.check("Module/A");
 
-    REQUIRE_EQ(1, result.errors.size());
-
     // As above: stringifying reads the error's TypeIds, which must outlive the discarded type graph.
     if (!FFlag::DebugLuauForceOldSolver)
-        CHECK_EQ("'a' is missing a property:\n  • 'Count: number'", toString(result.errors[0]));
+    {
+        // The second error is the misspelling: `count` written where `Count` was meant.
+        REQUIRE_EQ(2, result.errors.size());
+        CHECK_EQ("'a' is missing a property:\n  • 'Count: number'", toString(result.errors[1]));
+        REQUIRE(get<Typo>(result.errors[0]));
+        CHECK_EQ("Did you mean 'Count' instead of 'count'?", toString(result.errors[0]));
+    }
     else
+    {
+        REQUIRE_EQ(1, result.errors.size());
         CHECK_EQ("required property 'Count' not found in type\n  'a'\nexpected type:\n  '{ Count: number }'", toString(result.errors[0]));
+    }
 }
 
 TEST_CASE_FIXTURE(FrontendFixture, "trace_requires_in_nonstrict_mode")

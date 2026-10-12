@@ -244,6 +244,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "vararg_function_is_quantified")
 
 TEST_CASE_FIXTURE(Fixture, "list_only_alternative_overloads_that_match_argument_count")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     CheckResult result = check(R"(
         local multiply: ((number)->number) & ((number)->string) & ((number, number)->number)
         multiply("")
@@ -279,6 +280,7 @@ TEST_CASE_FIXTURE(Fixture, "list_only_alternative_overloads_that_match_argument_
 
 TEST_CASE_FIXTURE(Fixture, "list_all_overloads_if_no_overload_takes_given_argument_count")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     CheckResult result = check(R"(
         local multiply: ((number)->number) & ((number)->string) & ((number, number)->number)
         multiply()
@@ -3518,6 +3520,7 @@ TEST_CASE_FIXTURE(Fixture, "overload_selection_pick_better_arity")
 
 TEST_CASE_FIXTURE(Fixture, "overload_selection_no_compatible_option")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     ScopedFastFlag _{FFlag::DebugLuauForceOldSolver, false};
 
     auto result = check(R"(

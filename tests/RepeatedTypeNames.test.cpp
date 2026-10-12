@@ -87,15 +87,14 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "repeated_type_with_nothing_to_name_it_after_
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK_EQ(
         toString(result.errors[0]),
-        "Expected this to be\n"
+        "Expected 'animals' to be\n"
         "    '{ [string]: Nyla }'\n"
         "but was given\n"
-        "    'animals: Animals'\n"
+        "    'Animals: { [string]: {Nyla} }'\n"
         "where\n"
-        "    type Animals = { [string]: {Nyla} }\n"
         "    type Nyla = { age: number?, kind: \"Cat\" | \"Dog\", name: string }\n"
         "\n"
-        "The passed type is similar, but has an incompatible path:\n"
+        "Some properties are incompatible:\n"
         "  • animals[string] is an array where a single 'Nyla' is expected"
     );
 }
@@ -118,14 +117,14 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "repeated_type_is_named_after_its_property")
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK_EQ(
         toString(result.errors[0]),
-        "Expected this to be\n"
+        "Expected 'response' to be\n"
         "    '{ http_code: HttpCode, ok: boolean }'\n"
         "but was given\n"
-        "    'response: { http_code: HttpCode, ok: {boolean} }'\n"
+        "    '{ http_code: HttpCode, ok: {boolean} }'\n"
         "where\n"
         "    type HttpCode = { reason: string, retry: boolean, status: number }\n"
         "\n"
-        "The passed type is similar, but has an incompatible path:\n"
+        "Some properties are incompatible:\n"
         "  • response.ok is an array where a single 'boolean' is expected"
     );
 }
@@ -146,14 +145,14 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "repeated_list_of_an_aliased_type_is_named_wi
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK_EQ(
         toString(result.errors[0]),
-        "Expected this to be\n"
+        "Expected 'shelter' to be\n"
         "    '{ open: boolean, pets: Animals }'\n"
         "but was given\n"
-        "    'shelter: { open: {boolean}, pets: Animals }'\n"
+        "    '{ open: {boolean}, pets: Animals }'\n"
         "where\n"
         "    type Animals = {Animal}\n"
         "\n"
-        "The passed type is similar, but has an incompatible path:\n"
+        "Some properties are incompatible:\n"
         "  • shelter.open is an array where a single 'boolean' is expected"
     );
 }
@@ -176,14 +175,14 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_name_taken_in_scope_is_not_reused")
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK_EQ(
         toString(result.errors[0]),
-        "Expected this to be\n"
+        "Expected 'settings' to be\n"
         "    '{ config: Nyla, retries: number }'\n"
         "but was given\n"
-        "    'settings: { config: Nyla, retries: {number} }'\n"
+        "    '{ config: Nyla, retries: {number} }'\n"
         "where\n"
         "    type Nyla = { host: string, port: number, secure: boolean }\n"
         "\n"
-        "The passed type is similar, but has an incompatible path:\n"
+        "Some properties are incompatible:\n"
         "  • settings.retries is an array where a single 'number' is expected"
     );
 }
@@ -245,7 +244,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "large_tables_are_printed_a_field_per_line")
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK_EQ(
         toString(result.errors[0]),
-        "Expected this to be\n"
+        "Expected 'record' to be\n"
         "    {\n"
         "        id: number,\n"
         "        name: string,\n"
@@ -253,9 +252,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "large_tables_are_printed_a_field_per_line")
         "        tags: {string}\n"
         "    }\n"
         "but was given\n"
-        "    'record: { id: string, … }'\n"
+        "    '{ id: string, … }'\n"
         "\n"
-        "The passed type is similar, but has an incompatible path:\n"
+        "Some properties are incompatible:\n"
         "  • record.id: expected 'number', got 'string'"
     );
 }
@@ -273,15 +272,15 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_long_field_breaks_a_small_table")
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK_EQ(
         toString(result.errors[0]),
-        "Expected this to be\n"
+        "Expected 'options' to be\n"
         "    {\n"
         "        on_connection_established: (number) -> (),\n"
         "        retries: number\n"
         "    }\n"
         "but was given\n"
-        "    'options: { retries: string, … }'\n"
+        "    '{ retries: string, … }'\n"
         "\n"
-        "The passed type is similar, but has an incompatible path:\n"
+        "Some properties are incompatible:\n"
         "  • options.retries: expected 'number', got 'string'"
     );
 }

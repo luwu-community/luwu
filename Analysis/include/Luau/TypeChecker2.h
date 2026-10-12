@@ -258,8 +258,17 @@ private:
     template<typename TID>
     Reasonings explainReasonings_(TID subTy, TID superTy, Location location, const SubtypingResult& r);
 
-    void explainError(TypeId subTy, TypeId superTy, Location location, const SubtypingResult& result);
+    // `contextVerb` says what the two types are of, when they're a part of what's at `location` (`every returned
+    // value to be`), as `TypeMismatch::contextVerb`.
+    void explainError(
+        TypeId subTy,
+        TypeId superTy,
+        Location location,
+        const SubtypingResult& result,
+        std::optional<std::string> contextVerb = std::nullopt
+    );
     void explainError(TypePackId subTy, TypePackId superTy, Location location, const SubtypingResult& result);
+    void reportPropertyTypos(AstExprTable* expr);
 
     bool testLiteralOrAstTypeIsSubtype(AstExpr* expr, TypeId expectedType);
 

@@ -167,17 +167,28 @@ TEST_CASE_FIXTURE(ExplainFixture, "metatable_without_a_table_part")
     CHECK(!explanation);
 }
 
-// The header says how the value got here, from a string the caller builds.
-TEST_CASE_FIXTURE(ExplainFixture, "arrival_names_how_the_value_arrived")
+// Two tables only disagree about properties.
+TEST_CASE_FIXTURE(ExplainFixture, "tables_say_which_properties_are_incompatible")
 {
     TypeId expected = tbl({{"a", getBuiltins()->numberType}, {"b", getBuiltins()->numberType}});
     TypeId given = tbl({{"a", getBuiltins()->stringType}, {"b", getBuiltins()->numberType}});
+
+    std::optional<MismatchExplanation> explanation = explain(given, expected);
+    REQUIRE(explanation);
+    CHECK_EQ(explanation->reason, "\n\nSome properties are incompatible:\n  • given.a: expected 'number', got 'string'");
+    CHECK_EQ(explanation->notation, MismatchNotationGotRoot);
+}
+
+// Any other header says how the value got here, from a string the caller builds.
+TEST_CASE_FIXTURE(ExplainFixture, "arrival_names_how_the_value_arrived")
+{
+    TypeId expected = tbl({{"a", getBuiltins()->numberType}, {"b", getBuiltins()->numberType}});
+    TypeId given = arena.addType(IntersectionType{{tbl({{"a", getBuiltins()->stringType}}), tbl({{"b", getBuiltins()->numberType}})}});
 
     std::string arrival = std::string("ret") + "urned";
     std::optional<MismatchExplanation> explanation = explain(given, expected, arrival);
     REQUIRE(explanation);
     CHECK_EQ(explanation->reason, "\n\nThe returned type is similar, but has an incompatible path:\n  • given.a: expected 'number', got 'string'");
-    CHECK_EQ(explanation->notation, MismatchNotationGotRoot);
 }
 
 // A string isn't compared with a union's members one by one: it has no places to point at, and
@@ -389,8 +400,8 @@ TEST_CASE_FIXTURE(ExplainFixture, "many_bad_arguments_are_counted")
     std::optional<MismatchExplanation> explanation = explain(given, expected);
     REQUIRE(explanation);
     INFO(explanation->reason);
-    CHECK(countLines(explanation->reason, "      • 'number' as its") == 6);
-    CHECK(explanation->reason.find("      • ...and 14 more arguments") != std::string::npos);
+    CHECK(countLines(explanation->reason, "  • its ") == 6);
+    CHECK(explanation->reason.find("  • ...and 14 more arguments") != std::string::npos);
 }
 
 // However many sections a message has, it stops at the reason's line cap and counts the lines left.
@@ -435,14 +446,12 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "array_of_the_expected_type_in_a_map")
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK_EQ(
         toString(result.errors[0]),
-        "Expected this to be\n"
+        "Expected 'animals' to be\n"
         "    '{ [string]: { name: string } }'\n"
         "but was given\n"
-        "    'animals: Animals'\n"
-        "where\n"
-        "    type Animals = { [string]: {{ name: string }} }\n"
+        "    'Animals: { [string]: {{ name: string }} }'\n"
         "\n"
-        "The passed type is similar, but has an incompatible path:\n"
+        "Some properties are incompatible:\n"
         "  • animals[string] is an array where a single '{ name: string }' is expected"
     );
 }
@@ -460,12 +469,12 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "element_of_the_expected_array_in_a_field")
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK_EQ(
         toString(result.errors[0]),
-        "Expected this to be\n"
+        "Expected 'pack' to be\n"
         "    '{ cats: {{ name: string }} }'\n"
         "but was given\n"
-        "    'pack: { cats: { name: string } }'\n"
+        "    '{ cats: { name: string } }'\n"
         "\n"
-        "The passed type is similar, but has an incompatible path:\n"
+        "Some properties are incompatible:\n"
         "  • pack.cats is a single '{ name: string }' where an array of them is expected"
     );
 }
@@ -487,19 +496,19 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "whole_value_is_an_array_of_the_expected_type
     LUAU_REQUIRE_ERROR_COUNT(2, result);
     CHECK_EQ(
         toString(result.errors[0]),
-        "Expected this to be\n"
+        "Expected 'cats' to be\n"
         "    '{ name: string }'\n"
         "but was given\n"
-        "    'cats: {{ name: string }}'\n"
+        "    '{{ name: string }}'\n"
         "\n"
         "'cats' is an array where a single value is expected."
     );
     CHECK_EQ(
         toString(result.errors[1]),
-        "Expected this to be\n"
+        "Expected 'cat' to be\n"
         "    '{{ name: string }}'\n"
         "but was given\n"
-        "    'cat: { name: string }'\n"
+        "    '{ name: string }'\n"
         "\n"
         "'cat' is a single value where an array is expected: pass '{ cat }' instead."
     );
@@ -519,13 +528,12 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "array_of_the_expected_type_as_a_callback_arg
     CHECK_EQ(
         toString(result.errors[0]),
         "Expected this to be\n"
-        "    '({ name: string }) -> ()'\n"
+        "    '(cat: { name: string }) -> ()'\n"
         "but was given\n"
-        "    '({{ name: string }}) -> ()'\n"
+        "    '(cats: {{ name: string }}) -> ()'\n"
         "\n"
-        "This is because:\n"
-        "  • 'each' can call '(cats: {{ name: string }}) -> ()' with an incorrect argument:\n"
-        "      • 'cats: { name: string }', a single value where an array of them is expected"
+        "This function can be passed a value it doesn't accept:\n"
+        "  • cats: expected a single '{ name: string }', got an array of them"
     );
 }
 
@@ -546,8 +554,8 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "array_of_the_expected_type_as_a_callback_ret
         "but was given\n"
         "    '(...any) -> {{ name: string }}'\n"
         "\n"
-        "This is because:\n"
-        "  • '() -> {{ name: string }}' should return a single '{ name: string }', not an array of them"
+        "This function should return:\n"
+        "  • a single '{ name: string }', not an array of them"
     );
 }
 
@@ -567,12 +575,12 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "an_alias_is_not_spelled_out_when_the_bullets
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK_EQ(
         toString(result.errors[0]),
-        "Expected this to be\n"
+        "Expected 'settings' to be\n"
         "    'Config'\n"
         "but was given\n"
-        "    'settings: { port: string, … }'\n"
+        "    '{ port: string, … }'\n"
         "\n"
-        "The given type is similar, but has an incompatible path:\n"
+        "Some properties are incompatible:\n"
         "  • settings.port: expected 'number', got 'string'"
     );
 }
@@ -593,15 +601,12 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "an_argument_bullet_says_what_the_parameter_t
     CHECK_EQ(
         toString(result.errors[0]),
         "Expected this to be\n"
-        "    '(Response) -> ()'\n"
+        "    '(response: Response) -> ()'\n"
         "but was given\n"
-        "    '(Nyla) -> ()'\n"
-        "where\n"
-        "    type Nyla = { body: string, headers: { [string]: string }, status_code: string }\n"
+        "    '(response: { body: string, headers: { [string]: string }, status_code: string }) -> ()'\n"
         "\n"
-        "This is because:\n"
-        "  • 'request' can call '(response: Nyla) -> ()' with an incorrect argument:\n"
-        "      • 'response.status_code: number' (expected 'string')"
+        "This function can be passed a value it doesn't accept:\n"
+        "  • response.status_code: expected 'number', got 'string'"
     );
 }
 
@@ -633,10 +638,10 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "an_array_where_a_map_is_expected_says_so")
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK_EQ(
         toString(result.errors[0]),
-        "Expected this to be\n"
+        "Expected 'permissions' to be\n"
         "    'Permissions'\n"
         "but was given\n"
-        "    'permissions: {string}'\n"
+        "    '{string}'\n"
         "\n"
         "permissions: expected a map of '{ [string]: boolean }', got an array of 'string'"
     );
@@ -659,14 +664,14 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "mentioned_aliases_are_declared")
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK_EQ(
         toString(result.errors[0]),
-        "Expected this to be\n"
+        "Expected 'request' to be\n"
         "    'Request'\n"
         "but was given\n"
-        "    'request: { method: \"PATCH\", … }'\n"
+        "    '{ method: \"PATCH\", … }'\n"
         "where\n"
         "    type Method = \"GET\" | \"POST\" | \"PUT\" | \"DELETE\"\n"
         "\n"
-        "The passed type is similar, but has an incompatible path:\n"
+        "Some properties are incompatible:\n"
         "  • request.method: expected 'Method', got '\"PATCH\"'"
     );
 }
@@ -693,15 +698,292 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_large_record_shows_the_properties_that_mat
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK_EQ(
         toString(result.errors[0]),
-        "Expected this to be\n"
+        "Expected 'player' to be\n"
         "    'Player'\n"
         "but was given\n"
-        "    'player: { health: string, gold: string, kind: \"player\", team: \"red\", … }'\n"
+        "    '{ health: string, gold: string, kind: \"player\", team: \"red\", … }'\n"
         "\n"
-        "The passed type is similar, but has 2 incompatible paths:\n"
+        "Some properties are incompatible:\n"
         "  • player.health: expected 'number', got 'string'\n"
         "  • player.gold: expected 'number', got 'string'"
     );
+}
+
+// A value with a name is called by it, except when the name is one of the types printed under it.
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_name_that_is_also_a_printed_type_is_not_the_subject")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type Config = { port: number }
+        local Config = 5
+        local config: Config = Config
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        toString(result.errors[0]),
+        "Expected this to be\n"
+        "    'Config: { port: number }'\n"
+        "but was given\n"
+        "    'number'\n"
+        "\n"
+        "'number' is unrelated to 'Config'."
+    );
+}
+
+// A function in a table literal is named by its place in the literal, and its parameters and return values are
+// listed without its signature again: the header prints it, parameter names included.
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_function_in_a_table_literal_is_named_by_its_place")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type Handler = (inv: { slots: { number? } }) -> ()
+        local bus: { handlers: { craft: { Handler } } } = {
+            handlers = { craft = { function(inv: { slots: { number } }) end } },
+        }
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        toString(result.errors[0]),
+        "Expected 'bus.handlers.craft[1]' to be\n"
+        "    '(inv: { slots: {number?} }) -> ()'\n"
+        "but was given\n"
+        "    '(inv: { slots: {number} }) -> ()'\n"
+        "\n"
+        "This function can be passed a value it doesn't accept:\n"
+        "  • inv.slots[i]: expected 'number?', got 'number'\n"
+        "\n"
+        "Help: 'inv.slots[i]' can't be narrowed from 'number?' to 'number':\n"
+        "  • code calling this function as the expected type is allowed to pass 'nil' for 'inv.slots[i]'\n"
+        "  • this parameter must accept 'number?' to match the caller's expected signature"
+    );
+}
+
+// A function taken as a parameter gets a bullet of its own among the arguments.
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_callback_parameter_gets_its_own_bullet")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        local function use(handler: (req: { user: string? }, next: () -> ()) -> ()) end
+        local function auth(req: { user: string? }, next: (err: string?) -> ()) end
+        use(auth)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        toString(result.errors[0]),
+        "Expected 'auth' to be\n"
+        "    '(req: { user: string? }, next: () -> ()) -> ()'\n"
+        "but was given\n"
+        "    '(req: { user: string? }, next: (err: string?) -> ()) -> ()'\n"
+        "\n"
+        "This function can be passed a value it doesn't accept:\n"
+        "  • next = () -> ()\n"
+        "    'next' has no arguments but is incorrectly called with 'string?'"
+    );
+}
+
+// `...T` returned where `...U` is declared is about every value.
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_variadic_return_is_about_every_value")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        local function parts(...: string): ...number
+            return ...
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        toString(result.errors[0]),
+        "Expected every returned value to be 'number', but was given 'string'"
+    );
+}
+
+// Every overload is listed in the one error, by number, with its parameter names.
+TEST_CASE_FIXTURE(BuiltinsFixture, "overloads_are_listed_in_one_error")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type On = ((event: "join", fn: () -> ()) -> ()) & ((event: "chat", fn: (message: string) -> ()) -> ())
+        local on: On = nil :: any
+        on("chat", function(message: number) end)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        toString(result.errors[0]),
+        "None of the overloads of 'on' accept these 2 arguments:\n"
+        "  • #1 '(event: \"join\", fn: () -> ()) -> ()'\n"
+        "  • #2 '(event: \"chat\", fn: (message: string) -> ()) -> ()'"
+    );
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "overloads_taking_other_argument_counts_are_listed_in_one_error")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type On = ((event: "join", fn: () -> ()) -> ()) & ((event: "chat", fn: (message: string) -> ()) -> ())
+        local on: On = nil :: any
+        on("chat")
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        toString(result.errors[0]),
+        "No overload of 'on' takes 1 argument:\n"
+        "  • #1 '(event: \"join\", fn: () -> ()) -> ()'\n"
+        "  • #2 '(event: \"chat\", fn: (message: string) -> ()) -> ()'"
+    );
+}
+
+// A function whose only problem is a parameter the expected type never passes is one sentence, without the two types,
+// and a function in a table literal passed to a call is named after the call.
+TEST_CASE_FIXTURE(BuiltinsFixture, "an_extra_parameter_is_one_sentence")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type Props = { onClick: (button: string) -> () }
+        local function Button(props: Props) end
+        Button({ onClick = function(button: string, modifiers: { string }) end })
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(toString(result.errors[0]), "'Button.onClick' should only have 1 parameter, but was passed a function with an extra parameter 'modifiers: {string}'.");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "an_unnamed_function_with_extra_parameters_is_one_sentence")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        local function each(f: (item: string) -> ()) end
+        each(function(item: string, index: number, total: number) end)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(toString(result.errors[0]), "This function should only have 1 parameter, but has extra parameters 'index: number' and 'total: number'.");
+}
+
+// With something else wrong too, an extra parameter is one of the bullets.
+TEST_CASE_FIXTURE(BuiltinsFixture, "an_extra_parameter_among_other_problems_is_a_bullet")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        local function each(f: (item: string) -> ()) end
+        each(function(item: number, index: number) end)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        toString(result.errors[0]),
+        "Expected this to be\n"
+        "    '(item: string) -> ()'\n"
+        "but was given\n"
+        "    '(item: number, index: number) -> ()'\n"
+        "\n"
+        "This function can be passed values it doesn't accept:\n"
+        "  • item: expected 'string', got 'number'\n"
+        "  • 'index: number' is never passed"
+    );
+}
+
+// An aliased union in the header shows only the members the message refers to.
+TEST_CASE_FIXTURE(BuiltinsFixture, "union_members_the_message_doesnt_refer_to_are_left_out")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type Drop = { gold: number } | { id: string, weight: number } | { xp: number } | { mana: number }
+        local function take(_: { id: string, count: number }) end
+        local function f(lastDrop: Drop) take(lastDrop) end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        toString(result.errors[0]),
+        "Expected 'lastDrop' to be\n"
+        "    '{ count: number, id: string }'\n"
+        "but was given\n"
+        "    type Drop = … | { id: string, weight: number } | … (2 more)\n"
+        "\n"
+        "No member of 'Drop' is compatible with the expected type:\n"
+        "lastDrop#2 = { id: string, weight: number } is almost what we expected, but:\n"
+        "  • missing property 'lastDrop.count: number'"
+    );
+}
+
+// When the one problem is a misspelled property, the error is a typo, not a type mismatch.
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_typo_is_only_its_correction")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type GameEvent = { kind: "join", player: string } | { kind: "leave", player: string, reason: "kick" | "ban" }
+        local function emit(_: GameEvent) end
+        local leaving = { kind = "leave" :: "leave", player = "p", reson = "kick" :: "kick" }
+        emit(leaving)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    REQUIRE(get<Typo>(result.errors[0]));
+    CHECK_EQ(toString(result.errors[0]), "Did you mean 'leaving.reason' instead of 'leaving.reson'?");
+}
+
+// A misspelled property in a table literal is reported at its name, even for an optional property, which nothing else
+// reports: the literal fits, and the value is never read.
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_misspelled_optional_property_in_a_literal_is_a_typo")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type Config = { name: string, program: { path: string }?, verbose: boolean? }
+        local cfg: Config = {
+            name = "build",
+            pogram = { path = "/usr/bin/cc" },
+        }
+        local again: Config = { name = "x", ["verbos"] = true }
+        local both: Config = { name = "y", program = nil, progam = 1 }
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    REQUIRE(get<Typo>(result.errors[0]));
+    CHECK_EQ(toString(result.errors[0]), "Did you mean 'program' instead of 'pogram'?");
+    // Only the name, not its value.
+    CHECK_EQ(result.errors[0].location, Location{{4, 12}, {4, 18}});
+    REQUIRE(get<Typo>(result.errors[1]));
+    CHECK_EQ(toString(result.errors[1]), "Did you mean 'verbose' instead of 'verbos'?");
+}
+
+// A string one typo from an expected one is a typo (a swapped pair of letters is one), and a string too short to have
+// typos isn't, nor is a short word two edits from another.
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_misspelled_string_is_a_typo")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        local key: "LeftControl" | "LeftShift" = "LeftCtrl"
+        local team: "Red" | "Blue" = "Bleu"
+        local letter: "s" = "t"
+        local item: "Tool" | "Weapon" = "Food"
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(4, result);
+    REQUIRE(get<Typo>(result.errors[0]));
+    CHECK_EQ(toString(result.errors[0]), "Did you mean '\"LeftControl\"' instead of '\"LeftCtrl\"'?");
+    REQUIRE(get<Typo>(result.errors[1]));
+    CHECK_EQ(toString(result.errors[1]), "Did you mean '\"Blue\"' instead of '\"Bleu\"'?");
+    CHECK(get<TypeMismatch>(result.errors[2]));
+    CHECK(get<TypeMismatch>(result.errors[3]));
 }
 
 TEST_SUITE_END();

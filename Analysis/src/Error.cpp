@@ -280,6 +280,9 @@ struct ErrorConverter
 
         ToStringOptions typeOptions;
         typeOptions.sortUnionMembers = !tm.luwuExplanation;
+        // Luwu (helpful subtyping errors): an explained mismatch prints parameter names, so the two function types can
+        // be compared parameter by parameter and its bullets can refer to them by name.
+        typeOptions.functionTypeArguments = tm.luwuExplanation;
 
         std::string givenTypeName = tm.givenName ? *tm.givenName : Luau::toString(tm.givenType, typeOptions);
         std::string wantedTypeName = tm.wantedName ? *tm.wantedName : Luau::toString(tm.wantedType, typeOptions);
@@ -301,13 +304,6 @@ struct ErrorConverter
             return "'" + s + "'";
         };
 
-        // Normally this preamble just reads "Expected this to be"; when the mismatch reasoning
-        // was entirely about one specific, recognizable aspect of the type (e.g. a function's
-        // return type, or its arguments), a more specific phrase reads a lot more naturally,
-        // e.g. "Expected this function to return" instead of forcing the reader to infer that
-        // context from a wordy explanation below.
-        std::string preamble = tm.contextVerb ? ("Expected " + *tm.contextVerb) : "Expected this to be";
-
         // An explained mismatch roots its paths at `given` (or the variable's name), so it says it was given.
         // Except about a function's parameters or returns, where "was given 'Stack, number'" reads as
         // being called with them: there it says what the function it got takes or returns.
@@ -326,17 +322,34 @@ struct ErrorConverter
                                          std::optional<std::string> givenQualifier,
                                          std::optional<std::string> wantedQualifier) -> std::string
         {
-            std::string givenShown = tm.givenVariable ? *tm.givenVariable + ": " + givenType : givenType;
-            std::string given = givenQualifier ? shownType(givenShown) + *givenQualifier : shownType(givenShown);
+            // Luwu (helpful subtyping errors): a value with a name is called by it, `Expected 'totals' to be`, so the
+            // two types under it are only types and can be compared. Not when the name is one of the two types
+            // (`Expected 'Item' to be 'Item'` about a class and its object), including one spelled out in place as
+            // `'Config: { port: number }'`.
+            auto printsAs = [&](const std::string& type)
+            {
+                return type == *tm.givenVariable || type.rfind(*tm.givenVariable + ": ", 0) == 0;
+            };
+            bool nameIsAType = tm.givenVariable && (printsAs(givenType) || printsAs(wantedType));
+            std::string subject = tm.givenVariable && !nameIsAType ? quote(*tm.givenVariable) : "this";
+            // Normally this preamble just reads "Expected this to be"; when the mismatch reasoning
+            // was entirely about one specific, recognizable aspect of the type (e.g. a function's
+            // return type, or its arguments), a more specific phrase reads a lot more naturally,
+            // e.g. "Expected this function to return" instead of forcing the reader to infer that
+            // context from a wordy explanation below.
+            std::string preamble = tm.contextVerb ? ("Expected " + *tm.contextVerb) : "Expected " + subject + " to be";
+
+            std::string given = givenQualifier ? shownType(givenType) + *givenQualifier : shownType(givenType);
             std::string wanted = wantedQualifier ? shownType(wantedType) + *wantedQualifier : shownType(wantedType);
             size_t luauIndentTypeMismatchMaxTypeLength = size_t(FInt::LuauIndentTypeMismatchMaxTypeLength);
             // Luwu (helpful subtyping errors): two types go on lines of their own when one is printed a field per
-            // line, which can't share a line with the sentence, and when Luwu printed them (`wantedName`) and
-            // either has a table in it: tables side by side on one line can't be compared.
-            bool blockTypes = givenShown.find('\n') != std::string::npos || wantedType.find('\n') != std::string::npos;
-            bool hasTables = givenShown.find('{') != std::string::npos || wantedType.find('{') != std::string::npos;
-            bool stacked = blockTypes || ((tm.wantedName || tm.givenName) && hasTables);
-            bool givenIsShort = !stacked && givenShown.length() <= luauIndentTypeMismatchMaxTypeLength;
+            // line, which can't share a line with the sentence, and when Luwu printed or explained them and either has
+            // a table in it: tables side by side on one line can't be compared.
+            bool blockTypes = givenType.find('\n') != std::string::npos || wantedType.find('\n') != std::string::npos;
+            bool hasTables = givenType.find('{') != std::string::npos || wantedType.find('{') != std::string::npos;
+            bool printedByLuwu = tm.wantedName || tm.givenName || tm.luwuExplanation;
+            bool stacked = blockTypes || (printedByLuwu && hasTables);
+            bool givenIsShort = !stacked && givenType.length() <= luauIndentTypeMismatchMaxTypeLength;
             bool eitherIsShort = givenIsShort || (!stacked && wantedType.length() <= luauIndentTypeMismatchMaxTypeLength);
 
             // An aliased union is printed as its declaration, `type Drop = A | B`, so its members are
@@ -345,10 +358,7 @@ struct ErrorConverter
             {
                 if (tm.wantedExpansion)
                     wanted = typeDeclaration(wantedType, *tm.wantedExpansion);
-                // Under `'settings: Settings'`, the declaration is the line after it.
-                if (tm.givenExpansion && tm.givenVariable)
-                    given += "\n    " + typeDeclaration(givenType, *tm.givenExpansion);
-                else if (tm.givenExpansion)
+                if (tm.givenExpansion)
                     given = typeDeclaration(givenType, *tm.givenExpansion);
                 return preamble + "\n    " + wanted + "\n" + butGot + "\n    " + given;
             }
@@ -356,15 +366,15 @@ struct ErrorConverter
             if (get<NeverType>(follow(tm.wantedType)))
             {
                 if (givenIsShort)
-                    return "Expected this to be unreachable, " + butGot + " " + given;
-                return "Expected this to be unreachable, " + butGot + "\n    " + given;
+                    return "Expected " + subject + " to be unreachable, " + butGot + " " + given;
+                return "Expected " + subject + " to be unreachable, " + butGot + "\n    " + given;
             }
 
             if (tm.context == TypeMismatch::InvariantContext)
             {
                 if (eitherIsShort)
-                    return "Expected this to be exactly " + wanted + ", " + butGot + " " + given;
-                return "Expected this to be exactly\n    " + wanted + "\n" + butGot + "\n    " + given;
+                    return "Expected " + subject + " to be exactly " + wanted + ", " + butGot + " " + given;
+                return "Expected " + subject + " to be exactly\n    " + wanted + "\n" + butGot + "\n    " + given;
             }
 
             if (eitherIsShort)
@@ -1208,6 +1218,11 @@ struct ErrorConverter
                "an instance of this class from a `public function` instead? Call the constructor to silence";
     }
 
+    std::string operator()(const Typo& e) const
+    {
+        return "Did you mean '" + e.meant + "' instead of '" + e.written + "'?";
+    }
+
     std::string operator()(const ConstructorReadByName& e) const
     {
         return "Cannot read '__init' of class '" + e.className + "'; constructing the class with '" + e.className +
@@ -1304,7 +1319,12 @@ struct ErrorConverter
 
     std::string operator()(const MultipleNonviableOverloads& e) const
     {
-        return "None of the overloads for function that accept " + std::to_string(e.attemptedArgCount) + " arguments are compatible.";
+        if (e.overloads.empty())
+            return "None of the overloads for function that accept " + std::to_string(e.attemptedArgCount) + " arguments are compatible.";
+
+        std::string function = e.callee.empty() ? "this function" : "'" + e.callee + "'";
+        std::string arguments = e.attemptedArgCount == 1 ? "this argument" : "these " + std::to_string(e.attemptedArgCount) + " arguments";
+        return "None of the overloads of " + function + " accept " + arguments + ":\n" + numberedOverloads(e.overloads);
     }
 
     std::string operator()(const RecursiveRestraintViolation& e) const
@@ -1582,6 +1602,11 @@ bool UnusableClass::operator==(const UnusableClass& rhs) const
 bool UninstantiableClass::operator==(const UninstantiableClass& rhs) const
 {
     return classTy == rhs.classTy;
+}
+
+bool Typo::operator==(const Typo& rhs) const
+{
+    return written == rhs.written && meant == rhs.meant;
 }
 
 bool ConstructorReadByName::operator==(const ConstructorReadByName& rhs) const
@@ -1909,7 +1934,21 @@ bool GenericTypePackCountMismatch::operator==(const GenericTypePackCountMismatch
 
 bool MultipleNonviableOverloads::operator==(const MultipleNonviableOverloads& rhs) const
 {
-    return attemptedArgCount == rhs.attemptedArgCount;
+    return attemptedArgCount == rhs.attemptedArgCount && callee == rhs.callee && overloads == rhs.overloads;
+}
+
+std::string numberedOverloads(const std::vector<std::string>& signatures)
+{
+    // Past this many, the rest are counted: a hover shouldn't scroll.
+    constexpr size_t kMaxListedOverloads = 8;
+
+    std::string list;
+    size_t shown = std::min(signatures.size(), kMaxListedOverloads);
+    for (size_t i = 0; i < shown; ++i)
+        list += (i == 0 ? "" : "\n") + std::string("  • #") + std::to_string(i + 1) + " '" + signatures[i] + "'";
+    if (signatures.size() > shown)
+        list += "\n  • ...and " + std::to_string(signatures.size() - shown) + " more";
+    return list;
 }
 
 bool InstantiateGenericsOnNonFunction::operator==(const InstantiateGenericsOnNonFunction& rhs) const
@@ -2147,6 +2186,9 @@ void copyError(T& e, TypeArena& destArena, CloneState& cloneState)
         e.classTy = clone(e.classTy);
     else if constexpr (std::is_same_v<T, ConstructorReadByName>)
         e.table = clone(e.table);
+    else if constexpr (std::is_same_v<T, Typo>)
+    {
+    }
     else if constexpr (std::is_same_v<T, UninitializableClassField>)
         e.classTy = clone(e.classTy);
     else if constexpr (std::is_same_v<T, UnusableClass>)

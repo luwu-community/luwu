@@ -4561,6 +4561,7 @@ TEST_CASE_FIXTURE(Fixture, "read_only_property_with_type_mismatch_reports_both_e
 
 TEST_CASE_FIXTURE(Fixture, "read_only_property_subtype_mismatch_error_message")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     DOES_NOT_PASS_OLD_SOLVER_GUARD();
     ScopedFastFlag sff[] = {
         {FFlag::LuauPropertyModifierMismatchErrors, true},
@@ -7398,6 +7399,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "table_insert_strings_and_then_concat")
 
 TEST_CASE_FIXTURE(Fixture, "readonly_indexer_access_mismatch_error")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     DOES_NOT_PASS_OLD_SOLVER_GUARD();
     ScopedFastFlag _[] = {
         {FFlag::LuauPropertyModifierMismatchErrors, true},

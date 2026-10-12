@@ -1456,6 +1456,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "no_eq_field")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "tag_field")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
 
     CheckResult result = check(R"(

@@ -32,6 +32,7 @@
 #include <algorithm>
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "Luau/Simplify.h"
 
@@ -2077,6 +2078,18 @@ void TypeChecker2::visit(AstExprVarargs* expr)
     // TODO!
 }
 
+// Luwu (helpful subtyping errors): each overload as the message lists it, with its parameter names.
+static std::vector<std::string> overloadSignatures(const std::vector<TypeId>& overloads)
+{
+    ToStringOptions options;
+    options.functionTypeArguments = true;
+    options.sortUnionMembers = false;
+    std::vector<std::string> signatures;
+    for (TypeId overload : overloads)
+        signatures.push_back(toString(overload, options));
+    return signatures;
+}
+
 static void reportAvailableOverloads(ErrorVec& errors, Location location, const ModuleName& moduleName, const std::vector<TypeId>& overloads)
 {
     if (overloads.empty())
@@ -2469,7 +2482,14 @@ void TypeChecker2::visitCall(AstExprCall* call)
         }
 
         // If all nonviable overloads are error suppressing, don't report anything.
-        if (!overloadsToReport.empty())
+        if (!overloadsToReport.empty() && FFlag::LuwuHelpfulSubtypingErrors)
+        {
+            MultipleNonviableOverloads error{argHead.size()};
+            error.callee = calleeDisplayName(call->func);
+            error.overloads = overloadSignatures(overloadsToReport);
+            reportError(std::move(error), call->location);
+        }
+        else if (!overloadsToReport.empty())
         {
             reportError(MultipleNonviableOverloads{argHead.size()}, call->location);
             reportAvailableOverloads(module->errors, call->location, module->name, overloadsToReport);
@@ -2508,6 +2528,17 @@ void TypeChecker2::visitCall(AstExprCall* call)
             reportError(CountMismatch{minParams, optMaxParams, specifiedCount, CountMismatch::Arg, isVariadic}, call->func->location);
             return;
         }
+    }
+
+    // Luwu (helpful subtyping errors): one error, naming the function and listing its overloads a line each.
+    if (!result2.arityMismatches.empty() && FFlag::LuwuHelpfulSubtypingErrors)
+    {
+        std::string callee = calleeDisplayName(call->func);
+        std::string function = callee.empty() ? "this function" : "'" + callee + "'";
+        std::string arguments = argHead.size() == 1 ? "1 argument" : std::to_string(argHead.size()) + " arguments";
+        std::string message = "No overload of " + function + " takes " + arguments + ":\n" + numberedOverloads(overloadSignatures(result2.arityMismatches));
+        reportError(GenericError{std::move(message)}, call->func->location);
+        return;
     }
 
     if (!result2.arityMismatches.empty())
@@ -3099,6 +3130,72 @@ void TypeChecker2::visit(AstExprTable* expr)
         if (item.key)
             visit(item.key, ValueContext::RValue);
         visit(item.value, ValueContext::RValue);
+    }
+
+    if (FFlag::LuwuHelpfulSubtypingErrors)
+        reportPropertyTypos(expr);
+}
+
+// Luwu (helpful subtyping errors): the name of a literal's property, when it's written as one (`name = v` or `["name"] = v`).
+static std::optional<std::string> literalPropertyName(const AstExprTable::Item& item)
+{
+    if (item.kind == AstExprTable::Item::Kind::List || !item.key)
+        return std::nullopt;
+    if (AstExprConstantString* key = item.key->as<AstExprConstantString>())
+        return std::string(key->value.data, key->value.size);
+    return std::nullopt;
+}
+
+// Luwu (helpful subtyping errors): a property of a table literal that its expected table doesn't have, named like a
+// property the literal leaves out, is that property misspelled. For an optional property upstream reports nothing:
+// table types aren't exact, so the literal fits, and the value is never read. For a required one, the error for
+// leaving it out doesn't say why it's missing.
+void TypeChecker2::reportPropertyTypos(AstExprTable* expr)
+{
+    const TypeId* expectedType = module->astExpectedTypes.find(expr);
+    if (!expectedType)
+        return;
+
+    // `Config?` is checked as its `Config`.
+    TypeId expected = follow(*expectedType);
+    if (const UnionType* optional = get<UnionType>(expected))
+    {
+        std::vector<TypeId> nonNil;
+        for (TypeId option : optional->options)
+        {
+            if (!isNil(follow(option)))
+                nonNil.push_back(option);
+        }
+        if (nonNil.size() != 1)
+            return;
+        expected = follow(nonNil.front());
+    }
+
+    const TableType* table = get<TableType>(expected);
+    if (!table || table->indexer)
+        return;
+
+    std::unordered_set<std::string> written;
+    for (const AstExprTable::Item& item : expr->items)
+    {
+        if (std::optional<std::string> name = literalPropertyName(item))
+            written.insert(*name);
+    }
+
+    for (const AstExprTable::Item& item : expr->items)
+    {
+        std::optional<std::string> name = literalPropertyName(item);
+        if (!name || table->props.count(*name))
+            continue;
+
+        for (const auto& [meant, property] : table->props)
+        {
+            if (!written.count(meant) && looksLikeTypo(*name, meant))
+            {
+                reportError(Typo{*name, meant}, item.key->location);
+                break;
+            }
+        }
     }
 }
 
@@ -4902,39 +4999,104 @@ static std::optional<std::string> explainContravariantArgument(
     return message;
 }
 
-// Luwu (helpful subtyping errors): where the value at `location` is being put, when it's a name: the target of
-// `sprite.tint = { ... }` or the local of `local cfg: Config = { ... }`. A literal has no name of its
-// own, so this names the root of its paths in place of the generic `given`.
-static std::optional<std::string> destinationName(const SourceModule& sourceModule, Location location)
+// Luwu (helpful subtyping errors): where `value` is in the table literal `table`: `.name` for a `name = value` item,
+// `[2]` for the 2nd list item, else nullopt.
+static std::optional<std::string> placeInTableLiteral(const AstExprTable* table, const AstExpr* value)
 {
-    std::vector<AstNode*> ancestry = findAstAncestryOfPosition(sourceModule, location.begin);
-    for (auto it = ancestry.rbegin(); it != ancestry.rend(); ++it)
+    size_t listPosition = 0;
+    for (const AstExprTable::Item& item : table->items)
     {
-        if (AstStatAssign* assign = (*it)->as<AstStatAssign>())
-        {
-            for (size_t i = 0; i < assign->values.size && i < assign->vars.size; ++i)
-            {
-                if (assign->values.data[i]->location == location)
-                    return bindingName(assign->vars.data[i]);
-            }
-            return std::nullopt;
-        }
-        if (AstStatLocal* local = (*it)->as<AstStatLocal>())
-        {
-            for (size_t i = 0; i < local->values.size && i < local->vars.size; ++i)
-            {
-                if (local->values.data[i]->location == location)
-                    return std::string{local->vars.data[i]->name.value};
-            }
-            return std::nullopt;
-        }
-        if ((*it)->asStat())
-            return std::nullopt;
+        if (item.kind == AstExprTable::Item::Kind::List)
+            ++listPosition;
+        if (item.value != value)
+            continue;
+        if (item.kind == AstExprTable::Item::Kind::List)
+            return "[" + std::to_string(listPosition) + "]";
+        if (const AstExprConstantString* key = item.kind == AstExprTable::Item::Kind::Record ? item.key->as<AstExprConstantString>() : nullptr)
+            return "." + std::string(key->value.data, key->value.size);
+        return std::nullopt;
     }
     return std::nullopt;
 }
 
-void TypeChecker2::explainError(TypeId subTy, TypeId superTy, Location location, const SubtypingResult& result)
+// Luwu (helpful subtyping errors): where the value at `location` is being put, when it's a name: the target of
+// `sprite.tint = { ... }`, the local of `local cfg: Config = { ... }`, or a place inside one of those literals
+// (`bus.handlers.craft[1]` for a function in `local bus = { handlers = { craft = { function() end } } }`). A place
+// inside a literal passed to a call is named after the function (`Button.onClick` in `Button({ onClick = ... })`);
+// the literal itself isn't, since the function isn't what it is. A literal has no name of its own, so this names the
+// root of its paths in place of the generic `given`.
+static std::optional<std::string> destinationName(const SourceModule& sourceModule, Location location)
+{
+    std::vector<AstNode*> ancestry = findAstAncestryOfPosition(sourceModule, location.begin);
+
+    // The value is the outermost expression spanning exactly `location`.
+    size_t at = 0;
+    while (at < ancestry.size() && !(ancestry[at]->asExpr() && ancestry[at]->location == location))
+        ++at;
+    if (at == ancestry.size())
+        return std::nullopt;
+
+    // Walks out through the table literals around the value, collecting its place in each, to the statement
+    // that names the outermost one.
+    const AstExpr* value = ancestry[at]->asExpr();
+    std::string place;
+    for (size_t i = at; i > 0; --i)
+    {
+        AstNode* parent = ancestry[i - 1];
+        if (AstExprTable* table = parent->as<AstExprTable>())
+        {
+            std::optional<std::string> step = placeInTableLiteral(table, value);
+            if (!step)
+                return std::nullopt;
+            place = *step + place;
+            value = table;
+            continue;
+        }
+        if (AstExprGroup* group = parent->as<AstExprGroup>())
+        {
+            value = group;
+            continue;
+        }
+        if (AstExprCall* call = parent->as<AstExprCall>())
+        {
+            bool isArgument = std::find(call->args.begin(), call->args.end(), value) != call->args.end();
+            std::string callee = calleeDisplayName(call->func);
+            if (!isArgument || callee.empty() || place.empty())
+                return std::nullopt;
+            return callee + place;
+        }
+        if (AstStatAssign* assign = parent->as<AstStatAssign>())
+        {
+            for (size_t j = 0; j < assign->values.size && j < assign->vars.size; ++j)
+            {
+                if (assign->values.data[j] != value)
+                    continue;
+                std::optional<std::string> target = bindingName(assign->vars.data[j]);
+                return target ? std::optional<std::string>{*target + place} : std::nullopt;
+            }
+            return std::nullopt;
+        }
+        if (AstStatLocal* local = parent->as<AstStatLocal>())
+        {
+            for (size_t j = 0; j < local->values.size && j < local->vars.size; ++j)
+            {
+                if (local->values.data[j] == value)
+                    return std::string{local->vars.data[j]->name.value} + place;
+            }
+            return std::nullopt;
+        }
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
+void TypeChecker2::explainError(
+    TypeId subTy,
+    TypeId superTy,
+    Location location,
+    const SubtypingResult& result,
+    std::optional<std::string> contextVerb
+)
 {
     if (result.isErrorSuppressing)
         return;
@@ -5010,6 +5172,7 @@ void TypeChecker2::explainError(TypeId subTy, TypeId superTy, Location location,
     // disagree, instead of a sentence per subtyping reasoning. It declines types it can't take apart,
     // which then fall through to the reasonings below.
     std::optional<MismatchExplanation> explanation;
+    std::optional<std::string> variable;
     if (FFlag::LuwuHelpfulSubtypingErrors)
     {
         std::optional<std::string> callee;
@@ -5021,7 +5184,6 @@ void TypeChecker2::explainError(TypeId subTy, TypeId superTy, Location location,
         // property reads off one (`registry.recipes`), so paths read `leaving.kind`, not `given.kind`.
         // The expression spanning exactly the error: the innermost one at its start (`req` of
         // `req.user`) is usually a piece of it.
-        std::optional<std::string> variable;
         for (AstNode* node : findAstAncestryOfPosition(*sourceModule, location.begin))
         {
             if (AstExpr* expr = node->asExpr(); expr && expr->location == location)
@@ -5036,6 +5198,12 @@ void TypeChecker2::explainError(TypeId subTy, TypeId superTy, Location location,
         explanation = explainMismatch(subTy, superTy, subtyping, scope, builtinTypes, callee, arrival, variable);
     }
 
+    if (explanation && explanation->typo)
+    {
+        reportError(Typo{explanation->typo->first, explanation->typo->second}, location);
+        return;
+    }
+
     if (explanation)
     {
         TypeMismatch tm{superTy, subTy, explanation->standalone ? std::string() : std::move(explanation->reason)};
@@ -5045,10 +5213,12 @@ void TypeChecker2::explainError(TypeId subTy, TypeId superTy, Location location,
         tm.givenName = std::move(explanation->givenName);
         tm.wantedExpansion = std::move(explanation->wantedExpansion);
         tm.givenExpansion = std::move(explanation->givenExpansion);
-        tm.givenVariable = std::move(explanation->givenVariable);
+        // Paths may be rooted somewhere else, but the value is still called by its name.
+        tm.givenVariable = explanation->givenVariable ? std::move(explanation->givenVariable) : variable;
         tm.whereDeclarations = std::move(explanation->whereDeclarations);
         tm.luwuExplanation = true;
         tm.notation = explanation->notation;
+        tm.contextVerb = contextVerb;
         reportError(std::move(tm), location);
         return;
     }
@@ -5058,7 +5228,8 @@ void TypeChecker2::explainError(TypeId subTy, TypeId superTy, Location location,
     if (!reasonings.suppressed)
     {
         TypeMismatch tm{superTy, subTy, reasonings.toString()};
-        tm.contextVerb = reasonings.contextVerb;
+        tm.givenVariable = variable;
+        tm.contextVerb = reasonings.contextVerb ? reasonings.contextVerb : contextVerb;
         tm.contextWantedDisplay = reasonings.contextWantedDisplay;
         tm.contextGivenDisplay = reasonings.contextGivenDisplay;
         reportError(std::move(tm), location);
@@ -5111,9 +5282,30 @@ void TypeChecker2::explainError(TypePackId subTy, TypePackId superTy, Location l
     }
 
     Reasonings reasonings = explainReasonings(subTy, superTy, location, result);
+    if (reasonings.suppressed)
+        return;
 
-    if (!reasonings.suppressed)
-        reportError(TypePackMismatch{superTy, subTy, reasonings.toString()}, location);
+    // Luwu (helpful subtyping errors): `...T` against `...U` is about every value, one at a time. Upstream narrates it
+    // as "a tail of the variadic `T` in the latter type and `U` in the former type".
+    if (FFlag::LuwuHelpfulSubtypingErrors)
+    {
+        auto [subHead, subTail] = flatten(subTy);
+        auto [superHead, superTail] = flatten(superTy);
+        const VariadicTypePack* subVariadic = subTail ? get<VariadicTypePack>(follow(*subTail)) : nullptr;
+        const VariadicTypePack* superVariadic = superTail ? get<VariadicTypePack>(follow(*superTail)) : nullptr;
+        const bool onlyVariadics = subHead.empty() && superHead.empty() && subVariadic && superVariadic;
+        if (onlyVariadics)
+        {
+            SubtypingResult each = subtyping->isSubtype(subVariadic->ty, superVariadic->ty, NotNull<Scope>{findInnermostScope(location)});
+            if (!each.isSubtype)
+            {
+                explainError(subVariadic->ty, superVariadic->ty, location, each, checkingReturnStatement ? "every returned value to be" : "every value to be");
+                return;
+            }
+        }
+    }
+
+    reportError(TypePackMismatch{superTy, subTy, reasonings.toString()}, location);
 }
 
 bool TypeChecker2::testLiteralOrAstTypeIsSubtype(AstExpr* expr, TypeId expectedType)

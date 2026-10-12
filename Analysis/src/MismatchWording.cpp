@@ -227,13 +227,17 @@ std::string missingField(const Difference& d)
     return quoted(d.path.back().name + ": " + d.super);
 }
 
-// A parameter declared as the non-nil version of what the expected type passes it: says what it should
-// be, which is the fix. Why a narrower parameter breaks things goes in a help under the bullets
-// (`narrowedParameterHelp`), since it runs against the intuition that a `Player` is fine for a `Player?`.
-std::string nonNilVersion(const Difference& d, const std::string& noun, bool named)
+// A parameter that doesn't accept what the expected type passes it, said the way a table's bullets say it:
+// `payload[string]: expected 'string | number', got 'string'`. Expected is what the expected function type passes,
+// got is what the given function declares, so the bullet reads in the same direction as the two types above it. A
+// parameter declared as the non-nil version of an optional is said with the optional itself (`slot: expected 'Stack?',
+// got 'Stack'`), not an alias that hides the `nil`; why that's wrong goes in a help under the bullets
+// (`narrowedParameterHelp`), since it runs against the intuition that a `Stack` is fine for a `Stack?`.
+std::string parameterMismatch(const Difference& d, const std::string& noun)
 {
-    std::string should = quoted(d.sub) + (d.subMeaning ? " (which is " + quoted(*d.subMeaning) + ")" : "");
-    return slotInProse(noun, named) + " should be " + should + ", not " + quoted(d.super);
+    std::string exactly = d.kind == Difference::Kind::MismatchExactly ? "exactly " : "";
+    std::string expected = d.subMeaning ? *d.subMeaning : d.subInFull.value_or(d.sub);
+    return noun + ": expected " + exactly + quoted(expected) + ", got " + quoted(d.super);
 }
 
 // The element type of the array an `ElementOfExpected` difference expected.
@@ -268,14 +272,6 @@ std::string arrayNestingReturn(const Difference& d, const std::string& here)
     return "an array of " + quoted(element) + here + ", not a single " + (element == d.sub ? "one" : quoted(d.sub));
 }
 
-// What a parameter takes, after the value it's passed: ` (expected 'string')`. Said even when the
-// function's signature is printed, which can hide it behind a name (`(response: Nyla) -> ()`).
-std::string expectedParameter(const Difference& d)
-{
-    std::string exactly = d.kind == Difference::Kind::MismatchExactly ? "exactly " : "";
-    return " (expected " + exactly + quoted(d.super) + ")";
-}
-
 // The sentence for a difference inside a function. `function` is how the sentence names it: its
 // signature when the bullet is only this sentence, or the name on the `name = signature` line above.
 // `callee` is who calls it, when that's known and this is the first sentence about it. A collapsed
@@ -301,12 +297,10 @@ std::string describeInFunction(
         {
         case Difference::Kind::Mismatch:
         case Difference::Kind::MismatchExactly:
-            return calls + " with " + passedValue(noun, named, d.sub, collapsed) + expectedParameter(d);
         case Difference::Kind::CouldBeNil:
-            return "In " + quoted(function) + ", " + nonNilVersion(d, noun, named);
+            return "In " + quoted(function) + ", " + parameterMismatch(d, noun);
         case Difference::Kind::NotAMap:
-            return calls + " with " + passedValue(noun, named, d.sub, collapsed) + " (named properties but no indexer), where the map " +
-                   quoted(d.super) + " is expected";
+            return calls + " with " + passedValue(noun, named, d.sub, collapsed) + ", a record where map " + quoted(d.super) + " is expected";
         case Difference::Kind::ArrayOfExpected:
         case Difference::Kind::ElementOfExpected:
             return calls + " with " + passedValue(noun, named, d.sub, collapsed) + ", " + arrayNestingArgument(d);
@@ -345,7 +339,7 @@ std::string describeInFunction(
         case Difference::Kind::CouldBeNil:
             return should + quoted(d.super) + here + ", never 'nil'";
         case Difference::Kind::NotAMap:
-            return should + "the map " + quoted(d.super) + here + ", not " + quoted(d.sub) + " (named properties but no indexer)";
+            return should + "map " + quoted(d.super) + here + ", not record " + quoted(d.sub);
         case Difference::Kind::ArrayOfExpected:
         case Difference::Kind::ElementOfExpected:
             return should + arrayNestingReturn(d, here);
@@ -364,8 +358,9 @@ std::string describeInFunction(
 }
 
 // A difference inside a function as one item of a list under it ("with incorrect arguments:" / "and
-// it should return:"): what's passed and what the parameter takes, or what should come back.
-std::string describeAsListItem(const Difference& d, uint8_t* notation)
+// it should return:"): what's passed and what the parameter takes, or what should come back. `sayReturned` adds
+// what a mismatched return value is instead, for a list with no signature above it to show that.
+std::string describeAsListItem(const Difference& d, bool sayReturned, uint8_t* notation)
 {
     LUAU_ASSERT(d.anchor && d.anchor->at < d.path.size());
     size_t at = d.anchor->at;
@@ -379,18 +374,18 @@ std::string describeAsListItem(const Difference& d, uint8_t* notation)
         {
         case Difference::Kind::Mismatch:
         case Difference::Kind::MismatchExactly:
-            return passedValue(noun, named, d.sub, false) + expectedParameter(d);
         case Difference::Kind::CouldBeNil:
-            return nonNilVersion(d, noun, named);
+            return parameterMismatch(d, noun);
         case Difference::Kind::NotAMap:
-            return passedValue(noun, named, d.sub, false) + " (named properties but no indexer)";
+            return noun + ": expected record " + quoted(d.sub) + ", got map " + quoted(d.super);
         case Difference::Kind::ArrayOfExpected:
+            return noun + ": expected an array of " + quoted(d.super) + ", got a single one";
         case Difference::Kind::ElementOfExpected:
-            return passedValue(noun, named, d.sub, false) + ", " + arrayNestingArgument(d);
+            return noun + ": expected a single " + quoted(d.sub) + ", got an array of " + expectedElements(d);
         case Difference::Kind::Missing:
-            return slotInProse(slotNoun(d.path, at, d.path.size() - 1, notation), named) + " missing property " + missingField(d);
+            return "missing property " + quoted(noun + ": " + d.super);
         case Difference::Kind::NothingPassed:
-            return "nothing for " + slotInProse(noun, named);
+            return (named ? quoted(noun + ": " + d.super) : noun) + " is never passed";
         case Difference::Kind::ExtraPassed:
             return "an extra " + quoted(d.sub);
         case Difference::Kind::NothingReturned:
@@ -400,17 +395,19 @@ std::string describeAsListItem(const Difference& d, uint8_t* notation)
     else
     {
         std::string here = returnPlace(d.path, at, d.path.size(), notation);
+        std::string instead = sayReturned ? ", not " + quoted(d.sub) : "";
         switch (d.kind)
         {
         case Difference::Kind::Mismatch:
+            return quoted(d.super) + here + instead;
         case Difference::Kind::NothingReturned:
             return quoted(d.super) + here;
         case Difference::Kind::MismatchExactly:
-            return "exactly " + quoted(d.super) + here;
+            return "exactly " + quoted(d.super) + here + instead;
         case Difference::Kind::CouldBeNil:
             return quoted(d.super) + here + ", never 'nil'";
         case Difference::Kind::NotAMap:
-            return "the map " + quoted(d.super) + here + ", not " + quoted(d.sub) + " (named properties but no indexer)";
+            return "map " + quoted(d.super) + here + ", not record " + quoted(d.sub);
         case Difference::Kind::ArrayOfExpected:
         case Difference::Kind::ElementOfExpected:
             return arrayNestingReturn(d, here);
@@ -447,6 +444,33 @@ void appendNestedItems(Line& line, const std::vector<std::string>& items, size_t
         line.text.push_back(nestedItem(items[i]));
     if (items.size() > shown)
         line.text.push_back(nestedItem(moreText(items.size() - shown, things)));
+}
+
+// `items` as bullets of their own, then `nested`, past `limit` counted as `...and N more <things>`.
+void appendBullets(std::vector<Line>& lines, const std::vector<std::string>& items, const std::vector<Line>& nested, size_t limit, std::string_view things)
+{
+    size_t total = items.size() + nested.size();
+    size_t shown = std::min(total, limit);
+    for (size_t i = 0; i < shown; ++i)
+        lines.push_back(i < items.size() ? Line{true, {items[i]}} : nested[i - items.size()]);
+    if (total > shown)
+        lines.push_back(Line{true, {moreText(total - shown, things)}});
+}
+
+// A function's differences as list items: what its arguments should be, and what it should return.
+void splitFunctionItems(
+    const std::vector<const Difference*>& group,
+    bool sayReturned,
+    uint8_t* notation,
+    std::vector<std::string>& arguments,
+    std::vector<std::string>& returns
+)
+{
+    for (const Difference* d : group)
+    {
+        bool parameter = d->path[d->anchor->at].kind == Segment::Kind::Parameter;
+        (parameter ? arguments : returns).push_back(describeAsListItem(*d, sayReturned, notation));
+    }
 }
 
 } // namespace
@@ -504,7 +528,7 @@ std::string describe(const Difference& d, Rendering& rendering)
     case Difference::Kind::CouldBeNil:
         return path + ": expected " + quoted(d.super) + ", but it could be 'nil'";
     case Difference::Kind::NotAMap:
-        return path + ": expected the map " + quoted(d.super) + ", got " + quoted(d.sub) + " (named properties but no indexer)";
+        return path + ": expected map " + quoted(d.super) + ", got record " + quoted(d.sub);
     case Difference::Kind::ArrayOfExpected:
         return path + " is " + arrayNestingArgument(d);
     case Difference::Kind::ElementOfExpected:
@@ -554,11 +578,7 @@ Line functionBullet(const std::vector<const Difference*>& group, const std::opti
 
     std::vector<std::string> arguments;
     std::vector<std::string> returns;
-    for (const Difference* d : group)
-    {
-        bool parameter = d->path[d->anchor->at].kind == Segment::Kind::Parameter;
-        (parameter ? arguments : returns).push_back(describeAsListItem(*d, &rendering.notation));
-    }
+    splitFunctionItems(group, false, &rendering.notation, arguments, returns);
 
     if (!arguments.empty())
     {
@@ -575,6 +595,70 @@ Line functionBullet(const std::vector<const Difference*>& group, const std::opti
         appendNestedItems(line, returns, kMaxFunctionItems, "return values");
     }
     return line;
+}
+
+// Parameters the given function requires that the expected function type never passes, when nothing else is wrong:
+// `'Button.onClick' should only have 2 parameters, but was passed a function with an extra parameter 'modifiers: {string}'`.
+std::string extraParametersSentence(const std::vector<const Difference*>& extras, Rendering& rendering)
+{
+    LUAU_ASSERT(!extras.empty());
+    std::vector<std::string> parameters;
+    for (const Difference* d : extras)
+    {
+        const Segment& slot = d->path[d->anchor->at];
+        std::string name = slot.name.empty() ? "" : slot.name + ": ";
+        parameters.push_back(quoted(name + d->super));
+    }
+
+    size_t count = extras.front()->parameterCount;
+    std::string should = count == 0 ? "should have no parameters" : "should only have " + std::to_string(count) + (count == 1 ? " parameter" : " parameters");
+    std::string extra = parameters.size() == 1 ? "an extra parameter " : "extra parameters ";
+    if (rendering.givenIsPlaceholder)
+        return "This function " + should + ", but has " + extra + joinedWithAnd(parameters) + ".";
+    return quoted(rendering.givenRoot) + " " + should + ", but was passed a function with " + extra + joinedWithAnd(parameters) + ".";
+}
+
+FunctionReason givenFunctionReason(
+    const std::vector<const Difference*>& group,
+    const std::vector<Line>& nestedArguments,
+    const std::vector<Line>& nestedReturns,
+    Rendering& rendering
+)
+{
+    bool onlyExtraParameters = !group.empty() && nestedArguments.empty() && nestedReturns.empty() &&
+                               std::all_of(
+                                   group.begin(),
+                                   group.end(),
+                                   [](const Difference* d)
+                                   {
+                                       return d->kind == Difference::Kind::NothingPassed;
+                                   }
+                               );
+    if (onlyExtraParameters)
+        return FunctionReason{extraParametersSentence(group, rendering), {}, true};
+
+    std::vector<std::string> arguments;
+    std::vector<std::string> returns;
+    splitFunctionItems(group, true, &rendering.notation, arguments, returns);
+    bool anyArguments = !arguments.empty() || !nestedArguments.empty();
+    bool anyReturns = !returns.empty() || !nestedReturns.empty();
+
+    FunctionReason reason;
+    if (anyArguments)
+    {
+        bool one = arguments.size() + nestedArguments.size() == 1;
+        reason.header = one ? "This function can be passed a value it doesn't accept:" : "This function can be passed values it doesn't accept:";
+        appendBullets(reason.lines, arguments, nestedArguments, kMaxFunctionItems, "arguments");
+    }
+    if (anyReturns)
+    {
+        if (!anyArguments)
+            reason.header = "This function should return:";
+        else
+            reason.lines.push_back(Line{false, {"It should return:"}});
+        appendBullets(reason.lines, returns, nestedReturns, kMaxFunctionItems, "return values");
+    }
+    return reason;
 }
 
 Line missingFieldsBullet(const DiffPath& parent, const std::vector<const Difference*>& fields, Rendering& rendering)
@@ -610,7 +694,7 @@ std::string narrowedParameterHelp(const std::vector<const Difference*>& narrowed
         std::string from = d.subMeaning ? *d.subMeaning : d.sub;
         title = "Help: " + quoted(name) + " can't be narrowed from " + quoted(from) + " to " + quoted(d.super) + ":";
         passes = "code calling this function as the expected type is allowed to pass 'nil' for " + quoted(name);
-        must = "this parameter must accept " + quoted(d.sub) + " to match the caller's expected signature";
+        must = "this parameter must accept " + quoted(from) + " to match the caller's expected signature";
     }
     else
     {
@@ -639,13 +723,19 @@ std::string misspelledStringHelp(const std::string& suggestion)
     return "Help: did you mean " + quoted(suggestion) + "?";
 }
 
-std::string misspelledFieldHelp(const Difference& d, Rendering& rendering)
+std::pair<std::string, std::string> misspelledFieldNames(const Difference& d, Rendering& rendering)
 {
     LUAU_ASSERT(d.kind == Difference::Kind::Missing && d.similarName);
     DiffPath place = onGivenSide(d.path);
     LUAU_ASSERT(!place.empty());
     std::string parent = rendering.givenPath(place, 0, place.size() - 1);
-    return "Help: did you mean " + quoted(parent + "." + d.path.back().name) + " instead of " + quoted(parent + "." + *d.similarName) + "?";
+    return {parent + "." + d.similarName.value_or(""), parent + "." + d.path.back().name};
+}
+
+std::string misspelledFieldHelp(const Difference& d, Rendering& rendering)
+{
+    auto [written, meant] = misspelledFieldNames(d, rendering);
+    return "Help: did you mean " + quoted(meant) + " instead of " + quoted(written) + "?";
 }
 
 std::string misspelledValueHelp(const Difference& d, Rendering& rendering)
@@ -668,6 +758,11 @@ std::string pathsHeader(std::string_view arrival, size_t paths)
 std::string becauseHeader()
 {
     return "This is because:";
+}
+
+std::string propertiesHeader()
+{
+    return "Some properties are incompatible:";
 }
 
 std::string couldBeNilHeader(const std::string& subject)
@@ -831,6 +926,11 @@ std::string paragraph(const std::string& text)
     return "\n\n" + text;
 }
 
+std::string hiddenMembers(size_t count)
+{
+    return count == 1 ? "…" : "… (" + std::to_string(count) + " more)";
+}
+
 std::string unionSummary(size_t members, bool optional, const std::vector<std::pair<size_t, std::string>>& listed)
 {
     std::string text = std::string(optional ? "an optional union of " : "a union of ") + std::to_string(members) + " members, including:";
@@ -862,7 +962,8 @@ std::string composeReason(
     for (size_t i = 0; i < shownHelps.size(); ++i)
         reason += (i == 0 ? "\n\n" : "\n") + shownHelps[i];
 
-    reason += paragraph(header);
+    if (!header.empty())
+        reason += paragraph(header);
 
     // One that explains *why* goes under the bullets it's about.
     std::string tail = why.empty() ? std::string() : paragraph(why);

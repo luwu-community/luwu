@@ -435,6 +435,7 @@ TEST_CASE_FIXTURE(Fixture, "compound_assign_mismatch_op")
 
 TEST_CASE_FIXTURE(Fixture, "compound_assign_mismatch_result")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     CheckResult result = check(R"(
         local s = 'hello'
         s += 10

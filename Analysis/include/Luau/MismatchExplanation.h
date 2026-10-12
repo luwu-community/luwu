@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <utility>
 #include <string>
 #include <string_view>
 
@@ -45,7 +46,7 @@ struct MismatchExplanation
     // the order the `#n` numbers count them, or an aliased table spelled out.
     std::optional<std::string> wantedExpansion;
     std::optional<std::string> givenExpansion;
-    // The variable `reason`'s paths are rooted at, printed with the given type: `'settings: Settings'`.
+    // The variable `reason`'s paths are rooted at, which the message calls the given value by: `Expected 'settings' to be`.
     std::optional<std::string> givenVariable;
     // The `where` block for types the message would otherwise print several times. When it isn't empty,
     // `wantedName` and `givenName` are the two types printed with its names.
@@ -59,9 +60,16 @@ struct MismatchExplanation
     // The types the reason's bullets say were expected and given where a value doesn't fit, as printed
     // (`Method`), for declaring an alias one of them is.
     std::vector<std::string> bulletTypes;
+    // When the one thing wrong is a misspelling, what was written and what was meant (`"LeftCtrl"`,
+    // `"LeftControl"`; `leaving.reson`, `leaving.reason`): the error is a typo, not a type mismatch.
+    std::optional<std::pair<std::string, std::string>> typo;
 
 
 };
+
+// Whether `written` is close enough to `meant` to be a misspelling of it: a few edits apart, and long enough that a
+// few edits don't make it a different word.
+bool looksLikeTypo(const std::string& written, const std::string& meant);
 
 // Returns nullopt when the types are of a kind the differ doesn't take apart (generics, type
 // functions, classes), when no failing place can be found in two structured types, and when

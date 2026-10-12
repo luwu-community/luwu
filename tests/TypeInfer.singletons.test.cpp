@@ -179,6 +179,7 @@ TEST_CASE_FIXTURE(Fixture, "overloaded_function_resolution_singleton_parameters"
 
 TEST_CASE_FIXTURE(Fixture, "overloaded_function_call_with_singletons_mismatch")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     CheckResult result = check(R"(
         function f(g: ((true, string) -> ()) & ((false, number) -> ()))
             g(true, 37)

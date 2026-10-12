@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <utility>
 #include <set>
 #include <string>
 #include <string_view>
@@ -109,8 +110,8 @@ struct Difference
         NothingReturned,
         // An argument passed to a function that has no parameter to take it.
         ExtraPassed,
-        // A table with named fields and no indexer, where a map is expected: Luau doesn't treat one
-        // as the other even when every field would fit.
+        // A record (named properties, no indexer) where a map is expected: Luau doesn't treat one
+        // as the other even when every property would fit.
         NotAMap,
         // `sub` is an array of values that fit `super` (`{T}` where `T` is expected).
         ArrayOfExpected,
@@ -130,11 +131,15 @@ struct Difference
     // has already been reported, so this adds nothing but noise.
     bool suppressing = false;
     std::optional<Anchor> anchor;
-    // For `ExtraPassed`, how many parameters the function does have.
+    // For `ExtraPassed`, how many parameters the function does have; for `NothingPassed`, how many the expected
+    // function type passes.
     size_t parameterCount = 0;
     // For `CouldBeNil`, what an aliased `sub` stands for (`Slot` is `Stack?`): an alias hides the `nil`
     // the sentence is about.
     std::optional<std::string> subMeaning;
+    // For a `Mismatch` where only some members of a union `sub` don't fit, the whole union: `sub` holds just the
+    // members that don't. A parameter has to accept all of it.
+    std::optional<std::string> subInFull;
     // For `ElementOfExpected`, the element type of the array expected.
     std::optional<std::string> element;
 };
@@ -212,6 +217,26 @@ std::string describe(const Difference& d, Rendering& rendering);
 // function, when that's known.
 Line functionBullet(const std::vector<const Difference*>& group, const std::optional<std::string>& caller, Rendering& rendering);
 
+// What a message says about the given function itself, which its header prints with parameter names: a line
+// introducing what it can be passed and doesn't accept, or what it should return, and the bullets under it.
+struct FunctionReason
+{
+    std::string header;
+    std::vector<Line> lines;
+    // `header` is a sentence that says everything, so the message is just it, without the two types.
+    bool standalone = false;
+};
+
+// Every difference in the given function itself (`group`), without its signature: the header already shows it.
+// `nestedArguments` and `nestedReturns` are bullets about functions inside its parameters and return values
+// (a callback it takes), listed with the rest of each.
+FunctionReason givenFunctionReason(
+    const std::vector<const Difference*>& group,
+    const std::vector<Line>& nestedArguments,
+    const std::vector<Line>& nestedReturns,
+    Rendering& rendering
+);
+
 // Fields missing from one table, one per line: `missing fields in 'a.b':` + `• 'name: type'`.
 Line missingFieldsBullet(const DiffPath& parent, const std::vector<const Difference*>& fields, Rendering& rendering);
 
@@ -228,7 +253,9 @@ std::string narrowedParameterHelp(const std::vector<const Difference*>& narrowed
 std::string swappedParametersHelp(const std::string& first, const std::string& second, size_t i, size_t j);
 std::string swappedReturnsHelp(size_t i, size_t j);
 std::string misspelledStringHelp(const std::string& suggestion);
-// A missing field with a similar name present, at the path of the table holding it.
+// A missing field with a similar name present, at the path of the table holding it: what was written and what was
+// meant (`leaving.reson`, `leaving.reason`), and the help saying so.
+std::pair<std::string, std::string> misspelledFieldNames(const Difference& d, Rendering& rendering);
 std::string misspelledFieldHelp(const Difference& d, Rendering& rendering);
 // A string one typo from an expected one, inside a table.
 std::string misspelledValueHelp(const Difference& d, Rendering& rendering);
@@ -237,6 +264,8 @@ std::string misspelledValueHelp(const Difference& d, Rendering& rendering);
 std::string similarHeader(std::string_view arrival, size_t paths);
 std::string pathsHeader(std::string_view arrival, size_t paths);
 std::string becauseHeader();
+// Two tables whose properties don't fit.
+std::string propertiesHeader();
 std::string couldBeNilHeader(const std::string& subject);
 std::string unionMembersHeader(bool noneFit, const std::string& unionName, const std::string& target);
 // Scalars that aren't the scalar expected: `'string' isn't a 'number'.`, `Neither ... nor ...`,
@@ -281,6 +310,10 @@ Line someMembersNeedMoreLine();
 // `'kind = "chat"' also needs 'a: number' and 'b: string'`.
 Line memberNeedsBullet(const std::string& who, bool beyondCommon, const std::vector<std::string>& fields);
 std::string tagLabel(const std::string& field, const std::string& value);
+
+// Members of a union or intersection the message doesn't refer to, in place of them: `…`, or `… (3 more)` so the
+// members shown can still be counted.
+std::string hiddenMembers(size_t count);
 
 // An aliased union too long to spell out, as the lines after `type X = `: how many members it has,
 // then only those `listed`, by number, then how many others there are.

@@ -57,6 +57,7 @@ TEST_CASE_FIXTURE(Fixture, "names_are_ascribed")
 
 TEST_CASE_FIXTURE(Fixture, "cannot_steal_hoisted_type_alias")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     // This is a tricky case. In order to support recursive type aliases,
     // we first walk the block and generate free types as placeholders.
     // We then walk the AST as normal. If we declare a type alias as below,

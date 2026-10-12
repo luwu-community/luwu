@@ -45,9 +45,8 @@ constexpr int kMaxWalkDepth = 16;
 constexpr size_t kDetailedMembers = 3;
 // Failing members of a given union named after those, one line each; the rest are counted.
 constexpr size_t kNamedMembers = 5;
-// An aliased union is spelled out whole after `type X =` when it has at most this many members and
-// fits in this many characters; a longer one lists only the members the message refers to.
-constexpr size_t kMaxSpelledOutMembers = 10;
+// An aliased union or intersection after `type X =` shows the members the message refers to in place when that fits
+// in this many characters; a longer one lists them by number.
 constexpr size_t kMaxSpelledOutWidth = 240;
 // Members of an expected union a misspelled string is compared against.
 constexpr size_t kMaxSpellingCandidates = 256;
@@ -59,6 +58,9 @@ constexpr size_t kMaxMentionedAliases = 4;
 // A mentioned alias longer than this isn't declared: a type that large is one the reader knows by its name,
 // and its declaration would bury the message.
 constexpr size_t kMaxMentionedAliasWidth = 240;
+// A header type's alias whose table prints on one line in at most this many characters is spelled out in place,
+// `'Vector2: { x: number, y: number }'`, rather than declared in the `where` block.
+constexpr size_t kMaxInPlaceAliasWidth = 60;
 // How long a printed type may get before `ToString` truncates it.
 constexpr size_t kTypeWidth = 120;
 constexpr size_t kFunctionTypeWidth = 160;
@@ -206,24 +208,28 @@ ToStringOptions printOptions(size_t width)
     return options;
 }
 
+// The edits between `a` and `b`: insertions, deletions, substitutions, and swaps of two neighboring characters, each
+// one edit, so `"Bleu"` is one edit from `"Blue"` rather than two.
 size_t editDistance(const std::string& a, const std::string& b)
 {
-    std::vector<size_t> row(b.size() + 1);
+    std::vector<std::vector<size_t>> d(a.size() + 1, std::vector<size_t>(b.size() + 1));
+    for (size_t i = 0; i <= a.size(); ++i)
+        d[i][0] = i;
     for (size_t j = 0; j <= b.size(); ++j)
-        row[j] = j;
+        d[0][j] = j;
 
     for (size_t i = 1; i <= a.size(); ++i)
     {
-        size_t diagonal = row[0];
-        row[0] = i;
         for (size_t j = 1; j <= b.size(); ++j)
         {
-            size_t above = row[j];
-            row[j] = std::min({row[j] + 1, row[j - 1] + 1, diagonal + (a[i - 1] == b[j - 1] ? 0 : 1)});
-            diagonal = above;
+            size_t substitution = d[i - 1][j - 1] + (a[i - 1] == b[j - 1] ? 0 : 1);
+            d[i][j] = std::min({d[i - 1][j] + 1, d[i][j - 1] + 1, substitution});
+            bool swapped = i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1];
+            if (swapped)
+                d[i][j] = std::min(d[i][j], d[i - 2][j - 2] + 1);
         }
     }
-    return row[b.size()];
+    return d[a.size()][b.size()];
 }
 
 // The edit distance between `a` and `b` when it's at most `limit`. Strings whose lengths alone differ by
@@ -253,13 +259,24 @@ bool isAbbreviation(const std::string& shorter, const std::string& longer)
     return at == shorter.size();
 }
 
+// A misspelling is at most this many edits from what was meant, and longer than this: a string that short is a few
+// edits from everything (`"t"` for `"s"`).
+constexpr size_t kMaxTypoEdits = 2;
+// A word this long or shorter gets one edit: two turn most short words into other words (`"Food"` and `"Tool"`).
+constexpr size_t kShortWordLength = 4;
+
+size_t typoEditLimit(const std::string& written)
+{
+    return written.size() <= kShortWordLength ? 1 : kMaxTypoEdits;
+}
+
 // The expected string a given string singleton was most likely a misspelling of: within two edits,
 // or an abbreviation of it (`"LeftCtrl"` for `"LeftControl"`).
 std::optional<std::string> misspelledSingleton(TypeId sub, TypeId super)
 {
     const SingletonType* given = get<SingletonType>(follow(sub));
     const StringSingleton* givenString = given ? get<StringSingleton>(given) : nullptr;
-    if (!givenString)
+    if (!givenString || givenString->value.size() <= kMaxTypoEdits)
         return std::nullopt;
 
     // `("Red" | "Blue")?` is a union holding a union, so collect members through nesting. A union can
@@ -280,9 +297,8 @@ std::optional<std::string> misspelledSingleton(TypeId sub, TypeId super)
             candidates.push_back(ty);
     }
 
-    constexpr size_t kMaxTypoEdits = 2;
     std::optional<std::string> best;
-    size_t bestDistance = kMaxTypoEdits + 1;
+    size_t bestDistance = typoEditLimit(givenString->value) + 1;
     for (TypeId candidate : candidates)
     {
         const SingletonType* singleton = get<SingletonType>(follow(candidate));
@@ -917,7 +933,10 @@ struct Differ
                 failing.push_back(builtinTypes->nilType);
             got = expansion(failing, " | ", kTypeWidth);
         }
-        push(Difference{Difference::Kind::Mismatch, path, got, display(super)}, sub, super);
+        Difference d{Difference::Kind::Mismatch, path, got, display(super)};
+        if (std::string whole = display(sub); whole != got)
+            d.subInFull = std::move(whole);
+        push(std::move(d), sub, super);
     }
 
     // The member of an expected union whose singleton tag the given table carries, when exactly one
@@ -1020,11 +1039,10 @@ struct Differ
     // use itself.
     static std::optional<std::string> similarlyNamed(const std::string& name, const std::vector<std::string>& candidates, const TableType* expected)
     {
-        constexpr size_t kMaxNameEdits = 2;
         for (const std::string& candidate : candidates)
         {
             bool unusedByExpected = expected->props.count(candidate) == 0;
-            if (unusedByExpected && candidate.size() > kMaxNameEdits && editDistanceWithin(candidate, name, kMaxNameEdits))
+            if (unusedByExpected && looksLikeTypo(candidate, name))
                 return candidate;
         }
         return std::nullopt;
@@ -1218,7 +1236,11 @@ struct Differ
                 if (fits(builtinTypes->nilType, *accepted))
                     ++matched;
                 else
-                    push(Difference{Difference::Kind::NothingPassed, parameterPath, "", display(*accepted)}, *accepted);
+                {
+                    Difference nothing{Difference::Kind::NothingPassed, parameterPath, "", display(*accepted)};
+                    nothing.parameterCount = expectedArgs.size();
+                    push(std::move(nothing), *accepted);
+                }
                 continue;
             }
 
@@ -1579,25 +1601,40 @@ bool describeEmptyTableForUnion(
     return true;
 }
 
-// What follows `type X =` for an aliased union or intersection whose members the message counts: every
-// member when that's short, else only the `shown` ones by number.
+// What follows `type X =` for an aliased union or intersection whose members the message counts: the `shown` ones
+// in place, with the rest left out (`… | { kind: "leave", ... } | …`), else, when that's still long, only the `shown`
+// ones by number.
 std::string declaredExpansion(Differ& differ, TypeId ty, const std::set<size_t>& shown)
 {
     const UnionType* u = get<UnionType>(ty);
     const std::vector<TypeId>& options = u ? u->options : get<IntersectionType>(ty)->parts;
     const char* separator = u ? " | " : " & ";
 
-    // Only a union's members are counted, so an intersection is always spelled out.
-    if (!u)
-        return differ.expansion(options, separator, kMaxSpelledOutWidth);
-
     std::vector<TypeId> members = numberedMembers(options);
-    if (members.size() <= kMaxSpelledOutMembers)
+    std::string inPlace;
+    size_t hidden = 0;
+    auto append = [&](const std::string& part)
     {
-        std::string whole = differ.expansion(options, separator, kMaxSpelledOutWidth);
-        if (whole.size() <= kMaxSpelledOutWidth)
-            return whole;
+        inPlace += (inPlace.empty() ? "" : separator) + part;
+    };
+    for (size_t i = 0; i < members.size(); ++i)
+    {
+        if (!shown.count(i + 1))
+        {
+            ++hidden;
+            continue;
+        }
+        if (hidden > 0)
+            append(hiddenMembers(hidden));
+        hidden = 0;
+        append(differ.display(members[i]));
     }
+    if (hidden > 0)
+        append(hiddenMembers(hidden));
+    if (members.size() != options.size())
+        inPlace = "(" + inPlace + ")?";
+    if (inPlace.size() <= kMaxSpelledOutWidth || !u)
+        return inPlace;
 
     std::vector<std::pair<size_t, std::string>> listed;
     for (size_t number : shown)
@@ -1789,10 +1826,10 @@ std::optional<MismatchExplanation> explainOnce(
     differ.names = names;
     differ.printed = printed;
 
-    // Makes the header's two types something the reason's paths can be followed into: the variable the
-    // paths are rooted at goes with its type (`'settings: Settings'`), and, when `declareAliases`, an aliased
-    // table is declared in the `where` block under the two types. No declarations when both sides have the
-    // same name, which the header has to tell apart some other way.
+    // Makes the header's two types something the reason's paths can be followed into: the variable the paths are
+    // rooted at names the value (`Expected 'settings' to be`), and, when `declareAliases`, an aliased table is spelled
+    // out, in place when it's short and in the `where` block under the two types otherwise. Nothing is spelled out
+    // when both sides have the same name, which the header has to tell apart some other way.
     auto nameHeaderTypes = [&](bool declareAliases)
     {
         if (explanation.standalone)
@@ -1810,18 +1847,29 @@ std::optional<MismatchExplanation> explainOnce(
         std::optional<std::string> givenTableAlias = aliasName(given);
         if (!declareAliases || (givenTableAlias && givenTableAlias == aliasName(expected)))
             return;
-        // `Recipe?` is declared as its `Recipe`.
-        for (TypeId ty : {withoutNil(expected), withoutNil(given)})
+        // `Recipe?` is declared as its `Recipe`, in the `where` block: in place, the `?` would sit between the name and
+        // what it stands for.
+        auto spellOut = [&](TypeId side, std::optional<std::string>& printedAs)
         {
-            if (std::optional<std::string> expansion = aliasedTableExpansion(differ, ty, &explanation.propertyFocus))
+            TypeId ty = follow(withoutNil(side));
+            std::optional<std::string> expansion = aliasedTableExpansion(differ, ty, &explanation.propertyFocus);
+            if (!expansion)
+                return;
+            bool fitsInPlace = expansion->find('\n') == std::string::npos && expansion->size() <= kMaxInPlaceAliasWidth;
+            if (fitsInPlace && ty == follow(side) && !printedAs)
+                printedAs = *aliasName(ty) + ": " + *expansion;
+            else
                 explanation.whereDeclarations.push_back(NamedTypeDeclaration{*aliasName(ty), *expansion});
-        }
+        };
+        spellOut(expected, explanation.wantedName);
+        spellOut(given, explanation.givenName);
     };
 
     // A string that is one typo away from one of the strings expected needs nothing but the correction.
     if (std::optional<std::string> suggestion = misspelledSingleton(given, expected))
     {
         explanation.reason = paragraph(misspelledStringHelp(*suggestion));
+        explanation.typo = {differ.display(given), *suggestion};
         return explanation;
     }
 
@@ -1839,6 +1887,8 @@ std::optional<MismatchExplanation> explainOnce(
     std::vector<Line> lines;
     std::string header;
     bool suppressedAny = false;
+    // The header is one sentence that says everything, so the message is just it.
+    bool sentenceSaysAll = false;
 
     // What "could be 'nil'" is about: the given type as printed above when it's short (`'Drop?'`),
     // else the label that stands for it.
@@ -2094,14 +2144,56 @@ std::optional<MismatchExplanation> explainOnce(
         // slot by slot, which the bullets already say.
         bool comparedSlotBySlot = givenShape == Shape::Function || expectedShape == Shape::Function || expectedShape == Shape::Intersection;
 
+        // Everything wrong is under the given function's own parameters and return values, which the header prints
+        // with their names: the reason lists them without printing the function again.
+        auto underGivenFunction = [](const Difference& d)
+        {
+            if (d.path.empty())
+                return false;
+            Segment::Kind first = d.path.front().kind;
+            return first == Segment::Kind::Parameter || first == Segment::Kind::Return;
+        };
+        bool inGivenFunction =
+            givenShape == Shape::Function && !located.empty() && std::all_of(located.begin(), located.end(), underGivenFunction);
+
         if (onlyNil)
             header = couldBeNilHeader(nilSubject());
         else if (located.empty() && involvesStructure && !suppressedAny)
             return std::nullopt;
+        else if (inGivenFunction)
+        {
+            // The function's own slots are items; a function inside one (a callback it takes) gets bullets of its own.
+            std::vector<const Difference*> group;
+            std::vector<Difference> nestedArguments;
+            std::vector<Difference> nestedReturns;
+            for (const Difference& d : located)
+            {
+                if (d.anchor && d.anchor->at == 0)
+                    group.push_back(&d);
+                else if (d.path.front().kind == Segment::Kind::Parameter)
+                    nestedArguments.push_back(d);
+                else
+                    nestedReturns.push_back(d);
+            }
+            FunctionReason reason = givenFunctionReason(
+                group,
+                bullets(nestedArguments, rendering, std::nullopt, kMaxFunctionItems),
+                bullets(nestedReturns, rendering, std::nullopt, kMaxFunctionItems),
+                rendering
+            );
+            header = std::move(reason.header);
+            lines = std::move(reason.lines);
+            sentenceSaysAll = reason.standalone;
+            shownDifferences = std::move(located);
+        }
         else if (!located.empty())
         {
+            // Two tables only disagree about properties; how many and how near is what the bullets show.
+            bool bothTables = shapeOf(givenCore) == Shape::Table && shapeOf(expectedCore) == Shape::Table;
             if (comparedSlotBySlot)
                 header = becauseHeader();
+            else if (bothTables)
+                header = propertiesHeader();
             else if (isNear(located.size(), differ.matched))
                 header = similarHeader(arrival, located.size());
             else
@@ -2145,7 +2237,31 @@ std::optional<MismatchExplanation> explainOnce(
     if (header.empty() && suppressedAny)
         return std::nullopt;
 
-    if (!header.empty())
+    // Every problem is a typo: the correction says it all, so the message is the two types and the help, and nothing
+    // the reason would have counted or spelled out is shown.
+    bool typosOnly = !shownDifferences.empty() && std::all_of(
+                                                      shownDifferences.begin(),
+                                                      shownDifferences.end(),
+                                                      [](const Difference& d)
+                                                      {
+                                                          return d.similarName && !d.anchor;
+                                                      }
+                                                  );
+    if (typosOnly)
+    {
+        // One misspelled property name is only a typo. A misspelled string in a table is said at the table, so the
+        // help names the place it's in.
+        const Difference& only = shownDifferences.front();
+        if (shownDifferences.size() == 1 && only.kind == Difference::Kind::Missing)
+            explanation.typo = misspelledFieldNames(only, rendering);
+        header.clear();
+        lines.clear();
+        rendering.notation = 0;
+        rendering.givenMembersShown.clear();
+        rendering.expectedMembersShown.clear();
+    }
+
+    if (!header.empty() || typosOnly)
     {
         // A missing field with a similarly named one there, or a string one typo from an expected one, is
         // almost certainly a misspelling: the correction goes first, as a help, not buried in a bullet.
@@ -2175,9 +2291,9 @@ std::optional<MismatchExplanation> explainOnce(
     if (expectedNamed && !rendering.expectedMembersShown.empty())
         explanation.wantedExpansion = declaredExpansion(differ, expected, rendering.expectedMembersShown);
 
-    // Missing fields named by tag or shared by every member need nothing more. A `Shape#2` needs the
-    // union printed above to mean anything, so that keeps the types.
-    if (describedEmpty && rendering.expectedMembersShown.empty() && !givenNilFails)
+    // Missing fields named by tag or shared by every member need nothing more, nor does a function whose only problem
+    // is extra parameters. A `Shape#2` needs the union printed above to mean anything, so that keeps the types.
+    if ((describedEmpty && rendering.expectedMembersShown.empty() && !givenNilFails) || sentenceSaysAll)
     {
         LUAU_ASSERT(explanation.reason.rfind("\n\n", 0) == 0);
         explanation.reason.erase(0, 2);
@@ -2200,8 +2316,10 @@ std::optional<MismatchExplanation> explainOnce(
         explanation.bulletTypes.push_back(d.super);
     }
     explanation.bulletsSayBothTypes = everyBulletSaysBoth;
+    if (typosOnly)
+        explanation.bulletTypes.clear();
     if (!explanation.reason.empty())
-        nameHeaderTypes(!everyBulletSaysBoth);
+        nameHeaderTypes(!everyBulletSaysBoth && !typosOnly);
 
     explanation.notation = rendering.notation;
     return explanation;
@@ -2266,6 +2384,11 @@ std::string printedMessage(const MismatchExplanation& explanation, TypeId given,
 
 } // namespace
 
+bool looksLikeTypo(const std::string& written, const std::string& meant)
+{
+    return written.size() > kMaxTypoEdits && editDistanceWithin(written, meant, typoEditLimit(written)).has_value();
+}
+
 std::optional<MismatchExplanation> explainMismatch(
     TypeId given,
     TypeId expected,
@@ -2290,6 +2413,7 @@ std::optional<MismatchExplanation> explainMismatch(
     // How `ErrorConverter` prints the types of an explained mismatch.
     ToStringOptions header;
     header.sortUnionMembers = false;
+    header.functionTypeArguments = true;
 
     // The two types as the message shows them: a large table a field per line, and a repeated type by its
     // name.

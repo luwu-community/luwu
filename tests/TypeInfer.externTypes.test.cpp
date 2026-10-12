@@ -408,6 +408,7 @@ TEST_CASE_FIXTURE(ExternTypeFixture, "table_indexers_are_invariant")
 
 TEST_CASE_FIXTURE(ExternTypeFixture, "table_class_unification_reports_sane_errors_for_missing_properties")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     CheckResult result = check(R"(
         function foo(bar)
             bar.Y = 1 -- valid
@@ -434,6 +435,7 @@ TEST_CASE_FIXTURE(ExternTypeFixture, "table_class_unification_reports_sane_error
 
 TEST_CASE_FIXTURE(ExternTypeFixture, "class_unification_type_mismatch_is_correct_order")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     CheckResult result = check(R"(
         local p: BaseClass
         local foo: number = p
@@ -464,6 +466,7 @@ b.X = 2 -- real Vector2.X is also read-only
 
 TEST_CASE_FIXTURE(ExternTypeFixture, "detailed_class_unification_error")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     CheckResult result = check(R"(
 local function foo(v)
     return v.X :: number + string.len(v.Y)
@@ -498,6 +501,7 @@ Expected this to be 'string', but got 'number')";
 
 TEST_CASE_FIXTURE(ExternTypeFixture, "class_type_mismatch_with_name_conflict")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     CheckResult result = check(R"(
 local i = ChildClass.New()
 type ChildClass = { x: number }
