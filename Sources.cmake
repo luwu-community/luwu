@@ -256,6 +256,7 @@ target_sources(Luwu.Analysis PRIVATE
     Analysis/include/Luau/Quantify.h
     Analysis/include/Luau/RecursionCounter.h
     Analysis/include/Luau/Refinement.h
+    Analysis/include/Luau/RepeatedTypeNames.h
     Analysis/include/Luau/RequireTracer.h
     Analysis/include/Luau/Scope.h
     Analysis/include/Luau/Set.h
@@ -285,6 +286,7 @@ target_sources(Luwu.Analysis PRIVATE
     Analysis/include/Luau/TypeFwd.h
     Analysis/include/Luau/TypeIds.h
     Analysis/include/Luau/TypeInfer.h
+    Analysis/include/Luau/TypeNaming.h
     Analysis/include/Luau/TypeOrPack.h
     Analysis/include/Luau/TypePack.h
     Analysis/include/Luau/TypePairHash.h
@@ -346,6 +348,7 @@ target_sources(Luwu.Analysis PRIVATE
     Analysis/src/Quantify.cpp
     Analysis/src/RecursionCounter.cpp
     Analysis/src/Refinement.cpp
+    Analysis/src/RepeatedTypeNames.cpp
     Analysis/src/RequireTracer.cpp
     Analysis/src/Scope.cpp
     Analysis/src/Simplify.cpp
@@ -371,6 +374,7 @@ target_sources(Luwu.Analysis PRIVATE
     Analysis/src/TypeFunctionRuntimeBuilder.cpp
     Analysis/src/TypeIds.cpp
     Analysis/src/TypeInfer.cpp
+    Analysis/src/TypeNaming.cpp
     Analysis/src/TypeOrPack.cpp
     Analysis/src/TypePack.cpp
     Analysis/src/TypePath.cpp
@@ -550,6 +554,7 @@ if(TARGET Luwu.UnitTest)
         tests/Parser.test.cpp
         tests/PrettyPrinter.test.cpp
         tests/RegisterCallbacks.cpp
+        tests/RepeatedTypeNames.test.cpp
         tests/RegisterCallbacks.h
         tests/RequireTracer.test.cpp
         tests/RuntimeLimits.test.cpp

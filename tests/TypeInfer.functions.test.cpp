@@ -2329,7 +2329,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "param_1_and_2_both_takes_the_same_generic_bu
         const std::string expected = R"(Expected this to be 'vec2?', but got '{| x: number |}'
 caused by:
   None of the union options are compatible. For example:
-required field 'y' not found in type
+required property 'y' not found in type
   '{| x: number |}'
 expected type:
   'vec2')";

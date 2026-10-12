@@ -11,6 +11,7 @@
 #include "Luau/Error.h"
 #include "Luau/Instantiation.h"
 #include "Luau/MismatchExplanation.h"
+#include "Luau/RepeatedTypeNames.h"
 #include "Luau/Metamethods.h"
 #include "Luau/Normalize.h"
 #include "Luau/OverloadResolver.h"
@@ -4784,7 +4785,7 @@ static ReadWriteExplanation wordReadWriteMismatch(const ReadWriteMismatch& misma
                   " a value of a smaller type, causing data loss.\n\n"
                   "Help[read/write mismatch]:\n- if " +
                   nothingWrites + ", mark it as " + annotation + " in " + wantedContainer + "\n- if it reads and writes, make a " + wanted +
-                  " version of your data" + passTail + " or mark the additional fields as optional";
+                  " version of your data" + passTail + " or mark the additional properties as optional";
     }
     else
     {
@@ -4800,7 +4801,7 @@ static ReadWriteExplanation wordReadWriteMismatch(const ReadWriteMismatch& misma
                   " with those of a smaller type, causing data loss.\n\n"
                   "Help[read/write mismatch]:\n- if " +
                   nothingWrites + ", annotate " + annotated + " as " + annotation + "\n- if it reads and writes, make " + wanted +
-                  " versions of your data" + passTail + " or mark the additional fields as optional";
+                  " versions of your data" + passTail + " or mark the additional properties as optional";
     }
 
     return ReadWriteExplanation{std::move(message), std::move(parameterHelp), mismatch.parameterHelpPath};
@@ -5040,13 +5041,12 @@ void TypeChecker2::explainError(TypeId subTy, TypeId superTy, Location location,
         TypeMismatch tm{superTy, subTy, explanation->standalone ? std::string() : std::move(explanation->reason)};
         if (explanation->standalone)
             tm.overrideMessage = std::move(explanation->reason);
-        tm.contextVerb = std::move(explanation->contextVerb);
-        tm.contextWantedDisplay = std::move(explanation->contextWantedDisplay);
-        tm.contextGivenDisplay = std::move(explanation->contextGivenDisplay);
         tm.wantedName = std::move(explanation->wantedName);
         tm.givenName = std::move(explanation->givenName);
         tm.wantedExpansion = std::move(explanation->wantedExpansion);
         tm.givenExpansion = std::move(explanation->givenExpansion);
+        tm.givenVariable = std::move(explanation->givenVariable);
+        tm.whereDeclarations = std::move(explanation->whereDeclarations);
         tm.luwuExplanation = true;
         tm.notation = explanation->notation;
         reportError(std::move(tm), location);
@@ -5471,6 +5471,10 @@ void TypeChecker2::reportError(TypeErrorData data, const Location& location)
 {
     if (auto utk = get_if<UnknownProperty>(&data))
         diagnoseMissingTableKey(utk, data);
+
+    // Luwu (helpful subtyping errors): an expected/got error names the long types it would print twice.
+    if (FFlag::LuwuHelpfulSubtypingErrors)
+        nameRepeatedTypesInError(data, findInnermostScope(location));
 
     module->errors.emplace_back(location, module->name, std::move(data));
 

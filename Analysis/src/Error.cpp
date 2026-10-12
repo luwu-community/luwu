@@ -189,6 +189,86 @@ static void appendReason(std::string& message, const std::string& reason)
         message += "; " + reason;
 }
 
+// Luwu (helpful subtyping errors): `type Drop = A | B`, with a long expansion on the line below its name.
+static std::string typeDeclaration(const std::string& name, const std::string& expansion)
+{
+    constexpr size_t maxDeclarationLineLength = 80;
+
+    // A summarized expansion ("a union of 37 members, including:" then one member per line)
+    // keeps its first line after the `=` and indents the rest under it.
+    if (size_t firstBreak = expansion.find('\n'); firstBreak != std::string::npos)
+    {
+        std::string result = "type " + name + " = " + expansion.substr(0, firstBreak);
+        size_t lineStart = firstBreak + 1;
+        while (lineStart <= expansion.size())
+        {
+            size_t lineEnd = expansion.find('\n', lineStart);
+            if (lineEnd == std::string::npos)
+                lineEnd = expansion.size();
+            result += "\n        " + expansion.substr(lineStart, lineEnd - lineStart);
+            lineStart = lineEnd + 1;
+        }
+        return result;
+    }
+
+    std::string oneLine = "type " + name + " = " + expansion;
+    if (oneLine.size() <= maxDeclarationLineLength)
+        return oneLine;
+    return "type " + name + " =\n        " + expansion;
+}
+
+// Luwu (helpful subtyping errors): `text` with every line after the first indented by `indent`, so a type
+// printed a field per line stays together under the line it's on.
+static std::string indentContinuationLines(const std::string& text, const std::string& indent)
+{
+    std::string result;
+    for (char c : text)
+    {
+        result += c;
+        if (c == '\n')
+            result += indent;
+    }
+    return result;
+}
+
+// Luwu (helpful subtyping errors): a type in an expected/got message. One on a line of its own is quoted, as
+// in the rest of the message; one printed a field per line is a block, which quotes would only clutter.
+static std::string shownType(const std::string& type)
+{
+    if (type.find('\n') == std::string::npos)
+        return "'" + type + "'";
+    return indentContinuationLines(type, "    ");
+}
+
+// Luwu (helpful subtyping errors): a `where` line. A table printed a field per line keeps its own layout,
+// indented under `type X = {`.
+static std::string whereDeclaration(const NamedTypeDeclaration& declaration)
+{
+    if (declaration.expansion.find('\n') == std::string::npos)
+        return typeDeclaration(declaration.name, declaration.expansion);
+    return "type " + declaration.name + " = " + indentContinuationLines(declaration.expansion, "    ");
+}
+
+// Luwu (helpful subtyping errors): the expected/got types, then the names they use, then the reason. A
+// reason on lines of its own refers to the names too, so it comes after them; one appended with `; `
+// stays on the line it continues, and the names follow it.
+static void appendNamesAndReason(std::string& message, const std::vector<NamedTypeDeclaration>& declarations, const std::string& reason)
+{
+    bool reasonContinuesLine = !reason.empty() && reason.front() != '\n';
+    if (reasonContinuesLine)
+        appendReason(message, reason);
+
+    if (!declarations.empty())
+    {
+        message += "\nwhere";
+        for (const NamedTypeDeclaration& declaration : declarations)
+            message += "\n    " + whereDeclaration(declaration);
+    }
+
+    if (!reasonContinuesLine)
+        appendReason(message, reason);
+}
+
 struct ErrorConverter
 {
     FileResolver* fileResolver = nullptr;
@@ -246,62 +326,48 @@ struct ErrorConverter
                                          std::optional<std::string> givenQualifier,
                                          std::optional<std::string> wantedQualifier) -> std::string
         {
-            std::string given = givenQualifier ? quote(givenType) + *givenQualifier : quote(givenType);
-            std::string wanted = wantedQualifier ? quote(wantedType) + *wantedQualifier : quote(wantedType);
+            std::string givenShown = tm.givenVariable ? *tm.givenVariable + ": " + givenType : givenType;
+            std::string given = givenQualifier ? shownType(givenShown) + *givenQualifier : shownType(givenShown);
+            std::string wanted = wantedQualifier ? shownType(wantedType) + *wantedQualifier : shownType(wantedType);
             size_t luauIndentTypeMismatchMaxTypeLength = size_t(FInt::LuauIndentTypeMismatchMaxTypeLength);
+            // Luwu (helpful subtyping errors): two types go on lines of their own when one is printed a field per
+            // line, which can't share a line with the sentence, and when Luwu printed them (`wantedName`) and
+            // either has a table in it: tables side by side on one line can't be compared.
+            bool blockTypes = givenShown.find('\n') != std::string::npos || wantedType.find('\n') != std::string::npos;
+            bool hasTables = givenShown.find('{') != std::string::npos || wantedType.find('{') != std::string::npos;
+            bool stacked = blockTypes || ((tm.wantedName || tm.givenName) && hasTables);
+            bool givenIsShort = !stacked && givenShown.length() <= luauIndentTypeMismatchMaxTypeLength;
+            bool eitherIsShort = givenIsShort || (!stacked && wantedType.length() <= luauIndentTypeMismatchMaxTypeLength);
 
             // An aliased union is printed as its declaration, `type Drop = A | B`, so its members are
             // there to count; a long one goes on the line below its name.
             if (tm.givenExpansion || tm.wantedExpansion)
             {
-                auto declaration = [](const std::string& name, const std::string& expansion)
-                {
-                    constexpr size_t maxDeclarationLineLength = 80;
-
-                    // A summarized expansion ("a union of 37 members, including:" then one member per line)
-                    // keeps its first line after the `=` and indents the rest under it.
-                    if (size_t firstBreak = expansion.find('\n'); firstBreak != std::string::npos)
-                    {
-                        std::string result = "type " + name + " = " + expansion.substr(0, firstBreak);
-                        size_t lineStart = firstBreak + 1;
-                        while (lineStart <= expansion.size())
-                        {
-                            size_t lineEnd = expansion.find('\n', lineStart);
-                            if (lineEnd == std::string::npos)
-                                lineEnd = expansion.size();
-                            result += "\n        " + expansion.substr(lineStart, lineEnd - lineStart);
-                            lineStart = lineEnd + 1;
-                        }
-                        return result;
-                    }
-
-                    std::string oneLine = "type " + name + " = " + expansion;
-                    if (oneLine.size() <= maxDeclarationLineLength)
-                        return oneLine;
-                    return "type " + name + " =\n        " + expansion;
-                };
                 if (tm.wantedExpansion)
-                    wanted = declaration(wantedType, *tm.wantedExpansion);
-                if (tm.givenExpansion)
-                    given = declaration(givenType, *tm.givenExpansion);
+                    wanted = typeDeclaration(wantedType, *tm.wantedExpansion);
+                // Under `'settings: Settings'`, the declaration is the line after it.
+                if (tm.givenExpansion && tm.givenVariable)
+                    given += "\n    " + typeDeclaration(givenType, *tm.givenExpansion);
+                else if (tm.givenExpansion)
+                    given = typeDeclaration(givenType, *tm.givenExpansion);
                 return preamble + "\n    " + wanted + "\n" + butGot + "\n    " + given;
             }
 
             if (get<NeverType>(follow(tm.wantedType)))
             {
-                if (givenType.length() <= luauIndentTypeMismatchMaxTypeLength)
+                if (givenIsShort)
                     return "Expected this to be unreachable, " + butGot + " " + given;
                 return "Expected this to be unreachable, " + butGot + "\n    " + given;
             }
 
             if (tm.context == TypeMismatch::InvariantContext)
             {
-                if (givenType.length() <= luauIndentTypeMismatchMaxTypeLength || wantedType.length() <= luauIndentTypeMismatchMaxTypeLength)
+                if (eitherIsShort)
                     return "Expected this to be exactly " + wanted + ", " + butGot + " " + given;
                 return "Expected this to be exactly\n    " + wanted + "\n" + butGot + "\n    " + given;
             }
 
-            if (givenType.length() <= luauIndentTypeMismatchMaxTypeLength || wantedType.length() <= luauIndentTypeMismatchMaxTypeLength)
+            if (eitherIsShort)
                 return preamble + " " + wanted + ", " + butGot + " " + given;
             return preamble + "\n    " + wanted + "\n" + butGot + "\n    " + given;
         };
@@ -364,7 +430,7 @@ struct ErrorConverter
             result += Luau::toString(*tm.error, TypeErrorToStringOptions{fileResolver});
         }
         else
-            appendReason(result, tm.reason);
+            appendNamesAndReason(result, tm.whereDeclarations, tm.reason);
 
         return result;
     }
@@ -705,9 +771,9 @@ struct ErrorConverter
 
     std::string operator()(const Luau::MissingProperties& e) const
     {
-        // Luwu (helpful subtyping errors): the squiggle is already on the table literal, and the missing fields are
-        // all that's wrong with it, so neither type is printed: name the literal and what it's for, then
-        // list each missing field with the type it should have.
+        // Luwu (helpful subtyping errors): the squiggle is already on the table literal, and the missing properties
+        // are all that's wrong with it, so neither type is printed: name the literal and what it's for, then
+        // list each missing property with the type it should have.
         if (e.luwuExplanation && e.context == MissingProperties::Missing)
         {
             ToStringOptions typeOptions;
@@ -717,7 +783,8 @@ struct ErrorConverter
             constexpr size_t maxSubjectNameLength = 30;
             const bool nameIsShort = e.givenName && e.givenName->size() <= maxSubjectNameLength;
             std::string subject = nameIsShort ? "'" + *e.givenName + "'" : "The given table";
-            std::string s = subject + " is missing " + (e.properties.size() == 1 ? std::string("a field") : std::to_string(e.properties.size()) + " fields");
+            std::string count = e.properties.size() == 1 ? std::string("a property") : std::to_string(e.properties.size()) + " properties";
+            std::string s = subject + " is missing " + count;
             if (e.wantedName)
                 s += " for '" + *e.wantedName + "'";
             s += ":";
@@ -739,6 +806,11 @@ struct ErrorConverter
             return s;
         }
 
+        // Luwu: a table has properties, not fields (a class's members are its fields). Upstream says "field" in
+        // both messages below.
+        const bool severalProperties = e.properties.size() > 1;
+        const std::string properties = severalProperties ? "properties " : "property ";
+
         if (!FFlag::LuauBetterMissingPropertiesTypeError)
         {
             std::string s = "Table type '" + toString(e.subType) + "' not compatible with type '" + toString(e.superType) + "' because the former";
@@ -746,17 +818,12 @@ struct ErrorConverter
             switch (e.context)
             {
             case MissingProperties::Missing:
-                s += " is missing field";
+                s += " is missing " + properties;
                 break;
             case MissingProperties::Extra:
-                s += " has extra field";
+                s += " has extra " + properties;
                 break;
             }
-
-            if (e.properties.size() > 1)
-                s += "s";
-
-            s += " ";
 
             for (size_t i = 0; i < e.properties.size(); ++i)
             {
@@ -774,15 +841,14 @@ struct ErrorConverter
 
         std::string s;
         std::string afterFieldList;
-        std::string pluralSuffix = e.properties.size() > 1 ? "s " : " ";
         switch (e.context)
         {
         case MissingProperties::Missing:
-            s += "required field" + pluralSuffix;
+            s += "required " + properties;
             afterFieldList = " not";
             break;
         case MissingProperties::Extra:
-            s += "extra field" + pluralSuffix;
+            s += "extra " + properties;
             break;
         }
 
@@ -892,9 +958,18 @@ struct ErrorConverter
         if (e.overrideMessage)
             return *e.overrideMessage;
 
-        std::string ss = "Expected this to be '" + toString(e.wantedTp) + "', but got '" + toString(e.givenTp) + "'";
+        std::string wanted = e.wantedName ? *e.wantedName : toString(e.wantedTp);
+        std::string given = e.givenName ? *e.givenName : toString(e.givenTp);
+        // Luwu (helpful subtyping errors): a pack holding a type printed a field per line can't share a line
+        // with the sentence.
+        bool blockTypes = wanted.find('\n') != std::string::npos || given.find('\n') != std::string::npos;
+        std::string ss;
+        if (blockTypes)
+            ss = "Expected this to be\n    " + shownType(wanted) + "\nbut got\n    " + shownType(given);
+        else
+            ss = "Expected this to be '" + wanted + "', but got '" + given + "'";
 
-        appendReason(ss, e.reason);
+        appendNamesAndReason(ss, e.whereDeclarations, e.reason);
 
         return ss;
     }
@@ -1185,7 +1260,8 @@ struct ErrorConverter
 
     std::string operator()(const CannotAssignToNever& e) const
     {
-        std::string result = "Cannot assign a value of type " + toString(e.rhsType) + " to a field of type never";
+        // Luwu: a table has properties, not fields; upstream says "a field of type never".
+        std::string result = "Cannot assign a value of type " + toString(e.rhsType) + " to a property of type never";
 
         switch (e.reason)
         {
@@ -1430,8 +1506,8 @@ bool TypeMismatch::operator==(const TypeMismatch& rhs) const
     // layout), so two errors that agree on everything else say the same thing and keeping one loses nothing.
     const bool sameContext =
         contextVerb == rhs.contextVerb && contextWantedDisplay == rhs.contextWantedDisplay && contextGivenDisplay == rhs.contextGivenDisplay;
-    const bool sameNames =
-        wantedName == rhs.wantedName && givenName == rhs.givenName && wantedExpansion == rhs.wantedExpansion && givenExpansion == rhs.givenExpansion;
+    const bool sameNames = wantedName == rhs.wantedName && givenName == rhs.givenName && wantedExpansion == rhs.wantedExpansion &&
+                           givenExpansion == rhs.givenExpansion && givenVariable == rhs.givenVariable && whereDeclarations == rhs.whereDeclarations;
     const bool sameLuwuRendering = sameContext && sameNames && overrideMessage == rhs.overrideMessage && notation == rhs.notation;
 
     return *wantedType == *rhs.wantedType && *givenType == *rhs.givenType && reason == rhs.reason && context == rhs.context &&
@@ -1731,7 +1807,8 @@ bool TypesAreUnrelated::operator==(const TypesAreUnrelated& rhs) const
 
 bool TypePackMismatch::operator==(const TypePackMismatch& rhs) const
 {
-    return *wantedTp == *rhs.wantedTp && *givenTp == *rhs.givenTp && overrideMessage == rhs.overrideMessage;
+    return *wantedTp == *rhs.wantedTp && *givenTp == *rhs.givenTp && overrideMessage == rhs.overrideMessage && wantedName == rhs.wantedName &&
+           givenName == rhs.givenName && whereDeclarations == rhs.whereDeclarations;
 }
 
 bool DynamicPropertyLookupOnExternTypesUnsafe::operator==(const DynamicPropertyLookupOnExternTypesUnsafe& rhs) const

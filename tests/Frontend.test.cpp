@@ -943,10 +943,12 @@ TEST_CASE_FIXTURE(FrontendFixture, "it_should_be_safe_to_stringify_errors_when_f
     // It could segfault, or you could see weird type names like the empty string or <VALUELESS BY EXCEPTION>
     if (!FFlag::DebugLuauForceOldSolver)
     {
-        CHECK_EQ("required field 'Count' not found in type\n  '{ count: string }'\nexpected type:\n  '{ Count: number }'", toString(result.errors[0]));
+        CHECK_EQ(
+            "required property 'Count' not found in type\n  '{ count: string }'\nexpected type:\n  '{ Count: number }'", toString(result.errors[0])
+        );
     }
     else
-        REQUIRE_EQ("required field 'Count' not found in type\n  'a'\nexpected type:\n  '{ Count: number }'", toString(result.errors[0]));
+        REQUIRE_EQ("required property 'Count' not found in type\n  'a'\nexpected type:\n  '{ Count: number }'", toString(result.errors[0]));
 }
 
 TEST_CASE_FIXTURE(FrontendFixture, "it_should_be_safe_to_stringify_explained_errors_when_full_type_graph_is_discarded")
@@ -966,9 +968,9 @@ TEST_CASE_FIXTURE(FrontendFixture, "it_should_be_safe_to_stringify_explained_err
 
     // As above: stringifying reads the error's TypeIds, which must outlive the discarded type graph.
     if (!FFlag::DebugLuauForceOldSolver)
-        CHECK_EQ("'a' is missing a field:\n  • 'Count: number'", toString(result.errors[0]));
+        CHECK_EQ("'a' is missing a property:\n  • 'Count: number'", toString(result.errors[0]));
     else
-        CHECK_EQ("required field 'Count' not found in type\n  'a'\nexpected type:\n  '{ Count: number }'", toString(result.errors[0]));
+        CHECK_EQ("required property 'Count' not found in type\n  'a'\nexpected type:\n  '{ Count: number }'", toString(result.errors[0]));
 }
 
 TEST_CASE_FIXTURE(FrontendFixture, "trace_requires_in_nonstrict_mode")

@@ -639,7 +639,7 @@ end
         CHECK_EQ(toString(result.errors[0]), R"(Expected this to be '{ w: number }', but got 'X | Y | Z'
 caused by:
   Not all union options are compatible.
-required field 'w' not found in type
+required property 'w' not found in type
   'X'
 expected type:
   '{ w: number }')");
@@ -681,13 +681,13 @@ local a: X? = { w = 4 }
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     if (!FFlag::DebugLuauForceOldSolver)
-        CHECK("required field 'x' not found in type\n  '{ w: number }'\nexpected type:\n  'X'" == toString(result.errors[0]));
+        CHECK("required property 'x' not found in type\n  '{ w: number }'\nexpected type:\n  'X'" == toString(result.errors[0]));
     else
     {
         const std::string expected = R"(Expected this to be 'X?', but got 'a'
 caused by:
   None of the union options are compatible. For example:
-required field 'x' not found in type
+required property 'x' not found in type
   'a'
 expected type:
   'X')";

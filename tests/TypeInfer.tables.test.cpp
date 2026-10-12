@@ -2636,7 +2636,7 @@ local y: number = tmp.p.y
             "value of a smaller type, causing data loss.\n\n"
             "Help[read/write mismatch]:\n"
             "- if nothing writes to 'p', mark it as 'read p: Super' in 'HasSuper'\n"
-            "- if it reads and writes, make a 'Super' version of your data or mark the additional fields as optional",
+            "- if it reads and writes, make a 'Super' version of your data or mark the additional properties as optional",
             toString(result.errors[0])
         );
     }
@@ -2645,7 +2645,7 @@ local y: number = tmp.p.y
         const std::string expected = R"(Expected this to be exactly 'HasSuper', but got 'tmp'
 caused by:
   Property 'p' is not compatible.
-extra field 'y' found in type
+extra property 'y' found in type
   '{| x: number, y: number |}'
 expected type:
   'Super')";
@@ -3718,14 +3718,15 @@ TEST_CASE_FIXTURE(Fixture, "scalar_is_not_a_subtype_of_a_compatible_polymorphic_
         CHECK("typeof(string)" == toString(tm2->givenType));
         CHECK("t1 where t1 = { read absolutely_no_scalar_has_this_method: (t1) -> (a...) }" == toString(tm2->wantedType));
 
+        // Luwu: an argument is reported whole, not the union member that failed, as in upstream 0.742.
         TypeMismatch* tm3 = get<TypeMismatch>(result.errors[2]);
         REQUIRE(tm3);
-        CHECK("typeof(string)" == toString(tm3->givenType));
+        CHECK("\"bar\" | \"baz\"" == toString(tm3->givenType));
         CHECK("t1 where t1 = { read absolutely_no_scalar_has_this_method: (t1) -> (a...) }" == toString(tm3->wantedType));
 
         TypeMismatch* tm4 = get<TypeMismatch>(result.errors[3]);
         REQUIRE(tm4);
-        CHECK("typeof(string)" == toString(tm4->givenType));
+        CHECK("\"bar\" | \"baz\"" == toString(tm4->givenType));
         CHECK("t1 where t1 = { read absolutely_no_scalar_has_this_method: (t1) -> (a...) }" == toString(tm4->wantedType));
     }
     else
@@ -3736,7 +3737,7 @@ TEST_CASE_FIXTURE(Fixture, "scalar_is_not_a_subtype_of_a_compatible_polymorphic_
             R"(Expected this to be 't1 where t1 = {- absolutely_no_scalar_has_this_method: (t1) -> (a...) -}', but got 'string'
 caused by:
   The given type's metatable does not satisfy the requirements.
-required field 'absolutely_no_scalar_has_this_method' not found in type
+required property 'absolutely_no_scalar_has_this_method' not found in type
   'typeof(string)'
 expected type:
   't1 where t1 = {- absolutely_no_scalar_has_this_method: (t1) -> (a...) -}')";
@@ -3746,7 +3747,7 @@ expected type:
             R"(Expected this to be 't1 where t1 = {- absolutely_no_scalar_has_this_method: (t1) -> (a...) -}', but got '"bar"'
 caused by:
   The given type's metatable does not satisfy the requirements.
-required field 'absolutely_no_scalar_has_this_method' not found in type
+required property 'absolutely_no_scalar_has_this_method' not found in type
   'typeof(string)'
 expected type:
   't1 where t1 = {- absolutely_no_scalar_has_this_method: (t1) -> (a...) -}')";
@@ -3761,7 +3762,7 @@ caused by:
 Expected this to be 't1 where t1 = {- absolutely_no_scalar_has_this_method: (t1) -> (a...) -}', but got '"bar"'
 caused by:
   The given type's metatable does not satisfy the requirements.
-required field 'absolutely_no_scalar_has_this_method' not found in type
+required property 'absolutely_no_scalar_has_this_method' not found in type
   'typeof(string)'
 expected type:
   't1 where t1 = {- absolutely_no_scalar_has_this_method: (t1) -> (a...) -}')";
@@ -3816,7 +3817,7 @@ TEST_CASE_FIXTURE(Fixture, "a_free_shape_cannot_turn_into_a_scalar_if_it_is_not_
             R"(Expected this to be 'string', but got 't1 where t1 = {+ absolutely_no_scalar_has_this_method: (t1) -> (a, b...) +}'
 caused by:
   The given type's metatable does not satisfy the requirements.
-required field 'absolutely_no_scalar_has_this_method' not found in type
+required property 'absolutely_no_scalar_has_this_method' not found in type
   'typeof(string)'
 expected type:
   't1 where t1 = {+ absolutely_no_scalar_has_this_method: (t1) -> (a, b...) +}')";
@@ -5772,7 +5773,7 @@ TEST_CASE_FIXTURE(Fixture, "bigger_nested_table_causes_big_type_error")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    std::string expected = R"(required field 'name' not found in type
+    std::string expected = R"(required property 'name' not found in type
   '{ path: string, type: "file" }'
 expected type:
   'File')";
@@ -7482,7 +7483,7 @@ TEST_CASE_FIXTURE(Fixture, "variance_read_only_would_satisfy_indexer")
         "Help[read/write mismatch]:\n"
         "- if the function doesn't actually write to the array, annotate the parameter as '{ read Scoped }'\n"
         "- if it reads and writes, make 'Scoped' versions of your data to pass to the function or mark the additional "
-        "fields as optional",
+        "properties as optional",
         toString(result.errors[0])
     );
 
@@ -7520,7 +7521,7 @@ TEST_CASE_FIXTURE(Fixture, "variance_read_only_would_satisfy_map_uses_map_nouns_
         "Help[read/write mismatch]:\n"
         "- if the function doesn't actually write to the map, annotate the parameter as '{ read [string]: Scoped }'\n"
         "- if it reads and writes, make 'Scoped' versions of your data to pass to the function or mark the additional "
-        "fields as optional",
+        "properties as optional",
         toString(result.errors[0])
     );
     CHECK_EQ("Help[read/write mismatch]: consider marking this as 'read' if the function 'byKey' only reads from the map.", toString(result.errors[1]));
@@ -7682,7 +7683,7 @@ TEST_CASE_FIXTURE(Fixture, "variance_read_only_without_a_call_names_no_function"
         "replace its elements with those of a smaller type, causing data loss.\n\n"
         "Help[read/write mismatch]:\n"
         "- if nothing writes to the array, annotate it as '{ read Scoped }'\n"
-        "- if it reads and writes, make 'Scoped' versions of your data or mark the additional fields as optional",
+        "- if it reads and writes, make 'Scoped' versions of your data or mark the additional properties as optional",
         toString(result.errors[0])
     );
 }
@@ -7713,7 +7714,7 @@ TEST_CASE_FIXTURE(Fixture, "variance_read_only_would_satisfy_property_names_the_
         "Help[read/write mismatch]:\n"
         "- if the function doesn't actually write to 'value', mark it as 'read value: Scoped' in 'Box<Scoped>'\n"
         "- if it reads and writes, make a 'Scoped' version of your data to pass to the function or mark the additional "
-        "fields as optional",
+        "properties as optional",
         toString(result.errors[0])
     );
 

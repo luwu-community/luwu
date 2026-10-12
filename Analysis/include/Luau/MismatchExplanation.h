@@ -1,7 +1,9 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
+#include "Luau/Error.h"
 #include "Luau/NotNull.h"
+#include "Luau/ToString.h"
 #include "Luau/TypeFwd.h"
 
 #include <cstdint>
@@ -39,14 +41,26 @@ struct MismatchExplanation
     std::optional<std::string> wantedName;
     std::optional<std::string> givenName;
 
-    // The `= A | B` line under an aliased union, members in the order the `#n` numbers count them.
+    // What follows `type X =` for a type the header prints by its alias: an aliased union's members, in
+    // the order the `#n` numbers count them, or an aliased table spelled out.
     std::optional<std::string> wantedExpansion;
     std::optional<std::string> givenExpansion;
+    // The variable `reason`'s paths are rooted at, printed with the given type: `'settings: Settings'`.
+    std::optional<std::string> givenVariable;
+    // The `where` block for types the message would otherwise print several times. When it isn't empty,
+    // `wantedName` and `givenName` are the two types printed with its names.
+    std::vector<NamedTypeDeclaration> whereDeclarations;
+    // The properties the reason's paths go through, per table, which a large table printed as a block shows
+    // first (`ToStringOptions::propertyFocus`).
+    PropertyFocus propertyFocus{nullptr};
+    // Every bullet says both what was expected and what was given, so the two types are only context: a given
+    // table prints only the properties the bullets point into.
+    bool bulletsSayBothTypes = false;
+    // The types the reason's bullets say were expected and given where a value doesn't fit, as printed
+    // (`Method`), for declaring an alias one of them is.
+    std::vector<std::string> bulletTypes;
 
-    // Set when every difference is in a function's parameters, or every one is in its returns.
-    std::optional<std::string> contextVerb;
-    std::optional<std::string> contextWantedDisplay;
-    std::optional<std::string> contextGivenDisplay;
+
 };
 
 // Returns nullopt when the types are of a kind the differ doesn't take apart (generics, type

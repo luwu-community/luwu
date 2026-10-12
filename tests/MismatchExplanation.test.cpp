@@ -419,4 +419,289 @@ TEST_CASE_FIXTURE(ExplainFixture, "reason_is_held_to_its_line_cap")
     CHECK(explanation->reason.find("\n...and " + std::to_string((8 - shown) * 9) + " more lines") != std::string::npos);
 }
 
+// An array where one of its elements is expected is said in one line about the braces, not diffed field
+// by field against the element.
+TEST_CASE_FIXTURE(BuiltinsFixture, "array_of_the_expected_type_in_a_map")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type Animals = { [string]: { { name: string } } }
+        local function takes_animals(animals: { [string]: { name: string } }) end
+        local animals: Animals = {}
+        takes_animals(animals)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        toString(result.errors[0]),
+        "Expected this to be\n"
+        "    '{ [string]: { name: string } }'\n"
+        "but was given\n"
+        "    'animals: Animals'\n"
+        "where\n"
+        "    type Animals = { [string]: {{ name: string }} }\n"
+        "\n"
+        "The passed type is similar, but has an incompatible path:\n"
+        "  • animals[string] is an array where a single '{ name: string }' is expected"
+    );
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "element_of_the_expected_array_in_a_field")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        local function takes_pack(pack: { cats: { { name: string } } }) end
+        local pack: { cats: { name: string } } = { cats = { name = "Taz" } }
+        takes_pack(pack)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        toString(result.errors[0]),
+        "Expected this to be\n"
+        "    '{ cats: {{ name: string }} }'\n"
+        "but was given\n"
+        "    'pack: { cats: { name: string } }'\n"
+        "\n"
+        "The passed type is similar, but has an incompatible path:\n"
+        "  • pack.cats is a single '{ name: string }' where an array of them is expected"
+    );
+}
+
+// With nothing around the array, there is no path to point at: the whole value is the problem.
+TEST_CASE_FIXTURE(BuiltinsFixture, "whole_value_is_an_array_of_the_expected_type")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        local function takes_cat(cat: { name: string }) end
+        local function takes_cats(cats: { { name: string } }) end
+        local cats: { { name: string } } = {}
+        local cat: { name: string } = { name = "Taz" }
+        takes_cat(cats)
+        takes_cats(cat)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ(
+        toString(result.errors[0]),
+        "Expected this to be\n"
+        "    '{ name: string }'\n"
+        "but was given\n"
+        "    'cats: {{ name: string }}'\n"
+        "\n"
+        "'cats' is an array where a single value is expected."
+    );
+    CHECK_EQ(
+        toString(result.errors[1]),
+        "Expected this to be\n"
+        "    '{{ name: string }}'\n"
+        "but was given\n"
+        "    'cat: { name: string }'\n"
+        "\n"
+        "'cat' is a single value where an array is expected: pass '{ cat }' instead."
+    );
+}
+
+// A function slot gets the same sentence, after the argument it's about.
+TEST_CASE_FIXTURE(BuiltinsFixture, "array_of_the_expected_type_as_a_callback_argument")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        local function each(f: (cat: { name: string }) -> ()) end
+        each(function(cats: { { name: string } }) end)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        toString(result.errors[0]),
+        "Expected this to be\n"
+        "    '({ name: string }) -> ()'\n"
+        "but was given\n"
+        "    '({{ name: string }}) -> ()'\n"
+        "\n"
+        "This is because:\n"
+        "  • 'each' can call '(cats: {{ name: string }}) -> ()' with an incorrect argument:\n"
+        "      • 'cats: { name: string }', a single value where an array of them is expected"
+    );
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "array_of_the_expected_type_as_a_callback_return")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        local function with_cat(f: () -> { name: string }) end
+        with_cat(function(): { { name: string } } return {} end)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        toString(result.errors[0]),
+        "Expected this to be\n"
+        "    '() -> { name: string }'\n"
+        "but was given\n"
+        "    '(...any) -> {{ name: string }}'\n"
+        "\n"
+        "This is because:\n"
+        "  • '() -> {{ name: string }}' should return a single '{ name: string }', not an array of them"
+    );
+}
+
+// An aliased table isn't spelled out when every bullet says both what was expected and what was given: the
+// declaration would only say it again. The variable the paths are rooted at is printed with its type, and a
+// table literal's type is never printed as the name of the local holding it.
+TEST_CASE_FIXTURE(BuiltinsFixture, "an_alias_is_not_spelled_out_when_the_bullets_say_both_types")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type Config = { host: string, port: number }
+        local settings = { host = "localhost", port = "8080" }
+        local config: Config = settings
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        toString(result.errors[0]),
+        "Expected this to be\n"
+        "    'Config'\n"
+        "but was given\n"
+        "    'settings: { port: string, … }'\n"
+        "\n"
+        "The given type is similar, but has an incompatible path:\n"
+        "  • settings.port: expected 'number', got 'string'"
+    );
+}
+
+// An argument's bullet says what the parameter takes as well as what it's passed: the signature above it
+// can hide the parameter's type behind a name.
+TEST_CASE_FIXTURE(BuiltinsFixture, "an_argument_bullet_says_what_the_parameter_takes")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type Response = { status_code: number, headers: { [string]: string }, body: string }
+        local function request(on_response: (response: Response) -> ()) end
+        request(function(response: { status_code: string, headers: { [string]: string }, body: string }) end)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        toString(result.errors[0]),
+        "Expected this to be\n"
+        "    '(Response) -> ()'\n"
+        "but was given\n"
+        "    '(Nyla) -> ()'\n"
+        "where\n"
+        "    type Nyla = { body: string, headers: { [string]: string }, status_code: string }\n"
+        "\n"
+        "This is because:\n"
+        "  • 'request' can call '(response: Nyla) -> ()' with an incorrect argument:\n"
+        "      • 'response.status_code: number' (expected 'string')"
+    );
+}
+
+// An optional argument is reported as what was passed, `Player?`, not as the `nil` member that failed.
+TEST_CASE_FIXTURE(BuiltinsFixture, "an_optional_argument_is_reported_whole")
+{
+    CheckResult result = check(R"(
+        type Player = { name: string }
+        local function find_player(id: number): Player? return nil end
+        local function announce(player: Player) end
+        announce(find_player(42))
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(toString(result.errors[0]), "Expected this to be 'Player', but got 'Player?'");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "an_array_where_a_map_is_expected_says_so")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type Permissions = { [string]: boolean }
+        local function grant(permissions: Permissions) end
+        local permissions = { "read", "write" }
+        grant(permissions)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        toString(result.errors[0]),
+        "Expected this to be\n"
+        "    'Permissions'\n"
+        "but was given\n"
+        "    'permissions: {string}'\n"
+        "\n"
+        "permissions: expected a map of '{ [string]: boolean }', got an array of 'string'"
+    );
+}
+
+// An alias the message mentions without saying what it is gets declared, one level in from the two types; a
+// large one doesn't, being one the reader knows by name.
+TEST_CASE_FIXTURE(BuiltinsFixture, "mentioned_aliases_are_declared")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type Method = "GET" | "POST" | "PUT" | "DELETE"
+        type Request = { url: string, method: Method }
+        local function send(request: Request) end
+        local request = { url = "/users", method = "PATCH" :: "PATCH" }
+        send(request)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        toString(result.errors[0]),
+        "Expected this to be\n"
+        "    'Request'\n"
+        "but was given\n"
+        "    'request: { method: \"PATCH\", … }'\n"
+        "where\n"
+        "    type Method = \"GET\" | \"POST\" | \"PUT\" | \"DELETE\"\n"
+        "\n"
+        "The passed type is similar, but has an incompatible path:\n"
+        "  • request.method: expected 'Method', got '\"PATCH\"'"
+    );
+}
+
+// A large record printed as a block shows the properties the reason is about first, then the ones that say
+// what it is (`kind`, `name`, literal-typed ones), and counts the rest.
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_large_record_shows_the_properties_that_matter")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type Player = {
+            kind: "player", name: string, user_id: number, team: "red" | "blue", health: number, max_health: number,
+            level: number, xp: number, gold: number, position: { x: number, y: number }, inventory: { string }, muted: boolean,
+        }
+        local function spawn(player: Player) end
+        local player = {
+            kind = "player" :: "player", name = "deviaze", user_id = 7, team = "red" :: "red", health = "100", max_health = 100,
+            level = 3, xp = 0, gold = "12", position = { x = 0, y = 0 }, inventory = {}, muted = false,
+        }
+        spawn(player)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        toString(result.errors[0]),
+        "Expected this to be\n"
+        "    'Player'\n"
+        "but was given\n"
+        "    'player: { health: string, gold: string, kind: \"player\", team: \"red\", … }'\n"
+        "\n"
+        "The passed type is similar, but has 2 incompatible paths:\n"
+        "  • player.health: expected 'number', got 'string'\n"
+        "  • player.gold: expected 'number', got 'string'"
+    );
+}
+
 TEST_SUITE_END();
