@@ -6288,7 +6288,7 @@ static std::string disabledFeatureMessage(const LuwuFeature& feature, bool analy
 bool Parser::checkLuwuFeature(const Location& location, const LuwuFeature& feature, bool enabled)
 {
     // A Luau module can't use the feature at all, so turning the flag on wouldn't help
-    if (options.luauModule)
+    if (options.language != Language::Luwu)
     {
         report(location, "%s", luwuOnlyFeatureMessage(feature, options.analysisErrors).c_str());
         return false;

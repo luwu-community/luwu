@@ -18,15 +18,6 @@ using ModuleName = std::string;
 
 constexpr const char* kConfigName = ".luaurc";
 
-// Luwu: the language a module is written in. Luwu code lives in `.luwu` files; Luau and Lua files are checked too, and
-// some diagnostics depend on which language a module is (a Luwu-only API in a Luau module is a lint).
-enum class Language
-{
-    Lua,
-    Luau,
-    Luwu,
-};
-
 struct Config
 {
     Config();

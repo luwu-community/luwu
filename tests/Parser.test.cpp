@@ -2228,7 +2228,7 @@ TEST_CASE_FIXTURE(Fixture, "luwu_features_are_errors_in_a_luau_module")
     };
 
     ParseOptions runtime;
-    runtime.luauModule = true;
+    runtime.language = Language::Luau;
 
     // A runtime gets one line, even with the feature's FFlag on
     ParseResult result = tryParse("local function f(x = 1) end", runtime);

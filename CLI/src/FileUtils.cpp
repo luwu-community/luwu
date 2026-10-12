@@ -163,9 +163,13 @@ std::optional<std::string> resolvePath(std::string_view path, std::string_view b
     return normalizePath(joinPaths(*baseFilePathParent, path));
 }
 
-bool isLuauModulePath(std::string_view path)
+Luau::Language languageOfPath(std::string_view path)
 {
-    return hasFileExtension(path, {".luau", ".lua"});
+    if (hasFileExtension(path, {".luau"}))
+        return Luau::Language::Luau;
+    if (hasFileExtension(path, {".lua"}))
+        return Luau::Language::Lua;
+    return Luau::Language::Luwu;
 }
 
 bool hasFileExtension(std::string_view name, const std::vector<std::string>& extensions)

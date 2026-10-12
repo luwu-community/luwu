@@ -619,7 +619,7 @@ static bool runFile(const char* name, lua_State* GL, bool repl)
     std::string chunkname = "@" + normalizePath(name);
 
     Luau::CompileOptions options = copts();
-    options.luauModule = isLuauModulePath(name);
+    options.language = int(languageOfPath(name));
     std::string bytecode = Luau::compile(*source, options);
     int status = 0;
 

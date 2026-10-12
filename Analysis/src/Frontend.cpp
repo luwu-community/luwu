@@ -905,14 +905,14 @@ std::optional<CheckResult> Frontend::getCheckResult(const ModuleName& name, bool
     return checkResult;
 }
 
-// How the Frontend parses a module: with comments, and with errors worded for static analysis. Luwu syntax is an error
-// in a module the config says is Luau or Lua.
+// How the Frontend parses a module: with comments, in the language its config says, and with errors worded for static
+// analysis.
 static ParseOptions analysisParseOptions(const Config& config)
 {
     ParseOptions opts = config.parseOptions;
     opts.captureComments = true;
     opts.analysisErrors = true;
-    opts.luauModule = config.language != Language::Luwu;
+    opts.language = config.language;
     return opts;
 }
 

@@ -8599,12 +8599,12 @@ void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, A
     bytecode.finalize();
 }
 
-// Luwu: the parse options for compiling source, which also say whether it's a Luau module.
+// Luwu: the parse options for compiling source, in the language the compile options say.
 static ParseOptions compileParseOptions(const CompileOptions& options, const ParseOptions& parseOptions)
 {
     ParseOptions result = parseOptions;
-    if (options.luauModule)
-        result.luauModule = true;
+    if (options.language != int(Language::Luwu))
+        result.language = Language(options.language);
     return result;
 }
 

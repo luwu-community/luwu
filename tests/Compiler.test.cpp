@@ -13987,7 +13987,7 @@ TEST_CASE("LuwuSyntaxInALuauModuleDoesNotCompile")
     ScopedFastFlag luwuDefaultArguments{FFlag::LuwuDefaultArguments, true};
 
     Luau::CompileOptions options;
-    options.luauModule = 1;
+    options.language = int(Luau::Language::Luau);
 
     std::string bytecode = Luau::compile("local function f(x = 1) return x end", options);
     REQUIRE(!bytecode.empty());

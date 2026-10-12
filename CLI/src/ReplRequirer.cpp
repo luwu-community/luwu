@@ -161,7 +161,7 @@ static int load(lua_State* L, void* ctx, const char* path, const char* chunkname
         {
             // now we can compile & run module on the new thread
             Luau::CompileOptions options = req->copts();
-            options.luauModule = isLuauModulePath(loadname);
+            options.language = int(languageOfPath(loadname));
             std::string bytecode = Luau::compile(*contents, options);
             status = luau_load(ML, chunkname, bytecode.data(), bytecode.size(), 0);
         }
