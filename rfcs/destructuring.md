@@ -39,6 +39,10 @@ call that magically contains types visible to the type system. We report a TypeE
 a runtime binding that does not contain types. Supplying a top level variable in the destructure
 (`type Smth.{Ta, Tb} = smth`) is a syntax error, since such a type cannot exist.
 
+A `local` or `const` bound to a class a required module exports also brings in the class's type under the same name,
+so `const geometry.{Point} = require("./geometry")` and `local Point = geometry.Point` both make `Point` usable as a
+type without a separate `type .{Point} = geometry`. A type already declared under that name in the same scope wins.
+
 ## Compatibility
 
 This is not compatible with Luau 0.730, but may be partially compatible with upstream Luau because it's based on VIG's RFC.
