@@ -1308,6 +1308,57 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "destructured_types_alias_a_modules_exported_
     CHECK_EQ(b->exportedTypeBindings["Box"].typeParams.size(), 1);
 }
 
+TEST_CASE_FIXTURE(BuiltinsFixture, "locals_bound_to_an_imported_class_bring_its_type")
+{
+    ScopedFastFlag sff[] = {
+        {FFlag::LuauExportValueSyntax, true},
+        {FFlag::LuauExportValueTypecheck, true},
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuDestructuring, true},
+    };
+
+    fileResolver.source["game/A"] = R"(
+        export class Point
+            x: number
+            y: number
+        end
+
+        export class Size
+            w: number
+        end
+    )";
+
+    fileResolver.source["game/B"] = R"(
+        --!strict
+        local A = require(game.A)
+        local Point = A.Point
+        const .{Size as Dims} = require(game.A)
+        const mod.{Size} = require(game.A)
+        local p: Point = Point { x = 1, y = 2 }
+        local d: Dims = Dims { w = 1 }
+        local s: Size = mod.Size { w = 2 }
+        local wrong: Point = Dims { w = 3 }
+    )";
+
+    // `wrong` is the one error: the bound types are the classes', not `any`
+    CheckResult result = getFrontend().check("game/B");
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 9);
+
+    // A type the scope already declares under the name wins
+    fileResolver.source["game/C"] = R"(
+        --!strict
+        local A = require(game.A)
+        type Point = number
+        local Point = A.Point
+        local n: Point = 1
+    )";
+
+    result = getFrontend().check("game/C");
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "destructured_types_report_what_the_module_does_not_export")
 {
     ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
