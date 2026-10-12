@@ -603,19 +603,30 @@ AstStat* Parser::parseStat()
     return reportStatError(expr->location, copy({expr}), {}, "Incomplete statement: expected assignment or a function call");
 }
 
+// Luwu: the token an "Expected 'end' (to close ...)" error names: the `then` or `do`, or the statement's keyword when
+// that's missing. Upstream names whatever stood where the `then` or `do` should have been, often the next line's first
+// word ("to close 'local'").
+static const Lexeme& blockOpener(const Lexeme& keyword, const Lexeme& separator, bool hasSeparator)
+{
+    return hasSeparator ? separator : keyword;
+}
+
 // if exp then block {elseif exp then block} [else block] end
 AstStat* Parser::parseIf()
 {
     Location start = lexer.current().location;
 
+    Lexeme matchIf = lexer.current();
     nextLexeme(); // if / elseif
 
     AstExpr* cond = parseExpr();
 
     Lexeme matchThen = lexer.current();
     std::optional<Location> thenLocation;
-    if (expectAndConsume(Lexeme::ReservedThen, "if statement"))
+    bool hasThen = expectAndConsume(Lexeme::ReservedThen, "if statement");
+    if (hasThen)
         thenLocation = matchThen.location;
+    matchThen = blockOpener(matchIf, matchThen, hasThen);
 
     AstStatBlock* thenbody = parseBlock();
 
@@ -669,12 +680,14 @@ AstStat* Parser::parseWhile()
 {
     Location start = lexer.current().location;
 
+    Lexeme matchWhile = lexer.current();
     nextLexeme(); // while
 
     AstExpr* cond = parseExpr();
 
     Lexeme matchDo = lexer.current();
     bool hasDo = expectAndConsume(Lexeme::ReservedDo, "while loop");
+    const Lexeme& matchEnd = blockOpener(matchWhile, matchDo, hasDo);
 
     functionStack.back().loopDepth++;
 
@@ -684,7 +697,7 @@ AstStat* Parser::parseWhile()
 
     Location end = lexer.current().location;
 
-    bool hasEnd = expectMatchEndAndConsume(Lexeme::ReservedEnd, matchDo);
+    bool hasEnd = expectMatchEndAndConsume(Lexeme::ReservedEnd, matchEnd);
     body->hasEnd = hasEnd;
 
     return allocator.alloc<AstStatWhile>(Location(start, end), cond, body, hasDo, matchDo.location, start);
@@ -776,6 +789,7 @@ AstStat* Parser::parseFor()
 {
     Location start = lexer.current().location;
 
+    Lexeme matchFor = lexer.current();
     nextLexeme(); // for
 
     Binding varname = parseBinding();
@@ -805,6 +819,7 @@ AstStat* Parser::parseFor()
 
         Lexeme matchDo = lexer.current();
         bool hasDo = expectAndConsume(Lexeme::ReservedDo, "for loop");
+        const Lexeme& matchEnd = blockOpener(matchFor, matchDo, hasDo);
 
         unsigned int localsBegin = saveLocals();
 
@@ -820,7 +835,7 @@ AstStat* Parser::parseFor()
 
         Location end = lexer.current().location;
 
-        bool hasEnd = expectMatchEndAndConsume(Lexeme::ReservedEnd, matchDo);
+        bool hasEnd = expectMatchEndAndConsume(Lexeme::ReservedEnd, matchEnd);
         body->hasEnd = hasEnd;
 
         AstStatFor* node = allocator.alloc<AstStatFor>(Location(start, end), var, from, to, step, body, hasDo, matchDo.location, start);
@@ -860,6 +875,7 @@ AstStat* Parser::parseFor()
 
         Lexeme matchDo = lexer.current();
         bool hasDo = expectAndConsume(Lexeme::ReservedDo, "for loop");
+        const Lexeme& matchEnd = blockOpener(matchFor, matchDo, hasDo);
 
         unsigned int localsBegin = saveLocals();
 
@@ -878,7 +894,7 @@ AstStat* Parser::parseFor()
 
         Location end = lexer.current().location;
 
-        bool hasEnd = expectMatchEndAndConsume(Lexeme::ReservedEnd, matchDo);
+        bool hasEnd = expectMatchEndAndConsume(Lexeme::ReservedEnd, matchEnd);
         body->hasEnd = hasEnd;
 
         AstStatForIn* node = allocator.alloc<AstStatForIn>(

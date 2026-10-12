@@ -5331,6 +5331,23 @@ TEST_CASE_FIXTURE(Fixture, "classes_nested_and_repeated")
     CHECK_EQ("Cannot declare class 'Foo' inside another statement or expression", result.errors[0].getMessage());
 }
 
+// Luwu: a block missing its `then` or `do` names its own keyword in the "Expected 'end'" error, not the token that stood
+// where the `then` or `do` should have been. Found by the typewriter tests.
+TEST_CASE_FIXTURE(Fixture, "block_missing_then_or_do_names_its_keyword_in_the_end_error")
+{
+    for (const char* source : {"if x\nlocal y = 1\n", "while x\nlocal y = 1\n", "for i = 1, 2\nlocal y = 1\n", "for k in t\nlocal y = 1\n"})
+    {
+        INFO(source);
+        ParseResult result = tryParse(source);
+        REQUIRE_EQ(result.errors.size(), 2);
+        CHECK(result.errors[1].getMessage().find("to close 'local'") == std::string::npos);
+    }
+
+    ParseResult result = tryParse("if x\nlocal y = 1\n");
+    REQUIRE_EQ(result.errors.size(), 2);
+    CHECK_EQ(result.errors[1].getMessage(), "Expected 'end' (to close 'if' at line 1), got <eof>");
+}
+
 // Luwu Classes (rfcs/classes): a class with a syntax error reports only that, not its members' access specifiers.
 // Found by the typewriter tests: `private` with no name after it yet also reported every other parameter as needing one.
 TEST_CASE_FIXTURE(Fixture, "half_typed_class_reports_only_its_syntax_error")
