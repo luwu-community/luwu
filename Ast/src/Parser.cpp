@@ -59,6 +59,7 @@ const LuwuFeature kDefaultArgumentsFeature{"default arguments", /* plural= */ tr
 
 // Luwu Destructuring (rfcs/destructuring.md): destructuring always declares new locals, never assigns existing ones.
 const char* const kDestructuringNeedsKeywordError = "Destructuring declares new locals; start it with 'local' or 'const'";
+const LuwuFeature kDestructuringFeature{"destructuring", /* plural= */ false, "LuwuDestructuring"};
 
 // Luwu Classes (rfcs/classes): class members may not be named after the keywords that appear in the
 // class header or in front of a member. This keeps those positions unambiguous, and leaves room to give
@@ -858,8 +859,7 @@ Parser::Binding Parser::parseLoopPattern(std::vector<std::optional<DestructureTa
         target.annotation = parseType();
     }
 
-    if (!FFlag::LuwuDestructuring)
-        report(Location(start, lexer.previousLocation()), "Destructuring is a Luwu feature; enable the 'LuwuDestructuring' fast flag to use it");
+    checkLuwuFeature(Location(start, lexer.previousLocation()), kDestructuringFeature, FFlag::LuwuDestructuring);
 
     Name name = target.name ? *target.name : Name(nameDestructured, target.patternLocation.value_or(start));
     Binding binding(name, target.annotation, colonPosition);
@@ -1841,8 +1841,7 @@ AstStat* Parser::parseDestructuring(const Location& start, const Location& keywo
 
     Location location(start, value->location);
 
-    if (!FFlag::LuwuDestructuring)
-        report(location, "Destructuring is a Luwu feature; enable the 'LuwuDestructuring' fast flag to use it");
+    checkLuwuFeature(location, kDestructuringFeature, FFlag::LuwuDestructuring);
 
     std::vector<AstStat*> statements;
     AstDestructurePattern pattern = desugarDestructuring(target, value, location, equalsLocation, isConst, statements);
@@ -2248,8 +2247,7 @@ AstStat* Parser::parseTypeDestructuring(const Location& start, bool exported, co
 
     Location location(start, lexer.previousLocation());
 
-    if (!FFlag::LuwuDestructuring)
-        report(location, "Destructuring is a Luwu feature; enable the 'LuwuDestructuring' fast flag to use it");
+    checkLuwuFeature(location, kDestructuringFeature, FFlag::LuwuDestructuring);
 
     AstLocal* moduleLocal = nullptr;
     if (FFlag::LuauTrackPrefixLocal)
