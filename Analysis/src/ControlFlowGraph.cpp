@@ -423,7 +423,9 @@ void CFGBuilder::lower(AstStatWhile* statWhile)
     std::optional<CFGRefinement::RefinementId> ref;
     {
         BlockScope scope(*this, loopHeader);
-        ref = resolveCondition(statWhile->condition);
+        // Luwu If Local (rfcs/if-local.md): as for `if`, a `when` chain refines nothing here yet
+        if (statWhile->clauses.size == 0)
+            ref = resolveCondition(statWhile->condition);
     }
 
     Block* bodyBlock = newBlock(BlockKind::Linear, "while-loop body", loopHeader);
@@ -433,6 +435,11 @@ void CFGBuilder::lower(AstStatWhile* statWhile)
     Block* bodyExit;
     {
         BlockScope scope(*this, bodyBlock);
+
+        for (const AstIfClause& clause : statWhile->clauses)
+            if (clause.declaration)
+                lower(clause.declaration);
+
         lower(statWhile->body);
         bodyExit = currentBlock.get();
     }

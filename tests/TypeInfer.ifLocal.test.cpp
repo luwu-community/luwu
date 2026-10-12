@@ -6,7 +6,6 @@
 #include "ScopedFlags.h"
 
 LUAU_FASTFLAG(LuwuIfLocal)
-LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 
 using namespace Luau;
@@ -171,26 +170,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "if_local_chain_refinements_hold_after_the_if
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
-TEST_CASE_FIXTURE(BuiltinsFixture, "if_local_destructuring_names_are_narrowed")
-{
-    ScopedFastFlag sffs[] = {
-        {FFlag::LuwuIfLocal, true},
-        {FFlag::LuwuDestructuring, true},
-    };
-
-    CheckResult result = check(R"(
-        --!strict
-        local t: { a: number?, b: string? } = { a = 1, b = nil }
-
-        if const .{a, b} = t then
-            local x: number = a
-            local y: string = b
-        end
-    )");
-
-    LUAU_REQUIRE_NO_ERRORS(result);
-}
-
 TEST_CASE_FIXTURE(BuiltinsFixture, "if_local_in_the_old_solver")
 {
     ScopedFastFlag sffs[] = {
@@ -208,6 +187,76 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "if_local_in_the_old_solver")
         end
 
         local r = if const n = maybe() then n else 0
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "loop_when_chains_narrow_their_bindings_and_conditions")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        local function maybe(): string?
+            return nil
+        end
+        local xs: { number? } = {}
+
+        while local line = maybe() when #line > 0 do
+            local s: string = line
+        end
+
+        for _, v in xs when v do
+            local n: number = v
+        end
+
+        for i = 1, 10 when local s = maybe() when #s > i do
+            local t: string = s
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "while_local_binding_is_not_visible_after_the_loop")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        local function maybe(): string?
+            return nil
+        end
+
+        while local line = maybe() do
+        end
+        local s: string = line
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 8);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "loop_when_chains_in_the_old_solver")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::DebugLuauForceOldSolver, true},
+    };
+
+    CheckResult result = check(R"(
+        local function maybe(): number?
+            return nil
+        end
+
+        while local n = maybe() when n do
+            print(n)
+        end
+
+        for _, x in {1} when x do
+            print(x)
+        end
     )");
 
     LUAU_REQUIRE_NO_ERRORS(result);

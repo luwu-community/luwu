@@ -765,6 +765,8 @@ struct AstJsonEncoder : public AstVisitor
             [&]()
             {
                 PROP(condition);
+                if (node->clauses.size != 0)
+                    PROP(clauses);
                 PROP(body);
                 PROP(hasDo);
             }
