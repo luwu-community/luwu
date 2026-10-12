@@ -1823,6 +1823,7 @@ bool Parser::classBodyLooksLikeStatement()
 LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool exported, const Location& classKeywordLocation)
 {
     LUAU_ASSERT(FFlag::LuwuClasses);
+    size_t errorsBeforeClass = parseErrors.size();
     std::optional<Name> name = parseNameOpt("type name");
 
     // Use error name if the name is missing
@@ -2368,7 +2369,13 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
     //
     // The primary constructor's own specifier (`class PositiveNumber private (...)`) makes the
     // constructor private. It isn't a member's specifier, so it doesn't count here.
-    if ((sawPrivateMember || sawQualifiedParam || !explicitPublicQualifierLocations.empty()))
+    //
+    // These checks wait until the class parses. While a class is half-typed, a word on its way to
+    // being `end` or a member parses as an unqualified field, and reporting it as one only buries the
+    // syntax error.
+    bool classParsed = parseErrors.size() == errorsBeforeClass;
+    bool needsQualifiers = sawPrivateMember || sawQualifiedParam || !explicitPublicQualifierLocations.empty();
+    if (classParsed && needsQualifiers)
     {
         if (sawPrivateMember || sawQualifiedParam)
         {

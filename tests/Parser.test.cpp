@@ -5331,6 +5331,20 @@ TEST_CASE_FIXTURE(Fixture, "classes_nested_and_repeated")
     CHECK_EQ("Cannot declare class 'Foo' inside another statement or expression", result.errors[0].getMessage());
 }
 
+// Luwu Classes (rfcs/classes): a class with a syntax error reports only that, not its members' access specifiers.
+// Found by the typewriter tests: `private` with no name after it yet also reported every other parameter as needing one.
+TEST_CASE_FIXTURE(Fixture, "half_typed_class_reports_only_its_syntax_error")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    ParseResult result = tryParse(R"(
+class Cat(public name: string, private)
+end
+)");
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "Fields are not allowed to be named 'private'");
+}
+
 TEST_CASE_FIXTURE(Fixture, "non_exported_class")
 {
     ScopedFastFlag _{FFlag::LuwuClasses, true};
