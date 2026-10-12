@@ -2720,8 +2720,14 @@ void TypeChecker2::visit(AstStatPush* stat)
     if (isErrorSuppressing(stat->target->location, containerTy))
         return;
 
-    // the values in order; a call or `...` last contributes its whole pack
-    std::vector<std::pair<TypeId, Location>> values;
+    // the values in order, with the expression each came from; a call or `...` last contributes its whole pack
+    struct PushedValue
+    {
+        TypeId type;
+        Location location;
+        AstExpr* expr = nullptr;
+    };
+    std::vector<PushedValue> values;
     std::optional<TypePackId> tail;
     for (size_t i = 0; i < stat->values.size; ++i)
     {
@@ -2729,13 +2735,13 @@ void TypeChecker2::visit(AstStatPush* stat)
         bool multRet = i + 1 == stat->values.size && (value->is<AstExprCall>() || value->is<AstExprVarargs>());
         if (!multRet)
         {
-            values.emplace_back(lookupType(value), value->location);
+            values.push_back({lookupType(value), value->location, value});
             continue;
         }
 
         auto [head, packTail] = flatten(lookupPack(value));
         for (TypeId ty : head)
-            values.emplace_back(ty, value->location);
+            values.push_back({ty, value->location});
         tail = packTail;
     }
 
@@ -2746,8 +2752,8 @@ void TypeChecker2::visit(AstStatPush* stat)
             return;
 
         std::vector<TypeId> args{containerTy};
-        for (const auto& [ty, _] : values)
-            args.push_back(ty);
+        for (const PushedValue& value : values)
+            args.push_back(value.type);
 
         TypePackId argsPack = module->internalTypes->addTypePack(TypePack{std::move(args), tail});
         TypeId expectedFunction = module->internalTypes->addType(FunctionType{argsPack, builtinTypes->anyTypePack});
@@ -2760,21 +2766,28 @@ void TypeChecker2::visit(AstStatPush* stat)
         return;
 
     // nil pushes nothing, so only the rest of each value's type has to fit
-    auto checkValue = [&](TypeId ty, const Location& location)
+    auto checkValue = [&](TypeId ty, const Location& location, AstExpr* expr)
     {
         if (isNil(follow(ty)))
             return;
 
+        // A table literal is checked the way an annotated local's value is, so it may leave out optional fields
+        if (expr && expr->is<AstExprTable>())
+        {
+            testPotentialLiteralIsSubtype(expr, *element);
+            return;
+        }
+
         testIsSubtype(stripNil(builtinTypes, *module->internalTypes, ty), *element, location);
     };
 
-    for (const auto& [ty, location] : values)
-        checkValue(ty, location);
+    for (const PushedValue& value : values)
+        checkValue(value.type, value.location, value.expr);
 
     if (tail)
     {
         if (const VariadicTypePack* variadic = get<VariadicTypePack>(follow(*tail)))
-            checkValue(variadic->ty, stat->values.data[stat->values.size - 1]->location);
+            checkValue(variadic->ty, stat->values.data[stat->values.size - 1]->location, nullptr);
     }
 }
 
