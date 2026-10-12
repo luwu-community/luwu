@@ -254,9 +254,10 @@ struct ErrorConverter
             // there to count; a long one goes on the line below its name.
             if (tm.givenExpansion || tm.wantedExpansion)
             {
-                constexpr size_t maxDeclarationLineLength = 80;
                 auto declaration = [](const std::string& name, const std::string& expansion)
                 {
+                    constexpr size_t maxDeclarationLineLength = 80;
+
                     // A summarized expansion ("a union of 37 members, including:" then one member per line)
                     // keeps its first line after the `=` and indents the rest under it.
                     if (size_t firstBreak = expansion.find('\n'); firstBreak != std::string::npos)
