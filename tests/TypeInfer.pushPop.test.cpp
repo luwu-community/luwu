@@ -14,6 +14,37 @@ using namespace Luau;
 // Luwu Push and Pop Operators (rfcs/push-pop-operators.md)
 TEST_SUITE_BEGIN("TypeInferPushPop");
 
+// Luwu: a metamethod in a metatable's `__index` table never runs; operators read the metatable itself
+TEST_CASE_FIXTURE(BuiltinsFixture, "metamethods_on_index_are_reported")
+{
+    ScopedFastFlag poperators{FFlag::DebugLuwuPoperators, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        local methods = {
+            __push = function(self, ...) end,
+            __tostring = function(self) return "x" end,
+            increment = function(self) end,
+        }
+        local lines = setmetatable({}, { __index = methods })
+
+        -- a class table that is its own metatable: its metamethods are for its instances
+        local Base = {}
+        Base.__index = Base
+        function Base.__tostring(self) return "base" end
+        local Derived = setmetatable({}, { __index = Base })
+
+        -- metamethods on the metatable itself are fine
+        local ok = setmetatable({}, { __index = methods, __push = methods.__push, __tostring = methods.__tostring })
+        return lines, Derived, ok
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ(toString(result.errors[0]), "Metamethod '__tostring' should go directly on the metatable, not on __index");
+    CHECK_EQ(toString(result.errors[1]), "Metamethod '__push' should go directly on the metatable, not on __index");
+    CHECK_EQ(result.errors[0].location.begin.line, 7);
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "push_grows_an_empty_table_and_pop_gives_its_element_or_nil")
 {
     ScopedFastFlag poperators{FFlag::DebugLuwuPoperators, true};
