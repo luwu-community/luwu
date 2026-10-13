@@ -9,6 +9,7 @@
 using namespace Luau;
 
 LUAU_FASTFLAG(LuwuDestructuring)
+LUAU_FASTFLAG(LuauSolverV2)
 
 struct DocumentationSymbolFixture : BuiltinsFixture
 {
@@ -253,6 +254,40 @@ local .{alpha, beta as b} = value
     ExprOrLocal onName = findExprOrLocalAtPosition(*getMainSourceModule(), Position(2, 23));
     REQUIRE(onName.getLocal());
     CHECK_EQ(std::string("b"), onName.getLocal()->name.value);
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): a field bound in a loop's header is found there, as the local it declares,
+// with its type in the scope at that position (what the editor's hover reads)
+TEST_CASE_FIXTURE(Fixture, "local_and_scope_of_a_field_destructured_in_a_loop_header")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuDestructuring, true},
+        {FFlag::LuauSolverV2, true},
+    };
+
+    check(R"(
+local elements = { { name = "a", docs = 1 } }
+for _, el.{name, docs} in elements do
+    print(name, docs)
+end
+    )");
+
+    Position onName(2, 11);
+    ExprOrLocal found = findExprOrLocalAtPosition(*getMainSourceModule(), onName);
+    REQUIRE(found.getLocal());
+    CHECK_EQ(std::string("name"), found.getLocal()->name.value);
+
+    std::vector<AstNode*> ancestry = findAstAncestryOfPosition(*getMainSourceModule(), onName);
+    bool reachesDeclaration = false;
+    for (AstNode* node : ancestry)
+        reachesDeclaration = reachesDeclaration || node->is<AstStatLocal>();
+    CHECK(reachesDeclaration);
+
+    ScopePtr scope = findScopeAtPosition(*getMainModule(), onName);
+    REQUIRE(scope);
+    std::optional<TypeId> type = scope->lookup(found.getLocal());
+    REQUIRE(type);
+    CHECK_EQ("string", toString(*type));
 }
 
 // Luwu Destructuring (rfcs/destructuring.md): a bare name in `.{x}` is both the key and the value, so the cursor finds
