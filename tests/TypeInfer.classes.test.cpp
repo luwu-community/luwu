@@ -2,6 +2,7 @@
 
 #include "ClassesFixture.h"
 #include "Fixture.h"
+#include "Typewriter.h"
 
 #include "Luau/BuiltinDefinitions.h"
 #include "Luau/Error.h"
@@ -5324,4 +5325,98 @@ TEST_CASE_FIXTURE(ClassesFixture, "trait_parameter_named_self_wins")
     LUAU_REQUIRE_NO_ERRORS(result);
     CHECK_EQ("Thing", toString(requireType("t")));
 }
+
+// Luwu Traits (rfcs/classes/traits.md): typing traits, classes that implement them, and their uses
+const char* const kTraitTypewriterAfter = R"(
+local unrelated = 1
+print(unrelated + 1)
+)";
+
+TEST_CASE_FIXTURE(ClassesFixture, "typing_trait_declarations")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuTraits, true}, {FFlag::LuwuDefaultArguments, true}};
+    const char* before = "local a = 1\n";
+
+    const char* members = "trait Greeter\n"
+                          "    expect name: string\n"
+                          "    greeting = \"hello\"\n"
+                          "\n"
+                          "    function greet(self): string\n"
+                          "        return self.greeting .. \", \" .. self.name\n"
+                          "    end\n"
+                          "end";
+    checkTypewriting(*this, before, members, kTraitTypewriterAfter);
+
+    const char* parameters = "trait Item(category: string, count = 0)\n"
+                             "    expect name: string\n"
+                             "    final kind = \"item\"\n"
+                             "    expect function used?(self)\n"
+                             "end";
+    checkTypewriting(*this, before, parameters, kTraitTypewriterAfter);
+
+    const char* access = "trait Toggle\n"
+                         "    expect private model: string\n"
+                         "    private on = false\n"
+                         "    public function toggle(self): boolean\n"
+                         "        self.on = not self.on\n"
+                         "        return self.on\n"
+                         "    end\n"
+                         "end";
+    checkTypewriting(*this, before, access, kTraitTypewriterAfter);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "typing_traits_that_need_and_classes_that_implement")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuTraits, true}, {FFlag::LuwuDefaultArguments, true}};
+    const char* before = R"(trait Named
+    expect name: string
+end
+
+trait Item(category: string, count = 0)
+    function is_weapon(self): boolean
+        return self.category == "Weapon"
+    end
+end
+)";
+
+    const char* needs = "trait Greeter needs Named\n"
+                        "    function greet(self): string\n"
+                        "        return \"hi \" .. self.name\n"
+                        "    end\n"
+                        "end";
+    checkTypewriting(*this, before, needs, kTraitTypewriterAfter);
+
+    const char* implements = "class Cat implements Named\n"
+                             "    name = \"whiskers\"\n"
+                             "end";
+    checkTypewriting(*this, before, implements, kTraitTypewriterAfter);
+
+    const char* withArguments = "class Rifle implements Named, Item(\"Weapon\", 1)\n"
+                                "    name = \"rifle\"\n"
+                                "end";
+    checkTypewriting(*this, before, withArguments, kTraitTypewriterAfter);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "typing_trait_uses")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+    const char* before = R"(trait Greeter
+    expect name: string
+    function greet(self): string
+        return "hi " .. self.name
+    end
+end
+
+class Cat implements Greeter
+    name = "whiskers"
+end
+
+local value: unknown = nil
+)";
+
+    checkTypewriting(*this, before, "local s = Cat():greet()", kTraitTypewriterAfter);
+    checkTypewriting(*this, before, "local function welcome(g: Greeter): string\n    return g:greet()\nend", kTraitTypewriterAfter);
+    checkTypewriting(*this, before, "if class.implements(value, Greeter) then\n    print(value:greet())\nend", kTraitTypewriterAfter);
+}
+
 TEST_SUITE_END();
