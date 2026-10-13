@@ -369,10 +369,14 @@ local foo = makesandwich()
 local bar = foo.nutrition + 100
     )");
 
-    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    // Luwu: and the first use of `foo`, which has no type because of it (NoTypeUse). Upstream reports only the first.
+    size_t expectedErrors = FFlag::DebugLuauForceOldSolver ? 1 : 2;
+    LUAU_REQUIRE_ERROR_COUNT(expectedErrors, result);
 
     // We should definitely get this error
     CHECK_EQ("Unknown global 'makesandwich'; consider assigning to it first", toString(result.errors[0]));
+    if (!FFlag::DebugLuauForceOldSolver)
+        CHECK(get<NoTypeUse>(result.errors[1]));
     // We get this error if makesandwich() returns a free type
     // CHECK_EQ("Unknown type used in + operation; consider adding a type annotation to 'foo'", toString(result.errors[1]));
 }
@@ -448,6 +452,103 @@ TEST_CASE_FIXTURE(Fixture, "cast_to_table_of_any")
     )");
 
     LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+// Luwu: the first call or index of a local with no type is an error pointing at why it has none; every other use is a
+// note, not an error
+TEST_CASE_FIXTURE(BuiltinsFixture, "using_a_local_with_no_type_points_at_the_error_behind_it")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    CheckResult result = check(R"(
+        local w = nope
+        w.call()
+        w()
+        local copy = w
+    )");
+
+    // `nope` is unknown, and `w` has no type because of it
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK(get<UnknownSymbol>(result.errors[0]));
+    CHECK_EQ(Location{{2, 8}, {2, 9}}, result.errors[1].location);
+    CHECK_EQ(
+        "Attempt to use 'w', which has no type because of the error on line 2\n\n"
+        "Help (no type):\n"
+        "  • Fix the error on line 2 first; until then, uses of 'w' aren't checked",
+        toString(result.errors[1])
+    );
+
+    ModulePtr module = getMainModule();
+    REQUIRE_EQ(2, module->notes.size());
+    CHECK_EQ(Location{{3, 8}, {3, 9}}, module->notes[0].location);
+    CHECK_EQ(Location{{4, 21}, {4, 22}}, module->notes[1].location);
+    CHECK_EQ("'w' has no type because of the error on line 2", module->notes[0].message);
+    REQUIRE(module->notes[0].origin);
+    CHECK_EQ(result.errors[0].location, *module->notes[0].origin);
+}
+
+// Luwu: locals with no type because of the same one are one cascade: one error at the first improper use of any of
+// them, and notes pointing at the first error for every other use
+TEST_CASE_FIXTURE(BuiltinsFixture, "locals_with_no_type_from_the_same_one_get_one_error")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    CheckResult result = check(R"(
+        local w = nope
+        local alias = w
+        alias.call()
+        w.call()
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK(get<UnknownSymbol>(result.errors[0]));
+    const NoTypeUse* use = get<NoTypeUse>(result.errors[1]);
+    REQUIRE(use);
+    CHECK_EQ("alias", use->name);
+    CHECK_EQ(result.errors[0].location, use->origin);
+
+    // The use of `w` in `alias`'s declaration, and in `w.call()`
+    ModulePtr module = getMainModule();
+    REQUIRE_EQ(2, module->notes.size());
+    CHECK_EQ(Location{{4, 8}, {4, 9}}, module->notes[1].location);
+    CHECK_EQ("'w' has no type because of the error on line 2", module->notes[1].message);
+}
+
+// Luwu: an error type that isn't a local's comes from an error in the same expression, which is the only error
+TEST_CASE_FIXTURE(BuiltinsFixture, "an_error_type_in_the_expression_itself_reports_nothing_more")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    CheckResult result = check(R"(
+        nope.call()
+        nope.field.call()
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK(get<UnknownSymbol>(result.errors[0]));
+    CHECK(get<UnknownSymbol>(result.errors[1]));
+    CHECK(getMainModule()->notes.empty());
+}
+
+// Luwu: the error behind a local with no type can be in an alias its type goes through
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_local_with_no_type_through_an_alias_points_at_the_alias")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    CheckResult result = check(R"(
+        type Result = Nope
+        local function get(): Result
+            return 1 :: any
+        end
+        local result = get()
+        result.call()
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK(get<UnknownSymbol>(result.errors[0]));
+    const NoTypeUse* use = get<NoTypeUse>(result.errors[1]);
+    REQUIRE(use);
+    CHECK_EQ(result.errors[0].location, use->origin);
 }
 
 TEST_SUITE_END();

@@ -2116,8 +2116,18 @@ TEST_CASE_FIXTURE(FrontendFixture, "deleted_source_is_evicted_on_recheck")
     // Invalidate old contents of A
     getFrontend().markDirty("game/A");
 
-    // Should be able to check C and fail on missing B
-    LUAU_REQUIRE_ERROR_COUNT(1, getFrontend().check("game/C"));
+    // Should be able to check C and fail on missing B. Luwu: and on the first use of `B`, which has no type because
+    // of it (NoTypeUse).
+    CheckResult result = getFrontend().check("game/C");
+    if (!FFlag::DebugLuauForceOldSolver)
+    {
+        LUAU_REQUIRE_ERROR_COUNT(2, result);
+        CHECK(get<NoTypeUse>(result.errors[1]));
+    }
+    else
+    {
+        LUAU_REQUIRE_ERROR_COUNT(1, result);
+    }
 
     CHECK(getFrontend().sourceNodes.count("game/B") == 0);
     CHECK(getFrontend().moduleResolver.getModule("game/B") == nullptr);

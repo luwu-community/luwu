@@ -1,6 +1,8 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
+#include "Luau/Helpifier.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -172,6 +174,9 @@ struct Rendering
     // `Drop#2`: the 2nd member of the given or expected union.
     std::string givenMember(size_t number);
     std::string expectedMember(size_t number);
+    // Writes the explanation's helps.
+    Helpifier helpifier;
+
     // The expected root quoted, even when it's the placeholder.
     std::string expectedName();
     // The expected root quoted, or "the expected type" for the placeholder.
@@ -250,9 +255,9 @@ Line andMore(size_t hidden, bool bullet, std::string_view things = "");
 std::string narrowedParameterHelp(const std::vector<const Difference*>& narrowed, Rendering& rendering);
 
 // Helps: what to do, printed right after the two types.
-std::string swappedParametersHelp(const std::string& first, const std::string& second, size_t i, size_t j);
-std::string swappedReturnsHelp(size_t i, size_t j);
-std::string misspelledStringHelp(const std::string& suggestion);
+std::string swappedParametersHelp(const std::string& first, const std::string& second, size_t i, size_t j, const Helpifier& helpifier);
+std::string swappedReturnsHelp(size_t i, size_t j, const Helpifier& helpifier);
+std::string misspelledStringHelp(const std::string& suggestion, const Helpifier& helpifier);
 // A missing field with a similar name present, at the path of the table holding it: what was written and what was
 // meant (`leaving.reson`, `leaving.reason`), and the help saying so.
 std::pair<std::string, std::string> misspelledFieldNames(const Difference& d, Rendering& rendering);
@@ -319,7 +324,7 @@ std::string hiddenMembers(size_t count);
 // then only those `listed`, by number, then how many others there are.
 std::string unionSummary(size_t members, bool optional, const std::vector<std::pair<size_t, std::string>>& listed);
 
-// A block of text separated from what comes before it by a blank line.
+// A block of text separated from what comes before it by a blank line; nothing for no text (a help that is off).
 std::string paragraph(const std::string& text);
 // The whole explanation: helps, the header and its lines, then a help explaining why. Held to
 // `kMaxReasonLines` and `kMaxReasonChars`: lines past them are counted instead, and taken out of

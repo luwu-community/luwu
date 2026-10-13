@@ -2,6 +2,7 @@
 #pragma once
 
 #include "Luau/Ast.h"
+#include "Luau/Helpifier.h"
 #include "Luau/Location.h"
 #include "Luau/NotNull.h"
 #include "Luau/Type.h"
@@ -33,8 +34,8 @@ enum MismatchNotation : uint8_t
     MismatchNotationArrayElement = 1 << 5, // `[i]`, an element of an array
 };
 
-// The legend for `notation`, or an empty string when it uses none of the notation.
-std::string mismatchNotationLegend(uint8_t notation);
+// The legend for `notation`, a help; an empty string when it uses none of the notation or help is off.
+std::string mismatchNotationLegend(uint8_t notation, const Helpifier& helpifier);
 
 // Luwu (helpful subtyping errors): the `TypeMismatch::contextVerb` phrases for a mismatch in a function's
 // parameters and in its return values. The renderer words the rest of the message by which one it is.
@@ -424,6 +425,8 @@ struct MissingUnionProperty
     TypeId type;
     std::vector<TypeId> missing;
     Name key;
+    // Luwu: whether the message carries help (see Helpifier)
+    bool showHelp = true;
 
     bool operator==(const MissingUnionProperty& rhs) const;
 };
@@ -596,6 +599,70 @@ struct Typo
 
     bool operator==(const Typo& rhs) const;
 };
+
+// Luwu: what a value was used for, where its type says it can't exist (`never`) or couldn't be worked out
+// (`*error-type*`).
+enum class ImproperUse
+{
+    Call,
+    Index,
+};
+
+// Luwu: calling or indexing a value whose type is `never`. Either the code can't run, or a type checker bug made the
+// value `never` and nothing it's used for is checked; the second has crashed real code. Upstream says nothing, and for a
+// `never` it didn't simplify (`number & ~number`) reports that it can't be called.
+struct UnreachableCodeUse
+{
+    enum class Reason
+    {
+        // The checks before the use rule out every member of the local's declared type on their own (provesUnreachable)
+        NarrowedAway,
+        // The local holds the result of a call that never returns (`error(...)`)
+        NeverReturningCall,
+        // The local is annotated `never`
+        DeclaredNever,
+        // The local holds a `never` cast to it (`x :: never`)
+        CastToNever,
+        // Nothing the reader wrote proves it: inference or the solver's refinements made the value `never`, which a
+        // refinement bug can do while the code runs
+        PossibleTypeBug,
+    };
+
+    ImproperUse use = ImproperUse::Call;
+    // The local, or the name the value is read through (`self.dave`); empty when it has none
+    std::string name;
+    Reason reason = Reason::NarrowedAway;
+    bool showHelp = true;
+
+    bool operator==(const UnreachableCodeUse& rhs) const;
+};
+
+// Luwu: the first call or index of a local whose type couldn't be worked out (`*error-type*`), usually because of an
+// error in its declaration. Every other use of the local gets a note (`Module::notes`) pointing at that error.
+// Upstream says nothing: an error type stands for an error already reported.
+struct NoTypeUse
+{
+    ImproperUse use = ImproperUse::Call;
+    std::string name;
+    // The error that left the local without a type, when one was reported
+    std::optional<Location> origin;
+    bool showHelp = true;
+
+    bool operator==(const NoTypeUse& rhs) const;
+};
+
+// Luwu: a remark on code that an error elsewhere explains. It isn't an error (it changes no error count), so it is kept
+// in `Module::notes`; editors show it less prominently.
+struct DiagnosticNote
+{
+    Location location;
+    std::string message;
+    // The error it's about
+    std::optional<Location> origin;
+};
+
+// The note on a use of the local `name`, which has no type because of the error at `origin`.
+std::string noTypeNote(const std::string& name, std::optional<Location> origin);
 
 struct PropertyAccessViolation
 {
@@ -888,7 +955,9 @@ using TypeErrorData = Variant<
     AmbiguousFunctionCall,
     UninstantiableClass,
     ConstructorReadByName,
-    Typo>;
+    Typo,
+    UnreachableCodeUse,
+    NoTypeUse>;
 
 struct TypeErrorSummary
 {
