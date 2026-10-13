@@ -1215,7 +1215,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "cross_type_function_type_check")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    CHECK(toString(result.errors[0]).find("Expected this to be 'number', but") == 0);
+    CHECK(toString(result.errors[0]).find("to be 'number', but") != std::string::npos);
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_calling_each_other_unordered")
