@@ -784,6 +784,7 @@ AstStat* Parser::parseStat()
     }
 
     // we need to disambiguate a few cases, primarily assignment (lvalue = ...) vs statements-that-are calls
+    size_t errorsBeforeExpr = parseErrors.size();
     AstExpr* expr = parsePrimaryExpr(/* asStatement= */ true);
 
     // Luwu Do Expressions (rfcs/do-expressions.md): `x or return v`, `f() or continue` and the like as statements. An
@@ -900,16 +901,29 @@ AstStat* Parser::parseStat()
     if (start == lexer.current().location)
         nextLexeme();
 
+    // Luwu: an expression that already reported an error (`obj.` with no name yet) is incomplete for that reason, so
+    // the statement doesn't report it again, and neither does a second incomplete statement on the same line (`n o`).
+    // Upstream reports "Incomplete statement" for each.
+    bool alreadyReported = parseErrors.size() > errorsBeforeExpr || incompleteStatementLine == expr->location.begin.line;
+
     // Luwu Do Expressions (rfcs/do-expressions.md): in a `do` expression, a value where a statement goes was usually meant
     // as the result. The rest of an operator chain (`do x + 1`) is part of the same mistake, not more statements.
-    if (functionStack.back().doExprDepth > 0)
+    bool inDoExpr = functionStack.back().doExprDepth > 0;
+    if (inDoExpr)
     {
         while (parseBinaryOp(lexer.current()))
         {
             nextLexeme();
             parseExpr();
         }
+    }
 
+    if (alreadyReported)
+        return allocator.alloc<AstStatError>(expr->location, copy({expr}), AstArray<AstStat*>{}, unsigned(parseErrors.size() - 1));
+
+    incompleteStatementLine = expr->location.begin.line;
+    if (inDoExpr)
+    {
         return reportStatError(
             expr->location, copy({expr}), {}, "Incomplete statement: to give a value from a 'do' expression, write 'give <value>'"
         );
@@ -2275,10 +2289,12 @@ AstStat* Parser::parseLocal(
 
         TempVector<Binding> names(scratchBinding);
         AstArray<Position> varsCommaPositions;
+        size_t errorsBeforeNames = parseErrors.size();
         if (options.storeCstData)
             parseBindingList(names, false, false, &varsCommaPositions, nullptr, nullptr, isConst);
         else
             parseBindingList(names, false, false, nullptr, nullptr, nullptr, isConst);
+        bool namesReportedError = parseErrors.size() > errorsBeforeNames;
 
         matchRecoveryStopOnToken['=']--;
 
@@ -2322,7 +2338,9 @@ AstStat* Parser::parseLocal(
         // Both error as there's probably user error (`foo` and `baz` can
         // only ever be `nil`). We report an error but return the
         // declaration as-is, as it's still reasonable syntactically.
-        if (isConst && !isEnoughValues(values, vars.size()))
+        // Luwu: a name that's still being typed (`const` alone) already reported that, so the missing value isn't
+        // reported too. Upstream reports both.
+        if (isConst && !isEnoughValues(values, vars.size()) && !namesReportedError)
             report(node->location, "Missing initializer in const declaration");
 
         return node;
@@ -2391,6 +2409,7 @@ AstStat* Parser::parseTypeAlias(
     // note: `type` token is already parsed for us, so we just need to parse the rest
 
     std::optional<Name> name = parseNameOpt("type name");
+    bool hasName = name.has_value();
 
     // Use error name if the name is missing
     if (!name)
@@ -2407,10 +2426,17 @@ AstStat* Parser::parseTypeAlias(
                                           )
                                         : parseGenericTypeList(/* withDefaultValues= */ true);
 
-    bool equalsFound = expectAndConsume('=', "type alias");
+    // Luwu: `type` with no name yet reports only the name, and `type T` with no `=` yet only the `=`. Unless the line goes
+    // on (`type T number`), the missing type isn't reported too, and it sits where the alias stops, not on the next line's
+    // code. Upstream parses the next line's code as the type, reporting a second error and spanning the alias into the
+    // next statement.
+    bool equalsFound = false;
+    if (hasName || lexer.current().type == '=')
+        equalsFound = consumeExpected(Lexeme::Type('='), "type alias");
     Position equalsPosition = equalsFound ? lexer.previousLocation().begin : Position::missing();
 
-    AstType* type = parseType();
+    bool typeFollows = equalsFound || continuesOnSameLine();
+    AstType* type = typeFollows ? parseType() : missingTypeHere();
 
     AstStatTypeAlias* node = allocator.alloc<AstStatTypeAlias>(
         Location(start, type->location), name->name, name->location, generics, genericPacks, type, exported, typeKeywordLocation
@@ -5524,10 +5550,19 @@ AstType* Parser::parseFunctionTypeTail(
 {
     incrementRecursionCounter("type annotation");
 
+    bool returnTypeFollows = true;
     if (lexer.current().type == ':')
     {
         report(lexer.current().location, "Return types in function type annotations are written after '->' instead of ':'");
         lexer.next();
+    }
+    else if (lexer.current().type == '-')
+    {
+        // Luwu: `(number) -` is an arrow half typed: report the arrow, and take the `-` so it doesn't start a statement.
+        // Upstream also reports the missing return type and the stray `-`.
+        expectAndConsumeFail(Lexeme::SkinnyArrow, "function type");
+        nextLexeme();
+        returnTypeFollows = false;
     }
     // Users occasionally write '()' as the 'unit' type when they actually want to use 'nil', here we'll try to give a more specific error
     else if (lexer.current().type != Lexeme::SkinnyArrow && generics.size == 0 && genericPacks.size == 0 && params.size == 0)
@@ -5538,10 +5573,24 @@ AstType* Parser::parseFunctionTypeTail(
     }
     else
     {
-        expectAndConsume(Lexeme::SkinnyArrow, "function type");
+        // Luwu: `(number, string` with no `->` yet reports only the arrow; unless the line goes on, the return type
+        // isn't parsed from the next line's code. Upstream reports a second error there and spans the type into the
+        // next statement.
+        returnTypeFollows = consumeExpected(Lexeme::SkinnyArrow, "function type") || continuesOnSameLine();
     }
 
-    auto returnType = parseReturnType();
+    AstTypePack* returnType = nullptr;
+    if (returnTypeFollows)
+    {
+        returnType = parseReturnType();
+    }
+    else
+    {
+        AstType* missing = missingTypeHere();
+        returnType = allocator.alloc<AstTypePackExplicit>(missing->location, AstTypeList{copy(&missing, 1), nullptr});
+        if (options.storeCstData)
+            cstNodeMap[returnType] = allocator.alloc<CstTypePackExplicit>();
+    }
     LUAU_ASSERT(returnType);
 
     AstTypeList paramTypes = AstTypeList{params, varargAnnotation};
@@ -8419,6 +8468,30 @@ bool Parser::expectAndConsume(Lexeme::Type type, const char* context)
 
     nextLexeme();
     return true;
+}
+
+// Luwu: a type the user hasn't written yet, for an error already reported. It sits where the code so far stops, so the
+// node doesn't reach into the next line's code.
+AstTypeError* Parser::missingTypeHere()
+{
+    Position stop = lexer.previousLocation().end;
+    return allocator.alloc<AstTypeError>(Location(stop, stop), AstArray<AstType*>{}, /* isMissing= */ true, unsigned(parseErrors.size() - 1));
+}
+
+// Luwu: whether the next token is on the line where the code so far stops
+bool Parser::continuesOnSameLine()
+{
+    return lexer.current().location.begin.line == lexer.previousLocation().end.line;
+}
+
+// Luwu: expectAndConsume, returning whether the token was consumed: true also when it came after one stray token, which
+// expectAndConsume skips but reports as false. A caller that stops parsing at a missing token uses this to tell whether
+// what follows the token is there to parse.
+bool Parser::consumeExpected(Lexeme::Type type, const char* context)
+{
+    bool present = lexer.current().type == type || lexer.lookahead().type == type;
+    expectAndConsume(type, context);
+    return present;
 }
 
 // LUAU_NOINLINE is used to limit the stack cost due to std::string objects, and to increase caller performance since this code is cold
