@@ -88,7 +88,8 @@ void check(
     NotNull<TypeCheckLimits> limits,
     DcrLogger* logger,
     const SourceModule& sourceModule,
-    Module* module
+    Module* module,
+    Helpifier helpifier = {}
 );
 
 struct TypeChecker2
@@ -97,6 +98,8 @@ struct TypeChecker2
     NotNull<TypeFunctionRuntime> typeFunctionRuntime;
     DcrLogger* logger;
     const NotNull<TypeCheckLimits> limits;
+    // Luwu: writes the help in the errors this reports; off when the frontend's `showHelp` is
+    Helpifier helpifier;
     const NotNull<InternalErrorReporter> ice;
     const SourceModule* sourceModule;
     Module* module;
@@ -166,6 +169,40 @@ struct TypeChecker2
     // `getDeclarationIndex` the first time an error needs it, never on the clean path.
     struct DeclarationIndex;
     std::shared_ptr<DeclarationIndex> declarationIndex;
+
+    // Luwu: a call or index of a value that is `never` or has an error type (see UnreachableCodeUse, NoTypeUse).
+    // Returns whether `subjectType` is one; only types that are so without normalizing are recognized.
+    bool reportImproperUse(AstExpr* subject, TypeId subjectType, ImproperUse use);
+    void reportUnreachableUse(AstExpr* subject, ImproperUse use);
+    // Why the local read at `use` is `never`, when something the reader wrote says so; nullopt when it may be a type
+    // checker bug
+    std::optional<UnreachableCodeUse::Reason> unreachableReason(const AstExprLocal* use);
+    // The first error reported in `local`'s declaration, which explains what is wrong with its type
+    std::optional<Location> declarationError(const AstLocal* local);
+    std::optional<Location> firstErrorIn(const Location& range);
+    // The first error in an annotation, or in the declaration of an alias it names (`type Result = Nope`)
+    std::optional<Location> annotationError(AstNode* annotation);
+    // Why a local has no type: the error in its declaration, or the one behind another local with no type that its
+    // declaration uses (`local alias = w`). `root` is the local the chain starts at; it gets one error, at the first
+    // improper use of any local in the chain.
+    struct NoTypeCause
+    {
+        std::optional<Location> origin;
+        const AstLocal* root = nullptr;
+    };
+    NoTypeCause noTypeCause(const AstLocal* local, size_t depth = 0);
+    DenseHashMap<const AstLocal*, NoTypeCause> noTypeCauses{nullptr};
+    DenseHashSet<const AstLocal*> noTypeRootsReported{nullptr};
+    // Whether a value of the normalized type `norm` can't exist
+    bool isUninhabited(const NormalizedType* norm);
+    // A note on every use of an error-typed local that didn't get the error (see NoTypeUse)
+    void reportNoTypeNotes();
+    // Locals with an improper use reported: each gets one error
+    DenseHashSet<const AstLocal*> improperlyUsedLocals{nullptr};
+    // Every use of an error-typed local, and those reported as an improper use
+    std::vector<const AstExprLocal*> noTypeUses;
+    DenseHashSet<const AstExprLocal*> noTypeUsesReported{nullptr};
+    DenseHashMap<const AstLocal*, std::optional<Location>> declarationErrors{nullptr};
     const DeclarationIndex& getDeclarationIndex();
 
     bool testIsSubtype(TypeId subTy, TypeId superTy, Location location);
@@ -290,7 +327,8 @@ private:
         std::vector<TypeError>& errors
     );
     // If the provided type does not have the named property, report an error.
-    void checkIndexTypeFromType(TypeId tableTy, const std::string& prop, ValueContext context, const Location& location, TypeId astIndexExprType);
+    // Returns whether `tableTy` can't exist (a `never` the normalizer had to work out), for the caller to report.
+    bool checkIndexTypeFromType(TypeId tableTy, const std::string& prop, ValueContext context, const Location& location, TypeId astIndexExprType);
     // If the named property is `private` on some user-defined class in tableTy's hierarchy, and
     // `location` falls outside of that class's own definition block, report an error.
     void checkPrivatePropertyAccess(TypeId tableTy, const std::string& prop, const Location& location);

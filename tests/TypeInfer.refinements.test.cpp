@@ -1759,15 +1759,21 @@ TEST_CASE_FIXTURE(RefinementExternTypeFixture, "isa_type_refinement_must_be_know
         end
     )");
 
-    LUAU_REQUIRE_NO_ERRORS(result);
-
     if (!FFlag::DebugLuauForceOldSolver)
     {
+        // Luwu: inference makes `x` `never` where `x:IsA` reads it, which looks like a type checker bug
+        // (UnreachableCodeUse, PossibleTypeBug). Upstream reports nothing.
+        LUAU_REQUIRE_ERROR_COUNT(1, result);
+        const UnreachableCodeUse* unreachable = get<UnreachableCodeUse>(result.errors[0]);
+        REQUIRE(unreachable);
+        CHECK_EQ(UnreachableCodeUse::Reason::PossibleTypeBug, unreachable->reason);
+
         CHECK_EQ("t1 where t1 = Instance & { read IsA: (t1, string) -> (unknown, ...unknown) }", toString(requireTypeAtPosition({3, 28})));
         CHECK_EQ("t1 where t1 = Instance & { read IsA: (t1, string) -> (unknown, ...unknown) }", toString(requireTypeAtPosition({5, 28})));
     }
     else
     {
+        LUAU_REQUIRE_NO_ERRORS(result);
         CHECK_EQ("Instance", toString(requireTypeAtPosition({3, 28})));
         CHECK_EQ("Instance", toString(requireTypeAtPosition({5, 28})));
     }

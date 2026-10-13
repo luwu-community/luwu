@@ -352,6 +352,7 @@ struct Differ
     int matched = 0;
 
     std::vector<std::string> helps;
+    Helpifier helpifier;
 
     // Types the message prints by a name rather than spelled out (`where type Animal = ...`).
     const DenseHashMap<TypeId, std::string>* names = nullptr;
@@ -373,6 +374,7 @@ struct Differ
         d.allowance = trialAllowance;
         d.names = names;
         d.printed = printed;
+        d.helpifier = helpifier;
         return d;
     }
 
@@ -1259,7 +1261,7 @@ struct Differ
             size_t j = mismatchedParameters[a + 1];
             if (fits(withoutNil(expectedArgs[i]), givenArgs[j]) && fits(withoutNil(expectedArgs[j]), givenArgs[i]))
             {
-                helps.push_back(swappedParametersHelp(parameterName(given, i), parameterName(given, j), i, j));
+                helps.push_back(swappedParametersHelp(parameterName(given, i), parameterName(given, j), i, j, helpifier));
                 break;
             }
         }
@@ -1293,7 +1295,7 @@ struct Differ
             size_t j = mismatchedReturns[a + 1];
             if (fits(givenRets[i], expectedRets[j]) && fits(givenRets[j], expectedRets[i]))
             {
-                helps.push_back(swappedReturnsHelp(i, j));
+                helps.push_back(swappedReturnsHelp(i, j, helpifier));
                 break;
             }
         }
@@ -1766,7 +1768,8 @@ std::optional<MismatchExplanation> explainOnce(
     std::string_view arrival,
     const std::optional<std::string>& variable,
     const DenseHashMap<TypeId, std::string>* names,
-    std::vector<PrintedType>* printed
+    std::vector<PrintedType>* printed,
+    const Helpifier& helpifier
 )
 {
     given = follow(given);
@@ -1805,6 +1808,7 @@ std::optional<MismatchExplanation> explainOnce(
         rendering = Rendering{};
         givenAlias.reset();
     }
+    rendering.helpifier = helpifier;
 
     // A union or intersection has no name of its own when printed, so an aliased one is shown by its
     // name. Its members are spelled out too if a line counts them (`Drop#2`), further down.
@@ -1825,6 +1829,7 @@ std::optional<MismatchExplanation> explainOnce(
     Differ differ{subtyping, scope, builtinTypes, NotNull{&budget}};
     differ.names = names;
     differ.printed = printed;
+    differ.helpifier = helpifier;
 
     // Makes the header's two types something the reason's paths can be followed into: the variable the paths are
     // rooted at names the value (`Expected 'settings' to be`), and, when `declareAliases`, an aliased table is spelled
@@ -1868,7 +1873,7 @@ std::optional<MismatchExplanation> explainOnce(
     // A string that is one typo away from one of the strings expected needs nothing but the correction.
     if (std::optional<std::string> suggestion = misspelledSingleton(given, expected))
     {
-        explanation.reason = paragraph(misspelledStringHelp(*suggestion));
+        explanation.reason = paragraph(misspelledStringHelp(*suggestion, helpifier));
         explanation.typo = {differ.display(given), *suggestion};
         return explanation;
     }
@@ -2397,7 +2402,8 @@ std::optional<MismatchExplanation> explainMismatch(
     NotNull<BuiltinTypes> builtinTypes,
     std::optional<std::string> callee,
     std::string_view arrival,
-    std::optional<std::string> variable
+    std::optional<std::string> variable,
+    const Helpifier& helpifier
 )
 {
     given = follow(given);
@@ -2405,7 +2411,7 @@ std::optional<MismatchExplanation> explainMismatch(
 
     std::vector<PrintedType> printed{{expected, std::nullopt}, {given, variable}};
     std::optional<MismatchExplanation> plain =
-        explainOnce(given, expected, subtyping, scope, builtinTypes, callee, arrival, variable, nullptr, &printed);
+        explainOnce(given, expected, subtyping, scope, builtinTypes, callee, arrival, variable, nullptr, &printed, helpifier);
     // A standalone reason prints neither type, so it has no `where` block to put names in.
     if (!plain || plain->standalone)
         return plain;
@@ -2505,7 +2511,7 @@ std::optional<MismatchExplanation> explainMismatch(
     RepeatedTypeNames names = nameRepeatedTypes(printed, message, focused, scope.get());
     std::optional<MismatchExplanation> named;
     if (!names.empty())
-        named = explainOnce(given, expected, subtyping, scope, builtinTypes, callee, arrival, variable, &names.names, nullptr);
+        named = explainOnce(given, expected, subtyping, scope, builtinTypes, callee, arrival, variable, &names.names, nullptr, helpifier);
     if (!named)
     {
         printHeader(*plain, nullptr);

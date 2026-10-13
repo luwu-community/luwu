@@ -146,34 +146,31 @@ static bool isClassValueAgainstItsObject(TypeId given, TypeId wanted)
     return nominalDisplayName(given).has_value() != nominalDisplayName(wanted).has_value();
 }
 
-std::string mismatchNotationLegend(uint8_t notation)
+std::string mismatchNotationLegend(uint8_t notation, const Helpifier& helpifier)
 {
-    std::vector<std::string> parts;
+    // At most one part per kind of notation, and one for the roots
+    constexpr size_t kMaxLegendParts = 5;
+    std::string_view parts[kMaxLegendParts];
+    size_t count = 0;
     if (notation & MismatchNotationUnionMember)
-        parts.push_back("'#2' is the 2nd member of a union, counting in the order printed");
+        parts[count++] = "'#2' is the 2nd member of a union, counting in the order printed";
     if (notation & MismatchNotationOverload)
-        parts.push_back("'#2' is the 2nd overload of a function, counting in the order printed");
+        parts[count++] = "'#2' is the 2nd overload of a function, counting in the order printed";
     if (notation & MismatchNotationIndexer)
-        parts.push_back("'[string]' is any value in a map with string keys");
+        parts[count++] = "'[string]' is any value in a map with string keys";
     if (notation & MismatchNotationArrayElement)
-        parts.push_back("'[i]' is any element of an array");
+        parts[count++] = "'[i]' is any element of an array";
 
     bool expectedRoot = (notation & MismatchNotationExpectedRoot) != 0;
     bool gotRoot = (notation & MismatchNotationGotRoot) != 0;
     if (expectedRoot && gotRoot)
-        parts.push_back("'expected' is the type we expected, and 'given' is the type we were given");
+        parts[count++] = "'expected' is the type we expected, and 'given' is the type we were given";
     else if (expectedRoot)
-        parts.push_back("'expected' is the type we expected");
+        parts[count++] = "'expected' is the type we expected";
     else if (gotRoot)
-        parts.push_back("'given' is the type we were given");
+        parts[count++] = "'given' is the type we were given";
 
-    if (parts.empty())
-        return "";
-
-    std::string legend = "Help: in the paths above,";
-    for (const std::string& part : parts)
-        legend += "\n  • " + part;
-    return legend;
+    return helpifier("paths above", parts, count);
 }
 
 // A reason that starts on its own line joins the message as a line, not as a clause: `"; "` before a line
@@ -267,6 +264,55 @@ static void appendNamesAndReason(std::string& message, const std::vector<NamedTy
 
     if (!reasonContinuesLine)
         appendReason(message, reason);
+}
+
+// Luwu: where to report a bug in Luwu
+static const char* const kIssuesUrl = "https://github.com/luwu-community/luwu/issues";
+
+// Luwu: how an improper use reads in "Attempt to ...". Indexing is any use that isn't a call.
+static std::string improperUseVerb(ImproperUse use)
+{
+    return use == ImproperUse::Call ? "call" : "use";
+}
+
+// Luwu: why a local has no type, as the end of a sentence about it
+static std::string noTypeClause(std::optional<Location> origin)
+{
+    if (origin)
+        return "has no type because of the error on line " + std::to_string(origin->begin.line + 1);
+    return "has no type";
+}
+
+std::string noTypeNote(const std::string& name, std::optional<Location> origin)
+{
+    return "'" + name + "' " + noTypeClause(origin);
+}
+
+// Luwu: how to tell the members of a union of table types apart by a field some of them lack; nullopt when a member
+// that lacks it isn't a table type, which no field can be added to
+static std::optional<std::string> missingUnionPropertyHelp(const MissingUnionProperty& e)
+{
+    const UnionType* ut = get<UnionType>(follow(e.type));
+    if (!ut || !e.showHelp)
+        return std::nullopt;
+    for (TypeId missing : e.missing)
+    {
+        if (!get<TableType>(follow(missing)))
+            return std::nullopt;
+    }
+
+    std::string lacking;
+    for (TypeId missing : e.missing)
+        lacking += (lacking.empty() ? "'" : ", '") + toString(missing) + "'";
+    std::string members;
+    for (TypeId option : ut->options)
+        members += (members.empty() ? "" : ", ") + toString(option);
+
+    return Helpifier{e.showHelp}(
+        "telling members apart",
+        {"Add '" + e.key + ": nil' to " + lacking + " so that checking '" + e.key + "' tells the members apart",
+         "Or write the type as 'oneof<" + members + ">', which adds each member's missing fields as 'nil'"}
+    );
 }
 
 struct ErrorConverter
@@ -950,7 +996,13 @@ struct ErrorConverter
             ss += "'" + toString(ty) + "'";
         }
 
-        return ss + " in the type '" + toString(e.type) + "'";
+        ss += " in the type '" + toString(e.type) + "'";
+
+        // Luwu: a table type is a shape, so reading a field a member doesn't declare can raise (a class object, a vector
+        // or an extern value fits it). Declaring the field as `nil` makes testing it tell the members apart.
+        if (std::optional<std::string> help = missingUnionPropertyHelp(e))
+            ss += "\n\n" + *help;
+        return ss;
     }
 
     std::string operator()(const TypesAreUnrelated& e) const
@@ -1221,6 +1273,64 @@ struct ErrorConverter
     std::string operator()(const Typo& e) const
     {
         return "Did you mean '" + e.meant + "' instead of '" + e.written + "'?";
+    }
+
+    std::string operator()(const UnreachableCodeUse& e) const
+    {
+        if (e.reason == UnreachableCodeUse::Reason::PossibleTypeBug)
+        {
+            std::string subject = e.name.empty() ? "This value" : "'" + e.name + "'";
+            std::string message = subject + " is 'never' here but we're not sure it's truly unreachable. If this looks like a bug, report it to " +
+                                  kIssuesUrl;
+            std::string what = e.name.empty() ? "this value" : "'" + e.name + "'";
+            Helpifier{e.showHelp}.appendTo(message, "possible type bug", {"Until it's fixed, nothing " + what + " is used for here is checked"});
+            return message;
+        }
+
+        std::string message = "Attempt to " + improperUseVerb(e.use) + " unreachable code: '" + e.name + "' is 'never' here";
+
+        std::string reason;
+        switch (e.reason)
+        {
+        case UnreachableCodeUse::Reason::NarrowedAway:
+            reason = "The checks before this line rule out every type '" + e.name + "' could have, so this line never runs";
+            break;
+        case UnreachableCodeUse::Reason::NeverReturningCall:
+            reason = "'" + e.name + "' holds the result of a call that never returns, so this line never runs";
+            break;
+        case UnreachableCodeUse::Reason::DeclaredNever:
+            reason = "'" + e.name + "' is declared as 'never', so this line never runs";
+            break;
+        case UnreachableCodeUse::Reason::CastToNever:
+            reason = "'" + e.name + "' is cast to 'never', a type no value has, so this line never runs";
+            break;
+        case UnreachableCodeUse::Reason::PossibleTypeBug:
+            LUAU_ASSERT(!"worded above");
+            break;
+        }
+        Helpifier{e.showHelp}.appendTo(message, "unreachable code", {reason});
+        return message;
+    }
+
+    std::string operator()(const NoTypeUse& e) const
+    {
+        std::string message = "Attempt to " + improperUseVerb(e.use) + " '" + e.name + "', which " + noTypeClause(e.origin);
+
+        Helpifier helpifier{e.showHelp};
+        if (e.origin)
+        {
+            std::string line = std::to_string(e.origin->begin.line + 1);
+            helpifier.appendTo(message, "no type", {"Fix the error on line " + line + " first; until then, uses of '" + e.name + "' aren't checked"});
+        }
+        else
+        {
+            helpifier.appendTo(
+                message,
+                "no type",
+                {"Luwu couldn't work out a type for '" + e.name + "', so its uses aren't checked", "Annotating '" + e.name + "' gives it a type"}
+            );
+        }
+        return message;
     }
 
     std::string operator()(const ConstructorReadByName& e) const
@@ -1607,6 +1717,16 @@ bool UninstantiableClass::operator==(const UninstantiableClass& rhs) const
 bool Typo::operator==(const Typo& rhs) const
 {
     return written == rhs.written && meant == rhs.meant;
+}
+
+bool UnreachableCodeUse::operator==(const UnreachableCodeUse& rhs) const
+{
+    return use == rhs.use && name == rhs.name && reason == rhs.reason && showHelp == rhs.showHelp;
+}
+
+bool NoTypeUse::operator==(const NoTypeUse& rhs) const
+{
+    return use == rhs.use && name == rhs.name && origin == rhs.origin && showHelp == rhs.showHelp;
 }
 
 bool ConstructorReadByName::operator==(const ConstructorReadByName& rhs) const
@@ -2186,7 +2306,7 @@ void copyError(T& e, TypeArena& destArena, CloneState& cloneState)
         e.classTy = clone(e.classTy);
     else if constexpr (std::is_same_v<T, ConstructorReadByName>)
         e.table = clone(e.table);
-    else if constexpr (std::is_same_v<T, Typo>)
+    else if constexpr (std::is_same_v<T, Typo> || std::is_same_v<T, UnreachableCodeUse> || std::is_same_v<T, NoTypeUse>)
     {
     }
     else if constexpr (std::is_same_v<T, UninitializableClassField>)
