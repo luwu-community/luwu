@@ -18,6 +18,12 @@ local unrelated = 1
 print(unrelated + 1)
 )";
 
+// The same, declared with `const`: a value still being typed above it must not read the `const` as a global.
+const char* const kAfterConst = R"(
+const unrelated = 1
+print(unrelated + 1)
+)";
+
 } // namespace
 
 TEST_SUITE_BEGIN("Typewriter");
@@ -38,6 +44,8 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_field_assignments_and_constants")
     checkTypewriting(*this, before, "local n = t.x", kAfter);
     checkTypewriting(*this, before, "const n = t.x", kAfter);
     checkTypewriting(*this, before, "local function f()\n    t.x = 3\nend", kAfter);
+    checkTypewriting(*this, before, "local n = t.x", kAfterConst);
+    checkTypewriting(*this, before, "t.x = 2", kAfterConst);
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "typing_type_aliases")

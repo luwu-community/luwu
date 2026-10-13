@@ -5697,6 +5697,37 @@ TEST_CASE_FIXTURE(Fixture, "an_index_with_no_name_is_one_error")
     CHECK_EQ("Expected identifier, got <eof>", result.errors[0].getMessage());
 }
 
+TEST_CASE_FIXTURE(Fixture, "a_missing_value_above_a_const_declaration_is_one_error")
+{
+    ParseResult result = tryParse("local x =\nconst y = 1\n");
+    REQUIRE_EQ(1, result.errors.size());
+    CHECK_EQ("Expected identifier when parsing expression, got 'const'", result.errors[0].getMessage());
+    REQUIRE_EQ(2, result.root->body.size);
+    AstStatLocal* declaration = result.root->body.data[1]->as<AstStatLocal>();
+    REQUIRE(declaration);
+    CHECK(declaration->isConst);
+}
+
+TEST_CASE_FIXTURE(Fixture, "a_missing_name_above_a_const_declaration_is_one_error")
+{
+    ParseResult index = tryParse("local t = {}\nlocal n = t.\nconst y = 1\n");
+    REQUIRE_EQ(1, index.errors.size());
+    CHECK_EQ("Expected identifier, got 'const'", index.errors[0].getMessage());
+    CHECK_EQ(3, index.root->body.size);
+
+    ParseResult binding = tryParse("local\nconst y = 1\n");
+    REQUIRE_EQ(1, binding.errors.size());
+    CHECK_EQ("Expected identifier when parsing variable name, got 'const'", binding.errors[0].getMessage());
+    CHECK_EQ(2, binding.root->body.size);
+}
+
+TEST_CASE_FIXTURE(Fixture, "a_global_named_const_is_still_a_value")
+{
+    // Valid Luau <= 0.730: `const` read as a global wherever a name doesn't follow it on its own line
+    ParseResult result = tryParse("local x = const y = 1\nlocal z =\nconst\ny = 2\n");
+    CHECK_EQ(0, result.errors.size());
+}
+
 class CountAstNodes : public AstVisitor
 {
 public:

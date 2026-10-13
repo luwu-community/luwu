@@ -3282,7 +3282,7 @@ void Parser::parseExprList(TempVector<AstExpr*>& result, TempVector<Position>* c
 
 Parser::Binding Parser::parseBinding(bool isConst, bool allowDefault)
 {
-    std::optional<Name> name = parseNameOpt("variable name");
+    std::optional<Name> name = parseNameBeforeDeclaration("variable name");
 
     // Use placeholder if the name is missing
     if (!name)
@@ -5039,6 +5039,14 @@ AstExpr* Parser::parseSimpleExpr()
     {
         return parseIfElseExpr();
     }
+    else if (startsConstDeclaration())
+    {
+        // Luwu: the value is missing, and the next line declares a constant (`local x =` above `const y = 1`). Upstream
+        // reads `const` as a global and `y = 1` as a second statement, which cascades into type errors and lints on
+        // code the user hasn't touched. The statement loop parses the declaration.
+        reportNameError("expression");
+        return allocator.alloc<AstExprError>(start, copy<AstExpr*>({}), unsigned(parseErrors.size() - 1));
+    }
     else
     {
         return parsePrimaryExpr(/* asStatement= */ false);
@@ -5387,9 +5395,22 @@ Parser::Name Parser::parseName(const char* context)
     return Name(nameError, location);
 }
 
+// Luwu: parseNameOpt for a name that may not be typed yet. A new line starting with `const name` is the next declaration,
+// so the name is reported missing instead of read as `const` (`t.` or `local` above `const y = 1`).
+std::optional<Parser::Name> Parser::parseNameBeforeDeclaration(const char* context)
+{
+    if (startsConstDeclaration())
+    {
+        reportNameError(context);
+        return {};
+    }
+
+    return parseNameOpt(context);
+}
+
 Parser::Name Parser::parseIndexName(const char* context, const Position& previous)
 {
-    if (std::optional<Name> name = parseNameOpt(context))
+    if (std::optional<Name> name = parseNameBeforeDeclaration(context))
         return *name;
 
     // If we have a reserved keyword next at the same line, assume it's an incomplete name
@@ -6033,6 +6054,20 @@ AstTypeError* Parser::missingTypeHere()
 bool Parser::continuesOnSameLine()
 {
     return lexer.current().location.begin.line == lexer.previousLocation().end.line;
+}
+
+// Luwu: whether a new line starts with `const name` where a value or name was expected. Valid Luau <= 0.730 could read
+// that as a global named `const` followed by a statement on its line; Luwu reads it as a declaration, as KeywordShadow
+// already warns it will.
+bool Parser::startsConstDeclaration()
+{
+    Lexeme current = lexer.current();
+    Lexeme next = lexer.lookahead();
+
+    bool isConst = current.type == Lexeme::Name && AstName(current.name) == "const";
+    bool nameFollows = next.type == Lexeme::Name && next.location.begin.line == current.location.end.line;
+
+    return isConst && nameFollows && !continuesOnSameLine();
 }
 
 // Luwu: expectAndConsume, returning whether the token was consumed: true also when it came after one stray token, which

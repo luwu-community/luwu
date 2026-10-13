@@ -403,6 +403,7 @@ private:
 
     // Name
     std::optional<Name> parseNameOpt(const char* context = nullptr);
+    std::optional<Name> parseNameBeforeDeclaration(const char* context);
     Name parseName(const char* context = nullptr);
     Name parseIndexName(const char* context, const Position& previous);
 
@@ -440,6 +441,7 @@ private:
     bool consumeExpected(Lexeme::Type type, const char* context);
     AstTypeError* missingTypeHere();
     bool continuesOnSameLine();
+    bool startsConstDeclaration();
     bool expectAndConsumeFailWithLookahead(Lexeme::Type type, const char* context);
     void expectAndConsumeFail(Lexeme::Type type, const char* context);
 
