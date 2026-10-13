@@ -442,6 +442,17 @@ private:
     AstTypeError* missingTypeHere();
     bool continuesOnSameLine();
     bool startsConstDeclaration();
+    bool nextLineStartsStatement(bool (*cantContinue)(const Lexeme& afterName));
+    bool statementReportedError();
+    AstExpr* unfinishedIfElseExpr(
+        const Location& start,
+        AstExpr* condition,
+        size_t errorsBefore,
+        const char* keyword,
+        bool hasThen,
+        AstExpr* trueExpr = nullptr,
+        std::optional<Location> thenLocation = std::nullopt
+    );
     bool expectAndConsumeFailWithLookahead(Lexeme::Type type, const char* context);
     void expectAndConsumeFail(Lexeme::Type type, const char* context);
 
@@ -585,6 +596,9 @@ private:
     std::vector<HotComment> hotcomments;
 
     bool hotcommentHeader = true;
+
+    // Luwu: where the statement being parsed starts (see nextLineStartsStatement)
+    Position statementStart{0, 0};
 
     unsigned int recursionCounter;
 
