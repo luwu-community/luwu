@@ -1,5 +1,6 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Fixture.h"
+#include "Typewriter.h"
 
 #include "doctest.h"
 
@@ -109,6 +110,36 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "an_annotation_checks_the_item")
     CHECK_EQ(toString(mismatch->wantedType), "string");
     CHECK_EQ(toString(mismatch->givenType), "number");
     CHECK_EQ(result.errors[1].location.begin.line, 4);
+}
+
+// Code after the typed text. It uses nothing the typed text declares, so it stays clean whatever is typed above it.
+const char* const kTypewriterAfter = R"(
+local unrelated = 1
+print(unrelated + 1)
+)";
+
+const char* const kTypewriterBefore = R"(local function maybe(): number?
+    return nil
+end
+local nums = {1, 2, 3}
+)";
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_table_comprehensions")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuTableComprehensions, true},
+        {FFlag::LuwuIfLocal, true},
+    };
+
+    checkTypewriting(*this, kTypewriterBefore, "local doubled = { for _, v in nums give v * 2 }", kTypewriterAfter);
+    checkTypewriting(*this, kTypewriterBefore, "local evens = { for i = 1, 10 when i % 2 == 0 give i }", kTypewriterAfter);
+    checkTypewriting(*this, kTypewriterBefore, "local names = { for i, v in nums give [tostring(i)] = v }", kTypewriterAfter);
+    checkTypewriting(*this, kTypewriterBefore, "local found = { for _, v in nums when const n = maybe() give v + n }", kTypewriterAfter);
+    checkTypewriting(
+        *this,
+        kTypewriterBefore,
+        "local sums = {\n    for _, a in nums\n        when a > 1\n    for _, b in nums\n    give a + b\n}",
+        kTypewriterAfter
+    );
 }
 
 TEST_SUITE_END();
