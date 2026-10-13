@@ -31,6 +31,27 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_tables_and_calls")
     checkTypewriting(*this, before, "local s = (\"abc\"):upper()", kAfter);
 }
 
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_field_assignments_and_constants")
+{
+    const char* before = "local t = { x = 1 }\n";
+    checkTypewriting(*this, before, "t.x = 2", kAfter);
+    checkTypewriting(*this, before, "local n = t.x", kAfter);
+    checkTypewriting(*this, before, "const n = t.x", kAfter);
+    checkTypewriting(*this, before, "local function f()\n    t.x = 3\nend", kAfter);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_type_aliases")
+{
+    const char* before = "local a = 1\n";
+    checkTypewriting(*this, before, "type Point = { x: number, y: number }", kAfter);
+    checkTypewriting(*this, before, "export type Point = { x: number, y: number }", kAfter);
+    checkTypewriting(*this, before, "type Pair<T> = { first: T, second: T }", kAfter);
+    checkTypewriting(*this, before, "type Fn = (number, string) -> boolean", kAfter);
+    checkTypewriting(*this, before, "type Thunk = () -> number", kAfter);
+    checkTypewriting(*this, before, "local f: (number) -> string = tostring", kAfter);
+    checkTypewriting(*this, before, "local n = a :: number", kAfter);
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "typing_blocks")
 {
     const char* before = "local a = 1\n";
