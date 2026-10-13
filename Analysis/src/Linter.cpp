@@ -8364,12 +8364,30 @@ private:
         for (size_t i = 0; i < pairs; ++i)
         {
             AstExpr* var = node->vars.data[i];
-            if (!sameTarget(var, node->values.data[i]))
-                continue;
-
             AstExpr* target = unparenthesized(var);
             bool isName = target->is<AstExprLocal>() || target->is<AstExprGlobal>();
             if (!isName && !strict)
+                continue;
+
+            // Luwu Do Expressions (rfcs/do-expressions.md): `x = x or return nil` assigns `x` to itself; the guard alone,
+            // `x or return nil`, narrows `x` the same way
+            AstExprBinary* guard = asOrLeave(node->values.data[i]);
+            if (guard && sameTarget(var, guard->left))
+            {
+                std::optional<std::string> name = shortExprName(target);
+                std::string without = name ? "'" + *name + " ='" : std::string("the assignment");
+                emitWarning(
+                    *context,
+                    LintWarning::Code_SelfAssignment,
+                    Location(var->location.begin, guard->location.begin),
+                    "Assigning %s to itself does nothing; write the guard on its own, without %s",
+                    describe(var, "this").c_str(),
+                    without.c_str()
+                );
+                continue;
+            }
+
+            if (!sameTarget(var, node->values.data[i]))
                 continue;
 
             emitWarning(

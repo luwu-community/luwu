@@ -3358,6 +3358,35 @@ return f
     CHECK_EQ(found[0].location.begin.line, 4);
 }
 
+// Luwu Do Expressions (rfcs/do-expressions.md): `x = x or return nil` assigns `x` to itself; the guard alone does the
+// same narrowing
+TEST_CASE_FIXTURE(Fixture, "SelfAssignmentOfAGuard")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    LintResult result = lint(R"(
+local function f(comments: string?, t: { x: number? })
+    comments = comments or return nil
+    for _ = 1, 2 do
+        comments = comments or continue
+    end
+    local other = comments or return nil
+    comments = other or return nil
+    t.x = t.x or return nil
+    return comments, other
+end
+return f
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_SelfAssignment);
+    // the field too: the fixture is strict, where SelfAssignment reports fields
+    REQUIRE_EQ(found.size(), 3);
+    CHECK_EQ(found[0].text, "Assigning 'comments' to itself does nothing; write the guard on its own, without 'comments ='");
+    CHECK_EQ(found[0].location, Location(Position(2, 4), Position(2, 15)));
+    CHECK_EQ(found[1].location.begin.line, 4);
+    CHECK_EQ(found[2].text, "Assigning 't.x' to itself does nothing; write the guard on its own, without 't.x ='");
+}
+
 // Luwu If Local (rfcs/if-local.md): a condition binding a name to itself tests nothing a plain condition doesn't
 TEST_CASE_FIXTURE(Fixture, "SelfAssignmentInConditionBindings")
 {
