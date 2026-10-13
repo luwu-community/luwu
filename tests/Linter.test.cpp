@@ -3302,6 +3302,28 @@ return f, g
     CHECK_EQ(found[1].location.begin.line, 6);
 }
 
+// Luwu Do Expressions (rfcs/do-expressions.md): a one-line `do` expression holds several statements on its line by
+// design; a later line of a longer one is checked as usual
+TEST_CASE_FIXTURE(Fixture, "SameLineStatementInDoExpressions")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    LintResult result = lint(R"(
+local function f(s: any)
+    local ok = if typeof(s) ~= "string" then (do s = tostring(s) give true) else true
+    local v = do
+        print(s) print(ok)
+        give 1
+    return v
+end
+return f
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_SameLineStatement);
+    REQUIRE_EQ(found.size(), 1);
+    CHECK_EQ(found[0].location.begin.line, 4);
+}
+
 TEST_CASE_FIXTURE(Fixture, "ReturnOnNextLine")
 {
     ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};

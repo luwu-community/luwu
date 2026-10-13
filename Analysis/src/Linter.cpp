@@ -717,15 +717,30 @@ public:
 private:
     LintContext* context;
     unsigned int lastLine;
+    // Luwu Do Expressions (rfcs/do-expressions.md): the line each `do` expression's block starts on
+    DenseHashMap<const AstStatBlock*, unsigned int> doExprLines{nullptr};
+
+    bool visit(AstExprDo* node) override
+    {
+        doExprLines[node->body] = node->location.begin.line;
+        return true;
+    }
 
     bool visit(AstStatBlock* node) override
     {
+        const unsigned int* doLine = doExprLines.find(node);
+
         for (size_t i = 1; i < node->body.size; ++i)
         {
             const Location& last = node->body.data[i - 1]->location;
             const Location& location = node->body.data[i]->location;
 
             if (location.begin.line != last.end.line)
+                continue;
+
+            // Luwu Do Expressions (rfcs/do-expressions.md): a one-line `do` expression (`do s = tostring(s) give true`)
+            // holds several statements on the `do`'s line by design
+            if (doLine && location.begin.line == *doLine)
                 continue;
 
             // We warn once per line with multiple statements
