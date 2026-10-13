@@ -8367,6 +8367,56 @@ private:
 
         return true;
     }
+
+    // Luwu If Local (rfcs/if-local.md): `if const s = s then` binds `s` to itself, which tests nothing `if s then` doesn't.
+    // An annotated binding (`if local s: string = s`) says something about the type, so it isn't reported.
+    void checkClauses(const AstArray<AstIfClause>& clauses, const char* head)
+    {
+        for (const AstIfClause& clause : clauses)
+        {
+            if (!clause.local || clause.local->annotation || !clause.expr)
+                continue;
+
+            AstExpr* value = unparenthesized(clause.expr);
+            AstName valueName;
+            if (AstExprLocal* local = value->as<AstExprLocal>())
+                valueName = local->local->name;
+            else if (AstExprGlobal* global = value->as<AstExprGlobal>())
+                valueName = global->name;
+
+            if (valueName != clause.local->name)
+                continue;
+
+            const char* keyword = clause.whenLocation ? "when" : head;
+            emitWarning(
+                *context,
+                LintWarning::Code_SelfAssignment,
+                Location(clause.local->location, clause.expr->location),
+                "Binding '%s' to itself does nothing; test it directly with '%s %s'",
+                clause.local->name.value,
+                keyword,
+                clause.local->name.value
+            );
+        }
+    }
+
+    bool visit(AstStatIf* node) override
+    {
+        checkClauses(node->clauses, "if");
+        return true;
+    }
+
+    bool visit(AstExprIfElse* node) override
+    {
+        checkClauses(node->clauses, "if");
+        return true;
+    }
+
+    bool visit(AstStatWhile* node) override
+    {
+        checkClauses(node->clauses, "while");
+        return true;
+    }
 };
 
 // Luwu Traits (rfcs/classes/traits.md): a trait method returning `self`, or a new object of self's class
