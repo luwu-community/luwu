@@ -511,6 +511,7 @@ if(TARGET Luwu.UnitTest)
         tests/BytecodeCompiler.test.cpp
         tests/ClassFixture.cpp
         tests/ClassFixture.h
+        tests/ClassesFixture.h
         tests/CodeAllocator.test.cpp
         tests/Compiler.test.cpp
         tests/Config.test.cpp
@@ -558,6 +559,9 @@ if(TARGET Luwu.UnitTest)
         tests/TopoSort.test.cpp
         tests/ToString.test.cpp
         tests/TxnLog.test.cpp
+        tests/Typewriter.cpp
+        tests/Typewriter.h
+        tests/Typewriter.test.cpp
         tests/TypeFunction.test.cpp
         tests/TypeFunction.user.test.cpp
         tests/TypeInfer.aliases.test.cpp

@@ -603,19 +603,30 @@ AstStat* Parser::parseStat()
     return reportStatError(expr->location, copy({expr}), {}, "Incomplete statement: expected assignment or a function call");
 }
 
+// Luwu: the token an "Expected 'end' (to close ...)" error names: the `then` or `do`, or the statement's keyword when
+// that's missing. Upstream names whatever stood where the `then` or `do` should have been, often the next line's first
+// word ("to close 'local'").
+static const Lexeme& blockOpener(const Lexeme& keyword, const Lexeme& separator, bool hasSeparator)
+{
+    return hasSeparator ? separator : keyword;
+}
+
 // if exp then block {elseif exp then block} [else block] end
 AstStat* Parser::parseIf()
 {
     Location start = lexer.current().location;
 
+    Lexeme matchIf = lexer.current();
     nextLexeme(); // if / elseif
 
     AstExpr* cond = parseExpr();
 
     Lexeme matchThen = lexer.current();
     std::optional<Location> thenLocation;
-    if (expectAndConsume(Lexeme::ReservedThen, "if statement"))
+    bool hasThen = expectAndConsume(Lexeme::ReservedThen, "if statement");
+    if (hasThen)
         thenLocation = matchThen.location;
+    matchThen = blockOpener(matchIf, matchThen, hasThen);
 
     AstStatBlock* thenbody = parseBlock();
 
@@ -669,12 +680,14 @@ AstStat* Parser::parseWhile()
 {
     Location start = lexer.current().location;
 
+    Lexeme matchWhile = lexer.current();
     nextLexeme(); // while
 
     AstExpr* cond = parseExpr();
 
     Lexeme matchDo = lexer.current();
     bool hasDo = expectAndConsume(Lexeme::ReservedDo, "while loop");
+    const Lexeme& matchEnd = blockOpener(matchWhile, matchDo, hasDo);
 
     functionStack.back().loopDepth++;
 
@@ -684,7 +697,7 @@ AstStat* Parser::parseWhile()
 
     Location end = lexer.current().location;
 
-    bool hasEnd = expectMatchEndAndConsume(Lexeme::ReservedEnd, matchDo);
+    bool hasEnd = expectMatchEndAndConsume(Lexeme::ReservedEnd, matchEnd);
     body->hasEnd = hasEnd;
 
     return allocator.alloc<AstStatWhile>(Location(start, end), cond, body, hasDo, matchDo.location, start);
@@ -776,6 +789,7 @@ AstStat* Parser::parseFor()
 {
     Location start = lexer.current().location;
 
+    Lexeme matchFor = lexer.current();
     nextLexeme(); // for
 
     Binding varname = parseBinding();
@@ -805,6 +819,7 @@ AstStat* Parser::parseFor()
 
         Lexeme matchDo = lexer.current();
         bool hasDo = expectAndConsume(Lexeme::ReservedDo, "for loop");
+        const Lexeme& matchEnd = blockOpener(matchFor, matchDo, hasDo);
 
         unsigned int localsBegin = saveLocals();
 
@@ -820,7 +835,7 @@ AstStat* Parser::parseFor()
 
         Location end = lexer.current().location;
 
-        bool hasEnd = expectMatchEndAndConsume(Lexeme::ReservedEnd, matchDo);
+        bool hasEnd = expectMatchEndAndConsume(Lexeme::ReservedEnd, matchEnd);
         body->hasEnd = hasEnd;
 
         AstStatFor* node = allocator.alloc<AstStatFor>(Location(start, end), var, from, to, step, body, hasDo, matchDo.location, start);
@@ -860,6 +875,7 @@ AstStat* Parser::parseFor()
 
         Lexeme matchDo = lexer.current();
         bool hasDo = expectAndConsume(Lexeme::ReservedDo, "for loop");
+        const Lexeme& matchEnd = blockOpener(matchFor, matchDo, hasDo);
 
         unsigned int localsBegin = saveLocals();
 
@@ -878,7 +894,7 @@ AstStat* Parser::parseFor()
 
         Location end = lexer.current().location;
 
-        bool hasEnd = expectMatchEndAndConsume(Lexeme::ReservedEnd, matchDo);
+        bool hasEnd = expectMatchEndAndConsume(Lexeme::ReservedEnd, matchEnd);
         body->hasEnd = hasEnd;
 
         AstStatForIn* node = allocator.alloc<AstStatForIn>(
@@ -1823,6 +1839,7 @@ bool Parser::classBodyLooksLikeStatement()
 LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool exported, const Location& classKeywordLocation)
 {
     LUAU_ASSERT(FFlag::LuwuClasses);
+    size_t errorsBeforeClass = parseErrors.size();
     std::optional<Name> name = parseNameOpt("type name");
 
     // Use error name if the name is missing
@@ -2368,7 +2385,13 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
     //
     // The primary constructor's own specifier (`class PositiveNumber private (...)`) makes the
     // constructor private. It isn't a member's specifier, so it doesn't count here.
-    if ((sawPrivateMember || sawQualifiedParam || !explicitPublicQualifierLocations.empty()))
+    //
+    // These checks wait until the class parses. While a class is half-typed, a word on its way to
+    // being `end` or a member parses as an unqualified field, and reporting it as one only buries the
+    // syntax error.
+    bool classParsed = parseErrors.size() == errorsBeforeClass;
+    bool needsQualifiers = sawPrivateMember || sawQualifiedParam || !explicitPublicQualifierLocations.empty();
+    if (classParsed && needsQualifiers)
     {
         if (sawPrivateMember || sawQualifiedParam)
         {
@@ -4690,6 +4713,17 @@ AstExpr* Parser::parseMethodCall(Position start, AstExpr* expr)
     if (lexer.current().type == '<' && lexer.lookahead().type == '<')
     {
         typeArguments = parseTypeInstantiationExpr(cstTypeArguments);
+    }
+
+    // Luwu: `obj:` with no method name yet already reported that, so it doesn't also report the missing arguments.
+    // The error node is the one parseFunctionArgs would build, so autocomplete still sees `obj:` as a method call.
+    // Upstream reports both, at the same token.
+    Lexeme::Type next = lexer.current().type;
+    bool argumentsFollow = next == '(' || next == '{' || next == Lexeme::RawString || next == Lexeme::QuotedString;
+    if (index.name == nameError && !argumentsFollow)
+    {
+        Location location(func->location.begin, lexer.current().location.begin);
+        return allocator.alloc<AstExprError>(location, copy({func}), unsigned(parseErrors.size() - 1));
     }
 
     expr = parseFunctionArgs(func, true);
