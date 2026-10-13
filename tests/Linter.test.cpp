@@ -3381,10 +3381,10 @@ return f
     std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_SelfAssignment);
     // the field too: the fixture is strict, where SelfAssignment reports fields
     REQUIRE_EQ(found.size(), 3);
-    CHECK_EQ(found[0].text, "Assigning 'comments' to itself does nothing; write the guard on its own, without 'comments ='");
-    CHECK_EQ(found[0].location, Location(Position(2, 4), Position(2, 15)));
-    CHECK_EQ(found[1].location.begin.line, 4);
-    CHECK_EQ(found[2].text, "Assigning 't.x' to itself does nothing; write the guard on its own, without 't.x ='");
+    CHECK_EQ(found[0].text, "Replace this with 'comments or return nil'");
+    CHECK_EQ(found[0].location, Location(Position(2, 4), Position(2, 37)));
+    CHECK_EQ(found[1].text, "Replace this with 'comments or continue'");
+    CHECK_EQ(found[2].text, "Replace this with 't.x or return nil'");
 }
 
 // Luwu If Local (rfcs/if-local.md): a condition binding a name to itself tests nothing a plain condition doesn't

@@ -8374,16 +8374,15 @@ private:
             AstExprBinary* guard = asOrLeave(node->values.data[i]);
             if (guard && sameTarget(var, guard->left))
             {
-                std::optional<std::string> name = shortExprName(target);
-                std::string without = name ? "'" + *name + " ='" : std::string("the assignment");
-                emitWarning(
-                    *context,
-                    LintWarning::Code_SelfAssignment,
-                    Location(var->location.begin, guard->location.begin),
-                    "Assigning %s to itself does nothing; write the guard on its own, without %s",
-                    describe(var, "this").c_str(),
-                    without.c_str()
-                );
+                // A replacement longer than this is described instead of quoted
+                constexpr size_t kMaxSuggestionLength = 80;
+
+                Location assignment(var->location.begin, guard->location.end);
+                std::string suggestion = toString(guard);
+                if (suggestion.size() <= kMaxSuggestionLength)
+                    emitWarning(*context, LintWarning::Code_SelfAssignment, assignment, "Replace this with '%s'", suggestion.c_str());
+                else
+                    emitWarning(*context, LintWarning::Code_SelfAssignment, assignment, "Replace this with the guard on its own");
                 continue;
             }
 
