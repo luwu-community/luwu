@@ -36,6 +36,26 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "if_local_binding_is_narrowed_to_truthy")
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
+// `and` written for `when` is one parse error, and the binding works as it would after `when`
+TEST_CASE_FIXTURE(BuiltinsFixture, "and_before_a_condition_binding_has_no_cascade")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    CheckResult result = check(R"luau(
+        --!strict
+        local function prefix_of(s: string): string?
+            if string.sub(s, 1, 1) == "@" and const alias = string.match(s, "(@[%w%-%._]+/)") then
+                return alias
+            end
+            return nil
+        end
+        print(prefix_of("@a/"))
+    )luau");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<SyntaxError>(result.errors[0]));
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "if_local_binding_type_comes_from_its_value")
 {
     ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};

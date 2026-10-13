@@ -111,6 +111,7 @@ struct LintWarning
         Code_InlineOrLeave = 75,           // `x or return` ending a line much longer than the lines around it
         Code_LuaGuard = 76,                // `if not x then return end` on one line, in a Luwu file, which can write `x or return`
         Code_OrReturnComma = 77,           // Luwu: `f(x or return a, b)`, where `b` is the next argument, not a second return value
+        Code_MisleadingIndentation = 78,   // Luwu: a `do` expression's block reaching lines indented like the code after it
 
         Code__Count
     };
@@ -238,6 +239,7 @@ inline constexpr const char* kWarningNames[] = {
     "InlineOrLeave",
     "LuaGuard",
     "OrReturnComma",
+    "MisleadingIndentation",
 };
 // clang-format on
 

@@ -114,6 +114,169 @@ bool hasBreak(AstStat* node)
     }
 }
 
+// Luwu Do Expressions (rfcs/do-expressions.md): a `do` expression that evaluating `expr` always reaches, and whose block
+// never ends normally (`print(do return "x")`), so the code after the statement holding it never runs. Only parts
+// that always run count: not the right side of `and`/`or`, an if-else expression's branches or a function body.
+static const AstExprDo* findAlwaysLeavingDo(const AstExpr* expr);
+
+static const AstExprDo* findAlwaysLeavingDo(const AstArray<AstExpr*>& exprs)
+{
+    for (const AstExpr* expr : exprs)
+    {
+        if (const AstExprDo* found = findAlwaysLeavingDo(expr))
+            return found;
+    }
+
+    return nullptr;
+}
+
+static const AstExprDo* findAlwaysLeavingDo(const AstExpr* expr)
+{
+    if (const AstExprDo* doExpr = expr->as<AstExprDo>())
+        return getFallthrough(doExpr->body) == nullptr ? doExpr : nullptr;
+
+    if (const AstExprGroup* group = expr->as<AstExprGroup>())
+        return findAlwaysLeavingDo(group->expr);
+
+    if (const AstExprTypeAssertion* assertion = expr->as<AstExprTypeAssertion>())
+        return findAlwaysLeavingDo(assertion->expr);
+
+    if (const AstExprUnary* unary = expr->as<AstExprUnary>())
+        return findAlwaysLeavingDo(unary->expr);
+
+    if (const AstExprBinary* binary = expr->as<AstExprBinary>())
+    {
+        if (const AstExprDo* found = findAlwaysLeavingDo(binary->left))
+            return found;
+
+        bool shortCircuits = binary->op == AstExprBinary::And || binary->op == AstExprBinary::Or;
+        return shortCircuits ? nullptr : findAlwaysLeavingDo(binary->right);
+    }
+
+    if (const AstExprIfElse* ifElse = expr->as<AstExprIfElse>())
+        return findAlwaysLeavingDo(ifElse->condition);
+
+    if (const AstExprIndexName* index = expr->as<AstExprIndexName>())
+        return findAlwaysLeavingDo(index->expr);
+
+    if (const AstExprIndexExpr* index = expr->as<AstExprIndexExpr>())
+    {
+        if (const AstExprDo* found = findAlwaysLeavingDo(index->expr))
+            return found;
+
+        return findAlwaysLeavingDo(index->index);
+    }
+
+    if (const AstExprCall* call = expr->as<AstExprCall>())
+    {
+        if (const AstExprDo* found = findAlwaysLeavingDo(call->func))
+            return found;
+
+        return findAlwaysLeavingDo(call->args);
+    }
+
+    if (const AstExprTable* table = expr->as<AstExprTable>())
+    {
+        for (const AstExprTable::Item& item : table->items)
+        {
+            if (const AstExprDo* found = item.key ? findAlwaysLeavingDo(item.key) : nullptr)
+                return found;
+
+            if (const AstExprDo* found = findAlwaysLeavingDo(item.value))
+                return found;
+        }
+
+        return nullptr;
+    }
+
+    if (const AstExprInterpString* interp = expr->as<AstExprInterpString>())
+        return findAlwaysLeavingDo(interp->expressions);
+
+    return nullptr;
+}
+
+// Luwu Do Expressions (rfcs/do-expressions.md): a `do` expression that `expr` can only be truthy after, because it never
+// ends normally (`a and (do return x)`)
+static const AstExprDo* findTruthyOnlyAfterDo(const AstExpr* expr)
+{
+    if (const AstExprDo* found = findAlwaysLeavingDo(expr))
+        return found;
+
+    if (const AstExprGroup* group = expr->as<AstExprGroup>())
+        return findTruthyOnlyAfterDo(group->expr);
+
+    if (const AstExprBinary* binary = expr->as<AstExprBinary>())
+    {
+        // `a and b` is truthy only once `b` has run; `a or b` is truthy through either side
+        if (binary->op == AstExprBinary::And)
+        {
+            if (const AstExprDo* found = findTruthyOnlyAfterDo(binary->left))
+                return found;
+
+            return findTruthyOnlyAfterDo(binary->right);
+        }
+
+        if (binary->op == AstExprBinary::Or)
+        {
+            const AstExprDo* left = findTruthyOnlyAfterDo(binary->left);
+            return left && findTruthyOnlyAfterDo(binary->right) ? left : nullptr;
+        }
+    }
+
+    return nullptr;
+}
+
+// Luwu Do Expressions (rfcs/do-expressions.md): the `do` expression that keeps the `if`'s then-branch from ever running:
+// the condition, or any clause of its `when` chain, can only be truthy after it, and it never ends normally
+const AstExprDo* findDoBlockingThenBranch(const AstStatIf* stat)
+{
+    if (stat->clauses.size == 0)
+        return findTruthyOnlyAfterDo(stat->condition);
+
+    for (const AstIfClause& clause : stat->clauses)
+    {
+        if (const AstExprDo* found = findTruthyOnlyAfterDo(clause.expr))
+            return found;
+    }
+
+    return nullptr;
+}
+
+// Luwu Do Expressions (rfcs/do-expressions.md): the `do` expression that keeps the statement from finishing: the
+// statement always evaluates it, and it never ends normally
+const AstExprDo* findDoEndingStatement(const AstStat* node)
+{
+    if (const AstStatIf* stat = node->as<AstStatIf>())
+        return findAlwaysLeavingDo(stat->clauses.size == 0 ? stat->condition : stat->clauses.data[0].expr);
+
+    if (const AstStatWhile* stat = node->as<AstStatWhile>())
+        return findAlwaysLeavingDo(stat->condition);
+
+    if (const AstStatExpr* stat = node->as<AstStatExpr>())
+        return findAlwaysLeavingDo(stat->expr);
+
+    if (const AstStatLocal* stat = node->as<AstStatLocal>())
+        return findAlwaysLeavingDo(stat->values);
+
+    if (const AstStatAssign* stat = node->as<AstStatAssign>())
+    {
+        if (const AstExprDo* found = findAlwaysLeavingDo(stat->values))
+            return found;
+
+        return findAlwaysLeavingDo(stat->vars);
+    }
+
+    if (const AstStatCompoundAssign* stat = node->as<AstStatCompoundAssign>())
+    {
+        if (const AstExprDo* found = findAlwaysLeavingDo(stat->var))
+            return found;
+
+        return findAlwaysLeavingDo(stat->value);
+    }
+
+    return nullptr;
+}
+
 // returns the last statement before the block exits, or nullptr if the block never exits
 const AstStat* getFallthrough(const AstStat* node)
 {
@@ -130,9 +293,15 @@ const AstStat* getFallthrough(const AstStat* node)
 
         return getFallthrough(stat->body.data[stat->body.size - 1]);
     }
+    else if (findDoEndingStatement(node))
+    {
+        // Luwu Do Expressions (rfcs/do-expressions.md): `print(do return "x")` returns before the call
+        return nullptr;
+    }
     else if (const AstStatIf* stat = node->as<AstStatIf>())
     {
-        if (const AstStat* thenf = getFallthrough(stat->thenbody))
+        // Luwu Do Expressions (rfcs/do-expressions.md): a then-branch that never runs doesn't fall through
+        if (const AstStat* thenf = findDoBlockingThenBranch(stat) ? nullptr : getFallthrough(stat->thenbody))
             return thenf;
 
         if (stat->elsebody)

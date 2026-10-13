@@ -1368,22 +1368,30 @@ DataFlowResult DataFlowGraphBuilder::visitExpr(AstExprTypeAssertion* t)
     return {def, key};
 }
 
+// Luwu Do Expressions (rfcs/do-expressions.md): a branch can assign (`if c then do x = 1 give x else x`), so each branch
+// gets its own scope and the code after the expression sees the join of both, as after an `if` statement. Upstream
+// visits all three parts in one scope, which is only right while expressions can't assign.
 DataFlowResult DataFlowGraphBuilder::visitExpr(AstExprIfElse* i)
 {
+    DfgScope* thenScope = makeChildScope();
+    DfgScope* elseScope = makeChildScope();
+
     if (i->clauses.size == 0)
-    {
         visitExpr(i->condition);
-        visitExpr(i->trueExpr);
-    }
-    else
+
     {
-        // Luwu If Local (rfcs/if-local.md)
-        PushScope ps{scopeStack, makeChildScope()};
+        PushScope ps{scopeStack, thenScope};
+        // Luwu If Local (rfcs/if-local.md): the chain's bindings are in scope only in the `then` branch
         visitIfClauses(i->clauses);
         visitExpr(i->trueExpr);
     }
 
-    visitExpr(i->falseExpr);
+    {
+        PushScope ps{scopeStack, elseScope};
+        visitExpr(i->falseExpr);
+    }
+
+    join(currentScope(), thenScope, elseScope);
 
     return {defArena->freshCell(Symbol{}, i->location), nullptr};
 }
