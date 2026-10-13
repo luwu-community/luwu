@@ -5963,6 +5963,82 @@ TEST_CASE_FIXTURE(Fixture, "an_index_with_no_name_is_one_error")
     CHECK_EQ("Expected identifier, got <eof>", result.errors[0].getMessage());
 }
 
+TEST_CASE_FIXTURE(Fixture, "a_missing_value_above_a_const_declaration_is_one_error")
+{
+    ParseResult result = tryParse("local x =\nconst y = 1\n");
+    REQUIRE_EQ(1, result.errors.size());
+    CHECK_EQ("Expected identifier when parsing expression, got 'const'", result.errors[0].getMessage());
+    REQUIRE_EQ(2, result.root->body.size);
+    AstStatLocal* declaration = result.root->body.data[1]->as<AstStatLocal>();
+    REQUIRE(declaration);
+    CHECK(declaration->isConst);
+}
+
+TEST_CASE_FIXTURE(Fixture, "a_missing_name_above_a_const_declaration_is_one_error")
+{
+    ParseResult index = tryParse("local t = {}\nlocal n = t.\nconst y = 1\n");
+    REQUIRE_EQ(1, index.errors.size());
+    CHECK_EQ("Expected identifier, got 'const'", index.errors[0].getMessage());
+    CHECK_EQ(3, index.root->body.size);
+
+    ParseResult binding = tryParse("local\nconst y = 1\n");
+    REQUIRE_EQ(1, binding.errors.size());
+    CHECK_EQ("Expected identifier when parsing variable name, got 'const'", binding.errors[0].getMessage());
+    CHECK_EQ(2, binding.root->body.size);
+}
+
+// An unfinished `local`, `const` or `x =` above a line that can't continue it is one error on the unfinished line, and
+// the next line parses on its own
+TEST_CASE_FIXTURE(Fixture, "an_unfinished_statement_stops_before_a_next_line_that_cannot_continue_it")
+{
+    const std::string missingName = "Expected a variable name; the next line starts a new statement";
+    const std::string missingValue = "Expected a value; the next line starts a new statement";
+
+    for (const auto& [source, message] : std::vector<std::pair<const char*, std::string>>{
+             {"local total = 0\nlocal\ntotal += 1\n", missingName},
+             {"local total = 0\nconst\nprint(total)\n", missingName},
+             {"local total = 0\nlocal\ntotal.x = 1\n", missingName},
+             {"local total = 0\nlocal a =\ntotal += 1\n", missingValue},
+             {"local total = 0\ntotal =\ntotal = 2\n", missingValue},
+         })
+    {
+        INFO(source);
+        ParseResult result = tryParse(source);
+        REQUIRE_EQ(result.errors.size(), 1);
+        CHECK_EQ(result.errors[0].getMessage(), message);
+        CHECK_EQ(result.errors[0].getLocation().begin.line, 1);
+        CHECK_EQ(result.root->body.size, 3);
+    }
+}
+
+// Code that parses keeps its parse, however it's indented
+TEST_CASE_FIXTURE(Fixture, "an_unindented_continuation_that_parses_is_left_alone")
+{
+    for (const char* source : {
+             "local a =\nprint(1)\n",
+             "local\nx = 1\n",
+             "local\nx: number = 1\n",
+             "local a =\nfoo.bar\n",
+             "if true then\n    local\n        total += 1\nend\n",
+         })
+    {
+        INFO(source);
+        ParseResult result = tryParse(source);
+        // the last one stays an error (an indented `total` still reads as the name), just not this rule's
+        if (std::string(source).find("total") == std::string::npos)
+            CHECK_EQ(result.errors.size(), 0);
+        for (const ParseError& error : result.errors)
+            CHECK_NE(error.getMessage().find("the next line starts a new statement"), 0);
+    }
+}
+
+TEST_CASE_FIXTURE(Fixture, "a_global_named_const_is_still_a_value")
+{
+    // Valid Luau <= 0.730: `const` read as a global wherever a name doesn't follow it on its own line
+    ParseResult result = tryParse("local x = const y = 1\nlocal z =\nconst\ny = 2\n");
+    CHECK_EQ(0, result.errors.size());
+}
+
 class CountAstNodes : public AstVisitor
 {
 public:
