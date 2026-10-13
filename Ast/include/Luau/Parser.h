@@ -429,7 +429,8 @@ public:
 
 private:
     AstExpr* parseBinaryTail(AstExpr* expr, const Location& start, unsigned int limit);
-    AstStat* parseOrLeaveStatement(AstExpr* first, const Location& start);
+    AstStat* parseOrLeaveStatement(AstExpr* first, const Location& start, size_t errorsBeforeStatement);
+    AstStatError* reportIncompleteStatement(AstExpr* expr, size_t errorsBeforeStatement, const char* message);
 
     std::optional<AstExprUnary::Op> checkUnaryConfusables();
     std::optional<AstExprBinary::Op> checkBinaryConfusables(const BinaryOpPriority binaryPriority[], unsigned int limit);
@@ -482,6 +483,8 @@ private:
     void noteStrayEnd(const char* construct, bool reported);
     void reportLeftoverAtEndOfChunk();
     AstExpr* missingIfElseArm();
+    AstExpr* missingValueAfter(const char* keyword);
+    AstExprError* missingValueHere();
     // Luwu Do Expressions (rfcs/do-expressions.md)
     AstExpr* parseDoExpr();
     AstStat* parseGive();

@@ -1,5 +1,6 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Fixture.h"
+#include "Typewriter.h"
 
 #include "doctest.h"
 
@@ -217,6 +218,45 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "an_or_leave_inside_another_expression_narrow
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK_EQ(result.errors[0].location.begin.line, 4);
+}
+
+// Code after the typed text. It uses nothing the typed text declares, so it stays clean whatever is typed above it.
+const char* const kTypewriterAfter = R"(
+local unrelated = 1
+print(unrelated + 1)
+)";
+
+const char* const kTypewriterBefore = R"(local function maybe(): number?
+    return nil
+end
+local nums = {1, 2, 3}
+)";
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_do_expressions")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    checkTypewriting(*this, kTypewriterBefore, "local a = do give 5", kTypewriterAfter);
+    checkTypewriting(
+        *this,
+        kTypewriterBefore,
+        "local a = do\n    local n = maybe()\n    if n then\n        give n * 2\n    end\n    give 0",
+        kTypewriterAfter
+    );
+    checkTypewriting(
+        *this,
+        kTypewriterBefore,
+        "local function f(): number?\n    local n = maybe() or do\n        print(\"none\")\n        return nil\n    return n + 1\nend",
+        kTypewriterAfter
+    );
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_or_leave")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    checkTypewriting(*this, kTypewriterBefore, "local function f(): number?\n    local n = maybe() or return nil\n    return n + 1\nend", kTypewriterAfter);
+    checkTypewriting(*this, kTypewriterBefore, "local function f(): number\n    local n = maybe()\n    n or return 0\n    return n\nend", kTypewriterAfter);
+    checkTypewriting(*this, kTypewriterBefore, "for _, v in nums do\n    local n = maybe() or continue\n    print(v + n)\nend", kTypewriterAfter);
 }
 
 TEST_SUITE_END();

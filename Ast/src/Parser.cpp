@@ -81,6 +81,12 @@ const char* const kDeclaredDefaultIsATypeError = "In a declaration, a default is
 // several files come from a definitions file.
 const char* const kDeclareExportValueError =
     "Only types can be exported with 'export declare'; to declare a global for several files, use a definitions file";
+const char* const kIncompleteStatement = "Incomplete statement: expected assignment or a function call";
+// Luwu Do Expressions (rfcs/do-expressions.md): an expression statement can also end in a leave form, and in a `do`
+// expression a value where a statement goes was usually meant as the result.
+const char* const kOrLeaveIncompleteStatement =
+    "Incomplete statement: expected assignment, a function call, or an expression ending in 'or return', 'or break' or 'or continue'";
+const char* const kGiveIncompleteStatement = "Incomplete statement: to give a value from a 'do' expression, write 'give <value>'";
 // Luwu: upstream's legacy `declare class` declares an extern type; in Luwu it is a class or nothing.
 const char* const kLegacyDeclareClassError = "In Luwu, 'declare class' does not declare an extern type; write 'declare extern type' instead";
 const char* const kDeclareClassNeedsTypeError =
@@ -791,7 +797,7 @@ AstStat* Parser::parseStat()
     // expression statement is otherwise always a call, so no Luau statement starts like this.
     bool operatorFollows = !expr->is<AstExprError>() && parseBinaryOp(lexer.current());
     if (operatorFollows)
-        return parseOrLeaveStatement(expr, start);
+        return parseOrLeaveStatement(expr, start, errorsBeforeExpr);
 
     if (expr->is<AstExprCall>())
         return allocator.alloc<AstStatExpr>(expr->location, expr);
@@ -901,35 +907,33 @@ AstStat* Parser::parseStat()
     if (start == lexer.current().location)
         nextLexeme();
 
-    // Luwu: an expression that already reported an error (`obj.` with no name yet) is incomplete for that reason, so
-    // the statement doesn't report it again, and neither does a second incomplete statement on the same line (`n o`).
-    // Upstream reports "Incomplete statement" for each.
-    bool alreadyReported = parseErrors.size() > errorsBeforeExpr || incompleteStatementLine == expr->location.begin.line;
-
     // Luwu Do Expressions (rfcs/do-expressions.md): in a `do` expression, a value where a statement goes was usually meant
     // as the result. The rest of an operator chain (`do x + 1`) is part of the same mistake, not more statements.
-    bool inDoExpr = functionStack.back().doExprDepth > 0;
-    if (inDoExpr)
+    if (functionStack.back().doExprDepth > 0)
     {
         while (parseBinaryOp(lexer.current()))
         {
             nextLexeme();
             parseExpr();
         }
+
+        return reportIncompleteStatement(expr, errorsBeforeExpr, kGiveIncompleteStatement);
     }
 
+    return reportIncompleteStatement(expr, errorsBeforeExpr, kIncompleteStatement);
+}
+
+// Luwu: an expression that already reported an error (`obj.` with no name yet) is incomplete for that reason, so the
+// statement doesn't report it again, and neither does a second incomplete statement on the same line (`n o`). Upstream
+// reports "Incomplete statement" for each. `errorsBeforeStatement` is how many errors there were where it starts.
+AstStatError* Parser::reportIncompleteStatement(AstExpr* expr, size_t errorsBeforeStatement, const char* message)
+{
+    bool alreadyReported = parseErrors.size() > errorsBeforeStatement || incompleteStatementLine == expr->location.begin.line;
     if (alreadyReported)
         return allocator.alloc<AstStatError>(expr->location, copy({expr}), AstArray<AstStat*>{}, unsigned(parseErrors.size() - 1));
 
     incompleteStatementLine = expr->location.begin.line;
-    if (inDoExpr)
-    {
-        return reportStatError(
-            expr->location, copy({expr}), {}, "Incomplete statement: to give a value from a 'do' expression, write 'give <value>'"
-        );
-    }
-
-    return reportStatError(expr->location, copy({expr}), {}, "Incomplete statement: expected assignment or a function call");
+    return reportStatError(expr->location, copy({expr}), {}, "%s", message);
 }
 
 // Luwu: the token an "Expected 'end' (to close ...)" error names: the `then` or `do`, or the statement's keyword when
@@ -7081,6 +7085,14 @@ AstExpr* Parser::parseTableComprehension(const Location& start, const MatchLexem
     unsigned int localsBegin = saveLocals();
     unsigned int loopDepthBefore = functionStack.back().loopDepth;
 
+    // While a comprehension is being typed, an error in it is usually followed by the editor's `}`. The parts still
+    // missing before that `}` aren't reported on top: `{ for _, v i }` is one error, not three.
+    size_t errorsBeforeComprehension = parseErrors.size();
+    auto endsAfterError = [&]()
+    {
+        return parseErrors.size() > errorsBeforeComprehension && lexer.current().type == '}';
+    };
+
     while (lexer.current().type == Lexeme::ReservedFor)
     {
         Clause clause;
@@ -7162,6 +7174,7 @@ AstExpr* Parser::parseTableComprehension(const Location& start, const MatchLexem
     // `give` is contextual here: after an expression list or a `when` condition, a bare name can't continue it
     Location doLocation = lexer.current().location;
     bool giveFollows = lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "give";
+    bool headerEndsAfterError = endsAfterError();
 
     if (giveFollows)
     {
@@ -7173,7 +7186,7 @@ AstExpr* Parser::parseTableComprehension(const Location& start, const MatchLexem
         report(lexer.current().location, "Table comprehensions don't use 'do'; did you mean 'give'?");
         nextLexeme();
     }
-    else
+    else if (!headerEndsAfterError)
     {
         report(lexer.current().location, "Expected 'give' when parsing table comprehension, got %s", lexer.current().toString().c_str());
     }
@@ -7206,12 +7219,17 @@ AstExpr* Parser::parseTableComprehension(const Location& start, const MatchLexem
             cstItem.equalsPosition = lexer.current().location.begin;
             nextLexeme();
         }
+        else if (endsAfterError())
+        {
+            value = missingValueHere();
+        }
         else if (expectAndConsume('=', "table comprehension item"))
         {
             cstItem.equalsPosition = lexer.previousLocation().begin;
         }
 
-        value = parseExpr();
+        if (!value)
+            value = parseExpr();
     }
     else if (lexer.current().type == Lexeme::Name && lexer.lookahead().type == '=')
     {
@@ -7223,7 +7241,7 @@ AstExpr* Parser::parseTableComprehension(const Location& start, const MatchLexem
     }
     else
     {
-        value = parseExpr();
+        value = headerEndsAfterError ? missingValueHere() : parseExpr();
     }
 
     functionStack.back().loopDepth = loopDepthBefore;
@@ -7312,11 +7330,17 @@ AstExpr* Parser::parseIfElseExpr()
     bool thenContinue = thenKeyword != IfElseKeyword::Missing && orContinueFollows();
     bool thenLeaves = thenKeyword != IfElseKeyword::Missing && (orLeaveFollows() || thenContinue);
 
+    // Luwu: `if a then` with nothing after it yet, the next line starting a statement, gets one error on `then`, and the
+    // expression ends there. Upstream reports the next line's code as a missing value, then the missing `else` too.
+    bool thenArmMissing = thenKeyword != IfElseKeyword::Missing && !thenLeaves && valueEnds(lexer.current());
+
     AstExpr* trueExpr = nullptr;
     if (thenKeyword == IfElseKeyword::Missing)
         trueExpr = missingIfElseArm();
     else if (thenLeaves)
         trueExpr = parseOrLeave("then");
+    else if (thenArmMissing)
+        trueExpr = missingValueAfter("then");
     else
         trueExpr = parseExpr();
 
@@ -7330,7 +7354,7 @@ AstExpr* Parser::parseIfElseExpr()
     std::optional<Location> elseLocation = std::nullopt;
     bool isElseIf = false;
     bool elseContinue = false;
-    if (thenKeyword == IfElseKeyword::Missing)
+    if (thenKeyword == IfElseKeyword::Missing || thenArmMissing)
     {
         falseExpr = missingIfElseArm();
     }
@@ -7358,6 +7382,8 @@ AstExpr* Parser::parseIfElseExpr()
             falseExpr = missingIfElseArm();
         else if (elseLeaves)
             falseExpr = parseOrLeave("else");
+        else if (valueEnds(lexer.current()))
+            falseExpr = missingValueAfter("else");
         else
             falseExpr = parseExpr();
     }
@@ -7425,6 +7451,21 @@ void Parser::noteStrayEnd(const char* construct, bool reported)
 AstExpr* Parser::missingIfElseArm()
 {
     Position at = lexer.current().location.begin;
+    return allocator.alloc<AstExprError>(Location(at, at), copy<AstExpr*>({}), unsigned(parseErrors.size() - 1));
+}
+
+// Luwu: the arm of an if-else expression whose `then` or `else` (just consumed) has no value after it: the error goes
+// on the keyword, so the next line's code isn't painted as the problem
+AstExpr* Parser::missingValueAfter(const char* keyword)
+{
+    report(lexer.previousLocation(), "Expected a value after '%s'", keyword);
+    return missingValueHere();
+}
+
+// Luwu: a value the user hasn't written yet, for an error already reported. It sits where the code so far stops.
+AstExprError* Parser::missingValueHere()
+{
+    Position at = lexer.previousLocation().end;
     return allocator.alloc<AstExprError>(Location(at, at), copy<AstExpr*>({}), unsigned(parseErrors.size() - 1));
 }
 
@@ -7682,7 +7723,7 @@ AstExpr* Parser::parseOrLeave(const char* introducer)
 // `x or return v`, `ok and valid or break`, `str.startswith(s, "x") or continue`, or `x or do ... return`. The operand
 // before the last `or` always runs, and the statement only completes when it is truthy. `expr` is the statement's first
 // operand, already parsed.
-AstStat* Parser::parseOrLeaveStatement(AstExpr* first, const Location& start)
+AstStat* Parser::parseOrLeaveStatement(AstExpr* first, const Location& start, size_t errorsBeforeStatement)
 {
     AstExpr* expr = parseBinaryTail(first, start, 0);
 
@@ -7712,20 +7753,12 @@ AstStat* Parser::parseOrLeaveStatement(AstExpr* first, const Location& start)
 
     // in a `do` expression, a value where a statement goes was usually meant as the result
     if (functionStack.back().doExprDepth > 0)
-        return reportStatError(
-            expr->location, copy({expr}), {}, "Incomplete statement: to give a value from a 'do' expression, write 'give <value>'"
-        );
+        return reportIncompleteStatement(expr, errorsBeforeStatement, kGiveIncompleteStatement);
 
     if (FFlag::LuwuDoExpr)
-        return reportStatError(
-            expr->location,
-            copy({expr}),
-            {},
-            "Incomplete statement: expected assignment, a function call, or an expression ending in 'or return', 'or break' or "
-            "'or continue'"
-        );
+        return reportIncompleteStatement(expr, errorsBeforeStatement, kOrLeaveIncompleteStatement);
 
-    return reportStatError(expr->location, copy({expr}), {}, "Incomplete statement: expected assignment or a function call");
+    return reportIncompleteStatement(expr, errorsBeforeStatement, kIncompleteStatement);
 }
 
 // Luwu Do Expressions (rfcs/do-expressions.md): give exp

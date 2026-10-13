@@ -1,5 +1,6 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Fixture.h"
+#include "Typewriter.h"
 
 #include "doctest.h"
 
@@ -260,6 +261,41 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "loop_when_chains_in_the_old_solver")
     )");
 
     LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+// Code after the typed text. It uses nothing the typed text declares, so it stays clean whatever is typed above it.
+const char* const kTypewriterAfter = R"(
+local unrelated = 1
+print(unrelated + 1)
+)";
+
+const char* const kTypewriterBefore = R"(local function maybe(): number?
+    return nil
+end
+local nums = {1, 2, 3}
+)";
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_if_local")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    checkTypewriting(*this, kTypewriterBefore, "if local n = maybe() then\n    print(n + 1)\nend", kTypewriterAfter);
+    checkTypewriting(
+        *this,
+        kTypewriterBefore,
+        "if local n = maybe() when n > 3 then\n    print(n)\nelseif const m = maybe() then\n    print(m)\nend",
+        kTypewriterAfter
+    );
+    checkTypewriting(*this, kTypewriterBefore, "if #nums > 1 when const n = maybe() then\n    print(n)\nend", kTypewriterAfter);
+    checkTypewriting(*this, kTypewriterBefore, "local s = if local n = maybe() then n else 0", kTypewriterAfter);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_loop_when_chains")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    checkTypewriting(*this, kTypewriterBefore, "for i = 1, 10 when i % 2 == 0 do\n    print(i)\nend", kTypewriterAfter);
+    checkTypewriting(*this, kTypewriterBefore, "for _, v in nums when v > 1 when local n = maybe() do\n    print(v + n)\nend", kTypewriterAfter);
+    checkTypewriting(*this, kTypewriterBefore, "while local n = maybe() when n > 1 do\n    print(n)\nend", kTypewriterAfter);
 }
 
 TEST_SUITE_END();
