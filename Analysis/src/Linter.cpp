@@ -589,6 +589,32 @@ static bool containsParseError(AstNode* node)
             found = true;
             return false;
         }
+
+        // Types and type packs aren't visited by default
+        bool visit(AstType*) override
+        {
+            return !found;
+        }
+
+        bool visit(AstTypePack*) override
+        {
+            return !found;
+        }
+
+        // `type T =` or `x ::` with no type yet
+        bool visit(AstTypeError*) override
+        {
+            found = true;
+            return false;
+        }
+
+        // `t.` with no name yet: the parser gave the index the error name instead of an error node
+        bool visit(AstExprIndexName* node) override
+        {
+            if (node->index == kParseNameError)
+                found = true;
+            return !found;
+        }
     };
 
     Finder finder;
