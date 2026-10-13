@@ -1872,6 +1872,11 @@ static AutocompleteContext autocompleteExpression(
         result["not"] = {AutocompleteEntryKind::Keyword};
         result["function"] = {AutocompleteEntryKind::Keyword, std::nullopt, false, false, correctForFunction};
 
+        // Luwu Do Expressions (rfcs/do-expressions.md): `do` starts a value too. Without it, typing `do` here fuzzy-matches
+        // names like `DirectoryPath` and the editor completes to them.
+        if (FFlag::LuwuDoExpr)
+            result["do"] = {AutocompleteEntryKind::Keyword, std::nullopt, false, false};
+
         if (auto ty = findExpectedTypeAt(module, node, position))
             autocompleteStringSingleton(*ty, true, node, position, result);
     }

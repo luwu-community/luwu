@@ -3235,6 +3235,73 @@ if local grouped = (find(1) and t.flag == 1) then print(grouped) end
 }
 
 // Luwu Do Expressions (rfcs/do-expressions.md)
+// Luwu Do Expressions (rfcs/do-expressions.md): an unfinished `do` typed above code that ends in `return` takes that code
+// as its block; the first line indented like the code after the `do` is pointed out, with the `do` and the `return`
+TEST_CASE_FIXTURE(Fixture, "MisleadingIndentation")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    LintResult result = lint(R"(
+local function f(s: string)
+    const prefix = do
+
+    const splits = string.split(s, "/")
+    print(splits)
+    return {
+        prefix = 1,
+    }
+end
+local function g(s: string)
+    const a = do
+        print(s)
+    give 1
+    return a
+end
+return f, g
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_MisleadingIndentation);
+    REQUIRE_EQ(found.size(), 3);
+    CHECK_EQ(found[0].text, "The 'return' on line 7 ends the 'do' expression on line 3");
+    CHECK_EQ(found[0].location, Location(Position(2, 19), Position(2, 21)));
+    CHECK_EQ(found[1].text, "This line is in the 'do' expression on line 3, but is indented like the code after it");
+    CHECK_EQ(found[1].location, Location(Position(4, 4), Position(4, 39)));
+    CHECK_EQ(found[2].text, found[0].text);
+    CHECK_EQ(found[2].location, Location(Position(6, 4), Position(6, 10)));
+}
+
+// Luwu Do Expressions (rfcs/do-expressions.md): a statement that always runs a returning `do` ends the code path, and a
+// condition that can only be true after one returns guards a branch that never runs
+TEST_CASE_FIXTURE(Fixture, "UnreachableCodeAfterReturningDoExpressions")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    LintResult result = lint(R"(
+local function f(s: string)
+    if s == "a" and (do return "a") then
+        print("never")
+    end
+    print(do return "b")
+    print("never either")
+end
+local function g(s: string)
+    if s == "a" or (do return "a") then
+        print("runs when s is 'a'")
+    end
+    print(s and do return "b")
+    print("runs when s is falsy")
+end
+return f, g
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_UnreachableCode);
+    REQUIRE_EQ(found.size(), 2);
+    CHECK_EQ(found[0].text, "Unreachable code (the condition always returns before it can be true)");
+    CHECK_EQ(found[0].location.begin.line, 3);
+    CHECK_EQ(found[1].text, "Unreachable code (previous statement always returns)");
+    CHECK_EQ(found[1].location.begin.line, 6);
+}
+
 TEST_CASE_FIXTURE(Fixture, "ReturnOnNextLine")
 {
     ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
@@ -3386,10 +3453,13 @@ local w = do
 print(v, w)
 )");
 
+    // `w`'s `do` always raises, so the `print` after it never runs
     std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_UnreachableCode);
-    REQUIRE_EQ(found.size(), 1);
+    REQUIRE_EQ(found.size(), 2);
     CHECK_EQ(found[0].location.begin.line, 4);
     CHECK_EQ(found[0].text, "Unreachable code (previous statement always gives)");
+    CHECK_EQ(found[1].location.begin.line, 8);
+    CHECK_EQ(found[1].text, "Unreachable code (previous statement always errors)");
 }
 
 TEST_CASE_FIXTURE(Fixture, "DuplicateConditionsExpr")

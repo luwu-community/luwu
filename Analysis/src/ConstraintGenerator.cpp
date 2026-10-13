@@ -5816,6 +5816,11 @@ Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprIfElse* ifEls
     applyRefinements(elseScope, ifElse->falseExpr->location, refinementArena.negation(refinement));
     TypeId elseType = check(elseScope, ifElse->falseExpr, expectedType).ty;
 
+    // Luwu Do Expressions (rfcs/do-expressions.md): a `do` in a branch can assign, and the code after the expression reads
+    // the join of both branches (see DataFlowGraphBuilder::visitExpr(AstExprIfElse*))
+    scope->inheritAssignments(thenScope);
+    scope->inheritAssignments(elseScope);
+
     return Inference{makeUnion(scope, ifElse->location, thenType, elseType)};
 }
 

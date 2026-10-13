@@ -135,11 +135,14 @@ private:
 
     // Luwu If Local (rfcs/if-local.md)
     AstExpr* parseIfCondition(AstArray<AstIfClause>& clauses, const char* head = "if");
+    AstExpr* parseIfConditionClauses(AstArray<AstIfClause>& clauses, const char* head, const Location& start);
     AstArray<AstIfClause> parseLoopWhenChain(Location& whenLocation, bool inComprehension = false);
     AstStatBlock* wrapInWhenGuard(const AstArray<AstIfClause>& when, const Location& whenLocation, AstStatBlock* body, AstStatIf*& guard);
     void parseIfBindingClause(std::vector<AstIfClause>& chain, const std::optional<Location>& whenLocation);
     bool ifBindingFollows();
     bool whenFollows();
+    bool andStartsBinding();
+    void reportAndBeforeBinding();
 
     // while exp do block end
     AstStat* parseWhile();
@@ -711,6 +714,12 @@ private:
     // Luwu Do Expressions (rfcs/do-expressions.md): the statement being parsed is directly in a `do` expression's block, not
     // in a block nested in it. A `give` there ends the expression, so a `,` after its value belongs to the list around it.
     bool doExprTopLevel = false;
+
+
+    // Luwu If Local (rfcs/if-local.md): an `if`/`elseif`/`while` condition is being parsed, where `and local x` and
+    // `and const x` were meant as `when`. `andBeforeBinding` is that `and`, already reported and consumed.
+    bool inIfCondition = false;
+    std::optional<Location> andBeforeBinding;
 
     // Luwu: `end`s found right after an if-else or `do` expression (see noteStrayEnd)
     struct StrayEnd

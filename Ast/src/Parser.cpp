@@ -1030,13 +1030,29 @@ AstStat* Parser::parseIf()
 AstExpr* Parser::parseIfCondition(AstArray<AstIfClause>& clauses, const char* head)
 {
     Location start = lexer.current().location;
+
+    bool outerInIfCondition = inIfCondition;
+    std::optional<Location> outerAndBeforeBinding = andBeforeBinding;
+    inIfCondition = true;
+    andBeforeBinding.reset();
+
+    AstExpr* result = parseIfConditionClauses(clauses, head, start);
+
+    inIfCondition = outerInIfCondition;
+    andBeforeBinding = outerAndBeforeBinding;
+    return result;
+}
+
+// Luwu If Local (rfcs/if-local.md): parseIfCondition's clauses, with `start` the condition's first token
+AstExpr* Parser::parseIfConditionClauses(AstArray<AstIfClause>& clauses, const char* head, const Location& start)
+{
     AstExpr* plainFirst = nullptr;
 
     if (!ifBindingFollows())
     {
         plainFirst = parseExpr();
 
-        if (!whenFollows())
+        if (!whenFollows() && !andBeforeBinding)
             return plainFirst;
     }
 
@@ -1062,6 +1078,14 @@ AstExpr* Parser::parseIfCondition(AstArray<AstIfClause>& clauses, const char* he
             clause.expr = parseExpr();
             clause.whenLocation = whenLocation;
             chain.push_back(clause);
+        }
+
+        // An `and` meant as `when` was reported and consumed by the expression before it
+        if (andBeforeBinding)
+        {
+            whenLocation = andBeforeBinding;
+            andBeforeBinding.reset();
+            continue;
         }
 
         if (!whenFollows())
@@ -1177,6 +1201,37 @@ bool Parser::ifBindingFollows()
 bool Parser::whenFollows()
 {
     return lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "when";
+}
+
+// Luwu If Local (rfcs/if-local.md): reports the `and` before a binding (see andStartsBinding) and consumes it
+void Parser::reportAndBeforeBinding()
+{
+    Location andLocation = lexer.current().location;
+    nextLexeme(); // and
+
+    // the name after `local` or `const`
+    Lexeme name = lexer.lookahead();
+    if (name.type == Lexeme::Name)
+        report(andLocation, "Use 'when' instead of 'and' to bind '%s' in a condition", name.name);
+    else
+        report(andLocation, "Use 'when' instead of 'and' to bind a name in a condition");
+
+    andBeforeBinding = andLocation;
+}
+
+// Luwu If Local (rfcs/if-local.md): the current token is an `and` followed by a `local`/`const` binding, in a condition.
+// No statement can start inside a condition, so the binding was meant as a `when` clause.
+bool Parser::andStartsBinding()
+{
+    if (!inIfCondition || lexer.current().type != Lexeme::ReservedAnd)
+        return false;
+
+    Lexeme next = lexer.lookahead();
+    if (next.type == Lexeme::ReservedLocal)
+        return true;
+
+    bool isConst = next.type == Lexeme::Name && AstName(next.name) == "const";
+    return isConst && lexer.lookaheadSecond().type == Lexeme::Name;
 }
 
 // Luwu If Local (rfcs/if-local.md): the `when` chain after a `for` clause's header, in a loop statement or a table
@@ -6201,6 +6256,14 @@ AstExpr* Parser::parseBinaryTail(AstExpr* expr, const Location& start, unsigned 
 
     while (op && binaryPriority[*op].left > limit)
     {
+        // Luwu If Local (rfcs/if-local.md): `if a and const x = f() then` means `when`; the condition parser takes the
+        // binding as a `when` clause
+        if (andStartsBinding())
+        {
+            reportAndBeforeBinding();
+            break;
+        }
+
         Position opPosition = lexer.current().location.begin;
         nextLexeme();
 

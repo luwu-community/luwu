@@ -173,6 +173,58 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "do_expression_in_the_old_solver")
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
+// An assignment in a `do` in one branch of an if-else expression is joined with the other branch for the code after
+// it, as after an `if` statement
+TEST_CASE_FIXTURE(BuiltinsFixture, "assigning_in_an_if_else_expression_branch_joins_after_it")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        local function f(s: string, c: boolean)
+            local ok = (if c then do s = "x" give true else true) and s
+            if (if typeof(s) ~= "string" then do s = tostring(s) give true else true) and s == "meow" then
+                print(s)
+            end
+            return ok
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+// A `do` that always returns, inside a statement that always runs it, ends the code path
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_statement_running_a_returning_do_ends_the_code_path")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        local function meow(s: string): string
+            if s == "a" then
+                return s
+            end
+            print(do return "meow")
+        end
+
+        local function purr(s: string): string
+            if s == "a" and (do return "a") then
+                print(s)
+            end
+            return "b"
+        end
+
+        local function bark(s: string?): string
+            print(s and do return "x")
+        end
+    )");
+
+    // only `bark`: its `do` doesn't run when `s` is nil
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 18);
+    CHECK_EQ(result.errors[1].location.begin.line, 17);
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "an_or_leave_statement_narrows_its_operand_for_the_rest_of_the_block")
 {
     ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};

@@ -42,6 +42,8 @@ struct OverloadErrorEntry
 bool doesCallError(const AstExprCall* call);
 bool hasBreak(AstStat* node);
 const AstStat* getFallthrough(const AstStat* node);
+const AstExprDo* findDoEndingStatement(const AstStat* node);
+const AstExprDo* findDoBlockingThenBranch(const AstStatIf* stat);
 
 struct UnifierOptions;
 struct Unifier;

@@ -27,6 +27,7 @@
 #include "Luau/TypeFwd.h"
 #include "Luau/TypePack.h"
 #include "Luau/TypePath.h"
+#include "Luau/TypeInfer.h"
 #include "Luau/TypeUtils.h"
 #include "Luau/TypeOrPack.h"
 #include "Luau/VisitType.h"
@@ -529,9 +530,14 @@ const AstStat* TypeChecker2::getFallthrough(const AstStat* node)
         return getFallthrough(stat->body.data[stat->body.size - 1]);
     }
 
+    // Luwu Do Expressions (rfcs/do-expressions.md): `if (do return x) then` returns before the branch
+    if (findDoEndingStatement(node))
+        return nullptr;
+
     if (const AstStatIf* stat = node->as<AstStatIf>())
     {
-        if (const AstStat* thenf = getFallthrough(stat->thenbody))
+        // Luwu Do Expressions (rfcs/do-expressions.md): a then-branch that never runs doesn't fall through
+        if (const AstStat* thenf = findDoBlockingThenBranch(stat) ? nullptr : getFallthrough(stat->thenbody))
             return thenf;
 
         if (stat->elsebody)

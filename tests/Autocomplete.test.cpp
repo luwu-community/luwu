@@ -1007,6 +1007,18 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_give_inside_do_expressions")
     CHECK_EQ(autocomplete('1').entryMap.count("give"), 0);
 }
 
+// Luwu Do Expressions (rfcs/do-expressions.md): `do` where a value goes, so typing it doesn't complete to a name
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_do_where_a_value_goes")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    check(R"(
+        local DirectoryPath = 1
+        const prefix = d@1
+    )");
+    CHECK_EQ(autocomplete('1').entryMap.count("do"), 1);
+}
+
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_if_middle_keywords")
 {
     check(R"(

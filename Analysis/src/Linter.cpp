@@ -1455,6 +1455,8 @@ public:
 
 private:
     LintContext* context;
+    // Luwu: analyzing only for the status, without warnings (see leaveStatus)
+    bool silent = false;
 
     // Note: this enum is order-sensitive!
     // The order is in the "severity" of the termination and affects merging of status codes from different branches
@@ -1515,22 +1517,46 @@ private:
                     if (step == Error && si->is<AstStatExpr>() && leavesAfterError && i + 2 == stat->body.size)
                         return Error;
 
-                    emitWarning(
-                        *context,
-                        LintWarning::Code_UnreachableCode,
-                        next->location,
-                        "Unreachable code (previous statement always %ss)",
-                        getReason(step)
-                    );
+                    if (!silent)
+                        emitWarning(
+                            *context,
+                            LintWarning::Code_UnreachableCode,
+                            next->location,
+                            "Unreachable code (previous statement always %ss)",
+                            getReason(step)
+                        );
                     return step;
                 }
             }
 
             return Unknown;
         }
+        else if (const AstExprDo* leaving = findDoEndingStatement(node))
+        {
+            // Luwu Do Expressions (rfcs/do-expressions.md): `print(do return "x")` returns before the call; the `do`'s block
+            // says how it leaves (a return or an error)
+            return leaveStatus(leaving);
+        }
         else if (AstStatIf* stat = node->as<AstStatIf>())
         {
-            Status ifs = analyze(stat->thenbody);
+            Status ifs = Unknown;
+
+            // Luwu Do Expressions (rfcs/do-expressions.md): `if a and (do return x) then` can't enter the branch
+            if (const AstExprDo* blocking = findDoBlockingThenBranch(stat))
+            {
+                ifs = leaveStatus(blocking);
+                if (!silent && stat->thenbody->body.size != 0)
+                    emitWarning(
+                        *context,
+                        LintWarning::Code_UnreachableCode,
+                        stat->thenbody->body.data[0]->location,
+                        "Unreachable code (the condition always %ss before it can be true)",
+                        getReason(ifs)
+                    );
+            }
+            else
+                ifs = analyze(stat->thenbody);
+
             Status elses = stat->elsebody ? analyze(stat->elsebody) : Unknown;
 
             return std::min(ifs, elses);
@@ -1587,6 +1613,18 @@ private:
         {
             return Unknown;
         }
+    }
+
+    // Luwu Do Expressions (rfcs/do-expressions.md): how a `do` expression that never ends normally leaves: a return or an
+    // error. Its block is checked for unreachable code when it is visited, so this only reads the status.
+    Status leaveStatus(const AstExprDo* node)
+    {
+        bool outerSilent = silent;
+        silent = true;
+        Status status = analyze(node->body);
+        silent = outerSilent;
+
+        return std::max(status, Return);
     }
 
     bool visit(AstExprFunction* node) override
@@ -5040,7 +5078,7 @@ private:
     }
 };
 
-// Luwu Do Expressions (rfcs/do-expressions.md): ReturnOnNextLine and OrContinue
+// Luwu Do Expressions (rfcs/do-expressions.md): ReturnOnNextLine, OrContinue and MisleadingIndentation
 class LintDoExpressions : AstVisitor
 {
 public:
@@ -5048,6 +5086,7 @@ public:
     {
         bool returnOnNextLine = false;
         bool orContinue = false;
+        bool misleadingIndentation = false;
     };
 
     LUAU_NOINLINE static void process(LintContext& context, Enabled enabled)
@@ -5068,6 +5107,20 @@ private:
     std::vector<bool> doExprs;
     // Loops around the current position in this function: `or do continue` is only a fix inside one
     int loopDepth = 0;
+    // Where the statements around the current position start, innermost last
+    std::vector<Position> statementStarts;
+
+    bool visit(AstStatBlock* node) override
+    {
+        for (AstStat* stat : node->body)
+        {
+            statementStarts.push_back(stat->location.begin);
+            stat->visit(this);
+            statementStarts.pop_back();
+        }
+
+        return false;
+    }
 
     bool visitLoopBody(AstStatBlock* body)
     {
@@ -5108,6 +5161,9 @@ private:
 
     bool visit(AstExprDo* node) override
     {
+        if (enabled.misleadingIndentation && !node->shorthand && !statementStarts.empty())
+            checkIndentation(node, statementStarts.back().column);
+
         doExprs.push_back(node->shorthand);
         node->body->visit(this);
         doExprs.pop_back();
@@ -5128,6 +5184,78 @@ private:
         loopDepth = outerLoopDepth;
 
         return false;
+    }
+
+    static const char* terminatorKeyword(AstStat* stat)
+    {
+        if (stat->is<AstStatReturn>())
+            return "return";
+        if (stat->is<AstStatGive>())
+            return "give";
+        if (stat->is<AstStatBreak>())
+            return "break";
+        if (stat->is<AstStatContinue>())
+            return "continue";
+        return nullptr;
+    }
+
+    // A `do` expression ends at its first `give`, `return`, `break` or `continue`, wherever that is. Typed above existing
+    // code, an unfinished `do` takes that code as its block, up to the next `return`. A line in the block indented no
+    // deeper than the statement holding the `do` reads as code after it, so it is pointed out with the `do` and the
+    // keyword that ends it. Only the last statement may be outdented without a warning: some people indent the final
+    // `give` or `return` like the code around the expression.
+    void checkIndentation(AstExprDo* node, unsigned int statementColumn)
+    {
+        AstArray<AstStat*> body = node->body->body;
+        if (body.size == 0)
+            return;
+
+        AstStat* last = body.data[body.size - 1];
+        const char* keyword = terminatorKeyword(last);
+        if (!keyword)
+            return;
+
+        unsigned int doLine = node->location.begin.line;
+        AstStat* outdented = nullptr;
+
+        for (size_t i = 0; i + 1 < body.size && !outdented; i++)
+        {
+            Position begin = body.data[i]->location.begin;
+            if (begin.line > doLine && begin.column <= statementColumn)
+                outdented = body.data[i];
+        }
+
+        if (!outdented)
+            return;
+
+        // Only the statement's first line, so the rest of the block isn't painted with it
+        Location line = outdented->location;
+        if (line.end.line != line.begin.line)
+            line.end = line.begin;
+
+        Position doBegin = node->location.begin;
+        Position lastBegin = last->location.begin;
+        Location doKeyword(doBegin, Position(doBegin.line, doBegin.column + 2));
+        Location endKeyword(lastBegin, Position(lastBegin.line, lastBegin.column + unsigned(strlen(keyword))));
+
+        emitWarning(
+            *context,
+            LintWarning::Code_MisleadingIndentation,
+            line,
+            "This line is in the 'do' expression on line %d, but is indented like the code after it",
+            doLine + 1
+        );
+
+        for (const Location& location : {doKeyword, endKeyword})
+            emitWarning(
+                *context,
+                LintWarning::Code_MisleadingIndentation,
+                location,
+                "The '%s' on line %d ends the 'do' expression on line %d",
+                keyword,
+                lastBegin.line + 1,
+                doLine + 1
+            );
     }
 
     // `return`'s values may start on the next line, as everywhere in Lua. In a `do` expression the `return` is often meant
@@ -8896,7 +9024,8 @@ std::vector<LintWarning> lint(
     LintDoExpressions::Enabled doExpressions;
     doExpressions.returnOnNextLine = context.warningEnabled(LintWarning::Code_ReturnOnNextLine);
     doExpressions.orContinue = context.warningEnabled(LintWarning::Code_OrContinue);
-    if (FFlag::LuwuDoExpr && (doExpressions.returnOnNextLine || doExpressions.orContinue))
+    doExpressions.misleadingIndentation = context.warningEnabled(LintWarning::Code_MisleadingIndentation);
+    if (FFlag::LuwuDoExpr && (doExpressions.returnOnNextLine || doExpressions.orContinue || doExpressions.misleadingIndentation))
         LintDoExpressions::process(context, doExpressions);
 
     if (FFlag::LuwuNonePrimitive && context.warningEnabled(LintWarning::Code_NilNoneComparison))
