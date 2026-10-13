@@ -884,7 +884,11 @@ AstStatBlock* Parser::prependLoopFields(const std::vector<AstStat*>& fields, Ast
 
     std::vector<AstStat*> statements = fields;
     statements.insert(statements.end(), body->body.begin(), body->body.end());
-    return allocator.alloc<AstStatBlock>(body->location, copy(statements.data(), statements.size()), body->hasEnd);
+
+    // The block starts at the fields, in the loop's header: its scope holds them, and the editor finds them by position
+    // (hover, go to definition), so both have to reach back to where they're written
+    Location location(fields.front()->location.begin, body->location.end);
+    return allocator.alloc<AstStatBlock>(location, copy(statements.data(), statements.size()), body->hasEnd);
 }
 
 // Luwu Destructuring (rfcs/destructuring.md): `.{` or `name.{` where a loop variable goes. In Luwu code with
