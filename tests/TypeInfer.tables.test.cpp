@@ -9,6 +9,7 @@
 #include "Luau/Type.h"
 
 #include "Fixture.h"
+#include "Typewriter.h"
 
 #include "ScopedFlags.h"
 #include "doctest.h"
@@ -7474,6 +7475,42 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "destructuring_field_annotations_are_checked"
     CHECK_EQ(result.errors[0].location.begin.line, 3);
     CHECK_EQ("number", toString(requireType("x")));
     CHECK_EQ("number", toString(requireType("label")));
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): typing patterns, and the `.{...}` tables built the same way
+const char* const kDestructuringTypewriterBefore = R"(local point = { x = 1, y = "two", inner = { z = true } }
+local points = { point }
+local function make(t: { x: number }): number
+    return t.x
+end
+)";
+
+// Code after the typed text. It uses nothing the typed text declares, so it stays clean whatever is typed above it.
+const char* const kDestructuringTypewriterAfter = R"(
+local unrelated = 1
+print(unrelated + 1)
+)";
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_destructuring")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+    const char* before = kDestructuringTypewriterBefore;
+    const char* after = kDestructuringTypewriterAfter;
+
+    checkTypewriting(*this, before, "local .{x, y} = point", after);
+    checkTypewriting(*this, before, "const p.{y as why, inner.{z}} = point", after);
+    checkTypewriting(*this, before, "local .{x: number, y as label: string} = point", after);
+    checkTypewriting(*this, before, "for _, .{x, y} in points do\n    print(x, y)\nend", after);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_dot_table_constructors")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+    const char* before = "local x, y = 1, 2\nlocal function make(t: { x: number }): number\n    return t.x\nend\n";
+    const char* after = kDestructuringTypewriterAfter;
+
+    checkTypewriting(*this, before, "local t = .{x, y = y + 1}", after);
+    checkTypewriting(*this, before, "local n = make.{x}", after);
 }
 
 TEST_SUITE_END();

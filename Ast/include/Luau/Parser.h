@@ -212,6 +212,7 @@ private:
     bool destructurePatternFollows();
     bool destructuringAssignmentFollows();
     bool dotTableMissingBraceFollows();
+    bool destructuringAvailable();
     AstStat* parseDestructuring(const Location& start, const Location& keywordLocation, bool isConst, std::optional<Name> name = {});
     void parseDestructurePattern(DestructureTarget& target);
     struct DestructureField;

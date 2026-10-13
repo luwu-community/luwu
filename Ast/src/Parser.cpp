@@ -842,13 +842,16 @@ AstStatBlock* Parser::prependLoopFields(const std::vector<AstStat*>& fields, Ast
     return allocator.alloc<AstStatBlock>(body->location, copy(statements.data(), statements.size()), body->hasEnd);
 }
 
-// Luwu Destructuring (rfcs/destructuring.md): `.{` or `name.{` where a loop variable goes.
+// Luwu Destructuring (rfcs/destructuring.md): `.{` or `name.{` where a loop variable goes. In Luwu code with
+// destructuring on, also `.` or `name.` with no `{` yet, while the pattern is being typed: a loop variable can't be
+// followed by `.` otherwise.
 bool Parser::loopPatternFollows()
 {
-    if (destructurePatternFollows())
+    if (destructurePatternFollows() || dotTableMissingBraceFollows())
         return true;
 
-    return lexer.current().type == Lexeme::Name && lexer.lookahead().type == '.' && lexer.lookaheadSecond().type == '{';
+    bool namedPattern = lexer.current().type == Lexeme::Name && lexer.lookahead().type == '.';
+    return namedPattern && (lexer.lookaheadSecond().type == '{' || destructuringAvailable());
 }
 
 // Luwu Destructuring (rfcs/destructuring.md): a loop binding written as a pattern, `[name].{fields}[: Type]`. Appends
@@ -994,6 +997,7 @@ AstStat* Parser::parseFor()
     nextLexeme(); // for
 
     // Luwu Destructuring (rfcs/destructuring.md): `for _, p.{x, y} in ps`
+    size_t errorsBeforeBindings = parseErrors.size();
     std::vector<std::optional<DestructureTarget>> patterns;
     bool firstIsPattern = loopPatternFollows();
     Binding varname = firstIsPattern ? parseLoopPattern(patterns) : parseBinding();
@@ -1076,11 +1080,23 @@ AstStat* Parser::parseFor()
         }
 
         Location inLocation = lexer.current().location;
-        bool hasIn = expectAndConsume(Lexeme::ReservedIn, "for loop");
-
         TempVector<AstExpr*> values(scratchExpr);
         TempVector<Position> valuesCommaPositions(scratchPosition);
-        parseExprList(values, options.storeCstData ? &valuesCommaPositions : nullptr);
+        bool hasIn = false;
+
+        // Luwu Destructuring (rfcs/destructuring.md): a pattern still being typed (`for _, .{`) already reported what's
+        // wrong with it, so a missing `in` and values aren't reported on top
+        bool patternInProgress = parseErrors.size() > errorsBeforeBindings && lexer.current().type != Lexeme::ReservedIn;
+        if (patternInProgress)
+        {
+            Position at = lexer.previousLocation().end;
+            values.push_back(allocator.alloc<AstExprError>(Location(at, at), copy<AstExpr*>({}), unsigned(parseErrors.size() - 1)));
+        }
+        else
+        {
+            hasIn = expectAndConsume(Lexeme::ReservedIn, "for loop");
+            parseExprList(values, options.storeCstData ? &valuesCommaPositions : nullptr);
+        }
 
         Lexeme matchDo = lexer.current();
         bool hasDo = expectAndConsume(Lexeme::ReservedDo, "for loop");
@@ -1786,14 +1802,15 @@ AstStat* Parser::parseLocal(
 }
 
 // Luwu Destructuring (rfcs/destructuring.md): `.{` or `name.{` right after `local`/`const`. Neither `name.` nor
-// `{` can start anything else there, so both are parsed as a (malformed) destructuring for a useful error.
+// `{` can start anything else there, so both are parsed as a (malformed) destructuring for a useful error. So is a `.`
+// with no `{` yet, while the pattern is being typed.
 bool Parser::destructuringFollows()
 {
     if (lexer.current().type == '{')
         return true;
 
     if (lexer.current().type == '.')
-        return destructurePatternFollows();
+        return destructurePatternFollows() || dotTableMissingBraceFollows();
 
     return lexer.current().type == Lexeme::Name && lexer.lookahead().type == '.';
 }
@@ -1809,8 +1826,14 @@ bool Parser::destructurePatternFollows()
 // code with destructuring on; anywhere else it's the stray `.` it always was.
 bool Parser::dotTableMissingBraceFollows()
 {
-    bool dotTablesAvailable = FFlag::LuwuDestructuring && options.language == Language::Luwu;
-    return dotTablesAvailable && lexer.current().type == '.' && lexer.lookahead().type != '{';
+    return destructuringAvailable() && lexer.current().type == '.' && lexer.lookahead().type != '{';
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): whether this code can use destructuring, so that a `.` with no `{` after
+// it can be read as a pattern or table still being typed
+bool Parser::destructuringAvailable()
+{
+    return FFlag::LuwuDestructuring && options.language == Language::Luwu;
 }
 
 // Luwu Destructuring (rfcs/destructuring.md): whether the `.{...}` at the current token is followed by `=`, `:` or `,`,
@@ -1849,6 +1872,7 @@ bool Parser::destructuringAssignmentFollows()
 // The first statement is returned; the rest are left in pendingStatements for parseBlockNoScope.
 AstStat* Parser::parseDestructuring(const Location& start, const Location& keywordLocation, bool isConst, std::optional<Name> name)
 {
+    size_t errorsBeforePattern = parseErrors.size();
     DestructureTarget target;
     target.name = name;
     if (!target.name && lexer.current().type == Lexeme::Name)
@@ -1869,10 +1893,17 @@ AstStat* Parser::parseDestructuring(const Location& start, const Location& keywo
     Location equalsLocation = lexer.current().location;
     AstExpr* value = nullptr;
 
+    // A pattern still being typed already reported what's wrong with it; the missing value isn't reported on top
+    bool patternReportedError = parseErrors.size() > errorsBeforePattern;
+
     if (lexer.current().type == '=')
     {
         nextLexeme();
         value = parseExpr();
+    }
+    else if (patternReportedError)
+    {
+        value = allocator.alloc<AstExprError>(Location(lexer.previousLocation().end, 0), copy<AstExpr*>({}), unsigned(parseErrors.size() - 1));
     }
     else
     {
@@ -1927,7 +1958,15 @@ void Parser::parseDestructurePattern(DestructureTarget& target)
         nextLexeme();
 
     Lexeme open = lexer.current();
-    expectAndConsume('{', "destructuring");
+
+    // `name.` with no `{` yet: the fields aren't parsed from the code after it, which is usually the next line
+    if (!consumeExpected(Lexeme::Type('{'), "destructuring"))
+    {
+        target.patternLocation = Location(begin, lexer.previousLocation());
+        target.closed = false;
+        recursionCounter = oldRecursionCount;
+        return;
+    }
 
     if (lexer.current().type == '}')
         report(Location(begin, lexer.current().location), "A destructuring pattern needs at least one field");
