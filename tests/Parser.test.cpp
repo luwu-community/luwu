@@ -5668,7 +5668,8 @@ TEST_CASE_FIXTURE(Fixture, "recovery_error_limit_2")
 
     try
     {
-        parse("escape escape escape");
+        // Luwu: one line reports one incomplete statement, so each is on its own line. Upstream has all three on one.
+        parse("escape\nescape\nescape");
         FAIL("Expected ParseErrors to be thrown");
     }
     catch (const Luau::ParseErrors& e)
@@ -5677,6 +5678,23 @@ TEST_CASE_FIXTURE(Fixture, "recovery_error_limit_2")
         CHECK_EQ("3 parse errors", std::string(e.what()));
         CHECK_EQ("Reached error limit (2)", e.getErrors().back().getMessage());
     }
+}
+
+// Luwu: a word still being typed (`n o` on the way to `n or`) is several statements, and one error
+TEST_CASE_FIXTURE(Fixture, "one_incomplete_statement_error_per_line")
+{
+    ParseResult result = tryParse("local n = 1\nn o\nn\n");
+    REQUIRE_EQ(2, result.errors.size());
+    CHECK_EQ(Location({1, 0}, {1, 1}), result.errors[0].getLocation());
+    CHECK_EQ(Location({2, 0}, {2, 1}), result.errors[1].getLocation());
+}
+
+// Luwu: `t.` with no name yet reports only the missing name, not an incomplete statement too
+TEST_CASE_FIXTURE(Fixture, "an_index_with_no_name_is_one_error")
+{
+    ParseResult result = tryParse("local t = {}\nt.\n");
+    REQUIRE_EQ(1, result.errors.size());
+    CHECK_EQ("Expected identifier, got <eof>", result.errors[0].getMessage());
 }
 
 class CountAstNodes : public AstVisitor
