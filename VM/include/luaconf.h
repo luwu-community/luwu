@@ -105,13 +105,31 @@
 
 // number of valid Lua userdata tags
 #ifndef LUA_UTAG_LIMIT
-#define LUA_UTAG_LIMIT 128
+#define LUA_UTAG_LIMIT 144
 #endif
 
 // number of valid Lua lightuserdata tags
 #ifndef LUA_LUTAG_LIMIT
-#define LUA_LUTAG_LIMIT 128
+#define LUA_LUTAG_LIMIT 144
 #endif
+
+// number of reserved Lua userdata tags for Luwu internal libraries
+#ifndef LUA_UTAG_RESERVED_COUNT
+#define LUA_UTAG_RESERVED_COUNT 16
+#endif
+
+#define LUA_UTAG_RESERVED_START (LUA_UTAG_LIMIT - LUA_UTAG_RESERVED_COUNT)
+#define LUA_UTAG_RESERVED_END (LUA_UTAG_LIMIT - 1)
+#define LUA_INTERNAL_UTAG(idx) (LUA_UTAG_RESERVED_START + (idx))
+
+// number of reserved Lua lightuserdata tags for Luwu internal libraries
+#ifndef LUA_LUTAG_RESERVED_COUNT
+#define LUA_LUTAG_RESERVED_COUNT 16
+#endif
+
+#define LUA_LUTAG_RESERVED_START (LUA_LUTAG_LIMIT - LUA_LUTAG_RESERVED_COUNT)
+#define LUA_LUTAG_RESERVED_END (LUA_LUTAG_LIMIT - 1)
+#define LUA_INTERNAL_LUTAG(idx) (LUA_LUTAG_RESERVED_START + (idx))
 
 // upper bound for number of size classes used by page allocator
 #ifndef LUA_SIZECLASSES
