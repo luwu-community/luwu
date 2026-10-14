@@ -1226,7 +1226,8 @@ private:
 
     void reportUnusedLocal(AstLocal* local, const Local& info)
     {
-        if (local->name.value[0] == '_')
+        // Luwu: a name in parentheses is one the parser made, like an unnamed `match` subject's, which code can't use
+        if (local->name.value[0] == '_' || local->name.value[0] == '(')
             return;
 
         // Luwu: an exported local is used by the modules that require it. Upstream reports it as unused.
