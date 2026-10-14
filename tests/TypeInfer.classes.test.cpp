@@ -3567,6 +3567,27 @@ TEST_CASE_FIXTURE(ClassesFixture, "class_implements_refines")
     CHECK_EQ("Dog", toString(requireTypeAtPosition({24, 27})));
 }
 
+// Luwu Traits (rfcs/classes/traits.md): with no specific trait known, a value that passes `class.implements` is still
+// what it was (an object), not an error type that silences everything after
+TEST_CASE_FIXTURE(ClassesFixture, "class_implements_with_any_trait_keeps_the_value")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait Expect
+            private function expect_some(self, expected: trait)
+                if class.implements(self, expected) then
+                    local probe: number = self
+                end
+            end
+        end
+    )");
+
+    // `self` is still `Expect` in the branch, so the probe is an error instead of silently passing
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 4);
+}
+
 TEST_CASE_FIXTURE(ClassesFixture, "trait_functions_through_the_trait")
 {
     ScopedFastFlag traits{FFlag::LuwuTraits, true};
