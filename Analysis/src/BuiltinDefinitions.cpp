@@ -2124,6 +2124,41 @@ bool MagicClassInstanceCheck::infer(const MagicFunctionCallContext&)
     return false;
 }
 
+// Luwu Traits (rfcs/classes/traits.md): a class or trait value with no specific class or trait known: the top `class` or
+// `trait` (a parameter typed `class | trait`), or a union or intersection of such values
+static bool isAnyClassOrTraitValue(NotNull<BuiltinTypes> builtinTypes, TypeId ty, int depth = 0)
+{
+    // unions and intersections nest, and types can be cyclic
+    constexpr int kMaxDepth = 16;
+    if (depth > kMaxDepth)
+        return false;
+
+    ty = follow(ty);
+    if (ty == builtinTypes->classType || ty == builtinTypes->traitType)
+        return true;
+
+    if (const UnionType* u = get<UnionType>(ty))
+    {
+        for (TypeId option : u->options)
+        {
+            if (!isAnyClassOrTraitValue(builtinTypes, option, depth + 1) && !objectTypeOfClassValue(builtinTypes, option))
+                return false;
+        }
+        return true;
+    }
+
+    if (const IntersectionType* i = get<IntersectionType>(ty))
+    {
+        for (TypeId part : i->parts)
+        {
+            if (isAnyClassOrTraitValue(builtinTypes, part, depth + 1))
+                return true;
+        }
+    }
+
+    return false;
+}
+
 void MagicClassInstanceCheck::refine(const MagicRefinementContext& context)
 {
     // The value checked is the first argument. A method call (`lib:isinstance(c)`) puts `lib` there, which is not what
@@ -2140,6 +2175,11 @@ void MagicClassInstanceCheck::refine(const MagicRefinementContext& context)
     // the error type, as `objectof` does.
     NotNull<BuiltinTypes> builtinTypes = context.solver->builtinTypes;
     TypeId passed = objectTypeOfClassValue(builtinTypes, argTypes[1]).value_or(builtinTypes->errorType);
+
+    // Luwu Traits (rfcs/classes/traits.md): with no specific class or trait known (`expected: class | trait`), a value that
+    // passes is only known to be some object
+    if (passed == builtinTypes->errorType && isAnyClassOrTraitValue(builtinTypes, argTypes[1]))
+        passed = builtinTypes->objectType;
 
     TypeId discriminant = follow(*context.discriminantTypes[0]);
     LUAU_ASSERT(get<BlockedType>(discriminant));
