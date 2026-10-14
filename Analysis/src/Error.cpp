@@ -1301,6 +1301,9 @@ struct ErrorConverter
         case UnreachableCodeUse::Reason::DeclaredNever:
             reason = "'" + e.name + "' is declared as 'never', so this line never runs";
             break;
+        case UnreachableCodeUse::Reason::DeclaredUninhabited:
+            reason = "'" + e.name + "' is declared with a type no value has, so this line never runs";
+            break;
         case UnreachableCodeUse::Reason::CastToNever:
             reason = "'" + e.name + "' is cast to 'never', a type no value has, so this line never runs";
             break;
