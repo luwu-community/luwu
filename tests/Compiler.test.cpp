@@ -37,6 +37,7 @@ LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 LUAU_FASTFLAG(LuwuNoFenv)
+LUAU_FASTFLAG(DebugLuwuProperTailCalls)
 
 using namespace Luau;
 
@@ -14203,3 +14204,143 @@ R1: class [argument]
 }
 
 // Compiler B (classes review) end
+
+TEST_CASE("ProperTailCallsBytecode")
+{
+    // Both flags must be true to emit LOP_TAILCALL
+    {
+        ScopedFastFlag sff1{FFlag::LuwuNoFenv, false};
+        ScopedFastFlag sff2{FFlag::DebugLuwuProperTailCalls, true};
+
+        CHECK_EQ(
+            "\n" + compileFunction0("return f(x)"),
+            R"(
+GETIMPORT R0 1 [f]
+GETIMPORT R1 3 [x]
+CALL R0 1 -1
+RETURN R0 -1
+)"
+        );
+    }
+
+    {
+        ScopedFastFlag sff1{FFlag::LuwuNoFenv, true};
+        ScopedFastFlag sff2{FFlag::DebugLuwuProperTailCalls, false};
+
+        CHECK_EQ(
+            "\n" + compileFunction0("return f(x)"),
+            R"(
+GETIMPORT R0 1 [f]
+GETIMPORT R1 3 [x]
+CALL R0 1 -1
+RETURN R0 -1
+)"
+        );
+    }
+
+    {
+        ScopedFastFlag sff1{FFlag::LuwuNoFenv, true};
+        ScopedFastFlag sff2{FFlag::DebugLuwuProperTailCalls, true};
+
+        CHECK_EQ(
+            "\n" + compileFunction0("return f(x)"),
+            R"(
+GETIMPORT R0 1 [f]
+GETIMPORT R1 3 [x]
+TAILCALL R0 1
+)"
+        );
+
+        // Method call
+        CHECK_EQ(
+            "\n" + compileFunction0("return obj:method(x, y)"),
+            R"(
+GETIMPORT R0 1 [obj]
+GETIMPORT R2 3 [x]
+GETIMPORT R3 5 [y]
+NAMECALL R0 R0 K6 ['method']
+TAILCALL R0 3
+)"
+        );
+
+        // Fastcall
+        CHECK_EQ(
+            "\n" + compileFunction0("return math.abs(x)"),
+            R"(
+GETIMPORT R1 1 [x]
+FASTCALL1 2 R1 L0
+GETIMPORT R0 4 [math.abs]
+TAILCALL R0 1
+L0: RETURN R0 -1
+)"
+        );
+
+        // Upvalues must be closed before TAILCALL
+        const char* upvalueSource = R"(
+local x = 1
+local function f()
+    x = x + 1
+end
+return g(f)
+)";
+        CHECK_EQ(
+            "\n" + compileFunction(upvalueSource, 1),
+            R"(
+LOADN R0 1
+NEWCLOSURE R1 P0
+CAPTURE REF R0
+GETIMPORT R2 1 [g]
+MOVE R3 R1
+CLOSEUPVALS R0
+TAILCALL R2 1
+)"
+        );
+
+        // Disqualifications: parenthesized call
+        CHECK_EQ(
+            "\n" + compileFunction0("return (f(x))"),
+            R"(
+GETIMPORT R0 1 [f]
+GETIMPORT R1 3 [x]
+CALL R0 1 1
+RETURN R0 1
+)"
+        );
+
+        // Disqualifications: binary expression
+        CHECK_EQ(
+            "\n" + compileFunction0("return f(x) + 1"),
+            R"(
+GETIMPORT R1 2 [f]
+GETIMPORT R2 4 [x]
+CALL R1 1 1
+ADDK R0 R1 K0 [1]
+RETURN R0 1
+)"
+        );
+
+        // Disqualifications: multiple expressions in return list
+        CHECK_EQ(
+            "\n" + compileFunction0("return 1, f(x)"),
+            R"(
+LOADN R0 1
+GETIMPORT R1 1 [f]
+GETIMPORT R2 3 [x]
+CALL R1 1 -1
+RETURN R0 -1
+)"
+        );
+
+        // Multret argument inside tail call
+        CHECK_EQ(
+            "\n" + compileFunction0("return f(g())"),
+            R"(
+GETIMPORT R0 1 [f]
+GETIMPORT R1 3 [g]
+CALL R1 0 -1
+TAILCALL R0 -1
+)"
+        );
+    }
+}
+

@@ -120,10 +120,10 @@ struct BytecodeGraphParser
                 }
                 addSuccessor(currentBlock, blockByPC[target], isLoopJump(op) ? BcBlockEdgeKind::Loop : BcBlockEdgeKind::Branch);
             }
-            if (op == LOP_RETURN)
+            if (op == LOP_RETURN || op == LOP_TAILCALL)
                 addSuccessor(currentBlock, exitBlock, BcBlockEdgeKind::Fallthrough);
             i += getOpLength(op);
-            if ((needsBlock || (op == LOP_RETURN && i < codesize)) && blockByPC.count(i) == 0)
+            if ((needsBlock || ((op == LOP_RETURN || op == LOP_TAILCALL) && i < codesize)) && blockByPC.count(i) == 0)
                 makeBlock(i);
 
             if (blockByPC.count(i) != 0)
@@ -752,6 +752,28 @@ struct BytecodeGraphParser
                         func.addUse(node, inp);
                 if (nresults == 0)
                     func.addUse(node, BcOp{BcOpKind::VmReg, LUAU_INSN_A(insn)});
+                break;
+            }
+
+            case LOP_TAILCALL:
+            {
+                int nparams = LUAU_INSN_B(insn) - 1;
+                addImmInput(node, static_cast<int32_t>(nparams));
+
+                // Call target.
+                addVmRegInput(node, LUAU_INSN_A(insn));
+                // Fixed arguments.
+                for (int j = 1; j <= nparams; j++)
+                    addVmRegInput(node, LUAU_INSN_A(insn) + j);
+
+                if (nparams < 0)
+                {
+                    // all arguments prepared before call in the same block
+                    for (auto& inp : findProducersUpToTop(currentBlock, LUAU_INSN_A(insn) + 1))
+                    {
+                        func.addUse(node, inp);
+                    }
+                }
                 break;
             }
 

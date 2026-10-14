@@ -13,3 +13,8 @@ LUAU_FASTFLAGVARIABLE(LuwuClasses)
 // - proper tail calls.
 // - SROA on classes (future opt.)
 LUAU_FASTFLAGVARIABLE(LuwuNoFenv)
+
+// proper tail calls: enables proper tail calls/tail call optimization
+//
+// Requires LuwuNoFenv.
+LUAU_FASTFLAGVARIABLE(DebugLuwuProperTailCalls)

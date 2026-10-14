@@ -738,7 +738,7 @@ void buildBytecodeBlocks(IrFunction& function, const std::vector<uint8_t>& jumpT
                 bcBlocks.push_back(BytecodeBlock{nexti, -1});
         }
         // Returns just terminate the block
-        else if (int(op) == LOP_RETURN)
+        else if (int(op) == LOP_RETURN || int(op) == LOP_TAILCALL)
         {
             bcBlocks.back().finishpc = i;
         }
@@ -798,7 +798,7 @@ static std::vector<int> findIsinstanceProvenObjectRegs(const IrFunction& functio
         if (target >= 0 && !isFastCall(op))
             addEdge(target);
 
-        if (op != LOP_RETURN && op != LOP_JUMP && op != LOP_JUMPBACK && op != LOP_JUMPX)
+        if (op != LOP_RETURN && op != LOP_TAILCALL && op != LOP_JUMP && op != LOP_JUMPBACK && op != LOP_JUMPX)
             addEdge(block.finishpc + getOpLength(op));
     }
 
@@ -1320,7 +1320,7 @@ static void analyzeBytecodeTypesPass(
                 int skip = LUAU_INSN_C(*pc);
 
                 Instruction call = pc[skip + 1];
-                CODEGEN_ASSERT(LUAU_INSN_OP(call) == LOP_CALL);
+                CODEGEN_ASSERT(LUAU_INSN_OP(call) == LOP_CALL || LUAU_INSN_OP(call) == LOP_TAILCALL);
                 int ra = LUAU_INSN_A(call);
 
                 applyBuiltinCall(LuauBuiltinFunction(bfid), bcType);
@@ -1342,7 +1342,7 @@ static void analyzeBytecodeTypesPass(
                 int skip = LUAU_INSN_C(*pc);
 
                 Instruction call = pc[skip + 1];
-                CODEGEN_ASSERT(LUAU_INSN_OP(call) == LOP_CALL);
+                CODEGEN_ASSERT(LUAU_INSN_OP(call) == LOP_CALL || LUAU_INSN_OP(call) == LOP_TAILCALL);
                 int ra = LUAU_INSN_A(call);
 
                 applyBuiltinCall(LuauBuiltinFunction(bfid), bcType);
@@ -1361,7 +1361,7 @@ static void analyzeBytecodeTypesPass(
                 int skip = LUAU_INSN_C(*pc);
 
                 Instruction call = pc[skip + 1];
-                CODEGEN_ASSERT(LUAU_INSN_OP(call) == LOP_CALL);
+                CODEGEN_ASSERT(LUAU_INSN_OP(call) == LOP_CALL || LUAU_INSN_OP(call) == LOP_TAILCALL);
                 int ra = LUAU_INSN_A(call);
 
                 applyBuiltinCall(LuauBuiltinFunction(bfid), bcType);
@@ -1382,7 +1382,7 @@ static void analyzeBytecodeTypesPass(
                 int aux = pc[1];
 
                 Instruction call = pc[skip + 1];
-                CODEGEN_ASSERT(LUAU_INSN_OP(call) == LOP_CALL);
+                CODEGEN_ASSERT(LUAU_INSN_OP(call) == LOP_CALL || LUAU_INSN_OP(call) == LOP_TAILCALL);
                 int ra = LUAU_INSN_A(call);
 
                 applyBuiltinCall(LuauBuiltinFunction(bfid), bcType);
@@ -1512,6 +1512,7 @@ static void analyzeBytecodeTypesPass(
             }
             case LOP_SETGLOBAL:
             case LOP_RETURN:
+            case LOP_TAILCALL:
             case LOP_JUMP:
             case LOP_JUMPBACK:
             case LOP_JUMPIF:

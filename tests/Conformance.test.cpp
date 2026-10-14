@@ -99,6 +99,7 @@ LUAU_FASTFLAG(LuwuBufferIsFrozen)
 LUAU_FASTFLAG(LuauDirectFieldGet)
 LUAU_FASTFLAG(LuwuPcallMulti)
 LUAU_FASTFLAG(LuwuNoFenv)
+LUAU_FASTFLAG(DebugLuwuProperTailCalls)
 
 #ifndef LUAU_CONFORMANCE_SOURCE_DIR
 // Walks up from the current directory looking for the Client folder,
@@ -6699,6 +6700,166 @@ TEST_CASE("LuwuNoFenv")
         CHECK(lua_pcall(L, 0, 1, 0) == LUA_OK);
         CHECK(lua_istable(L, -1));
         lua_pop(L, 1);
+    }
+}
+
+TEST_CASE("ProperTailCallsRuntime")
+{
+    StateRef globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    auto runSource = [&](const std::string& source, int expectedResults = 0) -> int {
+        size_t bytecodeSize = 0;
+        char* bytecode = luau_compile(source.data(), source.size(), nullptr, &bytecodeSize);
+        REQUIRE(bytecode);
+        int loadRes = luau_load(L, "=tco_test", bytecode, bytecodeSize, 0);
+        free(bytecode);
+        REQUIRE(loadRes == 0);
+        return lua_pcall(L, 0, expectedResults, 0);
+    };
+
+    // 1. Gating verification: without flags, 100,000 recursive calls overflow stack
+    {
+        ScopedFastFlag sff1{FFlag::LuwuNoFenv, true};
+        ScopedFastFlag sff2{FFlag::DebugLuwuProperTailCalls, false};
+
+        std::string source = R"(
+local function loop(n)
+    if n <= 0 then return "done" end
+    return loop(n - 1)
+end
+return loop(100000)
+)";
+        CHECK(runSource(source, 1) == LUA_ERRRUN);
+        CHECK(strstr(lua_tostring(L, -1), "stack overflow"));
+        lua_pop(L, 1);
+    }
+
+    // 2. With both flags enabled, 1,000,000 recursive calls execute in O(1) stack space
+    {
+        ScopedFastFlag sff1{FFlag::LuwuNoFenv, true};
+        ScopedFastFlag sff2{FFlag::DebugLuwuProperTailCalls, true};
+
+        std::string source = R"(
+local function loop(n)
+    if n <= 0 then return "done", 42 end
+    return loop(n - 1)
+end
+return loop(1000000)
+)";
+        CHECK(runSource(source, 2) == LUA_OK);
+        CHECK_EQ(std::string(lua_tostring(L, -2)), "done");
+        CHECK_EQ(lua_tonumber(L, -1), 42);
+        lua_pop(L, 2);
+
+        // Mutual recursion
+        std::string mutual = R"(
+local is_even, is_odd
+function is_even(n)
+    if n == 0 then return true end
+    return is_odd(n - 1)
+end
+function is_odd(n)
+    if n == 0 then return false end
+    return is_even(n - 1)
+end
+return is_even(1000000), is_odd(1000001)
+)";
+        CHECK(runSource(mutual, 2) == LUA_OK);
+        CHECK(lua_toboolean(L, -2) == 1);
+        CHECK(lua_toboolean(L, -1) == 1);
+        lua_pop(L, 2);
+
+        // Upvalues closed properly before frame reuse
+        std::string upvalues = R"(
+local function make(val)
+    local a = val
+    local b = val * 2
+    local function get() return a + b end
+    local function recurse(n, fn)
+        if n <= 0 then return fn() end
+        return recurse(n - 1, fn)
+    end
+    return recurse(100, get)
+end
+return make(5)
+)";
+        CHECK(runSource(upvalues, 1) == LUA_OK);
+        CHECK_EQ(lua_tonumber(L, -1), 15);
+        lua_pop(L, 1);
+
+        // Variadic forwarding & multret
+        std::string variadic = R"(
+local function sum_four(a, b, c, d)
+    return a + b + c + d
+end
+local function forward(...)
+    return sum_four(...)
+end
+local function multret()
+    return 3, 4
+end
+local function with_multret(a, b)
+    return sum_four(a, b, multret())
+end
+return forward(1, 2, 3, 4), with_multret(1, 2)
+)";
+        CHECK(runSource(variadic, 2) == LUA_OK);
+        CHECK_EQ(lua_tonumber(L, -2), 10);
+        CHECK_EQ(lua_tonumber(L, -1), 10);
+        lua_pop(L, 2);
+
+        // Method call
+        std::string method = R"(
+local obj = { base = 100 }
+function obj:add(x, y)
+    return self.base + x + y
+end
+local function caller(o, x, y)
+    return o:add(x, y)
+end
+return caller(obj, 10, 20)
+)";
+        CHECK(runSource(method, 1) == LUA_OK);
+        CHECK_EQ(lua_tonumber(L, -1), 130);
+        lua_pop(L, 1);
+
+        // C function tail call & metamethod __call
+        std::string cfunc = R"(
+local function tail_pcall(fn, arg)
+    return pcall(fn, arg)
+end
+local ok, res = tail_pcall(function(x) return x * 2 end, 21)
+
+local callable = setmetatable({}, {
+    __call = function(self, x, y)
+        return x * y
+    end
+})
+local function call_obj(o, x, y)
+    return o(x, y)
+end
+
+return ok, res, call_obj(callable, 6, 7)
+)";
+        CHECK(runSource(cfunc, 3) == LUA_OK);
+        CHECK(lua_toboolean(L, -3) == 1);
+        CHECK_EQ(lua_tonumber(L, -2), 42);
+        CHECK_EQ(lua_tonumber(L, -1), 42);
+        lua_pop(L, 3);
+
+        // Disqualification: parenthesized return truncates to single value
+        std::string disqual = R"(
+local function pair() return 10, 20 end
+local function paren() return (pair()) end
+local r1, r2 = paren()
+return r1, r2
+)";
+        CHECK(runSource(disqual, 2) == LUA_OK);
+        CHECK_EQ(lua_tonumber(L, -2), 10);
+        CHECK(lua_isnil(L, -1));
+        lua_pop(L, 2);
     }
 }
 

@@ -142,7 +142,7 @@ LUAU_FLAGVERSION(LuauBackedgeHeapCheck, 2)
         VM_DISPATCH_OP(LOP_IDIVK), VM_DISPATCH_OP(LOP_GETUDATAKS), VM_DISPATCH_OP(LOP_SETUDATAKS), VM_DISPATCH_OP(LOP_NAMECALLUDATA), \
         VM_DISPATCH_OP(LOP_NEWCLASSMEMBER), VM_DISPATCH_OP(LOP_CALLFB), VM_DISPATCH_OP(LOP_CMPPROTO), VM_DISPATCH_OP(LOP_CHECKSELFCLASS), \
         VM_DISPATCH_OP(LOP_JUMPXISA), VM_DISPATCH_OP(LOP_NEWOBJECT), \
-        VM_DISPATCH_OP(LOP_GETOBJECTMEMBER), VM_DISPATCH_OP(LOP_SETOBJECTMEMBER),
+        VM_DISPATCH_OP(LOP_GETOBJECTMEMBER), VM_DISPATCH_OP(LOP_SETOBJECTMEMBER), VM_DISPATCH_OP(LOP_TAILCALL),
 
 #if defined(__GNUC__) || defined(__clang__)
 #define VM_USE_CGOTO 1
@@ -1142,7 +1142,7 @@ reentry:
                     }
                 }
 
-                if (LUAU_UNLIKELY(FFlag::LuauCallFeedback))
+                if (LUAU_UNLIKELY(FFlag::LuauCallFeedback) || LUAU_INSN_OP(*pc) != LOP_CALL)
                 {
                     VM_NEXT();
                 }
@@ -3136,12 +3136,12 @@ reentry:
                 VM_ASSERT_PC(pc + skip);
 
                 Instruction call = pc[skip];
-                LUAU_ASSERT(LUAU_INSN_OP(call) == LOP_CALL);
+                LUAU_ASSERT(LUAU_INSN_OP(call) == LOP_CALL || LUAU_INSN_OP(call) == LOP_TAILCALL);
 
                 VM_CASE_STKID ra = VM_REG(LUAU_INSN_A(call));
 
                 int nparams = LUAU_INSN_B(call) - 1;
-                int nresults = LUAU_INSN_C(call) - 1;
+                int nresults = LUAU_INSN_OP(call) == LOP_TAILCALL ? LUA_MULTRET : (LUAU_INSN_C(call) - 1);
 
                 nparams = (nparams == LUA_MULTRET) ? int(L->top - ra - 1) : nparams;
 
@@ -3253,12 +3253,12 @@ reentry:
                 VM_ASSERT_PC(pc + skip);
 
                 Instruction call = pc[skip];
-                LUAU_ASSERT(LUAU_INSN_OP(call) == LOP_CALL);
+                LUAU_ASSERT(LUAU_INSN_OP(call) == LOP_CALL || LUAU_INSN_OP(call) == LOP_TAILCALL);
 
                 VM_CASE_STKID ra = VM_REG(LUAU_INSN_A(call));
 
                 int nparams = 1;
-                int nresults = LUAU_INSN_C(call) - 1;
+                int nresults = LUAU_INSN_OP(call) == LOP_TAILCALL ? LUA_MULTRET : (LUAU_INSN_C(call) - 1);
 
                 luau_FastFunction f = luauF_table[bfid];
                 LUAU_ASSERT(f);
@@ -3303,12 +3303,12 @@ reentry:
                 VM_ASSERT_PC(pc + skip);
 
                 Instruction call = pc[skip];
-                LUAU_ASSERT(LUAU_INSN_OP(call) == LOP_CALL);
+                LUAU_ASSERT(LUAU_INSN_OP(call) == LOP_CALL || LUAU_INSN_OP(call) == LOP_TAILCALL);
 
                 VM_CASE_STKID ra = VM_REG(LUAU_INSN_A(call));
 
                 int nparams = 2;
-                int nresults = LUAU_INSN_C(call) - 1;
+                int nresults = LUAU_INSN_OP(call) == LOP_TAILCALL ? LUA_MULTRET : (LUAU_INSN_C(call) - 1);
 
                 luau_FastFunction f = luauF_table[bfid];
                 LUAU_ASSERT(f);
@@ -3353,12 +3353,12 @@ reentry:
                 VM_ASSERT_PC(pc + skip);
 
                 Instruction call = pc[skip];
-                LUAU_ASSERT(LUAU_INSN_OP(call) == LOP_CALL);
+                LUAU_ASSERT(LUAU_INSN_OP(call) == LOP_CALL || LUAU_INSN_OP(call) == LOP_TAILCALL);
 
                 VM_CASE_STKID ra = VM_REG(LUAU_INSN_A(call));
 
                 int nparams = 2;
-                int nresults = LUAU_INSN_C(call) - 1;
+                int nresults = LUAU_INSN_OP(call) == LOP_TAILCALL ? LUA_MULTRET : (LUAU_INSN_C(call) - 1);
 
                 luau_FastFunction f = luauF_table[bfid];
                 LUAU_ASSERT(f);
@@ -3404,12 +3404,12 @@ reentry:
                 VM_ASSERT_PC(pc + skip);
 
                 Instruction call = pc[skip];
-                LUAU_ASSERT(LUAU_INSN_OP(call) == LOP_CALL);
+                LUAU_ASSERT(LUAU_INSN_OP(call) == LOP_CALL || LUAU_INSN_OP(call) == LOP_TAILCALL);
 
                 VM_CASE_STKID ra = VM_REG(LUAU_INSN_A(call));
 
                 int nparams = 3;
-                int nresults = LUAU_INSN_C(call) - 1;
+                int nresults = LUAU_INSN_OP(call) == LOP_TAILCALL ? LUA_MULTRET : (LUAU_INSN_C(call) - 1);
 
                 luau_FastFunction f = luauF_table[bfid];
                 LUAU_ASSERT(f);
@@ -4030,6 +4030,131 @@ reentry:
                 pc += isInstance == jumpIfInstance ? LUAU_INSN_D(insn) : 1;
                 VM_ASSERT_PC(pc);
                 VM_NEXT();
+            }
+
+            VM_CASE(LOP_TAILCALL)
+            {
+                VM_INTERRUPT();
+                VM_CASE_INSTRUCTION insn = *pc++;
+                VM_CASE_STKID ra = VM_REG(LUAU_INSN_A(insn));
+
+                int nparams = LUAU_INSN_B(insn) - 1;
+
+                StkId argtop = L->top;
+                argtop = (nparams == LUA_MULTRET) ? argtop : ra + 1 + nparams;
+
+                if (LUAU_UNLIKELY(!ttisfunction(ra)))
+                {
+                    // slow-path: not a function call
+                    VM_PROTECT_PC(); // luaV_tryfuncTM may fail
+
+                    luaV_tryfuncTM(L, ra);
+                    argtop++; // __call adds an extra self
+                }
+
+                // Close open upvalues in current frame before overwriting stack
+                if (L->openupval && L->openupval->v >= L->base)
+                    luaF_close(L, L->base);
+
+                CallInfo* ci = L->ci;
+                StkId pfunc = ci->func;
+
+                // Shift function and arguments down to ci->func
+                StkId vali = ra;
+                StkId res = pfunc;
+                while (vali < argtop)
+                    setobj2s(L, res++, vali++);
+
+                L->base = ci->base = pfunc + 1;
+                L->top = res;
+
+                Closure* ccl = clvalue(pfunc);
+
+                // Check stack space for the callee's stacksize
+                luaD_checkstack(L, ccl->stacksize);
+
+                // Stack may have been reallocated; reload pointers
+                pfunc = ci->func;
+                ccl = clvalue(pfunc);
+                base = L->base = ci->base = pfunc + 1;
+                ci->top = base + ccl->stacksize;
+
+                if (FFlag::LuauCIProto)
+                    ci->p = getproto(ccl);
+
+                if (!ccl->isC)
+                {
+                    Proto* p = ccl->l.p;
+
+                    // fill unused parameters with nil
+                    StkId argi = L->top;
+                    StkId argend = L->base + p->numparams;
+                    while (argi < argend)
+                        setnilvalue(argi++); // complete missing arguments
+                    L->top = p->is_vararg ? argi : ci->top;
+
+                    pc = SingleStep ? p->code : p->codeentry;
+                    cl = ccl;
+                    k = p->k;
+                    VM_NEXT();
+                }
+                else
+                {
+                    lua_CFunction func = ccl->c.f;
+                    int n = func(L);
+
+                    // yield
+                    if (n < 0)
+                        goto exit;
+
+                    // ci is our callinfo, cip is our parent
+                    CallInfo* cip = ci - 1;
+
+                    // copy return values into parent stack, fill the rest with nil
+                    int nresults = ci->nresults;
+                    StkId retres = ci->func;
+                    StkId retvali = L->top - n;
+                    StkId retvalend = L->top;
+
+                    int i;
+                    for (i = nresults; i != 0 && retvali < retvalend; i--)
+                        setobj2s(L, retres++, retvali++);
+                    while (i-- > 0)
+                        setnilvalue(retres++);
+
+                    // pop the stack frame
+                    L->ci = cip;
+                    L->base = cip->base;
+                    L->top = (nresults == LUA_MULTRET) ? retres : cip->top;
+
+                    // we're done!
+                    if (LUAU_UNLIKELY(ci->flags & LUA_CALLINFO_RETURN))
+                    {
+                        goto exit;
+                    }
+
+                    LUAU_ASSERT(isLua(L->ci));
+
+                    Closure* nextcl = clvalue(cip->func);
+                    LUAU_ASSERT(!FFlag::LuauCIProto || cip->p != nullptr);
+                    Proto* nextproto = FFlag::LuauCIProto ? cip->p : nextcl->l.p;
+
+#if VM_HAS_NATIVE
+                    if (LUAU_UNLIKELY((cip->flags & LUA_CALLINFO_NATIVE) && !SingleStep))
+                    {
+                        if (L->global->ecb.enter(L, nextproto) == 1)
+                            goto reentry;
+                        else
+                            goto exit;
+                    }
+#endif
+
+                    pc = cip->savedpc;
+                    cl = nextcl;
+                    base = L->base;
+                    k = nextproto->k;
+                    VM_NEXT();
+                }
             }
 
 #if !VM_USE_CGOTO
