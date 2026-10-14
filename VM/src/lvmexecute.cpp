@@ -4068,7 +4068,7 @@ reentry:
                     ci->base = ra + 1;
                     ci->top = argtop + ccl->stacksize;
                     ci->savedpc = NULL;
-                    ci->flags = 0;
+                    ci->flags = LUA_CALLINFO_TAIL;
                     ci->nresults = LUA_MULTRET;
 
                     L->base = ci->base;
@@ -4135,6 +4135,8 @@ reentry:
 
                 if (FFlag::LuauCIProto)
                     ci->p = getproto(ccl);
+
+                ci->flags |= LUA_CALLINFO_TAIL;
 
                 Proto* p = ccl->l.p;
 

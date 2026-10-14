@@ -178,6 +178,11 @@ static Closure* auxgetinfo(lua_State* L, const char* what, lua_Debug* ar, Closur
             ar->name = ci ? getfuncname(ci_func(ci)) : getfuncname(f);
             break;
         }
+        case 't':
+        {
+            ar->istailcall = (ci && (ci->flags & LUA_CALLINFO_TAIL)) ? 1 : 0;
+            break;
+        }
         case 'f':
         {
             cl = f;

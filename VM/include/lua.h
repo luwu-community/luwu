@@ -616,6 +616,7 @@ struct lua_Debug
     unsigned char nupvals; // (u) number of upvalues
     unsigned char nparams; // (a) number of parameters
     char isvararg;         // (a)
+    char istailcall;       // (t)
     void* userdata; // only valid in lua_callhook
 
     char ssbuf[LUA_IDSIZE];

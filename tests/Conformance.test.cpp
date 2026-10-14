@@ -6902,6 +6902,25 @@ return ok, err
         CHECK(lua_toboolean(L, -2) == 0);
         CHECK(strstr(lua_tostring(L, -1), ":3: err_msg"));
         lua_pop(L, 2);
+
+        // Frame isTail / istailcall marking via debug.info
+        std::string tail_mark = R"(
+local function target()
+    return debug.info(1, "t")
+end
+local function normal_call()
+    local res = target()
+    return res
+end
+local function tail_call()
+    return target()
+end
+return normal_call(), tail_call()
+)";
+        CHECK(runSource(tail_mark, 2) == LUA_OK);
+        CHECK(lua_toboolean(L, -2) == 0);
+        CHECK(lua_toboolean(L, -1) == 1);
+        lua_pop(L, 2);
     }
 }
 
