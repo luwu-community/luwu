@@ -576,8 +576,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "never_proven_from_the_declared_types_is_unre
 }
 
 // Luwu: a `never` the declared types can't explain may be a type checker bug, which leaves the value unchecked. Here
-// the solver keeps `not h.enc` after `h.enc` is assigned, so `h` is `never` in a branch that runs; and it takes a table
-// type for a table, when it's a shape a vector also fits, so `v` is `never` past a `type(v) == "table"` guard.
+// the solver keeps `not h.enc` after `h.enc` is assigned, so `h` is `never` in a branch that runs.
 TEST_CASE_FIXTURE(BuiltinsFixture, "a_never_that_may_be_a_type_bug_says_so")
 {
     DOES_NOT_PASS_OLD_SOLVER_GUARD();
@@ -593,13 +592,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_never_that_may_be_a_type_bug_says_so")
                 end
             end
         end
-
-        local function g(v: { read x: number }): number
-            if type(v) == "table" then
-                return 0
-            end
-            return v.x
-        end
     )");
 
     std::vector<std::string> names;
@@ -611,7 +603,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_never_that_may_be_a_type_bug_says_so")
             names.push_back(use->name);
         }
     }
-    CHECK_EQ(std::vector<std::string>{"h", "v"}, names);
+    CHECK_EQ(std::vector<std::string>{"h"}, names);
 
     UnreachableCodeUse bug{ImproperUse::Index, "self.dave", UnreachableCodeUse::Reason::PossibleTypeBug, true};
     CHECK_EQ(

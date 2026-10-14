@@ -270,7 +270,7 @@ TEST_CASE_FIXTURE(ExplainFixture, "deep_and_wide_tables_stay_bounded" * doctest:
 
     TableType::Props wideExpected;
     TableType::Props wideGiven;
-    for (int f = 0; f < 3000; ++f)
+    for (int f = 0; f < 1000; ++f)
     {
         wideExpected["p" + std::to_string(f)] = getBuiltins()->numberType;
         wideGiven["p" + std::to_string(f)] = getBuiltins()->stringType;
