@@ -12,6 +12,12 @@ LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuwuNoinlineAttribute)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuDestructuring)
+LUAU_FASTFLAG(LuwuIfLocal)
+LUAU_FASTFLAG(LuwuDoExpr)
+LUAU_FASTFLAG(LuwuTableComprehensions)
+LUAU_FASTFLAG(LuwuTableFunctionFields)
+LUAU_FASTFLAG(LuwuTableFunctionFields)
+LUAU_FASTFLAG(DebugLuwuPoperators)
 LUAU_FASTFLAG(LuauTableEntriesDontNeedToMatchIndent)
 LUAU_FASTFLAG(LuauCstAttr)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
@@ -2327,6 +2333,117 @@ TEST_CASE("prettyPrint_attributes_beyond_functions")
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
 }
 
+TEST_CASE("prettyPrint_if_local")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuIfLocal, true},
+    };
+
+    std::string code = R"(
+if local a = f() when a > 1 when const b: number = g(a) then
+    print(a, b)
+elseif ready when local  c = h() then
+    print(c)
+elseif const x = p when x then
+else
+end
+local v = if const a = f() then a elseif local b = g() when b then b else nil
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+}
+
+TEST_CASE("prettyPrint_loop_when_chains")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuTableComprehensions, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    std::string code = R"(
+x  or return nil
+for _, v in t do v or continue; ok and  valid or (return 1, 2) end
+for i = 1,  10 when i % 2 == 0 do
+    print(i)
+end
+for _, v in  xs when local  w = v.inner when w > 1 do print(w) end
+for _ , person: Person in people when person.age > 18 do
+    print(name)
+end
+while local line = read() when line ~= "" do
+    print(line)
+end
+while  ready when const job = queue:pop() do end
+while running do end
+local a = { for _, p in points when p.x > 0 give p.x + p.y }
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+}
+
+TEST_CASE("prettyPrint_do_expressions")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    std::string code = R"(
+local x = do
+    local a = f()
+    if a then
+        give a
+    end
+    give  2
+local function g()
+    local b = x or return 1
+    local c = x or (return 1, 2)
+    local d = x or (do return)
+    for i = 1, 2 do
+        local e = x or break
+        local h = x or do continue
+    end
+    return f(do give 1, 2)
+end
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+}
+
+// Luwu Table Comprehensions (rfcs/table-comprehensions.md)
+TEST_CASE("prettyPrint_table_comprehensions")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuTableComprehensions, true},
+        {FFlag::LuwuIfLocal, true},
+    };
+
+    std::string code = R"(
+local a = { for _, v in xs give v * 2 }
+local b = {for i=1,10 , 2 when i > 2   when const j = i * 2 give [ i ]  = j}
+local t = { for _, w in words give [w]  += 1 }
+local c = {
+    for _, row in grid
+        when #row > 0
+    for _ , x in row
+    give x
+}
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+    CHECK_EQ(code, prettyPrint(code).code);
+}
+
+TEST_CASE("prettyPrint_table_function_fields")
+{
+    ScopedFastFlag tableFunctions{FFlag::LuwuTableFunctionFields, true};
+
+    std::string code = R"(
+local t = {
+    function   foo(a: number) : number
+        return a
+    end,
+    function bar  () end ;
+    baz = function() end
+}
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+}
+
 TEST_CASE("prettyPrint_class_attributes_beyond_methods")
 {
     ScopedFastFlag fflags[] = {
@@ -2525,6 +2642,23 @@ type .{Metadata, Entry as FileEntry} = fs
 export type  .{ Box }  =  fs; type Other = number
     )";
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
+}
+
+TEST_CASE("prettyPrint_push_and_pop")
+{
+    ScopedFastFlag poperators{FFlag::DebugLuwuPoperators, true};
+
+    std::string code = R"(
+const t = {}
+t <+ 1
+t  <+ 1 ,  f()
+self.items<+x
+local x = <-t
+local y = <-  t.items + #t
+local z = a<-b
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+    CHECK_EQ(code, prettyPrint(code).code);
 }
 
 TEST_CASE("prettyPrint_function_attributes")

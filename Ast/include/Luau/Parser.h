@@ -135,11 +135,14 @@ private:
 
     // Luwu If Local (rfcs/if-local.md)
     AstExpr* parseIfCondition(AstArray<AstIfClause>& clauses, const char* head = "if");
+    AstExpr* parseIfConditionClauses(AstArray<AstIfClause>& clauses, const char* head, const Location& start);
     AstArray<AstIfClause> parseLoopWhenChain(Location& whenLocation, bool inComprehension = false);
     AstStatBlock* wrapInWhenGuard(const AstArray<AstIfClause>& when, const Location& whenLocation, AstStatBlock* body, AstStatIf*& guard);
     void parseIfBindingClause(std::vector<AstIfClause>& chain, const std::optional<Location>& whenLocation);
     bool ifBindingFollows();
     bool whenFollows();
+    bool andStartsBinding();
+    void reportAndBeforeBinding();
 
     // while exp do block end
     AstStat* parseWhile();
@@ -488,7 +491,8 @@ public:
 
 private:
     AstExpr* parseBinaryTail(AstExpr* expr, const Location& start, unsigned int limit);
-    AstStat* parseOrLeaveStatement(AstExpr* first, const Location& start);
+    AstStat* parseOrLeaveStatement(AstExpr* first, const Location& start, size_t errorsBeforeStatement);
+    AstStatError* reportIncompleteStatement(AstExpr* expr, size_t errorsBeforeStatement, const char* message);
 
     std::optional<AstExprUnary::Op> checkUnaryConfusables();
     std::optional<AstExprBinary::Op> checkBinaryConfusables(const BinaryOpPriority binaryPriority[], unsigned int limit);
@@ -546,6 +550,8 @@ private:
     void noteStrayEnd(const char* construct, bool reported);
     void reportLeftoverAtEndOfChunk();
     AstExpr* missingIfElseArm();
+    AstExpr* missingValueAfter(const char* keyword);
+    AstExprError* missingValueHere();
     // Luwu Do Expressions (rfcs/do-expressions.md)
     AstExpr* parseDoExpr();
     AstStat* parseGive();
@@ -609,15 +615,6 @@ private:
     bool nextLineStartsStatement(bool (*cantContinue)(const Lexeme& afterName));
     bool nextLineStartsUnpatternedStatement();
     bool statementReportedError();
-    AstExpr* unfinishedIfElseExpr(
-        const Location& start,
-        AstExpr* condition,
-        size_t errorsBefore,
-        const char* keyword,
-        bool hasThen,
-        AstExpr* trueExpr = nullptr,
-        std::optional<Location> thenLocation = std::nullopt
-    );
     bool expectAndConsumeFailWithLookahead(Lexeme::Type type, const char* context);
     void expectAndConsumeFail(Lexeme::Type type, const char* context);
     void reportExpected(const Location& location, Lexeme::Type type, const char* context);
@@ -810,6 +807,12 @@ private:
     // Luwu Do Expressions (rfcs/do-expressions.md): the statement being parsed is directly in a `do` expression's block, not
     // in a block nested in it. A `give` there ends the expression, so a `,` after its value belongs to the list around it.
     bool doExprTopLevel = false;
+
+
+    // Luwu If Local (rfcs/if-local.md): an `if`/`elseif`/`while` condition is being parsed, where `and local x` and
+    // `and const x` were meant as `when`. `andBeforeBinding` is that `and`, already reported and consumed.
+    bool inIfCondition = false;
+    std::optional<Location> andBeforeBinding;
 
     // Luwu: `end`s found right after an if-else or `do` expression (see noteStrayEnd)
     struct StrayEnd

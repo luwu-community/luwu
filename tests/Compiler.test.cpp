@@ -23,6 +23,9 @@ LUAU_FASTINT(LuauCompileInlineThresholdMaxBoost)
 LUAU_FASTINT(LuauCompileLoopUnrollThreshold)
 LUAU_FASTINT(LuauCompileLoopUnrollThresholdMaxBoost)
 LUAU_FASTINT(LuauRecursionLimit)
+LUAU_FASTFLAG(LuwuIfLocal)
+LUAU_FASTFLAG(LuwuDoExpr)
+LUAU_FASTFLAG(LuwuTableComprehensions)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuauIntegerFastcalls)
 LUAU_FASTFLAG(LuauCompileIifeInline)
@@ -1456,6 +1459,474 @@ JUMPIF R0 L2
 L1: GETIMPORT R0 13 [Enum.Material.Sandstone]
 L2: RETURN R0 1
 )");
+}
+
+TEST_CASE("LoopWhenChains")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    // `while local` compiles exactly like the `while true` loop it replaces
+    std::string whileLocal = compileFunction0(R"(
+while local x = r() when x > 1 do
+    print(x)
+end
+)");
+    std::string handWritten = compileFunction0(R"(
+while true do
+    local x = r()
+    if not x then break end
+    if not (x > 1) then break end
+    print(x)
+end
+)");
+    CHECK_EQ(whileLocal, handWritten);
+    CHECK_EQ("\n" + whileLocal, R"(
+L0: GETIMPORT R0 1 [r]
+CALL R0 0 1
+JUMPIFNOT R0 L1
+LOADN R1 1
+JUMPIFNOTLT R1 R0 L1
+GETIMPORT R1 3 [print]
+MOVE R2 R0
+CALL R1 1 0
+JUMPBACK L0
+L1: RETURN R0 0
+)");
+
+    // a written binding captured by a later clause is closed on the way out of the loop, and at the end of every pass
+    CHECK_EQ("\n" + compileFunction(R"(
+while local x = r() when g(function() x = nil end) do
+end
+)", 1), R"(
+L0: GETIMPORT R0 1 [r]
+CALL R0 0 1
+JUMPIFNOT R0 L1
+GETIMPORT R1 3 [g]
+NEWCLOSURE R2 P0
+CAPTURE REF R0
+CALL R1 1 1
+JUMPIFNOT R1 L1
+CLOSEUPVALS R0
+JUMPBACK L0
+L1: CLOSEUPVALS R0
+RETURN R0 0
+)");
+
+    // `for ... when` is the loop with an `if` around its body
+    CHECK_EQ(compileFunction0("for _, v in xs when v > 1 do print(v) end"), compileFunction0("for _, v in xs do if v > 1 then print(v) end end"));
+}
+
+TEST_CASE("OrLeaveStatement")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    // `x or return v` compiles as the `if not x then return v end` it replaces, shortcuts included
+    CHECK_EQ(compileFunction0("local x = ... x or return 1 return x"), compileFunction0("local x = ... if not x then return 1 end return x"));
+    CHECK_EQ(
+        compileFunction0("for _, v in t do v ~= 0 or break print(v) end"),
+        compileFunction0("for _, v in t do if not (v ~= 0) then break end print(v) end")
+    );
+    CHECK_EQ(
+        compileFunction0("for _, v in t do v or continue print(v) end"),
+        compileFunction0("for _, v in t do if not v then continue end print(v) end")
+    );
+}
+
+TEST_CASE("IfLocal")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    // one register and one JUMPIFNOT per binding; a plain clause is an ordinary condition
+    CHECK_EQ("\n" + compileFunction0(R"(
+if local a = f() when a > 1 when local b = g(a) then
+    h(a, b)
+end
+)"), R"(
+GETIMPORT R0 1 [f]
+CALL R0 0 1
+JUMPIFNOT R0 L0
+LOADN R1 1
+JUMPIFNOTLT R1 R0 L0
+GETIMPORT R1 3 [g]
+MOVE R2 R0
+CALL R1 1 1
+JUMPIFNOT R1 L0
+GETIMPORT R2 5 [h]
+MOVE R3 R0
+MOVE R4 R1
+CALL R2 2 0
+L0: RETURN R0 0
+)");
+
+    // the expression form
+    CHECK_EQ("\n" + compileFunction0("return if local a = f() then a else 0"), R"(
+GETIMPORT R1 1 [f]
+CALL R1 0 1
+JUMPIFNOT R1 L0
+MOVE R0 R1
+RETURN R0 1
+L0: LOADN R0 0
+RETURN R0 1
+)");
+
+    // a constant first clause doesn't decide the chain
+    CHECK_EQ("\n" + compileFunction0("return if local a = 1 when f() then a else 0"), R"(
+LOADN R1 1
+JUMPIFNOT R1 L0
+GETIMPORT R2 1 [f]
+CALL R2 0 1
+JUMPIFNOT R2 L0
+LOADN R0 1
+RETURN R0 1
+L0: LOADN R0 0
+RETURN R0 1
+)");
+
+    // a later clause captured an earlier binding that is written: the else path closes it too
+    CHECK_EQ("\n" + compileFunction(R"(
+if local a = f() when g(function() a = nil end) then
+    h(a)
+else
+    h()
+end
+)", 1), R"(
+GETIMPORT R0 1 [f]
+CALL R0 0 1
+JUMPIFNOT R0 L0
+GETIMPORT R1 3 [g]
+NEWCLOSURE R2 P0
+CAPTURE REF R0
+CALL R1 1 1
+JUMPIFNOT R1 L0
+GETIMPORT R1 5 [h]
+MOVE R2 R0
+CALL R1 1 0
+CLOSEUPVALS R0
+RETURN R0 0
+L0: CLOSEUPVALS R0
+GETIMPORT R0 5 [h]
+CALL R0 0 0
+RETURN R0 0
+)");
+
+    // with no else branch, the branch falls into the else path's CLOSEUPVALS instead of closing on its own
+    CHECK_EQ("\n" + compileFunction(R"(
+if local a = f() when g(function() a = nil end) then
+    h(a)
+end
+)", 1), R"(
+GETIMPORT R0 1 [f]
+CALL R0 0 1
+JUMPIFNOT R0 L0
+GETIMPORT R1 3 [g]
+NEWCLOSURE R2 P0
+CAPTURE REF R0
+CALL R1 1 1
+JUMPIFNOT R1 L0
+GETIMPORT R1 5 [h]
+MOVE R2 R0
+CALL R1 1 0
+L0: CLOSEUPVALS R0
+RETURN R0 0
+)");
+}
+
+// Luwu Table Comprehensions (rfcs/table-comprehensions.md)
+TEST_CASE("TableComprehension")
+{
+    ScopedFastFlag comprehensions{FFlag::LuwuTableComprehensions, true};
+
+    // sized from the source before the loop, appended through a count register, trimmed after
+    CHECK_EQ("\n" + compileFunction0(R"(
+local t = { for _, v in src give v * 2 }
+g(t)
+)"), R"(
+NEWTABLE R0 0 0
+LOADN R1 0
+GETIMPORT R2 1 [src]
+LOADNIL R3
+LOADNIL R4
+PRESIZETABLE R0 R2 ITER_ARRAY
+FORGPREP R2 L1
+L0: MULK R7 R6 K2 [2]
+APPENDTABLE R0 R7 R1
+L1: FORGLOOP R2 L0 2
+PRESIZETABLE R0 R1 TRIM
+GETIMPORT R1 4 [g]
+MOVE R2 R0
+CALL R1 1 0
+RETURN R0 0
+)");
+
+    // a constant range is sized by NEWTABLE, a variable one at runtime
+    CHECK_EQ("\n" + compileFunction0(R"(
+local r = { for i = 1, 3 give i }
+local s = { for i = 1, n give i }
+g(r, s)
+)"), R"(
+NEWTABLE R0 0 3
+LOADN R1 0
+LOADN R4 1
+LOADN R2 3
+LOADN R3 1
+FORNPREP R2 L1
+L0: APPENDTABLE R0 R4 R1
+FORNLOOP R2 L0
+L1: PRESIZETABLE R0 R1 TRIM
+NEWTABLE R1 0 0
+LOADN R2 0
+LOADN R5 1
+GETIMPORT R3 1 [n]
+LOADN R4 1
+PRESIZETABLE R1 R3 RANGE_ARRAY
+FORNPREP R3 L3
+L2: APPENDTABLE R1 R5 R2
+FORNLOOP R3 L2
+L3: PRESIZETABLE R1 R2 TRIM
+GETIMPORT R2 3 [g]
+MOVE R3 R0
+MOVE R4 R1
+CALL R2 2 0
+RETURN R0 0
+)");
+
+    // a map sizes its hash part, skips nil values, and a `when` jumps to the next iteration
+    CHECK_EQ("\n" + compileFunction0(R"(
+local m = { for k, v in src when v give [k] = v }
+g(m)
+)"), R"(
+NEWTABLE R0 0 0
+GETIMPORT R1 1 [src]
+LOADNIL R2
+LOADNIL R3
+PRESIZETABLE R0 R1 ITER_HASH
+FORGPREP R1 L1
+L0: JUMPIFNOT R5 L1
+JUMPXEQKNIL R5 L1
+SETTABLE R5 R0 R4
+L1: FORGLOOP R1 L0 2
+GETIMPORT R1 3 [g]
+MOVE R2 R0
+CALL R1 1 0
+RETURN R0 0
+)");
+
+    // assigning to a local the comprehension reads builds in a temporary first; flattening doesn't presize
+    CHECK_EQ("\n" + compileFunction0(R"(
+local t = src
+t = { for _, row in t for _, c in row give c }
+g(t)
+)"), R"(
+GETIMPORT R0 1 [src]
+NEWTABLE R1 0 0
+LOADN R2 0
+MOVE R3 R0
+LOADNIL R4
+LOADNIL R5
+FORGPREP R3 L3
+L0: MOVE R8 R7
+LOADNIL R9
+LOADNIL R10
+FORGPREP R8 L2
+L1: APPENDTABLE R1 R12 R2
+L2: FORGLOOP R8 L1 2
+L3: FORGLOOP R3 L0 2
+MOVE R0 R1
+GETIMPORT R1 3 [g]
+MOVE R2 R0
+CALL R1 1 0
+RETURN R0 0
+)");
+}
+
+TEST_CASE("TableComprehensionLengthCountsWithoutATable")
+{
+    ScopedFastFlag comprehensions{FFlag::LuwuTableComprehensions, true};
+
+    // `#{ for ... }` is the counting loop: no NEWTABLE, and a constant item just counts
+    CHECK_EQ("\n" + compileFunction0(R"(
+local n = #{ for _, v in xs when v > 1 give true }
+g(n)
+)"), R"(
+LOADN R1 0
+GETIMPORT R2 1 [xs]
+LOADNIL R3
+LOADNIL R4
+FORGPREP R2 L1
+L0: LOADN R7 1
+JUMPIFNOTLT R7 R6 L1
+ADDK R1 R1 K2 [1]
+L1: FORGLOOP R2 L0 2
+MOVE R0 R1
+GETIMPORT R1 4 [g]
+MOVE R2 R0
+CALL R1 1 0
+RETURN R0 0
+)");
+}
+
+TEST_CASE("TableComprehensionFoldsToALiteral")
+{
+    ScopedFastFlag comprehensions{FFlag::LuwuTableComprehensions, true};
+
+    // at O2 a constant range whose item and `when` fold to constants is the literal it builds: no loop, no appends
+    CHECK_EQ("\n" + compileFunction(R"(
+local a = { for i = 1, 5 give i * 2 }
+local b = { for i = 1, 6 when i % 2 == 0 give i }
+g(a, b)
+)", 0, 2), R"(
+NEWTABLE R0 0 5
+LOADN R1 2
+LOADN R2 4
+LOADN R3 6
+LOADN R4 8
+LOADN R5 10
+SETLIST R0 R1 5 [1]
+NEWTABLE R1 0 3
+LOADN R2 2
+LOADN R3 4
+LOADN R4 6
+SETLIST R1 R2 3 [1]
+GETIMPORT R2 1 [g]
+MOVE R3 R0
+MOVE R4 R1
+CALL R2 2 0
+RETURN R0 0
+)");
+}
+
+TEST_CASE("DoExpression")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    // each give compiles into the target and jumps to the end; the block's own locals are registers above it
+    CHECK_EQ("\n" + compileFunction0(R"(
+local x = do
+    local a = f()
+    if a then
+        give a
+    end
+    give 2
+g(x)
+)"), R"(
+GETIMPORT R1 1 [f]
+CALL R1 0 1
+JUMPIFNOT R1 L0
+MOVE R0 R1
+JUMP L1
+L0: LOADN R0 2
+L1: GETIMPORT R1 3 [g]
+MOVE R2 R0
+CALL R1 1 0
+RETURN R0 0
+)");
+
+    // a give out of a loop closes the captured locals first
+    CHECK_EQ("\n" + compileFunction(R"(
+local x = do
+    for i = 1, 3 do
+        local c = i
+        h(function() c = nil end)
+        if c then
+            give c
+        end
+    end
+    give 0
+g(x)
+)", 1), R"(
+LOADN R3 1
+LOADN R1 3
+LOADN R2 1
+FORNPREP R1 L2
+L0: MOVE R4 R3
+GETIMPORT R5 1 [h]
+NEWCLOSURE R6 P0
+CAPTURE REF R4
+CALL R5 1 0
+JUMPIFNOT R4 L1
+MOVE R0 R4
+CLOSEUPVALS R4
+JUMP L3
+L1: CLOSEUPVALS R4
+FORNLOOP R1 L0
+L2: LOADN R0 0
+L3: GETIMPORT R1 3 [g]
+MOVE R2 R0
+CALL R1 1 0
+RETURN R0 0
+)");
+
+    // a break in a while condition jumps out of the enclosing loop, not the while
+    CHECK_EQ("\n" + compileFunction0(R"(
+for i = 1, 2 do
+    while do if f() then break end give g() do
+        h()
+    end
+end
+)"), R"(
+LOADN R2 1
+LOADN R0 2
+LOADN R1 1
+FORNPREP R0 L2
+L0: GETIMPORT R4 1 [f]
+CALL R4 0 1
+JUMPIF R4 L2
+GETIMPORT R3 3 [g]
+CALL R3 0 1
+JUMPIFNOT R3 L1
+GETIMPORT R3 5 [h]
+CALL R3 0 0
+JUMPBACK L0
+L1: FORNLOOP R0 L0
+L2: RETURN R0 0
+)");
+}
+
+// A do expression isn't a function that gets inlined: its block always compiles in place, at every optimization level,
+// whatever its size, nesting or the register pressure around it. Nothing here may create a closure or a call.
+TEST_CASE("DoExpressionAlwaysCompilesInPlace")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    auto compileAll = [](const std::string& source, int optimizationLevel)
+    {
+        Luau::BytecodeBuilder bcb;
+        bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code);
+        Luau::CompileOptions options;
+        options.optimizationLevel = optimizationLevel;
+        Luau::compileOrThrow(bcb, source, options);
+        return bcb.dumpEverything();
+    };
+
+    // far past any inlining cost threshold
+    std::string big = "local s = 0\nlocal x = do\n";
+    for (int i = 0; i < 300; ++i)
+        big += "    s += " + std::to_string(i) + "\n";
+    big += "    give s\nreturn x\n";
+
+    // nested deeper than inlining's depth limit
+    std::string nested = "1";
+    for (int i = 0; i < 40; ++i)
+        nested = "do local v = " + nested + " give v + 1";
+    nested = "return " + nested + "\n";
+
+    // with more registers live than inlining allows (it refuses above 128)
+    std::string pressure = "local t = {}\n";
+    for (int i = 0; i < 150; ++i)
+        pressure += "local r" + std::to_string(i) + " = t[" + std::to_string(i + 1) + "]\n";
+    pressure += "return do local a = r0 give a + r149\n";
+
+    for (const std::string& source : {big, nested, pressure})
+    {
+        for (int level = 0; level <= 2; ++level)
+        {
+            INFO(level);
+            std::string dump = compileAll(source, level);
+            CHECK(dump.find("Function 1") == std::string::npos);
+            CHECK(dump.find("CLOSURE") == std::string::npos);
+            CHECK(dump.find("CALL") == std::string::npos);
+        }
+    }
 }
 
 TEST_CASE("IfElseExpression")
@@ -11576,6 +12047,91 @@ end
         CHECK_MESSAGE(code.find("CHECKSELFCLASS") == std::string::npos, "function " << f << " kept a check a proven receiver does not need");
         CHECK_MESSAGE(code.find("GETOBJECTMEMBER") != std::string::npos, "function " << f << " did not reach the object path");
     }
+}
+
+TEST_CASE("ClassIsinstanceProofInAWhenChain")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuIfLocal, true},
+    };
+
+    // A `class.isinstance(c, C)` clause of a `when` chain proves `c` for the clauses after it and for the branch,
+    // exactly as an `if` condition proves it for its body. A write in a later clause or in the branch cancels it.
+    const char* source = R"(
+class Cat(public name: string)
+    public function meow(self): string
+        return self.name
+    end
+end
+
+function chain(x: unknown, flag): string
+    if local c = x when class.isinstance(c, Cat) when flag then
+        local r = c:meow()
+        return r
+    end
+    return ""
+end
+
+function expression(x: unknown): string
+    local r = if local c = x when class.isinstance(c, Cat) then c.name else ""
+    return r
+end
+
+function loop(xs): string
+    local out = ""
+    for _, v in xs when local ok = v when class.isinstance(v, Cat) do
+        local r = v:meow()
+        out ..= r
+    end
+    while local c = table.remove(xs) when class.isinstance(c, Cat) do
+        local r = c:meow()
+        out ..= r
+    end
+    return out
+end
+
+function writeInLaterClause(x: unknown, other): string
+    if local c = x when class.isinstance(c, Cat) when (do c = other give true) then
+        local r = c:meow()
+        return r
+    end
+    return ""
+end
+
+function writeInBranch(x: unknown, other): string
+    if local c = x when class.isinstance(c, Cat) then
+        c = other
+        local r = c:meow()
+        return r
+    end
+    return ""
+end
+)";
+
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    Luau::BytecodeBuilder bcb;
+    bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code);
+
+    Luau::CompileOptions options;
+    options.optimizationLevel = 2;
+
+    Luau::compileOrThrow(bcb, source, options);
+
+    // 0 is meow
+    for (int f : {1, 3})
+    {
+        std::string code = bcb.dumpFunction(f);
+
+        CHECK_MESSAGE(code.find("NAMECALL") == std::string::npos, "function " << f << " did not inline");
+        CHECK_MESSAGE(code.find("CHECKSELFCLASS") == std::string::npos, "function " << f << " kept a check a proven receiver does not need");
+    }
+
+    CHECK_MESSAGE(bcb.dumpFunction(2).find("GETOBJECTMEMBER") != std::string::npos, "the expression form did not reach the object path");
+
+    for (int f : {4, 5})
+        CHECK_MESSAGE(bcb.dumpFunction(f).find("NAMECALL") != std::string::npos, "function " << f << " inlined past a write it cannot see");
 }
 
 TEST_CASE("ClassAssertIsinstanceProvesTheRestOfTheBlock")

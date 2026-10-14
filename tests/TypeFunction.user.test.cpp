@@ -1196,6 +1196,35 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_calling_each_other_3")
     CHECK(toString(result.errors[1]) == R"('third' type function errored at runtime: [string "first"]:4: attempt to call a nil value)");
 }
 
+// Ported from upstream 0.734 (`LuauUdtfPopulateEnv`), plus a type function calling itself in a loop. A type function
+// called from a type function is typed, so misusing its result is reported, and `table.insert(parts, rec(part))`
+// picks an overload rather than reporting an ambiguous call.
+TEST_CASE_FIXTURE(BuiltinsFixture, "cross_type_function_type_check")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    CheckResult result = check(R"(
+        type function foo(x: number)
+            return x + 2
+        end
+
+        type function bar(ty: type)
+            return if foo(ty.tag) == 1 then types.any else types.boolean
+        end
+
+        type function rec(ty: type): type
+            local parts: { type } = {}
+            for _, part in ty:components() do
+                table.insert(parts, rec(part))
+            end
+            return types.unionof(table.unpack(parts))
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(toString(result.errors[0]).find("to be 'number', but") != std::string::npos);
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_calling_each_other_unordered")
 {
     ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};

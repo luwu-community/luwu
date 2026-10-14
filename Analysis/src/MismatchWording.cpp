@@ -201,6 +201,18 @@ std::string slotInProse(const std::string& noun, bool named)
     return named ? quoted(noun) : noun;
 }
 
+// The table a `NotAMap` difference expected: `array '{any}'` or `map '{ [string]: number }'`.
+static std::string expectedContainer(const Difference& d)
+{
+    return (d.expectsArray ? "array " : "map ") + quoted(d.super);
+}
+
+// The table a `NotAMap` difference was given, which has no indexer: `record 'Player'` or `empty table '{  }'`.
+static std::string givenTable(const Difference& d)
+{
+    return (d.givenEmpty ? "empty table " : "record ") + quoted(d.sub);
+}
+
 // A value passed to a parameter: `'i: number'` for a named one, `'number' as its 2nd argument` for one
 // whose name is lost. `parameterWord` says `parameter 'i: number'`, for a sentence with the signature
 // in it.
@@ -300,7 +312,8 @@ std::string describeInFunction(
         case Difference::Kind::CouldBeNil:
             return "In " + quoted(function) + ", " + parameterMismatch(d, noun);
         case Difference::Kind::NotAMap:
-            return calls + " with " + passedValue(noun, named, d.sub, collapsed) + ", a record where map " + quoted(d.super) + " is expected";
+            return calls + " with " + passedValue(noun, named, d.sub, collapsed) + (d.givenEmpty ? ", an empty table" : ", a record") + " where " +
+                   expectedContainer(d) + " is expected";
         case Difference::Kind::ArrayOfExpected:
         case Difference::Kind::ElementOfExpected:
             return calls + " with " + passedValue(noun, named, d.sub, collapsed) + ", " + arrayNestingArgument(d);
@@ -339,7 +352,7 @@ std::string describeInFunction(
         case Difference::Kind::CouldBeNil:
             return should + quoted(d.super) + here + ", never 'nil'";
         case Difference::Kind::NotAMap:
-            return should + "map " + quoted(d.super) + here + ", not record " + quoted(d.sub);
+            return should + expectedContainer(d) + here + ", not " + givenTable(d);
         case Difference::Kind::ArrayOfExpected:
         case Difference::Kind::ElementOfExpected:
             return should + arrayNestingReturn(d, here);
@@ -377,7 +390,7 @@ std::string describeAsListItem(const Difference& d, bool sayReturned, uint8_t* n
         case Difference::Kind::CouldBeNil:
             return parameterMismatch(d, noun);
         case Difference::Kind::NotAMap:
-            return noun + ": expected record " + quoted(d.sub) + ", got map " + quoted(d.super);
+            return noun + ": expected " + givenTable(d) + ", got " + expectedContainer(d);
         case Difference::Kind::ArrayOfExpected:
             return noun + ": expected an array of " + quoted(d.super) + ", got a single one";
         case Difference::Kind::ElementOfExpected:
@@ -407,7 +420,7 @@ std::string describeAsListItem(const Difference& d, bool sayReturned, uint8_t* n
         case Difference::Kind::CouldBeNil:
             return quoted(d.super) + here + ", never 'nil'";
         case Difference::Kind::NotAMap:
-            return "map " + quoted(d.super) + here + ", not record " + quoted(d.sub);
+            return expectedContainer(d) + here + ", not " + givenTable(d);
         case Difference::Kind::ArrayOfExpected:
         case Difference::Kind::ElementOfExpected:
             return arrayNestingReturn(d, here);
@@ -528,7 +541,7 @@ std::string describe(const Difference& d, Rendering& rendering)
     case Difference::Kind::CouldBeNil:
         return path + ": expected " + quoted(d.super) + ", but it could be 'nil'";
     case Difference::Kind::NotAMap:
-        return path + ": expected map " + quoted(d.super) + ", got record " + quoted(d.sub);
+        return path + ": expected " + expectedContainer(d) + ", got " + givenTable(d);
     case Difference::Kind::ArrayOfExpected:
         return path + " is " + arrayNestingArgument(d);
     case Difference::Kind::ElementOfExpected:
@@ -767,6 +780,27 @@ std::string propertiesHeader()
 std::string couldBeNilHeader(const std::string& subject)
 {
     return "This is because " + quoted(subject) + " could be 'nil'.";
+}
+
+std::string noIndexerSentence(const std::string& subject, const Difference& d)
+{
+    std::string what = d.givenEmpty ? " is an empty table" : " is a record";
+    return subject + what + " where " + expectedContainer(d) + " is expected.";
+}
+
+std::string emptyTableHelp(const std::string& variable, const std::string& type)
+{
+    return "Help (empty table type):\n"
+           "  - Nothing tells the type checker what " + quoted(variable) + " will hold, so its type is '{}'\n"
+           "  - To fix this, annotate " + quoted(variable) + " as " + quoted(type) + " where it's declared";
+}
+
+std::string unknownElementsHelp(const std::string& variable, const std::string& type)
+{
+    return "Help (unknown element type):\n"
+           "  - Nothing tells the type checker what " + quoted(variable) + " holds, so its elements are 'unknown' "
+           "('table.create(n)' without a value does this)\n"
+           "  - To fix this, annotate " + quoted(variable) + " as " + quoted(type) + " where it's declared";
 }
 
 std::string unionMembersHeader(bool noneFit, const std::string& unionName, const std::string& target)

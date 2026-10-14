@@ -750,6 +750,28 @@ struct Printer
 
                 visualizeAttributesOf(item.attributes, nullptr);
 
+                // Luwu: `function name() end`, written as such rather than `name = function() end`
+                if (AstExprFunction* fn = item.value->as<AstExprFunction>(); cstItem && cstItem->namedFunction && fn)
+                {
+                    for (const auto& attribute : fn->attributes)
+                        visualizeAttribute(*attribute);
+
+                    if (const auto cstNode = lookupCstNode<CstExprFunction>(fn); cstNode && cstNode->functionKeywordPosition.hasValue())
+                        advance(cstNode->functionKeywordPosition);
+                    writer.keyword("function");
+
+                    const auto& name = item.key->as<AstExprConstantString>()->value;
+                    advance(item.key->location.begin);
+                    writer.identifier(std::string_view(name.data, name.size));
+
+                    visualizeFunctionBody(*fn);
+
+                    if (cstItem->separator != CstExprTable::Separator::Missing)
+                        maybeAdvanceAndWrite(cstItem->separatorPosition, cstItem->separator == CstExprTable::Separator::Comma ? "," : ";", true);
+                    cstItem++;
+                    continue;
+                }
+
                 switch (item.kind)
                 {
                 case AstExprTable::Item::Kind::List:
@@ -907,6 +929,131 @@ struct Printer
             writer.keyword("if");
             visualizeElseIfExpr(*a);
         }
+        else if (const auto& a = expr.as<AstExprDo>())
+        {
+            // Luwu Do Expressions (rfcs/do-expressions.md): the shorthand (`x or return v`) is just its statement
+            if (!a->shorthand)
+                writer.keyword("do");
+
+            for (AstStat* stat : a->body->body)
+                visualize(*stat);
+        }
+        else if (const auto& a = expr.as<AstExprTableComprehension>())
+        {
+            // Luwu Table Comprehensions (rfcs/table-comprehensions.md): prints the clauses back from the loop they are
+            // stored as (see AstExprTableComprehension)
+            writer.symbol("{");
+
+            AstStat* stat = a->loop;
+            Location doLocation;
+
+            while (stat && !stat->is<AstStatComprehensionItem>())
+            {
+                AstStatBlock* body = nullptr;
+
+                if (AstStatFor* range = stat->as<AstStatFor>())
+                {
+                    const auto cstNode = lookupCstNode<CstStatFor>(range);
+
+                    advance(range->forLocation.begin);
+                    writer.keyword("for");
+                    visualize(*range->var, cstNode ? cstNode->annotationColonPosition : Position::missing());
+
+                    if (cstNode)
+                        advance(cstNode->equalsPosition);
+                    writer.symbol("=");
+                    visualize(*range->from);
+
+                    if (cstNode)
+                        maybeAdvanceAndWrite(cstNode->endCommaPosition, ",");
+                    else
+                        writer.symbol(",");
+                    visualize(*range->to);
+
+                    if (range->step)
+                    {
+                        if (cstNode)
+                            advance(cstNode->stepCommaPosition);
+                        writer.symbol(",");
+                        visualize(*range->step);
+                    }
+
+                    body = visualizeLoopWhen(*range->body, range->whenGuard);
+                    doLocation = range->doLocation;
+                }
+                else
+                {
+                    AstStatForIn* generic = stat->as<AstStatForIn>();
+                    LUAU_ASSERT(generic);
+                    const auto cstNode = lookupCstNode<CstStatForIn>(generic);
+
+                    advance(generic->forLocation.begin);
+                    writer.keyword("for");
+
+                    CommaSeparatorInserter varComma(writer, cstNode ? cstNode->varsCommaPositions.begin() : nullptr);
+                    for (size_t i = 0; i < generic->vars.size; i++)
+                    {
+                        varComma();
+                        bool hasColon = cstNode && cstNode->varsAnnotationColonPositions.size > i;
+                        visualize(*generic->vars.data[i], hasColon ? cstNode->varsAnnotationColonPositions.data[i] : Position::missing());
+                    }
+
+                    advance(generic->inLocation.begin);
+                    writer.keyword("in");
+
+                    CommaSeparatorInserter valComma(writer, cstNode ? cstNode->valuesCommaPositions.begin() : nullptr);
+                    for (AstExpr* value : generic->values)
+                    {
+                        valComma();
+                        visualize(*value);
+                    }
+
+                    body = visualizeLoopWhen(*generic->body, generic->whenGuard);
+                    doLocation = generic->doLocation;
+                }
+
+                // the clause's next `for` or the item, after any destructured fields
+                LUAU_ASSERT(body->body.size >= 1);
+                stat = body->body.data[body->body.size - 1];
+            }
+
+            advance(doLocation.begin);
+            writer.keyword("give");
+
+            const auto cstNode = lookupCstNode<CstExprTable>(a);
+            const CstExprTable::Item* cstItem = cstNode && cstNode->items.size == 1 ? cstNode->items.begin() : nullptr;
+
+            if (a->item->key)
+            {
+                std::string assignment = a->item->accumulate ? toString(*a->item->accumulate) + "=" : "=";
+
+                if (cstItem)
+                {
+                    maybeAdvanceAndWrite(cstItem->indexerOpenPosition, "[", true);
+                    visualize(*a->item->key);
+                    maybeAdvanceAndWrite(cstItem->indexerClosePosition, "]");
+                    maybeAdvanceAndWrite(cstItem->equalsPosition, assignment);
+                }
+                else
+                {
+                    writer.symbol("[");
+                    visualize(*a->item->key);
+                    writer.symbol("]");
+                    writer.maybeSpace(a->item->value->location.begin, 1);
+                    writer.symbol(assignment);
+                }
+            }
+
+            visualize(*a->item->value);
+
+            Position endPos = expr.location.end;
+            if (endPos.column > 0)
+                --endPos.column;
+
+            advance(endPos);
+            writer.symbol("}");
+            advance(expr.location.end);
+        }
         else if (const auto& a = expr.as<AstExprInterpString>())
         {
             const auto* cstNode = lookupCstNode<CstExprInterpString>(a);
@@ -1045,7 +1192,7 @@ struct Printer
         else if (const auto& a = program.as<AstStatWhile>())
         {
             writer.keyword("while");
-            visualize(*a->condition);
+            visualizeIfCondition(*a->condition, a->clauses);
             // TODO: what if 'hasDo = false'?
             advance(a->doLocation.begin);
             writer.keyword("do");
@@ -1070,6 +1217,12 @@ struct Printer
             writer.keyword("break");
         else if (program.is<AstStatContinue>())
             writer.keyword("continue");
+        else if (const auto& a = program.as<AstStatGive>())
+        {
+            // Luwu Do Expressions (rfcs/do-expressions.md)
+            writer.keyword("give");
+            visualize(*a->value);
+        }
         else if (const auto& a = program.as<AstStatReturn>())
         {
             const auto cstNode = lookupCstNode<CstStatReturn>(a);
@@ -1182,9 +1335,11 @@ struct Printer
 
                 visualize(*a->step);
             }
+
+            AstStatBlock* body = visualizeLoopWhen(*a->body, a->whenGuard);
             advance(a->doLocation.begin);
             writer.keyword("do");
-            visualizeBlock(*a->body);
+            visualizeBlock(*body);
 
             advance(a->body->location.end);
             writer.keyword("end");
@@ -1208,10 +1363,11 @@ struct Printer
                 visualize(*val);
             }
 
+            AstStatBlock* body = visualizeLoopWhen(*a->body, a->whenGuard);
             advance(a->doLocation.begin);
             writer.keyword("do");
 
-            visualizeBlock(*a->body);
+            visualizeBlock(*body);
 
             advance(a->body->location.end);
             writer.keyword("end");
@@ -1967,9 +2123,52 @@ struct Printer
         }
     }
 
+    // Luwu If Local (rfcs/if-local.md): prints a loop's `when` chain, if its body holds one (AstStatFor::whenGuard),
+    // and returns the block as written.
+    AstStatBlock* visualizeLoopWhen(AstStatBlock& body, AstStatIf* guard)
+    {
+        if (!guard)
+            return &body;
+
+        // a single plain `when` is stored as an ordinary condition, and its `when` is the if's keyword
+        if (guard->clauses.size == 0)
+        {
+            advance(guard->ifLocation.begin);
+            writer.keyword("when");
+        }
+
+        visualizeIfCondition(*guard->condition, guard->clauses);
+        return guard->thenbody;
+    }
+
+    // Luwu If Local (rfcs/if-local.md): a `when` chain prints clause by clause. A binding prints through its
+    // declaration.
+    void visualizeIfCondition(AstExpr& condition, const AstArray<AstIfClause>& clauses)
+    {
+        if (clauses.size == 0)
+        {
+            visualize(condition);
+            return;
+        }
+
+        for (const AstIfClause& clause : clauses)
+        {
+            if (clause.whenLocation)
+            {
+                advance(clause.whenLocation->begin);
+                writer.keyword("when");
+            }
+
+            if (clause.declaration)
+                visualize(static_cast<AstStat&>(*clause.declaration));
+            else
+                visualize(*clause.expr);
+        }
+    }
+
     void visualizeElseIf(AstStatIf& elseif)
     {
-        visualize(*elseif.condition);
+        visualizeIfCondition(*elseif.condition, elseif.clauses);
         if (elseif.thenLocation)
             advance(elseif.thenLocation->begin);
         writer.keyword("then");
@@ -2003,7 +2202,7 @@ struct Printer
     {
         const auto cstNode = lookupCstNode<CstExprIfElse>(&elseif);
 
-        visualize(*elseif.condition);
+        visualizeIfCondition(*elseif.condition, elseif.clauses);
         if (cstNode)
             maybeAdvanceAndWrite(cstNode->thenPosition, "then");
         else

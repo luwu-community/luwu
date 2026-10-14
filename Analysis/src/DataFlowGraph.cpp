@@ -106,6 +106,14 @@ const RefinementKey* DataFlowGraph::getRefinementKey(const AstExpr* expr) const
     return nullptr;
 }
 
+const RefinementKey* DataFlowGraph::getRefinementKey(const AstLocal* local) const
+{
+    if (auto key = ifBindingRefinementKeys.find(local))
+        return *key;
+
+    return nullptr;
+}
+
 std::optional<Symbol> DataFlowGraph::getSymbolFromDef(const Def* def) const
 {
     if (auto ref = defToSymbol.find(def))
@@ -436,6 +444,10 @@ ControlFlow DataFlowGraphBuilder::visit(AstStat* s)
         return visit(c);
     else if (auto r = s->as<AstStatReturn>())
         return visit(r);
+    else if (auto g = s->as<AstStatGive>())
+        return visit(g);
+    else if (auto i = s->as<AstStatComprehensionItem>())
+        return visit(i);
     else if (auto e = s->as<AstStatExpr>())
         return visit(e);
     else if (auto l = s->as<AstStatLocal>())
@@ -475,16 +487,38 @@ ControlFlow DataFlowGraphBuilder::visit(AstStat* s)
         handle->ice("Unknown AstStat in DataFlowGraphBuilder::visit");
 }
 
+// Luwu If Local (rfcs/if-local.md): visits a `when` chain in the scope of the branch it guards. A binding's
+// declaration is an ordinary `local`; its def also gets the refinement key the binding is narrowed through.
+void DataFlowGraphBuilder::visitIfClauses(const AstArray<AstIfClause>& clauses)
+{
+    for (const AstIfClause& clause : clauses)
+    {
+        if (!clause.declaration)
+        {
+            visitExpr(clause.expr);
+            continue;
+        }
+
+        visit(clause.declaration);
+
+        DefId def = graph.getDef(clause.local);
+        graph.ifBindingRefinementKeys[clause.local] = keyArena->leaf(def);
+        graph.defToSymbol[def] = clause.local;
+    }
+}
+
 ControlFlow DataFlowGraphBuilder::visit(AstStatIf* i)
 {
-    visitExpr(i->condition);
-
     DfgScope* thenScope = makeChildScope();
     DfgScope* elseScope = makeChildScope();
+
+    if (i->clauses.size == 0)
+        visitExpr(i->condition);
 
     ControlFlow thencf;
     {
         PushScope ps{scopeStack, thenScope};
+        visitIfClauses(i->clauses);
         thencf = visit(i->thenbody);
     }
 
@@ -532,7 +566,11 @@ ControlFlow DataFlowGraphBuilder::visit(AstStatWhile* w)
     ControlFlow cf;
     {
         PushScope ps{scopeStack, whileScope};
-        visitExpr(w->condition);
+        // Luwu If Local (rfcs/if-local.md): a `when` chain's bindings are declared in the loop's scope
+        if (w->clauses.size == 0)
+            visitExpr(w->condition);
+        else
+            visitIfClauses(w->clauses);
         cf = visit(w->body);
     }
 
@@ -1067,6 +1105,10 @@ DataFlowResult DataFlowGraphBuilder::visitExpr(AstExpr* e)
             return visitExpr(i);
         else if (auto i = e->as<AstExprInstantiate>())
             return visitExpr(i);
+        else if (auto d = e->as<AstExprDo>())
+            return visitExpr(d);
+        else if (auto c = e->as<AstExprTableComprehension>())
+            return visitExpr(c);
         else if (auto error = e->as<AstExprError>())
             return visitExpr(error);
         else
@@ -1326,13 +1368,125 @@ DataFlowResult DataFlowGraphBuilder::visitExpr(AstExprTypeAssertion* t)
     return {def, key};
 }
 
+// Luwu Do Expressions (rfcs/do-expressions.md): a branch can assign (`if c then do x = 1 give x else x`), so each branch
+// gets its own scope and the code after the expression sees the join of both, as after an `if` statement. Upstream
+// visits all three parts in one scope, which is only right while expressions can't assign.
 DataFlowResult DataFlowGraphBuilder::visitExpr(AstExprIfElse* i)
 {
-    visitExpr(i->condition);
-    visitExpr(i->trueExpr);
-    visitExpr(i->falseExpr);
+    DfgScope* thenScope = makeChildScope();
+    DfgScope* elseScope = makeChildScope();
+
+    if (i->clauses.size == 0)
+        visitExpr(i->condition);
+
+    {
+        PushScope ps{scopeStack, thenScope};
+        // Luwu If Local (rfcs/if-local.md): the chain's bindings are in scope only in the `then` branch
+        visitIfClauses(i->clauses);
+        visitExpr(i->trueExpr);
+    }
+
+    {
+        PushScope ps{scopeStack, elseScope};
+        visitExpr(i->falseExpr);
+    }
+
+    join(currentScope(), thenScope, elseScope);
 
     return {defArena->freshCell(Symbol{}, i->location), nullptr};
+}
+
+// Luwu Do Expressions (rfcs/do-expressions.md): the block always ends in a `give`, `return`, `break` or `continue`, so
+// nothing falls out of its end. Code after the expression runs only after a `give`, and sees the join of what each
+// `give` saw.
+DataFlowResult DataFlowGraphBuilder::visitExpr(AstExprDo* d)
+{
+    DfgScope* outer = currentScope();
+    giveExits.push_back({outer, nullptr});
+
+    DfgScope* body = makeChildScope();
+    {
+        PushScope ps{scopeStack, body};
+        visitBlockWithoutChildScope(d->body);
+    }
+
+    DfgScope* joined = giveExits.back().joined;
+    giveExits.pop_back();
+
+    if (joined)
+        outer->inherit(joined);
+
+    return {defArena->freshCell(Symbol{}, d->location), nullptr};
+}
+
+// Luwu Table Comprehensions (rfcs/table-comprehensions.md): the loop is an ordinary loop statement, scoped to the
+// expression
+DataFlowResult DataFlowGraphBuilder::visitExpr(AstExprTableComprehension* c)
+{
+    DfgScope* inner = makeChildScope();
+    {
+        PushScope ps{scopeStack, inner};
+        visit(c->loop);
+    }
+
+    currentScope()->inherit(inner);
+
+    return {defArena->freshCell(Symbol{}, c->location), nullptr};
+}
+
+ControlFlow DataFlowGraphBuilder::visit(AstStatComprehensionItem* i)
+{
+    if (i->key)
+        visitExpr(i->key);
+
+    visitExpr(i->value);
+    return ControlFlow::None;
+}
+
+// Luwu Do Expressions (rfcs/do-expressions.md): records what this path assigned since the `do` expression started, and
+// joins it with the other `give`s. Inside the block, a `give` leaves like `return`.
+ControlFlow DataFlowGraphBuilder::visit(AstStatGive* g)
+{
+    visitExpr(g->value);
+
+    // The parser only accepts `give` inside a `do` expression
+    if (giveExits.empty())
+        return ControlFlow::None;
+
+    DfgScope* outer = giveExits.back().outer;
+    DfgScope* path = scopes.emplace_back(new DfgScope{outer, DfgScope::Linear}).get();
+
+    // The innermost scope's def for a symbol wins
+    for (DfgScope* scope = currentScope(); scope && scope != outer; scope = scope->parent)
+    {
+        for (const auto& [symbol, def] : scope->bindings)
+        {
+            if (!path->bindings.find(symbol))
+                path->bindings[symbol] = def;
+        }
+
+        for (const auto& [parent, props] : scope->props)
+        {
+            auto& pathProps = path->props[parent];
+            for (const auto& [key, def] : props)
+                pathProps.try_emplace(key, def);
+        }
+    }
+
+    DfgScope* joined = giveExits.back().joined;
+
+    if (!joined)
+    {
+        giveExits.back().joined = path;
+    }
+    else
+    {
+        DfgScope* merged = scopes.emplace_back(new DfgScope{outer, DfgScope::Linear}).get();
+        join(merged, joined, path);
+        giveExits.back().joined = merged;
+    }
+
+    return ControlFlow::Returns;
 }
 
 DataFlowResult DataFlowGraphBuilder::visitExpr(AstExprInterpString* i)

@@ -3120,6 +3120,9 @@ return f
 
 TEST_CASE_FIXTURE(Fixture, "StyleGroupTurnsOffItsParts")
 {
+    // With do expressions on, a Luwu file's one-line guard is a LuaGuard instead
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, false};
+
     LintResult result = lint(R"(--!nolint Style
 local t = {}
 if t.a then print(1) end
@@ -3267,6 +3270,159 @@ if local grouped = (find(1) and t.flag == 1) then print(grouped) end
 }
 
 // Luwu Do Expressions (rfcs/do-expressions.md)
+// Luwu Do Expressions (rfcs/do-expressions.md): an unfinished `do` typed above code that ends in `return` takes that code
+// as its block; the first line indented like the code after the `do` is pointed out, with the `do` and the `return`
+TEST_CASE_FIXTURE(Fixture, "MisleadingIndentation")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    LintResult result = lint(R"(
+local function f(s: string)
+    const prefix = do
+
+    const splits = string.split(s, "/")
+    print(splits)
+    return {
+        prefix = 1,
+    }
+end
+local function g(s: string)
+    const a = do
+        print(s)
+    give 1
+    return a
+end
+return f, g
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_MisleadingIndentation);
+    REQUIRE_EQ(found.size(), 3);
+    CHECK_EQ(found[0].text, "The 'return' on line 7 ends the 'do' expression on line 3");
+    CHECK_EQ(found[0].location, Location(Position(2, 19), Position(2, 21)));
+    CHECK_EQ(found[1].text, "This line is in the 'do' expression on line 3, but is indented like the code after it");
+    CHECK_EQ(found[1].location, Location(Position(4, 4), Position(4, 39)));
+    CHECK_EQ(found[2].text, found[0].text);
+    CHECK_EQ(found[2].location, Location(Position(6, 4), Position(6, 10)));
+}
+
+// Luwu Do Expressions (rfcs/do-expressions.md): a statement that always runs a returning `do` ends the code path, and a
+// condition that can only be true after one returns guards a branch that never runs
+TEST_CASE_FIXTURE(Fixture, "UnreachableCodeAfterReturningDoExpressions")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    LintResult result = lint(R"(
+local function f(s: string)
+    if s == "a" and (do return "a") then
+        print("never")
+    end
+    print(do return "b")
+    print("never either")
+end
+local function g(s: string)
+    if s == "a" or (do return "a") then
+        print("runs when s is 'a'")
+    end
+    print(s and do return "b")
+    print("runs when s is falsy")
+end
+return f, g
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_UnreachableCode);
+    REQUIRE_EQ(found.size(), 2);
+    CHECK_EQ(found[0].text, "Unreachable code (the condition always returns before it can be true)");
+    CHECK_EQ(found[0].location.begin.line, 3);
+    CHECK_EQ(found[1].text, "Unreachable code (previous statement always returns)");
+    CHECK_EQ(found[1].location.begin.line, 6);
+}
+
+// Luwu Do Expressions (rfcs/do-expressions.md): a one-line `do` expression holds several statements on its line by
+// design; a later line of a longer one is checked as usual
+TEST_CASE_FIXTURE(Fixture, "SameLineStatementInDoExpressions")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    LintResult result = lint(R"(
+local function f(s: any)
+    local ok = if typeof(s) ~= "string" then (do s = tostring(s) give true) else true
+    local v = do
+        print(s) print(ok)
+        give 1
+    return v
+end
+return f
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_SameLineStatement);
+    REQUIRE_EQ(found.size(), 1);
+    CHECK_EQ(found[0].location.begin.line, 4);
+}
+
+// Luwu Do Expressions (rfcs/do-expressions.md): `x = x or return nil` assigns `x` to itself; the guard alone does the
+// same narrowing
+TEST_CASE_FIXTURE(Fixture, "SelfAssignmentOfAGuard")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    LintResult result = lint(R"(
+local function f(comments: string?, t: { x: number? })
+    comments = comments or return nil
+    for _ = 1, 2 do
+        comments = comments or continue
+    end
+    local other = comments or return nil
+    comments = other or return nil
+    t.x = t.x or return nil
+    return comments, other
+end
+return f
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_SelfAssignment);
+    // the field too: the fixture is strict, where SelfAssignment reports fields
+    REQUIRE_EQ(found.size(), 3);
+    CHECK_EQ(found[0].text, "Replace this with 'comments or return nil'");
+    CHECK_EQ(found[0].location, Location(Position(2, 4), Position(2, 37)));
+    CHECK_EQ(found[1].text, "Replace this with 'comments or continue'");
+    CHECK_EQ(found[2].text, "Replace this with 't.x or return nil'");
+}
+
+// Luwu If Local (rfcs/if-local.md): a condition binding a name to itself tests nothing a plain condition doesn't
+TEST_CASE_FIXTURE(Fixture, "SelfAssignmentInConditionBindings")
+{
+    ScopedFastFlag ifLocal{FFlag::LuwuIfLocal, true};
+
+    LintResult result = lint(R"(
+local function f(s: string?, n: number?)
+    if const s = s then
+        print(s)
+    end
+    if n when local n = n then
+        print(n)
+    end
+    while local s = s do
+        print(s)
+        break
+    end
+    if local s: string = s then
+        print(s)
+    end
+    local v = if const n = n then n else 0
+    return v
+end
+return f
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_SelfAssignment);
+    REQUIRE_EQ(found.size(), 4);
+    CHECK_EQ(found[0].text, "Binding 's' to itself does nothing; test it directly with 'if s'");
+    CHECK_EQ(found[0].location, Location(Position(2, 13), Position(2, 18)));
+    CHECK_EQ(found[1].text, "Binding 'n' to itself does nothing; test it directly with 'when n'");
+    CHECK_EQ(found[2].text, "Binding 's' to itself does nothing; test it directly with 'while s'");
+    CHECK_EQ(found[3].text, "Binding 'n' to itself does nothing; test it directly with 'if n'");
+}
+
 TEST_CASE_FIXTURE(Fixture, "ReturnOnNextLine")
 {
     ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
@@ -3418,10 +3574,13 @@ local w = do
 print(v, w)
 )");
 
+    // `w`'s `do` always raises, so the `print` after it never runs
     std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_UnreachableCode);
-    REQUIRE_EQ(found.size(), 1);
+    REQUIRE_EQ(found.size(), 2);
     CHECK_EQ(found[0].location.begin.line, 4);
     CHECK_EQ(found[0].text, "Unreachable code (previous statement always gives)");
+    CHECK_EQ(found[1].location.begin.line, 8);
+    CHECK_EQ(found[1].text, "Unreachable code (previous statement always errors)");
 }
 
 TEST_CASE_FIXTURE(Fixture, "DuplicateConditionsExpr")
