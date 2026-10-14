@@ -7548,10 +7548,16 @@ bool Parser::matchExpressionsAvailable()
     return FFlag::DebugLuwuMatchExpressions && options.language == Language::Luwu;
 }
 
-// Luwu match expressions: `is` or `implements` after an operand, on its line. `is = 1` assigns a variable named `is`.
+// Luwu match expressions: `is` or `implements` after an operand, followed by a name, `not` or `function`. Anything else
+// after it (`is = 1`, `is(f)`, `is.x`, `is "s"`) is a statement using a variable named `is`, which Luau code may have
+// on the same line, so it's never a type test.
 bool Parser::typeTestFollows()
 {
-    return matchExpressionsAvailable() && isTypeTestKeyword(lexer.current()) && continuesOnSameLine() && lexer.lookahead().type != '=';
+    if (!matchExpressionsAvailable() || !isTypeTestKeyword(lexer.current()))
+        return false;
+
+    Lexeme::Type next = lexer.lookahead().type;
+    return next == Lexeme::Name || next == Lexeme::ReservedNot || next == Lexeme::ReservedFunction;
 }
 
 // Luwu match expressions: `library.function(args)` on the global `library`, never a local that shadows it
@@ -7597,20 +7603,82 @@ AstExpr* Parser::parseTypeTest(AstExpr* value, const Location& start)
     return negated ? allocator.alloc<AstExprUnary>(location, AstExprUnary::Op::Not, test) : test;
 }
 
-// Luwu match expressions: `match` starting an expression, followed on its line by the value it tests (or `const` /
-// `local` naming it). `match(x)`, `match "s"` and `match.x` stay calls and indexing.
+// Luwu match expressions: whether `lexeme`, a `case` after a `match` subject, starts an arm rather than a statement
+// using a variable named `case` (`case = 1`, `case(x)`, `case.x`)
+static bool caseStartsArm(const Lexeme& next)
+{
+    switch (next.type)
+    {
+    case '=':
+    case '(':
+    case '.':
+    case '[':
+    case ':':
+    case '{':
+    case ',':
+        return false;
+    default:
+        return true;
+    }
+}
+
+// Luwu match expressions: `match` starting an expression, which is decided by a `case` arm following the value it
+// tests. Line breaks don't matter. `const which = match x or return` is valid Luau (a global `match`, then a statement
+// on the same line), and so is the same code split over two lines; neither has a `case`.
+//
+// The look-ahead scans to the first token at bracket depth 0 that starts a line after the subject's first token. A
+// `case` there (or on the subject's lines) is an arm. So is a lone `c`, `ca` or `cas` on its line, which is the first
+// arm still being typed and can't be a Luau statement.
 bool Parser::matchExpressionFollows()
 {
     const Lexeme& current = lexer.current();
     if (!matchExpressionsAvailable() || current.type != Lexeme::Name || AstName(current.name) != "match")
         return false;
 
-    Lexeme next = lexer.lookahead();
-    bool sameLine = next.location.begin.line == current.location.end.line;
-    bool startsSubject = next.type == Lexeme::Name || next.type == Lexeme::ReservedLocal || next.type == Lexeme::ReservedNot ||
-                         next.type == Lexeme::Number || next.type == Lexeme::ReservedTrue || next.type == Lexeme::ReservedFalse ||
-                         next.type == Lexeme::ReservedNil;
-    return sameLine && startsSubject;
+    // a subject can't start with these; `match.find(s)` and `match:x()` stay indexing and calls
+    Lexeme::Type afterMatch = lexer.lookahead().type;
+    if (afterMatch == '.' || afterMatch == ':' || afterMatch == '=')
+        return false;
+
+    Lexer probe = lexer;
+    auto advance = [&probe]() -> const Lexeme&
+    {
+        const Lexeme* next = &probe.next();
+        while (next->type == Lexeme::Comment || next->type == Lexeme::BlockComment)
+            next = &probe.next();
+        return *next;
+    };
+
+    unsigned int previousLine = current.location.end.line;
+    bool subjectStarted = false;
+    unsigned int depth = 0;
+    for (const Lexeme* token = &advance(); token->type != Lexeme::Eof; token = &advance())
+    {
+        bool isCase = token->type == Lexeme::Name && AstName(token->name) == "case";
+        if (depth == 0 && subjectStarted && isCase)
+            return caseStartsArm(probe.lookahead());
+
+        if (depth == 0 && subjectStarted && token->location.begin.line > previousLine)
+        {
+            std::string_view name = token->type == Lexeme::Name ? token->name : "";
+            if (name.empty() || name.size() >= 4 || std::string_view("case").substr(0, name.size()) != name)
+                return false;
+
+            unsigned int line = token->location.end.line;
+            const Lexeme& after = advance();
+            return after.type == Lexeme::Eof || after.location.begin.line > line;
+        }
+
+        if (token->type == '(' || token->type == '[' || token->type == '{')
+            depth++;
+        else if ((token->type == ')' || token->type == ']' || token->type == '}') && depth > 0)
+            depth--;
+
+        subjectStarted = true;
+        previousLine = token->location.end.line;
+    }
+
+    return false;
 }
 
 // Luwu match expressions:

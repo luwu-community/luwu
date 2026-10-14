@@ -123,7 +123,7 @@ TEST_CASE_FIXTURE(Fixture, "match_mistakes_get_one_error")
                  "('match const v = ...') and use 'when v == x'",
              },
              Case{
-                 "local x = 1\nlocal y = match x\nprint(y)\n",
+                 "local x = 1\nlocal y = match x\n    c\nprint(y)\n",
                  "Expected 'case' after the value 'match' tests",
              },
          })
@@ -135,6 +135,20 @@ TEST_CASE_FIXTURE(Fixture, "match_mistakes_get_one_error")
     }
 }
 
+// An unnamed subject's hidden local is never reported unused, even before the first arm is written
+TEST_CASE_FIXTURE(BuiltinsFixture, "an_unfinished_match_has_no_unused_subject")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    LintResult result = lint("local function f(): string? return nil end\nlocal x = match f() or 'a'\nprint(x)\n");
+    for (const LintWarning& warning : result.warnings)
+        CHECK_NE(warning.code, LintWarning::Code_LocalUnused);
+}
+
 // Valid Luau that looks like the new syntax keeps its parse in a Luau file
 TEST_CASE_FIXTURE(Fixture, "match_and_is_stay_names_in_luau_files")
 {
@@ -144,6 +158,30 @@ TEST_CASE_FIXTURE(Fixture, "match_and_is_stay_names_in_luau_files")
     options.language = Language::Luau;
     ParseResult result = tryParse("local match, is, x, b = 1, 2, 3, 4\nlocal a = x is = 1\nlocal c = match b = 2\n", options);
     CHECK_EQ(result.errors.size(), 0);
+}
+
+// In a Luwu file too, `match` and `is` stay names wherever the code means something without them, whatever the line
+// breaks: no `case` follows the `match`, and no name follows the `is`
+TEST_CASE_FIXTURE(Fixture, "match_and_is_stay_names_in_valid_code")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    for (const char* source : {
+             "local match, f, t = 1, function() end, {}\nlocal which = match f(1) or error('x') or return;\n",
+             "local match, f, t = 1, function() end, {}\nlocal which = match\nf(1) or error('x') or return;\n",
+             "local match, f = 1, function() end\nlocal which = match f(1)\nlocal case = 2\n",
+             "local match, f = 1, function() end\nlocal which = match f(1)\ncase = 2\n",
+             "local match, x, is = 1, 2, function() end\nlocal a = x is(print)\n",
+             "local match, x, is = 1, 2, {}\nlocal a = x\nis.y = 1\n",
+         })
+    {
+        INFO(source);
+        ParseResult result = tryParse(source);
+        CHECK_EQ(result.errors.size(), 0);
+    }
 }
 
 const char* const kTypewriterBefore = R"(local function maybe(): number?
