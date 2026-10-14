@@ -176,8 +176,7 @@ static TypeId writtenLiteralType(TypeArena& arena, NotNull<BuiltinTypes> builtin
     if (isLiteralValue(inferred))
         return inferred;
 
-    AstExpr* written = value;
-    written = unwrapGroup(written);
+    AstExpr* written = unwrapGroup(value);
 
     if (AstExprConstantString* str = written->as<AstExprConstantString>())
         return arena.addType(SingletonType{StringSingleton{std::string(str->value.data, str->value.size)}});
@@ -3212,8 +3211,7 @@ void TypeChecker2::checkLiteralParameters(AstExprCall* call, const FunctionType*
 
         // The caller's own literal parameter, passed on: its argument was checked where the caller was called. Only the
         // same validator can stand in for this one's, which can't see what that literal was.
-        AstExpr* written = arg;
-        written = unwrapGroup(written);
+        AstExpr* written = unwrapGroup(arg);
         // A cast to a literal type (`s :: literal<string>`) passes as one, checked by nothing, like a cast to `any`
         if (module->literalAssertions.contains(written))
             continue;
