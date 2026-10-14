@@ -6,6 +6,7 @@
 #include "Luau/ConstraintSolver.h"
 #include "Luau/Common.h"
 #include "Luau/DenseHash.h"
+#include "Luau/RecursionCounter.h"
 #include "Luau/StringUtils.h"
 #include "Luau/Type.h"
 #include "Luau/TypeArena.h"
@@ -1106,11 +1107,19 @@ private:
     // Luwu: whether `tfti` and every type it reaches are as they were serialized: none of them was edited
     // (TypeFunctionType::edited). Only then is a type still the alias its origin was named as.
     DenseHashMap<TypeFunctionTypeId, bool> pristineTypes{nullptr};
+    // How deep isPristine follows a type. A deeper one counts as edited, which only costs it its alias name.
+    static constexpr int kMaxPristineDepth = 200;
+    int pristineDepth = 0;
 
     bool isPristine(TypeFunctionTypeId tfti)
     {
         if (const bool* known = pristineTypes.find(tfti))
             return *known;
+
+        RecursionCounter depth{&pristineDepth};
+        if (pristineDepth > kMaxPristineDepth)
+            return false;
+
         // a cycle back to a type being checked says nothing new about it
         pristineTypes[tfti] = true;
 
