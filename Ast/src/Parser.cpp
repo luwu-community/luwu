@@ -6195,13 +6195,16 @@ bool Parser::continuesOnSameLine()
 // already warns it will.
 bool Parser::startsConstDeclaration()
 {
+    // called for every name the parser meets, so it only looks ahead past a `const`
     Lexeme current = lexer.current();
-    Lexeme next = lexer.lookahead();
-
     bool isConst = current.type == Lexeme::Name && AstName(current.name) == "const";
+    if (!isConst)
+        return false;
+
+    Lexeme next = lexer.lookahead();
     bool nameFollows = next.type == Lexeme::Name && next.location.begin.line == current.location.end.line;
 
-    return isConst && nameFollows && !continuesOnSameLine();
+    return nameFollows && !continuesOnSameLine();
 }
 
 // Luwu: the statement being parsed already reported an error (`local function` with no name yet), so what follows
