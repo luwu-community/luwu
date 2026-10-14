@@ -1188,10 +1188,11 @@ struct TypeStringifier
 
             // Luwu: the first line of the property's doc comment above it, the way the source reads. A property set from a
             // declaration (`function str.trim()`) has no comments of its own; its value carries them.
-            const TypeMetadataTable* comments = prop->metadata.get();
-            if (!comments && prop->readTy)
+            bool showsComments = state.lineBreaks && state.opts.propertyCommentWidth > 0;
+            const TypeMetadataTable* comments = showsComments ? prop->metadata.get() : nullptr;
+            if (showsComments && !comments && prop->readTy)
                 comments = docMetadataOf(*prop->readTy);
-            if (state.lineBreaks && state.opts.propertyCommentWidth > 0 && comments)
+            if (comments)
             {
                 for (const std::string& line : metadataDocLines(*comments))
                 {

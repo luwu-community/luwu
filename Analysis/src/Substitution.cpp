@@ -225,6 +225,22 @@ void Tarjan::visitChildren(TypeId ty, int index)
     if (auto pty = log->pending(ty))
         ty = &pty->pending;
 
+    // Luwu: the types in a type's or a property's metadata are its children too (metadataHasTypes)
+    auto visitMetadata = [&](const std::shared_ptr<const TypeMetadataTable>& metadata)
+    {
+        if (!metadata)
+            return;
+
+        forEachMetadataType(
+            *metadata,
+            [&](TypeId metadataTy)
+            {
+                visitChild(metadataTy);
+            }
+        );
+    };
+    visitMetadata(ty->metadata);
+
     if (const FunctionType* ftv = get<FunctionType>(ty))
     {
         for (TypeId generic : ftv->generics)
@@ -242,6 +258,7 @@ void Tarjan::visitChildren(TypeId ty, int index)
         {
             visitChild(prop.readTy);
             visitChild(prop.writeTy);
+            visitMetadata(prop.metadata);
         }
 
         if (ttv->indexer)
@@ -302,6 +319,7 @@ void Tarjan::visitChildren(TypeId ty, int index)
                     visitChild(prop.readTy);
                 if (prop.writeTy)
                     visitChild(prop.writeTy);
+                visitMetadata(prop.metadata);
             }
         }
         else if (substitutesGenericTemplates())
@@ -886,6 +904,19 @@ void Substitution::replaceChildren(TypeId ty)
     if (ty->owningArena != arena)
         return;
 
+    // Luwu: see Tarjan::visitChildren
+    auto replaceMetadata = [&](std::shared_ptr<const TypeMetadataTable>& metadata)
+    {
+        metadata = mapMetadataTypes(
+            metadata,
+            [&](TypeId metadataTy)
+            {
+                return replace(metadataTy);
+            }
+        );
+    };
+    replaceMetadata(asMutable(ty)->metadata);
+
     if (FunctionType* ftv = getMutable<FunctionType>(ty))
     {
         for (TypeId& generic : ftv->generics)
@@ -909,6 +940,7 @@ void Substitution::replaceChildren(TypeId ty)
                 prop.readTy = replace(prop.readTy);
             if (prop.writeTy)
                 prop.writeTy = replace(prop.writeTy);
+            replaceMetadata(prop.metadata);
         }
 
         if (ttv->indexer)
@@ -966,6 +998,7 @@ void Substitution::replaceChildren(TypeId ty)
                     prop.readTy = replace(prop.readTy);
                 if (prop.writeTy)
                     prop.writeTy = replace(prop.writeTy);
+                replaceMetadata(prop.metadata);
             }
         }
         else if (substitutesGenericTemplates())

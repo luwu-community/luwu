@@ -409,6 +409,35 @@ type Cat = Explain<CatBase>
     CHECK_FALSE(docMetadataOf(base->type));
 }
 
+TEST_CASE_FIXTURE(DocRefsFixture, "types_in_an_exported_types_metadata_are_copied_into_the_module_interface")
+{
+    CheckResult result = check(R"(--!strict
+type function Tagged(t: type): type
+    local out = types.copy(t)
+    out:setmetadata({ tag = types.singleton("tag") })
+    return out
+end
+
+export type Point = Tagged<{ x: number }>
+)");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+
+    // The module's own arena is freed once it's checked (retainFullTypeGraphs off), so a type in the exported type's
+    // metadata has to be copied along with it, like any of its other children.
+    ModulePtr module = getMainModule();
+    auto point = module->exportedTypeBindings.find("Point");
+    REQUIRE(point != module->exportedTypeBindings.end());
+    TypeId pointTy = follow(point->second.type);
+    CHECK_EQ(pointTy->owningArena, &module->interfaceTypes);
+    REQUIRE(pointTy->metadata);
+    REQUIRE_EQ(pointTy->metadata->entries.size(), 1);
+    const TypeId* tag = get_if<TypeId>(&pointTy->metadata->entries[0].second);
+    REQUIRE(tag);
+    CHECK_EQ(toString(*tag), "\"tag\"");
+    CHECK_EQ((*tag)->owningArena, &module->interfaceTypes);
+}
+
 TEST_CASE_FIXTURE(DocRefsFixture, "a_class_given_metadata_has_to_be_what_the_type_function_returns")
 {
     ScopedFastFlag classes{FFlag::LuwuClasses, true};
