@@ -6873,7 +6873,7 @@ return call_c_many()
         lua_pop(L, 1);
 
         // Coroutine yield across C tail call
-        std::string co_yield = R"(
+        std::string coyield = R"(
 local function worker()
     return coroutine.yield("from_yield", 99)
 end
@@ -6882,7 +6882,7 @@ local ok1, r1, r2 = coroutine.resume(co)
 local ok2, r3 = coroutine.resume(co, "resumed_val")
 return ok1, r1, r2, ok2, r3
 )";
-        CHECK(runSource(co_yield, 5) == LUA_OK);
+        CHECK(runSource(coyield, 5) == LUA_OK);
         CHECK(lua_toboolean(L, -5) == 1);
         CHECK_EQ(std::string(lua_tostring(L, -4)), "from_yield");
         CHECK_EQ(lua_tonumber(L, -3), 99);
