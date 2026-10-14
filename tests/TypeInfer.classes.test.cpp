@@ -2221,6 +2221,7 @@ local a: class<unknown>
 
 TEST_CASE_FIXTURE(ClassesFixture, "class_object_mismatch_says_which_side_is_the_class")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
 
     // Both extern types stringify as the bare name, which used to produce the long-standing
@@ -2240,6 +2241,7 @@ local a: class<Item> = inst
 
 TEST_CASE_FIXTURE(ClassesFixture, "object_class_mismatch_says_which_side_is_the_class")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
 
     CheckResult result = check(R"(
@@ -2315,6 +2317,34 @@ TEST_CASE_FIXTURE(ClassesFixture, "const_fields_are_assigned_only_by_init_itself
     CHECK_EQ(result.errors[0].location.begin.line, 5);
     REQUIRE(get<ConstPropertyAssignment>(result.errors[1]));
     CHECK_EQ(result.errors[1].location.begin.line, 8);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "const_field_written_through_an_alias_of_self_in_init")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    // The runtime checks the object, not the register holding it, so `__init` may write a const field
+    // through a local that always holds `self`. A local that is ever reassigned might not, so it is
+    // still reported.
+    CheckResult result = check(R"(
+        class K
+            public const id: number
+            public const tag: string
+            public function __init(self, id: number)
+                local s = self
+                local t = s
+                s.id = id
+                t.tag = "k"
+                local u = self
+                u.id = 2
+                u = K(1)
+            end
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    REQUIRE(get<ConstPropertyAssignment>(result.errors[0]));
+    CHECK_EQ(result.errors[0].location.begin.line, 10);
 }
 
 TEST_CASE_FIXTURE(ClassesFixture, "generic_class_referring_to_itself_with_a_wrapped_parameter_is_reported")
@@ -2463,6 +2493,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "generic_class_instantiated_with_any_is_compat
 
 TEST_CASE_FIXTURE(ClassesFixture, "generic_class_value_against_its_object_is_spelled_as_class")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},

@@ -16,6 +16,7 @@ LUAU_FASTFLAG(LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier)
 LUAU_FASTFLAG(LuauIndexingIntoErrorGivesError);
 LUAU_FASTFLAG(LuauAvoidTrivialPhis)
 LUAU_FASTFLAG(LuauTruthyFalsy)
+LUAU_FASTFLAG(LuauAllowIntersectionOfOneTableWithExtern)
 
 using namespace Luau;
 
@@ -497,6 +498,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "call_to_undefined_method_is_not_a_refinement
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "call_an_incompatible_function_after_using_typeguard")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         local function f(x: number)
             return x
@@ -1758,15 +1760,28 @@ TEST_CASE_FIXTURE(RefinementExternTypeFixture, "isa_type_refinement_must_be_know
         end
     )");
 
-    LUAU_REQUIRE_NO_ERRORS(result);
-
     if (!FFlag::DebugLuauForceOldSolver)
     {
+        // Luwu: without LuauAllowIntersectionOfOneTableWithExtern, inference makes `x` `never` where `x:IsA` reads it,
+        // which looks like a type checker bug (UnreachableCodeUse, PossibleTypeBug). Upstream reports nothing.
+        if (FFlag::LuauAllowIntersectionOfOneTableWithExtern)
+        {
+            LUAU_REQUIRE_NO_ERRORS(result);
+        }
+        else
+        {
+            LUAU_REQUIRE_ERROR_COUNT(1, result);
+            const UnreachableCodeUse* unreachable = get<UnreachableCodeUse>(result.errors[0]);
+            REQUIRE(unreachable);
+            CHECK_EQ(UnreachableCodeUse::Reason::PossibleTypeBug, unreachable->reason);
+        }
+
         CHECK_EQ("t1 where t1 = Instance & { read IsA: (t1, string) -> (unknown, ...unknown) }", toString(requireTypeAtPosition({3, 28})));
         CHECK_EQ("t1 where t1 = Instance & { read IsA: (t1, string) -> (unknown, ...unknown) }", toString(requireTypeAtPosition({5, 28})));
     }
     else
     {
+        LUAU_REQUIRE_NO_ERRORS(result);
         CHECK_EQ("Instance", toString(requireTypeAtPosition({3, 28})));
         CHECK_EQ("Instance", toString(requireTypeAtPosition({5, 28})));
     }

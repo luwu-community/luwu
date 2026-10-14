@@ -67,12 +67,22 @@ static void report(ReportFormat format, const char* name, const Luau::Location& 
     }
 }
 
+// Luwu (helpful subtyping errors): the path notation used by every mismatch reported, so its legend is
+// printed once after all of them rather than once per error.
+static uint8_t mismatchNotationUsed = 0;
+
 static void reportError(const Luau::Frontend& frontend, ReportFormat format, const Luau::TypeError& error)
 {
+    if (const Luau::TypeMismatch* mismatch = Luau::get_if<Luau::TypeMismatch>(&error.data))
+        mismatchNotationUsed |= mismatch->notation;
+
     std::string humanReadableName = frontend.fileResolver->getHumanReadableModuleName(error.moduleName);
 
     if (const Luau::SyntaxError* syntaxError = Luau::get_if<Luau::SyntaxError>(&error.data))
         report(format, humanReadableName.c_str(), error.location, "SyntaxError", syntaxError->message.c_str());
+    // Luwu (helpful subtyping errors): a misspelled name is labeled as one, so it isn't read as a broken type.
+    else if (Luau::get_if<Luau::Typo>(&error.data))
+        report(format, humanReadableName.c_str(), error.location, "Typo", Luau::toString(error, Luau::TypeErrorToStringOptions{frontend.fileResolver}).c_str());
     else
         report(
             format,
@@ -588,6 +598,13 @@ int main(int argc, char** argv)
 
     for (const Luau::ModuleName& name : checkedModules)
         failed += !reportModuleResult(frontend, name, format, annotate);
+
+    if (format != ReportFormat::Luacheck)
+    {
+        std::string legend = Luau::mismatchNotationLegend(mismatchNotationUsed, Luau::Helpifier{});
+        if (!legend.empty())
+            fprintf(stderr, "\n%s\n", legend.c_str());
+    }
 
     if (!configResolver.configErrors.empty())
     {

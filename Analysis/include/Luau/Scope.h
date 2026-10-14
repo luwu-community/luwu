@@ -11,6 +11,7 @@
 #include "Luau/Unifiable.h"
 
 #include <unordered_map>
+#include <unordered_set>
 #include <optional>
 #include <memory>
 
@@ -53,6 +54,8 @@ struct Scope
     std::unordered_map<Name, Location> typeAliasNameLocations;
     std::unordered_map<Name, ModuleName> importedModules; // Mapping from the name in the require statement to the internal moduleName.
     std::unordered_map<Name, std::unordered_map<Name, TypeFun>> importedTypeBindings;
+    // Luwu: locals bound to a `require` whose module couldn't be found or checked, so they have no importedTypeBindings
+    std::unordered_set<Name> unresolvedRequires;
 
     DenseHashSet<Name> builtinTypeNames{""};
     void addBuiltinTypeBinding(const Name& name, const TypeFun& tyFun);

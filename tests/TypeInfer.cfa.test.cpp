@@ -2,6 +2,7 @@
 #include "Fixture.h"
 #include "doctest.h"
 
+
 using namespace Luau;
 
 TEST_SUITE_BEGIN("ControlFlowAnalysis");
@@ -794,6 +795,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "type_alias_does_not_leak_out_continuing")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "prototyping_and_visiting_alias_has_the_same_scope")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     // In CG, we walk the block to prototype aliases. We then visit the block in-order, which will resolve the prototype to a real type.
     // That second walk assumes that the name occurs in the same `Scope` that the prototype walk had. If we arbitrarily change scope midway
     // through, we'd invoke UB.
@@ -818,6 +820,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "prototyping_and_visiting_alias_has_the_same_
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "prototyping_and_visiting_alias_has_the_same_scope_breaking")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         local function f(x: {{value: string?}})
             for _, record in x do
@@ -841,6 +844,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "prototyping_and_visiting_alias_has_the_same_
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "prototyping_and_visiting_alias_has_the_same_scope_continuing")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         local function f(x: {{value: string?}})
             for _, record in x do
