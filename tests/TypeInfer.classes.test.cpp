@@ -5440,4 +5440,27 @@ local value: unknown = nil
     checkTypewriting(*this, before, "if class.implements(value, Greeter) then\n    print(value:greet())\nend", kTraitTypewriterAfter);
 }
 
+TEST_CASE_FIXTURE(ClassesFixture, "method_call_on_a_union_of_classes")
+{
+    CheckResult result = check(R"(
+        --!strict
+        class Cat(public name: string)
+            public function speak(self): string
+                return "meow"
+            end
+        end
+        class Dog(public name: string)
+            public function speak(self): string
+                return "woof"
+            end
+        end
+
+        local function talk(pet: Cat | Dog): string
+            return pet:speak()
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
 TEST_SUITE_END();

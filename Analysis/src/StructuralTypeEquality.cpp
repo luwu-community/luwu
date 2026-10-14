@@ -157,6 +157,20 @@ bool areEqual(SeenSet& seen, const TableType& lhs, const TableType& rhs)
     return true;
 }
 
+// Luwu: the options of two unions or intersections, in order. Order matters, so equal sets written in different orders
+// aren't equal here: that only means a copy isn't recognized, never that two different types are taken for one.
+static bool areEqualOptions(SeenSet& seen, const std::vector<TypeId>& lhs, const std::vector<TypeId>& rhs)
+{
+    if (lhs.size() != rhs.size())
+        return false;
+    for (size_t i = 0; i < lhs.size(); ++i)
+    {
+        if (!areEqual(seen, *lhs[i], *rhs[i]))
+            return false;
+    }
+    return true;
+}
+
 static bool areEqual(SeenSet& seen, const MetatableType& lhs, const MetatableType& rhs)
 {
     if (areSeen(seen, &lhs, &rhs))
@@ -235,6 +249,40 @@ bool areEqual(SeenSet& seen, const Type& lhs, const Type& rhs)
 
     if (get_if<AnyType>(&lhs.ty) && get_if<AnyType>(&rhs.ty))
         return true;
+
+    // Luwu: unions, intersections and singletons, so two copies of `{ string }?` or `"a" | "b"` are equal (mergeUnionMethods
+    // keeps one of each member's copy of a signature). An extern type is equal only to itself.
+    if (&lhs == &rhs)
+        return true;
+
+    {
+        const UnionType* lu = get_if<UnionType>(&lhs.ty);
+        const UnionType* ru = get_if<UnionType>(&rhs.ty);
+        if (lu && ru)
+        {
+            if (areSeen(seen, &lhs, &rhs))
+                return true;
+            return areEqualOptions(seen, lu->options, ru->options);
+        }
+    }
+
+    {
+        const IntersectionType* li = get_if<IntersectionType>(&lhs.ty);
+        const IntersectionType* ri = get_if<IntersectionType>(&rhs.ty);
+        if (li && ri)
+        {
+            if (areSeen(seen, &lhs, &rhs))
+                return true;
+            return areEqualOptions(seen, li->parts, ri->parts);
+        }
+    }
+
+    {
+        const SingletonType* ls = get_if<SingletonType>(&lhs.ty);
+        const SingletonType* rs = get_if<SingletonType>(&rhs.ty);
+        if (ls && rs)
+            return *ls == *rs;
+    }
 
     return false;
 }
