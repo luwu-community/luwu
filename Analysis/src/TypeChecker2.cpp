@@ -6481,15 +6481,26 @@ std::optional<UnreachableCodeUse::Reason> TypeChecker2::unreachableReason(const 
     return std::nullopt;
 }
 
+// The earliest syntax or type error in `range`
 std::optional<Location> TypeChecker2::firstErrorIn(const Location& range)
 {
+    std::optional<Location> first;
+    auto consider = [&](const Location& location)
+    {
+        if (range.encloses(location) && (!first || location.begin < first->begin))
+            first = location;
+    };
+
+    for (const ParseError& error : sourceModule->parseErrors)
+        consider(error.getLocation());
+
     for (const TypeError& error : module->errors)
     {
         bool isUse = get<NoTypeUse>(error) || get<UnreachableCodeUse>(error);
-        if (!isUse && error.moduleName == module->name && range.encloses(error.location))
-            return error.location;
+        if (!isUse && error.moduleName == module->name)
+            consider(error.location);
     }
-    return std::nullopt;
+    return first;
 }
 
 // How many aliases deep an annotation's error is looked for (`type A = B`, `type B = Nope`)
