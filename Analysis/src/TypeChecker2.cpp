@@ -1647,6 +1647,12 @@ void TypeChecker2::visit(AstStatTypeAlias* stat)
     }
 
     visitGenerics(stat->generics, stat->genericPacks);
+
+    // Luwu Destructuring (rfcs/destructuring.md): a destructured alias of a generic type has its generics, so its
+    // reference, written without type arguments, isn't checked against them
+    if (const Scope* scope = findInnermostScope(stat->location); scope && importedGenericOfDestructuredAlias(*scope, stat))
+        return;
+
     visit(stat->type);
 }
 

@@ -468,6 +468,12 @@ struct FindExprOrLocal : public AstVisitor
 
     bool visit(AstExpr* expr) override
     {
+        // Luwu Destructuring (rfcs/destructuring.md): a pattern's hidden local is never written in the source. Its reads
+        // sit at the location of the key they read, where the key or its binding is what's pointed at.
+        AstExprLocal* local = expr->as<AstExprLocal>();
+        if (local && local->local->name == kDestructuredLocalName)
+            return false;
+
         if (isCloserMatch(expr->location))
         {
             result.setExpr(expr);
@@ -499,6 +505,11 @@ struct FindExprOrLocal : public AstVisitor
         {
             matchedVar |= visitLocal(al->vars.data[i]);
         }
+
+        // Luwu Destructuring (rfcs/destructuring.md): a binding of a pattern is declared by a statement whose value reads
+        // its key, at the same location as a shorthand binding (`.{name}`). The binding is what's pointed at there.
+        if (al->isDesugaredField() && matchedVar)
+            return false;
 
         return true;
     }

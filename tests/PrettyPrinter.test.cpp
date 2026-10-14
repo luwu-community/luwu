@@ -11,6 +11,7 @@
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuwuNoinlineAttribute)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuauTableEntriesDontNeedToMatchIndent)
 LUAU_FASTFLAG(LuauCstAttr)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
@@ -2472,6 +2473,56 @@ TEST_CASE("prettyPrint_attributes_beyond_functions_without_cst_attr")
 class Dog(@deprecated public x: number)
     @deprecated public sound: string
 end
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+}
+
+TEST_CASE("prettyPrint_destructuring")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    // Printed from the source form the parser keeps, not from the statements it desugars to
+    std::string code = R"(
+local .{x, y, z} = v
+const fs.{readfile as rf, path}: FsLib = require("@std/fs")
+const archive.{zip, tar as .{gz as targz}, lib.{a}} = require("@std/archive"); print(zip)
+local .{x: number, y as py: string, pos.{a}: Vec2, tar as .{gz}: Archive}: Whole = t
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+}
+
+TEST_CASE("prettyPrint_dot_tables")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    std::string code = R"(
+local t = .{x, y = 2; z}
+local c = Color . { r, g = 0 }
+obj:configure.{ inner = .{a}, b, }
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+}
+
+TEST_CASE("prettyPrint_destructured_loop_bindings")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    std::string code = R"(
+for _ , .{name, age as years}: Person in people do
+    print(name)
+end
+for k, entry.{kind}, x in iter do end
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+}
+
+TEST_CASE("prettyPrint_type_destructuring")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    std::string code = R"(
+type .{Metadata, Entry as FileEntry} = fs
+export type  .{ Box }  =  fs; type Other = number
     )";
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
 }

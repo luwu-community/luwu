@@ -328,6 +328,66 @@ struct Printer
             writer.write(s);
     }
 
+    // Luwu Destructuring (rfcs/destructuring.md): `[name].{field: T, key as name: T, key as [name].{...}: T}: T`,
+    // from the source form the parser kept.
+    void visualizeDestructuring(const AstDestructurePattern& pattern)
+    {
+        if (pattern.local->name != kDestructuredLocalName)
+        {
+            advance(pattern.local->location.begin);
+            writer.identifier(pattern.local->name.value);
+        }
+
+        visualizeDestructurePattern(pattern);
+    }
+
+    // The `.{...}` of a pattern, if any, then the annotation on the local it binds.
+    void visualizeDestructurePattern(const AstDestructurePattern& pattern)
+    {
+        visualizeDestructureFields(pattern);
+
+        if (writeTypes && pattern.local->annotation)
+        {
+            writer.symbol(":");
+            visualizeTypeAnnotation(*pattern.local->annotation);
+        }
+    }
+
+    void visualizeDestructureFields(const AstDestructurePattern& pattern)
+    {
+        if (!pattern.location)
+            return;
+
+        advance(pattern.location->begin);
+        writer.symbol(".");
+        writer.symbol("{");
+
+        CommaSeparatorInserter comma(writer, nullptr);
+        for (const AstDestructureField& field : pattern.fields)
+        {
+            comma();
+            advance(field.keyLocation.begin);
+            writer.identifier(field.key.value);
+
+            if (field.asLocation)
+            {
+                advance(field.asLocation->begin);
+                writer.keyword("as");
+
+                if (field.target.local->name != kDestructuredLocalName)
+                {
+                    advance(field.target.local->location.begin);
+                    writer.identifier(field.target.local->name.value);
+                }
+            }
+
+            visualizeDestructurePattern(field.target);
+        }
+
+        advanceBefore(pattern.location->end, 1);
+        writer.symbol("}");
+    }
+
     void visualize(const AstLocal& local, Position colonPosition)
     {
         advance(local.location.begin);
@@ -651,19 +711,35 @@ struct Printer
         }
         else if (const auto& a = expr.as<AstExprTable>())
         {
+            // Luwu Destructuring (rfcs/destructuring.md): a `.{x, y}` table prints its bare names back as written
+            const CstExprTable* cstTable = lookupCstNode<CstExprTable>(a);
+            bool dotTable = cstTable && cstTable->dotPosition.hasValue();
+            if (dotTable)
+            {
+                writer.symbol(".");
+
+                // a `.` with no `{` typed after it yet
+                if (!cstTable->openBracePosition.hasValue())
+                    return;
+
+                advance(cstTable->openBracePosition);
+            }
+
             writer.symbol("{");
 
             const CstExprTable::Item* cstItem = nullptr;
-            if (const auto cstNode = lookupCstNode<CstExprTable>(a))
+            if (cstTable)
             {
-                LUAU_ASSERT(cstNode->items.size == a->items.size);
-                cstItem = cstNode->items.begin();
+                LUAU_ASSERT(cstTable->items.size == a->items.size);
+                cstItem = cstTable->items.begin();
             }
 
             bool first = true;
 
             for (const auto& item : a->items)
             {
+                bool barePunnedName = dotTable && item.kind == AstExprTable::Item::Kind::Record && item.key->location == item.value->location;
+
                 if (!cstItem)
                 {
                     if (first)
@@ -686,6 +762,9 @@ struct Printer
                     advance(item.key->location.begin);
 
                     writer.identifier(std::string_view(value.data, value.size));
+
+                    if (barePunnedName)
+                        break;
 
                     if (cstItem)
                         advance(cstItem->equalsPosition);
@@ -723,8 +802,11 @@ struct Printer
                     LUAU_ASSERT(!"Unknown table item kind");
                 }
 
-                advance(item.value->location.begin);
-                visualize(*item.value);
+                if (!barePunnedName)
+                {
+                    advance(item.value->location.begin);
+                    visualize(*item.value);
+                }
 
                 if (cstItem)
                 {
@@ -917,6 +999,20 @@ struct Printer
 
     void visualize(AstStat& program)
     {
+        // Luwu Destructuring (rfcs/destructuring.md): the first statement a destructuring declaration desugars to
+        // prints the whole declaration, so the rest print nothing but a trailing `;`.
+        bool desugaredLocal = program.is<AstStatLocal>() && program.as<AstStatLocal>()->isDesugaredField();
+        bool desugaredTypeAlias = program.is<AstStatTypeAlias>() && program.as<AstStatTypeAlias>()->destructuredFrom;
+        if (desugaredLocal || desugaredTypeAlias)
+        {
+            if (program.hasSemicolon)
+            {
+                advanceBefore(program.location.end, 1);
+                writer.symbol(";");
+            }
+            return;
+        }
+
         advance(program.location.begin);
 
         if (const auto& block = program.as<AstStatBlock>())
@@ -1023,17 +1119,24 @@ struct Printer
                 writer.keyword("local");
             }
 
-            CommaSeparatorInserter varComma(writer, cstNode ? cstNode->varsCommaPositions.begin() : nullptr);
-            for (size_t i = 0; i < a->vars.size; i++)
+            if (a->destructure)
             {
-                varComma();
-                if (cstNode)
+                visualizeDestructuring(*a->destructure);
+            }
+            else
+            {
+                CommaSeparatorInserter varComma(writer, cstNode ? cstNode->varsCommaPositions.begin() : nullptr);
+                for (size_t i = 0; i < a->vars.size; i++)
                 {
-                    LUAU_ASSERT(cstNode->varsAnnotationColonPositions.size > i);
-                    visualize(*a->vars.data[i], cstNode->varsAnnotationColonPositions.data[i]);
+                    varComma();
+                    if (cstNode)
+                    {
+                        LUAU_ASSERT(cstNode->varsAnnotationColonPositions.size > i);
+                        visualize(*a->vars.data[i], cstNode->varsAnnotationColonPositions.data[i]);
+                    }
+                    else
+                        visualize(*a->vars.data[i], Position{0, 0});
                 }
-                else
-                    visualize(*a->vars.data[i], Position{0, 0});
             }
 
             if (a->equalsSignLocation)
@@ -1092,18 +1195,7 @@ struct Printer
 
             writer.keyword("for");
 
-            CommaSeparatorInserter varComma(writer, cstNode ? cstNode->varsCommaPositions.begin() : nullptr);
-            for (size_t i = 0; i < a->vars.size; i++)
-            {
-                varComma();
-                if (cstNode)
-                {
-                    LUAU_ASSERT(cstNode->varsAnnotationColonPositions.size > i);
-                    visualize(*a->vars.data[i], cstNode->varsAnnotationColonPositions.data[i]);
-                }
-                else
-                    visualize(*a->vars.data[i], Position{0, 0});
-            }
+            visualizeLoopVars(*a, cstNode);
 
             advance(a->inLocation.begin);
             writer.keyword("in");
@@ -1272,7 +1364,11 @@ struct Printer
         }
         else if (const auto& a = program.as<AstStatTypeAlias>())
         {
-            if (writeTypes)
+            if (writeTypes && a->destructure)
+            {
+                visualizeTypeDestructuring(*a);
+            }
+            else if (writeTypes)
             {
                 const auto* cstNode = lookupCstNode<CstStatTypeAlias>(a);
 
@@ -1796,6 +1892,79 @@ struct Printer
             visualizeBlock(*block);
         else
             LUAU_ASSERT(!"visualizeBlock was expecting an AstStatBlock");
+    }
+
+    // Luwu Destructuring (rfcs/destructuring.md): `[export] type .{A, B as C} = module`, from the source form the parser
+    // kept on the first alias.
+    void visualizeTypeDestructuring(const AstStatTypeAlias& first)
+    {
+        const AstTypeDestructure& pattern = *first.destructure;
+
+        if (first.exported)
+            writer.keyword("export");
+
+        advance(first.typeLocation.begin);
+        writer.keyword("type");
+
+        advance(pattern.location.begin);
+        writer.symbol(".");
+        writer.symbol("{");
+
+        CommaSeparatorInserter comma(writer, nullptr);
+        for (const AstTypeDestructureField& field : pattern.fields)
+        {
+            const AstTypeReference* reference = field.alias->destructuredReference();
+            LUAU_ASSERT(reference);
+
+            comma();
+            advance(reference->nameLocation.begin);
+            writer.identifier(reference->name.value);
+
+            if (field.asLocation)
+            {
+                advance(field.asLocation->begin);
+                writer.keyword("as");
+                advance(field.alias->nameLocation.begin);
+                writer.identifier(field.alias->name.value);
+            }
+        }
+
+        if (pattern.closed)
+        {
+            advanceBefore(pattern.location.end, 1);
+            writer.symbol("}");
+        }
+
+        if (!pattern.equalsLocation)
+            return;
+
+        advance(pattern.equalsLocation->begin);
+        writer.symbol("=");
+
+        if (pattern.module != kParseNameError)
+        {
+            advance(pattern.moduleLocation.begin);
+            writer.identifier(pattern.module.value);
+        }
+    }
+
+    // Luwu Destructuring (rfcs/destructuring.md): a `for ... in` loop's variables. A destructured one prints its pattern.
+    void visualizeLoopVars(const AstStatForIn& loop, const CstStatForIn* cstNode)
+    {
+        CommaSeparatorInserter varComma(writer, cstNode ? cstNode->varsCommaPositions.begin() : nullptr);
+        for (size_t i = 0; i < loop.vars.size; i++)
+        {
+            varComma();
+
+            if (loop.destructure.size > i && loop.destructure.data[i])
+            {
+                visualizeDestructuring(*loop.destructure.data[i]);
+                continue;
+            }
+
+            bool hasColon = cstNode && cstNode->varsAnnotationColonPositions.size > i;
+            visualize(*loop.vars.data[i], hasColon ? cstNode->varsAnnotationColonPositions.data[i] : Position::missing());
+        }
     }
 
     void visualizeElseIf(AstStatIf& elseif)

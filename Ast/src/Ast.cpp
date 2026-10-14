@@ -1003,6 +1003,14 @@ AstStatTypeAlias::AstStatTypeAlias(
 {
 }
 
+AstTypeReference* AstStatTypeAlias::destructuredReference() const
+{
+    if (!destructure && !destructuredFrom)
+        return nullptr;
+
+    return type->as<AstTypeReference>();
+}
+
 void AstStatTypeAlias::visit(AstVisitor* visitor)
 {
     if (visitor->visit(this))

@@ -3200,6 +3200,9 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatLocal* stat
                     tf = TypeFun{{}, {}, builtinTypes->anyType};
             }
         }
+
+        if (FFlag::LuwuClasses)
+            bindImportedClassTypes(scope, statLocal);
     }
 
     // Luwu: a table or function written as a local's value is that local's own (attachDeclarationComments)
@@ -3211,6 +3214,38 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatLocal* stat
     }
 
     return ControlFlow::None;
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): a local bound to a class a required module exports, `local Point =
+// geometry.Point` or a destructured `const geometry.{Point} = require(...)`, brings the class's type along, as if
+// `type Point = geometry.Point` were written next to it. A type the scope already declares under that name wins.
+void ConstraintGenerator::bindImportedClassTypes(const ScopePtr& scope, AstStatLocal* statLocal)
+{
+    for (size_t i = 0; i < statLocal->values.size && i < statLocal->vars.size; ++i)
+    {
+        const AstExprIndexName* index = statLocal->values.data[i]->as<AstExprIndexName>();
+        if (!index)
+            continue;
+
+        const AstExprLocal* moduleLocal = index->expr->as<AstExprLocal>();
+        if (!moduleLocal)
+            continue;
+
+        std::optional<TypeFun> imported = scope->lookupImportedType(moduleLocal->local->name.value, index->index.value);
+        if (!imported)
+            continue;
+
+        // An imported class's type is its object type, which knows its class
+        const ExternType* object = get<ExternType>(follow(imported->type));
+        if (!object || !object->relation || !object->relation->get_if<Klass>())
+            continue;
+
+        const Name name{statLocal->vars.data[i]->name.value};
+        if (scope->privateTypeBindings.count(name) || scope->exportedTypeBindings.count(name))
+            continue;
+
+        scope->privateTypeBindings[name] = *imported;
+    }
 }
 
 ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatFor* for_)
@@ -3748,6 +3783,19 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatTypeAlias* 
         return ControlFlow::None;
 
     ScopePtr defnScope = *defnScopePtr;
+
+    // Luwu Destructuring (rfcs/destructuring.md): `type .{List} = mod` is written without type arguments, so a generic
+    // `mod.List` is aliased whole: the alias takes its type and its generics.
+    if (std::optional<TypeFun> imported = importedGenericOfDestructuredAlias(*scope, alias))
+    {
+        TypeId aliasTy = bindingIt->second.type;
+        LUAU_ASSERT(get<BlockedType>(aliasTy));
+        emplaceType<BoundType>(asMutable(aliasTy), imported->type);
+        bindingIt->second.typeParams = imported->typeParams;
+        bindingIt->second.typePackParams = imported->typePackParams;
+        return ControlFlow::None;
+    }
+
     resolveGenericDefaultParameters(defnScope, alias, bindingIt->second);
 
     TypeId ty = resolveType(

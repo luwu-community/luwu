@@ -73,6 +73,10 @@ class AstTypePack;
 class AstAttr;
 class AstExprTable;
 
+// Luwu Destructuring (rfcs/destructuring.md): the name of the hidden local an unnamed pattern (`local .{x} = v`)
+// binds its value to. Code can't spell it, so nothing can refer to it.
+constexpr const char* kDestructuredLocalName = "(destructured)";
+
 template<typename T>
 struct AstArray
 {
@@ -995,6 +999,30 @@ public:
     AstExpr* expr;
 };
 
+// Luwu Destructuring (rfcs/destructuring.md): the source form of a destructuring declaration, kept on the first
+// statement it desugars to so tools can print it back. The desugared statements are what everything else reads.
+struct AstDestructureField;
+struct AstDestructurePattern
+{
+    // The local the value is bound to. Unnamed, it is a hidden local named kDestructuredLocalName.
+    AstLocal* local = nullptr;
+    // From the `.` to the `}`, when the value is destructured further; unset for a plain binding.
+    std::optional<Location> location;
+    // False when the `}` is missing, as it is while a pattern is being written: `location` then ends where the
+    // pattern stopped, and a cursor there is still inside it.
+    bool closed = true;
+    AstArray<AstDestructureField> fields{nullptr, 0};
+};
+
+struct AstDestructureField
+{
+    AstName key;
+    Location keyLocation;
+    // The `as` keyword, when the field is bound under another name or only destructured.
+    std::optional<Location> asLocation;
+    AstDestructurePattern target;
+};
+
 class AstStatLocal : public AstStat
 {
 public:
@@ -1022,6 +1050,22 @@ public:
 
     // Attributes written above this declaration, e.g. `@deprecated`. Empty when there are none.
     AstArray<AstAttr*> attributes{nullptr, 0};
+
+    // Luwu Destructuring (rfcs/destructuring.md): a destructuring declaration desugars to several `local`s (see
+    // Parser::parseDestructuring). The first spans the whole declaration and holds its source form in
+    // `destructure`; every one after it points to the first through `destructuredFrom`.
+    AstDestructurePattern* destructure = nullptr;
+    AstStatLocal* destructuredFrom = nullptr;
+    // A field of a pattern in a `for` loop's bindings (`for _, p.{x, y} in ps`): the loop body starts with one of
+    // these per bound name, and the loop holds the pattern (AstStatForIn::destructure).
+    bool destructuredFromLoop = false;
+
+    // One of several statements a single destructuring in the source desugars to, other than the one that holds
+    // the pattern. Tools that work on the source skip these.
+    bool isDesugaredField() const
+    {
+        return destructuredFrom || destructuredFromLoop;
+    }
 };
 
 class AstStatFor : public AstStat
@@ -1087,6 +1131,11 @@ public:
 
     // Location of the leading 'for' keyword token only.
     Location forLocation;
+
+    // Luwu Destructuring (rfcs/destructuring.md): the pattern of each binding written as one (`for _, p.{x, y} in ps`),
+    // null for a plain name; empty when no binding is a pattern. The loop variable is the pattern's local (hidden for
+    // `.{x, y}`), and `body` starts with one `local` per bound name (AstStatLocal::destructuredFromLoop).
+    AstArray<AstDestructurePattern*> destructure{nullptr, 0};
 };
 
 class AstStatAssign : public AstStat
@@ -1164,6 +1213,29 @@ public:
     Location functionLocation;
 };
 
+// Luwu Destructuring (rfcs/destructuring.md): the source form of `type .{A, B as C} = module`, kept on the first
+// alias it desugars to (Parser::parseTypeDestructuring) so tools can print it back.
+struct AstTypeDestructureField
+{
+    // Declares the type: `type C = module.B`. Its name and reference hold the field's name and key.
+    class AstStatTypeAlias* alias = nullptr;
+    // The `as` keyword, when the type is declared under another name.
+    std::optional<Location> asLocation;
+};
+
+struct AstTypeDestructure
+{
+    // From the `.` to the `}`.
+    Location location;
+    // False when the `}` is missing, as it is while a pattern is being written.
+    bool closed = true;
+    std::optional<Location> equalsLocation;
+    // The module local the types are read from; kParseNameError when the value isn't a name.
+    AstName module;
+    Location moduleLocation;
+    AstArray<AstTypeDestructureField> fields{nullptr, 0};
+};
+
 class AstStatTypeAlias : public AstStat
 {
 public:
@@ -1194,6 +1266,15 @@ public:
 
     // Attributes written above this declaration, e.g. `@deprecated`. Empty when there are none.
     AstArray<AstAttr*> attributes{nullptr, 0};
+
+    // Luwu Destructuring (rfcs/destructuring.md): `type .{A, B} = module` desugars to one alias per field (see
+    // Parser::parseTypeDestructuring). The first spans the whole declaration and holds its source form in
+    // `destructure`; every one after it points to the first through `destructuredFrom`.
+    AstTypeDestructure* destructure = nullptr;
+    AstStatTypeAlias* destructuredFrom = nullptr;
+
+    // The `module.Name` a destructured alias reads, or null for any other alias.
+    class AstTypeReference* destructuredReference() const;
 };
 
 class AstStatTypeFunction : public AstStat
