@@ -3774,6 +3774,12 @@ TypeId TypeChecker2::visit(AstExprBinary* expr, AstNode* overrideKey)
 
 void TypeChecker2::visit(AstExprTypeAssertion* expr)
 {
+    AstExpr* operand = expr->expr;
+    while (AstExprGroup* group = operand->as<AstExprGroup>())
+        operand = group->expr;
+    if (AstExprLocal* local = operand->as<AstExprLocal>())
+        noTypeUsesCast.insert(local);
+
     visit(expr->expr, ValueContext::RValue);
     visit(expr->annotation);
 
@@ -6600,10 +6606,14 @@ void TypeChecker2::reportNoTypeNotes()
 {
     for (const AstExprLocal* use : noTypeUses)
     {
-        if (noTypeUsesReported.contains(use))
+        if (noTypeUsesReported.contains(use) || noTypeUsesCast.contains(use))
             continue;
 
+        // A note points at the error behind the missing type; with none found it would only say the type is missing
         std::optional<Location> origin = noTypeCause(use->local).origin;
+        if (!origin)
+            continue;
+
         module->notes.push_back({use->location, noTypeNote(use->local->name.value, origin), origin});
     }
 }

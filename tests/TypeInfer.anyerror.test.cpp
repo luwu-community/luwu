@@ -487,6 +487,23 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "using_a_local_with_no_type_points_at_the_err
     CHECK_EQ(result.errors[0].location, *module->notes[0].origin);
 }
 
+// Luwu: a cast gives the value a type, so a use that's cast gets no note, and a local whose missing type has no error
+// to point at gets none either
+TEST_CASE_FIXTURE(BuiltinsFixture, "no_type_notes_skip_casts_and_locals_with_no_cause")
+{
+    CheckResult result = check(R"(
+        local w = nope
+        local a = w :: number
+        local b = (w) :: string
+        local c = w
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    ModulePtr module = getMainModule();
+    REQUIRE_EQ(1, module->notes.size());
+    CHECK_EQ(Location{{4, 18}, {4, 19}}, module->notes[0].location);
+}
+
 // Luwu: locals with no type because of the same one are one cascade: one error at the first improper use of any of
 // them, and notes pointing at the first error for every other use
 TEST_CASE_FIXTURE(BuiltinsFixture, "locals_with_no_type_from_the_same_one_get_one_error")

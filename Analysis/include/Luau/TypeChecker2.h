@@ -202,6 +202,8 @@ struct TypeChecker2
     // Every use of an error-typed local, and those reported as an improper use
     std::vector<const AstExprLocal*> noTypeUses;
     DenseHashSet<const AstExprLocal*> noTypeUsesReported{nullptr};
+    // Uses cast to a type (`self :: Class`): the cast gives the value a type, so they get no note
+    DenseHashSet<const AstExprLocal*> noTypeUsesCast{nullptr};
     DenseHashMap<const AstLocal*, std::optional<Location>> declarationErrors{nullptr};
     const DeclarationIndex& getDeclarationIndex();
 
