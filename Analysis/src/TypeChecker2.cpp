@@ -179,8 +179,7 @@ static TypeId writtenLiteralType(TypeArena& arena, NotNull<BuiltinTypes> builtin
         return inferred;
 
     AstExpr* written = value;
-    while (AstExprGroup* group = written->as<AstExprGroup>())
-        written = group->expr;
+    written = unwrapGroup(written);
 
     if (AstExprConstantString* str = written->as<AstExprConstantString>())
         return arena.addType(SingletonType{StringSingleton{std::string(str->value.data, str->value.size)}});
@@ -3478,8 +3477,7 @@ void TypeChecker2::checkUnionMethodSelves(AstExprIndexName* indexExpr)
 
 bool TypeChecker2::isLiteralAssertion(AstExpr* value) const
 {
-    while (AstExprGroup* group = value->as<AstExprGroup>())
-        value = group->expr;
+    value = unwrapGroup(value);
     return module->literalAssertions.contains(value);
 }
 
@@ -3516,8 +3514,7 @@ void TypeChecker2::checkLiteralParameters(AstExprCall* call, const FunctionType*
         // The caller's own literal parameter, passed on: its argument was checked where the caller was called. Only the
         // same validator can stand in for this one's, which can't see what that literal was.
         AstExpr* written = arg;
-        while (AstExprGroup* group = written->as<AstExprGroup>())
-            written = group->expr;
+        written = unwrapGroup(written);
         // A cast to a literal type (`s :: literal<string>`) passes as one, checked by nothing, like a cast to `any`
         if (module->literalAssertions.contains(written))
             continue;
@@ -5653,6 +5650,9 @@ void TypeChecker2::visit(AstTypeReference* ty)
     if (FFlag::DebugLuauMagicTypes && (ty->name == kLuauPrint || ty->name == kLuauForceConstraintSolvingIncomplete || ty->name == kLuauBlockedType))
         return;
 
+    Scope* scope = findInnermostScope(ty->location);
+    LUAU_ASSERT(scope);
+
     // `class<T>` and `object<C>` are routed to type functions by ConstraintGenerator rather than resolved through
     // the `class` and `object` aliases, which are zero-parameter top types; checking their arity against those
     // aliases would always report a spurious mismatch.
@@ -5660,9 +5660,6 @@ void TypeChecker2::visit(AstTypeReference* ty)
     const bool routedToTypeFunction = !ty->prefix.has_value() && ty->hasParameterList && (namesClass || ty->name == "object");
     if (FFlag::LuwuClasses && routedToTypeFunction)
     {
-        Scope* scope = findInnermostScope(ty->location);
-        LUAU_ASSERT(scope);
-
         for (const AstTypeOrPack& param : ty->parameters)
         {
             // `class<List>` names a generic class without its type arguments on purpose: it is the generic class
@@ -5682,8 +5679,7 @@ void TypeChecker2::visit(AstTypeReference* ty)
     // reports a misuse; there is no `trait` alias to check it against
     // Luwu literal types: `literal<B>` is resolved by ConstraintGenerator (resolveReferenceType), which also reports a
     // misuse; there is no `literal` alias to check it against
-    Scope* referenceScope = findInnermostScope(ty->location);
-    bool isLiteralParameter = referenceScope && isLiteralTypeReference(*referenceScope, ty);
+    bool isLiteralParameter = scope && isLiteralTypeReference(*scope, ty);
     bool isTraitValue = FFlag::LuwuTraits && !ty->prefix.has_value() && ty->name == "trait" && ty->hasParameterList;
     if (isLiteralParameter || isTraitValue)
     {
@@ -5710,9 +5706,6 @@ void TypeChecker2::visit(AstTypeReference* ty)
         else
             visit(param.typePack);
     }
-
-    Scope* scope = findInnermostScope(ty->location);
-    LUAU_ASSERT(scope);
 
     std::optional<TypeFun> alias = (ty->prefix) ? scope->lookupImportedType(ty->prefix->value, ty->name.value) : scope->lookupType(ty->name.value);
 
