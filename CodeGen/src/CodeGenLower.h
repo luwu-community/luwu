@@ -55,17 +55,7 @@ inline void gatherFunctionsHelper(
     bool shouldGather = hasNativeFunctions ? (!root && (proto->flags & LPF_NATIVE_FUNCTION) != 0)
                                            : ((proto->flags & LPF_NATIVE_COLD) == 0 || (flags & CodeGen_ColdFunctions) != 0);
 
-    bool hasTailCall = false;
-    for (int i = 0; i < proto->sizecode; i += getOpLength(LuauOpcode(LUAU_INSN_OP(proto->code[i]))))
-    {
-        if (LUAU_INSN_OP(proto->code[i]) == LOP_TAILCALL)
-        {
-            hasTailCall = true;
-            break;
-        }
-    }
-
-    if (shouldGather && !hasTailCall)
+    if (shouldGather)
         results[proto->bytecodeid] = proto;
 
     // Recursively traverse child protos even if we aren't compiling this one

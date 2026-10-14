@@ -394,6 +394,110 @@ Closure* callFallback(lua_State* L, StkId ra, StkId argtop, int nresults)
     }
 }
 
+Closure* tailcallFallback(lua_State* L, StkId ra, StkId argtop)
+{
+    // slow-path: not a function call
+    if (LUAU_UNLIKELY(!ttisfunction(ra)))
+    {
+        luaV_tryfuncTM(L, ra);
+        argtop++; // __call adds an extra self
+    }
+
+    Closure* ccl = clvalue(ra);
+
+    if (!ccl->isC)
+    {
+        // Close open upvalues in the current frame before reusing it
+        luaF_close(L, L->base);
+
+        CallInfo* ci = L->ci;
+
+        // Shift closure and arguments down to ci->func
+        StkId dst = ci->func;
+        StkId src = ra;
+        while (src < argtop)
+            setobj2s(L, dst++, src++);
+        argtop = dst;
+
+        ci->base = ci->func + 1;
+        ci->top = argtop + ccl->stacksize;
+
+        L->base = ci->base;
+        L->top = argtop;
+
+        luaD_checkstack(L, ccl->stacksize);
+
+        // Stack may have reallocated; reload ci/ccl pointers
+        ccl = clvalue(ci->func);
+        Proto* p = ccl->l.p;
+
+        if (FFlag::LuauCIProto)
+            ci->p = p;
+
+        ci->flags |= LUA_CALLINFO_TAIL;
+        if (LUAU_LIKELY(p->exectarget != 0))
+            ci->flags |= LUA_CALLINFO_NATIVE;
+        else
+            ci->flags &= ~LUA_CALLINFO_NATIVE;
+
+        // fill unused parameters with nil
+        StkId argi = L->top;
+        StkId argend = L->base + p->numparams;
+        while (argi < argend)
+            setnilvalue(argi++); // complete missing arguments
+        L->top = p->is_vararg ? argi : ci->top;
+
+        ci->savedpc = p->code;
+
+        return ccl;
+    }
+    else
+    {
+        // For C callees, push a temporary CallInfo frame
+        CallInfo* ci = incr_ci(L);
+        if (FFlag::LuauCIProto)
+            ci->p = getproto(ccl);
+        ci->func = ra;
+        ci->base = ra + 1;
+        ci->top = argtop + ccl->stacksize;
+        ci->savedpc = NULL;
+        ci->flags = LUA_CALLINFO_TAIL;
+        ci->nresults = LUA_MULTRET;
+
+        L->base = ci->base;
+        L->top = argtop;
+
+        luaD_checkstackfornewci(L, ccl->stacksize);
+
+        lua_CFunction func = ccl->c.f;
+        int n = func(L);
+
+        // yield
+        if (n < 0)
+            return (Closure*)CALL_FALLBACK_YIELD;
+
+        // ci is our callinfo, cip is our parent
+        CallInfo* cci = L->ci;
+        CallInfo* cip = cci - 1;
+
+        // copy return values into parent stack, updating top
+        StkId res = cci->func;
+        StkId vali = L->top - n;
+        StkId valend = L->top;
+
+        while (vali < valend)
+            setobj2s(L, res++, vali++);
+
+        // pop the C stack frame
+        L->ci = cip;
+        L->base = cip->base;
+        L->top = res;
+
+        // continue in caller: native code falls through to landing RETURN
+        return NULL;
+    }
+}
+
 const Instruction* executeGETGLOBAL(lua_State* L, const Instruction* pc, StkId base, TValue* k)
 {
     [[maybe_unused]] Closure* cl = clvalue(L->ci->func);
@@ -864,7 +968,7 @@ const Instruction* executeNAMECALL(lua_State* L, const Instruction* pc, StkId ba
     }
 
     // intentional fallthrough to CALL
-    LUAU_ASSERT(LUAU_INSN_OP(*pc) == LOP_CALL || LUAU_INSN_OP(*pc) == LOP_CALLFB);
+    LUAU_ASSERT(LUAU_INSN_OP(*pc) == LOP_CALL || LUAU_INSN_OP(*pc) == LOP_CALLFB || LUAU_INSN_OP(*pc) == LOP_TAILCALL);
     return pc;
 }
 

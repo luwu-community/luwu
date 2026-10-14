@@ -9,6 +9,7 @@
 
 #include "EmitCommonX64.h"
 #include "NativeState.h"
+#include "CodeGenUtils.h"
 
 #include "lstate.h"
 
@@ -177,6 +178,62 @@ void emitInstCall(IrRegAllocX64& regs, AssemblyBuilderX64& build, ModuleHelpers&
         build.mov(rax, qword[cip + offsetof(CallInfo, top)]);
         build.mov(qword[rState + offsetof(lua_State, top)], rax);
     }
+}
+
+void emitInstTailCall(IrRegAllocX64& regs, AssemblyBuilderX64& build, ModuleHelpers& helpers, int ra, int nparams)
+{
+    IrCallWrapperX64 callWrapper(regs, build);
+
+    callWrapper.addArgument(SizeX64::qword, rState);
+    callWrapper.addArgument(SizeX64::qword, luauRegAddress(ra));
+    if (nparams == LUA_MULTRET)
+        callWrapper.addArgument(SizeX64::qword, qword[rState + offsetof(lua_State, top)]);
+    else
+        callWrapper.addArgument(SizeX64::qword, luauRegAddress(ra + 1 + nparams));
+
+    callWrapper.call(qword[rNativeContext + offsetof(NativeContext, tailcallFallback)]);
+    RegisterX64 ccl = rax; // Returned from tailcallFallback
+
+    emitUpdateBase(build);
+
+    // If fallback yielded, exit
+    CODEGEN_ASSERT(CALL_FALLBACK_YIELD == 1);
+    build.test(al, 1);
+    build.jcc(ConditionX64::NotZero, helpers.exitNoContinueVm);
+
+    // If ccl == NULL (C function finished), skip to landing RETURN
+    Label skipToLandingReturn;
+    build.test(ccl, ccl);
+    build.jcc(ConditionX64::Zero, skipToLandingReturn);
+
+    // Lua callee:
+    RegisterX64 proto = rcx;
+    RegisterX64 ci = rdx;
+
+    if (!FFlag::LuauCIProto)
+        build.mov(proto, qword[ccl + offsetof(Closure, l.p)]);
+
+    build.mov(sClosure, ccl);
+    build.mov(ci, qword[rState + offsetof(lua_State, ci)]);
+
+    if (FFlag::LuauCIProto)
+        build.mov(proto, qword[ci + offsetof(CallInfo, p)]);
+
+    // Switch current code
+    build.mov(rax, qword[proto + offsetof(Proto, code)]);
+    build.mov(sCode, rax);
+
+    // Switch current constants
+    build.mov(rConstants, qword[proto + offsetof(Proto, k)]);
+
+    // Get native function entry
+    build.mov(rax, qword[proto + offsetof(Proto, exectarget)]);
+    build.test(rax, rax);
+    build.jcc(ConditionX64::Zero, helpers.exitContinueVm);
+
+    build.jmp(rax);
+
+    build.setLabel(skipToLandingReturn);
 }
 
 void emitInstReturn(AssemblyBuilderX64& build, ModuleHelpers& helpers, int ra, int actualResults, bool functionVariadic)

@@ -2963,7 +2963,7 @@ reentry:
                 LUAU_ASSERT(p->execdata);
 
                 CallInfo* ci = L->ci;
-                ci->flags = LUA_CALLINFO_NATIVE;
+                ci->flags |= LUA_CALLINFO_NATIVE;
                 ci->savedpc = p->code;
 
 #if VM_HAS_NATIVE

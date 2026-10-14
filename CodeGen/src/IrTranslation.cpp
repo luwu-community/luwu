@@ -1158,11 +1158,11 @@ IrOp translateFastCallN(IrBuilder& build, const Instruction* pc, int pcpos, bool
     int skip = LUAU_INSN_C(*pc);
 
     Instruction call = pc[skip + 1];
-    CODEGEN_ASSERT(LUAU_INSN_OP(call) == LOP_CALL);
+    CODEGEN_ASSERT(LUAU_INSN_OP(call) == LOP_CALL || LUAU_INSN_OP(call) == LOP_TAILCALL);
     int ra = LUAU_INSN_A(call);
 
     int nparams = customParams ? customParamCount : LUAU_INSN_B(call) - 1;
-    int nresults = LUAU_INSN_C(call) - 1;
+    int nresults = (LUAU_INSN_OP(call) == LOP_TAILCALL) ? LUA_MULTRET : (LUAU_INSN_C(call) - 1);
     int arg = customParams ? LUAU_INSN_B(*pc) : ra + 1;
     IrOp args = customParams ? customArgs : build.vmReg(ra + 2);
 
@@ -2159,11 +2159,11 @@ bool translateInstNamecall(IrBuilder& build, const Instruction* pc, int pcpos)
         if (build.hostHooks.vectorNamecall)
         {
             Instruction call = pc[2];
-            CODEGEN_ASSERT(LUAU_INSN_OP(call) == LOP_CALLFB || LUAU_INSN_OP(call) == LOP_CALL);
+            CODEGEN_ASSERT(LUAU_INSN_OP(call) == LOP_CALLFB || LUAU_INSN_OP(call) == LOP_CALL || LUAU_INSN_OP(call) == LOP_TAILCALL);
 
             int callra = LUAU_INSN_A(call);
             int nparams = LUAU_INSN_B(call) - 1;
-            int nresults = LUAU_INSN_C(call) - 1;
+            int nresults = (LUAU_INSN_OP(call) == LOP_TAILCALL) ? LUA_MULTRET : (LUAU_INSN_C(call) - 1);
 
             TString* str = gco2ts(build.function.proto->k[aux].value.gc);
             const char* field = getstr(str);
@@ -2183,11 +2183,11 @@ bool translateInstNamecall(IrBuilder& build, const Instruction* pc, int pcpos)
         if (build.hostHooks.userdataNamecall)
         {
             Instruction call = pc[2];
-            CODEGEN_ASSERT(LUAU_INSN_OP(call) == LOP_CALLFB || LUAU_INSN_OP(call) == LOP_CALL);
+            CODEGEN_ASSERT(LUAU_INSN_OP(call) == LOP_CALLFB || LUAU_INSN_OP(call) == LOP_CALL || LUAU_INSN_OP(call) == LOP_TAILCALL);
 
             int callra = LUAU_INSN_A(call);
             int nparams = LUAU_INSN_B(call) - 1;
-            int nresults = LUAU_INSN_C(call) - 1;
+            int nresults = (LUAU_INSN_OP(call) == LOP_TAILCALL) ? LUA_MULTRET : (LUAU_INSN_C(call) - 1);
 
             TString* str = gco2ts(build.function.proto->k[aux].value.gc);
             const char* field = getstr(str);

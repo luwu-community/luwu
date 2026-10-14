@@ -738,7 +738,7 @@ void buildBytecodeBlocks(IrFunction& function, const std::vector<uint8_t>& jumpT
                 bcBlocks.push_back(BytecodeBlock{nexti, -1});
         }
         // Returns just terminate the block
-        else if (int(op) == LOP_RETURN || int(op) == LOP_TAILCALL)
+        else if (int(op) == LOP_RETURN)
         {
             bcBlocks.back().finishpc = i;
         }
@@ -1461,6 +1461,7 @@ static void analyzeBytecodeTypesPass(
             }
             case LOP_CALLFB:
             case LOP_CALL:
+            case LOP_TAILCALL:
             {
                 int ra = LUAU_INSN_A(*pc);
 
@@ -1512,7 +1513,6 @@ static void analyzeBytecodeTypesPass(
             }
             case LOP_SETGLOBAL:
             case LOP_RETURN:
-            case LOP_TAILCALL:
             case LOP_JUMP:
             case LOP_JUMPBACK:
             case LOP_JUMPIF:
@@ -1698,8 +1698,9 @@ static void visitBytecodeRegWrites(const IrFunction& function, const std::vector
         break;
     case LOP_CALL:
     case LOP_CALLFB:
+    case LOP_TAILCALL:
     {
-        int results = LUAU_INSN_C(*code) - 1;
+        int results = (LUAU_INSN_OP(*code) == LOP_TAILCALL) ? -1 : (LUAU_INSN_C(*code) - 1);
 
         visit(ra, callResultTypes[pc]);
         visitRange(ra + 1, results < 0 ? proto->maxstacksize : results - 1);
