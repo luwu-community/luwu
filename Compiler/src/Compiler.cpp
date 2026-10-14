@@ -3526,8 +3526,7 @@ struct Compiler
         if (tailCall)
         {
             bytecode.emitABC(LOP_TAILCALL, regs, multCall ? 0 : uint8_t(expr->self + expr->args.size + 1), 0);
-            if (bfid >= 0)
-                bytecode.emitABC(LOP_RETURN, regs, 0, 0);
+            bytecode.emitABC(LOP_RETURN, regs, 0, 0);
         }
         else
         {

@@ -4052,6 +4052,62 @@ reentry:
                     argtop++; // __call adds an extra self
                 }
 
+                Closure* ccl = clvalue(ra);
+
+                if (ccl->isC)
+                {
+                    // For tailcalls into C functions, preserve the Lua caller's CallInfo so
+                    // stack-inspecting functions (require, error, debug.info) can inspect the caller.
+                    // savedpc is set to pc, which points directly to the landing LOP_RETURN instruction.
+                    L->ci->savedpc = pc;
+
+                    CallInfo* ci = incr_ci(L);
+                    ci->func = ra;
+                    if (FFlag::LuauCIProto)
+                        ci->p = nullptr;
+                    ci->base = ra + 1;
+                    ci->top = argtop + ccl->stacksize;
+                    ci->savedpc = NULL;
+                    ci->flags = 0;
+                    ci->nresults = LUA_MULTRET;
+
+                    L->base = ci->base;
+                    L->top = argtop;
+
+                    luaD_checkstackfornewci(L, ccl->stacksize);
+
+                    lua_CFunction func = ccl->c.f;
+                    int n = func(L);
+
+                    // yield
+                    if (n < 0)
+                        goto exit;
+
+                    // ci is our C callinfo, cip is our Lua parent
+                    ci = L->ci;
+                    CallInfo* cip = ci - 1;
+
+                    // copy return values into parent stack at ra (since nresults is MULTRET)
+                    StkId res = ci->func;
+                    StkId vali = L->top - n;
+                    StkId valend = L->top;
+
+                    int i;
+                    for (i = LUA_MULTRET; i != 0 && vali < valend; i--)
+                        setobj2s(L, res++, vali++);
+
+                    // pop the C stack frame
+                    L->ci = cip;
+                    L->base = cip->base;
+                    L->top = res;
+
+                    base = L->base;
+
+                    // Advance naturally to the landing RETURN instruction (pc points to it)
+                    VM_NEXT();
+                }
+
+                // Lua tailcall: reuse current stack frame
                 // Close open upvalues in current frame before overwriting stack
                 if (L->openupval && L->openupval->v >= L->base)
                     luaF_close(L, L->base);
@@ -4068,8 +4124,6 @@ reentry:
                 L->base = ci->base = pfunc + 1;
                 L->top = res;
 
-                Closure* ccl = clvalue(pfunc);
-
                 // Check stack space for the callee's stacksize
                 luaD_checkstack(L, ccl->stacksize);
 
@@ -4077,85 +4131,27 @@ reentry:
                 pfunc = ci->func;
                 ccl = clvalue(pfunc);
                 base = L->base = ci->base = pfunc + 1;
-                ci->top = base + ccl->stacksize;
+                ci->top = L->top + ccl->stacksize;
 
                 if (FFlag::LuauCIProto)
                     ci->p = getproto(ccl);
 
-                if (!ccl->isC)
-                {
-                    Proto* p = ccl->l.p;
+                Proto* p = ccl->l.p;
 
-                    // fill unused parameters with nil
-                    StkId argi = L->top;
-                    StkId argend = L->base + p->numparams;
-                    while (argi < argend)
-                        setnilvalue(argi++); // complete missing arguments
-                    L->top = p->is_vararg ? argi : ci->top;
+                // fill unused parameters with nil
+                StkId argi = L->top;
+                StkId argend = L->base + p->numparams;
+                while (argi < argend)
+                    setnilvalue(argi++); // complete missing arguments
+                L->top = p->is_vararg ? argi : ci->top;
 
-                    pc = SingleStep ? p->code : p->codeentry;
-                    cl = ccl;
-                    k = p->k;
-                    VM_NEXT();
-                }
-                else
-                {
-                    lua_CFunction func = ccl->c.f;
-                    int n = func(L);
-
-                    // yield
-                    if (n < 0)
-                        goto exit;
-
-                    // ci is our callinfo, cip is our parent
-                    CallInfo* cip = ci - 1;
-
-                    // copy return values into parent stack, fill the rest with nil
-                    int nresults = ci->nresults;
-                    StkId retres = ci->func;
-                    StkId retvali = L->top - n;
-                    StkId retvalend = L->top;
-
-                    int i;
-                    for (i = nresults; i != 0 && retvali < retvalend; i--)
-                        setobj2s(L, retres++, retvali++);
-                    while (i-- > 0)
-                        setnilvalue(retres++);
-
-                    // pop the stack frame
-                    L->ci = cip;
-                    L->base = cip->base;
-                    L->top = (nresults == LUA_MULTRET) ? retres : cip->top;
-
-                    // we're done!
-                    if (LUAU_UNLIKELY(ci->flags & LUA_CALLINFO_RETURN))
-                    {
-                        goto exit;
-                    }
-
-                    LUAU_ASSERT(isLua(L->ci));
-
-                    Closure* nextcl = clvalue(cip->func);
-                    LUAU_ASSERT(!FFlag::LuauCIProto || cip->p != nullptr);
-                    Proto* nextproto = FFlag::LuauCIProto ? cip->p : nextcl->l.p;
-
-#if VM_HAS_NATIVE
-                    if (LUAU_UNLIKELY((cip->flags & LUA_CALLINFO_NATIVE) && !SingleStep))
-                    {
-                        if (L->global->ecb.enter(L, nextproto) == 1)
-                            goto reentry;
-                        else
-                            goto exit;
-                    }
-#endif
-
-                    pc = cip->savedpc;
-                    cl = nextcl;
-                    base = L->base;
-                    k = nextproto->k;
-                    VM_NEXT();
-                }
+                pc = SingleStep ? p->code : p->codeentry;
+                cl = ccl;
+                k = p->k;
+                VM_NEXT();
             }
+
+
 
 #if !VM_USE_CGOTO
         default:

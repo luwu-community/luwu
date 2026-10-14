@@ -6860,6 +6860,48 @@ return r1, r2
         CHECK_EQ(lua_tonumber(L, -2), 10);
         CHECK(lua_isnil(L, -1));
         lua_pop(L, 2);
+
+        // C callee with > 20 arguments
+        std::string c_many_args = R"(
+local function call_c_many()
+    return math.max(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25)
+end
+return call_c_many()
+)";
+        CHECK(runSource(c_many_args, 1) == LUA_OK);
+        CHECK_EQ(lua_tonumber(L, -1), 25);
+        lua_pop(L, 1);
+
+        // Coroutine yield across C tail call
+        std::string co_yield = R"(
+local function worker()
+    return coroutine.yield("from_yield", 99)
+end
+local co = coroutine.create(worker)
+local ok1, r1, r2 = coroutine.resume(co)
+local ok2, r3 = coroutine.resume(co, "resumed_val")
+return ok1, r1, r2, ok2, r3
+)";
+        CHECK(runSource(co_yield, 5) == LUA_OK);
+        CHECK(lua_toboolean(L, -5) == 1);
+        CHECK_EQ(std::string(lua_tostring(L, -4)), "from_yield");
+        CHECK_EQ(lua_tonumber(L, -3), 99);
+        CHECK(lua_toboolean(L, -2) == 1);
+        CHECK_EQ(std::string(lua_tostring(L, -1)), "resumed_val");
+        lua_pop(L, 5);
+
+        // Error position preservation for C tail call
+        std::string err_pos = R"(
+local function fails()
+    return error("err_msg", 1)
+end
+local ok, err = pcall(fails)
+return ok, err
+)";
+        CHECK(runSource(err_pos, 2) == LUA_OK);
+        CHECK(lua_toboolean(L, -2) == 0);
+        CHECK(strstr(lua_tostring(L, -1), ":3: err_msg"));
+        lua_pop(L, 2);
     }
 }
 

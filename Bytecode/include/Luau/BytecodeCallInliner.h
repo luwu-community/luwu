@@ -674,6 +674,11 @@ struct CallInliner
         if (target.nups > 0)
             return false;
 
+        // inlining functions with tail calls is not supported yet
+        for (const BcInst& inst : target.instructions)
+            if (inst.op == LOP_TAILCALL)
+                return false;
+
         caller.maxstacksize = newMaxStackSize;
 
         auto [prevBlock, nextBlock] = splitBlockOnOp(call.op());
