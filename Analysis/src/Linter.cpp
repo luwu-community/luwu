@@ -8,6 +8,7 @@
 #include "Luau/PrettyPrinter.h"
 #include "Luau/Scope.h"
 #include "Luau/TypeInfer.h"
+#include "Luau/TypeUtils.h"
 #include "Luau/StringUtils.h"
 #include "Luau/Common.h"
 
@@ -3801,22 +3802,15 @@ private:
     // a plain truthiness test.
     DenseHashMap<AstExpr*, const char*> conditions{nullptr};
 
-    static AstExpr* unparenthesized(AstExpr* expr)
-    {
-        while (AstExprGroup* group = expr->as<AstExprGroup>())
-            expr = group->expr;
-        return expr;
-    }
-
     bool visit(AstStatIf* node) override
     {
-        conditions[unparenthesized(node->condition)] = "if";
+        conditions[unwrapGroup(node->condition)] = "if";
         return true;
     }
 
     bool visit(AstStatWhile* node) override
     {
-        conditions[unparenthesized(node->condition)] = "while";
+        conditions[unwrapGroup(node->condition)] = "while";
         return true;
     }
 
