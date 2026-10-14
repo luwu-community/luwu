@@ -3103,7 +3103,11 @@ local function f(x, path)
     local e = 5
     local broken = locate_the_thing_we_are_looking_for(path, x, "with a long argument")
         or return nil
-    return a, b, c, d, e, found, short, broken
+    local f = 6
+    -- a long line whose exit starts early: what follows the exit is the long part
+    path == "patch" or path == "unpatch" or return error(`arg should be patch or unpatch, got {path}`)
+    local g = 7
+    return a, b, c, d, e, f, g, found, short, broken
 end
 return f
 )");

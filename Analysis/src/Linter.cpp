@@ -4634,8 +4634,8 @@ private:
 //   expression is left alone: a one-line callback is ordinary.
 // - OneLineGuard and LuaGuard: the one-line `if not x then return end`. A Luau file gets OneLineGuard, which asks for
 //   three lines; a Luwu file gets LuaGuard, which asks for `x or return`. Only one of them reports a guard.
-// - InlineOrLeave: `x or return` at the end of a line much longer than the lines around it, where the exit is easy to
-//   miss.
+// - InlineOrLeave: `x or return` after a long `x`, at the end of a line much longer than the lines around it, where the
+//   exit is easy to miss. A long line with a short `x` (`ok or return error("a long message")`) is fine.
 class LintStyle : AstVisitor
 {
 public:
@@ -4812,10 +4812,13 @@ private:
         return true;
     }
 
-    // The `or return` of a statement's whole value (asOrLeave), when it ends a line much longer than the lines around the
-    // statement
+    // The `or return` of a statement's whole value (asOrLeave), after a long expression on a line much longer than the
+    // lines around the statement. The expression before the `or` is what a reader works through before reaching the exit,
+    // so it decides; what follows the exit (a long error message) doesn't hide it.
     void checkInlineOrLeave(AstStat* stat, AstExpr* value)
     {
+        // An expression before the `or` shorter than this leaves the exit in plain sight
+        constexpr unsigned kMinOperandWidth = 50;
         // A line shorter than this reads fine whatever its neighbors look like
         constexpr unsigned kMinWidth = 60;
         // How much longer than the longest nearby line it has to be, in columns and as a ratio (3/2)
@@ -4836,6 +4839,12 @@ private:
         // broken before the `or` already
         unsigned line = right->location.begin.line;
         if (line != orLeave->left->location.end.line)
+            return;
+
+        // the operand starts and ends on the exit's line, checked above
+        const Location& operand = orLeave->left->location;
+        bool longOperand = operand.begin.line == line && operand.end.column - operand.begin.column >= kMinOperandWidth;
+        if (!longOperand)
             return;
 
         auto it = lineWidths.find(line);
