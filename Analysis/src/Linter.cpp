@@ -3030,11 +3030,7 @@ private:
 
     void report(const Location& location, const char* functionName, const AstAttr::DeprecatedInfo& info)
     {
-        std::string usePart = info.use ? format(", use '%s' instead", info.use->c_str()) : "";
-        std::string reasonPart = info.reason ? format(". %s", info.reason->c_str()) : "";
-        emitWarning(
-            *context, LintWarning::Code_DeprecatedApi, location, "Function '%s' is deprecated%s%s", functionName, usePart.c_str(), reasonPart.c_str()
-        );
+        reportAttributeDeprecation(location, "Function", functionName, info);
     }
 
     std::vector<const FunctionType*> functionTypeScopeStack;
