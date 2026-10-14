@@ -2053,22 +2053,6 @@ static std::optional<AutocompleteEntryMap> autocompleteStringParams(
     return std::nullopt;
 }
 
-// Luwu Traits (rfcs/classes/traits.md): a member of a class or trait type, on the type itself or, for a method, in its metatable
-static const Property* findClassMember(const ExternType* type, const Name& name)
-{
-    if (auto it = type->props().find(name); it != type->props().end())
-        return &it->second;
-
-    const TableType* metatable = type->metatable ? get<TableType>(follow(*type->metatable)) : nullptr;
-    if (metatable)
-    {
-        if (auto it = metatable->props.find(name); it != metatable->props.end())
-            return &it->second;
-    }
-
-    return nullptr;
-}
-
 static std::string typeNameInScope(const ScopePtr& scope, TypeId ty)
 {
     if (std::optional<Name> name = tryGetTypeNameInScope(scope, ty, true))
@@ -2148,8 +2132,8 @@ static void autocompleteMissingTraitMembers(const ScopePtr& scope, AstStatClass*
 
         for (const auto& [name, optional] : traitType->traitInfo->expectations)
         {
-            const Property* expected = findClassMember(traitType, name);
-            if (name == "__init" || !expected || findClassMember(classType, name) || result.count(name))
+            const Property* expected = findNominalMember(traitType, name);
+            if (name == "__init" || !expected || findNominalMember(classType, name) || result.count(name))
                 continue;
 
             AutocompleteEntry entry{AutocompleteEntryKind::Property, expected->readTy};

@@ -184,6 +184,19 @@ static bool isTraitConstantField(const AstClassProperty& prop)
     return !prop.expectLocation && prop.defaultValue && isConstantClassDefault(prop.defaultValue);
 }
 
+// Luwu Classes (rfcs/classes): whether the class or trait body declares a field `name`, which restates the primary
+// constructor parameter of that name
+static bool classBodyDeclaresProperty(AstStatClass* decl, AstName name)
+{
+    for (const AstClassMember& member : decl->members)
+    {
+        if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && prop->name == name)
+            return true;
+    }
+
+    return false;
+}
+
 struct Compiler
 {
     struct RegScope;
@@ -3908,6 +3921,7 @@ struct Compiler
 
     // Luwu Traits (rfcs/classes/traits.md): a trait's fields in the order its shape lists them (compileClassDeclaration):
     // the body's provided fields, then the parameters the body doesn't restate. A parameter's entry has no property.
+    // An `expect` field restates a parameter too, so the parameter provides no field, as in luaR_implementtraits.
     static std::vector<std::pair<AstName, const AstClassProperty*>> traitProvidedFields(AstStatClass* trait)
     {
         std::vector<std::pair<AstName, const AstClassProperty*>> fields;
@@ -3920,16 +3934,7 @@ struct Compiler
         {
             for (AstLocal* param : trait->primaryConstructor->args)
             {
-                bool restated = std::any_of(
-                    fields.begin(),
-                    fields.end(),
-                    [&](const std::pair<AstName, const AstClassProperty*>& field)
-                    {
-                        return field.first == param->name;
-                    }
-                );
-
-                if (!restated)
+                if (!classBodyDeclaresProperty(trait, param->name))
                     fields.emplace_back(param->name, nullptr);
             }
         }
