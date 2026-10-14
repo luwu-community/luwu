@@ -3776,8 +3776,6 @@ private:
     }
 };
 
-static AstExpr* unparenthesized(AstExpr* expr);
-
 class LintMisleadingAndOr : AstVisitor
 {
 public:
@@ -3796,7 +3794,7 @@ private:
 
     void markCondition(AstExpr* expr)
     {
-        expr = unparenthesized(expr);
+        expr = unwrapGroup(expr);
         conditions.insert(expr);
 
         if (AstExprBinary* binary = expr->as<AstExprBinary>(); binary && (binary->op == AstExprBinary::And || binary->op == AstExprBinary::Or))
@@ -3846,7 +3844,7 @@ private:
         if (conditions.contains(node))
             return true;
 
-        AstExpr* last = unparenthesized(node->right);
+        AstExpr* last = unwrapGroup(node->right);
         if (last->is<AstExprConstantBool>())
             return true;
         if (AstExprUnary* unary = last->as<AstExprUnary>())
@@ -4360,12 +4358,24 @@ static bool hasNativeCommentDirective(const std::vector<HotComment>& hotcomments
     return hasHeaderCommentDirective(hotcomments, "native");
 }
 
-static AstExpr* unparenthesized(AstExpr* expr)
+// Luwu: a visitor told about every assignment target: `x` in `x = v` and in `x += v`
+struct AssignmentTargetVisitor : AstVisitor
 {
-    while (AstExprGroup* group = expr->as<AstExprGroup>())
-        expr = group->expr;
-    return expr;
-}
+    virtual void assigned(AstExpr* target) = 0;
+
+    bool visit(AstStatAssign* node) override
+    {
+        for (AstExpr* var : node->vars)
+            assigned(var);
+        return true;
+    }
+
+    bool visit(AstStatCompoundAssign* node) override
+    {
+        assigned(node->var);
+        return true;
+    }
+};
 
 // A short name for a value in a lint message (`x`, `t.value`, `obj:method`), or nullopt when it has none.
 static std::optional<std::string> shortExprName(AstExpr* expr)
@@ -4604,7 +4614,7 @@ private:
 
         bool visit(AstExprIndexName* node) override
         {
-            AstExprLocal* indexed = unparenthesized(node->expr)->as<AstExprLocal>();
+            AstExprLocal* indexed = unwrapGroup(node->expr)->as<AstExprLocal>();
             if (indexed && indexed->local == local)
                 found = true;
             return !found;
@@ -4618,8 +4628,10 @@ private:
 
     // `a.field:method(...)` calls in one function, by `a` and `field`, not counting nested functions. A field the
     // function also assigns can't be read into a local once, so those are marked.
-    struct FieldMethodCallCounter : AstVisitor
+    struct FieldMethodCallCounter : AssignmentTargetVisitor
     {
+        using AssignmentTargetVisitor::visit;
+
         struct Calls
         {
             AstExprIndexName* field = nullptr; // the first `a.field` called through
@@ -4632,8 +4644,8 @@ private:
         // `a.field` as a key, or nullopt when it isn't one
         static std::optional<std::pair<AstLocal*, AstName>> keyOf(AstExpr* expr)
         {
-            AstExprIndexName* field = unparenthesized(expr)->as<AstExprIndexName>();
-            AstExprLocal* base = field && field->op == '.' ? unparenthesized(field->expr)->as<AstExprLocal>() : nullptr;
+            AstExprIndexName* field = unwrapGroup(expr)->as<AstExprIndexName>();
+            AstExprLocal* base = field && field->op == '.' ? unwrapGroup(field->expr)->as<AstExprLocal>() : nullptr;
             if (!base)
                 return std::nullopt;
 
@@ -4657,7 +4669,7 @@ private:
             return calls.back().second;
         }
 
-        void markAssigned(AstExpr* target)
+        void assigned(AstExpr* target) override
         {
             if (std::optional<std::pair<AstLocal*, AstName>> key = keyOf(target))
                 entry(*key).assigned = true;
@@ -4672,21 +4684,8 @@ private:
 
             Calls& counted = entry(*key);
             if (!counted.field)
-                counted.field = unparenthesized(method->expr)->as<AstExprIndexName>();
+                counted.field = unwrapGroup(method->expr)->as<AstExprIndexName>();
             ++counted.count;
-            return true;
-        }
-
-        bool visit(AstStatAssign* node) override
-        {
-            for (AstExpr* var : node->vars)
-                markAssigned(var);
-            return true;
-        }
-
-        bool visit(AstStatCompoundAssign* node) override
-        {
-            markAssigned(node->var);
             return true;
         }
 
@@ -4716,7 +4715,7 @@ private:
     // The local `x`, `x ~= nil` or `x ~= none` narrows when it's true
     static AstExprLocal* narrowedLocal(AstExpr* condition)
     {
-        condition = unparenthesized(condition);
+        condition = unwrapGroup(condition);
         if (AstExprLocal* local = condition->as<AstExprLocal>())
             return local;
 
@@ -4724,8 +4723,8 @@ private:
         if (!binary || binary->op != AstExprBinary::CompareNe)
             return nullptr;
 
-        AstExpr* value = unparenthesized(binary->left);
-        AstExpr* sentinel = unparenthesized(binary->right);
+        AstExpr* value = unwrapGroup(binary->left);
+        AstExpr* sentinel = unwrapGroup(binary->right);
         if (isNilOrNone(value))
             std::swap(value, sentinel);
 
@@ -4873,7 +4872,7 @@ private:
         if (!library || library->name != "math" || function->index != "floor" || node->args.size != 1)
             return;
 
-        AstExprBinary* division = unparenthesized(node->args.data[0])->as<AstExprBinary>();
+        AstExprBinary* division = unwrapGroup(node->args.data[0])->as<AstExprBinary>();
         if (!division || division->op != AstExprBinary::Div)
             return;
 
@@ -4972,8 +4971,8 @@ private:
 // Luwu: whether `a` and `b` name the same variable or field chain (`x`, `t.items`)
 static bool sameTarget(AstExpr* a, AstExpr* b)
 {
-    a = unparenthesized(a);
-    b = unparenthesized(b);
+    a = unwrapGroup(a);
+    b = unwrapGroup(b);
 
     if (AstExprLocal* localA = a->as<AstExprLocal>())
     {
@@ -4995,7 +4994,7 @@ static bool sameTarget(AstExpr* a, AstExpr* b)
 // Luwu: `expr` quoted for a message, or `fallback` when it has no short name
 static std::string describe(AstExpr* expr, const char* fallback)
 {
-    std::optional<std::string> name = shortExprName(unparenthesized(expr));
+    std::optional<std::string> name = shortExprName(unwrapGroup(expr));
     return name ? "'" + *name + "'" : std::string(fallback);
 }
 
@@ -5107,13 +5106,13 @@ private:
     // The binding a target is reached through: `s` for `s` and `s.parts.text`
     static AstLocal* rootLocal(AstExpr* target)
     {
-        target = unparenthesized(target);
+        target = unwrapGroup(target);
         while (true)
         {
             if (AstExprIndexName* index = target->as<AstExprIndexName>())
-                target = unparenthesized(index->expr);
+                target = unwrapGroup(index->expr);
             else if (AstExprIndexExpr* index = target->as<AstExprIndexExpr>())
-                target = unparenthesized(index->expr);
+                target = unwrapGroup(index->expr);
             else
                 break;
         }
@@ -5146,7 +5145,7 @@ private:
     // local
     static bool outlives(AstExpr* target, AstStat* loop)
     {
-        AstExprLocal* local = unparenthesized(target)->as<AstExprLocal>();
+        AstExprLocal* local = unwrapGroup(target)->as<AstExprLocal>();
         return !local || local->local->location.begin < loop->location.begin;
     }
 
@@ -5208,7 +5207,7 @@ private:
         if (node->vars.size != 1 || node->values.size != 1)
             return true;
 
-        AstExprBinary* value = unparenthesized(node->values.data[0])->as<AstExprBinary>();
+        AstExprBinary* value = unwrapGroup(node->values.data[0])->as<AstExprBinary>();
         if (value && value->op == AstExprBinary::Concat && sameTarget(value->left, node->vars.data[0]))
             reportConcat(node->vars.data[0], node->location);
 
@@ -5217,7 +5216,7 @@ private:
 
     static bool isConstantOne(AstExpr* expr)
     {
-        AstExprConstantNumber* number = unparenthesized(expr)->as<AstExprConstantNumber>();
+        AstExprConstantNumber* number = unwrapGroup(expr)->as<AstExprConstantNumber>();
         return number && number->value == 1.0;
     }
 
@@ -5610,8 +5609,10 @@ private:
     DenseHashSet<AstLocal*> captured{nullptr};
     DenseHashSet<AstLocal*> capturedWrites{nullptr};
 
-    struct CaptureCollector : AstVisitor
+    struct CaptureCollector : AssignmentTargetVisitor
     {
+        using AssignmentTargetVisitor::visit;
+
         DenseHashSet<AstLocal*>* captured;
         DenseHashSet<AstLocal*>* capturedWrites;
 
@@ -5621,9 +5622,9 @@ private:
         {
         }
 
-        void write(AstExpr* target)
+        void assigned(AstExpr* target) override
         {
-            AstExprLocal* local = unparenthesized(target)->as<AstExprLocal>();
+            AstExprLocal* local = unwrapGroup(target)->as<AstExprLocal>();
             if (local && local->upvalue)
                 capturedWrites->insert(local->local);
         }
@@ -5634,25 +5635,12 @@ private:
                 captured->insert(node->local);
             return true;
         }
-
-        bool visit(AstStatAssign* node) override
-        {
-            for (AstExpr* var : node->vars)
-                write(var);
-            return true;
-        }
-
-        bool visit(AstStatCompoundAssign* node) override
-        {
-            write(node->var);
-            return true;
-        }
     };
 
     // `name(...)`, `lib.name(...)` or `obj:name(...)`: the last name in the callee
     static std::optional<std::string_view> calleeName(AstExprCall* call)
     {
-        AstExpr* func = unparenthesized(call->func);
+        AstExpr* func = unwrapGroup(call->func);
         if (AstExprGlobal* global = func->as<AstExprGlobal>())
             return std::string_view(global->name.value);
         if (AstExprLocal* local = func->as<AstExprLocal>())
@@ -5837,7 +5825,7 @@ private:
 
     static bool collectConditionReads(AstExpr* expr, ConditionReads& reads)
     {
-        expr = unparenthesized(expr);
+        expr = unwrapGroup(expr);
 
         if (AstExprLocal* local = expr->as<AstExprLocal>())
         {
@@ -5853,7 +5841,7 @@ private:
         {
             if (unary->op == AstExprUnary::Op::Len)
             {
-                AstExprLocal* table = unparenthesized(unary->expr)->as<AstExprLocal>();
+                AstExprLocal* table = unwrapGroup(unary->expr)->as<AstExprLocal>();
                 if (!table)
                     return false;
                 reads.lengths.push_back(table->local);
@@ -5881,7 +5869,7 @@ private:
 
         bool isConditionLocal(AstExpr* expr) const
         {
-            AstExprLocal* local = unparenthesized(expr)->as<AstExprLocal>();
+            AstExprLocal* local = unwrapGroup(expr)->as<AstExprLocal>();
             return local && std::find(reads->locals.begin(), reads->locals.end(), local->local) != reads->locals.end();
         }
 
@@ -5906,7 +5894,7 @@ private:
         // Reading an element of a table leaves its length alone; any other use of it might not
         bool visit(AstExprIndexExpr* node) override
         {
-            AstExprLocal* table = unparenthesized(node->expr)->as<AstExprLocal>();
+            AstExprLocal* table = unwrapGroup(node->expr)->as<AstExprLocal>();
             if (table && isLengthTable(table->local))
             {
                 node->index->visit(this);
@@ -5984,7 +5972,7 @@ private:
         if (loop->values.size == 0)
             return {};
 
-        AstExpr* first = unparenthesized(loop->values.data[0]);
+        AstExpr* first = unwrapGroup(loop->values.data[0]);
         if (AstExprCall* call = first->as<AstExprCall>())
         {
             AstExprGlobal* callee = call->func->as<AstExprGlobal>();
@@ -6025,7 +6013,7 @@ private:
             AstExprIndexName* function = node->func->as<AstExprIndexName>();
             AstExprGlobal* library = function ? function->expr->as<AstExprGlobal>() : nullptr;
             bool isRemove = library && library->name == "table" && function->index == "remove" && node->args.size == 2;
-            AstExprLocal* removed = isRemove ? unparenthesized(node->args.data[1])->as<AstExprLocal>() : nullptr;
+            AstExprLocal* removed = isRemove ? unwrapGroup(node->args.data[1])->as<AstExprLocal>() : nullptr;
             if (removed && removed->local == index && sameTarget(node->args.data[0], table))
                 found = node;
             return !found;
@@ -6116,7 +6104,7 @@ private:
 
         AstLocal* loopVariable(AstExpr* target)
         {
-            AstExprLocal* local = unparenthesized(target)->as<AstExprLocal>();
+            AstExprLocal* local = unwrapGroup(target)->as<AstExprLocal>();
             if (!local || std::find(vars->begin(), vars->end(), local->local) == vars->end())
                 return nullptr;
             return local->local;
@@ -6129,7 +6117,7 @@ private:
                 if (AstLocal* local = loopVariable(var))
                 {
                     writes.emplace_back(node, local);
-                    writeTargets.insert(unparenthesized(var)->as<AstExprLocal>());
+                    writeTargets.insert(unwrapGroup(var)->as<AstExprLocal>());
                 }
             }
             return true;
@@ -6197,7 +6185,7 @@ private:
 
             std::string fix = "write through the table instead";
             Iterated iterated = iteratedTable(forIn);
-            std::optional<std::string> tableName = iterated.table ? shortExprName(unparenthesized(iterated.table)) : std::nullopt;
+            std::optional<std::string> tableName = iterated.table ? shortExprName(unwrapGroup(iterated.table)) : std::nullopt;
             bool namedKey = forIn->vars.size >= 2 && std::string_view(forIn->vars.data[0]->name.value) != "_";
             if (tableName && namedKey && local == forIn->vars.data[1])
                 fix = "write through the table instead ('" + *tableName + "[" + forIn->vars.data[0]->name.value + "] = ...')";
@@ -6228,10 +6216,10 @@ private:
 
         bool writesOtherKey(AstExpr* target) const
         {
-            target = unparenthesized(target);
+            target = unwrapGroup(target);
             if (AstExprIndexExpr* index = target->as<AstExprIndexExpr>())
             {
-                AstExprLocal* indexLocal = unparenthesized(index->index)->as<AstExprLocal>();
+                AstExprLocal* indexLocal = unwrapGroup(index->index)->as<AstExprLocal>();
                 bool ownKey = key && indexLocal && indexLocal->local == key;
                 return sameTarget(index->expr, table) && !ownKey;
             }
@@ -6309,8 +6297,8 @@ private:
         checkUselessLoop(node, node->body, /* takesFirstItem */ false);
 
         // `for i = 1, #t` (counting up) is a forward pass over `t`
-        AstExprUnary* length = unparenthesized(node->to)->as<AstExprUnary>();
-        AstExprConstantNumber* step = node->step ? unparenthesized(node->step)->as<AstExprConstantNumber>() : nullptr;
+        AstExprUnary* length = unwrapGroup(node->to)->as<AstExprUnary>();
+        AstExprConstantNumber* step = node->step ? unwrapGroup(node->step)->as<AstExprConstantNumber>() : nullptr;
         bool countsUp = !node->step || (step && step->value > 0);
         if (length && length->op == AstExprUnary::Op::Len && countsUp)
             checkRemoveWhileIterating(length->expr, node->var, node->body);
@@ -6367,7 +6355,7 @@ private:
                 start = node->args.data[0];
         }
 
-        AstExprConstantNumber* zero = start ? unparenthesized(start)->as<AstExprConstantNumber>() : nullptr;
+        AstExprConstantNumber* zero = start ? unwrapGroup(start)->as<AstExprConstantNumber>() : nullptr;
         if (!zero || zero->value != 0.0)
             return true;
 
@@ -6426,8 +6414,10 @@ private:
     DenseHashSet<AstLocal*> containerLocals{nullptr};
     DenseHashSet<AstLocal*> assignedLocals{nullptr};
 
-    struct ContainerLocalCollector : AstVisitor
+    struct ContainerLocalCollector : AssignmentTargetVisitor
     {
+        using AssignmentTargetVisitor::visit;
+
         DenseHashSet<AstLocal*>* containerLocals;
         DenseHashSet<AstLocal*>* assignedLocals;
 
@@ -6451,29 +6441,16 @@ private:
         {
             for (size_t i = 0; i < node->vars.size && i < node->values.size; ++i)
             {
-                if (unparenthesized(node->values.data[i])->is<AstExprTable>())
+                if (unwrapGroup(node->values.data[i])->is<AstExprTable>())
                     containerLocals->insert(node->vars.data[i]);
             }
             return true;
         }
 
-        void assigned(AstExpr* target)
+        void assigned(AstExpr* target) override
         {
-            if (AstExprLocal* local = unparenthesized(target)->as<AstExprLocal>())
+            if (AstExprLocal* local = unwrapGroup(target)->as<AstExprLocal>())
                 assignedLocals->insert(local->local);
-        }
-
-        bool visit(AstStatAssign* node) override
-        {
-            for (AstExpr* var : node->vars)
-                assigned(var);
-            return true;
-        }
-
-        bool visit(AstStatCompoundAssign* node) override
-        {
-            assigned(node->var);
-            return true;
         }
     };
 
@@ -6483,8 +6460,8 @@ private:
         if (!enabled.newValueComparison || (node->op != AstExprBinary::CompareEq && node->op != AstExprBinary::CompareNe))
             return true;
 
-        AstExpr* left = unparenthesized(node->left);
-        AstExpr* right = unparenthesized(node->right);
+        AstExpr* left = unwrapGroup(node->left);
+        AstExpr* right = unwrapGroup(node->right);
         bool table = left->is<AstExprTable>() || right->is<AstExprTable>();
         bool function = left->is<AstExprFunction>() || right->is<AstExprFunction>();
         if (!table && !function)
@@ -6531,10 +6508,10 @@ private:
         if (!enabled.tableTruthiness)
             return;
 
-        condition = unparenthesized(condition);
+        condition = unwrapGroup(condition);
         AstExprUnary* negation = condition->as<AstExprUnary>();
         bool negated = negation && negation->op == AstExprUnary::Op::Not;
-        AstExpr* tested = negated ? unparenthesized(negation->expr) : condition;
+        AstExpr* tested = negated ? unwrapGroup(negation->expr) : condition;
         if (!isContainer(tested))
             return;
 
@@ -6650,6 +6627,12 @@ private:
         return library && isPureBuiltin(library->name.value, function->index.value);
     }
 
+    // `const _ = ...`, how to discard a result on purpose
+    static std::string discardOnPurpose(AstExprCall* call)
+    {
+        return "const _ = " + shortExprName(call->func).value_or("f") + "(...)";
+    }
+
     bool visit(AstStatExpr* node) override
     {
         if (!enabled.discardedResult)
@@ -6659,16 +6642,14 @@ private:
         if (!call)
             return true;
 
-        std::string callee = describe(call->func, "this function");
-
-        // `const _ = ...` is how to discard a result on purpose
-        std::string discard = "const _ = " + shortExprName(call->func).value_or("f") + "(...)";
-
         if (callsPureBuiltin(call))
         {
+            std::string callee = describe(call->func, "this function");
+            std::string discard = discardOnPurpose(call);
+
             // `s:upper()` on its own line: strings can't be changed in place
             AstExprIndexName* method = call->self ? call->func->as<AstExprIndexName>() : nullptr;
-            std::optional<std::string> receiver = method ? shortExprName(unparenthesized(method->expr)) : std::nullopt;
+            std::optional<std::string> receiver = method ? shortExprName(unwrapGroup(method->expr)) : std::nullopt;
             if (receiver)
                 emitWarning(
                     *context,
@@ -6701,6 +6682,8 @@ private:
         if (!function || !function->isNodiscard)
             return true;
 
+        std::string callee = describe(call->func, "this function");
+        std::string discard = discardOnPurpose(call);
         std::string reason = function->nodiscardReason.empty() ? std::string() : ": " + function->nodiscardReason;
         emitWarning(
             *context,
@@ -6737,32 +6720,19 @@ private:
     LintContext* context;
     DenseHashSet<AstLocal*> assigned{nullptr};
 
-    struct AssignmentCollector : AstVisitor
+    struct AssignmentCollector : AssignmentTargetVisitor
     {
-        DenseHashSet<AstLocal*>* assigned;
+        DenseHashSet<AstLocal*>* assignedLocals;
 
-        explicit AssignmentCollector(DenseHashSet<AstLocal*>* assigned)
-            : assigned(assigned)
+        explicit AssignmentCollector(DenseHashSet<AstLocal*>* assignedLocals)
+            : assignedLocals(assignedLocals)
         {
         }
 
-        void write(AstExpr* target)
+        void assigned(AstExpr* target) override
         {
-            if (AstExprLocal* local = unparenthesized(target)->as<AstExprLocal>())
-                assigned->insert(local->local);
-        }
-
-        bool visit(AstStatAssign* node) override
-        {
-            for (AstExpr* var : node->vars)
-                write(var);
-            return true;
-        }
-
-        bool visit(AstStatCompoundAssign* node) override
-        {
-            write(node->var);
-            return true;
+            if (AstExprLocal* local = unwrapGroup(target)->as<AstExprLocal>())
+                assignedLocals->insert(local->local);
         }
     };
 
@@ -6832,7 +6802,7 @@ private:
     // in between (`math.floor(n / 2)`) makes its own value, so it isn't looked into.
     static AstExprBinary* findDivision(AstExpr* expr)
     {
-        expr = unparenthesized(expr);
+        expr = unwrapGroup(expr);
 
         if (AstExprBinary* binary = expr->as<AstExprBinary>())
         {
@@ -6935,7 +6905,7 @@ private:
             if (!sameTarget(var, node->values.data[i]))
                 continue;
 
-            AstExpr* target = unparenthesized(var);
+            AstExpr* target = unwrapGroup(var);
             bool isName = target->is<AstExprLocal>() || target->is<AstExprGlobal>();
             if (!isName && !strict)
                 continue;
@@ -7010,7 +6980,7 @@ private:
         bool visit(AstStatAssign* node) override
         {
             for (AstExpr* var : node->vars)
-                if (!unparenthesized(var)->is<AstExprLocal>())
+                if (!unwrapGroup(var)->is<AstExprLocal>())
                     var->visit(this);
             for (AstExpr* value : node->values)
                 value->visit(this);
@@ -7093,13 +7063,21 @@ private:
 
     static bool isComputed(AstExpr* value)
     {
-        value = unparenthesized(value);
+        value = unwrapGroup(value);
         return value->is<AstExprCall>() || value->is<AstExprBinary>() || value->is<AstExprUnary>() || value->is<AstExprIfElse>() ||
                value->is<AstExprInterpString>();
     }
 
-    static void forgetRead(std::vector<Store>& pending, const Effects& effects)
+    // Forgets the stores `node` reads, or all of them when it can leave the block. Walking `node` is what this costs, and
+    // nested blocks are walked again on their own, so it's skipped when nothing is pending.
+    static void forgetRead(std::vector<Store>& pending, AstNode* node)
     {
+        if (pending.empty())
+            return;
+
+        Effects effects;
+        node->visit(&effects);
+
         if (effects.leaves)
         {
             pending.clear();
@@ -7131,13 +7109,10 @@ private:
 
         for (AstStat* stat : block->body)
         {
-            Effects effects;
-
             if (AstStatLocal* local = stat->as<AstStatLocal>())
             {
                 for (AstExpr* value : local->values)
-                    value->visit(&effects);
-                forgetRead(pending, effects);
+                    forgetRead(pending, value);
 
                 if (local->vars.size == 1 && local->values.size == 1)
                     remember(pending, local->vars.data[0], local->values.data[0], local->vars.data[0]->location);
@@ -7147,18 +7122,16 @@ private:
             AstStatAssign* assign = stat->as<AstStatAssign>();
             if (!assign)
             {
-                stat->visit(&effects);
-                forgetRead(pending, effects);
+                forgetRead(pending, stat);
                 continue;
             }
 
             // The values and any table being indexed are read before the locals are written
-            assign->visit(&effects);
-            forgetRead(pending, effects);
+            forgetRead(pending, assign);
 
             for (size_t i = 0; i < assign->vars.size; ++i)
             {
-                AstExprLocal* target = unparenthesized(assign->vars.data[i])->as<AstExprLocal>();
+                AstExprLocal* target = unwrapGroup(assign->vars.data[i])->as<AstExprLocal>();
                 if (!target)
                     continue;
 
