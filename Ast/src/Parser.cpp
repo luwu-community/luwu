@@ -29,6 +29,7 @@ LUAU_FLAGVERSION(LuauExportValueSyntax, 3)
 // inlining, no LPF_INLINABLE). Upstream spells this `@debugnoinline` behind the Debug flag `DebugLuauNoInline`;
 // Luwu ships it as `@noinline` and drops the debug spelling.
 LUAU_FASTFLAGVARIABLE(LuwuNoinlineAttribute)
+LUAU_FASTFLAGVARIABLE(DebugLuwuUserDefinedRefinements)
 // Luwu Attributes (rfcs/attributes-for-types-variables-fields-classes.md): attributes on variables, type
 // aliases, table fields, classes, class fields, parameters and assignments, where upstream only allows them on
 // functions.
@@ -75,6 +76,7 @@ const char* const kDeclareExportValueError =
 const char* const kLegacyDeclareClassError = "In Luwu, 'declare class' does not declare an extern type; write 'declare extern type' instead";
 const char* const kDeclareClassNeedsTypeError =
     "A declared class is written 'declare class type Name'; to declare an extern type, write 'declare extern type Name'";
+const char* const kDeclareTraitNeedsTypeError = "A declared trait is written 'declare trait type Name'";
 const char* const kDeclareExportOrderError = "'export' goes before 'declare': write 'export declare'";
 const char* const kClassesDisabledError = "Classes are currently disabled; enable the 'LuwuClasses' fast flag to use 'class'";
 
@@ -271,6 +273,8 @@ std::pair<AttributeEntry, Luau::FValue<bool>&> kFlaggedAttributeEntries[] = {
       nullptr,
       {}},
      FFlag::LuwuNoinlineAttribute},
+    // Luwu user-defined refinements: parsed by parseTruthyAttribute, since its second argument is a type
+    {{"truthy", AstAttr::Type::Truthy, AstAttr::Context::AnyFunction, "functions", nullptr, {}}, FFlag::DebugLuwuUserDefinedRefinements},
 };
 
 std::vector<AttributeInfo> getKnownAttributes()
@@ -577,7 +581,41 @@ AstStatBlock* Parser::parseChunk()
     if (lexer.current().type != Lexeme::Eof)
         expectAndConsumeFail(Lexeme::Eof, nullptr);
 
+    if (traitsEnabled())
+        checkTraitsDeclaredBeforeUse(result);
+
     return result;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a class reads its traits when its statement runs, so a trait declared further down
+// the chunk is nil there. Its name in the `implements` list parsed as a global, which would fail at runtime. Classes
+// and traits are only declared at the top level, so the whole chunk says whether that global is really a later trait.
+void Parser::checkTraitsDeclaredBeforeUse(AstStatBlock* chunk)
+{
+    DenseHashMap<AstName, const AstStatClass*> traits{AstName()};
+
+    for (AstStat* stat : chunk->body)
+    {
+        const AstStatClass* trait = stat->as<AstStatClass>();
+        if (trait && trait->isTrait && !traits.contains(trait->name->name))
+            traits[trait->name->name] = trait;
+    }
+
+    for (AstStat* stat : chunk->body)
+    {
+        const AstStatClass* cls = stat->as<AstStatClass>();
+        if (!cls || cls->isTrait)
+            continue;
+
+        for (const AstClassTraitRef& ref : cls->implements)
+        {
+            const AstExprGlobal* global = ref.trait->as<AstExprGlobal>();
+            const AstStatClass* const* trait = global ? traits.find(global->name) : nullptr;
+
+            if (trait && (*trait)->location.begin > cls->location.begin)
+                report(ref.trait->location, "Trait '%s' must be declared before class '%s'", global->name.value, cls->name->name.value);
+        }
+    }
 }
 
 // chunk ::= {stat [`;']} [laststat [`;']]
@@ -720,6 +758,11 @@ AstStat* Parser::parseStat()
             return reportStatError(expr->location, copy({expr}), {}, "%s", kClassesDisabledError);
     }
 
+    // Luwu Traits (rfcs/classes/traits.md): `trait Name`. Like `class`, `trait` is only a keyword where a declaration starts,
+    // so a variable named `trait` keeps working.
+    if (ident == "trait" && traitsEnabled() && lexer.current().type == Lexeme::Name)
+        return parseClassStat(start, /* exported= */ false, start, {nullptr, 0}, /* declared= */ false, /* isTrait= */ true);
+
     if (ident == "export")
     {
         // Luwu Declare Statements (rfcs/declare-statements.md): `export declare extern type`, `export declare class`
@@ -735,9 +778,13 @@ AstStat* Parser::parseStat()
         {
             Lexeme current = lexer.current();
 
+            // Luwu Traits (rfcs/classes/traits.md): `export trait Name`
+            bool exportsTrait = current.type == Lexeme::Name && AstName(current.name) == "trait" && traitsEnabled() &&
+                                lexer.lookahead().type == Lexeme::Name;
+
             if (current.type == Lexeme::ReservedLocal || current.type == Lexeme::ReservedFunction ||
                 (current.type == Lexeme::Name && AstName(current.name) == "const") ||
-                (current.type == Lexeme::Name && AstName(current.name) == "class"))
+                (current.type == Lexeme::Name && AstName(current.name) == "class") || exportsTrait)
             {
                 // `export class` routes here with the classes feature off too, so that it reports the
                 // feature being disabled rather than 'export' wanting an identifier.
@@ -1254,6 +1301,42 @@ std::optional<AstAttr::Type> Parser::validateAttribute(
     return type;
 }
 
+// Luwu user-defined refinements:
+// truthyattr = 'truthy' '(' Name ',' Type ')'
+AstAttr* Parser::parseTruthyAttribute(const TempVector<AstAttr*>& attributes, const Name& name, AstAttr::Context context)
+{
+    AstArray<AstExpr*> empty;
+    validateAttribute(name.location, name.name.value, attributes, empty, context);
+
+    Location end = name.location;
+    AstAttr* node = allocator.alloc<AstAttr>(name.location, AstAttr::Type::Truthy, empty, name.name);
+
+    if (lexer.current().type != '(')
+    {
+        report(name.location, "'truthy' needs a parameter and the type it has when the function returns a truthy value: truthy(param, Type)");
+        return node;
+    }
+
+    Lexeme open = lexer.current();
+    nextLexeme();
+
+    Name param = parseName("parameter name");
+    node->refinedParam = param.name;
+    node->refinedParamLocation = param.location;
+
+    expectAndConsume(',', "truthy attribute");
+    node->refinedType = parseType();
+
+    end = lexer.current().location;
+    expectMatchAndConsume(')', open);
+
+    node->location = Location(name.location, end);
+    if (options.storeCstData)
+        cstNodeMap[node] = allocator.alloc<CstAttr>(/* hasAt */ false);
+
+    return node;
+}
+
 // attrlist = '@[' parattr {',' parattr} ']'
 void Parser::parseAttrList(TempVector<AstAttr*>& attributes, TempVector<CstAttrList*>* cstAttrLists, AstAttr::Context context)
 {
@@ -1281,7 +1364,11 @@ void Parser::parseAttrList(TempVector<AstAttr*>& attributes, TempVector<CstAttrL
             Lexeme argOpen = lexer.current();
             Lexeme::Type argOpenType = argOpen.type;
 
-            if (argOpenType == Lexeme::RawString || argOpenType == Lexeme::QuotedString || argOpenType == '{' || argOpenType == '(')
+            if (FFlag::DebugLuwuUserDefinedRefinements && strcmp(attrName, "truthy") == 0)
+            {
+                attributes.push_back(parseTruthyAttribute(attributes, name, context));
+            }
+            else if (argOpenType == Lexeme::RawString || argOpenType == Lexeme::QuotedString || argOpenType == '{' || argOpenType == '(')
             {
                 Position openParenPosition = argOpenType == '(' ? argOpen.location.begin : Position::missing();
                 TempVector<Position> argCommaPositions(scratchPosition2);
@@ -1433,7 +1520,12 @@ void Parser::parseAttribute_DEPRECATED(TempVector<AstAttr*>& attributes, AstAttr
                 Location nameLoc = name.location;
                 const char* attrName = name.name.value;
 
-                if (lexer.current().type == Lexeme::RawString || lexer.current().type == Lexeme::QuotedString || lexer.current().type == '{' ||
+                // Luwu user-defined refinements: as in parseAttrList, so the attribute doesn't depend on LuauCstAttr
+                if (FFlag::DebugLuwuUserDefinedRefinements && strcmp(attrName, "truthy") == 0)
+                {
+                    attributes.push_back(parseTruthyAttribute(attributes, name, context));
+                }
+                else if (lexer.current().type == Lexeme::RawString || lexer.current().type == Lexeme::QuotedString || lexer.current().type == '{' ||
                     lexer.current().type == '(')
                 {
 
@@ -1501,6 +1593,10 @@ void Parser::parseAttribute(TempVector<AstAttr*>& attributes, AstAttr::Context c
     const bool argumentsFollowBare = parseMisplacedBareAttributeArgs(name, context, args, argsLocation);
 
     std::optional<AstAttr::Type> type = validateAttribute(loc, name, attributes, args, context);
+
+    // Luwu user-defined refinements: its arguments are a name and a type, which only the list form parses
+    if (type == AstAttr::Type::Truthy)
+        report(loc, "'truthy' takes a parameter and a type: write it as @[truthy(param, Type)]");
 
     AstAttr* node = allocator.alloc<AstAttr>(
         argumentsFollowBare ? Location(loc, argsLocation) : loc, type.value_or(AstAttr::Type::Unknown), args, AstName(name)
@@ -1705,6 +1801,12 @@ AstStat* Parser::parseAttributeStat()
             {
                 validateAttributeContexts(attributes, AstAttr::Context::Class);
                 return parseClassStat(attributeStart, /* exported= */ false, expr->location, attributes);
+            }
+
+            if (ident == "trait" && traitsEnabled())
+            {
+                validateAttributeContexts(attributes, AstAttr::Context::Class);
+                return parseClassStat(attributeStart, /* exported= */ false, expr->location, attributes, /* declared= */ false, /* isTrait= */ true);
             }
 
             // The expression is already consumed, so name what was attributed rather than quoting a
@@ -2008,10 +2110,13 @@ const std::unordered_set<std::string> EXPLICITLY_DISALLOWED_METAMETHODS{
 LUAU_NOINLINE AstClassPrimaryConstructor* Parser::parseClassPrimaryConstructor(
     const std::optional<Location>& qualifierLocation,
     AstClassMemberVisibility visibility,
-    bool declared
+    bool declared,
+    bool isTrait
 )
 {
     LUAU_ASSERT(FFlag::LuwuClasses);
+    // Luwu Traits (rfcs/classes/traits.md): a trait's parameter list is parsed by this function too
+    const char* listName = isTrait ? "A trait's parameter list" : "A class's primary constructor";
 
     Lexeme matchParen = lexer.current();
     Location start = lexer.current().location;
@@ -2032,7 +2137,7 @@ LUAU_NOINLINE AstClassPrimaryConstructor* Parser::parseClassPrimaryConstructor(
     {
         if (lexer.current().type == Lexeme::Dot3)
         {
-            report(lexer.current().location, "A class's primary constructor cannot be variadic");
+            report(lexer.current().location, "%s cannot be variadic", listName);
             nextLexeme();
         }
         else
@@ -2145,7 +2250,7 @@ LUAU_NOINLINE AstClassPrimaryConstructor* Parser::parseClassPrimaryConstructor(
         // comma either -- but say so, rather than reporting a missing parameter name.
         if (lexer.current().type == ')')
         {
-            report(commaLocation, "A class's primary constructor cannot have a trailing comma");
+            report(commaLocation, "%s cannot have a trailing comma", listName);
             break;
         }
     }
@@ -2181,10 +2286,15 @@ LUAU_NOINLINE AstClassPrimaryConstructor* Parser::parseClassPrimaryConstructor(
     return primaryConstructor;
 }
 
+bool Parser::traitsEnabled() const
+{
+    return FFlag::LuwuTraits && FFlag::LuwuClasses;
+}
+
 // Luwu Classes (rfcs/classes): does the current token in a class body start a statement rather than
-// a member? A member is `name`, `name: T`, `name = expr` or a `function`. A statement keyword, or a name
-// followed by a call, index or comma, means the class was never closed and we are now eating the code
-// that follows it.
+// a member? A member is `name`, `name: T`, `name = expr` or a `function`. A statement keyword, a name
+// followed by a call, index or comma, or a declaration (`class Name`, `trait Name`, `export ...`,
+// `type Name`) means the class was never closed and we are now eating the code that follows it.
 bool Parser::classBodyLooksLikeStatement()
 {
     if (lexer.current().type == '(')
@@ -2209,26 +2319,48 @@ bool Parser::classBodyLooksLikeStatement()
     // `print(...)`, `t.field = x` and `a, b = 1, 2` can't be class members. `name:` is not in this
     // list on purpose: it starts a member's type annotation.
     Lexeme::Type next = lexer.lookahead().type;
-    return next == '(' || next == '.' || next == ',' || next == '[';
+    if (next == '(' || next == '.' || next == ',' || next == '[')
+        return true;
+
+    // Two names on one line are never a member: a field named `trait` followed by another member would be on the
+    // next line. Nested declarations aren't allowed, so `trait Name` here is the next statement.
+    bool nameFollowsOnSameLine = next == Lexeme::Name && lexer.lookahead().location.begin.line == lexer.current().location.begin.line;
+    if (!nameFollowsOnSameLine)
+        return false;
+
+    AstName ident(lexer.current().name);
+    return ident == "class" || ident == "export" || ident == "type" || (ident == "trait" && traitsEnabled());
 }
 
 // Luwu Classes (rfcs/classes): the grammar is also in the RFC's "Class definition syntax" section.
-// classStatement ::= [`export'] `class' Name [`<' GenericTypeListWithDefaults `>'] [primaryCtor] {classMember} `end'
+// classStatement ::= [`export'] `class' Name [`<' GenericTypeListWithDefaults `>'] [primaryCtor] [`implements' traitRefList]
+//                    {classMember} `end'
 // primaryCtor ::= [access] `(' [ctorParam {`,' ctorParam}] `)'
 // ctorParam ::= [access] [`const'] Name [`:' Type] [`=' exp]
 // classMember ::= [access] [`const'] Name [`:' Type] [`=' exp] [`;']
 //              | {attribute} [access] {attribute} `function' Name funcbody [`;']
 // access ::= `public' | `private'
+// Luwu Traits (rfcs/classes/traits.md): a trait is parsed by the same function.
+// traitStatement ::= [`export'] `trait' Name [`<' GenericTypeListWithDefaults `>'] [`(' [ctorParam {`,' ctorParam}] `)']
+//                    [`needs' traitRefList] {traitMember} `end'
+// traitMember ::= classMember | [access] `final' `function' Name funcbody [`;']
+//              | `expect' [access] [`const'] Name [`:' Type] [`;']
+//              | `expect' [access] `function' Name [`?'] funcsignature [`;']
 LUAU_NOINLINE AstStat* Parser::parseClassStat(
     const Location& start,
     bool exported,
     const Location& classKeywordLocation,
     const AstArray<AstAttr*>& classAttributes,
-    bool declared
+    bool declared,
+    bool isTrait
 )
 {
     LUAU_ASSERT(FFlag::LuwuClasses);
+    LUAU_ASSERT(!isTrait || FFlag::LuwuTraits);
     size_t errorsBeforeClass = parseErrors.size();
+    // what the declaration is called in messages
+    const char* kind = isTrait ? "trait" : "class";
+
     std::optional<Name> name = parseNameOpt("type name");
 
     // Use error name if the name is missing
@@ -2290,6 +2422,9 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
     // so it produces only one error.
     auto rejectImplements = [&]()
     {
+        if (FFlag::LuwuTraits)
+            return;
+
         if (lexer.current().type != Lexeme::Name || AstName(lexer.current().name) != "implements" ||
             lexer.lookahead().type != Lexeme::Name)
             return;
@@ -2315,12 +2450,65 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
     AstClassPrimaryConstructor* primaryConstructor = nullptr;
 
     if (lexer.current().type == '(')
-        primaryConstructor = parseClassPrimaryConstructor(ctorQualifierLocation, ctorVisibility, declared);
+        primaryConstructor = parseClassPrimaryConstructor(ctorQualifierLocation, ctorVisibility, declared, isTrait);
 
     if (primaryConstructor)
     {
         rejectExtends();
         rejectImplements();
+    }
+
+    // Luwu Traits (rfcs/classes/traits.md): a trait is never constructed, so its parameter list takes no access specifier.
+    if (isTrait && ctorQualifierLocation)
+        report(*ctorQualifierLocation, "A trait's parameter list can't be public or private");
+
+    // Luwu Traits (rfcs/classes/traits.md): `class C(...) implements A, B("arg")` and `trait T(...) needs A, B`. Both are
+    // contextual keywords, recognized only where a name follows.
+    AstArray<AstClassTraitRef> implements{nullptr, 0};
+    AstArray<AstClassTraitRef> needs{nullptr, 0};
+    std::optional<Location> implementsKeywordLocation;
+    std::optional<Location> needsKeywordLocation;
+
+    auto contextualKeywordListFollows = [&](const char* keyword)
+    {
+        // the list may be parenthesized (`implements (A, B)`), which no class member starts with
+        return FFlag::LuwuTraits && lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == keyword &&
+               (lexer.lookahead().type == Lexeme::Name || lexer.lookahead().type == '(');
+    };
+
+    if (contextualKeywordListFollows("implements"))
+    {
+        Location implementsLocation = lexer.current().location;
+        nextLexeme();
+
+        if (isTrait)
+        {
+            report(implementsLocation, "Traits can't implement traits; did you mean 'needs'?");
+            needsKeywordLocation = implementsLocation;
+            needs = parseClassTraitRefs(/* allowArgs= */ false, primaryConstructor);
+        }
+        else
+        {
+            implementsKeywordLocation = implementsLocation;
+            implements = parseClassTraitRefs(/* allowArgs= */ true, primaryConstructor);
+        }
+    }
+    else if (contextualKeywordListFollows("needs"))
+    {
+        Location needsLocation = lexer.current().location;
+        nextLexeme();
+
+        if (!isTrait)
+        {
+            report(needsLocation, "Classes can't need traits; did you mean 'implements'?");
+            implementsKeywordLocation = needsLocation;
+            implements = parseClassTraitRefs(/* allowArgs= */ true, primaryConstructor);
+        }
+        else
+        {
+            needsKeywordLocation = needsLocation;
+            needs = parseClassTraitRefs(/* allowArgs= */ false, primaryConstructor);
+        }
     }
 
     // Every parameter declares a field of the same name, so a *method* with that name collides with it.
@@ -2409,7 +2597,8 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
         {
             report(
                 lexer.current().location,
-                "Expected 'end' (to close 'class' at line %d), got %s",
+                "Expected 'end' (to close '%s' at line %d), got %s",
+                kind,
                 classKeywordLocation.begin.line + 1,
                 lexer.current().toString().c_str()
             );
@@ -2441,6 +2630,23 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
         if (memberAttributesFollow())
             parseMemberAttributes();
 
+        // Luwu Traits (rfcs/classes/traits.md): `expect` leads a trait member that implementing classes must declare
+        // themselves, before its access specifier: `expect private model: Model`, `expect public function fire(self)`.
+        // It is a keyword only where a member follows it, so `expect: number` is a field named `expect`.
+        std::optional<Location> expectLocation;
+
+        bool expectFollows = FFlag::LuwuTraits && lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "expect" &&
+                             (lexer.lookahead().type == Lexeme::Name || lexer.lookahead().type == Lexeme::ReservedFunction);
+        if (expectFollows)
+        {
+            expectLocation = lexer.current().location;
+
+            if (!isTrait)
+                report(*expectLocation, "Only traits can 'expect' members");
+
+            nextLexeme();
+        }
+
         // Luwu Classes (rfcs/classes): functions in a class are always const, so `const function` is rejected
         // rather than being read as a field -- it's valid outside a class, and easy to paste into one. The `const`
         // is dropped so the function itself still parses.
@@ -2449,7 +2655,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
             if (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "const" &&
                 lexer.lookahead().type == Lexeme::ReservedFunction)
             {
-                report(lexer.current().location, "Functions in a class are always const; remove 'const' here");
+                report(lexer.current().location, "Functions in a %s are always const; remove 'const' here", kind);
                 nextLexeme();
             }
         };
@@ -2497,7 +2703,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
         {
             if (attributes.size > 0)
             {
-                report(lexer.current().location, "Attributes on a class member must all be written on the same side of the access specifier");
+                report(lexer.current().location, "Attributes on a %s member must all be written on the same side of the access specifier", kind);
 
                 // Report and keep going: both lists are still kept on the function, so the member
                 // behaves as written and the CST has an entry for every attribute it prints.
@@ -2511,6 +2717,24 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
         // `public const function`
         if (qualifierLocation)
             rejectConstFunction();
+
+        // Luwu Traits (rfcs/classes/traits.md): `final` follows the access specifier, like `const`. A final function can't
+        // be defined by an implementing class.
+        std::optional<Location> finalLocation;
+
+        bool finalFollows = FFlag::LuwuTraits && lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "final" &&
+                            (lexer.lookahead().type == Lexeme::Name || lexer.lookahead().type == Lexeme::ReservedFunction);
+        if (finalFollows)
+        {
+            finalLocation = lexer.current().location;
+
+            if (!isTrait)
+                report(*finalLocation, "Only trait members can be 'final'");
+            else if (expectLocation)
+                report(*finalLocation, "Expected members can't be 'final'");
+
+            nextLexeme();
+        }
 
         // Attributes are parsed before the member kind is known, and both members can carry them, so
         // the only shapes rejected here are the ones that are no member at all -- the class's own
@@ -2558,6 +2782,9 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                 isConst = true;
                 nextLexeme();
             }
+
+            if (finalLocation && constLocation)
+                report(*constLocation, "'final' fields are already const");
 
             std::optional<Name> propName = parseNameOpt("class field name");
             if (!propName)
@@ -2662,11 +2889,36 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
             }
 
             if (strncmp(propName->name.value, "__", 2) == 0)
-                report(propName->location, "Class fields cannot start with '__'");
+                report(propName->location, "%s fields cannot start with '__'", isTrait ? "Trait" : "Class");
+
+            if (expectLocation && equalsLocation)
+                report(*equalsLocation, "Expected fields can't have default values");
+
+            // Luwu Traits (rfcs/classes/traits.md): a final field's value is the trait's default, which nothing else can set
+            bool isFinalField = isTrait && finalLocation && !expectLocation;
+            // a declared trait's final field may leave its default out: the value is the trait's business
+            if (isFinalField && !defaultValue && !declared)
+                report(propName->location, "Final field '%s' needs a default value", propName->name.value);
+            else if (isFinalField && findPrimaryConstructorParam(propName->name) >= 0)
+                report(propName->location, "Final field '%s' can't be a trait parameter", propName->name.value);
+
+            // Luwu Traits (rfcs/classes/traits.md): a trait field the trait provides needs a value to provide. Without one it
+            // would be nil in every implementing class, whatever its type says.
+            bool traitFieldHasNoValue =
+                isTrait && !declared && !expectLocation && !finalLocation && !defaultValue && findPrimaryConstructorParam(propName->name) < 0;
+            if (traitFieldHasNoValue)
+                report(
+                    propName->location, "Trait field '%s' needs a default value; did you mean 'expect %s'?", propName->name.value, propName->name.value
+                );
 
             // Luwu Declare Statements (rfcs/declare-statements.md): a declaration writes every type out
             if (declared && !propType)
-                report(propName->location, "Declared class field '%s' needs a type: 'name: T', or 'name = T' if it has a default", propName->name.value);
+                report(
+                    propName->location,
+                    "Declared %s field '%s' needs a type: 'name: T', or 'name = T' if it has a default",
+                    kind,
+                    propName->name.value
+                );
 
             // The member turned out to be a field rather than a method, so pin the attributes down
             // to that position now -- `@native` is a method-only attribute.
@@ -2682,7 +2934,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
 
             if (classMemberNamespace.contains(propName->name))
             {
-                report(propName->location, "Duplicate class member '%s'", propName->name.value);
+                report(propName->location, "Duplicate %s member '%s'", kind, propName->name.value);
             }
             else
             {
@@ -2704,6 +2956,8 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                         equalsLocation,
                         defaultValue,
                         attributes,
+                        expectLocation,
+                        finalLocation,
                     }
                 );
             }
@@ -2716,6 +2970,18 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
             nextLexeme();
 
             Name name = parseName("method name");
+
+            // Luwu Traits (rfcs/classes/traits.md): `expect function name?(self)` is an expected function a class may leave out
+            bool isOptional = false;
+            if (lexer.current().type == '?')
+            {
+                if (!expectLocation)
+                    report(lexer.current().location, "Only expected functions can be optional: 'expect function %s?()'", name.name.value);
+
+                isOptional = expectLocation.has_value();
+                nextLexeme();
+            }
+
             // This is a little funky as we pass in a debug name but not a
             // local name. The reason is that // in the declaration:
             //
@@ -2740,7 +3006,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                 FFlag::LuauCstAttr ? &cstAttrLists : nullptr,
                 /* endMatchLexeme= */ nullptr,
                 /* isClassFunction= */ true,
-                /* signatureOnly= */ declared
+                /* signatureOnly= */ declared || expectLocation.has_value()
             );
 
             matchRecoveryStopOnToken[Lexeme::ReservedEnd]--;
@@ -2756,10 +3022,34 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
 
             if (strncmp(name.name.value, "__", 2) == 0)
             {
-                if (name.name == "__init")
+                if (name.name == "__create")
                 {
+                    // Luwu Traits (rfcs/classes/traits.md): `__create` makes a trait callable, as a factory: `Path("./src")` returns whatever
+                    // it returns, usually an object of one of the classes implementing the trait. The trait defines it
+                    // itself, and it runs before any object exists, so it takes no `self`. Trait parameters would make
+                    // `Trait(...)` read two ways (trait arguments, or a factory call), so a trait has one or the other.
+                    if (!isTrait)
+                        report(name.location, "Only traits can define '__create'; did you mean '__init'?");
+                    else if (expectLocation)
+                        report(name.location, "'__create' can't be expected");
+                    else if (primaryConstructor)
+                        report(name.location, "Traits with parameters can't define '__create'");
+                    else if (body->args.size > 0 && body->args.data[0]->name == "self")
+                        report(name.location, "'__create' can't take 'self'");
+                }
+                else if (name.name == "__init" && isTrait && !expectLocation)
+                {
+                    // Luwu Traits (rfcs/classes/traits.md): construction belongs to the class. A trait's state comes from its field defaults and
+                    // trait parameters. A trait may only expect `__init`, to require a constructor its `__create` can call.
+                    report(name.location, "Traits can't define '__init'; give fields default values or trait parameters instead");
+                }
+                else if (name.name == "__init")
+                {
+                    if (isOptional)
+                        report(name.location, "An expected '__init' can't be optional");
+
                     // The primary constructor already defines this class's `__init`.
-                    if (primaryConstructor)
+                    if (primaryConstructor && !isTrait)
                         report(
                             name.location,
                             "Cannot define an '__init' constructor because this class defines a primary constructor on line %d; remove the "
@@ -2774,7 +3064,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                         report(name.location, "'__init' must take 'self' as its first parameter");
                 }
                 else if (EXPLICITLY_DISALLOWED_METAMETHODS.count(name.name.value) > 0)
-                    report(name.location, "Classes cannot define '%s' as a metamethod", name.name.value);
+                    report(name.location, "%s cannot define '%s' as a metamethod", isTrait ? "Traits" : "Classes", name.name.value);
                 else if (ALLOWED_METAMETHODS.count(name.name.value) == 0)
                     report(name.location, "Cannot use '%s' as a method name: names starting with '__' are reserved", name.name.value);
             }
@@ -2789,7 +3079,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
 
             if (classMemberNamespace.contains(name.name) || primaryConstructorParams.contains(name.name))
             {
-                report(name.location, "Duplicate class member '%s'", name.name.value);
+                report(name.location, "Duplicate %s member '%s'", kind, name.name.value);
             }
             else
             {
@@ -2807,6 +3097,9 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                         name.location,
                         body,
                         hasSemicolon,
+                        expectLocation,
+                        isOptional,
+                        finalLocation,
                     }
                 );
             }
@@ -2840,14 +3133,16 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                 if (sawPrivateMember)
                     report(
                         loc,
-                        "This class contains non-public members; put the 'public' or 'private' keyword in front of this %s to prevent ambiguity",
+                        "This %s contains non-public members; put the 'public' or 'private' keyword in front of this %s to prevent ambiguity",
+                        kind,
                         memberKind
                     );
                 else
                     report(
                         loc,
-                        "This class mixes explicit and implicit 'public'; put the 'public' or 'private' keyword in front of this %s to prevent "
+                        "This %s mixes explicit and implicit 'public'; put the 'public' or 'private' keyword in front of this %s to prevent "
                         "ambiguity",
+                        kind,
                         memberKind
                     );
             }
@@ -2859,8 +3154,9 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
             for (const Location& loc : explicitPublicQualifierLocations)
                 report(
                     loc,
-                    "This class mixes explicit and implicit 'public'; remove 'public' or add 'public' or 'private' to all other members to prevent "
-                    "ambiguity"
+                    "This %s mixes explicit and implicit 'public'; remove 'public' or add 'public' or 'private' to all other members to prevent "
+                    "ambiguity",
+                    kind
                 );
         }
 
@@ -2896,39 +3192,151 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
     // plan to add a `class` library.
     // An unterminated class ends at its last member, not at the statement that follows it.
     Location end = unterminated ? lexer.previousLocation() : lexer.current().location;
-    bool hasEnd = unterminated ? false : expectAndConsume(Lexeme::ReservedEnd, "class");
+    bool hasEnd = unterminated ? false : expectAndConsume(Lexeme::ReservedEnd, kind);
     Location location{start, end};
 
     // We only allow classes at the top level: we can make use of the
     // recursion counter to check this, though it's a little clowny.
     // Luwu Declare Statements (rfcs/declare-statements.md): a declared class follows the rules for declarations instead.
     if (recursionCounter > 1 && !declared)
-        report(nameLocal->location, "Cannot declare class '%s' inside another statement or expression", nameLocal->name.value);
+        report(nameLocal->location, "Cannot declare %s '%s' inside another statement or expression", kind, nameLocal->name.value);
 
     AstStatClass* cls = allocator.alloc<AstStatClass>(
         location, nameLocal, copy(declarations), exported, classKeywordLocation, generics, genericPacks, primaryConstructor
     );
     cls->hasEnd = hasEnd;
     cls->attributes = classAttributes;
+    cls->isTrait = isTrait;
+    cls->implements = implements;
+    cls->needs = needs;
+    cls->implementsLocation = implementsKeywordLocation;
+    cls->needsLocation = needsKeywordLocation;
 
     // A declared class has no value, so its name is not a class name for assignment and lookup; a clash with a
     // class's type name is reported by the type checker.
     if (declared)
         return cls;
 
-    if (classesWithinModule.contains(nameLocal->name))
+    if (AstStatClass** previous = classesWithinModule.find(nameLocal->name))
     {
-        // We do not allow shadowing classes with the same name.
+        // We do not allow shadowing classes with the same name. Luwu Traits (rfcs/classes/traits.md): traits share the name
+        // space, since both are hoisted values.
+        const char* kinds = isTrait || (*previous)->isTrait ? "class or trait" : "class";
         return reportStatError(
             nameLocal->location,
             {},
             copy({static_cast<AstStat*>(cls)}),
-            "A class named '%s' has already been declared in this module",
+            "A %s named '%s' has already been declared in this module",
+            kinds,
             nameLocal->name.value
         );
     }
     classesWithinModule[nameLocal->name] = cls;
     return cls;
+}
+
+// Luwu Traits (rfcs/classes/traits.md):
+// traitRefList ::= traitRef {`,' traitRef}
+// traitRef ::= Name {`.' Name} [`<' TypeList `>'] [`(' [explist] `)']
+AstArray<AstClassTraitRef> Parser::parseClassTraitRefs(bool allowArgs, AstClassPrimaryConstructor* primaryConstructor)
+{
+    LUAU_ASSERT(FFlag::LuwuTraits);
+    std::vector<AstClassTraitRef> refs;
+
+    // `implements (A, B)`, so a long list can go one per line
+    std::optional<MatchLexeme> parenthesized;
+    if (lexer.current().type == '(')
+    {
+        parenthesized = lexer.current();
+        nextLexeme();
+    }
+
+    while (true)
+    {
+        AstClassTraitRef ref;
+        Location start = lexer.current().location;
+
+        // A trait's needed traits are compiled into its `__needs` function, one function scope deeper than the trait
+        // (see Compiler's ClassInitDefaultsVisitor::visitTrait); a class's traits are read by the class statement itself.
+        static Function needsFunction;
+        if (!allowArgs)
+            functionStack.emplace_back(needsFunction);
+
+        AstExpr* trait = parseNameExpr("trait name");
+
+        while (lexer.current().type == '.' && lexer.lookahead().type == Lexeme::Name)
+        {
+            Position opPosition = lexer.current().location.begin;
+            nextLexeme();
+
+            Name index = parseName("trait name");
+            trait = allocator.alloc<AstExprIndexName>(Location(start, index.location), trait, index.name, index.location, opPosition, '.');
+        }
+
+        if (!allowArgs)
+            functionStack.pop_back();
+
+        ref.trait = trait;
+
+        if (lexer.current().type == '<')
+            ref.typeArguments = parseTypeParams();
+
+        if (lexer.current().type == '(')
+        {
+            MatchLexeme matchParen = lexer.current();
+            Location argsStart = lexer.current().location;
+            nextLexeme();
+
+            // Trait arguments are evaluated on every construction, with the class's primary constructor parameters in
+            // scope, like a field default; they get the same function depth for the same reason (see parseClassStat).
+            static Function dummyFunction;
+            functionStack.emplace_back(dummyFunction);
+
+            unsigned int localsBegin = saveLocals();
+
+            if (primaryConstructor)
+                pushClassPrimaryConstructorParams(primaryConstructor);
+
+            TempVector<AstExpr*> args(scratchExpr);
+
+            if (lexer.current().type != ')')
+            {
+                args.push_back(parseExpr());
+
+                while (lexer.current().type == ',')
+                {
+                    nextLexeme();
+                    args.push_back(parseExpr());
+                }
+            }
+
+            restoreLocals(localsBegin);
+            functionStack.pop_back();
+
+            Location argsEnd = lexer.current().location;
+            expectMatchAndConsume(')', matchParen);
+
+            ref.hasArgs = true;
+            ref.args = copy(args);
+            ref.argsLocation = Location(argsStart, argsEnd);
+
+            if (!allowArgs)
+                report(ref.argsLocation, "Traits in a 'needs' list can't take arguments; the implementing class passes them");
+        }
+
+        ref.location = Location(start, lexer.previousLocation());
+        refs.push_back(ref);
+
+        if (lexer.current().type != ',')
+            break;
+
+        nextLexeme();
+    }
+
+    if (parenthesized)
+        expectMatchAndConsume(')', *parenthesized);
+
+    return copy(refs.data(), refs.size());
 }
 
 // type function Name `(' arglist `)' `=' funcbody `end'
@@ -3083,7 +3491,8 @@ AstStat* Parser::parseDeclaration(const Location& start, const AstArray<AstAttr*
 
     if (exportLocation)
     {
-        bool exportsType = declaresClass() || (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "extern");
+        bool exportsType =
+            declaresClass() || declaresTrait() || (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "extern");
         if (!exportsType)
         {
             report(*exportLocation, "%s", kDeclareExportValueError);
@@ -3091,7 +3500,10 @@ AstStat* Parser::parseDeclaration(const Location& start, const AstArray<AstAttr*
         }
     }
 
-    if (declaresClass())
+    // Luwu Traits (rfcs/classes/traits.md): `declare trait type Name` declares a trait the way `declare class type` declares a
+    // class, as the same shape.
+    bool isTrait = declaresTrait();
+    if (isTrait || declaresClass())
     {
         Location classKeywordLocation = lexer.current().location;
         nextLexeme();
@@ -3102,9 +3514,11 @@ AstStat* Parser::parseDeclaration(const Location& start, const AstArray<AstAttr*
         if (typeKeyword)
             nextLexeme();
         else
-            report(classKeywordLocation, "%s", kDeclareClassNeedsTypeError);
+            report(classKeywordLocation, "%s", isTrait ? kDeclareTraitNeedsTypeError : kDeclareClassNeedsTypeError);
 
-        AstStat* stat = parseClassStat(start, /* exported= */ exportLocation.has_value(), classKeywordLocation, {nullptr, 0}, /* declared= */ true);
+        AstStat* stat = parseClassStat(
+            start, /* exported= */ exportLocation.has_value(), classKeywordLocation, {nullptr, 0}, /* declared= */ true, isTrait
+        );
         AstStatClass* shape = stat->as<AstStatClass>();
         if (!shape)
             return stat;
@@ -3502,6 +3916,13 @@ bool Parser::declaresClass()
            lexer.lookahead().type == Lexeme::Name;
 }
 
+// Luwu Traits (rfcs/classes/traits.md): `declare trait type Name`. `declare trait: T` is still a global named `trait`.
+bool Parser::declaresTrait()
+{
+    return FFlag::LuwuDeclareStatements && traitsEnabled() && lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "trait" &&
+           lexer.lookahead().type == Lexeme::Name;
+}
+
 Parser::DeclaredParameters::DeclaredParameters(Parser& parser)
     : parser(parser)
     , outer(parser.parsingDeclaredParameters)
@@ -3791,6 +4212,20 @@ AstStat* Parser::parseExportValue(
                 report(classStat->name->location, "Duplicate exported class '%s'", classStat->name->name.value);
 
             classStat->name->isExported = true;
+        }
+        return stat;
+    }
+    else if (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "trait" && traitsEnabled())
+    {
+        Location traitKeywordLocation = lexer.current().location;
+        nextLexeme();
+        auto stat = parseClassStat(start, /*exported*/ true, traitKeywordLocation, {nullptr, 0}, /* declared= */ false, /* isTrait= */ true);
+        if (auto traitStat = stat->as<AstStatClass>())
+        {
+            if (!checkDuplicateExport(traitStat->name->name, traitStat->name->location))
+                report(traitStat->name->location, "Duplicate exported trait '%s'", traitStat->name->name.value);
+
+            traitStat->name->isExported = true;
         }
         return stat;
     }

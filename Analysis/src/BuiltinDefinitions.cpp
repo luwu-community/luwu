@@ -56,6 +56,7 @@ struct MagicSetMetatable final : MagicFunction
         WithPredicate<TypePackId>
     ) override;
     bool infer(const MagicFunctionCallContext& ctx) override;
+    bool typeCheck(const MagicFunctionTypeCheckContext& ctx) override;
 };
 
 struct MagicAssert final : MagicFunction
@@ -89,6 +90,27 @@ struct MagicClone final : MagicFunction
         WithPredicate<TypePackId>
     ) override;
     bool infer(const MagicFunctionCallContext& context) override;
+    bool typeCheck(const MagicFunctionTypeCheckContext& ctx) override;
+};
+
+// Luwu Classes (rfcs/classes): `rawset` is declared to take `{[K]: V}`, which an object still satisfies, but the
+// runtime only accepts tables. This magic function only adds that check.
+struct MagicRawset final : MagicFunction
+{
+    std::optional<WithPredicate<TypePackId>> handleOldSolver(
+        struct TypeChecker&,
+        const std::shared_ptr<struct Scope>&,
+        const class AstExprCall&,
+        WithPredicate<TypePackId>
+    ) override
+    {
+        return std::nullopt;
+    }
+    bool infer(const MagicFunctionCallContext&) override
+    {
+        return false;
+    }
+    bool typeCheck(const MagicFunctionTypeCheckContext& ctx) override;
 };
 
 struct MagicFreeze final : MagicFunction
@@ -363,9 +385,9 @@ void makeVectorMetatable(NotNull<BuiltinTypes> builtinTypes)
     if (vectorCls->metatable)
         return;
 
-    vectorCls->props["x"] = Property::readonly(numberType);
-    vectorCls->props["y"] = Property::readonly(numberType);
-    vectorCls->props["z"] = Property::readonly(numberType);
+    vectorCls->props()["x"] = Property::readonly(numberType);
+    vectorCls->props()["y"] = Property::readonly(numberType);
+    vectorCls->props()["z"] = Property::readonly(numberType);
 
     vectorCls->metatable = arena->addType(TableType{{}, std::nullopt, TypeLevel{}, TableState::Sealed});
     TableType* metatableTy = getMutable<TableType>(*vectorCls->metatable);
@@ -503,6 +525,7 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
     }
 
     attachMagicFunction(getGlobalBinding(globals, "setmetatable"), std::make_shared<MagicSetMetatable>());
+    attachMagicFunction(getGlobalBinding(globals, "rawset"), std::make_shared<MagicRawset>());
     attachMagicFunction(getGlobalBinding(globals, "select"), std::make_shared<MagicSelect>());
 
     if (TableType* ttv = getMutable<TableType>(getGlobalBinding(globals, "table")))
@@ -548,6 +571,12 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
                 attachMagicFunction(*it->second.readTy, std::make_shared<MagicClassFields>());
             if (auto it = ctv->props.find("name"); it != ctv->props.end() && it->second.readTy)
                 attachMagicFunction(*it->second.readTy, std::make_shared<MagicClassName>());
+            if (auto it = ctv->props.find("of"); it != ctv->props.end() && it->second.readTy)
+                attachMagicFunction(*it->second.readTy, std::make_shared<MagicClassOf>());
+            if (auto it = ctv->props.find("isinstance"); it != ctv->props.end() && it->second.readTy)
+                attachMagicFunction(*it->second.readTy, std::make_shared<MagicClassInstanceCheck>());
+            if (auto it = ctv->props.find("implements"); it != ctv->props.end() && it->second.readTy)
+                attachMagicFunction(*it->second.readTy, std::make_shared<MagicClassInstanceCheck>());
         }
     }
 
@@ -1479,6 +1508,42 @@ bool MagicSetMetatable::infer(const MagicFunctionCallContext&)
     return false;
 }
 
+// Luwu Classes (rfcs/classes): the table library and the raw functions raise "table expected, got object" for an
+// object, class or trait value. Several of them are declared over an unconstrained generic (`<T>(T) -> T`), so nothing
+// else rejects one. Constraining the generic to tables instead would also reject generic code that passes a `T` along.
+// Returns true when it reported an error.
+static bool reportLuwuNominalFirstArgument(const MagicFunctionTypeCheckContext& ctx)
+{
+    if (ctx.callSite->args.size == 0)
+        return false;
+
+    const auto& [paramTypes, _] = flatten(ctx.arguments);
+    if (paramTypes.empty())
+        return false;
+
+    TypeId firstArgument = follow(paramTypes[0]);
+    if (!luwuNominalKind(firstArgument))
+        return false;
+
+    ctx.typechecker->reportError(TypeMismatch{ctx.builtinTypes->tableType, firstArgument}, ctx.callSite->args.data[0]->location);
+    return true;
+}
+
+bool MagicSetMetatable::typeCheck(const MagicFunctionTypeCheckContext& ctx)
+{
+    return reportLuwuNominalFirstArgument(ctx);
+}
+
+bool MagicRawset::typeCheck(const MagicFunctionTypeCheckContext& ctx)
+{
+    return reportLuwuNominalFirstArgument(ctx);
+}
+
+bool MagicClone::typeCheck(const MagicFunctionTypeCheckContext& ctx)
+{
+    return reportLuwuNominalFirstArgument(ctx);
+}
+
 std::optional<WithPredicate<TypePackId>> MagicAssert::handleOldSolver(
     TypeChecker& typechecker,
     const ScopePtr& scope,
@@ -1853,7 +1918,8 @@ bool MagicClassFields::infer(const MagicFunctionCallContext& context)
     // were handed the class type, its relation points (via Obj) at the corresponding instance
     // type.
     const ExternType* instanceEtv = etv;
-    if (etv->root == builtinTypes->classType && etv->relation)
+    bool isClassOrTraitValue = etv->root == builtinTypes->classType || etv->root == builtinTypes->traitType;
+    if (isClassOrTraitValue && etv->relation)
     {
         if (const Obj* obj = get_if<Obj>(&*etv->relation))
             instanceEtv = get<ExternType>(follow(obj->ty));
@@ -1874,7 +1940,7 @@ bool MagicClassFields::infer(const MagicFunctionCallContext& context)
     TableType::Props resultProps;
     bool complete = true;
 
-    for (const auto& [name, prop] : instanceEtv->props)
+    for (const auto& [name, prop] : instanceEtv->props())
     {
         if (fieldUserData->fieldNames.count(name) == 0)
             continue;
@@ -1911,13 +1977,17 @@ std::optional<WithPredicate<TypePackId>> MagicClassName::handleOldSolver(
     return std::nullopt;
 }
 
-// Collects the distinct class names of `ty`, which must be a class type, an object type, or a union
-// of them. Returns false for anything else -- including the `class`/`object` top types themselves,
-// whose name isn't known -- so the caller can fall back to the declared `string`.
+// Collects the distinct class names of `ty`, which must be a class type, an object type, a trait, or a
+// union of them. Returns false for anything else -- including the `class`/`object`/`trait` top types
+// themselves, whose name isn't known -- so the caller can fall back to the declared `string`.
 static bool collectClassName(NotNull<BuiltinTypes> builtinTypes, TypeId ty, std::vector<Name>& names)
 {
     const ExternType* etv = get<ExternType>(follow(ty));
-    if (!etv || !etv->root || (*etv->root != builtinTypes->classType && *etv->root != builtinTypes->objectType))
+    if (!etv || !etv->root)
+        return false;
+
+    TypeId root = *etv->root;
+    if (root != builtinTypes->classType && root != builtinTypes->objectType && root != builtinTypes->traitType)
         return false;
 
     // a class and its objects share a name, as do the instantiations of a generic class
@@ -1966,6 +2036,154 @@ bool MagicClassName::infer(const MagicFunctionCallContext& context)
     asMutable(context.result)->ty.emplace<BoundTypePack>(arena->addTypePack({resultTy}));
 
     return true;
+}
+
+// The class value that made an object of type `ty`, or nullopt when `ty` isn't an object type known to come from one
+static std::optional<TypeId> classOfObjectType(NotNull<BuiltinTypes> builtinTypes, TypeId ty)
+{
+    const ExternType* etv = get<ExternType>(follow(ty));
+    if (!etv || etv->root != builtinTypes->objectType)
+        return std::nullopt;
+
+    // an object known only by a trait was made by some class implementing it
+    if (etv->traitInfo)
+        return etv->traitInfo->implementorClass;
+
+    const Klass* klass = etv->relation ? etv->relation->get_if<Klass>() : nullptr;
+    if (!klass)
+        return std::nullopt;
+
+    return klass->ty;
+}
+
+std::optional<WithPredicate<TypePackId>> MagicClassOf::handleOldSolver(
+    struct TypeChecker&,
+    const std::shared_ptr<struct Scope>&,
+    const class AstExprCall&,
+    WithPredicate<TypePackId>
+)
+{
+    return std::nullopt;
+}
+
+bool MagicClassOf::infer(const MagicFunctionCallContext& context)
+{
+    NotNull<BuiltinTypes> builtinTypes = context.solver->builtinTypes;
+
+    const auto& [paramTypes, paramTail] = flatten(context.arguments);
+    if (paramTypes.empty())
+        return false;
+
+    TypeId argTy = follow(paramTypes[0]);
+
+    std::vector<TypeId> classes;
+    auto addClassOf = [&](TypeId option)
+    {
+        std::optional<TypeId> cls = classOfObjectType(builtinTypes, option);
+        if (cls && std::find(classes.begin(), classes.end(), *cls) == classes.end())
+            classes.push_back(*cls);
+        return cls.has_value();
+    };
+
+    // UnionTypeIterator flattens nested unions and stops on a union that contains itself
+    bool known = false;
+    if (const UnionType* ut = get<UnionType>(argTy))
+        known = std::all_of(begin(ut), end(ut), addClassOf);
+    else if (const IntersectionType* it = get<IntersectionType>(argTy))
+    {
+        // Luwu Traits (rfcs/classes/traits.md): `self` in a trait method generic over `Self` is `Self & Trait`, made by
+        // some class implementing the trait; the object types in an intersection say what made it
+        known = std::any_of(begin(it), end(it), addClassOf);
+    }
+    else
+        known = addClassOf(argTy);
+
+    if (!known || classes.empty())
+        return false;
+
+    TypeArena* arena = context.solver->arena;
+    TypeId resultTy = classes.size() == 1 ? classes[0] : arena->addType(UnionType{std::move(classes)});
+    asMutable(context.result)->ty.emplace<BoundTypePack>(arena->addTypePack({resultTy}));
+
+    return true;
+}
+
+std::optional<WithPredicate<TypePackId>> MagicClassInstanceCheck::handleOldSolver(
+    struct TypeChecker&,
+    const std::shared_ptr<struct Scope>&,
+    const class AstExprCall&,
+    WithPredicate<TypePackId>
+)
+{
+    return std::nullopt;
+}
+
+bool MagicClassInstanceCheck::infer(const MagicFunctionCallContext&)
+{
+    // the declared signature types the call; this function only refines
+    return false;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a class or trait value with no specific class or trait known: the top `class` or
+// `trait` (a parameter typed `class | trait`), or a union or intersection of such values
+static bool isAnyClassOrTraitValue(NotNull<BuiltinTypes> builtinTypes, TypeId ty, int depth = 0)
+{
+    // unions and intersections nest, and types can be cyclic
+    constexpr int kMaxDepth = 16;
+    if (depth > kMaxDepth)
+        return false;
+
+    ty = follow(ty);
+    if (ty == builtinTypes->classType || ty == builtinTypes->traitType)
+        return true;
+
+    if (const UnionType* u = get<UnionType>(ty))
+    {
+        for (TypeId option : u->options)
+        {
+            if (!isAnyClassOrTraitValue(builtinTypes, option, depth + 1) && !objectTypeOfClassValue(builtinTypes, option))
+                return false;
+        }
+        return true;
+    }
+
+    if (const IntersectionType* i = get<IntersectionType>(ty))
+    {
+        for (TypeId part : i->parts)
+        {
+            if (isAnyClassOrTraitValue(builtinTypes, part, depth + 1))
+                return true;
+        }
+    }
+
+    return false;
+}
+
+void MagicClassInstanceCheck::refine(const MagicRefinementContext& context)
+{
+    // The value checked is the first argument. A method call (`lib:isinstance(c)`) puts `lib` there, which is not what
+    // the check is about.
+    if (context.callSite->self || context.discriminantTypes.empty() || !context.discriminantTypes[0])
+        return;
+
+    const auto& [argTypes, argTail] = flatten(context.arguments);
+    if (argTypes.size() < 2)
+        return;
+
+    // The objects that pass the check, as `objectof` names them. The solver has the arguments' types by now (it
+    // blocks the call on them), so this reads the class value directly. A value that isn't a class or trait gives
+    // the error type, as `objectof` does.
+    NotNull<BuiltinTypes> builtinTypes = context.solver->builtinTypes;
+    TypeId passed = objectTypeOfClassValue(builtinTypes, argTypes[1]).value_or(builtinTypes->errorType);
+
+    // Luwu Traits (rfcs/classes/traits.md): with no specific class or trait known (`expected: class | trait`), a value that
+    // passes is only known to be some object
+    if (passed == builtinTypes->errorType && isAnyClassOrTraitValue(builtinTypes, argTypes[1]))
+        passed = builtinTypes->objectType;
+
+    TypeId discriminant = follow(*context.discriminantTypes[0]);
+    LUAU_ASSERT(get<BlockedType>(discriminant));
+    emplaceType<BoundType>(asMutable(discriminant), passed);
 }
 
 static bool checkRequirePath(TypeChecker& typechecker, AstExpr* expr)

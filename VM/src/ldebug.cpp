@@ -9,6 +9,7 @@
 #include "ldo.h"
 #include "lbytecode.h"
 #include "lvm.h"
+#include "lclass.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -232,7 +233,14 @@ int lua_getinfo(lua_State* L, int level, const char* what, lua_Debug* ar)
         if (Closure* fcl = auxgetinfo(L, what, ar, f, ci))
         {
             luaC_threadbarrier(L);
-            setclvalue(L, L->top, fcl);
+
+            // Luwu Classes (rfcs/classes): a function only the VM calls is never handed out; its frame still counts as
+            // a level, and the option gives nil in its place
+            if (luaR_isvminternalfunction(L, fcl))
+                setnilvalue(L->top);
+            else
+                setclvalue(L, L->top, fcl);
+
             incr_top(L);
         }
     }
@@ -327,6 +335,10 @@ l_noret luaG_missingmembererror(lua_State* L, const TValue* p1, const TValue* p2
 
     const char* key = getstr(tsvalue(p2));
 
+    // Luwu Traits (rfcs/classes/traits.md): a trait has no objects of its own to point at
+    if (ttisclass(p1) && classvalue(p1)->istrait)
+        luaG_runerrorL(L, "trait '%s' does not have a member named '%s'", getstr(classvalue(p1)->name), key);
+
     if (ttisclass(p1))
         luaG_runerrorL(
             L,
@@ -347,6 +359,15 @@ l_noret luaG_missingmembererror(lua_State* L, const TValue* p1, const TValue* p2
 l_noret luaG_instancefieldonclasserror(lua_State* L, const TValue* p1, const TValue* p2)
 {
     const char* className = getstr(classvalue(p1)->name);
+
+    // Luwu Traits (rfcs/classes/traits.md): a trait's fields only exist in the objects of implementing classes
+    if (classvalue(p1)->istrait)
+        luaG_runerrorL(
+            L,
+            "cannot read field '%s' of trait '%s': fields exist only on objects",
+            getstr(tsvalue(p2)),
+            className
+        );
 
     luaG_runerrorL(
         L,

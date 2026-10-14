@@ -1592,6 +1592,14 @@ static void analyzeBytecodeTypesPass(
             case LOP_JUMPXISA:
             case LOP_SETOBJECTMEMBER:
                 break;
+            case LOP_INITTRAITS:
+            {
+                // Luwu Traits (rfcs/classes/traits.md): A gets the runner, or nil when the jump is taken
+                int ra = LUAU_INSN_A(*pc);
+                regTags[ra] = LBC_TYPE_ANY;
+                bcType.result = regTags[ra];
+                break;
+            }
             case LOP_GETOBJECTMEMBER:
             {
                 // Luwu Classes (rfcs/classes): the member's type is unknown here, like GETTABLEKS's result
@@ -1690,6 +1698,9 @@ static void visitBytecodeRegWrites(const IrFunction& function, const std::vector
         visit(ra, function.bcTypes[pc].result);
         if (LUAU_INSN_C(*code) == LBC_NEWOBJECT_INIT)
             visitRange(ra + 1, 2);
+        break;
+    case LOP_INITTRAITS:
+        visit(ra, uint8_t(LBC_TYPE_ANY));
         break;
     case LOP_NAMECALL:
     case LOP_NAMECALLUDATA:

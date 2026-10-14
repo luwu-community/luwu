@@ -126,6 +126,10 @@ std::vector<TypeId> reduceUnion(const std::vector<TypeId>& types);
  */
 TypeId stripNil(NotNull<BuiltinTypes> builtinTypes, TypeArena& arena, TypeId ty);
 
+// Luwu Traits (rfcs/classes/traits.md): through the trait, an optional expected function (`expect function f?(self)`)
+// reads as `F?`, since an implementing class may leave it out. This is its `F`, and `ty` itself for any other member.
+TypeId expectedTraitFunction(TypeId ty);
+
 struct ErrorSuppression
 {
     enum Value
@@ -473,6 +477,18 @@ bool isInsideClassDeclaration(const ExternType* cls, const ModuleName& moduleNam
 const char* luwuNominalKind(TypeId ty);
 
 /**
+ * Luwu Classes (rfcs/classes): `ty` described for an error message: "an object of class 'Cat'", "an object implementing
+ * 'Named'" (a value typed by a trait), "class 'Cat'", "trait 'Named'", or the quoted type for anything else.
+ */
+std::string describeLuwuNominalValue(TypeId ty);
+
+/**
+ * Luwu Classes (rfcs/classes): the check to use instead of comparing with a class or trait (`obj == Cat`,
+ * `typeof(obj) == "Cat"`): `class.isinstance(value, Cat)`, or `class.implements(value, Named)` for a trait.
+ */
+std::string luwuNominalCheckSuggestion(const std::string& declarationName, bool isTrait);
+
+/**
  * Luwu Attributes (rfcs/attributes-for-types-variables-fields-classes.md): marks `prop` deprecated when the
  * field it was declared from carries `@deprecated`, with the attribute's `use` as its suggestion. Leaves `prop`
  * alone otherwise.
@@ -484,5 +500,48 @@ void applyDeprecatedAttribute(Property& prop, const AstArray<AstAttr*>& attribut
  * `class<List>`, or nothing when `argument` is anything else.
  */
 std::optional<TypeId> genericClassValueType(const Scope& scope, const AstType* argument);
+
+/**
+ * Luwu Classes (rfcs/classes): what calling the class or trait value `ty` calls -- the class's constructor, or a trait's
+ * `__create` -- as its `__call` metamethod, taking the value itself first. Nothing for any other type.
+ */
+std::optional<TypeId> classValueCallType(NotNull<BuiltinTypes> builtinTypes, TypeId ty);
+
+/**
+ * Luwu Classes (rfcs/classes): the function type `fnTy` without its first parameter (a method's `self`, or the class value
+ * a constructor's `__call` takes), or `fnTy` itself when it isn't a function taking one.
+ */
+TypeId withoutFirstParameter(TypeArena& arena, TypeId fnTy);
+
+/**
+ * Luwu Traits (rfcs/classes/traits.md): whether an error type appears anywhere in `ty`, e.g. from a generic type named
+ * without its arguments in an annotation, whose error was already reported where it is written.
+ */
+bool containsErrorType(TypeId ty);
+
+// Luwu (helpful subtyping errors): gives a member a value for the lifetime of the guard and restores the one it
+// had on every exit, including a `TimeLimitError` or `UserCancelError` thrown through it.
+template<typename T>
+struct ScopedMemberValue
+{
+    ScopedMemberValue(T& target, T value)
+        : member(target)
+        , previous(std::move(target))
+    {
+        member = std::move(value);
+    }
+
+    ~ScopedMemberValue()
+    {
+        member = std::move(previous);
+    }
+
+    ScopedMemberValue(const ScopedMemberValue&) = delete;
+    ScopedMemberValue& operator=(const ScopedMemberValue&) = delete;
+
+private:
+    T& member;
+    T previous;
+};
 
 } // namespace Luau

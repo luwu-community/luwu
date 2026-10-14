@@ -57,12 +57,12 @@ RefinementId RefinementArena::proposition(const RefinementKey* key, TypeId discr
     return NotNull{allocator.allocate(Proposition{key, discriminantTy, false})};
 }
 
-RefinementId RefinementArena::implicitProposition(const RefinementKey* key, TypeId discriminantTy)
+RefinementId RefinementArena::implicitProposition(const RefinementKey* key, TypeId discriminantTy, TypeId negativeDiscriminantTy)
 {
     if (!key)
         return nullptr;
 
-    return NotNull{allocator.allocate(Proposition{key, discriminantTy, true})};
+    return NotNull{allocator.allocate(Proposition{key, discriminantTy, true, negativeDiscriminantTy})};
 }
 
 } // namespace Luau

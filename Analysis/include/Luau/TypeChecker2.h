@@ -252,6 +252,34 @@ private:
     void visit(AstStatDeclareGlobal* stat);
     void visit(AstStatDeclareExternType* stat);
     void visit(AstStatClass* stat);
+    // Luwu Traits (rfcs/classes/traits.md): the class's fields against the types of the fields its traits expect
+    std::optional<TypeId> selfFieldFor(const ExternType* traitType, TypeId classTy, const Name& name);
+    void checkTraitFieldExpectations(AstStatClass* stat);
+    // Luwu Traits (rfcs/classes/traits.md): the class's constructor against the trait's expected `__init`
+    void checkTraitConstructorExpectation(AstStatClass* stat, const ExternType* classType, const ExternType* traitType);
+    void checkTraitArguments(AstStatClass* stat);
+    // Luwu Traits (rfcs/classes/traits.md): the class implements the instantiation of each trait its traits need with
+    // the type arguments their `needs` entries give it
+    void checkNeededTraitArguments(AstStatClass* stat);
+    void checkTraitRefs(AstStatClass* stat, const AstArray<AstClassTraitRef>& refs);
+    void checkTraitOverrides(AstStatClass* stat);
+    // Luwu Traits (rfcs/classes/traits.md): the members a class is missing, reported on one `implements` entry
+    struct MissingTraitMembers
+    {
+        Location location;
+        std::string traitName;
+        std::vector<std::string> members;
+        size_t fields = 0;
+        size_t functions = 0;
+    };
+    void addMissingTraitMember(
+        std::vector<MissingTraitMembers>& missing,
+        AstStatClass* stat,
+        const ExternType* traitType,
+        const Name& name,
+        bool isField
+    );
+    void reportMissingTraitMembers(const ExternType* classType, const MissingTraitMembers& group);
     void visit(AstStatDeclareClass* stat);
     void visit(AstStatError* stat);
     void visit(AstExpr* expr, ValueContext context);
@@ -276,6 +304,9 @@ private:
     void visit(AstExprTable* expr);
     void visit(AstExprUnary* expr);
     TypeId visit(AstExprBinary* expr, AstNode* overrideKey = nullptr);
+    // Luwu Classes (rfcs/classes): `type(x) == "table"` where `x` is an object, a class or a trait value, whose `type`
+    // is always "object", "class" or "trait"
+    void checkLuwuNominalTypeComparison(AstExprBinary* expr);
     void visit(AstExprTypeAssertion* expr);
     void visit(AstExprIfElse* expr);
     void visit(AstExprInterpString* interpString);
@@ -349,7 +380,8 @@ private:
     // definition block, report an error.
     void checkPrivateConstructorAccess(TypeId classTy, const Location& location);
     // Luwu Classes (rfcs/classes): steers `typeof(Cat)` to `class<Cat>`.
-    void reportClassTypeofSpelling(AstTypeTypeof* ty, const std::string& className, TypeId objectTy);
+    TypeId withoutSelfParameter(TypeId fnTy);
+    void reportClassTypeofSpelling(AstTypeTypeof* ty, const std::string& className, TypeId objectTy, const char* valueKind);
     // Luwu Classes (rfcs/classes): reports reading `__init` from a class or object; true if it did.
     bool checkConstructorReadByName(TypeId tableTy, const std::string& prop, ValueContext context, const Location& location);
     PropertyType hasIndexTypeFromType(

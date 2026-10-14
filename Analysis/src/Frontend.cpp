@@ -150,7 +150,7 @@ static void generateDocumentationSymbols(TypeId ty, const std::string& rootName)
     }
     else if (ExternType* etv = getMutable<ExternType>(ty))
     {
-        for (auto& [name, prop] : etv->props)
+        for (auto& [name, prop] : etv->props())
         {
             std::string n;
             n.reserve(rootName.size() + 1 + name.size());
