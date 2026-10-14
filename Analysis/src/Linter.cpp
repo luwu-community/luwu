@@ -9,6 +9,7 @@
 #include "Luau/PrettyPrinter.h"
 #include "Luau/Scope.h"
 #include "Luau/TypeInfer.h"
+#include "Luau/TypeUtils.h"
 #include "Luau/StringUtils.h"
 #include "Luau/ToString.h"
 #include "Luau/Common.h"
@@ -5739,7 +5740,7 @@ private:
     {
         // Luwu If Local (rfcs/if-local.md): a `when` chain's first expression may be a binding's value, not a test
         if (node->clauses.size == 0)
-            conditions[unparenthesized(node->condition)] = "if";
+            conditions[unwrapGroup(node->condition)] = "if";
         return true;
     }
 
@@ -5747,7 +5748,7 @@ private:
     {
         // Luwu If Local (rfcs/if-local.md): as for `if`
         if (node->clauses.size == 0)
-            conditions[unparenthesized(node->condition)] = "while";
+            conditions[unwrapGroup(node->condition)] = "while";
         return true;
     }
 
@@ -7125,7 +7126,7 @@ private:
             {
                 for (AstExpr* part : {item->key, item->value})
                 {
-                    AstExprDo* leaving = part ? unparenthesized(part)->as<AstExprDo>() : nullptr;
+                    AstExprDo* leaving = part ? unwrapGroup(part)->as<AstExprDo>() : nullptr;
                     if (leaving && howBlockLeaves(leaving->body) != Leaves::Never)
                         return Leaves::Directly;
                 }
@@ -8410,7 +8411,7 @@ private:
             if (!clause.local || clause.local->annotation || !clause.expr)
                 continue;
 
-            AstExpr* value = unparenthesized(clause.expr);
+            AstExpr* value = unwrapGroup(clause.expr);
             AstName valueName;
             if (AstExprLocal* local = value->as<AstExprLocal>())
                 valueName = local->local->name;
