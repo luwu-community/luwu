@@ -313,6 +313,8 @@ static StateRef runConformance(
 
     stream.close();
 
+    ScopedFastFlag sff{FFlag::LuwuNoFenv, false};
+
     if (!initialLuaState)
         initialLuaState = luaL_newstate();
     StateRef globalState(initialLuaState, lua_close);
@@ -2756,6 +2758,7 @@ static int cpcallTest(lua_State* L)
 
 TEST_CASE("ApiCalls")
 {
+    ScopedFastFlag sff{FFlag::LuwuNoFenv, false};
     StateRef globalState = runConformance("apicalls.luau", nullptr, nullptr, lua_newstate(limitedRealloc, nullptr));
     lua_State* L = globalState.get();
 

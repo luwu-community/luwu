@@ -5353,6 +5353,7 @@ local t = {
 
 TEST_CASE("ConstantClosure")
 {
+    ScopedFastFlag sff{FFlag::LuwuNoFenv, false};
     // closures without upvalues are created when bytecode is loaded
     CHECK_EQ(
         "\n" + compileFunction(
@@ -6786,6 +6787,7 @@ RETURN R1 1
 
 TEST_CASE("InlineProhibited")
 {
+    ScopedFastFlag sff{FFlag::LuwuNoFenv, false};
     // we can't inline variadic functions
     CHECK_EQ(
         "\n" + compileFunction(
@@ -10500,6 +10502,7 @@ TEST_CASE("BuiltinFoldMathK")
 
 TEST_CASE("NoBuiltinFoldFenv")
 {
+    ScopedFastFlag sff{FFlag::LuwuNoFenv, false};
     // builtin folding is disabled when getfenv/setfenv is used in the module
     CHECK_EQ(
         "\n" + compileFunction(
