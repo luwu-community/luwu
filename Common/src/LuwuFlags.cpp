@@ -5,5 +5,11 @@
 // link Common.
 
 // Luwu Classes (rfcs/classes): enables classes. While it is on, the compiler emits WIP bytecode (version 200),
-// whose format can still change.
 LUAU_FASTFLAGVARIABLE(LuwuClasses)
+
+// Disables getfenv/setfenv completely
+//
+// Required for multiple optimizations/features including:
+// - proper tail calls.
+// - SROA on classes (future opt.)
+LUAU_FASTFLAGVARIABLE(LuwuNoFenv)

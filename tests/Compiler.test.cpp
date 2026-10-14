@@ -36,6 +36,7 @@ LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
+LUAU_FASTFLAG(LuwuNoFenv)
 
 using namespace Luau;
 
@@ -10520,6 +10521,57 @@ CALL R1 1 1
 L0: RETURN R0 2
 )"
     );
+}
+
+TEST_CASE("LuwuNoFenvBuiltinFold")
+{
+    {
+        ScopedFastFlag sff{FFlag::LuwuNoFenv, true};
+
+        // builtin folding works even if getfenv is mentioned when LuwuNoFenv is enabled
+        CHECK_EQ(
+            "\n" + compileFunction(
+                       R"(
+getfenv()
+
+function test()
+    return math.pi, math.sin(0)
+end
+)",
+                       0,
+                       2
+                   ),
+            R"(
+LOADK R0 K0 [3.1415926535897931]
+LOADN R1 0
+RETURN R0 2
+)"
+        );
+    }
+
+    {
+        ScopedFastFlag sff{FFlag::LuwuNoFenv, false};
+
+        // builtin folding is disabled when getfenv is mentioned and LuwuNoFenv is false
+        CHECK_NE(
+            "\n" + compileFunction(
+                       R"(
+getfenv()
+
+function test()
+    return math.pi, math.sin(0)
+end
+)",
+                       0,
+                       2
+                   ),
+            R"(
+LOADK R0 K0 [3.1415926535897931]
+LOADN R1 0
+RETURN R0 2
+)"
+        );
+    }
 }
 
 TEST_CASE("IfThenElseAndOr")

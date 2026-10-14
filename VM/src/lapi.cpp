@@ -31,6 +31,7 @@ LUAU_FASTFLAGVARIABLE(LuwuFatCClosure)
 LUAU_FASTFLAGVARIABLE(LuwuManagedReferences2)
 LUAU_FASTFLAGVARIABLE(LuwuPcallMulti)
 LUAU_FASTFLAG(LuauGcTraceUdata)
+LUAU_FASTFLAG(LuwuNoFenv)
 
 /*
  * This file contains most implementations of core Lua APIs from lua.h.
@@ -1014,6 +1015,9 @@ int lua_getmetatable(lua_State* L, int objindex)
 
 void lua_getfenv(lua_State* L, int idx)
 {
+    if (FFlag::LuwuNoFenv)
+        luaG_runerror(L, "'getfenv' is disabled");
+
     luaC_threadbarrier(L);
     ensure_stack(L, 1);
     StkId o = index2addr(L, idx);
@@ -1154,6 +1158,9 @@ int lua_setmetatable(lua_State* L, int objindex)
 
 int lua_setfenv(lua_State* L, int idx)
 {
+    if (FFlag::LuwuNoFenv)
+        luaG_runerror(L, "'setfenv' is disabled");
+
     int res = 1;
     api_checknelems(L, 1);
     StkId o = index2addr(L, idx);

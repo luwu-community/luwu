@@ -98,6 +98,7 @@ LUAU_FASTFLAG(LuwuNonePrimitive)
 LUAU_FASTFLAG(LuwuBufferIsFrozen)
 LUAU_FASTFLAG(LuauDirectFieldGet)
 LUAU_FASTFLAG(LuwuPcallMulti)
+LUAU_FASTFLAG(LuwuNoFenv)
 
 #ifndef LUAU_CONFORMANCE_SOURCE_DIR
 // Walks up from the current directory looking for the Client folder,
@@ -6626,6 +6627,79 @@ TEST_CASE("ClassesInterpreterMemberSlotCacheSkipsWideOffsets")
 
     run("farcall", 301);
     CHECK(LUAU_INSN_C(*farCallInsn) == farCallHint);
+}
+
+TEST_CASE("LuwuNoFenv")
+{
+    StateRef globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    {
+        ScopedFastFlag sff{FFlag::LuwuNoFenv, true};
+
+        std::string sourceGet = "getfenv()";
+        size_t bytecodeSize = 0;
+        char* bytecode = luau_compile(sourceGet.data(), sourceGet.size(), nullptr, &bytecodeSize);
+        REQUIRE(bytecode);
+        REQUIRE(luau_load(L, "=getfenv_test", bytecode, bytecodeSize, 0) == 0);
+        free(bytecode);
+        CHECK(lua_pcall(L, 0, 0, 0) == LUA_ERRRUN);
+        CHECK(strstr(lua_tostring(L, -1), "'getfenv' is disabled"));
+        lua_pop(L, 1);
+
+        std::string sourceSet = "setfenv(1, {})";
+        bytecode = luau_compile(sourceSet.data(), sourceSet.size(), nullptr, &bytecodeSize);
+        REQUIRE(bytecode);
+        REQUIRE(luau_load(L, "=setfenv_test", bytecode, bytecodeSize, 0) == 0);
+        free(bytecode);
+        CHECK(lua_pcall(L, 0, 0, 0) == LUA_ERRRUN);
+        CHECK(strstr(lua_tostring(L, -1), "'setfenv' is disabled"));
+        lua_pop(L, 1);
+
+        // Direct C API calls also raise a Lua error when FFlag::LuwuNoFenv is enabled
+        lua_pushcfunction(L, [](lua_State* L) -> int {
+            lua_pushthread(L);
+            lua_getfenv(L, -1);
+            return 1;
+        }, nullptr);
+        CHECK(lua_pcall(L, 0, 1, 0) == LUA_ERRRUN);
+        CHECK(strstr(lua_tostring(L, -1), "'getfenv' is disabled"));
+        lua_pop(L, 1);
+
+        lua_pushcfunction(L, [](lua_State* L) -> int {
+            lua_pushthread(L);
+            lua_newtable(L);
+            lua_setfenv(L, -2);
+            return 0;
+        }, nullptr);
+        CHECK(lua_pcall(L, 0, 0, 0) == LUA_ERRRUN);
+        CHECK(strstr(lua_tostring(L, -1), "'setfenv' is disabled"));
+        lua_pop(L, 1);
+    }
+
+    {
+        ScopedFastFlag sff{FFlag::LuwuNoFenv, false};
+
+        std::string sourceGet = "return type(getfenv()) == 'table'";
+        size_t bytecodeSize = 0;
+        char* bytecode = luau_compile(sourceGet.data(), sourceGet.size(), nullptr, &bytecodeSize);
+        REQUIRE(bytecode);
+        REQUIRE(luau_load(L, "=getfenv_test_enabled", bytecode, bytecodeSize, 0) == 0);
+        free(bytecode);
+        CHECK(lua_pcall(L, 0, 1, 0) == LUA_OK);
+        CHECK(lua_toboolean(L, -1) == 1);
+        lua_pop(L, 1);
+
+        lua_pushcfunction(L, [](lua_State* L) -> int {
+            lua_pushthread(L);
+            lua_getfenv(L, -1);
+            return 1;
+        }, nullptr);
+        CHECK(lua_pcall(L, 0, 1, 0) == LUA_OK);
+        CHECK(lua_istable(L, -1));
+        lua_pop(L, 1);
+    }
 }
 
 TEST_SUITE_END();

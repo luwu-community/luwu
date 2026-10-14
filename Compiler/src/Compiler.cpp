@@ -40,6 +40,7 @@ LUAU_FASTFLAG(DebugLuauNoInline)
 LUAU_FASTFLAGVARIABLE(LuauEmitCallFeedback)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAGVARIABLE(LuwuExportedClassIsNilWorkaround)
+LUAU_FASTFLAG(LuwuNoFenv)
 
 // May a file use the `--!trust` directive, which lets the compiler act on type annotations it cannot
 // verify (Compiler::trustsTypeAnnotations)? The flag only permits the directive; it never enables trust
@@ -8479,7 +8480,7 @@ void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, A
     trackValues(compiler.globals, compiler.variables, compiler.classLocals, root);
 
     // this visitor tracks calls to getfenv/setfenv and disables some optimizations when they are found
-    if (options.optimizationLevel >= 1 && (names.get("getfenv").value || names.get("setfenv").value))
+    if (!FFlag::LuwuNoFenv && options.optimizationLevel >= 1 && (names.get("getfenv").value || names.get("setfenv").value))
     {
         Compiler::FenvVisitor fenvVisitor(compiler.getfenvUsed, compiler.setfenvUsed);
         root->visit(&fenvVisitor);
