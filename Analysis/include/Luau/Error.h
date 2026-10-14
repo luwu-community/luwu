@@ -621,6 +621,8 @@ struct UnreachableCodeUse
         NeverReturningCall,
         // The local is annotated `never`
         DeclaredNever,
+        // The local is annotated with a type no value has (`{ x: number } & { x: string }`)
+        DeclaredUninhabited,
         // The local holds a `never` cast to it (`x :: never`)
         CastToNever,
         // Nothing the reader wrote proves it: inference or the solver's refinements made the value `never`, which a

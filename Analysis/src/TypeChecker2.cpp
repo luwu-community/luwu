@@ -6474,6 +6474,9 @@ std::optional<UnreachableCodeUse::Reason> TypeChecker2::unreachableReason(const 
         return std::nullopt;
     }
 
+    if (local->annotation && normalizer.isInhabited(*declared) == NormalizationResult::False)
+        return UnreachableCodeUse::Reason::DeclaredUninhabited;
+
     // Declared with a type that can exist, it's unreachable when the checks before the use rule out every member of
     // that type on their own. When they don't, the solver's refinements made it `never`, which may be a bug.
     if (provesUnreachable(*sourceModule, use, *declared))
