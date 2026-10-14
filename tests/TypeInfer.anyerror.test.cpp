@@ -487,6 +487,37 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "using_a_local_with_no_type_points_at_the_err
     CHECK_EQ(result.errors[0].location, *module->notes[0].origin);
 }
 
+// Luwu: a syntax error in the declaration is the error behind the missing type too
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_local_with_no_type_points_at_a_syntax_error_behind_it")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    CheckResult result = check(R"(
+        local w = )
+        w.call()
+        local copy = w
+    )");
+
+    LUAU_REQUIRE_ERRORS(result);
+    const TypeError* use = nullptr;
+    for (const TypeError& error : result.errors)
+    {
+        if (get<NoTypeUse>(error))
+            use = &error;
+    }
+    REQUIRE(use);
+    CHECK_EQ(
+        "Attempt to use 'w', which has no type because of the error on line 2\n\n"
+        "Help (no type):\n"
+        "  • Fix the error on line 2 first; until then, uses of 'w' aren't checked",
+        toString(*use)
+    );
+
+    ModulePtr module = getMainModule();
+    REQUIRE_EQ(1, module->notes.size());
+    CHECK_EQ("'w' has no type because of the error on line 2", module->notes[0].message);
+}
+
 // Luwu: a cast gives the value a type, so a use that's cast gets no note, and a local whose missing type has no error
 // to point at gets none either
 TEST_CASE_FIXTURE(BuiltinsFixture, "no_type_notes_skip_casts_and_locals_with_no_cause")
