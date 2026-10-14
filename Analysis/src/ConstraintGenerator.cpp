@@ -104,22 +104,6 @@ static bool isOwnSelf(const Scope& scope, const ClassDeclRecord* record)
     return record && self && self->typeParams.empty() && follow(self->type) == follow(record->ty);
 }
 
-// Luwu Traits (rfcs/classes/traits.md): a class's or trait's member `name`, from its object type or its metatable
-static const Property* findNominalMember(const ExternType* type, const Name& name)
-{
-    if (auto it = type->props().find(name); it != type->props().end())
-        return &it->second;
-
-    const TableType* metatable = type->metatable ? get<TableType>(follow(*type->metatable)) : nullptr;
-    if (metatable)
-    {
-        if (auto it = metatable->props.find(name); it != metatable->props.end())
-            return &it->second;
-    }
-
-    return nullptr;
-}
-
 // Luwu Traits (rfcs/classes/traits.md): the function `name` that a method of `type` overrides: the one the traits it
 // implements (a class) or needs (a trait) provide. Of several, the one that needs the others, as the runtime picks it. A
 // trait from this module has its signature in `signatures`; one from another module is solved already.

@@ -1848,22 +1848,6 @@ TypeId TypeChecker2::withoutSelfParameter(TypeId fnTy)
     return withoutFirstParameter(*module->internalTypes, fnTy);
 }
 
-// Luwu Traits (rfcs/classes/traits.md): a member of a class or trait type, on the type itself or, for a method, in its metatable
-static const Property* findClassMember(const ExternType* type, const Name& name)
-{
-    if (auto it = type->props().find(name); it != type->props().end())
-        return &it->second;
-
-    const TableType* metatable = type->metatable ? get<TableType>(follow(*type->metatable)) : nullptr;
-    if (metatable)
-    {
-        if (auto it = metatable->props.find(name); it != metatable->props.end())
-            return &it->second;
-    }
-
-    return nullptr;
-}
-
 // Luwu Traits (rfcs/classes/traits.md): a trait field naming `Self`, as `classTy` has it
 std::optional<TypeId> TypeChecker2::selfFieldFor(const ExternType* traitType, TypeId classTy, const Name& name)
 {
@@ -1912,8 +1896,8 @@ void TypeChecker2::checkTraitFieldExpectations(AstStatClass* stat)
             if (traitType->traitInfo->expectations.count(name) || !classHasField)
                 continue;
 
-            const Property* provided = findClassMember(traitType, name);
-            const Property* found = findClassMember(classType, name);
+            const Property* provided = findNominalMember(traitType, name);
+            const Property* found = findNominalMember(classType, name);
             if (!provided || !found || !provided->readTy || !found->readTy)
                 continue;
 
@@ -1935,11 +1919,11 @@ void TypeChecker2::checkTraitFieldExpectations(AstStatClass* stat)
         for (const auto& [name, optional] : traitType->traitInfo->expectations)
         {
             // an expected constructor is checked by checkTraitConstructorExpectation
-            if (name != "__init" && !findClassMember(classType, name))
+            if (name != "__init" && !findNominalMember(classType, name))
                 addMissingTraitMember(missing, stat, traitType, name, traitFields->fieldNames.count(name) > 0);
 
-            const Property* expected = findClassMember(traitType, name);
-            const Property* found = findClassMember(classType, name);
+            const Property* expected = findNominalMember(traitType, name);
+            const Property* found = findNominalMember(classType, name);
             if (name == "__init" || !expected || !found || !expected->readTy || !found->readTy)
                 continue;
 
@@ -2285,7 +2269,7 @@ void TypeChecker2::checkTraitOverrides(AstStatClass* stat)
 
     for (const Declared& mine : declared)
     {
-        const Property* myProp = findClassMember(traitType, mine.name);
+        const Property* myProp = findNominalMember(traitType, mine.name);
 
         for (const ExternType* other : needed)
         {
@@ -2294,7 +2278,7 @@ void TypeChecker2::checkTraitOverrides(AstStatClass* stat)
             if (info.expectations.count(mine.name) || info.fromNeeds.count(mine.name))
                 continue;
 
-            const Property* theirs = findClassMember(other, mine.name);
+            const Property* theirs = findNominalMember(other, mine.name);
             if (!theirs)
                 continue;
 
@@ -2375,7 +2359,7 @@ void TypeChecker2::addMissingTraitMember(
     }
 
     // the member as the trait declares it: `name: type` for a field, a signature for a function
-    const Property* expected = findClassMember(traitType, name);
+    const Property* expected = findNominalMember(traitType, name);
     std::optional<TypeId> expectedTy = expected ? expected->readTy : std::nullopt;
     const FunctionType* expectedFn = expectedTy ? get<FunctionType>(follow(*expectedTy)) : nullptr;
 
