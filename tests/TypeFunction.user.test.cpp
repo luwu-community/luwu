@@ -23,6 +23,8 @@ LUAU_FASTFLAG(LuauUdtfTypeToStringMetamethod)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FASTFLAG(LuwuTraits)
+LUAU_FASTFLAG(LuwuLiteralTypes)
+LUAU_FASTFLAG(LuwuClasses)
 
 TEST_SUITE_BEGIN("UserDefinedTypeFunctionTests");
 
@@ -3916,7 +3918,7 @@ end
 
 --[=[
     A filesystem library.
-    
+
         indented further
     the end
 ]=]
@@ -4172,6 +4174,376 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "an_error_inside_a_type_functions_argument_is
         REQUIRE(unknown);
         CHECK_EQ(unknown->name, "Pathlike");
     }
+}
+
+// Luwu literal types: a validator sees each argument as written and accepts or rejects it at the call
+TEST_CASE_FIXTURE(BuiltinsFixture, "literal_parameters_run_the_validator_on_each_argument")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastFlag literalParameters{FFlag::LuwuLiteralTypes, true};
+
+    CheckResult result = check(R"(
+type function ShortFlag(alias: type): type
+    if alias:is("singleton") then
+        local name = alias:value()
+        if typeof(name) == "string" and string.sub(name, 1, 1) == "-" and string.sub(name, 1, 2) ~= "--" then
+            return alias
+        end
+        return types.error(`bad alias {name}`)
+    end
+    return types.error(`not a literal: {alias.tag}`)
+end
+
+local function aliases(first: ShortFlag<literal<string>>, ...: ShortFlag<literal<string>>): string
+    local s: string = first
+    return s
+end
+
+aliases("-f")
+aliases("-f", "-g", ("-h"))
+aliases("--f")
+aliases("-f", "-g", "x")
+local s: string = "-f"
+aliases(s)
+    )");
+
+    REQUIRE_EQ(result.errors.size(), 3);
+    CHECK_EQ(result.errors[0].location.begin.line, 19);
+    CHECK_EQ(toString(result.errors[0]), "bad alias --f");
+    CHECK_EQ(result.errors[1].location.begin.line, 20);
+    CHECK_EQ(toString(result.errors[1]), "bad alias x");
+    CHECK_EQ(result.errors[2].location.begin.line, 22);
+    CHECK_EQ(toString(result.errors[2]), "expected a literal of type string, but got string");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "literal_parameters_rejected_by_never")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastFlag literalParameters{FFlag::LuwuLiteralTypes, true};
+
+    CheckResult result = check(R"(
+type function NoDashes(s: type): type
+    if s:is("singleton") and string.find(s:value() :: string, "-", 1, true) == nil then
+        return s
+    end
+    return types.never
+end
+
+type Opts = {
+    set: (self: Opts, key: NoDashes<literal<string>>) -> (),
+}
+local o: Opts = nil :: any
+o:set("abc")
+o:set("a-b")
+
+local function generic<T>(x: T, key: NoDashes<literal<string>>) end
+generic(1, "ok")
+generic(1, "n-o")
+    )");
+
+    REQUIRE_EQ(result.errors.size(), 2);
+    CHECK_EQ(result.errors[0].location.begin.line, 13);
+    CHECK_EQ(toString(result.errors[0]), "Expected this to be unreachable, but got '\"a-b\"'");
+    CHECK_EQ(result.errors[1].location.begin.line, 17);
+    CHECK_EQ(toString(result.errors[1]), "Expected this to be unreachable, but got '\"n-o\"'");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "literal_parameters_on_class_methods")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastFlag literalParameters{FFlag::LuwuLiteralTypes, true};
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+
+    CheckResult result = check(R"(
+type function Short(s: type): type
+    if s:is("singleton") and #(s:value() :: string) <= 2 then
+        return s
+    end
+    return types.never
+end
+
+class Flag(public name: string)
+    public function alias(self, short: Short<literal<string>>): Flag
+        return self
+    end
+end
+
+local ok: Flag = Flag("verbose"):alias("-v")
+local bad = Flag("verbose"):alias("--verbose")
+    )");
+
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].location.begin.line, 15);
+    CHECK_EQ(toString(result.errors[0]), "Expected this to be unreachable, but got\n    '\"--verbose\"'");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "literal_locals_keep_the_literal")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastFlag literalTypes{FFlag::LuwuLiteralTypes, true};
+
+    CheckResult result = check(R"(
+local a: literal<string> = "a"
+local a2: "a" = a
+local c: literal<boolean> = true
+local c2: true = c
+local s: string = "x"
+local b: literal<string> = s
+local wrong: "b" = a
+    )");
+
+    REQUIRE_EQ(result.errors.size(), 2);
+    CHECK_EQ(result.errors[0].location.begin.line, 6);
+    CHECK_EQ(toString(result.errors[0]), "expected a literal of type string, but got string");
+    CHECK_EQ(result.errors[1].location.begin.line, 7);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "literal_generics_infer_the_literal")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastFlag literalTypes{FFlag::LuwuLiteralTypes, true};
+
+    CheckResult result = check(R"(
+type Symbol<S> = { name: S }
+local function sym<S>(n: literal<S>): Symbol<S>
+    return { name = n }
+end
+local function name(n: literal<string>): string
+    return n
+end
+
+local foo = sym("foo")
+local foo2: Symbol<"foo"> = foo
+local s: string = "x"
+local notLiteral = sym(s)
+name("ok")
+name(s)
+    )");
+
+    REQUIRE_EQ(result.errors.size(), 2);
+    CHECK_EQ(result.errors[0].location.begin.line, 12);
+    CHECK_EQ(toString(result.errors[0]), "expected a literal of type string, but got string");
+    CHECK_EQ(result.errors[1].location.begin.line, 14);
+    CHECK_EQ(toString(result.errors[1]), "expected a literal of type string, but got string");
+    CHECK_EQ(toString(requireType("foo")), "Symbol<\"foo\">");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "literal_outside_parameters_and_locals")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastFlag literalTypes{FFlag::LuwuLiteralTypes, true};
+
+    CheckResult result = check(R"(
+type T = { kind: literal<string> }
+local function ret(): literal<string> return "a" end
+    )");
+
+    REQUIRE_EQ(result.errors.size(), 2);
+    for (const TypeError& error : result.errors)
+        CHECK_EQ(
+            toString(error),
+            "literal<T> only works in the annotation of a function parameter, a local or a type alias, or as the argument of a "
+            "type function there (`name: Validate<literal<string>>`)"
+        );
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "literal_parameters_through_type_aliases")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastFlag literalTypes{FFlag::LuwuLiteralTypes, true};
+
+    CheckResult result = check(R"(
+type function NoDashes(alias: type): type
+    if alias:is("singleton") and string.sub(alias:value() :: string, 1, 1) == "-" then
+        return types.error(`no dashes: {alias:value()}`)
+    end
+    return alias
+end
+
+type Unprefixed = NoDashes<literal<string>>
+type AnyLiteral = literal<string>
+
+local function aliases(first: Unprefixed, ...: Unprefixed)
+    local s: string = first
+end
+local function sym(n: AnyLiteral) end
+type Fn = (first: Unprefixed) -> ()
+local fn: Fn = nil :: any
+
+aliases("f", "g")
+aliases("-f", "--g")
+sym("ok")
+local str: string = "x"
+sym(str)
+fn("-x")
+    )");
+
+    REQUIRE_EQ(result.errors.size(), 4);
+    CHECK_EQ(toString(result.errors[0]), "no dashes: -f");
+    CHECK_EQ(toString(result.errors[1]), "no dashes: --g");
+    CHECK_EQ(toString(result.errors[2]), "expected a literal of type string, but got string");
+    CHECK_EQ(toString(result.errors[3]), "no dashes: -x");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "literal_parameters_in_primary_constructors")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastFlag literalTypes{FFlag::LuwuLiteralTypes, true};
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+
+    CheckResult result = check(R"(
+type function NoDashes(alias: type): type
+    if alias:is("singleton") and string.sub(alias:value() :: string, 1, 1) == "-" then
+        return types.error(`no dashes: {alias:value()}`)
+    end
+    return alias
+end
+type Unprefixed = NoDashes<literal<string>>
+
+class Positional(public name: Unprefixed, public help: string) end
+class Tagged(public tag: literal<string>) end
+
+local p = Positional("file", "the file")
+local name = p.name
+Positional("-f", "dashes")
+Tagged("x")
+local s: string = "y"
+Tagged(s)
+    )");
+
+    REQUIRE_EQ(result.errors.size(), 2);
+    CHECK_EQ(toString(result.errors[0]), "no dashes: -f");
+    CHECK_EQ(toString(result.errors[1]), "expected a literal of type string, but got string");
+    CHECK_EQ("string", toString(requireType("name")));
+}
+
+// Luwu literal types: a function's own literal parameter, passed on unchanged, was checked where that function was called
+TEST_CASE_FIXTURE(BuiltinsFixture, "literal_parameters_forward")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastFlag literalTypes{FFlag::LuwuLiteralTypes, true};
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+
+    CheckResult result = check(R"(
+type function NoDashes(alias: type): type
+    return alias
+end
+type function Short(alias: type): type
+    return alias
+end
+type Unprefixed = NoDashes<literal<string>>
+
+class Positional(public name: Unprefixed) end
+
+local function same(name: Unprefixed)
+    return Positional(name)
+end
+local function bare(name: literal<string>)
+    return Positional(name)
+end
+local function other(name: Short<literal<string>>)
+    return Positional(name)
+end
+local function plainString(name: string)
+    return Positional(name)
+end
+return { same = same, bare = bare, other = other, plainString = plainString }
+    )");
+
+    REQUIRE_EQ(result.errors.size(), 3);
+    CHECK_EQ(
+        toString(result.errors[0]),
+        "'name' isn't checked by 'NoDashes'; annotate 'name' with 'NoDashes' (or an alias of it), or pass a literal here"
+    );
+    CHECK_EQ(
+        toString(result.errors[1]),
+        "'name' was checked by 'Short', not 'NoDashes'; annotate 'name' with 'NoDashes' (or an alias of it), or pass a literal here"
+    );
+    CHECK_EQ(toString(result.errors[2]), "expected a literal of type string, but got string");
+}
+
+// Luwu literal types: a cast to a literal type passes as a literal, unchecked, like a cast to `any`
+TEST_CASE_FIXTURE(BuiltinsFixture, "literal_casts_pass_as_literals")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastFlag literalTypes{FFlag::LuwuLiteralTypes, true};
+
+    CheckResult result = check(R"(
+type function NoDashes(alias: type): type
+    return types.error("never reached for a cast")
+end
+type Unprefixed = NoDashes<literal<string>>
+local function named(name: Unprefixed) end
+local function tag(t: literal<string>) end
+
+local s: string = "file"
+named(s :: literal<string>)
+named(s :: Unprefixed)
+tag((s :: literal<string>))
+local l: literal<string> = s :: literal<string>
+local back: string = s :: literal<string>
+tag(s)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 14);
+    CHECK_EQ(toString(result.errors[0]), "expected a literal of type string, but got string");
+}
+
+// Luwu: an argument that is an error was reported where it's written; the type function adds nothing about it
+TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_error_type_argument_reports_once")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+
+    CheckResult result = check(R"(
+type function Id(t: type): type
+    return t
+end
+local x: Id<Nope> = 1
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(toString(result.errors[0]), "Unknown type 'Nope'");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "literal_parameters_yield_to_a_type_named_literal")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastFlag literalParameters{FFlag::LuwuLiteralTypes, true};
+
+    CheckResult result = check(R"(
+type literal<T> = T
+type function Id(s: type): type
+    return s
+end
+
+local function f(key: Id<literal<string>>): string
+    return key
+end
+local s: string = "x"
+f(s)
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "literal_parameters_need_a_type_with_literals")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastFlag literalParameters{FFlag::LuwuLiteralTypes, true};
+
+    CheckResult result = check(R"(
+type function Id(s: type): type
+    return s
+end
+
+local function strings(a: Id<literal<string>>, b: Id<literal<boolean>>, c: Id<literal<string | false>>, d: Id<literal<"x" | "y">>) end
+local function numbers(n: Id<literal<number>>) end
+    )");
+
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].location.begin.line, 6);
+    CHECK_EQ(toString(result.errors[0]), "there are no literals of type number");
 }
 
 TEST_SUITE_END();
