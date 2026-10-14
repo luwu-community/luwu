@@ -917,6 +917,54 @@ struct TypeMetadataTable
     std::optional<MetadataDocContext> docContext;
 };
 
+// Luwu: whether `metadata` holds any types. They belong to the arena the metadata was made in, so anything that copies a
+// type or property into another arena (Clone, Substitution) has to copy them along with it.
+bool metadataHasTypes(const TypeMetadataTable& metadata);
+
+// Luwu: calls `f` on every type in `metadata`, nested tables included
+template<typename F>
+void forEachMetadataType(const TypeMetadataTable& metadata, F&& f)
+{
+    auto visitValue = [&](const TypeMetadataValue& value)
+    {
+        if (const TypeId* ty = get_if<TypeId>(&value))
+            f(*ty);
+        else if (const auto* table = get_if<std::shared_ptr<const TypeMetadataTable>>(&value); table && *table)
+            forEachMetadataType(**table, f);
+    };
+
+    for (const auto& [key, value] : metadata.entries)
+    {
+        visitValue(key);
+        visitValue(value);
+    }
+}
+
+// Luwu: a copy of `metadata` with each type in it replaced by `f(type)`. Metadata without types is shared, not copied.
+template<typename F>
+std::shared_ptr<const TypeMetadataTable> mapMetadataTypes(const std::shared_ptr<const TypeMetadataTable>& metadata, F&& f)
+{
+    if (!metadata || !metadataHasTypes(*metadata))
+        return metadata;
+
+    auto mapValue = [&](const TypeMetadataValue& value) -> TypeMetadataValue
+    {
+        if (const TypeId* ty = get_if<TypeId>(&value))
+            return f(*ty);
+        if (const auto* table = get_if<std::shared_ptr<const TypeMetadataTable>>(&value))
+            return mapMetadataTypes(*table, f);
+        return value;
+    };
+
+    auto mapped = std::make_shared<TypeMetadataTable>();
+    mapped->entries.reserve(metadata->entries.size());
+    for (const auto& [key, value] : metadata->entries)
+        mapped->entries.emplace_back(mapValue(key), mapValue(value));
+    mapped->docContext = metadata->docContext;
+
+    return mapped;
+}
+
 struct Type final
 {
     explicit Type(const TypeVariant& ty)
