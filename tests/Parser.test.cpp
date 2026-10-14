@@ -5791,6 +5791,25 @@ TEST_CASE_FIXTURE(Fixture, "an_unindented_continuation_that_parses_is_left_alone
     }
 }
 
+// The next line's type alias is a declaration of its own, not a global `type` then a statement. The one error is the
+// missing value or name, reported at the declaration as for `const`.
+TEST_CASE_FIXTURE(Fixture, "a_missing_value_above_a_type_alias_is_one_error")
+{
+    for (const char* source : {
+             "local x =\ntype Line = {\n    ln: number,\n}\nlocal l: Line = { ln = 1 }\n",
+             "local x =\n-- a comment\nexport type Line<T> = { ln: T }\nlocal l: Line<number> = { ln = 1 }\n",
+             "local t = {}\nlocal n = t.\ntype function f()\n    return types.number\nend\nlocal l = 1\n",
+         })
+    {
+        INFO(source);
+        ParseResult result = tryParse(source);
+        REQUIRE_EQ(1, result.errors.size());
+        AstStat* declaration = result.root->body.data[result.root->body.size - 2];
+        bool declaresType = declaration->is<AstStatTypeAlias>() || declaration->is<AstStatTypeFunction>();
+        CHECK(declaresType);
+    }
+}
+
 TEST_CASE_FIXTURE(Fixture, "a_global_named_const_is_still_a_value")
 {
     // Valid Luau <= 0.730: `const` read as a global wherever a name doesn't follow it on its own line
