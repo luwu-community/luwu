@@ -2113,36 +2113,4 @@ local x = Test.get("hello", "world")
     CHECK(toString(requireType("x")) == "*error-type*");
 }
 
-// Luwu: `oneof<...>` adds each table member's missing fields as `nil`, so testing a field tells the members apart
-TEST_CASE_FIXTURE(BuiltinsFixture, "oneof_lets_a_field_tell_union_members_apart")
-{
-    DOES_NOT_PASS_OLD_SOLVER_GUARD();
-
-    CheckResult result = check(R"(
-        type Ok = { message: string }
-        type Err = { err: string }
-        type Result = oneof<Ok, Err>
-
-        local function get(): Result
-            return { message = "hi" }
-        end
-
-        local result = get()
-        local message = if result.message then result.message else result.err
-
-        -- arguments are flattened, unions included, and members that aren't tables are kept
-        type More = oneof<Result, { timeout: number }, string>
-        local more: More = { timeout = 5 }
-    )");
-
-    LUAU_REQUIRE_NO_ERRORS(result);
-    CHECK_EQ("string", toString(requireType("message")));
-    CHECK_EQ(
-        "string | { err: string, read message: nil, read timeout: nil } | { read err: nil, message: string, read timeout: nil } | "
-        "{ read err: nil, read message: nil, timeout: number }",
-        toString(requireTypeAlias("More"))
-    );
-}
-
-
 TEST_SUITE_END();

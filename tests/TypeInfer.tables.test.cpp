@@ -7822,8 +7822,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_field_some_union_members_lack_says_how_to_
     CHECK_EQ(
         "Key 'message' is missing from 'Err' in the type 'Err | Ok'\n\n"
         "Help (telling members apart):\n"
-        "  • Add 'message: nil' to 'Err' so that checking 'message' tells the members apart\n"
-        "  • Or write the type as 'oneof<Ok, Err>', which adds each member's missing fields as 'nil'",
+        "  • Add 'message: nil' to 'Err' so that checking 'message' tells the members apart",
         toString(result.errors[0])
     );
 }

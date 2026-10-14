@@ -304,14 +304,9 @@ static std::optional<std::string> missingUnionPropertyHelp(const MissingUnionPro
     std::string lacking;
     for (TypeId missing : e.missing)
         lacking += (lacking.empty() ? "'" : ", '") + toString(missing) + "'";
-    std::string members;
-    for (TypeId option : ut->options)
-        members += (members.empty() ? "" : ", ") + toString(option);
 
     return Helpifier{e.showHelp}(
-        "telling members apart",
-        {"Add '" + e.key + ": nil' to " + lacking + " so that checking '" + e.key + "' tells the members apart",
-         "Or write the type as 'oneof<" + members + ">', which adds each member's missing fields as 'nil'"}
+        "telling members apart", {"Add '" + e.key + ": nil' to " + lacking + " so that checking '" + e.key + "' tells the members apart"}
     );
 }
 
