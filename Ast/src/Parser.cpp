@@ -3120,12 +3120,15 @@ AstStat* Parser::parsePush(AstExpr* target)
 
 bool Parser::typeArgumentsFollow()
 {
-    if (lexer.current().type != '<' || lexer.lookahead().type != '<')
+    if (lexer.current().type != '<')
+        return false;
+
+    Lexeme second = lexer.lookahead();
+    if (second.type != '<')
         return false;
 
     // Luwu Push and Pop Operators (rfcs/push-pop-operators.md), `<-` syntax: upstream reads `<` `<` as explicit type
     // arguments even with a space between them. No type starts with `-`, so `x < <-t` is a comparison with a pop.
-    Lexeme second = lexer.lookahead();
     Lexeme third = lexer.lookaheadSecond();
     bool popAfterSecond = third.type == '-' && third.location.begin == second.location.end;
     return !popAfterSecond;

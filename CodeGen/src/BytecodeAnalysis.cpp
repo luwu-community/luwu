@@ -1701,6 +1701,9 @@ static void visitBytecodeRegWrites(const IrFunction& function, const std::vector
             visitRange(ra + 1, 2);
         break;
     case LOP_POP:
+        // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): writes only A, with any element or __pop's result
+        visitRange(ra, 1);
+        break;
     case LOP_NAMECALL:
     case LOP_NAMECALLUDATA:
         visitRange(ra, 2);
