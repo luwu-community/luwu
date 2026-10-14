@@ -2601,10 +2601,17 @@ void TypeChecker2::visitCall(AstExprCall* call)
     if (!result2.nonFunctions.empty())
     {
         auto norm = normalizer.normalize(fnTy);
-        if (!norm || normalizer.isInhabited(norm.get()) == NormalizationResult::HitLimits)
+        // Luwu: upstream reports this and then reads `norm` below anyway, dereferencing null. Normalizing can fail here
+        // though `shouldSuppressErrors` normalized the same type above: the normalizer may have cleared its cache since.
+        if (!norm)
+        {
+            reportError(NormalizationTooComplex{}, call->func->location);
+            return;
+        }
+        if (normalizer.isInhabited(norm.get()) == NormalizationResult::HitLimits)
             reportError(NormalizationTooComplex{}, call->func->location);
         // Luwu: a `never` the normalizer had to work out (`number & ~number`). Upstream reports it can't be called.
-        if (norm && isUninhabited(norm.get()))
+        if (isUninhabited(norm.get()))
         {
             reportUnreachableUse(call->func, ImproperUse::Call);
             return;
@@ -3243,6 +3250,21 @@ void TypeChecker2::reportPropertyTypos(AstExprTable* expr)
 
     const TableType* table = get<TableType>(expected);
     if (!table || table->indexer)
+        return;
+
+    // This runs for every table literal with an expected table type. Most write only properties the type has.
+    bool writesUnknownProperty = false;
+    for (const AstExprTable::Item& item : expr->items)
+    {
+        std::optional<std::string> name = literalPropertyName(item);
+        if (name && !table->props.count(*name))
+        {
+            writesUnknownProperty = true;
+            break;
+        }
+    }
+
+    if (!writesUnknownProperty)
         return;
 
     std::unordered_set<std::string> written;
@@ -6345,9 +6367,7 @@ static const AstExprLocal* rootLocal(AstExpr* expr)
 // Luwu: `x` for `x` and `(x)`
 static const AstExprLocal* asLocal(AstExpr* expr)
 {
-    while (AstExprGroup* group = expr->as<AstExprGroup>())
-        expr = group->expr;
-    return expr->as<AstExprLocal>();
+    return unwrapGroup(expr)->as<AstExprLocal>();
 }
 
 bool TypeChecker2::isUninhabited(const NormalizedType* norm)

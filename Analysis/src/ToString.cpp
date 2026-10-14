@@ -1126,14 +1126,11 @@ struct TypeStringifier
             comma = true;
         }
 
-        std::vector<std::pair<const std::string*, const Property*>> shown = propertiesToShow(ty, ttv);
-        // Luwu (helpful subtyping errors): properties `maxPropertiesShown` leaves out, counted at the end.
-        size_t leftOut = ttv.props.size() - shown.size();
-
         size_t index = 0;
         size_t oldLength = state.result.name.length();
         bool truncated = false;
-        for (const auto& [name, prop] : shown)
+        // false once the table is too long to print more
+        auto emitProperty = [&](const std::string& name, const Property& prop)
         {
             if (comma)
             {
@@ -1149,13 +1146,35 @@ struct TypeStringifier
             {
                 emitMoreProperties(ttv.props.size() - index, comma);
                 truncated = true;
-                break;
+                return false;
             }
 
-            stringify(*name, *prop);
+            stringify(name, prop);
 
             comma = true;
             ++index;
+            return true;
+        };
+
+        // Luwu (helpful subtyping errors): properties `maxPropertiesShown` leaves out, counted at the end.
+        size_t leftOut = 0;
+        if (showsEveryProperty(ttv))
+        {
+            for (const auto& [name, prop] : ttv.props)
+            {
+                if (!emitProperty(name, prop))
+                    break;
+            }
+        }
+        else
+        {
+            std::vector<std::pair<const std::string*, const Property*>> shown = propertiesToShow(ty, ttv);
+            leftOut = ttv.props.size() - shown.size();
+            for (const auto& [name, prop] : shown)
+            {
+                if (!emitProperty(*name, *prop))
+                    break;
+            }
         }
 
         if (leftOut > 0 && !truncated)
@@ -1208,20 +1227,25 @@ struct TypeStringifier
         }
     }
 
+    // Luwu (helpful subtyping errors): whether the table prints all its properties, in order: without a limit or under
+    // it, and not only the focused ones
+    bool showsEveryProperty(const TableType& ttv) const
+    {
+        size_t limit = state.opts.maxPropertiesShown;
+        bool limited = limit != 0 && ttv.props.size() > limit;
+        return !state.opts.onlyFocusedProperties && !limited;
+    }
+
     // Luwu (helpful subtyping errors): the properties `maxPropertiesShown` lets a table print, in the order it
-    // prints them; all of them, in order, without a limit or under it.
+    // prints them, when it doesn't print them all (showsEveryProperty)
     std::vector<std::pair<const std::string*, const Property*>> propertiesToShow(TypeId ty, const TableType& ttv) const
     {
+        LUAU_ASSERT(!showsEveryProperty(ttv));
+
         std::vector<std::pair<const std::string*, const Property*>> shown;
         size_t limit = state.opts.maxPropertiesShown;
         bool onlyFocused = state.opts.onlyFocusedProperties;
         bool limited = limit != 0 && ttv.props.size() > limit;
-        if (!onlyFocused && !limited)
-        {
-            for (const auto& [name, prop] : ttv.props)
-                shown.emplace_back(&name, &prop);
-            return shown;
-        }
 
         auto isShown = [&](const std::string& name)
         {

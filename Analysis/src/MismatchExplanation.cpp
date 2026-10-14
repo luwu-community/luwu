@@ -5,6 +5,7 @@
 #include "Luau/MismatchWording.h"
 #include "Luau/RepeatedTypeNames.h"
 #include "Luau/Scope.h"
+#include "Luau/StringUtils.h"
 #include "Luau/Subtyping.h"
 #include "Luau/ToString.h"
 #include "Luau/Type.h"
@@ -208,30 +209,6 @@ ToStringOptions printOptions(size_t width)
     return options;
 }
 
-// The edits between `a` and `b`: insertions, deletions, substitutions, and swaps of two neighboring characters, each
-// one edit, so `"Bleu"` is one edit from `"Blue"` rather than two.
-size_t editDistance(const std::string& a, const std::string& b)
-{
-    std::vector<std::vector<size_t>> d(a.size() + 1, std::vector<size_t>(b.size() + 1));
-    for (size_t i = 0; i <= a.size(); ++i)
-        d[i][0] = i;
-    for (size_t j = 0; j <= b.size(); ++j)
-        d[0][j] = j;
-
-    for (size_t i = 1; i <= a.size(); ++i)
-    {
-        for (size_t j = 1; j <= b.size(); ++j)
-        {
-            size_t substitution = d[i - 1][j - 1] + (a[i - 1] == b[j - 1] ? 0 : 1);
-            d[i][j] = std::min({d[i - 1][j] + 1, d[i][j - 1] + 1, substitution});
-            bool swapped = i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1];
-            if (swapped)
-                d[i][j] = std::min(d[i][j], d[i - 2][j - 2] + 1);
-        }
-    }
-    return d[a.size()][b.size()];
-}
-
 // The edit distance between `a` and `b` when it's at most `limit`. Strings whose lengths alone differ by
 // more can't be that close, and long strings aren't compared at all.
 std::optional<size_t> editDistanceWithin(const std::string& a, const std::string& b, size_t limit)
@@ -239,6 +216,8 @@ std::optional<size_t> editDistanceWithin(const std::string& a, const std::string
     size_t lengthGap = a.size() > b.size() ? a.size() - b.size() : b.size() - a.size();
     if (lengthGap > limit || a.size() > kMaxSpellingLength || b.size() > kMaxSpellingLength)
         return std::nullopt;
+    // insertions, deletions, substitutions and swaps of two neighboring characters each count as one edit, so `"Bleu"`
+    // is one edit from `"Blue"`
     size_t distance = editDistance(a, b);
     if (distance > limit)
         return std::nullopt;
