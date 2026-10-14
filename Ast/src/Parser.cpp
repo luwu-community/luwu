@@ -7827,7 +7827,7 @@ AstExpr* Parser::parseMatchExpr()
     // consumed, so its line isn't also an incomplete statement. An unfinished header or arm has already said what's
     // missing, so it gets no second error.
     const char* missingArm = arms.empty() ? "Expected 'case' after the value 'match' tests"
-                                          : "A 'match' expression must end with an 'else' arm, so it has a value when no 'case' matches";
+                                          : "A 'match' expression must be exhaustive; add an 'else' branch to handle all unhandled cases";
     bool reportMissingArm = parseErrors.size() == errorsBefore;
     if (const Lexeme& next = lexer.current(); next.type == Lexeme::Name && next.location.begin.line > lexer.previousLocation().end.line)
     {

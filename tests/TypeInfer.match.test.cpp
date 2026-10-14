@@ -116,7 +116,7 @@ TEST_CASE_FIXTURE(Fixture, "match_mistakes_get_one_error")
     for (const Case& c : {
              Case{
                  "local x = 1\nlocal y = match x\n    case 1 then 'one'\n",
-                 "A 'match' expression must end with an 'else' arm, so it has a value when no 'case' matches",
+                 "A 'match' expression must be exhaustive; add an 'else' branch to handle all unhandled cases",
              },
              Case{
                  "local x, limit = 1, 2\nlocal y = match x\n    case limit then 'one'\n    else 'other'\n",
