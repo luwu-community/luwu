@@ -911,6 +911,17 @@ std::optional<CheckResult> Frontend::getCheckResult(const ModuleName& name, bool
     return checkResult;
 }
 
+// How the Frontend parses a module: with comments, in the language its config says, and with errors worded for static
+// analysis.
+static ParseOptions analysisParseOptions(const Config& config)
+{
+    ParseOptions opts = config.parseOptions;
+    opts.captureComments = true;
+    opts.analysisErrors = true;
+    opts.language = config.language;
+    return opts;
+}
+
 std::vector<ModuleName> Frontend::getRequiredScripts(const ModuleName& name, const TypeCheckLimits& limits)
 {
     RequireTraceResult require = requireTrace[name];
@@ -922,10 +933,9 @@ std::vector<ModuleName> Frontend::getRequiredScripts(const ModuleName& name, con
             return {};
         }
         const Config& config = configResolver->getConfig(name, limits);
-        ParseOptions opts = config.parseOptions;
-        opts.captureComments = true;
-        SourceModule result = parse(name, source->source, opts);
+        SourceModule result = parse(name, source->source, analysisParseOptions(config));
         result.type = source->type;
+        result.language = config.language;
         require = traceRequires(fileResolver, result.root, name, limits);
     }
     std::vector<std::string> requiredModuleNames;
@@ -1617,6 +1627,7 @@ ModulePtr check(
     module->checkedInNewSolver = true;
     module->name = sourceModule.name;
     module->humanReadableName = sourceModule.humanReadableName;
+    module->language = sourceModule.language;
     module->mode = mode;
     module->internalTypes->owningModule = module.get();
     module->interfaceTypes.owningModule = module.get();
@@ -2004,10 +2015,9 @@ std::pair<SourceNode*, SourceModule*> Frontend::getSourceNode(const ModuleName& 
     }
 
     const Config& config = configResolver->getConfig(name, limits);
-    ParseOptions opts = config.parseOptions;
-    opts.captureComments = true;
-    SourceModule result = parse(name, source->source, opts);
+    SourceModule result = parse(name, source->source, analysisParseOptions(config));
     result.type = source->type;
+    result.language = config.language;
 
     RequireTraceResult& require = requireTrace[name];
     require = traceRequires(fileResolver, result.root, name, limits);

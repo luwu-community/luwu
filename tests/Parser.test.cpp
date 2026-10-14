@@ -2215,12 +2215,74 @@ TEST_CASE_FIXTURE(Fixture, "default_arguments_are_gated")
 {
     {
         ScopedFastFlag sff{FFlag::LuwuDefaultArguments, false};
-        matchParseError("local function foo(x = 1) end", "Expected ')' (to close '(' at column 19), got '='");
+        // Luwu: upstream reports "Expected ')' (to close '(' at column 19), got '='"
+        matchParseError(
+            "local function foo(x = 1) end",
+            "attempt to use disabled Luwu feature default arguments; enable via FFlag 'LuwuDefaultArguments'",
+            Location{{0, 21}, {0, 22}}
+        );
     }
 
     ScopedFastFlag sff{FFlag::LuwuDefaultArguments, true};
 
     parse("local function foo(x = 1) end");
+}
+
+TEST_CASE_FIXTURE(Fixture, "luwu_features_are_errors_in_a_luau_module")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuDefaultArguments, true},
+        {FFlag::LuwuClasses, true},
+    };
+
+    ParseOptions runtime;
+    runtime.language = Language::Luau;
+
+    // A runtime gets one line, even with the feature's FFlag on
+    ParseResult result = tryParse("local function f(x = 1) end", runtime);
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: default arguments");
+
+    result = tryParse("class Point end", runtime);
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: classes");
+
+    // Static analysis also gets the ways out
+    ParseOptions analysis = runtime;
+    analysis.analysisErrors = true;
+    result = tryParse("local function f(x = 1) end", analysis);
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(
+        result.errors[0].getMessage(),
+        "Default arguments are a Luwu-only feature.\n"
+        "\n"
+        "Help (Luwu-only feature):\n"
+        "  • Consider migrating to a .luwu module if this environment supports Luwu\n"
+        "  • Alternatively, you may transpile Luwu code to Luau code via the 'ast' library; see Luwu documentation on existing "
+        "transpilers and usage"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "disabled_luwu_features_say_which_fflag_enables_them")
+{
+    ScopedFastFlag sff{FFlag::LuwuClasses, false};
+
+    ParseOptions analysis;
+    analysis.analysisErrors = true;
+
+    ParseResult result = tryParse("class Point end", analysis);
+    REQUIRE(!result.errors.empty());
+    CHECK_EQ(
+        result.errors[0].getMessage(),
+        "Classes are currently disabled.\n"
+        "\n"
+        "Help (Disabled Luwu feature):\n"
+        "  • If this environment supports classes at runtime, enable the 'LuwuClasses' FFlag in your editor's configuration options"
+    );
+
+    result = tryParse("class Point end");
+    REQUIRE(!result.errors.empty());
+    CHECK_EQ(result.errors[0].getMessage(), "attempt to use disabled Luwu feature classes; enable via FFlag 'LuwuClasses'");
 }
 
 TEST_CASE_FIXTURE(Fixture, "default_arguments_are_luwu_only")

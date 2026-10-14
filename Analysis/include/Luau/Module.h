@@ -1,6 +1,7 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
+#include "Luau/Config.h"
 #include "Luau/Error.h"
 #include "Luau/Linter.h"
 #include "Luau/FileResolver.h"
@@ -55,6 +56,8 @@ struct SourceModule
     std::string humanReadableName;
 
     SourceCode::Type type = SourceCode::None;
+    // Luwu: from the module's config when it's parsed.
+    Language language = Language::Luwu;
     std::optional<std::string> environmentName;
     bool cyclic = false;
 
@@ -111,6 +114,8 @@ struct Module
 
     ModuleName name;
     std::string humanReadableName;
+    // Luwu: the source module's language.
+    Language language = Language::Luwu;
 
     TypeArena interfaceTypes;
     // For modules in a require cycle, internalTypes is shared across all members

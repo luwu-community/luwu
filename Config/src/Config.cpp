@@ -19,6 +19,7 @@ Config::Config()
 
 Config::Config(const Config& other)
     : mode(other.mode)
+    , language(other.language)
     , parseOptions(other.parseOptions)
     , enabledLint(other.enabledLint)
     , fatalLint(other.fatalLint)
