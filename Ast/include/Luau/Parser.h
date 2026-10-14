@@ -482,7 +482,7 @@ private:
     AstExpr* parseTypeTest(AstExpr* value, const Location& start);
     std::optional<AstExpr*> parseNothingValue();
     bool matchExpressionFollows();
-    AstExpr* parseMatchExpr();
+    AstExpr* parseMatchExpr(bool inStatement = false);
     AstExpr* parseMatchPattern(AstLocal* subject);
     AstExpr* parseMatchAlternative(AstLocal* subject);
     AstExprCall* makeGlobalCall(AstName library, std::optional<AstName> function, const Location& location, std::initializer_list<AstExpr*> args);

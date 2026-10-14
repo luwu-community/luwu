@@ -850,6 +850,15 @@ AstStat* Parser::parseStat()
         }
     }
 
+    // Luwu match expressions: `match` with `case` arms where a statement goes. It's parsed as the expression it is, so
+    // its arms don't cascade, and reported once, without the missing `else` an `if`-like statement wouldn't have.
+    if (matchExpressionFollows())
+    {
+        Location keyword = lexer.current().location;
+        AstExpr* match = parseMatchExpr(/* inStatement= */ true);
+        return reportStatError(keyword, copy({match}), {}, "'match' only supports expressions, use an 'if' statement instead");
+    }
+
     // we need to disambiguate a few cases, primarily assignment (lvalue = ...) vs statements-that-are calls
     size_t errorsBeforeExpr = parseErrors.size();
     AstExpr* expr = parsePrimaryExpr(/* asStatement= */ true);
@@ -7723,7 +7732,7 @@ bool Parser::matchExpressionFollows()
 // is parsed as the `do` expression it means: the subject bound to a local, then an if-else expression with one arm per
 // `case`, each arm's condition the pattern's test of the subject followed by its `when` clauses. Every pass that handles
 // `do` and if-else expressions (scopes, narrowing per arm, the compiler's fused class checks) handles a `match`.
-AstExpr* Parser::parseMatchExpr()
+AstExpr* Parser::parseMatchExpr(bool inStatement)
 {
     Location start = lexer.current().location;
     nextLexeme(); // match
@@ -7828,7 +7837,7 @@ AstExpr* Parser::parseMatchExpr()
     // missing, so it gets no second error.
     const char* missingArm = arms.empty() ? "Expected 'case' after the value 'match' tests"
                                           : "A 'match' expression must be exhaustive; add an 'else' branch to handle all unhandled cases";
-    bool reportMissingArm = parseErrors.size() == errorsBefore;
+    bool reportMissingArm = parseErrors.size() == errorsBefore && !inStatement;
     if (const Lexeme& next = lexer.current(); next.type == Lexeme::Name && next.location.begin.line > lexer.previousLocation().end.line)
     {
         std::string_view typed = next.name;
