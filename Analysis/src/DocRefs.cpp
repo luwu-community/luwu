@@ -347,6 +347,21 @@ private:
                 found = "functions can't be defined in a doc comment";
                 return false;
             }
+            bool visit(AstExprDo*) override
+            {
+                found = "do expressions can't be used in a doc comment";
+                return false;
+            }
+            bool visit(AstExprTableComprehension*) override
+            {
+                found = "loops can't be used in a doc comment";
+                return false;
+            }
+            bool visit(AstExprPop*) override
+            {
+                found = "'<-' can't be used in a doc comment";
+                return false;
+            }
         };
 
         Finder finder;

@@ -999,13 +999,7 @@ struct Printer
                     advance(generic->forLocation.begin);
                     writer.keyword("for");
 
-                    CommaSeparatorInserter varComma(writer, cstNode ? cstNode->varsCommaPositions.begin() : nullptr);
-                    for (size_t i = 0; i < generic->vars.size; i++)
-                    {
-                        varComma();
-                        bool hasColon = cstNode && cstNode->varsAnnotationColonPositions.size > i;
-                        visualize(*generic->vars.data[i], hasColon ? cstNode->varsAnnotationColonPositions.data[i] : Position::missing());
-                    }
+                    visualizeLoopVars(*generic, cstNode);
 
                     advance(generic->inLocation.begin);
                     writer.keyword("in");
@@ -2078,6 +2072,72 @@ struct Printer
             LUAU_ASSERT(!"visualizeBlock was expecting an AstStatBlock");
     }
 
+    // Luwu Destructuring (rfcs/destructuring.md): a `for ... in` loop's variables. A destructured one prints its pattern.
+    void visualizeLoopVars(const AstStatForIn& loop, const CstStatForIn* cstNode)
+    {
+        CommaSeparatorInserter varComma(writer, cstNode ? cstNode->varsCommaPositions.begin() : nullptr);
+        for (size_t i = 0; i < loop.vars.size; i++)
+        {
+            varComma();
+
+            if (loop.destructure.size > i && loop.destructure.data[i])
+            {
+                visualizeDestructuring(*loop.destructure.data[i]);
+                continue;
+            }
+
+            bool hasColon = cstNode && cstNode->varsAnnotationColonPositions.size > i;
+            visualize(*loop.vars.data[i], hasColon ? cstNode->varsAnnotationColonPositions.data[i] : Position::missing());
+        }
+    }
+
+    // Luwu If Local (rfcs/if-local.md): prints a loop's `when` chain, if its body holds one (AstStatFor::whenGuard),
+    // and returns the block as written. Destructured fields at the start of the body print with the loop's bindings, and
+    // print nothing themselves.
+    AstStatBlock* visualizeLoopWhen(AstStatBlock& body, AstStatIf* guard)
+    {
+        if (!guard)
+            return &body;
+
+        // a single plain `when` is stored as an ordinary condition, and its `when` is the if's keyword
+        if (guard->clauses.size == 0)
+        {
+            advance(guard->ifLocation.begin);
+            writer.keyword("when");
+        }
+
+        visualizeIfCondition(*guard->condition, guard->clauses);
+        return guard->thenbody;
+    }
+
+    // Luwu If Local (rfcs/if-local.md): a `when` chain prints clause by clause. A binding prints through its
+    // declaration, which also prints a destructuring pattern back as written.
+    void visualizeIfCondition(AstExpr& condition, const AstArray<AstIfClause>& clauses)
+    {
+        if (clauses.size == 0)
+        {
+            visualize(condition);
+            return;
+        }
+
+        for (const AstIfClause& clause : clauses)
+        {
+            if (clause.declaration && clause.declaration->destructuredFrom)
+                continue;
+
+            if (clause.whenLocation)
+            {
+                advance(clause.whenLocation->begin);
+                writer.keyword("when");
+            }
+
+            if (clause.declaration)
+                visualize(static_cast<AstStat&>(*clause.declaration));
+            else
+                visualize(*clause.expr);
+        }
+    }
+
     // Luwu Destructuring (rfcs/destructuring.md): `[export] type .{A, B as C} = module`, from the source form the parser
     // kept on the first alias.
     void visualizeTypeDestructuring(const AstStatTypeAlias& first)
@@ -2129,68 +2189,6 @@ struct Printer
         {
             advance(pattern.moduleLocation.begin);
             writer.identifier(pattern.module.value);
-        }
-    }
-
-    // Luwu Destructuring (rfcs/destructuring.md): a `for ... in` loop's variables. A destructured one prints its pattern.
-    void visualizeLoopVars(const AstStatForIn& loop, const CstStatForIn* cstNode)
-    {
-        CommaSeparatorInserter varComma(writer, cstNode ? cstNode->varsCommaPositions.begin() : nullptr);
-        for (size_t i = 0; i < loop.vars.size; i++)
-        {
-            varComma();
-
-            if (loop.destructure.size > i && loop.destructure.data[i])
-            {
-                visualizeDestructuring(*loop.destructure.data[i]);
-                continue;
-            }
-
-            bool hasColon = cstNode && cstNode->varsAnnotationColonPositions.size > i;
-            visualize(*loop.vars.data[i], hasColon ? cstNode->varsAnnotationColonPositions.data[i] : Position::missing());
-        }
-    }
-
-    // Luwu If Local (rfcs/if-local.md): prints a loop's `when` chain, if its body holds one (AstStatFor::whenGuard),
-    // and returns the block as written.
-    AstStatBlock* visualizeLoopWhen(AstStatBlock& body, AstStatIf* guard)
-    {
-        if (!guard)
-            return &body;
-
-        // a single plain `when` is stored as an ordinary condition, and its `when` is the if's keyword
-        if (guard->clauses.size == 0)
-        {
-            advance(guard->ifLocation.begin);
-            writer.keyword("when");
-        }
-
-        visualizeIfCondition(*guard->condition, guard->clauses);
-        return guard->thenbody;
-    }
-
-    // Luwu If Local (rfcs/if-local.md): a `when` chain prints clause by clause. A binding prints through its
-    // declaration.
-    void visualizeIfCondition(AstExpr& condition, const AstArray<AstIfClause>& clauses)
-    {
-        if (clauses.size == 0)
-        {
-            visualize(condition);
-            return;
-        }
-
-        for (const AstIfClause& clause : clauses)
-        {
-            if (clause.whenLocation)
-            {
-                advance(clause.whenLocation->begin);
-                writer.keyword("when");
-            }
-
-            if (clause.declaration)
-                visualize(static_cast<AstStat&>(*clause.declaration));
-            else
-                visualize(*clause.expr);
         }
     }
 

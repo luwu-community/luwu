@@ -838,14 +838,6 @@ AstStat* Parser::parseStat()
 
     Location start = lexer.current().location;
 
-    // Luwu Destructuring (rfcs/destructuring.md): `.{x} = t` with no `local`/`const`. Parsed as a `local` so the
-    // rest of the file still sees its names.
-    if (destructurePatternFollows())
-    {
-        report(start, "%s", kDestructuringNeedsKeywordError);
-        return parseDestructuring(start, start, /* isConst= */ false);
-    }
-
     // Luwu Do Expressions (rfcs/do-expressions.md): inside a `do` expression, `give` and `continue` are hard keywords,
     // decided on the token. Parsing a primary expression first, as for contextual keywords, would read
     // `give (f)(x)` or `continue` followed by a line starting with `(` as a call.
@@ -861,6 +853,14 @@ AstStat* Parser::parseStat()
             nextLexeme();
             return parseContinue(start);
         }
+    }
+
+    // Luwu Destructuring (rfcs/destructuring.md): `.{x} = t` with no `local`/`const`. Parsed as a `local` so the
+    // rest of the file still sees its names.
+    if (destructurePatternFollows())
+    {
+        report(start, "%s", kDestructuringNeedsKeywordError);
+        return parseDestructuring(start, start, /* isConst= */ false);
     }
 
     // we need to disambiguate a few cases, primarily assignment (lvalue = ...) vs statements-that-are calls
@@ -1118,7 +1118,7 @@ AstStat* Parser::parseIf()
 // chain of one clause.
 //
 // condition ::= exp | clause {`when' clause}
-// clause ::= (`local' | `const') binding `=' exp | exp
+// clause ::= (`local' | `const') (binding | destructuring) `=' exp | exp
 AstExpr* Parser::parseIfCondition(AstArray<AstIfClause>& clauses, const char* head)
 {
     Location start = lexer.current().location;
@@ -1204,13 +1204,49 @@ AstExpr* Parser::parseIfConditionClauses(AstArray<AstIfClause>& clauses, const c
 }
 
 // Luwu If Local (rfcs/if-local.md): parses one `local`/`const` clause, from the keyword through its value, and
-// appends it to `chain`.
+// appends it to `chain`. A destructuring clause appends one clause per name it binds.
 void Parser::parseIfBindingClause(std::vector<AstIfClause>& chain, const std::optional<Location>& whenLocation)
 {
     bool isConst = lexer.current().type != Lexeme::ReservedLocal;
     const char* keyword = isConst ? "const" : "local";
     Location keywordLocation = lexer.current().location;
     nextLexeme(); // local / const
+
+    if (destructuringFollows())
+    {
+        DestructureTarget target;
+        Location equalsLocation;
+        AstExpr* value = parseDestructuringDeclaration(keywordLocation, target, equalsLocation);
+        Location location(keywordLocation, value->location);
+
+        std::vector<AstStat*> statements;
+        AstDestructurePattern pattern = desugarDestructuring(target, value, location, equalsLocation, isConst, statements);
+
+        AstStatLocal* first = statements.front()->as<AstStatLocal>();
+        LUAU_ASSERT(first);
+        first->keywordLocation = keywordLocation;
+        first->destructure = allocator.alloc<AstDestructurePattern>(pattern);
+
+        // Each desugared `local name = read` becomes a clause, so every name has to be truthy for the branch to run.
+        for (AstStat* statement : statements)
+        {
+            AstStatLocal* declaration = statement->as<AstStatLocal>();
+            LUAU_ASSERT(declaration && declaration->vars.size == 1 && declaration->values.size == 1);
+
+            declaration->luwuOnly = true;
+            if (declaration != first)
+                declaration->destructuredFrom = first;
+
+            AstIfClause clause;
+            clause.declaration = declaration;
+            clause.local = declaration->vars.data[0];
+            clause.expr = declaration->values.data[0];
+            clause.whenLocation = declaration == first ? whenLocation : std::nullopt;
+            chain.push_back(clause);
+        }
+
+        return;
+    }
 
     Binding binding = parseBinding(isConst);
     bool extraNames = lexer.current().type == ',';
@@ -1383,124 +1419,6 @@ AstStatBlock* Parser::wrapInWhenGuard(const AstArray<AstIfClause>& when, const L
     return allocator.alloc<AstStatBlock>(guard->location, copy({static_cast<AstStat*>(guard)}), body->hasEnd);
 }
 
-// while exp do block end
-AstStat* Parser::parseWhile()
-{
-    Location start = lexer.current().location;
-
-    Lexeme matchWhile = lexer.current();
-    nextLexeme(); // while
-
-    // Luwu If Local (rfcs/if-local.md): `while local x = f() when x.ok do`; the chain's bindings are fresh on every
-    // iteration and end with the loop
-    unsigned int localsBegin = saveLocals();
-    AstArray<AstIfClause> clauses{nullptr, 0};
-    AstExpr* cond = parseIfCondition(clauses, "while");
-
-    Lexeme matchDo = lexer.current();
-    bool hasDo = expectAndConsume(Lexeme::ReservedDo, "while loop");
-    const Lexeme& matchEnd = blockOpener(matchWhile, matchDo, hasDo);
-
-    functionStack.back().loopDepth++;
-
-    AstStatBlock* body = parseBlock();
-
-    functionStack.back().loopDepth--;
-
-    restoreLocals(localsBegin);
-
-    Location end = lexer.current().location;
-
-    bool hasEnd = expectMatchEndAndConsume(Lexeme::ReservedEnd, matchEnd);
-    body->hasEnd = hasEnd;
-
-    AstStatWhile* node = allocator.alloc<AstStatWhile>(Location(start, end), cond, body, hasDo, matchDo.location, start);
-    node->clauses = clauses;
-    node->luwuOnly = clauses.size != 0;
-    return node;
-}
-
-// repeat block until exp
-AstStat* Parser::parseRepeat()
-{
-    Location start = lexer.current().location;
-
-    Lexeme matchRepeat = lexer.current();
-    nextLexeme(); // repeat
-
-    unsigned int localsBegin = saveLocals();
-
-    functionStack.back().loopDepth++;
-
-    AstStatBlock* body = parseBlockNoScope();
-
-    functionStack.back().loopDepth--;
-
-    Lexeme matchUntil = lexer.current();
-    bool hasUntil = expectMatchEndAndConsume(Lexeme::ReservedUntil, matchRepeat);
-    body->hasEnd = hasUntil;
-    Position untilPosition = hasUntil ? lexer.previousLocation().begin : Position::missing();
-
-    AstExpr* cond = parseExpr();
-
-    restoreLocals(localsBegin);
-
-    AstStatRepeat* node = allocator.alloc<AstStatRepeat>(Location(start, cond->location), cond, body, hasUntil, start, matchUntil.location);
-    if (options.storeCstData)
-        cstNodeMap[node] = allocator.alloc<CstStatRepeat>(untilPosition);
-    return node;
-}
-
-// do block end
-AstStat* Parser::parseDo()
-{
-    Location start = lexer.current().location;
-
-    Lexeme matchDo = lexer.current();
-    nextLexeme(); // do
-
-    Position statsStart = lexer.current().location.begin;
-
-    nextBlockAllowsDeclarations = blockAllowsDeclarations;
-    AstStatBlock* body = parseBlock();
-
-    body->location.begin = start.begin;
-
-    Location endLocation = lexer.current().location;
-    body->hasEnd = expectMatchEndAndConsume(Lexeme::ReservedEnd, matchDo);
-    if (body->hasEnd)
-        body->location.end = endLocation.end;
-
-    if (options.storeCstData)
-        cstNodeMap[body] = allocator.alloc<CstStatDo>(statsStart, body->hasEnd ? endLocation.begin : Position::missing());
-
-    return body;
-}
-
-// break
-AstStat* Parser::parseBreak()
-{
-    Location start = lexer.current().location;
-
-    nextLexeme(); // break
-
-    if (functionStack.back().loopDepth == 0)
-        return reportStatError(start, {}, copy<AstStat*>({allocator.alloc<AstStatBreak>(start)}), "break statement must be inside a loop");
-
-    return allocator.alloc<AstStatBreak>(start);
-}
-
-// continue
-AstStat* Parser::parseContinue(const Location& start)
-{
-    if (functionStack.back().loopDepth == 0)
-        return reportStatError(start, {}, copy<AstStat*>({allocator.alloc<AstStatContinue>(start)}), "continue statement must be inside a loop");
-
-    // note: the token is already parsed for us!
-
-    return allocator.alloc<AstStatContinue>(start);
-}
-
 // Luwu Destructuring (rfcs/destructuring.md): `body` with a loop's destructured fields (pushLoopLocals) in front of it.
 AstStatBlock* Parser::prependLoopFields(const std::vector<AstStat*>& fields, AstStatBlock* body)
 {
@@ -1659,6 +1577,124 @@ AstArray<AstLocal*> Parser::pushLoopLocals(
 
     destructure = copy(sources.data(), sources.size());
     return result;
+}
+
+// while exp do block end
+AstStat* Parser::parseWhile()
+{
+    Location start = lexer.current().location;
+
+    Lexeme matchWhile = lexer.current();
+    nextLexeme(); // while
+
+    // Luwu If Local (rfcs/if-local.md): `while local x = f() when x.ok do`; the chain's bindings are fresh on every
+    // iteration and end with the loop
+    unsigned int localsBegin = saveLocals();
+    AstArray<AstIfClause> clauses{nullptr, 0};
+    AstExpr* cond = parseIfCondition(clauses, "while");
+
+    Lexeme matchDo = lexer.current();
+    bool hasDo = expectAndConsume(Lexeme::ReservedDo, "while loop");
+    const Lexeme& matchEnd = blockOpener(matchWhile, matchDo, hasDo);
+
+    functionStack.back().loopDepth++;
+
+    AstStatBlock* body = parseBlock();
+
+    functionStack.back().loopDepth--;
+
+    restoreLocals(localsBegin);
+
+    Location end = lexer.current().location;
+
+    bool hasEnd = expectMatchEndAndConsume(Lexeme::ReservedEnd, matchEnd);
+    body->hasEnd = hasEnd;
+
+    AstStatWhile* node = allocator.alloc<AstStatWhile>(Location(start, end), cond, body, hasDo, matchDo.location, start);
+    node->clauses = clauses;
+    node->luwuOnly = clauses.size != 0;
+    return node;
+}
+
+// repeat block until exp
+AstStat* Parser::parseRepeat()
+{
+    Location start = lexer.current().location;
+
+    Lexeme matchRepeat = lexer.current();
+    nextLexeme(); // repeat
+
+    unsigned int localsBegin = saveLocals();
+
+    functionStack.back().loopDepth++;
+
+    AstStatBlock* body = parseBlockNoScope();
+
+    functionStack.back().loopDepth--;
+
+    Lexeme matchUntil = lexer.current();
+    bool hasUntil = expectMatchEndAndConsume(Lexeme::ReservedUntil, matchRepeat);
+    body->hasEnd = hasUntil;
+    Position untilPosition = hasUntil ? lexer.previousLocation().begin : Position::missing();
+
+    AstExpr* cond = parseExpr();
+
+    restoreLocals(localsBegin);
+
+    AstStatRepeat* node = allocator.alloc<AstStatRepeat>(Location(start, cond->location), cond, body, hasUntil, start, matchUntil.location);
+    if (options.storeCstData)
+        cstNodeMap[node] = allocator.alloc<CstStatRepeat>(untilPosition);
+    return node;
+}
+
+// do block end
+AstStat* Parser::parseDo()
+{
+    Location start = lexer.current().location;
+
+    Lexeme matchDo = lexer.current();
+    nextLexeme(); // do
+
+    Position statsStart = lexer.current().location.begin;
+
+    nextBlockAllowsDeclarations = blockAllowsDeclarations;
+    AstStatBlock* body = parseBlock();
+
+    body->location.begin = start.begin;
+
+    Location endLocation = lexer.current().location;
+    body->hasEnd = expectMatchEndAndConsume(Lexeme::ReservedEnd, matchDo);
+    if (body->hasEnd)
+        body->location.end = endLocation.end;
+
+    if (options.storeCstData)
+        cstNodeMap[body] = allocator.alloc<CstStatDo>(statsStart, body->hasEnd ? endLocation.begin : Position::missing());
+
+    return body;
+}
+
+// break
+AstStat* Parser::parseBreak()
+{
+    Location start = lexer.current().location;
+
+    nextLexeme(); // break
+
+    if (functionStack.back().loopDepth == 0)
+        return reportStatError(start, {}, copy<AstStat*>({allocator.alloc<AstStatBreak>(start)}), "break statement must be inside a loop");
+
+    return allocator.alloc<AstStatBreak>(start);
+}
+
+// continue
+AstStat* Parser::parseContinue(const Location& start)
+{
+    if (functionStack.back().loopDepth == 0)
+        return reportStatError(start, {}, copy<AstStat*>({allocator.alloc<AstStatContinue>(start)}), "continue statement must be inside a loop");
+
+    // note: the token is already parsed for us!
+
+    return allocator.alloc<AstStatContinue>(start);
 }
 
 // for binding `=' exp `,' exp [`,' exp] do block end |
@@ -1837,20 +1873,18 @@ AstStat* Parser::parseFor()
         bool hasEnd = expectMatchEndAndConsume(Lexeme::ReservedEnd, matchEnd);
         body->hasEnd = hasEnd;
 
-        // Destructured fields are read at the start of every iteration
-        AstStatBlock* loopBody = prependLoopFields(fields, body);
-
         AstStatIf* guard = nullptr;
         AstStatBlock* loopBody = when.size ? wrapInWhenGuard(when, whenLocation, body, guard) : body;
 
+        // Destructured fields are read at the start of every iteration, before the `when` chain
+        loopBody = prependLoopFields(fields, loopBody);
+
         AstStatForIn* node = allocator.alloc<AstStatForIn>(
             Location(start, end), vars, copy(values), loopBody, hasIn, inLocation, hasDo, matchDo.location, start
-            Location(start, end), copy(vars), copy(values), loopBody, hasIn, inLocation, hasDo, matchDo.location, start
         );
-        node->destructure = destructure;
-        node->luwuOnly = destructure.size != 0;
         node->whenGuard = guard;
-        node->luwuOnly = guard != nullptr;
+        node->destructure = destructure;
+        node->luwuOnly = guard != nullptr || destructure.size != 0;
         if (options.storeCstData)
         {
             cstNodeMap[node] = allocator.alloc<CstStatForIn>(extractAnnotationColonPositions(names), varsCommaPosition, copy(valuesCommaPositions));
@@ -2798,9 +2832,41 @@ bool Parser::destructuringAssignmentFollows()
 // The first statement is returned; the rest are left in pendingStatements for parseBlockNoScope.
 AstStat* Parser::parseDestructuring(const Location& start, const Location& keywordLocation, bool isConst, std::optional<Name> name)
 {
-    size_t errorsBeforePattern = parseErrors.size();
     DestructureTarget target;
     target.name = name;
+
+    Location equalsLocation;
+    AstExpr* value = parseDestructuringDeclaration(start, target, equalsLocation);
+    Location location(start, value->location);
+
+    std::vector<AstStat*> statements;
+    AstDestructurePattern pattern = desugarDestructuring(target, value, location, equalsLocation, isConst, statements);
+
+    AstStatLocal* first = statements.front()->as<AstStatLocal>();
+    LUAU_ASSERT(first);
+    first->keywordLocation = keywordLocation;
+    first->destructure = allocator.alloc<AstDestructurePattern>(pattern);
+
+    // Upstream's destructuring RFC (luau-lang/rfcs#260) is still open, so none of this is Luau syntax yet.
+    for (AstStat* statement : statements)
+    {
+        statement->luwuOnly = true;
+
+        if (statement != first)
+            statement->as<AstStatLocal>()->destructuredFrom = first;
+    }
+
+    pendingStatements.insert(pendingStatements.end(), statements.begin() + 1, statements.end());
+
+    return first;
+}
+
+// Parses everything after the `local`/`const` keyword of a destructuring binding: the optional name (unless the
+// caller already parsed it into `target`), the pattern, an optional annotation, `=` and the value. Returns the
+// value. `start` is where the declaration starts. Shared by destructuring declarations and `if local` clauses.
+AstExpr* Parser::parseDestructuringDeclaration(const Location& start, DestructureTarget& target, Location& equalsLocation)
+{
+    size_t errorsBeforePattern = parseErrors.size();
     if (!target.name && lexer.current().type == Lexeme::Name)
         target.name = parseName("variable name");
 
@@ -2816,7 +2882,7 @@ AstStat* Parser::parseDestructuring(const Location& start, const Location& keywo
         target.annotation = parseType();
     }
 
-    Location equalsLocation = lexer.current().location;
+    equalsLocation = lexer.current().location;
     AstExpr* value = nullptr;
 
     // A pattern still being typed already reported what's wrong with it; the missing value isn't reported on top
@@ -2845,30 +2911,9 @@ AstStat* Parser::parseDestructuring(const Location& start, const Location& keywo
         report(Location(extra, lexer.previousLocation()), "A destructuring declaration takes exactly one value");
     }
 
-    Location location(start, value->location);
+    checkLuwuFeature(Location(start, value->location), kDestructuringFeature, FFlag::LuwuDestructuring);
 
-    checkLuwuFeature(location, kDestructuringFeature, FFlag::LuwuDestructuring);
-
-    std::vector<AstStat*> statements;
-    AstDestructurePattern pattern = desugarDestructuring(target, value, location, equalsLocation, isConst, statements);
-
-    AstStatLocal* first = statements.front()->as<AstStatLocal>();
-    LUAU_ASSERT(first);
-    first->keywordLocation = keywordLocation;
-    first->destructure = allocator.alloc<AstDestructurePattern>(pattern);
-
-    // Upstream's destructuring RFC (luau-lang/rfcs#260) is still open, so none of this is Luau syntax yet.
-    for (AstStat* statement : statements)
-    {
-        statement->luwuOnly = true;
-
-        if (statement != first)
-            statement->as<AstStatLocal>()->destructuredFrom = first;
-    }
-
-    pendingStatements.insert(pendingStatements.end(), statements.begin() + 1, statements.end());
-
-    return first;
+    return value;
 }
 
 // Parses `.{ fieldlist }` into `target`, starting at the `.` (or at the `{`, when the caller already reported
@@ -8346,6 +8391,9 @@ AstExpr* Parser::parseTableComprehension(const Location& start, const MatchLexem
         // The `when` chain: clauses and where it starts. Empty without one.
         AstArray<AstIfClause> when{nullptr, 0};
         Location whenLocation;
+        // Destructured loop bindings: the fields the body starts with, and the patterns (see AstStatForIn::destructure).
+        std::vector<AstStat*> fields;
+        AstArray<AstDestructurePattern*> destructure{nullptr, 0};
         // The loop's CST node, when CST data is stored.
         CstNode* cst = nullptr;
     };
@@ -8368,10 +8416,17 @@ AstExpr* Parser::parseTableComprehension(const Location& start, const MatchLexem
         clause.forLocation = lexer.current().location;
         nextLexeme(); // for
 
-        Binding varname = parseBinding();
+        std::vector<std::optional<DestructureTarget>> patterns;
+        bool firstIsPattern = loopPatternFollows();
+        Binding varname = firstIsPattern ? parseLoopPattern(patterns) : parseBinding();
+        if (!firstIsPattern)
+            patterns.push_back(std::nullopt);
 
         if (lexer.current().type == '=')
         {
+            if (firstIsPattern)
+                report(varname.name.location, "A numeric 'for' clause's variable is a number; only 'for ... in' bindings can be destructured");
+
             Position equalsPosition = lexer.current().location.begin;
             nextLexeme();
             clause.from = parseExpr();
@@ -8405,12 +8460,12 @@ AstExpr* Parser::parseTableComprehension(const Location& start, const MatchLexem
                 {
                     Position initialCommaPosition = lexer.current().location.begin;
                     nextLexeme();
-                    parseBindingList(names, false, false, &varsCommaPosition, &initialCommaPosition);
+                    parseLoopBindings(names, patterns, &varsCommaPosition, &initialCommaPosition);
                 }
                 else
                 {
                     nextLexeme();
-                    parseBindingList(names);
+                    parseLoopBindings(names, patterns, nullptr, nullptr);
                 }
             }
 
@@ -8422,10 +8477,7 @@ AstExpr* Parser::parseTableComprehension(const Location& start, const MatchLexem
             parseExprList(values, options.storeCstData ? &valuesCommaPositions : nullptr);
             clause.values = copy(values);
 
-            TempVector<AstLocal*> vars(scratchLocal);
-            for (const Binding& name : names)
-                vars.push_back(pushLocal(name));
-            clause.vars = copy(vars);
+            clause.vars = pushLoopLocals(names, patterns, clause.fields, clause.destructure);
 
             if (options.storeCstData)
                 clause.cst =
@@ -8543,6 +8595,8 @@ AstExpr* Parser::parseTableComprehension(const Location& start, const MatchLexem
         if (clause.when.size != 0)
             body = wrapInWhenGuard(clause.when, clause.whenLocation, body, guard);
 
+        body = prependLoopFields(clause.fields, body);
+
         if (clause.var)
         {
             AstStatFor* loop = allocator.alloc<AstStatFor>(
@@ -8557,6 +8611,7 @@ AstExpr* Parser::parseTableComprehension(const Location& start, const MatchLexem
                 loopLocation, clause.vars, clause.values, body, clause.hasIn, clause.inLocation, true, doLocation, clause.forLocation
             );
             loop->whenGuard = guard;
+            loop->destructure = clause.destructure;
             inner = loop;
         }
 

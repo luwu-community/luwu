@@ -248,6 +248,7 @@ private:
     bool dotTableMissingBraceFollows();
     bool destructuringAvailable();
     AstStat* parseDestructuring(const Location& start, const Location& keywordLocation, bool isConst, std::optional<Name> name = {});
+    AstExpr* parseDestructuringDeclaration(const Location& start, DestructureTarget& target, Location& equalsLocation);
     void parseDestructurePattern(DestructureTarget& target);
     struct DestructureField;
     DestructureField parseDestructureField();
@@ -890,6 +891,10 @@ private:
 
     CstNodeMap cstNodeMap;
 
+    // Luwu Destructuring (rfcs/destructuring.md): a destructuring declaration desugars to several
+    // statements. parseStat returns the first, and parseBlockNoScope appends these right after it.
+    std::vector<AstStat*> pendingStatements;
+
     // Luwu Declare Statements (rfcs/declare-statements.md): whether the block being parsed may contain `declare`
     // (the top level, or a `do` block there), and what the next block parseBlockNoScope starts should allow.
     // fileDeclarations holds each global this file declares, so a second declaration of it is an error.
@@ -921,10 +926,6 @@ private:
         TempVector<CstAttrList*>* cstAttrLists;
     };
     std::optional<PendingFunctionAttributes> pendingFunctionAttributes;
-
-    // Luwu Destructuring (rfcs/destructuring.md): a destructuring declaration desugars to several
-    // statements. parseStat returns the first, and parseBlockNoScope appends these right after it.
-    std::vector<AstStat*> pendingStatements;
 };
 
 } // namespace Luau

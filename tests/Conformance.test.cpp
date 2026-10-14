@@ -89,9 +89,9 @@ LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuwuIfLocal)
 LUAU_FASTFLAG(LuwuDoExpr)
 LUAU_FASTFLAG(LuwuTableComprehensions)
+LUAU_FASTFLAG(DebugLuwuPoperators)
 LUAU_FASTFLAG(LuwuTableFunctionFields)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
-LUAU_FASTFLAG(DebugLuwuPoperators)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuwuExportedClassIsNilWorkaround)
@@ -3073,7 +3073,7 @@ TEST_CASE("ApiPcallMulti")
     CHECK_EQ(std::string(lua_tostring(L, -2)), "traceback2");
     CHECK_EQ(std::string(lua_tostring(L, -1)), "test error");
     lua_pop(L, 3); // pop results
-
+    
     // Test multiple returns where we pass nresults = LUA_MULTRET
     lua_getglobal(L, "errorfunc");
     status = lua_pcallmulti(L, 0, LUA_MULTRET, handler_idx);
@@ -6567,6 +6567,7 @@ TEST_CASE("IfLocal")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDestructuring, true},
         {FFlag::LuwuNonePrimitive, true},
     };
 
@@ -6578,6 +6579,7 @@ TEST_CASE("LoopWhenChains")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDestructuring, true},
         {FFlag::LuwuTableComprehensions, true},
         {FFlag::LuwuDoExpr, true},
     };
@@ -6608,6 +6610,16 @@ TEST_CASE("TableComprehensions")
     runConformance("table_comprehensions.luwu");
 }
 
+TEST_CASE("PushPopOperators")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuPoperators, true},
+        {FFlag::LuwuClasses, true},
+    };
+
+    runConformance("push_pop.luwu");
+}
+
 TEST_CASE("TableFunctionFields")
 {
     ScopedFastFlag tableFunctions{FFlag::LuwuTableFunctionFields, true};
@@ -6623,16 +6635,6 @@ TEST_CASE("DoExpressionsCursed")
     };
 
     runConformance("do_expr_cursed.luwu");
-}
-
-TEST_CASE("PushPopOperators")
-{
-    ScopedFastFlag sffs[] = {
-        {FFlag::DebugLuwuPoperators, true},
-        {FFlag::LuwuClasses, true},
-    };
-
-    runConformance("push_pop.luwu");
 }
 
 TEST_CASE("None")

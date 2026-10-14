@@ -1215,6 +1215,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "cross_type_function_type_check")
         end
 
         type function rec(ty: type): type
+            if not ty:is("union") then
+                return ty
+            end
             local parts: { type } = {}
             for _, part in ty:components() do
                 table.insert(parts, rec(part))

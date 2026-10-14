@@ -394,8 +394,7 @@ declare class: {
     implements: @checked (o: unknown, t: trait) -> boolean,
     of: @checked (o: unknown) -> class?,
     name: @checked (o: class | object | trait) -> string,
-    fields: @checked (o: class | object | trait) -> ({ [string]: unknown }, boolean)
-}
+    fields: @checked (o: class | object | trait) -> ({ [string]: unknown }, boolean),
 )CLASS_SRC";
 
 std::string getBuiltinDefinitionSource()

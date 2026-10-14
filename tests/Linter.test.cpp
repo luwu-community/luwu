@@ -13,6 +13,7 @@ LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(LuauCstAttr)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
+LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuwuIfLocal)
 LUAU_FASTFLAG(LuwuDoExpr)
 LUAU_FASTFLAG(LuwuTableComprehensions)
@@ -20,7 +21,6 @@ LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuauSolverV2)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuNonePrimitive)
-LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuauDeprecatedAttributeOnAnonymousFunctions)
 LUAU_FASTFLAG(LuauFunctionUnusedRecursiveLinting)
 LUAU_FASTFLAG(LuwuTableRemoveFootgunLint)
@@ -2974,28 +2974,30 @@ print(a)
     CHECK_EQ(shadow[0].text, "Variable 'a' shadows previous declaration at line 3");
 }
 
-TEST_CASE_FIXTURE(Fixture, "LintsSeeLoopWhenChains")
+TEST_CASE_FIXTURE(Fixture, "LintsSeeLoopWhenChainsAndDestructuredLoopBindings")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDestructuring, true},
     };
 
     LintResult result = lint(R"(
 local function f(): number? return 1 end
 local people = {}
 
-for _, name in people when name do print(name) end
+for _, .{name, unused} in people when name do print(name) end
 while local x = f() do print(x) end
 while local y = f() do end
 for i = 1, 3 when i > 1 do print(i) end
 )");
 
-    // the `when` chain is written in the loop's header, not as a statement of its body
+    // the fields and the `when` chain are written in the loop's header, not as statements of its body
     CHECK(warningsWithCode(result, LintWarning::Code_SameLineStatement).empty());
 
     std::vector<LintWarning> unused = warningsWithCode(result, LintWarning::Code_LocalUnused);
-    REQUIRE_EQ(unused.size(), 1);
-    CHECK_EQ(unused[0].text, "Variable 'y' is never used; prefix with '_' to silence");
+    REQUIRE_EQ(unused.size(), 2);
+    CHECK_EQ(unused[0].text, "Variable 'unused' is never used; prefix with '_' to silence");
+    CHECK_EQ(unused[1].text, "Variable 'y' is never used; prefix with '_' to silence");
 
     // a `while local` loop ends when its binding is falsy
     CHECK(warningsWithCode(result, LintWarning::Code_ForeverLoop).empty());
@@ -3226,6 +3228,7 @@ TEST_CASE_FIXTURE(Fixture, "BindingSwallowsCondition")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDestructuring, true},
     };
 
     LintResult result = lint(R"(
@@ -3251,6 +3254,7 @@ if local user = find(1) and find(2) then print(user) end
 if local field = t.inner and t.inner.field then print(field) end
 if local fallback = t.value or 0 then print(fallback) end
 if local grouped = (find(1) and t.flag == 1) then print(grouped) end
+if local .{name} = find(1) then print(name) end
 )");
 
     std::vector<LintWarning> warnings = warningsWithCode(result, LintWarning::Code_BindingSwallowsCondition);
@@ -3466,6 +3470,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "KeywordShadowAndBuiltinShadow")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDestructuring, true},
     };
 
     LintResult result = lint(R"(
@@ -3477,7 +3482,7 @@ for _, type in {} do end
 local function f(typeof, ok) return typeof, ok end
 local print = print
 if local table = {} then end
-local string = "s"
+local .{string} = { string = "s" }
 local export = 1
 local function g(const) return const end
 
