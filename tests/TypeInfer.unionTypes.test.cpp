@@ -233,8 +233,7 @@ TEST_CASE_FIXTURE(Fixture, "index_on_a_union_type_with_missing_property")
     CHECK_EQ(
         "Key 'x' is missing from 'B' in the type 'A | B'\n\n"
         "Help (telling members apart):\n"
-        "  • Add 'x: nil' to 'B' so that checking 'x' tells the members apart\n"
-        "  • Or write the type as 'oneof<A, B>', which adds each member's missing fields as 'nil'",
+        "  • Add 'x: nil' to 'B' so that checking 'x' tells the members apart",
         toString(result.errors[0])
     );
 
@@ -544,8 +543,7 @@ TEST_CASE_FIXTURE(Fixture, "optional_missing_key_error_details")
     const std::string missingY =
         "Key 'y' is missing from 'C', 'D' in the type 'A | B | C | D'\n\n"
         "Help (telling members apart):\n"
-        "  • Add 'y: nil' to 'C', 'D' so that checking 'y' tells the members apart\n"
-        "  • Or write the type as 'oneof<A, B, C, D>', which adds each member's missing fields as 'nil'";
+        "  • Add 'y: nil' to 'C', 'D' so that checking 'y' tells the members apart";
     CHECK_EQ(missingY, toString(result.errors[0]));
     CHECK_EQ("Type 'A | B | C | D' does not have key 'z'", toString(result.errors[1]));
 
