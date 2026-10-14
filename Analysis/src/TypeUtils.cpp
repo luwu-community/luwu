@@ -1146,6 +1146,49 @@ bool isInsideClassDeclaration(const ExternType* cls, const ModuleName& moduleNam
     return cls->definitionLocation && cls->definitionModuleName == moduleName && cls->definitionLocation->encloses(location);
 }
 
+static const char* luwuNominalKindOfExternType(const ExternType* etv)
+{
+    // The roots `object`, `class` and `trait` have no root of their own.
+    const ExternType* rootEtv = etv->root ? get<ExternType>(follow(*etv->root)) : etv;
+    if (!rootEtv)
+        return nullptr;
+
+    if (rootEtv->name == "object")
+        return "object";
+    if (rootEtv->name == "class")
+        return "class";
+    if (rootEtv->name == "trait")
+        return "trait";
+
+    return nullptr;
+}
+
+const char* luwuNominalKind(TypeId ty)
+{
+    ty = follow(ty);
+
+    if (const ExternType* etv = get<ExternType>(ty))
+        return luwuNominalKindOfExternType(etv);
+
+    const UnionType* utv = get<UnionType>(ty);
+    if (!utv)
+        return nullptr;
+
+    // UnionTypeIterator follows and flattens nested unions, and stops on cycles.
+    const char* kind = nullptr;
+    for (TypeId option : utv)
+    {
+        const ExternType* etv = get<ExternType>(option);
+        const char* optionKind = etv ? luwuNominalKindOfExternType(etv) : nullptr;
+        if (!optionKind || (kind && std::string_view(kind) != optionKind))
+            return nullptr;
+
+        kind = optionKind;
+    }
+
+    return kind;
+}
+
 void applyDeprecatedAttribute(Property& prop, const AstArray<AstAttr*>& attributes)
 {
     std::optional<AstAttr::DeprecatedInfo> info = findDeprecatedInfo(attributes);
