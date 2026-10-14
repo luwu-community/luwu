@@ -120,10 +120,10 @@ struct BytecodeGraphParser
                 }
                 addSuccessor(currentBlock, blockByPC[target], isLoopJump(op) ? BcBlockEdgeKind::Loop : BcBlockEdgeKind::Branch);
             }
-            if (op == LOP_RETURN || op == LOP_TAILCALL)
+            if (op == LOP_RETURN)
                 addSuccessor(currentBlock, exitBlock, BcBlockEdgeKind::Fallthrough);
             i += getOpLength(op);
-            if ((needsBlock || ((op == LOP_RETURN || op == LOP_TAILCALL) && i < codesize)) && blockByPC.count(i) == 0)
+            if ((needsBlock || (op == LOP_RETURN && i < codesize)) && blockByPC.count(i) == 0)
                 makeBlock(i);
 
             if (blockByPC.count(i) != 0)

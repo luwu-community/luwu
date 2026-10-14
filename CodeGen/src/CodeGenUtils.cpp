@@ -396,11 +396,15 @@ Closure* callFallback(lua_State* L, StkId ra, StkId argtop, int nresults)
 
 Closure* tailcallFallback(lua_State* L, StkId ra, StkId argtop)
 {
+    L->top = argtop;
+
     // slow-path: not a function call
     if (LUAU_UNLIKELY(!ttisfunction(ra)))
     {
+        ptrdiff_t raOffset = savestack(L, ra);
         luaV_tryfuncTM(L, ra);
-        argtop++; // __call adds an extra self
+        ra = restorestack(L, raOffset);
+        argtop = L->top;
     }
 
     Closure* ccl = clvalue(ra);
@@ -420,7 +424,6 @@ Closure* tailcallFallback(lua_State* L, StkId ra, StkId argtop)
         argtop = dst;
 
         ci->base = ci->func + 1;
-        ci->top = argtop + ccl->stacksize;
 
         L->base = ci->base;
         L->top = argtop;
@@ -429,6 +432,7 @@ Closure* tailcallFallback(lua_State* L, StkId ra, StkId argtop)
 
         // Stack may have reallocated; reload ci/ccl pointers
         ccl = clvalue(ci->func);
+        ci->top = L->top + ccl->stacksize;
         Proto* p = ccl->l.p;
 
         if (FFlag::LuauCIProto)
@@ -456,12 +460,12 @@ Closure* tailcallFallback(lua_State* L, StkId ra, StkId argtop)
         // For C callees, push a temporary CallInfo frame
         CallInfo* ci = incr_ci(L);
         if (FFlag::LuauCIProto)
-            ci->p = getproto(ccl);
+            ci->p = nullptr;
         ci->func = ra;
         ci->base = ra + 1;
         ci->top = argtop + ccl->stacksize;
         ci->savedpc = NULL;
-        ci->flags = LUA_CALLINFO_TAIL;
+        ci->flags = 0;
         ci->nresults = LUA_MULTRET;
 
         L->base = ci->base;

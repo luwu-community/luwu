@@ -798,7 +798,7 @@ static std::vector<int> findIsinstanceProvenObjectRegs(const IrFunction& functio
         if (target >= 0 && !isFastCall(op))
             addEdge(target);
 
-        if (op != LOP_RETURN && op != LOP_TAILCALL && op != LOP_JUMP && op != LOP_JUMPBACK && op != LOP_JUMPX)
+        if (op != LOP_RETURN && op != LOP_JUMP && op != LOP_JUMPBACK && op != LOP_JUMPX)
             addEdge(block.finishpc + getOpLength(op));
     }
 

@@ -4042,14 +4042,19 @@ reentry:
 
                 StkId argtop = L->top;
                 argtop = (nparams == LUA_MULTRET) ? argtop : ra + 1 + nparams;
+                L->top = argtop;
 
                 if (LUAU_UNLIKELY(!ttisfunction(ra)))
                 {
                     // slow-path: not a function call
                     VM_PROTECT_PC(); // luaV_tryfuncTM may fail
 
+                    ptrdiff_t raOffset = savestack(L, ra);
+                    ptrdiff_t baseOffset = savestack(L, base);
                     luaV_tryfuncTM(L, ra);
-                    argtop++; // __call adds an extra self
+                    ra = restorestack(L, raOffset);
+                    base = restorestack(L, baseOffset);
+                    argtop = L->top;
                 }
 
                 Closure* ccl = clvalue(ra);
@@ -4068,7 +4073,7 @@ reentry:
                     ci->base = ra + 1;
                     ci->top = argtop + ccl->stacksize;
                     ci->savedpc = NULL;
-                    ci->flags = LUA_CALLINFO_TAIL;
+                    ci->flags = 0;
                     ci->nresults = LUA_MULTRET;
 
                     L->base = ci->base;
@@ -4136,7 +4141,7 @@ reentry:
                 if (FFlag::LuauCIProto)
                     ci->p = getproto(ccl);
 
-                ci->flags |= LUA_CALLINFO_TAIL;
+                ci->flags = (ci->flags & ~LUA_CALLINFO_NATIVE) | LUA_CALLINFO_TAIL;
 
                 Proto* p = ccl->l.p;
 

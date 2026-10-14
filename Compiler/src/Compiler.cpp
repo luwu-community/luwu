@@ -3299,7 +3299,7 @@ struct Compiler
         setDebugLine(expr); // normally compileExpr sets up line info, but compileExprCall can be called directly
 
         // try inlining the function
-        if (options.optimizationLevel >= 2 && !expr->self)
+        if (options.optimizationLevel >= 2 && !expr->self && !tailCall)
         {
             AstExprFunction* func = getFunctionExpr(expr->func);
             Function* fi = func ? functions.find(func) : nullptr;
@@ -3338,7 +3338,7 @@ struct Compiler
 
         // Luwu Classes (rfcs/classes): inline `obj:method()` calls whose receiver class is
         // statically known and whose body can be inlined here (see tryResolveMethodCall).
-        if (options.optimizationLevel >= 2 && expr->self && FFlag::LuwuClasses)
+        if (options.optimizationLevel >= 2 && expr->self && FFlag::LuwuClasses && !tailCall)
         {
             if (AstExprFunction* mfunc = tryResolveMethodCall(expr))
             {
@@ -6370,7 +6370,8 @@ struct Compiler
         if (stat->list.size >= 255)
             CompileError::raise(stat->location, "Exceeded return count limit; simplify the code to compile");
 
-        if (FFlag::LuwuNoFenv && FFlag::DebugLuwuProperTailCalls && stat->list.size == 1 && stat->list.data[0]->is<AstExprCall>() && inlineFrames.empty())
+        if (FFlag::LuwuNoFenv && FFlag::DebugLuwuProperTailCalls && stat->list.size == 1 && stat->list.data[0]->is<AstExprCall>() &&
+            !isConstant(stat->list.data[0]) && inlineFrames.empty())
         {
             hasMultiRet = true;
             RegScope rs(this);
