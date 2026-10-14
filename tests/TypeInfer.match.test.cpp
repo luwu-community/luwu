@@ -49,8 +49,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "match_narrows_the_subject_in_each_arm")
 
     CheckResult result = check(R"(
         --!strict
-        local function describe(value: string | number | boolean): string
+        local function describe(value: string | number | boolean | nil): string
             return match const v = value
+                case is nil then "nothing"
                 case is string then v:upper()
                 case is number when v > 0 then tostring(v + 1)
                 case is boolean when const flipped = not v then tostring(flipped)

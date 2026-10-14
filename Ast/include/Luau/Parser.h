@@ -480,6 +480,7 @@ private:
     bool matchExpressionsAvailable();
     bool typeTestFollows();
     AstExpr* parseTypeTest(AstExpr* value, const Location& start);
+    std::optional<AstExpr*> parseNothingValue();
     bool matchExpressionFollows();
     AstExpr* parseMatchExpr();
     AstExpr* parseMatchPattern(AstLocal* subject);
@@ -760,6 +761,7 @@ private:
     AstName nameIsinstance;
     AstName nameImplements;
     AstName nameMatched;
+    AstName nameNone;
     AstName nameNumber;
     AstName nameAny;
     AstName nameError;

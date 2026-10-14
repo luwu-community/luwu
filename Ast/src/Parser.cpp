@@ -607,6 +607,7 @@ Parser::Parser(const char* buffer, size_t bufferSize, AstNameTable& names, Alloc
     nameIsinstance = names.getOrAdd("isinstance");
     nameImplements = names.getOrAdd("implements");
     nameMatched = names.getOrAdd(kMatchedLocalName);
+    nameNone = names.getOrAdd("none");
     nameContinue = names.getOrAdd("continue");
     nameNumber = names.getOrAdd("number");
     nameAny = names.getOrAdd("any");
@@ -7548,7 +7549,7 @@ bool Parser::matchExpressionsAvailable()
     return FFlag::DebugLuwuMatchExpressions && options.language == Language::Luwu;
 }
 
-// Luwu match expressions: `is` or `implements` after an operand, followed by a name, `not` or `function`. Anything else
+// Luwu match expressions: `is` or `implements` after an operand, followed by a name, `not`, `function` or `nil`. Anything else
 // after it (`is = 1`, `is(f)`, `is.x`, `is "s"`) is a statement using a variable named `is`, which Luau code may have
 // on the same line, so it's never a type test.
 bool Parser::typeTestFollows()
@@ -7557,7 +7558,7 @@ bool Parser::typeTestFollows()
         return false;
 
     Lexeme::Type next = lexer.lookahead().type;
-    return next == Lexeme::Name || next == Lexeme::ReservedNot || next == Lexeme::ReservedFunction;
+    return next == Lexeme::Name || next == Lexeme::ReservedNot || next == Lexeme::ReservedFunction || next == Lexeme::ReservedNil;
 }
 
 // Luwu match expressions: `library.function(args)` on the global `library`, never a local that shadows it
@@ -7567,7 +7568,31 @@ AstExprCall* Parser::makeGlobalCall(AstName library, std::optional<AstName> func
     if (function)
         callee = allocator.alloc<AstExprIndexName>(location, callee, *function, location, location.begin, '.');
 
-    return allocator.alloc<AstExprCall>(location, callee, copy(args), false, AstArray<AstTypeOrPack>{nullptr, 0}, location);
+    AstExprCall* call = allocator.alloc<AstExprCall>(location, callee, copy(args), false, AstArray<AstTypeOrPack>{nullptr, 0}, location);
+    call->fromTypeTest = true;
+    return call;
+}
+
+// Luwu match expressions: `nil` or `none`, the values a type test or pattern compares with directly, as itself. `none`
+// is the global, never a local that shadows it.
+std::optional<AstExpr*> Parser::parseNothingValue()
+{
+    const Lexeme& current = lexer.current();
+    if (current.type == Lexeme::ReservedNil)
+    {
+        Location location = current.location;
+        nextLexeme();
+        return allocator.alloc<AstExprConstantNil>(location);
+    }
+
+    if (current.type == Lexeme::Name && AstName(current.name) == nameNone)
+    {
+        Location location = current.location;
+        nextLexeme();
+        return allocator.alloc<AstExprGlobal>(location, nameNone);
+    }
+
+    return std::nullopt;
 }
 
 // Luwu match expressions: the rest of `value is string`, `value is [not] Class` or `value implements Trait`, from the
@@ -7583,6 +7608,13 @@ AstExpr* Parser::parseTypeTest(AstExpr* value, const Location& start)
     {
         negated = true;
         nextLexeme();
+    }
+
+    // `x is nil` and `x is none` compare with the value; type() can't tell `none` from other symbols
+    if (std::optional<AstExpr*> nothing = implements ? std::nullopt : parseNothingValue())
+    {
+        AstExprBinary::Op op = negated ? AstExprBinary::CompareNe : AstExprBinary::CompareEq;
+        return allocator.alloc<AstExprBinary>(Location(start, (*nothing)->location), op, value, *nothing);
     }
 
     if (std::optional<std::string> tag = implements ? std::nullopt : primitiveTagAt(lexer.current()))
@@ -7875,7 +7907,8 @@ AstExpr* Parser::parseMatchPattern(AstLocal* subject)
 }
 
 // Luwu match expressions: one alternative of a `case` pattern: a literal compared with the subject, or a type test.
-// A name is never a pattern: it would read as a binding or a comparison, and a `case` is neither.
+// A name is never a pattern, except `none`, a value like `nil`: it would read as a binding or a comparison, and a
+// `case` is neither.
 AstExpr* Parser::parseMatchAlternative(AstLocal* subject)
 {
     Location start = lexer.current().location;
@@ -7885,8 +7918,11 @@ AstExpr* Parser::parseMatchAlternative(AstLocal* subject)
         return parseTypeTest(subjectValue, start);
 
     const Lexeme& current = lexer.current();
+    if (std::optional<AstExpr*> nothing = parseNothingValue())
+        return allocator.alloc<AstExprBinary>(Location(start, (*nothing)->location), AstExprBinary::CompareEq, subjectValue, *nothing);
+
     bool literal = current.type == Lexeme::QuotedString || current.type == Lexeme::RawString || current.type == Lexeme::Number ||
-                   current.type == Lexeme::ReservedTrue || current.type == Lexeme::ReservedFalse || current.type == Lexeme::ReservedNil ||
+                   current.type == Lexeme::ReservedTrue || current.type == Lexeme::ReservedFalse ||
                    (current.type == '-' && lexer.lookahead().type == Lexeme::Number);
     if (literal)
     {

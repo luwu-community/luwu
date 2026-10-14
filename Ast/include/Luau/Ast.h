@@ -582,6 +582,9 @@ public:
     AstArray<AstExpr*> args;
     bool self;
     Location argLocation;
+    // Luwu match expressions: a call the parser wrote for a type test (`x is Point` is `class.isinstance(x, Point)`),
+    // not one in the code. Editor features that show a call's parameters skip it.
+    bool fromTypeTest = false;
 };
 
 class AstExprIndexName : public AstExpr
