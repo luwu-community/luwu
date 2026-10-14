@@ -274,6 +274,7 @@ target_sources(Luwu.Analysis PRIVATE
     Analysis/include/Luau/ToDot.h
     Analysis/include/Luau/TopoSortStatements.h
     Analysis/include/Luau/ToString.h
+    Analysis/include/Luau/TypeFormat.h
     Analysis/include/Luau/TxnLog.h
     Analysis/include/Luau/Type.h
     Analysis/include/Luau/TypeArena.h
@@ -366,6 +367,7 @@ target_sources(Luwu.Analysis PRIVATE
     Analysis/src/ToDot.cpp
     Analysis/src/TopoSortStatements.cpp
     Analysis/src/ToString.cpp
+    Analysis/src/TypeFormat.cpp
     Analysis/src/TxnLog.cpp
     Analysis/src/Type.cpp
     Analysis/src/TypeArena.cpp

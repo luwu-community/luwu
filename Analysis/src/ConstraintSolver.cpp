@@ -3592,6 +3592,26 @@ void dropWhile(std::vector<T>& vec, Predicate pred)
     vec.erase(vec.begin(), it);
 }
 
+// Luwu: whether a type mentions one generic
+struct GenericFinder : TypeOnceVisitor
+{
+    TypeId generic;
+    bool found = false;
+
+    explicit GenericFinder(TypeId generic)
+        : TypeOnceVisitor("GenericFinder", /* skipBoundTypes */ true)
+        , generic(generic)
+    {
+    }
+
+    bool visit(TypeId ty) override
+    {
+        if (ty == generic)
+            found = true;
+        return !found;
+    }
+};
+
 TypeId ConstraintSolver::instantiateFunctionType(
     TypeId functionTypeId,
     const std::vector<TypeId>& typeArguments,
@@ -3625,9 +3645,31 @@ TypeId ConstraintSolver::instantiateFunctionType(
         replacements[*typeParametersIter++] = typeArgument;
     }
 
+    // Luwu: a generic not given that a parameter uses stays generic, and the call instantiates it as it would with no
+    // type arguments, binding `methods: M` in `attach<<string>>({}, { ... })` to its argument. Upstream made it a free
+    // type here, which nothing settled, so `M` stayed `'a` and nothing could be read off it. One only the return type uses
+    // has no argument to come from, so it's still a free type, inferred from where the result goes.
+    std::pair<std::vector<TypeId>, std::optional<TypePackId>> flattened = flatten(ft->argTypes);
+    const std::vector<TypeId>& parameters = flattened.first;
+    std::optional<TypePackId> variadic = flattened.second;
+    auto usedByParameter = [&](TypeId generic)
+    {
+        GenericFinder finder{generic};
+        for (TypeId parameter : parameters)
+            finder.traverse(parameter);
+        if (variadic)
+            finder.traverse(*variadic);
+        return finder.found;
+    };
+
+    std::vector<TypeId> remainingGenerics;
     while (typeParametersIter != ft->generics.end())
     {
-        replacements[*typeParametersIter++] = freshType(arena, builtinTypes, scope, Polarity::Mixed);
+        TypeId generic = *typeParametersIter++;
+        if (usedByParameter(generic))
+            remainingGenerics.push_back(generic);
+        else
+            replacements[generic] = freshType(arena, builtinTypes, scope, Polarity::Mixed);
     }
 
     DenseHashMap<TypePackId, TypePackId> replacementPacks{nullptr};
@@ -3653,8 +3695,8 @@ TypeId ConstraintSolver::instantiateFunctionType(
     FunctionType* ft2 = getMutable<FunctionType>(clonedFunctionTypeId);
     LUAU_ASSERT(ft != ft2);
 
-    // We instantiate all generics, replacing any with free types.
-    ft2->generics.clear();
+    // The generics given, and the ones only the return type uses, are instantiated; the rest are left for the call.
+    ft2->generics = std::move(remainingGenerics);
 
     // However, we only instantiate as many type pack arguments as are given.
     if (!ft2->genericPacks.empty() && typePackArguments.size() < ft2->genericPacks.size())

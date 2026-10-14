@@ -87,6 +87,14 @@ struct ToStringOptions
     // Luwu (helpful subtyping errors): print only the properties `maxPropertiesShown` puts ahead of the rest, and `…`
     // for the others, however few there are: for a table the message only needs to point into.
     bool onlyFocusedProperties = false;
+    // Luwu: print every alias's structure instead of its name (`string | Path` for `Pathlike`). A recursive alias still
+    // prints by name where it refers to itself.
+    bool expandAliases = false;
+    // Luwu: spaces per indentation level, with useLineBreaks
+    size_t indentSize = 4;
+    // Luwu: with useLineBreaks, the first line of each table property's doc comment (its metadata's `comments`) goes above
+    // it as `--- ...`, cut to this many characters. 0 leaves them out.
+    size_t propertyCommentWidth = 0;
     size_t maxTableLength = size_t(FInt::LuauTableTypeMaximumStringifierLength); // Only applied to TableTypes
     size_t maxTypeLength = size_t(FInt::LuauTypeMaximumStringifierLength);
     size_t compositeTypesSingleLineLimit = 5; // The number of type elements permitted on a single line when printing type unions/intersections

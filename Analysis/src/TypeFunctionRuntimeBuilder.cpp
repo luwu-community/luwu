@@ -3,8 +3,10 @@
 #include "Luau/TypeFunctionRuntimeBuilder.h"
 
 #include "Luau/BuiltinDefinitions.h"
+#include "Luau/ConstraintSolver.h"
 #include "Luau/Common.h"
 #include "Luau/DenseHash.h"
+#include "Luau/RecursionCounter.h"
 #include "Luau/StringUtils.h"
 #include "Luau/Type.h"
 #include "Luau/TypeArena.h"
@@ -143,8 +145,23 @@ private:
         }
     }
 
+    // Luwu: the first metadata on the way to what `ty` follows to. A type can be bound to another after it got its
+    // comments (a field's function type is, while solving), and following skips the one that has them.
+    static const std::shared_ptr<const TypeMetadataTable>& metadataAlongBounds(TypeId ty)
+    {
+        while (!ty->metadata)
+        {
+            const BoundType* bound = get<BoundType>(ty);
+            if (!bound)
+                break;
+            ty = bound->boundTo;
+        }
+        return ty->metadata;
+    }
+
     TypeFunctionTypeId shallowSerialize(TypeId ty)
     {
+        const std::shared_ptr<const TypeMetadataTable>& metadata = metadataAlongBounds(ty);
         ty = follow(ty);
 
         if (auto it = find(ty))
@@ -255,7 +272,63 @@ private:
 
         types[ty] = target;
         queue.emplace_back(ty, target);
+
+        if (target)
+        {
+            TypeFunctionType* mutableTarget = const_cast<TypeFunctionType*>(target);
+            mutableTarget->origin = ty;
+            mutableTarget->metadata = serializeMetadata(metadata);
+        }
+
         return target;
+    }
+
+    // Luwu: a type's metadata, with the types in it serialized like any other (TypeMetadataTable)
+    std::shared_ptr<const TypeFunctionMetadataTable> serializeMetadata(const std::shared_ptr<const TypeMetadataTable>& metadata)
+    {
+        if (!metadata)
+            return nullptr;
+
+        auto serializeValue = [&](const TypeMetadataValue& value) -> TypeFunctionMetadataValue
+        {
+            if (const bool* b = get_if<bool>(&value))
+                return *b;
+            if (const double* n = get_if<double>(&value))
+                return *n;
+            if (const std::string* str = get_if<std::string>(&value))
+                return *str;
+            if (const TypeId* ty = get_if<TypeId>(&value))
+                return shallowSerialize(*ty);
+
+            const auto* table = get_if<std::shared_ptr<const TypeMetadataTable>>(&value);
+            LUAU_ASSERT(table);
+            return serializeMetadata(*table);
+        };
+
+        auto result = std::make_shared<TypeFunctionMetadataTable>();
+        result->entries.reserve(metadata->entries.size());
+        for (const auto& [key, value] : metadata->entries)
+            result->entries.emplace_back(serializeValue(key), serializeValue(value));
+        result->docContext = metadata->docContext;
+
+        return result;
+    }
+
+    // Luwu: a property's documentation goes along with it (TypeFunctionProperty)
+    TypeFunctionProperty serializedProperty(
+        const Property& p,
+        std::optional<TypeFunctionTypeId> readTy,
+        std::optional<TypeFunctionTypeId> writeTy
+    )
+    {
+        TypeFunctionProperty result{readTy, writeTy};
+        result.location = p.location;
+        result.typeLocation = p.typeLocation;
+        result.documentationSymbol = p.documentationSymbol;
+        result.deprecated = p.deprecated;
+        result.deprecatedSuggestion = p.deprecatedSuggestion;
+        result.metadata = serializeMetadata(p.metadata);
+        return result;
     }
 
     TypeFunctionTypePackId shallowSerialize(TypePackId tp)
@@ -417,7 +490,7 @@ private:
             if (p.writeTy)
                 writeTy = shallowSerialize(*p.writeTy);
 
-            t2->props[k] = TypeFunctionProperty{readTy, writeTy};
+            t2->props[k] = serializedProperty(p, readTy, writeTy);
         }
 
         if (t1->indexer)
@@ -487,7 +560,7 @@ private:
             if (p.writeTy)
                 writeTy = shallowSerialize(*p.writeTy);
 
-            c2->props[k] = TypeFunctionProperty{readTy, writeTy};
+            c2->props[k] = serializedProperty(p, readTy, writeTy);
         }
 
         if (c1->indexer)
@@ -623,6 +696,12 @@ public:
         }
 
         return find(ty).value_or(state->ctx->builtins->errorType);
+    }
+
+    // Luwu doc references: just `ty`'s metadata, for a type the deserializer doesn't make (a class put on the call's type)
+    std::shared_ptr<const TypeMetadataTable> deserializeMetadataOf(TypeFunctionTypeId ty)
+    {
+        return withDocContext(deserializeMetadata(ty->metadata));
     }
 
     TypePackId deserialize(TypeFunctionTypePackId tp)
@@ -807,6 +886,12 @@ private:
         {
             target = c->externTy;
         }
+        else if (get<TypeFunctionErrorType>(ty))
+        {
+            // Luwu: only a type function's own result can be `types.error` (UserDefinedTypeFunction.cpp reports it)
+            pushRuntimeError("types.error(...) can only be returned from a type function, not used inside another type");
+            return nullptr;
+        }
         else if (auto g = get<TypeFunctionGenericType>(ty))
         {
             if (g->isPack)
@@ -839,7 +924,104 @@ private:
 
         types[ty] = target;
         queue.emplace_back(ty, target);
+
+        // Luwu: a type made here gets the documentation and metadata of what it was serialized from. Builtins, extern types
+        // and generics are shared by every use, so they keep their own.
+        if (target && ownsDeserializedType(ty))
+        {
+            if (ty->origin)
+                asMutable(target)->documentationSymbol = ty->origin->documentationSymbol;
+            asMutable(target)->metadata = withDocContext(deserializeMetadata(ty->metadata));
+        }
+
         return target;
+    }
+
+    // Luwu: whether deserializing `ty` made a new type, rather than reusing a builtin, extern type or generic
+    static bool ownsDeserializedType(TypeFunctionTypeId ty)
+    {
+        return get<TypeFunctionSingletonType>(ty) || get<TypeFunctionUnionType>(ty) || get<TypeFunctionIntersectionType>(ty) ||
+               get<TypeFunctionNegationType>(ty) || get<TypeFunctionTableType>(ty) || get<TypeFunctionFunctionType>(ty);
+    }
+
+    // Luwu doc references: metadata a type function set has its doc comments written at the call, so references in them
+    // resolve there
+    std::shared_ptr<const TypeMetadataTable> withDocContext(std::shared_ptr<const TypeMetadataTable> metadata)
+    {
+        if (!metadata || metadata->docContext)
+            return metadata;
+
+        ConstraintSolver* solver = state->ctx->solver;
+        const Constraint* constraint = state->ctx->constraint;
+        if (!solver || !solver->module || !constraint)
+            return metadata;
+
+        auto withContext = std::make_shared<TypeMetadataTable>(*metadata);
+        withContext->docContext = MetadataDocContext{solver->module->name, constraint->location, /* generated= */ true};
+        return withContext;
+    }
+
+    // Luwu: the inverse of TypeFunctionSerializer::serializeMetadata
+    std::shared_ptr<const TypeMetadataTable> deserializeMetadata(const std::shared_ptr<const TypeFunctionMetadataTable>& metadata)
+    {
+        if (!metadata)
+            return nullptr;
+
+        auto deserializeValue = [&](const TypeFunctionMetadataValue& value) -> TypeMetadataValue
+        {
+            if (const bool* b = get_if<bool>(&value))
+                return *b;
+            if (const double* n = get_if<double>(&value))
+                return *n;
+            if (const std::string* str = get_if<std::string>(&value))
+                return *str;
+            if (const TypeFunctionTypeId* ty = get_if<TypeFunctionTypeId>(&value))
+                return shallowDeserialize(*ty);
+
+            const auto* table = get_if<std::shared_ptr<const TypeFunctionMetadataTable>>(&value);
+            LUAU_ASSERT(table);
+            return deserializeMetadata(*table);
+        };
+
+        auto result = std::make_shared<TypeMetadataTable>();
+        result->entries.reserve(metadata->entries.size());
+        for (const auto& [key, value] : metadata->entries)
+            result->entries.emplace_back(deserializeValue(key), deserializeValue(value));
+        result->docContext = metadata->docContext;
+
+        return result;
+    }
+
+    // Luwu: the table a TypeFunctionTableType was serialized from, a metatable type's own table included
+    static const TableType* originTable(TypeFunctionTypeId ty)
+    {
+        if (!ty->origin)
+            return nullptr;
+
+        TypeId origin = follow(ty->origin);
+        if (const MetatableType* mt = get<MetatableType>(origin))
+            origin = follow(mt->table);
+
+        return get<TableType>(origin);
+    }
+
+    Property deserializedProperty(const TypeFunctionProperty& p, std::optional<TypeId> readTy, std::optional<TypeId> writeTy)
+    {
+        Property result;
+        if (readTy && writeTy)
+            result = Property::rw(*readTy, *writeTy);
+        else if (readTy)
+            result = Property::readonly(*readTy);
+        else
+            result = Property::writeonly(*writeTy);
+
+        result.location = p.location;
+        result.typeLocation = p.typeLocation;
+        result.documentationSymbol = p.documentationSymbol;
+        result.deprecated = p.deprecated;
+        result.deprecatedSuggestion = p.deprecatedSuggestion;
+        result.metadata = withDocContext(deserializeMetadata(p.metadata));
+        return result;
     }
 
     TypePackId shallowDeserialize(TypeFunctionTypePackId tp)
@@ -909,7 +1091,7 @@ private:
             deserializeChildren(t2, t1);
         else if (auto [m1, m2] = std::tuple{getMutable<MetatableType>(ty), getMutable<TypeFunctionTableType>(tfti)};
                  m1 && m2 && m2->metatable.has_value())
-            deserializeChildren(m2, m1);
+            deserializeChildren(tfti, m2, m1);
         else if (auto [f1, f2] = std::tuple{getMutable<FunctionType>(ty), getMutable<TypeFunctionFunctionType>(tfti)}; f1 && f2)
             deserializeChildren(f2, f1);
         else if (auto [c1, c2] = std::tuple{getMutable<ExternType>(ty), getMutable<TypeFunctionExternType>(tfti)}; c1 && c2)
@@ -918,6 +1100,163 @@ private:
             deserializeChildren(g2, g1);
         else
             state->ctx->ice->ice("Deserializing user defined type function arguments: mysterious type is being deserialized");
+
+        restoreDefinition(tfti, ty);
+    }
+
+    // Luwu: whether `tfti` and every type it reaches are as they were serialized: none of them was edited
+    // (TypeFunctionType::edited). Only then is a type still the alias its origin was named as.
+    DenseHashMap<TypeFunctionTypeId, bool> pristineTypes{nullptr};
+    // How deep isPristine follows a type. A deeper one counts as edited, which only costs it its alias name.
+    static constexpr int kMaxPristineDepth = 200;
+    int pristineDepth = 0;
+
+    bool isPristine(TypeFunctionTypeId tfti)
+    {
+        if (const bool* known = pristineTypes.find(tfti))
+            return *known;
+
+        RecursionCounter depth{&pristineDepth};
+        if (pristineDepth > kMaxPristineDepth)
+            return false;
+
+        // a cycle back to a type being checked says nothing new about it
+        pristineTypes[tfti] = true;
+
+        bool pristine = !tfti->edited;
+        auto visit = [&](TypeFunctionTypeId child)
+        {
+            pristine = pristine && isPristine(child);
+        };
+
+        if (const TypeFunctionUnionType* u = get<TypeFunctionUnionType>(tfti))
+        {
+            for (TypeFunctionTypeId component : u->components)
+                visit(component);
+        }
+        else if (const TypeFunctionIntersectionType* i = get<TypeFunctionIntersectionType>(tfti))
+        {
+            for (TypeFunctionTypeId component : i->components)
+                visit(component);
+        }
+        else if (const TypeFunctionNegationType* n = get<TypeFunctionNegationType>(tfti))
+            visit(n->type);
+        else if (const TypeFunctionTableType* t = get<TypeFunctionTableType>(tfti))
+        {
+            for (const auto& [_, prop] : t->props)
+            {
+                if (prop.readTy)
+                    visit(*prop.readTy);
+                if (prop.writeTy)
+                    visit(*prop.writeTy);
+            }
+            if (t->indexer)
+            {
+                visit(t->indexer->keyType);
+                visit(t->indexer->valueType);
+            }
+            if (t->metatable)
+                visit(*t->metatable);
+        }
+        else if (const TypeFunctionFunctionType* f = get<TypeFunctionFunctionType>(tfti))
+        {
+            for (TypeFunctionTypeId generic : f->generics)
+                visit(generic);
+            pristine = pristine && isPristine(f->argTypes) && isPristine(f->retTypes);
+        }
+
+        pristineTypes[tfti] = pristine;
+        return pristine;
+    }
+
+    bool isPristine(TypeFunctionTypePackId tftp)
+    {
+        if (const TypeFunctionTypePack* pack = get<TypeFunctionTypePack>(tftp))
+        {
+            for (TypeFunctionTypeId head : pack->head)
+            {
+                if (!isPristine(head))
+                    return false;
+            }
+            return !pack->tail || isPristine(*pack->tail);
+        }
+        if (const TypeFunctionVariadicTypePack* variadic = get<TypeFunctionVariadicTypePack>(tftp))
+            return isPristine(variadic->type);
+        return true;
+    }
+
+    // Luwu: the alias name a type printed as (`Pathlike`, `Config`), kept when the type function left it as it was, so a
+    // type that only passed through a type function prints the same in hovers, errors and `tostring` as it did before
+    void restoreAliasName(TypeFunctionTypeId tfti, TypeId ty)
+    {
+        TypeId origin = follow(tfti->origin);
+        if (UnionType* u = getMutable<UnionType>(ty))
+        {
+            const UnionType* from = get<UnionType>(origin);
+            if (from && (from->name || from->syntheticName) && isPristine(tfti))
+            {
+                u->name = from->name;
+                u->syntheticName = from->syntheticName;
+            }
+        }
+        else if (IntersectionType* i = getMutable<IntersectionType>(ty))
+        {
+            const IntersectionType* from = get<IntersectionType>(origin);
+            if (from && (from->name || from->syntheticName) && isPristine(tfti))
+            {
+                i->name = from->name;
+                i->syntheticName = from->syntheticName;
+            }
+        }
+        else if (TableType* t = getMutable<TableType>(ty))
+        {
+            // a generic alias prints with its arguments (`List<number>`), which aren't carried over
+            const TableType* from = get<TableType>(origin);
+            if (from && (from->name || from->syntheticName) && from->instantiatedTypeParams.empty() &&
+                from->instantiatedTypePackParams.empty() && isPristine(tfti))
+            {
+                t->name = from->name;
+                t->syntheticName = from->syntheticName;
+            }
+        }
+        else if (MetatableType* m = getMutable<MetatableType>(ty))
+        {
+            const MetatableType* from = get<MetatableType>(origin);
+            if (from && from->syntheticName && isPristine(tfti))
+                m->syntheticName = from->syntheticName;
+        }
+        else if (FunctionType* f = getMutable<FunctionType>(ty))
+        {
+            const FunctionType* from = get<FunctionType>(origin);
+            if (from && (from->name || from->syntheticName) && isPristine(tfti))
+            {
+                f->name = from->name;
+                f->syntheticName = from->syntheticName;
+            }
+        }
+    }
+
+    // Luwu: where the original table or function was defined, which is how luwu-lsp finds its doc comment
+    void restoreDefinition(TypeFunctionTypeId tfti, TypeId ty)
+    {
+        if (!tfti->origin)
+            return;
+
+        restoreAliasName(tfti, ty);
+
+        if (TableType* table = getMutable<TableType>(ty))
+        {
+            if (const TableType* origin = originTable(tfti))
+            {
+                table->definitionModuleName = origin->definitionModuleName;
+                table->definitionLocation = origin->definitionLocation;
+            }
+        }
+        else if (FunctionType* function = getMutable<FunctionType>(ty))
+        {
+            if (const FunctionType* origin = get<FunctionType>(follow(tfti->origin)))
+                function->definition = origin->definition;
+        }
     }
 
     void deserializeChildren(TypeFunctionTypePackId tftp, TypePackId tp)
@@ -989,12 +1328,12 @@ private:
     {
         for (const auto& [k, p] : t2->props)
         {
-            if (p.readTy && p.writeTy)
-                t1->props[k] = Property::rw(shallowDeserialize(*p.readTy), shallowDeserialize(*p.writeTy));
-            else if (p.readTy)
-                t1->props[k] = Property::readonly(shallowDeserialize(*p.readTy));
-            else if (p.writeTy)
-                t1->props[k] = Property::writeonly(shallowDeserialize(*p.writeTy));
+            if (!p.readTy && !p.writeTy)
+                continue;
+
+            std::optional<TypeId> readTy = p.readTy ? std::optional<TypeId>{shallowDeserialize(*p.readTy)} : std::nullopt;
+            std::optional<TypeId> writeTy = p.writeTy ? std::optional<TypeId>{shallowDeserialize(*p.writeTy)} : std::nullopt;
+            t1->props[k] = deserializedProperty(p, readTy, writeTy);
         }
 
         if (t2->indexer.has_value())
@@ -1007,9 +1346,11 @@ private:
         }
     }
 
-    void deserializeChildren(TypeFunctionTableType* m2, MetatableType* m1)
+    void deserializeChildren(TypeFunctionTypeId tfti, TypeFunctionTableType* m2, MetatableType* m1)
     {
         TypeFunctionTypeId temp = typeFunctionRuntime->typeArena.allocate(TypeFunctionTableType{m2->props, m2->indexer});
+        // Luwu: the metatable type's node holds the origin, and originTable finds its table from it
+        const_cast<TypeFunctionType*>(temp)->origin = tfti->origin;
         m1->table = shallowDeserialize(temp);
 
         if (m2->metatable.has_value())
@@ -1150,6 +1491,11 @@ TypeId deserialize(TypeFunctionTypeId ty, TypeFunctionRuntimeBuilderState* state
 TypePackId deserialize(TypeFunctionTypePackId tp, TypeFunctionRuntimeBuilderState* state)
 {
     return TypeFunctionDeserializer(state).deserialize(tp);
+}
+
+std::shared_ptr<const TypeMetadataTable> deserializeMetadata(TypeFunctionTypeId ty, TypeFunctionRuntimeBuilderState* state)
+{
+    return TypeFunctionDeserializer(state).deserializeMetadataOf(ty);
 }
 
 } // namespace Luau
