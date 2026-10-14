@@ -5322,13 +5322,14 @@ void TypeChecker2::explainError(
             tm.overrideMessage = std::move(explanation->reason);
         tm.wantedName = std::move(explanation->wantedName);
         tm.givenName = std::move(explanation->givenName);
-        tm.wantedExpansion = std::move(explanation->wantedExpansion);
-        tm.givenExpansion = std::move(explanation->givenExpansion);
         // Paths may be rooted somewhere else, but the value is still called by its name.
         tm.givenVariable = explanation->givenVariable ? std::move(explanation->givenVariable) : variable;
         tm.whereDeclarations = std::move(explanation->whereDeclarations);
-        tm.luwuExplanation = true;
-        tm.notation = explanation->notation;
+        tm.explained = TypeMismatch::Explained{
+            std::move(explanation->wantedExpansion),
+            std::move(explanation->givenExpansion),
+            explanation->notation,
+        };
         tm.contextVerb = contextVerb;
         reportError(std::move(tm), location);
         return;
@@ -5666,7 +5667,7 @@ bool TypeChecker2::testPotentialLiteralIsSubtype(AstExpr* expr, TypeId expectedT
         MissingProperties missing{expectedType, exprType, std::move(temp)};
         if (FFlag::LuwuHelpfulSubtypingErrors)
         {
-            missing.luwuExplanation = true;
+            missing.fromTableLiteral = true;
             missing.givenName = destinationName(*sourceModule, expr->location);
             const bool isNarrowedFromUnion = narrowedLiteralUnion && narrowedLiteralUnion->literal == expr;
             const bool isUninstantiatedAlias = expectedTableType->name && expectedTableType->instantiatedTypeParams.empty() &&

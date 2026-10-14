@@ -619,7 +619,7 @@ void nameRepeatedTypesInError(TypeErrorData& data, const Scope* scope)
     if (TypeMismatch* tm = get_if<TypeMismatch>(&data))
     {
         // An explained mismatch printed its types already; the others print something other than the two types.
-        bool printsBothTypes = !tm->luwuExplanation && !tm->overrideMessage && !tm->contextWantedDisplay && !tm->contextGivenDisplay &&
+        bool printsBothTypes = !tm->explained && !tm->overrideMessage && !tm->contextWantedDisplay && !tm->contextGivenDisplay &&
                                !tm->wantedName && !tm->givenName && !tm->error;
         if (!printsBothTypes)
             return;

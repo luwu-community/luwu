@@ -325,10 +325,11 @@ struct ErrorConverter
             return *tm.overrideMessage;
 
         ToStringOptions typeOptions;
-        typeOptions.sortUnionMembers = !tm.luwuExplanation;
+        const bool explained = tm.explained.has_value();
+        typeOptions.sortUnionMembers = !explained;
         // Luwu (helpful subtyping errors): an explained mismatch prints parameter names, so the two function types can
         // be compared parameter by parameter and its bullets can refer to them by name.
-        typeOptions.functionTypeArguments = tm.luwuExplanation;
+        typeOptions.functionTypeArguments = explained;
 
         std::string givenTypeName = tm.givenName ? *tm.givenName : Luau::toString(tm.givenType, typeOptions);
         std::string wantedTypeName = tm.wantedName ? *tm.wantedName : Luau::toString(tm.wantedType, typeOptions);
@@ -355,10 +356,10 @@ struct ErrorConverter
         // being called with them: there it says what the function it got takes or returns.
         const bool aboutParameters = tm.contextVerb && *tm.contextVerb == mismatchContextFunctionTakes;
         const bool aboutReturns = tm.contextVerb && *tm.contextVerb == mismatchContextFunctionReturns;
-        std::string butGot = tm.luwuExplanation ? "but was given" : "but got";
-        if (tm.luwuExplanation && aboutParameters)
+        std::string butGot = explained ? "but was given" : "but got";
+        if (explained && aboutParameters)
             butGot = "but it takes";
-        else if (tm.luwuExplanation && aboutReturns)
+        else if (explained && aboutReturns)
             butGot = "but it returns";
 
         // A qualifier is rendered already formatted (" from 'a.luau'", " defined on line 3") because
@@ -393,19 +394,20 @@ struct ErrorConverter
             // a table in it: tables side by side on one line can't be compared.
             bool blockTypes = givenType.find('\n') != std::string::npos || wantedType.find('\n') != std::string::npos;
             bool hasTables = givenType.find('{') != std::string::npos || wantedType.find('{') != std::string::npos;
-            bool printedByLuwu = tm.wantedName || tm.givenName || tm.luwuExplanation;
+            bool printedByLuwu = tm.wantedName || tm.givenName || explained;
             bool stacked = blockTypes || (printedByLuwu && hasTables);
             bool givenIsShort = !stacked && givenType.length() <= luauIndentTypeMismatchMaxTypeLength;
             bool eitherIsShort = givenIsShort || (!stacked && wantedType.length() <= luauIndentTypeMismatchMaxTypeLength);
 
             // An aliased union is printed as its declaration, `type Drop = A | B`, so its members are
             // there to count; a long one goes on the line below its name.
-            if (tm.givenExpansion || tm.wantedExpansion)
+            const bool hasExpansion = explained && (tm.explained->givenExpansion || tm.explained->wantedExpansion);
+            if (hasExpansion)
             {
-                if (tm.wantedExpansion)
-                    wanted = typeDeclaration(wantedType, *tm.wantedExpansion);
-                if (tm.givenExpansion)
-                    given = typeDeclaration(givenType, *tm.givenExpansion);
+                if (tm.explained->wantedExpansion)
+                    wanted = typeDeclaration(wantedType, *tm.explained->wantedExpansion);
+                if (tm.explained->givenExpansion)
+                    given = typeDeclaration(givenType, *tm.explained->givenExpansion);
                 return preamble + "\n    " + wanted + "\n" + butGot + "\n    " + given;
             }
 
@@ -830,7 +832,7 @@ struct ErrorConverter
         // Luwu (helpful subtyping errors): the squiggle is already on the table literal, and the missing properties
         // are all that's wrong with it, so neither type is printed: name the literal and what it's for, then
         // list each missing property with the type it should have.
-        if (e.luwuExplanation && e.context == MissingProperties::Missing)
+        if (e.fromTableLiteral && e.context == MissingProperties::Missing)
         {
             ToStringOptions typeOptions;
             typeOptions.sortUnionMembers = false;
@@ -1634,17 +1636,26 @@ bool TypeMismatch::operator==(const TypeMismatch& rhs) const
         return false;
 
     // Luwu (helpful subtyping errors): errors are deduplicated with ==, so everything that changes what the
-    // message says takes part. `luwuExplanation` doesn't, here or on MissingProperties: it only selects the
-    // rendering style ("but was given" for "but got", union members in written order, the missing-fields
-    // layout), so two errors that agree on everything else say the same thing and keeping one loses nothing.
+    // message says takes part. Whether the mismatch was explained doesn't, nor does `fromTableLiteral` on
+    // MissingProperties: they only select the rendering style ("but was given" for "but got", union members in
+    // written order, the missing-fields layout), so two errors that agree on everything else say the same thing
+    // and keeping one loses nothing. What an explanation adds (expansions, notation) does take part.
+    const Explained noExplanation;
+    const Explained& lhsExplained = explained ? *explained : noExplanation;
+    const Explained& rhsExplained = rhs.explained ? *rhs.explained : noExplanation;
     const bool sameContext =
         contextVerb == rhs.contextVerb && contextWantedDisplay == rhs.contextWantedDisplay && contextGivenDisplay == rhs.contextGivenDisplay;
-    const bool sameNames = wantedName == rhs.wantedName && givenName == rhs.givenName && wantedExpansion == rhs.wantedExpansion &&
-                           givenExpansion == rhs.givenExpansion && givenVariable == rhs.givenVariable && whereDeclarations == rhs.whereDeclarations;
-    const bool sameLuwuRendering = sameContext && sameNames && overrideMessage == rhs.overrideMessage && notation == rhs.notation;
+    const bool sameNames = wantedName == rhs.wantedName && givenName == rhs.givenName && givenVariable == rhs.givenVariable &&
+                           whereDeclarations == rhs.whereDeclarations;
+    const bool sameLuwuRendering = sameContext && sameNames && overrideMessage == rhs.overrideMessage && lhsExplained == rhsExplained;
 
     return *wantedType == *rhs.wantedType && *givenType == *rhs.givenType && reason == rhs.reason && context == rhs.context &&
            sameLuwuRendering;
+}
+
+bool TypeMismatch::Explained::operator==(const Explained& rhs) const
+{
+    return wantedExpansion == rhs.wantedExpansion && givenExpansion == rhs.givenExpansion && notation == rhs.notation;
 }
 
 bool UnknownSymbol::operator==(const UnknownSymbol& rhs) const

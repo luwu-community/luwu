@@ -73,8 +73,9 @@ static uint8_t mismatchNotationUsed = 0;
 
 static void reportError(const Luau::Frontend& frontend, ReportFormat format, const Luau::TypeError& error)
 {
-    if (const Luau::TypeMismatch* mismatch = Luau::get_if<Luau::TypeMismatch>(&error.data))
-        mismatchNotationUsed |= mismatch->notation;
+    const Luau::TypeMismatch* mismatch = Luau::get_if<Luau::TypeMismatch>(&error.data);
+    if (mismatch && mismatch->explained)
+        mismatchNotationUsed |= mismatch->explained->notation;
 
     std::string humanReadableName = frontend.fileResolver->getHumanReadableModuleName(error.moduleName);
 

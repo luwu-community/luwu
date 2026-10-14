@@ -99,12 +99,9 @@ struct TypeMismatch
     // `wantedType` and `givenType` for everything downstream that reads them rather than the message.
     std::optional<std::string> overrideMessage;
 
-    // Luwu (helpful subtyping errors): printed in place of a type that has a name the reader wrote, with an
-    // optional `= ...` expansion on the line below (an aliased union has no name of its own to print).
+    // Luwu (helpful subtyping errors): printed in place of a type that has a name the reader wrote.
     std::optional<std::string> wantedName;
     std::optional<std::string> givenName;
-    std::optional<std::string> wantedExpansion;
-    std::optional<std::string> givenExpansion;
     // The name the given value has in the code: the variable it was read from, or where a literal is being put. The
     // message calls the value by it (`Expected 'settings' to be`), and the reason's paths start at it.
     std::optional<std::string> givenVariable;
@@ -112,13 +109,22 @@ struct TypeMismatch
     // `wantedName` and `givenName` hold the two types printed with these names.
     std::vector<NamedTypeDeclaration> whereDeclarations;
 
-    // Luwu (helpful subtyping errors): explained by `explainMismatch`. Such a message prints union members in the
-    // order they were written, not sorted, because the reason numbers them (`Drop#2`) and the numbers have
-    // to match what is printed; and it says "but was given", matching the `given` its paths are rooted at.
-    bool luwuExplanation = false;
+    // Luwu (helpful subtyping errors): what `explainMismatch` adds when it explains the mismatch.
+    struct Explained
+    {
+        // An aliased union has no name of its own to print, so its `= ...` expansion goes on the line below the name.
+        std::optional<std::string> wantedExpansion;
+        std::optional<std::string> givenExpansion;
+        // `MismatchNotation` bits used by `reason`.
+        uint8_t notation = 0;
 
-    // Luwu (helpful subtyping errors): `MismatchNotation` bits used by `reason`.
-    uint8_t notation = 0;
+        bool operator==(const Explained& rhs) const;
+    };
+
+    // Set when `explainMismatch` explained the mismatch. The message then prints union members in the order they were
+    // written, not sorted, because the reason numbers them (`Drop#2`) and the numbers have to match what is printed;
+    // and it says "but was given", matching the `given` its paths are rooted at.
+    std::optional<Explained> explained;
 
     bool operator==(const TypeMismatch& rhs) const;
 };
@@ -365,9 +371,9 @@ struct MissingProperties
     std::vector<Name> properties;
     Context context = Missing;
 
-    // Luwu (helpful subtyping errors): render in the same style as an explained `TypeMismatch`, naming the
-    // table by `givenName` (what it's being assigned to) when it has one.
-    bool luwuExplanation = false;
+    // Luwu (helpful subtyping errors): the properties are missing from a table literal. The message names the literal
+    // by `givenName` (what it's being assigned to) when it has one, and lists each missing property with its type.
+    bool fromTableLiteral = false;
     std::optional<std::string> givenName;
     // The name of the type the table is for, which can be a union the literal was narrowed to one member
     // of (`GameEvent`), so the message doesn't name a member the reader never wrote.
