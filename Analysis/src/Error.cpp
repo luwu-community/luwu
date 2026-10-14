@@ -515,6 +515,11 @@ static std::optional<std::string> missingUnionPropertyHelp(const MissingUnionPro
     {
         std::string addNil = "'" + e.key + ": nil' to " + quotedTypes(e.missing) + " so that checking '" + e.key + "' tells the variants apart";
         bullets.push_back((bullets.empty() ? "Add " : "Or add ") + addNil);
+
+        std::string members;
+        for (TypeId option : ut->options)
+            members += (members.empty() ? "" : ", ") + toString(option);
+        bullets.push_back("Or write the type as 'oneof<" + members + ">', which adds each variant's missing fields as 'nil'");
     }
 
     if (bullets.empty())
