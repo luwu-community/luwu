@@ -5873,8 +5873,11 @@ struct Compiler
                 compileExprTemp(clause.expr, reg);
                 pushLocal(clause.local, reg, allocpc);
 
-                elseJumps.push_back(bytecode.emitLabel());
-                bytecode.emitAD(LOP_JUMPIFNOT, reg, 0);
+                if (clause.tested)
+                {
+                    elseJumps.push_back(bytecode.emitLabel());
+                    bytecode.emitAD(LOP_JUMPIFNOT, reg, 0);
+                }
             }
             else
             {

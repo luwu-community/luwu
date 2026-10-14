@@ -791,6 +791,9 @@ struct AstIfClause
     AstExpr* expr = nullptr;
     // The `when` before this clause. Unset on the first clause.
     std::optional<Location> whenLocation;
+    // False for a binding that holds its value whatever it is, with no truthiness test: a field a pattern binds after
+    // a type test (`x is Point.{x, y}`), which has to bind even when the field is `false`.
+    bool tested = true;
 };
 
 class AstExprIfElse : public AstExpr
@@ -1825,6 +1828,10 @@ public:
     // Written as `x or return v` or `x or break` rather than with `do`: the body is that one statement
     // (see Parser::parseOrLeave).
     bool shorthand = false;
+
+    // Luwu match expressions: parsed from a `match` expression (see Parser::parseMatchExpr). The body is the subject's
+    // `local` and a `give` of an if-else expression with one arm per `case`, none of them written as statements.
+    bool fromMatch = false;
 
     // Does every path leave it with `return`, `break` or `continue`, so it never has a value? True for the shorthand,
     // and for a `do` expression with no `give` of its own.

@@ -475,6 +475,16 @@ private:
 
     // TODO: Add grammar rules here?
     AstExpr* parseIfElseExpr();
+
+    // Luwu match expressions: `match` and the `is` / `implements` operators
+    bool matchExpressionsAvailable();
+    bool typeTestFollows();
+    AstExpr* parseTypeTest(AstExpr* value, const Location& start);
+    bool matchExpressionFollows();
+    AstExpr* parseMatchExpr();
+    AstExpr* parseMatchPattern(AstLocal* subject);
+    AstExpr* parseMatchAlternative(AstLocal* subject);
+    AstExprCall* makeGlobalCall(AstName library, std::optional<AstName> function, const Location& location, std::initializer_list<AstExpr*> args);
     // Luwu: a missing `then`/`else` in an if-else expression is reported on its keyword (see parseIfElseExpr)
     enum class IfElseKeyword
     {
@@ -744,6 +754,12 @@ private:
     std::vector<AstExpr**> orContinues;
 
     AstName nameSelf;
+    // Luwu match expressions: the globals and functions `is` / `implements` call, and a `match` subject's hidden name
+    AstName nameClass;
+    AstName nameType;
+    AstName nameIsinstance;
+    AstName nameImplements;
+    AstName nameMatched;
     AstName nameNumber;
     AstName nameAny;
     AstName nameError;

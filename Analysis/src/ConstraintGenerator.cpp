@@ -3720,10 +3720,10 @@ ScopePtr ConstraintGenerator::ifClausesScope(const AstArray<AstIfClause>& clause
 }
 
 // Luwu If Local (rfcs/if-local.md): checks a `when` chain in `chainScope` (see ifClausesScope). A
-// binding is declared like a `local` and narrowed to truthy; a plain condition's refinement applies to the clauses
-// after it and to the branch. Returns what the else branch may assume the negation of: for a chain of plain
-// conditions, their conjunction (the same as `a and b`); for a chain with a binding, nothing, since any of its
-// clauses may be the one that failed.
+// binding is declared like a `local` and narrowed to truthy (an untested one only declared); a plain condition's
+// refinement applies to the clauses after it and to the branch. Returns what the else branch may assume the negation
+// of: for a chain of plain conditions and untested bindings, the conditions' conjunction (the same as `a and b`); for a
+// chain with a tested binding, nothing, since any of its clauses may be the one that failed.
 RefinementId ConstraintGenerator::checkIfClauses(const ScopePtr& chainScope, const AstArray<AstIfClause>& clauses)
 {
     RefinementId conditions = nullptr;
@@ -3733,9 +3733,11 @@ RefinementId ConstraintGenerator::checkIfClauses(const ScopePtr& chainScope, con
     {
         if (clause.declaration)
         {
-            binds = true;
             visit(chainScope, clause.declaration);
+            if (!clause.tested)
+                continue;
 
+            binds = true;
             if (const RefinementKey* key = dfg->getRefinementKey(clause.local))
                 applyRefinements(chainScope, clause.local->location, refinementArena.proposition(key, builtinTypes->truthyType));
         }

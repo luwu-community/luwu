@@ -973,6 +973,24 @@ private:
     {
         visit(static_cast<AstExpr*>(node));
 
+        // Luwu match expressions: a `match`'s subject and arms are parts of the statement around it, not statements
+        if (node->fromMatch)
+        {
+            for (AstStat* stmt : node->body->body)
+            {
+                if (AstStatLocal* subject = stmt->as<AstStatLocal>())
+                {
+                    for (AstExpr* value : subject->values)
+                        value->visit(this);
+                }
+                else if (AstStatGive* arms = stmt->as<AstStatGive>())
+                    arms->value->visit(this);
+            }
+
+            stack.back().lastLine = std::max(stack.back().lastLine, node->location.end.line);
+            return false;
+        }
+
         Location outer = stack.back().start;
 
         for (AstStat* stmt : node->body->body)

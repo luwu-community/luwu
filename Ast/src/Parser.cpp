@@ -40,6 +40,16 @@ LUAU_FASTFLAGVARIABLE(LuwuAttributesEverywhere)
 LUAU_FASTFLAGVARIABLE(LuwuIfLocal)
 // Luwu Do Expressions (rfcs/do-expressions.md): `do ... give exp` expressions. Experimental.
 LUAU_FASTFLAGVARIABLE(LuwuDoExpr)
+// Luwu match expressions: `match` expressions and the `is` / `is not` / `implements` operators, in Luwu files. In
+// progress; off by default until the design settles.
+LUAU_FASTFLAGVARIABLE(DebugLuwuMatchExpressions)
+
+namespace
+{
+// Luwu match expressions: the name of a `match` subject the code didn't name. It can't be written, so nothing reads it
+// but the arms' tests.
+constexpr const char* kMatchedLocalName = "(matched)";
+} // namespace
 LUAU_FASTFLAG(LuwuTableComprehensions)
 // Luwu: `{ function foo() end }` in a table literal, meaning `{ foo = function() end }`.
 LUAU_FASTFLAGVARIABLE(LuwuTableFunctionFields)
@@ -592,6 +602,11 @@ Parser::Parser(const char* buffer, size_t bufferSize, AstNameTable& names, Alloc
     functionStack.push_back(top);
 
     nameSelf = names.getOrAdd("self");
+    nameClass = names.getOrAdd("class");
+    nameType = names.getOrAdd("type");
+    nameIsinstance = names.getOrAdd("isinstance");
+    nameImplements = names.getOrAdd("implements");
+    nameMatched = names.getOrAdd(kMatchedLocalName);
     nameContinue = names.getOrAdd("continue");
     nameNumber = names.getOrAdd("number");
     nameAny = names.getOrAdd("any");
@@ -6350,8 +6365,19 @@ AstExpr* Parser::parseBinaryTail(AstExpr* expr, const Location& start, unsigned 
     if (!op)
         op = checkBinaryConfusables(binaryPriority, limit);
 
-    while (op && binaryPriority[*op].left > limit)
+    // Luwu match expressions: `x is T` and `x implements T` bind like `==`
+    const unsigned int typeTestPriority = binaryPriority[AstExprBinary::CompareEq].left;
+
+    while ((op && binaryPriority[*op].left > limit) || (!op && typeTestPriority > limit && typeTestFollows()))
     {
+        if (!op)
+        {
+            expr = parseTypeTest(expr, start);
+            op = parseBinaryOp(lexer.current());
+            incrementRecursionCounter("expression");
+            continue;
+        }
+
         // Luwu If Local (rfcs/if-local.md): `if a and const x = f() then` means `when`; the condition parser takes the
         // binding as a `when` clause
         if (andStartsBinding())
@@ -6855,6 +6881,10 @@ AstExpr* Parser::parseSimpleExpr()
     else if (lexer.current().type == Lexeme::ReservedDo)
     {
         return parseDoExpr();
+    }
+    else if (matchExpressionFollows())
+    {
+        return parseMatchExpr();
     }
     else if (startsConstDeclaration())
     {
@@ -7479,6 +7509,331 @@ AstExpr* Parser::parseTableComprehension(const Location& start, const MatchLexem
     if (options.storeCstData)
         cstNodeMap[node] = allocator.alloc<CstExprTable>(copy(&cstItem, 1));
     return node;
+}
+
+// Luwu match expressions: the primitive types `is` tests against with `type()`. `function` is a keyword token, so it's
+// matched separately (see primitiveTagAt).
+static constexpr const char* kPrimitiveTags[] = {
+    "string", "number", "boolean", "buffer", "vector", "table", "thread", "userdata", "object", "class",
+};
+
+// Luwu match expressions: the primitive type `is` names at `lexeme`, if it names one
+static std::optional<std::string> primitiveTagAt(const Lexeme& lexeme)
+{
+    if (lexeme.type == Lexeme::ReservedFunction)
+        return "function";
+
+    if (lexeme.type != Lexeme::Name)
+        return std::nullopt;
+
+    for (const char* tag : kPrimitiveTags)
+    {
+        if (strcmp(lexeme.name, tag) == 0)
+            return tag;
+    }
+
+    return std::nullopt;
+}
+
+// Luwu match expressions: `is` or `implements`, the keywords that start a type test
+static bool isTypeTestKeyword(const Lexeme& lexeme)
+{
+    return lexeme.type == Lexeme::Name && (AstName(lexeme.name) == "is" || AstName(lexeme.name) == "implements");
+}
+
+// Luwu match expressions: only in Luwu files. In a Luau file `x is` and `match x` keep their upstream parse
+// (`local a = x is = 1` is two statements there).
+bool Parser::matchExpressionsAvailable()
+{
+    return FFlag::DebugLuwuMatchExpressions && options.language == Language::Luwu;
+}
+
+// Luwu match expressions: `is` or `implements` after an operand, on its line. `is = 1` assigns a variable named `is`.
+bool Parser::typeTestFollows()
+{
+    return matchExpressionsAvailable() && isTypeTestKeyword(lexer.current()) && continuesOnSameLine() && lexer.lookahead().type != '=';
+}
+
+// Luwu match expressions: `library.function(args)` on the global `library`, never a local that shadows it
+AstExprCall* Parser::makeGlobalCall(AstName library, std::optional<AstName> function, const Location& location, std::initializer_list<AstExpr*> args)
+{
+    AstExpr* callee = allocator.alloc<AstExprGlobal>(location, library);
+    if (function)
+        callee = allocator.alloc<AstExprIndexName>(location, callee, *function, location, location.begin, '.');
+
+    return allocator.alloc<AstExprCall>(location, callee, copy(args), false, AstArray<AstTypeOrPack>{nullptr, 0}, location);
+}
+
+// Luwu match expressions: the rest of `value is string`, `value is [not] Class` or `value implements Trait`, from the
+// keyword. They mean `type(value) == "string"`, `class.isinstance(value, Class)` and `class.implements(value, Trait)`,
+// and are parsed as those calls, so narrowing and the compiler's fused class checks apply as they do to the calls.
+AstExpr* Parser::parseTypeTest(AstExpr* value, const Location& start)
+{
+    bool implements = AstName(lexer.current().name) == "implements";
+    nextLexeme(); // is / implements
+
+    bool negated = false;
+    if (!implements && lexer.current().type == Lexeme::ReservedNot)
+    {
+        negated = true;
+        nextLexeme();
+    }
+
+    if (std::optional<std::string> tag = implements ? std::nullopt : primitiveTagAt(lexer.current()))
+    {
+        Location tagLocation = lexer.current().location;
+        nextLexeme();
+
+        Location location(start, tagLocation);
+        AstExpr* typeName = allocator.alloc<AstExprConstantString>(tagLocation, copy(*tag), AstExprConstantString::QuoteStyle::Unquoted);
+        AstExprBinary::Op op = negated ? AstExprBinary::CompareNe : AstExprBinary::CompareEq;
+        return allocator.alloc<AstExprBinary>(location, op, makeGlobalCall(nameType, std::nullopt, location, {value}), typeName);
+    }
+
+    AstExpr* type = parseExpr(binaryPriority[AstExprBinary::CompareEq].right);
+    Location location(start, type->location);
+    AstExpr* test = makeGlobalCall(nameClass, implements ? nameImplements : nameIsinstance, location, {value, type});
+
+    return negated ? allocator.alloc<AstExprUnary>(location, AstExprUnary::Op::Not, test) : test;
+}
+
+// Luwu match expressions: `match` starting an expression, followed on its line by the value it tests (or `const` /
+// `local` naming it). `match(x)`, `match "s"` and `match.x` stay calls and indexing.
+bool Parser::matchExpressionFollows()
+{
+    const Lexeme& current = lexer.current();
+    if (!matchExpressionsAvailable() || current.type != Lexeme::Name || AstName(current.name) != "match")
+        return false;
+
+    Lexeme next = lexer.lookahead();
+    bool sameLine = next.location.begin.line == current.location.end.line;
+    bool startsSubject = next.type == Lexeme::Name || next.type == Lexeme::ReservedLocal || next.type == Lexeme::ReservedNot ||
+                         next.type == Lexeme::Number || next.type == Lexeme::ReservedTrue || next.type == Lexeme::ReservedFalse ||
+                         next.type == Lexeme::ReservedNil;
+    return sameLine && startsSubject;
+}
+
+// Luwu match expressions:
+//
+//   match [const name =] value
+//       case pattern [when clause ...] then value
+//       ...
+//       else value
+//
+// is parsed as the `do` expression it means: the subject bound to a local, then an if-else expression with one arm per
+// `case`, each arm's condition the pattern's test of the subject followed by its `when` clauses. Every pass that handles
+// `do` and if-else expressions (scopes, narrowing per arm, the compiler's fused class checks) handles a `match`.
+AstExpr* Parser::parseMatchExpr()
+{
+    Location start = lexer.current().location;
+    nextLexeme(); // match
+
+    unsigned int localsBegin = saveLocals();
+    size_t errorsBefore = parseErrors.size();
+
+    // `match const name = value` names the subject for every arm; otherwise it gets a name nothing can read
+    bool named = lexer.current().type == Lexeme::ReservedLocal || ifBindingFollows();
+    bool isConst = lexer.current().type != Lexeme::ReservedLocal;
+    std::optional<Location> keywordLocation;
+    std::optional<Location> equalsLocation;
+    Binding binding(Name(nameMatched, lexer.current().location));
+
+    if (named)
+    {
+        keywordLocation = lexer.current().location;
+        nextLexeme(); // local / const
+        binding = parseBinding(isConst);
+        if (lexer.current().type == '=')
+            equalsLocation = lexer.current().location;
+        expectAndConsume('=', "match subject");
+    }
+
+    AstExpr* value = parseExpr();
+
+    // A local is tested as itself, so each arm narrows it. Anything else is evaluated once, into the subject's local.
+    AstLocal* subject = nullptr;
+    AstStatLocal* declaration = nullptr;
+    if (AstExprLocal* local = value->as<AstExprLocal>(); local && !named)
+    {
+        subject = local->local;
+    }
+    else
+    {
+        if (!named)
+            binding.name.location = value->location;
+        binding.isConst = true;
+
+        subject = pushLocal(binding);
+        declaration =
+            allocator.alloc<AstStatLocal>(Location(start, value->location), copy({subject}), copy({value}), equalsLocation, true);
+        declaration->keywordLocation = keywordLocation;
+    }
+
+    struct Arm
+    {
+        Location caseLocation;
+        AstExpr* condition = nullptr;
+        AstArray<AstIfClause> clauses{nullptr, 0};
+        std::optional<Location> thenLocation;
+        AstExpr* value = nullptr;
+    };
+    std::vector<Arm> arms;
+
+    while (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "case")
+    {
+        Arm arm;
+        arm.caseLocation = lexer.current().location;
+        nextLexeme(); // case
+
+        // the arm's `when` bindings end with its value
+        unsigned int armLocalsBegin = saveLocals();
+
+        std::vector<AstIfClause> chain;
+        AstIfClause first;
+        first.expr = parseMatchPattern(subject);
+        chain.push_back(first);
+
+        while (whenFollows())
+        {
+            Location whenLocation = lexer.current().location;
+            nextLexeme(); // when
+
+            if (ifBindingFollows())
+            {
+                parseIfBindingClause(chain, whenLocation);
+                continue;
+            }
+
+            AstIfClause clause;
+            clause.expr = parseExpr();
+            clause.whenLocation = whenLocation;
+            chain.push_back(clause);
+        }
+
+        arm.condition = chain.front().expr;
+        if (chain.size() > 1)
+            arm.clauses = copy(chain.data(), chain.size());
+
+        if (lexer.current().type == Lexeme::ReservedThen)
+            arm.thenLocation = lexer.current().location;
+        expectAndConsume(Lexeme::ReservedThen, "match arm");
+        arm.value = parseExpr();
+
+        restoreLocals(armLocalsBegin);
+        arms.push_back(arm);
+    }
+
+    // A name that starts `case` or `else` (`c`, `els`) is the next arm being typed: it gets the arm's error and is
+    // consumed, so its line isn't also an incomplete statement. An unfinished header or arm has already said what's
+    // missing, so it gets no second error.
+    const char* missingArm = arms.empty() ? "Expected 'case' after the value 'match' tests"
+                                          : "A 'match' expression must end with an 'else' arm, so it has a value when no 'case' matches";
+    bool reportMissingArm = parseErrors.size() == errorsBefore;
+    if (const Lexeme& next = lexer.current(); next.type == Lexeme::Name && next.location.begin.line > lexer.previousLocation().end.line)
+    {
+        std::string_view typed = next.name;
+        if (std::string_view("case").substr(0, typed.size()) == typed || std::string_view("else").substr(0, typed.size()) == typed)
+        {
+            if (reportMissingArm)
+                report(next.location, "%s", missingArm);
+            reportMissingArm = false;
+            nextLexeme();
+        }
+    }
+    // with no arms, the missing `case` goes at the end of the line being typed rather than on the next one
+    if (reportMissingArm && arms.empty())
+        report(lexer.previousLocation(), "%s", missingArm);
+
+    AstExpr* result = nullptr;
+    std::optional<Location> elseLocation;
+    if (lexer.current().type == Lexeme::ReservedElse)
+    {
+        elseLocation = lexer.current().location;
+        nextLexeme();
+        result = parseExpr();
+    }
+    else
+    {
+        if (reportMissingArm && !arms.empty())
+            report(start, "%s", missingArm);
+        result = missingValueHere();
+    }
+
+    // the arms, last to first, each with the rest of the chain as its `else`
+    for (size_t i = arms.size(); i-- > 0;)
+    {
+        const Arm& arm = arms[i];
+        AstExprIfElse* node = allocator.alloc<AstExprIfElse>(
+            Location(arm.caseLocation, result->location),
+            arm.condition,
+            arm.thenLocation.has_value(),
+            arm.value,
+            true,
+            result,
+            arm.caseLocation,
+            arm.thenLocation,
+            i + 1 == arms.size() ? elseLocation : std::nullopt
+        );
+        node->clauses = arm.clauses;
+        node->luwuOnly = true;
+        result = node;
+    }
+
+    restoreLocals(localsBegin);
+
+    Location location(start, result->location);
+    AstStatGive* give = allocator.alloc<AstStatGive>(result->location, result);
+    AstStatBlock* body = allocator.alloc<AstStatBlock>(
+        location, declaration ? copy<AstStat*>({declaration, give}) : copy<AstStat*>({give})
+    );
+    AstExprDo* node = allocator.alloc<AstExprDo>(location, body);
+    node->luwuOnly = true;
+    node->fromMatch = true;
+    return node;
+}
+
+// Luwu match expressions: a `case` pattern, alternatives joined by `|`, as a test of the subject
+AstExpr* Parser::parseMatchPattern(AstLocal* subject)
+{
+    AstExpr* test = parseMatchAlternative(subject);
+    while (lexer.current().type == '|')
+    {
+        nextLexeme();
+        AstExpr* next = parseMatchAlternative(subject);
+        test = allocator.alloc<AstExprBinary>(Location(test->location, next->location), AstExprBinary::Or, test, next);
+    }
+
+    return test;
+}
+
+// Luwu match expressions: one alternative of a `case` pattern: a literal compared with the subject, or a type test.
+// A name is never a pattern: it would read as a binding or a comparison, and a `case` is neither.
+AstExpr* Parser::parseMatchAlternative(AstLocal* subject)
+{
+    Location start = lexer.current().location;
+    AstExpr* subjectValue = allocator.alloc<AstExprLocal>(start, subject, false);
+
+    if (isTypeTestKeyword(lexer.current()))
+        return parseTypeTest(subjectValue, start);
+
+    const Lexeme& current = lexer.current();
+    bool literal = current.type == Lexeme::QuotedString || current.type == Lexeme::RawString || current.type == Lexeme::Number ||
+                   current.type == Lexeme::ReservedTrue || current.type == Lexeme::ReservedFalse || current.type == Lexeme::ReservedNil ||
+                   (current.type == '-' && lexer.lookahead().type == Lexeme::Number);
+    if (literal)
+    {
+        AstExpr* value = parseExpr(binaryPriority[AstExprBinary::CompareEq].right);
+        return allocator.alloc<AstExprBinary>(Location(start, value->location), AstExprBinary::CompareEq, subjectValue, value);
+    }
+
+    // still parsed, so the arm after it is too
+    AstExpr* bad = parseExpr(binaryPriority[AstExprBinary::CompareEq].right);
+    return reportExprError(
+        Location(start, bad->location),
+        copy({bad}),
+        "A 'case' pattern is a literal, 'is Type' or 'implements Trait'; to compare with a variable, name the subject "
+        "('match const v = ...') and use 'when v == x'"
+    );
 }
 
 AstExpr* Parser::parseIfElseExpr()
