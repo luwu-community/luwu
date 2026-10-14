@@ -6921,6 +6921,30 @@ return normal_call(), tail_call()
         CHECK(lua_toboolean(L, -2) == 0);
         CHECK(lua_toboolean(L, -1) == 1);
         lua_pop(L, 2);
+
+        // Traceback includes (...tail calls...) for tail call frames
+        std::string tb_test = R"(
+local function err_leaf()
+    error("tail_err")
+end
+local function intermediate()
+    return err_leaf()
+end
+local function top_caller()
+    return intermediate()
+end
+local ok, trace = xpcall(top_caller, function(e)
+    return debug.traceback(e, 1)
+end)
+return ok, trace
+)";
+        CHECK(runSource(tb_test, 2) == LUA_OK);
+        CHECK(lua_toboolean(L, -2) == 0);
+        const char* trace_str = lua_tostring(L, -1);
+        CHECK(strstr(trace_str, "function err_leaf"));
+        CHECK(strstr(trace_str, "(...tail calls...)"));
+        CHECK(!strstr(trace_str, "function intermediate"));
+        lua_pop(L, 2);
     }
 }
 
