@@ -1285,6 +1285,24 @@ static bool isNominalSubclass(const ExternType* cls, const ExternType* parent)
 // visited once.
 static bool implementsTrait(const ExternType* cls, const ExternType* trait)
 {
+    // This runs on every failed nominal subtype test. Most traits need no others, so the ones `cls` implements directly
+    // are checked before setting up the walk.
+    bool anyNeeds = false;
+    for (TypeId implemented : cls->implementedTraits)
+    {
+        const ExternType* implementedCls = get<ExternType>(follow(implemented));
+        if (!implementedCls)
+            continue;
+
+        if (isNominalSubclass(implementedCls, trait))
+            return true;
+
+        anyNeeds |= !implementedCls->implementedTraits.empty();
+    }
+
+    if (!anyNeeds)
+        return false;
+
     std::vector<const ExternType*> pending;
     DenseHashSet<const ExternType*> visited{nullptr};
 
@@ -1350,6 +1368,23 @@ bool isSubclass(const ExternType* cls, const ExternType* parent)
 bool isTraitLike(const ExternType* ty)
 {
     return ty->traitInfo.has_value() || !ty->traitIntersection.empty();
+}
+
+const Property* findNominalMember(const ExternType* type, const Name& name)
+{
+    // props() builds an instantiation's members on first read, so it's read once
+    const ExternType::Props& props = type->props();
+    if (auto it = props.find(name); it != props.end())
+        return &it->second;
+
+    const TableType* metatable = type->metatable ? get<TableType>(follow(*type->metatable)) : nullptr;
+    if (metatable)
+    {
+        if (auto it = metatable->props.find(name); it != metatable->props.end())
+            return &it->second;
+    }
+
+    return nullptr;
 }
 
 

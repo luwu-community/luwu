@@ -684,6 +684,27 @@ do
     end
 end
 
+-- An `expect` field restates the trait parameter of its name, so the parameter has no field of its own: here `x` comes
+-- from PlanBase, after its `z`. Construction compiled in this file writes each field at the slot the runtime gives it,
+-- the same as construction through a class the compiler can't see.
+trait PlanBase
+    z = "z"
+    x = "x"
+end
+trait PlanExpect(x: string) needs PlanBase
+    expect x: string
+end
+class PlanUser implements PlanExpect("arg") end
+do
+    local u = PlanUser()
+    assert(u.x == "x" and u.z == "z", `{u.x} {u.z}`)
+    local unseen = chunk([[trait B z = "z" x = "x" end
+        trait E(x: string) needs B expect x: string end
+        class C implements E("arg") end
+        return C]])()
+    assert(unseen.x == "x" and unseen.z == "z", `{unseen.x} {unseen.z}`)
+end
+
 -- A trait's function overrides the function of a trait it needs: the trait further down the `needs` chain wins, and a
 -- clash with no such order is an error the class settles by defining the function itself
 trait OvBase
