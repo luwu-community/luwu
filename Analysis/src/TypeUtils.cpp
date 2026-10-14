@@ -783,6 +783,17 @@ AstExpr* unwrapGroup(AstExpr* expr)
     return expr;
 }
 
+std::optional<TypeId> rawArrayElement(const TableType& table, NotNull<BuiltinTypes> builtinTypes)
+{
+    if (table.indexer && isNumber(follow(table.indexer->indexType)))
+        return table.indexer->indexResultType;
+
+    if (!table.indexer && table.props.empty())
+        return builtinTypes->neverType;
+
+    return std::nullopt;
+}
+
 bool isOptionalType(TypeId ty, NotNull<BuiltinTypes> builtinTypes)
 {
     ty = follow(ty);

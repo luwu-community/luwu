@@ -2672,12 +2672,8 @@ std::optional<TypeId> TypeChecker2::pushedOrPoppedElement(TypeId containerTy, co
 
     if (const TableType* table = get<TableType>(tableTy))
     {
-        if (table->indexer && isNumber(follow(table->indexer->indexType)))
-            return table->indexer->indexResultType;
-
-        // a table nothing was ever pushed to holds nothing
-        if (!table->indexer && table->props.empty())
-            return builtinTypes->neverType;
+        if (std::optional<TypeId> element = rawArrayElement(*table, builtinTypes))
+            return element;
 
         reportError(
             GenericError{format(

@@ -434,7 +434,13 @@ Lexeme Lexer::lookaheadSecond()
     unsigned int currentLineOffset = lineOffset;
     Lexeme currentLexeme = lexeme;
     Location currentPrevLocation = prevLocation;
-    std::vector<BraceType> currentBraceStack = braceStack;
+
+    // two lexemes can only close the last two braces, or open new ones, so only those are kept
+    size_t currentBraceStackSize = braceStack.size();
+    size_t untouchedBraces = currentBraceStackSize >= 2 ? currentBraceStackSize - 2 : 0;
+    BraceType lastBraces[2] = {BraceType::Normal, BraceType::Normal};
+    for (size_t i = untouchedBraces; i < currentBraceStackSize; ++i)
+        lastBraces[i - untouchedBraces] = braceStack[i];
 
     next();
     Lexeme result = next();
@@ -444,7 +450,10 @@ Lexeme Lexer::lookaheadSecond()
     lineOffset = currentLineOffset;
     lexeme = currentLexeme;
     prevLocation = currentPrevLocation;
-    braceStack = std::move(currentBraceStack);
+
+    braceStack.resize(untouchedBraces);
+    for (size_t i = untouchedBraces; i < currentBraceStackSize; ++i)
+        braceStack.push_back(lastBraces[i - untouchedBraces]);
 
     return result;
 }

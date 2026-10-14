@@ -422,15 +422,14 @@ TypeFunctionReductionResult<TypeId> popTypeFunction(
     if (const MetatableType* metatable = get<MetatableType>(containerTy))
         tableTy = follow(metatable->table);
 
-    if (const TableType* table = get<TableType>(tableTy))
+    const TableType* table = get<TableType>(tableTy);
+    if (std::optional<TypeId> element = table ? rawArrayElement(*table, ctx->builtins) : std::nullopt)
     {
-        if (table->indexer && isNumber(follow(table->indexer->indexType)))
-            return {addUnion(ctx->arena, ctx->builtins, {table->indexer->indexResultType, ctx->builtins->nilType}), Reduction::MaybeOk, {}, {}};
-
-        // nothing has been pushed to a table that's still being built, so popping it gives nil
-        bool growing = table->state == TableState::Unsealed || table->state == TableState::Free;
-        if (!table->indexer && table->props.empty() && growing)
+        // an empty table pops nil
+        if (get<NeverType>(follow(*element)))
             return {ctx->builtins->nilType, Reduction::MaybeOk, {}, {}};
+
+        return {addUnion(ctx->arena, ctx->builtins, {*element, ctx->builtins->nilType}), Reduction::MaybeOk, {}, {}};
     }
 
     return {ctx->builtins->errorType, Reduction::MaybeOk, {}, {}};
