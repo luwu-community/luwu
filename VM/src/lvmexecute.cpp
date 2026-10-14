@@ -143,7 +143,7 @@ LUAU_FLAGVERSION(LuauBackedgeHeapCheck, 2)
         VM_DISPATCH_OP(LOP_NEWCLASSMEMBER), VM_DISPATCH_OP(LOP_CALLFB), VM_DISPATCH_OP(LOP_CMPPROTO), VM_DISPATCH_OP(LOP_CHECKSELFCLASS), \
         VM_DISPATCH_OP(LOP_JUMPXISA), VM_DISPATCH_OP(LOP_NEWOBJECT), \
         VM_DISPATCH_OP(LOP_GETOBJECTMEMBER), VM_DISPATCH_OP(LOP_SETOBJECTMEMBER), VM_DISPATCH_OP(LOP_INITTRAITS), \
-        VM_DISPATCH_OP(LOP_PRESIZETABLE), VM_DISPATCH_OP(LOP_APPENDTABLE),
+        VM_DISPATCH_OP(LOP_PRESIZETABLE), VM_DISPATCH_OP(LOP_APPENDTABLE), VM_DISPATCH_OP(LOP_PUSH), VM_DISPATCH_OP(LOP_POP),
 
 #if defined(__GNUC__) || defined(__clang__)
 #define VM_USE_CGOTO 1
@@ -4101,6 +4101,73 @@ reentry:
                 }
 
                 luaC_barriert(L, h, rb);
+                VM_NEXT();
+            }
+
+            VM_CASE(LOP_PUSH)
+            {
+                // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): `A <+ values`
+                Instruction insn = *pc++;
+                StkId ra = VM_REG(LUAU_INSN_A(insn));
+                StkId rb = &base[LUAU_INSN_B(insn)]; // note: this can point to L->top if c == LUA_MULTRET making VM_REG unsafe to use
+                int c = LUAU_INSN_C(insn) - 1;
+
+                // fast path: one value onto a table without a metatable, with room in its array part
+                if (c == 1 && ttistable(ra) && !hvalue(ra)->metatable)
+                {
+                    LuaTable* h = hvalue(ra);
+
+                    if (ttisnil(rb))
+                        VM_NEXT();
+
+                    int n = luaH_getn(h);
+                    if (!h->readonly && unsigned(n) < unsigned(h->sizearray))
+                    {
+                        setobj2t(L, &h->array[n], rb);
+                        luaC_barriert(L, h, rb);
+                        VM_NEXT();
+                    }
+                }
+
+                // a multret value list ends at L->top, which luaV_push leaves in place so a __push call goes above it
+                if (c == LUA_MULTRET)
+                    c = int(L->top - rb);
+
+                VM_PROTECT(luaV_push(L, ra, rb, c));
+                L->top = L->ci->top;
+                VM_NEXT();
+            }
+
+            VM_CASE(LOP_POP)
+            {
+                // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): `A = <-B`
+                Instruction insn = *pc++;
+                StkId ra = VM_REG(LUAU_INSN_A(insn));
+                StkId rb = VM_REG(LUAU_INSN_B(insn));
+
+                // fast path: a table without a metatable that's empty, or whose last element is in its array part
+                if (ttistable(rb) && !hvalue(rb)->metatable)
+                {
+                    LuaTable* h = hvalue(rb);
+                    int n = luaH_getn(h);
+
+                    if (n == 0)
+                    {
+                        setnilvalue(ra);
+                        VM_NEXT();
+                    }
+
+                    if (!h->readonly && unsigned(n - 1) < unsigned(h->sizearray))
+                    {
+                        // `h` was read before A is written, so A can be B's own register
+                        TValue* slot = &h->array[n - 1];
+                        setobj2s(L, ra, slot);
+                        setnilvalue(slot);
+                        VM_NEXT();
+                    }
+                }
+
+                VM_PROTECT(luaV_pop(L, ra, rb));
                 VM_NEXT();
             }
 

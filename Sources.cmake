@@ -596,6 +596,7 @@ if(TARGET Luwu.UnitTest)
         tests/TypeInfer.generics.test.cpp
         tests/TypeInfer.doExpr.test.cpp
         tests/TypeInfer.tableComprehensions.test.cpp
+        tests/TypeInfer.pushPop.test.cpp
         tests/TypeInfer.ifLocal.test.cpp
         tests/TypeInfer.intersectionTypes.test.cpp
         tests/TypeInfer.docRefs.test.cpp

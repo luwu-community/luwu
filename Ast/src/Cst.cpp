@@ -186,6 +186,13 @@ CstStatCompoundAssign::CstStatCompoundAssign(Position opPosition)
 {
 }
 
+CstStatPush::CstStatPush(Position opPosition, AstArray<Position> valuesCommaPositions)
+    : CstNode(CstClassIndex())
+    , opPosition(opPosition)
+    , valuesCommaPositions(valuesCommaPositions)
+{
+}
+
 CstStatFunction::CstStatFunction(Position functionKeywordPosition)
     : CstNode(CstClassIndex())
     , attrLists({})

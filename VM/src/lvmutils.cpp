@@ -788,6 +788,109 @@ static int rangetripcount(const TValue* limit)
     return trips < LBC_PRESIZE_RANGE_LIMIT ? int(trips) : LBC_PRESIZE_RANGE_LIMIT;
 }
 
+void luaV_push(lua_State* L, StkId container, StkId values, int count)
+{
+    const TValue* tm = luaT_gettmbyobj(L, container, TM_PUSH);
+    if (!ttisnil(tm))
+    {
+        int pushed = 0;
+        for (int i = 0; i < count; i++)
+        {
+            if (!ttisnil(values + i))
+                pushed++;
+        }
+
+        // every value nil: nothing to push, so __push isn't called
+        if (pushed == 0)
+            return;
+
+        // __push, the container, then the non-nil values, above everything the frame and the values use
+        ptrdiff_t containeroffset = savestack(L, container);
+        ptrdiff_t valuesoffset = savestack(L, values);
+        luaD_checkstack(L, pushed + 2);
+        container = restorestack(L, containeroffset);
+        values = restorestack(L, valuesoffset);
+
+        StkId func = L->top;
+        setobj2s(L, func, tm);
+        setobj2s(L, func + 1, container);
+
+        StkId arg = func + 2;
+        for (int i = 0; i < count; i++)
+        {
+            if (!ttisnil(values + i))
+                setobj2s(L, arg++, values + i);
+        }
+
+        L->top = arg;
+        luaD_call(L, func, 0);
+        return;
+    }
+
+    if (!ttistable(container))
+        luaG_typeerror(L, container, "push to");
+
+    // table.insert's semantics: each value goes at the raw length + 1, with a raw set
+    LuaTable* h = hvalue(container);
+    int n = luaH_getn(h);
+    for (int i = 0; i < count; i++)
+    {
+        const TValue* value = values + i;
+        if (ttisnil(value))
+            continue;
+
+        if (h->readonly)
+            luaG_readonlyerror(L);
+
+        TValue* slot = luaH_setnum(L, h, ++n);
+        setobj2t(L, slot, value);
+        luaC_barriert(L, h, value);
+    }
+}
+
+void luaV_pop(lua_State* L, StkId ra, StkId container)
+{
+    const TValue* tm = luaT_gettmbyobj(L, container, TM_POP);
+    if (!ttisnil(tm))
+    {
+        // __pop(container), keeping its first result
+        ptrdiff_t raoffset = savestack(L, ra);
+        ptrdiff_t containeroffset = savestack(L, container);
+        luaD_checkstack(L, 2);
+        container = restorestack(L, containeroffset);
+
+        StkId func = L->top;
+        setobj2s(L, func, tm);
+        setobj2s(L, func + 1, container);
+        L->top = func + 2;
+        luaD_call(L, func, 1);
+
+        ra = restorestack(L, raoffset);
+        L->top--;
+        setobj2s(L, ra, L->top);
+        return;
+    }
+
+    if (!ttistable(container))
+        luaG_typeerror(L, container, "pop from");
+
+    // table.remove's semantics: the element at the raw length, read and cleared raw; an empty table pops nil
+    LuaTable* h = hvalue(container);
+    int n = luaH_getn(h);
+    if (n == 0)
+    {
+        setnilvalue(ra);
+        return;
+    }
+
+    if (h->readonly)
+        luaG_readonlyerror(L);
+
+    // `ra` can be the container's own register, so `h` is read before it's overwritten
+    setobj2s(L, ra, luaH_getnum(h, n));
+    setnilvalue(luaH_setnum(L, h, n));
+}
+
 void luaV_presizetable(lua_State* L, LuaTable* t, const TValue* rb, int form)
 {
     switch (form)

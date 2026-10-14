@@ -272,6 +272,15 @@ struct AssignIndexConstraint
     TypeId propType;
 };
 
+// Luwu Push and Pop Operators (rfcs/push-pop-operators.md): `container <+ values`. Once the container's type is known,
+// a plain table gets one AssignIndexConstraint per value at a number index, so `const t = {}; t <+ 1` grows `t` an
+// indexer like `t[1] = 1` would. Anything else is left to TypeChecker2, which checks it against its `__push`.
+struct PushConstraint
+{
+    TypeId containerType;
+    TypePackId valuesPack;
+};
+
 // resultTypes ~ unpack sourceTypePack
 //
 // Similar to PackSubtypeConstraint, but with one important difference: If the
@@ -388,6 +397,7 @@ using ConstraintV = Variant<
     HasIndexerConstraint,
     AssignPropConstraint,
     AssignIndexConstraint,
+    PushConstraint,
     UnpackConstraint,
     ReduceConstraint,
     ReducePackConstraint,

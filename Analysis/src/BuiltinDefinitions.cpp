@@ -15,6 +15,7 @@
 #include "Luau/Subtyping.h"
 #include "Luau/Symbol.h"
 #include "Luau/Type.h"
+#include "Luau/StringUtils.h"
 #include "Luau/TypeChecker2.h"
 #include "Luau/TypeFunction.h"
 #include "Luau/TypeInfer.h"
@@ -1526,6 +1527,67 @@ std::optional<WithPredicate<TypePackId>> MagicSetMetatable::handleOldSolver(
     }
 
     return WithPredicate<TypePackId>{arena.addTypePack({target})};
+}
+
+// Luwu: the metamethods a metatable is read for. Each is looked up on the metatable itself, never through its `__index`.
+static constexpr const char* kMetamethods[] = {
+    "__add",     "__sub",  "__mul",      "__div",  "__idiv", "__mod", "__pow", "__unm",  "__concat", "__eq",  "__lt",
+    "__le",      "__len",  "__call",     "__iter", "__tostring", "__newindex", "__metatable", "__mode", "__push", "__pop",
+};
+
+// Luwu: `setmetatable(t, { __index = methods })` where `methods` defines `__push` or `__tostring`: the VM looks those up
+// on the metatable itself, so they never run from `__index`. A methods table with its own `__index` is itself a
+// metatable (`Base.__index = Base` for inheritance), and its metamethods are meant for it, so it isn't reported.
+static void reportMetamethodsOnIndex(const MagicFunctionTypeCheckContext& context)
+{
+    auto it = begin(context.arguments);
+    if (it == end(context.arguments) || ++it == end(context.arguments))
+        return;
+
+    const TableType* metatable = get<TableType>(follow(*it));
+    if (!metatable)
+        return;
+
+    auto index = metatable->props.find("__index");
+    if (index == metatable->props.end() || !index->second.readTy)
+        return;
+
+    const TableType* methods = get<TableType>(follow(*index->second.readTy));
+    if (!methods || methods->props.count("__index"))
+        return;
+
+    // the `__index = ...` value when the metatable is written at the call, or else the metatable
+    Location location = context.callSite->location;
+    if (context.callSite->args.size >= 2)
+    {
+        AstExpr* metatableExpr = context.callSite->args.data[1];
+        location = metatableExpr->location;
+        if (AstExprTable* literal = metatableExpr->as<AstExprTable>())
+        {
+            for (const AstExprTable::Item& item : literal->items)
+            {
+                AstExprConstantString* key = item.key ? item.key->as<AstExprConstantString>() : nullptr;
+                if (key && std::string_view(key->value.data, key->value.size) == "__index")
+                    location = item.value->location;
+            }
+        }
+    }
+
+    // one the metatable also has is a method that shares the metamethod's code, which is fine
+    for (const char* name : kMetamethods)
+    {
+        if (methods->props.count(name) && !metatable->props.count(name))
+            context.typechecker->reportError(
+                GenericError{format("Metamethod '%s' should go directly on the metatable, not on __index", name)}, location
+            );
+    }
+}
+
+bool MagicSetMetatable::typeCheck(const MagicFunctionTypeCheckContext& context)
+{
+    reportMetamethodsOnIndex(context);
+    // the call is still checked as usual
+    return false;
 }
 
 bool MagicSetMetatable::infer(const MagicFunctionCallContext&)
