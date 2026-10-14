@@ -124,6 +124,10 @@ TEST_CASE_FIXTURE(Fixture, "match_mistakes_get_one_error")
                  "('match const v = ...') and use 'when v == x'",
              },
              Case{
+                 "local x = 1\nmatch x\n    case 1 then print('one')\n    case 2 then print('two')\nprint(x)\n",
+                 "'match' only supports expressions, use an 'if' statement instead",
+             },
+             Case{
                  "local x = 1\nlocal y = match x\n    c\nprint(y)\n",
                  "Expected 'case' after the value 'match' tests",
              },
