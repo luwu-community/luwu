@@ -1783,4 +1783,22 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "overload_concat")
     LUAU_CHECK_NO_ERRORS(result);
 }
 
+// Luwu: what a `~=` refinement leaves of a string (`string & ~"p"`) is still a string, with string's metatable, so
+// comparing it with a string isn't a metatable mismatch
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_refined_string_compares_with_strings")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    CheckResult result = check(R"(
+        local function f(x: string): boolean
+            if x ~= "p" and x ~= "q" then
+                return x == "p" or x == "r"
+            end
+            return false
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
 TEST_SUITE_END();
