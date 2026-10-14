@@ -316,8 +316,10 @@ private:
     {
         Allocator& allocator = *sourceModule.allocator;
 
-        char* chars = static_cast<char*>(allocator.allocate(path.size()));
+        // NUL-terminated like the strings the parser makes, which embedders' resolvers may rely on
+        char* chars = static_cast<char*>(allocator.allocate(path.size() + 1));
         std::copy(path.begin(), path.end(), chars);
+        chars[path.size()] = '\0';
         AstExpr* argument = allocator.alloc<AstExprConstantString>(
             location, AstArray<char>{chars, path.size()}, AstExprConstantString::QuoteStyle::QuotedSimple
         );
