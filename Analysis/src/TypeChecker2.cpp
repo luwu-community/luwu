@@ -1,5 +1,6 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/TypeChecker2.h"
+#include "Luau/UnreachableProof.h"
 
 #include "Luau/Ast.h"
 #include "Luau/AstUtils.h"
@@ -101,6 +102,17 @@ struct TypeChecker2::DeclarationIndex
     // they aren't using.
     std::unordered_map<AstName, AstStatTypeAlias*> aliases;
 
+    // Where a local gets its type: the declaring statement (a parameter's annotation), and the value given to it
+    struct LocalSource
+    {
+        Location range;
+        AstExpr* value = nullptr;
+    };
+    std::unordered_map<const AstLocal*, LocalSource> locals;
+
+    // A `local function`'s return annotation
+    std::unordered_map<const AstLocal*, AstTypePack*> returnAnnotations;
+
     static uint64_t key(const Position& position)
     {
         return (uint64_t(position.line) << 32) | position.column;
@@ -134,6 +146,33 @@ struct DeclarationCollector : AstVisitor
     bool visit(AstExprFunction* fn) override
     {
         index.functions.emplace(TypeChecker2::DeclarationIndex::key(fn->location.begin), fn);
+        for (AstLocal* arg : fn->args)
+            index.locals[arg] = {arg->annotation ? arg->annotation->location : arg->location, nullptr};
+        return true;
+    }
+
+    bool visit(AstStatLocalFunction* function) override
+    {
+        if (function->func->returnAnnotation)
+            index.returnAnnotations[function->name] = function->func->returnAnnotation;
+        return true;
+    }
+
+    bool visit(AstStatLocal* local) override
+    {
+        for (size_t i = 0; i < local->vars.size; ++i)
+            index.locals[local->vars.data[i]] = {local->location, i < local->values.size ? local->values.data[i] : nullptr};
+        return true;
+    }
+
+    bool visit(AstStatForIn* forIn) override
+    {
+        if (forIn->values.size != 0)
+        {
+            Location values{forIn->values.data[0]->location, forIn->values.data[forIn->values.size - 1]->location};
+            for (AstLocal* var : forIn->vars)
+                index.locals[var] = {values, nullptr};
+        }
         return true;
     }
 
@@ -424,14 +463,17 @@ void check(
     NotNull<TypeCheckLimits> limits,
     DcrLogger* logger,
     const SourceModule& sourceModule,
-    Module* module
+    Module* module,
+    Helpifier helpifier
 )
 {
     LUAU_TIMETRACE_SCOPE("check", "Typechecking");
 
     TypeChecker2 typeChecker{builtinTypes, typeFunctionRuntime, unifierState, limits, logger, &sourceModule, module};
+    typeChecker.helpifier = helpifier;
 
     typeChecker.visit(sourceModule.root);
+    typeChecker.reportNoTypeNotes();
 
     unfreeze(module->interfaceTypes);
     copyErrors(module->errors, module->interfaceTypes, builtinTypes);
@@ -2054,6 +2096,11 @@ void TypeChecker2::visit(AstExprConstantString* expr)
 void TypeChecker2::visit(AstExprLocal* expr)
 {
     // TODO!
+
+    // Luwu: each use of a local with an error type gets a note pointing at the error (reportNoTypeNotes). Not
+    // `lookupType`, which can report errors of its own.
+    if (TypeId* ty = module->astTypes.find(expr); ty && get<ErrorType>(follow(*ty)))
+        noTypeUses.push_back(expr);
 }
 
 void TypeChecker2::visit(AstExprGlobal* expr)
@@ -2201,7 +2248,8 @@ void TypeChecker2::visitCall(AstExprCall* call)
     TypeId fnTy = follow(*originalCallTy);
 
 
-    if (get<AnyType>(fnTy) || get<ErrorType>(fnTy) || get<NeverType>(fnTy))
+    // Luwu: calling `never` or an error type is reported (reportImproperUse); upstream returns here for both.
+    if (reportImproperUse(call->func, fnTy, ImproperUse::Call) || get<AnyType>(fnTy))
         return;
     else if (isOptional(fnTy))
     {
@@ -2450,7 +2498,7 @@ void TypeChecker2::visitCall(AstExprCall* call)
                                               toString(wantedTp, options) + "', but was given '" + toString(givenTp, options) + "'";
 
                         std::optional<MismatchExplanation> explanation =
-                            explainMismatch(given->ty, wanted->ty, subtyping, scope, builtinTypes, std::nullopt, "passed");
+                            explainMismatch(given->ty, wanted->ty, subtyping, scope, builtinTypes, std::nullopt, "passed", std::nullopt, helpifier);
                         if (explanation && !explanation->standalone)
                             message += explanation->reason;
 
@@ -2553,8 +2601,21 @@ void TypeChecker2::visitCall(AstExprCall* call)
     if (!result2.nonFunctions.empty())
     {
         auto norm = normalizer.normalize(fnTy);
-        if (!norm || normalizer.isInhabited(norm.get()) == NormalizationResult::HitLimits)
+        // Luwu: upstream reports this and then reads `norm` below anyway, dereferencing null. Normalizing can fail here
+        // though `shouldSuppressErrors` normalized the same type above: the normalizer may have cleared its cache since.
+        if (!norm)
+        {
             reportError(NormalizationTooComplex{}, call->func->location);
+            return;
+        }
+        if (normalizer.isInhabited(norm.get()) == NormalizationResult::HitLimits)
+            reportError(NormalizationTooComplex{}, call->func->location);
+        // Luwu: a `never` the normalizer had to work out (`number & ~number`). Upstream reports it can't be called.
+        if (isUninhabited(norm.get()))
+        {
+            reportUnreachableUse(call->func, ImproperUse::Call);
+            return;
+        }
         // At this point norm is non-null and inhabited.
         if (!norm->shouldSuppressErrors())
             reportError(CannotCallNonFunction{fnTy}, call->func->location);
@@ -2838,7 +2899,13 @@ void TypeChecker2::visitExprName(AstExpr* expr, Location location, const std::st
 {
     visit(expr, ValueContext::RValue);
     TypeId leftType = stripFromNilAndReport(lookupType(expr), location);
-    checkIndexTypeFromType(leftType, propName, context, location, astIndexExprTy);
+    if (reportImproperUse(expr, leftType, ImproperUse::Index))
+        return;
+    if (checkIndexTypeFromType(leftType, propName, context, location, astIndexExprTy))
+    {
+        reportUnreachableUse(expr, ImproperUse::Index);
+        return;
+    }
     const bool readsConstructor = checkConstructorReadByName(leftType, propName, context, location);
     if (!readsConstructor)
         checkPrivatePropertyAccess(leftType, propName, location);
@@ -2885,6 +2952,9 @@ void TypeChecker2::visit(AstExprIndexExpr* indexExpr, ValueContext context)
 
     TypeId exprType = follow(lookupType(indexExpr->expr));
     TypeId indexType = follow(lookupType(indexExpr->index));
+
+    if (reportImproperUse(indexExpr->expr, exprType, ImproperUse::Index))
+        return;
 
     if (auto tt = get<TableType>(exprType))
     {
@@ -2942,7 +3012,14 @@ void TypeChecker2::visit(AstExprIndexExpr* indexExpr, ValueContext context)
     {
         // if any of the typeArguments are a table type, the intersection must be a table, and so we shouldn't error.
         if (!std::any_of(begin(it), end(it), getTableType))
-            reportError(NotATable{exprType}, indexExpr->location);
+        {
+            // Luwu: an intersection with nothing in it (`number & ~number`) is `never`. Upstream says it isn't a table.
+            std::shared_ptr<const NormalizedType> norm = normalizer.normalize(exprType);
+            if (norm && isUninhabited(norm.get()))
+                reportUnreachableUse(indexExpr->expr, ImproperUse::Index);
+            else
+                reportError(NotATable{exprType}, indexExpr->location);
+        }
     }
     else if (get<NeverType>(exprType) || isErrorSuppressing(indexExpr->location, exprType))
     {
@@ -3173,6 +3250,21 @@ void TypeChecker2::reportPropertyTypos(AstExprTable* expr)
 
     const TableType* table = get<TableType>(expected);
     if (!table || table->indexer)
+        return;
+
+    // This runs for every table literal with an expected table type. Most write only properties the type has.
+    bool writesUnknownProperty = false;
+    for (const AstExprTable::Item& item : expr->items)
+    {
+        std::optional<std::string> name = literalPropertyName(item);
+        if (name && !table->props.count(*name))
+        {
+            writesUnknownProperty = true;
+            break;
+        }
+    }
+
+    if (!writesUnknownProperty)
         return;
 
     std::unordered_set<std::string> written;
@@ -3682,6 +3774,12 @@ TypeId TypeChecker2::visit(AstExprBinary* expr, AstNode* overrideKey)
 
 void TypeChecker2::visit(AstExprTypeAssertion* expr)
 {
+    AstExpr* operand = expr->expr;
+    while (AstExprGroup* group = operand->as<AstExprGroup>())
+        operand = group->expr;
+    if (AstExprLocal* local = operand->as<AstExprLocal>())
+        noTypeUsesCast.insert(local);
+
     visit(expr->expr, ValueContext::RValue);
     visit(expr->annotation);
 
@@ -4802,7 +4900,7 @@ static std::optional<ReadWriteMismatch> findReadWriteMismatch(
     return mismatch;
 }
 
-static ReadWriteExplanation wordReadWriteMismatch(const ReadWriteMismatch& mismatch)
+static ReadWriteExplanation wordReadWriteMismatch(const ReadWriteMismatch& mismatch, const Helpifier& helpifier)
 {
     auto quote = [](const std::string& s)
     {
@@ -4825,9 +4923,11 @@ static ReadWriteExplanation wordReadWriteMismatch(const ReadWriteMismatch& misma
     // being marked rather than as the thing doing the reading. This line is only ever reported for a
     // call argument, so the reader is always the callee.
     const std::string reader = hasFunction ? function : "the function";
-    std::string parameterHelp = isProperty
-                                    ? "Help[read/write mismatch]: consider marking " + property + " as 'read' if " + reader + " only reads from it."
-                                    : "Help[read/write mismatch]: consider marking this as 'read' if " + reader + " only reads from the " + noun + ".";
+    std::string parameterHelp = helpifier(
+        "read/write mismatch",
+        {isProperty ? "Consider marking " + property + " as 'read' if " + reader + " only reads from it"
+                    : "Consider marking this as 'read' if " + reader + " only reads from the " + noun}
+    );
 
     // A union member the given type never admitted -- `nil` most often, but any of them. Nothing is lost,
     // one disallowed value could simply be written in, so the help is to mark it `read` or cast.
@@ -4857,9 +4957,13 @@ static ReadWriteExplanation wordReadWriteMismatch(const ReadWriteMismatch& misma
                           " are allowed; doing so would allow 'nil' to be written into it.";
         }
 
-        message += "\n\nHelp[read/write mismatch]:\n- annotate " + (isProperty ? property : std::string("the expected indexer")) +
-                   " as 'read' if nothing writes to it\n- cast this " + (isProperty ? std::string() : noun + " ") + "to " + wantedContainer +
-                   " if you know " + writtenValue + " will not be written to it";
+        helpifier.appendTo(
+            message,
+            "read/write mismatch",
+            {"Annotate " + (isProperty ? property : std::string("the expected indexer")) + " as 'read' if nothing writes to it",
+             "Cast this " + (isProperty ? std::string() : noun + " ") + "to " + wantedContainer + " if you know " + writtenValue +
+                 " will not be written to it"}
+        );
 
         return ReadWriteExplanation{std::move(message), std::move(parameterHelp), mismatch.parameterHelpPath};
     }
@@ -4879,10 +4983,13 @@ static ReadWriteExplanation wordReadWriteMismatch(const ReadWriteMismatch& misma
 
         message = "Expected property " + property + " to allow reading and writing as " + wanted + ", but in " + givenContainer + " it is a " +
                   given + ", which can only be read as " + wanted + ". Because " + canReadWrite + ", " + replaced +
-                  " a value of a smaller type, causing data loss.\n\n"
-                  "Help[read/write mismatch]:\n- if " +
-                  nothingWrites + ", mark it as " + annotation + " in " + wantedContainer + "\n- if it reads and writes, make a " + wanted +
-                  " version of your data" + passTail + " or mark the additional properties as optional";
+                  " a value of a smaller type, causing data loss.";
+        helpifier.appendTo(
+            message,
+            "read/write mismatch",
+            {"If " + nothingWrites + ", mark it as " + annotation + " in " + wantedContainer,
+             "If it reads and writes, make a " + wanted + " version of your data" + passTail + " or mark the additional properties as optional"}
+        );
     }
     else
     {
@@ -4895,10 +5002,13 @@ static ReadWriteExplanation wordReadWriteMismatch(const ReadWriteMismatch& misma
         message = "Expected this to be " + wantedContainer + ", " + article + noun + " that can read and write " + wanted + ", but got " +
                   givenContainer + ", " + article + noun + " that is only allowed to read " + wanted + " through its " + given + " " + plural +
                   ". Because " + canReadWrite + ", it can silently replace its " + plural +
-                  " with those of a smaller type, causing data loss.\n\n"
-                  "Help[read/write mismatch]:\n- if " +
-                  nothingWrites + ", annotate " + annotated + " as " + annotation + "\n- if it reads and writes, make " + wanted +
-                  " versions of your data" + passTail + " or mark the additional properties as optional";
+                  " with those of a smaller type, causing data loss.";
+        helpifier.appendTo(
+            message,
+            "read/write mismatch",
+            {"If " + nothingWrites + ", annotate " + annotated + " as " + annotation,
+             "If it reads and writes, make " + wanted + " versions of your data" + passTail + " or mark the additional properties as optional"}
+        );
     }
 
     return ReadWriteExplanation{std::move(message), std::move(parameterHelp), mismatch.parameterHelpPath};
@@ -4913,7 +5023,8 @@ static std::optional<ReadWriteExplanation> explainReadOnlyWouldSatisfy(
     NotNull<BuiltinTypes> builtinTypes,
     NotNull<TypeArena> arena,
     bool isArgument,
-    const std::string& functionName
+    const std::string& functionName,
+    const Helpifier& helpifier
 )
 {
     std::optional<ReadWriteMismatch> mismatch = findReadWriteMismatch(subTy, superTy, result, subtyping, scope, builtinTypes, arena);
@@ -4922,7 +5033,7 @@ static std::optional<ReadWriteExplanation> explainReadOnlyWouldSatisfy(
 
     mismatch->isArgument = isArgument;
     mismatch->functionName = functionName;
-    return wordReadWriteMismatch(*mismatch);
+    return wordReadWriteMismatch(*mismatch, helpifier);
 }
 
 // Luwu (helpful subtyping errors): a callback is passed somewhere that will call it with any `Widget`, and it
@@ -5134,14 +5245,14 @@ void TypeChecker2::explainError(
     const std::string calleeName = argumentContext ? calleeDisplayName(argumentContext->callee) : std::string{};
 
     if (std::optional<ReadWriteExplanation> readWrite = explainReadOnlyWouldSatisfy(
-            subTy, superTy, result, subtyping, scope, builtinTypes, subtyping->arena, argumentContext.has_value(), calleeName
+            subTy, superTy, result, subtyping, scope, builtinTypes, subtyping->arena, argumentContext.has_value(), calleeName, helpifier
         ))
     {
         reportWithMessage(std::move(readWrite->message));
 
         // The value is at the call, but the annotation to change is at the parameter, which can be pages
-        // away. Say so where the edit actually happens, or nowhere if that place can't be found.
-        if (argumentContext)
+        // away. Say so where the edit actually happens, or nowhere if that place can't be found or help is off.
+        if (argumentContext && !readWrite->parameterHelp.empty())
         {
             const DeclarationIndex& declarations = getDeclarationIndex();
             AstType* annotation = parameterAnnotation(argumentContext->calleeType, argumentContext->parameterIndex, module->name, declarations);
@@ -5195,7 +5306,7 @@ void TypeChecker2::explainError(
         if (!variable)
             variable = destinationName(*sourceModule, location);
 
-        explanation = explainMismatch(subTy, superTy, subtyping, scope, builtinTypes, callee, arrival, variable);
+        explanation = explainMismatch(subTy, superTy, subtyping, scope, builtinTypes, callee, arrival, variable, helpifier);
     }
 
     if (explanation && explanation->typo)
@@ -5903,7 +6014,7 @@ PropertyTypes TypeChecker2::lookupProp(
 }
 
 
-void TypeChecker2::checkIndexTypeFromType(
+bool TypeChecker2::checkIndexTypeFromType(
     TypeId tableTy,
     const std::string& prop,
     ValueContext context,
@@ -5915,20 +6026,25 @@ void TypeChecker2::checkIndexTypeFromType(
     if (!norm)
     {
         reportError(NormalizationTooComplex{}, location);
-        return;
+        return false;
     }
 
     // if the type is error suppressing, we don't actually have any work left to do.
     if (norm->shouldSuppressErrors())
-        return;
+        return false;
 
     std::vector<TypeError> dummy;
     const auto propTypes = lookupProp(norm.get(), prop, context, location, astIndexExprType, module->errors);
 
+    // Luwu: nothing in the type has the property or lacks it, which happens when there's nothing in the type at all
+    bool foundNothing = !propTypes.foundOneProp() && !propTypes.foundMissingProp();
+    if (foundNothing && isUninhabited(norm.get()))
+        return true;
+
     if (propTypes.foundMissingProp())
     {
         if (propTypes.foundOneProp())
-            reportError(MissingUnionProperty{tableTy, propTypes.missingProp, prop}, location);
+            reportError(MissingUnionProperty{tableTy, propTypes.missingProp, prop, helpifier.enabled}, location);
         // For class LValues, we don't want to report an extension error,
         // because extern typeArguments come into being with full knowledge of their
         // shape. We instead want to report the unknown property error of
@@ -5961,6 +6077,8 @@ void TypeChecker2::checkIndexTypeFromType(
         else
             reportError(UnknownProperty{tableTy, prop}, location);
     }
+
+    return false;
 }
 
 PropertyType TypeChecker2::hasIndexTypeFromType(
@@ -6232,6 +6350,272 @@ void TypeChecker2::diagnoseMissingTableKey(UnknownProperty* utk, TypeErrorData& 
 
     if (!candidates.empty())
         data = TypeErrorData(UnknownPropButFoundLikeProp{utk->table, utk->key, std::move(candidates)});
+}
+
+// Luwu: `x` for `x`, `(x)` and `x.y.z`, `x[k]` or `x.f()`: the local a use is read through
+static const AstExprLocal* rootLocal(AstExpr* expr)
+{
+    while (true)
+    {
+        if (AstExprGroup* group = expr->as<AstExprGroup>())
+            expr = group->expr;
+        else if (AstExprIndexName* indexName = expr->as<AstExprIndexName>())
+            expr = indexName->expr;
+        else if (AstExprIndexExpr* indexExpr = expr->as<AstExprIndexExpr>())
+            expr = indexExpr->expr;
+        else if (AstExprCall* call = expr->as<AstExprCall>())
+            expr = call->func;
+        else
+            return expr->as<AstExprLocal>();
+    }
+}
+
+// Luwu: `x` for `x` and `(x)`
+static const AstExprLocal* asLocal(AstExpr* expr)
+{
+    return unwrapGroup(expr)->as<AstExprLocal>();
+}
+
+bool TypeChecker2::isUninhabited(const NormalizedType* norm)
+{
+    return normalizer.isInhabited(norm) == NormalizationResult::False;
+}
+
+bool TypeChecker2::reportImproperUse(AstExpr* subject, TypeId subjectType, ImproperUse use)
+{
+    TypeId ty = follow(subjectType);
+    bool noType = get<ErrorType>(ty) != nullptr;
+    if (!noType && !get<NeverType>(ty))
+        return false;
+
+    if (!noType)
+    {
+        reportUnreachableUse(subject, use);
+        return true;
+    }
+
+    // An error type that isn't a local's comes from an error in the expression itself (`require("missing").x`), which
+    // is already reported. A use through a local that was reported (`stdio.write()` after `stdio.write`) is the same
+    // mistake.
+    const AstExprLocal* local = asLocal(subject);
+    const AstExprLocal* root = rootLocal(subject);
+    bool alreadyReported = root && improperlyUsedLocals.contains(root->local);
+    if (!local || alreadyReported)
+        return true;
+
+    improperlyUsedLocals.insert(local->local);
+
+    // Locals with no type because of the same one are one cascade: the rest of their uses get notes
+    NoTypeCause cause = noTypeCause(local->local);
+    if (noTypeRootsReported.contains(cause.root))
+        return true;
+    noTypeRootsReported.insert(cause.root);
+
+    noTypeUsesReported.insert(local);
+    reportError(NoTypeUse{use, local->local->name.value, cause.origin, helpifier.enabled}, local->location);
+    return true;
+}
+
+void TypeChecker2::reportUnreachableUse(AstExpr* subject, ImproperUse use)
+{
+    // Each local is reported once, its first use and uses through it (`x.y` after `x`) alike: the code after the first
+    // is just as unreachable, or just as unchecked
+    const AstExprLocal* root = rootLocal(subject);
+    if (root && improperlyUsedLocals.contains(root->local))
+        return;
+    if (root)
+        improperlyUsedLocals.insert(root->local);
+
+    // An error in its declaration (a parameter "reduced to never") already says why it's `never`
+    const AstExprLocal* local = asLocal(subject);
+    if (local && declarationError(local->local))
+        return;
+
+    // Only a local's declaration can say for sure that the code can't run; `self.dave` being `never` can't
+    std::optional<UnreachableCodeUse::Reason> reason = local ? unreachableReason(local) : std::nullopt;
+    std::string name = bindingName(subject).value_or("");
+    reportError(
+        UnreachableCodeUse{use, std::move(name), reason.value_or(UnreachableCodeUse::Reason::PossibleTypeBug), helpifier.enabled},
+        subject->location
+    );
+}
+
+std::optional<UnreachableCodeUse::Reason> TypeChecker2::unreachableReason(const AstExprLocal* use)
+{
+    const AstLocal* local = use->local;
+    std::optional<TypeId> declared;
+    AstExpr* value = nullptr;
+    if (local->annotation)
+    {
+        declared = follow(lookupAnnotation(local->annotation));
+    }
+    else
+    {
+        const DeclarationIndex& declarations = getDeclarationIndex();
+        auto it = declarations.locals.find(local);
+        value = it != declarations.locals.end() ? it->second.value : nullptr;
+        if (value)
+            declared = follow(lookupType(value));
+    }
+
+    if (!declared)
+        return std::nullopt;
+
+    // A `never` value that isn't a call's or a cast's comes from inference (an unannotated parameter used before), which
+    // the reader can't point at
+    if (get<NeverType>(*declared))
+    {
+        if (local->annotation)
+            return UnreachableCodeUse::Reason::DeclaredNever;
+        if (value && value->is<AstExprCall>())
+            return UnreachableCodeUse::Reason::NeverReturningCall;
+        if (value && value->is<AstExprTypeAssertion>())
+            return UnreachableCodeUse::Reason::CastToNever;
+        return std::nullopt;
+    }
+
+    // Declared with a type that can exist, it's unreachable when the checks before the use rule out every member of
+    // that type on their own. When they don't, the solver's refinements made it `never`, which may be a bug.
+    if (provesUnreachable(*sourceModule, use, *declared))
+        return UnreachableCodeUse::Reason::NarrowedAway;
+    return std::nullopt;
+}
+
+std::optional<Location> TypeChecker2::firstErrorIn(const Location& range)
+{
+    for (const TypeError& error : module->errors)
+    {
+        bool isUse = get<NoTypeUse>(error) || get<UnreachableCodeUse>(error);
+        if (!isUse && error.moduleName == module->name && range.encloses(error.location))
+            return error.location;
+    }
+    return std::nullopt;
+}
+
+// How many aliases deep an annotation's error is looked for (`type A = B`, `type B = Nope`)
+static constexpr size_t kMaxAliasChain = 8;
+
+std::optional<Location> TypeChecker2::annotationError(AstNode* annotation)
+{
+    // The names an annotation refers to without a module prefix
+    struct NameFinder : AstVisitor
+    {
+        std::vector<AstName> names;
+
+        bool visit(AstType*) override
+        {
+            return true;
+        }
+
+        bool visit(AstTypePack*) override
+        {
+            return true;
+        }
+
+        bool visit(AstTypeReference* reference) override
+        {
+            if (!reference->prefix)
+                names.push_back(reference->name);
+            return true;
+        }
+    };
+
+    if (std::optional<Location> origin = firstErrorIn(annotation->location))
+        return origin;
+
+    const DeclarationIndex& declarations = getDeclarationIndex();
+    std::vector<AstName> visited;
+    NameFinder finder;
+    annotation->visit(&finder);
+    for (size_t depth = 0; depth < kMaxAliasChain && !finder.names.empty(); ++depth)
+    {
+        std::vector<AstName> names = std::move(finder.names);
+        finder.names.clear();
+        for (AstName name : names)
+        {
+            AstStatTypeAlias* alias = declarations.aliasNamed(name);
+            if (!alias || std::find(visited.begin(), visited.end(), name) != visited.end())
+                continue;
+            visited.push_back(name);
+
+            if (std::optional<Location> origin = firstErrorIn(alias->location))
+                return origin;
+            alias->type->visit(&finder);
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<Location> TypeChecker2::declarationError(const AstLocal* local)
+{
+    if (std::optional<Location>* cached = declarationErrors.find(local))
+        return *cached;
+
+    std::optional<Location> origin;
+    const DeclarationIndex& declarations = getDeclarationIndex();
+    if (auto it = declarations.locals.find(local); it != declarations.locals.end())
+        origin = firstErrorIn(it->second.range);
+
+    declarationErrors[local] = origin;
+    return origin;
+}
+
+// How many locals with no type a cause is followed through (`local b = a.x`, `local c = b.y`, ...)
+static constexpr size_t kMaxNoTypeChain = 16;
+
+TypeChecker2::NoTypeCause TypeChecker2::noTypeCause(const AstLocal* local, size_t depth)
+{
+    if (NoTypeCause* cached = noTypeCauses.find(local))
+        return *cached;
+
+    NoTypeCause cause{declarationError(local), local};
+    const DeclarationIndex& declarations = getDeclarationIndex();
+    auto it = declarations.locals.find(local);
+    bool searchUses = !cause.origin && depth < kMaxNoTypeChain && it != declarations.locals.end();
+    if (searchUses)
+    {
+        // Its declaration was checked before its uses, so a use of another local with no type there is already recorded
+        for (const AstExprLocal* use : noTypeUses)
+        {
+            if (use->local != local && it->second.range.encloses(use->location))
+            {
+                cause = noTypeCause(use->local, depth + 1);
+                break;
+            }
+        }
+    }
+
+    // `local x: Result`, or `local x = get()` with `get(): Result`, where the error is in `Result`'s declaration
+    if (searchUses && !cause.origin && local->annotation)
+        cause.origin = annotationError(local->annotation);
+
+    AstExprCall* call = searchUses && !cause.origin && it->second.value ? it->second.value->as<AstExprCall>() : nullptr;
+    AstExprLocal* callee = call ? call->func->as<AstExprLocal>() : nullptr;
+    auto returnAnnotation = callee ? declarations.returnAnnotations.find(callee->local) : declarations.returnAnnotations.end();
+    if (returnAnnotation != declarations.returnAnnotations.end())
+    {
+        if (std::optional<Location> origin = annotationError(returnAnnotation->second))
+            cause = {origin, callee->local};
+    }
+
+    noTypeCauses[local] = cause;
+    return cause;
+}
+
+void TypeChecker2::reportNoTypeNotes()
+{
+    for (const AstExprLocal* use : noTypeUses)
+    {
+        if (noTypeUsesReported.contains(use) || noTypeUsesCast.contains(use))
+            continue;
+
+        // A note points at the error behind the missing type; with none found it would only say the type is missing
+        std::optional<Location> origin = noTypeCause(use->local).origin;
+        if (!origin)
+            continue;
+
+        module->notes.push_back({use->location, noTypeNote(use->local->name.value, origin), origin});
+    }
 }
 
 bool TypeChecker2::isErrorSuppressing(Location loc, TypeId ty)

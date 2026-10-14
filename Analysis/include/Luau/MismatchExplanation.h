@@ -89,7 +89,9 @@ std::optional<MismatchExplanation> explainMismatch(
     std::string_view arrival = "given",
     // The variable the given value was read from, when it's that simple: paths are rooted at its name
     // (`leaving.kind`) rather than at the generic `given`.
-    std::optional<std::string> variable = std::nullopt
+    std::optional<std::string> variable = std::nullopt,
+    // Writes the explanation's helps; off, there are none.
+    const Helpifier& helpifier = {}
 );
 
 } // namespace Luau

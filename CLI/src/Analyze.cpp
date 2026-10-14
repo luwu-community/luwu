@@ -601,7 +601,7 @@ int main(int argc, char** argv)
 
     if (format != ReportFormat::Luacheck)
     {
-        std::string legend = Luau::mismatchNotationLegend(mismatchNotationUsed);
+        std::string legend = Luau::mismatchNotationLegend(mismatchNotationUsed, Luau::Helpifier{});
         if (!legend.empty())
             fprintf(stderr, "\n%s\n", legend.c_str());
     }
