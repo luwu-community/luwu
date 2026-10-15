@@ -80,14 +80,6 @@ Luna rules map Luwu IR positional arguments (`OP_A(inst)`, `OP_B(inst)`, `OP_C(i
 - **`(sign-extend-8 <val>)`**: Sign-extends an 8-bit value to a 32-bit integer (`sbfx` on A64, `movsx ..., byteReg(...)` on X64).
 - **`(sign-extend-16 <val>)`**: Sign-extends a 16-bit value to a 32-bit integer (`sbfx` on A64, `movsx ..., wordReg(...)` on X64).
 - **`(truncate-uint <val>)`**: Truncates an unsigned integer to 32 bits (`ubfx ..., 0, 32` on A64, `mov` on X64).
-- **`(byteswap-32 <val>)`**, **`(byteswap-64 <val>)`**: Endian byte-swap (`rev` on A64, `bswap` on X64) with explicit 32-bit or 64-bit width.
-- **`(mul-64 <val1> <val2>)`**: Integer multiplication (`mul` on A64, `imul` on X64) with explicit width.
-
-### Bitwise Operations
-- **`(bitnot-32 <val>)`**, **`(bitnot-64 <val>)`**: Bitwise negation (`mvn_` on A64, `not_` on X64).
-- **`(bitand-32 <val1> <val2>)`**, **`(bitand-64 <val1> <val2>)`**: Bitwise AND (`and_` on A64/X64).
-- **`(bitor-32 <val1> <val2>)`**, **`(bitor-64 <val1> <val2>)`**: Bitwise OR (`orr` on A64, `or_` on X64).
-- **`(bitxor-32 <val1> <val2>)`**, **`(bitxor-64 <val1> <val2>)`**: Bitwise XOR (`eor` on A64, `xor_` on X64).
 
 ### Comparisons
 - **`(is-equal <val> <expected>)`**: Evaluates boolean equality, producing 1 or 0 (`cmp` + `cset` on A64, `xor` + `cmp` + `setcc` on X64).
@@ -123,6 +115,7 @@ Rules that produce values for Luwu IR instructions (`inst.regA64` / `inst.regX64
 - **`(and first rest ...)`:** Checks if `first` is falsy, if so evaluates to `#f`, otherwise evaluates to `(and rest ...)` with the base case of `(and a)` being `a`
 - **`(or ...)`: Checks if `first` is truthy, if so evaluates to `first`, otherwise evaluate to `(or rest ...)` with the base case of `(or)` being `false`
 - **`(not a)`**: Evaluates `!a`
+- **`(fflag <flag>)`**, **`(dfflag <flag>)`**: Tests if a fast flag or dynamic fast flag is enabled (`FFlag::<flag>` / `DFFlag::<flag>`). Example: `(fflag :LuauCIProto)`
 
 ### Architecture-Specific Emission Builders
 All architecture-dependent builders are prefixed with `<arch>:` and require an explicit `<dest>` operand (bound by `%produce-*` or `let`). They must appear inside a matching `target-case` branch.
@@ -131,22 +124,39 @@ All architecture-dependent builders are prefixed with `<arch>:` and require an e
 - **`(x64:inc! <dest>)`**: Emits `build.inc(<dest>)`.
 - **`(x64:mov-reg! <dest> <src>)`**: Emits `build.mov(<dest>, regOp(<src>))`.
 - **`(x64:mov-imm-32! <dest> <imm>)`**, **`(x64:mov-imm-64! <dest> <imm>)`**: Emits `build.mov` / `build.mov64`.
+- **`(x64:mov-mem-reg-32! <dest> <src>)`**, **`(x64:mov-mem-reg-64! <dest> <src>)`**: Emits `build.mov(<dest>, memReg*Op(<src>))`.
+- **`(x64:bswap-32! <dest>)`**, **`(x64:bswap-64! <dest>)`**: Emits `build.bswap(<dest>)`.
+- **`(x64:not-32! <dest>)`**, **`(x64:not-64! <dest>)`**: Emits `build.not_(<dest>)`.
+- **`(x64:and-32! <dest> <src>)`**, **`(x64:and-64! <dest> <src>)`**: Emits `build.and_(<dest>, memReg*Op(<src>))`.
+- **`(x64:or-32! <dest> <src>)`**, **`(x64:or-64! <dest> <src>)`**: Emits `build.or_(<dest>, memReg*Op(<src>))`.
+- **`(x64:xor-32! <dest> <src>)`**, **`(x64:xor-64! <dest> <src>)`**: Emits `build.xor_(<dest>, memReg*Op(<src>))`.
+- **`(x64:imul-64! <dest> <src>)`**: Emits `build.imul(<dest>, memRegInt64Op(<src>))`.
 - **`(x64:add-reg-32! <dest> <src>)`**, **`(x64:add-reg-64! <dest> <src>)`**: Emits `build.add(<dest>, regOp(<src>))`.
 - **`(x64:add-imm-32! <dest> <imm>)`**, **`(x64:add-imm-64! <dest> <imm>)`**: Emits `build.add(<dest>, <imm>)`.
-- **`(x64:add-tmp-64! <dest> <imm>)`**: Allocates `ScopedRegX64 tmp`, moves 64-bit immediate, and adds.
 - **`(x64:sub-reg-32! <dest> <src>)`**, **`(x64:sub-reg-64! <dest> <src>)`**: Emits `build.sub(<dest>, regOp(<src>))`.
 - **`(x64:sub-imm-32! <dest> <imm>)`**, **`(x64:sub-imm-64! <dest> <imm>)`**: Emits `build.sub(<dest>, <imm>)`.
-- **`(x64:sub-tmp-64! <dest> <imm>)`**: Allocates `ScopedRegX64 tmp`, moves 64-bit immediate, and subs.
 - **`(x64:lea-reg-32! <dest> <base> <offset>)`**, **`(x64:lea-reg-64! <dest> <base> <offset>)`**: Emits `build.lea(<dest>, addr[regOp(<base>) + regOp(<offset>)])`.
 - **`(x64:lea-imm-32! <dest> <base> <offset>)`**, **`(x64:lea-imm-64! <dest> <base> <offset>)`**: Emits `build.lea(<dest>, addr[regOp(<base>) + <offset>])`.
 - **`(x64:lea-sub-32! <dest> <base> <offset>)`**, **`(x64:lea-sub-64! <dest> <base> <offset>)`**: Emits `build.lea(<dest>, addr[regOp(<base>) - <offset>])`.
 
 #### AArch64 Builders (`a64:*`)
+- **`(a64:mov-imm-32! <dest> <imm>)`**: Emits `build.mov(<dest>, intOp(<imm>))`.
+- **`(a64:mov-imm-64! <dest> <imm>)`**: Emits `emitLoadInt64(build, <dest>, int64Op(<imm>))`.
+- **`(a64:rev-32! <dest> <src>)`**, **`(a64:rev-64! <dest> <src>)`**: Emits `build.rev(<dest>, temp*(<src>))`.
+- **`(a64:mvn-32! <dest> <src>)`**, **`(a64:mvn-64! <dest> <src>)`**: Emits `build.mvn_(<dest>, temp*(<src>))`.
+- **`(a64:and-reg-32! <dest> <src1> <src2>)`**, **`(a64:and-reg-64! <dest> <src1> <src2>)`**: Emits `build.and_(<dest>, temp1, temp2)`.
+- **`(a64:and-imm-32! <dest> <src> <imm>)`**: Emits `build.and_(<dest>, regOp(<src>), unsigned(intOp(<imm>)))`.
+- **`(a64:orr-reg-32! <dest> <src1> <src2>)`**, **`(a64:orr-reg-64! <dest> <src1> <src2>)`**: Emits `build.orr(<dest>, temp1, temp2)`.
+- **`(a64:orr-imm-32! <dest> <src> <imm>)`**: Emits `build.orr(<dest>, regOp(<src>), unsigned(intOp(<imm>)))`.
+- **`(a64:eor-reg-32! <dest> <src1> <src2>)`**, **`(a64:eor-reg-64! <dest> <src1> <src2>)`**: Emits `build.eor(<dest>, temp1, temp2)`.
+- **`(a64:eor-imm-32! <dest> <src> <imm>)`**: Emits `build.eor(<dest>, regOp(<src>), unsigned(intOp(<imm>)))`.
+- **`(a64:mul-reg-64! <dest> <src1> <src2>)`**: Emits `build.mul(<dest>, temp1, temp2)`.
 - **`(a64:add-reg-32! <dest> <src1> <src2>)`**, **`(a64:add-reg-64! <dest> <src1> <src2>)`**: Emits `build.add(<dest>, regOp(<src1>), regOp(<src2>))`.
 - **`(a64:add-imm-32! <dest> <src> <imm>)`**, **`(a64:add-imm-64! <dest> <src> <imm>)`**: Emits `build.add(<dest>, regOp(<src>), <imm>)`.
-- **`(a64:sub-reg-32! <dest> <src1> <src2>)`**, **`(a64:sub-reg-64! <dest> <src1> <src2>)`**: Emits `build.sub(<dest>, regOp(<src1>), regOp(<src2>))`.
+- **`(a64:sub-reg-32! <dest> <src1> <src2>)`**, **`(a64:sub-reg-64! <dest> <src1> <src2>)`**: Emits `build.sub(<dest>, temp1, temp2)`.
 - **`(a64:sub-imm-32! <dest> <src> <imm>)`**, **`(a64:sub-imm-64! <dest> <src> <imm>)`**: Emits `build.sub(<dest>, regOp(<src>), <imm>)`.
-- **`(a64:fits-imm-32? <op>)`**, **`(a64:fits-imm-64? <op>)`**: Tests if immediate fits AArch64 12-bit range (`kMaxImmediate`)
+- **`(a64:fits-imm-32? <op>)`**, **`(a64:fits-imm-64? <op>)`**: Tests if immediate fits AArch64 12-bit range (`kMaxImmediate`).
+- **`(a64:fits-mask-32? <op>)`**, **`(a64:fits-mask? <op>)`**: Tests if immediate matches an AArch64 logical bitmask (`AssemblyBuilderA64::isMaskSupported`).
 
 
 ### Branch Guards
@@ -156,8 +166,14 @@ All architecture-dependent builders are prefixed with `<arch>:` and require an e
 - **`(branch-if-not-equal! <val> <expected> <label>)`**: Guards `val != expected` (`cmp` + `b.ne` on A64; memory/reg `cmp` on X64).
 - **`(branch-if-negative! <val> <label>)`**: Guards `val < 0` (`cmp` + `b.lt` on A64; `test` + `jcc(Less)` on X64).
 
-### Local Bindings & Automatic Synthesis
+### Local Bindings & Temporary Registers
 - **`(let ([<var> <expr>] ...) <body> ...)`**: Introduces lexically scoped local variables. Within `%produce-` bodies with a single binding, destination registers are reused directly when possible to avoid temporary allocations.
+- **Explicit Temporary Registers `(alloc-temp <type>)`**: Allocates an explicit temporary register scoped to the enclosing `let` binding (`ScopedRegX64` on X64, `regs.allocTemp` on A64). Supported types include `:i64`, `:u64`, `:ptr`, `:i32`, `:u32`.
+```scheme
+(let ([tmp (alloc-temp :i64)])
+  (x64:mov-imm-64! tmp b)
+  (x64:add-reg-64! res tmp))
+```
 - **Automatic `let` Synthesis**: When a sub-rule takes a `:reg` parameter and the caller supplies a compound memory load, the expander automatically wraps the inlined body in a synthetic `let`:
 
 ```scheme

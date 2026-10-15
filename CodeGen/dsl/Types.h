@@ -28,9 +28,9 @@ inline TypeKind parseTypeKind(const std::string& name)
         s = s.substr(1);
 
     if (s == "ptr") return TypeKind::Ptr;
-    if (s == "i64") return TypeKind::I64;
+    if (s == "i64" || s == "qword" || s == "64") return TypeKind::I64;
     if (s == "u64") return TypeKind::U64;
-    if (s == "i32" || s == "int") return TypeKind::I32;
+    if (s == "i32" || s == "int" || s == "dword" || s == "32") return TypeKind::I32;
     if (s == "u32" || s == "uint") return TypeKind::U32;
     if (s == "i16") return TypeKind::I16;
     if (s == "u8") return TypeKind::U8;

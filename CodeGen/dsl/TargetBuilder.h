@@ -8,6 +8,7 @@
 #include "CompileError.h"
 
 #include <string>
+#include <set>
 #include <unordered_map>
 #include <vector>
 
@@ -36,11 +37,35 @@ struct EvalContext
     CodeWriter* writer = nullptr;
     int tempCount = 0;
     std::string currentTargetArch;
+    std::set<std::string> fflags;
+    std::set<std::string> dfflags;
+    std::set<std::string> usedSymbols;
+
+    void use(const std::string& name)
+    {
+        usedSymbols.insert(name);
+    }
+
+    bool isUsed(const std::string& name) const
+    {
+        return usedSymbols.count(name) > 0;
+    }
 
     void addDecl(const std::string& line)
     {
         if (writer)
             writer->addDecl(line);
+    }
+
+    const Operand* lookup(const std::string& name)
+    {
+        const Operand* op = scope ? scope->lookup(name) : nullptr;
+        if (op)
+        {
+            if (!op->rawOp.empty() || op->text.find("inst") != std::string::npos)
+                use("inst");
+        }
+        return op;
     }
 
     const Operand* lookup(const std::string& name) const
@@ -80,10 +105,12 @@ public:
     virtual std::string loweringClass() const = 0;
     virtual std::string destRegVar() const = 0;
 
-    virtual void emitPreamble(CodeWriter& out) = 0;
+    virtual void emitPreamble(CodeWriter& out, const std::vector<std::string>& fflags = {}, const std::vector<std::string>& dfflags = {}) = 0;
     virtual void emitPostamble(CodeWriter& out) = 0;
 
-    virtual void emitAllocProduce(CodeWriter& out, TypeKind type, bool isReuse, const std::vector<std::string>& rawOps) = 0;
+    virtual void emitAllocProduce(CodeWriter& out, EvalContext& ctx, TypeKind type, bool isReuse, const std::vector<std::string>& rawOps) = 0;
+
+    virtual Operand emitAllocTemp(CodeWriter& out, EvalContext& ctx, TypeKind type, const std::string& varName) = 0;
 
     virtual std::string toReg(CodeWriter& out, EvalContext& ctx, const Operand& op, const std::string& destReg = "", const std::string& preferredKind = "") = 0;
 
@@ -106,14 +133,6 @@ public:
     virtual Operand emitTruncateUint(CodeWriter& out, EvalContext& ctx, const Operand& val, const std::string& destReg) = 0;
 
     virtual Operand emitIsEqual(CodeWriter& out, EvalContext& ctx, const Operand& val, const Operand& expected, const std::string& destReg) = 0;
-
-    virtual Operand emitByteSwap(CodeWriter& out, EvalContext& ctx, int bits, const std::string& rawOp, const std::string& destReg) = 0;
-
-    virtual Operand emitBitwiseNot(CodeWriter& out, EvalContext& ctx, int bits, const std::string& rawOp, const std::string& destReg) = 0;
-
-    virtual Operand emitBitwiseBinOp(CodeWriter& out, EvalContext& ctx, const std::string& op, int bits, const std::string& rawOpA, const std::string& rawOpB, const std::string& destReg) = 0;
-
-    virtual Operand emitMul(CodeWriter& out, EvalContext& ctx, int bits, const std::string& rawOpA, const std::string& rawOpB, const std::string& destReg) = 0;
 
     virtual void emitUnsupported(CodeWriter& out)
     {

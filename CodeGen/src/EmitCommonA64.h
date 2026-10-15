@@ -72,6 +72,72 @@ inline void emitAddOffset(AssemblyBuilderA64& build, RegisterA64 dst, RegisterA6
     }
 }
 
+inline void emitLoadInt64(AssemblyBuilderA64& build, RegisterA64 dst, int64_t val)
+{
+    uint64_t u = uint64_t(val);
+
+    // Count non-zero halfwords (movz path) vs non-0xFFFF halfwords (movn path)
+    int movzCount = 0;
+    int movnCount = 0;
+    for (int shift = 0; shift < 64; shift += 16)
+    {
+        uint16_t hw = uint16_t(u >> shift);
+        if (hw != 0)
+            movzCount++;
+        if (hw != 0xFFFF)
+            movnCount++;
+    }
+
+    if (movzCount <= movnCount)
+    {
+        // movz path: emit movz for first non-zero halfword, movk for rest
+        bool first = true;
+        for (int shift = 0; shift < 64; shift += 16)
+        {
+            uint16_t hw = uint16_t(u >> shift);
+            if (hw != 0)
+            {
+                if (first)
+                {
+                    build.movz(dst, hw, shift);
+                    first = false;
+                }
+                else
+                {
+                    build.movk(dst, hw, shift);
+                }
+            }
+        }
+
+        if (first)
+            build.movz(dst, 0);
+    }
+    else
+    {
+        // movn path: use movn for first non-0xFFFF halfword, movk for rest
+        bool first = true;
+        for (int shift = 0; shift < 64; shift += 16)
+        {
+            uint16_t hw = uint16_t(u >> shift);
+            if (hw != 0xFFFF)
+            {
+                if (first)
+                {
+                    build.movn(dst, uint16_t(~hw), shift);
+                    first = false;
+                }
+                else
+                {
+                    build.movk(dst, hw, shift);
+                }
+            }
+        }
+
+        if (first)
+            build.movn(dst, 0);
+    }
+}
+
 } // namespace A64
 } // namespace CodeGen
 } // namespace Luau

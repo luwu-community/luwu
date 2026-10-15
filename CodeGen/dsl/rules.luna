@@ -21,6 +21,210 @@
 (define-subrule (check-negative [val :reg] [fallback :label])
   (branch-if-negative! val fallback))
 
+(define-subrule (emit-byteswap-32 [dest :reg] [val :op])
+  (target-case
+    [:x64
+     (if (not-reused? dest val)
+         (x64:mov-mem-reg-32! dest val))
+     (x64:bswap-32! dest)]
+    [:a64
+     (cond
+       [(constant? val)
+        (let ([tmp (alloc-temp :u32)])
+          (a64:mov-imm-32! tmp val)
+          (a64:rev-32! dest tmp))]
+       [else
+        (a64:rev-32! dest val)])]))
+
+(define-subrule (emit-byteswap-64 [dest :reg] [val :op])
+  (target-case
+    [:x64
+     (if (not-reused? dest val)
+         (x64:mov-mem-reg-64! dest val))
+     (x64:bswap-64! dest)]
+    [:a64
+     (cond
+       [(constant? val)
+        (let ([tmp (alloc-temp :i64)])
+          (a64:mov-imm-64! tmp val)
+          (a64:rev-64! dest tmp))]
+       [else
+        (a64:rev-64! dest val)])]))
+
+(define-subrule (emit-bitnot-32 [dest :reg] [val :op])
+  (target-case
+    [:x64
+     (if (not-reused? dest val)
+         (x64:mov-mem-reg-32! dest val))
+     (x64:not-32! dest)]
+    [:a64
+     (cond
+       [(constant? val)
+        (let ([tmp (alloc-temp :u32)])
+          (a64:mov-imm-32! tmp val)
+          (a64:mvn-32! dest tmp))]
+       [else
+        (a64:mvn-32! dest val)])]))
+
+(define-subrule (emit-bitnot-64 [dest :reg] [val :op])
+  (target-case
+    [:x64
+     (if (not-reused? dest val)
+         (x64:mov-mem-reg-64! dest val))
+     (x64:not-64! dest)]
+    [:a64
+     (cond
+       [(constant? val)
+        (let ([tmp (alloc-temp :i64)])
+          (a64:mov-imm-64! tmp val)
+          (a64:mvn-64! dest tmp))]
+       [else
+        (a64:mvn-64! dest val)])]))
+
+(define-subrule (emit-bitand-32 [dest :reg] [a :op] [b :op])
+  (target-case
+    [:x64
+     (if (not-reused? dest a)
+         (x64:mov-mem-reg-32! dest a))
+     (x64:and-32! dest b)]
+    [:a64
+     (cond
+       [(and (inst? a) (constant? b) (a64:fits-mask-32? b))
+        (a64:and-imm-32! dest a b)]
+       [(and (inst? b) (constant? a) (a64:fits-mask-32? a))
+        (a64:and-imm-32! dest b a)]
+       [(constant? b)
+        (let ([tmp (alloc-temp :u32)])
+          (a64:mov-imm-32! tmp b)
+          (a64:and-reg-32! dest a tmp))]
+       [(constant? a)
+        (let ([tmp (alloc-temp :u32)])
+          (a64:mov-imm-32! tmp a)
+          (a64:and-reg-32! dest tmp b))]
+       [else
+        (a64:and-reg-32! dest a b)])]))
+
+(define-subrule (emit-bitor-32 [dest :reg] [a :op] [b :op])
+  (target-case
+    [:x64
+     (if (not-reused? dest a)
+         (x64:mov-mem-reg-32! dest a))
+     (x64:or-32! dest b)]
+    [:a64
+     (cond
+       [(and (inst? a) (constant? b) (a64:fits-mask-32? b))
+        (a64:orr-imm-32! dest a b)]
+       [(and (inst? b) (constant? a) (a64:fits-mask-32? a))
+        (a64:orr-imm-32! dest b a)]
+       [(constant? b)
+        (let ([tmp (alloc-temp :u32)])
+          (a64:mov-imm-32! tmp b)
+          (a64:orr-reg-32! dest a tmp))]
+       [(constant? a)
+        (let ([tmp (alloc-temp :u32)])
+          (a64:mov-imm-32! tmp a)
+          (a64:orr-reg-32! dest tmp b))]
+       [else
+        (a64:orr-reg-32! dest a b)])]))
+
+(define-subrule (emit-bitxor-32 [dest :reg] [a :op] [b :op])
+  (target-case
+    [:x64
+     (if (not-reused? dest a)
+         (x64:mov-mem-reg-32! dest a))
+     (x64:xor-32! dest b)]
+    [:a64
+     (cond
+       [(and (inst? a) (constant? b) (a64:fits-mask-32? b))
+        (a64:eor-imm-32! dest a b)]
+       [(and (inst? b) (constant? a) (a64:fits-mask-32? a))
+        (a64:eor-imm-32! dest b a)]
+       [(constant? b)
+        (let ([tmp (alloc-temp :u32)])
+          (a64:mov-imm-32! tmp b)
+          (a64:eor-reg-32! dest a tmp))]
+       [(constant? a)
+        (let ([tmp (alloc-temp :u32)])
+          (a64:mov-imm-32! tmp a)
+          (a64:eor-reg-32! dest tmp b))]
+       [else
+        (a64:eor-reg-32! dest a b)])]))
+
+(define-subrule (emit-bitand-64 [dest :reg] [a :op] [b :op])
+  (target-case
+    [:x64
+     (if (not-reused? dest a)
+         (x64:mov-mem-reg-64! dest a))
+     (x64:and-64! dest b)]
+    [:a64
+     (cond
+       [(constant? b)
+        (let ([tmp (alloc-temp :i64)])
+          (a64:mov-imm-64! tmp b)
+          (a64:and-reg-64! dest a tmp))]
+       [(constant? a)
+        (let ([tmp (alloc-temp :i64)])
+          (a64:mov-imm-64! tmp a)
+          (a64:and-reg-64! dest tmp b))]
+       [else
+        (a64:and-reg-64! dest a b)])]))
+
+(define-subrule (emit-bitor-64 [dest :reg] [a :op] [b :op])
+  (target-case
+    [:x64
+     (if (not-reused? dest a)
+         (x64:mov-mem-reg-64! dest a))
+     (x64:or-64! dest b)]
+    [:a64
+     (cond
+       [(constant? b)
+        (let ([tmp (alloc-temp :i64)])
+          (a64:mov-imm-64! tmp b)
+          (a64:orr-reg-64! dest a tmp))]
+       [(constant? a)
+        (let ([tmp (alloc-temp :i64)])
+          (a64:mov-imm-64! tmp a)
+          (a64:orr-reg-64! dest tmp b))]
+       [else
+        (a64:orr-reg-64! dest a b)])]))
+
+(define-subrule (emit-bitxor-64 [dest :reg] [a :op] [b :op])
+  (target-case
+    [:x64
+     (if (not-reused? dest a)
+         (x64:mov-mem-reg-64! dest a))
+     (x64:xor-64! dest b)]
+    [:a64
+     (cond
+       [(constant? b)
+        (let ([tmp (alloc-temp :i64)])
+          (a64:mov-imm-64! tmp b)
+          (a64:eor-reg-64! dest a tmp))]
+       [(constant? a)
+        (let ([tmp (alloc-temp :i64)])
+          (a64:mov-imm-64! tmp a)
+          (a64:eor-reg-64! dest tmp b))]
+       [else
+        (a64:eor-reg-64! dest a b)])]))
+
+(define-subrule (emit-mul-64 [dest :reg] [a :op] [b :op])
+  (target-case
+    [:x64
+     (x64:mov-mem-reg-64! dest a)
+     (x64:imul-64! dest b)]
+    [:a64
+     (cond
+       [(constant? b)
+        (let ([tmp (alloc-temp :i64)])
+          (a64:mov-imm-64! tmp b)
+          (a64:mul-reg-64! dest a tmp))]
+       [(constant? a)
+        (let ([tmp (alloc-temp :i64)])
+          (a64:mov-imm-64! tmp a)
+          (a64:mul-reg-64! dest tmp b))]
+       [else
+        (a64:mul-reg-64! dest a b)])]))
+
 ;; ============================================================================
 ;; Top-Level Opcode Rules
 ;; ============================================================================
@@ -100,47 +304,47 @@
 
 (define-rule (byteswap-uint [val :op])
   (%produce-u32-reuse res val
-    (byteswap-32 val)))
+    (emit-byteswap-32 res val)))
 
 (define-rule (byteswap-int64 [val :op])
   (%produce-i64-reuse res val
-    (byteswap-64 val)))
+    (emit-byteswap-64 res val)))
 
 (define-rule (bitnot-uint [val :op])
   (%produce-u32-reuse res val
-    (bitnot-32 val)))
+    (emit-bitnot-32 res val)))
 
 (define-rule (bitnot-int64 [val :op])
   (%produce-i64-reuse res val
-    (bitnot-64 val)))
+    (emit-bitnot-64 res val)))
 
 (define-rule (bitand-uint [a :op] [b :op])
   (%produce-u32-reuse res [a b]
-    (bitand-32 a b)))
+    (emit-bitand-32 res a b)))
 
 (define-rule (bitxor-uint [a :op] [b :op])
   (%produce-u32-reuse res [a b]
-    (bitxor-32 a b)))
+    (emit-bitxor-32 res a b)))
 
 (define-rule (bitor-uint [a :op] [b :op])
   (%produce-u32-reuse res [a b]
-    (bitor-32 a b)))
+    (emit-bitor-32 res a b)))
 
 (define-rule (bitand-int64 [a :op] [b :op])
   (%produce-i64-reuse res [a b]
-    (bitand-64 a b)))
+    (emit-bitand-64 res a b)))
 
 (define-rule (bitxor-int64 [a :op] [b :op])
   (%produce-i64-reuse res [a b]
-    (bitxor-64 a b)))
+    (emit-bitxor-64 res a b)))
 
 (define-rule (bitor-int64 [a :op] [b :op])
   (%produce-i64-reuse res [a b]
-    (bitor-64 a b)))
+    (emit-bitor-64 res a b)))
 
 (define-rule (mul-int64 [a :op] [b :op])
   (%produce-i64-reuse res [a b]
-    (mul-64 a b)))
+    (emit-mul-64 res a b)))
 
 (define-rule (add-int [a :op] [b :op])
   (%produce-i32-reuse res [a b]
@@ -165,6 +369,14 @@
           (a64:add-imm-32! res a b)]
          [(and (constant? a) (a64:fits-imm-32? a))
           (a64:add-imm-32! res b a)]
+         [(constant? b)
+          (let ([tmp (alloc-temp :i32)])
+            (a64:mov-imm-32! tmp b)
+            (a64:add-reg-32! res a tmp))]
+         [(constant? a)
+          (let ([tmp (alloc-temp :i32)])
+            (a64:mov-imm-32! tmp a)
+            (a64:add-reg-32! res tmp b))]
          [else
           (a64:add-reg-32! res a b)])])))
 
@@ -191,6 +403,14 @@
        (cond
          [(and (constant? b) (a64:fits-imm-32? b))
           (a64:sub-imm-32! res a b)]
+         [(constant? b)
+          (let ([tmp (alloc-temp :i32)])
+            (a64:mov-imm-32! tmp b)
+            (a64:sub-reg-32! res a tmp))]
+         [(constant? a)
+          (let ([tmp (alloc-temp :i32)])
+            (a64:mov-imm-32! tmp a)
+            (a64:sub-reg-32! res tmp b))]
          [else
           (a64:sub-reg-32! res a b)])])))
 
@@ -211,13 +431,16 @@
                 [(inst? b)           (x64:add-reg-64! res b)]
                 [(= (int64-val b) 1) (x64:inc! res)]
                 [(fits-i32? b)       (x64:add-imm-64! res b)]
-                [else                (x64:add-tmp-64! res b)])
+                [else
+                  (let ([tmp (alloc-temp :i64)])
+                    (x64:mov-imm-64! tmp b)
+                    (x64:add-reg-64! res tmp))])
               (cond
                 [(inst? b)           (x64:lea-reg-64! res a b)]
                 [(fits-i32? b)       (x64:lea-imm-64! res a b)]
                 [else
-                 (x64:mov-imm-64! res b)
-                 (x64:add-reg-64! res a)]))]
+                  (x64:mov-imm-64! res b)
+                  (x64:add-reg-64! res a)]))]
          [else (unsupported!)])]
       [:a64
        (cond
@@ -225,6 +448,14 @@
           (a64:add-imm-64! res a b)]
          [(and (constant? a) (a64:fits-imm-64? a))
           (a64:add-imm-64! res b a)]
+         [(constant? b)
+          (let ([tmp (alloc-temp :i64)])
+            (a64:mov-imm-64! tmp b)
+            (a64:add-reg-64! res a tmp))]
+         [(constant? a)
+          (let ([tmp (alloc-temp :i64)])
+            (a64:mov-imm-64! tmp a)
+            (a64:add-reg-64! res tmp b))]
          [else
           (a64:add-reg-64! res a b)])])))
 
@@ -240,10 +471,11 @@
                  (if (not-reused? res a)
                      (x64:lea-sub-64! res a b)
                      (x64:sub-imm-64! res b))
-                 (begin
+                 (let ([tmp (alloc-temp :i64)])
                    (if (not-reused? res a)
                        (x64:mov-reg! res a))
-                   (x64:sub-tmp-64! res b)))]
+                   (x64:mov-imm-64! tmp b)
+                   (x64:sub-reg-64! res tmp)))]
             [else
              (if (not-reused? res a)
                  (x64:mov-reg! res a))
@@ -256,5 +488,13 @@
        (cond
          [(and (constant? b) (a64:fits-imm-64? b))
           (a64:sub-imm-64! res a b)]
+         [(constant? b)
+          (let ([tmp (alloc-temp :i64)])
+            (a64:mov-imm-64! tmp b)
+            (a64:sub-reg-64! res a tmp))]
+         [(constant? a)
+          (let ([tmp (alloc-temp :i64)])
+            (a64:mov-imm-64! tmp a)
+            (a64:sub-reg-64! res tmp b))]
          [else
           (a64:sub-reg-64! res a b)])])))

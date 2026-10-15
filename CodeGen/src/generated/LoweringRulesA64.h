@@ -16,16 +16,13 @@ inline void lower_SET_SAVEDPC(IrLoweringA64& lowering, IrInst& inst, uint32_t in
 {
     auto& build = lowering.build;
     auto& regs = lowering.regs;
-    (void)build;
-    (void)regs;
-    (void)inst;
     (void)index;
     (void)next;
 
     RegisterA64 tmp_addr0 = regs.allocTemp(KindA64::x);
-    RegisterA64 tmp_reg1 = regs.allocTemp(KindA64::x);
 
     emitAddOffset(build, tmp_addr0, rCode, (lowering.uintOp(OP_A(inst))) * sizeof(Instruction));
+    RegisterA64 tmp_reg1 = regs.allocTemp(KindA64::x);
     build.ldr(tmp_reg1, mem(rState, offsetof(lua_State, ci)));
     build.str(tmp_addr0, mem(tmp_reg1, offsetof(CallInfo, savedpc)));
 }
@@ -34,14 +31,11 @@ inline void lower_ADJUST_STACK_TO_TOP(IrLoweringA64& lowering, IrInst& inst, uin
 {
     auto& build = lowering.build;
     auto& regs = lowering.regs;
-    (void)build;
-    (void)regs;
     (void)inst;
     (void)index;
     (void)next;
 
     RegisterA64 tmp_reg0 = regs.allocTemp(KindA64::x);
-
     build.ldr(tmp_reg0, mem(rState, offsetof(lua_State, ci)));
     build.ldr(tmp_reg0, mem(tmp_reg0, offsetof(CallInfo, top)));
     build.str(tmp_reg0, mem(rState, offsetof(lua_State, top)));
@@ -51,15 +45,11 @@ inline void lower_CHECK_READONLY(IrLoweringA64& lowering, IrInst& inst, uint32_t
 {
     auto& build = lowering.build;
     auto& regs = lowering.regs;
-    (void)build;
-    (void)regs;
-    (void)inst;
-    (void)index;
     (void)next;
 
-    RegisterA64 tmp_reg0 = regs.allocTemp(KindA64::w);
     Label fresh;
 
+    RegisterA64 tmp_reg0 = regs.allocTemp(KindA64::w);
     build.ldrb(tmp_reg0, mem(lowering.regOp(OP_A(inst)), offsetof(LuaTable, readonly)));
     build.cbnz(tmp_reg0, lowering.getTargetLabel(OP_B(inst), index, fresh));
     lowering.finalizeTargetLabel(OP_B(inst), index, fresh);
@@ -69,15 +59,11 @@ inline void lower_CHECK_NO_METATABLE(IrLoweringA64& lowering, IrInst& inst, uint
 {
     auto& build = lowering.build;
     auto& regs = lowering.regs;
-    (void)build;
-    (void)regs;
-    (void)inst;
-    (void)index;
     (void)next;
 
-    RegisterA64 tmp_reg0 = regs.allocTemp(KindA64::x);
     Label fresh;
 
+    RegisterA64 tmp_reg0 = regs.allocTemp(KindA64::x);
     build.ldr(tmp_reg0, mem(lowering.regOp(OP_A(inst)), offsetof(LuaTable, metatable)));
     build.cbnz(tmp_reg0, lowering.getTargetLabel(OP_B(inst), index, fresh));
     lowering.finalizeTargetLabel(OP_B(inst), index, fresh);
@@ -87,15 +73,11 @@ inline void lower_CHECK_NODE_VALUE(IrLoweringA64& lowering, IrInst& inst, uint32
 {
     auto& build = lowering.build;
     auto& regs = lowering.regs;
-    (void)build;
-    (void)regs;
-    (void)inst;
-    (void)index;
     (void)next;
 
-    RegisterA64 tmp_reg0 = regs.allocTemp(KindA64::w);
     Label fresh;
 
+    RegisterA64 tmp_reg0 = regs.allocTemp(KindA64::w);
     build.ldr(tmp_reg0, mem(lowering.regOp(OP_A(inst)), offsetof(LuaNode, val.tt)));
     build.cbz(tmp_reg0, lowering.getTargetLabel(OP_B(inst), index, fresh));
     lowering.finalizeTargetLabel(OP_B(inst), index, fresh);
@@ -105,15 +87,11 @@ inline void lower_CHECK_BUFFER_MUTABLE(IrLoweringA64& lowering, IrInst& inst, ui
 {
     auto& build = lowering.build;
     auto& regs = lowering.regs;
-    (void)build;
-    (void)regs;
-    (void)inst;
-    (void)index;
     (void)next;
 
-    RegisterA64 tmp_reg0 = regs.allocTemp(KindA64::w);
     Label fresh;
 
+    RegisterA64 tmp_reg0 = regs.allocTemp(KindA64::w);
     build.ldrb(tmp_reg0, mem(lowering.regOp(OP_A(inst)), offsetof(Buffer, mode)));
     build.cmp(tmp_reg0, uint16_t(LUA_BHOST_IMMUTABLE));
     build.b(ConditionA64::Equal, lowering.getTargetLabel(OP_B(inst), index, fresh));
@@ -123,10 +101,6 @@ inline void lower_CHECK_BUFFER_MUTABLE(IrLoweringA64& lowering, IrInst& inst, ui
 inline void lower_CHECK_FASTCALL_RES(IrLoweringA64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
 {
     auto& build = lowering.build;
-    auto& regs = lowering.regs;
-    (void)build;
-    (void)regs;
-    (void)inst;
     (void)index;
     (void)next;
 
@@ -138,15 +112,11 @@ inline void lower_CHECK_USERDATA_TAG(IrLoweringA64& lowering, IrInst& inst, uint
 {
     auto& build = lowering.build;
     auto& regs = lowering.regs;
-    (void)build;
-    (void)regs;
-    (void)inst;
-    (void)index;
     (void)next;
 
-    RegisterA64 tmp_reg0 = regs.allocTemp(KindA64::w);
     Label fresh;
 
+    RegisterA64 tmp_reg0 = regs.allocTemp(KindA64::w);
     build.ldrb(tmp_reg0, mem(lowering.regOp(OP_A(inst)), offsetof(Udata, tag)));
     build.cmp(tmp_reg0, uint16_t(lowering.intOp(OP_B(inst))));
     build.b(ConditionA64::NotEqual, lowering.getTargetLabel(OP_C(inst), index, fresh));
@@ -157,10 +127,6 @@ inline void lower_LOAD_ENV(IrLoweringA64& lowering, IrInst& inst, uint32_t index
 {
     auto& build = lowering.build;
     auto& regs = lowering.regs;
-    (void)build;
-    (void)regs;
-    (void)inst;
-    (void)index;
     (void)next;
 
     inst.regA64 = regs.allocReg(KindA64::x, index);
@@ -171,10 +137,6 @@ inline void lower_LOAD_BUFFER_DATA(IrLoweringA64& lowering, IrInst& inst, uint32
 {
     auto& build = lowering.build;
     auto& regs = lowering.regs;
-    (void)build;
-    (void)regs;
-    (void)inst;
-    (void)index;
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst)});
@@ -185,10 +147,6 @@ inline void lower_LOAD_OWNER_CLASS(IrLoweringA64& lowering, IrInst& inst, uint32
 {
     auto& build = lowering.build;
     auto& regs = lowering.regs;
-    (void)build;
-    (void)regs;
-    (void)inst;
-    (void)index;
     (void)next;
 
     inst.regA64 = regs.allocReg(KindA64::x, index);
@@ -200,10 +158,6 @@ inline void lower_SEXTI8_INT(IrLoweringA64& lowering, IrInst& inst, uint32_t ind
 {
     auto& build = lowering.build;
     auto& regs = lowering.regs;
-    (void)build;
-    (void)regs;
-    (void)inst;
-    (void)index;
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::w, index, {OP_A(inst)});
@@ -214,10 +168,6 @@ inline void lower_SEXTI16_INT(IrLoweringA64& lowering, IrInst& inst, uint32_t in
 {
     auto& build = lowering.build;
     auto& regs = lowering.regs;
-    (void)build;
-    (void)regs;
-    (void)inst;
-    (void)index;
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::w, index, {OP_A(inst)});
@@ -228,10 +178,6 @@ inline void lower_STRING_LEN(IrLoweringA64& lowering, IrInst& inst, uint32_t ind
 {
     auto& build = lowering.build;
     auto& regs = lowering.regs;
-    (void)build;
-    (void)regs;
-    (void)inst;
-    (void)index;
     (void)next;
 
     inst.regA64 = regs.allocReg(KindA64::w, index);
@@ -242,10 +188,6 @@ inline void lower_TRUNCATE_UINT(IrLoweringA64& lowering, IrInst& inst, uint32_t 
 {
     auto& build = lowering.build;
     auto& regs = lowering.regs;
-    (void)build;
-    (void)regs;
-    (void)inst;
-    (void)index;
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::w, index, {OP_A(inst)});
@@ -256,15 +198,10 @@ inline void lower_BUFFER_ISFROZEN(IrLoweringA64& lowering, IrInst& inst, uint32_
 {
     auto& build = lowering.build;
     auto& regs = lowering.regs;
-    (void)build;
-    (void)regs;
-    (void)inst;
-    (void)index;
     (void)next;
 
-    RegisterA64 tmp_reg0 = regs.allocTemp(KindA64::w);
-
     inst.regA64 = regs.allocReg(KindA64::w, index);
+    RegisterA64 tmp_reg0 = regs.allocTemp(KindA64::w);
     build.ldrb(tmp_reg0, mem(lowering.regOp(OP_A(inst)), offsetof(Buffer, mode)));
     build.cmp(tmp_reg0, uint16_t(LUA_BHOST_IMMUTABLE));
     build.cset(inst.regA64, ConditionA64::Equal);
@@ -274,81 +211,108 @@ inline void lower_BYTESWAP_UINT(IrLoweringA64& lowering, IrInst& inst, uint32_t 
 {
     auto& build = lowering.build;
     auto& regs = lowering.regs;
-    (void)build;
-    (void)regs;
-    (void)inst;
-    (void)index;
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::w, index, {OP_A(inst)});
-    RegisterA64 temp = lowering.tempUint(OP_A(inst));
-    build.rev(inst.regA64, temp);
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        RegisterA64 tmp = regs.allocTemp(KindA64::w);
+        build.mov(tmp, lowering.intOp(OP_A(inst)));
+        build.rev(inst.regA64, tmp);
+    }
+    else
+    {
+        build.rev(inst.regA64, lowering.regOp(OP_A(inst)));
+    }
 }
 
 inline void lower_BYTESWAP_INT64(IrLoweringA64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
 {
     auto& build = lowering.build;
     auto& regs = lowering.regs;
-    (void)build;
-    (void)regs;
-    (void)inst;
-    (void)index;
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst)});
-    RegisterA64 temp = lowering.tempInt64(OP_A(inst));
-    build.rev(inst.regA64, temp);
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        RegisterA64 tmp = regs.allocTemp(KindA64::x);
+        emitLoadInt64(build, tmp, lowering.int64Op(OP_A(inst)));
+        build.rev(inst.regA64, tmp);
+    }
+    else
+    {
+        build.rev(inst.regA64, lowering.regOp(OP_A(inst)));
+    }
 }
 
 inline void lower_BITNOT_UINT(IrLoweringA64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
 {
     auto& build = lowering.build;
     auto& regs = lowering.regs;
-    (void)build;
-    (void)regs;
-    (void)inst;
-    (void)index;
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::w, index, {OP_A(inst)});
-    RegisterA64 temp = lowering.tempUint(OP_A(inst));
-    build.mvn_(inst.regA64, temp);
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        RegisterA64 tmp = regs.allocTemp(KindA64::w);
+        build.mov(tmp, lowering.intOp(OP_A(inst)));
+        build.mvn_(inst.regA64, tmp);
+    }
+    else
+    {
+        build.mvn_(inst.regA64, lowering.regOp(OP_A(inst)));
+    }
 }
 
 inline void lower_BITNOT_INT64(IrLoweringA64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
 {
     auto& build = lowering.build;
     auto& regs = lowering.regs;
-    (void)build;
-    (void)regs;
-    (void)inst;
-    (void)index;
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst)});
-    RegisterA64 temp = lowering.tempInt64(OP_A(inst));
-    build.mvn_(inst.regA64, temp);
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        RegisterA64 tmp = regs.allocTemp(KindA64::x);
+        emitLoadInt64(build, tmp, lowering.int64Op(OP_A(inst)));
+        build.mvn_(inst.regA64, tmp);
+    }
+    else
+    {
+        build.mvn_(inst.regA64, lowering.regOp(OP_A(inst)));
+    }
 }
 
 inline void lower_BITAND_UINT(IrLoweringA64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
 {
     auto& build = lowering.build;
     auto& regs = lowering.regs;
-    (void)build;
-    (void)regs;
-    (void)inst;
-    (void)index;
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::w, index, {OP_A(inst), OP_B(inst)});
-    if (OP_A(inst).kind == IrOpKind::Inst && OP_B(inst).kind == IrOpKind::Constant &&
-        AssemblyBuilderA64::isMaskSupported(unsigned(lowering.intOp(OP_B(inst)))))
+    if (OP_A(inst).kind == IrOpKind::Inst && OP_B(inst).kind == IrOpKind::Constant && AssemblyBuilderA64::isMaskSupported(unsigned(lowering.intOp(OP_B(inst)))))
+    {
         build.and_(inst.regA64, lowering.regOp(OP_A(inst)), unsigned(lowering.intOp(OP_B(inst))));
+    }
+    else if (OP_B(inst).kind == IrOpKind::Inst && OP_A(inst).kind == IrOpKind::Constant && AssemblyBuilderA64::isMaskSupported(unsigned(lowering.intOp(OP_A(inst)))))
+    {
+        build.and_(inst.regA64, lowering.regOp(OP_B(inst)), unsigned(lowering.intOp(OP_A(inst))));
+    }
+    else if (OP_B(inst).kind == IrOpKind::Constant)
+    {
+        RegisterA64 tmp = regs.allocTemp(KindA64::w);
+        build.mov(tmp, lowering.intOp(OP_B(inst)));
+        build.and_(inst.regA64, lowering.regOp(OP_A(inst)), tmp);
+    }
+    else if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        RegisterA64 tmp = regs.allocTemp(KindA64::w);
+        build.mov(tmp, lowering.intOp(OP_A(inst)));
+        build.and_(inst.regA64, tmp, lowering.regOp(OP_B(inst)));
+    }
     else
     {
-        RegisterA64 temp1 = lowering.tempUint(OP_A(inst));
-        RegisterA64 temp2 = lowering.tempUint(OP_B(inst));
-        build.and_(inst.regA64, temp1, temp2);
+        build.and_(inst.regA64, lowering.regOp(OP_A(inst)), lowering.regOp(OP_B(inst)));
     }
 }
 
@@ -356,21 +320,32 @@ inline void lower_BITXOR_UINT(IrLoweringA64& lowering, IrInst& inst, uint32_t in
 {
     auto& build = lowering.build;
     auto& regs = lowering.regs;
-    (void)build;
-    (void)regs;
-    (void)inst;
-    (void)index;
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::w, index, {OP_A(inst), OP_B(inst)});
-    if (OP_A(inst).kind == IrOpKind::Inst && OP_B(inst).kind == IrOpKind::Constant &&
-        AssemblyBuilderA64::isMaskSupported(unsigned(lowering.intOp(OP_B(inst)))))
+    if (OP_A(inst).kind == IrOpKind::Inst && OP_B(inst).kind == IrOpKind::Constant && AssemblyBuilderA64::isMaskSupported(unsigned(lowering.intOp(OP_B(inst)))))
+    {
         build.eor(inst.regA64, lowering.regOp(OP_A(inst)), unsigned(lowering.intOp(OP_B(inst))));
+    }
+    else if (OP_B(inst).kind == IrOpKind::Inst && OP_A(inst).kind == IrOpKind::Constant && AssemblyBuilderA64::isMaskSupported(unsigned(lowering.intOp(OP_A(inst)))))
+    {
+        build.eor(inst.regA64, lowering.regOp(OP_B(inst)), unsigned(lowering.intOp(OP_A(inst))));
+    }
+    else if (OP_B(inst).kind == IrOpKind::Constant)
+    {
+        RegisterA64 tmp = regs.allocTemp(KindA64::w);
+        build.mov(tmp, lowering.intOp(OP_B(inst)));
+        build.eor(inst.regA64, lowering.regOp(OP_A(inst)), tmp);
+    }
+    else if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        RegisterA64 tmp = regs.allocTemp(KindA64::w);
+        build.mov(tmp, lowering.intOp(OP_A(inst)));
+        build.eor(inst.regA64, tmp, lowering.regOp(OP_B(inst)));
+    }
     else
     {
-        RegisterA64 temp1 = lowering.tempUint(OP_A(inst));
-        RegisterA64 temp2 = lowering.tempUint(OP_B(inst));
-        build.eor(inst.regA64, temp1, temp2);
+        build.eor(inst.regA64, lowering.regOp(OP_A(inst)), lowering.regOp(OP_B(inst)));
     }
 }
 
@@ -378,21 +353,32 @@ inline void lower_BITOR_UINT(IrLoweringA64& lowering, IrInst& inst, uint32_t ind
 {
     auto& build = lowering.build;
     auto& regs = lowering.regs;
-    (void)build;
-    (void)regs;
-    (void)inst;
-    (void)index;
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::w, index, {OP_A(inst), OP_B(inst)});
-    if (OP_A(inst).kind == IrOpKind::Inst && OP_B(inst).kind == IrOpKind::Constant &&
-        AssemblyBuilderA64::isMaskSupported(unsigned(lowering.intOp(OP_B(inst)))))
+    if (OP_A(inst).kind == IrOpKind::Inst && OP_B(inst).kind == IrOpKind::Constant && AssemblyBuilderA64::isMaskSupported(unsigned(lowering.intOp(OP_B(inst)))))
+    {
         build.orr(inst.regA64, lowering.regOp(OP_A(inst)), unsigned(lowering.intOp(OP_B(inst))));
+    }
+    else if (OP_B(inst).kind == IrOpKind::Inst && OP_A(inst).kind == IrOpKind::Constant && AssemblyBuilderA64::isMaskSupported(unsigned(lowering.intOp(OP_A(inst)))))
+    {
+        build.orr(inst.regA64, lowering.regOp(OP_B(inst)), unsigned(lowering.intOp(OP_A(inst))));
+    }
+    else if (OP_B(inst).kind == IrOpKind::Constant)
+    {
+        RegisterA64 tmp = regs.allocTemp(KindA64::w);
+        build.mov(tmp, lowering.intOp(OP_B(inst)));
+        build.orr(inst.regA64, lowering.regOp(OP_A(inst)), tmp);
+    }
+    else if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        RegisterA64 tmp = regs.allocTemp(KindA64::w);
+        build.mov(tmp, lowering.intOp(OP_A(inst)));
+        build.orr(inst.regA64, tmp, lowering.regOp(OP_B(inst)));
+    }
     else
     {
-        RegisterA64 temp1 = lowering.tempUint(OP_A(inst));
-        RegisterA64 temp2 = lowering.tempUint(OP_B(inst));
-        build.orr(inst.regA64, temp1, temp2);
+        build.orr(inst.regA64, lowering.regOp(OP_A(inst)), lowering.regOp(OP_B(inst)));
     }
 }
 
@@ -400,74 +386,106 @@ inline void lower_BITAND_INT64(IrLoweringA64& lowering, IrInst& inst, uint32_t i
 {
     auto& build = lowering.build;
     auto& regs = lowering.regs;
-    (void)build;
-    (void)regs;
-    (void)inst;
-    (void)index;
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst), OP_B(inst)});
-    RegisterA64 temp1 = lowering.tempInt64(OP_A(inst));
-    RegisterA64 temp2 = lowering.tempInt64(OP_B(inst));
-    build.and_(inst.regA64, temp1, temp2);
+    if (OP_B(inst).kind == IrOpKind::Constant)
+    {
+        RegisterA64 tmp = regs.allocTemp(KindA64::x);
+        emitLoadInt64(build, tmp, lowering.int64Op(OP_B(inst)));
+        build.and_(inst.regA64, lowering.regOp(OP_A(inst)), tmp);
+    }
+    else if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        RegisterA64 tmp = regs.allocTemp(KindA64::x);
+        emitLoadInt64(build, tmp, lowering.int64Op(OP_A(inst)));
+        build.and_(inst.regA64, tmp, lowering.regOp(OP_B(inst)));
+    }
+    else
+    {
+        build.and_(inst.regA64, lowering.regOp(OP_A(inst)), lowering.regOp(OP_B(inst)));
+    }
 }
 
 inline void lower_BITXOR_INT64(IrLoweringA64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
 {
     auto& build = lowering.build;
     auto& regs = lowering.regs;
-    (void)build;
-    (void)regs;
-    (void)inst;
-    (void)index;
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst), OP_B(inst)});
-    RegisterA64 temp1 = lowering.tempInt64(OP_A(inst));
-    RegisterA64 temp2 = lowering.tempInt64(OP_B(inst));
-    build.eor(inst.regA64, temp1, temp2);
+    if (OP_B(inst).kind == IrOpKind::Constant)
+    {
+        RegisterA64 tmp = regs.allocTemp(KindA64::x);
+        emitLoadInt64(build, tmp, lowering.int64Op(OP_B(inst)));
+        build.eor(inst.regA64, lowering.regOp(OP_A(inst)), tmp);
+    }
+    else if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        RegisterA64 tmp = regs.allocTemp(KindA64::x);
+        emitLoadInt64(build, tmp, lowering.int64Op(OP_A(inst)));
+        build.eor(inst.regA64, tmp, lowering.regOp(OP_B(inst)));
+    }
+    else
+    {
+        build.eor(inst.regA64, lowering.regOp(OP_A(inst)), lowering.regOp(OP_B(inst)));
+    }
 }
 
 inline void lower_BITOR_INT64(IrLoweringA64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
 {
     auto& build = lowering.build;
     auto& regs = lowering.regs;
-    (void)build;
-    (void)regs;
-    (void)inst;
-    (void)index;
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst), OP_B(inst)});
-    RegisterA64 temp1 = lowering.tempInt64(OP_A(inst));
-    RegisterA64 temp2 = lowering.tempInt64(OP_B(inst));
-    build.orr(inst.regA64, temp1, temp2);
+    if (OP_B(inst).kind == IrOpKind::Constant)
+    {
+        RegisterA64 tmp = regs.allocTemp(KindA64::x);
+        emitLoadInt64(build, tmp, lowering.int64Op(OP_B(inst)));
+        build.orr(inst.regA64, lowering.regOp(OP_A(inst)), tmp);
+    }
+    else if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        RegisterA64 tmp = regs.allocTemp(KindA64::x);
+        emitLoadInt64(build, tmp, lowering.int64Op(OP_A(inst)));
+        build.orr(inst.regA64, tmp, lowering.regOp(OP_B(inst)));
+    }
+    else
+    {
+        build.orr(inst.regA64, lowering.regOp(OP_A(inst)), lowering.regOp(OP_B(inst)));
+    }
 }
 
 inline void lower_MUL_INT64(IrLoweringA64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
 {
     auto& build = lowering.build;
     auto& regs = lowering.regs;
-    (void)build;
-    (void)regs;
-    (void)inst;
-    (void)index;
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst), OP_B(inst)});
-    RegisterA64 temp1 = lowering.tempInt64(OP_A(inst));
-    RegisterA64 temp2 = lowering.tempInt64(OP_B(inst));
-    build.mul(inst.regA64, temp1, temp2);
+    if (OP_B(inst).kind == IrOpKind::Constant)
+    {
+        RegisterA64 tmp = regs.allocTemp(KindA64::x);
+        emitLoadInt64(build, tmp, lowering.int64Op(OP_B(inst)));
+        build.mul(inst.regA64, lowering.regOp(OP_A(inst)), tmp);
+    }
+    else if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        RegisterA64 tmp = regs.allocTemp(KindA64::x);
+        emitLoadInt64(build, tmp, lowering.int64Op(OP_A(inst)));
+        build.mul(inst.regA64, tmp, lowering.regOp(OP_B(inst)));
+    }
+    else
+    {
+        build.mul(inst.regA64, lowering.regOp(OP_A(inst)), lowering.regOp(OP_B(inst)));
+    }
 }
 
 inline void lower_ADD_INT(IrLoweringA64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
 {
     auto& build = lowering.build;
     auto& regs = lowering.regs;
-    (void)build;
-    (void)regs;
-    (void)inst;
-    (void)index;
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::w, index, {OP_A(inst), OP_B(inst)});
@@ -479,11 +497,21 @@ inline void lower_ADD_INT(IrLoweringA64& lowering, IrInst& inst, uint32_t index,
     {
         build.add(inst.regA64, lowering.regOp(OP_B(inst)), uint16_t(lowering.intOp(OP_A(inst))));
     }
+    else if (OP_B(inst).kind == IrOpKind::Constant)
+    {
+        RegisterA64 tmp = regs.allocTemp(KindA64::w);
+        build.mov(tmp, lowering.intOp(OP_B(inst)));
+        build.add(inst.regA64, lowering.regOp(OP_A(inst)), tmp);
+    }
+    else if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        RegisterA64 tmp = regs.allocTemp(KindA64::w);
+        build.mov(tmp, lowering.intOp(OP_A(inst)));
+        build.add(inst.regA64, tmp, lowering.regOp(OP_B(inst)));
+    }
     else
     {
-        RegisterA64 temp1 = lowering.tempInt(OP_A(inst));
-        RegisterA64 temp2 = lowering.tempInt(OP_B(inst));
-        build.add(inst.regA64, temp1, temp2);
+        build.add(inst.regA64, lowering.regOp(OP_A(inst)), lowering.regOp(OP_B(inst)));
     }
 }
 
@@ -491,10 +519,6 @@ inline void lower_SUB_INT(IrLoweringA64& lowering, IrInst& inst, uint32_t index,
 {
     auto& build = lowering.build;
     auto& regs = lowering.regs;
-    (void)build;
-    (void)regs;
-    (void)inst;
-    (void)index;
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::w, index, {OP_A(inst), OP_B(inst)});
@@ -502,11 +526,21 @@ inline void lower_SUB_INT(IrLoweringA64& lowering, IrInst& inst, uint32_t index,
     {
         build.sub(inst.regA64, lowering.regOp(OP_A(inst)), uint16_t(lowering.intOp(OP_B(inst))));
     }
+    else if (OP_B(inst).kind == IrOpKind::Constant)
+    {
+        RegisterA64 tmp = regs.allocTemp(KindA64::w);
+        build.mov(tmp, lowering.intOp(OP_B(inst)));
+        build.sub(inst.regA64, lowering.regOp(OP_A(inst)), tmp);
+    }
+    else if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        RegisterA64 tmp = regs.allocTemp(KindA64::w);
+        build.mov(tmp, lowering.intOp(OP_A(inst)));
+        build.sub(inst.regA64, tmp, lowering.regOp(OP_B(inst)));
+    }
     else
     {
-        RegisterA64 temp1 = lowering.tempInt(OP_A(inst));
-        RegisterA64 temp2 = lowering.tempInt(OP_B(inst));
-        build.sub(inst.regA64, temp1, temp2);
+        build.sub(inst.regA64, lowering.regOp(OP_A(inst)), lowering.regOp(OP_B(inst)));
     }
 }
 
@@ -514,26 +548,32 @@ inline void lower_ADD_INT64(IrLoweringA64& lowering, IrInst& inst, uint32_t inde
 {
     auto& build = lowering.build;
     auto& regs = lowering.regs;
-    (void)build;
-    (void)regs;
-    (void)inst;
-    (void)index;
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst), OP_B(inst)});
     if (OP_B(inst).kind == IrOpKind::Constant && uint64_t(lowering.int64Op(OP_B(inst))) <= AssemblyBuilderA64::kMaxImmediate)
     {
-        build.add(inst.regA64, lowering.tempInt64(OP_A(inst)), uint16_t(lowering.int64Op(OP_B(inst))));
+        build.add(inst.regA64, lowering.regOp(OP_A(inst)), uint16_t(lowering.int64Op(OP_B(inst))));
     }
     else if (OP_A(inst).kind == IrOpKind::Constant && uint64_t(lowering.int64Op(OP_A(inst))) <= AssemblyBuilderA64::kMaxImmediate)
     {
-        build.add(inst.regA64, lowering.tempInt64(OP_B(inst)), uint16_t(lowering.int64Op(OP_A(inst))));
+        build.add(inst.regA64, lowering.regOp(OP_B(inst)), uint16_t(lowering.int64Op(OP_A(inst))));
+    }
+    else if (OP_B(inst).kind == IrOpKind::Constant)
+    {
+        RegisterA64 tmp = regs.allocTemp(KindA64::x);
+        emitLoadInt64(build, tmp, lowering.int64Op(OP_B(inst)));
+        build.add(inst.regA64, lowering.regOp(OP_A(inst)), tmp);
+    }
+    else if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        RegisterA64 tmp = regs.allocTemp(KindA64::x);
+        emitLoadInt64(build, tmp, lowering.int64Op(OP_A(inst)));
+        build.add(inst.regA64, tmp, lowering.regOp(OP_B(inst)));
     }
     else
     {
-        RegisterA64 temp1 = lowering.tempInt64(OP_A(inst));
-        RegisterA64 temp2 = lowering.tempInt64(OP_B(inst));
-        build.add(inst.regA64, temp1, temp2);
+        build.add(inst.regA64, lowering.regOp(OP_A(inst)), lowering.regOp(OP_B(inst)));
     }
 }
 
@@ -541,22 +581,28 @@ inline void lower_SUB_INT64(IrLoweringA64& lowering, IrInst& inst, uint32_t inde
 {
     auto& build = lowering.build;
     auto& regs = lowering.regs;
-    (void)build;
-    (void)regs;
-    (void)inst;
-    (void)index;
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst), OP_B(inst)});
     if (OP_B(inst).kind == IrOpKind::Constant && uint64_t(lowering.int64Op(OP_B(inst))) <= AssemblyBuilderA64::kMaxImmediate)
     {
-        build.sub(inst.regA64, lowering.tempInt64(OP_A(inst)), uint16_t(lowering.int64Op(OP_B(inst))));
+        build.sub(inst.regA64, lowering.regOp(OP_A(inst)), uint16_t(lowering.int64Op(OP_B(inst))));
+    }
+    else if (OP_B(inst).kind == IrOpKind::Constant)
+    {
+        RegisterA64 tmp = regs.allocTemp(KindA64::x);
+        emitLoadInt64(build, tmp, lowering.int64Op(OP_B(inst)));
+        build.sub(inst.regA64, lowering.regOp(OP_A(inst)), tmp);
+    }
+    else if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        RegisterA64 tmp = regs.allocTemp(KindA64::x);
+        emitLoadInt64(build, tmp, lowering.int64Op(OP_A(inst)));
+        build.sub(inst.regA64, tmp, lowering.regOp(OP_B(inst)));
     }
     else
     {
-        RegisterA64 temp1 = lowering.tempInt64(OP_A(inst));
-        RegisterA64 temp2 = lowering.tempInt64(OP_B(inst));
-        build.sub(inst.regA64, temp1, temp2);
+        build.sub(inst.regA64, lowering.regOp(OP_A(inst)), lowering.regOp(OP_B(inst)));
     }
 }
 
