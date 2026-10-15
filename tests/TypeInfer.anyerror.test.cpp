@@ -374,7 +374,7 @@ local bar = foo.nutrition + 100
     LUAU_REQUIRE_ERROR_COUNT(expectedErrors, result);
 
     // We should definitely get this error
-    CHECK_EQ("Unknown global 'makesandwich'; consider assigning to it first", toString(result.errors[0]));
+    CHECK_EQ("Unknown variable 'makesandwich', define it with 'local makesandwich = value'", toString(result.errors[0]));
     if (!FFlag::DebugLuauForceOldSolver)
         CHECK(get<NoTypeUse>(result.errors[1]));
     // We get this error if makesandwich() returns a free type

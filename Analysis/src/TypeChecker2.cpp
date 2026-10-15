@@ -2108,16 +2108,23 @@ void TypeChecker2::visit(AstExprGlobal* expr)
     NotNull<Scope> scope = stack.back();
     if (!scope->lookup(expr->name))
     {
-        reportError(UnknownSymbol{expr->name.value, UnknownSymbol::Binding}, expr->location);
+        reportUnknownVariable(expr, scope);
     }
     else
     {
         if (scope->shouldWarnGlobal(expr->name.value) && !warnedGlobals.contains(expr->name.value))
         {
-            reportError(UnknownSymbol{expr->name.value, UnknownSymbol::Binding}, expr->location);
+            reportUnknownVariable(expr, scope);
             warnedGlobals.insert(expr->name.value);
         }
     }
+}
+
+void TypeChecker2::reportUnknownVariable(const AstExprGlobal* expr, NotNull<Scope> scope)
+{
+    if (!unknownVariables)
+        unknownVariables = std::make_unique<UnknownVariableExplainer>(sourceModule->root);
+    reportError(unknownVariableError(*unknownVariables, expr, *scope, module->notes), expr->location);
 }
 
 void TypeChecker2::visit(AstExprVarargs* expr)
