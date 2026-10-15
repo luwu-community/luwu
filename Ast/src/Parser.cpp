@@ -7648,7 +7648,8 @@ AstExpr* Parser::parseTypeTest(AstExpr* value, const Location& start)
 // using a variable named `case` (`case = 1`, `case(x)`, `case.x`)
 static bool caseStartsArm(const Lexeme& next)
 {
-    switch (next.type)
+    // Single-character tokens are their character, which isn't a named Lexeme::Type
+    switch (int(next.type))
     {
     case '=':
     case '(':
