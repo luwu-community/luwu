@@ -11,6 +11,7 @@
 #include <utility>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace Luau
 {
@@ -70,6 +71,11 @@ struct MismatchExplanation
 // Whether `written` is close enough to `meant` to be a misspelling of it: a few edits apart, and long enough that a
 // few edits don't make it a different word.
 bool looksLikeTypo(const std::string& written, const std::string& meant);
+
+// Luwu (helpful subtyping errors): the misspelled properties of a table literal whose expected type is `expectedType`.
+// Each is a property the type lacks, named like one the literal leaves out. For an optional property upstream reports
+// nothing: table types aren't exact, so the literal fits and the value is never read.
+std::vector<std::pair<Location, Typo>> literalPropertyTypos(const AstExprTable* expr, TypeId expectedType);
 
 // Returns nullopt when the types are of a kind the differ doesn't take apart (generics, type
 // functions, classes), when no failing place can be found in two structured types, and when

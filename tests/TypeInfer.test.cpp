@@ -20,6 +20,7 @@ LUAU_DYNAMIC_FASTINT(LuauConstraintGeneratorRecursionLimit)
 LUAU_DYNAMIC_FASTINT(LuauSubtypingRecursionLimit)
 
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
+LUAU_FASTFLAG(LuwuHelpfulSubtypingErrors)
 LUAU_FASTFLAG(LuauInstantiateInSubtyping)
 LUAU_FASTINT(LuauCheckRecursionLimit)
 LUAU_FASTINT(LuauNormalizeCacheLimit)
@@ -3207,6 +3208,79 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "unknown_variable_typo_comes_before_inner_sco
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK_EQ("Typo 'result': Did you mean 'resutl'?", toString(result.errors[0]));
     CHECK(getMainModule()->notes.empty());
+}
+
+// Luwu: misspellings aren't false positives, so nonstrict mode reports them too. Assigning to a misspelled local
+// creates a global, which nonstrict code otherwise does silently.
+// Nonstrict mode doesn't report errors in source order, so these tests compare them sorted.
+static std::vector<std::string> sortedMessages(const CheckResult& result)
+{
+    std::vector<std::string> messages;
+    for (const TypeError& error : result.errors)
+        messages.push_back(toString(error));
+    std::sort(messages.begin(), messages.end());
+    return messages;
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "unknown_variable_typos_are_reported_in_nonstrict_mode")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        --!nonstrict
+        local othername = 1
+        print(othrname)
+        pirnt("hi")
+        othrname = 5
+        local cfg: { verbose: boolean? } = { verbos = true }
+    )");
+
+    const std::vector<std::string> expected = {
+        "Did you mean 'verbose' instead of 'verbos'?",
+        "Typo 'othrname': Did you mean 'othername'?",
+        "Typo 'othrname': Did you mean 'othername'?",
+        "Typo 'pirnt': Did you mean 'print'?",
+    };
+    CHECK_EQ(expected, sortedMessages(result));
+}
+
+// Luwu: strict mode reports a global only assigned in the module once, but a misspelled local at every use
+TEST_CASE_FIXTURE(BuiltinsFixture, "unknown_variable_misspelled_local_is_a_typo_at_every_use")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    CheckResult result = check(R"(
+        local othername = 1
+        othrname = 5
+        print(othrname)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ("Typo 'othrname': Did you mean 'othername'?", toString(result.errors[0]));
+    CHECK_EQ("Typo 'othrname': Did you mean 'othername'?", toString(result.errors[1]));
+}
+
+// A global named like a local's plural is meant, but a plural nobody defined is still suggested
+TEST_CASE_FIXTURE(BuiltinsFixture, "unknown_variable_plural_global_beside_a_local_is_meant")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    CheckResult result = check(R"(
+        --!nonstrict
+        local player = 1
+        players = {}
+        print(players, player)
+        print(items)
+        local item = 2
+        print(itemz, item)
+    )");
+
+    const std::vector<std::string> expected = {
+        "Typo 'itemz': Did you mean 'item'?",
+        "Unknown variable 'items', define it with 'local items = value'",
+    };
+    CHECK_EQ(expected, sortedMessages(result));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "unknown_variable_typewriting")
