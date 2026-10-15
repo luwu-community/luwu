@@ -201,6 +201,9 @@ target_sources(Luwu.CodeGen PRIVATE
     CodeGen/src/IrTranslation.h
     CodeGen/src/IrValueLocationTracking.h
     CodeGen/src/NativeState.h
+
+    CodeGen/src/generated/LoweringRulesA64.h
+    CodeGen/src/generated/LoweringRulesX64.h
 )
 
 # Luwu.Analysis Sources

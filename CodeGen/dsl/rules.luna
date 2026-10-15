@@ -1,0 +1,260 @@
+;; rules.luna
+;; Luwu NCG Lowering Rules
+
+
+;; ============================================================================
+;; Sub-rules / Macro Templates
+;; ============================================================================
+
+(define-subrule (check-nonzero [value :reg] [fallback :label])
+  (branch-if-not-zero! value fallback))
+
+(define-subrule (check-zero [value :reg] [fallback :label])
+  (branch-if-zero! value fallback))
+
+(define-subrule (check-equal [val :reg] [expected :any] [fallback :label])
+  (branch-if-equal! val expected fallback))
+
+(define-subrule (check-not-equal [val :reg] [expected :any] [fallback :label])
+  (branch-if-not-equal! val expected fallback))
+
+(define-subrule (check-negative [val :reg] [fallback :label])
+  (branch-if-negative! val fallback))
+
+;; ============================================================================
+;; Top-Level Opcode Rules
+;; ============================================================================
+
+(define-rule (set-savedpc [pc-offset :uint])
+  (let ([pc-addr (code-address pc-offset)]
+        [ci      (load-ptr (mem rState :lua_State.ci))])
+    (store-ptr! (mem ci :CallInfo.savedpc) pc-addr)))
+
+(define-rule (adjust-stack-to-top)
+  (let ([ci  (load-ptr (mem rState :lua_State.ci))]
+        [top (load-ptr (mem ci :CallInfo.top))])
+    (store-ptr! (mem rState :lua_State.top) top)))
+
+(define-rule (check-readonly [table :reg] [fallback :label])
+  (check-nonzero
+    (load-u8 (mem table :LuaTable.readonly))
+    fallback))
+
+(define-rule (check-no-metatable [table :reg] [fallback :label])
+  (check-nonzero
+    (load-ptr (mem table :LuaTable.metatable))
+    fallback))
+
+(define-rule (check-node-value [node :reg] [fallback :label])
+  (check-zero
+    (load-u32 (mem node :LuaNode.val.tt))
+    fallback))
+
+(define-rule (check-buffer-mutable [buf :reg] [fallback :label])
+  (check-equal
+    (load-u8 (mem buf :Buffer.mode))
+    :LUA_BHOST_IMMUTABLE
+    fallback))
+
+(define-rule (check-fastcall-res [res :reg] [fallback :label])
+  (check-negative res fallback))
+
+(define-rule (check-userdata-tag [udata :reg] [tag :int] [fallback :label])
+  (check-not-equal
+    (load-u8 (mem udata :Udata.tag))
+    tag
+    fallback))
+
+(define-rule (load-env)
+  (%produce-ptr
+    (load-ptr (mem rClosure :Closure.env))))
+
+(define-rule (load-buffer-data [buf :reg])
+  (%produce-ptr-reuse buf
+    (load-ptr (mem buf :Buffer.data))))
+
+(define-rule (load-owner-class)
+  (%produce-ptr
+    (let ([proto (load-ptr (mem rClosure :Closure.l.p))])
+      (load-ptr (mem proto :Proto.ownerclass)))))
+
+(define-rule (sexti8-int [val :reg])
+  (%produce-i32-reuse val
+    (sign-extend-8 val)))
+
+(define-rule (sexti16-int [val :reg])
+  (%produce-i32-reuse val
+    (sign-extend-16 val)))
+
+(define-rule (string-len [str :reg])
+  (%produce-u32
+    (load-u32 (mem str :TString.len))))
+
+(define-rule (truncate-uint [val :reg])
+  (%produce-u32-reuse val
+    (truncate-uint val)))
+
+(define-rule (buffer-isfrozen [buf :reg])
+  (%produce-u32
+    (is-equal (load-u8 (mem buf :Buffer.mode)) :LUA_BHOST_IMMUTABLE)))
+
+(define-rule (byteswap-uint [val :op])
+  (%produce-u32-reuse val
+    (byteswap-32 val)))
+
+(define-rule (byteswap-int64 [val :op])
+  (%produce-i64-reuse val
+    (byteswap-64 val)))
+
+(define-rule (bitnot-uint [val :op])
+  (%produce-u32-reuse val
+    (bitnot-32 val)))
+
+(define-rule (bitnot-int64 [val :op])
+  (%produce-i64-reuse val
+    (bitnot-64 val)))
+
+(define-rule (bitand-uint [a :op] [b :op])
+  (%produce-u32-reuse [a b]
+    (bitand-32 a b)))
+
+(define-rule (bitxor-uint [a :op] [b :op])
+  (%produce-u32-reuse [a b]
+    (bitxor-32 a b)))
+
+(define-rule (bitor-uint [a :op] [b :op])
+  (%produce-u32-reuse [a b]
+    (bitor-32 a b)))
+
+(define-rule (bitand-int64 [a :op] [b :op])
+  (%produce-i64-reuse [a b]
+    (bitand-64 a b)))
+
+(define-rule (bitxor-int64 [a :op] [b :op])
+  (%produce-i64-reuse [a b]
+    (bitxor-64 a b)))
+
+(define-rule (bitor-int64 [a :op] [b :op])
+  (%produce-i64-reuse [a b]
+    (bitor-64 a b)))
+
+(define-rule (mul-int64 [a :op] [b :op])
+  (%produce-i64-reuse [a b]
+    (mul-64 a b)))
+
+(define-rule (add-int [a :op] [b :op])
+  (%produce-i32-reuse [a b]
+    (target-case
+      [:x64
+       (cond
+         [(constant? a)
+          (lea-imm-32! b a)]
+         [(inst? a)
+          (if (reused? a)
+              (cond
+                [(inst? b)         (add-reg-32! b)]
+                [(= (int-val b) 1) (inc!)]
+                [else              (add-imm-32! b)])
+              (cond
+                [(inst? b)         (lea-reg-32! a b)]
+                [else              (lea-imm-32! a b)]))]
+         [else (unsupported!)])]
+      [:a64
+       (cond
+         [(and (constant? b) (fits-imm-a64-32? b))
+          (add-imm-32! a b)]
+         [(and (constant? a) (fits-imm-a64-32? a))
+          (add-imm-32! b a)]
+         [else
+          (add-reg-32! a b)])])))
+
+(define-rule (sub-int [a :op] [b :op])
+  (%produce-i32-reuse [a b]
+    (target-case
+      [:x64
+       (cond
+         [(inst? a)
+          (cond
+            [(constant? b)
+             (if (not-reused? a)
+                 (lea-sub-32! a b)
+                 (sub-imm-32! b))]
+            [else
+             (if (not-reused? a)
+                 (mov-reg! a))
+             (sub-reg-32! b)])]
+         [(inst? b)
+          (mov-imm-32! a)
+          (sub-reg-32! b)]
+         [else (unsupported!)])]
+      [:a64
+       (cond
+         [(and (constant? b) (fits-imm-a64-32? b))
+          (sub-imm-32! a b)]
+         [else
+          (sub-reg-32! a b)])])))
+
+(define-rule (add-int64 [a :op] [b :op])
+  (%produce-i64-reuse [a b]
+    (target-case
+      [:x64
+       (cond
+         [(constant? a)
+          (if (fits-i32? a)
+              (lea-imm-64! b a)
+              (begin
+                (mov-imm-64! a)
+                (add-reg-64! b)))]
+         [(inst? a)
+          (if (reused? a)
+              (cond
+                [(inst? b)           (add-reg-64! b)]
+                [(= (int64-val b) 1) (inc!)]
+                [(fits-i32? b)       (add-imm-64! b)]
+                [else                (add-tmp-64! b)])
+              (cond
+                [(inst? b)           (lea-reg-64! a b)]
+                [(fits-i32? b)       (lea-imm-64! a b)]
+                [else
+                 (mov-imm-64! b)
+                 (add-reg-64! a)]))]
+         [else (unsupported!)])]
+      [:a64
+       (cond
+         [(and (constant? b) (fits-imm-a64-64? b))
+          (add-imm-64! a b)]
+         [(and (constant? a) (fits-imm-a64-64? a))
+          (add-imm-64! b a)]
+         [else
+          (add-reg-64! a b)])])))
+
+(define-rule (sub-int64 [a :op] [b :op])
+  (%produce-i64-reuse [a b]
+    (target-case
+      [:x64
+       (cond
+         [(inst? a)
+          (cond
+            [(constant? b)
+             (if (fits-i32? b)
+                 (if (not-reused? a)
+                     (lea-sub-64! a b)
+                     (sub-imm-64! b))
+                 (begin
+                   (if (not-reused? a)
+                       (mov-reg! a))
+                   (sub-tmp-64! b)))]
+            [else
+             (if (not-reused? a)
+                 (mov-reg! a))
+             (sub-reg-64! b)])]
+         [(inst? b)
+          (mov-imm-64! a)
+          (sub-reg-64! b)]
+         [else (unsupported!)])]
+      [:a64
+       (cond
+         [(and (constant? b) (fits-imm-a64-64? b))
+          (sub-imm-64! a b)]
+         [else
+          (sub-reg-64! a b)])])))

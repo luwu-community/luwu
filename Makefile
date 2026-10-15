@@ -42,6 +42,11 @@ CODEGEN_SOURCES=$(wildcard CodeGen/src/*.cpp)
 CODEGEN_OBJECTS=$(CODEGEN_SOURCES:%=$(BUILD)/%.o)
 CODEGEN_TARGET=$(BUILD)/libluaucodegen.a
 
+DSL_SOURCES=$(wildcard CodeGen/dsl/*.cpp)
+DSL_COMPILER=$(BUILD)/luwu-dsl-compiler
+DSL_RULES=CodeGen/dsl/rules.luna
+DSL_GENERATED=CodeGen/src/generated/LoweringRulesA64.h CodeGen/src/generated/LoweringRulesX64.h
+
 VM_SOURCES=$(wildcard VM/src/*.cpp)
 VM_OBJECTS=$(VM_SOURCES:%=$(BUILD)/%.o)
 VM_TARGET=$(BUILD)/libluauvm.a
@@ -177,7 +182,7 @@ $(JITINLINER_OBJECTS): CXXFLAGS+=-std=c++17 -IInliner/include -IBytecode/include
 $(COMPILER_OBJECTS): CXXFLAGS+=-std=c++17 -IBytecode/include -ICompiler/include -ICommon/include -IAst/include
 $(CONFIG_OBJECTS): CXXFLAGS+=-std=c++17 -IConfig/include -ICommon/include -IAst/include -IBytecode/include -ICompiler/include -IVM/include
 $(ANALYSIS_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IAnalysis/include -IConfig/include -IBytecode/include -ICompiler/include -IVM/include
-$(CODEGEN_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -ICodeGen/include -IVM/include -IVM/src # Code generation needs VM internals
+$(CODEGEN_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -ICodeGen/include -ICodeGen/src -IVM/include -IVM/src # Code generation needs VM internals
 $(VM_OBJECTS): CXXFLAGS+=-std=c++11 -ICommon/include -IVM/include
 $(REQUIRE_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IVM/include -IAst/include -IConfig/include -IRequire/include
 $(ISOCLINE_OBJECTS): CXXFLAGS+=-Wno-unused-function -Iextern/isocline/include
@@ -214,6 +219,7 @@ conformance: $(TESTS_TARGET)
 
 clean:
 	rm -rf $(BUILD)
+	rm -rf CodeGen/src/generated
 	rm -rf build/fuzz fuzz-proto fuzz-prototest
 	rm -rf $(EXECUTABLE_ALIASES)
 
@@ -301,6 +307,16 @@ $(COMPILER_TARGET): $(COMPILER_OBJECTS)
 $(CONFIG_TARGET): $(CONFIG_OBJECTS)
 $(ANALYSIS_TARGET): $(ANALYSIS_OBJECTS)
 $(EQSAT_TARGET): $(EQSAT_OBJECTS)
+$(DSL_COMPILER): $(DSL_SOURCES)
+	@mkdir -p $(dir $@)
+	$(CXX) -std=c++17 -O2 $^ -o $@
+
+$(DSL_GENERATED): $(DSL_RULES) $(DSL_COMPILER)
+	@mkdir -p CodeGen/src/generated
+	$(DSL_COMPILER) $(DSL_RULES) CodeGen/src/generated
+
+$(CODEGEN_OBJECTS): $(DSL_GENERATED)
+
 $(CODEGEN_TARGET): $(CODEGEN_OBJECTS)
 $(VM_TARGET): $(VM_OBJECTS)
 $(REQUIRE_TARGET): $(REQUIRE_OBJECTS)

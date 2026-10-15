@@ -8,6 +8,7 @@
 #include "lobject.h"
 #include "ltm.h"
 #include "lstate.h"
+#include <climits>
 
 // AArch64 ABI reminder:
 // Arguments: x0-x7, v0-v7
@@ -53,6 +54,22 @@ inline constexpr AddressA64 sTemporary = mem(sp, kStashSlots * 8);
 inline void emitUpdateBase(AssemblyBuilderA64& build)
 {
     build.ldr(rBase, mem(rState, offsetof(lua_State, base)));
+}
+
+inline void emitAddOffset(AssemblyBuilderA64& build, RegisterA64 dst, RegisterA64 src, size_t offset)
+{
+    CODEGEN_ASSERT(dst != src);
+    CODEGEN_ASSERT(offset <= INT_MAX);
+
+    if (offset <= AssemblyBuilderA64::kMaxImmediate)
+    {
+        build.add(dst, src, uint16_t(offset));
+    }
+    else
+    {
+        build.mov(dst, int(offset));
+        build.add(dst, dst, src);
+    }
 }
 
 } // namespace A64
