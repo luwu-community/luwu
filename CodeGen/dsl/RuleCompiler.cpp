@@ -18,77 +18,67 @@ static std::string getRawOp(const EvalContext& ctx, const SExpr& elem)
     return elem.text;
 }
 
-static std::string evalPredicate(const EvalContext& ctx, const SExpr& expr, const std::string& destReg)
-{
-    if (!expr.isList() || expr.elements.empty())
-        throw std::runtime_error("Predicate must be a list: " + expr.text);
+#include <string_view>
 
-    const std::string& head = expr.elements[0].text;
-    if (head == "constant?")
-    {
+static std::string evalPredicate(const EvalContext& ctx, const SExpr& expr, const std::string& destReg);
+
+using PredicateTrampoline = std::string (*)(const EvalContext& ctx, const SExpr& expr, const std::string& destReg);
+
+static const std::unordered_map<std::string_view, PredicateTrampoline> kPredicateTrampolines = {
+    {"constant?", [](const EvalContext& ctx, const SExpr& expr, const std::string&) -> std::string {
         if (expr.elements.size() != 2)
             throw std::runtime_error("constant? requires 1 argument");
         return getRawOp(ctx, expr.elements[1]) + ".kind == IrOpKind::Constant";
-    }
-    else if (head == "inst?")
-    {
+    }},
+    {"inst?", [](const EvalContext& ctx, const SExpr& expr, const std::string&) -> std::string {
         if (expr.elements.size() != 2)
             throw std::runtime_error("inst? requires 1 argument");
         return getRawOp(ctx, expr.elements[1]) + ".kind == IrOpKind::Inst";
-    }
-    else if (head == "reused?")
-    {
+    }},
+    {"reused?", [](const EvalContext& ctx, const SExpr& expr, const std::string& destReg) -> std::string {
         if (expr.elements.size() != 2)
             throw std::runtime_error("reused? requires 1 argument");
         return destReg + " == lowering.regOp(" + getRawOp(ctx, expr.elements[1]) + ")";
-    }
-    else if (head == "not-reused?")
-    {
+    }},
+    {"not-reused?", [](const EvalContext& ctx, const SExpr& expr, const std::string& destReg) -> std::string {
         if (expr.elements.size() != 2)
             throw std::runtime_error("not-reused? requires 1 argument");
         return destReg + " != lowering.regOp(" + getRawOp(ctx, expr.elements[1]) + ")";
-    }
-    else if (head == "=")
-    {
+    }},
+    {"=", [](const EvalContext& ctx, const SExpr& expr, const std::string& destReg) -> std::string {
         if (expr.elements.size() != 3)
             throw std::runtime_error("= requires 2 arguments");
         std::string lhs = evalPredicate(ctx, expr.elements[1], destReg);
         std::string rhs = expr.elements[2].text;
         return lhs + " == " + rhs;
-    }
-    else if (head == "int-val")
-    {
+    }},
+    {"int-val", [](const EvalContext& ctx, const SExpr& expr, const std::string&) -> std::string {
         if (expr.elements.size() != 2)
             throw std::runtime_error("int-val requires 1 argument");
         return "lowering.intOp(" + getRawOp(ctx, expr.elements[1]) + ")";
-    }
-    else if (head == "int64-val")
-    {
+    }},
+    {"int64-val", [](const EvalContext& ctx, const SExpr& expr, const std::string&) -> std::string {
         if (expr.elements.size() != 2)
             throw std::runtime_error("int64-val requires 1 argument");
         return "lowering.int64Op(" + getRawOp(ctx, expr.elements[1]) + ")";
-    }
-    else if (head == "fits-i32?")
-    {
+    }},
+    {"fits-i32?", [](const EvalContext& ctx, const SExpr& expr, const std::string&) -> std::string {
         if (expr.elements.size() != 2)
             throw std::runtime_error("fits-i32? requires 1 argument");
         std::string raw = getRawOp(ctx, expr.elements[1]);
         return "lowering.int64Op(" + raw + ") >= INT32_MIN && lowering.int64Op(" + raw + ") <= INT32_MAX";
-    }
-    else if (head == "fits-imm-a64-32?")
-    {
+    }},
+    {"fits-imm-a64-32?", [](const EvalContext& ctx, const SExpr& expr, const std::string&) -> std::string {
         if (expr.elements.size() != 2)
             throw std::runtime_error("fits-imm-a64-32? requires 1 argument");
         return "unsigned(lowering.intOp(" + getRawOp(ctx, expr.elements[1]) + ")) <= AssemblyBuilderA64::kMaxImmediate";
-    }
-    else if (head == "fits-imm-a64-64?")
-    {
+    }},
+    {"fits-imm-a64-64?", [](const EvalContext& ctx, const SExpr& expr, const std::string&) -> std::string {
         if (expr.elements.size() != 2)
             throw std::runtime_error("fits-imm-a64-64? requires 1 argument");
         return "uint64_t(lowering.int64Op(" + getRawOp(ctx, expr.elements[1]) + ")) <= AssemblyBuilderA64::kMaxImmediate";
-    }
-    else if (head == "and")
-    {
+    }},
+    {"and", [](const EvalContext& ctx, const SExpr& expr, const std::string& destReg) -> std::string {
         if (expr.elements.size() < 2)
             throw std::runtime_error("and requires at least 1 argument");
         std::string res;
@@ -98,9 +88,8 @@ static std::string evalPredicate(const EvalContext& ctx, const SExpr& expr, cons
             res += evalPredicate(ctx, expr.elements[i], destReg);
         }
         return res;
-    }
-    else if (head == "or")
-    {
+    }},
+    {"or", [](const EvalContext& ctx, const SExpr& expr, const std::string& destReg) -> std::string {
         if (expr.elements.size() < 2)
             throw std::runtime_error("or requires at least 1 argument");
         std::string res;
@@ -110,176 +99,303 @@ static std::string evalPredicate(const EvalContext& ctx, const SExpr& expr, cons
             res += evalPredicate(ctx, expr.elements[i], destReg);
         }
         return res;
-    }
-    else if (head == "not")
-    {
+    }},
+    {"not", [](const EvalContext& ctx, const SExpr& expr, const std::string& destReg) -> std::string {
         if (expr.elements.size() != 2)
             throw std::runtime_error("not requires 1 argument");
         return "!(" + evalPredicate(ctx, expr.elements[1], destReg) + ")";
-    }
-    else
-    {
-        throw std::runtime_error("Unknown predicate: " + head);
-    }
+    }}
+};
+
+static std::string evalPredicate(const EvalContext& ctx, const SExpr& expr, const std::string& destReg)
+{
+    if (!expr.isList() || expr.elements.empty())
+        throw std::runtime_error("Predicate must be a list: " + expr.text);
+
+    auto it = kPredicateTrampolines.find(expr.elements[0].text);
+    if (it != kPredicateTrampolines.end())
+        return it->second(ctx, expr, destReg);
+
+    throw std::runtime_error("Unknown predicate: " + expr.elements[0].text);
 }
 
-Operand evalExpr(std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent)
+using ExprTrampoline = Operand (*)(std::ostream& os, EvalContext& ctx, TargetBuilder& target,
+                                  const SExpr& expr, const std::string& destReg, const std::string& indent);
+
+static Operand evalExplicitWidthRequired(std::ostream&, EvalContext&, TargetBuilder&, const SExpr& expr, const std::string&, const std::string&)
 {
-    if (expr.isSymbol())
-    {
-        auto it = ctx.env.find(expr.text);
-        if (it != ctx.env.end())
-            return it->second;
-        return Operand::makeReg(TypeKind::Ptr, expr.text);
-    }
-    if (expr.isNumber())
-    {
-        return Operand::makeImm(TypeKind::I32, std::to_string(expr.intValue));
-    }
-    if (expr.isKeyword())
-    {
-        return Operand::makeImm(TypeKind::I32, ctx.resolveOffset(expr.text));
-    }
-
-    if (!expr.isList())
-        throw std::runtime_error("Unexpected SExpr kind in evalExpr");
-
     const std::string& head = expr.elements[0].text;
+    std::string base = head;
+    if (base == "add-int" || base == "add-int64")
+        base = "add";
+    else if (base == "sub-int" || base == "sub-int64")
+        base = "sub";
+    throw std::runtime_error(head + " requires explicit width suffix: use (" + base + "-32 ...) or (" + base + "-64 ...)");
+}
 
-    if (head == "code-address")
-    {
+static Operand evalBitwiseBinOp(std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent, const char* op, int bits)
+{
+    if (expr.elements.size() != 3)
+        throw std::runtime_error(expr.elements[0].text + " requires 2 arguments");
+    std::string rawOpA = getRawOp(ctx, expr.elements[1]);
+    std::string rawOpB = getRawOp(ctx, expr.elements[2]);
+    return target.emitBitwiseBinOp(os, indent, ctx, op, bits, rawOpA, rawOpB, destReg);
+}
+
+static Operand evalAddReg(std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent, int bits)
+{
+    if (expr.elements.size() == 2)
+        target.emitAddOp(os, indent, ctx, getRawOp(ctx, expr.elements[1]), destReg, bits);
+    else if (expr.elements.size() == 3)
+        target.emitAddReg(os, indent, ctx, getRawOp(ctx, expr.elements[1]), getRawOp(ctx, expr.elements[2]), destReg, bits);
+    else
+        throw std::runtime_error(expr.elements[0].text + " requires 1 or 2 arguments");
+    return Operand{};
+}
+
+static Operand evalAddImm(std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent, int bits)
+{
+    if (expr.elements.size() == 2)
+        target.emitAddImmOp(os, indent, ctx, getRawOp(ctx, expr.elements[1]), destReg, bits);
+    else if (expr.elements.size() == 3)
+        target.emitAddImm(os, indent, ctx, getRawOp(ctx, expr.elements[1]), getRawOp(ctx, expr.elements[2]), destReg, bits);
+    else
+        throw std::runtime_error(expr.elements[0].text + " requires 1 or 2 arguments");
+    return Operand{};
+}
+
+static Operand evalSubReg(std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent, int bits)
+{
+    if (expr.elements.size() == 2)
+        target.emitSubOp(os, indent, ctx, getRawOp(ctx, expr.elements[1]), destReg, bits);
+    else if (expr.elements.size() == 3)
+        target.emitSubReg(os, indent, ctx, getRawOp(ctx, expr.elements[1]), getRawOp(ctx, expr.elements[2]), destReg, bits);
+    else
+        throw std::runtime_error(expr.elements[0].text + " requires 1 or 2 arguments");
+    return Operand{};
+}
+
+static Operand evalSubImm(std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent, int bits)
+{
+    if (expr.elements.size() == 2)
+        target.emitSubImmOp(os, indent, ctx, getRawOp(ctx, expr.elements[1]), destReg, bits);
+    else if (expr.elements.size() == 3)
+        target.emitSubImm(os, indent, ctx, getRawOp(ctx, expr.elements[1]), getRawOp(ctx, expr.elements[2]), destReg, bits);
+    else
+        throw std::runtime_error(expr.elements[0].text + " requires 1 or 2 arguments");
+    return Operand{};
+}
+
+static const std::unordered_map<std::string_view, ExprTrampoline> kExprTrampolines = {
+    // Memory & Loads
+    {"code-address", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
         if (expr.elements.size() != 2)
             throw std::runtime_error("code-address takes 1 argument");
         Operand offsetOp = evalExpr(os, ctx, target, expr.elements[1], "", indent);
         return target.emitCodeAddress(os, indent, ctx, offsetOp.text, destReg);
-    }
-    else if (head == "load-ptr" || head == "load-u8" || head == "load-u32")
-    {
+    }},
+    {"load-ptr", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
         if (expr.elements.size() != 2)
-            throw std::runtime_error(head + " takes 1 argument");
-        TypeKind tk = (head == "load-ptr") ? TypeKind::Ptr : ((head == "load-u8") ? TypeKind::U8 : TypeKind::U32);
+            throw std::runtime_error("load-ptr takes 1 argument");
         auto [base, offset] = evalMem(os, ctx, target, expr.elements[1], destReg, indent);
-        return target.emitLoad(os, indent, ctx, tk, base, offset, destReg);
-    }
-    else if (head == "sign-extend-8" || head == "sign-extend-16")
-    {
+        return target.emitLoad(os, indent, ctx, TypeKind::Ptr, base, offset, destReg);
+    }},
+    {"load-u8", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
         if (expr.elements.size() != 2)
-            throw std::runtime_error(head + " takes 1 argument");
-        int bits = (head == "sign-extend-8") ? 8 : 16;
+            throw std::runtime_error("load-u8 takes 1 argument");
+        auto [base, offset] = evalMem(os, ctx, target, expr.elements[1], destReg, indent);
+        return target.emitLoad(os, indent, ctx, TypeKind::U8, base, offset, destReg);
+    }},
+    {"load-u32", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
+        if (expr.elements.size() != 2)
+            throw std::runtime_error("load-u32 takes 1 argument");
+        auto [base, offset] = evalMem(os, ctx, target, expr.elements[1], destReg, indent);
+        return target.emitLoad(os, indent, ctx, TypeKind::U32, base, offset, destReg);
+    }},
+    {"sign-extend-8", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
+        if (expr.elements.size() != 2)
+            throw std::runtime_error("sign-extend-8 takes 1 argument");
         Operand val = evalExpr(os, ctx, target, expr.elements[1], "", indent);
-        return target.emitSignExtend(os, indent, ctx, bits, val, destReg);
-    }
-    else if (head == "store-ptr!" || head == "store-u8!")
-    {
+        return target.emitSignExtend(os, indent, ctx, 8, val, destReg);
+    }},
+    {"sign-extend-16", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
+        if (expr.elements.size() != 2)
+            throw std::runtime_error("sign-extend-16 takes 1 argument");
+        Operand val = evalExpr(os, ctx, target, expr.elements[1], "", indent);
+        return target.emitSignExtend(os, indent, ctx, 16, val, destReg);
+    }},
+    {"store-ptr!", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&, const std::string& indent) -> Operand {
         if (expr.elements.size() != 3)
-            throw std::runtime_error(head + " requires (store! (mem base offset) val)");
-        TypeKind tk = (head == "store-ptr!") ? TypeKind::Ptr : TypeKind::U8;
+            throw std::runtime_error("store-ptr! requires (store! (mem base offset) val)");
         auto [base, offset] = evalMem(os, ctx, target, expr.elements[1], "", indent);
         Operand val = evalExpr(os, ctx, target, expr.elements[2], "", indent);
         std::string valName = expr.elements[2].isSymbol() ? expr.elements[2].text : "";
-        target.emitStore(os, indent, ctx, tk, base, offset, val, valName);
+        target.emitStore(os, indent, ctx, TypeKind::Ptr, base, offset, val, valName);
         return Operand{};
-    }
-    else if (head == "branch-if-not-zero!" || head == "branch-if-zero!")
-    {
+    }},
+    {"store-u8!", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&, const std::string& indent) -> Operand {
         if (expr.elements.size() != 3)
-            throw std::runtime_error(head + " requires val and label");
-        bool notZero = (head == "branch-if-not-zero!");
+            throw std::runtime_error("store-u8! requires (store! (mem base offset) val)");
+        auto [base, offset] = evalMem(os, ctx, target, expr.elements[1], "", indent);
+        Operand val = evalExpr(os, ctx, target, expr.elements[2], "", indent);
+        std::string valName = expr.elements[2].isSymbol() ? expr.elements[2].text : "";
+        target.emitStore(os, indent, ctx, TypeKind::U8, base, offset, val, valName);
+        return Operand{};
+    }},
+
+    // Control flow & Branches
+    {"branch-if-not-zero!", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&, const std::string& indent) -> Operand {
+        if (expr.elements.size() != 3)
+            throw std::runtime_error("branch-if-not-zero! requires val and label");
         Operand val = evalExpr(os, ctx, target, expr.elements[1], "", indent);
         Operand labelOp = evalExpr(os, ctx, target, expr.elements[2], "", indent);
-        target.emitBranchIfZero(os, indent, ctx, notZero, val, labelOp.text);
+        target.emitBranchIfZero(os, indent, ctx, true, val, labelOp.text);
         return Operand{};
-    }
-    else if (head == "branch-if-equal!" || head == "branch-if-not-equal!")
-    {
+    }},
+    {"branch-if-zero!", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&, const std::string& indent) -> Operand {
+        if (expr.elements.size() != 3)
+            throw std::runtime_error("branch-if-zero! requires val and label");
+        Operand val = evalExpr(os, ctx, target, expr.elements[1], "", indent);
+        Operand labelOp = evalExpr(os, ctx, target, expr.elements[2], "", indent);
+        target.emitBranchIfZero(os, indent, ctx, false, val, labelOp.text);
+        return Operand{};
+    }},
+    {"branch-if-equal!", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&, const std::string& indent) -> Operand {
         if (expr.elements.size() != 4)
-            throw std::runtime_error(head + " requires val, expected, and label");
-        bool notEqual = (head == "branch-if-not-equal!");
+            throw std::runtime_error("branch-if-equal! requires val, expected, and label");
         Operand val = evalExpr(os, ctx, target, expr.elements[1], "", indent);
         Operand expected = evalExpr(os, ctx, target, expr.elements[2], "", indent);
         Operand labelOp = evalExpr(os, ctx, target, expr.elements[3], "", indent);
-        target.emitBranchIfEqual(os, indent, ctx, notEqual, val, expected, labelOp.text);
+        target.emitBranchIfEqual(os, indent, ctx, false, val, expected, labelOp.text);
         return Operand{};
-    }
-    else if (head == "branch-if-negative!")
-    {
+    }},
+    {"branch-if-not-equal!", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&, const std::string& indent) -> Operand {
+        if (expr.elements.size() != 4)
+            throw std::runtime_error("branch-if-not-equal! requires val, expected, and label");
+        Operand val = evalExpr(os, ctx, target, expr.elements[1], "", indent);
+        Operand expected = evalExpr(os, ctx, target, expr.elements[2], "", indent);
+        Operand labelOp = evalExpr(os, ctx, target, expr.elements[3], "", indent);
+        target.emitBranchIfEqual(os, indent, ctx, true, val, expected, labelOp.text);
+        return Operand{};
+    }},
+    {"branch-if-negative!", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&, const std::string& indent) -> Operand {
         if (expr.elements.size() != 3)
             throw std::runtime_error("branch-if-negative! requires val and label");
         Operand val = evalExpr(os, ctx, target, expr.elements[1], "", indent);
         Operand labelOp = evalExpr(os, ctx, target, expr.elements[2], "", indent);
         target.emitBranchIfNegative(os, indent, ctx, val, labelOp.text);
         return Operand{};
-    }
-    else if (head == "truncate-uint")
-    {
+    }},
+    {"truncate-uint", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
         if (expr.elements.size() != 2)
             throw std::runtime_error("truncate-uint requires 1 argument");
         Operand val = evalExpr(os, ctx, target, expr.elements[1], "", indent);
         return target.emitTruncateUint(os, indent, ctx, val, destReg);
-    }
-    else if (head == "is-equal")
-    {
+    }},
+    {"is-equal", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
         if (expr.elements.size() != 3)
             throw std::runtime_error("is-equal requires 2 arguments");
         Operand val = evalExpr(os, ctx, target, expr.elements[1], "", indent);
         Operand expected = evalExpr(os, ctx, target, expr.elements[2], "", indent);
         return target.emitIsEqual(os, indent, ctx, val, expected, destReg);
-    }
-    else if (head == "byteswap-32" || head == "byteswap-64")
-    {
+    }},
+
+    // Byteswap & Bitwise
+    {"byteswap-32", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
         if (expr.elements.size() != 2)
-            throw std::runtime_error(head + " requires 1 argument");
-        int bits = (head == "byteswap-64") ? 64 : 32;
-        std::string rawOp = getRawOp(ctx, expr.elements[1]);
-        return target.emitByteSwap(os, indent, ctx, bits, rawOp, destReg);
-    }
-    else if (head == "byteswap")
-    {
-        throw std::runtime_error("byteswap requires explicit width suffix: use (byteswap-32 ...) or (byteswap-64 ...)");
-    }
-    else if (head == "bitnot-32" || head == "bitnot-64" || head == "bitwise-not-32" || head == "bitwise-not-64")
-    {
+            throw std::runtime_error("byteswap-32 requires 1 argument");
+        return target.emitByteSwap(os, indent, ctx, 32, getRawOp(ctx, expr.elements[1]), destReg);
+    }},
+    {"byteswap-64", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
         if (expr.elements.size() != 2)
-            throw std::runtime_error(head + " requires 1 argument");
-        int bits = (head.find("-64") != std::string::npos) ? 64 : 32;
-        std::string rawOp = getRawOp(ctx, expr.elements[1]);
-        return target.emitBitwiseNot(os, indent, ctx, bits, rawOp, destReg);
-    }
-    else if (head == "bitnot" || head == "bitwise-not")
-    {
-        throw std::runtime_error(head + " requires explicit width suffix: use (" + head + "-32 ...) or (" + head + "-64 ...)");
-    }
-    else if (head == "bitand-32" || head == "bitand-64" || head == "bitwise-and-32" || head == "bitwise-and-64" ||
-             head == "bitor-32"  || head == "bitor-64"  || head == "bitwise-or-32"  || head == "bitwise-or-64"  ||
-             head == "bitxor-32" || head == "bitxor-64" || head == "bitwise-xor-32" || head == "bitwise-xor-64")
-    {
+            throw std::runtime_error("byteswap-64 requires 1 argument");
+        return target.emitByteSwap(os, indent, ctx, 64, getRawOp(ctx, expr.elements[1]), destReg);
+    }},
+    {"byteswap", evalExplicitWidthRequired},
+
+    {"bitnot-32", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
+        if (expr.elements.size() != 2)
+            throw std::runtime_error("bitnot-32 requires 1 argument");
+        return target.emitBitwiseNot(os, indent, ctx, 32, getRawOp(ctx, expr.elements[1]), destReg);
+    }},
+    {"bitwise-not-32", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
+        if (expr.elements.size() != 2)
+            throw std::runtime_error("bitwise-not-32 requires 1 argument");
+        return target.emitBitwiseNot(os, indent, ctx, 32, getRawOp(ctx, expr.elements[1]), destReg);
+    }},
+    {"bitnot-64", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
+        if (expr.elements.size() != 2)
+            throw std::runtime_error("bitnot-64 requires 1 argument");
+        return target.emitBitwiseNot(os, indent, ctx, 64, getRawOp(ctx, expr.elements[1]), destReg);
+    }},
+    {"bitwise-not-64", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
+        if (expr.elements.size() != 2)
+            throw std::runtime_error("bitwise-not-64 requires 1 argument");
+        return target.emitBitwiseNot(os, indent, ctx, 64, getRawOp(ctx, expr.elements[1]), destReg);
+    }},
+    {"bitnot", evalExplicitWidthRequired},
+    {"bitwise-not", evalExplicitWidthRequired},
+
+    {"bitand-32", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
+        return evalBitwiseBinOp(os, ctx, target, expr, destReg, indent, "and", 32);
+    }},
+    {"bitwise-and-32", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
+        return evalBitwiseBinOp(os, ctx, target, expr, destReg, indent, "and", 32);
+    }},
+    {"bitand-64", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
+        return evalBitwiseBinOp(os, ctx, target, expr, destReg, indent, "and", 64);
+    }},
+    {"bitwise-and-64", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
+        return evalBitwiseBinOp(os, ctx, target, expr, destReg, indent, "and", 64);
+    }},
+
+    {"bitor-32", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
+        return evalBitwiseBinOp(os, ctx, target, expr, destReg, indent, "or", 32);
+    }},
+    {"bitwise-or-32", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
+        return evalBitwiseBinOp(os, ctx, target, expr, destReg, indent, "or", 32);
+    }},
+    {"bitor-64", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
+        return evalBitwiseBinOp(os, ctx, target, expr, destReg, indent, "or", 64);
+    }},
+    {"bitwise-or-64", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
+        return evalBitwiseBinOp(os, ctx, target, expr, destReg, indent, "or", 64);
+    }},
+
+    {"bitxor-32", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
+        return evalBitwiseBinOp(os, ctx, target, expr, destReg, indent, "xor", 32);
+    }},
+    {"bitwise-xor-32", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
+        return evalBitwiseBinOp(os, ctx, target, expr, destReg, indent, "xor", 32);
+    }},
+    {"bitxor-64", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
+        return evalBitwiseBinOp(os, ctx, target, expr, destReg, indent, "xor", 64);
+    }},
+    {"bitwise-xor-64", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
+        return evalBitwiseBinOp(os, ctx, target, expr, destReg, indent, "xor", 64);
+    }},
+
+    {"bitand", evalExplicitWidthRequired},
+    {"bitwise-and", evalExplicitWidthRequired},
+    {"bitor", evalExplicitWidthRequired},
+    {"bitwise-or", evalExplicitWidthRequired},
+    {"bitxor", evalExplicitWidthRequired},
+    {"bitwise-xor", evalExplicitWidthRequired},
+
+    {"mul-32", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
         if (expr.elements.size() != 3)
-            throw std::runtime_error(head + " requires 2 arguments");
-        std::string op = (head.find("and") != std::string::npos) ? "and" : ((head.find("or") != std::string::npos && head.find("xor") == std::string::npos) ? "or" : "xor");
-        int bits = (head.find("-64") != std::string::npos) ? 64 : 32;
-        std::string rawOpA = getRawOp(ctx, expr.elements[1]);
-        std::string rawOpB = getRawOp(ctx, expr.elements[2]);
-        return target.emitBitwiseBinOp(os, indent, ctx, op, bits, rawOpA, rawOpB, destReg);
-    }
-    else if (head == "bitand" || head == "bitwise-and" || head == "bitor" || head == "bitwise-or" || head == "bitxor" || head == "bitwise-xor")
-    {
-        throw std::runtime_error(head + " requires explicit width suffix: use (" + head + "-32 ...) or (" + head + "-64 ...)");
-    }
-    else if (head == "mul-32" || head == "mul-64")
-    {
+            throw std::runtime_error("mul-32 requires 2 arguments");
+        return target.emitMul(os, indent, ctx, 32, getRawOp(ctx, expr.elements[1]), getRawOp(ctx, expr.elements[2]), destReg);
+    }},
+    {"mul-64", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
         if (expr.elements.size() != 3)
-            throw std::runtime_error(head + " requires 2 arguments");
-        int bits = (head == "mul-64") ? 64 : 32;
-        std::string rawOpA = getRawOp(ctx, expr.elements[1]);
-        std::string rawOpB = getRawOp(ctx, expr.elements[2]);
-        return target.emitMul(os, indent, ctx, bits, rawOpA, rawOpB, destReg);
-    }
-    else if (head == "mul")
-    {
-        throw std::runtime_error("mul requires explicit width suffix: use (mul-32 ...) or (mul-64 ...)");
-    }
-    else if (head == "target-case")
-    {
+            throw std::runtime_error("mul-64 requires 2 arguments");
+        return target.emitMul(os, indent, ctx, 64, getRawOp(ctx, expr.elements[1]), getRawOp(ctx, expr.elements[2]), destReg);
+    }},
+    {"mul", evalExplicitWidthRequired},
+
+    // Control flow structures
+    {"target-case", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
         for (size_t i = 1; i < expr.elements.size(); ++i)
         {
             const auto& branch = expr.elements[i];
@@ -303,9 +419,8 @@ Operand evalExpr(std::ostream& os, EvalContext& ctx, TargetBuilder& target, cons
             }
         }
         return Operand{};
-    }
-    else if (head == "cond")
-    {
+    }},
+    {"cond", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
         for (size_t i = 1; i < expr.elements.size(); ++i)
         {
             const auto& clause = expr.elements[i];
@@ -332,9 +447,8 @@ Operand evalExpr(std::ostream& os, EvalContext& ctx, TargetBuilder& target, cons
             os << indent << "}\n";
         }
         return Operand{};
-    }
-    else if (head == "if")
-    {
+    }},
+    {"if", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
         if (expr.elements.size() < 3 || expr.elements.size() > 4)
             throw std::runtime_error("if requires condition, then-branch, and optional else-branch");
         std::string condStr = evalPredicate(ctx, expr.elements[1], destReg);
@@ -350,156 +464,150 @@ Operand evalExpr(std::ostream& os, EvalContext& ctx, TargetBuilder& target, cons
             os << indent << "}\n";
         }
         return Operand{};
-    }
-    else if (head == "begin")
-    {
+    }},
+    {"begin", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
         for (size_t i = 1; i < expr.elements.size(); ++i)
         {
             evalExpr(os, ctx, target, expr.elements[i], destReg, indent);
         }
         return Operand{};
-    }
-    else if (head == "unsupported!")
-    {
+    }},
+    {"unsupported!", [](std::ostream& os, EvalContext&, TargetBuilder& target, const SExpr&, const std::string&, const std::string& indent) -> Operand {
         target.emitUnsupported(os, indent);
         return Operand{};
-    }
-    else if (head == "lea-reg-32!" || head == "lea-reg-64!")
-    {
+    }},
+
+    // Fine-grained target builders
+    {"lea-reg-32!", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
         if (expr.elements.size() != 3)
-            throw std::runtime_error(head + " requires base and offset");
-        int bits = (head == "lea-reg-64!") ? 64 : 32;
-        target.emitLeaReg(os, indent, ctx, getRawOp(ctx, expr.elements[1]), getRawOp(ctx, expr.elements[2]), destReg, bits);
+            throw std::runtime_error("lea-reg-32! requires base and offset");
+        target.emitLeaReg(os, indent, ctx, getRawOp(ctx, expr.elements[1]), getRawOp(ctx, expr.elements[2]), destReg, 32);
         return Operand{};
-    }
-    else if (head == "lea-imm-32!" || head == "lea-imm-64!")
-    {
+    }},
+    {"lea-reg-64!", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
         if (expr.elements.size() != 3)
-            throw std::runtime_error(head + " requires base and offset");
-        int bits = (head == "lea-imm-64!") ? 64 : 32;
-        target.emitLeaImm(os, indent, ctx, getRawOp(ctx, expr.elements[1]), getRawOp(ctx, expr.elements[2]), destReg, bits);
+            throw std::runtime_error("lea-reg-64! requires base and offset");
+        target.emitLeaReg(os, indent, ctx, getRawOp(ctx, expr.elements[1]), getRawOp(ctx, expr.elements[2]), destReg, 64);
         return Operand{};
-    }
-    else if (head == "lea-sub-32!" || head == "lea-sub-64!")
-    {
+    }},
+    {"lea-imm-32!", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
         if (expr.elements.size() != 3)
-            throw std::runtime_error(head + " requires base and offset");
-        int bits = (head == "lea-sub-64!") ? 64 : 32;
-        target.emitLeaSub(os, indent, ctx, getRawOp(ctx, expr.elements[1]), getRawOp(ctx, expr.elements[2]), destReg, bits);
+            throw std::runtime_error("lea-imm-32! requires base and offset");
+        target.emitLeaImm(os, indent, ctx, getRawOp(ctx, expr.elements[1]), getRawOp(ctx, expr.elements[2]), destReg, 32);
         return Operand{};
-    }
-    else if (head == "add-reg-32!" || head == "add-reg-64!")
-    {
-        int bits = (head == "add-reg-64!") ? 64 : 32;
-        if (expr.elements.size() == 2)
-            target.emitAddOp(os, indent, ctx, getRawOp(ctx, expr.elements[1]), destReg, bits);
-        else if (expr.elements.size() == 3)
-            target.emitAddReg(os, indent, ctx, getRawOp(ctx, expr.elements[1]), getRawOp(ctx, expr.elements[2]), destReg, bits);
-        else
-            throw std::runtime_error(head + " requires 1 or 2 arguments");
+    }},
+    {"lea-imm-64!", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
+        if (expr.elements.size() != 3)
+            throw std::runtime_error("lea-imm-64! requires base and offset");
+        target.emitLeaImm(os, indent, ctx, getRawOp(ctx, expr.elements[1]), getRawOp(ctx, expr.elements[2]), destReg, 64);
         return Operand{};
-    }
-    else if (head == "add-imm-32!" || head == "add-imm-64!")
-    {
-        int bits = (head == "add-imm-64!") ? 64 : 32;
-        if (expr.elements.size() == 2)
-            target.emitAddImmOp(os, indent, ctx, getRawOp(ctx, expr.elements[1]), destReg, bits);
-        else if (expr.elements.size() == 3)
-            target.emitAddImm(os, indent, ctx, getRawOp(ctx, expr.elements[1]), getRawOp(ctx, expr.elements[2]), destReg, bits);
-        else
-            throw std::runtime_error(head + " requires 1 or 2 arguments");
+    }},
+    {"lea-sub-32!", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
+        if (expr.elements.size() != 3)
+            throw std::runtime_error("lea-sub-32! requires base and offset");
+        target.emitLeaSub(os, indent, ctx, getRawOp(ctx, expr.elements[1]), getRawOp(ctx, expr.elements[2]), destReg, 32);
         return Operand{};
-    }
-    else if (head == "sub-reg-32!" || head == "sub-reg-64!")
-    {
-        int bits = (head == "sub-reg-64!") ? 64 : 32;
-        if (expr.elements.size() == 2)
-            target.emitSubOp(os, indent, ctx, getRawOp(ctx, expr.elements[1]), destReg, bits);
-        else if (expr.elements.size() == 3)
-            target.emitSubReg(os, indent, ctx, getRawOp(ctx, expr.elements[1]), getRawOp(ctx, expr.elements[2]), destReg, bits);
-        else
-            throw std::runtime_error(head + " requires 1 or 2 arguments");
+    }},
+    {"lea-sub-64!", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
+        if (expr.elements.size() != 3)
+            throw std::runtime_error("lea-sub-64! requires base and offset");
+        target.emitLeaSub(os, indent, ctx, getRawOp(ctx, expr.elements[1]), getRawOp(ctx, expr.elements[2]), destReg, 64);
         return Operand{};
-    }
-    else if (head == "sub-imm-32!" || head == "sub-imm-64!")
-    {
-        int bits = (head == "sub-imm-64!") ? 64 : 32;
-        if (expr.elements.size() == 2)
-            target.emitSubImmOp(os, indent, ctx, getRawOp(ctx, expr.elements[1]), destReg, bits);
-        else if (expr.elements.size() == 3)
-            target.emitSubImm(os, indent, ctx, getRawOp(ctx, expr.elements[1]), getRawOp(ctx, expr.elements[2]), destReg, bits);
-        else
-            throw std::runtime_error(head + " requires 1 or 2 arguments");
-        return Operand{};
-    }
-    else if (head == "inc!")
-    {
+    }},
+
+    {"add-reg-32!", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
+        return evalAddReg(os, ctx, target, expr, destReg, indent, 32);
+    }},
+    {"add-reg-64!", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
+        return evalAddReg(os, ctx, target, expr, destReg, indent, 64);
+    }},
+    {"add-imm-32!", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
+        return evalAddImm(os, ctx, target, expr, destReg, indent, 32);
+    }},
+    {"add-imm-64!", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
+        return evalAddImm(os, ctx, target, expr, destReg, indent, 64);
+    }},
+
+    {"sub-reg-32!", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
+        return evalSubReg(os, ctx, target, expr, destReg, indent, 32);
+    }},
+    {"sub-reg-64!", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
+        return evalSubReg(os, ctx, target, expr, destReg, indent, 64);
+    }},
+    {"sub-imm-32!", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
+        return evalSubImm(os, ctx, target, expr, destReg, indent, 32);
+    }},
+    {"sub-imm-64!", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
+        return evalSubImm(os, ctx, target, expr, destReg, indent, 64);
+    }},
+
+    {"inc!", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr&, const std::string& destReg, const std::string& indent) -> Operand {
         target.emitInc(os, indent, ctx, destReg);
         return Operand{};
-    }
-    else if (head == "mov-reg!")
-    {
+    }},
+    {"mov-reg!", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
         if (expr.elements.size() != 2)
             throw std::runtime_error("mov-reg! requires 1 argument");
         target.emitMovReg(os, indent, ctx, getRawOp(ctx, expr.elements[1]), destReg);
         return Operand{};
-    }
-    else if (head == "mov-imm-32!" || head == "mov-imm-64!")
-    {
+    }},
+    {"mov-imm-32!", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
         if (expr.elements.size() != 2)
-            throw std::runtime_error(head + " requires 1 argument");
-        int bits = (head == "mov-imm-64!") ? 64 : 32;
-        target.emitMovImm(os, indent, ctx, getRawOp(ctx, expr.elements[1]), destReg, bits);
+            throw std::runtime_error("mov-imm-32! requires 1 argument");
+        target.emitMovImm(os, indent, ctx, getRawOp(ctx, expr.elements[1]), destReg, 32);
         return Operand{};
-    }
-    else if (head == "add-tmp-64!")
-    {
+    }},
+    {"mov-imm-64!", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
+        if (expr.elements.size() != 2)
+            throw std::runtime_error("mov-imm-64! requires 1 argument");
+        target.emitMovImm(os, indent, ctx, getRawOp(ctx, expr.elements[1]), destReg, 64);
+        return Operand{};
+    }},
+
+    {"add-tmp-64!", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
         if (expr.elements.size() != 2)
             throw std::runtime_error("add-tmp-64! requires 1 argument");
         target.emitAddTmp64(os, indent, ctx, getRawOp(ctx, expr.elements[1]), destReg);
         return Operand{};
-    }
-    else if (head == "sub-tmp-64!")
-    {
+    }},
+    {"sub-tmp-64!", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
         if (expr.elements.size() != 2)
             throw std::runtime_error("sub-tmp-64! requires 1 argument");
         target.emitSubTmp64(os, indent, ctx, getRawOp(ctx, expr.elements[1]), destReg);
         return Operand{};
-    }
-    else if (head == "add-32" || head == "add-64")
-    {
+    }},
+
+    // Legacy / High-level
+    {"add-32", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
         if (expr.elements.size() != 3)
-            throw std::runtime_error(head + " requires 2 arguments");
-        bool is64 = (head == "add-64");
-        std::string rawOpA = getRawOp(ctx, expr.elements[1]);
-        std::string rawOpB = getRawOp(ctx, expr.elements[2]);
-        if (is64)
-            return target.emitAddInt64(os, indent, ctx, rawOpA, rawOpB, destReg);
-        else
-            return target.emitAddInt(os, indent, ctx, rawOpA, rawOpB, destReg);
-    }
-    else if (head == "add" || head == "add-int" || head == "add-int64")
-    {
-        throw std::runtime_error(head + " requires explicit width suffix: use (add-32 ...) or (add-64 ...)");
-    }
-    else if (head == "sub-32" || head == "sub-64")
-    {
+            throw std::runtime_error("add-32 requires 2 arguments");
+        return target.emitAddInt(os, indent, ctx, getRawOp(ctx, expr.elements[1]), getRawOp(ctx, expr.elements[2]), destReg);
+    }},
+    {"add-64", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
         if (expr.elements.size() != 3)
-            throw std::runtime_error(head + " requires 2 arguments");
-        bool is64 = (head == "sub-64");
-        std::string rawOpA = getRawOp(ctx, expr.elements[1]);
-        std::string rawOpB = getRawOp(ctx, expr.elements[2]);
-        if (is64)
-            return target.emitSubInt64(os, indent, ctx, rawOpA, rawOpB, destReg);
-        else
-            return target.emitSubInt(os, indent, ctx, rawOpA, rawOpB, destReg);
-    }
-    else if (head == "sub" || head == "sub-int" || head == "sub-int64")
-    {
-        throw std::runtime_error(head + " requires explicit width suffix: use (sub-32 ...) or (sub-64 ...)");
-    }
-    else if (head == "let")
-    {
+            throw std::runtime_error("add-64 requires 2 arguments");
+        return target.emitAddInt64(os, indent, ctx, getRawOp(ctx, expr.elements[1]), getRawOp(ctx, expr.elements[2]), destReg);
+    }},
+    {"add", evalExplicitWidthRequired},
+    {"add-int", evalExplicitWidthRequired},
+    {"add-int64", evalExplicitWidthRequired},
+
+    {"sub-32", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
+        if (expr.elements.size() != 3)
+            throw std::runtime_error("sub-32 requires 2 arguments");
+        return target.emitSubInt(os, indent, ctx, getRawOp(ctx, expr.elements[1]), getRawOp(ctx, expr.elements[2]), destReg);
+    }},
+    {"sub-64", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
+        if (expr.elements.size() != 3)
+            throw std::runtime_error("sub-64 requires 2 arguments");
+        return target.emitSubInt64(os, indent, ctx, getRawOp(ctx, expr.elements[1]), getRawOp(ctx, expr.elements[2]), destReg);
+    }},
+    {"sub", evalExplicitWidthRequired},
+    {"sub-int", evalExplicitWidthRequired},
+    {"sub-int64", evalExplicitWidthRequired},
+
+    // Bindings
+    {"let", [](std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent) -> Operand {
         if (expr.elements.size() < 3)
             throw std::runtime_error("let requires bindings and body");
 
@@ -540,8 +648,37 @@ Operand evalExpr(std::ostream& os, EvalContext& ctx, TargetBuilder& target, cons
 
         ctx.env = oldEnv;
         return result;
+    }},
+};
+
+Operand evalExpr(std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent)
+{
+    if (expr.isSymbol())
+    {
+        auto it = ctx.env.find(expr.text);
+        if (it != ctx.env.end())
+            return it->second;
+        return Operand::makeReg(TypeKind::Ptr, expr.text);
     }
-    else if (head.rfind("%produce-", 0) == 0)
+    if (expr.isNumber())
+    {
+        return Operand::makeImm(TypeKind::I32, std::to_string(expr.intValue));
+    }
+    if (expr.isKeyword())
+    {
+        return Operand::makeImm(TypeKind::I32, ctx.resolveOffset(expr.text));
+    }
+
+    if (!expr.isList())
+        throw std::runtime_error("Unexpected SExpr kind in evalExpr");
+
+    const std::string& head = expr.elements[0].text;
+
+    auto it = kExprTrampolines.find(head);
+    if (it != kExprTrampolines.end())
+        return it->second(os, ctx, target, expr, destReg, indent);
+
+    if (head.rfind("%produce-", 0) == 0)
     {
         bool isReuse = head.find("-reuse") != std::string::npos;
         TypeKind tk = TypeKind::Ptr;
@@ -591,10 +728,8 @@ Operand evalExpr(std::ostream& os, EvalContext& ctx, TargetBuilder& target, cons
         evalExpr(os, ctx, target, *innerExpr, target.destRegVar(), indent);
         return Operand::makeReg(tk, target.destRegVar());
     }
-    else
-    {
-        throw std::runtime_error("Unsupported expression: " + head);
-    }
+
+    throw std::runtime_error("Unsupported expression: " + head);
 }
 
 std::pair<std::string, std::string> evalMem(std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& memExpr, const std::string& destReg, const std::string& indent)
