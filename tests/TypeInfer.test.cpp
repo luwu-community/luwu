@@ -10,6 +10,7 @@
 
 #include "Fixture.h"
 #include "ScopedFlags.h"
+#include "Typewriter.h"
 
 #include "doctest.h"
 
@@ -1394,8 +1395,8 @@ local b = typeof(foo) ~= 'nil'
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(2, result);
-    CHECK(toString(result.errors[0]) == "Unknown global 'foo'; consider assigning to it first");
-    CHECK(toString(result.errors[1]) == "Unknown global 'foo'; consider assigning to it first");
+    CHECK(toString(result.errors[0]) == "Unknown variable 'foo', define it with 'local foo = value'");
+    CHECK(toString(result.errors[1]) == "Unknown variable 'foo', define it with 'local foo = value'");
 }
 
 TEST_CASE_FIXTURE(Fixture, "occurs_isnt_always_failure")
@@ -1821,7 +1822,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "infer_types_of_globals")
     CHECK_EQ("number", toString(requireTypeAtPosition({3, 14})));
 
     REQUIRE_EQ(1, result.errors.size());
-    CHECK_EQ("Unknown global 'foo'; consider assigning to it first", toString(result.errors[0]));
+    CHECK_EQ("Unknown variable 'foo', define it with 'local foo = value'", toString(result.errors[0]));
 }
 
 TEST_CASE_FIXTURE(Fixture, "multiple_assignment")
@@ -3079,4 +3080,137 @@ TEST_CASE_FIXTURE(Fixture, "generic_P_widening_with_recursive_optional_field")
     )"));
 }
 
+// Luwu: an unknown variable says how to define one. Upstream says "Unknown global 'x'; consider assigning to it first".
+TEST_CASE_FIXTURE(BuiltinsFixture, "unknown_variable_says_how_to_define_it")
+{
+    CheckResult result = check(R"(
+        print(nothing_here)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ("Unknown variable 'nothing_here', define it with 'local nothing_here = value'", toString(result.errors[0]));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "unknown_variable_typo_of_a_local_global_or_library")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    CheckResult result = check(R"(
+        local othername = 1
+        print(othrname)
+        pirnt("hi")
+        local n = mth.floor(1.5)
+        -- typos keep the first letter so this isn't 'tonumber'
+        local s = number
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(4, result);
+    CHECK_EQ("Typo 'othrname': Did you mean 'othername'?", toString(result.errors[0]));
+    CHECK_EQ("Typo 'pirnt': Did you mean 'print'?", toString(result.errors[1]));
+    CHECK_EQ("Typo 'mth': Did you mean 'math'?", toString(result.errors[2]));
+    CHECK_EQ("Unknown variable 'number', define it with 'local number = value'", toString(result.errors[3]));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "unknown_variable_used_before_its_definition")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    CheckResult result = check(R"(
+        local function f()
+            return later()
+        end
+        local function later() return 1 end
+        print(count)
+        local count = 0
+        local total = total + 1
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
+    CHECK_EQ("Can't use 'later' defined on line 5 before it exists", toString(result.errors[0]));
+    CHECK_EQ("Can't use 'count' defined on line 7 before it exists", toString(result.errors[1]));
+    CHECK_EQ("Can't use 'total' defined on line 8 before it exists", toString(result.errors[2]));
+}
+
+// Luwu: a local ends with its block, unlike in Python. Each binding gets a note.
+TEST_CASE_FIXTURE(BuiltinsFixture, "unknown_variable_from_an_inner_scope")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    CheckResult result = check(R"(
+        local function g(c: boolean)
+            if c then
+                local result = 1
+            else
+                local result = 2
+            end
+            return result
+        end
+        for i = 1, 3 do
+            local doubled = i * 2
+        end
+        print(doubled)
+        print(doubled)
+        do
+            local inside = 1
+        end
+        print(inside)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(4, result);
+    CHECK_EQ("'result' is not accessible here because it was defined in an inner scope on line 4", toString(result.errors[0]));
+    CHECK_EQ("'doubled' is not accessible here because it was defined in an inner scope on line 11", toString(result.errors[1]));
+    CHECK_EQ("'doubled' is not accessible here because it was defined in an inner scope on line 11", toString(result.errors[2]));
+    CHECK_EQ("'inside' is not accessible here because it was defined in an inner scope on line 16", toString(result.errors[3]));
+
+    // One note per binding: the second use of `doubled` doesn't repeat it
+    ModulePtr module = getMainModule();
+    REQUIRE_EQ(4, module->notes.size());
+    CHECK_EQ(Location{{3, 22}, {3, 28}}, module->notes[0].location);
+    CHECK_EQ(Location{{5, 22}, {5, 28}}, module->notes[1].location);
+    CHECK_EQ("Consider moving this binding above this 'if' statement to use it on line 8", module->notes[0].message);
+    CHECK_EQ("Consider moving this binding above this 'if' statement to use it on line 8", module->notes[1].message);
+    CHECK_EQ("Consider moving this binding above this loop to use it on line 13", module->notes[2].message);
+    CHECK_EQ("Consider moving this binding above this 'do' block to use it on line 18", module->notes[3].message);
+    REQUIRE(module->notes[0].origin);
+    CHECK_EQ(Location{{7, 19}, {7, 25}}, *module->notes[0].origin);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "unknown_variable_inner_scope_stays_in_its_function")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    // A local of another function isn't one the reader expects to see
+    CheckResult result = check(R"(
+        local function make()
+            local hidden = 1
+        end
+        print(hidden)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ("Unknown variable 'hidden', define it with 'local hidden = value'", toString(result.errors[0]));
+    CHECK(getMainModule()->notes.empty());
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "unknown_variable_typo_comes_before_inner_scope")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    CheckResult result = check(R"(
+        local resutl = 0
+        if math.random() > 0.5 then
+            local result = 1
+        end
+        print(result)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ("Typo 'result': Did you mean 'resutl'?", toString(result.errors[0]));
+    CHECK(getMainModule()->notes.empty());
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "unknown_variable_typewriting")
+{
+    checkTypewriting(*this, "local othername = 1\n", "print(othername)", "\nlocal after = 2\nprint(after)\n");
+}
 TEST_SUITE_END();

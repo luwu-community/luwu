@@ -10,6 +10,7 @@
 #include "Luau/Type.h"
 #include "Luau/TypeFwd.h"
 #include "Luau/TypeUtils.h"
+#include "Luau/UnknownVariable.h"
 
 #include <memory>
 
@@ -363,6 +364,10 @@ private:
 
     // Avoid duplicate warnings being emitted for the same global variable.
     DenseHashSet<std::string> warnedGlobals{""};
+
+    // Luwu: says why a name isn't a variable here. Created at the first unknown name.
+    std::unique_ptr<UnknownVariableExplainer> unknownVariables;
+    void reportUnknownVariable(const AstExprGlobal* expr, NotNull<Scope> scope);
 
     void suggestAnnotations(AstExprFunction* expr, TypeId ty);
 

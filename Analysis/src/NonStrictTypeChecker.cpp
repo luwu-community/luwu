@@ -16,6 +16,7 @@
 #include "Luau/TypeArena.h"
 #include "Luau/TypeFunction.h"
 #include "Luau/TypeUtils.h"
+#include "Luau/UnknownVariable.h"
 
 #include <iterator>
 
@@ -165,6 +166,9 @@ struct NonStrictTypeChecker
     const NotNull<InternalErrorReporter> ice;
     NotNull<TypeArena> arena;
     Module* module;
+    // Luwu: the module's root, for explaining unknown variables
+    AstStatBlock* root = nullptr;
+    std::unique_ptr<UnknownVariableExplainer> unknownVariables;
     Normalizer normalizer;
     Subtyping subtyping;
     NotNull<const DataFlowGraph> dfg;
@@ -633,7 +637,9 @@ struct NonStrictTypeChecker
         NotNull<Scope> scope = stack.back();
         if (!scope->lookup(global->name))
         {
-            reportError(UnknownSymbol{global->name.value, UnknownSymbol::Binding}, global->location);
+            if (!unknownVariables)
+                unknownVariables = std::make_unique<UnknownVariableExplainer>(root);
+            reportError(unknownVariableError(*unknownVariables, global, *scope, module->notes), global->location);
         }
 
         return {};
@@ -1281,6 +1287,7 @@ void checkNonStrict(
     LUAU_TIMETRACE_SCOPE("checkNonStrict", "Typechecking");
 
     NonStrictTypeChecker typeChecker{NotNull{module->internalTypes.get()}, builtinTypes, typeFunctionRuntime, ice, unifierState, dfg, limits, module};
+    typeChecker.root = sourceModule.root;
     typeChecker.visit(sourceModule.root);
     unfreeze(module->interfaceTypes);
     copyErrors(module->errors, module->interfaceTypes, builtinTypes);

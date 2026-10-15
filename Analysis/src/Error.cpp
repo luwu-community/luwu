@@ -12,6 +12,7 @@
 #include "Luau/TypeChecker2.h"
 #include "Luau/TypeFunction.h"
 #include "Luau/TypeUtils.h"
+#include "Luau/UnknownVariable.h"
 
 #include <optional>
 #include <string>
@@ -493,7 +494,7 @@ struct ErrorConverter
         switch (e.context)
         {
         case UnknownSymbol::Binding:
-            return "Unknown global '" + e.name + "'; consider assigning to it first";
+            return unknownVariableMessage(e);
         case UnknownSymbol::Type:
             switch (e.qualifier)
             {
@@ -1655,7 +1656,7 @@ bool TypeMismatch::Explained::operator==(const Explained& rhs) const
 
 bool UnknownSymbol::operator==(const UnknownSymbol& rhs) const
 {
-    return name == rhs.name && qualifier == rhs.qualifier;
+    return name == rhs.name && qualifier == rhs.qualifier && unbound == rhs.unbound && meant == rhs.meant && definition == rhs.definition;
 }
 
 UnknownSymbol unknownTypeReference(const Scope& scope, const AstTypeReference& reference)

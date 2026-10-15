@@ -154,6 +154,23 @@ struct UnknownSymbol
     Name module;
     Name member;
 
+    // Luwu: why a variable's name isn't bound where it's used. Upstream says "Unknown global 'x'; consider assigning
+    // to it first" every time.
+    enum class Unbound
+    {
+        // No local in the file has the name
+        NotDefined,
+        // `meant` is in scope and spelled almost the same
+        Typo,
+        // The local at `definition` is declared after this use
+        BeforeDefinition,
+        // The local at `definition` is in a block that doesn't contain this use
+        InnerScope,
+    };
+    Unbound unbound = Unbound::NotDefined;
+    Name meant;
+    std::optional<Location> definition;
+
     bool operator==(const UnknownSymbol& rhs) const;
 };
 
