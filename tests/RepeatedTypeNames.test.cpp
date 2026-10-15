@@ -229,6 +229,39 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "unexplained_mismatches_name_repeated_types_t
     );
 }
 
+// Every type that repeats gets a name, however many there are.
+TEST_CASE_FIXTURE(BuiltinsFixture, "every_repeated_type_is_named")
+{
+    CheckResult result = check(R"(
+        local a: {
+            alpha: { host: string, port: number, secure: boolean },
+            beta: { user: string, password: string, token: string? },
+            gamma: { width: number, height: number, depth: number },
+            delta: { red: number, green: number, blue: number, alpha: number },
+            epsilon: { title: string, body: string, footer: string },
+            zeta: { latitude: number, longitude: number, altitude: number },
+            n: number,
+        } = nil :: any
+        local b: {
+            alpha: { host: string, port: number, secure: boolean },
+            beta: { user: string, password: string, token: string? },
+            gamma: { width: number, height: number, depth: number },
+            delta: { red: number, green: number, blue: number, alpha: number },
+            epsilon: { title: string, body: string, footer: string },
+            zeta: { latitude: number, longitude: number, altitude: number },
+            n: string,
+        } = nil :: any
+    )");
+    LUAU_REQUIRE_NO_ERRORS(result);
+
+    TypeErrorData mismatch = TypeMismatch{requireType("a"), requireType("b")};
+    nameRepeatedTypesInError(mismatch, nullptr);
+    const std::string message = toString(TypeError{Location{}, mismatch});
+    INFO(message);
+    for (const char* name : {"Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta"})
+        CHECK(message.find(std::string("    type ") + name + " = ") != std::string::npos);
+}
+
 // A table with more than three fields, or with a long one, is printed a field per line wherever the
 // message shows a type on its own lines. A small table stays on one line, even inside a large one.
 TEST_CASE_FIXTURE(BuiltinsFixture, "large_tables_are_printed_a_field_per_line")

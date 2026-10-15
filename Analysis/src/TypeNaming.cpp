@@ -207,7 +207,20 @@ std::string listNameOf(const std::string& element)
 
 const std::vector<std::string>& petNames()
 {
-    static const std::vector<std::string> names = {"Nyla", "Hina", "Taz", "Nanuk", "Purrsalot"};
+    static const std::vector<std::string> names = {
+        "Nyla",
+        "Hina",
+        "Taz",
+        "Nanuk",
+        "Sam",
+        "MrPurrsalot",
+        "Jasper",
+        "Cookie",
+        "MrCat",
+        "Yuki",
+        "Luna",
+        "Willow",
+    };
     return names;
 }
 
