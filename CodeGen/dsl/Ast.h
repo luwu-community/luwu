@@ -9,6 +9,24 @@
 namespace Luwu::Dsl
 {
 
+struct SourceLocation
+{
+    std::string file;
+    int line = 1;
+    int col = 1;
+
+    std::string toString() const
+    {
+        if (file.empty())
+        {
+            if (line == 0 && col == 0)
+                return "";
+            return std::to_string(line) + ":" + std::to_string(col);
+        }
+        return file + ":" + std::to_string(line) + ":" + std::to_string(col);
+    }
+};
+
 enum class SExprKind
 {
     Symbol,
@@ -25,8 +43,7 @@ struct SExpr
     std::string text;
     int64_t intValue = 0;
     std::vector<SExpr> elements;
-    int line = 1;
-    int col = 1;
+    SourceLocation loc;
 
     bool isSymbol() const { return kind == SExprKind::Symbol; }
     bool isKeyword() const { return kind == SExprKind::Keyword; }

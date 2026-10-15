@@ -66,170 +66,170 @@
     fallback))
 
 (define-rule (load-env)
-  (%produce-ptr
+  (%produce-ptr res
     (load-ptr (mem rClosure :Closure.env))))
 
 (define-rule (load-buffer-data [buf :reg])
-  (%produce-ptr-reuse buf
+  (%produce-ptr-reuse res buf
     (load-ptr (mem buf :Buffer.data))))
 
 (define-rule (load-owner-class)
-  (%produce-ptr
+  (%produce-ptr res
     (let ([proto (load-ptr (mem rClosure :Closure.l.p))])
       (load-ptr (mem proto :Proto.ownerclass)))))
 
 (define-rule (sexti8-int [val :reg])
-  (%produce-i32-reuse val
+  (%produce-i32-reuse res val
     (sign-extend-8 val)))
 
 (define-rule (sexti16-int [val :reg])
-  (%produce-i32-reuse val
+  (%produce-i32-reuse res val
     (sign-extend-16 val)))
 
 (define-rule (string-len [str :reg])
-  (%produce-u32
+  (%produce-u32 res
     (load-u32 (mem str :TString.len))))
 
 (define-rule (truncate-uint [val :reg])
-  (%produce-u32-reuse val
+  (%produce-u32-reuse res val
     (truncate-uint val)))
 
 (define-rule (buffer-isfrozen [buf :reg])
-  (%produce-u32
+  (%produce-u32 res
     (is-equal (load-u8 (mem buf :Buffer.mode)) :LUA_BHOST_IMMUTABLE)))
 
 (define-rule (byteswap-uint [val :op])
-  (%produce-u32-reuse val
+  (%produce-u32-reuse res val
     (byteswap-32 val)))
 
 (define-rule (byteswap-int64 [val :op])
-  (%produce-i64-reuse val
+  (%produce-i64-reuse res val
     (byteswap-64 val)))
 
 (define-rule (bitnot-uint [val :op])
-  (%produce-u32-reuse val
+  (%produce-u32-reuse res val
     (bitnot-32 val)))
 
 (define-rule (bitnot-int64 [val :op])
-  (%produce-i64-reuse val
+  (%produce-i64-reuse res val
     (bitnot-64 val)))
 
 (define-rule (bitand-uint [a :op] [b :op])
-  (%produce-u32-reuse [a b]
+  (%produce-u32-reuse res [a b]
     (bitand-32 a b)))
 
 (define-rule (bitxor-uint [a :op] [b :op])
-  (%produce-u32-reuse [a b]
+  (%produce-u32-reuse res [a b]
     (bitxor-32 a b)))
 
 (define-rule (bitor-uint [a :op] [b :op])
-  (%produce-u32-reuse [a b]
+  (%produce-u32-reuse res [a b]
     (bitor-32 a b)))
 
 (define-rule (bitand-int64 [a :op] [b :op])
-  (%produce-i64-reuse [a b]
+  (%produce-i64-reuse res [a b]
     (bitand-64 a b)))
 
 (define-rule (bitxor-int64 [a :op] [b :op])
-  (%produce-i64-reuse [a b]
+  (%produce-i64-reuse res [a b]
     (bitxor-64 a b)))
 
 (define-rule (bitor-int64 [a :op] [b :op])
-  (%produce-i64-reuse [a b]
+  (%produce-i64-reuse res [a b]
     (bitor-64 a b)))
 
 (define-rule (mul-int64 [a :op] [b :op])
-  (%produce-i64-reuse [a b]
+  (%produce-i64-reuse res [a b]
     (mul-64 a b)))
 
 (define-rule (add-int [a :op] [b :op])
-  (%produce-i32-reuse [a b]
+  (%produce-i32-reuse res [a b]
     (target-case
       [:x64
        (cond
          [(constant? a)
-          (lea-imm-32! b a)]
+          (x64:lea-imm-32! res b a)]
          [(inst? a)
-          (if (reused? a)
+          (if (reused? res a)
               (cond
-                [(inst? b)         (add-reg-32! b)]
-                [(= (int-val b) 1) (inc!)]
-                [else              (add-imm-32! b)])
+                [(inst? b)         (x64:add-reg-32! res b)]
+                [(= (int-val b) 1) (x64:inc! res)]
+                [else              (x64:add-imm-32! res b)])
               (cond
-                [(inst? b)         (lea-reg-32! a b)]
-                [else              (lea-imm-32! a b)]))]
+                [(inst? b)         (x64:lea-reg-32! res a b)]
+                [else              (x64:lea-imm-32! res a b)]))]
          [else (unsupported!)])]
       [:a64
        (cond
-         [(and (constant? b) (fits-imm-a64-32? b))
-          (add-imm-32! a b)]
-         [(and (constant? a) (fits-imm-a64-32? a))
-          (add-imm-32! b a)]
+         [(and (constant? b) (a64:fits-imm-32? b))
+          (a64:add-imm-32! res a b)]
+         [(and (constant? a) (a64:fits-imm-32? a))
+          (a64:add-imm-32! res b a)]
          [else
-          (add-reg-32! a b)])])))
+          (a64:add-reg-32! res a b)])])))
 
 (define-rule (sub-int [a :op] [b :op])
-  (%produce-i32-reuse [a b]
+  (%produce-i32-reuse res [a b]
     (target-case
       [:x64
        (cond
          [(inst? a)
           (cond
             [(constant? b)
-             (if (not-reused? a)
-                 (lea-sub-32! a b)
-                 (sub-imm-32! b))]
+             (if (not-reused? res a)
+                 (x64:lea-sub-32! res a b)
+                 (x64:sub-imm-32! res b))]
             [else
-             (if (not-reused? a)
-                 (mov-reg! a))
-             (sub-reg-32! b)])]
+             (if (not-reused? res a)
+                 (x64:mov-reg! res a))
+             (x64:sub-reg-32! res b)])]
          [(inst? b)
-          (mov-imm-32! a)
-          (sub-reg-32! b)]
+          (x64:mov-imm-32! res a)
+          (x64:sub-reg-32! res b)]
          [else (unsupported!)])]
       [:a64
        (cond
-         [(and (constant? b) (fits-imm-a64-32? b))
-          (sub-imm-32! a b)]
+         [(and (constant? b) (a64:fits-imm-32? b))
+          (a64:sub-imm-32! res a b)]
          [else
-          (sub-reg-32! a b)])])))
+          (a64:sub-reg-32! res a b)])])))
 
 (define-rule (add-int64 [a :op] [b :op])
-  (%produce-i64-reuse [a b]
+  (%produce-i64-reuse res [a b]
     (target-case
       [:x64
        (cond
          [(constant? a)
           (if (fits-i32? a)
-              (lea-imm-64! b a)
+              (x64:lea-imm-64! res b a)
               (begin
-                (mov-imm-64! a)
-                (add-reg-64! b)))]
+                (x64:mov-imm-64! res a)
+                (x64:add-reg-64! res b)))]
          [(inst? a)
-          (if (reused? a)
+          (if (reused? res a)
               (cond
-                [(inst? b)           (add-reg-64! b)]
-                [(= (int64-val b) 1) (inc!)]
-                [(fits-i32? b)       (add-imm-64! b)]
-                [else                (add-tmp-64! b)])
+                [(inst? b)           (x64:add-reg-64! res b)]
+                [(= (int64-val b) 1) (x64:inc! res)]
+                [(fits-i32? b)       (x64:add-imm-64! res b)]
+                [else                (x64:add-tmp-64! res b)])
               (cond
-                [(inst? b)           (lea-reg-64! a b)]
-                [(fits-i32? b)       (lea-imm-64! a b)]
+                [(inst? b)           (x64:lea-reg-64! res a b)]
+                [(fits-i32? b)       (x64:lea-imm-64! res a b)]
                 [else
-                 (mov-imm-64! b)
-                 (add-reg-64! a)]))]
+                 (x64:mov-imm-64! res b)
+                 (x64:add-reg-64! res a)]))]
          [else (unsupported!)])]
       [:a64
        (cond
-         [(and (constant? b) (fits-imm-a64-64? b))
-          (add-imm-64! a b)]
-         [(and (constant? a) (fits-imm-a64-64? a))
-          (add-imm-64! b a)]
+         [(and (constant? b) (a64:fits-imm-64? b))
+          (a64:add-imm-64! res a b)]
+         [(and (constant? a) (a64:fits-imm-64? a))
+          (a64:add-imm-64! res b a)]
          [else
-          (add-reg-64! a b)])])))
+          (a64:add-reg-64! res a b)])])))
 
 (define-rule (sub-int64 [a :op] [b :op])
-  (%produce-i64-reuse [a b]
+  (%produce-i64-reuse res [a b]
     (target-case
       [:x64
        (cond
@@ -237,24 +237,24 @@
           (cond
             [(constant? b)
              (if (fits-i32? b)
-                 (if (not-reused? a)
-                     (lea-sub-64! a b)
-                     (sub-imm-64! b))
+                 (if (not-reused? res a)
+                     (x64:lea-sub-64! res a b)
+                     (x64:sub-imm-64! res b))
                  (begin
-                   (if (not-reused? a)
-                       (mov-reg! a))
-                   (sub-tmp-64! b)))]
+                   (if (not-reused? res a)
+                       (x64:mov-reg! res a))
+                   (x64:sub-tmp-64! res b)))]
             [else
-             (if (not-reused? a)
-                 (mov-reg! a))
-             (sub-reg-64! b)])]
+             (if (not-reused? res a)
+                 (x64:mov-reg! res a))
+             (x64:sub-reg-64! res b)])]
          [(inst? b)
-          (mov-imm-64! a)
-          (sub-reg-64! b)]
+          (x64:mov-imm-64! res a)
+          (x64:sub-reg-64! res b)]
          [else (unsupported!)])]
       [:a64
        (cond
-         [(and (constant? b) (fits-imm-a64-64? b))
-          (sub-imm-64! a b)]
+         [(and (constant? b) (a64:fits-imm-64? b))
+          (a64:sub-imm-64! res a b)]
          [else
-          (sub-reg-64! a b)])])))
+          (a64:sub-reg-64! res a b)])])))

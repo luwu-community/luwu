@@ -45,36 +45,31 @@ enum class OperandKind
 {
     Reg,
     Mem,
-    Imm,
-    ContextSpill
+    Imm
 };
 
 struct Operand
 {
     OperandKind kind = OperandKind::Reg;
     TypeKind type = TypeKind::Void;
-    std::string text;      // register name, immediate literal, or spill variable name
+    std::string text;      // register name or immediate literal
     std::string memBase;   // base register string if kind == Mem
     std::string memOffset; // offset expression string if kind == Mem
+    std::string rawOp;     // raw opcode string (e.g. "OP_A(inst)") if bound from rule param
 
-    static Operand makeReg(TypeKind t, const std::string& reg)
+    static Operand makeReg(TypeKind t, const std::string& reg, const std::string& raw = "")
     {
-        return Operand{OperandKind::Reg, t, reg, "", ""};
+        return Operand{OperandKind::Reg, t, reg, "", "", raw};
     }
 
     static Operand makeMem(TypeKind t, const std::string& base, const std::string& offset)
     {
-        return Operand{OperandKind::Mem, t, "", base, offset};
+        return Operand{OperandKind::Mem, t, "", base, offset, ""};
     }
 
     static Operand makeImm(TypeKind t, const std::string& imm)
     {
-        return Operand{OperandKind::Imm, t, imm, "", ""};
-    }
-
-    static Operand makeSpill(TypeKind t, const std::string& spill)
-    {
-        return Operand{OperandKind::ContextSpill, t, spill, "", ""};
+        return Operand{OperandKind::Imm, t, imm, "", "", ""};
     }
 };
 

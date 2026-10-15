@@ -81,12 +81,10 @@ Luna rules map Luwu IR positional arguments (`OP_A(inst)`, `OP_B(inst)`, `OP_C(i
 - **`(sign-extend-16 <val>)`**: Sign-extends a 16-bit value to a 32-bit integer (`sbfx` on A64, `movsx ..., wordReg(...)` on X64).
 - **`(truncate-uint <val>)`**: Truncates an unsigned integer to 32 bits (`ubfx ..., 0, 32` on A64, `mov` on X64).
 - **`(byteswap-32 <val>)`**, **`(byteswap-64 <val>)`**: Endian byte-swap (`rev` on A64, `bswap` on X64) with explicit 32-bit or 64-bit width.
-- **`(add-32 <val1> <val2>)`**, **`(add-64 <val1> <val2>)`**: Integer addition (`add` on A64, `add` or `lea` on X64) with explicit 32-bit or 64-bit width.
-- **`(sub-32 <val1> <val2>)`**, **`(sub-64 <val1> <val2>)`**: Integer subtraction (`sub` on A64, `sub` on X64) with explicit 32-bit or 64-bit width.
 - **`(mul-64 <val1> <val2>)`**: Integer multiplication (`mul` on A64, `imul` on X64) with explicit width.
 
 ### Bitwise Operations
-- **`(bitnot-32 <val>)`**, **`(bitnot-64 <val>)`**: Bitwise negation (`mvn_` on A64, `not_` on X64) with explicit width.
+- **`(bitnot-32 <val>)`**, **`(bitnot-64 <val>)`**: Bitwise negation (`mvn_` on A64, `not_` on X64).
 - **`(bitand-32 <val1> <val2>)`**, **`(bitand-64 <val1> <val2>)`**: Bitwise AND (`and_` on A64/X64).
 - **`(bitor-32 <val1> <val2>)`**, **`(bitor-64 <val1> <val2>)`**: Bitwise OR (`orr` on A64, `or_` on X64).
 - **`(bitxor-32 <val1> <val2>)`**, **`(bitxor-64 <val1> <val2>)`**: Bitwise XOR (`eor` on A64, `xor_` on X64).
@@ -96,20 +94,18 @@ Luna rules map Luwu IR positional arguments (`OP_A(inst)`, `OP_B(inst)`, `OP_C(i
 
 ### Value Producing Special Forms
 Rules that produce values for Luwu IR instructions (`inst.regA64` / `inst.regX64`) wrap their body in `%produce-<type>` or `%produce-<type>-reuse`:
-- **`(%produce-ptr <body>)`**: Allocates a fresh 64-bit register (`regs.allocReg`) and executes `<body>` targeting it.
-- **`(%produce-ptr-reuse <param> <body>)`**: Allocates a 64-bit register reusing operand `<param>` (`regs.allocReuse` / `regs.allocRegOrReuse`) and executes `<body>`.
-- **`(%produce-i32-reuse <param> <body>)`**: Allocates a 32-bit integer register reusing operand `<param>`.
-- **`(%produce-u32-reuse <param> <body>)`**: Allocates a 32-bit unsigned register reusing operand `<param>`.
-- **`(%produce-i64-reuse <param> <body>)`**: Allocates a 64-bit integer register reusing operand `<param>`.
-- **`(%produce-u64-reuse <param> <body>)`**: Allocates a 64-bit unsigned register reusing operand `<param>`.
-- **Multi-Operand Reuse `(%produce-*-reuse [<param1> <param2>] <body>)`**:
-  - Binary operations accept a vector of candidate operands `[a b]`.
-  - On **AArch64** (3-address: `op dst, src1, src2`), emits `{OP_A(inst), OP_B(inst)}`, allowing either operand register to be reused.
-  - On **x86-64** (2-address: `op dst, src`), integer arithmetic restricts reuse strictly to `{OP_A(inst)}` so as not to clobber `src2`.
+- **`(%produce-ptr <ident> <body>)`**: Allocates a fresh 64-bit register (`regs.allocReg`), binds `<ident>`, and executes `<body>`.
+- **`(%produce-ptr-reuse <ident> <param> <body>)`**: Allocates a 64-bit register reusing operand `<param>` (`regs.allocReuse` / `regs.allocRegOrReuse`), binds `<ident>`, and executes `<body>`.
+- **`(%produce-i32-reuse <ident> <param> <body>)`**: Allocates a 32-bit integer register reusing operand `<param>`, binds `<ident>`, and executes `<body>`.
+- **`(%produce-u32-reuse <ident> <param> <body>)`**: Allocates a 32-bit unsigned register reusing operand `<param>`, binds `<ident>`, and executes `<body>`.
+- **`(%produce-i64-reuse <ident> <param> <body>)`**: Allocates a 64-bit integer register reusing operand `<param>`, binds `<ident>`, and executes `<body>`.
+- **`(%produce-u64-reuse <ident> <param> <body>)`**: Allocates a 64-bit unsigned register reusing operand `<param>`, binds `<ident>`, and executes `<body>`.
+- **Multi-Operand Reuse `(%produce-*-reuse <ident> [<param1> <param2>] <body>)`**:
+  - Binary operations accept a list of candidate operands `[a b]` which enables Luna to reuse  operand register to be reused when it is safe to do so.
 
 ### Control Flow, Conditionals & Target Specialization
-- **`(target-case [:x64 ...] [:a64 ...])`**: Conditionally compiles branches depending on target architecture (`a64` vs `x64`).
-- **`(cond [<pred> <expr>...] ... [else <default>...])`**: Multi-way conditional branching mapping directly to C++ `if (...) { ... } else if (...) { ... } else { ... }`.
+- **`(target-case [:x64 ...] [:a64 ...])`**: Conditionally compiles branches depending on target architecture (`a64` vs `x64`). Architecture-dependent operations (e.g. `x64:*`, `a64:*`) must be within a `target-case` for the architecture.
+- **`(cond [<pred> <expr>...] ... [else <default>...])`**: Multi-way conditional branching
 - **`(if <pred> <then-expr> [<else-expr>])`**: Single-condition branch.
 - **`(begin <expr>...)`**: Evaluates expressions in sequence.
 - **`(unsupported!)`**: Emits `CODEGEN_ASSERT(!"Unsupported instruction form");`.
@@ -117,26 +113,41 @@ Rules that produce values for Luwu IR instructions (`inst.regA64` / `inst.regX64
 #### Inspection Predicates
 - **`(constant? <op>)`**: Tests `<op>.kind == IrOpKind::Constant`.
 - **`(inst? <op>)`**: Tests `<op>.kind == IrOpKind::Inst`.
-- **`(reused? <op>)`**: Tests `destReg == lowering.regOp(<op>)`.
-- **`(not-reused? <op>)`**: Tests `destReg != lowering.regOp(<op>)`.
-- **`(= (int-val <op>) <n>)`**: Tests `lowering.intOp(<op>) == <n>`.
-- **`(= (int64-val <op>) <n>)`**: Tests `lowering.int64Op(<op>) == <n>`.
+- **`(reused? <dest> <op>)`**: Tests `<dest> == lowering.regOp(<op>)`.
+- **`(not-reused? <dest> <op>)`**: Tests `<dest> != lowering.regOp(<op>)`.
+- **`(= <lhs> <rhs>)`**, **`(!= <lhs> <rhs>)`**: Compares two expressions, variables, or literals (`lhs == rhs`, `lhs != rhs`).
+- **`(< <lhs> <rhs>)`**, **`(<= <lhs> <rhs>)`**, **`(> <lhs> <rhs>)`**, **`(>= <lhs> <rhs>)`**: Numerical relational comparisons.
+- **`(int-val <op>)`**: Yields `lowering.intOp(<op>)`.
+- **`(int64-val <op>)`**: Yields `lowering.int64Op(<op>)`.
 - **`(fits-i32? <op>)`**: Tests `lowering.int64Op(<op>) >= INT32_MIN && <= INT32_MAX`.
-- **`(fits-imm-a64-32? <op>)`**, **`(fits-imm-a64-64? <op>)`**: Tests if immediate fits AArch64 12-bit range (`kMaxImmediate`).
-- **`(and ...)`, `(or ...)`, `(not ...)`**: Standard boolean combinators.
+- **`(and first rest ...)`:** Checks if `first` is falsy, if so evaluates to `#f`, otherwise evaluates to `(and rest ...)` with the base case of `(and a)` being `a`
+- **`(or ...)`: Checks if `first` is truthy, if so evaluates to `first`, otherwise evaluate to `(or rest ...)` with the base case of `(or)` being `false`
+- **`(not a)`**: Evaluates `!a`
 
-### Fine-Grained Emission Builders
-- **`(lea-reg-32! <base> <offset>)`**, **`(lea-reg-64! <base> <offset>)`**: Emits `build.lea(dest, addr[regOp(base) + regOp(offset)])`.
-- **`(lea-imm-32! <base> <offset>)`**, **`(lea-imm-64! <base> <offset>)`**: Emits `build.lea(dest, addr[regOp(base) + imm])`.
-- **`(lea-sub-32! <base> <offset>)`**, **`(lea-sub-64! <base> <offset>)`**: Emits `build.lea(dest, addr[regOp(base) - imm])`.
-- **`(add-reg-32! <src>)`**, **`(add-reg-64! <src>)`**: Emits `build.add(dest, regOp(src))`.
-- **`(add-imm-32! <src>)`**, **`(add-imm-64! <src>)`**: Emits `build.add(dest, imm)`.
-- **`(sub-reg-32! <src>)`**, **`(sub-reg-64! <src>)`**: Emits `build.sub(dest, regOp(src))`.
-- **`(sub-imm-32! <src>)`**, **`(sub-imm-64! <src>)`**: Emits `build.sub(dest, imm)`.
-- **`(inc!)`**: Emits `build.inc(dest)`.
-- **`(mov-reg! <src>)`**: Emits `build.mov(dest, regOp(src))`.
-- **`(mov-imm-32! <src>)`**, **`(mov-imm-64! <src>)`**: Emits `build.mov` / `build.mov64`.
-- **`(add-tmp-64! <imm>)`**, **`(sub-tmp-64! <imm>)`**: Allocates `ScopedRegX64 tmp`, moves 64-bit immediate, and adds/subs.
+### Architecture-Specific Emission Builders
+All architecture-dependent builders are prefixed with `<arch>:` and require an explicit `<dest>` operand (bound by `%produce-*` or `let`). They must appear inside a matching `target-case` branch.
+
+#### x86-64 Builders (`x64:*`)
+- **`(x64:inc! <dest>)`**: Emits `build.inc(<dest>)`.
+- **`(x64:mov-reg! <dest> <src>)`**: Emits `build.mov(<dest>, regOp(<src>))`.
+- **`(x64:mov-imm-32! <dest> <imm>)`**, **`(x64:mov-imm-64! <dest> <imm>)`**: Emits `build.mov` / `build.mov64`.
+- **`(x64:add-reg-32! <dest> <src>)`**, **`(x64:add-reg-64! <dest> <src>)`**: Emits `build.add(<dest>, regOp(<src>))`.
+- **`(x64:add-imm-32! <dest> <imm>)`**, **`(x64:add-imm-64! <dest> <imm>)`**: Emits `build.add(<dest>, <imm>)`.
+- **`(x64:add-tmp-64! <dest> <imm>)`**: Allocates `ScopedRegX64 tmp`, moves 64-bit immediate, and adds.
+- **`(x64:sub-reg-32! <dest> <src>)`**, **`(x64:sub-reg-64! <dest> <src>)`**: Emits `build.sub(<dest>, regOp(<src>))`.
+- **`(x64:sub-imm-32! <dest> <imm>)`**, **`(x64:sub-imm-64! <dest> <imm>)`**: Emits `build.sub(<dest>, <imm>)`.
+- **`(x64:sub-tmp-64! <dest> <imm>)`**: Allocates `ScopedRegX64 tmp`, moves 64-bit immediate, and subs.
+- **`(x64:lea-reg-32! <dest> <base> <offset>)`**, **`(x64:lea-reg-64! <dest> <base> <offset>)`**: Emits `build.lea(<dest>, addr[regOp(<base>) + regOp(<offset>)])`.
+- **`(x64:lea-imm-32! <dest> <base> <offset>)`**, **`(x64:lea-imm-64! <dest> <base> <offset>)`**: Emits `build.lea(<dest>, addr[regOp(<base>) + <offset>])`.
+- **`(x64:lea-sub-32! <dest> <base> <offset>)`**, **`(x64:lea-sub-64! <dest> <base> <offset>)`**: Emits `build.lea(<dest>, addr[regOp(<base>) - <offset>])`.
+
+#### AArch64 Builders (`a64:*`)
+- **`(a64:add-reg-32! <dest> <src1> <src2>)`**, **`(a64:add-reg-64! <dest> <src1> <src2>)`**: Emits `build.add(<dest>, regOp(<src1>), regOp(<src2>))`.
+- **`(a64:add-imm-32! <dest> <src> <imm>)`**, **`(a64:add-imm-64! <dest> <src> <imm>)`**: Emits `build.add(<dest>, regOp(<src>), <imm>)`.
+- **`(a64:sub-reg-32! <dest> <src1> <src2>)`**, **`(a64:sub-reg-64! <dest> <src1> <src2>)`**: Emits `build.sub(<dest>, regOp(<src1>), regOp(<src2>))`.
+- **`(a64:sub-imm-32! <dest> <src> <imm>)`**, **`(a64:sub-imm-64! <dest> <src> <imm>)`**: Emits `build.sub(<dest>, regOp(<src>), <imm>)`.
+- **`(a64:fits-imm-32? <op>)`**, **`(a64:fits-imm-64? <op>)`**: Tests if immediate fits AArch64 12-bit range (`kMaxImmediate`)
+
 
 ### Branch Guards
 - **`(branch-if-not-zero! <val> <label>)`**: Guards `val != 0` (`cbnz` on A64; memory/reg `cmp` on X64).
@@ -164,3 +175,27 @@ Rules that produce values for Luwu IR instructions (`inst.regA64` / `inst.regX64
   (let ([value (load-u8 (mem table :LuaTable.readonly))])
     (branch-if-not-zero! value fallback)))
 ```
+
+---
+
+## Metacompiler Architecture
+
+The `luwu-dsl-compiler` frontend and code generation pipeline is built around three core architectural pillars:
+
+### 1. Source-Located Diagnostics (`CompileError`)
+All compilation errors (syntax errors, arity mismatches, invalid types, bare architecture ops outside `target-case`) throw `CompileError` carrying a `SourceLocation` (`file`, `line`, `col`). Errors are formatted matching standard Clang/GCC conventions:
+```
+rules.luna:150:12: error: sign-extend-8 takes 1 argument
+```
+
+### 2. Structured Code Writer (`CodeWriter`)
+Manual string formatting and raw indent string passing have been eliminated in favor of [`CodeWriter`](CodeWriter.h):
+- **RAII Indentation**: `block(header, lambda)` automatically indents and formats braces `{ ... }`.
+- **Declaration Hoisting**: Declarations (such as `ScopedRegX64`, `regs.allocTemp`, `Label fresh;`) are collected via `addDecl` and emitted at the top of the generated C++ functions.
+- **Buffering**: `StringCodeWriter` enables isolated body evaluation before emitting hoisted declarations.
+
+### 3. Lexical Scoping (`Scope` & `ScopeGuard`)
+Environment management replaces $O(N)$ hash map cloning with linked symbol tables:
+- **Linked Structure**: Each nested `let` or `%produce-*` allocates a lightweight [`Scope`](Scope.h) pointing to its parent scope.
+- **RAII Guards**: `ScopeGuard` pushes and pops scopes in $O(1)$ without heap reallocation, ensuring exception-safe lexical scope unwinding.
+

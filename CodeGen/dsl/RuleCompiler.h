@@ -3,6 +3,8 @@
 
 #include "TargetBuilder.h"
 #include "Emitter.h"
+#include "CodeWriter.h"
+#include "CompileError.h"
 
 #include <vector>
 #include <ostream>
@@ -10,9 +12,9 @@
 namespace Luwu::Dsl
 {
 
-Operand evalExpr(std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg, const std::string& indent);
+Operand evalExpr(CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg);
 
-std::pair<std::string, std::string> evalMem(std::ostream& os, EvalContext& ctx, TargetBuilder& target, const SExpr& memExpr, const std::string& destReg, const std::string& indent);
+std::pair<std::string, std::string> evalMem(CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& memExpr, const std::string& destReg);
 
 void compileRules(std::ostream& os, TargetBuilder& target, const std::vector<Rule>& rules);
 

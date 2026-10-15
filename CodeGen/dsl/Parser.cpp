@@ -1,5 +1,6 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Parser.h"
+#include "CompileError.h"
 
 #include <stdexcept>
 
@@ -39,9 +40,9 @@ Token Parser::expect(TokenType type, const std::string& message)
     if (current.type == type)
         return advance();
 
-    throw std::runtime_error(
-        lexer.getFilename() + ":" + std::to_string(current.line) + ":" + std::to_string(current.col) + ": Error: " + message +
-        " (got '" + current.text + "')"
+    throw CompileError(
+        SourceLocation{lexer.getFilename(), current.line, current.col},
+        message + " (got '" + current.text + "')"
     );
 }
 
@@ -62,8 +63,7 @@ SExpr Parser::parseExpr()
         Token start = advance();
         SExpr expr;
         expr.kind = SExprKind::List;
-        expr.line = start.line;
-        expr.col = start.col;
+        expr.loc = {lexer.getFilename(), start.line, start.col};
 
         while (current.type != TokenType::RParen && current.type != TokenType::Eof)
         {
@@ -79,8 +79,7 @@ SExpr Parser::parseExpr()
         Token start = advance();
         SExpr expr;
         expr.kind = SExprKind::BracketList;
-        expr.line = start.line;
-        expr.col = start.col;
+        expr.loc = {lexer.getFilename(), start.line, start.col};
 
         while (current.type != TokenType::RBracket && current.type != TokenType::Eof)
         {
@@ -97,8 +96,7 @@ SExpr Parser::parseExpr()
         SExpr expr;
         expr.kind = SExprKind::Symbol;
         expr.text = tok.text;
-        expr.line = tok.line;
-        expr.col = tok.col;
+        expr.loc = {lexer.getFilename(), tok.line, tok.col};
         return expr;
     }
 
@@ -108,8 +106,7 @@ SExpr Parser::parseExpr()
         SExpr expr;
         expr.kind = SExprKind::Keyword;
         expr.text = tok.text;
-        expr.line = tok.line;
-        expr.col = tok.col;
+        expr.loc = {lexer.getFilename(), tok.line, tok.col};
         return expr;
     }
 
@@ -120,8 +117,7 @@ SExpr Parser::parseExpr()
         expr.kind = SExprKind::Number;
         expr.text = tok.text;
         expr.intValue = tok.intValue;
-        expr.line = tok.line;
-        expr.col = tok.col;
+        expr.loc = {lexer.getFilename(), tok.line, tok.col};
         return expr;
     }
 
@@ -131,13 +127,13 @@ SExpr Parser::parseExpr()
         SExpr expr;
         expr.kind = SExprKind::String;
         expr.text = tok.text;
-        expr.line = tok.line;
-        expr.col = tok.col;
+        expr.loc = {lexer.getFilename(), tok.line, tok.col};
         return expr;
     }
 
-    throw std::runtime_error(
-        lexer.getFilename() + ":" + std::to_string(current.line) + ":" + std::to_string(current.col) + ": Unexpected token '" + current.text + "'"
+    throw CompileError(
+        SourceLocation{lexer.getFilename(), current.line, current.col},
+        "Unexpected token '" + current.text + "'"
     );
 }
 

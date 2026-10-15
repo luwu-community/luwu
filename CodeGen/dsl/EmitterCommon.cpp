@@ -1,5 +1,6 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Emitter.h"
+#include "CompileError.h"
 
 #include <algorithm>
 #include <cctype>
@@ -53,14 +54,15 @@ std::vector<Rule> parseRules(const std::vector<SExpr>& program)
         std::string formName = isDefineSubrule ? "define-subrule" : "define-rule";
 
         if (expr.elements.size() < 3)
-            throw std::runtime_error(formName + " requires a signature and at least one body expression");
+            throw CompileError(expr, formName + " requires a signature and at least one body expression");
 
         const SExpr& sig = expr.elements[1];
         if (!sig.isList() || sig.elements.empty())
-            throw std::runtime_error(formName + " signature must be a non-empty list");
+            throw CompileError(sig, formName + " signature must be a non-empty list");
 
         Rule rule;
         rule.name = sig.elements[0].text;
+        rule.loc = expr.loc;
         rule.isSubrule = isDefineSubrule;
 
         for (size_t i = 1; i < sig.elements.size(); ++i)
@@ -68,28 +70,29 @@ std::vector<Rule> parseRules(const std::vector<SExpr>& program)
             const SExpr& p = sig.elements[i];
             if (!p.isList() || p.elements.size() != 2)
             {
-                throw std::runtime_error(
-                    "Rule parameter must be a pair [name :type], got: " + p.text
+                throw CompileError(
+                    p, "Rule parameter must be a pair [name :type], got: " + p.text
                 );
             }
 
             RuleParam param;
             param.name = p.elements[0].text;
             param.type = stripLeadingColon(p.elements[1].text);
+            param.loc = p.loc;
 
             if (!rule.isSubrule)
             {
                 if (param.type == "any")
                 {
-                    throw std::runtime_error(
-                        "Type :any is only allowed in define-subrule, not top-level define-rule: " + rule.name
+                    throw CompileError(
+                        p, "Type :any is only allowed in define-subrule, not top-level define-rule: " + rule.name
                     );
                 }
                 if (param.type != "reg" && param.type != "uint" && param.type != "int" &&
                     param.type != "tag" && param.type != "label" && param.type != "op")
                 {
-                    throw std::runtime_error(
-                        "Unknown parameter type :" + param.type + " in define-rule: " + rule.name
+                    throw CompileError(
+                        p, "Unknown parameter type :" + param.type + " in define-rule: " + rule.name
                     );
                 }
             }
@@ -143,7 +146,7 @@ static std::vector<SExpr> expandExpr(const SExpr& expr, const std::unordered_map
             const Rule& subrule = it->second;
             if (expr.elements.size() - 1 != subrule.params.size())
             {
-                throw std::runtime_error("Rule " + head + " expects " +
+                throw CompileError(expr, "Rule " + head + " expects " +
                     std::to_string(subrule.params.size()) + " arguments, got " +
                     std::to_string(expr.elements.size() - 1));
             }
@@ -161,10 +164,12 @@ static std::vector<SExpr> expandExpr(const SExpr& expr, const std::unordered_map
                     // Create a synthetic let binding: [param.name arg]
                     SExpr binding;
                     binding.kind = SExprKind::BracketList;
+                    binding.loc = arg.loc;
 
                     SExpr nameSym;
                     nameSym.kind = SExprKind::Symbol;
                     nameSym.text = param.name;
+                    nameSym.loc = param.loc;
 
                     binding.elements = {nameSym, arg};
                     bindings.push_back(binding);
@@ -189,13 +194,16 @@ static std::vector<SExpr> expandExpr(const SExpr& expr, const std::unordered_map
             {
                 SExpr letExpr;
                 letExpr.kind = SExprKind::List;
+                letExpr.loc = expr.loc;
 
                 SExpr letSym;
                 letSym.kind = SExprKind::Symbol;
                 letSym.text = "let";
+                letSym.loc = expr.loc;
 
                 SExpr bindingsList;
                 bindingsList.kind = SExprKind::BracketList;
+                bindingsList.loc = expr.loc;
                 bindingsList.elements = bindings;
 
                 letExpr.elements.push_back(letSym);
@@ -213,11 +221,40 @@ static std::vector<SExpr> expandExpr(const SExpr& expr, const std::unordered_map
 
         if (head == "let")
         {
-            // Inside let, bindings stay as is, but body expressions are expanded
             SExpr copy = expr;
             copy.elements.clear();
             copy.elements.push_back(expr.elements[0]);
-            copy.elements.push_back(expr.elements[1]);
+
+            // Expand subrule expressions within let bindings: ([var val] ...)
+            if (expr.elements.size() > 1)
+            {
+                const SExpr& bindings = expr.elements[1];
+                if (bindings.isList())
+                {
+                    SExpr newBindings = bindings;
+                    newBindings.elements.clear();
+                    for (const auto& b : bindings.elements)
+                    {
+                        if (b.isList() && b.elements.size() == 2)
+                        {
+                            SExpr newB = b;
+                            auto res = expandExpr(b.elements[1], ruleMap);
+                            if (res.size() == 1)
+                                newB.elements = {b.elements[0], res[0]};
+                            newBindings.elements.push_back(newB);
+                        }
+                        else
+                        {
+                            newBindings.elements.push_back(b);
+                        }
+                    }
+                    copy.elements.push_back(newBindings);
+                }
+                else
+                {
+                    copy.elements.push_back(bindings);
+                }
+            }
 
             for (size_t i = 2; i < expr.elements.size(); ++i)
             {
@@ -227,32 +264,24 @@ static std::vector<SExpr> expandExpr(const SExpr& expr, const std::unordered_map
             return {copy};
         }
 
-        if (head.rfind("%produce-", 0) == 0)
+        // For all other list expressions (cond, if, begin, target-case, %produce-*, etc.),
+        // recursively expand list children so subrules can be used within any control structure.
+        SExpr copy = expr;
+        copy.elements.clear();
+        for (const auto& el : expr.elements)
         {
-            bool isReuse = head.find("-reuse") != std::string::npos;
-            SExpr copy = expr;
-            copy.elements.clear();
-            copy.elements.push_back(expr.elements[0]);
-
-            for (size_t i = 1; i < expr.elements.size(); ++i)
+            if (el.isList())
             {
-                if (isReuse && i == 1)
-                {
-                    copy.elements.push_back(expr.elements[i]);
-                }
-                else if (expr.elements[i].isList())
-                {
-                    auto res = expandExpr(expr.elements[i], ruleMap);
-                    for (const auto& r : res)
-                        copy.elements.push_back(r);
-                }
-                else
-                {
-                    copy.elements.push_back(expr.elements[i]);
-                }
+                auto res = expandExpr(el, ruleMap);
+                for (const auto& r : res)
+                    copy.elements.push_back(r);
             }
-            return {copy};
+            else
+            {
+                copy.elements.push_back(el);
+            }
         }
+        return {copy};
     }
 
     return {expr};

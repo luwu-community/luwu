@@ -15,6 +15,7 @@ struct RuleParam
 {
     std::string name; // e.g. "pc-offset"
     std::string type; // e.g. "uint", "int", "reg", "label", "tag"
+    SourceLocation loc;
 };
 
 struct Rule
@@ -22,6 +23,7 @@ struct Rule
     std::string name; // e.g. "set-savedpc"
     std::vector<RuleParam> params;
     std::vector<SExpr> body;
+    SourceLocation loc;
     bool isSubrule = false;
 };
 

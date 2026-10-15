@@ -3,6 +3,7 @@
 #include "Lexer.h"
 #include "Parser.h"
 #include "Emitter.h"
+#include "CompileError.h"
 
 #include <fstream>
 #include <iostream>
@@ -69,6 +70,11 @@ int main(int argc, char** argv)
         std::cout << "luwu-dsl-compiler: compiled " << rules.size() << " rule(s) from "
                   << inputPath << " -> " << outputDir << "\n";
         return 0;
+    }
+    catch (const Luwu::Dsl::CompileError& e)
+    {
+        std::cerr << "luwu-dsl-compiler: " << e.what() << "\n";
+        return 1;
     }
     catch (const std::exception& e)
     {
