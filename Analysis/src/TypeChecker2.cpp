@@ -2117,14 +2117,25 @@ void TypeChecker2::visit(AstExprGlobal* expr)
             reportUnknownVariable(expr, scope);
             warnedGlobals.insert(expr->name.value);
         }
+        else if (scope->shouldWarnGlobal(expr->name.value))
+        {
+            // Luwu: a global only assigned in this module is reported once, but a misspelled local is a typo at every use
+            if (std::optional<UnknownSymbol> typo = misspelledLocalError(unknownVariableExplainer(), expr))
+                reportError(std::move(*typo), expr->location);
+        }
     }
+}
+
+UnknownVariableExplainer& TypeChecker2::unknownVariableExplainer()
+{
+    if (!unknownVariables)
+        unknownVariables = std::make_unique<UnknownVariableExplainer>(sourceModule->root);
+    return *unknownVariables;
 }
 
 void TypeChecker2::reportUnknownVariable(const AstExprGlobal* expr, NotNull<Scope> scope)
 {
-    if (!unknownVariables)
-        unknownVariables = std::make_unique<UnknownVariableExplainer>(sourceModule->root);
-    reportError(unknownVariableError(*unknownVariables, expr, *scope, module->notes), expr->location);
+    reportError(unknownVariableError(unknownVariableExplainer(), expr, *scope, module->notes), expr->location);
 }
 
 void TypeChecker2::visit(AstExprVarargs* expr)
@@ -3217,86 +3228,15 @@ void TypeChecker2::visit(AstExprTable* expr)
     }
 
     if (FFlag::LuwuHelpfulSubtypingErrors)
-        reportPropertyTypos(expr);
-}
-
-// Luwu (helpful subtyping errors): the name of a literal's property, when it's written as one (`name = v` or `["name"] = v`).
-static std::optional<std::string> literalPropertyName(const AstExprTable::Item& item)
-{
-    if (item.kind == AstExprTable::Item::Kind::List || !item.key)
-        return std::nullopt;
-    if (AstExprConstantString* key = item.key->as<AstExprConstantString>())
-        return std::string(key->value.data, key->value.size);
-    return std::nullopt;
-}
-
-// Luwu (helpful subtyping errors): a property of a table literal that its expected table doesn't have, named like a
-// property the literal leaves out, is that property misspelled. For an optional property upstream reports nothing:
-// table types aren't exact, so the literal fits, and the value is never read. For a required one, the error for
-// leaving it out doesn't say why it's missing.
-void TypeChecker2::reportPropertyTypos(AstExprTable* expr)
-{
-    const TypeId* expectedType = module->astExpectedTypes.find(expr);
-    if (!expectedType)
-        return;
-
-    // `Config?` is checked as its `Config`.
-    TypeId expected = follow(*expectedType);
-    if (const UnionType* optional = get<UnionType>(expected))
     {
-        std::vector<TypeId> nonNil;
-        for (TypeId option : optional->options)
+        if (const TypeId* expected = module->astExpectedTypes.find(expr))
         {
-            if (!isNil(follow(option)))
-                nonNil.push_back(option);
-        }
-        if (nonNil.size() != 1)
-            return;
-        expected = follow(nonNil.front());
-    }
-
-    const TableType* table = get<TableType>(expected);
-    if (!table || table->indexer)
-        return;
-
-    // This runs for every table literal with an expected table type. Most write only properties the type has.
-    bool writesUnknownProperty = false;
-    for (const AstExprTable::Item& item : expr->items)
-    {
-        std::optional<std::string> name = literalPropertyName(item);
-        if (name && !table->props.count(*name))
-        {
-            writesUnknownProperty = true;
-            break;
-        }
-    }
-
-    if (!writesUnknownProperty)
-        return;
-
-    std::unordered_set<std::string> written;
-    for (const AstExprTable::Item& item : expr->items)
-    {
-        if (std::optional<std::string> name = literalPropertyName(item))
-            written.insert(*name);
-    }
-
-    for (const AstExprTable::Item& item : expr->items)
-    {
-        std::optional<std::string> name = literalPropertyName(item);
-        if (!name || table->props.count(*name))
-            continue;
-
-        for (const auto& [meant, property] : table->props)
-        {
-            if (!written.count(meant) && looksLikeTypo(*name, meant))
-            {
-                reportError(Typo{*name, meant}, item.key->location);
-                break;
-            }
+            for (auto& [location, typo] : literalPropertyTypos(expr, *expected))
+                reportError(std::move(typo), location);
         }
     }
 }
+
 
 void TypeChecker2::visit(AstExprUnary* expr)
 {

@@ -2373,6 +2373,79 @@ bool looksLikeTypo(const std::string& written, const std::string& meant)
     return written.size() > kMaxTypoEdits && editDistanceWithin(written, meant, typoEditLimit(written)).has_value();
 }
 
+// The name of a literal's property, when it's written as one (`name = v` or `["name"] = v`).
+static std::optional<std::string> literalPropertyName(const AstExprTable::Item& item)
+{
+    if (item.kind == AstExprTable::Item::Kind::List || !item.key)
+        return std::nullopt;
+    if (AstExprConstantString* key = item.key->as<AstExprConstantString>())
+        return std::string(key->value.data, key->value.size);
+    return std::nullopt;
+}
+
+std::vector<std::pair<Location, Typo>> literalPropertyTypos(const AstExprTable* expr, TypeId expectedType)
+{
+    std::vector<std::pair<Location, Typo>> typos;
+
+    // `Config?` is checked as its `Config`.
+    TypeId expected = follow(expectedType);
+    if (const UnionType* optional = get<UnionType>(expected))
+    {
+        std::vector<TypeId> nonNil;
+        for (TypeId option : optional->options)
+        {
+            if (!isNil(follow(option)))
+                nonNil.push_back(option);
+        }
+        if (nonNil.size() != 1)
+            return typos;
+        expected = follow(nonNil.front());
+    }
+
+    const TableType* table = get<TableType>(expected);
+    if (!table || table->indexer)
+        return typos;
+
+    // This runs for every table literal with an expected table type. Most write only properties the type has.
+    bool writesUnknownProperty = false;
+    for (const AstExprTable::Item& item : expr->items)
+    {
+        std::optional<std::string> name = literalPropertyName(item);
+        if (name && !table->props.count(*name))
+        {
+            writesUnknownProperty = true;
+            break;
+        }
+    }
+
+    if (!writesUnknownProperty)
+        return typos;
+
+    std::unordered_set<std::string> written;
+    for (const AstExprTable::Item& item : expr->items)
+    {
+        if (std::optional<std::string> name = literalPropertyName(item))
+            written.insert(*name);
+    }
+
+    for (const AstExprTable::Item& item : expr->items)
+    {
+        std::optional<std::string> name = literalPropertyName(item);
+        if (!name || table->props.count(*name))
+            continue;
+
+        for (const auto& [meant, property] : table->props)
+        {
+            if (!written.count(meant) && looksLikeTypo(*name, meant))
+            {
+                typos.emplace_back(item.key->location, Typo{*name, meant});
+                break;
+            }
+        }
+    }
+    return typos;
+}
+
 std::optional<MismatchExplanation> explainMismatch(
     TypeId given,
     TypeId expected,

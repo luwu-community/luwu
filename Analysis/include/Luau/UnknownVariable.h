@@ -33,6 +33,9 @@ public:
     // `globals` are the global names the use could have meant.
     UnknownVariableExplanation explain(const AstExprGlobal* use, const std::vector<std::string>& globals);
 
+    // The name in scope that `use` is probably a misspelling of, with no other explanation.
+    std::optional<std::string> misspelledName(const AstExprGlobal* use, const std::vector<std::string>& globals);
+
     // The global names of `scope` and its parents. They're collected once per outermost scope.
     const std::vector<std::string>& globalsOf(const Scope& scope);
 
@@ -83,6 +86,9 @@ UnknownSymbol unknownVariableError(
     const Scope& scope,
     std::vector<DiagnosticNote>& notes
 );
+
+// Luwu: the typo error for a global spelled like a local in scope, such as `othrname = 5` beside `local othername`.
+std::optional<UnknownSymbol> misspelledLocalError(UnknownVariableExplainer& explainer, const AstExprGlobal* use);
 
 // Luwu: the message for an unknown variable. The type checkers and the UnknownGlobal lint share it.
 std::string unknownVariableMessage(const UnknownSymbol& error);

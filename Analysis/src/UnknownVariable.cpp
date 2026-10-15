@@ -303,19 +303,14 @@ const std::vector<std::string>& UnknownVariableExplainer::globalsOf(const Scope&
     return globals;
 }
 
-UnknownVariableExplanation UnknownVariableExplainer::explain(const AstExprGlobal* use, const std::vector<std::string>& globals)
+// The name in scope that `written` is probably a misspelling of. Typos keep the first letter: `number` isn't `tonumber`.
+static std::optional<std::string> closestName(
+    const std::vector<Declaration>& declarations,
+    const UseSite& site,
+    const std::string& written,
+    const std::vector<std::string>& globals
+)
 {
-    if (!indexed)
-        index();
-
-    UnknownVariableExplanation result;
-    if (!root)
-        return result;
-
-    const std::string written = use->name.value;
-    const UseSite site{root, use->location.begin, parentBlocks};
-
-    // A misspelled name in scope is the likeliest fix. Typos keep the first letter: `number` isn't `tonumber`.
     std::optional<std::string> closest;
     size_t closestDistance = std::numeric_limits<size_t>::max();
     auto consider = [&](const std::string& candidate)
@@ -352,8 +347,33 @@ UnknownVariableExplanation UnknownVariableExplainer::explain(const AstExprGlobal
     }
     for (const std::string& global : globals)
         consider(global);
+    return closest;
+}
 
-    if (closest)
+std::optional<std::string> UnknownVariableExplainer::misspelledName(const AstExprGlobal* use, const std::vector<std::string>& globals)
+{
+    if (!indexed)
+        index();
+    if (!root)
+        return std::nullopt;
+
+    const UseSite site{root, use->location.begin, parentBlocks};
+    return closestName(declarations, site, use->name.value, globals);
+}
+
+UnknownVariableExplanation UnknownVariableExplainer::explain(const AstExprGlobal* use, const std::vector<std::string>& globals)
+{
+    if (!indexed)
+        index();
+
+    UnknownVariableExplanation result;
+    if (!root)
+        return result;
+
+    const UseSite site{root, use->location.begin, parentBlocks};
+
+    // A misspelled name in scope is the likeliest fix
+    if (std::optional<std::string> closest = closestName(declarations, site, use->name.value, globals))
     {
         result.unbound = UnknownSymbol::Unbound::Typo;
         result.meant = *closest;
@@ -457,6 +477,24 @@ UnknownSymbol unknownVariableError(
 )
 {
     return unknownVariableError(explainer, use, explainer.globalsOf(scope), notes);
+}
+
+std::optional<UnknownSymbol> misspelledLocalError(UnknownVariableExplainer& explainer, const AstExprGlobal* use)
+{
+    std::optional<std::string> meant = explainer.misspelledName(use, {});
+    if (!meant)
+        return std::nullopt;
+
+    // A global named like a local's plural is meant: `players = {}` beside `local player`
+    const std::string written = use->name.value;
+    const bool pluralPair = written == *meant + "s" || written == *meant + "es" || *meant == written + "s" || *meant == written + "es";
+    if (pluralPair)
+        return std::nullopt;
+
+    UnknownSymbol error{use->name.value, UnknownSymbol::Binding};
+    error.unbound = UnknownSymbol::Unbound::Typo;
+    error.meant = std::move(*meant);
+    return error;
 }
 
 std::string unknownVariableMessage(const UnknownSymbol& error)

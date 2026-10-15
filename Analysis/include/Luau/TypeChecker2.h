@@ -308,7 +308,6 @@ private:
         std::optional<std::string> contextVerb = std::nullopt
     );
     void explainError(TypePackId subTy, TypePackId superTy, Location location, const SubtypingResult& result);
-    void reportPropertyTypos(AstExprTable* expr);
 
     bool testLiteralOrAstTypeIsSubtype(AstExpr* expr, TypeId expectedType);
 
@@ -367,6 +366,7 @@ private:
 
     // Luwu: says why a name isn't a variable here. Created at the first unknown name.
     std::unique_ptr<UnknownVariableExplainer> unknownVariables;
+    UnknownVariableExplainer& unknownVariableExplainer();
     void reportUnknownVariable(const AstExprGlobal* expr, NotNull<Scope> scope);
 
     void suggestAnnotations(AstExprFunction* expr, TypeId ty);
