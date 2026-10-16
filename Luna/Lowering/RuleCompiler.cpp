@@ -90,269 +90,436 @@ static std::string evalPredicateArg(EvalContext& ctx, TargetBuilder& target, con
 
 using PredicateTrampoline = PredicateResult (*)(EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg);
 
-static const std::unordered_map<std::string_view, PredicateTrampoline> kPredicateTrampolines = {
-    {"constant?", [](EvalContext& ctx, TargetBuilder&, const SExpr& expr, const std::string&) -> PredicateResult {
-        if (expr.elements.size() != 2)
-            throw CompileError(expr, "constant? requires 1 argument");
-        return {getRawOpText(ctx, expr.elements[1]) + ".kind == IrOpKind::Constant", Precedence::Primary};
-    }},
-    {"inst?", [](EvalContext& ctx, TargetBuilder&, const SExpr& expr, const std::string&) -> PredicateResult {
-        if (expr.elements.size() != 2)
-            throw CompileError(expr, "inst? requires 1 argument");
-        return {getRawOpText(ctx, expr.elements[1]) + ".kind == IrOpKind::Inst", Precedence::Primary};
-    }},
-    {"undef?", [](EvalContext& ctx, TargetBuilder&, const SExpr& expr, const std::string&) -> PredicateResult {
-        if (expr.elements.size() != 2)
-            throw CompileError(expr, "undef? requires 1 argument");
-        return {getRawOpText(ctx, expr.elements[1]) + ".kind == IrOpKind::Undef", Precedence::Primary};
-    }},
-    {"vm-exit?", [](EvalContext& ctx, TargetBuilder&, const SExpr& expr, const std::string&) -> PredicateResult {
-        if (expr.elements.size() != 2)
-            throw CompileError(expr, "vm-exit? requires 1 argument");
-        return {getRawOpText(ctx, expr.elements[1]) + ".kind == IrOpKind::VmExit", Precedence::Primary};
-    }},
-    {"fallthrough?", [](EvalContext& ctx, TargetBuilder&, const SExpr& expr, const std::string&) -> PredicateResult {
-        if (expr.elements.size() != 2)
-            throw CompileError(expr, "fallthrough? requires 1 argument");
-        ctx.use("next");
-        return {"lowering.isFallthroughBlock(lowering.blockOp(" + getRawOpText(ctx, expr.elements[1]) + "), next)", Precedence::Primary};
-    }},
-    {"cmd-is?", [](EvalContext& ctx, TargetBuilder&, const SExpr& expr, const std::string&) -> PredicateResult {
-        requireArity(expr, 2);
-        std::string cmd = expr.elements[2].text;
-        if (!cmd.empty() && cmd[0] == ':')
-            cmd = cmd.substr(1);
-        return {"lowering.function.instOp(" + getRawOpText(ctx, expr.elements[1]) + ").cmd == IrCmd::" + cmd, Precedence::Relational};
-    }},
-    {"reused?", [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
-        if (!destReg.empty() && destReg.find("inst") != std::string::npos)
-            ctx.use("inst");
-        if (expr.elements.size() == 3)
-        {
-            std::string opText = getRawOpText(ctx, expr.elements[2]);
-            return {"(" + opText + ".kind == IrOpKind::Inst && " + evalPredicateArg(ctx, target, expr.elements[1], destReg) + " == lowering.regOp(" + opText + "))", Precedence::Relational};
+struct PredicateTrampolineSpec
+{
+    const char* syntax;
+    const char* desc;
+    PredicateTrampoline fn;
+};
+
+static const std::unordered_map<std::string_view, PredicateTrampolineSpec> kPredicateTrampolines = {
+    {"constant?", {
+        "(constant? <op>)",
+        "Test if IR operand is a compile-time constant",
+        [](EvalContext& ctx, TargetBuilder&, const SExpr& expr, const std::string&) -> PredicateResult {
+            if (expr.elements.size() != 2)
+                throw CompileError(expr, "constant? requires 1 argument");
+            return {getRawOpText(ctx, expr.elements[1]) + ".kind == IrOpKind::Constant", Precedence::Primary};
         }
-        if (expr.elements.size() == 2)
-        {
-            if (destReg.empty())
-                throw CompileError(expr, "1-argument reused? requires an active destination register context");
-            std::string opText = getRawOpText(ctx, expr.elements[1]);
-            return {"(" + opText + ".kind == IrOpKind::Inst && " + destReg + " == lowering.regOp(" + opText + "))", Precedence::Relational};
+    }},
+    {"inst?", {
+        "(inst? <op>)",
+        "Test if IR operand is an instruction result",
+        [](EvalContext& ctx, TargetBuilder&, const SExpr& expr, const std::string&) -> PredicateResult {
+            if (expr.elements.size() != 2)
+                throw CompileError(expr, "inst? requires 1 argument");
+            return {getRawOpText(ctx, expr.elements[1]) + ".kind == IrOpKind::Inst", Precedence::Primary};
         }
-        throw CompileError(expr, "reused? requires 1 or 2 arguments");
     }},
-    {"not-reused?", [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
-        if (!destReg.empty() && destReg.find("inst") != std::string::npos)
-            ctx.use("inst");
-        if (expr.elements.size() == 3)
-        {
-            std::string opText = getRawOpText(ctx, expr.elements[2]);
-            return {"(" + opText + ".kind != IrOpKind::Inst || " + evalPredicateArg(ctx, target, expr.elements[1], destReg) + " != lowering.regOp(" + opText + "))", Precedence::Relational};
+    {"undef?", {
+        "(undef? <op>)",
+        "Test if IR operand is undefined",
+        [](EvalContext& ctx, TargetBuilder&, const SExpr& expr, const std::string&) -> PredicateResult {
+            if (expr.elements.size() != 2)
+                throw CompileError(expr, "undef? requires 1 argument");
+            return {getRawOpText(ctx, expr.elements[1]) + ".kind == IrOpKind::Undef", Precedence::Primary};
         }
-        if (expr.elements.size() == 2)
-        {
-            if (destReg.empty())
-                throw CompileError(expr, "1-argument not-reused? requires an active destination register context");
-            std::string opText = getRawOpText(ctx, expr.elements[1]);
-            return {"(" + opText + ".kind != IrOpKind::Inst || " + destReg + " != lowering.regOp(" + opText + "))", Precedence::Relational};
+    }},
+    {"vm-exit?", {
+        "(vm-exit? <op>)",
+        "Test if IR operand is VM exit point",
+        [](EvalContext& ctx, TargetBuilder&, const SExpr& expr, const std::string&) -> PredicateResult {
+            if (expr.elements.size() != 2)
+                throw CompileError(expr, "vm-exit? requires 1 argument");
+            return {getRawOpText(ctx, expr.elements[1]) + ".kind == IrOpKind::VmExit", Precedence::Primary};
         }
-        throw CompileError(expr, "not-reused? requires 1 or 2 arguments");
     }},
-    {"=", [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
-        if (expr.elements.size() != 3)
-            throw CompileError(expr, "= requires 2 arguments");
-        std::string lhs = evalPredicateArg(ctx, target, expr.elements[1], destReg);
-        std::string rhs = evalPredicateArg(ctx, target, expr.elements[2], destReg);
-        return {lhs + " == " + rhs, Precedence::Relational};
+    {"fallthrough?", {
+        "(fallthrough? <blockOp>)",
+        "Test if target block is next fallthrough block",
+        [](EvalContext& ctx, TargetBuilder&, const SExpr& expr, const std::string&) -> PredicateResult {
+            if (expr.elements.size() != 2)
+                throw CompileError(expr, "fallthrough? requires 1 argument");
+            ctx.use("next");
+            return {"lowering.isFallthroughBlock(lowering.blockOp(" + getRawOpText(ctx, expr.elements[1]) + "), next)", Precedence::Primary};
+        }
     }},
-    {"==", [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
-        if (expr.elements.size() != 3)
-            throw CompileError(expr, "== requires 2 arguments");
-        std::string lhs = evalPredicateArg(ctx, target, expr.elements[1], destReg);
-        std::string rhs = evalPredicateArg(ctx, target, expr.elements[2], destReg);
-        return {lhs + " == " + rhs, Precedence::Relational};
+    {"cmd-is?", {
+        "(cmd-is? <instOp> :<cmd>)",
+        "Test if instruction operand matches IrCmd::<cmd>",
+        [](EvalContext& ctx, TargetBuilder&, const SExpr& expr, const std::string&) -> PredicateResult {
+            requireArity(expr, 2);
+            std::string cmd = expr.elements[2].text;
+            if (!cmd.empty() && cmd[0] == ':')
+                cmd = cmd.substr(1);
+            return {"lowering.function.instOp(" + getRawOpText(ctx, expr.elements[1]) + ").cmd == IrCmd::" + cmd, Precedence::Relational};
+        }
     }},
-    {"!=", [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
-        if (expr.elements.size() != 3)
-            throw CompileError(expr, "!= requires 2 arguments");
-        std::string lhs = evalPredicateArg(ctx, target, expr.elements[1], destReg);
-        std::string rhs = evalPredicateArg(ctx, target, expr.elements[2], destReg);
-        return {lhs + " != " + rhs, Precedence::Relational};
+    {"reused?", {
+        "(reused? [<dest>] <op>)",
+        "Test if destination register was reused from operand register",
+        [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
+            if (!destReg.empty() && destReg.find("inst") != std::string::npos)
+                ctx.use("inst");
+            if (expr.elements.size() == 3)
+            {
+                std::string opText = getRawOpText(ctx, expr.elements[2]);
+                return {"(" + opText + ".kind == IrOpKind::Inst && " + evalPredicateArg(ctx, target, expr.elements[1], destReg) + " == lowering.regOp(" + opText + "))", Precedence::Relational};
+            }
+            if (expr.elements.size() == 2)
+            {
+                if (destReg.empty())
+                    throw CompileError(expr, "1-argument reused? requires an active destination register context");
+                std::string opText = getRawOpText(ctx, expr.elements[1]);
+                return {"(" + opText + ".kind == IrOpKind::Inst && " + destReg + " == lowering.regOp(" + opText + "))", Precedence::Relational};
+            }
+            throw CompileError(expr, "reused? requires 1 or 2 arguments");
+        }
     }},
-    {"<", [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
-        if (expr.elements.size() != 3)
-            throw CompileError(expr, "< requires 2 arguments");
-        std::string lhs = evalPredicateArg(ctx, target, expr.elements[1], destReg);
-        std::string rhs = evalPredicateArg(ctx, target, expr.elements[2], destReg);
-        return {lhs + " < " + rhs, Precedence::Relational};
+    {"not-reused?", {
+        "(not-reused? [<dest>] <op>)",
+        "Test if destination register was not reused from operand register",
+        [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
+            if (!destReg.empty() && destReg.find("inst") != std::string::npos)
+                ctx.use("inst");
+            if (expr.elements.size() == 3)
+            {
+                std::string opText = getRawOpText(ctx, expr.elements[2]);
+                return {"(" + opText + ".kind != IrOpKind::Inst || " + evalPredicateArg(ctx, target, expr.elements[1], destReg) + " != lowering.regOp(" + opText + "))", Precedence::Relational};
+            }
+            if (expr.elements.size() == 2)
+            {
+                if (destReg.empty())
+                    throw CompileError(expr, "1-argument not-reused? requires an active destination register context");
+                std::string opText = getRawOpText(ctx, expr.elements[1]);
+                return {"(" + opText + ".kind != IrOpKind::Inst || " + destReg + " != lowering.regOp(" + opText + "))", Precedence::Relational};
+            }
+            throw CompileError(expr, "not-reused? requires 1 or 2 arguments");
+        }
     }},
-    {"<=", [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
-        if (expr.elements.size() != 3)
-            throw CompileError(expr, "<= requires 2 arguments");
-        std::string lhs = evalPredicateArg(ctx, target, expr.elements[1], destReg);
-        std::string rhs = evalPredicateArg(ctx, target, expr.elements[2], destReg);
-        return {lhs + " <= " + rhs, Precedence::Relational};
+    {"=", {
+        "(= <lhs> <rhs>)",
+        "Structural equality comparison",
+        [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
+            if (expr.elements.size() != 3)
+                throw CompileError(expr, "= requires 2 arguments");
+            std::string lhs = evalPredicateArg(ctx, target, expr.elements[1], destReg);
+            std::string rhs = evalPredicateArg(ctx, target, expr.elements[2], destReg);
+            return {lhs + " == " + rhs, Precedence::Relational};
+        }
     }},
-    {">", [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
-        if (expr.elements.size() != 3)
-            throw CompileError(expr, "> requires 2 arguments");
-        std::string lhs = evalPredicateArg(ctx, target, expr.elements[1], destReg);
-        std::string rhs = evalPredicateArg(ctx, target, expr.elements[2], destReg);
-        return {lhs + " > " + rhs, Precedence::Relational};
+    {"==", {
+        "(== <lhs> <rhs>)",
+        "Structural equality comparison (alias)",
+        [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
+            if (expr.elements.size() != 3)
+                throw CompileError(expr, "== requires 2 arguments");
+            std::string lhs = evalPredicateArg(ctx, target, expr.elements[1], destReg);
+            std::string rhs = evalPredicateArg(ctx, target, expr.elements[2], destReg);
+            return {lhs + " == " + rhs, Precedence::Relational};
+        }
     }},
-    {">=", [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
-        if (expr.elements.size() != 3)
-            throw CompileError(expr, ">= requires 2 arguments");
-        std::string lhs = evalPredicateArg(ctx, target, expr.elements[1], destReg);
-        std::string rhs = evalPredicateArg(ctx, target, expr.elements[2], destReg);
-        return {lhs + " >= " + rhs, Precedence::Relational};
+    {"!=", {
+        "(!= <lhs> <rhs>)",
+        "Structural inequality comparison",
+        [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
+            if (expr.elements.size() != 3)
+                throw CompileError(expr, "!= requires 2 arguments");
+            std::string lhs = evalPredicateArg(ctx, target, expr.elements[1], destReg);
+            std::string rhs = evalPredicateArg(ctx, target, expr.elements[2], destReg);
+            return {lhs + " != " + rhs, Precedence::Relational};
+        }
     }},
-    {"int-val", [](EvalContext& ctx, TargetBuilder&, const SExpr& expr, const std::string&) -> PredicateResult {
-        if (expr.elements.size() != 2)
-            throw CompileError(expr, "int-val requires 1 argument");
-        return {"lowering.intOp(" + getRawOpText(ctx, expr.elements[1]) + ")", Precedence::Primary};
+    {"<", {
+        "(< <lhs> <rhs>)",
+        "Signed numerical less-than comparison",
+        [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
+            if (expr.elements.size() != 3)
+                throw CompileError(expr, "< requires 2 arguments");
+            std::string lhs = evalPredicateArg(ctx, target, expr.elements[1], destReg);
+            std::string rhs = evalPredicateArg(ctx, target, expr.elements[2], destReg);
+            return {lhs + " < " + rhs, Precedence::Relational};
+        }
     }},
-    {"int64-val", [](EvalContext& ctx, TargetBuilder&, const SExpr& expr, const std::string&) -> PredicateResult {
-        if (expr.elements.size() != 2)
-            throw CompileError(expr, "int64-val requires 1 argument");
-        return {"lowering.int64Op(" + getRawOpText(ctx, expr.elements[1]) + ")", Precedence::Primary};
+    {"<=", {
+        "(<= <lhs> <rhs>)",
+        "Signed numerical less-than-or-equal comparison",
+        [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
+            if (expr.elements.size() != 3)
+                throw CompileError(expr, "<= requires 2 arguments");
+            std::string lhs = evalPredicateArg(ctx, target, expr.elements[1], destReg);
+            std::string rhs = evalPredicateArg(ctx, target, expr.elements[2], destReg);
+            return {lhs + " <= " + rhs, Precedence::Relational};
+        }
     }},
-    {"fits-i32?", [](EvalContext& ctx, TargetBuilder&, const SExpr& expr, const std::string&) -> PredicateResult {
-        if (expr.elements.size() != 2)
-            throw CompileError(expr, "fits-i32? requires 1 argument");
-        std::string raw = getRawOpText(ctx, expr.elements[1]);
-        return {"lowering.int64Op(" + raw + ") >= INT32_MIN && lowering.int64Op(" + raw + ") <= INT32_MAX", Precedence::And};
+    {">", {
+        "(> <lhs> <rhs>)",
+        "Signed numerical greater-than comparison",
+        [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
+            if (expr.elements.size() != 3)
+                throw CompileError(expr, "> requires 2 arguments");
+            std::string lhs = evalPredicateArg(ctx, target, expr.elements[1], destReg);
+            std::string rhs = evalPredicateArg(ctx, target, expr.elements[2], destReg);
+            return {lhs + " > " + rhs, Precedence::Relational};
+        }
+    }},
+    {">=", {
+        "(>= <lhs> <rhs>)",
+        "Signed numerical greater-than-or-equal comparison",
+        [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
+            if (expr.elements.size() != 3)
+                throw CompileError(expr, ">= requires 2 arguments");
+            std::string lhs = evalPredicateArg(ctx, target, expr.elements[1], destReg);
+            std::string rhs = evalPredicateArg(ctx, target, expr.elements[2], destReg);
+            return {lhs + " >= " + rhs, Precedence::Relational};
+        }
+    }},
+    {"int-val", {
+        "(int-val <op>)",
+        "Extract 32-bit integer value of constant operand",
+        [](EvalContext& ctx, TargetBuilder&, const SExpr& expr, const std::string&) -> PredicateResult {
+            if (expr.elements.size() != 2)
+                throw CompileError(expr, "int-val requires 1 argument");
+            return {"lowering.intOp(" + getRawOpText(ctx, expr.elements[1]) + ")", Precedence::Primary};
+        }
+    }},
+    {"int64-val", {
+        "(int64-val <op>)",
+        "Extract 64-bit integer value of constant operand",
+        [](EvalContext& ctx, TargetBuilder&, const SExpr& expr, const std::string&) -> PredicateResult {
+            if (expr.elements.size() != 2)
+                throw CompileError(expr, "int64-val requires 1 argument");
+            return {"lowering.int64Op(" + getRawOpText(ctx, expr.elements[1]) + ")", Precedence::Primary};
+        }
+    }},
+    {"fits-i32?", {
+        "(fits-i32? <op>)",
+        "Test if 64-bit integer fits in signed 32-bit range",
+        [](EvalContext& ctx, TargetBuilder&, const SExpr& expr, const std::string&) -> PredicateResult {
+            if (expr.elements.size() != 2)
+                throw CompileError(expr, "fits-i32? requires 1 argument");
+            std::string raw = getRawOpText(ctx, expr.elements[1]);
+            return {"lowering.int64Op(" + raw + ") >= INT32_MIN && lowering.int64Op(" + raw + ") <= INT32_MAX", Precedence::And};
+        }
     }},
     // IR Condition predicates
-    {"ir-cond-eq?", [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
-        requireArity(expr, 1);
-        return {evalPredicateArg(ctx, target, expr.elements[1], destReg) + " == IrCondition::Equal", Precedence::Relational};
-    }},
-    {"ir-cond-ne?", [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
-        requireArity(expr, 1);
-        return {evalPredicateArg(ctx, target, expr.elements[1], destReg) + " == IrCondition::NotEqual", Precedence::Relational};
-    }},
-    {"ir-cond-neq?", [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
-        requireArity(expr, 1);
-        return {evalPredicateArg(ctx, target, expr.elements[1], destReg) + " == IrCondition::NotEqual", Precedence::Relational};
-    }},
-    {"ir-cond-lt?", [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
-        requireArity(expr, 1);
-        return {evalPredicateArg(ctx, target, expr.elements[1], destReg) + " == IrCondition::Less", Precedence::Relational};
-    }},
-    {"ir-cond-nlt?", [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
-        requireArity(expr, 1);
-        return {evalPredicateArg(ctx, target, expr.elements[1], destReg) + " == IrCondition::NotLess", Precedence::Relational};
-    }},
-    {"ir-cond-le?", [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
-        requireArity(expr, 1);
-        return {evalPredicateArg(ctx, target, expr.elements[1], destReg) + " == IrCondition::LessEqual", Precedence::Relational};
-    }},
-    {"ir-cond-nle?", [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
-        requireArity(expr, 1);
-        return {evalPredicateArg(ctx, target, expr.elements[1], destReg) + " == IrCondition::NotLessEqual", Precedence::Relational};
-    }},
-    {"ir-cond-gt?", [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
-        requireArity(expr, 1);
-        return {evalPredicateArg(ctx, target, expr.elements[1], destReg) + " == IrCondition::Greater", Precedence::Relational};
-    }},
-    {"ir-cond-ngt?", [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
-        requireArity(expr, 1);
-        return {evalPredicateArg(ctx, target, expr.elements[1], destReg) + " == IrCondition::NotGreater", Precedence::Relational};
-    }},
-    {"ir-cond-ge?", [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
-        requireArity(expr, 1);
-        return {evalPredicateArg(ctx, target, expr.elements[1], destReg) + " == IrCondition::GreaterEqual", Precedence::Relational};
-    }},
-    {"ir-cond-nge?", [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
-        requireArity(expr, 1);
-        return {evalPredicateArg(ctx, target, expr.elements[1], destReg) + " == IrCondition::NotGreaterEqual", Precedence::Relational};
-    }},
-    {"ir-cond-ult?", [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
-        requireArity(expr, 1);
-        return {evalPredicateArg(ctx, target, expr.elements[1], destReg) + " == IrCondition::UnsignedLess", Precedence::Relational};
-    }},
-    {"ir-cond-ule?", [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
-        requireArity(expr, 1);
-        return {evalPredicateArg(ctx, target, expr.elements[1], destReg) + " == IrCondition::UnsignedLessEqual", Precedence::Relational};
-    }},
-    {"ir-cond-ugt?", [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
-        requireArity(expr, 1);
-        return {evalPredicateArg(ctx, target, expr.elements[1], destReg) + " == IrCondition::UnsignedGreater", Precedence::Relational};
-    }},
-    {"ir-cond-uge?", [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
-        requireArity(expr, 1);
-        return {evalPredicateArg(ctx, target, expr.elements[1], destReg) + " == IrCondition::UnsignedGreaterEqual", Precedence::Relational};
-    }},
-    {"fflag", [](EvalContext& ctx, TargetBuilder&, const SExpr& expr, const std::string&) -> PredicateResult {
-        requireArity(expr, 1);
-        std::string flag = expr.elements[1].text;
-        if (!flag.empty() && flag[0] == ':')
-            flag = flag.substr(1);
-        if (flag.empty())
-            throw CompileError(expr, "fflag requires a valid flag name");
-        if (flag.rfind("FFlag::", 0) == 0)
-        {
-            ctx.fflags.insert(flag.substr(7));
-            return {flag, Precedence::Primary};
+    {"ir-cond-eq?", {
+        "(ir-cond-eq? <cond>)",
+        "Test if IrCondition is Equal",
+        [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
+            requireArity(expr, 1);
+            return {evalPredicateArg(ctx, target, expr.elements[1], destReg) + " == IrCondition::Equal", Precedence::Relational};
         }
-        if (flag.rfind("DFFlag::", 0) == 0)
-        {
-            ctx.dfflags.insert(flag.substr(8));
-            return {flag, Precedence::Primary};
+    }},
+    {"ir-cond-ne?", {
+        "(ir-cond-ne? <cond>)",
+        "Test if IrCondition is NotEqual",
+        [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
+            requireArity(expr, 1);
+            return {evalPredicateArg(ctx, target, expr.elements[1], destReg) + " == IrCondition::NotEqual", Precedence::Relational};
         }
-        ctx.fflags.insert(flag);
-        return {"FFlag::" + flag, Precedence::Primary};
     }},
-    {"fflag?", [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
-        return kPredicateTrampolines.at("fflag")(ctx, target, expr, destReg);
-    }},
-    {"dfflag", [](EvalContext& ctx, TargetBuilder&, const SExpr& expr, const std::string&) -> PredicateResult {
-        requireArity(expr, 1);
-        std::string flag = expr.elements[1].text;
-        if (!flag.empty() && flag[0] == ':')
-            flag = flag.substr(1);
-        if (flag.empty())
-            throw CompileError(expr, "dfflag requires a valid flag name");
-        if (flag.rfind("DFFlag::", 0) == 0)
-        {
-            ctx.dfflags.insert(flag.substr(8));
-            return {flag, Precedence::Primary};
+    {"ir-cond-neq?", {
+        "(ir-cond-neq? <cond>)",
+        "Test if IrCondition is NotEqual (alias)",
+        [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
+            requireArity(expr, 1);
+            return {evalPredicateArg(ctx, target, expr.elements[1], destReg) + " == IrCondition::NotEqual", Precedence::Relational};
         }
-        ctx.dfflags.insert(flag);
-        return {"DFFlag::" + flag, Precedence::Primary};
     }},
-    {"dfflag?", [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
-        return kPredicateTrampolines.at("dfflag")(ctx, target, expr, destReg);
-    }},
-    {"and", [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
-        if (expr.elements.size() < 2)
-            throw CompileError(expr, "and requires at least 1 argument");
-        std::string res;
-        for (size_t i = 1; i < expr.elements.size(); ++i)
-        {
-            if (i > 1) res += " && ";
-            PredicateResult child = evalPredicate(ctx, target, expr.elements[i], destReg);
-            res += formatChild(child, Precedence::And);
+    {"ir-cond-lt?", {
+        "(ir-cond-lt? <cond>)",
+        "Test if IrCondition is Less",
+        [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
+            requireArity(expr, 1);
+            return {evalPredicateArg(ctx, target, expr.elements[1], destReg) + " == IrCondition::Less", Precedence::Relational};
         }
-        return {res, Precedence::And};
     }},
-    {"or", [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
-        if (expr.elements.size() < 2)
-            throw CompileError(expr, "or requires at least 1 argument");
-        std::string res;
-        for (size_t i = 1; i < expr.elements.size(); ++i)
-        {
-            if (i > 1) res += " || ";
-            PredicateResult child = evalPredicate(ctx, target, expr.elements[i], destReg);
-            res += formatChild(child, Precedence::Or);
+    {"ir-cond-nlt?", {
+        "(ir-cond-nlt? <cond>)",
+        "Test if IrCondition is NotLess",
+        [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
+            requireArity(expr, 1);
+            return {evalPredicateArg(ctx, target, expr.elements[1], destReg) + " == IrCondition::NotLess", Precedence::Relational};
         }
-        return {res, Precedence::Or};
     }},
-    {"not", [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
-        if (expr.elements.size() != 2)
-            throw CompileError(expr, "not requires 1 argument");
-        return {"!(" + evalPredicate(ctx, target, expr.elements[1], destReg).text + ")", Precedence::Primary};
+    {"ir-cond-le?", {
+        "(ir-cond-le? <cond>)",
+        "Test if IrCondition is LessEqual",
+        [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
+            requireArity(expr, 1);
+            return {evalPredicateArg(ctx, target, expr.elements[1], destReg) + " == IrCondition::LessEqual", Precedence::Relational};
+        }
+    }},
+    {"ir-cond-nle?", {
+        "(ir-cond-nle? <cond>)",
+        "Test if IrCondition is NotLessEqual",
+        [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
+            requireArity(expr, 1);
+            return {evalPredicateArg(ctx, target, expr.elements[1], destReg) + " == IrCondition::NotLessEqual", Precedence::Relational};
+        }
+    }},
+    {"ir-cond-gt?", {
+        "(ir-cond-gt? <cond>)",
+        "Test if IrCondition is Greater",
+        [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
+            requireArity(expr, 1);
+            return {evalPredicateArg(ctx, target, expr.elements[1], destReg) + " == IrCondition::Greater", Precedence::Relational};
+        }
+    }},
+    {"ir-cond-ngt?", {
+        "(ir-cond-ngt? <cond>)",
+        "Test if IrCondition is NotGreater",
+        [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
+            requireArity(expr, 1);
+            return {evalPredicateArg(ctx, target, expr.elements[1], destReg) + " == IrCondition::NotGreater", Precedence::Relational};
+        }
+    }},
+    {"ir-cond-ge?", {
+        "(ir-cond-ge? <cond>)",
+        "Test if IrCondition is GreaterEqual",
+        [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
+            requireArity(expr, 1);
+            return {evalPredicateArg(ctx, target, expr.elements[1], destReg) + " == IrCondition::GreaterEqual", Precedence::Relational};
+        }
+    }},
+    {"ir-cond-nge?", {
+        "(ir-cond-nge? <cond>)",
+        "Test if IrCondition is NotGreaterEqual",
+        [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
+            requireArity(expr, 1);
+            return {evalPredicateArg(ctx, target, expr.elements[1], destReg) + " == IrCondition::NotGreaterEqual", Precedence::Relational};
+        }
+    }},
+    {"ir-cond-ult?", {
+        "(ir-cond-ult? <cond>)",
+        "Test if IrCondition is UnsignedLess",
+        [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
+            requireArity(expr, 1);
+            return {evalPredicateArg(ctx, target, expr.elements[1], destReg) + " == IrCondition::UnsignedLess", Precedence::Relational};
+        }
+    }},
+    {"ir-cond-ule?", {
+        "(ir-cond-ule? <cond>)",
+        "Test if IrCondition is UnsignedLessEqual",
+        [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
+            requireArity(expr, 1);
+            return {evalPredicateArg(ctx, target, expr.elements[1], destReg) + " == IrCondition::UnsignedLessEqual", Precedence::Relational};
+        }
+    }},
+    {"ir-cond-ugt?", {
+        "(ir-cond-ugt? <cond>)",
+        "Test if IrCondition is UnsignedGreater",
+        [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
+            requireArity(expr, 1);
+            return {evalPredicateArg(ctx, target, expr.elements[1], destReg) + " == IrCondition::UnsignedGreater", Precedence::Relational};
+        }
+    }},
+    {"ir-cond-uge?", {
+        "(ir-cond-uge? <cond>)",
+        "Test if IrCondition is UnsignedGreaterEqual",
+        [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
+            requireArity(expr, 1);
+            return {evalPredicateArg(ctx, target, expr.elements[1], destReg) + " == IrCondition::UnsignedGreaterEqual", Precedence::Relational};
+        }
+    }},
+    {"fflag", {
+        "(fflag :<flag-name>)",
+        "Test if fast flag is enabled at compile/lowering time",
+        [](EvalContext& ctx, TargetBuilder&, const SExpr& expr, const std::string&) -> PredicateResult {
+            requireArity(expr, 1);
+            std::string flag = expr.elements[1].text;
+            if (!flag.empty() && flag[0] == ':')
+                flag = flag.substr(1);
+            if (flag.empty())
+                throw CompileError(expr, "fflag requires a valid flag name");
+            if (flag.rfind("FFlag::", 0) == 0)
+            {
+                ctx.fflags.insert(flag.substr(7));
+                return {flag, Precedence::Primary};
+            }
+            if (flag.rfind("DFFlag::", 0) == 0)
+            {
+                ctx.dfflags.insert(flag.substr(8));
+                return {flag, Precedence::Primary};
+            }
+            ctx.fflags.insert(flag);
+            return {"FFlag::" + flag, Precedence::Primary};
+        }
+    }},
+    {"fflag?", {
+        "(fflag? :<flag-name>)",
+        "Test if fast flag is enabled (alias)",
+        [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
+            return kPredicateTrampolines.at("fflag").fn(ctx, target, expr, destReg);
+        }
+    }},
+    {"dfflag", {
+        "(dfflag :<flag-name>)",
+        "Test if dynamic fast flag is enabled at compile/lowering time",
+        [](EvalContext& ctx, TargetBuilder&, const SExpr& expr, const std::string&) -> PredicateResult {
+            requireArity(expr, 1);
+            std::string flag = expr.elements[1].text;
+            if (!flag.empty() && flag[0] == ':')
+                flag = flag.substr(1);
+            if (flag.empty())
+                throw CompileError(expr, "dfflag requires a valid flag name");
+            if (flag.rfind("DFFlag::", 0) == 0)
+            {
+                ctx.dfflags.insert(flag.substr(8));
+                return {flag, Precedence::Primary};
+            }
+            ctx.dfflags.insert(flag);
+            return {"DFFlag::" + flag, Precedence::Primary};
+        }
+    }},
+    {"dfflag?", {
+        "(dfflag? :<flag-name>)",
+        "Test if dynamic fast flag is enabled (alias)",
+        [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
+            return kPredicateTrampolines.at("dfflag").fn(ctx, target, expr, destReg);
+        }
+    }},
+    {"and", {
+        "(and <pred>...)",
+        "Logical short-circuit AND conjunction",
+        [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
+            if (expr.elements.size() < 2)
+                throw CompileError(expr, "and requires at least 1 argument");
+            std::string res;
+            for (size_t i = 1; i < expr.elements.size(); ++i)
+            {
+                if (i > 1) res += " && ";
+                PredicateResult child = evalPredicate(ctx, target, expr.elements[i], destReg);
+                res += formatChild(child, Precedence::And);
+            }
+            return {res, Precedence::And};
+        }
+    }},
+    {"or", {
+        "(or <pred>...)",
+        "Logical short-circuit OR disjunction",
+        [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
+            if (expr.elements.size() < 2)
+                throw CompileError(expr, "or requires at least 1 argument");
+            std::string res;
+            for (size_t i = 1; i < expr.elements.size(); ++i)
+            {
+                if (i > 1) res += " || ";
+                PredicateResult child = evalPredicate(ctx, target, expr.elements[i], destReg);
+                res += formatChild(child, Precedence::Or);
+            }
+            return {res, Precedence::Or};
+        }
+    }},
+    {"not", {
+        "(not <pred>)",
+        "Logical boolean negation",
+        [](EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> PredicateResult {
+            if (expr.elements.size() != 2)
+                throw CompileError(expr, "not requires 1 argument");
+            return {"!(" + evalPredicate(ctx, target, expr.elements[1], destReg).text + ")", Precedence::Primary};
+        }
     }}
 };
 
@@ -366,254 +533,13 @@ static PredicateResult evalPredicate(EvalContext& ctx, TargetBuilder& target, co
 
     auto it = kPredicateTrampolines.find(head);
     if (it != kPredicateTrampolines.end())
-        return it->second(ctx, target, expr, destReg);
+        return it->second.fn(ctx, target, expr, destReg);
 
     if (auto archPred = target.evalArchPredicate(ctx, expr, destReg))
         return *archPred;
 
     throw CompileError(expr, "Unknown predicate: " + head);
 }
-
-using ExprTrampoline = Operand (*)(CodeWriter& out, EvalContext& ctx, TargetBuilder& target,
-                                  const SExpr& expr, const std::string& destReg);
-
-static const std::unordered_map<std::string_view, ExprTrampoline> kExprTrampolines = {
-
-    // Memory & Loads
-    {"mem", [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> Operand {
-        if (expr.elements.size() != 3 && expr.elements.size() != 4)
-            throw CompileError(expr, "mem requires base and offset: (mem base offset [type])");
-        const SExpr& baseExpr = expr.elements[1];
-        Operand baseOp = evalExpr(out, ctx, target, baseExpr, destReg);
-        std::string base = target.resolveMemBase(out, ctx, baseExpr, baseOp, destReg);
-        std::string offset = expr.elements[2].isList()
-            ? evalExpr(out, ctx, target, expr.elements[2], "").text
-            : ctx.resolveOffset(expr.elements[2].text);
-        TypeKind type = TypeKind::Void;
-        if (expr.elements.size() == 4)
-        {
-            std::string typeStr = expr.elements[3].text;
-            if (!typeStr.empty() && typeStr[0] == ':')
-                typeStr = typeStr.substr(1);
-            type = parseTypeKind(typeStr);
-            if (type == TypeKind::Void)
-                throw CompileError(expr.elements[3], "Unknown memory type: " + expr.elements[3].text);
-        }
-        return Operand::makeMem(type, base, offset);
-    }},
-    {"sizeof", [](CodeWriter&, EvalContext&, TargetBuilder&, const SExpr& expr, const std::string&) -> Operand {
-        requireArity(expr, 1, "sizeof requires 1 argument: (sizeof :Type)");
-        std::string typeName = expr.elements[1].text;
-        if (!typeName.empty() && typeName[0] == ':')
-            typeName = typeName.substr(1);
-        return Operand::makeImm(TypeKind::U64, "sizeof(" + typeName + ")");
-    }},
-    {"+", [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
-        requireArity(expr, 2, "+ requires 2 arguments");
-        Operand a = evalExpr(out, ctx, target, expr.elements[1], "");
-        Operand b = evalExpr(out, ctx, target, expr.elements[2], "");
-        return Operand::makeImm(TypeKind::U64, a.text + " + " + b.text);
-    }},
-    {"*", [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
-        requireArity(expr, 2, "* requires 2 arguments");
-        Operand a = evalExpr(out, ctx, target, expr.elements[1], "");
-        Operand b = evalExpr(out, ctx, target, expr.elements[2], "");
-        return Operand::makeImm(TypeKind::U64, a.text + " * " + b.text);
-    }},
-    {"jump-or-fallthrough!", [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
-        requireArity(expr, 1, "jump-or-fallthrough! requires block");
-        Operand blockOp = evalExpr(out, ctx, target, expr.elements[1], "");
-        target.emitJumpOrFallthrough(out, ctx, blockOp.text);
-        return Operand{};
-    }},
-
-    // Control flow structures
-    {"target-case", [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> Operand {
-        std::string targetArch = target.archName();
-        for (char& c : targetArch)
-            c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
-
-        for (size_t i = 1; i < expr.elements.size(); ++i)
-        {
-            const auto& branch = expr.elements[i];
-            if (!branch.isList() || branch.elements.empty())
-                throw CompileError(branch, "target-case branch must be [:arch-name expr...]");
-            std::string arch = branch.elements[0].text;
-            if (!arch.empty() && arch[0] == ':')
-                arch = arch.substr(1);
-            for (char& c : arch)
-                c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
-
-            if (arch == targetArch)
-            {
-                TargetArchGuard guard(ctx, arch);
-                for (size_t j = 1; j < branch.elements.size(); ++j)
-                {
-                    evalExpr(out, ctx, target, branch.elements[j], destReg);
-                }
-                return Operand{};
-            }
-        }
-        return Operand{};
-    }},
-    {"cond", [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> Operand {
-        for (size_t i = 1; i < expr.elements.size(); ++i)
-        {
-            const auto& clause = expr.elements[i];
-            if (!clause.isList() || clause.elements.empty())
-                throw CompileError(clause, "cond clause must be [test expr...]");
-            const auto& test = clause.elements[0];
-            bool isElse = (test.text == "else");
-            std::string header;
-            if (isElse)
-            {
-                if (i == 1)
-                    throw CompileError(clause, "'else' cannot be the first clause in cond");
-                if (i != expr.elements.size() - 1)
-                    throw CompileError(clause, "'else' must be the last clause in cond");
-                header = "else";
-            }
-            else
-            {
-                std::string condStr = evalPredicate(ctx, target, test, destReg).text;
-                std::string prefix = (i == 1) ? "if (" : "else if (";
-                header = prefix + condStr + ")";
-            }
-            out.block(header, [&]() {
-                for (size_t j = 1; j < clause.elements.size(); ++j)
-                {
-                    evalExpr(out, ctx, target, clause.elements[j], destReg);
-                }
-            });
-        }
-        return Operand{};
-    }},
-    {"if", [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> Operand {
-        if (expr.elements.size() < 3 || expr.elements.size() > 4)
-            throw CompileError(expr, "if requires condition, then-branch, and optional else-branch");
-        std::string condStr = evalPredicate(ctx, target, expr.elements[1], destReg).text;
-        out.block("if (" + condStr + ")", [&]() {
-            evalExpr(out, ctx, target, expr.elements[2], destReg);
-        });
-        if (expr.elements.size() == 4)
-        {
-            out.block("else", [&]() {
-                evalExpr(out, ctx, target, expr.elements[3], destReg);
-            });
-        }
-        return Operand{};
-    }},
-    {"begin", [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> Operand {
-        Operand result;
-        for (size_t i = 1; i < expr.elements.size(); ++i)
-        {
-            std::string d = (i == expr.elements.size() - 1) ? destReg : "";
-            result = evalExpr(out, ctx, target, expr.elements[i], d);
-        }
-        return result;
-    }},
-    {"unsupported!", [](CodeWriter& out, EvalContext&, TargetBuilder& target, const SExpr&, const std::string&) -> Operand {
-        target.emitUnsupported(out);
-        return Operand{};
-    }},
-
-    {"alloc-temp", [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> Operand {
-        requireArity(expr, 1, "alloc-temp requires 1 argument: (alloc-temp <type>)");
-        std::string typeStr = expr.elements[1].text;
-        if (!typeStr.empty() && typeStr[0] == ':')
-            typeStr = typeStr.substr(1);
-        TypeKind tk = parseTypeKind(typeStr);
-        if (tk == TypeKind::Void)
-            throw CompileError(expr.elements[1], "Unknown type for alloc-temp: " + expr.elements[1].text);
-        std::string varName = destReg.empty() ? ctx.nextTemp("tmp") : destReg;
-        return target.emitAllocTemp(out, ctx, tk, varName);
-    }},
-
-    // Bindings
-    {"let", [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> Operand {
-        if (expr.elements.size() < 3)
-            throw CompileError(expr, "let requires bindings and body");
-
-        const SExpr& bindings = expr.elements[1];
-        if (!bindings.isList())
-            throw CompileError(bindings, "let bindings must be a list");
-
-        ScopeGuard guard(ctx.scope);
-
-        for (const auto& binding : bindings.elements)
-        {
-            if (!binding.isList() || binding.elements.size() != 2)
-                throw CompileError(binding, "let binding must be [var expr]");
-
-            std::string varName = binding.elements[0].text;
-            const SExpr& valExpr = binding.elements[1];
-
-            if (valExpr.isList() && !valExpr.elements.empty() &&
-                (valExpr.elements[0].text == "alloc-temp" || target.isEagerBindingExpr(valExpr.elements[0].text)))
-            {
-                Operand op = evalExpr(out, ctx, target, valExpr, toCppIdent(varName));
-                ctx.bind(varName, op);
-            }
-            else
-            {
-                // Lazy evaluation:
-                // Stores OperandKind::Mem or OperandKind::Reg in ctx.scope
-                ctx.bind(varName, evalExpr(out, ctx, target, valExpr, ""));
-            }
-        }
-
-        Operand result;
-        for (size_t i = 2; i < expr.elements.size(); ++i)
-        {
-            std::string d = (i == expr.elements.size() - 1) ? destReg : "";
-            result = evalExpr(out, ctx, target, expr.elements[i], d);
-        }
-
-        return result;
-    }},
-
-    {"fflag", [](CodeWriter&, EvalContext& ctx, TargetBuilder&, const SExpr& expr, const std::string&) -> Operand {
-        requireArity(expr, 1);
-        std::string flag = expr.elements[1].text;
-        if (!flag.empty() && flag[0] == ':')
-            flag = flag.substr(1);
-        if (flag.empty())
-            throw CompileError(expr, "fflag requires a valid flag name");
-        if (flag.rfind("FFlag::", 0) == 0)
-        {
-            ctx.fflags.insert(flag.substr(7));
-            return Operand::makeReg(TypeKind::I32, flag);
-        }
-        if (flag.rfind("DFFlag::", 0) == 0)
-        {
-            ctx.dfflags.insert(flag.substr(8));
-            return Operand::makeReg(TypeKind::I32, flag);
-        }
-        ctx.fflags.insert(flag);
-        return Operand::makeReg(TypeKind::I32, "FFlag::" + flag);
-    }},
-    {"fflag?", [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> Operand {
-        return kExprTrampolines.at("fflag")(out, ctx, target, expr, destReg);
-    }},
-    {"dfflag", [](CodeWriter&, EvalContext& ctx, TargetBuilder&, const SExpr& expr, const std::string&) -> Operand {
-        requireArity(expr, 1);
-        std::string flag = expr.elements[1].text;
-        if (!flag.empty() && flag[0] == ':')
-            flag = flag.substr(1);
-        if (flag.empty())
-            throw CompileError(expr, "dfflag requires a valid flag name");
-        if (flag.rfind("DFFlag::", 0) == 0)
-        {
-            ctx.dfflags.insert(flag.substr(8));
-            return Operand::makeReg(TypeKind::I32, flag);
-        }
-        ctx.dfflags.insert(flag);
-        return Operand::makeReg(TypeKind::I32, "DFFlag::" + flag);
-    }},
-    {"dfflag?", [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> Operand {
-        return kExprTrampolines.at("dfflag")(out, ctx, target, expr, destReg);
-    }},
-};
 
 static Operand evalProduceForm(CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& head)
 {
@@ -693,6 +619,429 @@ static Operand evalProduceForm(CodeWriter& out, EvalContext& ctx, TargetBuilder&
     return Operand::makeReg(tk, target.destRegVar());
 }
 
+using ExprTrampoline = Operand (*)(CodeWriter& out, EvalContext& ctx, TargetBuilder& target,
+                                  const SExpr& expr, const std::string& destReg);
+
+struct ExprTrampolineSpec
+{
+    const char* syntax;
+    const char* desc;
+    ExprTrampoline fn;
+};
+
+static const std::unordered_map<std::string_view, ExprTrampolineSpec> kExprTrampolines = {
+    // Memory & Loads
+    {"mem", {
+        "(mem <base-reg> <offset> [:<type>])",
+        "Construct memory operand address [base + offset] (offset may be :Struct.member)",
+        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> Operand {
+            if (expr.elements.size() != 3 && expr.elements.size() != 4)
+                throw CompileError(expr, "mem requires base and offset: (mem base offset [type])");
+            const SExpr& baseExpr = expr.elements[1];
+            Operand baseOp = evalExpr(out, ctx, target, baseExpr, destReg);
+            std::string base = target.resolveMemBase(out, ctx, baseExpr, baseOp, destReg);
+            std::string offset = expr.elements[2].isList()
+                ? evalExpr(out, ctx, target, expr.elements[2], "").text
+                : ctx.resolveOffset(expr.elements[2].text);
+            TypeKind type = TypeKind::Void;
+            if (expr.elements.size() == 4)
+            {
+                std::string typeStr = expr.elements[3].text;
+                if (!typeStr.empty() && typeStr[0] == ':')
+                    typeStr = typeStr.substr(1);
+                type = parseTypeKind(typeStr);
+                if (type == TypeKind::Void)
+                    throw CompileError(expr.elements[3], "Unknown memory type: " + expr.elements[3].text);
+            }
+            return Operand::makeMem(type, base, offset);
+        }
+    }},
+    {"sizeof", {
+        "(sizeof :<type>)",
+        "Compute sizeof(<type>) as a compile-time constant",
+        [](CodeWriter&, EvalContext&, TargetBuilder&, const SExpr& expr, const std::string&) -> Operand {
+            requireArity(expr, 1, "sizeof requires 1 argument: (sizeof :Type)");
+            std::string typeName = expr.elements[1].text;
+            if (!typeName.empty() && typeName[0] == ':')
+                typeName = typeName.substr(1);
+            return Operand::makeImm(TypeKind::U64, "sizeof(" + typeName + ")");
+        }
+    }},
+    {"+", {
+        "(+ <lhs> <rhs>)",
+        "Compute constant addition expression",
+        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
+            requireArity(expr, 2, "+ requires 2 arguments");
+            Operand a = evalExpr(out, ctx, target, expr.elements[1], "");
+            Operand b = evalExpr(out, ctx, target, expr.elements[2], "");
+            return Operand::makeImm(TypeKind::U64, a.text + " + " + b.text);
+        }
+    }},
+    {"*", {
+        "(* <lhs> <rhs>)",
+        "Compute constant multiplication expression",
+        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
+            requireArity(expr, 2, "* requires 2 arguments");
+            Operand a = evalExpr(out, ctx, target, expr.elements[1], "");
+            Operand b = evalExpr(out, ctx, target, expr.elements[2], "");
+            return Operand::makeImm(TypeKind::U64, a.text + " * " + b.text);
+        }
+    }},
+    {"jump-or-fallthrough!", {
+        "(jump-or-fallthrough! <blockOp>)",
+        "Branch to block if not fallthrough",
+        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
+            requireArity(expr, 1, "jump-or-fallthrough! requires block");
+            Operand blockOp = evalExpr(out, ctx, target, expr.elements[1], "");
+            target.emitJumpOrFallthrough(out, ctx, blockOp.text);
+            return Operand{};
+        }
+    }},
+
+    // Control flow structures
+    {"target-case", {
+        "(target-case [:<arch> <body>...]...)",
+        "Branch on target architecture (:a64, :x64) for architecture-specific lowering",
+        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> Operand {
+            std::string targetArch = target.archName();
+            for (char& c : targetArch)
+                c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+
+            for (size_t i = 1; i < expr.elements.size(); ++i)
+            {
+                const auto& branch = expr.elements[i];
+                if (!branch.isList() || branch.elements.empty())
+                    throw CompileError(branch, "target-case branch must be [:arch-name expr...]");
+                std::string arch = branch.elements[0].text;
+                if (!arch.empty() && arch[0] == ':')
+                    arch = arch.substr(1);
+                for (char& c : arch)
+                    c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+
+                if (arch == targetArch)
+                {
+                    TargetArchGuard guard(ctx, arch);
+                    for (size_t j = 1; j < branch.elements.size(); ++j)
+                    {
+                        evalExpr(out, ctx, target, branch.elements[j], destReg);
+                    }
+                    return Operand{};
+                }
+            }
+            return Operand{};
+        }
+    }},
+    {"cond", {
+        "(cond [<cond> <body>...]... [else <body>...])",
+        "Multi-way conditional branching statement",
+        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> Operand {
+            for (size_t i = 1; i < expr.elements.size(); ++i)
+            {
+                const auto& clause = expr.elements[i];
+                if (!clause.isList() || clause.elements.empty())
+                    throw CompileError(clause, "cond clause must be [test expr...]");
+                const auto& test = clause.elements[0];
+                bool isElse = (test.text == "else");
+                std::string header;
+                if (isElse)
+                {
+                    if (i == 1)
+                        throw CompileError(clause, "'else' cannot be the first clause in cond");
+                    if (i != expr.elements.size() - 1)
+                        throw CompileError(clause, "'else' must be the last clause in cond");
+                    header = "else";
+                }
+                else
+                {
+                    std::string condStr = evalPredicate(ctx, target, test, destReg).text;
+                    std::string prefix = (i == 1) ? "if (" : "else if (";
+                    header = prefix + condStr + ")";
+                }
+                out.block(header, [&]() {
+                    for (size_t j = 1; j < clause.elements.size(); ++j)
+                    {
+                        evalExpr(out, ctx, target, clause.elements[j], destReg);
+                    }
+                });
+            }
+            return Operand{};
+        }
+    }},
+    {"if", {
+        "(if <cond> <then> [<else>])",
+        "Conditional branching expression",
+        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> Operand {
+            if (expr.elements.size() < 3 || expr.elements.size() > 4)
+                throw CompileError(expr, "if requires condition, then-branch, and optional else-branch");
+            std::string condStr = evalPredicate(ctx, target, expr.elements[1], destReg).text;
+            out.block("if (" + condStr + ")", [&]() {
+                evalExpr(out, ctx, target, expr.elements[2], destReg);
+            });
+            if (expr.elements.size() == 4)
+            {
+                out.block("else", [&]() {
+                    evalExpr(out, ctx, target, expr.elements[3], destReg);
+                });
+            }
+            return Operand{};
+        }
+    }},
+    {"begin", {
+        "(begin <expr>...)",
+        "Sequence multiple expressions in a single body block",
+        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> Operand {
+            Operand result;
+            for (size_t i = 1; i < expr.elements.size(); ++i)
+            {
+                std::string d = (i == expr.elements.size() - 1) ? destReg : "";
+                result = evalExpr(out, ctx, target, expr.elements[i], d);
+            }
+            return result;
+        }
+    }},
+    {"unsupported!", {
+        "(unsupported!)",
+        "Emit assertion failure for unhandled instruction form",
+        [](CodeWriter& out, EvalContext&, TargetBuilder& target, const SExpr&, const std::string&) -> Operand {
+            target.emitUnsupported(out);
+            return Operand{};
+        }
+    }},
+
+    {"alloc-temp", {
+        "(alloc-temp <type>)",
+        "Allocate explicit temporary register (:ptr, :i64, :u64, :i32, :u32) scoped to enclosing let",
+        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> Operand {
+            requireArity(expr, 1, "alloc-temp requires 1 argument: (alloc-temp <type>)");
+            std::string typeStr = expr.elements[1].text;
+            if (!typeStr.empty() && typeStr[0] == ':')
+                typeStr = typeStr.substr(1);
+            TypeKind tk = parseTypeKind(typeStr);
+            if (tk == TypeKind::Void)
+                throw CompileError(expr.elements[1], "Unknown type for alloc-temp: " + expr.elements[1].text);
+            std::string varName = destReg.empty() ? ctx.nextTemp("tmp") : destReg;
+            return target.emitAllocTemp(out, ctx, tk, varName);
+        }
+    }},
+
+    // Bindings
+    {"let", {
+        "(let ([<var> <expr>]...) <body>...)",
+        "Lexically scoped local variable binding with destination register reuse optimization",
+        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> Operand {
+            if (expr.elements.size() < 3)
+                throw CompileError(expr, "let requires bindings and body");
+
+            const SExpr& bindings = expr.elements[1];
+            if (!bindings.isList())
+                throw CompileError(bindings, "let bindings must be a list");
+
+            ScopeGuard guard(ctx.scope);
+
+            for (const auto& binding : bindings.elements)
+            {
+                if (!binding.isList() || binding.elements.size() != 2)
+                    throw CompileError(binding, "let binding must be [var expr]");
+
+                std::string varName = binding.elements[0].text;
+                const SExpr& valExpr = binding.elements[1];
+
+                if (valExpr.isList() && !valExpr.elements.empty() &&
+                    (valExpr.elements[0].text == "alloc-temp" || target.isEagerBindingExpr(valExpr.elements[0].text)))
+                {
+                    Operand op = evalExpr(out, ctx, target, valExpr, toCppIdent(varName));
+                    ctx.bind(varName, op);
+                }
+                else
+                {
+                    ctx.bind(varName, evalExpr(out, ctx, target, valExpr, ""));
+                }
+            }
+
+            Operand result;
+            for (size_t i = 2; i < expr.elements.size(); ++i)
+            {
+                std::string d = (i == expr.elements.size() - 1) ? destReg : "";
+                result = evalExpr(out, ctx, target, expr.elements[i], d);
+            }
+
+            return result;
+        }
+    }},
+
+    {"fflag", {
+        "(fflag :<flag-name>)",
+        "Reference fast flag in expression context",
+        [](CodeWriter&, EvalContext& ctx, TargetBuilder&, const SExpr& expr, const std::string&) -> Operand {
+            requireArity(expr, 1);
+            std::string flag = expr.elements[1].text;
+            if (!flag.empty() && flag[0] == ':')
+                flag = flag.substr(1);
+            if (flag.empty())
+                throw CompileError(expr, "fflag requires a valid flag name");
+            if (flag.rfind("FFlag::", 0) == 0)
+            {
+                ctx.fflags.insert(flag.substr(7));
+                return Operand::makeReg(TypeKind::I32, flag);
+            }
+            if (flag.rfind("DFFlag::", 0) == 0)
+            {
+                ctx.dfflags.insert(flag.substr(8));
+                return Operand::makeReg(TypeKind::I32, flag);
+            }
+            ctx.fflags.insert(flag);
+            return Operand::makeReg(TypeKind::I32, "FFlag::" + flag);
+        }
+    }},
+    {"fflag?", {
+        "(fflag? :<flag-name>)",
+        "Reference fast flag in expression context (alias)",
+        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> Operand {
+            return kExprTrampolines.at("fflag").fn(out, ctx, target, expr, destReg);
+        }
+    }},
+    {"dfflag", {
+        "(dfflag :<flag-name>)",
+        "Reference dynamic fast flag in expression context",
+        [](CodeWriter&, EvalContext& ctx, TargetBuilder&, const SExpr& expr, const std::string&) -> Operand {
+            requireArity(expr, 1);
+            std::string flag = expr.elements[1].text;
+            if (!flag.empty() && flag[0] == ':')
+                flag = flag.substr(1);
+            if (flag.empty())
+                throw CompileError(expr, "dfflag requires a valid flag name");
+            if (flag.rfind("DFFlag::", 0) == 0)
+            {
+                ctx.dfflags.insert(flag.substr(8));
+                return Operand::makeReg(TypeKind::I32, flag);
+            }
+            ctx.dfflags.insert(flag);
+            return Operand::makeReg(TypeKind::I32, "DFFlag::" + flag);
+        }
+    }},
+    {"dfflag?", {
+        "(dfflag? :<flag-name>)",
+        "Reference dynamic fast flag in expression context (alias)",
+        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> Operand {
+            return kExprTrampolines.at("dfflag").fn(out, ctx, target, expr, destReg);
+        }
+    }},
+
+    // Produce forms
+    {"%produce-ptr", {
+        "(%produce-ptr <var> <body>...)",
+        "Allocate fresh 64-bit register for instruction result and bind <var>",
+        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
+            return evalProduceForm(out, ctx, target, expr, "%produce-ptr");
+        }
+    }},
+    {"%produce-i32", {
+        "(%produce-i32 <var> <body>...)",
+        "Allocate fresh 32-bit integer register for instruction result and bind <var>",
+        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
+            return evalProduceForm(out, ctx, target, expr, "%produce-i32");
+        }
+    }},
+    {"%produce-u32", {
+        "(%produce-u32 <var> <body>...)",
+        "Allocate fresh 32-bit unsigned register for instruction result and bind <var>",
+        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
+            return evalProduceForm(out, ctx, target, expr, "%produce-u32");
+        }
+    }},
+    {"%produce-i64", {
+        "(%produce-i64 <var> <body>...)",
+        "Allocate fresh 64-bit integer register for instruction result and bind <var>",
+        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
+            return evalProduceForm(out, ctx, target, expr, "%produce-i64");
+        }
+    }},
+    {"%produce-u64", {
+        "(%produce-u64 <var> <body>...)",
+        "Allocate fresh 64-bit unsigned register for instruction result and bind <var>",
+        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
+            return evalProduceForm(out, ctx, target, expr, "%produce-u64");
+        }
+    }},
+    {"%produce-f32", {
+        "(%produce-f32 <var> <body>...)",
+        "Allocate fresh 32-bit float register for instruction result and bind <var>",
+        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
+            return evalProduceForm(out, ctx, target, expr, "%produce-f32");
+        }
+    }},
+    {"%produce-f64", {
+        "(%produce-f64 <var> <body>...)",
+        "Allocate fresh 64-bit double register for instruction result and bind <var>",
+        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
+            return evalProduceForm(out, ctx, target, expr, "%produce-f64");
+        }
+    }},
+    {"%produce-vec", {
+        "(%produce-vec <var> <body>...)",
+        "Allocate fresh 128-bit SIMD vector register for instruction result and bind <var>",
+        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
+            return evalProduceForm(out, ctx, target, expr, "%produce-vec");
+        }
+    }},
+    {"%produce-ptr-reuse", {
+        "(%produce-ptr-reuse <var> <cand> <body>...)",
+        "Allocate 64-bit result register, reusing operand <cand> (or list [a b]) if safe",
+        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
+            return evalProduceForm(out, ctx, target, expr, "%produce-ptr-reuse");
+        }
+    }},
+    {"%produce-i32-reuse", {
+        "(%produce-i32-reuse <var> <cand> <body>...)",
+        "Allocate 32-bit integer result register, reusing operand <cand> if safe",
+        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
+            return evalProduceForm(out, ctx, target, expr, "%produce-i32-reuse");
+        }
+    }},
+    {"%produce-u32-reuse", {
+        "(%produce-u32-reuse <var> <cand> <body>...)",
+        "Allocate 32-bit unsigned result register, reusing operand <cand> if safe",
+        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
+            return evalProduceForm(out, ctx, target, expr, "%produce-u32-reuse");
+        }
+    }},
+    {"%produce-i64-reuse", {
+        "(%produce-i64-reuse <var> <cand> <body>...)",
+        "Allocate 64-bit integer result register, reusing operand <cand> if safe",
+        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
+            return evalProduceForm(out, ctx, target, expr, "%produce-i64-reuse");
+        }
+    }},
+    {"%produce-u64-reuse", {
+        "(%produce-u64-reuse <var> <cand> <body>...)",
+        "Allocate 64-bit unsigned result register, reusing operand <cand> if safe",
+        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
+            return evalProduceForm(out, ctx, target, expr, "%produce-u64-reuse");
+        }
+    }},
+    {"%produce-f32-reuse", {
+        "(%produce-f32-reuse <var> <cand> <body>...)",
+        "Allocate 32-bit float result register, reusing operand <cand> if safe",
+        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
+            return evalProduceForm(out, ctx, target, expr, "%produce-f32-reuse");
+        }
+    }},
+    {"%produce-f64-reuse", {
+        "(%produce-f64-reuse <var> <cand> <body>...)",
+        "Allocate 64-bit double result register, reusing operand <cand> if safe",
+        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
+            return evalProduceForm(out, ctx, target, expr, "%produce-f64-reuse");
+        }
+    }},
+    {"%produce-vec-reuse", {
+        "(%produce-vec-reuse <var> <cand> <body>...)",
+        "Allocate 128-bit vector result register, reusing operand <cand> if safe",
+        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
+            return evalProduceForm(out, ctx, target, expr, "%produce-vec-reuse");
+        }
+    }}
+};
+
 struct SourceLocGuard
 {
     EvalContext& ctx;
@@ -739,7 +1088,7 @@ Operand evalExpr(CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const
     if (it != kExprTrampolines.end())
     {
         validateArchTarget(ctx, expr, head, "expression");
-        return it->second(out, ctx, target, expr, destReg);
+        return it->second.fn(out, ctx, target, expr, destReg);
     }
 
     size_t colonPos = head.find(':');
@@ -890,6 +1239,25 @@ void compileRules(std::ostream& os, TargetBuilder& target, const std::vector<Rul
     }
 
     target.emitPostamble(writer);
+}
+
+void getCommonCoreDocs(std::vector<FormDoc>& out)
+{
+    out.push_back({"define-rule", "(define-rule (<name> [<param> <type>]...) <body>...)", "Define top-level IR instruction lowering rule that compiles to C++ lower_<NAME>"});
+    out.push_back({"define-subrule", "(define-subrule (<name> [<param> <type>]...) <body>...)", "Define compile-time macro template inlined at expansion sites"});
+
+    for (const auto& [name, spec] : kExprTrampolines)
+    {
+        out.push_back({std::string(name), spec.syntax ? spec.syntax : "", spec.desc ? spec.desc : ""});
+    }
+}
+
+void getCommonPredicateDocs(std::vector<FormDoc>& out)
+{
+    for (const auto& [name, spec] : kPredicateTrampolines)
+    {
+        out.push_back({std::string(name), spec.syntax ? spec.syntax : "", spec.desc ? spec.desc : ""});
+    }
 }
 
 } // namespace Luwu::Dsl

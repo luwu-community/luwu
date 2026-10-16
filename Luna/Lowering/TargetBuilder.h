@@ -6,6 +6,7 @@
 #include "Scope.h"
 #include "CodeWriter.h"
 #include "CompileError.h"
+#include "Describe.h"
 
 #include <string>
 #include <set>
@@ -192,6 +193,9 @@ public:
     {
         return false;
     }
+
+    virtual void getArchOpDocs(std::vector<FormDoc>& out) const {}
+    virtual void getArchPredicateDocs(std::vector<FormDoc>& out) const {}
 };
 
 } // namespace Luwu::Dsl

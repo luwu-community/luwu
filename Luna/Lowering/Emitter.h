@@ -3,6 +3,7 @@
 
 #include "Ast.h"
 #include "Types.h"
+#include "Describe.h"
 
 #include <string>
 #include <vector>
@@ -32,6 +33,9 @@ std::vector<Rule> expandRules(const std::vector<Rule>& rules);
 
 void emitA64(std::ostream& os, const std::vector<Rule>& rules);
 void emitX64(std::ostream& os, const std::vector<Rule>& rules);
+
+void getA64Docs(std::vector<FormDoc>& ops, std::vector<FormDoc>& preds);
+void getX64Docs(std::vector<FormDoc>& ops, std::vector<FormDoc>& preds);
 
 std::string toCppIdent(const std::string& name);
 std::string toUpperIdent(const std::string& name);

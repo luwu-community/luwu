@@ -5,6 +5,8 @@
 #include "Lowering/Emitter.h"
 #include "CompileError.h"
 
+#include "Describe.h"
+
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -12,9 +14,28 @@
 
 int main(int argc, char** argv)
 {
+    if (argc >= 2)
+    {
+        std::string arg1 = argv[1];
+        if (arg1 == "--describe" || arg1 == "--docs" || arg1 == "--list-forms")
+        {
+            std::string filter = (argc >= 3) ? argv[2] : "";
+            Luwu::Dsl::printDocs(std::cout, filter);
+            return 0;
+        }
+        if (arg1 == "--help" || arg1 == "-h")
+        {
+            std::cout << "Usage: " << argv[0] << " <input.luna> <output-dir>\n"
+                      << "       " << argv[0] << " --describe [all|core|a64|x64]\n\n"
+                      << "Luna Metacompiler for Luwu NCG IR Lowering.\n";
+            return 0;
+        }
+    }
+
     if (argc != 3)
     {
-        std::cerr << "Usage: " << argv[0] << " <input.luna> <output-dir>\n";
+        std::cerr << "Usage: " << argv[0] << " <input.luna> <output-dir>\n"
+                  << "       " << argv[0] << " --describe [all|core|a64|x64]\n";
         return 1;
     }
 

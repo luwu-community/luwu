@@ -1086,8 +1086,6 @@ inline void lower_SELECT_INT64(IrLoweringX64& lowering, IrInst& inst, uint32_t i
 
 inline void lower_JUMP(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
 {
-    auto& build = lowering.build;
-
     lowering.jumpOrAbortOnUndef(OP_A(inst), index, next);
 }
 
