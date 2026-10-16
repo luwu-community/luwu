@@ -9,6 +9,7 @@
 #include "Describe.h"
 
 #include <string>
+#include <map>
 #include <set>
 #include <unordered_map>
 #include <vector>
@@ -43,6 +44,18 @@ struct EvalContext
     std::set<std::string> fflags;
     std::set<std::string> dfflags;
     std::set<std::string> usedSymbols;
+
+    // Raw C++ names (e.g. rState, rClosure) that may appear unbound in rule bodies
+    std::set<std::string> globalSymbols;
+
+    // Name for the C++ variable declared by the binding currently being evaluated in a let
+    std::string bindingName;
+
+    // One Label per distinct guard target (A64) so different VM exits never share a label
+    std::map<std::string, std::string> freshLabels;
+
+    // C++ locals declared by let directly in each open block, innermost last (the function body is the first)
+    std::vector<std::set<std::string>> blockLocals;
 
     void use(const std::string& name)
     {
@@ -97,6 +110,34 @@ struct EvalContext
     {
         return Dsl::resolveOffset(text);
     }
+
+    // Takes the pending let binding name if any, otherwise a fresh temporary name
+    std::string takeBindingName(const std::string& prefix = "tmp")
+    {
+        std::string name = std::move(bindingName);
+        bindingName.clear();
+        return name.empty() ? nextTemp(prefix) : name;
+    }
+
+    std::string freshLabelFor(const std::string& labelOp)
+    {
+        auto it = freshLabels.find(labelOp);
+        if (it != freshLabels.end())
+            return it->second;
+
+        std::string name = freshLabels.empty() ? "fresh" : "fresh" + std::to_string(freshLabels.size() + 1);
+        freshLabels[labelOp] = name;
+        addDecl("Label " + name + ";");
+        return name;
+    }
+
+    // Resolves a symbol that is not a bound variable; only known C++ globals may pass through
+    const std::string& requireGlobal(const SExpr& sym) const
+    {
+        if (!globalSymbols.count(sym.text))
+            throw CompileError(sym, "Unbound symbol '" + sym.text + "'");
+        return sym.text;
+    }
 };
 
 inline std::string getRawOpText(EvalContext& ctx, const SExpr& elem)
@@ -113,20 +154,10 @@ inline std::string getRawOpText(EvalContext& ctx, const SExpr& elem)
             if (!op->text.empty())
                 return op->text;
         }
-        if (elem.text.find("inst") != std::string::npos)
-            ctx.use("inst");
+        return ctx.requireGlobal(elem);
     }
     return elem.text;
 }
-
-enum class Precedence : int
-{
-    Lowest = 0,
-    Or = 1,          // ||
-    And = 2,         // &&
-    Relational = 3,  // ==, !=, <, <=, >, >=
-    Primary = 4      // constant?, inst?, not, atoms
-};
 
 struct PredicateResult
 {
@@ -182,16 +213,23 @@ public:
         return std::nullopt;
     }
 
-    // Architecture-dependent expression / operand materialization hook
-    virtual std::optional<Operand> evalArchExpr(CodeWriter& out, EvalContext& ctx, const SExpr& expr, const std::string& destReg)
+    // Raw C++ names (global registers / stack slots) that rules may reference without binding
+    virtual std::set<std::string> globalSymbols() const
     {
-        return std::nullopt;
+        return {};
     }
 
-    // Whether this expression must be eagerly materialized into a local variable in let bindings
-    virtual bool isEagerBindingExpr(const std::string& opName) const
+    // C++ type of a local holding a register
+    virtual std::string regVarType() const = 0;
+
+    // C++ expression for a register operand (e.g. lowering.regOp(OP_A(inst)) for an IR operand)
+    virtual std::string formatRegOperand(const Operand& op) const = 0;
+
+    // C++ expression allocating a temporary register, for use inside a conditional binding; nullopt when the
+    // target's temporaries cannot be allocated in an expression (e.g. X64 ScopedRegX64)
+    virtual std::optional<std::string> allocTempExpr(EvalContext& ctx, TypeKind type)
     {
-        return false;
+        return std::nullopt;
     }
 
     virtual void getArchOpDocs(std::vector<FormDoc>& out) const {}

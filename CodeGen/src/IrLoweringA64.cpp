@@ -121,22 +121,6 @@ static bool emitBuiltin(AssemblyBuilderA64& build, IrFunction& function, IrRegAl
     }
 }
 
-static uint64_t getDoubleBits(double value)
-{
-    uint64_t result;
-    static_assert(sizeof(result) == sizeof(value), "Expecting double to be 64-bit");
-    memcpy(&result, &value, sizeof(value));
-    return result;
-}
-
-static uint32_t getFloatBits(float value)
-{
-    uint32_t result;
-    static_assert(sizeof(result) == sizeof(value), "Expecting float to be 32-bit");
-    memcpy(&result, &value, sizeof(value));
-    return result;
-}
-
 // Luwu Classes (rfcs/classes): the a64 counterpart of emitClassMemberAuthX64. Authorizes
 // private/const access to the member at `slotReg` on `classReg`, which is an object's lclass or a
 // class object. When access is not authorized, it jumps to `mismatch`, the interpreter fallback that
@@ -3888,26 +3872,7 @@ RegisterA64 IrLoweringA64::tempDouble(IrOp op)
         {
             RegisterA64 temp1 = regs.allocTemp(KindA64::x);
             RegisterA64 temp2 = regs.allocTemp(KindA64::d);
-
-            uint64_t vali = getDoubleBits(val);
-
-            if ((vali << 16) == 0)
-            {
-                build.movz(temp1, uint16_t(vali >> 48), 48);
-                build.fmov(temp2, temp1);
-            }
-            else if ((vali << 32) == 0)
-            {
-                build.movz(temp1, uint16_t(vali >> 48), 48);
-                build.movk(temp1, uint16_t(vali >> 32), 32);
-                build.fmov(temp2, temp1);
-            }
-            else
-            {
-                build.adr(temp1, val);
-                build.ldr(temp2, temp1);
-            }
-
+            emitLoadDoubleBits(build, temp2, temp1, val);
             return temp2;
         }
     }
@@ -3935,24 +3900,8 @@ RegisterA64 IrLoweringA64::tempFloat(IrOp op)
         else
         {
             RegisterA64 temp = regs.allocTemp(KindA64::s);
-
-            uint32_t vali = getFloatBits(val);
-
-            if ((vali & 0xffff) == 0)
-            {
-                RegisterA64 temp2 = regs.allocTemp(KindA64::w);
-
-                build.movz(temp2, uint16_t(vali >> 16), 16);
-                build.fmov(temp, temp2);
-            }
-            else
-            {
-                RegisterA64 temp2 = regs.allocTemp(KindA64::x);
-
-                build.adr(temp2, val);
-                build.ldr(temp, temp2);
-            }
-
+            RegisterA64 temp2 = regs.allocTemp(KindA64::x);
+            emitLoadFloatBits(build, temp, temp2, val);
             return temp;
         }
     }

@@ -11,6 +11,7 @@
 #include "Luau/IrData.h"
 #include "Luau/IrUtils.h"
 #include <climits>
+#include <cstring>
 
 // AArch64 ABI reminder:
 // Arguments: x0-x7, v0-v7
@@ -222,6 +223,63 @@ inline void emitAddOffset(AssemblyBuilderA64& build, RegisterA64 dst, RegisterA6
     {
         build.mov(dst, int(offset));
         build.add(dst, dst, src);
+    }
+}
+
+inline uint64_t getDoubleBits(double value)
+{
+    uint64_t result;
+    static_assert(sizeof(result) == sizeof(value), "Expecting double to be 64-bit");
+    memcpy(&result, &value, sizeof(value));
+    return result;
+}
+
+inline uint32_t getFloatBits(float value)
+{
+    uint32_t result;
+    static_assert(sizeof(result) == sizeof(value), "Expecting float to be 32-bit");
+    memcpy(&result, &value, sizeof(value));
+    return result;
+}
+
+// Loads a double constant that cannot be encoded by fmov; scratch must be a 64-bit general-purpose register
+inline void emitLoadDoubleBits(AssemblyBuilderA64& build, RegisterA64 dst, RegisterA64 scratch, double val)
+{
+    uint64_t vali = getDoubleBits(val);
+
+    if ((vali << 16) == 0)
+    {
+        build.movz(scratch, uint16_t(vali >> 48), 48);
+        build.fmov(dst, scratch);
+    }
+    else if ((vali << 32) == 0)
+    {
+        build.movz(scratch, uint16_t(vali >> 48), 48);
+        build.movk(scratch, uint16_t(vali >> 32), 32);
+        build.fmov(dst, scratch);
+    }
+    else
+    {
+        build.adr(scratch, val);
+        build.ldr(dst, scratch);
+    }
+}
+
+// Loads a float constant that cannot be encoded by fmov; scratch must be a 64-bit general-purpose register
+inline void emitLoadFloatBits(AssemblyBuilderA64& build, RegisterA64 dst, RegisterA64 scratch, float val)
+{
+    uint32_t vali = getFloatBits(val);
+
+    if ((vali & 0xffff) == 0)
+    {
+        RegisterA64 scratchw = castReg(KindA64::w, scratch);
+        build.movz(scratchw, uint16_t(vali >> 16), 16);
+        build.fmov(dst, scratchw);
+    }
+    else
+    {
+        build.adr(scratch, val);
+        build.ldr(dst, scratch);
     }
 }
 

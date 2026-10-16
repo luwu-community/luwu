@@ -47,6 +47,18 @@ inline TypeKind parseTypeKind(const std::string& name)
     return TypeKind::Void;
 }
 
+// C++ operator precedence of a generated expression, lowest binding first
+enum class Precedence : int
+{
+    Lowest = 0,
+    Or = 1,             // ||
+    And = 2,            // &&
+    Relational = 3,     // ==, !=, <, <=, >, >=
+    Additive = 4,       // +
+    Multiplicative = 5, // *
+    Primary = 6         // constant?, inst?, not, atoms, calls
+};
+
 enum class OperandKind
 {
     Reg,
@@ -62,6 +74,7 @@ struct Operand
     std::string memBase;   // base register string if kind == Mem
     std::string memOffset; // offset expression string if kind == Mem
     std::string rawOp;     // raw opcode string (e.g. "OP_A(inst)") if bound from rule param
+    Precedence prec = Precedence::Primary; // precedence of text when it is a compound expression (e.g. "a + b")
 
     static Operand makeReg(TypeKind t, const std::string& reg, const std::string& raw = "")
     {
@@ -73,9 +86,9 @@ struct Operand
         return Operand{OperandKind::Mem, t, "", base, offset, ""};
     }
 
-    static Operand makeImm(TypeKind t, const std::string& imm)
+    static Operand makeImm(TypeKind t, const std::string& imm, Precedence prec = Precedence::Primary)
     {
-        return Operand{OperandKind::Imm, t, imm, "", "", ""};
+        return Operand{OperandKind::Imm, t, imm, "", "", "", prec};
     }
 };
 

@@ -70,6 +70,16 @@ public:
         line("}");
     }
 
+    template <typename Fn>
+    void scope(Fn&& fn)
+    {
+        line("{");
+        indent();
+        fn();
+        dedent();
+        line("}");
+    }
+
     void addDecl(const std::string& decl)
     {
         for (const auto& d : decls_)

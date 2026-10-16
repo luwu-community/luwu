@@ -80,13 +80,22 @@ static const std::unordered_map<std::string_view, ArchPredicateSpecA64> kArchPre
             return PredicateResult{"AssemblyBuilderA64::isMaskSupported(unsigned(lowering.intOp(" + getRawOpText(ctx, expr.elements[1]) + ")))", Precedence::Primary};
         }
     }},
-    {"a64:fits-mask?", {
-        "(a64:fits-mask? <op>)",
-        "Test if 64-bit immediate is a valid A64 logical bitmask",
+    {"a64:fmov-f64?", {
+        "(a64:fmov-f64? <op>)",
+        "Test if a double constant operand can be materialized with a single fmov",
         [](EvalContext& ctx, const SExpr& expr) -> PredicateResult {
             if (expr.elements.size() != 2)
-                throw CompileError(expr, "a64:fits-mask? requires 1 argument");
-            return PredicateResult{"AssemblyBuilderA64::isMaskSupported(unsigned(lowering.intOp(" + getRawOpText(ctx, expr.elements[1]) + ")))", Precedence::Primary};
+                throw CompileError(expr, "a64:fmov-f64? requires 1 argument");
+            return PredicateResult{"AssemblyBuilderA64::isFmovSupportedFp64(lowering.doubleOp(" + getRawOpText(ctx, expr.elements[1]) + "))", Precedence::Primary};
+        }
+    }},
+    {"a64:fmov-f32?", {
+        "(a64:fmov-f32? <op>)",
+        "Test if a float constant operand can be materialized with a single fmov",
+        [](EvalContext& ctx, const SExpr& expr) -> PredicateResult {
+            if (expr.elements.size() != 2)
+                throw CompileError(expr, "a64:fmov-f32? requires 1 argument");
+            return PredicateResult{"AssemblyBuilderA64::isFmovSupportedFp32(float(lowering.doubleOp(" + getRawOpText(ctx, expr.elements[1]) + ")))", Precedence::Primary};
         }
     }}
 };
@@ -95,19 +104,19 @@ static void emitGuardBranchA64(CodeWriter& out, EvalContext& ctx, const std::str
 {
     ctx.use("build");
     ctx.use("index");
-    ctx.addDecl("Label fresh;");
-    out.line("build.b(" + condStr + ", lowering.getTargetLabel(" + labelOp + ", index, fresh));");
-    out.line("lowering.finalizeTargetLabel(" + labelOp + ", index, fresh);");
+    std::string fresh = ctx.freshLabelFor(labelOp);
+    out.line("build.b(" + condStr + ", lowering.getTargetLabel(" + labelOp + ", index, " + fresh + "));");
+    out.line("lowering.finalizeTargetLabel(" + labelOp + ", index, " + fresh + ");");
 }
 
 static void emitGuardCbzA64(CodeWriter& out, EvalContext& ctx, bool notZero, const std::string& valReg, const std::string& labelOp)
 {
     ctx.use("build");
     ctx.use("index");
-    ctx.addDecl("Label fresh;");
+    std::string fresh = ctx.freshLabelFor(labelOp);
     std::string instr = notZero ? "build.cbnz" : "build.cbz";
-    out.line(instr + "(" + valReg + ", lowering.getTargetLabel(" + labelOp + ", index, fresh));");
-    out.line("lowering.finalizeTargetLabel(" + labelOp + ", index, fresh);");
+    out.line(instr + "(" + valReg + ", lowering.getTargetLabel(" + labelOp + ", index, " + fresh + "));");
+    out.line("lowering.finalizeTargetLabel(" + labelOp + ", index, " + fresh + ");");
 }
 
 static void requireMemArgA64(EvalContext& ctx, const Operand& op, std::string_view opName)
@@ -358,6 +367,38 @@ static const std::unordered_map<std::string_view, ArchOpSpecA64> kArchOpsA64 = {
         [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>&, const std::vector<std::string>& args) {
         ctx.use("build");
         out.line("emitLoadInt64(build, " + args[0] + ", lowering.int64Op(" + args[1] + "));");
+    }}},
+    {"a64:fmov-imm-f64!", {
+        2, false,
+        "(a64:fmov-imm-f64! <dest> <src>)",
+        "Load a double constant operand with fmov (check a64:fmov-f64? first)",
+        [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        ctx.use("build");
+        out.line("build.fmov(" + args[0] + ", lowering.doubleOp(" + args[1] + "));");
+    }}},
+    {"a64:fmov-imm-f32!", {
+        2, false,
+        "(a64:fmov-imm-f32! <dest> <src>)",
+        "Load a float constant operand with fmov (check a64:fmov-f32? first)",
+        [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        ctx.use("build");
+        out.line("build.fmov(" + args[0] + ", float(lowering.doubleOp(" + args[1] + ")));");
+    }}},
+    {"a64:load-f64-bits!", {
+        3, false,
+        "(a64:load-f64-bits! <dest> <src> <scratch>)",
+        "Load a double constant operand that fmov cannot encode, via a 64-bit scratch register",
+        [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        ctx.use("build");
+        out.line("emitLoadDoubleBits(build, " + args[0] + ", " + args[2] + ", lowering.doubleOp(" + args[1] + "));");
+    }}},
+    {"a64:load-f32-bits!", {
+        3, false,
+        "(a64:load-f32-bits! <dest> <src> <scratch>)",
+        "Load a float constant operand that fmov cannot encode, via a 64-bit scratch register",
+        [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        ctx.use("build");
+        out.line("emitLoadFloatBits(build, " + args[0] + ", " + args[2] + ", float(lowering.doubleOp(" + args[1] + ")));");
     }}},
     {"a64:mov-imm-raw!", {
         2, false,
@@ -905,9 +946,9 @@ static const std::unordered_map<std::string_view, ArchOpSpecA64> kArchOpsA64 = {
         [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>&, const std::vector<std::string>& args) {
         ctx.use("build");
         ctx.use("index");
-        ctx.addDecl("Label fresh;");
-        out.line("build.b(lowering.getTargetLabel(" + args[0] + ", index, fresh));");
-        out.line("lowering.finalizeTargetLabel(" + args[0] + ", index, fresh);");
+        std::string fresh = ctx.freshLabelFor(args[0]);
+        out.line("build.b(lowering.getTargetLabel(" + args[0] + ", index, " + fresh + "));");
+        out.line("lowering.finalizeTargetLabel(" + args[0] + ", index, " + fresh + ");");
     }}},
     {"a64:guard-neg-cond-int!", {
         2, false,
@@ -1381,40 +1422,22 @@ public:
         return std::nullopt;
     }
 
-    std::optional<Operand> evalArchExpr(CodeWriter& out, EvalContext& ctx, const SExpr& expr, const std::string& destReg) override
+    std::string regVarType() const override { return "RegisterA64"; }
+
+    std::string formatRegOperand(const Operand& op) const override
     {
-        if (!expr.isList() || expr.elements.empty())
-            return std::nullopt;
-
-        const std::string& name = expr.elements[0].text;
-        if (name.rfind("a64:temp-", 0) != 0)
-            return std::nullopt;
-
-        if (expr.elements.size() != 2)
-            throw CompileError(expr, name + " requires 1 argument");
-
-        std::string helper;
-        TypeKind tk = TypeKind::I32;
-        if (name == "a64:temp-double") { helper = "tempDouble"; tk = TypeKind::F64; }
-        else if (name == "a64:temp-float") { helper = "tempFloat"; tk = TypeKind::F32; }
-        else if (name == "a64:temp-int") { helper = "tempInt"; tk = TypeKind::I32; }
-        else if (name == "a64:temp-int64") { helper = "tempInt64"; tk = TypeKind::I64; }
-        else if (name == "a64:temp-uint") { helper = "tempUint"; tk = TypeKind::U32; }
-        else return std::nullopt;
-
-        std::string raw = getRawOpText(ctx, expr.elements[1]);
-        std::string callStr = "lowering." + helper + "(" + raw + ")";
-        if (!destReg.empty())
-        {
-            out.line("RegisterA64 " + destReg + " = " + callStr + ";");
-            return Operand::makeReg(tk, destReg);
-        }
-        return Operand::makeReg(tk, callStr);
+        return formatRegArgA64(op.text);
     }
 
-    bool isEagerBindingExpr(const std::string& opName) const override
+    std::optional<std::string> allocTempExpr(EvalContext& ctx, TypeKind type) override
     {
-        return opName.rfind("a64:temp-", 0) == 0;
+        ctx.use("regs");
+        return "regs.allocTemp(" + kindForTypeA64(type) + ")";
+    }
+
+    std::set<std::string> globalSymbols() const override
+    {
+        return {"rState", "rBase", "rConstants", "rClosure", "rCode", "rGlobalState", "rNativeContext"};
     }
 
     void getArchPredicateDocs(std::vector<FormDoc>& out) const override

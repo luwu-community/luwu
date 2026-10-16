@@ -11,6 +11,7 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <utility>
 
 int main(int argc, char** argv)
 {
@@ -68,25 +69,23 @@ int main(int argc, char** argv)
         std::vector<Luwu::Dsl::Rule> rules = Luwu::Dsl::parseRules(program);
         rules = Luwu::Dsl::expandRules(rules);
 
-        // Emit AArch64
-        std::string a64Path = outputDir + "/LoweringRulesA64.h";
-        std::ofstream a64File(a64Path);
-        if (!a64File.is_open())
-        {
-            std::cerr << "Error: Could not open output file: " << a64Path << "\n";
-            return 1;
-        }
-        Luwu::Dsl::emitA64(a64File, rules);
 
-        // Emit x86-64
-        std::string x64Path = outputDir + "/LoweringRulesX64.h";
-        std::ofstream x64File(x64Path);
-        if (!x64File.is_open())
+        std::ostringstream a64Out;
+        Luwu::Dsl::emitA64(a64Out, rules);
+
+        std::ostringstream x64Out;
+        Luwu::Dsl::emitX64(x64Out, rules);
+
+        for (const auto& [path, text] : {std::pair{outputDir + "/LoweringRulesA64.h", a64Out.str()},
+                                         std::pair{outputDir + "/LoweringRulesX64.h", x64Out.str()}})
         {
-            std::cerr << "Error: Could not open output file: " << x64Path << "\n";
-            return 1;
+            std::ofstream outFile(path);
+            if (!outFile.is_open() || !(outFile << text))
+            {
+                std::cerr << "Error: Could not write output file: " << path << "\n";
+                return 1;
+            }
         }
-        Luwu::Dsl::emitX64(x64File, rules);
 
         std::cout << "luwu-dsl-compiler: compiled " << rules.size() << " rule(s) from "
                   << inputPath << " -> " << outputDir << "\n";

@@ -699,7 +699,11 @@ inline void lower_INT_TO_NUM(IrLoweringA64& lowering, IrInst& inst, uint32_t ind
     (void)next;
 
     inst.regA64 = regs.allocReg(KindA64::d, index);
-    RegisterA64 tmp = lowering.tempInt(OP_A(inst));
+    RegisterA64 tmp = OP_A(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::w) : lowering.regOp(OP_A(inst));
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        build.mov(tmp, lowering.intOp(OP_A(inst)));
+    }
     build.scvtf(inst.regA64, tmp);
 }
 
@@ -710,7 +714,11 @@ inline void lower_INT64_TO_NUM(IrLoweringA64& lowering, IrInst& inst, uint32_t i
     (void)next;
 
     inst.regA64 = regs.allocReg(KindA64::d, index);
-    RegisterA64 tmp = lowering.tempInt64(OP_A(inst));
+    RegisterA64 tmp = OP_A(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::x) : lowering.regOp(OP_A(inst));
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        emitLoadInt64(build, tmp, lowering.int64Op(OP_A(inst)));
+    }
     build.scvtf(inst.regA64, tmp);
 }
 
@@ -721,7 +729,11 @@ inline void lower_UINT_TO_NUM(IrLoweringA64& lowering, IrInst& inst, uint32_t in
     (void)next;
 
     inst.regA64 = regs.allocReg(KindA64::d, index);
-    RegisterA64 tmp = lowering.tempInt(OP_A(inst));
+    RegisterA64 tmp = OP_A(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::w) : lowering.regOp(OP_A(inst));
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        build.mov(tmp, lowering.intOp(OP_A(inst)));
+    }
     build.ucvtf(inst.regA64, tmp);
 }
 
@@ -732,7 +744,11 @@ inline void lower_UINT_TO_FLOAT(IrLoweringA64& lowering, IrInst& inst, uint32_t 
     (void)next;
 
     inst.regA64 = regs.allocReg(KindA64::s, index);
-    RegisterA64 tmp = lowering.tempInt(OP_A(inst));
+    RegisterA64 tmp = OP_A(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::w) : lowering.regOp(OP_A(inst));
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        build.mov(tmp, lowering.intOp(OP_A(inst)));
+    }
     build.ucvtf(inst.regA64, tmp);
 }
 
@@ -743,7 +759,19 @@ inline void lower_NUM_TO_INT(IrLoweringA64& lowering, IrInst& inst, uint32_t ind
     (void)next;
 
     inst.regA64 = regs.allocReg(KindA64::w, index);
-    RegisterA64 tmp = lowering.tempDouble(OP_A(inst));
+    RegisterA64 tmp = OP_A(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::d) : lowering.regOp(OP_A(inst));
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        if (AssemblyBuilderA64::isFmovSupportedFp64(lowering.doubleOp(OP_A(inst))))
+        {
+            build.fmov(tmp, lowering.doubleOp(OP_A(inst)));
+        }
+        else
+        {
+            RegisterA64 scratch = regs.allocTemp(KindA64::x);
+            emitLoadDoubleBits(build, tmp, scratch, lowering.doubleOp(OP_A(inst)));
+        }
+    }
     build.fcvtzs(inst.regA64, tmp);
 }
 
@@ -754,7 +782,19 @@ inline void lower_NUM_TO_INT64(IrLoweringA64& lowering, IrInst& inst, uint32_t i
     (void)next;
 
     inst.regA64 = regs.allocReg(KindA64::x, index);
-    RegisterA64 tmp = lowering.tempDouble(OP_A(inst));
+    RegisterA64 tmp = OP_A(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::d) : lowering.regOp(OP_A(inst));
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        if (AssemblyBuilderA64::isFmovSupportedFp64(lowering.doubleOp(OP_A(inst))))
+        {
+            build.fmov(tmp, lowering.doubleOp(OP_A(inst)));
+        }
+        else
+        {
+            RegisterA64 scratch = regs.allocTemp(KindA64::x);
+            emitLoadDoubleBits(build, tmp, scratch, lowering.doubleOp(OP_A(inst)));
+        }
+    }
     build.fcvtzs(inst.regA64, tmp);
 }
 
@@ -765,7 +805,19 @@ inline void lower_NUM_TO_UINT(IrLoweringA64& lowering, IrInst& inst, uint32_t in
     (void)next;
 
     inst.regA64 = regs.allocReg(KindA64::w, index);
-    RegisterA64 tmp = lowering.tempDouble(OP_A(inst));
+    RegisterA64 tmp = OP_A(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::d) : lowering.regOp(OP_A(inst));
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        if (AssemblyBuilderA64::isFmovSupportedFp64(lowering.doubleOp(OP_A(inst))))
+        {
+            build.fmov(tmp, lowering.doubleOp(OP_A(inst)));
+        }
+        else
+        {
+            RegisterA64 scratch = regs.allocTemp(KindA64::x);
+            emitLoadDoubleBits(build, tmp, scratch, lowering.doubleOp(OP_A(inst)));
+        }
+    }
     build.fcvtzs(castReg(KindA64::x, inst.regA64), tmp);
 }
 
@@ -796,8 +848,32 @@ inline void lower_ADD_NUM(IrLoweringA64& lowering, IrInst& inst, uint32_t index,
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::d, index, {OP_A(inst), OP_B(inst)});
-    RegisterA64 t1 = lowering.tempDouble(OP_A(inst));
-    RegisterA64 t2 = lowering.tempDouble(OP_B(inst));
+    RegisterA64 t1 = OP_A(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::d) : lowering.regOp(OP_A(inst));
+    RegisterA64 t2 = OP_B(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::d) : lowering.regOp(OP_B(inst));
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        if (AssemblyBuilderA64::isFmovSupportedFp64(lowering.doubleOp(OP_A(inst))))
+        {
+            build.fmov(t1, lowering.doubleOp(OP_A(inst)));
+        }
+        else
+        {
+            RegisterA64 scratch = regs.allocTemp(KindA64::x);
+            emitLoadDoubleBits(build, t1, scratch, lowering.doubleOp(OP_A(inst)));
+        }
+    }
+    if (OP_B(inst).kind == IrOpKind::Constant)
+    {
+        if (AssemblyBuilderA64::isFmovSupportedFp64(lowering.doubleOp(OP_B(inst))))
+        {
+            build.fmov(t2, lowering.doubleOp(OP_B(inst)));
+        }
+        else
+        {
+            RegisterA64 scratch = regs.allocTemp(KindA64::x);
+            emitLoadDoubleBits(build, t2, scratch, lowering.doubleOp(OP_B(inst)));
+        }
+    }
     build.fadd(inst.regA64, t1, t2);
 }
 
@@ -808,8 +884,32 @@ inline void lower_SUB_NUM(IrLoweringA64& lowering, IrInst& inst, uint32_t index,
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::d, index, {OP_A(inst), OP_B(inst)});
-    RegisterA64 t1 = lowering.tempDouble(OP_A(inst));
-    RegisterA64 t2 = lowering.tempDouble(OP_B(inst));
+    RegisterA64 t1 = OP_A(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::d) : lowering.regOp(OP_A(inst));
+    RegisterA64 t2 = OP_B(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::d) : lowering.regOp(OP_B(inst));
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        if (AssemblyBuilderA64::isFmovSupportedFp64(lowering.doubleOp(OP_A(inst))))
+        {
+            build.fmov(t1, lowering.doubleOp(OP_A(inst)));
+        }
+        else
+        {
+            RegisterA64 scratch = regs.allocTemp(KindA64::x);
+            emitLoadDoubleBits(build, t1, scratch, lowering.doubleOp(OP_A(inst)));
+        }
+    }
+    if (OP_B(inst).kind == IrOpKind::Constant)
+    {
+        if (AssemblyBuilderA64::isFmovSupportedFp64(lowering.doubleOp(OP_B(inst))))
+        {
+            build.fmov(t2, lowering.doubleOp(OP_B(inst)));
+        }
+        else
+        {
+            RegisterA64 scratch = regs.allocTemp(KindA64::x);
+            emitLoadDoubleBits(build, t2, scratch, lowering.doubleOp(OP_B(inst)));
+        }
+    }
     build.fsub(inst.regA64, t1, t2);
 }
 
@@ -820,8 +920,32 @@ inline void lower_MUL_NUM(IrLoweringA64& lowering, IrInst& inst, uint32_t index,
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::d, index, {OP_A(inst), OP_B(inst)});
-    RegisterA64 t1 = lowering.tempDouble(OP_A(inst));
-    RegisterA64 t2 = lowering.tempDouble(OP_B(inst));
+    RegisterA64 t1 = OP_A(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::d) : lowering.regOp(OP_A(inst));
+    RegisterA64 t2 = OP_B(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::d) : lowering.regOp(OP_B(inst));
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        if (AssemblyBuilderA64::isFmovSupportedFp64(lowering.doubleOp(OP_A(inst))))
+        {
+            build.fmov(t1, lowering.doubleOp(OP_A(inst)));
+        }
+        else
+        {
+            RegisterA64 scratch = regs.allocTemp(KindA64::x);
+            emitLoadDoubleBits(build, t1, scratch, lowering.doubleOp(OP_A(inst)));
+        }
+    }
+    if (OP_B(inst).kind == IrOpKind::Constant)
+    {
+        if (AssemblyBuilderA64::isFmovSupportedFp64(lowering.doubleOp(OP_B(inst))))
+        {
+            build.fmov(t2, lowering.doubleOp(OP_B(inst)));
+        }
+        else
+        {
+            RegisterA64 scratch = regs.allocTemp(KindA64::x);
+            emitLoadDoubleBits(build, t2, scratch, lowering.doubleOp(OP_B(inst)));
+        }
+    }
     build.fmul(inst.regA64, t1, t2);
 }
 
@@ -832,8 +956,32 @@ inline void lower_DIV_NUM(IrLoweringA64& lowering, IrInst& inst, uint32_t index,
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::d, index, {OP_A(inst), OP_B(inst)});
-    RegisterA64 t1 = lowering.tempDouble(OP_A(inst));
-    RegisterA64 t2 = lowering.tempDouble(OP_B(inst));
+    RegisterA64 t1 = OP_A(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::d) : lowering.regOp(OP_A(inst));
+    RegisterA64 t2 = OP_B(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::d) : lowering.regOp(OP_B(inst));
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        if (AssemblyBuilderA64::isFmovSupportedFp64(lowering.doubleOp(OP_A(inst))))
+        {
+            build.fmov(t1, lowering.doubleOp(OP_A(inst)));
+        }
+        else
+        {
+            RegisterA64 scratch = regs.allocTemp(KindA64::x);
+            emitLoadDoubleBits(build, t1, scratch, lowering.doubleOp(OP_A(inst)));
+        }
+    }
+    if (OP_B(inst).kind == IrOpKind::Constant)
+    {
+        if (AssemblyBuilderA64::isFmovSupportedFp64(lowering.doubleOp(OP_B(inst))))
+        {
+            build.fmov(t2, lowering.doubleOp(OP_B(inst)));
+        }
+        else
+        {
+            RegisterA64 scratch = regs.allocTemp(KindA64::x);
+            emitLoadDoubleBits(build, t2, scratch, lowering.doubleOp(OP_B(inst)));
+        }
+    }
     build.fdiv(inst.regA64, t1, t2);
 }
 
@@ -844,8 +992,32 @@ inline void lower_IDIV_NUM(IrLoweringA64& lowering, IrInst& inst, uint32_t index
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::d, index, {OP_A(inst), OP_B(inst)});
-    RegisterA64 t1 = lowering.tempDouble(OP_A(inst));
-    RegisterA64 t2 = lowering.tempDouble(OP_B(inst));
+    RegisterA64 t1 = OP_A(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::d) : lowering.regOp(OP_A(inst));
+    RegisterA64 t2 = OP_B(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::d) : lowering.regOp(OP_B(inst));
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        if (AssemblyBuilderA64::isFmovSupportedFp64(lowering.doubleOp(OP_A(inst))))
+        {
+            build.fmov(t1, lowering.doubleOp(OP_A(inst)));
+        }
+        else
+        {
+            RegisterA64 scratch = regs.allocTemp(KindA64::x);
+            emitLoadDoubleBits(build, t1, scratch, lowering.doubleOp(OP_A(inst)));
+        }
+    }
+    if (OP_B(inst).kind == IrOpKind::Constant)
+    {
+        if (AssemblyBuilderA64::isFmovSupportedFp64(lowering.doubleOp(OP_B(inst))))
+        {
+            build.fmov(t2, lowering.doubleOp(OP_B(inst)));
+        }
+        else
+        {
+            RegisterA64 scratch = regs.allocTemp(KindA64::x);
+            emitLoadDoubleBits(build, t2, scratch, lowering.doubleOp(OP_B(inst)));
+        }
+    }
     build.fdiv(inst.regA64, t1, t2);
     build.frintm(inst.regA64, inst.regA64);
 }
@@ -857,8 +1029,32 @@ inline void lower_MIN_NUM(IrLoweringA64& lowering, IrInst& inst, uint32_t index,
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::d, index, {OP_A(inst), OP_B(inst)});
-    RegisterA64 t1 = lowering.tempDouble(OP_A(inst));
-    RegisterA64 t2 = lowering.tempDouble(OP_B(inst));
+    RegisterA64 t1 = OP_A(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::d) : lowering.regOp(OP_A(inst));
+    RegisterA64 t2 = OP_B(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::d) : lowering.regOp(OP_B(inst));
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        if (AssemblyBuilderA64::isFmovSupportedFp64(lowering.doubleOp(OP_A(inst))))
+        {
+            build.fmov(t1, lowering.doubleOp(OP_A(inst)));
+        }
+        else
+        {
+            RegisterA64 scratch = regs.allocTemp(KindA64::x);
+            emitLoadDoubleBits(build, t1, scratch, lowering.doubleOp(OP_A(inst)));
+        }
+    }
+    if (OP_B(inst).kind == IrOpKind::Constant)
+    {
+        if (AssemblyBuilderA64::isFmovSupportedFp64(lowering.doubleOp(OP_B(inst))))
+        {
+            build.fmov(t2, lowering.doubleOp(OP_B(inst)));
+        }
+        else
+        {
+            RegisterA64 scratch = regs.allocTemp(KindA64::x);
+            emitLoadDoubleBits(build, t2, scratch, lowering.doubleOp(OP_B(inst)));
+        }
+    }
     build.fcmp(t1, t2);
     build.fcsel(inst.regA64, t1, t2, getConditionFP(IrCondition::Less));
 }
@@ -870,8 +1066,32 @@ inline void lower_MAX_NUM(IrLoweringA64& lowering, IrInst& inst, uint32_t index,
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::d, index, {OP_A(inst), OP_B(inst)});
-    RegisterA64 t1 = lowering.tempDouble(OP_A(inst));
-    RegisterA64 t2 = lowering.tempDouble(OP_B(inst));
+    RegisterA64 t1 = OP_A(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::d) : lowering.regOp(OP_A(inst));
+    RegisterA64 t2 = OP_B(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::d) : lowering.regOp(OP_B(inst));
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        if (AssemblyBuilderA64::isFmovSupportedFp64(lowering.doubleOp(OP_A(inst))))
+        {
+            build.fmov(t1, lowering.doubleOp(OP_A(inst)));
+        }
+        else
+        {
+            RegisterA64 scratch = regs.allocTemp(KindA64::x);
+            emitLoadDoubleBits(build, t1, scratch, lowering.doubleOp(OP_A(inst)));
+        }
+    }
+    if (OP_B(inst).kind == IrOpKind::Constant)
+    {
+        if (AssemblyBuilderA64::isFmovSupportedFp64(lowering.doubleOp(OP_B(inst))))
+        {
+            build.fmov(t2, lowering.doubleOp(OP_B(inst)));
+        }
+        else
+        {
+            RegisterA64 scratch = regs.allocTemp(KindA64::x);
+            emitLoadDoubleBits(build, t2, scratch, lowering.doubleOp(OP_B(inst)));
+        }
+    }
     build.fcmp(t1, t2);
     build.fcsel(inst.regA64, t1, t2, getConditionFP(IrCondition::Greater));
 }
@@ -883,7 +1103,19 @@ inline void lower_FLOOR_NUM(IrLoweringA64& lowering, IrInst& inst, uint32_t inde
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::d, index, {OP_A(inst)});
-    RegisterA64 t = lowering.tempDouble(OP_A(inst));
+    RegisterA64 t = OP_A(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::d) : lowering.regOp(OP_A(inst));
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        if (AssemblyBuilderA64::isFmovSupportedFp64(lowering.doubleOp(OP_A(inst))))
+        {
+            build.fmov(t, lowering.doubleOp(OP_A(inst)));
+        }
+        else
+        {
+            RegisterA64 scratch = regs.allocTemp(KindA64::x);
+            emitLoadDoubleBits(build, t, scratch, lowering.doubleOp(OP_A(inst)));
+        }
+    }
     build.frintm(inst.regA64, t);
 }
 
@@ -894,7 +1126,19 @@ inline void lower_CEIL_NUM(IrLoweringA64& lowering, IrInst& inst, uint32_t index
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::d, index, {OP_A(inst)});
-    RegisterA64 t = lowering.tempDouble(OP_A(inst));
+    RegisterA64 t = OP_A(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::d) : lowering.regOp(OP_A(inst));
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        if (AssemblyBuilderA64::isFmovSupportedFp64(lowering.doubleOp(OP_A(inst))))
+        {
+            build.fmov(t, lowering.doubleOp(OP_A(inst)));
+        }
+        else
+        {
+            RegisterA64 scratch = regs.allocTemp(KindA64::x);
+            emitLoadDoubleBits(build, t, scratch, lowering.doubleOp(OP_A(inst)));
+        }
+    }
     build.frintp(inst.regA64, t);
 }
 
@@ -905,7 +1149,19 @@ inline void lower_SQRT_NUM(IrLoweringA64& lowering, IrInst& inst, uint32_t index
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::d, index, {OP_A(inst)});
-    RegisterA64 t = lowering.tempDouble(OP_A(inst));
+    RegisterA64 t = OP_A(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::d) : lowering.regOp(OP_A(inst));
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        if (AssemblyBuilderA64::isFmovSupportedFp64(lowering.doubleOp(OP_A(inst))))
+        {
+            build.fmov(t, lowering.doubleOp(OP_A(inst)));
+        }
+        else
+        {
+            RegisterA64 scratch = regs.allocTemp(KindA64::x);
+            emitLoadDoubleBits(build, t, scratch, lowering.doubleOp(OP_A(inst)));
+        }
+    }
     build.fsqrt(inst.regA64, t);
 }
 
@@ -916,8 +1172,32 @@ inline void lower_ADD_FLOAT(IrLoweringA64& lowering, IrInst& inst, uint32_t inde
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::s, index, {OP_A(inst), OP_B(inst)});
-    RegisterA64 t1 = lowering.tempFloat(OP_A(inst));
-    RegisterA64 t2 = lowering.tempFloat(OP_B(inst));
+    RegisterA64 t1 = OP_A(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::s) : lowering.regOp(OP_A(inst));
+    RegisterA64 t2 = OP_B(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::s) : lowering.regOp(OP_B(inst));
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        if (AssemblyBuilderA64::isFmovSupportedFp32(float(lowering.doubleOp(OP_A(inst)))))
+        {
+            build.fmov(t1, float(lowering.doubleOp(OP_A(inst))));
+        }
+        else
+        {
+            RegisterA64 scratch = regs.allocTemp(KindA64::x);
+            emitLoadFloatBits(build, t1, scratch, float(lowering.doubleOp(OP_A(inst))));
+        }
+    }
+    if (OP_B(inst).kind == IrOpKind::Constant)
+    {
+        if (AssemblyBuilderA64::isFmovSupportedFp32(float(lowering.doubleOp(OP_B(inst)))))
+        {
+            build.fmov(t2, float(lowering.doubleOp(OP_B(inst))));
+        }
+        else
+        {
+            RegisterA64 scratch = regs.allocTemp(KindA64::x);
+            emitLoadFloatBits(build, t2, scratch, float(lowering.doubleOp(OP_B(inst))));
+        }
+    }
     build.fadd(inst.regA64, t1, t2);
 }
 
@@ -928,8 +1208,32 @@ inline void lower_SUB_FLOAT(IrLoweringA64& lowering, IrInst& inst, uint32_t inde
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::s, index, {OP_A(inst), OP_B(inst)});
-    RegisterA64 t1 = lowering.tempFloat(OP_A(inst));
-    RegisterA64 t2 = lowering.tempFloat(OP_B(inst));
+    RegisterA64 t1 = OP_A(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::s) : lowering.regOp(OP_A(inst));
+    RegisterA64 t2 = OP_B(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::s) : lowering.regOp(OP_B(inst));
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        if (AssemblyBuilderA64::isFmovSupportedFp32(float(lowering.doubleOp(OP_A(inst)))))
+        {
+            build.fmov(t1, float(lowering.doubleOp(OP_A(inst))));
+        }
+        else
+        {
+            RegisterA64 scratch = regs.allocTemp(KindA64::x);
+            emitLoadFloatBits(build, t1, scratch, float(lowering.doubleOp(OP_A(inst))));
+        }
+    }
+    if (OP_B(inst).kind == IrOpKind::Constant)
+    {
+        if (AssemblyBuilderA64::isFmovSupportedFp32(float(lowering.doubleOp(OP_B(inst)))))
+        {
+            build.fmov(t2, float(lowering.doubleOp(OP_B(inst))));
+        }
+        else
+        {
+            RegisterA64 scratch = regs.allocTemp(KindA64::x);
+            emitLoadFloatBits(build, t2, scratch, float(lowering.doubleOp(OP_B(inst))));
+        }
+    }
     build.fsub(inst.regA64, t1, t2);
 }
 
@@ -940,8 +1244,32 @@ inline void lower_MUL_FLOAT(IrLoweringA64& lowering, IrInst& inst, uint32_t inde
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::s, index, {OP_A(inst), OP_B(inst)});
-    RegisterA64 t1 = lowering.tempFloat(OP_A(inst));
-    RegisterA64 t2 = lowering.tempFloat(OP_B(inst));
+    RegisterA64 t1 = OP_A(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::s) : lowering.regOp(OP_A(inst));
+    RegisterA64 t2 = OP_B(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::s) : lowering.regOp(OP_B(inst));
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        if (AssemblyBuilderA64::isFmovSupportedFp32(float(lowering.doubleOp(OP_A(inst)))))
+        {
+            build.fmov(t1, float(lowering.doubleOp(OP_A(inst))));
+        }
+        else
+        {
+            RegisterA64 scratch = regs.allocTemp(KindA64::x);
+            emitLoadFloatBits(build, t1, scratch, float(lowering.doubleOp(OP_A(inst))));
+        }
+    }
+    if (OP_B(inst).kind == IrOpKind::Constant)
+    {
+        if (AssemblyBuilderA64::isFmovSupportedFp32(float(lowering.doubleOp(OP_B(inst)))))
+        {
+            build.fmov(t2, float(lowering.doubleOp(OP_B(inst))));
+        }
+        else
+        {
+            RegisterA64 scratch = regs.allocTemp(KindA64::x);
+            emitLoadFloatBits(build, t2, scratch, float(lowering.doubleOp(OP_B(inst))));
+        }
+    }
     build.fmul(inst.regA64, t1, t2);
 }
 
@@ -952,8 +1280,32 @@ inline void lower_DIV_FLOAT(IrLoweringA64& lowering, IrInst& inst, uint32_t inde
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::s, index, {OP_A(inst), OP_B(inst)});
-    RegisterA64 t1 = lowering.tempFloat(OP_A(inst));
-    RegisterA64 t2 = lowering.tempFloat(OP_B(inst));
+    RegisterA64 t1 = OP_A(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::s) : lowering.regOp(OP_A(inst));
+    RegisterA64 t2 = OP_B(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::s) : lowering.regOp(OP_B(inst));
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        if (AssemblyBuilderA64::isFmovSupportedFp32(float(lowering.doubleOp(OP_A(inst)))))
+        {
+            build.fmov(t1, float(lowering.doubleOp(OP_A(inst))));
+        }
+        else
+        {
+            RegisterA64 scratch = regs.allocTemp(KindA64::x);
+            emitLoadFloatBits(build, t1, scratch, float(lowering.doubleOp(OP_A(inst))));
+        }
+    }
+    if (OP_B(inst).kind == IrOpKind::Constant)
+    {
+        if (AssemblyBuilderA64::isFmovSupportedFp32(float(lowering.doubleOp(OP_B(inst)))))
+        {
+            build.fmov(t2, float(lowering.doubleOp(OP_B(inst))));
+        }
+        else
+        {
+            RegisterA64 scratch = regs.allocTemp(KindA64::x);
+            emitLoadFloatBits(build, t2, scratch, float(lowering.doubleOp(OP_B(inst))));
+        }
+    }
     build.fdiv(inst.regA64, t1, t2);
 }
 
@@ -964,8 +1316,32 @@ inline void lower_MIN_FLOAT(IrLoweringA64& lowering, IrInst& inst, uint32_t inde
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::s, index, {OP_A(inst), OP_B(inst)});
-    RegisterA64 t1 = lowering.tempFloat(OP_A(inst));
-    RegisterA64 t2 = lowering.tempFloat(OP_B(inst));
+    RegisterA64 t1 = OP_A(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::s) : lowering.regOp(OP_A(inst));
+    RegisterA64 t2 = OP_B(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::s) : lowering.regOp(OP_B(inst));
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        if (AssemblyBuilderA64::isFmovSupportedFp32(float(lowering.doubleOp(OP_A(inst)))))
+        {
+            build.fmov(t1, float(lowering.doubleOp(OP_A(inst))));
+        }
+        else
+        {
+            RegisterA64 scratch = regs.allocTemp(KindA64::x);
+            emitLoadFloatBits(build, t1, scratch, float(lowering.doubleOp(OP_A(inst))));
+        }
+    }
+    if (OP_B(inst).kind == IrOpKind::Constant)
+    {
+        if (AssemblyBuilderA64::isFmovSupportedFp32(float(lowering.doubleOp(OP_B(inst)))))
+        {
+            build.fmov(t2, float(lowering.doubleOp(OP_B(inst))));
+        }
+        else
+        {
+            RegisterA64 scratch = regs.allocTemp(KindA64::x);
+            emitLoadFloatBits(build, t2, scratch, float(lowering.doubleOp(OP_B(inst))));
+        }
+    }
     build.fcmp(t1, t2);
     build.fcsel(inst.regA64, t1, t2, getConditionFP(IrCondition::Less));
 }
@@ -977,8 +1353,32 @@ inline void lower_MAX_FLOAT(IrLoweringA64& lowering, IrInst& inst, uint32_t inde
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::s, index, {OP_A(inst), OP_B(inst)});
-    RegisterA64 t1 = lowering.tempFloat(OP_A(inst));
-    RegisterA64 t2 = lowering.tempFloat(OP_B(inst));
+    RegisterA64 t1 = OP_A(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::s) : lowering.regOp(OP_A(inst));
+    RegisterA64 t2 = OP_B(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::s) : lowering.regOp(OP_B(inst));
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        if (AssemblyBuilderA64::isFmovSupportedFp32(float(lowering.doubleOp(OP_A(inst)))))
+        {
+            build.fmov(t1, float(lowering.doubleOp(OP_A(inst))));
+        }
+        else
+        {
+            RegisterA64 scratch = regs.allocTemp(KindA64::x);
+            emitLoadFloatBits(build, t1, scratch, float(lowering.doubleOp(OP_A(inst))));
+        }
+    }
+    if (OP_B(inst).kind == IrOpKind::Constant)
+    {
+        if (AssemblyBuilderA64::isFmovSupportedFp32(float(lowering.doubleOp(OP_B(inst)))))
+        {
+            build.fmov(t2, float(lowering.doubleOp(OP_B(inst))));
+        }
+        else
+        {
+            RegisterA64 scratch = regs.allocTemp(KindA64::x);
+            emitLoadFloatBits(build, t2, scratch, float(lowering.doubleOp(OP_B(inst))));
+        }
+    }
     build.fcmp(t1, t2);
     build.fcsel(inst.regA64, t1, t2, getConditionFP(IrCondition::Greater));
 }
@@ -990,7 +1390,19 @@ inline void lower_FLOOR_FLOAT(IrLoweringA64& lowering, IrInst& inst, uint32_t in
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::s, index, {OP_A(inst)});
-    RegisterA64 t = lowering.tempFloat(OP_A(inst));
+    RegisterA64 t = OP_A(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::s) : lowering.regOp(OP_A(inst));
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        if (AssemblyBuilderA64::isFmovSupportedFp32(float(lowering.doubleOp(OP_A(inst)))))
+        {
+            build.fmov(t, float(lowering.doubleOp(OP_A(inst))));
+        }
+        else
+        {
+            RegisterA64 scratch = regs.allocTemp(KindA64::x);
+            emitLoadFloatBits(build, t, scratch, float(lowering.doubleOp(OP_A(inst))));
+        }
+    }
     build.frintm(inst.regA64, t);
 }
 
@@ -1001,7 +1413,19 @@ inline void lower_CEIL_FLOAT(IrLoweringA64& lowering, IrInst& inst, uint32_t ind
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::s, index, {OP_A(inst)});
-    RegisterA64 t = lowering.tempFloat(OP_A(inst));
+    RegisterA64 t = OP_A(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::s) : lowering.regOp(OP_A(inst));
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        if (AssemblyBuilderA64::isFmovSupportedFp32(float(lowering.doubleOp(OP_A(inst)))))
+        {
+            build.fmov(t, float(lowering.doubleOp(OP_A(inst))));
+        }
+        else
+        {
+            RegisterA64 scratch = regs.allocTemp(KindA64::x);
+            emitLoadFloatBits(build, t, scratch, float(lowering.doubleOp(OP_A(inst))));
+        }
+    }
     build.frintp(inst.regA64, t);
 }
 
@@ -1012,7 +1436,19 @@ inline void lower_SQRT_FLOAT(IrLoweringA64& lowering, IrInst& inst, uint32_t ind
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::s, index, {OP_A(inst)});
-    RegisterA64 t = lowering.tempFloat(OP_A(inst));
+    RegisterA64 t = OP_A(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::s) : lowering.regOp(OP_A(inst));
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        if (AssemblyBuilderA64::isFmovSupportedFp32(float(lowering.doubleOp(OP_A(inst)))))
+        {
+            build.fmov(t, float(lowering.doubleOp(OP_A(inst))));
+        }
+        else
+        {
+            RegisterA64 scratch = regs.allocTemp(KindA64::x);
+            emitLoadFloatBits(build, t, scratch, float(lowering.doubleOp(OP_A(inst))));
+        }
+    }
     build.fsqrt(inst.regA64, t);
 }
 
@@ -1031,7 +1467,11 @@ inline void lower_CMP_INT(IrLoweringA64& lowering, IrInst& inst, uint32_t index,
         }
         else
         {
-            RegisterA64 t = lowering.tempInt(OP_A(inst));
+            RegisterA64 t = OP_A(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::w) : lowering.regOp(OP_A(inst));
+            if (OP_A(inst).kind == IrOpKind::Constant)
+            {
+                build.mov(t, lowering.intOp(OP_A(inst)));
+            }
             build.cmp(lowering.regOp(OP_B(inst)), t);
         }
         build.cset(inst.regA64, getInverseCondition(getConditionInt(conditionOp(OP_C(inst)))));
@@ -1044,7 +1484,11 @@ inline void lower_CMP_INT(IrLoweringA64& lowering, IrInst& inst, uint32_t index,
         }
         else
         {
-            RegisterA64 t = lowering.tempInt(OP_B(inst));
+            RegisterA64 t = OP_B(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::w) : lowering.regOp(OP_B(inst));
+            if (OP_B(inst).kind == IrOpKind::Constant)
+            {
+                build.mov(t, lowering.intOp(OP_B(inst)));
+            }
             build.cmp(lowering.regOp(OP_A(inst)), t);
         }
         build.cset(inst.regA64, getConditionInt(conditionOp(OP_C(inst))));
@@ -1066,7 +1510,11 @@ inline void lower_CMP_INT64(IrLoweringA64& lowering, IrInst& inst, uint32_t inde
         }
         else
         {
-            RegisterA64 t = lowering.tempInt64(OP_A(inst));
+            RegisterA64 t = OP_A(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::x) : lowering.regOp(OP_A(inst));
+            if (OP_A(inst).kind == IrOpKind::Constant)
+            {
+                emitLoadInt64(build, t, lowering.int64Op(OP_A(inst)));
+            }
             build.cmp(lowering.regOp(OP_B(inst)), t);
         }
         build.cset(inst.regA64, getInverseCondition(getConditionInt64(conditionOp(OP_C(inst)))));
@@ -1079,7 +1527,11 @@ inline void lower_CMP_INT64(IrLoweringA64& lowering, IrInst& inst, uint32_t inde
         }
         else
         {
-            RegisterA64 t = lowering.tempInt64(OP_B(inst));
+            RegisterA64 t = OP_B(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::x) : lowering.regOp(OP_B(inst));
+            if (OP_B(inst).kind == IrOpKind::Constant)
+            {
+                emitLoadInt64(build, t, lowering.int64Op(OP_B(inst)));
+            }
             build.cmp(lowering.regOp(OP_A(inst)), t);
         }
         build.cset(inst.regA64, getConditionInt64(conditionOp(OP_C(inst))));
@@ -1093,10 +1545,26 @@ inline void lower_SELECT_INT64(IrLoweringA64& lowering, IrInst& inst, uint32_t i
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst), OP_B(inst), OP_C(inst), OP_D(inst)});
-    RegisterA64 t1 = lowering.tempInt64(OP_A(inst));
-    RegisterA64 t2 = lowering.tempInt64(OP_B(inst));
-    RegisterA64 t3 = lowering.tempInt64(OP_C(inst));
-    RegisterA64 t4 = lowering.tempInt64(OP_D(inst));
+    RegisterA64 t1 = OP_A(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::x) : lowering.regOp(OP_A(inst));
+    RegisterA64 t2 = OP_B(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::x) : lowering.regOp(OP_B(inst));
+    RegisterA64 t3 = OP_C(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::x) : lowering.regOp(OP_C(inst));
+    RegisterA64 t4 = OP_D(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::x) : lowering.regOp(OP_D(inst));
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        emitLoadInt64(build, t1, lowering.int64Op(OP_A(inst)));
+    }
+    if (OP_B(inst).kind == IrOpKind::Constant)
+    {
+        emitLoadInt64(build, t2, lowering.int64Op(OP_B(inst)));
+    }
+    if (OP_C(inst).kind == IrOpKind::Constant)
+    {
+        emitLoadInt64(build, t3, lowering.int64Op(OP_C(inst)));
+    }
+    if (OP_D(inst).kind == IrOpKind::Constant)
+    {
+        emitLoadInt64(build, t4, lowering.int64Op(OP_D(inst)));
+    }
     build.cmp(t3, t4);
     build.csel(inst.regA64, t2, t1, getConditionInt64(conditionOp(OP_E(inst))));
 }
@@ -1142,6 +1610,7 @@ inline void lower_JUMP_CMP_INT(IrLoweringA64& lowering, IrInst& inst, uint32_t i
 inline void lower_CHECK_CMP_INT(IrLoweringA64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
 {
     auto& build = lowering.build;
+    auto& regs = lowering.regs;
     (void)next;
 
     Label fresh;
@@ -1158,14 +1627,22 @@ inline void lower_CHECK_CMP_INT(IrLoweringA64& lowering, IrInst& inst, uint32_t 
     }
     else
     {
-        RegisterA64 tempA = lowering.tempInt(OP_A(inst));
+        RegisterA64 tempA = OP_A(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::w) : lowering.regOp(OP_A(inst));
+        if (OP_A(inst).kind == IrOpKind::Constant)
+        {
+            build.mov(tempA, lowering.intOp(OP_A(inst)));
+        }
         if (OP_B(inst).kind == IrOpKind::Constant && unsigned(lowering.intOp(OP_B(inst))) <= AssemblyBuilderA64::kMaxImmediate)
         {
             build.cmp(tempA, uint16_t(lowering.intOp(OP_B(inst))));
         }
         else
         {
-            RegisterA64 tempB = lowering.tempInt(OP_B(inst));
+            RegisterA64 tempB = OP_B(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::w) : lowering.regOp(OP_B(inst));
+            if (OP_B(inst).kind == IrOpKind::Constant)
+            {
+                build.mov(tempB, lowering.intOp(OP_B(inst)));
+            }
             build.cmp(tempA, tempB);
         }
         build.b(getConditionInt(getNegatedCondition(conditionOp(OP_C(inst)))), lowering.getTargetLabel(OP_D(inst), index, fresh));
@@ -1176,6 +1653,7 @@ inline void lower_CHECK_CMP_INT(IrLoweringA64& lowering, IrInst& inst, uint32_t 
 inline void lower_CHECK_CMP_INT64(IrLoweringA64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
 {
     auto& build = lowering.build;
+    auto& regs = lowering.regs;
     (void)next;
 
     Label fresh;
@@ -1192,14 +1670,22 @@ inline void lower_CHECK_CMP_INT64(IrLoweringA64& lowering, IrInst& inst, uint32_
     }
     else
     {
-        RegisterA64 tempA = lowering.tempInt64(OP_A(inst));
+        RegisterA64 tempA = OP_A(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::x) : lowering.regOp(OP_A(inst));
+        if (OP_A(inst).kind == IrOpKind::Constant)
+        {
+            emitLoadInt64(build, tempA, lowering.int64Op(OP_A(inst)));
+        }
         if (OP_B(inst).kind == IrOpKind::Constant && uint64_t(lowering.int64Op(OP_B(inst))) <= AssemblyBuilderA64::kMaxImmediate)
         {
             build.cmp(tempA, uint16_t(lowering.int64Op(OP_B(inst))));
         }
         else
         {
-            RegisterA64 tempB = lowering.tempInt64(OP_B(inst));
+            RegisterA64 tempB = OP_B(inst).kind == IrOpKind::Constant ? regs.allocTemp(KindA64::x) : lowering.regOp(OP_B(inst));
+            if (OP_B(inst).kind == IrOpKind::Constant)
+            {
+                emitLoadInt64(build, tempB, lowering.int64Op(OP_B(inst)));
+            }
             build.cmp(tempA, tempB);
         }
         build.b(getConditionInt64(getNegatedCondition(conditionOp(OP_C(inst)))), lowering.getTargetLabel(OP_D(inst), index, fresh));

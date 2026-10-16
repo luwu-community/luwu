@@ -1304,25 +1304,13 @@ static const std::unordered_map<std::string_view, ArchOpSpecX64> kArchOpsX64 = {
         ctx.use("build");
         out.line("build.vcvtsi2sd(" + args[0] + ", " + args[0] + ", " + formatRegArg(args[1]) + ");");
     }}},
-    {"x64:vcvtsi2sd-u32!", {
+    {"x64:vcvtsi2sd-qword!", {
         2, false,
-        "(x64:vcvtsi2sd-u32! <dest> <src>)",
-        "Convert unsigned 32-bit integer to scalar double",
+        "(x64:vcvtsi2sd-qword! <dest> <src>)",
+        "Convert the full 64-bit register of a signed integer source to scalar double",
         [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>&, const std::vector<std::string>& args) {
-        ctx.use("function");
-        ctx.use("regs");
         ctx.use("build");
-        out.line("if (IrCmd source = function.instOp(" + args[1] + ").cmd; source == IrCmd::NUM_TO_UINT)");
-        out.line("{");
-        out.line("    ScopedRegX64 tmp{regs, SizeX64::dword};");
-        out.line("    build.mov(tmp.reg, lowering.regOp(" + args[1] + "));");
-        out.line("    build.vcvtsi2sd(" + args[0] + ", " + args[0] + ", qwordReg(tmp.reg));");
-        out.line("}");
-        out.line("else");
-        out.line("{");
-        out.line("    CODEGEN_ASSERT(source != IrCmd::SUBSTITUTE);");
-        out.line("    build.vcvtsi2sd(" + args[0] + ", " + args[0] + ", qwordReg(lowering.regOp(" + args[1] + ")));");
-        out.line("}");
+        out.line("build.vcvtsi2sd(" + args[0] + ", " + args[0] + ", qwordReg(" + formatRegArg(args[1]) + "));");
     }}},
     {"x64:vcvtsi2ss!", {
         2, false,
@@ -1332,25 +1320,13 @@ static const std::unordered_map<std::string_view, ArchOpSpecX64> kArchOpsX64 = {
         ctx.use("build");
         out.line("build.vcvtsi2ss(" + args[0] + ", " + args[0] + ", " + formatRegArg(args[1]) + ");");
     }}},
-    {"x64:vcvtsi2ss-u32!", {
+    {"x64:vcvtsi2ss-qword!", {
         2, false,
-        "(x64:vcvtsi2ss-u32! <dest> <src>)",
-        "Convert unsigned 32-bit integer to scalar float",
+        "(x64:vcvtsi2ss-qword! <dest> <src>)",
+        "Convert the full 64-bit register of a signed integer source to scalar float",
         [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>&, const std::vector<std::string>& args) {
-        ctx.use("function");
-        ctx.use("regs");
         ctx.use("build");
-        out.line("if (IrCmd source = function.instOp(" + args[1] + ").cmd; source == IrCmd::NUM_TO_UINT)");
-        out.line("{");
-        out.line("    ScopedRegX64 tmp{regs, SizeX64::dword};");
-        out.line("    build.mov(tmp.reg, lowering.regOp(" + args[1] + "));");
-        out.line("    build.vcvtsi2ss(" + args[0] + ", " + args[0] + ", qwordReg(tmp.reg));");
-        out.line("}");
-        out.line("else");
-        out.line("{");
-        out.line("    CODEGEN_ASSERT(source != IrCmd::SUBSTITUTE);");
-        out.line("    build.vcvtsi2ss(" + args[0] + ", " + args[0] + ", qwordReg(lowering.regOp(" + args[1] + ")));");
-        out.line("}");
+        out.line("build.vcvtsi2ss(" + args[0] + ", " + args[0] + ", qwordReg(" + formatRegArg(args[1]) + "));");
     }}},
     {"x64:vcvttsd2si!", {
         2, false,
@@ -1448,6 +1424,8 @@ public:
         std::string sizeStr = sizeForTypeX64(type);
         if (isReuse)
         {
+            // Only the first candidate may be reused: x64 two-operand forms (mov res, a; op res, b) would
+            // clobber b before reading it if res were allocated in b's register
             out.line("inst.regX64 = regs.allocRegOrReuse(" + sizeStr + ", index, {" + rawOps[0] + "});");
         }
         else
@@ -1475,6 +1453,19 @@ public:
             throw CompileError(ctx.loc, "Cannot use memory operand as memory base in X64; load it into a register first");
 
         return baseOp.text;
+    }
+
+    std::string regVarType() const override { return "RegisterX64"; }
+
+    std::string formatRegOperand(const Operand& op) const override
+    {
+        return formatRegArg(op.text);
+    }
+
+    std::set<std::string> globalSymbols() const override
+    {
+        // rClosure is not a register on X64; loads through it are lowered via sClosure
+        return {"rState", "rBase", "rConstants", "rNativeContext", "rClosure", "sClosure", "sCode"};
     }
 
     bool emitArchOp(CodeWriter& out, EvalContext& ctx, const std::string& opName, const std::vector<Operand>& rawArgs) override

@@ -4,6 +4,7 @@ CXXFLAGS ?= -std=c++17 -O2 -Wall
 INCLUDES = -I. -ILowering
 
 SOURCES = $(wildcard *.cpp) $(wildcard Lowering/*.cpp)
+HEADERS = $(wildcard *.h) $(wildcard Lowering/*.h)
 TARGET = ../build/debug/luwu-dsl-compiler
 RULES = Lowering/rules.luna
 OUTPUT_DIR = ../CodeGen/src/generated
@@ -12,9 +13,9 @@ OUTPUT_DIR = ../CodeGen/src/generated
 
 all: generate
 
-$(TARGET): $(SOURCES)
+$(TARGET): $(SOURCES) $(HEADERS)
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) $^ -o $@
+	$(CXX) $(CXXFLAGS) $(INCLUDES) $(SOURCES) -o $@
 
 generate: $(TARGET) $(RULES)
 	@mkdir -p $(OUTPUT_DIR)

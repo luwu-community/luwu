@@ -39,5 +39,6 @@ void getX64Docs(std::vector<FormDoc>& ops, std::vector<FormDoc>& preds);
 
 std::string toCppIdent(const std::string& name);
 std::string toUpperIdent(const std::string& name);
+std::string toCppVarName(const std::string& name);
 
 } // namespace Luwu::Dsl

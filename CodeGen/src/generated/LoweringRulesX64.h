@@ -627,11 +627,10 @@ inline void lower_UINT_TO_NUM(IrLoweringX64& lowering, IrInst& inst, uint32_t in
 {
     auto& build = lowering.build;
     auto& regs = lowering.regs;
-    auto& function = lowering.function;
     (void)next;
 
     inst.regX64 = regs.allocReg(SizeX64::xmmword, index);
-    if (IrCmd source = function.instOp(OP_A(inst)).cmd; source == IrCmd::NUM_TO_UINT)
+    if (lowering.function.instOp(OP_A(inst)).cmd == IrCmd::NUM_TO_UINT)
     {
         ScopedRegX64 tmp{regs, SizeX64::dword};
         build.mov(tmp.reg, lowering.regOp(OP_A(inst)));
@@ -639,7 +638,7 @@ inline void lower_UINT_TO_NUM(IrLoweringX64& lowering, IrInst& inst, uint32_t in
     }
     else
     {
-        CODEGEN_ASSERT(source != IrCmd::SUBSTITUTE);
+        CODEGEN_ASSERT(!(lowering.function.instOp(OP_A(inst)).cmd == IrCmd::SUBSTITUTE));
         build.vcvtsi2sd(inst.regX64, inst.regX64, qwordReg(lowering.regOp(OP_A(inst))));
     }
 }
@@ -648,11 +647,10 @@ inline void lower_UINT_TO_FLOAT(IrLoweringX64& lowering, IrInst& inst, uint32_t 
 {
     auto& build = lowering.build;
     auto& regs = lowering.regs;
-    auto& function = lowering.function;
     (void)next;
 
     inst.regX64 = regs.allocReg(SizeX64::xmmword, index);
-    if (IrCmd source = function.instOp(OP_A(inst)).cmd; source == IrCmd::NUM_TO_UINT)
+    if (lowering.function.instOp(OP_A(inst)).cmd == IrCmd::NUM_TO_UINT)
     {
         ScopedRegX64 tmp{regs, SizeX64::dword};
         build.mov(tmp.reg, lowering.regOp(OP_A(inst)));
@@ -660,7 +658,7 @@ inline void lower_UINT_TO_FLOAT(IrLoweringX64& lowering, IrInst& inst, uint32_t 
     }
     else
     {
-        CODEGEN_ASSERT(source != IrCmd::SUBSTITUTE);
+        CODEGEN_ASSERT(!(lowering.function.instOp(OP_A(inst)).cmd == IrCmd::SUBSTITUTE));
         build.vcvtsi2ss(inst.regX64, inst.regX64, qwordReg(lowering.regOp(OP_A(inst))));
     }
 }

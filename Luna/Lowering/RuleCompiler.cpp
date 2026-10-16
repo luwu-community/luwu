@@ -20,8 +20,8 @@ static std::string getOpText(EvalContext& ctx, const SExpr& elem)
         const Operand* op = ctx.lookup(elem.text);
         if (op && !op->text.empty())
             return op->text;
-        if (elem.text.find("inst") != std::string::npos)
-            ctx.use("inst");
+        if (!op)
+            return ctx.requireGlobal(elem);
     }
     return elem.text;
 }
@@ -46,6 +46,18 @@ private:
     EvalContext& ctx_;
     std::string prevArch_;
 };
+
+// Opens a C++ block (header may be empty for a bare scope) and tracks the locals declared directly inside it
+template <typename Fn>
+static void emitBlock(CodeWriter& out, EvalContext& ctx, const std::string& header, Fn&& fn)
+{
+    ctx.blockLocals.emplace_back();
+    if (header.empty())
+        out.scope(fn);
+    else
+        out.block(header, fn);
+    ctx.blockLocals.pop_back();
+}
 
 static void validateArchTarget(const EvalContext& ctx, const SExpr& expr, const std::string& head, const char* constructKind)
 {
@@ -78,10 +90,18 @@ static void requireArity(const SExpr& expr, size_t expectedArgs, const std::stri
 
 static PredicateResult evalPredicate(EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg);
 
+// Formats one side of a binary arithmetic expression, parenthesized only where C++ precedence requires it. The right
+// side is also parenthesized at equal precedence so the generated grouping (and integer promotion order) follows the DSL.
+static std::string formatArithOperand(const Operand& op, Precedence parent, bool isRight)
+{
+    bool needsParens = isRight ? op.prec <= parent : op.prec < parent;
+    return needsParens ? "(" + op.text + ")" : op.text;
+}
+
 static std::string evalPredicateArg(EvalContext& ctx, TargetBuilder& target, const SExpr& elem, const std::string& destReg)
 {
     if (elem.isList())
-        return evalPredicate(ctx, target, elem, destReg).text;
+        return formatChild(evalPredicate(ctx, target, elem, destReg), Precedence::Primary);
     std::string text = getOpText(ctx, elem);
     if (text.find("inst") != std::string::npos)
         ctx.use("inst");
@@ -541,82 +561,92 @@ static PredicateResult evalPredicate(EvalContext& ctx, TargetBuilder& target, co
     throw CompileError(expr, "Unknown predicate: " + head);
 }
 
-static Operand evalProduceForm(CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& head)
+static TypeKind parseRegType(const SExpr& typeExpr, const std::string& formName)
 {
-    bool isReuse = head.find("-reuse") != std::string::npos;
-    TypeKind tk = TypeKind::Ptr;
-    if (head.find("i32") != std::string::npos)
-        tk = TypeKind::I32;
-    else if (head.find("u32") != std::string::npos)
-        tk = TypeKind::U32;
-    else if (head.find("i64") != std::string::npos)
-        tk = TypeKind::I64;
-    else if (head.find("u64") != std::string::npos)
-        tk = TypeKind::U64;
-    else if (head.find("f32") != std::string::npos)
-        tk = TypeKind::F32;
-    else if (head.find("f64") != std::string::npos)
-        tk = TypeKind::F64;
-    else if (head.find("vec") != std::string::npos)
-        tk = TypeKind::Vec;
-    else if (head != "%produce-ptr" && head != "%produce-ptr-reuse")
-        throw CompileError(expr, "Unknown produce form: " + head);
+    TypeKind tk = parseTypeKind(typeExpr.text);
+    if (!typeExpr.isKeyword() || tk == TypeKind::Void || tk == TypeKind::Any || tk == TypeKind::Tag || tk == TypeKind::Cond)
+        throw CompileError(typeExpr, "Unknown register type for " + formName + ": " + typeExpr.text);
+    return tk;
+}
 
-    std::string resName;
+// (alloc-result <type>) / (alloc-result-reuse <type> <cand-or-[cands]>): allocates the instruction's result register
+static Operand evalAllocResult(CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, bool isReuse)
+{
+    const std::string& head = expr.elements[0].text;
+    if (expr.elements.size() != (isReuse ? 3u : 2u))
+        throw CompileError(expr, isReuse ? head + " requires a type and reuse candidates: (" + head + " <type> <cand-or-[cands]>)"
+                                         : head + " requires a type: (" + head + " <type>)");
+
+    TypeKind tk = parseRegType(expr.elements[1], head);
+
     std::vector<std::string> rawOps;
-    size_t bodyStartIndex = 0;
-
     if (isReuse)
     {
-        if (expr.elements.size() < 4)
-            throw CompileError(expr, head + " requires [ident], [reuse-candidates], and body");
-        if (!expr.elements[1].isSymbol())
-            throw CompileError(expr.elements[1], head + " first argument must be an identifier name (e.g. res)");
-
-        resName = expr.elements[1].text;
-        const auto& reuseElem = expr.elements[2];
+        const SExpr& reuseElem = expr.elements[2];
+        std::vector<const SExpr*> cands;
         if (reuseElem.isList())
         {
+            if (reuseElem.elements.empty())
+                throw CompileError(reuseElem, head + " requires at least one reuse candidate");
             for (const auto& item : reuseElem.elements)
-            {
-                const Operand* op = ctx.lookup(item.text);
-                if (!op || op->rawOp.empty())
-                    throw CompileError(item, "Unknown reuse parameter: " + item.text);
-                rawOps.push_back(op->rawOp);
-            }
+                cands.push_back(&item);
         }
         else
         {
-            const Operand* op = ctx.lookup(reuseElem.text);
+            cands.push_back(&reuseElem);
+        }
+
+        for (const SExpr* item : cands)
+        {
+            const Operand* op = item->isSymbol() ? ctx.lookup(item->text) : nullptr;
             if (!op || op->rawOp.empty())
-                throw CompileError(reuseElem, "Unknown reuse parameter: " + reuseElem.text);
+                throw CompileError(*item, "Reuse candidate must be a rule parameter: " + item->text);
             rawOps.push_back(op->rawOp);
         }
-        bodyStartIndex = 3;
-    }
-    else
-    {
-        if (expr.elements.size() < 3)
-            throw CompileError(expr, head + " requires [ident] and body");
-        if (!expr.elements[1].isSymbol())
-            throw CompileError(expr.elements[1], head + " first argument must be an identifier name (e.g. res)");
-
-        resName = expr.elements[1].text;
-        bodyStartIndex = 2;
     }
 
     target.emitAllocProduce(out, ctx, tk, isReuse, rawOps);
     ctx.use("inst");
-
-    ScopeGuard guard(ctx.scope);
-    ctx.bind(resName, Operand::makeReg(tk, target.destRegVar()));
-
-    for (size_t i = bodyStartIndex; i < expr.elements.size(); ++i)
-    {
-        evalExpr(out, ctx, target, expr.elements[i], target.destRegVar());
-    }
-
     return Operand::makeReg(tk, target.destRegVar());
+}
+
+// [var (if <pred> <a> <b>)] in a let: declares var as whichever register the predicate selects; each branch must be
+// an alloc-temp or a plain operand, since a C++ conditional expression cannot contain statements
+static Operand evalConditionalBinding(CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& varName)
+{
+    if (expr.elements.size() != 4)
+        throw CompileError(expr, "if used as a let binding value requires both a then and an else branch");
+
+    std::string cond = evalPredicate(ctx, target, expr.elements[1], "").text;
+    TypeKind type = TypeKind::Void;
+
+    auto branch = [&](const SExpr& e) -> std::string {
+        if (e.isList("alloc-temp"))
+        {
+            requireArity(e, 1, "alloc-temp requires 1 argument: (alloc-temp <type>)");
+            TypeKind tk = parseRegType(e.elements[1], "alloc-temp");
+            std::optional<std::string> alloc = target.allocTempExpr(ctx, tk);
+            if (!alloc)
+                throw CompileError(e, "Conditional alloc-temp is not supported on " + target.archName());
+            type = tk;
+            return *alloc;
+        }
+        if (e.isList())
+            throw CompileError(e, "if branches in a let binding must be an alloc-temp or an operand");
+
+        Operand op = evalExpr(out, ctx, target, e, "");
+        if (op.kind == OperandKind::Mem)
+            throw CompileError(e, "if branches in a let binding cannot be memory operands");
+        if (type == TypeKind::Void)
+            type = op.type;
+        return target.formatRegOperand(op);
+    };
+
+    std::string thenStr = branch(expr.elements[2]);
+    std::string elseStr = branch(expr.elements[3]);
+
+    out.line(target.regVarType() + " " + varName + " = " + cond + " ? " + thenStr + " : " + elseStr + ";");
+    return Operand::makeReg(type, varName);
 }
 
 using ExprTrampoline = Operand (*)(CodeWriter& out, EvalContext& ctx, TargetBuilder& target,
@@ -640,9 +670,14 @@ static const std::unordered_map<std::string_view, ExprTrampolineSpec> kExprTramp
             const SExpr& baseExpr = expr.elements[1];
             Operand baseOp = evalExpr(out, ctx, target, baseExpr, destReg);
             std::string base = target.resolveMemBase(out, ctx, baseExpr, baseOp, destReg);
-            std::string offset = expr.elements[2].isList()
-                ? evalExpr(out, ctx, target, expr.elements[2], "").text
-                : ctx.resolveOffset(expr.elements[2].text);
+            const SExpr& offsetExpr = expr.elements[2];
+            std::string offset;
+            if (offsetExpr.isList())
+                offset = evalExpr(out, ctx, target, offsetExpr, "").text;
+            else if (offsetExpr.isSymbol() && ctx.lookup(offsetExpr.text))
+                offset = ctx.lookup(offsetExpr.text)->text;
+            else
+                offset = ctx.resolveOffset(offsetExpr.text);
             TypeKind type = TypeKind::Void;
             if (expr.elements.size() == 4)
             {
@@ -674,7 +709,9 @@ static const std::unordered_map<std::string_view, ExprTrampolineSpec> kExprTramp
             requireArity(expr, 2, "+ requires 2 arguments");
             Operand a = evalExpr(out, ctx, target, expr.elements[1], "");
             Operand b = evalExpr(out, ctx, target, expr.elements[2], "");
-            return Operand::makeImm(TypeKind::U64, a.text + " + " + b.text);
+            return Operand::makeImm(TypeKind::U64,
+                formatArithOperand(a, Precedence::Additive, false) + " + " + formatArithOperand(b, Precedence::Additive, true),
+                Precedence::Additive);
         }
     }},
     {"*", {
@@ -684,7 +721,9 @@ static const std::unordered_map<std::string_view, ExprTrampolineSpec> kExprTramp
             requireArity(expr, 2, "* requires 2 arguments");
             Operand a = evalExpr(out, ctx, target, expr.elements[1], "");
             Operand b = evalExpr(out, ctx, target, expr.elements[2], "");
-            return Operand::makeImm(TypeKind::U64, a.text + " * " + b.text);
+            return Operand::makeImm(TypeKind::U64,
+                formatArithOperand(a, Precedence::Multiplicative, false) + " * " + formatArithOperand(b, Precedence::Multiplicative, true),
+                Precedence::Multiplicative);
         }
     }},
     {"jump-or-fallthrough!", {
@@ -707,26 +746,33 @@ static const std::unordered_map<std::string_view, ExprTrampolineSpec> kExprTramp
             for (char& c : targetArch)
                 c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
 
+            const SExpr* selected = nullptr;
+            std::set<std::string> seenArchs;
             for (size_t i = 1; i < expr.elements.size(); ++i)
             {
                 const auto& branch = expr.elements[i];
-                if (!branch.isList() || branch.elements.empty())
+                if (!branch.isList() || branch.elements.empty() || !branch.elements[0].isKeyword())
                     throw CompileError(branch, "target-case branch must be [:arch-name expr...]");
-                std::string arch = branch.elements[0].text;
-                if (!arch.empty() && arch[0] == ':')
-                    arch = arch.substr(1);
+                std::string arch = branch.elements[0].text.substr(1);
                 for (char& c : arch)
                     c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
 
+                if (arch != "a64" && arch != "x64")
+                    throw CompileError(branch.elements[0], "Unknown target-case architecture :" + arch + " (expected :a64 or :x64)");
+                if (!seenArchs.insert(arch).second)
+                    throw CompileError(branch.elements[0], "Duplicate target-case branch for :" + arch);
+
                 if (arch == targetArch)
-                {
-                    TargetArchGuard guard(ctx, arch);
-                    for (size_t j = 1; j < branch.elements.size(); ++j)
-                    {
-                        evalExpr(out, ctx, target, branch.elements[j], destReg);
-                    }
-                    return Operand{};
-                }
+                    selected = &branch;
+            }
+
+            if (!selected)
+                throw CompileError(expr, "target-case has no branch for :" + targetArch);
+
+            TargetArchGuard guard(ctx, targetArch);
+            for (size_t j = 1; j < selected->elements.size(); ++j)
+            {
+                evalExpr(out, ctx, target, selected->elements[j], destReg);
             }
             return Operand{};
         }
@@ -757,7 +803,7 @@ static const std::unordered_map<std::string_view, ExprTrampolineSpec> kExprTramp
                     std::string prefix = (i == 1) ? "if (" : "else if (";
                     header = prefix + condStr + ")";
                 }
-                out.block(header, [&]() {
+                emitBlock(out, ctx, header, [&]() {
                     for (size_t j = 1; j < clause.elements.size(); ++j)
                     {
                         evalExpr(out, ctx, target, clause.elements[j], destReg);
@@ -774,12 +820,12 @@ static const std::unordered_map<std::string_view, ExprTrampolineSpec> kExprTramp
             if (expr.elements.size() < 3 || expr.elements.size() > 4)
                 throw CompileError(expr, "if requires condition, then-branch, and optional else-branch");
             std::string condStr = evalPredicate(ctx, target, expr.elements[1], destReg).text;
-            out.block("if (" + condStr + ")", [&]() {
+            emitBlock(out, ctx, "if (" + condStr + ")", [&]() {
                 evalExpr(out, ctx, target, expr.elements[2], destReg);
             });
             if (expr.elements.size() == 4)
             {
-                out.block("else", [&]() {
+                emitBlock(out, ctx, "else", [&]() {
                     evalExpr(out, ctx, target, expr.elements[3], destReg);
                 });
             }
@@ -792,10 +838,7 @@ static const std::unordered_map<std::string_view, ExprTrampolineSpec> kExprTramp
         [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> Operand {
             Operand result;
             for (size_t i = 1; i < expr.elements.size(); ++i)
-            {
-                std::string d = (i == expr.elements.size() - 1) ? destReg : "";
-                result = evalExpr(out, ctx, target, expr.elements[i], d);
-            }
+                result = evalExpr(out, ctx, target, expr.elements[i], destReg);
             return result;
         }
     }},
@@ -810,7 +853,7 @@ static const std::unordered_map<std::string_view, ExprTrampolineSpec> kExprTramp
 
     {"alloc-temp", {
         "(alloc-temp <type>)",
-        "Allocate explicit temporary register (:ptr, :i64, :u64, :i32, :u32) scoped to enclosing let",
+        "Allocate a temporary register (:ptr, :i64, :u64, :i32, :u32, :f32, :f64, :vec) declared in the enclosing C++ block; bind it with let",
         [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> Operand {
             requireArity(expr, 1, "alloc-temp requires 1 argument: (alloc-temp <type>)");
             std::string typeStr = expr.elements[1].text;
@@ -819,15 +862,38 @@ static const std::unordered_map<std::string_view, ExprTrampolineSpec> kExprTramp
             TypeKind tk = parseTypeKind(typeStr);
             if (tk == TypeKind::Void)
                 throw CompileError(expr.elements[1], "Unknown type for alloc-temp: " + expr.elements[1].text);
-            std::string varName = destReg.empty() ? ctx.nextTemp("tmp") : destReg;
-            return target.emitAllocTemp(out, ctx, tk, varName);
+            return target.emitAllocTemp(out, ctx, tk, ctx.takeBindingName("tmp"));
+        }
+    }},
+
+    {"alloc-result", {
+        "(alloc-result <type>)",
+        "Allocate the instruction's result register (inst.regA64/inst.regX64) and return it; bind it with let",
+        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
+            return evalAllocResult(out, ctx, target, expr, false);
+        }
+    }},
+    {"alloc-result-reuse", {
+        "(alloc-result-reuse <type> <cand-or-[cands]>)",
+        "Allocate the result register, reusing a dying operand register when possible (X64 only considers the first candidate)",
+        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
+            return evalAllocResult(out, ctx, target, expr, true);
+        }
+    }},
+    {"assert!", {
+        "(assert! <pred>)",
+        "Emit CODEGEN_ASSERT(<pred>)",
+        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> Operand {
+            requireArity(expr, 1, "assert! requires 1 argument: (assert! <pred>)");
+            out.line("CODEGEN_ASSERT(" + evalPredicate(ctx, target, expr.elements[1], destReg).text + ");");
+            return Operand{};
         }
     }},
 
     // Bindings
     {"let", {
         "(let ([<var> <expr>]...) <body>...)",
-        "Lexically scoped local variable binding with destination register reuse optimization",
+        "Lexically scoped local binding; a binding [var (if <pred> <a> <b>)] picks one of two registers, where each branch is an operand or (alloc-temp <type>) (A64 only)",
         [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> Operand {
             if (expr.elements.size() < 3)
                 throw CompileError(expr, "let requires bindings and body");
@@ -836,33 +902,71 @@ static const std::unordered_map<std::string_view, ExprTrampolineSpec> kExprTramp
             if (!bindings.isList())
                 throw CompileError(bindings, "let bindings must be a list");
 
-            ScopeGuard guard(ctx.scope);
+            // Bindings that declare a C++ local: temporaries and register choices made with if
+            auto isEager = [&](const SExpr& valExpr) {
+                return valExpr.isList("alloc-temp") || valExpr.isList("if");
+            };
 
+            std::set<std::string> names;
+            std::vector<std::string> declaredLocals;
             for (const auto& binding : bindings.elements)
             {
-                if (!binding.isList() || binding.elements.size() != 2)
+                if (!binding.isList() || binding.elements.size() != 2 || !binding.elements[0].isSymbol())
                     throw CompileError(binding, "let binding must be [var expr]");
-
-                std::string varName = binding.elements[0].text;
-                const SExpr& valExpr = binding.elements[1];
-
-                if (valExpr.isList() && !valExpr.elements.empty() &&
-                    (valExpr.elements[0].text == "alloc-temp" || target.isEagerBindingExpr(valExpr.elements[0].text)))
-                {
-                    Operand op = evalExpr(out, ctx, target, valExpr, toCppIdent(varName));
-                    ctx.bind(varName, op);
-                }
-                else
-                {
-                    ctx.bind(varName, evalExpr(out, ctx, target, valExpr, ""));
-                }
+                if (!names.insert(binding.elements[0].text).second)
+                    throw CompileError(binding.elements[0], "Duplicate let binding '" + binding.elements[0].text + "'");
+                if (isEager(binding.elements[1]))
+                    declaredLocals.push_back(toCppVarName(binding.elements[0].text));
             }
 
+            ScopeGuard guard(ctx.scope);
             Operand result;
-            for (size_t i = 2; i < expr.elements.size(); ++i)
+
+            auto body = [&]() {
+                for (const auto& binding : bindings.elements)
+                {
+                    const std::string& varName = binding.elements[0].text;
+                    const SExpr& valExpr = binding.elements[1];
+
+                    if (valExpr.isList("if"))
+                    {
+                        ctx.bind(varName, evalConditionalBinding(out, ctx, target, valExpr, toCppVarName(varName)));
+                    }
+                    else if (isEager(valExpr))
+                    {
+                        ctx.bindingName = toCppVarName(varName);
+                        Operand op = evalExpr(out, ctx, target, valExpr, "");
+                        ctx.bindingName.clear();
+                        ctx.bind(varName, op);
+                    }
+                    else
+                    {
+                        ctx.bind(varName, evalExpr(out, ctx, target, valExpr, ""));
+                    }
+                }
+
+                for (size_t i = 2; i < expr.elements.size(); ++i)
+                    result = evalExpr(out, ctx, target, expr.elements[i], destReg);
+            };
+
+            // Locals declared by the bindings (temp registers) go straight into the enclosing C++ block; a new block
+            // is only opened when one of the names was already declared there by a sibling let
+            std::set<std::string>& enclosing = ctx.blockLocals.back();
+            bool clashes = false;
+            for (const auto& name : declaredLocals)
+                clashes |= enclosing.count(name) > 0;
+
+            if (clashes)
             {
-                std::string d = (i == expr.elements.size() - 1) ? destReg : "";
-                result = evalExpr(out, ctx, target, expr.elements[i], d);
+                emitBlock(out, ctx, "", [&]() {
+                    ctx.blockLocals.back().insert(declaredLocals.begin(), declaredLocals.end());
+                    body();
+                });
+            }
+            else
+            {
+                enclosing.insert(declaredLocals.begin(), declaredLocals.end());
+                body();
             }
 
             return result;
@@ -925,120 +1029,6 @@ static const std::unordered_map<std::string_view, ExprTrampolineSpec> kExprTramp
         [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> Operand {
             return kExprTrampolines.at("dfflag").fn(out, ctx, target, expr, destReg);
         }
-    }},
-
-    // Produce forms
-    {"%produce-ptr", {
-        "(%produce-ptr <var> <body>...)",
-        "Allocate fresh 64-bit register for instruction result and bind <var>",
-        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
-            return evalProduceForm(out, ctx, target, expr, "%produce-ptr");
-        }
-    }},
-    {"%produce-i32", {
-        "(%produce-i32 <var> <body>...)",
-        "Allocate fresh 32-bit integer register for instruction result and bind <var>",
-        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
-            return evalProduceForm(out, ctx, target, expr, "%produce-i32");
-        }
-    }},
-    {"%produce-u32", {
-        "(%produce-u32 <var> <body>...)",
-        "Allocate fresh 32-bit unsigned register for instruction result and bind <var>",
-        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
-            return evalProduceForm(out, ctx, target, expr, "%produce-u32");
-        }
-    }},
-    {"%produce-i64", {
-        "(%produce-i64 <var> <body>...)",
-        "Allocate fresh 64-bit integer register for instruction result and bind <var>",
-        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
-            return evalProduceForm(out, ctx, target, expr, "%produce-i64");
-        }
-    }},
-    {"%produce-u64", {
-        "(%produce-u64 <var> <body>...)",
-        "Allocate fresh 64-bit unsigned register for instruction result and bind <var>",
-        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
-            return evalProduceForm(out, ctx, target, expr, "%produce-u64");
-        }
-    }},
-    {"%produce-f32", {
-        "(%produce-f32 <var> <body>...)",
-        "Allocate fresh 32-bit float register for instruction result and bind <var>",
-        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
-            return evalProduceForm(out, ctx, target, expr, "%produce-f32");
-        }
-    }},
-    {"%produce-f64", {
-        "(%produce-f64 <var> <body>...)",
-        "Allocate fresh 64-bit double register for instruction result and bind <var>",
-        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
-            return evalProduceForm(out, ctx, target, expr, "%produce-f64");
-        }
-    }},
-    {"%produce-vec", {
-        "(%produce-vec <var> <body>...)",
-        "Allocate fresh 128-bit SIMD vector register for instruction result and bind <var>",
-        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
-            return evalProduceForm(out, ctx, target, expr, "%produce-vec");
-        }
-    }},
-    {"%produce-ptr-reuse", {
-        "(%produce-ptr-reuse <var> <cand> <body>...)",
-        "Allocate 64-bit result register, reusing operand <cand> (or list [a b]) if safe",
-        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
-            return evalProduceForm(out, ctx, target, expr, "%produce-ptr-reuse");
-        }
-    }},
-    {"%produce-i32-reuse", {
-        "(%produce-i32-reuse <var> <cand> <body>...)",
-        "Allocate 32-bit integer result register, reusing operand <cand> if safe",
-        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
-            return evalProduceForm(out, ctx, target, expr, "%produce-i32-reuse");
-        }
-    }},
-    {"%produce-u32-reuse", {
-        "(%produce-u32-reuse <var> <cand> <body>...)",
-        "Allocate 32-bit unsigned result register, reusing operand <cand> if safe",
-        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
-            return evalProduceForm(out, ctx, target, expr, "%produce-u32-reuse");
-        }
-    }},
-    {"%produce-i64-reuse", {
-        "(%produce-i64-reuse <var> <cand> <body>...)",
-        "Allocate 64-bit integer result register, reusing operand <cand> if safe",
-        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
-            return evalProduceForm(out, ctx, target, expr, "%produce-i64-reuse");
-        }
-    }},
-    {"%produce-u64-reuse", {
-        "(%produce-u64-reuse <var> <cand> <body>...)",
-        "Allocate 64-bit unsigned result register, reusing operand <cand> if safe",
-        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
-            return evalProduceForm(out, ctx, target, expr, "%produce-u64-reuse");
-        }
-    }},
-    {"%produce-f32-reuse", {
-        "(%produce-f32-reuse <var> <cand> <body>...)",
-        "Allocate 32-bit float result register, reusing operand <cand> if safe",
-        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
-            return evalProduceForm(out, ctx, target, expr, "%produce-f32-reuse");
-        }
-    }},
-    {"%produce-f64-reuse", {
-        "(%produce-f64-reuse <var> <cand> <body>...)",
-        "Allocate 64-bit double result register, reusing operand <cand> if safe",
-        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
-            return evalProduceForm(out, ctx, target, expr, "%produce-f64-reuse");
-        }
-    }},
-    {"%produce-vec-reuse", {
-        "(%produce-vec-reuse <var> <cand> <body>...)",
-        "Allocate 128-bit vector result register, reusing operand <cand> if safe",
-        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
-            return evalProduceForm(out, ctx, target, expr, "%produce-vec-reuse");
-        }
     }}
 };
 
@@ -1066,9 +1056,7 @@ Operand evalExpr(CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const
         const Operand* op = ctx.lookup(expr.text);
         if (op)
             return *op;
-        if (expr.text.find("inst") != std::string::npos)
-            ctx.use("inst");
-        return Operand::makeReg(TypeKind::Ptr, expr.text);
+        return Operand::makeReg(TypeKind::Ptr, ctx.requireGlobal(expr));
     }
     if (expr.isNumber())
     {
@@ -1096,9 +1084,6 @@ Operand evalExpr(CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const
     {
         validateArchTarget(ctx, expr, head, "operation");
 
-        if (auto archExpr = target.evalArchExpr(out, ctx, expr, destReg))
-            return *archExpr;
-
         std::vector<Operand> args;
         for (size_t i = 1; i < expr.elements.size(); ++i)
             args.push_back(evalExpr(out, ctx, target, expr.elements[i], ""));
@@ -1110,7 +1095,7 @@ Operand evalExpr(CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const
     }
 
     if (head.rfind("%produce-", 0) == 0)
-        return evalProduceForm(out, ctx, target, expr, head);
+        throw CompileError(expr, head + " has been removed; allocate the result explicitly with (let ([res (alloc-result <type>)]) ...)");
 
     throw CompileError(expr, "Unsupported expression: " + head);
 }
@@ -1145,6 +1130,8 @@ void compileRules(std::ostream& os, TargetBuilder& target, const std::vector<Rul
         ctx.scope = &rootScope;
         ctx.writer = &bodyWriter;
         ctx.loc = rule.loc;
+        ctx.globalSymbols = target.globalSymbols();
+        ctx.blockLocals.emplace_back();
 
         for (size_t i = 0; i < rule.params.size(); ++i)
         {

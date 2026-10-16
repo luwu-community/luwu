@@ -1,5 +1,6 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Lexer.h"
+#include "CompileError.h"
 
 #include <cctype>
 #include <stdexcept>
@@ -122,11 +123,28 @@ Token Lexer::lexNumber(int startCol)
             advance();
     }
 
+    size_t digitsStart = start + (source[start] == '-' || source[start] == '+') + (isHex ? 2 : 0);
+
+    bool malformed = cursor == digitsStart || (!isAtEnd() && (isSymbolChar(peek()) || peek() == ':'));
+    while (!isAtEnd() && (isSymbolChar(peek()) || peek() == ':'))
+        advance();
+
     std::string text(source.substr(start, cursor - start));
+    SourceLocation loc{filename, curLine, startCol};
+    if (malformed)
+        throw CompileError(loc, "Malformed number literal '" + text + "'");
+
     Token tok;
     tok.type = TokenType::Number;
     tok.text = text;
-    tok.intValue = isHex ? std::stoll(text, nullptr, 16) : std::stoll(text, nullptr, 10);
+    try
+    {
+        tok.intValue = isHex ? std::stoll(text, nullptr, 16) : std::stoll(text, nullptr, 10);
+    }
+    catch (const std::out_of_range&)
+    {
+        throw CompileError(loc, "Number literal '" + text + "' does not fit in a signed 64-bit integer");
+    }
     tok.line = curLine;
     tok.col = startCol;
     return tok;
@@ -183,7 +201,7 @@ Token Lexer::lexString(int startCol)
     }
 
     if (isAtEnd())
-        throw std::runtime_error(filename + ":" + std::to_string(curLine) + ":" + std::to_string(startCol) + ": Unterminated string");
+        throw CompileError(SourceLocation{filename, curLine, startCol}, "Unterminated string");
 
     advance(); // consume closing '"'
 
@@ -268,7 +286,7 @@ Token Lexer::nextToken()
     if (c == ':' || isSymbolChar(c))
         return lexSymbolOrKeyword(curCol);
 
-    throw std::runtime_error(filename + ":" + std::to_string(curLine) + ":" + std::to_string(curCol) + ": Unexpected character '" + c + "'");
+    throw CompileError(SourceLocation{filename, curLine, curCol}, std::string("Unexpected character '") + c + "'");
 }
 
 } // namespace Luwu::Dsl
