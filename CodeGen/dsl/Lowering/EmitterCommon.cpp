@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <stdexcept>
+#include <unordered_map>
 
 namespace Luwu::Dsl
 {

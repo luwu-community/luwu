@@ -42,9 +42,9 @@ CODEGEN_SOURCES=$(wildcard CodeGen/src/*.cpp)
 CODEGEN_OBJECTS=$(CODEGEN_SOURCES:%=$(BUILD)/%.o)
 CODEGEN_TARGET=$(BUILD)/libluaucodegen.a
 
-DSL_SOURCES=$(wildcard CodeGen/dsl/*.cpp)
+DSL_SOURCES=$(wildcard CodeGen/dsl/*.cpp) $(wildcard CodeGen/dsl/Lowering/*.cpp)
 DSL_COMPILER=$(BUILD)/luwu-dsl-compiler
-DSL_RULES=CodeGen/dsl/rules.luna
+DSL_RULES=CodeGen/dsl/Lowering/rules.luna
 DSL_GENERATED=CodeGen/src/generated/LoweringRulesA64.h CodeGen/src/generated/LoweringRulesX64.h
 
 VM_SOURCES=$(wildcard VM/src/*.cpp)
@@ -201,7 +201,7 @@ $(ANALYZE_CLI_TARGET): LDFLAGS+=-lpthread
 fuzz-proto fuzz-prototest: LDFLAGS+=$(LPROTOBUF)
 
 # pseudo targets
-.PHONY: all test clean coverage luwu-size aliases build-mutator-libs
+.PHONY: all test clean coverage luwu-size aliases build-mutator-libs luna-dsl
 
 # Explicitly make 'all' the default goal ensuring that even if targets are added before 'all', they won't
 # implicitly become the default target built by make.
@@ -219,7 +219,6 @@ conformance: $(TESTS_TARGET)
 
 clean:
 	rm -rf $(BUILD)
-	rm -rf CodeGen/src/generated
 	rm -rf build/fuzz fuzz-proto fuzz-prototest
 	rm -rf $(EXECUTABLE_ALIASES)
 
@@ -307,15 +306,15 @@ $(COMPILER_TARGET): $(COMPILER_OBJECTS)
 $(CONFIG_TARGET): $(CONFIG_OBJECTS)
 $(ANALYSIS_TARGET): $(ANALYSIS_OBJECTS)
 $(EQSAT_TARGET): $(EQSAT_OBJECTS)
+luna-dsl: $(DSL_GENERATED)
+
 $(DSL_COMPILER): $(DSL_SOURCES)
 	@mkdir -p $(dir $@)
-	$(CXX) -std=c++17 -O2 $^ -o $@
+	$(CXX) -std=c++17 -O2 -ICodeGen/dsl -ICodeGen/dsl/Lowering $^ -o $@
 
 $(DSL_GENERATED): $(DSL_RULES) $(DSL_COMPILER)
 	@mkdir -p CodeGen/src/generated
 	$(DSL_COMPILER) $(DSL_RULES) CodeGen/src/generated
-
-$(CODEGEN_OBJECTS): $(DSL_GENERATED)
 
 $(CODEGEN_TARGET): $(CODEGEN_OBJECTS)
 $(VM_TARGET): $(VM_OBJECTS)

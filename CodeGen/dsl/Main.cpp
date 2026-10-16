@@ -2,7 +2,7 @@
 #include "Ast.h"
 #include "Lexer.h"
 #include "Parser.h"
-#include "Emitter.h"
+#include "Lowering/Emitter.h"
 #include "CompileError.h"
 
 #include <fstream>
