@@ -3606,6 +3606,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         state.invalidateHeapBufferData();
         break;
     case IrCmd::CALL:
+    case IrCmd::TAILCALL:
         state.invalidateRegistersFrom(vmRegOp(OP_A(inst)));
         state.invalidateUserCall();
         break;

@@ -437,6 +437,8 @@ const char* getCmdName(IrCmd cmd)
         return "SETLIST";
     case IrCmd::CALL:
         return "CALL";
+    case IrCmd::TAILCALL:
+        return "TAILCALL";
     case IrCmd::RETURN:
         return "RETURN";
     case IrCmd::FORGLOOP:
