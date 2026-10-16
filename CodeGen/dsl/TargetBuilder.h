@@ -11,6 +11,7 @@
 #include <set>
 #include <unordered_map>
 #include <vector>
+#include <optional>
 
 namespace Luwu::Dsl
 {
@@ -36,6 +37,7 @@ struct EvalContext
     Scope* scope = nullptr;
     CodeWriter* writer = nullptr;
     int tempCount = 0;
+    SourceLocation loc;
     std::string currentTargetArch;
     std::set<std::string> fflags;
     std::set<std::string> dfflags;
@@ -96,6 +98,48 @@ struct EvalContext
     }
 };
 
+inline std::string getRawOpText(EvalContext& ctx, const SExpr& elem)
+{
+    if (elem.isList())
+        throw CompileError(elem, "Expected symbol or literal operand, got list expression");
+    if (elem.isSymbol())
+    {
+        const Operand* op = ctx.lookup(elem.text);
+        if (op)
+        {
+            if (!op->rawOp.empty())
+                return op->rawOp;
+            if (!op->text.empty())
+                return op->text;
+        }
+        if (elem.text.find("inst") != std::string::npos)
+            ctx.use("inst");
+    }
+    return elem.text;
+}
+
+enum class Precedence : int
+{
+    Lowest = 0,
+    Or = 1,          // ||
+    And = 2,         // &&
+    Relational = 3,  // ==, !=, <, <=, >, >=
+    Primary = 4      // constant?, inst?, not, atoms
+};
+
+struct PredicateResult
+{
+    std::string text;
+    Precedence prec = Precedence::Primary;
+};
+
+inline std::string formatChild(const PredicateResult& child, Precedence parentPrec)
+{
+    if (child.prec < parentPrec)
+        return "(" + child.text + ")";
+    return child.text;
+}
+
 class TargetBuilder
 {
 public:
@@ -112,27 +156,13 @@ public:
 
     virtual Operand emitAllocTemp(CodeWriter& out, EvalContext& ctx, TypeKind type, const std::string& varName) = 0;
 
-    virtual std::string toReg(CodeWriter& out, EvalContext& ctx, const Operand& op, const std::string& destReg = "", const std::string& preferredKind = "") = 0;
-
     virtual std::string resolveMemBase(CodeWriter& out, EvalContext& ctx, const SExpr& baseExpr, const Operand& baseOp, const std::string& destReg = "") = 0;
 
-    virtual Operand emitCodeAddress(CodeWriter& out, EvalContext& ctx, const std::string& offset, const std::string& destReg) = 0;
-
-    virtual Operand emitLoad(CodeWriter& out, EvalContext& ctx, TypeKind type, const std::string& base, const std::string& offset, const std::string& destReg) = 0;
-
-    virtual void emitStore(CodeWriter& out, EvalContext& ctx, TypeKind type, const std::string& base, const std::string& offset, const Operand& val, const std::string& valName = "") = 0;
-
-    virtual void emitBranchIfZero(CodeWriter& out, EvalContext& ctx, bool notZero, const Operand& val, const std::string& labelOp) = 0;
-
-    virtual void emitBranchIfEqual(CodeWriter& out, EvalContext& ctx, bool notEqual, const Operand& val, const Operand& expected, const std::string& labelOp) = 0;
-
-    virtual void emitBranchIfNegative(CodeWriter& out, EvalContext& ctx, const Operand& val, const std::string& labelOp) = 0;
-
-    virtual Operand emitSignExtend(CodeWriter& out, EvalContext& ctx, int bits, const Operand& val, const std::string& destReg) = 0;
-
-    virtual Operand emitTruncateUint(CodeWriter& out, EvalContext& ctx, const Operand& val, const std::string& destReg) = 0;
-
-    virtual Operand emitIsEqual(CodeWriter& out, EvalContext& ctx, const Operand& val, const Operand& expected, const std::string& destReg) = 0;
+    virtual void emitJumpOrFallthrough(CodeWriter& out, EvalContext& ctx, const std::string& blockOp)
+    {
+        ctx.use("next");
+        out.line("lowering.jumpOrFallthrough(lowering.blockOp(" + blockOp + "), next);");
+    }
 
     virtual void emitUnsupported(CodeWriter& out)
     {
@@ -140,7 +170,25 @@ public:
     }
 
     // Architecture-dependent operation dispatch hook
-    virtual bool emitArchOp(CodeWriter& out, EvalContext& ctx, const std::string& opName, const std::vector<std::string>& args)
+    virtual bool emitArchOp(CodeWriter& out, EvalContext& ctx, const std::string& opName, const std::vector<Operand>& args)
+    {
+        return false;
+    }
+
+    // Architecture-dependent predicate hook
+    virtual std::optional<PredicateResult> evalArchPredicate(EvalContext& ctx, const SExpr& expr, const std::string& destReg)
+    {
+        return std::nullopt;
+    }
+
+    // Architecture-dependent expression / operand materialization hook
+    virtual std::optional<Operand> evalArchExpr(CodeWriter& out, EvalContext& ctx, const SExpr& expr, const std::string& destReg)
+    {
+        return std::nullopt;
+    }
+
+    // Whether this expression must be eagerly materialized into a local variable in let bindings
+    virtual bool isEagerBindingExpr(const std::string& opName) const
     {
         return false;
     }

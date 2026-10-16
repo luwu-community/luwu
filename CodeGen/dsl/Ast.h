@@ -12,8 +12,8 @@ namespace Luwu::Dsl
 struct SourceLocation
 {
     std::string file;
-    int line = 1;
-    int col = 1;
+    int line = 0;
+    int col = 0;
 
     std::string toString() const
     {
@@ -23,6 +23,8 @@ struct SourceLocation
                 return "";
             return std::to_string(line) + ":" + std::to_string(col);
         }
+        if (line == 0 && col == 0)
+            return file;
         return file + ":" + std::to_string(line) + ":" + std::to_string(col);
     }
 };

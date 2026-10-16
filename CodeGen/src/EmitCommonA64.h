@@ -8,6 +8,8 @@
 #include "lobject.h"
 #include "ltm.h"
 #include "lstate.h"
+#include "Luau/IrData.h"
+#include "Luau/IrUtils.h"
 #include <climits>
 
 // AArch64 ABI reminder:
@@ -25,6 +27,157 @@ namespace CodeGen
 
 namespace A64
 {
+
+inline ConditionA64 getConditionFP(IrCondition cond)
+{
+    switch (cond)
+    {
+    case IrCondition::Equal:
+        return ConditionA64::Equal;
+
+    case IrCondition::NotEqual:
+        return ConditionA64::NotEqual;
+
+    case IrCondition::Less:
+        return ConditionA64::Minus;
+
+    case IrCondition::NotLess:
+        return ConditionA64::Plus;
+
+    case IrCondition::LessEqual:
+        return ConditionA64::UnsignedLessEqual;
+
+    case IrCondition::NotLessEqual:
+        return ConditionA64::UnsignedGreater;
+
+    case IrCondition::Greater:
+        return ConditionA64::Greater;
+
+    case IrCondition::NotGreater:
+        return ConditionA64::LessEqual;
+
+    case IrCondition::GreaterEqual:
+        return ConditionA64::GreaterEqual;
+
+    case IrCondition::NotGreaterEqual:
+        return ConditionA64::Less;
+
+    default:
+        CODEGEN_ASSERT(!"Unexpected condition code");
+        return ConditionA64::Always;
+    }
+}
+
+inline ConditionA64 getConditionInt(IrCondition cond)
+{
+    switch (cond)
+    {
+    case IrCondition::Equal:
+        return ConditionA64::Equal;
+
+    case IrCondition::NotEqual:
+        return ConditionA64::NotEqual;
+
+    // Minus/Plus (MI/PL) check the N flag only, which is correct for small
+    // integer comparisons where overflow cannot occur.
+    case IrCondition::Less:
+        return ConditionA64::Minus;
+
+    case IrCondition::NotLess:
+        return ConditionA64::Plus;
+
+    case IrCondition::LessEqual:
+        return ConditionA64::LessEqual;
+
+    case IrCondition::NotLessEqual:
+        return ConditionA64::Greater;
+
+    case IrCondition::Greater:
+        return ConditionA64::Greater;
+
+    case IrCondition::NotGreater:
+        return ConditionA64::LessEqual;
+
+    case IrCondition::GreaterEqual:
+        return ConditionA64::GreaterEqual;
+
+    case IrCondition::NotGreaterEqual:
+        return ConditionA64::Less;
+
+    case IrCondition::UnsignedLess:
+        return ConditionA64::CarryClear;
+
+    case IrCondition::UnsignedLessEqual:
+        return ConditionA64::UnsignedLessEqual;
+
+    case IrCondition::UnsignedGreater:
+        return ConditionA64::UnsignedGreater;
+
+    case IrCondition::UnsignedGreaterEqual:
+        return ConditionA64::CarrySet;
+
+    default:
+        CODEGEN_ASSERT(!"Unexpected condition code");
+        return ConditionA64::Always;
+    }
+}
+
+// Full-range signed integer condition mapping for int64 comparisons.
+// Unlike getConditionInt which uses MI/PL (N flag only) for Less/NotLess,
+// this uses LT/GE (N!=V / N==V) which correctly handles overflow.
+// Example: CMP INT64_MAX, -1 sets N=1,V=1 so MI fires but LT does not.
+// Helpful cheatsheet: https://gist.github.com/ryo/31017f265cc2f9ade124aea64543df22
+inline ConditionA64 getConditionInt64(IrCondition cond)
+{
+    switch (cond)
+    {
+    case IrCondition::Equal:
+        return ConditionA64::Equal;
+
+    case IrCondition::NotEqual:
+        return ConditionA64::NotEqual;
+
+    case IrCondition::Less:
+        return ConditionA64::Less;
+
+    case IrCondition::NotLess:
+        return ConditionA64::GreaterEqual;
+
+    case IrCondition::LessEqual:
+        return ConditionA64::LessEqual;
+
+    case IrCondition::NotLessEqual:
+        return ConditionA64::Greater;
+
+    case IrCondition::Greater:
+        return ConditionA64::Greater;
+
+    case IrCondition::NotGreater:
+        return ConditionA64::LessEqual;
+
+    case IrCondition::GreaterEqual:
+        return ConditionA64::GreaterEqual;
+
+    case IrCondition::NotGreaterEqual:
+        return ConditionA64::Less;
+
+    case IrCondition::UnsignedLess:
+        return ConditionA64::CarryClear;
+
+    case IrCondition::UnsignedLessEqual:
+        return ConditionA64::UnsignedLessEqual;
+
+    case IrCondition::UnsignedGreater:
+        return ConditionA64::UnsignedGreater;
+
+    case IrCondition::UnsignedGreaterEqual:
+        return ConditionA64::CarrySet;
+
+    default:
+        CODEGEN_ASSERT(!"Unexpected condition code");
+        return ConditionA64::Always;
+    }
+}
 
 // Data that is very common to access is placed in non-volatile registers:
 // 1. Constant registers (only loaded during codegen entry)

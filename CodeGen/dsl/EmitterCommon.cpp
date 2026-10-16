@@ -80,21 +80,19 @@ std::vector<Rule> parseRules(const std::vector<SExpr>& program)
             param.type = stripLeadingColon(p.elements[1].text);
             param.loc = p.loc;
 
-            if (!rule.isSubrule)
+            if (!rule.isSubrule && param.type == "any")
             {
-                if (param.type == "any")
-                {
-                    throw CompileError(
-                        p, "Type :any is only allowed in define-subrule, not top-level define-rule: " + rule.name
-                    );
-                }
-                if (param.type != "reg" && param.type != "uint" && param.type != "int" &&
-                    param.type != "tag" && param.type != "label" && param.type != "op")
-                {
-                    throw CompileError(
-                        p, "Unknown parameter type :" + param.type + " in define-rule: " + rule.name
-                    );
-                }
+                throw CompileError(
+                    p, "Type :any is only allowed in define-subrule, not top-level define-rule: " + rule.name
+                );
+            }
+            if (param.type != "reg" && param.type != "uint" && param.type != "int" &&
+                param.type != "tag" && param.type != "upvalue" && param.type != "cond" &&
+                param.type != "label" && param.type != "op" && param.type != "any")
+            {
+                throw CompileError(
+                    p, "Unknown parameter type :" + param.type + " in " + formName + ": " + rule.name
+                );
             }
 
             rule.params.push_back(std::move(param));
@@ -158,6 +156,11 @@ static std::vector<SExpr> expandExpr(const SExpr& expr, const std::unordered_map
             {
                 const auto& param = subrule.params[i];
                 const SExpr& arg = expr.elements[i + 1];
+
+                if (param.type == "reg" && arg.isList("mem"))
+                {
+                    throw CompileError(arg, "Cannot pass memory operand to :reg parameter '" + param.name + "' in subrule " + head);
+                }
 
                 if (param.type == "reg" && arg.isList())
                 {

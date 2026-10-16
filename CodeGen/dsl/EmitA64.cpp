@@ -1,6 +1,10 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "RuleCompiler.h"
 
+#include <functional>
+#include <string_view>
+#include <unordered_map>
+
 namespace Luwu::Dsl
 {
 
@@ -10,6 +14,529 @@ static std::string formatRegArgA64(const std::string& arg)
         return "lowering.regOp(" + arg + ")";
     return arg;
 }
+
+static std::string kindForTypeA64(TypeKind type)
+{
+    switch (type)
+    {
+    case TypeKind::U8:
+    case TypeKind::I16:
+    case TypeKind::I32:
+    case TypeKind::U32:
+    case TypeKind::Tag:
+        return "KindA64::w";
+    case TypeKind::F32:
+        return "KindA64::s";
+    case TypeKind::F64:
+        return "KindA64::d";
+    case TypeKind::Vec:
+        return "KindA64::q";
+    default:
+        return "KindA64::x";
+    }
+}
+
+struct ArchOpSpecA64
+{
+    size_t arity;
+    bool allowMemArgs;
+    std::function<void(CodeWriter&, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>&)> emit;
+};
+
+static void emitGuardBranchA64(CodeWriter& out, EvalContext& ctx, const std::string& condStr, const std::string& labelOp)
+{
+    ctx.use("build");
+    ctx.use("index");
+    ctx.addDecl("Label fresh;");
+    out.line("build.b(" + condStr + ", lowering.getTargetLabel(" + labelOp + ", index, fresh));");
+    out.line("lowering.finalizeTargetLabel(" + labelOp + ", index, fresh);");
+}
+
+static void emitGuardCbzA64(CodeWriter& out, EvalContext& ctx, bool notZero, const std::string& valReg, const std::string& labelOp)
+{
+    ctx.use("build");
+    ctx.use("index");
+    ctx.addDecl("Label fresh;");
+    std::string instr = notZero ? "build.cbnz" : "build.cbz";
+    out.line(instr + "(" + valReg + ", lowering.getTargetLabel(" + labelOp + ", index, fresh));");
+    out.line("lowering.finalizeTargetLabel(" + labelOp + ", index, fresh);");
+}
+
+static void requireMemArgA64(EvalContext& ctx, const Operand& op, std::string_view opName)
+{
+    if (op.kind != OperandKind::Mem)
+        throw CompileError(ctx.loc, std::string(opName) + " requires memory operand for addr");
+}
+
+static std::string formatMemA64(const Operand& op)
+{
+    return "mem(" + formatRegArgA64(op.memBase) + ", " + op.memOffset + ")";
+}
+
+static const std::unordered_map<std::string_view, ArchOpSpecA64> kArchOpsA64 = {
+    {"a64:ldrb!", {2, true, [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>& raw, const std::vector<std::string>&) {
+        requireMemArgA64(ctx, raw[1], "a64:ldrb!");
+        out.line("build.ldrb(" + formatRegArgA64(raw[0].text) + ", " + formatMemA64(raw[1]) + ");");
+    }}},
+    {"a64:ldrh!", {2, true, [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>& raw, const std::vector<std::string>&) {
+        requireMemArgA64(ctx, raw[1], "a64:ldrh!");
+        out.line("build.ldrh(" + formatRegArgA64(raw[0].text) + ", " + formatMemA64(raw[1]) + ");");
+    }}},
+    {"a64:ldr-32!", {2, true, [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>& raw, const std::vector<std::string>&) {
+        requireMemArgA64(ctx, raw[1], "a64:ldr-32!");
+        out.line("build.ldr(" + formatRegArgA64(raw[0].text) + ", " + formatMemA64(raw[1]) + ");");
+    }}},
+    {"a64:ldr-ptr!", {2, true, [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>& raw, const std::vector<std::string>&) {
+        requireMemArgA64(ctx, raw[1], "a64:ldr-ptr!");
+        out.line("build.ldr(" + formatRegArgA64(raw[0].text) + ", " + formatMemA64(raw[1]) + ");");
+    }}},
+    {"a64:ldr-64!", {2, true, [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>& raw, const std::vector<std::string>&) {
+        requireMemArgA64(ctx, raw[1], "a64:ldr-64!");
+        out.line("build.ldr(" + formatRegArgA64(raw[0].text) + ", " + formatMemA64(raw[1]) + ");");
+    }}},
+    {"a64:ldrsb!", {2, true, [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>& raw, const std::vector<std::string>&) {
+        requireMemArgA64(ctx, raw[1], "a64:ldrsb!");
+        out.line("build.ldrsb(" + formatRegArgA64(raw[0].text) + ", " + formatMemA64(raw[1]) + ");");
+    }}},
+    {"a64:ldrsh!", {2, true, [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>& raw, const std::vector<std::string>&) {
+        requireMemArgA64(ctx, raw[1], "a64:ldrsh!");
+        out.line("build.ldrsh(" + formatRegArgA64(raw[0].text) + ", " + formatMemA64(raw[1]) + ");");
+    }}},
+    {"a64:ldrsw!", {2, true, [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>& raw, const std::vector<std::string>&) {
+        requireMemArgA64(ctx, raw[1], "a64:ldrsw!");
+        out.line("build.ldrsw(" + formatRegArgA64(raw[0].text) + ", " + formatMemA64(raw[1]) + ");");
+    }}},
+    {"a64:ldr-f32!", {2, true, [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>& raw, const std::vector<std::string>&) {
+        requireMemArgA64(ctx, raw[1], "a64:ldr-f32!");
+        out.line("build.ldr(" + formatRegArgA64(raw[0].text) + ", " + formatMemA64(raw[1]) + ");");
+    }}},
+    {"a64:ldr-f64!", {2, true, [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>& raw, const std::vector<std::string>&) {
+        requireMemArgA64(ctx, raw[1], "a64:ldr-f64!");
+        out.line("build.ldr(" + formatRegArgA64(raw[0].text) + ", " + formatMemA64(raw[1]) + ");");
+    }}},
+    {"a64:ldr-vec!", {2, true, [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>& raw, const std::vector<std::string>&) {
+        requireMemArgA64(ctx, raw[1], "a64:ldr-vec!");
+        out.line("build.ldr(" + formatRegArgA64(raw[0].text) + ", " + formatMemA64(raw[1]) + ");");
+    }}},
+    {"a64:strb!", {2, true, [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>& raw, const std::vector<std::string>&) {
+        requireMemArgA64(ctx, raw[0], "a64:strb!");
+        out.line("build.strb(" + formatRegArgA64(raw[1].text) + ", " + formatMemA64(raw[0]) + ");");
+    }}},
+    {"a64:strh!", {2, true, [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>& raw, const std::vector<std::string>&) {
+        requireMemArgA64(ctx, raw[0], "a64:strh!");
+        out.line("build.strh(" + formatRegArgA64(raw[1].text) + ", " + formatMemA64(raw[0]) + ");");
+    }}},
+    {"a64:str-32!", {2, true, [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>& raw, const std::vector<std::string>&) {
+        requireMemArgA64(ctx, raw[0], "a64:str-32!");
+        out.line("build.str(" + formatRegArgA64(raw[1].text) + ", " + formatMemA64(raw[0]) + ");");
+    }}},
+    {"a64:str-ptr!", {2, true, [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>& raw, const std::vector<std::string>&) {
+        requireMemArgA64(ctx, raw[0], "a64:str-ptr!");
+        out.line("build.str(" + formatRegArgA64(raw[1].text) + ", " + formatMemA64(raw[0]) + ");");
+    }}},
+    {"a64:str-64!", {2, true, [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>& raw, const std::vector<std::string>&) {
+        requireMemArgA64(ctx, raw[0], "a64:str-64!");
+        out.line("build.str(" + formatRegArgA64(raw[1].text) + ", " + formatMemA64(raw[0]) + ");");
+    }}},
+    {"a64:str-f32!", {2, true, [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>& raw, const std::vector<std::string>&) {
+        requireMemArgA64(ctx, raw[0], "a64:str-f32!");
+        out.line("build.str(" + formatRegArgA64(raw[1].text) + ", " + formatMemA64(raw[0]) + ");");
+    }}},
+    {"a64:str-f64!", {2, true, [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>& raw, const std::vector<std::string>&) {
+        requireMemArgA64(ctx, raw[0], "a64:str-f64!");
+        out.line("build.str(" + formatRegArgA64(raw[1].text) + ", " + formatMemA64(raw[0]) + ");");
+    }}},
+    {"a64:str-vec!", {2, true, [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>& raw, const std::vector<std::string>&) {
+        requireMemArgA64(ctx, raw[0], "a64:str-vec!");
+        out.line("build.str(" + formatRegArgA64(raw[1].text) + ", " + formatMemA64(raw[0]) + ");");
+    }}},
+    {"a64:str-wzr!", {1, true, [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>& raw, const std::vector<std::string>&) {
+        requireMemArgA64(ctx, raw[0], "a64:str-wzr!");
+        out.line("build.str(wzr, " + formatMemA64(raw[0]) + ");");
+    }}},
+    {"a64:str-xzr!", {1, true, [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>& raw, const std::vector<std::string>&) {
+        requireMemArgA64(ctx, raw[0], "a64:str-xzr!");
+        out.line("build.str(xzr, " + formatMemA64(raw[0]) + ");");
+    }}},
+    {"a64:add-offset!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("emitAddOffset(build, " + args[0] + ", " + formatRegArgA64(args[1]) + ", " + args[2] + ");");
+    }}},
+    {"a64:code-addr!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("emitAddOffset(build, " + formatRegArgA64(args[0]) + ", rCode, (" + formatRegArgA64(args[1]) + ") * sizeof(Instruction));");
+    }}},
+    {"a64:mov-reg!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.mov(" + args[0] + ", " + formatRegArgA64(args[1]) + ");");
+    }}},
+    {"a64:mov-imm-32!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.mov(" + args[0] + ", lowering.intOp(" + args[1] + "));");
+    }}},
+    {"a64:mov-imm-u32!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.mov(" + args[0] + ", lowering.uintOp(" + args[1] + "));");
+    }}},
+    {"a64:mov-imm-64!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("emitLoadInt64(build, " + args[0] + ", lowering.int64Op(" + args[1] + "));");
+    }}},
+    {"a64:mov-imm-raw!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.mov(" + args[0] + ", " + args[1] + ");");
+    }}},
+    {"a64:add-reg-32!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.add(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ");");
+    }}},
+    {"a64:add-reg-64!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.add(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ");");
+    }}},
+    {"a64:add-imm-32!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.add(" + args[0] + ", " + formatRegArgA64(args[1]) + ", uint16_t(lowering.intOp(" + args[2] + ")));");
+    }}},
+    {"a64:add-imm-64!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.add(" + args[0] + ", " + formatRegArgA64(args[1]) + ", uint16_t(lowering.int64Op(" + args[2] + ")));");
+    }}},
+    {"a64:add-imm-u16!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.add(" + args[0] + ", " + formatRegArgA64(args[1]) + ", uint16_t(" + args[2] + "));");
+    }}},
+    {"a64:add-shifted!", {4, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.add(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ", " + args[3] + ");");
+    }}},
+    {"a64:sub-reg-32!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.sub(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ");");
+    }}},
+    {"a64:sub-reg-64!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.sub(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ");");
+    }}},
+    {"a64:sub-imm-32!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.sub(" + args[0] + ", " + formatRegArgA64(args[1]) + ", uint16_t(lowering.intOp(" + args[2] + ")));");
+    }}},
+    {"a64:sub-imm-64!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.sub(" + args[0] + ", " + formatRegArgA64(args[1]) + ", uint16_t(lowering.int64Op(" + args[2] + ")));");
+    }}},
+    {"a64:sub-imm-u16!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.sub(" + args[0] + ", " + formatRegArgA64(args[1]) + ", uint16_t(" + args[2] + "));");
+    }}},
+    {"a64:neg-32!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.neg(" + args[0] + ", " + formatRegArgA64(args[1]) + ");");
+    }}},
+    {"a64:neg-64!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.neg(" + args[0] + ", " + formatRegArgA64(args[1]) + ");");
+    }}},
+    {"a64:mul-reg-32!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.mul(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ");");
+    }}},
+    {"a64:mul-reg-64!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.mul(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ");");
+    }}},
+    {"a64:msub!", {4, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.msub(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ", " + formatRegArgA64(args[3]) + ");");
+    }}},
+    {"a64:sdiv!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.sdiv(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ");");
+    }}},
+    {"a64:udiv!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.udiv(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ");");
+    }}},
+    {"a64:rem!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.rem(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ");");
+    }}},
+    {"a64:sbfx!", {4, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.sbfx(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + args[2] + ", " + args[3] + ");");
+    }}},
+    {"a64:ubfx!", {4, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.ubfx(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + args[2] + ", " + args[3] + ");");
+    }}},
+    {"a64:ubfx-64!", {4, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.ubfx(castReg(KindA64::x, " + args[0] + "), castReg(KindA64::x, " + formatRegArgA64(args[1]) + "), " + args[2] + ", " + args[3] + ");");
+    }}},
+    {"a64:sbfx-w-to-x!", {4, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.sbfx(" + args[0] + ", castReg(KindA64::x, " + formatRegArgA64(args[1]) + "), " + args[2] + ", " + args[3] + ");");
+    }}},
+    {"a64:ubfx-w-to-x!", {4, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.ubfx(" + args[0] + ", castReg(KindA64::x, " + formatRegArgA64(args[1]) + "), " + args[2] + ", " + args[3] + ");");
+    }}},
+    {"a64:sbfiz!", {4, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.sbfiz(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + args[2] + ", " + args[3] + ");");
+    }}},
+    {"a64:ubfiz!", {4, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.ubfiz(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + args[2] + ", " + args[3] + ");");
+    }}},
+    {"a64:rev-32!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.rev(" + args[0] + ", " + formatRegArgA64(args[1]) + ");");
+    }}},
+    {"a64:rev-64!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.rev(" + args[0] + ", " + formatRegArgA64(args[1]) + ");");
+    }}},
+    {"a64:clz!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.clz(" + args[0] + ", " + formatRegArgA64(args[1]) + ");");
+    }}},
+    {"a64:rbit!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.rbit(" + args[0] + ", " + formatRegArgA64(args[1]) + ");");
+    }}},
+    {"a64:mvn-32!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.mvn_(" + args[0] + ", " + formatRegArgA64(args[1]) + ");");
+    }}},
+    {"a64:mvn-64!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.mvn_(" + args[0] + ", " + formatRegArgA64(args[1]) + ");");
+    }}},
+    {"a64:and-reg-32!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.and_(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ");");
+    }}},
+    {"a64:and-reg-64!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.and_(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ");");
+    }}},
+    {"a64:and-imm-32!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.and_(" + args[0] + ", " + formatRegArgA64(args[1]) + ", unsigned(lowering.intOp(" + args[2] + ")));");
+    }}},
+    {"a64:orr-reg-32!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.orr(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ");");
+    }}},
+    {"a64:orr-reg-64!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.orr(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ");");
+    }}},
+    {"a64:orr-imm-32!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.orr(" + args[0] + ", " + formatRegArgA64(args[1]) + ", unsigned(lowering.intOp(" + args[2] + ")));");
+    }}},
+    {"a64:eor-reg-32!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.eor(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ");");
+    }}},
+    {"a64:eor-reg-64!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.eor(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ");");
+    }}},
+    {"a64:eor-imm-32!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.eor(" + args[0] + ", " + formatRegArgA64(args[1]) + ", unsigned(lowering.intOp(" + args[2] + ")));");
+    }}},
+    {"a64:bic-reg!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.bic(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ");");
+    }}},
+    {"a64:lsl-reg!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.lsl(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ");");
+    }}},
+    {"a64:lsl-imm-32!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.lsl(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + args[2] + ");");
+    }}},
+    {"a64:lsl-imm-u8!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.lsl(" + args[0] + ", " + formatRegArgA64(args[1]) + ", uint8_t(" + args[2] + "));");
+    }}},
+    {"a64:lsr-reg!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.lsr(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ");");
+    }}},
+    {"a64:lsr-imm-32!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.lsr(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + args[2] + ");");
+    }}},
+    {"a64:lsr-imm-u8!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.lsr(" + args[0] + ", " + formatRegArgA64(args[1]) + ", uint8_t(" + args[2] + "));");
+    }}},
+    {"a64:asr-reg!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.asr(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ");");
+    }}},
+    {"a64:asr-imm-u8!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.asr(" + args[0] + ", " + formatRegArgA64(args[1]) + ", uint8_t(" + args[2] + "));");
+    }}},
+    {"a64:ror-reg!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.ror(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ");");
+    }}},
+    {"a64:ror-imm-u8!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.ror(" + args[0] + ", " + formatRegArgA64(args[1]) + ", uint8_t(" + args[2] + "));");
+    }}},
+
+    {"a64:cmp-reg!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.cmp(" + formatRegArgA64(args[0]) + ", " + formatRegArgA64(args[1]) + ");");
+    }}},
+    {"a64:cmp-imm!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.cmp(" + formatRegArgA64(args[0]) + ", uint16_t(" + formatRegArgA64(args[1]) + "));");
+    }}},
+    {"a64:cmp-imm-32!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.cmp(" + formatRegArgA64(args[0]) + ", uint16_t(lowering.intOp(" + args[1] + ")));");
+    }}},
+    {"a64:cmp-imm-64!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.cmp(" + formatRegArgA64(args[0]) + ", uint16_t(lowering.int64Op(" + args[1] + ")));");
+    }}},
+    {"a64:tst-reg!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.tst(" + formatRegArgA64(args[0]) + ", " + formatRegArgA64(args[1]) + ");");
+    }}},
+    {"a64:tst-imm!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.tst(" + formatRegArgA64(args[0]) + ", " + args[1] + ");");
+    }}},
+    {"a64:cset-eq!", {1, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.cset(" + args[0] + ", ConditionA64::Equal);");
+    }}},
+    {"a64:cset-ne!", {1, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.cset(" + args[0] + ", ConditionA64::NotEqual);");
+    }}},
+    {"a64:cset-cond-int!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.cset(" + args[0] + ", getConditionInt(" + args[1] + "));");
+    }}},
+    {"a64:cset-inv-cond-int!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.cset(" + args[0] + ", getInverseCondition(getConditionInt(" + args[1] + ")));");
+    }}},
+    {"a64:cset-cond-int64!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.cset(" + args[0] + ", getConditionInt64(" + args[1] + "));");
+    }}},
+    {"a64:cset-inv-cond-int64!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.cset(" + args[0] + ", getInverseCondition(getConditionInt64(" + args[1] + ")));");
+    }}},
+    {"a64:csel!", {4, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.csel(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ", " + args[3] + ");");
+    }}},
+    {"a64:csel-cond-int64!", {4, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.csel(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ", getConditionInt64(" + args[3] + "));");
+    }}},
+
+    // Guard Branches (abort-on-undef / VM-exit aware via getTargetLabel + finalizeTargetLabel)
+    {"a64:guard-b!", {1, false, [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        ctx.use("index");
+        ctx.addDecl("Label fresh;");
+        out.line("build.b(lowering.getTargetLabel(" + args[0] + ", index, fresh));");
+        out.line("lowering.finalizeTargetLabel(" + args[0] + ", index, fresh);");
+    }}},
+    {"a64:guard-neg-cond-int!", {2, false, [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        emitGuardBranchA64(out, ctx, "getConditionInt(getNegatedCondition(" + args[0] + "))", args[1]);
+    }}},
+    {"a64:guard-neg-cond-int64!", {2, false, [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        emitGuardBranchA64(out, ctx, "getConditionInt64(getNegatedCondition(" + args[0] + "))", args[1]);
+    }}},
+    {"a64:guard-z!", {2, false, [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        emitGuardCbzA64(out, ctx, false, formatRegArgA64(args[0]), args[1]);
+    }}},
+    {"a64:guard-nz!", {2, false, [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        emitGuardCbzA64(out, ctx, true, formatRegArgA64(args[0]), args[1]);
+    }}},
+    {"a64:guard-eq!", {3, false, [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>& raw, const std::vector<std::string>& args) {
+        std::string valReg = formatRegArgA64(args[0]);
+        std::string expStr = (raw[1].kind == OperandKind::Reg && raw[1].type == TypeKind::Ptr)
+            ? formatRegArgA64(args[1])
+            : ("uint16_t(" + formatRegArgA64(args[1]) + ")");
+        out.line("build.cmp(" + valReg + ", " + expStr + ");");
+        emitGuardBranchA64(out, ctx, "ConditionA64::Equal", args[2]);
+    }}},
+    {"a64:guard-ne!", {3, false, [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>& raw, const std::vector<std::string>& args) {
+        std::string valReg = formatRegArgA64(args[0]);
+        std::string expStr = (raw[1].kind == OperandKind::Reg && raw[1].type == TypeKind::Ptr)
+            ? formatRegArgA64(args[1])
+            : ("uint16_t(" + formatRegArgA64(args[1]) + ")");
+        out.line("build.cmp(" + valReg + ", " + expStr + ");");
+        emitGuardBranchA64(out, ctx, "ConditionA64::NotEqual", args[2]);
+    }}},
+    {"a64:branch-if-not-equal!", {3, false, [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>& raw, const std::vector<std::string>& args) {
+        std::string valReg = formatRegArgA64(args[0]);
+        std::string expStr = (raw[1].kind == OperandKind::Reg && raw[1].type == TypeKind::Ptr)
+            ? formatRegArgA64(args[1])
+            : ("uint16_t(" + formatRegArgA64(args[1]) + ")");
+        out.line("build.cmp(" + valReg + ", " + expStr + ");");
+        emitGuardBranchA64(out, ctx, "ConditionA64::NotEqual", args[2]);
+    }}},
+    {"a64:guard-ule-reg!", {3, false, [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.cmp(" + formatRegArgA64(args[0]) + ", " + formatRegArgA64(args[1]) + ");");
+        emitGuardBranchA64(out, ctx, "ConditionA64::UnsignedLessEqual", args[2]);
+    }}},
+    {"a64:guard-ule-imm!", {3, false, [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.cmp(" + formatRegArgA64(args[0]) + ", uint16_t(" + args[1] + "));");
+        emitGuardBranchA64(out, ctx, "ConditionA64::UnsignedLessEqual", args[2]);
+    }}},
+    {"a64:guard-ult-reg!", {3, false, [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.cmp(" + formatRegArgA64(args[0]) + ", " + formatRegArgA64(args[1]) + ");");
+        emitGuardBranchA64(out, ctx, "ConditionA64::UnsignedLess", args[2]);
+    }}},
+    {"a64:guard-ult-imm!", {3, false, [](CodeWriter& out, EvalContext& ctx, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.cmp(" + formatRegArgA64(args[0]) + ", uint16_t(" + args[1] + "));");
+        emitGuardBranchA64(out, ctx, "ConditionA64::UnsignedLess", args[2]);
+    }}},
+
+    // Block Jumps (jump directly to lowering.labelOp(target))
+    {"a64:jump-z!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.cbz(" + formatRegArgA64(args[0]) + ", lowering.labelOp(" + args[1] + "));");
+    }}},
+    {"a64:jump-nz!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.cbnz(" + formatRegArgA64(args[0]) + ", lowering.labelOp(" + args[1] + "));");
+    }}},
+    {"a64:jump-eq!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.cmp(" + formatRegArgA64(args[0]) + ", " + formatRegArgA64(args[1]) + ");");
+        out.line("build.b(ConditionA64::Equal, lowering.labelOp(" + args[2] + "));");
+    }}},
+    {"a64:jump-ne!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.cmp(" + formatRegArgA64(args[0]) + ", " + formatRegArgA64(args[1]) + ");");
+        out.line("build.b(ConditionA64::NotEqual, lowering.labelOp(" + args[2] + "));");
+    }}},
+    {"a64:jump-neg!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.cmp(" + formatRegArgA64(args[0]) + ", uint16_t(0));");
+        out.line("build.b(ConditionA64::Less, lowering.labelOp(" + args[1] + "));");
+    }}},
+    {"a64:jump-cond-int-imm!", {4, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.cmp(" + formatRegArgA64(args[0]) + ", uint16_t(lowering.intOp(" + args[1] + ")));");
+        out.line("build.b(getConditionInt(" + args[2] + "), lowering.labelOp(" + args[3] + "));");
+    }}},
+    {"a64:jump-cond-int-reg!", {4, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.cmp(" + formatRegArgA64(args[0]) + ", " + formatRegArgA64(args[1]) + ");");
+        out.line("build.b(getConditionInt(" + args[2] + "), lowering.labelOp(" + args[3] + "));");
+    }}},
+    {"a64:b!", {1, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.b(lowering.labelOp(" + args[0] + "));");
+    }}},
+
+    {"a64:fmov!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.fmov(" + args[0] + ", " + formatRegArgA64(args[1]) + ");");
+    }}},
+    {"a64:fadd!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.fadd(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ");");
+    }}},
+    {"a64:fsub!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.fsub(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ");");
+    }}},
+    {"a64:fmul!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.fmul(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ");");
+    }}},
+    {"a64:fdiv!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.fdiv(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ");");
+    }}},
+    {"a64:fneg!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.fneg(" + args[0] + ", " + formatRegArgA64(args[1]) + ");");
+    }}},
+    {"a64:fabs!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.fabs(" + args[0] + ", " + formatRegArgA64(args[1]) + ");");
+    }}},
+    {"a64:fsqrt!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.fsqrt(" + args[0] + ", " + formatRegArgA64(args[1]) + ");");
+    }}},
+    {"a64:fmla!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.fmla(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ");");
+    }}},
+    {"a64:frintm!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.frintm(" + args[0] + ", " + formatRegArgA64(args[1]) + ");");
+    }}},
+    {"a64:frintp!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.frintp(" + args[0] + ", " + formatRegArgA64(args[1]) + ");");
+    }}},
+    {"a64:frinta!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.frinta(" + args[0] + ", " + formatRegArgA64(args[1]) + ");");
+    }}},
+    {"a64:fcvt!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.fcvt(" + args[0] + ", " + formatRegArgA64(args[1]) + ");");
+    }}},
+    {"a64:fcvtzs!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.fcvtzs(" + args[0] + ", " + formatRegArgA64(args[1]) + ");");
+    }}},
+    {"a64:fcvtzs-64!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.fcvtzs(castReg(KindA64::x, " + args[0] + "), " + formatRegArgA64(args[1]) + ");");
+    }}},
+    {"a64:scvtf!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.scvtf(" + args[0] + ", " + formatRegArgA64(args[1]) + ");");
+    }}},
+    {"a64:ucvtf!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.ucvtf(" + args[0] + ", " + formatRegArgA64(args[1]) + ");");
+    }}},
+    {"a64:fcmp!", {2, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.fcmp(" + formatRegArgA64(args[0]) + ", " + formatRegArgA64(args[1]) + ");");
+    }}},
+    {"a64:fcmpz!", {1, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.fcmpz(" + formatRegArgA64(args[0]) + ");");
+    }}},
+    {"a64:fcsel!", {4, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.fcsel(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ", " + args[3] + ");");
+    }}},
+    {"a64:fcsel-lt!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.fcsel(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ", getConditionFP(IrCondition::Less));");
+    }}},
+    {"a64:fcsel-gt!", {3, false, [](CodeWriter& out, EvalContext&, const std::vector<Operand>&, const std::vector<std::string>& args) {
+        out.line("build.fcsel(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ", getConditionFP(IrCondition::Greater));");
+    }}},
+};
 
 class TargetBuilderA64 : public TargetBuilder
 {
@@ -51,8 +578,7 @@ public:
         ctx.use("regs");
         ctx.use("index");
         ctx.use("inst");
-        bool is32 = (type == TypeKind::I32 || type == TypeKind::U32);
-        std::string kind = is32 ? "KindA64::w" : "KindA64::x";
+        std::string kind = kindForTypeA64(type);
         if (isReuse)
         {
             std::string line = "inst.regA64 = regs.allocReuse(" + kind + ", index, {";
@@ -72,327 +598,111 @@ public:
     Operand emitAllocTemp(CodeWriter& out, EvalContext& ctx, TypeKind type, const std::string& varName) override
     {
         ctx.use("regs");
-        bool is32 = (type == TypeKind::I32 || type == TypeKind::U32);
-        std::string kindStr = is32 ? "KindA64::w" : "KindA64::x";
+        std::string kindStr = kindForTypeA64(type);
         out.line("RegisterA64 " + varName + " = regs.allocTemp(" + kindStr + ");");
         return Operand::makeReg(type, varName);
     }
 
-    std::string toReg(CodeWriter& out, EvalContext& ctx, const Operand& op, const std::string& destReg = "", const std::string& preferredKind = "") override
-    {
-        (void)destReg;
-        if (op.kind == OperandKind::Reg || op.kind == OperandKind::Imm)
-            return op.text;
-
-        if (op.kind == OperandKind::Mem)
-        {
-            ctx.use("regs");
-            ctx.use("build");
-            std::string tmp = ctx.nextTemp("tmp_reg");
-            std::string kind = (op.type == TypeKind::U8 || op.type == TypeKind::U32 || op.type == TypeKind::I32 || op.type == TypeKind::I16)
-                ? "KindA64::w"
-                : (preferredKind.empty() ? "KindA64::x" : preferredKind);
-            std::string ldr = (op.type == TypeKind::U8) ? "build.ldrb" : "build.ldr";
-
-            out.line("RegisterA64 " + tmp + " = regs.allocTemp(" + kind + ");");
-            out.line(ldr + "(" + tmp + ", mem(" + op.memBase + ", " + op.memOffset + "));");
-            return tmp;
-        }
-
-        throw CompileError(SourceLocation{}, "Cannot convert operand to register in A64");
-    }
-
     std::string resolveMemBase(CodeWriter& out, EvalContext& ctx, const SExpr& baseExpr, const Operand& baseOp, const std::string& destReg = "") override
     {
+        (void)out;
         (void)baseExpr;
         (void)destReg;
-        return toReg(out, ctx, baseOp, "", "KindA64::x");
+        if (baseOp.kind == OperandKind::Mem)
+            throw CompileError(ctx.loc, "Cannot use memory operand as memory base in A64; load it into a register first");
+        return formatRegArgA64(baseOp.text);
     }
 
-    Operand emitCodeAddress(CodeWriter& out, EvalContext& ctx, const std::string& offset, const std::string& destReg) override
+    bool emitArchOp(CodeWriter& out, EvalContext& ctx, const std::string& opName, const std::vector<Operand>& rawArgs) override
     {
+        auto it = kArchOpsA64.find(opName);
+        if (it == kArchOpsA64.end())
+            return false;
+
+        const ArchOpSpecA64& spec = it->second;
+        if (rawArgs.size() != spec.arity)
+        {
+            throw CompileError(
+                ctx.loc,
+                opName + " requires " + std::to_string(spec.arity) + " argument(s), got " + std::to_string(rawArgs.size())
+            );
+        }
+
         ctx.use("build");
-        if (destReg.empty())
+        std::vector<std::string> args;
+        args.reserve(rawArgs.size());
+        for (const auto& a : rawArgs)
         {
-            ctx.use("regs");
-            std::string var = ctx.nextTemp("tmp_addr");
-            ctx.addDecl("RegisterA64 " + var + " = regs.allocTemp(KindA64::x);");
-            out.line("emitAddOffset(build, " + var + ", rCode, (" + offset + ") * sizeof(Instruction));");
-            return Operand::makeReg(TypeKind::Ptr, var);
+            if (!spec.allowMemArgs && a.kind == OperandKind::Mem)
+                throw CompileError(ctx.loc, "Cannot implicitly convert memory operand to register in A64; use an explicit load subrule");
+            args.push_back(a.text);
         }
-        else
-        {
-            out.line("emitAddOffset(build, " + destReg + ", rCode, (" + offset + ") * sizeof(Instruction));");
-            return Operand::makeReg(TypeKind::Ptr, destReg);
-        }
+
+        spec.emit(out, ctx, rawArgs, args);
+        return true;
     }
 
-    Operand emitLoad(CodeWriter& out, EvalContext& ctx, TypeKind type, const std::string& base, const std::string& offset, const std::string& destReg) override
+    std::optional<PredicateResult> evalArchPredicate(EvalContext& ctx, const SExpr& expr, const std::string&) override
     {
+        if (!expr.isList() || expr.elements.empty())
+            return std::nullopt;
+
+        const std::string& name = expr.elements[0].text;
+        if (name == "a64:fits-imm-32?")
+        {
+            if (expr.elements.size() != 2)
+                throw CompileError(expr, "a64:fits-imm-32? requires 1 argument");
+            return PredicateResult{"unsigned(lowering.intOp(" + getRawOpText(ctx, expr.elements[1]) + ")) <= AssemblyBuilderA64::kMaxImmediate", Precedence::Relational};
+        }
+        if (name == "a64:fits-imm-64?")
+        {
+            if (expr.elements.size() != 2)
+                throw CompileError(expr, "a64:fits-imm-64? requires 1 argument");
+            return PredicateResult{"uint64_t(lowering.int64Op(" + getRawOpText(ctx, expr.elements[1]) + ")) <= AssemblyBuilderA64::kMaxImmediate", Precedence::Relational};
+        }
+        if (name == "a64:fits-mask-32?" || name == "a64:fits-mask?")
+        {
+            if (expr.elements.size() != 2)
+                throw CompileError(expr, name + " requires 1 argument");
+            return PredicateResult{"AssemblyBuilderA64::isMaskSupported(unsigned(lowering.intOp(" + getRawOpText(ctx, expr.elements[1]) + ")))", Precedence::Primary};
+        }
+        return std::nullopt;
+    }
+
+    std::optional<Operand> evalArchExpr(CodeWriter& out, EvalContext& ctx, const SExpr& expr, const std::string& destReg) override
+    {
+        if (!expr.isList() || expr.elements.empty())
+            return std::nullopt;
+
+        const std::string& name = expr.elements[0].text;
+        if (name.rfind("a64:temp-", 0) != 0)
+            return std::nullopt;
+
+        if (expr.elements.size() != 2)
+            throw CompileError(expr, name + " requires 1 argument");
+
+        std::string helper;
+        TypeKind tk = TypeKind::I32;
+        if (name == "a64:temp-double") { helper = "tempDouble"; tk = TypeKind::F64; }
+        else if (name == "a64:temp-float") { helper = "tempFloat"; tk = TypeKind::F32; }
+        else if (name == "a64:temp-int") { helper = "tempInt"; tk = TypeKind::I32; }
+        else if (name == "a64:temp-int64") { helper = "tempInt64"; tk = TypeKind::I64; }
+        else if (name == "a64:temp-uint") { helper = "tempUint"; tk = TypeKind::U32; }
+        else return std::nullopt;
+
+        std::string raw = getRawOpText(ctx, expr.elements[1]);
+        std::string callStr = "lowering." + helper + "(" + raw + ")";
         if (!destReg.empty())
         {
-            ctx.use("build");
-            std::string instr = (type == TypeKind::U8) ? "build.ldrb" : "build.ldr";
-            out.line(instr + "(" + destReg + ", mem(" + base + ", " + offset + "));");
-            return Operand::makeReg(type, destReg);
+            out.line("RegisterA64 " + destReg + " = " + callStr + ";");
+            return Operand::makeReg(tk, destReg);
         }
-        return Operand::makeMem(type, base, offset);
+        return Operand::makeReg(tk, callStr);
     }
 
-    void emitStore(CodeWriter& out, EvalContext& ctx, TypeKind type, const std::string& base, const std::string& offset, const Operand& val, const std::string& valName = "") override
+    bool isEagerBindingExpr(const std::string& opName) const override
     {
-        (void)valName;
-        ctx.use("build");
-        std::string pref = (type == TypeKind::U8) ? "KindA64::w" : "KindA64::x";
-        std::string valReg;
-        if (val.kind == OperandKind::Mem && !val.memBase.empty() && val.memBase != base && val.memBase.rfind("tmp_reg", 0) == 0)
-        {
-            std::string ldr = (val.type == TypeKind::U8) ? "build.ldrb" : "build.ldr";
-            out.line(ldr + "(" + val.memBase + ", mem(" + val.memBase + ", " + val.memOffset + "));");
-            valReg = val.memBase;
-        }
-        else
-        {
-            valReg = toReg(out, ctx, val, "", pref);
-        }
-        std::string instr = (type == TypeKind::U8) ? "build.strb" : "build.str";
-        out.line(instr + "(" + valReg + ", mem(" + base + ", " + offset + "));");
-    }
-
-    void emitBranchIfZero(CodeWriter& out, EvalContext& ctx, bool notZero, const Operand& val, const std::string& labelOp) override
-    {
-        ctx.use("build");
-        ctx.use("index");
-        std::string pref = (val.type == TypeKind::Ptr) ? "KindA64::x" : "KindA64::w";
-        std::string valReg = toReg(out, ctx, val, "", pref);
-        std::string instr = notZero ? "build.cbnz" : "build.cbz";
-        ctx.addDecl("Label fresh;");
-        out.line(instr + "(" + valReg + ", lowering.getTargetLabel(" + labelOp + ", index, fresh));");
-        out.line("lowering.finalizeTargetLabel(" + labelOp + ", index, fresh);");
-    }
-
-    void emitBranchIfEqual(CodeWriter& out, EvalContext& ctx, bool notEqual, const Operand& val, const Operand& expected, const std::string& labelOp) override
-    {
-        ctx.use("build");
-        ctx.use("index");
-        std::string valReg = toReg(out, ctx, val, "", "KindA64::w");
-        std::string cond = notEqual ? "ConditionA64::NotEqual" : "ConditionA64::Equal";
-        ctx.addDecl("Label fresh;");
-        out.line("build.cmp(" + valReg + ", uint16_t(" + expected.text + "));");
-        out.line("build.b(" + cond + ", lowering.getTargetLabel(" + labelOp + ", index, fresh));");
-        out.line("lowering.finalizeTargetLabel(" + labelOp + ", index, fresh);");
-    }
-
-    void emitBranchIfNegative(CodeWriter& out, EvalContext& ctx, const Operand& val, const std::string& labelOp) override
-    {
-        ctx.use("build");
-        std::string valReg = toReg(out, ctx, val, "", "KindA64::w");
-        out.line("build.cmp(" + valReg + ", uint16_t(0));");
-        out.line("build.b(ConditionA64::Less, lowering.labelOp(" + labelOp + "));");
-    }
-
-    Operand emitSignExtend(CodeWriter& out, EvalContext& ctx, int bits, const Operand& val, const std::string& destReg) override
-    {
-        ctx.use("build");
-        std::string valReg = toReg(out, ctx, val, "", "KindA64::w");
-        std::string target = destReg.empty() ? ctx.nextTemp("tmp_sext") : destReg;
-        if (destReg.empty())
-        {
-            ctx.use("regs");
-            out.line("RegisterA64 " + target + " = regs.allocTemp(KindA64::w);");
-        }
-        out.line("build.sbfx(" + target + ", " + valReg + ", 0, " + std::to_string(bits) + ");");
-        return Operand::makeReg(TypeKind::I32, target);
-    }
-
-    Operand emitTruncateUint(CodeWriter& out, EvalContext& ctx, const Operand& val, const std::string& destReg) override
-    {
-        ctx.use("build");
-        out.line("build.ubfx(castReg(KindA64::x, " + destReg + "), castReg(KindA64::x, " + val.text + "), 0, 32);");
-        return Operand::makeReg(TypeKind::U32, destReg);
-    }
-
-    Operand emitIsEqual(CodeWriter& out, EvalContext& ctx, const Operand& val, const Operand& expected, const std::string& destReg) override
-    {
-        ctx.use("build");
-        std::string valReg = toReg(out, ctx, val, "", "KindA64::w");
-        out.line("build.cmp(" + valReg + ", uint16_t(" + expected.text + "));");
-        out.line("build.cset(" + destReg + ", ConditionA64::Equal);");
-        return Operand::makeReg(TypeKind::U32, destReg);
-    }
-
-    bool emitArchOp(CodeWriter& out, EvalContext& ctx, const std::string& opName, const std::vector<std::string>& args) override
-    {
-        ctx.use("build");
-        if (opName == "a64:rev-32!")
-        {
-            if (args.size() != 2)
-                throw CompileError(SourceLocation{}, "a64:rev-32! requires dest and src");
-            out.line("build.rev(" + args[0] + ", " + formatRegArgA64(args[1]) + ");");
-            return true;
-        }
-        if (opName == "a64:rev-64!")
-        {
-            if (args.size() != 2)
-                throw CompileError(SourceLocation{}, "a64:rev-64! requires dest and src");
-            out.line("build.rev(" + args[0] + ", " + formatRegArgA64(args[1]) + ");");
-            return true;
-        }
-        if (opName == "a64:mvn-32!")
-        {
-            if (args.size() != 2)
-                throw CompileError(SourceLocation{}, "a64:mvn-32! requires dest and src");
-            out.line("build.mvn_(" + args[0] + ", " + formatRegArgA64(args[1]) + ");");
-            return true;
-        }
-        if (opName == "a64:mvn-64!")
-        {
-            if (args.size() != 2)
-                throw CompileError(SourceLocation{}, "a64:mvn-64! requires dest and src");
-            out.line("build.mvn_(" + args[0] + ", " + formatRegArgA64(args[1]) + ");");
-            return true;
-        }
-        if (opName == "a64:and-reg-32!")
-        {
-            if (args.size() != 3)
-                throw CompileError(SourceLocation{}, "a64:and-reg-32! requires dest, src1, and src2");
-            out.line("build.and_(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ");");
-            return true;
-        }
-        if (opName == "a64:and-reg-64!")
-        {
-            if (args.size() != 3)
-                throw CompileError(SourceLocation{}, "a64:and-reg-64! requires dest, src1, and src2");
-            out.line("build.and_(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ");");
-            return true;
-        }
-        if (opName == "a64:and-imm-32!")
-        {
-            if (args.size() != 3)
-                throw CompileError(SourceLocation{}, "a64:and-imm-32! requires dest, src, and imm");
-            out.line("build.and_(" + args[0] + ", " + formatRegArgA64(args[1]) + ", unsigned(lowering.intOp(" + args[2] + ")));");
-            return true;
-        }
-        if (opName == "a64:orr-reg-32!")
-        {
-            if (args.size() != 3)
-                throw CompileError(SourceLocation{}, "a64:orr-reg-32! requires dest, src1, and src2");
-            out.line("build.orr(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ");");
-            return true;
-        }
-        if (opName == "a64:orr-reg-64!")
-        {
-            if (args.size() != 3)
-                throw CompileError(SourceLocation{}, "a64:orr-reg-64! requires dest, src1, and src2");
-            out.line("build.orr(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ");");
-            return true;
-        }
-        if (opName == "a64:orr-imm-32!")
-        {
-            if (args.size() != 3)
-                throw CompileError(SourceLocation{}, "a64:orr-imm-32! requires dest, src, and imm");
-            out.line("build.orr(" + args[0] + ", " + formatRegArgA64(args[1]) + ", unsigned(lowering.intOp(" + args[2] + ")));");
-            return true;
-        }
-        if (opName == "a64:eor-reg-32!")
-        {
-            if (args.size() != 3)
-                throw CompileError(SourceLocation{}, "a64:eor-reg-32! requires dest, src1, and src2");
-            out.line("build.eor(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ");");
-            return true;
-        }
-        if (opName == "a64:eor-reg-64!")
-        {
-            if (args.size() != 3)
-                throw CompileError(SourceLocation{}, "a64:eor-reg-64! requires dest, src1, and src2");
-            out.line("build.eor(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ");");
-            return true;
-        }
-        if (opName == "a64:eor-imm-32!")
-        {
-            if (args.size() != 3)
-                throw CompileError(SourceLocation{}, "a64:eor-imm-32! requires dest, src, and imm");
-            out.line("build.eor(" + args[0] + ", " + formatRegArgA64(args[1]) + ", unsigned(lowering.intOp(" + args[2] + ")));");
-            return true;
-        }
-        if (opName == "a64:mul-reg-64!")
-        {
-            if (args.size() != 3)
-                throw CompileError(SourceLocation{}, "a64:mul-reg-64! requires dest, src1, and src2");
-            out.line("build.mul(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ");");
-            return true;
-        }
-        if (opName == "a64:mov-imm-32!")
-        {
-            if (args.size() != 2)
-                throw CompileError(SourceLocation{}, "a64:mov-imm-32! requires dest and imm");
-            out.line("build.mov(" + args[0] + ", lowering.intOp(" + args[1] + "));");
-            return true;
-        }
-        if (opName == "a64:mov-imm-64!")
-        {
-            if (args.size() != 2)
-                throw CompileError(SourceLocation{}, "a64:mov-imm-64! requires dest and imm");
-            out.line("emitLoadInt64(build, " + args[0] + ", lowering.int64Op(" + args[1] + "));");
-            return true;
-        }
-        if (opName == "a64:add-reg-32!")
-        {
-            if (args.size() != 3)
-                throw CompileError(SourceLocation{}, "a64:add-reg-32! requires dest, src1, and src2");
-            out.line("build.add(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ");");
-            return true;
-        }
-        if (opName == "a64:add-reg-64!")
-        {
-            if (args.size() != 3)
-                throw CompileError(SourceLocation{}, "a64:add-reg-64! requires dest, src1, and src2");
-            out.line("build.add(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ");");
-            return true;
-        }
-        if (opName == "a64:add-imm-32!")
-        {
-            if (args.size() != 3)
-                throw CompileError(SourceLocation{}, "a64:add-imm-32! requires dest, src, and imm");
-            out.line("build.add(" + args[0] + ", " + formatRegArgA64(args[1]) + ", uint16_t(lowering.intOp(" + args[2] + ")));");
-            return true;
-        }
-        if (opName == "a64:add-imm-64!")
-        {
-            if (args.size() != 3)
-                throw CompileError(SourceLocation{}, "a64:add-imm-64! requires dest, src, and imm");
-            out.line("build.add(" + args[0] + ", " + formatRegArgA64(args[1]) + ", uint16_t(lowering.int64Op(" + args[2] + ")));");
-            return true;
-        }
-        if (opName == "a64:sub-reg-32!")
-        {
-            if (args.size() != 3)
-                throw CompileError(SourceLocation{}, "a64:sub-reg-32! requires dest, src1, and src2");
-            out.line("build.sub(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ");");
-            return true;
-        }
-        if (opName == "a64:sub-reg-64!")
-        {
-            if (args.size() != 3)
-                throw CompileError(SourceLocation{}, "a64:sub-reg-64! requires dest, src1, and src2");
-            out.line("build.sub(" + args[0] + ", " + formatRegArgA64(args[1]) + ", " + formatRegArgA64(args[2]) + ");");
-            return true;
-        }
-        if (opName == "a64:sub-imm-32!")
-        {
-            if (args.size() != 3)
-                throw CompileError(SourceLocation{}, "a64:sub-imm-32! requires dest, src, and imm");
-            out.line("build.sub(" + args[0] + ", " + formatRegArgA64(args[1]) + ", uint16_t(lowering.intOp(" + args[2] + ")));");
-            return true;
-        }
-        if (opName == "a64:sub-imm-64!")
-        {
-            if (args.size() != 3)
-                throw CompileError(SourceLocation{}, "a64:sub-imm-64! requires dest, src, and imm");
-            out.line("build.sub(" + args[0] + ", " + formatRegArgA64(args[1]) + ", uint16_t(lowering.int64Op(" + args[2] + ")));");
-            return true;
-        }
-        return false;
+        return opName.rfind("a64:temp-", 0) == 0;
     }
 };
 

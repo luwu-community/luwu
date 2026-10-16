@@ -14,7 +14,6 @@ namespace Luwu::Dsl
 
 Operand evalExpr(CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg);
 
-std::pair<std::string, std::string> evalMem(CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& memExpr, const std::string& destReg);
 
 void compileRules(std::ostream& os, TargetBuilder& target, const std::vector<Rule>& rules);
 

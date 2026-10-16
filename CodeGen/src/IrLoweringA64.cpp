@@ -28,156 +28,7 @@ namespace CodeGen
 namespace A64
 {
 
-inline ConditionA64 getConditionFP(IrCondition cond)
-{
-    switch (cond)
-    {
-    case IrCondition::Equal:
-        return ConditionA64::Equal;
 
-    case IrCondition::NotEqual:
-        return ConditionA64::NotEqual;
-
-    case IrCondition::Less:
-        return ConditionA64::Minus;
-
-    case IrCondition::NotLess:
-        return ConditionA64::Plus;
-
-    case IrCondition::LessEqual:
-        return ConditionA64::UnsignedLessEqual;
-
-    case IrCondition::NotLessEqual:
-        return ConditionA64::UnsignedGreater;
-
-    case IrCondition::Greater:
-        return ConditionA64::Greater;
-
-    case IrCondition::NotGreater:
-        return ConditionA64::LessEqual;
-
-    case IrCondition::GreaterEqual:
-        return ConditionA64::GreaterEqual;
-
-    case IrCondition::NotGreaterEqual:
-        return ConditionA64::Less;
-
-    default:
-        CODEGEN_ASSERT(!"Unexpected condition code");
-        return ConditionA64::Always;
-    }
-}
-
-inline ConditionA64 getConditionInt(IrCondition cond)
-{
-    switch (cond)
-    {
-    case IrCondition::Equal:
-        return ConditionA64::Equal;
-
-    case IrCondition::NotEqual:
-        return ConditionA64::NotEqual;
-
-    // Minus/Plus (MI/PL) check the N flag only, which is correct for small
-    // integer comparisons where overflow cannot occur.
-    case IrCondition::Less:
-        return ConditionA64::Minus;
-
-    case IrCondition::NotLess:
-        return ConditionA64::Plus;
-
-    case IrCondition::LessEqual:
-        return ConditionA64::LessEqual;
-
-    case IrCondition::NotLessEqual:
-        return ConditionA64::Greater;
-
-    case IrCondition::Greater:
-        return ConditionA64::Greater;
-
-    case IrCondition::NotGreater:
-        return ConditionA64::LessEqual;
-
-    case IrCondition::GreaterEqual:
-        return ConditionA64::GreaterEqual;
-
-    case IrCondition::NotGreaterEqual:
-        return ConditionA64::Less;
-
-    case IrCondition::UnsignedLess:
-        return ConditionA64::CarryClear;
-
-    case IrCondition::UnsignedLessEqual:
-        return ConditionA64::UnsignedLessEqual;
-
-    case IrCondition::UnsignedGreater:
-        return ConditionA64::UnsignedGreater;
-
-    case IrCondition::UnsignedGreaterEqual:
-        return ConditionA64::CarrySet;
-
-    default:
-        CODEGEN_ASSERT(!"Unexpected condition code");
-        return ConditionA64::Always;
-    }
-}
-
-// Full-range signed integer condition mapping for int64 comparisons.
-// Unlike getConditionInt which uses MI/PL (N flag only) for Less/NotLess,
-// this uses LT/GE (N!=V / N==V) which correctly handles overflow.
-// Example: CMP INT64_MAX, -1 sets N=1,V=1 so MI fires but LT does not.
-// Helpful cheatsheet: https://gist.github.com/ryo/31017f265cc2f9ade124aea64543df22
-inline ConditionA64 getConditionInt64(IrCondition cond)
-{
-    switch (cond)
-    {
-    case IrCondition::Equal:
-        return ConditionA64::Equal;
-
-    case IrCondition::NotEqual:
-        return ConditionA64::NotEqual;
-
-    case IrCondition::Less:
-        return ConditionA64::Less;
-
-    case IrCondition::NotLess:
-        return ConditionA64::GreaterEqual;
-
-    case IrCondition::LessEqual:
-        return ConditionA64::LessEqual;
-
-    case IrCondition::NotLessEqual:
-        return ConditionA64::Greater;
-
-    case IrCondition::Greater:
-        return ConditionA64::Greater;
-
-    case IrCondition::NotGreater:
-        return ConditionA64::LessEqual;
-
-    case IrCondition::GreaterEqual:
-        return ConditionA64::GreaterEqual;
-
-    case IrCondition::NotGreaterEqual:
-        return ConditionA64::Less;
-
-    case IrCondition::UnsignedLess:
-        return ConditionA64::CarryClear;
-
-    case IrCondition::UnsignedLessEqual:
-        return ConditionA64::UnsignedLessEqual;
-
-    case IrCondition::UnsignedGreater:
-        return ConditionA64::UnsignedGreater;
-
-    case IrCondition::UnsignedGreaterEqual:
-        return ConditionA64::CarrySet;
-
-    default:
-        CODEGEN_ASSERT(!"Unexpected condition code");
-        return ConditionA64::Always;
-    }
-}
 
 
 static void emitAbort(AssemblyBuilderA64& build, Label& abort)
@@ -545,13 +396,8 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         lower_LOAD_OWNER_CLASS(*this, inst, index, next);
         break;
     case IrCmd::GET_CLOSURE_UPVAL_ADDR:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst)});
-        RegisterA64 cl = OP_A(inst).kind == IrOpKind::Undef ? rClosure : regOp(OP_A(inst));
-
-        build.add(inst.regA64, cl, uint16_t(offsetof(Closure, l.uprefs) + sizeof(TValue) * vmUpvalueOp(OP_B(inst))));
+        lower_GET_CLOSURE_UPVAL_ADDR(*this, inst, index, next);
         break;
-    }
     case IrCmd::STORE_TAG:
     {
         AddressA64 addr = tempAddr(OP_A(inst), offsetof(TValue, tt));
@@ -835,46 +681,20 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         lower_SEXTI16_INT(*this, inst, index, next);
         break;
     case IrCmd::ADD_NUM:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::d, index, {OP_A(inst), OP_B(inst)});
-        RegisterA64 temp1 = tempDouble(OP_A(inst));
-        RegisterA64 temp2 = tempDouble(OP_B(inst));
-        build.fadd(inst.regA64, temp1, temp2);
+        lower_ADD_NUM(*this, inst, index, next);
         break;
-    }
     case IrCmd::SUB_NUM:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::d, index, {OP_A(inst), OP_B(inst)});
-        RegisterA64 temp1 = tempDouble(OP_A(inst));
-        RegisterA64 temp2 = tempDouble(OP_B(inst));
-        build.fsub(inst.regA64, temp1, temp2);
+        lower_SUB_NUM(*this, inst, index, next);
         break;
-    }
     case IrCmd::MUL_NUM:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::d, index, {OP_A(inst), OP_B(inst)});
-        RegisterA64 temp1 = tempDouble(OP_A(inst));
-        RegisterA64 temp2 = tempDouble(OP_B(inst));
-        build.fmul(inst.regA64, temp1, temp2);
+        lower_MUL_NUM(*this, inst, index, next);
         break;
-    }
     case IrCmd::DIV_NUM:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::d, index, {OP_A(inst), OP_B(inst)});
-        RegisterA64 temp1 = tempDouble(OP_A(inst));
-        RegisterA64 temp2 = tempDouble(OP_B(inst));
-        build.fdiv(inst.regA64, temp1, temp2);
+        lower_DIV_NUM(*this, inst, index, next);
         break;
-    }
     case IrCmd::IDIV_NUM:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::d, index, {OP_A(inst), OP_B(inst)});
-        RegisterA64 temp1 = tempDouble(OP_A(inst));
-        RegisterA64 temp2 = tempDouble(OP_B(inst));
-        build.fdiv(inst.regA64, temp1, temp2);
-        build.frintm(inst.regA64, inst.regA64);
+        lower_IDIV_NUM(*this, inst, index, next);
         break;
-    }
     case IrCmd::MOD_NUM:
     {
         inst.regA64 = regs.allocReg(KindA64::d, index); // can't allocReuse because both A and B are used twice
@@ -908,23 +728,11 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::MIN_NUM:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::d, index, {OP_A(inst), OP_B(inst)});
-        RegisterA64 temp1 = tempDouble(OP_A(inst));
-        RegisterA64 temp2 = tempDouble(OP_B(inst));
-        build.fcmp(temp1, temp2);
-        build.fcsel(inst.regA64, temp1, temp2, getConditionFP(IrCondition::Less));
+        lower_MIN_NUM(*this, inst, index, next);
         break;
-    }
     case IrCmd::MAX_NUM:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::d, index, {OP_A(inst), OP_B(inst)});
-        RegisterA64 temp1 = tempDouble(OP_A(inst));
-        RegisterA64 temp2 = tempDouble(OP_B(inst));
-        build.fcmp(temp1, temp2);
-        build.fcsel(inst.regA64, temp1, temp2, getConditionFP(IrCondition::Greater));
+        lower_MAX_NUM(*this, inst, index, next);
         break;
-    }
     case IrCmd::UNM_NUM:
     {
         inst.regA64 = regs.allocReuse(KindA64::d, index, {OP_A(inst)});
@@ -933,19 +741,11 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::FLOOR_NUM:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::d, index, {OP_A(inst)});
-        RegisterA64 temp = tempDouble(OP_A(inst));
-        build.frintm(inst.regA64, temp);
+        lower_FLOOR_NUM(*this, inst, index, next);
         break;
-    }
     case IrCmd::CEIL_NUM:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::d, index, {OP_A(inst)});
-        RegisterA64 temp = tempDouble(OP_A(inst));
-        build.frintp(inst.regA64, temp);
+        lower_CEIL_NUM(*this, inst, index, next);
         break;
-    }
     case IrCmd::ROUND_NUM:
     {
         inst.regA64 = regs.allocReuse(KindA64::d, index, {OP_A(inst)});
@@ -954,12 +754,8 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::SQRT_NUM:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::d, index, {OP_A(inst)});
-        RegisterA64 temp = tempDouble(OP_A(inst));
-        build.fsqrt(inst.regA64, temp);
+        lower_SQRT_NUM(*this, inst, index, next);
         break;
-    }
     case IrCmd::ABS_NUM:
     {
         inst.regA64 = regs.allocReuse(KindA64::d, index, {OP_A(inst)});
@@ -984,55 +780,23 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::ADD_FLOAT:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::s, index, {OP_A(inst), OP_B(inst)});
-        RegisterA64 temp1 = tempFloat(OP_A(inst));
-        RegisterA64 temp2 = tempFloat(OP_B(inst));
-        build.fadd(inst.regA64, temp1, temp2);
+        lower_ADD_FLOAT(*this, inst, index, next);
         break;
-    }
     case IrCmd::SUB_FLOAT:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::s, index, {OP_A(inst), OP_B(inst)});
-        RegisterA64 temp1 = tempFloat(OP_A(inst));
-        RegisterA64 temp2 = tempFloat(OP_B(inst));
-        build.fsub(inst.regA64, temp1, temp2);
+        lower_SUB_FLOAT(*this, inst, index, next);
         break;
-    }
     case IrCmd::MUL_FLOAT:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::s, index, {OP_A(inst), OP_B(inst)});
-        RegisterA64 temp1 = tempFloat(OP_A(inst));
-        RegisterA64 temp2 = tempFloat(OP_B(inst));
-        build.fmul(inst.regA64, temp1, temp2);
+        lower_MUL_FLOAT(*this, inst, index, next);
         break;
-    }
     case IrCmd::DIV_FLOAT:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::s, index, {OP_A(inst), OP_B(inst)});
-        RegisterA64 temp1 = tempFloat(OP_A(inst));
-        RegisterA64 temp2 = tempFloat(OP_B(inst));
-        build.fdiv(inst.regA64, temp1, temp2);
+        lower_DIV_FLOAT(*this, inst, index, next);
         break;
-    }
     case IrCmd::MIN_FLOAT:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::s, index, {OP_A(inst), OP_B(inst)});
-        RegisterA64 temp1 = tempFloat(OP_A(inst));
-        RegisterA64 temp2 = tempFloat(OP_B(inst));
-        build.fcmp(temp1, temp2);
-        build.fcsel(inst.regA64, temp1, temp2, getConditionFP(IrCondition::Less));
+        lower_MIN_FLOAT(*this, inst, index, next);
         break;
-    }
     case IrCmd::MAX_FLOAT:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::s, index, {OP_A(inst), OP_B(inst)});
-        RegisterA64 temp1 = tempFloat(OP_A(inst));
-        RegisterA64 temp2 = tempFloat(OP_B(inst));
-        build.fcmp(temp1, temp2);
-        build.fcsel(inst.regA64, temp1, temp2, getConditionFP(IrCondition::Greater));
+        lower_MAX_FLOAT(*this, inst, index, next);
         break;
-    }
     case IrCmd::UNM_FLOAT:
     {
         inst.regA64 = regs.allocReuse(KindA64::s, index, {OP_A(inst)});
@@ -1041,26 +805,14 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::FLOOR_FLOAT:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::s, index, {OP_A(inst)});
-        RegisterA64 temp = tempFloat(OP_A(inst));
-        build.frintm(inst.regA64, temp);
+        lower_FLOOR_FLOAT(*this, inst, index, next);
         break;
-    }
     case IrCmd::CEIL_FLOAT:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::s, index, {OP_A(inst)});
-        RegisterA64 temp = tempFloat(OP_A(inst));
-        build.frintp(inst.regA64, temp);
+        lower_CEIL_FLOAT(*this, inst, index, next);
         break;
-    }
     case IrCmd::SQRT_FLOAT:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::s, index, {OP_A(inst)});
-        RegisterA64 temp = tempFloat(OP_A(inst));
-        build.fsqrt(inst.regA64, temp);
+        lower_SQRT_FLOAT(*this, inst, index, next);
         break;
-    }
     case IrCmd::ABS_FLOAT:
     {
         inst.regA64 = regs.allocReuse(KindA64::s, index, {OP_A(inst)});
@@ -1098,20 +850,8 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::SELECT_INT64:
-    {
-        IrCondition cond = conditionOp(OP_E(inst));
-
-        inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst), OP_B(inst), OP_C(inst), OP_D(inst)});
-
-        RegisterA64 temp1 = tempInt64(OP_A(inst));
-        RegisterA64 temp2 = tempInt64(OP_B(inst));
-        RegisterA64 temp3 = tempInt64(OP_C(inst));
-        RegisterA64 temp4 = tempInt64(OP_D(inst));
-
-        build.cmp(temp3, temp4);
-        build.csel(inst.regA64, temp2, temp1, getConditionInt64(cond));
+        lower_SELECT_INT64(*this, inst, index, next);
         break;
-    }
     case IrCmd::SELECT_VEC:
     {
         // `OP_B(inst)` cannot be reused for return value, because it can be overwritten with A before the first usage
@@ -1369,65 +1109,11 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::CMP_INT:
-    {
-        inst.regA64 = regs.allocReuse(KindA64::w, index, {OP_A(inst), OP_B(inst)});
-
-        IrCondition cond = conditionOp(OP_C(inst));
-
-        if (OP_A(inst).kind == IrOpKind::Constant)
-        {
-            if (unsigned(intOp(OP_A(inst))) <= AssemblyBuilderA64::kMaxImmediate)
-                build.cmp(regOp(OP_B(inst)), uint16_t(intOp(OP_A(inst))));
-            else
-                build.cmp(regOp(OP_B(inst)), tempInt(OP_A(inst)));
-
-            build.cset(inst.regA64, getInverseCondition(getConditionInt(cond)));
-        }
-        else if (OP_A(inst).kind == IrOpKind::Inst)
-        {
-            if (unsigned(intOp(OP_B(inst))) <= AssemblyBuilderA64::kMaxImmediate)
-                build.cmp(regOp(OP_A(inst)), uint16_t(intOp(OP_B(inst))));
-            else
-                build.cmp(regOp(OP_A(inst)), tempInt(OP_B(inst)));
-
-            build.cset(inst.regA64, getConditionInt(cond));
-        }
-        else
-        {
-            CODEGEN_ASSERT(!"Unsupported instruction form");
-        }
+        lower_CMP_INT(*this, inst, index, next);
         break;
-    }
     case IrCmd::CMP_INT64:
-    {
-        inst.regA64 = regs.allocReg(KindA64::w, index);
-
-        IrCondition cond = conditionOp(OP_C(inst));
-
-        if (OP_A(inst).kind == IrOpKind::Constant)
-        {
-            if (uint64_t(int64Op(OP_A(inst))) <= AssemblyBuilderA64::kMaxImmediate)
-                build.cmp(regOp(OP_B(inst)), uint16_t(int64Op(OP_A(inst))));
-            else
-                build.cmp(regOp(OP_B(inst)), tempInt64(OP_A(inst)));
-
-            build.cset(inst.regA64, getInverseCondition(getConditionInt64(cond)));
-        }
-        else if (OP_A(inst).kind == IrOpKind::Inst)
-        {
-            if (OP_B(inst).kind == IrOpKind::Constant && uint64_t(int64Op(OP_B(inst))) <= AssemblyBuilderA64::kMaxImmediate)
-                build.cmp(regOp(OP_A(inst)), uint16_t(int64Op(OP_B(inst))));
-            else
-                build.cmp(regOp(OP_A(inst)), tempInt64(OP_B(inst)));
-
-            build.cset(inst.regA64, getConditionInt64(cond));
-        }
-        else
-        {
-            CODEGEN_ASSERT(!"Unsupported instruction form");
-        }
+        lower_CMP_INT64(*this, inst, index, next);
         break;
-    }
     case IrCmd::CMP_ANY:
     {
         CODEGEN_ASSERT(OP_A(inst).kind == IrOpKind::VmReg && OP_B(inst).kind == IrOpKind::VmReg);
@@ -1628,16 +1314,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::JUMP:
-        if (OP_A(inst).kind == IrOpKind::Undef || OP_A(inst).kind == IrOpKind::VmExit)
-        {
-            Label fresh;
-            build.b(getTargetLabel(OP_A(inst), index, fresh));
-            finalizeTargetLabel(OP_A(inst), index, fresh);
-        }
-        else
-        {
-            jumpOrFallthrough(blockOp(OP_A(inst)), next);
-        }
+        lower_JUMP(*this, inst, index, next);
         break;
     case IrCmd::JUMP_IF_TRUTHY:
     {
@@ -1743,30 +1420,10 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::JUMP_CMP_INT:
-    {
-        IrCondition cond = conditionOp(OP_C(inst));
-
-        if (cond == IrCondition::Equal && intOp(OP_B(inst)) == 0)
-        {
-            build.cbz(regOp(OP_A(inst)), labelOp(OP_D(inst)));
-        }
-        else if (cond == IrCondition::NotEqual && intOp(OP_B(inst)) == 0)
-        {
-            build.cbnz(regOp(OP_A(inst)), labelOp(OP_D(inst)));
-        }
-        else
-        {
-            CODEGEN_ASSERT(unsigned(intOp(OP_B(inst))) <= AssemblyBuilderA64::kMaxImmediate);
-            build.cmp(regOp(OP_A(inst)), uint16_t(intOp(OP_B(inst))));
-            build.b(getConditionInt(cond), labelOp(OP_D(inst)));
-        }
-        jumpOrFallthrough(blockOp(OP_E(inst)), next);
+        lower_JUMP_CMP_INT(*this, inst, index, next);
         break;
-    }
     case IrCmd::JUMP_EQ_POINTER:
-        build.cmp(regOp(OP_A(inst)), regOp(OP_B(inst)));
-        build.b(ConditionA64::Equal, labelOp(OP_C(inst)));
-        jumpOrFallthrough(blockOp(OP_D(inst)), next);
+        lower_JUMP_EQ_POINTER(*this, inst, index, next);
         break;
     case IrCmd::JUMP_CMP_NUM:
     {
@@ -2016,64 +1673,31 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::INT64_TO_NUM:
-    {
-        inst.regA64 = regs.allocReg(KindA64::d, index);
-        RegisterA64 temp = tempInt64(OP_A(inst));
-        build.scvtf(inst.regA64, temp);
+        lower_INT64_TO_NUM(*this, inst, index, next);
         break;
-    }
     case IrCmd::INT_TO_NUM:
-    {
-        inst.regA64 = regs.allocReg(KindA64::d, index);
-        RegisterA64 temp = tempInt(OP_A(inst));
-        build.scvtf(inst.regA64, temp);
+        lower_INT_TO_NUM(*this, inst, index, next);
         break;
-    }
     case IrCmd::UINT_TO_NUM:
-    {
-        inst.regA64 = regs.allocReg(KindA64::d, index);
-        RegisterA64 temp = tempInt(OP_A(inst));
-        build.ucvtf(inst.regA64, temp);
+        lower_UINT_TO_NUM(*this, inst, index, next);
         break;
-    }
     case IrCmd::UINT_TO_FLOAT:
-    {
-        inst.regA64 = regs.allocReg(KindA64::s, index);
-        RegisterA64 temp = tempInt(OP_A(inst));
-        build.ucvtf(inst.regA64, temp);
+        lower_UINT_TO_FLOAT(*this, inst, index, next);
         break;
-    }
     case IrCmd::NUM_TO_INT:
-    {
-        inst.regA64 = regs.allocReg(KindA64::w, index);
-        RegisterA64 temp = tempDouble(OP_A(inst));
-        build.fcvtzs(inst.regA64, temp);
+        lower_NUM_TO_INT(*this, inst, index, next);
         break;
-    }
     case IrCmd::NUM_TO_INT64:
-    {
-        inst.regA64 = regs.allocReg(KindA64::x, index);
-        RegisterA64 temp = tempDouble(OP_A(inst));
-        build.fcvtzs(inst.regA64, temp);
+        lower_NUM_TO_INT64(*this, inst, index, next);
         break;
-    }
     case IrCmd::NUM_TO_UINT:
-    {
-        inst.regA64 = regs.allocReg(KindA64::w, index);
-        RegisterA64 temp = tempDouble(OP_A(inst));
-        // note: we don't use fcvtzu for consistency with C++ code
-        build.fcvtzs(castReg(KindA64::x, inst.regA64), temp);
+        lower_NUM_TO_UINT(*this, inst, index, next);
         break;
-    }
     case IrCmd::FLOAT_TO_NUM:
-        inst.regA64 = regs.allocReg(KindA64::d, index);
-
-        build.fcvt(inst.regA64, regOp(OP_A(inst)));
+        lower_FLOAT_TO_NUM(*this, inst, index, next);
         break;
     case IrCmd::NUM_TO_FLOAT:
-        inst.regA64 = regs.allocReg(KindA64::s, index);
-
-        build.fcvt(inst.regA64, regOp(OP_A(inst)));
+        lower_NUM_TO_FLOAT(*this, inst, index, next);
         break;
     case IrCmd::FLOAT_TO_VEC:
     {
@@ -2419,23 +2043,8 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::CHECK_TAG:
-    {
-        Label fresh; // used when guard aborts execution or jumps to a VM exit
-        Label& fail = getTargetLabel(OP_C(inst), index, fresh);
-
-        if (tagOp(OP_B(inst)) == 0)
-        {
-            build.cbnz(regOp(OP_A(inst)), fail);
-        }
-        else
-        {
-            build.cmp(regOp(OP_A(inst)), uint16_t(tagOp(OP_B(inst))));
-            build.b(ConditionA64::NotEqual, fail);
-        }
-
-        finalizeTargetLabel(OP_C(inst), index, fresh);
+        lower_CHECK_TAG(*this, inst, index, next);
         break;
-    }
     case IrCmd::CHECK_TRUTHY:
     {
         // Constant tags which don't require boolean value check should've been removed in constant folding
@@ -2558,16 +2167,8 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::CHECK_NODE_NO_NEXT:
-    {
-        Label fresh; // used when guard aborts execution or jumps to a VM exit
-        RegisterA64 temp = regs.allocTemp(KindA64::w);
-
-        build.ldr(temp, mem(regOp(OP_A(inst)), offsetof(LuaNode, key) + kOffsetOfTKeyTagNext));
-        build.lsr(temp, temp, kTKeyTagBits);
-        build.cbnz(temp, getTargetLabel(OP_B(inst), index, fresh));
-        finalizeTargetLabel(OP_B(inst), index, fresh);
+        lower_CHECK_NODE_NO_NEXT(*this, inst, index, next);
         break;
-    }
     case IrCmd::CHECK_NODE_VALUE:
         lower_CHECK_NODE_VALUE(*this, inst, index, next);
         break;
@@ -2695,16 +2296,8 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         lower_CHECK_USERDATA_TAG(*this, inst, index, next);
         break;
     case IrCmd::CHECK_OBJECT_CLASS:
-    {
-        Label fresh; // used when guard aborts execution or jumps to a VM exit
-        Label& fail = getTargetLabel(OP_C(inst), index, fresh);
-        RegisterA64 temp = regs.allocTemp(KindA64::x);
-        build.ldr(temp, mem(regOp(OP_A(inst)), offsetof(LuauObject, lclass)));
-        build.cmp(temp, regOp(OP_B(inst)));
-        build.b(ConditionA64::NotEqual, fail);
-        finalizeTargetLabel(OP_C(inst), index, fresh);
+        lower_CHECK_OBJECT_CLASS(*this, inst, index, next);
         break;
-    }
     case IrCmd::TRY_OBJECT_MEMBER_ADDR:
     {
         Label abort; // used when guard aborts execution
@@ -2760,28 +2353,8 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::OBJECT_MEMBER_ADDR:
-    {
-        // See the X64 lowering: proven or freshly allocated object, constant offset, no check of any kind and no branch.
-        inst.regA64 = regs.allocReg(KindA64::x, index);
-
-        uint32_t offset = uintOp(OP_B(inst));
-
-        // address = self + LUAR_OBJECT_MEMBERS_OFFSET + offset * sizeof(TValue), with no load
-        size_t displacement = LUAR_OBJECT_MEMBERS_OFFSET + offset * sizeof(TValue);
-
-        if (displacement <= AssemblyBuilderA64::kMaxImmediate)
-        {
-            build.add(inst.regA64, regOp(OP_A(inst)), uint16_t(displacement));
-        }
-        else
-        {
-            RegisterA64 tempx = regs.allocTemp(KindA64::x);
-            build.mov(tempx, int(displacement));
-            build.add(inst.regA64, regOp(OP_A(inst)), tempx);
-        }
-
+        lower_OBJECT_MEMBER_ADDR(*this, inst, index, next);
         break;
-    }
     case IrCmd::CHECK_CLASS_FIELDS_CONSTRUCTIBLE:
     {
         // See the X64 lowering.
@@ -2961,63 +2534,11 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::CHECK_CMP_INT:
-    {
-        IrCondition cond = conditionOp(OP_C(inst));
-
-        Label fresh; // used when guard aborts execution or jumps to a VM exit
-        Label& fail = getTargetLabel(OP_D(inst), index, fresh);
-
-        if (cond == IrCondition::Equal && intOp(OP_B(inst)) == 0)
-        {
-            build.cbnz(regOp(OP_A(inst)), fail);
-        }
-        else if (cond == IrCondition::NotEqual && intOp(OP_B(inst)) == 0)
-        {
-            build.cbz(regOp(OP_A(inst)), fail);
-        }
-        else
-        {
-            RegisterA64 tempA = tempInt(OP_A(inst));
-
-            if (OP_B(inst).kind == IrOpKind::Constant && unsigned(intOp(OP_B(inst))) <= AssemblyBuilderA64::kMaxImmediate)
-                build.cmp(tempA, uint16_t(intOp(OP_B(inst))));
-            else
-                build.cmp(tempA, tempInt(OP_B(inst)));
-
-            build.b(getConditionInt(getNegatedCondition(cond)), fail);
-        }
-        finalizeTargetLabel(OP_D(inst), index, fresh);
+        lower_CHECK_CMP_INT(*this, inst, index, next);
         break;
-    }
     case IrCmd::CHECK_CMP_INT64:
-    {
-        IrCondition cond = conditionOp(OP_C(inst));
-
-        Label fresh; // used when guard aborts execution or jumps to a VM exit
-        Label& fail = getTargetLabel(OP_D(inst), index, fresh);
-
-        if (cond == IrCondition::Equal && OP_B(inst).kind == IrOpKind::Constant && int64Op(OP_B(inst)) == 0)
-        {
-            build.cbnz(regOp(OP_A(inst)), fail);
-        }
-        else if (cond == IrCondition::NotEqual && OP_B(inst).kind == IrOpKind::Constant && int64Op(OP_B(inst)) == 0)
-        {
-            build.cbz(regOp(OP_A(inst)), fail);
-        }
-        else
-        {
-            RegisterA64 tempA = tempInt64(OP_A(inst));
-
-            if (OP_B(inst).kind == IrOpKind::Constant && uint64_t(int64Op(OP_B(inst))) <= AssemblyBuilderA64::kMaxImmediate)
-                build.cmp(tempA, uint16_t(int64Op(OP_B(inst))));
-            else
-                build.cmp(tempA, tempInt64(OP_B(inst)));
-
-            build.b(getConditionInt64(getNegatedCondition(cond)), fail);
-        }
-        finalizeTargetLabel(OP_D(inst), index, fresh);
+        lower_CHECK_CMP_INT64(*this, inst, index, next);
         break;
-    }
     case IrCmd::INTERRUPT:
     {
         regs.spill(index);

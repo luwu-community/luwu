@@ -139,6 +139,8 @@ All architecture-dependent builders are prefixed with `<arch>:` and require an e
 - **`(x64:lea-imm-32! <dest> <base> <offset>)`**, **`(x64:lea-imm-64! <dest> <base> <offset>)`**: Emits `build.lea(<dest>, addr[regOp(<base>) + <offset>])`.
 - **`(x64:lea-sub-32! <dest> <base> <offset>)`**, **`(x64:lea-sub-64! <dest> <base> <offset>)`**: Emits `build.lea(<dest>, addr[regOp(<base>) - <offset>])`.
 
+- **`(x64:branch-if-not-equal! <val> <expected> <label>)`**: Guards `val != expected` on x86-64 (`cmp` + `jumpOrAbortOnUndef(NotEqual)`).
+
 #### AArch64 Builders (`a64:*`)
 - **`(a64:mov-imm-32! <dest> <imm>)`**: Emits `build.mov(<dest>, intOp(<imm>))`.
 - **`(a64:mov-imm-64! <dest> <imm>)`**: Emits `emitLoadInt64(build, <dest>, int64Op(<imm>))`.
@@ -155,6 +157,7 @@ All architecture-dependent builders are prefixed with `<arch>:` and require an e
 - **`(a64:add-imm-32! <dest> <src> <imm>)`**, **`(a64:add-imm-64! <dest> <src> <imm>)`**: Emits `build.add(<dest>, regOp(<src>), <imm>)`.
 - **`(a64:sub-reg-32! <dest> <src1> <src2>)`**, **`(a64:sub-reg-64! <dest> <src1> <src2>)`**: Emits `build.sub(<dest>, temp1, temp2)`.
 - **`(a64:sub-imm-32! <dest> <src> <imm>)`**, **`(a64:sub-imm-64! <dest> <src> <imm>)`**: Emits `build.sub(<dest>, regOp(<src>), <imm>)`.
+- **`(a64:branch-if-not-equal! <val> <expected> <label>)`**: Guards `val != expected` on AArch64 (`cmp` + `b.ne`).
 - **`(a64:fits-imm-32? <op>)`**, **`(a64:fits-imm-64? <op>)`**: Tests if immediate fits AArch64 12-bit range (`kMaxImmediate`).
 - **`(a64:fits-mask-32? <op>)`**, **`(a64:fits-mask? <op>)`**: Tests if immediate matches an AArch64 logical bitmask (`AssemblyBuilderA64::isMaskSupported`).
 
@@ -163,7 +166,6 @@ All architecture-dependent builders are prefixed with `<arch>:` and require an e
 - **`(branch-if-not-zero! <val> <label>)`**: Guards `val != 0` (`cbnz` on A64; memory/reg `cmp` on X64).
 - **`(branch-if-zero! <val> <label>)`**: Guards `val == 0` (`cbz` on A64; memory/reg `cmp` on X64).
 - **`(branch-if-equal! <val> <expected> <label>)`**: Guards `val == expected` (`cmp` + `b.eq` on A64; memory/reg `cmp` on X64).
-- **`(branch-if-not-equal! <val> <expected> <label>)`**: Guards `val != expected` (`cmp` + `b.ne` on A64; memory/reg `cmp` on X64).
 - **`(branch-if-negative! <val> <label>)`**: Guards `val < 0` (`cmp` + `b.lt` on A64; `test` + `jcc(Less)` on X64).
 
 ### Local Bindings & Temporary Registers

@@ -20,13 +20,12 @@ inline void lower_SET_SAVEDPC(IrLoweringX64& lowering, IrInst& inst, uint32_t in
     (void)index;
     (void)next;
 
-    ScopedRegX64 tmp_addr0{regs, SizeX64::qword};
+    ScopedRegX64 pc_addr{regs, SizeX64::qword};
     ScopedRegX64 ci{regs, SizeX64::qword};
-
-    build.mov(tmp_addr0.reg, sCode);
-    build.add(tmp_addr0.reg, (lowering.uintOp(OP_A(inst))) * sizeof(Instruction));
+    build.mov(pc_addr.reg, sCode);
+    build.add(pc_addr.reg, (lowering.uintOp(OP_A(inst))) * sizeof(Instruction));
     build.mov(ci.reg, qword[rState + offsetof(lua_State, ci)]);
-    build.mov(qword[ci.reg + offsetof(CallInfo, savedpc)], tmp_addr0.reg);
+    build.mov(qword[ci.reg + offsetof(CallInfo, savedpc)], pc_addr.reg);
 }
 
 inline void lower_ADJUST_STACK_TO_TOP(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
@@ -37,11 +36,10 @@ inline void lower_ADJUST_STACK_TO_TOP(IrLoweringX64& lowering, IrInst& inst, uin
     (void)index;
     (void)next;
 
-    ScopedRegX64 ci{regs, SizeX64::qword};
-
-    build.mov(ci.reg, qword[rState + offsetof(lua_State, ci)]);
-    build.mov(ci.reg, qword[ci.reg + offsetof(CallInfo, top)]);
-    build.mov(qword[rState + offsetof(lua_State, top)], ci.reg);
+    ScopedRegX64 tmp{regs, SizeX64::qword};
+    build.mov(tmp.reg, qword[rState + offsetof(lua_State, ci)]);
+    build.mov(tmp.reg, qword[tmp.reg + offsetof(CallInfo, top)]);
+    build.mov(qword[rState + offsetof(lua_State, top)], tmp.reg);
 }
 
 inline void lower_CHECK_READONLY(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
@@ -531,6 +529,668 @@ inline void lower_SUB_INT64(IrLoweringX64& lowering, IrInst& inst, uint32_t inde
     else
     {
         CODEGEN_ASSERT(!"Unsupported instruction form");
+    }
+}
+
+inline void lower_CHECK_OBJECT_CLASS(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+
+    ScopedRegX64 tmp{regs, SizeX64::qword};
+    build.mov(tmp.reg, qword[lowering.regOp(OP_A(inst)) + offsetof(LuauObject, lclass)]);
+    build.cmp(tmp.reg, lowering.regOp(OP_B(inst)));
+    lowering.jumpOrAbortOnUndef(ConditionX64::NotEqual, OP_C(inst), index, next);
+}
+
+inline void lower_CHECK_NODE_NO_NEXT(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+
+    ScopedRegX64 tmp{regs, SizeX64::dword};
+    build.mov(tmp.reg, dword[lowering.regOp(OP_A(inst)) + offsetof(LuaNode, key) + kOffsetOfTKeyTagNext]);
+    build.shr(tmp.reg, kTKeyTagBits);
+    lowering.jumpOrAbortOnUndef(ConditionX64::NotEqual, OP_B(inst), index, next);
+}
+
+inline void lower_CHECK_TAG(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+
+    build.cmp(lowering.memRegTagOp(OP_A(inst)), lowering.tagOp(OP_B(inst)));
+    lowering.jumpOrAbortOnUndef(ConditionX64::NotEqual, OP_C(inst), index, next);
+}
+
+inline void lower_JUMP_EQ_POINTER(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    (void)index;
+
+    build.cmp(lowering.regOp(OP_A(inst)), lowering.regOp(OP_B(inst)));
+    build.jcc(ConditionX64::Equal, lowering.labelOp(OP_C(inst)));
+    lowering.jumpOrFallthrough(lowering.blockOp(OP_D(inst)), next);
+}
+
+inline void lower_OBJECT_MEMBER_ADDR(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+    (void)next;
+
+    inst.regX64 = regs.allocReg(SizeX64::qword, index);
+    build.lea(inst.regX64, addr[lowering.regOp(OP_A(inst)) + int32_t(LUAR_OBJECT_MEMBERS_OFFSET + lowering.uintOp(OP_B(inst)) * sizeof(TValue))]);
+}
+
+inline void lower_GET_CLOSURE_UPVAL_ADDR(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+    (void)next;
+
+    inst.regX64 = regs.allocRegOrReuse(SizeX64::qword, index, {OP_A(inst)});
+    if (OP_A(inst).kind == IrOpKind::Undef)
+    {
+        build.mov(inst.regX64, sClosure);
+    }
+    else
+    {
+        if ((OP_A(inst).kind != IrOpKind::Inst || inst.regX64 != lowering.regOp(OP_A(inst))))
+        {
+            build.mov(inst.regX64, lowering.regOp(OP_A(inst)));
+        }
+    }
+    build.add(inst.regX64, int32_t(offsetof(Closure, l.uprefs) + vmUpvalueOp(OP_B(inst)) * sizeof(TValue)));
+}
+
+inline void lower_INT_TO_NUM(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+    (void)next;
+
+    inst.regX64 = regs.allocReg(SizeX64::xmmword, index);
+    build.vcvtsi2sd(inst.regX64, inst.regX64, lowering.regOp(OP_A(inst)));
+}
+
+inline void lower_INT64_TO_NUM(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+    (void)next;
+
+    inst.regX64 = regs.allocReg(SizeX64::xmmword, index);
+    build.vcvtsi2sd(inst.regX64, inst.regX64, lowering.regOp(OP_A(inst)));
+}
+
+inline void lower_UINT_TO_NUM(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+    auto& function = lowering.function;
+    (void)next;
+
+    inst.regX64 = regs.allocReg(SizeX64::xmmword, index);
+    if (IrCmd source = function.instOp(OP_A(inst)).cmd; source == IrCmd::NUM_TO_UINT)
+    {
+        ScopedRegX64 tmp{regs, SizeX64::dword};
+        build.mov(tmp.reg, lowering.regOp(OP_A(inst)));
+        build.vcvtsi2sd(inst.regX64, inst.regX64, qwordReg(tmp.reg));
+    }
+    else
+    {
+        CODEGEN_ASSERT(source != IrCmd::SUBSTITUTE);
+        build.vcvtsi2sd(inst.regX64, inst.regX64, qwordReg(lowering.regOp(OP_A(inst))));
+    }
+}
+
+inline void lower_UINT_TO_FLOAT(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+    auto& function = lowering.function;
+    (void)next;
+
+    inst.regX64 = regs.allocReg(SizeX64::xmmword, index);
+    if (IrCmd source = function.instOp(OP_A(inst)).cmd; source == IrCmd::NUM_TO_UINT)
+    {
+        ScopedRegX64 tmp{regs, SizeX64::dword};
+        build.mov(tmp.reg, lowering.regOp(OP_A(inst)));
+        build.vcvtsi2ss(inst.regX64, inst.regX64, qwordReg(tmp.reg));
+    }
+    else
+    {
+        CODEGEN_ASSERT(source != IrCmd::SUBSTITUTE);
+        build.vcvtsi2ss(inst.regX64, inst.regX64, qwordReg(lowering.regOp(OP_A(inst))));
+    }
+}
+
+inline void lower_NUM_TO_INT(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+    (void)next;
+
+    inst.regX64 = regs.allocReg(SizeX64::dword, index);
+    build.vcvttsd2si(inst.regX64, lowering.memRegDoubleOp(OP_A(inst)));
+}
+
+inline void lower_NUM_TO_INT64(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+    (void)next;
+
+    inst.regX64 = regs.allocReg(SizeX64::qword, index);
+    build.vcvttsd2si(inst.regX64, lowering.memRegDoubleOp(OP_A(inst)));
+}
+
+inline void lower_NUM_TO_UINT(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+    (void)next;
+
+    inst.regX64 = regs.allocReg(SizeX64::dword, index);
+    build.vcvttsd2si(qwordReg(inst.regX64), lowering.memRegDoubleOp(OP_A(inst)));
+}
+
+inline void lower_FLOAT_TO_NUM(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+    (void)next;
+
+    inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
+    build.vcvtss2sd(inst.regX64, inst.regX64, lowering.memRegDoubleOp(OP_A(inst)));
+}
+
+inline void lower_NUM_TO_FLOAT(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+    (void)next;
+
+    inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
+    build.vcvtsd2ss(inst.regX64, inst.regX64, lowering.memRegDoubleOp(OP_A(inst)));
+}
+
+inline void lower_ADD_NUM(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+    (void)next;
+
+    inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        ScopedRegX64 tmp{regs, SizeX64::xmmword};
+        build.vmovsd(tmp.reg, lowering.memRegDoubleOp(OP_A(inst)));
+        build.vaddsd(inst.regX64, tmp.reg, lowering.memRegDoubleOp(OP_B(inst)));
+    }
+    else
+    {
+        build.vaddsd(inst.regX64, lowering.regOp(OP_A(inst)), lowering.memRegDoubleOp(OP_B(inst)));
+    }
+}
+
+inline void lower_SUB_NUM(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+    (void)next;
+
+    inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        ScopedRegX64 tmp{regs, SizeX64::xmmword};
+        build.vmovsd(tmp.reg, lowering.memRegDoubleOp(OP_A(inst)));
+        build.vsubsd(inst.regX64, tmp.reg, lowering.memRegDoubleOp(OP_B(inst)));
+    }
+    else
+    {
+        build.vsubsd(inst.regX64, lowering.regOp(OP_A(inst)), lowering.memRegDoubleOp(OP_B(inst)));
+    }
+}
+
+inline void lower_MUL_NUM(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+    (void)next;
+
+    inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        ScopedRegX64 tmp{regs, SizeX64::xmmword};
+        build.vmovsd(tmp.reg, lowering.memRegDoubleOp(OP_A(inst)));
+        build.vmulsd(inst.regX64, tmp.reg, lowering.memRegDoubleOp(OP_B(inst)));
+    }
+    else
+    {
+        build.vmulsd(inst.regX64, lowering.regOp(OP_A(inst)), lowering.memRegDoubleOp(OP_B(inst)));
+    }
+}
+
+inline void lower_DIV_NUM(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+    (void)next;
+
+    inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        ScopedRegX64 tmp{regs, SizeX64::xmmword};
+        build.vmovsd(tmp.reg, lowering.memRegDoubleOp(OP_A(inst)));
+        build.vdivsd(inst.regX64, tmp.reg, lowering.memRegDoubleOp(OP_B(inst)));
+    }
+    else
+    {
+        build.vdivsd(inst.regX64, lowering.regOp(OP_A(inst)), lowering.memRegDoubleOp(OP_B(inst)));
+    }
+}
+
+inline void lower_IDIV_NUM(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+    (void)next;
+
+    inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        ScopedRegX64 tmp{regs, SizeX64::xmmword};
+        build.vmovsd(tmp.reg, lowering.memRegDoubleOp(OP_A(inst)));
+        build.vdivsd(inst.regX64, tmp.reg, lowering.memRegDoubleOp(OP_B(inst)));
+    }
+    else
+    {
+        build.vdivsd(inst.regX64, lowering.regOp(OP_A(inst)), lowering.memRegDoubleOp(OP_B(inst)));
+    }
+    build.vroundsd(inst.regX64, inst.regX64, inst.regX64, RoundingModeX64::RoundToNegativeInfinity);
+}
+
+inline void lower_MIN_NUM(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+    (void)next;
+
+    inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        ScopedRegX64 tmp{regs, SizeX64::xmmword};
+        build.vmovsd(tmp.reg, lowering.memRegDoubleOp(OP_A(inst)));
+        build.vminsd(inst.regX64, tmp.reg, lowering.memRegDoubleOp(OP_B(inst)));
+    }
+    else
+    {
+        build.vminsd(inst.regX64, lowering.regOp(OP_A(inst)), lowering.memRegDoubleOp(OP_B(inst)));
+    }
+}
+
+inline void lower_MAX_NUM(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+    (void)next;
+
+    inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        ScopedRegX64 tmp{regs, SizeX64::xmmword};
+        build.vmovsd(tmp.reg, lowering.memRegDoubleOp(OP_A(inst)));
+        build.vmaxsd(inst.regX64, tmp.reg, lowering.memRegDoubleOp(OP_B(inst)));
+    }
+    else
+    {
+        build.vmaxsd(inst.regX64, lowering.regOp(OP_A(inst)), lowering.memRegDoubleOp(OP_B(inst)));
+    }
+}
+
+inline void lower_FLOOR_NUM(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+    (void)next;
+
+    inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
+    build.vroundsd(inst.regX64, inst.regX64, lowering.memRegDoubleOp(OP_A(inst)), RoundingModeX64::RoundToNegativeInfinity);
+}
+
+inline void lower_CEIL_NUM(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+    (void)next;
+
+    inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
+    build.vroundsd(inst.regX64, inst.regX64, lowering.memRegDoubleOp(OP_A(inst)), RoundingModeX64::RoundToPositiveInfinity);
+}
+
+inline void lower_SQRT_NUM(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+    (void)next;
+
+    inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
+    build.vsqrtsd(inst.regX64, inst.regX64, lowering.memRegDoubleOp(OP_A(inst)));
+}
+
+inline void lower_ADD_FLOAT(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+    (void)next;
+
+    inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        ScopedRegX64 tmp{regs, SizeX64::xmmword};
+        build.vmovss(tmp.reg, lowering.memRegFloatOp(OP_A(inst)));
+        build.vaddss(inst.regX64, tmp.reg, lowering.memRegFloatOp(OP_B(inst)));
+    }
+    else
+    {
+        build.vaddss(inst.regX64, lowering.regOp(OP_A(inst)), lowering.memRegFloatOp(OP_B(inst)));
+    }
+}
+
+inline void lower_SUB_FLOAT(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+    (void)next;
+
+    inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        ScopedRegX64 tmp{regs, SizeX64::xmmword};
+        build.vmovss(tmp.reg, lowering.memRegFloatOp(OP_A(inst)));
+        build.vsubss(inst.regX64, tmp.reg, lowering.memRegFloatOp(OP_B(inst)));
+    }
+    else
+    {
+        build.vsubss(inst.regX64, lowering.regOp(OP_A(inst)), lowering.memRegFloatOp(OP_B(inst)));
+    }
+}
+
+inline void lower_MUL_FLOAT(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+    (void)next;
+
+    inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        ScopedRegX64 tmp{regs, SizeX64::xmmword};
+        build.vmovss(tmp.reg, lowering.memRegFloatOp(OP_A(inst)));
+        build.vmulss(inst.regX64, tmp.reg, lowering.memRegFloatOp(OP_B(inst)));
+    }
+    else
+    {
+        build.vmulss(inst.regX64, lowering.regOp(OP_A(inst)), lowering.memRegFloatOp(OP_B(inst)));
+    }
+}
+
+inline void lower_DIV_FLOAT(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+    (void)next;
+
+    inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        ScopedRegX64 tmp{regs, SizeX64::xmmword};
+        build.vmovss(tmp.reg, lowering.memRegFloatOp(OP_A(inst)));
+        build.vdivss(inst.regX64, tmp.reg, lowering.memRegFloatOp(OP_B(inst)));
+    }
+    else
+    {
+        build.vdivss(inst.regX64, lowering.regOp(OP_A(inst)), lowering.memRegFloatOp(OP_B(inst)));
+    }
+}
+
+inline void lower_MIN_FLOAT(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+    (void)next;
+
+    inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        ScopedRegX64 tmp{regs, SizeX64::xmmword};
+        build.vmovss(tmp.reg, lowering.memRegFloatOp(OP_A(inst)));
+        build.vminss(inst.regX64, tmp.reg, lowering.memRegFloatOp(OP_B(inst)));
+    }
+    else
+    {
+        build.vminss(inst.regX64, lowering.regOp(OP_A(inst)), lowering.memRegFloatOp(OP_B(inst)));
+    }
+}
+
+inline void lower_MAX_FLOAT(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+    (void)next;
+
+    inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        ScopedRegX64 tmp{regs, SizeX64::xmmword};
+        build.vmovss(tmp.reg, lowering.memRegFloatOp(OP_A(inst)));
+        build.vmaxss(inst.regX64, tmp.reg, lowering.memRegFloatOp(OP_B(inst)));
+    }
+    else
+    {
+        build.vmaxss(inst.regX64, lowering.regOp(OP_A(inst)), lowering.memRegFloatOp(OP_B(inst)));
+    }
+}
+
+inline void lower_FLOOR_FLOAT(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+    (void)next;
+
+    inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
+    build.vroundss(inst.regX64, inst.regX64, lowering.memRegFloatOp(OP_A(inst)), RoundingModeX64::RoundToNegativeInfinity);
+}
+
+inline void lower_CEIL_FLOAT(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+    (void)next;
+
+    inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
+    build.vroundss(inst.regX64, inst.regX64, lowering.memRegFloatOp(OP_A(inst)), RoundingModeX64::RoundToPositiveInfinity);
+}
+
+inline void lower_SQRT_FLOAT(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+    (void)next;
+
+    inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
+    build.vsqrtss(inst.regX64, inst.regX64, lowering.memRegFloatOp(OP_A(inst)));
+}
+
+inline void lower_CMP_INT(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+    (void)next;
+
+    inst.regX64 = regs.allocReg(SizeX64::dword, index);
+    build.xor_(inst.regX64, inst.regX64);
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        build.cmp(lowering.regOp(OP_B(inst)), lowering.intOp(OP_A(inst)));
+        build.setcc(getInverseCondition(getConditionInt(conditionOp(OP_C(inst)))), byteReg(inst.regX64));
+    }
+    else
+    {
+        build.cmp(lowering.regOp(OP_A(inst)), lowering.intOp(OP_B(inst)));
+        build.setcc(getConditionInt(conditionOp(OP_C(inst))), byteReg(inst.regX64));
+    }
+}
+
+inline void lower_CMP_INT64(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+    (void)next;
+
+    inst.regX64 = regs.allocReg(SizeX64::dword, index);
+    build.xor_(inst.regX64, inst.regX64);
+    if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        build.cmp(lowering.regOp(OP_B(inst)), lowering.memRegInt64Op(OP_A(inst)));
+        build.setcc(getInverseCondition(getConditionInt(conditionOp(OP_C(inst)))), byteReg(inst.regX64));
+    }
+    else
+    {
+        build.cmp(lowering.regOp(OP_A(inst)), lowering.memRegInt64Op(OP_B(inst)));
+        build.setcc(getConditionInt(conditionOp(OP_C(inst))), byteReg(inst.regX64));
+    }
+}
+
+inline void lower_SELECT_INT64(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+    (void)next;
+
+    inst.regX64 = regs.allocRegOrReuse(SizeX64::qword, index, {OP_A(inst)});
+    build.mov(inst.regX64, lowering.memRegInt64Op(OP_A(inst)));
+    if (OP_C(inst).kind == IrOpKind::Inst)
+    {
+        build.cmp(lowering.regOp(OP_C(inst)), lowering.memRegInt64Op(OP_D(inst)));
+    }
+    else
+    {
+        ScopedRegX64 tmp{regs, SizeX64::qword};
+        build.mov(tmp.reg, lowering.memRegInt64Op(OP_C(inst)));
+        build.cmp(tmp.reg, lowering.memRegInt64Op(OP_D(inst)));
+    }
+    build.cmov(getConditionInt(conditionOp(OP_E(inst))), inst.regX64, lowering.memRegInt64Op(OP_B(inst)));
+}
+
+inline void lower_JUMP(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+
+    lowering.jumpOrAbortOnUndef(OP_A(inst), index, next);
+}
+
+inline void lower_JUMP_CMP_INT(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    (void)index;
+
+    if ((conditionOp(OP_C(inst)) == IrCondition::Equal || conditionOp(OP_C(inst)) == IrCondition::NotEqual) && OP_B(inst).kind == IrOpKind::Constant && lowering.intOp(OP_B(inst)) == 0)
+    {
+        build.test(lowering.regOp(OP_A(inst)), lowering.regOp(OP_A(inst)));
+        if (lowering.isFallthroughBlock(lowering.blockOp(OP_D(inst)), next))
+        {
+            if (conditionOp(OP_C(inst)) == IrCondition::NotEqual)
+            {
+                build.jcc(ConditionX64::Equal, lowering.labelOp(OP_E(inst)));
+            }
+            else
+            {
+                build.jcc(ConditionX64::NotEqual, lowering.labelOp(OP_E(inst)));
+            }
+            lowering.jumpOrFallthrough(lowering.blockOp(OP_D(inst)), next);
+        }
+        else
+        {
+            if (conditionOp(OP_C(inst)) == IrCondition::NotEqual)
+            {
+                build.jcc(ConditionX64::NotEqual, lowering.labelOp(OP_D(inst)));
+            }
+            else
+            {
+                build.jcc(ConditionX64::Equal, lowering.labelOp(OP_D(inst)));
+            }
+            lowering.jumpOrFallthrough(lowering.blockOp(OP_E(inst)), next);
+        }
+    }
+    else
+    {
+        build.cmp(lowering.regOp(OP_A(inst)), lowering.intOp(OP_B(inst)));
+        build.jcc(getConditionInt(conditionOp(OP_C(inst))), lowering.labelOp(OP_D(inst)));
+        lowering.jumpOrFallthrough(lowering.blockOp(OP_E(inst)), next);
+    }
+}
+
+inline void lower_CHECK_CMP_INT(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+
+    if ((conditionOp(OP_C(inst)) == IrCondition::Equal || conditionOp(OP_C(inst)) == IrCondition::NotEqual) && OP_B(inst).kind == IrOpKind::Constant && lowering.intOp(OP_B(inst)) == 0)
+    {
+        build.test(lowering.regOp(OP_A(inst)), lowering.regOp(OP_A(inst)));
+        if (conditionOp(OP_C(inst)) == IrCondition::Equal)
+        {
+            lowering.jumpOrAbortOnUndef(ConditionX64::NotEqual, OP_D(inst), index, next);
+        }
+        else
+        {
+            lowering.jumpOrAbortOnUndef(ConditionX64::Equal, OP_D(inst), index, next);
+        }
+    }
+    else if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        ScopedRegX64 tmp{regs, SizeX64::dword};
+        build.mov(tmp.reg, lowering.memRegIntOp(OP_A(inst)));
+        build.cmp(tmp.reg, lowering.memRegIntOp(OP_B(inst)));
+        lowering.jumpOrAbortOnUndef(getConditionInt(getNegatedCondition(conditionOp(OP_C(inst)))), OP_D(inst), index, next);
+    }
+    else
+    {
+        build.cmp(lowering.regOp(OP_A(inst)), lowering.memRegIntOp(OP_B(inst)));
+        lowering.jumpOrAbortOnUndef(getConditionInt(getNegatedCondition(conditionOp(OP_C(inst)))), OP_D(inst), index, next);
+    }
+}
+
+inline void lower_CHECK_CMP_INT64(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    auto& build = lowering.build;
+    auto& regs = lowering.regs;
+
+    if ((conditionOp(OP_C(inst)) == IrCondition::Equal || conditionOp(OP_C(inst)) == IrCondition::NotEqual) && OP_B(inst).kind == IrOpKind::Constant && lowering.int64Op(OP_B(inst)) == 0)
+    {
+        build.test(lowering.regOp(OP_A(inst)), lowering.regOp(OP_A(inst)));
+        if (conditionOp(OP_C(inst)) == IrCondition::Equal)
+        {
+            lowering.jumpOrAbortOnUndef(ConditionX64::NotEqual, OP_D(inst), index, next);
+        }
+        else
+        {
+            lowering.jumpOrAbortOnUndef(ConditionX64::Equal, OP_D(inst), index, next);
+        }
+    }
+    else if (OP_A(inst).kind == IrOpKind::Constant)
+    {
+        ScopedRegX64 tmp{regs, SizeX64::qword};
+        build.mov(tmp.reg, lowering.memRegInt64Op(OP_A(inst)));
+        build.cmp(tmp.reg, lowering.memRegInt64Op(OP_B(inst)));
+        lowering.jumpOrAbortOnUndef(getConditionInt(getNegatedCondition(conditionOp(OP_C(inst)))), OP_D(inst), index, next);
+    }
+    else
+    {
+        build.cmp(lowering.regOp(OP_A(inst)), lowering.memRegInt64Op(OP_B(inst)));
+        lowering.jumpOrAbortOnUndef(getConditionInt(getNegatedCondition(conditionOp(OP_C(inst)))), OP_D(inst), index, next);
     }
 }
 

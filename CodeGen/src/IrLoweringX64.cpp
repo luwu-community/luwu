@@ -282,23 +282,8 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         lower_LOAD_OWNER_CLASS(*this, inst, index, next);
         break;
     case IrCmd::GET_CLOSURE_UPVAL_ADDR:
-    {
-        inst.regX64 = regs.allocRegOrReuse(SizeX64::qword, index, {OP_A(inst)});
-
-        if (OP_A(inst).kind == IrOpKind::Undef)
-        {
-            build.mov(inst.regX64, sClosure);
-        }
-        else
-        {
-            RegisterX64 cl = regOp(OP_A(inst));
-            if (inst.regX64 != cl)
-                build.mov(inst.regX64, cl);
-        }
-
-        build.add(inst.regX64, offsetof(Closure, l.uprefs) + sizeof(TValue) * vmUpvalueOp(OP_B(inst)));
+        lower_GET_CLOSURE_UPVAL_ADDR(*this, inst, index, next);
         break;
-    }
     case IrCmd::STORE_TAG:
         if (OP_B(inst).kind == IrOpKind::Constant)
         {
@@ -506,67 +491,19 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         lower_SEXTI16_INT(*this, inst, index, next);
         break;
     case IrCmd::ADD_NUM:
-        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
-
-        if (OP_A(inst).kind == IrOpKind::Constant)
-        {
-            ScopedRegX64 tmp{regs, SizeX64::xmmword};
-
-            build.vmovsd(tmp.reg, memRegDoubleOp(OP_A(inst)));
-            build.vaddsd(inst.regX64, tmp.reg, memRegDoubleOp(OP_B(inst)));
-        }
-        else
-        {
-            build.vaddsd(inst.regX64, regOp(OP_A(inst)), memRegDoubleOp(OP_B(inst)));
-        }
+        lower_ADD_NUM(*this, inst, index, next);
         break;
     case IrCmd::SUB_NUM:
-        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
-
-        if (OP_A(inst).kind == IrOpKind::Constant)
-        {
-            ScopedRegX64 tmp{regs, SizeX64::xmmword};
-
-            build.vmovsd(tmp.reg, memRegDoubleOp(OP_A(inst)));
-            build.vsubsd(inst.regX64, tmp.reg, memRegDoubleOp(OP_B(inst)));
-        }
-        else
-        {
-            build.vsubsd(inst.regX64, regOp(OP_A(inst)), memRegDoubleOp(OP_B(inst)));
-        }
+        lower_SUB_NUM(*this, inst, index, next);
         break;
     case IrCmd::MUL_NUM:
-        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
-
-        if (OP_A(inst).kind == IrOpKind::Constant)
-        {
-            ScopedRegX64 tmp{regs, SizeX64::xmmword};
-
-            build.vmovsd(tmp.reg, memRegDoubleOp(OP_A(inst)));
-            build.vmulsd(inst.regX64, tmp.reg, memRegDoubleOp(OP_B(inst)));
-        }
-        else
-        {
-            build.vmulsd(inst.regX64, regOp(OP_A(inst)), memRegDoubleOp(OP_B(inst)));
-        }
+        lower_MUL_NUM(*this, inst, index, next);
         break;
     case IrCmd::MUL_INT64:
         lower_MUL_INT64(*this, inst, index, next);
         break;
     case IrCmd::DIV_NUM:
-        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
-
-        if (OP_A(inst).kind == IrOpKind::Constant)
-        {
-            ScopedRegX64 tmp{regs, SizeX64::xmmword};
-
-            build.vmovsd(tmp.reg, memRegDoubleOp(OP_A(inst)));
-            build.vdivsd(inst.regX64, tmp.reg, memRegDoubleOp(OP_B(inst)));
-        }
-        else
-        {
-            build.vdivsd(inst.regX64, regOp(OP_A(inst)), memRegDoubleOp(OP_B(inst)));
-        }
+        lower_DIV_NUM(*this, inst, index, next);
         break;
     case IrCmd::DIV_INT64:
     {
@@ -585,20 +522,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::IDIV_NUM:
-        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
-
-        if (OP_A(inst).kind == IrOpKind::Constant)
-        {
-            ScopedRegX64 tmp{regs, SizeX64::xmmword};
-
-            build.vmovsd(tmp.reg, memRegDoubleOp(OP_A(inst)));
-            build.vdivsd(inst.regX64, tmp.reg, memRegDoubleOp(OP_B(inst)));
-        }
-        else
-        {
-            build.vdivsd(inst.regX64, regOp(OP_A(inst)), memRegDoubleOp(OP_B(inst)));
-        }
-        build.vroundsd(inst.regX64, inst.regX64, inst.regX64, RoundingModeX64::RoundToNegativeInfinity);
+        lower_IDIV_NUM(*this, inst, index, next);
         break;
     case IrCmd::IDIV_INT64:
     {
@@ -844,34 +768,10 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::MIN_NUM:
-        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
-
-        if (OP_A(inst).kind == IrOpKind::Constant)
-        {
-            ScopedRegX64 tmp{regs, SizeX64::xmmword};
-
-            build.vmovsd(tmp.reg, memRegDoubleOp(OP_A(inst)));
-            build.vminsd(inst.regX64, tmp.reg, memRegDoubleOp(OP_B(inst)));
-        }
-        else
-        {
-            build.vminsd(inst.regX64, regOp(OP_A(inst)), memRegDoubleOp(OP_B(inst)));
-        }
+        lower_MIN_NUM(*this, inst, index, next);
         break;
     case IrCmd::MAX_NUM:
-        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
-
-        if (OP_A(inst).kind == IrOpKind::Constant)
-        {
-            ScopedRegX64 tmp{regs, SizeX64::xmmword};
-
-            build.vmovsd(tmp.reg, memRegDoubleOp(OP_A(inst)));
-            build.vmaxsd(inst.regX64, tmp.reg, memRegDoubleOp(OP_B(inst)));
-        }
-        else
-        {
-            build.vmaxsd(inst.regX64, regOp(OP_A(inst)), memRegDoubleOp(OP_B(inst)));
-        }
+        lower_MAX_NUM(*this, inst, index, next);
         break;
     case IrCmd::UNM_NUM:
     {
@@ -881,14 +781,10 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::FLOOR_NUM:
-        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
-
-        build.vroundsd(inst.regX64, inst.regX64, memRegDoubleOp(OP_A(inst)), RoundingModeX64::RoundToNegativeInfinity);
+        lower_FLOOR_NUM(*this, inst, index, next);
         break;
     case IrCmd::CEIL_NUM:
-        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
-
-        build.vroundsd(inst.regX64, inst.regX64, memRegDoubleOp(OP_A(inst)), RoundingModeX64::RoundToPositiveInfinity);
+        lower_CEIL_NUM(*this, inst, index, next);
         break;
     case IrCmd::ROUND_NUM:
     {
@@ -910,9 +806,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::SQRT_NUM:
-        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
-
-        build.vsqrtsd(inst.regX64, inst.regX64, memRegDoubleOp(OP_A(inst)));
+        lower_SQRT_NUM(*this, inst, index, next);
         break;
     case IrCmd::ABS_NUM:
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
@@ -950,94 +844,22 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::ADD_FLOAT:
-        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
-
-        if (OP_A(inst).kind == IrOpKind::Constant)
-        {
-            ScopedRegX64 tmp{regs, SizeX64::xmmword};
-
-            build.vmovss(tmp.reg, memRegFloatOp(OP_A(inst)));
-            build.vaddss(inst.regX64, tmp.reg, memRegFloatOp(OP_B(inst)));
-        }
-        else
-        {
-            build.vaddss(inst.regX64, regOp(OP_A(inst)), memRegFloatOp(OP_B(inst)));
-        }
+        lower_ADD_FLOAT(*this, inst, index, next);
         break;
     case IrCmd::SUB_FLOAT:
-        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
-
-        if (OP_A(inst).kind == IrOpKind::Constant)
-        {
-            ScopedRegX64 tmp{regs, SizeX64::xmmword};
-
-            build.vmovss(tmp.reg, memRegFloatOp(OP_A(inst)));
-            build.vsubss(inst.regX64, tmp.reg, memRegFloatOp(OP_B(inst)));
-        }
-        else
-        {
-            build.vsubss(inst.regX64, regOp(OP_A(inst)), memRegFloatOp(OP_B(inst)));
-        }
+        lower_SUB_FLOAT(*this, inst, index, next);
         break;
     case IrCmd::MUL_FLOAT:
-        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
-
-        if (OP_A(inst).kind == IrOpKind::Constant)
-        {
-            ScopedRegX64 tmp{regs, SizeX64::xmmword};
-
-            build.vmovss(tmp.reg, memRegFloatOp(OP_A(inst)));
-            build.vmulss(inst.regX64, tmp.reg, memRegFloatOp(OP_B(inst)));
-        }
-        else
-        {
-            build.vmulss(inst.regX64, regOp(OP_A(inst)), memRegFloatOp(OP_B(inst)));
-        }
+        lower_MUL_FLOAT(*this, inst, index, next);
         break;
     case IrCmd::DIV_FLOAT:
-        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
-
-        if (OP_A(inst).kind == IrOpKind::Constant)
-        {
-            ScopedRegX64 tmp{regs, SizeX64::xmmword};
-
-            build.vmovss(tmp.reg, memRegFloatOp(OP_A(inst)));
-            build.vdivss(inst.regX64, tmp.reg, memRegFloatOp(OP_B(inst)));
-        }
-        else
-        {
-            build.vdivss(inst.regX64, regOp(OP_A(inst)), memRegFloatOp(OP_B(inst)));
-        }
+        lower_DIV_FLOAT(*this, inst, index, next);
         break;
     case IrCmd::MIN_FLOAT:
-        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
-
-        if (OP_A(inst).kind == IrOpKind::Constant)
-        {
-            ScopedRegX64 tmp{regs, SizeX64::xmmword};
-
-            build.vmovss(tmp.reg, memRegFloatOp(OP_A(inst)));
-            build.vminss(inst.regX64, tmp.reg, memRegFloatOp(OP_B(inst)));
-        }
-        else
-        {
-            build.vminss(inst.regX64, regOp(OP_A(inst)), memRegFloatOp(OP_B(inst)));
-        }
+        lower_MIN_FLOAT(*this, inst, index, next);
         break;
     case IrCmd::MAX_FLOAT:
-        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
-
-        if (OP_A(inst).kind == IrOpKind::Constant)
-        {
-            ScopedRegX64 tmp{regs, SizeX64::xmmword};
-
-            build.vmovss(tmp.reg, memRegFloatOp(OP_A(inst)));
-            build.vmaxss(inst.regX64, tmp.reg, memRegFloatOp(OP_B(inst)));
-        }
-        else
-        {
-            build.vmaxss(inst.regX64, regOp(OP_A(inst)), memRegFloatOp(OP_B(inst)));
-        }
+        lower_MAX_FLOAT(*this, inst, index, next);
         break;
     case IrCmd::UNM_FLOAT:
     {
@@ -1047,19 +869,13 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::FLOOR_FLOAT:
-        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
-
-        build.vroundss(inst.regX64, inst.regX64, memRegFloatOp(OP_A(inst)), RoundingModeX64::RoundToNegativeInfinity);
+        lower_FLOOR_FLOAT(*this, inst, index, next);
         break;
     case IrCmd::CEIL_FLOAT:
-        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
-
-        build.vroundss(inst.regX64, inst.regX64, memRegFloatOp(OP_A(inst)), RoundingModeX64::RoundToPositiveInfinity);
+        lower_CEIL_FLOAT(*this, inst, index, next);
         break;
     case IrCmd::SQRT_FLOAT:
-        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
-
-        build.vsqrtss(inst.regX64, inst.regX64, memRegFloatOp(OP_A(inst)));
+        lower_SQRT_FLOAT(*this, inst, index, next);
         break;
     case IrCmd::ABS_FLOAT:
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
@@ -1120,31 +936,8 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::SELECT_INT64:
-    {
-        // Select B if C cond D, otherwise select A
-        // A, B: int64 (endpoints), C, D: int64 (condition arguments), E: condition
-        inst.regX64 = regs.allocRegOrReuse(SizeX64::qword, index, {OP_A(inst)});
-
-        IrCondition cond = conditionOp(OP_E(inst));
-
-        // Start with falseVal (A), conditionally replace with trueVal (B)
-        build.mov(inst.regX64, memRegInt64Op(OP_A(inst)));
-
-        ScopedRegX64 tmp{regs, SizeX64::qword};
-        // Compare C vs D
-        if (OP_C(inst).kind == IrOpKind::Inst)
-            build.cmp(regOp(OP_C(inst)), memRegInt64Op(OP_D(inst)));
-        else
-        {
-            build.mov(tmp.reg, memRegInt64Op(OP_C(inst)));
-            build.cmp(tmp.reg, memRegInt64Op(OP_D(inst)));
-        }
-
-        // If condition is true, select B instead
-        build.cmov(getConditionInt(cond), inst.regX64, memRegInt64Op(OP_B(inst)));
-
+        lower_SELECT_INT64(*this, inst, index, next);
         break;
-    }
     case IrCmd::SELECT_VEC:
     {
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_C(inst), OP_D(inst)});
@@ -1415,31 +1208,8 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::CMP_INT:
-    {
-        // Cannot reuse operand registers as a target because we have to modify it before the comparison
-        inst.regX64 = regs.allocReg(SizeX64::dword, index);
-
-        // We are going to operate on byte register, those do not clear high bits on write
-        build.xor_(inst.regX64, inst.regX64);
-
-        IrCondition cond = conditionOp(OP_C(inst));
-
-        if (OP_A(inst).kind == IrOpKind::Constant)
-        {
-            build.cmp(regOp(OP_B(inst)), intOp(OP_A(inst)));
-            build.setcc(getInverseCondition(getConditionInt(cond)), byteReg(inst.regX64));
-        }
-        else if (OP_A(inst).kind == IrOpKind::Inst)
-        {
-            build.cmp(regOp(OP_A(inst)), intOp(OP_B(inst)));
-            build.setcc(getConditionInt(cond), byteReg(inst.regX64));
-        }
-        else
-        {
-            CODEGEN_ASSERT(!"Unsupported instruction form");
-        }
+        lower_CMP_INT(*this, inst, index, next);
         break;
-    }
     case IrCmd::CMP_ANY:
     {
         CODEGEN_ASSERT(OP_A(inst).kind == IrOpKind::VmReg && OP_B(inst).kind == IrOpKind::VmReg);
@@ -1621,7 +1391,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::JUMP:
-        jumpOrAbortOnUndef(OP_A(inst), index, next);
+        lower_JUMP(*this, inst, index, next);
         break;
     case IrCmd::JUMP_IF_TRUTHY:
         jumpIfTruthy(build, vmRegOp(OP_A(inst)), labelOp(OP_B(inst)), labelOp(OP_C(inst)));
@@ -1654,40 +1424,10 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::JUMP_CMP_INT:
-    {
-        IrCondition cond = conditionOp(OP_C(inst));
-
-        if ((cond == IrCondition::Equal || cond == IrCondition::NotEqual) && intOp(OP_B(inst)) == 0)
-        {
-            bool invert = cond == IrCondition::NotEqual;
-
-            build.test(regOp(OP_A(inst)), regOp(OP_A(inst)));
-
-            if (isFallthroughBlock(blockOp(OP_D(inst)), next))
-            {
-                build.jcc(invert ? ConditionX64::Zero : ConditionX64::NotZero, labelOp(OP_E(inst)));
-                jumpOrFallthrough(blockOp(OP_D(inst)), next);
-            }
-            else
-            {
-                build.jcc(invert ? ConditionX64::NotZero : ConditionX64::Zero, labelOp(OP_D(inst)));
-                jumpOrFallthrough(blockOp(OP_E(inst)), next);
-            }
-        }
-        else
-        {
-            build.cmp(regOp(OP_A(inst)), intOp(OP_B(inst)));
-
-            build.jcc(getConditionInt(cond), labelOp(OP_D(inst)));
-            jumpOrFallthrough(blockOp(OP_E(inst)), next);
-        }
+        lower_JUMP_CMP_INT(*this, inst, index, next);
         break;
-    }
     case IrCmd::JUMP_EQ_POINTER:
-        build.cmp(regOp(OP_A(inst)), regOp(OP_B(inst)));
-
-        build.jcc(ConditionX64::Equal, labelOp(OP_C(inst)));
-        jumpOrFallthrough(blockOp(OP_D(inst)), next);
+        lower_JUMP_EQ_POINTER(*this, inst, index, next);
         break;
     case IrCmd::JUMP_CMP_NUM:
     {
@@ -1880,66 +1620,25 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::INT_TO_NUM:
-        inst.regX64 = regs.allocReg(SizeX64::xmmword, index);
-
-        build.vcvtsi2sd(inst.regX64, inst.regX64, regOp(OP_A(inst)));
+        lower_INT_TO_NUM(*this, inst, index, next);
         break;
     case IrCmd::UINT_TO_NUM:
-        inst.regX64 = regs.allocReg(SizeX64::xmmword, index);
-
-        // AVX has no uint->double conversion; the source must come from UINT op and they all should clear top 32 bits so we can usually
-        // use 64-bit reg; the one exception is NUM_TO_UINT which doesn't clear top bits
-        if (IrCmd source = function.instOp(OP_A(inst)).cmd; source == IrCmd::NUM_TO_UINT)
-        {
-            ScopedRegX64 tmp{regs, SizeX64::dword};
-            build.mov(tmp.reg, regOp(OP_A(inst)));
-            build.vcvtsi2sd(inst.regX64, inst.regX64, qwordReg(tmp.reg));
-        }
-        else
-        {
-            CODEGEN_ASSERT(source != IrCmd::SUBSTITUTE); // we don't process substitutions
-            build.vcvtsi2sd(inst.regX64, inst.regX64, qwordReg(regOp(OP_A(inst))));
-        }
+        lower_UINT_TO_NUM(*this, inst, index, next);
         break;
     case IrCmd::UINT_TO_FLOAT:
-        inst.regX64 = regs.allocReg(SizeX64::xmmword, index);
-
-        // AVX has no uint->float conversion; the source must come from UINT op and they all should clear top 32 bits so we can usually
-        // use 64-bit reg; the one exception is NUM_TO_UINT which doesn't clear top bits
-        if (IrCmd source = function.instOp(OP_A(inst)).cmd; source == IrCmd::NUM_TO_UINT)
-        {
-            ScopedRegX64 tmp{regs, SizeX64::dword};
-            build.mov(tmp.reg, regOp(OP_A(inst)));
-            build.vcvtsi2ss(inst.regX64, inst.regX64, qwordReg(tmp.reg));
-        }
-        else
-        {
-            CODEGEN_ASSERT(source != IrCmd::SUBSTITUTE); // we don't process substitutions
-            build.vcvtsi2ss(inst.regX64, inst.regX64, qwordReg(regOp(OP_A(inst))));
-        }
+        lower_UINT_TO_FLOAT(*this, inst, index, next);
         break;
     case IrCmd::NUM_TO_INT:
-        inst.regX64 = regs.allocReg(SizeX64::dword, index);
-
-        build.vcvttsd2si(inst.regX64, memRegDoubleOp(OP_A(inst)));
+        lower_NUM_TO_INT(*this, inst, index, next);
         break;
     case IrCmd::NUM_TO_UINT:
-        inst.regX64 = regs.allocReg(SizeX64::dword, index);
-
-        // Note: we perform 'uint64_t = (long long)double' for consistency with C++ code
-        build.vcvttsd2si(qwordReg(inst.regX64), memRegDoubleOp(OP_A(inst)));
+        lower_NUM_TO_UINT(*this, inst, index, next);
         break;
-
     case IrCmd::FLOAT_TO_NUM:
-        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
-
-        build.vcvtss2sd(inst.regX64, inst.regX64, memRegDoubleOp(OP_A(inst)));
+        lower_FLOAT_TO_NUM(*this, inst, index, next);
         break;
-
     case IrCmd::NUM_TO_FLOAT:
-        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
-
-        build.vcvtsd2ss(inst.regX64, inst.regX64, memRegDoubleOp(OP_A(inst)));
+        lower_NUM_TO_FLOAT(*this, inst, index, next);
         break;
     case IrCmd::FLOAT_TO_VEC:
         inst.regX64 = regs.allocReg(SizeX64::xmmword, index);
@@ -2208,8 +1907,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::CHECK_TAG:
-        build.cmp(memRegTagOp(OP_A(inst)), tagOp(OP_B(inst)));
-        jumpOrAbortOnUndef(ConditionX64::NotEqual, OP_C(inst), index, next);
+        lower_CHECK_TAG(*this, inst, index, next);
         break;
     case IrCmd::CHECK_TRUTHY:
     {
@@ -2305,14 +2003,8 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::CHECK_NODE_NO_NEXT:
-    {
-        ScopedRegX64 tmp{regs, SizeX64::dword};
-
-        build.mov(tmp.reg, dword[regOp(OP_A(inst)) + offsetof(LuaNode, key) + kOffsetOfTKeyTagNext]);
-        build.shr(tmp.reg, kTKeyTagBits);
-        jumpOrAbortOnUndef(ConditionX64::NotZero, OP_B(inst), index, next);
+        lower_CHECK_NODE_NO_NEXT(*this, inst, index, next);
         break;
-    }
     case IrCmd::CHECK_NODE_VALUE:
         lower_CHECK_NODE_VALUE(*this, inst, index, next);
         break;
@@ -2428,13 +2120,8 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         lower_CHECK_USERDATA_TAG(*this, inst, index, next);
         break;
     case IrCmd::CHECK_OBJECT_CLASS:
-    {
-        ScopedRegX64 tmp{regs, SizeX64::qword};
-        build.mov(tmp.reg, qword[regOp(OP_A(inst)) + offsetof(LuauObject, lclass)]);
-        build.cmp(tmp.reg, regOp(OP_B(inst)));
-        jumpOrAbortOnUndef(ConditionX64::NotEqual, OP_C(inst), index, next);
+        lower_CHECK_OBJECT_CLASS(*this, inst, index, next);
         break;
-    }
     case IrCmd::TRY_OBJECT_MEMBER_ADDR:
     {
         Label abort; // used when guard aborts execution
@@ -2484,20 +2171,8 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::OBJECT_MEMBER_ADDR:
-    {
-        // Luwu Classes (rfcs/classes): the receiver's class is proven (see LOP_GETOBJECTMEMBER), or the
-        // object was just allocated (NEW_OBJECT). So the member's offset is a constant, and nothing needs
-        // re-checking here: not the class, and not the offset against the member count. A single lea, with
-        // no load and no branch.
-        inst.regX64 = regs.allocReg(SizeX64::qword, index);
-
-        uint32_t offset = uintOp(OP_B(inst));
-
-        // address = self + LUAR_OBJECT_MEMBERS_OFFSET + offset * sizeof(TValue)
-        build.lea(inst.regX64, addr[regOp(OP_A(inst)) + int32_t(LUAR_OBJECT_MEMBERS_OFFSET + offset * sizeof(TValue))]);
-
+        lower_OBJECT_MEMBER_ADDR(*this, inst, index, next);
         break;
-    }
     case IrCmd::CHECK_CLASS_FIELDS_CONSTRUCTIBLE:
     {
         // The runtime conditions of executeNEWOBJECT's member-copy case (see IrData.h). The class's
@@ -2671,28 +2346,8 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::CHECK_CMP_INT:
-    {
-        IrCondition cond = conditionOp(OP_C(inst));
-
-        if ((cond == IrCondition::Equal || cond == IrCondition::NotEqual) && OP_B(inst).kind == IrOpKind::Constant && intOp(OP_B(inst)) == 0)
-        {
-            build.test(regOp(OP_A(inst)), regOp(OP_A(inst)));
-            jumpOrAbortOnUndef(cond == IrCondition::Equal ? ConditionX64::NotZero : ConditionX64::Zero, OP_D(inst), index, next);
-        }
-        else if (OP_A(inst).kind == IrOpKind::Constant)
-        {
-            ScopedRegX64 tmp{regs, SizeX64::dword};
-            build.mov(tmp.reg, memRegIntOp(OP_A(inst)));
-            build.cmp(tmp.reg, memRegIntOp(OP_B(inst)));
-            jumpOrAbortOnUndef(getConditionInt(getNegatedCondition(cond)), OP_D(inst), index, next);
-        }
-        else
-        {
-            build.cmp(regOp(OP_A(inst)), memRegIntOp(OP_B(inst)));
-            jumpOrAbortOnUndef(getConditionInt(getNegatedCondition(cond)), OP_D(inst), index, next);
-        }
+        lower_CHECK_CMP_INT(*this, inst, index, next);
         break;
-    }
     case IrCmd::INTERRUPT:
     {
         unsigned pcpos = uintOp(OP_A(inst));
@@ -3406,64 +3061,16 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::CHECK_CMP_INT64:
-    {
-        IrCondition cond = conditionOp(OP_C(inst));
-
-        if ((cond == IrCondition::Equal || cond == IrCondition::NotEqual) && OP_B(inst).kind == IrOpKind::Constant && int64Op(OP_B(inst)) == 0)
-        {
-            build.test(regOp(OP_A(inst)), regOp(OP_A(inst)));
-            jumpOrAbortOnUndef(cond == IrCondition::Equal ? ConditionX64::NotZero : ConditionX64::Zero, OP_D(inst), index, next);
-        }
-        else if (OP_A(inst).kind == IrOpKind::Constant)
-        {
-            ScopedRegX64 tmp{regs, SizeX64::qword};
-            build.mov(tmp.reg, memRegInt64Op(OP_A(inst)));
-            build.cmp(tmp.reg, memRegInt64Op(OP_B(inst)));
-            jumpOrAbortOnUndef(getConditionInt(getNegatedCondition(cond)), OP_D(inst), index, next);
-        }
-        else
-        {
-            build.cmp(regOp(OP_A(inst)), memRegInt64Op(OP_B(inst)));
-            jumpOrAbortOnUndef(getConditionInt(getNegatedCondition(cond)), OP_D(inst), index, next);
-        }
+        lower_CHECK_CMP_INT64(*this, inst, index, next);
         break;
-    }
-
     case IrCmd::CMP_INT64:
-    {
-        // cannot reuse operand registers as a target because we have to modify it before the comparison
-        inst.regX64 = regs.allocReg(SizeX64::dword, index);
-
-        // We are going to operate on byte register, those do not clear high bits on write
-        build.xor_(inst.regX64, inst.regX64);
-
-        IrCondition cond = conditionOp(OP_C(inst));
-
-        if (OP_A(inst).kind == IrOpKind::Constant)
-        {
-            build.cmp(regOp(OP_B(inst)), memRegInt64Op(OP_A(inst)));
-            build.setcc(getInverseCondition(getConditionInt(cond)), byteReg(inst.regX64));
-        }
-        else if (OP_A(inst).kind == IrOpKind::Inst)
-        {
-            build.cmp(regOp(OP_A(inst)), memRegInt64Op(OP_B(inst)));
-            build.setcc(getConditionInt(cond), byteReg(inst.regX64));
-        }
-        else
-        {
-            CODEGEN_ASSERT(!"Unsupported instruction form");
-        }
+        lower_CMP_INT64(*this, inst, index, next);
         break;
-    }
     case IrCmd::INT64_TO_NUM:
-        inst.regX64 = regs.allocReg(SizeX64::xmmword, index);
-
-        build.vcvtsi2sd(inst.regX64, inst.regX64, regOp(OP_A(inst)));
+        lower_INT64_TO_NUM(*this, inst, index, next);
         break;
     case IrCmd::NUM_TO_INT64:
-        inst.regX64 = regs.allocReg(SizeX64::qword, index);
-
-        build.vcvttsd2si(inst.regX64, memRegDoubleOp(OP_A(inst)));
+        lower_NUM_TO_INT64(*this, inst, index, next);
         break;
     case IrCmd::BITAND_INT64:
         lower_BITAND_INT64(*this, inst, index, next);
