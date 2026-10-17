@@ -1,0 +1,38 @@
+~ Return specified values from the function
+~ A: Rn (value start)
+~ B: int (result count or -1 to return all values up to stack top)
+(define-ircmd RETURN
+  (operands ra count)
+  (class :terminator)
+  (lowering (return ra count)))
+
+~ Adjust loop variables for one iteration of a generic for loop, jump back to the loop header if loop needs to continue
+~ A: Rn (loop variable start, updates Rn+2 and 'B' number of registers starting from Rn+3)
+~ B: int (loop variable count, if more than 2, registers starting from Rn+5 are set to nil)
+~ C: block (repeat)
+~ D: block (exit)
+(define-ircmd FORGLOOP
+  (operands ra nvars loop exit)
+  (class :terminator)
+  (lowering (forgloop ra nvars loop exit)))
+
+~ Handle LOP_FORGLOOP fallback when variable being iterated is not a table
+~ A: Rn (loop state start, updates Rn+2 and 'B' number of registers starting from Rn+3)
+~ B: int (loop variable count and a MSB set when it's an ipairs-like iteration loop)
+~ C: block (repeat)
+~ D: block (exit)
+(define-ircmd FORGLOOP_FALLBACK
+  (operands ra nvars loop exit)
+  (class :terminator)
+  (heap-effects :invalidates-safe-env)
+  (lowering (forgloop-fallback ra nvars loop exit)))
+
+~ Fallback for generic for loop preparation when iterating over builtin pairs/ipairs
+~ It raises an error if 'B' register is not a function
+~ A: unsigned int (bytecode instruction index)
+~ B: Rn
+~ C: block (forgloop location)
+(define-ircmd FORGPREP_XNEXT_FALLBACK
+  (operands pc ra target)
+  (class :terminator)
+  (lowering (forgprep-xnext-fallback pc ra target)))

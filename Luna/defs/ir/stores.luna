@@ -1,0 +1,78 @@
+~ Store a tag into TValue
+~ A: Rn
+~ B: tag
+(define-ircmd STORE_TAG
+  (operands a tag)
+  (class :effect)
+  (lowering (store-tag a tag)))
+
+~ Store an integer into the extra field of the TValue
+~ A: Rn
+~ B: int
+(define-ircmd STORE_EXTRA
+  (operands a extra)
+  (class :effect)
+  (lowering (store-extra a extra)))
+
+~ Store a pointer (*) into TValue
+~ A: Rn
+~ B: pointer
+(define-ircmd STORE_POINTER
+  (operands a val)
+  (class :effect)
+  (lowering (store-pointer a val)))
+
+~ Store a double number into TValue
+~ A: Rn
+~ B: double
+(define-ircmd STORE_DOUBLE
+  (operands a val)
+  (class :effect)
+  (lowering (store-double a val)))
+
+~ Store an int into TValue
+~ A: Rn
+~ B: int
+(define-ircmd STORE_INT
+  (operands a val)
+  (class :effect)
+  (lowering (store-int a val)))
+
+~ Store an int64 into TValue
+~ A: Rn
+~ B: int64
+(define-ircmd STORE_INT64
+  (operands a val)
+  (class :effect)
+  (lowering (store-int64 a val)))
+
+~ Store a vector into TValue
+~ When optional 'E' tag is present, it is written out to the TValue as well
+~ A: Rn
+~ B: float (x)
+~ C: float (y)
+~ D: float (z)
+~ E: tag (optional)
+(define-ircmd STORE_VECTOR
+  (operands a x y z tag)
+  (class :effect)
+  (lowering (store-vector a x y z tag)))
+
+~ Store a TValue into memory
+~ A: Rn or pointer (TValue)
+~ B: TValue
+~ C: int (optional 'A' pointer offset)
+(define-ircmd STORE_TVALUE
+  (operands a val offset)
+  (class :effect)
+  (lowering (store-tvalue a val offset)))
+
+~ Store a pair of tag and value into memory
+~ A: Rn or pointer (TValue)
+~ B: tag (must be a constant)
+~ C: int/double/pointer
+~ D: int (optional 'A' pointer offset)
+(define-ircmd STORE_SPLIT_TVALUE
+  (operands a tag val offset)
+  (class :effect)
+  (lowering (store-split-tvalue a tag val offset)))

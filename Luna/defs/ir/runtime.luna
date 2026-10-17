@@ -1,0 +1,67 @@
+~ Perform an arithmetic operation on TValues of any type
+~ A: Rn (where to store the result)
+~ B: Rn (lhs)
+~ C: Rn or Kn (rhs)
+~ D: int (TMS enum with arithmetic type)
+(define-ircmd DO_ARITH
+  (operands ra rb rc tm)
+  (class :effect)
+  (heap-effects :invalidates-safe-env)
+  (lowering (do-arith ra rb rc tm)))
+
+~ Get length of a TValue of any type
+~ A: Rn (where to store the result)
+~ B: Rn
+(define-ircmd DO_LEN
+  (operands ra rb)
+  (class :effect)
+  (heap-effects :invalidates-safe-env)
+  (lowering (do-len ra rb)))
+
+~ Lookup a value in TValue of any type using a key of any type
+~ A: Rn (where to store the result)
+~ B: Rn
+~ C: Rn or unsigned int (key)
+(define-ircmd GET_TABLE
+  (operands ra rb key)
+  (class :effect)
+  (heap-effects :invalidates-safe-env)
+  (lowering (get-table ra rb key)))
+
+~ Store a value into TValue of any type using a key of any type
+~ A: Rn (value to store)
+~ B: Rn
+~ C: Rn or unsigned int (key)
+(define-ircmd SET_TABLE
+  (operands ra rb key)
+  (class :effect)
+  (heap-effects :invalidates-safe-env)
+  (lowering (set-table ra rb key)))
+
+~ Concatenate multiple TValues into a string
+~ A: Rn (value start)
+~ B: unsigned int (number of registers to go over)
+~ Note: result is stored in the register specified in 'A'
+~ Note: all referenced registers might be modified in the operation
+(define-ircmd CONCAT
+  (operands ra count)
+  (class :effect)
+  (heap-effects :invalidates-safe-env)
+  (lowering (concat ra count)))
+
+~ Returns the string name of a type based on tag, alternative for type(x)
+~ A: tag
+(define-ircmd GET_TYPE
+  (operands tag)
+  (result :pointer)
+  (class :value)
+  (lowering (get-type tag)))
+
+~ Returns the string name of a type either from a __type metatable field or just based on the tag, alternative for typeof(x)
+~ A: Rn
+(define-ircmd GET_TYPEOF
+  (operands ra)
+  (result :pointer)
+  (class :value)
+  (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Reads VM register: STORE_TAG/STORE_TVALUE/etc. to the same VM register
+  (lowering (get-typeof ra)))

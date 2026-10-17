@@ -171,6 +171,10 @@ std::vector<Rule> parseRules(const std::vector<SExpr>& program)
 
     for (const auto& original : program)
     {
+        // IR command declarations are parsed separately (parseIrCmds)
+        if (original.isList("define-ircmd"))
+            continue;
+
         // Doc placement checks may move trailing docs, so they work on a copy
         SExpr expr = original;
         bool isDefineRule = expr.isList("define-rule");
@@ -178,7 +182,7 @@ std::vector<Rule> parseRules(const std::vector<SExpr>& program)
         if (!isDefineRule && !isDefineSubrule)
         {
             std::string what = expr.isList() && !expr.elements.empty() ? expr.elements[0].text : expr.text;
-            throw CompileError(expr, "Unknown top-level form '" + what + "' (expected define-rule or define-subrule)");
+            throw CompileError(expr, "Unknown top-level form '" + what + "' (expected define-ircmd, define-rule or define-subrule)");
         }
 
         std::string formName = isDefineSubrule ? "define-subrule" : "define-rule";

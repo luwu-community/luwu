@@ -1409,7 +1409,7 @@ static Operand evalExprNoDocs(CodeWriter& out, EvalContext& ctx, TargetBuilder& 
 
 
 
-void compileRules(std::ostream& os, TargetBuilder& target, const std::vector<Rule>& rules)
+void compileRules(std::ostream& os, TargetBuilder& target, const std::vector<LoweringInstance>& lowerings, const std::vector<DispatchEntry>& dispatch)
 {
     CodeWriter writer(os);
 
@@ -1428,9 +1428,10 @@ void compileRules(std::ostream& os, TargetBuilder& target, const std::vector<Rul
     std::set<std::string> allDFFlags;
     std::vector<CompiledRule> compiledRules;
 
-    for (const auto& rule : rules)
+    for (const auto& lowering : lowerings)
     {
-        std::string fnName = "lower_" + toUpperIdent(rule.name);
+        const Rule& rule = *lowering.rule;
+        std::string fnName = "lower_" + lowering.cmdName;
         StringCodeWriter bodyWriter(1);
 
         EvalContext ctx;
@@ -1443,11 +1444,16 @@ void compileRules(std::ostream& os, TargetBuilder& target, const std::vector<Rul
 
         for (size_t i = 0; i < rule.params.size(); ++i)
         {
-            if (i >= 7)
-                throw CompileError(rule.params[i].loc, "Too many parameters in rule: " + rule.name);
-
             const auto& p = rule.params[i];
-            std::string opName = kOpNames[i];
+
+            // Bound to a literal in the command's lowering clause: the parameter is that value
+            if (lowering.operandIndex[i] < 0)
+            {
+                ctx.bind(p.name, evalExpr(bodyWriter, ctx, target, lowering.literals[i], ""));
+                continue;
+            }
+
+            std::string opName = kOpNames[lowering.operandIndex[i]];
 
             if (p.type == "uint")
                 ctx.bind(p.name, Operand::makeReg(TypeKind::U32, "lowering.uintOp(" + opName + ")", opName));
@@ -1543,12 +1549,50 @@ void compileRules(std::ostream& os, TargetBuilder& target, const std::vector<Rul
         writer.line();
     }
 
+    // Full switch (no default), so -Wswitch catches a command without a case
+    writer.line("// Lowers `inst` with the rule its define-ircmd names; pseudo-instructions are never lowered");
+    writer.block("inline void lowerInstGenerated(" + target.loweringClass() + "& lowering, IrInst& inst, uint32_t index, const IrBlock& next)", [&]() {
+        writer.line("switch (inst.cmd)");
+        writer.line("{");
+        std::vector<std::string> pseudo;
+        for (const auto& entry : dispatch)
+        {
+            if (!entry.lowered)
+            {
+                pseudo.push_back(entry.cmdName);
+                continue;
+            }
+            writer.line("case IrCmd::" + entry.cmdName + ":");
+            writer.indent();
+            writer.line("lower_" + entry.cmdName + "(lowering, inst, index, next);");
+            writer.line("break;");
+            writer.dedent();
+        }
+        for (const auto& name : pseudo)
+            writer.line("case IrCmd::" + name + ":");
+        if (!pseudo.empty())
+        {
+            writer.indent();
+            writer.line("CODEGEN_ASSERT(!\"Pseudo instructions should not be lowered\");");
+            writer.line("break;");
+            writer.dedent();
+        }
+        writer.line("}");
+    });
+    writer.line();
+
     target.emitPostamble(writer);
 }
 
 void getCommonCoreDocs(std::vector<FormDoc>& out)
 {
-    out.push_back({"define-rule", "(define-rule (<name> [<param> <type>]...) <body>...)", "Define top-level IR instruction lowering rule that compiles to C++ lower_<NAME>"});
+    out.push_back({"define-ircmd", "(define-ircmd NAME (operands <name>...) (result :<kind>) (class :<class>) (flags :<flag>...) (heap-effects :<effect>...) (lowering (<rule> <arg>...)))",
+        "Declare an IR command (an IrCmd enumerator, in declaration order with NOP first). result: :tag :int :int64 :pointer :float :double :tvalue :unknown (none when absent). "
+        "class: :value (has a result), :effect (none), :guard (may branch to a target and continue), :terminator (ends a block), :pseudo (never lowered)."
+        "flags: :dirty-high-bits, :deprecated/has-side-effects (pot dangerous), :deprecated/is-unsafe-to-sink (pot dangerous), :invalidates-safe-env (heap effect)"
+        "lowering names the define-rule that lowers it (generating lower_NAME), passing each rule parameter explicitly: an operand name or a number/keyword literal. "
+    });
+    out.push_back({"define-rule", "(define-rule (<name> [<param> <type>]...) <body>...)", "Define an IR instruction lowering rule"});
     out.push_back({"define-subrule", "(define-subrule (<name> [<param> <type>]...) <body>...)", "Define compile-time macro template inlined at expansion sites"});
     out.push_back({"~", "~ <text>", "Doc comment: to the end of the line, kept and written into the generated C++ as a // comment (; comments stay Luna-only). Leading ones go on their own lines before a statement, a trailing one after code on the same line (it moves up to the statement when it lands on an argument of a statement starting on that line, e.g. (if (constant? a) ~ ...). Allowed on define-rule (written above lower_<NAME>) and statements: rule/subrule body items, let bindings, cond clauses, target-case branches and the bodies of let/begin/block/if/cond/target-case/for-range"});
     out.push_back({"include", "(include \"<path>.luna\")", "Top-level only: splice in another file's definitions at this point. The path is relative to the including file and may not leave the root file's directory; each file is included once, and include cycles are errors"});

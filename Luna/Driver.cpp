@@ -2,6 +2,7 @@
 #include "Driver.h"
 
 #include "Ast.h"
+#include "IrCmds.h"
 #include "Loader.h"
 #include "Lowering/Emitter.h"
 #include "CompileError.h"
@@ -16,7 +17,7 @@
 #include <vector>
 
 static const char* kUsage =
-    "Usage: luwu-dsl-compiler <root.luna> <output-dir> [-MF <depfile> [-MT <target>]]\n"
+    "Usage: luwu-dsl-compiler <root.luna> <output-dir> [--public-output <dir>] [-MF <depfile> [-MT <target>]]\n"
     "       luwu-dsl-compiler --list-files <root.luna>\n"
     "       luwu-dsl-compiler --describe [all|core|a64|x64]\n";
 
@@ -99,6 +100,7 @@ int runDriver(const std::vector<std::string>& args, std::ostream& out, std::ostr
     std::vector<std::string> positional;
     std::string depfilePath;
     std::string depTarget;
+    std::string publicOutputDir;
     bool listFiles = false;
 
     for (size_t i = 0; i < args.size(); ++i)
@@ -119,9 +121,9 @@ int runDriver(const std::vector<std::string>& args, std::ostream& out, std::ostr
         {
             listFiles = true;
         }
-        else if ((arg == "-MF" || arg == "-MT") && i + 1 < args.size())
+        else if ((arg == "-MF" || arg == "-MT" || arg == "--public-output") && i + 1 < args.size())
         {
-            (arg == "-MF" ? depfilePath : depTarget) = args[++i];
+            (arg == "-MF" ? depfilePath : arg == "-MT" ? depTarget : publicOutputDir) = args[++i];
         }
         else if (!arg.empty() && arg[0] == '-')
         {
@@ -154,22 +156,40 @@ int runDriver(const std::vector<std::string>& args, std::ostream& out, std::ostr
             return 0;
         }
 
-        std::string outputDir = positional[1];
-        while (!outputDir.empty() && (outputDir.back() == '/' || outputDir.back() == '\\'))
-            outputDir.pop_back();
+        auto trimDir = [](std::string dir) {
+            while (!dir.empty() && (dir.back() == '/' || dir.back() == '\\'))
+                dir.pop_back();
+            return dir;
+        };
+        std::string outputDir = trimDir(positional[1]);
+        // Headers other components include (the IrCmd enum and per-command information); next to the lowering
+        // headers unless given
+        std::string publicDir = publicOutputDir.empty() ? outputDir : trimDir(publicOutputDir);
 
+        std::vector<Luwu::Dsl::IrCmdDef> cmds = Luwu::Dsl::parseIrCmds(program);
         std::vector<Luwu::Dsl::Rule> rules = Luwu::Dsl::parseRules(program);
         rules = Luwu::Dsl::expandRules(rules);
+        std::vector<Luwu::Dsl::LoweringInstance> lowerings = Luwu::Dsl::linkLowerings(cmds, rules);
+
+        std::vector<Luwu::Dsl::DispatchEntry> dispatch = Luwu::Dsl::loweringDispatch(cmds);
 
         std::ostringstream a64Out;
-        Luwu::Dsl::emitA64(a64Out, rules);
+        Luwu::Dsl::emitA64(a64Out, lowerings, dispatch);
 
         std::ostringstream x64Out;
-        Luwu::Dsl::emitX64(x64Out, rules);
+        Luwu::Dsl::emitX64(x64Out, lowerings, dispatch);
+
+        std::ostringstream infoOut;
+        Luwu::Dsl::emitIrCmdInfo(infoOut, cmds);
+
+        std::ostringstream enumOut;
+        Luwu::Dsl::emitIrCmdEnum(enumOut, cmds);
 
         std::vector<std::pair<std::string, std::string>> outputs = {
             {outputDir + "/LoweringRulesA64.h", a64Out.str()},
             {outputDir + "/LoweringRulesX64.h", x64Out.str()},
+            {publicDir + "/IrCmdInfo.h", infoOut.str()},
+            {publicDir + "/IrCmd.h", enumOut.str()},
         };
 
         int updated = 0;
@@ -201,7 +221,7 @@ int runDriver(const std::vector<std::string>& args, std::ostream& out, std::ostr
             }
         }
 
-        out << "luwu-dsl-compiler: compiled " << rules.size() << " rule(s) from " << loader.files().size() << " file(s) ("
+        out << "luwu-dsl-compiler: compiled " << cmds.size() << " IR command(s) and " << rules.size() << " rule(s) from " << loader.files().size() << " file(s) ("
                   << inputPath << ") -> " << outputDir << ", " << updated << " output(s) updated\n";
         return 0;
     }

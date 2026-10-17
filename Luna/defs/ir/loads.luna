@@ -1,0 +1,65 @@
+~ Load a tag from TValue
+~ A: Rn or Kn
+(define-ircmd LOAD_TAG
+  (operands a)
+  (result :tag)
+  (class :value)
+  (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: VM register reads: STORE_TAG/STORE_DOUBLE/STORE_TVALUE/etc. to the same VM register
+  (lowering (load-tag a)))
+
+~ Load a pointer (*) from TValue
+~ A: Rn or Kn
+(define-ircmd LOAD_POINTER
+  (operands a)
+  (result :pointer)
+  (class :value)
+  (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: VM register reads: STORE_TAG/STORE_DOUBLE/STORE_TVALUE/etc. to the same VM register
+  (lowering (load-pointer a)))
+
+~ Load a double number from TValue
+~ A: Rn or Kn
+(define-ircmd LOAD_DOUBLE
+  (operands a)
+  (result :double)
+  (class :value)
+  (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: VM register reads: STORE_TAG/STORE_DOUBLE/STORE_TVALUE/etc. to the same VM register
+  (lowering (load-double a)))
+
+~ Load an int from TValue
+~ A: Rn
+(define-ircmd LOAD_INT
+  (operands a)
+  (result :int)
+  (class :value)
+  (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: VM register reads: STORE_TAG/STORE_DOUBLE/STORE_TVALUE/etc. to the same VM register
+  (lowering (load-int a)))
+
+~ Load an int64 from TValue
+~ A: Rn
+(define-ircmd LOAD_INT64
+  (operands a)
+  (result :int64)
+  (class :value)
+  (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: VM register reads: STORE_TAG/STORE_DOUBLE/STORE_TVALUE/etc. to the same VM register
+  (lowering (load-int64 a)))
+
+~ Load a float field from vector (use FLOAT_TO_NUM to convert to double)
+~ A: Rn or Kn
+~ B: int (offset from the start of TValue)
+(define-ircmd LOAD_FLOAT
+  (operands a offset)
+  (result :float)
+  (class :value)
+  (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: VM register reads: STORE_TAG/STORE_DOUBLE/STORE_TVALUE/etc. to the same VM register
+  (lowering (load-float a offset)))
+
+~ Load a TValue from memory
+~ A: Rn or Kn or pointer (TValue)
+~ B: int/none (optional 'A' pointer offset)
+~ C: tag/none (tag of the value being loaded)
+(define-ircmd LOAD_TVALUE
+  (operands a offset)
+  (result :tvalue)
+  (class :value)
+  (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: VM register reads: STORE_TAG/STORE_DOUBLE/STORE_TVALUE/etc. to the same VM register
+  (lowering (load-tvalue a offset)))

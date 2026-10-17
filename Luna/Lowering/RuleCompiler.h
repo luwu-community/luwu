@@ -15,7 +15,7 @@ namespace Luwu::Dsl
 Operand evalExpr(CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg);
 
 
-void compileRules(std::ostream& os, TargetBuilder& target, const std::vector<Rule>& rules);
+void compileRules(std::ostream& os, TargetBuilder& target, const std::vector<LoweringInstance>& lowerings, const std::vector<DispatchEntry>& dispatch);
 
 void getCommonCoreDocs(std::vector<FormDoc>& out);
 void getCommonPredicateDocs(std::vector<FormDoc>& out);

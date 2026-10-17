@@ -1,0 +1,63 @@
+~ Get table length
+~ A: pointer (LuaTable)
+(define-ircmd TABLE_LEN
+  (operands table)
+  (result :int)
+  (class :value)
+  (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Reads table array metadata: TABLE_SETNUM can grow the array and change the length
+  (lowering (table-len table)))
+
+~ Allocate new table
+~ A: unsigned int (array element count)
+~ B: unsigned int (node element count)
+(define-ircmd NEW_TABLE
+  (operands narray nhash)
+  (result :pointer)
+  (class :value)
+  (lowering (new-table narray nhash)))
+
+~ Duplicate a table
+~ A: pointer (LuaTable)
+(define-ircmd DUP_TABLE
+  (operands table)
+  (result :pointer)
+  (class :value)
+  (lowering (dup-table table)))
+
+~ Insert an integer key into a table and return the pointer to inserted value (TValue)
+~ A: pointer (LuaTable)
+~ B: int (key)
+(define-ircmd TABLE_SETNUM
+  (operands table key)
+  (result :pointer)
+  (class :value)
+  (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Mutates table array part, invalidating reads
+  (lowering (table-setnum table key)))
+
+~ Create new tagged userdata
+~ A: int (size)
+~ B: int (tag)
+(define-ircmd NEW_USERDATA
+  (operands size utag)
+  (result :pointer)
+  (class :value)
+  (lowering (new-userdata size utag)))
+
+~ Create new heap-allocated vector
+~ A: double (x)
+~ B: double (y)
+~ C: double (z)
+(define-ircmd NEW_VECTOR
+  (operands x y z)
+  (result :pointer)
+  (class :value)
+  (lowering (new-vector x y z)))
+
+~ Luwu Classes (rfcs/classes): allocate an object of a class with its members uninitialized
+~ (luaR_newobjectuninit). Every member must be stored before anything can collect or observe it.
+~ A: pointer (LuauClass)
+(define-ircmd NEW_OBJECT
+  (operands cls)
+  (result :pointer)
+  (class :value)
+  (lowering (new-object cls)))

@@ -1,0 +1,147 @@
+~ Guard against access at specified offset with [min, max) range of bytes overflowing the buffer length
+~ When base offset source number is provided, instruction will additionally validate that the integer and double versions of base are exact
+~ A: pointer (buffer)
+~ B: int (base offset)
+~ C: int (access range min inclusive)
+~ D: int (access range max exclusive)
+~ E: double/undef (base offset source double)
+~ F: block/vmexit/undef
+~ When undef is specified instead of a block, execution is aborted on check failure
+(define-ircmd CHECK_BUFFER_LEN
+  (operands buffer offset min max exact fail)
+  (class :guard)
+  (lowering (check-buffer-len buffer offset min max exact fail)))
+
+~ Read i8 (sign-extended to int) from buffer storage at specified offset
+~ A: pointer (buffer)
+~ B: int (offset)
+(define-ircmd BUFFER_READI8
+  (operands a b tag)
+  (result :int)
+  (class :value)
+  (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Buffer reads: BUFFER_WRITE* to the same buffer at the same offset
+  (lowering (buffer-readi8 a b tag)))
+
+~ Read u8 (zero-extended to int) from buffer storage at specified offset
+~ A: pointer (buffer)
+~ B: int (offset)
+(define-ircmd BUFFER_READU8
+  (operands a b tag)
+  (result :int)
+  (class :value)
+  (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Buffer reads: BUFFER_WRITE* to the same buffer at the same offset
+  (lowering (buffer-readu8 a b tag)))
+
+~ Write i8/u8 value (int argument is truncated) to buffer storage at specified offset
+~ A: pointer (buffer)
+~ B: int (offset)
+~ C: int (value)
+(define-ircmd BUFFER_WRITEI8
+  (operands a b val tag)
+  (class :effect)
+  (lowering (buffer-writei8 a b val tag)))
+
+~ Read i16 (sign-extended to int) from buffer storage at specified offset
+~ A: pointer (buffer)
+~ B: int (offset)
+(define-ircmd BUFFER_READI16
+  (operands a b tag)
+  (result :int)
+  (class :value)
+  (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Buffer reads: BUFFER_WRITE* to the same buffer at the same offset
+  (lowering (buffer-readi16 a b tag)))
+
+~ Read u16 (zero-extended to int) from buffer storage at specified offset
+~ A: pointer (buffer)
+~ B: int (offset)
+(define-ircmd BUFFER_READU16
+  (operands a b tag)
+  (result :int)
+  (class :value)
+  (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Buffer reads: BUFFER_WRITE* to the same buffer at the same offset
+  (lowering (buffer-readu16 a b tag)))
+
+~ Write i16/u16 value (int argument is truncated) to buffer storage at specified offset
+~ A: pointer (buffer)
+~ B: int (offset)
+~ C: int (value)
+(define-ircmd BUFFER_WRITEI16
+  (operands a b val tag)
+  (class :effect)
+  (lowering (buffer-writei16 a b val tag)))
+
+~ Read i32 value from buffer storage at specified offset
+~ A: pointer (buffer)
+~ B: int (offset)
+(define-ircmd BUFFER_READI32
+  (operands a b tag)
+  (result :int)
+  (class :value)
+  (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Buffer reads: BUFFER_WRITE* to the same buffer at the same offset
+  (lowering (buffer-readi32 a b tag)))
+
+~ Write i32/u32 value to buffer storage at specified offset
+~ A: pointer (buffer)
+~ B: int (offset)
+~ C: int (value)
+(define-ircmd BUFFER_WRITEI32
+  (operands a b val tag)
+  (class :effect)
+  (lowering (buffer-writei32 a b val tag)))
+
+~ Read float value (use FLOAT_TO_NUM to convert to double) from buffer storage at specified offset
+~ A: pointer (buffer)
+~ B: int (offset)
+(define-ircmd BUFFER_READF32
+  (operands a b tag)
+  (result :float)
+  (class :value)
+  (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Buffer reads: BUFFER_WRITE* to the same buffer at the same offset
+  (lowering (buffer-readf32 a b tag)))
+
+~ Write float value (use NUM_TO_FLOAT to convert from double) to buffer storage at specified offset
+~ A: pointer (buffer)
+~ B: int (offset)
+~ C: float (value)
+(define-ircmd BUFFER_WRITEF32
+  (operands a b val tag)
+  (class :effect)
+  (lowering (buffer-writef32 a b val tag)))
+
+~ Read double value from buffer storage at specified offset
+~ A: pointer (buffer)
+~ B: int (offset)
+(define-ircmd BUFFER_READF64
+  (operands a b tag)
+  (result :double)
+  (class :value)
+  (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Buffer reads: BUFFER_WRITE* to the same buffer at the same offset
+  (lowering (buffer-readf64 a b tag)))
+
+~ Write double value to buffer storage at specified offset
+~ A: pointer (buffer)
+~ B: int (offset)
+~ C: double (value)
+(define-ircmd BUFFER_WRITEF64
+  (operands a b val tag)
+  (class :effect)
+  (lowering (buffer-writef64 a b val tag)))
+
+~ Read int64 value from buffer storage at specified offset
+~ A: pointer (buffer)
+~ B: int (offset)
+(define-ircmd BUFFER_READI64
+  (operands a b tag)
+  (result :int64)
+  (class :value)
+  (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Buffer reads: BUFFER_WRITE* to the same buffer at the same offset
+  (lowering (buffer-readi64 a b tag)))
+
+~ Write i64/u64 value to buffer storage at specified offset
+~ A: pointer (buffer)
+~ B: int (offset)
+~ C: int64 (value)
+(define-ircmd BUFFER_WRITEI64
+  (operands a b val tag)
+  (class :effect)
+  (lowering (buffer-writei64 a b val tag)))

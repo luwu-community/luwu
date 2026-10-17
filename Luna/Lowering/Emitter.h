@@ -29,11 +29,28 @@ struct Rule
     std::vector<std::string> docs; // doc comments (~) on the definition, written above the generated function
 };
 
+// A generated lower_<CMD> function: a define-rule instantiated for one IR command, each rule parameter bound to one of
+// the command's operand slots (OP_A..OP_G) or to a literal
+struct LoweringInstance
+{
+    std::string cmdName; // e.g. "ADD_INT"
+    const Rule* rule = nullptr;
+    std::vector<int> operandIndex; // per rule parameter: the operand slot, or -1 when bound to `literals[i]`
+    std::vector<SExpr> literals;
+};
+
+// One case of the generated lowering dispatch, in IrCmd declaration order
+struct DispatchEntry
+{
+    std::string cmdName;
+    bool lowered = true; // false for pseudo-instructions, which are never lowered
+};
+
 std::vector<Rule> parseRules(const std::vector<SExpr>& program);
 std::vector<Rule> expandRules(const std::vector<Rule>& rules);
 
-void emitA64(std::ostream& os, const std::vector<Rule>& rules);
-void emitX64(std::ostream& os, const std::vector<Rule>& rules);
+void emitA64(std::ostream& os, const std::vector<LoweringInstance>& lowerings, const std::vector<DispatchEntry>& dispatch);
+void emitX64(std::ostream& os, const std::vector<LoweringInstance>& lowerings, const std::vector<DispatchEntry>& dispatch);
 
 void getA64Docs(std::vector<FormDoc>& ops, std::vector<FormDoc>& preds);
 void getX64Docs(std::vector<FormDoc>& ops, std::vector<FormDoc>& preds);

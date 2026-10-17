@@ -1,0 +1,116 @@
+~ Load a value from global table at specified key
+~ A: unsigned int (bytecode instruction index)
+~ B: Rn (dest)
+~ C: Kn (key)
+(define-ircmd FALLBACK_GETGLOBAL
+  (operands pc ra k)
+  (class :effect)
+  (heap-effects :invalidates-safe-env)
+  (lowering (fallback-getglobal pc ra k)))
+
+~ Store a value into global table at specified key
+~ A: unsigned int (bytecode instruction index)
+~ B: Rn (value)
+~ C: Kn (key)
+(define-ircmd FALLBACK_SETGLOBAL
+  (operands pc ra k)
+  (class :effect)
+  (heap-effects :invalidates-safe-env)
+  (lowering (fallback-setglobal pc ra k)))
+
+~ Load a value from table at specified key
+~ A: unsigned int (bytecode instruction index)
+~ B: Rn (dest)
+~ C: Rn (table)
+~ D: Kn (key)
+(define-ircmd FALLBACK_GETTABLEKS
+  (operands pc ra rb k)
+  (class :effect)
+  (heap-effects :invalidates-safe-env)
+  (lowering (fallback-gettableks pc ra rb k)))
+
+~ Store a value into a table at specified key
+~ A: unsigned int (bytecode instruction index)
+~ B: Rn (value)
+~ C: Rn (table)
+~ D: Kn (key)
+(define-ircmd FALLBACK_SETTABLEKS
+  (operands pc ra rb k)
+  (class :effect)
+  (heap-effects :invalidates-safe-env)
+  (lowering (fallback-settableks pc ra rb k)))
+
+~ Load function from source register using name into target register and copying source register into target register + 1
+~ A: unsigned int (bytecode instruction index)
+~ B: Rn (target)
+~ C: Rn (source)
+~ D: Kn (name)
+(define-ircmd FALLBACK_NAMECALL
+  (operands pc ra rb k)
+  (class :effect)
+  (heap-effects :invalidates-safe-env)
+  (lowering (fallback-namecall pc ra rb k)))
+
+~ Prepare stack for variadic functions so that GETVARARGS works correctly
+~ A: unsigned int (bytecode instruction index)
+~ B: int (numparams)
+(define-ircmd FALLBACK_PREPVARARGS
+  (operands pc numparams)
+  (class :effect)
+  (lowering (fallback-prepvarargs pc numparams)))
+
+~ Copy variables into the target registers from vararg storage for current function
+~ A: unsigned int (bytecode instruction index)
+~ B: Rn (dest start)
+~ C: int (count)
+(define-ircmd FALLBACK_GETVARARGS
+  (operands pc ra count)
+  (class :effect)
+  (lowering (fallback-getvarargs pc ra count)))
+
+~ Create closure from a pre-created function object (reusing it unless environments diverge)
+~ A: unsigned int (bytecode instruction index)
+~ B: Rn (dest)
+~ C: Kn (prototype)
+(define-ircmd FALLBACK_DUPCLOSURE
+  (operands pc ra k)
+  (class :effect)
+  (lowering (fallback-dupclosure pc ra k)))
+
+~ Prepare loop variables for a generic for loop, jump to the loop back edge unconditionally
+~ A: unsigned int (bytecode instruction index)
+~ B: Rn (loop state start, updates Rn Rn+1 Rn+2)
+~ C: block
+(define-ircmd FALLBACK_FORGPREP
+  (operands pc ra loop)
+  (class :terminator)
+  (heap-effects :invalidates-safe-env)
+  (lowering (fallback-forgprep pc ra loop)))
+
+~ Luwu Classes (rfcs/classes): construct an instance of a statically resolved class, using the
+~ same C implementation the interpreter uses. It covers the forms the native lowering doesn't
+~ handle, and the cases where the native lowering's guard misses. Unlike a bare exit, native
+~ execution continues after it instead of leaving the rest of the function to the interpreter, and
+~ register liveness stays honest.
+~ A: unsigned int (bytecode instruction index)
+~ B: Rn (instance destination, also the base of the constructor's register window)
+~ C: Rn (class)
+~ D: int (form: LBC_NEWOBJECT_DEFAULT, LBC_NEWOBJECT_INIT or LBC_NEWOBJECT_FIELDS)
+~ E: int (AUX: argument count for DEFAULT and INIT, field count for FIELDS)
+(define-ircmd FALLBACK_NEWOBJECT
+  (operands pc ra rb)
+  (class :effect)
+  (heap-effects :invalidates-safe-env)
+  (lowering (fallback-newobject pc ra rb)))
+
+~ Luwu Classes (rfcs/classes): add a member (a method, a primary constructor's synthesized
+~ __init, or a __defaults closure) to a class under construction. Runs as a C fallback for the
+~ same reason as FALLBACK_NEWOBJECT.
+~ A: unsigned int (bytecode instruction index)
+~ B: Rn (class)
+~ C: Rn (member value)
+(define-ircmd FALLBACK_NEWCLASSMEMBER
+  (operands pc ra rb)
+  (class :effect)
+  (heap-effects :invalidates-safe-env)
+  (lowering (fallback-newclassmember pc ra rb)))

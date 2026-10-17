@@ -21,57 +21,6 @@ namespace Luau
 namespace CodeGen
 {
 
-// Result-producing instructions that pass !hasSideEffects but are still unsafe to sink into ExitSync blocks
-static bool isUnsafeToSink(IrCmd cmd)
-{
-    switch (cmd)
-    {
-    // VM register reads: STORE_TAG/STORE_DOUBLE/STORE_TVALUE/etc. to the same VM register
-    case IrCmd::LOAD_TAG:
-    case IrCmd::LOAD_POINTER:
-    case IrCmd::LOAD_DOUBLE:
-    case IrCmd::LOAD_INT:
-    case IrCmd::LOAD_INT64:
-    case IrCmd::LOAD_FLOAT:
-    case IrCmd::LOAD_TVALUE:
-
-    // Buffer reads: BUFFER_WRITE* to the same buffer at the same offset
-    case IrCmd::BUFFER_READI8:
-    case IrCmd::BUFFER_READU8:
-    case IrCmd::BUFFER_READI16:
-    case IrCmd::BUFFER_READU16:
-    case IrCmd::BUFFER_READI32:
-    case IrCmd::BUFFER_READI64:
-    case IrCmd::BUFFER_READF32:
-    case IrCmd::BUFFER_READF64:
-
-    // Upvalue read: SET_UPVALUE to the same upvalue slot
-    case IrCmd::GET_UPVALUE:
-
-    // Reads table array metadata: TABLE_SETNUM can grow the array and change the length
-    case IrCmd::TABLE_LEN:
-
-    // Reads VM register: STORE_TAG/STORE_TVALUE/etc. to the same VM register
-    case IrCmd::GET_TYPEOF:
-
-    // Mutates table array part, invalidating reads
-    case IrCmd::TABLE_SETNUM:
-
-    // Can execute user metamethods via luaV_equalval/luaV_lessthan/luaV_lessequal
-    case IrCmd::CMP_ANY:
-
-    // Branch operand targets a fallback block: can't appear in an exit sync sequence
-    case IrCmd::TRY_NUM_TO_INDEX:
-    case IrCmd::TRY_CALL_FASTGETTM:
-    case IrCmd::TRY_OBJECT_MEMBER_ADDR:
-    case IrCmd::TRY_CLASS_MEMBER_ADDR:
-    case IrCmd::TRY_OBJECT_NAMECALL_ADDR:
-        return true;
-    default:
-        return false;
-    }
-}
-
 // Luau value structure reminder:
 // [              TValue             ]
 // [     Value     ][ Extra ][  Tag  ]

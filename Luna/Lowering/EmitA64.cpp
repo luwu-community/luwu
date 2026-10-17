@@ -1756,10 +1756,10 @@ void TargetBuilderA64::getArchOpDocs(std::vector<FormDoc>& out) const
     }
 }
 
-void emitA64(std::ostream& os, const std::vector<Rule>& rules)
+void emitA64(std::ostream& os, const std::vector<LoweringInstance>& lowerings, const std::vector<DispatchEntry>& dispatch)
 {
     TargetBuilderA64 target;
-    compileRules(os, target, rules);
+    compileRules(os, target, lowerings, dispatch);
 }
 
 void getA64Docs(std::vector<FormDoc>& ops, std::vector<FormDoc>& preds)

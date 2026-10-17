@@ -1750,10 +1750,10 @@ public:
     }
 };
 
-void emitX64(std::ostream& os, const std::vector<Rule>& rules)
+void emitX64(std::ostream& os, const std::vector<LoweringInstance>& lowerings, const std::vector<DispatchEntry>& dispatch)
 {
     TargetBuilderX64 target;
-    compileRules(os, target, rules);
+    compileRules(os, target, lowerings, dispatch);
 }
 
 void getX64Docs(std::vector<FormDoc>& ops, std::vector<FormDoc>& preds)

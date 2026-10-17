@@ -1,0 +1,104 @@
+~ Select one of the TValues based on the truthyness of A
+~ A: TValue
+~ B: TValue (if true)
+~ C: TValue (if false)
+(define-ircmd SELECT_IF_TRUTHY
+  (operands cond-val lhs rhs)
+  (result :tvalue)
+  (class :value)
+  (lowering (select-if-truthy cond-val lhs rhs)))
+
+~ Perform a TValue comparison, supported conditions are LessEqual, Less and Equal
+~ A, B: Rn
+~ C: condition
+(define-ircmd CMP_ANY
+  (operands a b cond)
+  (result :int)
+  (class :value)
+  (flags :deprecated/is-unsafe-to-sink :dirty-high-bits) ; unsafe to sink: Can execute user metamethods via luaV_equalval/luaV_lessthan/luaV_lessequal
+  (heap-effects :invalidates-safe-env)
+  (lowering (cmp-any a b cond)))
+
+~ Perform tag and value comparison. Result is an integer register containing 0 or 1
+(define-ircmd CMP_SPLIT_TVALUE
+  (operands tag-a tag-b val-a val-b cond)
+  (result :int)
+  (class :value)
+  (lowering (cmp-split-tvalue tag-a tag-b val-a val-b cond)))
+
+~ Jump if tags are equal
+~ A, B: tag
+~ C: block (if true)
+~ D: block (if false)
+(define-ircmd JUMP_EQ_TAG
+  (operands a b if-eq if-ne)
+  (class :terminator)
+  (lowering (jump-eq-tag a b if-eq if-ne)))
+
+~ Perform a conditional jump based on the result of double comparison
+~ A, B: double
+~ C: condition
+~ D: block (if true)
+~ E: block (if false)
+(define-ircmd JUMP_CMP_NUM
+  (operands a b cond if-true if-false)
+  (class :terminator)
+  (lowering (jump-cmp-num a b cond if-true if-false)))
+
+~ Perform a conditional jump based on the result of float comparison
+~ A, B: float
+~ C: condition
+~ D: block (if true)
+~ E: block (if false)
+(define-ircmd JUMP_CMP_FLOAT
+  (operands a b cond if-true if-false)
+  (class :terminator)
+  (lowering (jump-cmp-float a b cond if-true if-false)))
+
+~ Perform jump based on a numerical loop condition (step > 0 ? idx <= limit : limit <= idx)
+~ A: double (index)
+~ B: double (limit)
+~ C: double (step)
+~ D: block (if true)
+~ E: block (if false)
+(define-ircmd JUMP_FORN_LOOP_COND
+  (operands idx limit step loop exit)
+  (class :terminator)
+  (lowering (jump-forn-loop-cond idx limit step loop exit)))
+
+~ Guard against a falsy tag+value
+~ A: tag
+~ B: value
+~ C: block/vmexit/undef
+(define-ircmd CHECK_TRUTHY
+  (operands tag val fail)
+  (class :guard)
+  (lowering (check-truthy tag val fail)))
+
+~ Guard against executing in unsafe environment, exits to VM on check failure
+~ A: block/vmexit/undef
+~ When undef is specified, execution is aborted on check failure
+(define-ircmd CHECK_SAFE_ENV
+  (operands fail)
+  (class :guard)
+  (lowering (check-safe-env fail)))
+
+~ Guard against index overflowing the table array size
+~ A: pointer (LuaTable)
+~ B: int (index)
+~ C: block/vmexit/undef
+~ When undef is specified instead of a block, execution is aborted on check failure
+(define-ircmd CHECK_ARRAY_SIZE
+  (operands table size fail)
+  (class :guard)
+  (lowering (check-array-size table size fail)))
+
+~ Guard against the result of number comparison being false
+~ A, B: number
+~ C: condition
+~ D: block/vmexit/undef
+~ When undef is specified instead of a block, execution is aborted on check failure
+(define-ircmd CHECK_CMP_NUM
+  (operands a b cond fail)
+  (class :guard)
+  (lowering (check-cmp-num a b cond fail)))

@@ -4624,6 +4624,701 @@ inline void lower_NEWCLOSURE(IrLoweringX64& lowering, IrInst& inst, uint32_t ind
     inst.regX64 = regs.takeReg(rax, index);
 }
 
+// Lowers `inst` with the rule its define-ircmd names; pseudo-instructions are never lowered
+inline void lowerInstGenerated(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
+{
+    switch (inst.cmd)
+    {
+    case IrCmd::LOAD_BUFFER_DATA:
+        lower_LOAD_BUFFER_DATA(lowering, inst, index, next);
+        break;
+    case IrCmd::LOAD_ENV:
+        lower_LOAD_ENV(lowering, inst, index, next);
+        break;
+    case IrCmd::GET_CLOSURE_UPVAL_ADDR:
+        lower_GET_CLOSURE_UPVAL_ADDR(lowering, inst, index, next);
+        break;
+    case IrCmd::LOAD_OWNER_CLASS:
+        lower_LOAD_OWNER_CLASS(lowering, inst, index, next);
+        break;
+    case IrCmd::ADD_INT:
+        lower_ADD_INT(lowering, inst, index, next);
+        break;
+    case IrCmd::SUB_INT:
+        lower_SUB_INT(lowering, inst, index, next);
+        break;
+    case IrCmd::ADD_INT64:
+        lower_ADD_INT64(lowering, inst, index, next);
+        break;
+    case IrCmd::SUB_INT64:
+        lower_SUB_INT64(lowering, inst, index, next);
+        break;
+    case IrCmd::MUL_INT64:
+        lower_MUL_INT64(lowering, inst, index, next);
+        break;
+    case IrCmd::SEXTI8_INT:
+        lower_SEXTI8_INT(lowering, inst, index, next);
+        break;
+    case IrCmd::SEXTI16_INT:
+        lower_SEXTI16_INT(lowering, inst, index, next);
+        break;
+    case IrCmd::ADD_NUM:
+        lower_ADD_NUM(lowering, inst, index, next);
+        break;
+    case IrCmd::SUB_NUM:
+        lower_SUB_NUM(lowering, inst, index, next);
+        break;
+    case IrCmd::MUL_NUM:
+        lower_MUL_NUM(lowering, inst, index, next);
+        break;
+    case IrCmd::DIV_NUM:
+        lower_DIV_NUM(lowering, inst, index, next);
+        break;
+    case IrCmd::IDIV_NUM:
+        lower_IDIV_NUM(lowering, inst, index, next);
+        break;
+    case IrCmd::MIN_NUM:
+        lower_MIN_NUM(lowering, inst, index, next);
+        break;
+    case IrCmd::MAX_NUM:
+        lower_MAX_NUM(lowering, inst, index, next);
+        break;
+    case IrCmd::FLOOR_NUM:
+        lower_FLOOR_NUM(lowering, inst, index, next);
+        break;
+    case IrCmd::CEIL_NUM:
+        lower_CEIL_NUM(lowering, inst, index, next);
+        break;
+    case IrCmd::SQRT_NUM:
+        lower_SQRT_NUM(lowering, inst, index, next);
+        break;
+    case IrCmd::ADD_FLOAT:
+        lower_ADD_FLOAT(lowering, inst, index, next);
+        break;
+    case IrCmd::SUB_FLOAT:
+        lower_SUB_FLOAT(lowering, inst, index, next);
+        break;
+    case IrCmd::MUL_FLOAT:
+        lower_MUL_FLOAT(lowering, inst, index, next);
+        break;
+    case IrCmd::DIV_FLOAT:
+        lower_DIV_FLOAT(lowering, inst, index, next);
+        break;
+    case IrCmd::MIN_FLOAT:
+        lower_MIN_FLOAT(lowering, inst, index, next);
+        break;
+    case IrCmd::MAX_FLOAT:
+        lower_MAX_FLOAT(lowering, inst, index, next);
+        break;
+    case IrCmd::FLOOR_FLOAT:
+        lower_FLOOR_FLOAT(lowering, inst, index, next);
+        break;
+    case IrCmd::CEIL_FLOAT:
+        lower_CEIL_FLOAT(lowering, inst, index, next);
+        break;
+    case IrCmd::SQRT_FLOAT:
+        lower_SQRT_FLOAT(lowering, inst, index, next);
+        break;
+    case IrCmd::JUMP_EQ_POINTER:
+        lower_JUMP_EQ_POINTER(lowering, inst, index, next);
+        break;
+    case IrCmd::STRING_LEN:
+        lower_STRING_LEN(lowering, inst, index, next);
+        break;
+    case IrCmd::BUFFER_ISFROZEN:
+        lower_BUFFER_ISFROZEN(lowering, inst, index, next);
+        break;
+    case IrCmd::INT_TO_NUM:
+        lower_INT_TO_NUM(lowering, inst, index, next);
+        break;
+    case IrCmd::INT64_TO_NUM:
+        lower_INT64_TO_NUM(lowering, inst, index, next);
+        break;
+    case IrCmd::UINT_TO_NUM:
+        lower_UINT_TO_NUM(lowering, inst, index, next);
+        break;
+    case IrCmd::UINT_TO_FLOAT:
+        lower_UINT_TO_FLOAT(lowering, inst, index, next);
+        break;
+    case IrCmd::NUM_TO_INT:
+        lower_NUM_TO_INT(lowering, inst, index, next);
+        break;
+    case IrCmd::NUM_TO_INT64:
+        lower_NUM_TO_INT64(lowering, inst, index, next);
+        break;
+    case IrCmd::NUM_TO_UINT:
+        lower_NUM_TO_UINT(lowering, inst, index, next);
+        break;
+    case IrCmd::FLOAT_TO_NUM:
+        lower_FLOAT_TO_NUM(lowering, inst, index, next);
+        break;
+    case IrCmd::NUM_TO_FLOAT:
+        lower_NUM_TO_FLOAT(lowering, inst, index, next);
+        break;
+    case IrCmd::TRUNCATE_UINT:
+        lower_TRUNCATE_UINT(lowering, inst, index, next);
+        break;
+    case IrCmd::ADJUST_STACK_TO_TOP:
+        lower_ADJUST_STACK_TO_TOP(lowering, inst, index, next);
+        break;
+    case IrCmd::CHECK_FASTCALL_RES:
+        lower_CHECK_FASTCALL_RES(lowering, inst, index, next);
+        break;
+    case IrCmd::CHECK_TAG:
+        lower_CHECK_TAG(lowering, inst, index, next);
+        break;
+    case IrCmd::CHECK_READONLY:
+        lower_CHECK_READONLY(lowering, inst, index, next);
+        break;
+    case IrCmd::CHECK_NO_METATABLE:
+        lower_CHECK_NO_METATABLE(lowering, inst, index, next);
+        break;
+    case IrCmd::CHECK_NODE_NO_NEXT:
+        lower_CHECK_NODE_NO_NEXT(lowering, inst, index, next);
+        break;
+    case IrCmd::CHECK_NODE_VALUE:
+        lower_CHECK_NODE_VALUE(lowering, inst, index, next);
+        break;
+    case IrCmd::CHECK_OBJECT_CLASS:
+        lower_CHECK_OBJECT_CLASS(lowering, inst, index, next);
+        break;
+    case IrCmd::OBJECT_MEMBER_ADDR:
+        lower_OBJECT_MEMBER_ADDR(lowering, inst, index, next);
+        break;
+    case IrCmd::CHECK_BUFFER_MUTABLE:
+        lower_CHECK_BUFFER_MUTABLE(lowering, inst, index, next);
+        break;
+    case IrCmd::CHECK_USERDATA_TAG:
+        lower_CHECK_USERDATA_TAG(lowering, inst, index, next);
+        break;
+    case IrCmd::SET_SAVEDPC:
+        lower_SET_SAVEDPC(lowering, inst, index, next);
+        break;
+    case IrCmd::BITAND_INT64:
+        lower_BITAND_INT64(lowering, inst, index, next);
+        break;
+    case IrCmd::BITXOR_INT64:
+        lower_BITXOR_INT64(lowering, inst, index, next);
+        break;
+    case IrCmd::BITOR_INT64:
+        lower_BITOR_INT64(lowering, inst, index, next);
+        break;
+    case IrCmd::BITNOT_INT64:
+        lower_BITNOT_INT64(lowering, inst, index, next);
+        break;
+    case IrCmd::BYTESWAP_INT64:
+        lower_BYTESWAP_INT64(lowering, inst, index, next);
+        break;
+    case IrCmd::BITAND_UINT:
+        lower_BITAND_UINT(lowering, inst, index, next);
+        break;
+    case IrCmd::BITXOR_UINT:
+        lower_BITXOR_UINT(lowering, inst, index, next);
+        break;
+    case IrCmd::BITOR_UINT:
+        lower_BITOR_UINT(lowering, inst, index, next);
+        break;
+    case IrCmd::BITNOT_UINT:
+        lower_BITNOT_UINT(lowering, inst, index, next);
+        break;
+    case IrCmd::BYTESWAP_UINT:
+        lower_BYTESWAP_UINT(lowering, inst, index, next);
+        break;
+    case IrCmd::SELECT_INT64:
+        lower_SELECT_INT64(lowering, inst, index, next);
+        break;
+    case IrCmd::CMP_INT:
+        lower_CMP_INT(lowering, inst, index, next);
+        break;
+    case IrCmd::CMP_INT64:
+        lower_CMP_INT64(lowering, inst, index, next);
+        break;
+    case IrCmd::JUMP:
+        lower_JUMP(lowering, inst, index, next);
+        break;
+    case IrCmd::JUMP_CMP_INT:
+        lower_JUMP_CMP_INT(lowering, inst, index, next);
+        break;
+    case IrCmd::CHECK_CMP_INT:
+        lower_CHECK_CMP_INT(lowering, inst, index, next);
+        break;
+    case IrCmd::CHECK_CMP_INT64:
+        lower_CHECK_CMP_INT64(lowering, inst, index, next);
+        break;
+    case IrCmd::LOAD_TAG:
+        lower_LOAD_TAG(lowering, inst, index, next);
+        break;
+    case IrCmd::LOAD_POINTER:
+        lower_LOAD_POINTER(lowering, inst, index, next);
+        break;
+    case IrCmd::LOAD_DOUBLE:
+        lower_LOAD_DOUBLE(lowering, inst, index, next);
+        break;
+    case IrCmd::LOAD_INT:
+        lower_LOAD_INT(lowering, inst, index, next);
+        break;
+    case IrCmd::LOAD_INT64:
+        lower_LOAD_INT64(lowering, inst, index, next);
+        break;
+    case IrCmd::LOAD_FLOAT:
+        lower_LOAD_FLOAT(lowering, inst, index, next);
+        break;
+    case IrCmd::LOAD_TVALUE:
+        lower_LOAD_TVALUE(lowering, inst, index, next);
+        break;
+    case IrCmd::STORE_TAG:
+        lower_STORE_TAG(lowering, inst, index, next);
+        break;
+    case IrCmd::STORE_EXTRA:
+        lower_STORE_EXTRA(lowering, inst, index, next);
+        break;
+    case IrCmd::STORE_POINTER:
+        lower_STORE_POINTER(lowering, inst, index, next);
+        break;
+    case IrCmd::STORE_DOUBLE:
+        lower_STORE_DOUBLE(lowering, inst, index, next);
+        break;
+    case IrCmd::STORE_INT:
+        lower_STORE_INT(lowering, inst, index, next);
+        break;
+    case IrCmd::STORE_INT64:
+        lower_STORE_INT64(lowering, inst, index, next);
+        break;
+    case IrCmd::STORE_VECTOR:
+        lower_STORE_VECTOR(lowering, inst, index, next);
+        break;
+    case IrCmd::STORE_TVALUE:
+        lower_STORE_TVALUE(lowering, inst, index, next);
+        break;
+    case IrCmd::STORE_SPLIT_TVALUE:
+        lower_STORE_SPLIT_TVALUE(lowering, inst, index, next);
+        break;
+    case IrCmd::MOD_NUM:
+        lower_MOD_NUM(lowering, inst, index, next);
+        break;
+    case IrCmd::MULADD_NUM:
+        lower_MULADD_NUM(lowering, inst, index, next);
+        break;
+    case IrCmd::UNM_NUM:
+        lower_UNM_NUM(lowering, inst, index, next);
+        break;
+    case IrCmd::ROUND_NUM:
+        lower_ROUND_NUM(lowering, inst, index, next);
+        break;
+    case IrCmd::ABS_NUM:
+        lower_ABS_NUM(lowering, inst, index, next);
+        break;
+    case IrCmd::SIGN_NUM:
+        lower_SIGN_NUM(lowering, inst, index, next);
+        break;
+    case IrCmd::UNM_FLOAT:
+        lower_UNM_FLOAT(lowering, inst, index, next);
+        break;
+    case IrCmd::ABS_FLOAT:
+        lower_ABS_FLOAT(lowering, inst, index, next);
+        break;
+    case IrCmd::SIGN_FLOAT:
+        lower_SIGN_FLOAT(lowering, inst, index, next);
+        break;
+    case IrCmd::SELECT_NUM:
+        lower_SELECT_NUM(lowering, inst, index, next);
+        break;
+    case IrCmd::SELECT_VEC:
+        lower_SELECT_VEC(lowering, inst, index, next);
+        break;
+    case IrCmd::ADD_VEC:
+        lower_ADD_VEC(lowering, inst, index, next);
+        break;
+    case IrCmd::SUB_VEC:
+        lower_SUB_VEC(lowering, inst, index, next);
+        break;
+    case IrCmd::MUL_VEC:
+        lower_MUL_VEC(lowering, inst, index, next);
+        break;
+    case IrCmd::DIV_VEC:
+        lower_DIV_VEC(lowering, inst, index, next);
+        break;
+    case IrCmd::IDIV_VEC:
+        lower_IDIV_VEC(lowering, inst, index, next);
+        break;
+    case IrCmd::MULADD_VEC:
+        lower_MULADD_VEC(lowering, inst, index, next);
+        break;
+    case IrCmd::UNM_VEC:
+        lower_UNM_VEC(lowering, inst, index, next);
+        break;
+    case IrCmd::MIN_VEC:
+        lower_MIN_VEC(lowering, inst, index, next);
+        break;
+    case IrCmd::MAX_VEC:
+        lower_MAX_VEC(lowering, inst, index, next);
+        break;
+    case IrCmd::FLOOR_VEC:
+        lower_FLOOR_VEC(lowering, inst, index, next);
+        break;
+    case IrCmd::CEIL_VEC:
+        lower_CEIL_VEC(lowering, inst, index, next);
+        break;
+    case IrCmd::ABS_VEC:
+        lower_ABS_VEC(lowering, inst, index, next);
+        break;
+    case IrCmd::DOT_VEC:
+        lower_DOT_VEC(lowering, inst, index, next);
+        break;
+    case IrCmd::EXTRACT_VEC:
+        lower_EXTRACT_VEC(lowering, inst, index, next);
+        break;
+    case IrCmd::FLOAT_TO_VEC:
+        lower_FLOAT_TO_VEC(lowering, inst, index, next);
+        break;
+    case IrCmd::TAG_VECTOR:
+        lower_TAG_VECTOR(lowering, inst, index, next);
+        break;
+    case IrCmd::DIV_INT64:
+        lower_DIV_INT64(lowering, inst, index, next);
+        break;
+    case IrCmd::IDIV_INT64:
+        lower_IDIV_INT64(lowering, inst, index, next);
+        break;
+    case IrCmd::UDIV_INT64:
+        lower_UDIV_INT64(lowering, inst, index, next);
+        break;
+    case IrCmd::REM_INT64:
+        lower_REM_INT64(lowering, inst, index, next);
+        break;
+    case IrCmd::UREM_INT64:
+        lower_UREM_INT64(lowering, inst, index, next);
+        break;
+    case IrCmd::MOD_INT64:
+        lower_MOD_INT64(lowering, inst, index, next);
+        break;
+    case IrCmd::CHECK_DIV_INT64:
+        lower_CHECK_DIV_INT64(lowering, inst, index, next);
+        break;
+    case IrCmd::BITLSHIFT_INT64:
+        lower_BITLSHIFT_INT64(lowering, inst, index, next);
+        break;
+    case IrCmd::BITRSHIFT_INT64:
+        lower_BITRSHIFT_INT64(lowering, inst, index, next);
+        break;
+    case IrCmd::BITARSHIFT_INT64:
+        lower_BITARSHIFT_INT64(lowering, inst, index, next);
+        break;
+    case IrCmd::BITLROTATE_INT64:
+        lower_BITLROTATE_INT64(lowering, inst, index, next);
+        break;
+    case IrCmd::BITRROTATE_INT64:
+        lower_BITRROTATE_INT64(lowering, inst, index, next);
+        break;
+    case IrCmd::BITCOUNTLZ_INT64:
+        lower_BITCOUNTLZ_INT64(lowering, inst, index, next);
+        break;
+    case IrCmd::BITCOUNTRZ_INT64:
+        lower_BITCOUNTRZ_INT64(lowering, inst, index, next);
+        break;
+    case IrCmd::BITLSHIFT_UINT:
+        lower_BITLSHIFT_UINT(lowering, inst, index, next);
+        break;
+    case IrCmd::BITRSHIFT_UINT:
+        lower_BITRSHIFT_UINT(lowering, inst, index, next);
+        break;
+    case IrCmd::BITARSHIFT_UINT:
+        lower_BITARSHIFT_UINT(lowering, inst, index, next);
+        break;
+    case IrCmd::BITLROTATE_UINT:
+        lower_BITLROTATE_UINT(lowering, inst, index, next);
+        break;
+    case IrCmd::BITRROTATE_UINT:
+        lower_BITRROTATE_UINT(lowering, inst, index, next);
+        break;
+    case IrCmd::BITCOUNTLZ_UINT:
+        lower_BITCOUNTLZ_UINT(lowering, inst, index, next);
+        break;
+    case IrCmd::BITCOUNTRZ_UINT:
+        lower_BITCOUNTRZ_UINT(lowering, inst, index, next);
+        break;
+    case IrCmd::CHECK_BUFFER_LEN:
+        lower_CHECK_BUFFER_LEN(lowering, inst, index, next);
+        break;
+    case IrCmd::BUFFER_READI8:
+        lower_BUFFER_READI8(lowering, inst, index, next);
+        break;
+    case IrCmd::BUFFER_READU8:
+        lower_BUFFER_READU8(lowering, inst, index, next);
+        break;
+    case IrCmd::BUFFER_WRITEI8:
+        lower_BUFFER_WRITEI8(lowering, inst, index, next);
+        break;
+    case IrCmd::BUFFER_READI16:
+        lower_BUFFER_READI16(lowering, inst, index, next);
+        break;
+    case IrCmd::BUFFER_READU16:
+        lower_BUFFER_READU16(lowering, inst, index, next);
+        break;
+    case IrCmd::BUFFER_WRITEI16:
+        lower_BUFFER_WRITEI16(lowering, inst, index, next);
+        break;
+    case IrCmd::BUFFER_READI32:
+        lower_BUFFER_READI32(lowering, inst, index, next);
+        break;
+    case IrCmd::BUFFER_WRITEI32:
+        lower_BUFFER_WRITEI32(lowering, inst, index, next);
+        break;
+    case IrCmd::BUFFER_READF32:
+        lower_BUFFER_READF32(lowering, inst, index, next);
+        break;
+    case IrCmd::BUFFER_WRITEF32:
+        lower_BUFFER_WRITEF32(lowering, inst, index, next);
+        break;
+    case IrCmd::BUFFER_READF64:
+        lower_BUFFER_READF64(lowering, inst, index, next);
+        break;
+    case IrCmd::BUFFER_WRITEF64:
+        lower_BUFFER_WRITEF64(lowering, inst, index, next);
+        break;
+    case IrCmd::BUFFER_READI64:
+        lower_BUFFER_READI64(lowering, inst, index, next);
+        break;
+    case IrCmd::BUFFER_WRITEI64:
+        lower_BUFFER_WRITEI64(lowering, inst, index, next);
+        break;
+    case IrCmd::NOT_ANY:
+        lower_NOT_ANY(lowering, inst, index, next);
+        break;
+    case IrCmd::CMP_TAG:
+        lower_CMP_TAG(lowering, inst, index, next);
+        break;
+    case IrCmd::JUMP_IF_TRUTHY:
+        lower_JUMP_IF_TRUTHY(lowering, inst, index, next);
+        break;
+    case IrCmd::JUMP_IF_FALSY:
+        lower_JUMP_IF_FALSY(lowering, inst, index, next);
+        break;
+    case IrCmd::SELECT_IF_TRUTHY:
+        lower_SELECT_IF_TRUTHY(lowering, inst, index, next);
+        break;
+    case IrCmd::CMP_ANY:
+        lower_CMP_ANY(lowering, inst, index, next);
+        break;
+    case IrCmd::CMP_SPLIT_TVALUE:
+        lower_CMP_SPLIT_TVALUE(lowering, inst, index, next);
+        break;
+    case IrCmd::JUMP_EQ_TAG:
+        lower_JUMP_EQ_TAG(lowering, inst, index, next);
+        break;
+    case IrCmd::JUMP_CMP_NUM:
+        lower_JUMP_CMP_NUM(lowering, inst, index, next);
+        break;
+    case IrCmd::JUMP_CMP_FLOAT:
+        lower_JUMP_CMP_FLOAT(lowering, inst, index, next);
+        break;
+    case IrCmd::JUMP_FORN_LOOP_COND:
+        lower_JUMP_FORN_LOOP_COND(lowering, inst, index, next);
+        break;
+    case IrCmd::CHECK_TRUTHY:
+        lower_CHECK_TRUTHY(lowering, inst, index, next);
+        break;
+    case IrCmd::CHECK_SAFE_ENV:
+        lower_CHECK_SAFE_ENV(lowering, inst, index, next);
+        break;
+    case IrCmd::CHECK_ARRAY_SIZE:
+        lower_CHECK_ARRAY_SIZE(lowering, inst, index, next);
+        break;
+    case IrCmd::CHECK_CMP_NUM:
+        lower_CHECK_CMP_NUM(lowering, inst, index, next);
+        break;
+    case IrCmd::FALLBACK_GETGLOBAL:
+        lower_FALLBACK_GETGLOBAL(lowering, inst, index, next);
+        break;
+    case IrCmd::FALLBACK_SETGLOBAL:
+        lower_FALLBACK_SETGLOBAL(lowering, inst, index, next);
+        break;
+    case IrCmd::FALLBACK_GETTABLEKS:
+        lower_FALLBACK_GETTABLEKS(lowering, inst, index, next);
+        break;
+    case IrCmd::FALLBACK_SETTABLEKS:
+        lower_FALLBACK_SETTABLEKS(lowering, inst, index, next);
+        break;
+    case IrCmd::FALLBACK_NAMECALL:
+        lower_FALLBACK_NAMECALL(lowering, inst, index, next);
+        break;
+    case IrCmd::FALLBACK_PREPVARARGS:
+        lower_FALLBACK_PREPVARARGS(lowering, inst, index, next);
+        break;
+    case IrCmd::FALLBACK_GETVARARGS:
+        lower_FALLBACK_GETVARARGS(lowering, inst, index, next);
+        break;
+    case IrCmd::FALLBACK_DUPCLOSURE:
+        lower_FALLBACK_DUPCLOSURE(lowering, inst, index, next);
+        break;
+    case IrCmd::FALLBACK_FORGPREP:
+        lower_FALLBACK_FORGPREP(lowering, inst, index, next);
+        break;
+    case IrCmd::FALLBACK_NEWOBJECT:
+        lower_FALLBACK_NEWOBJECT(lowering, inst, index, next);
+        break;
+    case IrCmd::FALLBACK_NEWCLASSMEMBER:
+        lower_FALLBACK_NEWCLASSMEMBER(lowering, inst, index, next);
+        break;
+    case IrCmd::DO_ARITH:
+        lower_DO_ARITH(lowering, inst, index, next);
+        break;
+    case IrCmd::DO_LEN:
+        lower_DO_LEN(lowering, inst, index, next);
+        break;
+    case IrCmd::GET_TABLE:
+        lower_GET_TABLE(lowering, inst, index, next);
+        break;
+    case IrCmd::SET_TABLE:
+        lower_SET_TABLE(lowering, inst, index, next);
+        break;
+    case IrCmd::CONCAT:
+        lower_CONCAT(lowering, inst, index, next);
+        break;
+    case IrCmd::GET_TYPE:
+        lower_GET_TYPE(lowering, inst, index, next);
+        break;
+    case IrCmd::GET_TYPEOF:
+        lower_GET_TYPEOF(lowering, inst, index, next);
+        break;
+    case IrCmd::TABLE_LEN:
+        lower_TABLE_LEN(lowering, inst, index, next);
+        break;
+    case IrCmd::NEW_TABLE:
+        lower_NEW_TABLE(lowering, inst, index, next);
+        break;
+    case IrCmd::DUP_TABLE:
+        lower_DUP_TABLE(lowering, inst, index, next);
+        break;
+    case IrCmd::TABLE_SETNUM:
+        lower_TABLE_SETNUM(lowering, inst, index, next);
+        break;
+    case IrCmd::NEW_USERDATA:
+        lower_NEW_USERDATA(lowering, inst, index, next);
+        break;
+    case IrCmd::NEW_VECTOR:
+        lower_NEW_VECTOR(lowering, inst, index, next);
+        break;
+    case IrCmd::NEW_OBJECT:
+        lower_NEW_OBJECT(lowering, inst, index, next);
+        break;
+    case IrCmd::ADJUST_STACK_TO_REG:
+        lower_ADJUST_STACK_TO_REG(lowering, inst, index, next);
+        break;
+    case IrCmd::INTERRUPT:
+        lower_INTERRUPT(lowering, inst, index, next);
+        break;
+    case IrCmd::CHECK_GC:
+        lower_CHECK_GC(lowering, inst, index, next);
+        break;
+    case IrCmd::CLOSE_UPVALS:
+        lower_CLOSE_UPVALS(lowering, inst, index, next);
+        break;
+    case IrCmd::CAPTURE:
+        lower_CAPTURE(lowering, inst, index, next);
+        break;
+    case IrCmd::SETLIST:
+        lower_SETLIST(lowering, inst, index, next);
+        break;
+    case IrCmd::COVERAGE:
+        lower_COVERAGE(lowering, inst, index, next);
+        break;
+    case IrCmd::FINDUPVAL:
+        lower_FINDUPVAL(lowering, inst, index, next);
+        break;
+    case IrCmd::GET_ARR_ADDR:
+        lower_GET_ARR_ADDR(lowering, inst, index, next);
+        break;
+    case IrCmd::GET_SLOT_NODE_ADDR:
+        lower_GET_SLOT_NODE_ADDR(lowering, inst, index, next);
+        break;
+    case IrCmd::GET_HASH_NODE_ADDR:
+        lower_GET_HASH_NODE_ADDR(lowering, inst, index, next);
+        break;
+    case IrCmd::TRY_NUM_TO_INDEX:
+        lower_TRY_NUM_TO_INDEX(lowering, inst, index, next);
+        break;
+    case IrCmd::SET_UPVALUE:
+        lower_SET_UPVALUE(lowering, inst, index, next);
+        break;
+    case IrCmd::BARRIER_OBJ:
+        lower_BARRIER_OBJ(lowering, inst, index, next);
+        break;
+    case IrCmd::BARRIER_TABLE_BACK:
+        lower_BARRIER_TABLE_BACK(lowering, inst, index, next);
+        break;
+    case IrCmd::BARRIER_TABLE_FORWARD:
+        lower_BARRIER_TABLE_FORWARD(lowering, inst, index, next);
+        break;
+    case IrCmd::JUMP_SLOT_MATCH:
+        lower_JUMP_SLOT_MATCH(lowering, inst, index, next);
+        break;
+    case IrCmd::TRY_CALL_FASTGETTM:
+        lower_TRY_CALL_FASTGETTM(lowering, inst, index, next);
+        break;
+    case IrCmd::GET_CACHED_IMPORT:
+        lower_GET_CACHED_IMPORT(lowering, inst, index, next);
+        break;
+    case IrCmd::CHECK_SLOT_MATCH:
+        lower_CHECK_SLOT_MATCH(lowering, inst, index, next);
+        break;
+    case IrCmd::FASTCALL:
+        lower_FASTCALL(lowering, inst, index, next);
+        break;
+    case IrCmd::INVOKE_FASTCALL:
+        lower_INVOKE_FASTCALL(lowering, inst, index, next);
+        break;
+    case IrCmd::INVOKE_LIBM:
+        lower_INVOKE_LIBM(lowering, inst, index, next);
+        break;
+    case IrCmd::RETURN:
+        lower_RETURN(lowering, inst, index, next);
+        break;
+    case IrCmd::FORGLOOP:
+        lower_FORGLOOP(lowering, inst, index, next);
+        break;
+    case IrCmd::FORGLOOP_FALLBACK:
+        lower_FORGLOOP_FALLBACK(lowering, inst, index, next);
+        break;
+    case IrCmd::FORGPREP_XNEXT_FALLBACK:
+        lower_FORGPREP_XNEXT_FALLBACK(lowering, inst, index, next);
+        break;
+    case IrCmd::GET_UPVALUE:
+        lower_GET_UPVALUE(lowering, inst, index, next);
+        break;
+    case IrCmd::CALL:
+        lower_CALL(lowering, inst, index, next);
+        break;
+    case IrCmd::CLASS_ISINSTANCE:
+        lower_CLASS_ISINSTANCE(lowering, inst, index, next);
+        break;
+    case IrCmd::TRY_OBJECT_MEMBER_ADDR:
+        lower_TRY_OBJECT_MEMBER_ADDR(lowering, inst, index, next);
+        break;
+    case IrCmd::CHECK_CLASS_FIELDS_CONSTRUCTIBLE:
+        lower_CHECK_CLASS_FIELDS_CONSTRUCTIBLE(lowering, inst, index, next);
+        break;
+    case IrCmd::TRY_CLASS_MEMBER_ADDR:
+        lower_TRY_CLASS_MEMBER_ADDR(lowering, inst, index, next);
+        break;
+    case IrCmd::TRY_OBJECT_NAMECALL_ADDR:
+        lower_TRY_OBJECT_NAMECALL_ADDR(lowering, inst, index, next);
+        break;
+    case IrCmd::NEWCLOSURE:
+        lower_NEWCLOSURE(lowering, inst, index, next);
+        break;
+    case IrCmd::JUMP_CMP_PROTOID:
+        lower_JUMP_CMP_PROTOID(lowering, inst, index, next);
+        break;
+    case IrCmd::NOP:
+    case IrCmd::SUBSTITUTE:
+    case IrCmd::MARK_USED:
+    case IrCmd::MARK_DEAD:
+        CODEGEN_ASSERT(!"Pseudo instructions should not be lowered");
+        break;
+    }
+}
+
 } // namespace X64
 } // namespace CodeGen
 } // namespace Luau

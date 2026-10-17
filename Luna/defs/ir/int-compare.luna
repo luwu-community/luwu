@@ -1,0 +1,64 @@
+~ Select B if C cond D, otherwise select A
+~ A, B: int64 (endpoints)
+~ C, D: int64 (condition arguments)
+~ E: condition
+(define-ircmd SELECT_INT64
+  (operands a b c d cond)
+  (result :int64)
+  (class :value)
+  (lowering (select-int64 a b c d cond)))
+
+~ Perform a comparison of two integer numbers. Result is an integer register containing 0 or 1
+~ A, B: int
+~ C: condition
+(define-ircmd CMP_INT
+  (operands a b cond)
+  (result :int)
+  (class :value)
+  (lowering (cmp-int a b cond)))
+
+~ Perform a comparison of two int64 numbers. Result is an integer register containing 0 or 1
+~ A, B: int64
+~ C: condition
+(define-ircmd CMP_INT64
+  (operands a b cond)
+  (result :int)
+  (class :value)
+  (lowering (cmp-int64 a b cond)))
+
+~ Unconditional jump
+~ A: block/vmexit/undef
+(define-ircmd JUMP
+  (operands target)
+  (class :terminator)
+  (lowering (jump target)))
+
+~ Perform a conditional jump based on the result of integer comparison
+~ A, B: int
+~ C: condition
+~ D: block (if true)
+~ E: block (if false)
+(define-ircmd JUMP_CMP_INT
+  (operands a b cond target-d target-e)
+  (class :terminator)
+  (lowering (jump-cmp-int a b cond target-d target-e)))
+
+~ Guard against the result of integer comparison being false
+~ A, B: int
+~ C: condition
+~ D: block/vmexit/undef
+~ When undef is specified instead of a block, execution is aborted on check failure
+(define-ircmd CHECK_CMP_INT
+  (operands a b cond fail)
+  (class :guard)
+  (lowering (check-cmp-int a b cond fail)))
+
+~ Guard against the result of int64 comparison being false
+~ A, B: int64
+~ C: condition
+~ D: block/vmexit/undef
+~ When undef is specified instead of a block, execution is aborted on check failure
+(define-ircmd CHECK_CMP_INT64
+  (operands a b cond fail)
+  (class :guard)
+  (lowering (check-cmp-int64 a b cond fail)))

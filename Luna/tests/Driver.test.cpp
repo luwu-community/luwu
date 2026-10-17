@@ -61,10 +61,10 @@ TEST_CASE_FIXTURE(LunaFixture, "duplicate_definitions_across_files_report_both_l
 {
     file("root.luna", "(include \"a.luna\")\n(include \"b.luna\")");
     file("a.luna", kRuleA);
-    file("b.luna", kRuleA);
+    file("b.luna", "(define-rule (rule-a [a :op]) (unsupported!))");
 
     run({"root.luna", "out"});
-    requireError({"b.luna:1:15: error: Duplicate definition of 'rule-a'", "previously defined at a.luna:1:1"});
+    requireError({"b.luna:1:15: error: Duplicate definition of 'rule-a'", "previously defined at a.luna:2:1"});
 }
 
 TEST_CASE_FIXTURE(LunaFixture, "errors_in_included_files_show_the_include_stack")
@@ -145,7 +145,7 @@ TEST_CASE_FIXTURE(LunaFixture, "unchanged_outputs_are_not_rewritten")
 
     run({"root.luna", "out"});
     requireOk();
-    CHECK(out.find("2 output(s) updated") != std::string::npos);
+    CHECK(out.find("4 output(s) updated") != std::string::npos);
 
     auto before = fs::last_write_time(dir / "out/LoweringRulesA64.h");
 

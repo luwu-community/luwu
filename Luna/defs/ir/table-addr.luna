@@ -1,0 +1,37 @@
+~ Get pointer (TValue) to table array at index
+~ A: pointer (LuaTable)
+~ B: int
+(define-ircmd GET_ARR_ADDR
+  (operands table idx)
+  (result :pointer)
+  (class :value)
+  (lowering (get-arr-addr table idx)))
+
+~ Get pointer (LuaNode) to table node element at the active cached slot index
+~ A: pointer (LuaTable)
+~ B: unsigned int (pcpos)
+~ C: Kn
+(define-ircmd GET_SLOT_NODE_ADDR
+  (operands table pc)
+  (result :pointer)
+  (class :value)
+  (lowering (get-slot-node-addr table pc)))
+
+~ Get pointer (LuaNode) to table node element at the main position of the specified key hash
+~ A: pointer (LuaTable)
+~ B: unsigned int (hash)
+(define-ircmd GET_HASH_NODE_ADDR
+  (operands table hash)
+  (result :pointer)
+  (class :value)
+  (lowering (get-hash-node-addr table hash)))
+
+~ Try to convert a double number into a table index (int) or jump if it's not an integer
+~ A: double
+~ B: block
+(define-ircmd TRY_NUM_TO_INDEX
+  (operands num fail)
+  (result :int)
+  (class :guard)
+  (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Branch operand targets a fallback block: can't appear in an exit sync sequence
+  (lowering (try-num-to-index num fail)))

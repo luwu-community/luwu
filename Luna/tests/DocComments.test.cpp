@@ -9,6 +9,12 @@ namespace
 // Compiles root.luna and returns the generated A64 function for rule-a
 struct DocFixture : LunaFixture
 {
+    // root.luna with the RULE_A command that uses rule-a
+    void rootWithCmdA(const std::string& text)
+    {
+        file("root.luna", kCmdA + text);
+    }
+
     std::string lowerRuleA(const std::string& header = "out/LoweringRulesA64.h")
     {
         run({"root.luna", "out"});
@@ -29,7 +35,7 @@ TEST_SUITE_BEGIN("LunaDocComments");
 
 TEST_CASE_FIXTURE(DocFixture, "rule_docs_go_above_the_generated_function")
 {
-    file("root.luna", "~ Lowers rule-a\n"
+    rootWithCmdA("~ Lowers rule-a\n"
                       "~\n"
                       "~ Mentions regs, index and next\n"
                       "(define-rule (rule-a [a :op])\n"
@@ -54,7 +60,7 @@ TEST_CASE_FIXTURE(DocFixture, "rule_docs_go_above_the_generated_function")
 
 TEST_CASE_FIXTURE(DocFixture, "trailing_doc_on_the_rule_header_line_documents_the_rule")
 {
-    file("root.luna", "(define-rule (rule-a [a :op]) ~ Lowers rule-a\n"
+    rootWithCmdA("(define-rule (rule-a [a :op]) ~ Lowers rule-a\n"
                       "  (unsupported!))");
 
     CHECK(lowerRuleA().rfind("// Lowers rule-a\ninline void lower_RULE_A(", 0) == 0);
@@ -62,7 +68,7 @@ TEST_CASE_FIXTURE(DocFixture, "trailing_doc_on_the_rule_header_line_documents_th
 
 TEST_CASE_FIXTURE(DocFixture, "statement_docs")
 {
-    file("root.luna", "(define-rule (rule-a [a :op])\n"
+    rootWithCmdA("(define-rule (rule-a [a :op])\n"
                       "  ~ leading\n"
                       "  (unsupported!)\n"
                       "  (unsupported!) ~ trailing, one line\n"
@@ -79,7 +85,7 @@ TEST_CASE_FIXTURE(DocFixture, "statement_docs")
 
 TEST_CASE_FIXTURE(DocFixture, "binding_docs")
 {
-    file("root.luna", "(define-rule (rule-a [a :op])\n"
+    rootWithCmdA("(define-rule (rule-a [a :op])\n"
                       "  (let ([t (alloc-temp :i32)] ~ trailing\n"
                       "        ~ leading\n"
                       "        [u (alloc-temp :i32)])\n"
@@ -93,7 +99,7 @@ TEST_CASE_FIXTURE(DocFixture, "binding_docs")
 
 TEST_CASE_FIXTURE(DocFixture, "cond_clause_docs_go_before_the_branch")
 {
-    file("root.luna", "(define-rule (rule-a [a :op])\n"
+    rootWithCmdA("(define-rule (rule-a [a :op])\n"
                       "  (cond\n"
                       "    ~ constant\n"
                       "    [(constant? a) (unsupported!)]\n"
@@ -110,7 +116,7 @@ TEST_CASE_FIXTURE(DocFixture, "cond_clause_docs_go_before_the_branch")
 
 TEST_CASE_FIXTURE(DocFixture, "target_case_docs_only_reach_their_target")
 {
-    file("root.luna", "(define-rule (rule-a [a :op])\n"
+    rootWithCmdA("(define-rule (rule-a [a :op])\n"
                       "  (target-case\n"
                       "    ~ x64 branch\n"
                       "    [:x64 (unsupported!)]\n"
@@ -129,7 +135,7 @@ TEST_CASE_FIXTURE(DocFixture, "target_case_docs_only_reach_their_target")
 
 TEST_CASE_FIXTURE(DocFixture, "subrule_docs_are_written_where_the_subrule_is_used")
 {
-    file("root.luna", "~ helper docs stay in Luna\n"
+    rootWithCmdA("~ helper docs stay in Luna\n"
                       "(define-subrule (helper! [a :op])\n"
                       "  ~ inside helper\n"
                       "  (unsupported!))\n"
@@ -206,7 +212,7 @@ TEST_CASE_FIXTURE(LunaFixture, "unattached_docs_are_errors")
     {
         file("root.luna", std::string(kRuleA) + "\n~ dangling");
         run({"root.luna", "out"});
-        requireError({"root.luna:2:1: error: Doc comment isn't attached to anything"});
+        requireError({"root.luna:3:1: error: Doc comment isn't attached to anything"});
     }
 
     SUBCASE("trailing a line of closing brackets")
