@@ -1,0 +1,137 @@
+;; ============================================================================
+;; Allocating runtime objects
+;; ============================================================================
+
+(define-rule (new-table [narray :op] [nhash :op])
+  (target-case
+    [:x64
+     (let ([call-wrap (x64:call-wrapper-at)])
+       (x64:call-arg! call-wrap :qword rState)
+       (x64:call-arg! call-wrap :dword (to-int32 (uint-val narray)))
+       (x64:call-arg! call-wrap :dword (to-int32 (uint-val nhash)))
+       (x64:call! call-wrap (mem rNativeContext :NativeContext.luaH_new :ptr))
+       (alloc-result-in rax :ptr))]
+    [:a64
+     (a64:spill-all!)
+     (a64:mov! x0 rState)
+     (a64:mov! x1 (uint-val narray))
+     (a64:mov! x2 (uint-val nhash))
+     (a64:ldr! x3 (mem rNativeContext :NativeContext.luaH_new))
+     (a64:blr! x3)
+     (alloc-result-in x0 :ptr)]))
+
+;; A64 call with a single pointer argument that is an instruction result: x0 = L, x1 = argument
+(define-subrule (a64:call-with-object! [handler :any] [obj :op])
+  ~ resolve the operand register before the spill so it isn't reloaded redundantly
+  (let ([reg (reg-op obj)])
+    (a64:spill-keeping! reg)
+    (a64:mov! x1 reg)
+    (a64:mov! x0 rState)
+    (a64:ldr! x2 (mem rNativeContext handler))
+    (a64:blr! x2)
+    (alloc-result-in x0 :ptr)))
+
+(define-subrule (x64:call-with-object! [handler :any] [obj :op])
+  (let ([call-wrap (x64:call-wrapper-at)])
+    (x64:call-arg! call-wrap :qword rState)
+    (x64:call-arg-op! call-wrap :qword obj obj)
+    (x64:call! call-wrap (mem rNativeContext handler :ptr))
+    (alloc-result-in rax :ptr)))
+
+(define-rule (dup-table [table :op])
+  (target-case
+    [:x64 (x64:call-with-object! :NativeContext.luaH_clone table)]
+    [:a64 (a64:call-with-object! :NativeContext.luaH_clone table)]))
+
+(define-rule (new-object [cls :op])
+  (target-case
+    [:x64 (x64:call-with-object! :NativeContext.luaR_newobjectuninit cls)]
+    [:a64 (a64:call-with-object! :NativeContext.luaR_newobjectuninit cls)]))
+
+(define-rule (table-len [table :op])
+  (target-case
+    [:x64
+     (let ([call-wrap (x64:call-wrapper-at)])
+       (x64:call-arg-op! call-wrap :qword table table)
+       (x64:call! call-wrap (mem rNativeContext :NativeContext.luaH_getn :ptr))
+       (let ([res (alloc-result-in eax :i32)])
+         (x64:mov! res res)))] ~ clear the high register bits
+    [:a64
+     ~ resolve the operand register before the spill so it isn't reloaded redundantly
+     (let ([reg (reg-op table)])
+       (a64:spill-keeping! reg)
+       (a64:mov! x0 reg)
+       (a64:ldr! x1 (mem rNativeContext :NativeContext.luaH_getn))
+       (a64:blr! x1)
+       (let ([res (alloc-result-in w0 :i32)])
+         (a64:ubfx! res res 0 32)))])) ~ clear the high register bits
+
+(define-rule (table-setnum [table :op] [key :op])
+  (target-case
+    [:x64
+     (let ([call-wrap (x64:call-wrapper-at)])
+       (x64:call-arg! call-wrap :qword rState)
+       (x64:call-arg-op! call-wrap :qword table table)
+       (x64:call-arg-op! call-wrap :dword key key)
+       (x64:call! call-wrap (mem rNativeContext :NativeContext.luaH_setnum :ptr))
+       (alloc-result-in rax :ptr))]
+    [:a64
+     ~ resolve the operand registers before the spill so they aren't reloaded redundantly
+     (let ([table-reg (reg-op table)]
+           [key-reg (reg-op key)]
+           [temp (alloc-temp :u32)])
+       (a64:spill-keeping2! table-reg key-reg)
+       (if (!= w1 key-reg)
+           (begin
+             (a64:mov! x1 table-reg)
+             (a64:mov! w2 key-reg))
+           (begin
+             ~ the key is in w1, which the table argument overwrites
+             (a64:mov! temp w1)
+             (a64:mov! x1 table-reg)
+             (a64:mov! w2 temp)))
+       (a64:mov! x0 rState)
+       (a64:ldr! x3 (mem rNativeContext :NativeContext.luaH_setnum))
+       (a64:blr! x3)
+       (alloc-result-in x0 :ptr))]))
+
+(define-rule (new-userdata [size :op] [utag :op])
+  (target-case
+    [:x64
+     (let ([call-wrap (x64:call-wrapper-at)])
+       (x64:call-arg! call-wrap :qword rState)
+       (x64:call-arg! call-wrap :qword (int-val size))
+       (x64:call-arg! call-wrap :dword (int-val utag))
+       (x64:call! call-wrap (mem rNativeContext :NativeContext.newUserdata :ptr))
+       (alloc-result-in rax :ptr))]
+    [:a64
+     (a64:spill-all!)
+     (a64:mov! x0 rState)
+     (a64:mov! x1 (int-val size))
+     (a64:mov! x2 (int-val utag))
+     (a64:ldr! x3 (mem rNativeContext :NativeContext.newUserdata))
+     (a64:blr! x3)
+     (alloc-result-in x0 :ptr)]))
+
+(define-rule (new-vector [x :op] [y :op] [z :op])
+  (target-case
+    [:x64
+     (let ([call-wrap (x64:call-wrapper-at)])
+       (x64:call-arg! call-wrap :qword rState)
+       (x64:call-arg-op! call-wrap :xmmword (x64:mem-reg-double x) x)
+       (x64:call-arg-op! call-wrap :xmmword (x64:mem-reg-double y) y)
+       (x64:call-arg-op! call-wrap :xmmword (x64:mem-reg-double z) z)
+       (x64:call! call-wrap (mem rNativeContext :NativeContext.newVector :ptr))
+       (alloc-result-in rax :ptr))]
+    [:a64
+     (let ([tempx (a64:double-operand x)]
+           [tempy (a64:double-operand y)]
+           [tempz (a64:double-operand z)])
+       (a64:spill-keeping3! tempx tempy tempz)
+       (a64:mov! x0 rState)
+       (if (!= tempx d0) (a64:fmov! d0 tempx))
+       (if (!= tempy d1) (a64:fmov! d1 tempy))
+       (if (!= tempz d2) (a64:fmov! d2 tempz))
+       (a64:ldr! x1 (mem rNativeContext :NativeContext.newVector))
+       (a64:blr! x1)
+       (alloc-result-in x0 :ptr))]))

@@ -3,10 +3,29 @@
 
 #include "Luau/Label.h"
 
+#include <cstdint>
+#include <cstring>
+
 namespace Luau
 {
 namespace CodeGen
 {
+
+inline uint64_t getDoubleBits(double value)
+{
+    uint64_t result;
+    static_assert(sizeof(result) == sizeof(value), "Expecting double to be 64-bit");
+    memcpy(&result, &value, sizeof(value));
+    return result;
+}
+
+inline uint32_t getFloatBits(float value)
+{
+    uint32_t result;
+    static_assert(sizeof(result) == sizeof(value), "Expecting float to be 32-bit");
+    memcpy(&result, &value, sizeof(value));
+    return result;
+}
 
 constexpr unsigned kTValueSizeLog2 = 4;
 constexpr unsigned kLuaNodeSizeLog2 = 5;

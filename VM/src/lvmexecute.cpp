@@ -1237,17 +1237,36 @@ reentry:
                     StkId vali = L->top - n;
                     StkId valend = L->top;
 
-                    int i;
-                    for (i = nresults; i != 0 && vali < valend; i--)
-                        setobj2s(L, res++, vali++);
-                    while (i-- > 0)
-                        setnilvalue(res++);
+                    if (nresults == 1)
+                    {
+                        if (LUAU_LIKELY(n >= 1))
+                        {
+                            setobj2s(L, res, vali);
+                        }
+                        else
+                        {
+                            setnilvalue(res);
+                        }
+                        L->top = cip->top;
+                    }
+                    else if (nresults == 0)
+                    {
+                        L->top = cip->top;
+                    }
+                    else
+                    {
+                        int i;
+                        for (i = nresults; i != 0 && vali < valend; i--)
+                            setobj2s(L, res++, vali++);
+                        while (i-- > 0)
+                            setnilvalue(res++);
+
+                        L->top = (nresults == LUA_MULTRET) ? res : cip->top;
+                    }
 
                     // pop the stack frame
                     L->ci = cip;
                     L->base = cip->base;
-                    L->top = (nresults == LUA_MULTRET) ? res : cip->top;
-
                     base = L->base; // stack may have been reallocated, so we need to refresh base ptr
                     VM_NEXT();
                 }
@@ -1350,17 +1369,36 @@ reentry:
                     StkId vali = L->top - n;
                     StkId valend = L->top;
 
-                    int i;
-                    for (i = nresults; i != 0 && vali < valend; i--)
-                        setobj2s(L, res++, vali++);
-                    while (i-- > 0)
-                        setnilvalue(res++);
+                    if (nresults == 1)
+                    {
+                        if (LUAU_LIKELY(n >= 1))
+                        {
+                            setobj2s(L, res, vali);
+                        }
+                        else
+                        {
+                            setnilvalue(res);
+                        }
+                        L->top = cip->top;
+                    }
+                    else if (nresults == 0)
+                    {
+                        L->top = cip->top;
+                    }
+                    else
+                    {
+                        int i;
+                        for (i = nresults; i != 0 && vali < valend; i--)
+                            setobj2s(L, res++, vali++);
+                        while (i-- > 0)
+                            setnilvalue(res++);
+
+                        L->top = (nresults == LUA_MULTRET) ? res : cip->top;
+                    }
 
                     // pop the stack frame
                     L->ci = cip;
                     L->base = cip->base;
-                    L->top = (nresults == LUA_MULTRET) ? res : cip->top;
-
                     base = L->base; // stack may have been reallocated, so we need to refresh base ptr
                     VM_NEXT();
                 }
@@ -4149,11 +4187,29 @@ int luau_precall(lua_State* L, StkId func, int nresults)
         StkId vali = L->top - n;
         StkId valend = L->top;
 
-        int i;
-        for (i = nresults; i != 0 && vali < valend; i--)
-            setobj2s(L, res++, vali++);
-        while (i-- > 0)
-            setnilvalue(res++);
+        if (nresults == 1)
+        {
+            if (LUAU_LIKELY(n >= 1))
+            {
+                setobj2s(L, res, vali);
+            }
+            else
+            {
+                setnilvalue(res);
+            }
+            res++;
+        }
+        else if (nresults == 0)
+        {
+        }
+        else
+        {
+            int i;
+            for (i = nresults; i != 0 && vali < valend; i--)
+                setobj2s(L, res++, vali++);
+            while (i-- > 0)
+                setnilvalue(res++);
+        }
 
         // pop the stack frame
         L->ci = cip;

@@ -235,6 +235,14 @@ void emitExit(AssemblyBuilderX64& build, bool continueInVm);
 void emitUpdateBase(AssemblyBuilderX64& build);
 void emitInterrupt(AssemblyBuilderX64& build);
 void emitFallback(IrRegAllocX64& regs, AssemblyBuilderX64& build, int offset, int pcpos);
+void emitClassMemberAuthX64(
+    AssemblyBuilderX64& build,
+    IrRegAllocX64& regs,
+    RegisterX64 classReg,
+    RegisterX64 slotReg,
+    RegisterX64 writtenObject,
+    Label& mismatch
+);
 
 void emitUpdatePcForExit(AssemblyBuilderX64& build);
 

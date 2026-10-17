@@ -1,0 +1,496 @@
+;; ============================================================================
+;; Top-Level Opcode Rules
+;; ============================================================================
+
+(define-subrule (store-savedpc! [pc-addr :reg] [ci :reg] [pc-offset :any])
+  (begin
+    (code-address! pc-addr pc-offset)
+    (load-ptr! ci (mem rState :lua_State.ci))
+    (store-ptr! (mem ci :CallInfo.savedpc) pc-addr)))
+
+;; X64 allocates the CallInfo temp first, A64 the pc temp
+(define-rule (set-savedpc [pc-offset :uint])
+  (target-case
+    [:x64
+     (let ([ci (alloc-temp :ptr)]
+           [pc-addr (alloc-temp :ptr)])
+       (store-savedpc! pc-addr ci pc-offset))]
+    [:a64
+     (let ([pc-addr (alloc-temp :ptr)]
+           [ci (alloc-temp :ptr)])
+       (store-savedpc! pc-addr ci pc-offset))]))
+
+(define-rule (adjust-stack-to-top)
+  (let ([tmp (alloc-temp :ptr)])
+    (load-ptr! tmp (mem rState :lua_State.ci))
+    (load-ptr! tmp (mem tmp :CallInfo.top))
+    (store-ptr! (mem rState :lua_State.top) tmp)))
+
+(define-rule (check-readonly [table :reg] [fallback :label])
+  (check-mem-nonzero-u8 (mem table :LuaTable.readonly :u8) fallback))
+
+(define-rule (check-no-metatable [table :reg] [fallback :label])
+  (check-mem-nonzero-ptr (mem table :LuaTable.metatable :ptr) fallback))
+
+(define-rule (check-node-value [node :reg] [fallback :label])
+  (check-mem-zero-u32 (mem node :LuaNode.val.tt :u32) fallback))
+
+(define-rule (check-buffer-mutable [buf :reg] [fallback :label])
+  (check-mem-equal-u8 (mem buf :Buffer.mode :u8) :LUA_BHOST_IMMUTABLE fallback))
+
+(define-rule (check-fastcall-res [res :reg] [fallback :label])
+  (check-negative res fallback))
+
+(define-rule (check-userdata-tag [udata :reg] [tag :int] [fallback :label])
+  (check-mem-not-equal-u8 (mem udata :Udata.tag :u8) tag fallback))
+
+(define-rule (load-env)
+  (let ([res (alloc-result :ptr)])
+    (load-ptr! res (mem rClosure :Closure.env))))
+
+(define-rule (load-buffer-data [buf :reg])
+  (let ([res (alloc-result-reuse :ptr buf)])
+    (load-ptr! res (mem buf :Buffer.data))))
+
+(define-rule (load-owner-class)
+  (let ([res (alloc-result :ptr)])
+    (load-ptr! res (mem rClosure :Closure.l.p))
+    (load-ptr! res (mem res :Proto.ownerclass))))
+
+(define-rule (sexti8-int [val :reg])
+  (let ([res (alloc-result-reuse :i32 val)])
+    (sign-extend-8! res val)))
+
+(define-rule (sexti16-int [val :reg])
+  (let ([res (alloc-result-reuse :i32 val)])
+    (sign-extend-16! res val)))
+
+(define-rule (string-len [str :reg])
+  (let ([res (alloc-result :u32)])
+    (load-u32! res (mem str :TString.len :u32))))
+
+(define-rule (truncate-uint [val :reg])
+  (let ([res (alloc-result-reuse :u32 val)])
+    (truncate-uint! res val)))
+
+(define-rule (buffer-isfrozen [buf :reg])
+  (let ([res (alloc-result :u32)])
+    (emit-is-equal-mem-u8! res (mem buf :Buffer.mode :u8) :LUA_BHOST_IMMUTABLE)))
+
+(define-rule (byteswap-uint [val :op])
+  (let ([res (alloc-result-reuse :u32 val)])
+    (emit-byteswap-32 res val)))
+
+(define-rule (byteswap-int64 [val :op])
+  (let ([res (alloc-result-reuse :i64 val)])
+    (emit-byteswap-64 res val)))
+
+(define-rule (bitnot-uint [val :op])
+  (let ([res (alloc-result-reuse :u32 val)])
+    (emit-bitnot-32 res val)))
+
+(define-rule (bitnot-int64 [val :op])
+  (let ([res (alloc-result-reuse :i64 val)])
+    (emit-bitnot-64 res val)))
+
+(define-rule (bitand-uint [a :op] [b :op])
+  (let ([res (alloc-result-reuse-x64-lhs :u32 [a b] a)])
+    (emit-bitand-32 res a b)))
+
+(define-rule (bitxor-uint [a :op] [b :op])
+  (let ([res (alloc-result-reuse-x64-lhs :u32 [a b] a)])
+    (emit-bitxor-32 res a b)))
+
+(define-rule (bitor-uint [a :op] [b :op])
+  (let ([res (alloc-result-reuse-x64-lhs :u32 [a b] a)])
+    (emit-bitor-32 res a b)))
+
+(define-rule (bitand-int64 [a :op] [b :op])
+  (let ([res (alloc-result-reuse-x64-lhs :i64 [a b] a)])
+    (emit-bitand-64 res a b)))
+
+(define-rule (bitxor-int64 [a :op] [b :op])
+  (let ([res (alloc-result-reuse-x64-lhs :i64 [a b] a)])
+    (emit-bitxor-64 res a b)))
+
+(define-rule (bitor-int64 [a :op] [b :op])
+  (let ([res (alloc-result-reuse-x64-lhs :i64 [a b] a)])
+    (emit-bitor-64 res a b)))
+
+(define-rule (mul-int64 [a :op] [b :op])
+  (let ([res (alloc-result-reuse-x64-lhs :i64 [a b] a)])
+    (emit-mul-64 res a b)))
+
+(define-rule (add-int [a :op] [b :op])
+  (let ([res (alloc-result-reuse-x64-lhs :i32 [a b] a)])
+    (target-case
+      [:x64
+       (cond
+         [(constant? a)
+          (x64:lea-imm-32! res b a)]
+         [(inst? a)
+          (if (reused? res a)
+              (cond
+                [(inst? b)         (x64:add-reg-32! res b)]
+                [(= (int-val b) 1) (x64:inc! res)]
+                [else              (x64:add-imm-32! res b)])
+              (cond
+                [(inst? b)         (x64:lea-reg-32! res a b)]
+                [else              (x64:lea-imm-32! res a b)]))]
+         [else (unsupported!)])]
+      [:a64
+       (cond
+         [(and (constant? b) (a64:fits-imm-32? b)) (a64:add-imm-32! res a b)]
+         [(and (constant? a) (a64:fits-imm-32? a)) (a64:add-imm-32! res b a)]
+         [else
+          (let ([temp1 (a64:int-operand a)]
+                [temp2 (a64:int-operand b)])
+            (a64:add-reg-32! res temp1 temp2))])])))
+
+(define-rule (sub-int [a :op] [b :op])
+  (let ([res (alloc-result-reuse-x64-lhs :i32 [a b] a)])
+    (target-case
+      [:x64
+       (cond
+         [(inst? a)
+          (cond
+            [(constant? b)
+             (if (not-reused? res a)
+                 (x64:lea-sub-32! res a b)
+                 (x64:sub-imm-32! res b))]
+            [else
+             (if (not-reused? res a)
+                 (x64:mov-reg! res a))
+             (x64:sub-reg-32! res b)])]
+         [(inst? b)
+          (x64:mov-imm-32! res a)
+          (x64:sub-reg-32! res b)]
+         [else (unsupported!)])]
+      [:a64
+       (if (and (constant? b) (a64:fits-imm-32? b))
+           (a64:sub-imm-32! res a b)
+           (let ([temp1 (a64:int-operand a)]
+                 [temp2 (a64:int-operand b)])
+             (a64:sub-reg-32! res temp1 temp2)))])))
+
+(define-rule (add-int64 [a :op] [b :op])
+  (let ([res (alloc-result-reuse-x64-lhs :i64 [a b] a)])
+    (target-case
+      [:x64
+       (cond
+         [(constant? a)
+          (if (fits-i32? a)
+              (x64:lea-imm-64! res b a)
+              (begin
+                (x64:mov-imm-64! res a)
+                (x64:add-reg-64! res b)))]
+         [(inst? a)
+          (if (reused? res a)
+              (cond
+                [(inst? b)           (x64:add-reg-64! res b)]
+                [(= (int64-val b) 1) (x64:inc! res)]
+                [(fits-i32? b)       (x64:add-imm-64! res b)]
+                [else
+                  (let ([tmp (alloc-temp :i64)])
+                    (x64:mov-imm-64! tmp b)
+                    (x64:add-reg-64! res tmp))])
+              (cond
+                [(inst? b)           (x64:lea-reg-64! res a b)]
+                [(fits-i32? b)       (x64:lea-imm-64! res a b)]
+                [else
+                  (x64:mov-imm-64! res b)
+                  (x64:add-reg-64! res a)]))]
+         [else (unsupported!)])]
+      [:a64
+       (cond
+         [(and (constant? b) (a64:fits-imm-64? b))
+          (let ([temp (a64:int64-operand a)])
+            (a64:add-imm-64! res temp b))]
+         [(and (constant? a) (a64:fits-imm-64? a))
+          (let ([temp (a64:int64-operand b)])
+            (a64:add-imm-64! res temp a))]
+         [else
+          (let ([temp1 (a64:int64-operand a)]
+                [temp2 (a64:int64-operand b)])
+            (a64:add-reg-64! res temp1 temp2))])])))
+
+(define-rule (sub-int64 [a :op] [b :op])
+  (let ([res (alloc-result-reuse-x64-lhs :i64 [a b] a)])
+    (target-case
+      [:x64
+       (cond
+         [(inst? a)
+          (cond
+            [(constant? b)
+             (if (fits-i32? b)
+                 (if (not-reused? res a)
+                     (x64:lea-sub-64! res a b)
+                     (x64:sub-imm-64! res b))
+                 (let ([tmp (alloc-temp :i64)])
+                   (if (not-reused? res a)
+                       (x64:mov-reg! res a))
+                   (x64:mov-imm-64! tmp b)
+                   (x64:sub-reg-64! res tmp)))]
+            [else
+             (if (not-reused? res a)
+                 (x64:mov-reg! res a))
+             (x64:sub-reg-64! res b)])]
+         [(inst? b)
+          (x64:mov-imm-64! res a)
+          (x64:sub-reg-64! res b)]
+         [else (unsupported!)])]
+      [:a64
+       (if (and (constant? b) (a64:fits-imm-64? b))
+           (let ([temp (a64:int64-operand a)])
+             (a64:sub-imm-64! res temp b))
+           (let ([temp1 (a64:int64-operand a)]
+                 [temp2 (a64:int64-operand b)])
+             (a64:sub-reg-64! res temp1 temp2)))])))
+
+(define-subrule (shr-u32-imm! [dest :reg] [imm :any])
+  (target-case
+    [:x64 (x64:shr-imm-32! dest imm)]
+    [:a64 (a64:lsr-imm-32! dest dest imm)]))
+
+(define-subrule (add-ptr-offset! [dest :reg] [base :reg] [disp :any])
+  (target-case
+    [:x64 (x64:lea-offset! dest base disp)]
+    [:a64 (a64:add-offset! dest base disp)]))
+
+(define-rule (check-object-class [obj :reg] [expected-class :reg] [fallback :label])
+  (let ([tmp (alloc-temp :ptr)])
+    (load-ptr! tmp (mem obj :LuauObject.lclass :ptr))
+    (check-not-equal tmp expected-class fallback)))
+
+(define-rule (check-node-no-next [node :reg] [fallback :label])
+  (let ([tmp (alloc-temp :u32)])
+    (load-u32! tmp (mem node (+ :LuaNode.key :kOffsetOfTKeyTagNext) :u32))
+    (shr-u32-imm! tmp :kTKeyTagBits)
+    (target-case
+      [:x64 (x64:jump-or-abort-on-undef! :NotZero fallback)]
+      [:a64 (a64:guard-nz! tmp fallback)])))
+
+(define-rule (check-tag [a :op] [b :tag] [fallback :label])
+  (target-case
+    [:x64
+     (x64:branch-if-tag-not-equal! a b fallback)]
+    [:a64
+     (if (= b 0)
+         (a64:guard-nz! a fallback)
+         (a64:branch-if-not-equal! a b fallback))]))
+
+(define-rule (jump-eq-pointer [a :reg] [b :reg] [then-block :label] [else-block :label])
+  (jump-if-equal! a b then-block)
+  (jump-or-fallthrough! else-block))
+
+(define-rule (object-member-addr [obj :reg] [offset :uint])
+  (let ([res (alloc-result :ptr)])
+    (add-ptr-offset! res obj (+ :LUAR_OBJECT_MEMBERS_OFFSET (* offset (sizeof :TValue))))))
+
+(define-rule (get-closure-upval-addr [cl :op] [upval :upvalue])
+  (let ([res (alloc-result-reuse :ptr cl)])
+    (let ([disp (+ :Closure.l.uprefs (* upval (sizeof :TValue)))])
+      (target-case
+        [:x64
+         (if (undef? cl)
+             (x64:mov-closure! res)
+             (if (not-reused? res cl)
+                 (x64:mov-reg! res cl)))
+         (x64:add-offset! res disp)]
+        [:a64
+         (if (undef? cl)
+             (a64:add-imm-u16! res rClosure disp)
+             (a64:add-imm-u16! res cl disp))]))))
+
+(define-rule (int-to-num [a :op])
+  (let ([res (alloc-result :f64)])
+    (target-case
+      [:x64 (x64:vcvtsi2sd! res a)]
+      [:a64
+       (let ([tmp (a64:int-operand a)])
+         (a64:scvtf! res tmp))])))
+
+(define-rule (int64-to-num [a :op])
+  (let ([res (alloc-result :f64)])
+    (target-case
+      [:x64 (x64:vcvtsi2sd! res a)]
+      [:a64
+       (let ([tmp (a64:int64-operand a)])
+         (a64:scvtf! res tmp))])))
+
+(define-rule (uint-to-num [a :op])
+  (let ([res (alloc-result :f64)])
+    (target-case
+      [:x64
+       ~ A uint produced by NUM_TO_UINT may have garbage in the upper half of its 64-bit register
+       (if (cmd-is? a :NUM_TO_UINT)
+           (let ([tmp (alloc-temp :u32)])
+             (x64:mov-reg! tmp a)
+             (x64:vcvtsi2sd-qword! res tmp))
+           (begin
+             (assert! (not (cmd-is? a :SUBSTITUTE)))
+             (x64:vcvtsi2sd-qword! res a)))]
+      [:a64
+       (let ([tmp (a64:int-operand a)])
+         (a64:ucvtf! res tmp))])))
+
+(define-rule (uint-to-float [a :op])
+  (let ([res (alloc-result :f32)])
+    (target-case
+      [:x64
+       ~ A uint produced by NUM_TO_UINT may have garbage in the upper half of its 64-bit register
+       (if (cmd-is? a :NUM_TO_UINT)
+           (let ([tmp (alloc-temp :u32)])
+             (x64:mov-reg! tmp a)
+             (x64:vcvtsi2ss-qword! res tmp))
+           (begin
+             (assert! (not (cmd-is? a :SUBSTITUTE)))
+             (x64:vcvtsi2ss-qword! res a)))]
+      [:a64
+       (let ([tmp (a64:int-operand a)])
+         (a64:ucvtf! res tmp))])))
+
+(define-rule (num-to-int [a :op])
+  (let ([res (alloc-result :i32)])
+    (target-case
+      [:x64 (x64:vcvttsd2si! res a)]
+      [:a64
+       (let ([tmp (a64:double-operand a)])
+         (a64:fcvtzs! res tmp))])))
+
+(define-rule (num-to-int64 [a :op])
+  (let ([res (alloc-result :i64)])
+    (target-case
+      [:x64 (x64:vcvttsd2si! res a)]
+      [:a64
+       (let ([tmp (a64:double-operand a)])
+         (a64:fcvtzs! res tmp))])))
+
+(define-rule (num-to-uint [a :op])
+  (let ([res (alloc-result :u32)])
+    (target-case
+      [:x64 (x64:vcvttsd2si-64! res a)]
+      [:a64
+       (let ([tmp (a64:double-operand a)])
+         (a64:fcvtzs-64! res tmp))])))
+
+(define-rule (float-to-num [a :op])
+  (target-case
+    [:x64
+     (let ([res (alloc-result-reuse :f64 a)])
+       (x64:vcvtss2sd! res a))]
+    [:a64
+     (let ([res (alloc-result :f64)])
+       (a64:fcvt! res a))]))
+
+(define-rule (num-to-float [a :op])
+  (target-case
+    [:x64
+     (let ([res (alloc-result-reuse :f32 a)])
+       (x64:vcvtsd2ss! res a))]
+    [:a64
+     (let ([res (alloc-result :f32)])
+       (a64:fcvt! res a))]))
+
+(define-rule (add-num [a :op] [b :op])
+  (let ([res (alloc-result-reuse :f64 [a b])])
+    (emit-add-num res a b)))
+
+(define-rule (sub-num [a :op] [b :op])
+  (let ([res (alloc-result-reuse :f64 [a b])])
+    (emit-sub-num res a b)))
+
+(define-rule (mul-num [a :op] [b :op])
+  (let ([res (alloc-result-reuse :f64 [a b])])
+    (emit-mul-num res a b)))
+
+(define-rule (div-num [a :op] [b :op])
+  (let ([res (alloc-result-reuse :f64 [a b])])
+    (emit-div-num res a b)))
+
+(define-rule (idiv-num [a :op] [b :op])
+  (let ([res (alloc-result-reuse :f64 [a b])])
+    (emit-div-num res a b)
+    (target-case
+      [:x64 (x64:vroundsd-floor! res res)]
+      [:a64 (a64:frintm! res res)])))
+
+(define-rule (min-num [a :op] [b :op])
+  (let ([res (alloc-result-reuse :f64 [a b])])
+    (emit-min-num res a b)))
+
+(define-rule (max-num [a :op] [b :op])
+  (let ([res (alloc-result-reuse :f64 [a b])])
+    (emit-max-num res a b)))
+
+(define-rule (floor-num [a :op])
+  (let ([res (alloc-result-reuse :f64 a)])
+    (target-case
+      [:x64 (x64:vroundsd-floor! res a)]
+      [:a64
+       (let ([t (a64:double-operand a)])
+         (a64:frintm! res t))])))
+
+(define-rule (ceil-num [a :op])
+  (let ([res (alloc-result-reuse :f64 a)])
+    (target-case
+      [:x64 (x64:vroundsd-ceil! res a)]
+      [:a64
+       (let ([t (a64:double-operand a)])
+         (a64:frintp! res t))])))
+
+(define-rule (sqrt-num [a :op])
+  (let ([res (alloc-result-reuse :f64 a)])
+    (target-case
+      [:x64 (x64:vsqrtsd! res a)]
+      [:a64
+       (let ([t (a64:double-operand a)])
+         (a64:fsqrt! res t))])))
+
+(define-rule (add-float [a :op] [b :op])
+  (let ([res (alloc-result-reuse :f32 [a b])])
+    (emit-add-float res a b)))
+
+(define-rule (sub-float [a :op] [b :op])
+  (let ([res (alloc-result-reuse :f32 [a b])])
+    (emit-sub-float res a b)))
+
+(define-rule (mul-float [a :op] [b :op])
+  (let ([res (alloc-result-reuse :f32 [a b])])
+    (emit-mul-float res a b)))
+
+(define-rule (div-float [a :op] [b :op])
+  (let ([res (alloc-result-reuse :f32 [a b])])
+    (emit-div-float res a b)))
+
+(define-rule (min-float [a :op] [b :op])
+  (let ([res (alloc-result-reuse :f32 [a b])])
+    (emit-min-float res a b)))
+
+(define-rule (max-float [a :op] [b :op])
+  (let ([res (alloc-result-reuse :f32 [a b])])
+    (emit-max-float res a b)))
+
+(define-rule (floor-float [a :op])
+  (let ([res (alloc-result-reuse :f32 a)])
+    (target-case
+      [:x64 (x64:vroundss-floor! res a)]
+      [:a64
+       (let ([t (a64:float-operand a)])
+         (a64:frintm! res t))])))
+
+(define-rule (ceil-float [a :op])
+  (let ([res (alloc-result-reuse :f32 a)])
+    (target-case
+      [:x64 (x64:vroundss-ceil! res a)]
+      [:a64
+       (let ([t (a64:float-operand a)])
+         (a64:frintp! res t))])))
+
+(define-rule (sqrt-float [a :op])
+  (let ([res (alloc-result-reuse :f32 a)])
+    (target-case
+      [:x64 (x64:vsqrtss! res a)]
+      [:a64
+       (let ([t (a64:float-operand a)])
+         (a64:fsqrt! res t))])))

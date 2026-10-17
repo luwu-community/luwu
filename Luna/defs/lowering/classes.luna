@@ -1,0 +1,374 @@
+;; ============================================================================
+;; Closures and classes
+;; ============================================================================
+
+(define-rule (jump-cmp-protoid [closure :op] [protoid :op] [if-eq :label] [if-ne :label])
+  (assert! (kind? closure :Inst))
+  (target-case
+    [:x64
+     ~ C closures never match
+     (x64:cmp-op! (mem closure :Closure.isC :u8) 0)
+     (x64:jcc! :NotEqual (label-of if-ne))
+     (block
+       (let ([tmp (alloc-temp :ptr)])
+         (x64:mov! tmp (mem closure :Closure.l.p :ptr))
+         (x64:cmp-op! (mem tmp :Proto.funid :u32) (uint-val protoid))
+         (x64:jcc! :NotEqual (label-of if-ne))))]
+    [:a64
+     (let ([temp (alloc-temp :ptr)]
+           [tempw (a64:cast-w temp)])
+       ~ C closures never match
+       (a64:ldrb-op! tempw (mem closure :Closure.isC))
+       (a64:cbnz! tempw (label-of if-ne))
+       ~ compare the proto's funid
+       (a64:ldr! temp (mem closure :Closure.l.p))
+       (a64:ldr! tempw (mem temp :Proto.funid))
+       (let ([proto-id (uint-val protoid)])
+         (if (<= proto-id :AssemblyBuilderA64::kMaxImmediate)
+             (a64:cmp-imm! tempw proto-id)
+             (let ([temp2 (alloc-temp :u32)])
+               (a64:mov! temp2 proto-id)
+               (a64:cmp-reg! tempw temp2))))
+       (a64:b-cond! (a64:cond :NotEqual) (label-of if-ne)))])
+  (jump-or-fallthrough! if-eq))
+
+(define-rule (class-isinstance [tag :op] [obj :op] [cls :op])
+  ~ result = (tag == object) && (obj->lclass == cls); the dereference is guarded by the tag check, which constant
+  ~ propagation can fold to a known tag (e.g. after CHECKSELFCLASS)
+  (assert! (or (kind? tag :Inst) (constant? tag)))
+  (target-case
+    [:x64
+     (let ([res (alloc-result :i32)])
+       (x64:xor! res res)
+       ~ a value statically known not to be an object is never an instance
+       (if (not (and (constant? tag) (!= (tag-val tag) :LUA_TOBJECT)))
+           (let ([done (alloc-label)])
+             (if (not (constant? tag))
+                 (begin
+                   (x64:cmp-op! tag :LUA_TOBJECT)
+                   (x64:jcc! :NotEqual done)))
+             (x64:cmp-op! cls (mem obj :LuauObject.lclass :ptr))
+             (x64:setcc! (x64:cond :Equal) (x64:byte-reg res))
+             (set-label! done))))]
+    [:a64
+     (let ([res (alloc-result :i32)])
+       (a64:mov! res 0)
+       ~ a value statically known not to be an object is never an instance
+       (if (not (and (constant? tag) (!= (tag-val tag) :LUA_TOBJECT)))
+           ~ reserved before the tag branch, which skips to `done` on the main line
+           (let ([temp (alloc-temp :ptr)]
+                 [done (alloc-label)])
+             (if (not (constant? tag))
+                 (begin
+                   (a64:cmp-imm! tag :LUA_TOBJECT)
+                   (a64:b-cond! (a64:cond :NotEqual) done)))
+             (a64:ldr! temp (mem obj :LuauObject.lclass))
+             (a64:cmp-reg! temp cls)
+             (a64:cset! res (a64:cond :Equal))
+             (set-label! done))))]))
+
+~ The runtime conditions of executeNEWOBJECT's member-copy case (see IrData.h): no member defaults, and a custom __init
+~ (always a primary constructor here) that is either public or called from one of the class's own closures
+(define-rule (check-class-fields-constructible [cls :op] [fail :label])
+  (target-case
+    [:x64
+     (let ([fresh-label (alloc-label)]
+           [fail-label (x64:target-label fail fresh-label)]
+           [class-reg (reg-op cls)]
+           ~ reserved before the first branch: `constructible` rejoins the main line, so a register evicted after a
+           ~ branch to it would only be stored on the path that skipped it
+           [flags (alloc-temp :ptr)]
+           [offset (alloc-temp :ptr)]
+           [constructible (alloc-label)])
+       (x64:cmp-op! (mem class-reg :LuauClass.memberdefaults :ptr) 0)
+       (x64:jcc! :NotEqual fail-label)
+       (x64:cmp-op! (mem class-reg :LuauClass.hascustominit :u8) 0)
+       (x64:jcc! :Equal constructible)
+       (x64:mov! flags (mem class-reg :LuauClass.memberflags :ptr))
+       (x64:mov! (x64:dword-reg offset) (mem class-reg :LuauClass.initoffset :u32))
+       (x64:test! (x64:ptr2 :byte flags offset) (to-int8 :LBC_CLASSMEMBER_PRIVATE))
+       (x64:jcc! :Zero constructible)
+       ~ private: only from one of the class's own methods (or a closure nested in one)
+       (x64:mov! flags sClosure)
+       (x64:mov! flags (mem flags :Closure.l.p :ptr))
+       (x64:cmp-op! (mem flags :Proto.ownerclass :ptr) class-reg)
+       (x64:jcc! :NotEqual fail-label)
+       (set-label! constructible)
+       (x64:finalize-target-label! fail fresh-label))]
+    [:a64
+     (let ([fresh-label (alloc-label)]
+           [fail-label (a64:target-label fail fresh-label)]
+           [class-reg (reg-op cls)]
+           [tempw (alloc-temp :u32)]
+           [tempx (alloc-temp :ptr)]
+           [constructible (alloc-label)])
+       (a64:ldr! tempx (mem class-reg :LuauClass.memberdefaults))
+       (a64:cbnz! tempx fail-label)
+       (a64:ldrb-op! tempw (mem class-reg :LuauClass.hascustominit))
+       (a64:cbz! tempw constructible)
+       (a64:ldr! tempx (mem class-reg :LuauClass.memberflags))
+       (a64:ldr! tempw (mem class-reg :LuauClass.initoffset))
+       (a64:ldrb-op! tempw (mem tempx (a64:cast-x tempw)))
+       (a64:tst-imm! tempw (to-uint32 :LBC_CLASSMEMBER_PRIVATE))
+       (a64:b-cond! (a64:cond :Equal) constructible)
+       ~ private: only from one of the class's own methods (or a closure nested in one)
+       (a64:ldr! tempx (mem rClosure :Closure.l.p))
+       (a64:ldr! tempx (mem tempx :Proto.ownerclass))
+       (a64:cmp-reg! tempx class-reg)
+       (a64:b-cond! (a64:cond :NotEqual) fail-label)
+       (set-label! constructible)
+       (a64:finalize-target-label! fail fresh-label))]))
+
+;; Live cached member slot of the instruction at `pc` (patched by the interpreter or the native fallbacks)
+(define-subrule (a64:load-member-slot! [slotw :reg] [tempw :reg] [tempx :reg] [pc :op])
+  (begin
+    (if (<= (uint-val pc) :AddressA64::kMaxOffset)
+        (a64:ldr! tempw (mem rCode (* (uint-val pc) (sizeof :Instruction))))
+        (begin
+          (a64:mov! tempx (* (uint-val pc) (sizeof :Instruction)))
+          (a64:ldr! tempw (mem rCode tempx))))
+    (assert! (= :kOffsetOfInstructionC 3))
+    (a64:ubfx! slotw tempw 24 8)))
+
+(define-subrule (x64:load-member-slot! [slot :reg] [pc :op])
+  (begin
+    (x64:mov! slot sCode)
+    (x64:movzx! (x64:dword-reg slot) (mem slot (+ (* (uint-val pc) (sizeof :Instruction)) :kOffsetOfInstructionC) :u8))))
+
+;; Key check: offsettomember[slot] must name the expected member (constant `k`)
+(define-subrule (a64:check-member-key! [lclass :reg] [slotx :reg] [tempx :reg] [key :reg] [k :op] [mismatch :any])
+  (begin
+    (a64:ldr! tempx (mem lclass :LuauClass.offsettomember))
+    (a64:add-shifted! tempx tempx slotx 3) ~ pointer-sized elements: 1 << 3 == 8
+    (a64:ldr! tempx (mem tempx 0))
+    (a64:ldr! key (a64:temp-addr k :TValue.value))
+    (a64:cmp-reg! tempx key)
+    (a64:b-cond! (a64:cond :NotEqual) mismatch)))
+
+;; Abort path for an undef mismatch target
+(define-subrule (x64:member-abort-tail! [abort :any] [mismatch-op :op])
+  (if (kind? mismatch-op :Undef)
+      (let ([skip (alloc-label)])
+        (x64:jmp-label! skip)
+        (set-label! abort)
+        (x64:ud2!)
+        (set-label! skip))))
+
+(define-rule (try-object-member-addr [obj :op] [pc :op] [k :op] [mismatch-op :label] [write :op])
+  (let ([abort (alloc-label)]
+        [mismatch (label-or-local mismatch-op abort)]
+        [res (alloc-result :ptr)])
+    (target-case
+      [:x64
+       (let ([lclass (alloc-temp :ptr)]
+             [slot (alloc-temp :ptr)]
+             [key (alloc-temp :ptr)])
+         (x64:load-member-slot! slot pc)
+         (x64:mov! lclass (mem obj :LuauObject.lclass :ptr))
+         ~ bounds check: the slot must be an instance member; a static member read through an object (`obj.method`,
+         ~ not a call) deliberately misses into the fallback, keeping field reads to one check
+         (x64:cmp-op! (x64:dword-reg slot) (mem lclass :LuauClass.numberofinstancemembers :u32))
+         (x64:jcc! :AboveEqual mismatch)
+         ~ authorize private/const access (or bail); must run before the key check clobbers lclass below
+         (let ([written (if (and (has-op? write) (!= (uint-val write) 0)) (reg-op obj) noreg)])
+           (x64:class-member-auth! lclass slot written mismatch))
+         (x64:mov! key (x64:luau-constant-value (vm-const k)))
+         (x64:mov! lclass (mem lclass :LuauClass.offsettomember :ptr))
+         (x64:cmp-op! key (x64:ptr-scaled0 :qword lclass slot 8))
+         (x64:jcc! :NotEqual mismatch)
+         ~ address = self + LUAR_OBJECT_MEMBERS_OFFSET + slot * sizeof(TValue); sizeof(TValue) isn't a valid SIB
+         ~ scale, so the index register is shifted instead
+         (x64:shift-raw! :shl slot :kTValueSizeLog2)
+         (x64:lea-addr3! res obj slot :LUAR_OBJECT_MEMBERS_OFFSET)
+         (x64:member-abort-tail! abort mismatch-op))]
+      [:a64
+       (let ([slotw (alloc-temp :u32)]
+             [slotx (a64:cast-x slotw)]
+             [lclass (alloc-temp :ptr)]
+             [tempw (alloc-temp :u32)]
+             [tempx (a64:cast-x tempw)]
+             [key (alloc-temp :ptr)])
+         (a64:load-member-slot! slotw tempw tempx pc)
+         (a64:ldr! lclass (mem obj :LuauObject.lclass))
+         ~ bounds check: the slot must be an instance member; a static member read through an object (`obj.method`,
+         ~ not a call) deliberately misses into the fallback, keeping field reads to one check
+         (a64:ldr! tempw (mem lclass :LuauClass.numberofinstancemembers))
+         (a64:cmp-reg! slotw tempw)
+         (a64:b-cond! (a64:cond :CarrySet) mismatch)
+         ~ authorize private/const access (or bail)
+         (let ([written (if (and (has-op? write) (!= (uint-val write) 0)) (reg-op obj) noreg)])
+           (a64:class-member-auth! lclass slotx written mismatch))
+         (a64:check-member-key! lclass slotx tempx key k mismatch)
+         ~ address = self + LUAR_OBJECT_MEMBERS_OFFSET + slot * sizeof(TValue)
+         (a64:add-imm! res obj :LUAR_OBJECT_MEMBERS_OFFSET)
+         (a64:add-shifted! res res slotx :kTValueSizeLog2)
+         (if (kind? mismatch-op :Undef)
+             (a64:emit-abort! abort)))])))
+
+(define-rule (try-object-namecall-addr [obj :op] [pc :op] [k :op] [mismatch-op :label])
+  (let ([abort (alloc-label)]
+        [mismatch (label-or-local mismatch-op abort)]
+        [res (alloc-result :ptr)])
+    (target-case
+      [:x64
+       (let ([lclass (alloc-temp :ptr)]
+             [slot (alloc-temp :ptr)]
+             [key (alloc-temp :ptr)])
+         (x64:load-member-slot! slot pc)
+         (x64:mov! lclass (mem obj :LuauObject.lclass :ptr))
+         ~ bounds check: the slot must be a member (instance or static)
+         (x64:cmp-op! (x64:dword-reg slot) (mem lclass :LuauClass.numberofallmembers :u32))
+         (x64:jcc! :AboveEqual mismatch)
+         ~ authorize private method access (or bail); method resolution is a read
+         (x64:class-member-auth! lclass slot noreg mismatch)
+         (x64:mov! key (x64:luau-constant-value (vm-const k)))
+         (x64:mov! res (mem lclass :LuauClass.offsettomember :ptr))
+         (x64:cmp-op! key (x64:ptr-scaled0 :qword res slot 8))
+         (x64:jcc! :NotEqual mismatch)
+         (let ([is-static (alloc-label)]
+               [done (alloc-label)])
+           (x64:cmp-op! (x64:dword-reg slot) (mem lclass :LuauClass.numberofinstancemembers :u32))
+           (x64:jcc! :AboveEqual is-static)
+           ~ instance: address = self + LUAR_OBJECT_MEMBERS_OFFSET + slot * sizeof(TValue)
+           (x64:shift-raw! :shl slot :kTValueSizeLog2)
+           (x64:lea-addr3! res obj slot :LUAR_OBJECT_MEMBERS_OFFSET)
+           (x64:jmp-label! done)
+           ~ static: address = lclass->staticmembers + (slot - numberofinstancemembers) * sizeof(TValue)
+           (set-label! is-static)
+           (x64:sub! (x64:dword-reg slot) (mem lclass :LuauClass.numberofinstancemembers :u32))
+           (x64:shift-raw! :shl slot :kTValueSizeLog2)
+           (x64:mov! res (mem lclass :LuauClass.staticmembers :ptr))
+           (x64:add! res slot)
+           (set-label! done))
+         (x64:member-abort-tail! abort mismatch-op))]
+      [:a64
+       (let ([slotw (alloc-temp :u32)]
+             [slotx (a64:cast-x slotw)]
+             [lclass (alloc-temp :ptr)]
+             [tempw (alloc-temp :u32)]
+             [tempx (a64:cast-x tempw)]
+             [key (alloc-temp :ptr)]
+             [ninstance (alloc-temp :u32)])
+         (a64:load-member-slot! slotw tempw tempx pc)
+         (a64:ldr! lclass (mem obj :LuauObject.lclass))
+         ~ bounds check: the slot must be a member (instance or static)
+         (a64:ldr! tempw (mem lclass :LuauClass.numberofallmembers))
+         (a64:cmp-reg! slotw tempw)
+         (a64:b-cond! (a64:cond :CarrySet) mismatch)
+         ~ authorize private method access (or bail); method resolution is a read
+         (a64:class-member-auth! lclass slotx noreg mismatch)
+         (a64:check-member-key! lclass slotx tempx key k mismatch)
+         (let ([is-static (alloc-label)]
+               [done (alloc-label)])
+           (a64:ldr! ninstance (mem lclass :LuauClass.numberofinstancemembers))
+           (a64:cmp-reg! slotw ninstance)
+           (a64:b-cond! (a64:cond :CarrySet) is-static)
+           ~ instance: address = self + LUAR_OBJECT_MEMBERS_OFFSET + slot * sizeof(TValue)
+           (a64:add-imm! res obj :LUAR_OBJECT_MEMBERS_OFFSET)
+           (a64:add-shifted! res res slotx :kTValueSizeLog2)
+           (a64:b-label! done)
+           ~ static: address = lclass->staticmembers + (slot - numberofinstancemembers) * sizeof(TValue)
+           (set-label! is-static)
+           (a64:sub-reg! slotw slotw ninstance)
+           (a64:ldr! res (mem lclass :LuauClass.staticmembers))
+           (a64:add-shifted! res res slotx :kTValueSizeLog2)
+           (set-label! done))
+         (if (kind? mismatch-op :Undef)
+             (a64:emit-abort! abort)))])))
+
+(define-rule (try-class-member-addr [cls :op] [pc :op] [k :op] [mismatch-op :label])
+  (let ([abort (alloc-label)]
+        [mismatch (label-or-local mismatch-op abort)]
+        [res (alloc-result :ptr)])
+    (target-case
+      [:x64
+       (let ([slot (alloc-temp :ptr)]
+             [tmp (alloc-temp :ptr)]
+             [key (alloc-temp :ptr)])
+         (x64:load-member-slot! slot pc)
+         ~ bounds check: the slot must be a static member (instance members aren't readable here)
+         (x64:cmp-op! (x64:dword-reg slot) (mem cls :LuauClass.numberofinstancemembers :u32))
+         (x64:jcc! :Below mismatch)
+         (x64:cmp-op! (x64:dword-reg slot) (mem cls :LuauClass.numberofallmembers :u32))
+         (x64:jcc! :AboveEqual mismatch)
+         ~ authorize private static-member access (or bail); static access is read-only
+         (x64:class-member-auth! cls slot noreg mismatch)
+         (x64:mov! key (x64:luau-constant-value (vm-const k)))
+         (x64:mov! tmp (mem cls :LuauClass.offsettomember :ptr))
+         (x64:cmp-op! key (x64:ptr-scaled0 :qword tmp slot 8))
+         (x64:jcc! :NotEqual mismatch)
+         ~ address = staticmembers + (slot - numberofinstancemembers) * sizeof(TValue); sizeof(TValue) isn't a valid
+         ~ SIB scale, so the index register is shifted instead
+         (x64:sub! (x64:dword-reg slot) (mem cls :LuauClass.numberofinstancemembers :u32))
+         (x64:shift-raw! :shl slot :kTValueSizeLog2)
+         (x64:mov! res (mem cls :LuauClass.staticmembers :ptr))
+         (x64:add! res slot)
+         (x64:member-abort-tail! abort mismatch-op))]
+      [:a64
+       (let ([slotw (alloc-temp :u32)]
+             [slotx (a64:cast-x slotw)]
+             [tempw (alloc-temp :u32)]
+             [tempx (a64:cast-x tempw)]
+             [key (alloc-temp :ptr)])
+         (a64:load-member-slot! slotw tempw tempx pc)
+         ~ bounds check: the slot must be a static member (instance members aren't readable here)
+         (a64:ldr! tempw (mem cls :LuauClass.numberofinstancemembers))
+         (a64:cmp-reg! slotw tempw)
+         (a64:b-cond! (a64:cond :CarryClear) mismatch)
+         (a64:ldr! tempw (mem cls :LuauClass.numberofallmembers))
+         (a64:cmp-reg! slotw tempw)
+         (a64:b-cond! (a64:cond :CarrySet) mismatch)
+         ~ authorize private static-member access (or bail); static access is read-only
+         (a64:class-member-auth! cls slotx noreg mismatch)
+         (a64:check-member-key! cls slotx tempx key k mismatch)
+         ~ address = staticmembers + (slot - numberofinstancemembers) * sizeof(TValue)
+         (a64:ldr! tempw (mem cls :LuauClass.numberofinstancemembers))
+         (a64:sub-reg! slotw slotw tempw)
+         (a64:ldr! res (mem cls :LuauClass.staticmembers))
+         (a64:add-shifted! res res slotx :kTValueSizeLog2)
+         (if (kind? mismatch-op :Undef)
+             (a64:emit-abort! abort)))])))
+
+(define-rule (newclosure [nupvalues :op] [env :op] [proto-index :op])
+  (target-case
+    [:x64
+     (let ([tmp2 (x64:unallocated-temp)])
+       (x64:alloc! tmp2 :qword)
+       (if (fflag :LuauCIProto)
+           (begin
+             (x64:mov! (x64:reg-of tmp2) (mem rState :lua_State.ci :ptr))
+             (x64:mov! (x64:reg-of tmp2) (mem (x64:reg-of tmp2) :CallInfo.p :ptr)))
+           (begin
+             (x64:mov! (x64:reg-of tmp2) sClosure)
+             (x64:mov! (x64:reg-of tmp2) (mem (x64:reg-of tmp2) :Closure.l.p :ptr))))
+       (x64:mov! (x64:reg-of tmp2) (mem (x64:reg-of tmp2) :Proto.p :ptr))
+       (x64:mov! (x64:reg-of tmp2) (mem (x64:reg-of tmp2) (* (sizeof :Proto*) (uint-val proto-index)) :ptr))
+       (let ([call-wrap (x64:call-wrapper-at)])
+         (x64:call-arg! call-wrap :qword rState)
+         (x64:call-arg-op! call-wrap :dword (uint-val nupvalues) nupvalues)
+         (x64:call-arg-op! call-wrap :qword env env)
+         (x64:call-arg-scoped! call-wrap :qword tmp2)
+         (x64:call! call-wrap (mem rNativeContext :NativeContext.luaF_newLclosure :ptr))
+         (alloc-result-in rax :ptr)))]
+    [:a64
+     ~ resolve the operand register before the spill so it isn't reloaded redundantly
+     (let ([reg (reg-op env)])
+       (a64:spill-keeping! reg)
+       (a64:mov! x2 reg)
+       (a64:mov! x0 rState)
+       (a64:mov! w1 (uint-val nupvalues))
+       (if (fflag :LuauCIProto)
+           (begin
+             (a64:ldr! x3 (mem rState :lua_State.ci))
+             (a64:ldr! x3 (mem x3 :CallInfo.p)))
+           (a64:ldr! x3 (mem rClosure :Closure.l.p)))
+       (a64:ldr! x3 (mem x3 :Proto.p))
+       (let ([proto-offset (to-int (* (sizeof :Proto*) (uint-val proto-index)))]) ~ index is 0..32767
+         (if (<= (uint-val proto-index) :AddressA64::kMaxOffset)
+             (a64:ldr! x3 (mem x3 proto-offset))
+             (begin
+               (a64:mov! x4 proto-offset)
+               (a64:ldr! x3 (mem x3 x4)))))
+       (a64:ldr! x4 (mem rNativeContext :NativeContext.luaF_newLclosure))
+       (a64:blr! x4)
+       (alloc-result-in x0 :ptr))]))

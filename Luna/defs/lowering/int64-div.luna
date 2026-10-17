@@ -1,0 +1,222 @@
+;; ============================================================================
+;; 64-bit integer division and remainder
+;; ============================================================================
+
+(define-rule (div-int64 [a :op] [b :op])
+  (target-case
+    [:x64
+     ~ idiv clobbers rax (quotient) and rdx (remainder)
+     (let ([div-rax (x64:unallocated-temp)]
+           [div-rdx (x64:unallocated-temp)])
+       (x64:take! div-rax rax)
+       (x64:take! div-rdx rdx)
+       (x64:mov! rax (x64:mem-reg-int64 a))
+       (x64:cqo!) ~ sign-extend rax into rdx:rax
+       (x64:idiv! (x64:mem-reg-int64 b))
+       (let ([res (alloc-result-reuse :i64 [a b])])
+         (x64:mov! res rax)))]
+    [:a64
+     (let ([res (alloc-result-reuse :i64 [a b])]
+           [temp1 (a64:int64-operand a)]
+           [temp2 (a64:int64-operand b)])
+       (a64:sdiv! res temp1 temp2))]))
+
+(define-rule (idiv-int64 [a :op] [b :op])
+  (target-case
+    [:x64
+     ~ idiv clobbers rax (quotient) and rdx (remainder)
+     (let ([div-rax (x64:unallocated-temp)])
+       (x64:take! div-rax rax)
+       (let ([div-rdx (x64:unallocated-temp)])
+         (x64:take! div-rdx rdx)
+         (let ([temp-b (alloc-temp :i64)])
+           (x64:mov! temp-b (x64:mem-reg-int64 b))
+           ~ idiv divides rdx:rax by the operand; quotient in rax, remainder in rdx
+           (x64:mov! rax (x64:mem-reg-int64 a))
+           (x64:cqo!)
+           (x64:idiv! temp-b)
+           (let ([res (alloc-result-reuse :i64 [a b])]
+                 [done (alloc-label)])
+             (x64:mov! res rax) ~ start with the truncated quotient
+             (x64:test! rdx rdx)
+             (x64:jcc! :Equal done) ~ remainder == 0, no adjustment needed
+             (x64:xor! rdx temp-b)
+             (x64:jcc! :GreaterEqual done) ~ same sign, no adjustment
+             (x64:sub! res 1) ~ floor adjustment
+             (set-label! done)))))]
+    [:a64
+     ~ floored division: q = a / b, then if (q < 0 && a % b != 0) q -= 1
+     ~ can't reuse an operand register: both operands are needed for the remainder
+     (let ([res (alloc-result :i64)]
+           [temp1 (a64:int64-operand a)]
+           [temp2 (a64:int64-operand b)])
+       (let ([temp-rem (alloc-temp :i64)]
+             [temp-adj (alloc-temp :i64)])
+         (a64:sdiv! res temp1 temp2)
+         (a64:mov! temp-rem res) ~ rem requires dst to initially hold the quotient
+         (a64:rem! temp-rem temp1 temp2)
+         (a64:sub-imm-u16! temp-adj res 1)
+         (a64:cmp-imm! temp-rem 0)
+         (a64:csel! temp-adj temp-adj res (a64:cond :NotEqual)) ~ remainder != 0 ? result - 1 : result
+         (a64:cmp-imm! res 0)
+         (a64:csel! res temp-adj res (a64:cond :Less))))])) ~ result < 0 ? adjusted : result
+
+(define-rule (udiv-int64 [a :op] [b :op])
+  (target-case
+    [:x64
+     ~ div clobbers rax (quotient) and rdx (remainder)
+     (let ([div-rax (x64:unallocated-temp)]
+           [div-rdx (x64:unallocated-temp)])
+       (x64:take! div-rax rax)
+       (x64:take! div-rdx rdx)
+       (x64:mov! rax (x64:mem-reg-int64 a))
+       (x64:xor! rdx rdx) ~ zero-extend rax into rdx:rax
+       (x64:div! (x64:mem-reg-int64 b))
+       (let ([res (alloc-result-reuse :i64 [a b])])
+         (x64:mov! res rax)))]
+    [:a64
+     (let ([res (alloc-result-reuse :i64 [a b])]
+           [temp1 (a64:int64-operand a)]
+           [temp2 (a64:int64-operand b)])
+       (a64:udiv! res temp1 temp2))]))
+
+;; X64 signed division of temp-a by temp-b into rdx:rax, skipping it (and jumping to done) for INT64_MIN / -1, which
+;; would trap; on that path `overflow-result!` sets the result instead
+(define-subrule (x64:guarded-idiv! [temp-a :reg] [temp-b :reg] [tmp-min :reg] [skip :any] [done :any] [overflow-result :reg])
+  (begin
+    (x64:cmp-op! temp-b -1)
+    (x64:jcc! :NotEqual skip)
+    (x64:mov! overflow-result 0)
+    (x64:mov64! tmp-min :INT64_MIN)
+    (x64:cmp-op! temp-a tmp-min)
+    (x64:jcc! :Equal done)
+    (set-label! skip)
+    (x64:mov! rax temp-a)
+    (x64:cqo!)
+    (x64:idiv! temp-b)))
+
+(define-rule (rem-int64 [a :op] [b :op])
+  (target-case
+    [:x64
+     ~ idiv clobbers rax (quotient) and rdx (remainder)
+     (let ([div-rax (x64:unallocated-temp)]
+           [div-rdx (x64:unallocated-temp)])
+       (x64:take! div-rax rax)
+       (x64:take! div-rdx rdx)
+       (let ([temp-b (alloc-temp :i64)]
+             [temp-a (alloc-temp :i64)])
+         (x64:mov! temp-a (x64:mem-reg-int64 a))
+         (x64:mov! temp-b (x64:mem-reg-int64 b))
+         ~ INT64_MIN % -1 overflows idiv; the result is 0
+         (let ([skip (alloc-label)]
+               [done (alloc-label)]
+               [tmp-min (alloc-temp :i64)])
+           (x64:guarded-idiv! temp-a temp-b tmp-min skip done rdx)
+           (set-label! done)
+           (let ([res (alloc-result-reuse :i64 [a b])])
+             (x64:mov! res rdx)))))]
+    [:a64
+     (let ([res (alloc-result :i64)]
+           [temp1 (a64:int64-operand a)]
+           [temp2 (a64:int64-operand b)])
+       (a64:sdiv! res temp1 temp2)
+       (a64:rem! res temp1 temp2))]))
+
+(define-rule (mod-int64 [a :op] [b :op])
+  (target-case
+    [:x64
+     ~ idiv clobbers rax (quotient) and rdx (remainder)
+     (let ([div-rax (x64:unallocated-temp)])
+       (x64:take! div-rax rax)
+       (let ([div-rdx (x64:unallocated-temp)])
+         (x64:take! div-rdx rdx)
+         (let ([temp-b (alloc-temp :i64)]
+               [temp-a (alloc-temp :i64)])
+           (x64:mov! temp-a (x64:mem-reg-int64 a))
+           (x64:mov! temp-b (x64:mem-reg-int64 b))
+           (let ([res (alloc-result-reuse :i64 [a b])]
+                 [skip (alloc-label)]
+                 [done (alloc-label)]
+                 [tmp-min (alloc-temp :i64)])
+             ~ INT64_MIN % -1 overflows idiv; the result is 0
+             (x64:guarded-idiv! temp-a temp-b tmp-min skip done res)
+             (x64:mov! res rdx)
+             ~ floored modulo: add b when the remainder is non-zero and its sign differs from b
+             (x64:test! rdx rdx)
+             (x64:jcc! :Equal done)
+             (x64:xor! rdx temp-b)
+             (x64:jcc! :GreaterEqual done)
+             (x64:add! res temp-b)
+             (set-label! done)))))]
+    [:a64
+     ~ floored modulo: rem = a % b (truncated); if (rem != 0 && sign(rem) != sign(b)) rem += b
+     ~ can't reuse an operand register: the dividend is needed after sdiv
+     (let ([res (alloc-result :i64)]
+           [temp1 (a64:int64-operand a)]
+           [temp2 (a64:int64-operand b)])
+       (let ([temp-rem (alloc-temp :i64)]
+             [temp-adj (alloc-temp :i64)])
+         (a64:sdiv! res temp1 temp2)
+         (a64:mov! temp-rem res)
+         (a64:rem! temp-rem temp1 temp2)
+         (a64:add-reg-64! temp-adj temp-rem temp2) ~ floored candidate
+         (a64:eor-reg-64! res temp-rem temp2) ~ negative if the signs differ
+         (a64:cmp-imm! res 0)
+         (a64:csel! temp-adj temp-adj temp-rem (a64:cond :Less))
+         (a64:cmp-imm! temp-rem 0)
+         (a64:csel! res temp-adj temp-rem (a64:cond :NotEqual))))]))
+
+(define-rule (urem-int64 [a :op] [b :op])
+  (target-case
+    [:x64
+     ~ div clobbers rax (quotient) and rdx (remainder)
+     (let ([div-rax (x64:unallocated-temp)]
+           [div-rdx (x64:unallocated-temp)])
+       (x64:take! div-rax rax)
+       (x64:take! div-rdx rdx)
+       (x64:mov! rax (x64:mem-reg-int64 a))
+       (x64:xor! rdx rdx) ~ zero-extend rax into rdx:rax
+       (x64:div! (x64:mem-reg-int64 b))
+       (let ([res (alloc-result-reuse :i64 [a b])])
+         (x64:mov! res rdx)))]
+    [:a64
+     (let ([res (alloc-result :i64)]
+           [temp1 (a64:int64-operand a)]
+           [temp2 (a64:int64-operand b)])
+       (a64:udiv! res temp1 temp2)
+       (a64:rem! res temp1 temp2))]))
+
+(define-rule (check-div-int64 [a :op] [b :op] [fail :label])
+  (target-case
+    [:x64
+     (let ([tmp-a (alloc-temp :i64)]
+           [tmp-b (alloc-temp :i64)])
+       (x64:mov! tmp-a (x64:mem-reg-int64 a))
+       (x64:mov! tmp-b (x64:mem-reg-int64 b))
+       ~ guard against division by zero
+       (x64:test! tmp-b tmp-b)
+       (x64:jump-or-abort-on-undef! :Equal fail)
+       ~ guard against INT64_MIN / -1 (signed overflow)
+       (let ([skip (alloc-label)]
+             [tmp-min (alloc-temp :i64)])
+         (x64:cmp-op! tmp-b -1)
+         (x64:jcc! :NotEqual skip)
+         (x64:mov64! tmp-min :INT64_MIN)
+         (x64:cmp-op! tmp-a tmp-min)
+         (x64:jump-or-abort-on-undef! :Equal fail)
+         (set-label! skip)))]
+    [:a64
+     (let ([fresh-label (alloc-label)]
+           [fail-label (a64:target-label fail fresh-label)])
+       ~ guard against division by zero
+       (let ([reg-b (a64:int64-operand b)])
+         (a64:cbz! reg-b fail-label)
+         ~ guard against INT64_MIN / -1: rotating INT64_MIN by 63 gives 1
+         (let ([reg-a (a64:int64-operand a)])
+           (let ([temp-rotate (alloc-temp :i64)])
+             (a64:ror-imm-u8! temp-rotate reg-a 63)
+             (a64:cmp-imm! temp-rotate 1)
+             ~ nzcv = 0000 (eq) when b == -1, else 0001 (ne)
+             (a64:ccmn! reg-b 1 (a64:cond-int64 :Equal) 1)
+             (a64:b-cond! (a64:cond-int64 :Equal) fail-label))))
+       (a64:finalize-target-label! fail fresh-label))]))

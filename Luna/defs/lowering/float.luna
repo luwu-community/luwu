@@ -1,0 +1,212 @@
+;; ============================================================================
+;; Floating-point unary operations, rounding, sign, modulo, fused multiply-add, select
+;; ============================================================================
+
+;; Moves floating-point operand `a` into `res` on X64 unless it is already there (memory/constant operands load it)
+(define-subrule (x64:move-double-to! [res :reg] [a :op])
+  (cond
+    [(not (kind? a :Inst)) (x64:vmovsd-op! res (x64:mem-reg-double a))]
+    [(not-reused? res a) (x64:vmovsd3! res res a)]))
+
+(define-subrule (x64:move-float-to! [res :reg] [a :op])
+  (cond
+    [(not (kind? a :Inst)) (x64:vmovss-op! res (x64:mem-reg-float a))]
+    [(not-reused? res a) (x64:vmovss3! res res a)]))
+
+(define-rule (unm-num [a :op])
+  (let ([res (alloc-result-reuse :f64 a)])
+    (target-case
+      [:x64 (x64:vxorpd! res a (x64:f64 -0.0))]
+      [:a64
+       (let ([temp (a64:double-operand a)])
+         (a64:fneg! res temp))])))
+
+(define-rule (unm-float [a :op])
+  (let ([res (alloc-result-reuse :f32 a)])
+    (target-case
+      [:x64 (x64:vxorps! res a (x64:f32 -0.0))]
+      [:a64
+       (let ([temp (a64:float-operand a)])
+         (a64:fneg! res temp))])))
+
+(define-rule (abs-num [a :op])
+  (let ([res (alloc-result-reuse :f64 a)])
+    (target-case
+      [:x64
+       (x64:move-double-to! res a)
+       (x64:vandpd! res res (x64:i64 0x7fffffffffffffff))]
+      [:a64
+       (let ([temp (a64:double-operand a)])
+         (a64:fabs! res temp))])))
+
+(define-rule (abs-float [a :op])
+  (let ([res (alloc-result-reuse :f32 a)])
+    (target-case
+      [:x64
+       (x64:move-float-to! res a)
+       (x64:vandps! res res (x64:i32 0x7fffffff))]
+      [:a64
+       (let ([temp (a64:float-operand a)])
+         (a64:fabs! res temp))])))
+
+(define-rule (round-num [a :op])
+  (let ([res (alloc-result-reuse :f64 a)])
+    (target-case
+      [:x64
+       (let ([tmp1 (alloc-temp :f64)]
+             [tmp2 (alloc-temp :f64)])
+         (x64:move-double-to! res a)
+         ~ res + copysign(0.49999999999999994, res), truncated
+         (x64:vandpd! tmp1 res (x64:f64x2 -0.0 -0.0))
+         (x64:vmovsd-op! tmp2 (x64:i64 0x3fdfffffffffffff))
+         (x64:vorpd! tmp1 tmp1 tmp2)
+         (x64:vaddsd-op! res res tmp1)
+         (x64:vroundsd! res res res :RoundingModeX64::RoundToZero))]
+      [:a64
+       (let ([temp (a64:double-operand a)])
+         (a64:frinta! res temp))])))
+
+(define-rule (sign-num [a :op])
+  (let ([res (alloc-result-reuse :f64 a)])
+    (target-case
+      [:x64
+       (let ([tmp0 (alloc-temp :f64)]
+             [tmp1 (alloc-temp :f64)]
+             [tmp2 (alloc-temp :f64)])
+         (x64:vxorpd! tmp0 tmp0 tmp0)
+         ~ tmp1 = arg < 0 ? -1 : 0
+         (x64:vcmpltsd! tmp1 a tmp0)
+         (x64:vmovsd-op! tmp2 (x64:f64 -1))
+         (x64:vandpd! tmp1 tmp1 tmp2)
+         ~ mask = 0 < arg; result = mask ? 1.0 : tmp1
+         (x64:vcmpltsd! res tmp0 a)
+         (x64:vblendvpd! res tmp1 (x64:f64x2 1 1) res))]
+      [:a64
+       (let ([temp (a64:double-operand a)])
+         (let ([temp0 (alloc-temp :f64)]
+               [temp1 (alloc-temp :f64)])
+           (a64:fcmpz! temp)
+           (a64:fmov! temp0 0.0)
+           (a64:fmov! temp1 1.0)
+           (a64:fcsel-gt! res temp1 temp0)
+           (a64:fmov! temp1 -1.0)
+           (a64:fcsel-lt! res temp1 res)))])))
+
+(define-rule (sign-float [a :op])
+  (let ([res (alloc-result-reuse :f32 a)])
+    (target-case
+      [:x64
+       (let ([tmp0 (alloc-temp :f64)]
+             [tmp1 (alloc-temp :f64)]
+             [tmp2 (alloc-temp :f64)])
+         (x64:vxorps! tmp0 tmp0 tmp0)
+         ~ tmp1 = arg < 0 ? -1 : 0
+         (x64:vcmpltss! tmp1 a tmp0)
+         (x64:vmovss-op! tmp2 (x64:f32 -1.0f))
+         (x64:vandps! tmp1 tmp1 tmp2)
+         ~ mask = 0 < arg; result = mask ? 1.0 : tmp1
+         (x64:vcmpltss! res tmp0 a)
+         (x64:vblendvps! res tmp1 (x64:f32x4 1 1 1 1) res))]
+      [:a64
+       (let ([temp (a64:float-operand a)])
+         (let ([temp0 (alloc-temp :f32)]
+               [temp1 (alloc-temp :f32)])
+           (a64:fcmpz! temp)
+           (a64:fmov! temp0 0.0f)
+           (a64:fmov! temp1 1.0f)
+           (a64:fcsel-gt! res temp1 temp0)
+           (a64:fmov! temp1 -1.0f)
+           (a64:fcsel-lt! res temp1 res)))])))
+
+(define-rule (mod-num [a :op] [b :op])
+  ;; A64 can't reuse an operand register since both a and b are read twice
+  (let ([res (target-case
+               [:x64 (alloc-result-reuse :f64 [a b])]
+               [:a64 (alloc-result :f64)])])
+    (target-case
+      [:x64
+       (let ([lhs (if (constant? a) (alloc-temp :f64) a)])
+         (if (constant? a)
+             (x64:vmovsd-op! lhs (x64:mem-reg-double a)))
+         (if (kind? b :Inst)
+             (let ([tmp (alloc-temp :f64)])
+               (x64:vdivsd-op! tmp lhs (x64:mem-reg-double b))
+               (x64:vroundsd! tmp tmp tmp :RoundingModeX64::RoundToNegativeInfinity)
+               (x64:vmulsd-op! tmp tmp (x64:mem-reg-double b))
+               (x64:vsubsd-op! res lhs tmp))
+             (let ([tmp1 (alloc-temp :f64)]
+                   [tmp2 (alloc-temp :f64)])
+               (x64:vmovsd-op! tmp1 (x64:mem-reg-double b))
+               (x64:vdivsd-op! tmp2 lhs tmp1)
+               (x64:vroundsd! tmp2 tmp2 tmp2 :RoundingModeX64::RoundToNegativeInfinity)
+               (x64:vmulsd-op! tmp1 tmp2 tmp1)
+               (x64:vsubsd-op! res lhs tmp1))))]
+      [:a64
+       (let ([temp1 (a64:double-operand a)]
+             [temp2 (a64:double-operand b)])
+         (a64:fdiv! res temp1 temp2)
+         (a64:frintm! res res)
+         (a64:fmul! res res temp2)
+         (a64:fsub! res temp1 res))])))
+
+(define-rule (muladd-num [a :op] [b :op] [c :op])
+  (target-case
+    [:x64
+     (if (build-feature? :Feature_FMA3)
+         (let ([res (if (kind? a :Inst) (alloc-result-reuse :f64 a) (alloc-result :f64))])
+           (if (kind? a :Inst)
+               (if (not-reused? res a)
+                   (x64:vmovupd! res a))
+               (x64:vmovsd-op! res (x64:mem-reg-double a)))
+           (let ([b-reg (if (constant? b) (alloc-temp :f64) b)])
+             (if (constant? b)
+                 (x64:vmovsd-op! b-reg (x64:mem-reg-double b)))
+             (x64:vfmadd213pd! res b-reg (x64:mem-reg-double c))))
+         (let ([res (alloc-result-reuse :f64 a)])
+           (cond
+             [(and (not (kind? a :Inst)) (not (kind? b :Inst)))
+              (x64:vmovsd-op! res (x64:mem-reg-double a))
+              (x64:vmulsd-op! res res (x64:mem-reg-double b))]
+             [(kind? a :Inst) (x64:vmulsd-op! res a (x64:mem-reg-double b))]
+             [else
+              (assert! (kind? b :Inst))
+              (x64:vmulsd-op! res b (x64:mem-reg-double a))])
+           (x64:vaddsd-op! res res (x64:mem-reg-double c))))]
+    [:a64
+     (let ([temp-a (a64:double-operand a)]
+           [temp-b (a64:double-operand b)]
+           [temp-c (a64:double-operand c)])
+       (if (build-feature? :Feature_AdvSIMD)
+           (let ([res (alloc-result-reuse :f64 c)])
+             (if (!= res temp-c)
+                 (a64:fmov! res temp-c))
+             (a64:fmla! res temp-b temp-a))
+           (let ([res (alloc-result :f64)])
+             (a64:fmul! res temp-b temp-a)
+             (a64:fadd! res res temp-c))))]))
+
+(define-rule (select-num [a :op] [b :op] [c :op] [d :op])
+  ;; X64 can't reuse b, since a may be a memory operand
+  (let ([res (target-case
+               [:x64 (alloc-result-reuse :f64 [a c d])]
+               [:a64 (alloc-result-reuse :f64 [a b c d])])])
+    (target-case
+      [:x64
+       (let ([tmp (alloc-temp :f64)])
+         (if (kind? c :Inst)
+             (x64:vcmpeqsd! tmp c (x64:mem-reg-double d))
+             (begin
+               (x64:vmovsd-op! tmp (x64:mem-reg-double c))
+               (x64:vcmpeqsd! tmp tmp (x64:mem-reg-double d))))
+         (if (kind? a :Inst)
+             (x64:vblendvpd! res a (x64:mem-reg-double b) tmp)
+             (begin
+               (x64:vmovsd-op! res (x64:mem-reg-double a))
+               (x64:vblendvpd! res res (x64:mem-reg-double b) tmp))))]
+      [:a64
+       (let ([temp1 (a64:double-operand a)]
+             [temp2 (a64:double-operand b)]
+             [temp3 (a64:double-operand c)]
+             [temp4 (a64:double-operand d)])
+         (a64:fcmp! temp3 temp4)
+         (a64:fcsel! res temp2 temp1 (a64:cond-fp :Equal)))])))

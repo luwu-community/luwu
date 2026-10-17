@@ -1,0 +1,128 @@
+;; ============================================================================
+;; GC write barriers and upvalue writes
+;; ============================================================================
+
+;; Tag of the value being stored for barrier checks: a constant tag, or -1 when unknown
+(define-subrule (barrier-tag [tag :op])
+  (if (kind? tag :Undef) -1 (tag-val tag)))
+
+;; X64 forward barrier for object `obj` gaining a reference to VM register `ra`; `handler` is the luaC_ barrier to call
+(define-subrule (x64:object-barrier! [handler :any] [obj :op] [ra :op] [tag :op])
+  (let ([skip (alloc-label)]
+        [tmp (x64:unallocated-temp)]
+        [ratag (barrier-tag tag)])
+    (x64:alloc! tmp :qword)
+    (x64:check-object-barrier-conditions! (x64:reg-of tmp) obj noreg ra ratag skip)
+    (block
+      (let ([spill-guard (x64:scoped-spills)]
+            [call-wrap (x64:call-wrapper-at)])
+        (x64:call-arg! call-wrap :qword rState)
+        (x64:call-arg-op! call-wrap :qword obj obj)
+        (x64:call-arg-scoped! call-wrap :qword tmp)
+        (x64:call! call-wrap (mem rNativeContext handler :ptr))))
+    (set-label! skip)))
+
+(define-rule (barrier-obj [obj :op] [ra :op] [tag :op])
+  (target-case
+    ~ written out here (not via callBarrierObject) so the call wrapper gets this instruction's index and the real object
+    ~ operand: its last-use logic then releases the object register exactly once
+    [:x64 (x64:object-barrier! :NativeContext.luaC_barrierf obj ra tag)]
+    [:a64
+     (let ([temp (alloc-temp :ptr)]
+           [skip (alloc-label)]
+           [ratag (barrier-tag tag)])
+       (a64:check-object-barrier-conditions! obj temp noreg ra ratag skip)
+       ~ resolve the operand register before the spill so it isn't reloaded redundantly
+       (let ([reg (reg-op obj)])
+         (let ([spills (a64:spill-keeping reg)])
+           (a64:mov! x1 reg)
+           (a64:mov! x0 rState)
+           (a64:ldr! x2 (mem rBase (+ (* (vm-reg ra) (sizeof :TValue)) :TValue.value)))
+           (a64:ldr! x3 (mem rNativeContext :NativeContext.luaC_barrierf))
+           (a64:blr! x3)
+           ~ restore before the skip label so the register state is the same on both paths
+           (a64:restore! spills)))
+       ~ luaC_ barriers don't reallocate the stack, so rBase stays valid
+       (set-label! skip))]))
+
+(define-rule (barrier-table-back [table :op])
+  (target-case
+    [:x64 (x64:call-barrier-table-fast! table table)]
+    [:a64
+     (let ([skip (alloc-label)]
+           [temp (alloc-temp :u32)])
+       ~ isblack(obj2gco(t))
+       (a64:ldrb-op! temp (mem table :GCheader.marked))
+       (a64:tbz! temp :BLACKBIT skip)
+       ~ resolve the operand register before the spill so it isn't reloaded redundantly
+       (let ([reg (reg-op table)])
+         (let ([spills (a64:spill-keeping reg)])
+           (a64:mov! x1 reg)
+           (a64:mov! x0 rState)
+           (a64:add-imm! x2 x1 :LuaTable.gclist)
+           (a64:ldr! x3 (mem rNativeContext :NativeContext.luaC_barrierback))
+           (a64:blr! x3)
+           ~ restore before the skip label so the register state is the same on both paths
+           (a64:restore! spills)))
+       ~ luaC_ barriers don't reallocate the stack, so rBase stays valid
+       (set-label! skip))]))
+
+(define-rule (barrier-table-forward [table :op] [ra :op] [tag :op])
+  (target-case
+    [:x64 (x64:object-barrier! :NativeContext.luaC_barriertable table ra tag)]
+    [:a64
+     (let ([temp (alloc-temp :ptr)]
+           [skip (alloc-label)]
+           [ratag (barrier-tag tag)])
+       (a64:check-object-barrier-conditions! table temp noreg ra ratag skip)
+       ~ resolve the operand register before the spill so it isn't reloaded redundantly
+       (let ([reg (reg-op table)]
+             [addr (a64:temp-addr ra :TValue.value)])
+         (let ([spills (a64:spill-keeping reg)])
+           (a64:mov! x1 reg)
+           (a64:mov! x0 rState)
+           (a64:ldr! x2 addr)
+           (a64:ldr! x3 (mem rNativeContext :NativeContext.luaC_barriertable))
+           (a64:blr! x3)
+           ~ restore before the skip label so the register state is the same on both paths
+           (a64:restore! spills)))
+       ~ luaC_ barriers don't reallocate the stack, so rBase stays valid
+       (set-label! skip))]))
+
+(define-rule (set-upvalue [up :op] [val :op] [tag :op])
+  (target-case
+    [:x64
+     (let ([tmp1 (x64:unallocated-temp)]
+           [tmp2 (x64:unallocated-temp)])
+       (x64:alloc! tmp1 :qword)
+       (x64:alloc! tmp2 :qword)
+       (x64:mov! (x64:reg-of tmp1) sClosure)
+       (x64:mov! (x64:reg-of tmp2) (mem (x64:reg-of tmp1) (+ (+ :Closure.l.uprefs (* (sizeof :TValue) (upvalue-index up))) :TValue.value.gc) :ptr))
+       (x64:mov! (x64:reg-of tmp1) (mem (x64:reg-of tmp2) :UpVal.v :ptr))
+       (x64:vmovups-op! (x64:ptr :xmmword (x64:reg-of tmp1)) val)
+       (x64:free! tmp1)
+       (if (or (kind? tag :Undef) (is-gco? tag))
+           (let ([ratag (barrier-tag tag)])
+             (x64:call-barrier-object! (x64:release tmp2) val val ratag))))]
+    [:a64
+     (let ([temp1 (alloc-temp :ptr)]
+           [temp2 (alloc-temp :ptr)])
+       ~ UpVal*
+       (a64:ldr! temp1 (mem rClosure (+ (+ :Closure.l.uprefs (* (sizeof :TValue) (upvalue-index up))) :TValue.value.gc)))
+       (a64:ldr! temp2 (mem temp1 :UpVal.v))
+       (a64:str! val temp2)
+       (if (or (kind? tag :Undef) (is-gco? tag))
+           (let ([value (reg-op val)]
+                 [skip (alloc-label)]
+                 [ratag (barrier-tag tag)])
+             (a64:check-object-barrier-conditions! temp1 temp2 value val ratag skip)
+             (let ([spills (a64:spill-keeping2 temp1 value)])
+               (a64:mov! x1 temp1)
+               (a64:mov! x0 rState)
+               (a64:fmov! x2 (a64:cast-d value))
+               (a64:ldr! x3 (mem rNativeContext :NativeContext.luaC_barrierf))
+               (a64:blr! x3)
+               ~ restore before the skip label so the register state is the same on both paths
+               (a64:restore! spills))
+             ~ luaC_ barriers don't reallocate the stack, so rBase stays valid
+             (set-label! skip))))]))

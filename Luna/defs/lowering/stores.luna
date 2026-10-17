@@ -1,0 +1,198 @@
+;; ============================================================================
+;; Stores to VM registers and TValue pointers
+;; ============================================================================
+
+;; Destination for a TValue field on X64: a register operand holds a pointer to the TValue, otherwise it's a VM register
+(define-subrule (x64:tvalue-field [a :op] [offset :any] [type :any] [vm-field :any])
+  (if (kind? a :Inst) (mem a offset type) vm-field))
+
+(define-rule (store-tag [a :op] [tag :op])
+  (target-case
+    [:x64
+     (if (constant? tag)
+         (if (kind? a :Inst)
+             (x64:mov! (mem a :TValue.tt :u32) (tag-val tag))
+             (x64:mov! (x64:luau-reg-tag (vm-reg a)) (tag-val tag)))
+         (unsupported!))]
+    [:a64
+     (let ([addr (a64:temp-addr a :TValue.tt)])
+       (if (= (tag-val tag) 0)
+           (a64:str! wzr addr)
+           (let ([temp (alloc-temp :u32)])
+             (a64:mov! temp (tag-val tag))
+             (a64:str! temp addr))))]))
+
+(define-rule (store-pointer [a :op] [val :op])
+  (target-case
+    [:x64
+     (let ([value-lhs (x64:tvalue-field a :TValue.value :ptr (x64:luau-reg-value (vm-reg a)))])
+       (cond
+         [(constant? val)
+          (assert! (= (int-val val) 0))
+          (x64:mov! value-lhs 0)]
+         [(kind? val :Inst) (x64:mov! value-lhs val)]
+         [else (unsupported!)]))]
+    [:a64
+     (let ([addr (a64:temp-addr a :TValue.value)])
+       (if (constant? val)
+           (begin
+             (assert! (= (int-val val) 0))
+             (a64:str! xzr addr))
+           (a64:str! val addr)))]))
+
+(define-rule (store-extra [a :op] [extra :op])
+  (target-case
+    [:x64
+     (if (constant? extra)
+         (if (kind? a :Inst)
+             (x64:mov! (mem a :TValue.extra :u32) (int-val extra))
+             (x64:mov! (x64:luau-reg-extra (vm-reg a)) (int-val extra)))
+         (unsupported!))]
+    [:a64
+     (let ([addr (a64:temp-addr a :TValue.extra)])
+       (if (= (int-val extra) 0)
+           (a64:str! wzr addr)
+           (let ([temp (alloc-temp :u32)])
+             (a64:mov! temp (int-val extra))
+             (a64:str! temp addr))))]))
+
+(define-rule (store-double [a :op] [val :op])
+  (target-case
+    [:x64
+     (let ([value-lhs (x64:tvalue-field a :TValue.value :ptr (x64:luau-reg-value (vm-reg a)))])
+       (cond
+         [(constant? val)
+          (let ([tmp (alloc-temp :f64)])
+            (x64:vmovsd-op! tmp (x64:f64 val))
+            (x64:vmovsd-op! value-lhs tmp))]
+         [(kind? val :Inst) (x64:vmovsd-op! value-lhs val)]
+         [else (unsupported!)]))]
+    [:a64
+     (let ([addr (a64:temp-addr a :TValue.value)])
+       (if (and (constant? val) (= (a64:double-bits val) 0))
+           (a64:str! xzr addr)
+           (let ([temp (a64:double-operand val)])
+             (a64:str! temp addr))))]))
+
+(define-rule (store-int [a :op] [val :op])
+  (target-case
+    [:x64
+     (cond
+       [(constant? val) (x64:mov! (x64:luau-reg-value-int (vm-reg a)) (int-val val))]
+       [(kind? val :Inst) (x64:mov! (x64:luau-reg-value-int (vm-reg a)) val)]
+       [else (unsupported!)])]
+    [:a64
+     (let ([addr (a64:temp-addr a :TValue.value)])
+       (if (and (constant? val) (= (int-val val) 0))
+           (a64:str! wzr addr)
+           (let ([temp (a64:int-operand val)])
+             (a64:str! temp addr))))]))
+
+;; x64 mov r/m64, imm32 sign-extends, so int64 constants outside that range go through a register
+(define-subrule (x64:store-int64-const! [dst :any] [val :op])
+  (if (fits-i32? val)
+      (x64:mov-imm32! dst val)
+      (let ([tmp (alloc-temp :i64)])
+        (x64:mov64! tmp val)
+        (x64:mov! dst tmp))))
+
+(define-rule (store-int64 [a :op] [val :op])
+  (target-case
+    [:x64
+     (cond
+       [(constant? val) (x64:store-int64-const! (x64:luau-reg-value-int64 (vm-reg a)) val)]
+       [(kind? val :Inst) (x64:mov! (x64:luau-reg-value-int64 (vm-reg a)) val)]
+       [else (unsupported!)])]
+    [:a64
+     (let ([addr (a64:temp-addr a :TValue.value)])
+       (if (and (constant? val) (= (int64-val val) 0))
+           (a64:str! xzr addr)
+           (let ([temp (a64:int64-operand val)])
+             (a64:str! temp addr))))]))
+
+(define-rule (store-vector [a :op] [x :op] [y :op] [z :op] [tag :op])
+  (target-case
+    [:x64
+     (x64:store-float! (x64:luau-reg-value-vector (vm-reg a) 0) x)
+     (x64:store-float! (x64:luau-reg-value-vector (vm-reg a) 1) y)
+     (x64:store-float! (x64:luau-reg-value-vector (vm-reg a) 2) z)
+     (if (has-op? tag)
+         (x64:mov! (x64:luau-reg-tag (vm-reg a)) (tag-val tag)))]
+    [:a64
+     (let ([temp1 (a64:float-operand x)]
+           [temp2 (a64:float-operand y)]
+           [temp3 (a64:float-operand z)])
+       (let ([addr (a64:temp-addr a :TValue.value)])
+         (assert! (a64:addr-fits-vector? addr))
+         (a64:str! temp1 (a64:addr-plus addr 0))
+         (a64:str! temp2 (a64:addr-plus addr 4))
+         (a64:str! temp3 (a64:addr-plus addr 8)))
+       (if (has-op? tag)
+           (let ([temp (alloc-temp :u32)])
+             (a64:mov! temp (tag-val tag))
+             (a64:str! temp (a64:temp-addr a :TValue.tt)))))]))
+
+(define-rule (store-tvalue [a :op] [val :op] [offset :int])
+  (let ([addr-offset (if (has-op? offset) offset 0)])
+    (target-case
+      [:x64
+       (cond
+         [(kind? a :VmReg) (x64:vmovups-op! (x64:luau-reg (vm-reg a)) val)]
+         [(kind? a :Inst) (x64:vmovups-op! (mem a addr-offset :vec) val)]
+         [else (unsupported!)])]
+      [:a64
+       (let ([addr (a64:temp-addr a addr-offset)])
+         (a64:str! val addr))])))
+
+(define-rule (store-split-tvalue [a :op] [tag :op] [val :op] [offset :int])
+  (let ([addr-offset (if (has-op? offset) offset 0)])
+    (target-case
+      [:x64
+       (let ([tag-lhs (x64:tvalue-field a (+ :TValue.tt addr-offset) :u32 (x64:luau-reg-tag (vm-reg a)))])
+         (x64:mov! tag-lhs (tag-val tag)))
+       (cond
+         [(= (tag-val tag) :LUA_TBOOLEAN)
+          (let ([value-lhs (x64:tvalue-field a (+ :TValue.value addr-offset) :u32 (x64:luau-reg-value-int (vm-reg a)))])
+            (if (constant? val)
+                (x64:mov! value-lhs (int-val val))
+                (x64:mov! value-lhs val)))]
+         [(= (tag-val tag) :LUA_TNUMBER)
+          (let ([value-lhs (x64:tvalue-field a (+ :TValue.value addr-offset) :ptr (x64:luau-reg-value (vm-reg a)))])
+            (if (constant? val)
+                (let ([tmp (alloc-temp :f64)])
+                  (x64:vmovsd-op! tmp (x64:f64 val))
+                  (x64:vmovsd-op! value-lhs tmp))
+                (x64:vmovsd-op! value-lhs val)))]
+         [(= (tag-val tag) :LUA_TINTEGER)
+          (let ([value-lhs (x64:tvalue-field a (+ :TValue.value addr-offset) :ptr (x64:luau-reg-value-int64 (vm-reg a)))])
+            (if (constant? val)
+                (x64:store-int64-const! value-lhs val)
+                (x64:mov! value-lhs val)))]
+         [(is-gco? tag)
+          (let ([value-lhs (x64:tvalue-field a (+ :TValue.value addr-offset) :ptr (x64:luau-reg-value (vm-reg a)))])
+            (x64:mov! value-lhs val))]
+         [else (unsupported!)])]
+      [:a64
+       (let ([tempt (alloc-temp :u32)]
+             [addrt (a64:temp-addr a (+ :TValue.tt addr-offset))])
+         (a64:mov! tempt (tag-val tag))
+         (a64:str! tempt addrt)
+         (let ([addr (a64:temp-addr a (+ :TValue.value addr-offset))])
+           (cond
+             [(= (tag-val tag) :LUA_TBOOLEAN)
+              (if (constant? val)
+                  ~ true booleans reuse the tag register (LUA_TBOOLEAN == 1), false ones use the zero register
+                  (begin
+                    (assert! (= :LUA_TBOOLEAN 1))
+                    (if (!= (int-val val) 0)
+                        (a64:str! tempt addr)
+                        (a64:str! wzr addr)))
+                  (a64:str! val addr))]
+             [(= (tag-val tag) :LUA_TNUMBER)
+              (let ([temp (a64:double-operand val)])
+                (a64:str! temp addr))]
+             [(= (tag-val tag) :LUA_TINTEGER)
+              (let ([temp (a64:int64-operand val)])
+                (a64:str! temp addr))]
+             [(is-gco? tag) (a64:str! val addr)]
+             [else (unsupported!)])))])))

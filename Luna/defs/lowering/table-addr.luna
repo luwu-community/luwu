@@ -1,0 +1,111 @@
+;; ============================================================================
+;; Table element addresses
+;; ============================================================================
+
+(define-rule (get-arr-addr [table :op] [idx :op])
+  (target-case
+    [:x64
+     (cond
+       [(kind? idx :Inst)
+        (let ([res (alloc-result-reuse :ptr idx)])
+          (if (!= (x64:dword-reg res) (reg-op idx))
+              (x64:mov! (x64:dword-reg res) idx))
+          (x64:shift-raw! :shl (x64:dword-reg res) :kTValueSizeLog2)
+          (x64:add! res (mem table :LuaTable.array :ptr)))]
+       [(constant? idx)
+        (let ([res (alloc-result-reuse :ptr table)])
+          (x64:mov! res (mem table :LuaTable.array :ptr))
+          (if (!= (int-val idx) 0)
+              (x64:lea-addr! res res (* (int-val idx) (sizeof :TValue)))))]
+       [else (unsupported!)])]
+    [:a64
+     (let ([res (alloc-result-reuse :ptr table)])
+       (a64:ldr! res (mem table :LuaTable.array))
+       (cond
+         [(kind? idx :Inst) (a64:add-shifted! res res idx :kTValueSizeLog2)] ~ implicit uxtw
+         [(constant? idx)
+          (cond
+            [(= (int-val idx) 0)] ~ no offset required
+            [(<= (* (int-val idx) (sizeof :TValue)) :AssemblyBuilderA64::kMaxImmediate)
+             (a64:add-imm! res res (* (int-val idx) (sizeof :TValue)))]
+            [else
+             (let ([temp (alloc-temp :ptr)])
+               (a64:mov! temp (* (int-val idx) (sizeof :TValue)))
+               (a64:add-reg-64! res res temp))])]
+         [else (unsupported!)]))]))
+
+(define-rule (get-slot-node-addr [table :op] [pc :op])
+  (target-case
+    [:x64
+     (let ([res (alloc-result :ptr)]
+           [tmp (alloc-temp :ptr)])
+       (x64:table-node-at-cached-slot! tmp res table pc))]
+    [:a64
+     (let ([res (alloc-result-reuse :ptr table)]
+           [temp1 (alloc-temp :ptr)]
+           [temp1w (a64:cast-w temp1)]
+           [temp2 (alloc-temp :u32)]
+           [temp2x (a64:cast-x temp2)])
+       ~ the load's stride equals the destination size, so the array index (not the byte offset) is range checked
+       (if (<= (uint-val pc) :AddressA64::kMaxOffset)
+           (a64:ldr! temp1w (mem rCode (* (uint-val pc) (sizeof :Instruction))))
+           (begin
+             (a64:mov! temp1 (* (uint-val pc) (sizeof :Instruction)))
+             (a64:ldr! temp1w (mem rCode temp1))))
+       ~ the C field can be shifted down as it's the most significant byte of the instruction word
+       (assert! (= :kOffsetOfInstructionC 3))
+       (a64:ldrb-op! temp2 (mem table :LuaTable.nodemask8))
+       (a64:and-shifted! temp2 temp2 temp1w -24)
+       ~ this may clobber the table register, so it isn't used after this
+       (a64:ldr! res (mem table :LuaTable.node))
+       (a64:add-shifted! res res temp2x :kLuaNodeSizeLog2))])) ~ temp2 is zero-extended, allowing the larger shift
+
+(define-rule (get-hash-node-addr [table :op] [hash :op])
+  (target-case
+    [:x64
+     ~ a variable shift amount has to be in cl
+     (let ([shift-tmp (x64:unallocated-temp)])
+       (x64:take! shift-tmp rcx)
+       (let ([res (alloc-result :ptr)]
+             [tmp (alloc-temp :ptr)])
+         (x64:mov! res (mem table :LuaTable.node :ptr))
+         (x64:mov! (x64:dword-reg tmp) 1)
+         (x64:mov! (x64:byte-reg (x64:reg-of shift-tmp)) (mem table :LuaTable.lsizenode :u8))
+         (x64:shift-raw! :shl (x64:dword-reg tmp) (x64:byte-reg (x64:reg-of shift-tmp)))
+         (x64:dec! (x64:dword-reg tmp))
+         (x64:and! (x64:dword-reg tmp) (uint-val hash))
+         (x64:shift-raw! :shl tmp :kLuaNodeSizeLog2)
+         (x64:add! res tmp)))]
+    [:a64
+     (let ([res (alloc-result-reuse :ptr table)]
+           [temp1 (alloc-temp :u32)]
+           [temp2 (alloc-temp :u32)]
+           [temp2x (a64:cast-x temp2)])
+       ~ hash & ((1 << lsizenode) - 1) == hash & ~(-1 << lsizenode)
+       (a64:mov! temp1 -1)
+       (a64:ldrb-op! temp2 (mem table :LuaTable.lsizenode))
+       (a64:shift-reg! :lsl temp1 temp1 temp2)
+       (a64:mov! temp2 (uint-val hash))
+       (a64:bic-op! temp2 temp2 temp1)
+       ~ this may clobber the table register, so it isn't used after this
+       (a64:ldr! res (mem table :LuaTable.node))
+       (a64:add-shifted! res res temp2x :kLuaNodeSizeLog2))])) ~ temp2 is zero-extended, allowing the larger shift
+
+(define-rule (try-num-to-index [num :op] [fail :label])
+  (target-case
+    [:x64
+     (let ([res (alloc-result :i32)]
+           [tmp (alloc-temp :f64)])
+       (x64:convert-number-to-index-or-jump! tmp num res (label-of fail)))]
+    [:a64
+     (let ([res (alloc-result :i32)]
+           [temp1 (a64:double-operand num)])
+       (if (build-feature? :Feature_JSCVT)
+           (begin
+             (a64:fjcvtzs! res temp1) ~ sets Z iff the conversion is exact
+             (a64:b-cond! (a64:cond :NotEqual) (label-of fail)))
+           (let ([temp2 (alloc-temp :f64)])
+             (a64:fcvtzs-op! res temp1)
+             (a64:scvtf! temp2 res)
+             (a64:fcmp! temp1 temp2)
+             (a64:b-cond! (a64:cond :NotEqual) (label-of fail)))))]))

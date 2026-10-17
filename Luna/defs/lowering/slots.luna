@@ -1,0 +1,158 @@
+;; ============================================================================
+;; Hash slot checks, cached imports, fast metamethod lookup
+;; ============================================================================
+
+;; Check that table node `node` holds string key `key` with a non-nil value, branching to `mismatch` otherwise
+(define-subrule (slot-match-checks! [node :op] [key :op] [mismatch :any])
+  (target-case
+    [:x64
+     (let ([tmp (alloc-temp :ptr)])
+       ~ the node key tag must be a string
+       (x64:mov! (x64:dword-reg tmp) (x64:luau-node-key-tag node))
+       (x64:and! (x64:dword-reg tmp) :kTKeyTagMask)
+       (x64:cmp-op! (x64:dword-reg tmp) :LUA_TSTRING)
+       (x64:jcc! :NotEqual mismatch)
+       ~ the node key must be the expected string
+       (x64:mov! tmp (x64:luau-constant-value (vm-const key)))
+       (x64:cmp-op! tmp (x64:luau-node-key-value node))
+       (x64:jcc! :NotEqual mismatch)
+       ~ the node value must not be nil
+       (x64:cmp-op! (mem node (+ :LuaNode.val :TValue.tt) :u32) :LUA_TNIL)
+       (x64:jcc! :Equal mismatch))]
+    [:a64
+     (let ([temp1 (alloc-temp :ptr)]
+           [temp1w (a64:cast-w temp1)]
+           [temp2 (alloc-temp :ptr)])
+       (assert! (and (= :LuaNode.key.value :LuaNode.key) (and (>= :kOffsetOfTKeyTagNext 8) (< :kOffsetOfTKeyTagNext 16))))
+       ~ key.value into temp1, key.tt (with other bits) into temp2
+       (a64:ldp! temp1 temp2 (mem node :LuaNode.key))
+       ~ .tt is right before .next, and ldp skipped 8 bytes
+       (a64:ubfx! temp2 temp2 (* (- :kOffsetOfTKeyTagNext 8) 8) :kTKeyTagBits)
+       (a64:cmp-imm! temp2 :LUA_TSTRING)
+       (a64:b-cond! (a64:cond :NotEqual) mismatch)
+       (let ([addr (a64:temp-addr key :TValue.value)])
+         (a64:ldr! temp2 addr))
+       (a64:cmp-reg! temp1 temp2)
+       (a64:b-cond! (a64:cond :NotEqual) mismatch)
+       (a64:ldr! temp1w (mem node :LuaNode.val.tt))
+       (assert! (= :LUA_TNIL 0))
+       (a64:cbz! temp1w mismatch))]))
+
+(define-rule (check-slot-match [node :op] [key :op] [fail :label])
+  ~ an undef target aborts through a local label
+  (let ([abort (alloc-label)]
+        [mismatch (label-or-local fail abort)])
+    (slot-match-checks! node key mismatch)
+    (target-case
+      [:x64
+       (if (kind? fail :Undef)
+           (let ([skip (alloc-label)])
+             (x64:jmp-label! skip)
+             (set-label! abort)
+             (x64:ud2!)
+             (set-label! skip)))]
+      [:a64
+       (if (label-bound? abort)
+           (a64:emit-abort! abort))])))
+
+(define-rule (jump-slot-match [node :op] [key :op] [match :label] [mismatch-op :label])
+  ~ an undef target aborts through a local label
+  (let ([abort (alloc-label)]
+        [mismatch (label-or-local mismatch-op abort)])
+    (slot-match-checks! node key mismatch)
+    (jump-or-fallthrough! match)))
+
+(define-rule (get-cached-import [ra :op] [k :op] [import-id :op] [pc :op])
+  (target-case
+    [:x64
+     (x64:assert-all-free!)
+     (x64:assert-no-spills!)
+     (let ([skip (alloc-label)]
+           [exit (alloc-label)])
+       ~ a set import constant is used directly, otherwise the import path is looked up
+       (x64:cmp-op! (x64:luau-constant-tag (vm-const k)) :LUA_TNIL)
+       (x64:jcc! :NotEqual skip)
+       (block
+         (let ([spill-guard (x64:scoped-spills)]
+               [call-wrap (x64:call-wrapper-at)])
+           (x64:call-arg! call-wrap :qword rState)
+           (x64:call-arg! call-wrap :qword (x64:luau-reg-address (vm-reg ra)))
+           (x64:call-arg! call-wrap :dword (import-val import-id))
+           (x64:call-arg! call-wrap :dword (uint-val pc))
+           (x64:call! call-wrap (mem rNativeContext :NativeContext.getImport :ptr))
+           (x64:update-base!)))
+       (x64:jmp-label! exit)
+       (set-label! skip)
+       (let ([tmp1 (alloc-temp :vec)])
+         (x64:vmovups-op! tmp1 (x64:luau-constant (vm-const k)))
+         (x64:vmovups-op! (x64:luau-reg (vm-reg ra)) tmp1))
+       (set-label! exit))]
+    [:a64
+     (a64:spill-all!)
+     (let ([skip (alloc-label)]
+           [exit (alloc-label)]
+           [temp-tag (alloc-temp :u32)]
+           [addr-const-tag (a64:temp-addr k :TValue.tt)])
+       (a64:ldr! temp-tag addr-const-tag)
+       ~ a set import constant is used directly, otherwise the import path is looked up
+       (assert! (= :LUA_TNIL 0))
+       (a64:cbnz! temp-tag skip)
+       (a64:mov! x0 rState)
+       (a64:vm-reg-address! x1 ra)
+       (a64:mov! w2 (import-val import-id))
+       (a64:mov! w3 (uint-val pc))
+       (a64:ldr! x4 (mem rNativeContext :NativeContext.getImport))
+       (a64:blr! x4)
+       (a64:update-base!)
+       (a64:b-label! exit)
+       (set-label! skip)
+       (let ([temp-tv (alloc-temp :vec)]
+             [addr-const (a64:temp-addr k 0)])
+         (a64:ldr! temp-tv addr-const)
+         (let ([addr-reg (a64:temp-addr ra 0)])
+           (a64:str! temp-tv addr-reg)))
+       (set-label! exit))]))
+
+(define-rule (try-call-fastgettm [table :op] [tm :op] [fail :label])
+  (target-case
+    [:x64
+     (let ([res (alloc-result :ptr)]
+           [tmp (x64:unallocated-temp)])
+       (x64:alloc! tmp :qword)
+       (x64:mov! (x64:reg-of tmp) (mem table :LuaTable.metatable :ptr))
+       ~ release the table before the call if this is its last use
+       (x64:free-last-use-reg! table)
+       (x64:test! (x64:reg-of tmp) (x64:reg-of tmp))
+       (x64:jcc! :Zero (label-of fail)) ~ no metatable
+       (x64:test! (mem (x64:reg-of tmp) :LuaTable.tmcache :u8) (bit tm))
+       (x64:jcc! :NotZero (label-of fail)) ~ no tag method
+       (let ([tmp2 (x64:unallocated-temp)])
+         (x64:alloc! tmp2 :qword)
+         (x64:mov! (x64:reg-of tmp2) (mem rState :lua_State.global :ptr))
+         (block
+           (let ([spill-guard (x64:scoped-spills)]
+                 [call-wrap (x64:call-wrapper-at)])
+             (x64:call-arg-scoped! call-wrap :qword tmp)
+             (x64:call-arg! call-wrap :qword (int-val tm))
+             (x64:call-arg! call-wrap :qword (mem (x64:release tmp2) (+ :global_State.tmname (* (int-val tm) (sizeof :TString*))) :ptr))
+             (x64:call-result! call-wrap res)
+             (x64:call! call-wrap (mem rNativeContext :NativeContext.luaT_gettm :ptr)))))
+       (x64:test! res res)
+       (x64:jcc! :Zero (label-of fail)))] ~ no tag method
+    [:a64
+     (let ([temp1 (alloc-temp :ptr)]
+           [temp2 (alloc-temp :u32)])
+       (a64:ldr! temp1 (mem table :LuaTable.metatable))
+       (a64:cbz! temp1 (label-of fail)) ~ no metatable
+       (a64:ldrb-op! temp2 (mem temp1 :LuaTable.tmcache))
+       ~ tbz/tbnz can't be used, their jump offsets are too short; tmcache caches the *absence* of metamethods
+       (a64:tst-imm! temp2 (bit tm))
+       (a64:b-cond! (a64:cond :NotEqual) (label-of fail))
+       (a64:spill-keeping! temp1)
+       (a64:mov! x0 temp1)
+       (a64:mov! w1 (int-val tm))
+       (a64:ldr! x2 (mem rGlobalState (+ :global_State.tmname (* (int-val tm) (sizeof :TString*)))))
+       (a64:ldr! x3 (mem rNativeContext :NativeContext.luaT_gettm))
+       (a64:blr! x3)
+       (a64:cbz! x0 (label-of fail)) ~ no tag method
+       (alloc-result-in x0 :ptr))]))

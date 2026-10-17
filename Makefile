@@ -42,6 +42,7 @@ CODEGEN_SOURCES=$(wildcard CodeGen/src/*.cpp)
 CODEGEN_OBJECTS=$(CODEGEN_SOURCES:%=$(BUILD)/%.o)
 CODEGEN_TARGET=$(BUILD)/libluaucodegen.a
 
+
 VM_SOURCES=$(wildcard VM/src/*.cpp)
 VM_OBJECTS=$(VM_SOURCES:%=$(BUILD)/%.o)
 VM_TARGET=$(BUILD)/libluauvm.a
@@ -177,7 +178,7 @@ $(JITINLINER_OBJECTS): CXXFLAGS+=-std=c++17 -IInliner/include -IBytecode/include
 $(COMPILER_OBJECTS): CXXFLAGS+=-std=c++17 -IBytecode/include -ICompiler/include -ICommon/include -IAst/include
 $(CONFIG_OBJECTS): CXXFLAGS+=-std=c++17 -IConfig/include -ICommon/include -IAst/include -IBytecode/include -ICompiler/include -IVM/include
 $(ANALYSIS_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IAnalysis/include -IConfig/include -IBytecode/include -ICompiler/include -IVM/include
-$(CODEGEN_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -ICodeGen/include -IVM/include -IVM/src # Code generation needs VM internals
+$(CODEGEN_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -ICodeGen/include -ICodeGen/src -IVM/include -IVM/src # Code generation needs VM internals
 $(VM_OBJECTS): CXXFLAGS+=-std=c++11 -ICommon/include -IVM/include
 $(REQUIRE_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IVM/include -IAst/include -IConfig/include -IRequire/include
 $(ISOCLINE_OBJECTS): CXXFLAGS+=-Wno-unused-function -Iextern/isocline/include
@@ -196,7 +197,7 @@ $(ANALYZE_CLI_TARGET): LDFLAGS+=-lpthread
 fuzz-proto fuzz-prototest: LDFLAGS+=$(LPROTOBUF)
 
 # pseudo targets
-.PHONY: all test clean coverage luwu-size aliases build-mutator-libs
+.PHONY: all test clean coverage luwu-size aliases build-mutator-libs luna-dsl
 
 # Explicitly make 'all' the default goal ensuring that even if targets are added before 'all', they won't
 # implicitly become the default target built by make.
@@ -301,6 +302,9 @@ $(COMPILER_TARGET): $(COMPILER_OBJECTS)
 $(CONFIG_TARGET): $(CONFIG_OBJECTS)
 $(ANALYSIS_TARGET): $(ANALYSIS_OBJECTS)
 $(EQSAT_TARGET): $(EQSAT_OBJECTS)
+luna-dsl:
+	$(MAKE) -C Luna
+
 $(CODEGEN_TARGET): $(CODEGEN_OBJECTS)
 $(VM_TARGET): $(VM_OBJECTS)
 $(REQUIRE_TARGET): $(REQUIRE_OBJECTS)
