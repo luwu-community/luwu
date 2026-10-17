@@ -1,5 +1,6 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "RuleCompiler.h"
+#include "OpTemplates.h"
 
 #include <functional>
 #include <string_view>
@@ -1307,6 +1308,118 @@ static const std::unordered_map<std::string_view, ArchOpSpecA64> kArchOpsA64 = {
     }}},
 };
 
+// Operations defined as C++ templates (see TemplateOpSpec for the placeholder syntax)
+static const TemplateOpTable kTemplateOpsA64 = {
+    // Addresses (may allocate a temporary register for the address computation)
+    {"a64:temp-addr", {"lowering.tempAddr({0:raw}, {1:int})", "Address of a VmReg/VmConst/pointer operand plus offset (may allocate)", true}},
+
+    {"a64:temp-addr-buffer", {"lowering.tempAddrBuffer({0:raw}, {1:raw}, lowering.tagOp({2:raw}))", "Address of element <1> in buffer <0> (tag <2>; may allocate)", true}},
+    {"a64:max-imm", {"int(AssemblyBuilderA64::kMaxImmediate)", "Largest add/sub/cmp immediate", true}},
+    {"a64:cast-d", {"castReg(KindA64::d, {0})", "Register <0> viewed as a 64-bit float register", true}},
+    {"a64:cast-x", {"castReg(KindA64::x, {0})", "Register <0> viewed as a 64-bit register", true}},
+    {"a64:cast-w", {"castReg(KindA64::w, {0})", "Register <0> viewed as a 32-bit register", true}},
+    // Register allocator state around calls
+    {"a64:free-reg!", {"regs.freeReg({0});", "Release register <0> so it isn't recorded in the spill sequence"}},
+    {"a64:take-reg!", {"{0} = regs.takeReg({0}, index);", "Re-reserve register <0> for the current instruction's value"}},
+    {"a64:spill", {"regs.spill(index)", "Spill all live registers before a call; returns the spill sequence start for a64:restore!", true}},
+    {"a64:restore!", {"regs.restore({0:raw});", "Restore registers spilled by a64:spill"}},
+    {"a64:spill-keeping!", {"regs.spill(index, {{0}});", "Spill live registers before a call, keeping <0> (already loaded) in place"}},
+    {"a64:spill-keeping2!", {"regs.spill(index, {{0}, {1}});", "Spill live registers before a call, keeping <0> and <1> in place"}},
+    {"a64:spill-keeping3!", {"regs.spill(index, {{0}, {1}, {2}});", "Spill live registers before a call, keeping <0>, <1> and <2> in place"}},
+    {"a64:spill-keeping", {"regs.spill(index, {{0}})", "Spill live registers keeping <0> in place; returns the spill sequence start for a64:restore!", true}},
+    {"a64:add-interrupt-handler!", {"{ Label resume = build.setLabel(); lowering.interruptHandlers.push_back({{0:raw}, {1:uint}, resume}); }",
+        "Register an interrupt handler: label <0> jumps out for pc <1>, and the handler resumes here"}},
+    {"a64:spill-keeping2", {"regs.spill(index, {{0}, {1}})", "Spill live registers keeping <0> and <1> in place; returns the spill sequence start", true}},
+    {"a64:check-object-barrier-conditions!", {"lowering.checkObjectBarrierConditions({0}, {1}, {2}, {3:raw}, {4:raw}, {5:raw});",
+        "Branch to <5> unless storing value <3> (register <2>, tag <4> or -1) into object <0> needs a GC barrier (scratch <1>)"}},
+    {"a64:spill-all!", {"regs.spill(index);", "Spill all live registers before a call that doesn't return values in registers"}},
+    {"a64:fallback!", {"emitFallback(build, {0:raw}, {1:uint});", "Call the VM implementation at NativeContext offset <0> for the instruction at pc <1>"}},
+    {"a64:emit-add-offset!", {"emitAddOffset(build, {0}, {1}, {2:raw});", "<0> = <1> + <2> for any offset"}},
+    {"a64:adr-number-tvalue!", {"{ TValue n = {}; setnvalue(&n, {1:uint}); build.adr({0}, &n, sizeof(n)); }",
+        "Load the address of a data-section number TValue holding uint constant <1> into <0>"}},
+    {"a64:emit-abort!", {"emitAbort(build, {0:raw});", "Place local label <0> on a trap, skipped by normal control flow"}},
+    {"a64:emit-builtin!", {"lowering.error |= !emitBuiltin(build, lowering.function, regs, {0:uint}, {1:raw}, {2:raw}, {3:int});",
+        "Inline builtin <0> with R<1> = f(R<2>...) and <3> results (records a lowering error if unsupported)"}},
+    {"a64:class-member-auth!", {"emitClassMemberAuthA64(build, regs, {0}, {1}, {2}, {3:raw});",
+        "Authorize private/const access to member slot <1> of class <0> (written object <2> or noreg), else branch to <3>"}},
+    {"a64:update-base!", {"emitUpdateBase(build);", "Reload rBase from L->base after a call that may reallocate the stack"}},
+    {"a64:mark-exit-sync!", {"lowering.exitSyncInstIdx = index;\nlowering.exitSyncAllocToken = regs.getAllocToken();",
+        "Record the register state so every branch to an exit sync block can be checked to see the same allocation"}},
+    {"a64:mem-post", {"mem({0}, {1:raw}, AddressKindA64::post)", "Address <0>, post-incremented by <1>", true}},
+    {"a64:addr-plus", {"AddressA64({0:raw}.base, {0:raw}.data + {1:raw})", "Immediate address <0> displaced by <1> bytes", true}},
+    {"a64:addr-fits-vector?", {"({0:raw}.kind == AddressKindA64::imm && {0:raw}.data % 4 == 0 && unsigned({0:raw}.data + 8) / 4 <= AddressA64::kMaxOffset)",
+        "Test if immediate address <0> can address three consecutive floats", true}},
+    {"a64:cast-s", {"castReg(KindA64::s, {0})", "Register <0> viewed as a 32-bit float register", true}},
+    {"a64:cast-q", {"castReg(KindA64::q, {0})", "Register <0> viewed as a 128-bit vector register", true}},
+    {"a64:cond", {"ConditionA64::{0:raw}", "A64 condition code (e.g. :NotEqual)", true}},
+    {"a64:cond-int-of", {"getConditionInt({0})", "A64 condition for an IrCondition operand on int comparisons", true}},
+    {"a64:cond-inverse", {"getInverseCondition({0:raw})", "Inverse of an A64 condition", true}},
+    {"a64:cond-fp-of", {"getConditionFP({0})", "A64 condition for an IrCondition operand on floating-point comparisons", true}},
+    {"a64:cond-int64-of", {"getConditionInt64({0})", "A64 condition for an IrCondition operand on int64 comparisons", true}},
+    {"a64:cond-fp-negated-of", {"getConditionFP(getNegatedCondition({0}))", "A64 floating-point condition for the negation of IrCondition operand <0>", true}},
+    {"a64:cond-int64", {"getConditionInt64(IrCondition::{0:raw})", "A64 condition for an IrCondition on int64 comparisons (e.g. :Equal)", true}},
+
+    // Branch targets: a block/exit label, using the given local label when the target needs a fresh one (VM exit or undef)
+    {"a64:target-label", {"lowering.getTargetLabel({0:raw}, index, {1:raw})", "Label for branching to block/exit <0>, with fallback label <1>", true, true}},
+    {"a64:finalize-target-label!", {"lowering.finalizeTargetLabel({0:raw}, index, {1:raw});", "Emit the exit/abort code for fallback label <1> of target <0>"}},
+    {"a64:cond-fp", {"getConditionFP(IrCondition::{0:raw})", "A64 condition for an IrCondition on floating-point comparisons (e.g. :Equal)", true}},
+    {"a64:double-bits", {"getDoubleBits({0:double})", "Bit pattern of a double constant operand", true}},
+
+    // Instructions
+    {"a64:ldr!", {"build.ldr({0}, {1});", "ldr <0>, <1> (load sized by the destination register)"}},
+    {"a64:str!", {"build.str({0}, {1});", "str <0>, <1> (store sized by the source register)"}},
+    {"a64:mov-imm-unsigned!", {"build.mov({0}, unsigned({1:int}));", "mov <0>, int constant <1> reinterpreted as unsigned"}},
+    // Shifts and rotates by mnemonic (e.g. :lsl, :lsr, :asr, :ror)
+    {"a64:shift-raw!", {"build.{0:raw}({1}, {2}, {3:raw});", "<0> <1>, <2>, #<3> (amount as given)"}},
+    {"a64:shift-reg!", {"build.{0:raw}({1}, {2}, {3});", "<0> <1>, <2>, <3> (shift amount in a register)"}},
+    {"a64:shift-imm32!", {"build.{0:raw}({1}, {2}, uint8_t(unsigned({3:int}) & 31));", "<0> <1>, <2>, #(<3> & 31)"}},
+    {"a64:shift-imm64!", {"build.{0:raw}({1}, {2}, uint8_t(unsigned({3:int}) & 63));", "<0> <1>, <2>, #(<3> & 63)"}},
+    {"a64:rol-imm32!", {"build.ror({0}, {1}, uint8_t((32 - unsigned({2:int})) & 31));", "Rotate <1> left by int constant <2> (as ror by 32 - <2>)"}},
+    {"a64:b-label!", {"build.b({0:raw});", "b to local label <0>"}},
+    {"a64:neg!", {"build.neg({0}, {1});", "neg <0>, <1>"}},
+    {"a64:clz-op!", {"build.clz({0}, {1});", "clz <0>, <1>"}},
+    {"a64:rbit-op!", {"build.rbit({0}, {1});", "rbit <0>, <1>"}},
+    {"a64:ldrb-op!", {"build.ldrb({0}, {1});", "ldrb <0>, <address>"}},
+    {"a64:ldrsb-op!", {"build.ldrsb({0}, {1});", "ldrsb <0>, <address>"}},
+    {"a64:ldrh-op!", {"build.ldrh({0}, {1});", "ldrh <0>, <address>"}},
+    {"a64:ldrsh-op!", {"build.ldrsh({0}, {1});", "ldrsh <0>, <address>"}},
+    {"a64:strb-op!", {"build.strb({0}, {1});", "strb <0>, <address>"}},
+    {"a64:strh-op!", {"build.strh({0}, {1});", "strh <0>, <address>"}},
+    {"a64:fjcvtzs!", {"build.fjcvtzs({0}, {1});", "fjcvtzs <0>, <1> (sets Z iff the conversion is exact)"}},
+    {"a64:add-imm!", {"build.add({0}, {1}, uint16_t({2:raw}));", "add <0>, <1>, #<2>"}},
+    {"a64:sub-imm!", {"build.sub({0}, {1}, uint16_t({2:raw}));", "sub <0>, <1>, #<2>"}},
+    {"a64:sub-reg!", {"build.sub({0}, {1}, {2});", "sub <0>, <1>, <2>"}},
+    {"a64:cmp-op!", {"build.cmp({0}, {1});", "cmp <0>, <1> (register or uint16_t immediate as given)"}},
+    {"a64:cset!", {"build.cset({0}, {1:raw});", "cset <0>, <cond 1>"}},
+    {"a64:eor-imm!", {"build.eor({0}, {1}, {2:raw});", "eor <0>, <1>, #<2>"}},
+    {"a64:orr-op!", {"build.orr({0}, {1}, {2});", "orr <0>, <1>, <2>"}},
+    {"a64:umov-4s!", {"build.umov_4s({0}, {1}, {2:raw});", "umov <0>, <1>.s[<lane>]"}},
+    {"a64:ldp!", {"build.ldp({0}, {1}, {2});", "ldp <0>, <1>, <address>"}},
+    {"a64:sub-shifted!", {"build.sub({0}, {1}, {2}, {3:raw});", "sub <0>, <1>, <2> shifted left by <3>"}},
+    {"a64:stp!", {"build.stp({0}, {1}, {2});", "stp <0>, <1>, <address>"}},
+    {"a64:br!", {"build.br({0});", "br <0> (indirect jump)"}},
+    {"a64:blr!", {"build.blr({0});", "blr <0> (call)"}},
+    {"a64:and-shifted!", {"build.and_({0}, {1}, {2}, {3:raw});", "and <0>, <1>, <2> shifted by <3> (negative: right shift)"}},
+    {"a64:bic-op!", {"build.bic({0}, {1}, {2});", "bic <0>, <1>, <2>"}},
+    {"a64:fcvtzs-op!", {"build.fcvtzs({0}, {1});", "fcvtzs <0>, <1>"}},
+    {"a64:and-op!", {"build.and_({0}, {1}, {2});", "and <0>, <1>, <2>"}},
+    {"a64:tbz!", {"build.tbz({0}, {1:raw}, {2:raw});", "tbz <0>, #<bit 1>, <label>"}},
+    {"a64:cbz!", {"build.cbz({0}, {1:raw});", "cbz <0>, <label>"}},
+    {"a64:cbnz!", {"build.cbnz({0}, {1:raw});", "cbnz <0>, <label>"}},
+    {"a64:b-cond!", {"build.b({0:raw}, {1:raw});", "b.<cond> <label> (condition from a64:cond / a64:cond-int64)"}},
+    {"a64:ccmn!", {"build.ccmn({0}, {1:raw}, {2:raw}, {3:raw});", "ccmn <0>, #<1>, #<nzcv 3>, <cond 2>"}},
+    {"a64:fcmgt-4s!", {"build.fcmgt_4s({0}, {1}, {2});", "fcmgt <0>.4s, <1>.4s, <2>.4s"}},
+    {"a64:fcmeq-4s!", {"build.fcmeq_4s({0}, {1}, {2});", "fcmeq <0>.4s, <1>.4s, <2>.4s"}},
+    {"a64:bif!", {"build.bif({0}, {1}, {2});", "bif <0>, <1>, <2> (insert <1> where mask <2> is clear)"}},
+    {"a64:bit!", {"build.bit({0}, {1}, {2});", "bit <0>, <1>, <2> (insert <1> where mask <2> is set)"}},
+    {"a64:faddp!", {"build.faddp({0}, {1});", "faddp <0>, <1> (pairwise add)"}},
+    {"a64:dup-4s!", {"build.dup_4s({0}, {1}, {2:int});", "dup <0>, <1>.s[<2>]"}},
+    {"a64:ins-4s!", {"build.ins_4s({0}, {1}, {2:raw});", "ins <0>.s[<2>], <1>"}},
+    {"a64:adr-u32x3!", {"{ uint32_t vec[4] = {{1:raw}, {1:raw}, {1:raw}, 0}; build.adr({0}, vec, sizeof(vec)); }",
+        "Load the address of a data-section vector of three copies of 32-bit pattern <1> (fourth lane 0) into <0>"}},
+    {"a64:mov!", {"build.mov({0}, {1});", "mov <0>, <1> (register or immediate)"}},
+};
+
 class TargetBuilderA64 : public TargetBuilder
 {
 public:
@@ -1320,7 +1433,8 @@ public:
                 "#pragma once\n\n"
                 "#include \"IrLoweringA64.h\"\n"
                 "#include \"EmitCommonA64.h\"\n"
-                "#include \"lstate.h\"\n\n");
+                "#include \"lstate.h\"\n"
+                "#include \"lgc.h\"\n\n");
         for (const auto& flag : fflags)
             out.line("LUAU_FASTFLAG(" + flag + ")");
         for (const auto& flag : dfflags)
@@ -1422,14 +1536,36 @@ public:
         return std::nullopt;
     }
 
+    void emitTakeResult(CodeWriter& out, EvalContext& ctx, const std::string& physReg) override
+    {
+        ctx.use("regs");
+        out.line("inst.regA64 = regs.takeReg(" + physReg + ", index);");
+    }
+
     std::string regVarType() const override { return "RegisterA64"; }
+
+    std::string formatMemOperand(EvalContext&, const Operand& op, const std::string&) const override
+    {
+        return formatMemA64(op);
+    }
+
+    const TemplateOpSpec* findTemplateOp(const std::string& name) const override
+    {
+        auto it = kTemplateOpsA64.find(name);
+        return it == kTemplateOpsA64.end() ? nullptr : &it->second;
+    }
+
+    void getTemplateOpDocs(std::vector<FormDoc>& ops, std::vector<FormDoc>& values) const override
+    {
+        getTemplateDocs(kTemplateOpsA64, ops, values);
+    }
 
     std::string formatRegOperand(const Operand& op) const override
     {
         return formatRegArgA64(op.text);
     }
 
-    std::optional<std::string> allocTempExpr(EvalContext& ctx, TypeKind type) override
+    std::string conditionalTempExpr(CodeWriter&, EvalContext& ctx, TypeKind type, const std::string&, const std::string&) override
     {
         ctx.use("regs");
         return "regs.allocTemp(" + kindForTypeA64(type) + ")";
@@ -1437,7 +1573,14 @@ public:
 
     std::set<std::string> globalSymbols() const override
     {
-        return {"rState", "rBase", "rConstants", "rClosure", "rCode", "rGlobalState", "rNativeContext"};
+        std::set<std::string> globals = {"rState", "rBase", "rConstants", "rClosure", "rCode", "rGlobalState", "rNativeContext", "noreg", "xzr", "wzr", "sp"};
+        // Physical registers, for code that runs with all allocatable registers free or spilled (calls, ABI glue)
+        for (int i = 0; i < 32; ++i)
+        {
+            for (const char* prefix : {"x", "w", "d", "s", "q"})
+                globals.insert(prefix + std::to_string(i));
+        }
+        return globals;
     }
 
     void getArchPredicateDocs(std::vector<FormDoc>& out) const override
@@ -1624,6 +1767,7 @@ void getA64Docs(std::vector<FormDoc>& ops, std::vector<FormDoc>& preds)
     TargetBuilderA64 target;
     target.getArchOpDocs(ops);
     target.getArchPredicateDocs(preds);
+    target.getTemplateOpDocs(ops, preds);
 }
 
 } // namespace Luwu::Dsl

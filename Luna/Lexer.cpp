@@ -109,6 +109,7 @@ Token Lexer::lexNumber(int startCol)
         advance();
 
     bool isHex = false;
+    bool isFloat = false;
     if (peek() == '0' && cursor + 1 < source.size() && (source[cursor + 1] == 'x' || source[cursor + 1] == 'X'))
     {
         advance(); // '0'
@@ -121,6 +122,25 @@ Token Lexer::lexNumber(int startCol)
     {
         while (!isAtEnd() && std::isdigit(static_cast<unsigned char>(peek())))
             advance();
+
+        // Floating-point literal (C++ syntax): digits '.' digits [exponent] ['f']
+        if (peek() == '.' && cursor + 1 < source.size() && std::isdigit(static_cast<unsigned char>(source[cursor + 1])))
+        {
+            isFloat = true;
+            advance();
+            while (!isAtEnd() && std::isdigit(static_cast<unsigned char>(peek())))
+                advance();
+            if (peek() == 'e' || peek() == 'E')
+            {
+                advance();
+                if (peek() == '-' || peek() == '+')
+                    advance();
+                while (!isAtEnd() && std::isdigit(static_cast<unsigned char>(peek())))
+                    advance();
+            }
+            if (peek() == 'f')
+                advance();
+        }
     }
 
     size_t digitsStart = start + (source[start] == '-' || source[start] == '+') + (isHex ? 2 : 0);
@@ -139,7 +159,8 @@ Token Lexer::lexNumber(int startCol)
     tok.text = text;
     try
     {
-        tok.intValue = isHex ? std::stoll(text, nullptr, 16) : std::stoll(text, nullptr, 10);
+        if (!isFloat)
+            tok.intValue = isHex ? std::stoll(text, nullptr, 16) : std::stoll(text, nullptr, 10);
     }
     catch (const std::out_of_range&)
     {

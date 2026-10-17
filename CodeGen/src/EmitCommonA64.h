@@ -11,7 +11,6 @@
 #include "Luau/IrData.h"
 #include "Luau/IrUtils.h"
 #include <climits>
-#include <cstring>
 
 // AArch64 ABI reminder:
 // Arguments: x0-x7, v0-v7
@@ -28,6 +27,22 @@ namespace CodeGen
 
 namespace A64
 {
+
+struct IrRegAllocA64;
+
+// Lowering helpers shared by IrLoweringA64.cpp and the generated lowering rules
+void emitAbort(AssemblyBuilderA64& build, Label& abort);
+void emitFallback(AssemblyBuilderA64& build, int offset, int pcpos);
+void emitInvokeLibm1P(AssemblyBuilderA64& build, size_t func, int arg);
+bool emitBuiltin(AssemblyBuilderA64& build, IrFunction& function, IrRegAllocA64& regs, int bfid, int res, int arg, int nresults);
+void emitClassMemberAuthA64(
+    AssemblyBuilderA64& build,
+    IrRegAllocA64& regs,
+    RegisterA64 classReg,
+    RegisterA64 slotReg,
+    RegisterA64 writtenObject,
+    Label& mismatch
+);
 
 inline ConditionA64 getConditionFP(IrCondition cond)
 {
@@ -224,22 +239,6 @@ inline void emitAddOffset(AssemblyBuilderA64& build, RegisterA64 dst, RegisterA6
         build.mov(dst, int(offset));
         build.add(dst, dst, src);
     }
-}
-
-inline uint64_t getDoubleBits(double value)
-{
-    uint64_t result;
-    static_assert(sizeof(result) == sizeof(value), "Expecting double to be 64-bit");
-    memcpy(&result, &value, sizeof(value));
-    return result;
-}
-
-inline uint32_t getFloatBits(float value)
-{
-    uint32_t result;
-    static_assert(sizeof(result) == sizeof(value), "Expecting float to be 32-bit");
-    memcpy(&result, &value, sizeof(value));
-    return result;
 }
 
 // Loads a double constant that cannot be encoded by fmov; scratch must be a 64-bit general-purpose register

@@ -172,6 +172,24 @@ inline std::string formatChild(const PredicateResult& child, Precedence parentPr
     return child.text;
 }
 
+// An operation defined by a C++ template. Placeholders {N} or {N:kind} are replaced by the N-th argument:
+//   {N}         register operand (IR operands become lowering.regOp(...)), or a memory operand
+//   {N:raw}     the argument as written (IrOp handles such as OP_A(inst), labels, C++ constants)
+//   {N:int} {N:uint} {N:int64} {N:double} {N:tag}
+//               constant value of an IR operand (lowering.intOp(...) etc.); literals pass through
+//   {N:@fn}     lowering.fn(<raw>)          {N:%fn}  fn(<raw>)
+//   {N:byte} {N:word} {N:dword} {N:qword} {N:xmmword}
+//               memory operand with an explicit access size (X64)
+// Statement templates are complete C++ statements (lines separated by '\n'); value templates are a C++ expression,
+// which a let binding stores into an auto local.
+struct TemplateOpSpec
+{
+    const char* fmt = nullptr;
+    const char* desc = nullptr;
+    bool isValue = false;
+    bool bindsReference = false; // a let binding refers to the result (auto&) instead of copying it, e.g. Label&
+};
+
 class TargetBuilder
 {
 public:
@@ -185,6 +203,9 @@ public:
     virtual void emitPostamble(CodeWriter& out) = 0;
 
     virtual void emitAllocProduce(CodeWriter& out, EvalContext& ctx, TypeKind type, bool isReuse, const std::vector<std::string>& rawOps) = 0;
+
+    // Result register taken over from a physical register that already holds the value (e.g. a call's return register)
+    virtual void emitTakeResult(CodeWriter& out, EvalContext& ctx, const std::string& physReg) = 0;
 
     virtual Operand emitAllocTemp(CodeWriter& out, EvalContext& ctx, TypeKind type, const std::string& varName) = 0;
 
@@ -222,15 +243,23 @@ public:
     // C++ type of a local holding a register
     virtual std::string regVarType() const = 0;
 
+    // Memory operand in the target's assembler syntax; size is an optional explicit access size (X64)
+    virtual std::string formatMemOperand(EvalContext& ctx, const Operand& op, const std::string& size) const = 0;
+
+    // Template-defined operations of this target (e.g. a64:fabs!)
+    virtual const TemplateOpSpec* findTemplateOp(const std::string& name) const
+    {
+        return nullptr;
+    }
+
+    virtual void getTemplateOpDocs(std::vector<FormDoc>& ops, std::vector<FormDoc>& values) const {}
+
     // C++ expression for a register operand (e.g. lowering.regOp(OP_A(inst)) for an IR operand)
     virtual std::string formatRegOperand(const Operand& op) const = 0;
 
-    // C++ expression allocating a temporary register, for use inside a conditional binding; nullopt when the
-    // target's temporaries cannot be allocated in an expression (e.g. X64 ScopedRegX64)
-    virtual std::optional<std::string> allocTempExpr(EvalContext& ctx, TypeKind type)
-    {
-        return std::nullopt;
-    }
+    // C++ expression for a temporary register that is only allocated when cond holds, for a conditional binding named
+    // varName; may emit setup code first (e.g. an X64 ScopedRegX64 that allocates under the condition)
+    virtual std::string conditionalTempExpr(CodeWriter& out, EvalContext& ctx, TypeKind type, const std::string& cond, const std::string& varName) = 0;
 
     virtual void getArchOpDocs(std::vector<FormDoc>& out) const {}
     virtual void getArchPredicateDocs(std::vector<FormDoc>& out) const {}

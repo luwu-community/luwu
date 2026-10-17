@@ -1,8 +1,11 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "RuleCompiler.h"
+#include "OpTemplates.h"
 #include "CompileError.h"
 #include "Scope.h"
 
+#include <functional>
+#include <regex>
 #include <sstream>
 #include <string_view>
 
@@ -90,6 +93,13 @@ static void requireArity(const SExpr& expr, size_t expectedArgs, const std::stri
 
 static PredicateResult evalPredicate(EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg);
 
+static const TemplateOpSpec* findTemplateOp(const TargetBuilder& target, const std::string& name)
+{
+    if (const TemplateOpSpec* spec = findCoreTemplateOp(name))
+        return spec;
+    return target.findTemplateOp(name);
+}
+
 // Formats one side of a binary arithmetic expression, parenthesized only where C++ precedence requires it. The right
 // side is also parenthesized at equal precedence so the generated grouping (and integer promotion order) follows the DSL.
 static std::string formatArithOperand(const Operand& op, Precedence parent, bool isRight)
@@ -143,6 +153,44 @@ static const std::unordered_map<std::string_view, PredicateTrampolineSpec> kPred
             if (expr.elements.size() != 2)
                 throw CompileError(expr, "undef? requires 1 argument");
             return {getRawOpText(ctx, expr.elements[1]) + ".kind == IrOpKind::Undef", Precedence::Primary};
+        }
+    }},
+    {"kind?", {
+        "(kind? <op> :<IrOpKind>)",
+        "Test the kind of an IR operand (e.g. :VmReg, :VmConst, :Inst, :Constant, :Undef)",
+        [](EvalContext& ctx, TargetBuilder&, const SExpr& expr, const std::string&) -> PredicateResult {
+            requireArity(expr, 2);
+            if (!expr.elements[2].isKeyword())
+                throw CompileError(expr.elements[2], "kind? expects an IrOpKind keyword such as :VmReg");
+            return {getRawOpText(ctx, expr.elements[1]) + ".kind == IrOpKind::" + expr.elements[2].text.substr(1), Precedence::Relational};
+        }
+    }},
+    {"same-op?", {
+        "(same-op? <op> <op>)",
+        "Test if two IR operands refer to the same value",
+        [](EvalContext& ctx, TargetBuilder&, const SExpr& expr, const std::string&) -> PredicateResult {
+            requireArity(expr, 2);
+            return {getRawOpText(ctx, expr.elements[1]) + " == " + getRawOpText(ctx, expr.elements[2]), Precedence::Relational};
+        }
+    }},
+    {"true?", {
+        "(true? <value>)",
+        "Test a boolean value (e.g. a let-bound result of a value template)",
+        [](EvalContext& ctx, TargetBuilder&, const SExpr& expr, const std::string&) -> PredicateResult {
+            requireArity(expr, 1);
+            return {getOpText(ctx, expr.elements[1]), Precedence::Primary};
+        }
+    }},
+    {"has-op?", {
+        "(has-op? <param>)",
+        "Test if an optional instruction operand is present (HAS_OP_X(inst))",
+        [](EvalContext& ctx, TargetBuilder&, const SExpr& expr, const std::string&) -> PredicateResult {
+            requireArity(expr, 1);
+            std::string raw = getRawOpText(ctx, expr.elements[1]);
+            if (raw.rfind("OP_", 0) != 0)
+                throw CompileError(expr.elements[1], "has-op? requires a rule parameter");
+            ctx.use("inst");
+            return {"HAS_" + raw, Precedence::Primary};
         }
     }},
     {"vm-exit?", {
@@ -292,24 +340,6 @@ static const std::unordered_map<std::string_view, PredicateTrampolineSpec> kPred
             std::string lhs = evalPredicateArg(ctx, target, expr.elements[1], destReg);
             std::string rhs = evalPredicateArg(ctx, target, expr.elements[2], destReg);
             return {lhs + " >= " + rhs, Precedence::Relational};
-        }
-    }},
-    {"int-val", {
-        "(int-val <op>)",
-        "Extract 32-bit integer value of constant operand",
-        [](EvalContext& ctx, TargetBuilder&, const SExpr& expr, const std::string&) -> PredicateResult {
-            if (expr.elements.size() != 2)
-                throw CompileError(expr, "int-val requires 1 argument");
-            return {"lowering.intOp(" + getRawOpText(ctx, expr.elements[1]) + ")", Precedence::Primary};
-        }
-    }},
-    {"int64-val", {
-        "(int64-val <op>)",
-        "Extract 64-bit integer value of constant operand",
-        [](EvalContext& ctx, TargetBuilder&, const SExpr& expr, const std::string&) -> PredicateResult {
-            if (expr.elements.size() != 2)
-                throw CompileError(expr, "int64-val requires 1 argument");
-            return {"lowering.int64Op(" + getRawOpText(ctx, expr.elements[1]) + ")", Precedence::Primary};
         }
     }},
     {"fits-i32?", {
@@ -543,6 +573,39 @@ static const std::unordered_map<std::string_view, PredicateTrampolineSpec> kPred
     }}
 };
 
+// Evaluates a template operation: statements are written out, values are returned as an expression operand
+static std::optional<Operand> evalTemplateOp(CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr)
+{
+    const std::string& head = expr.elements[0].text;
+    const TemplateOpSpec* spec = findTemplateOp(target, head);
+    if (!spec)
+        return std::nullopt;
+
+    size_t arity = templateArity(spec->fmt);
+    if (expr.elements.size() - 1 != arity)
+        throw CompileError(expr, head + " requires " + std::to_string(arity) + (arity == 1 ? " argument" : " arguments") + ", got " +
+                                     std::to_string(expr.elements.size() - 1));
+
+    std::vector<Operand> args;
+    for (size_t i = 1; i < expr.elements.size(); ++i)
+        args.push_back(evalExpr(out, ctx, target, expr.elements[i], ""));
+
+    std::string text = expandOpTemplate(ctx, target, expr, spec->fmt, args);
+    if (spec->isValue)
+        return Operand::makeImm(TypeKind::Void, text);
+
+    size_t start = 0;
+    while (start <= text.size())
+    {
+        size_t end = text.find('\n', start);
+        out.line(text.substr(start, end == std::string::npos ? std::string::npos : end - start));
+        if (end == std::string::npos)
+            break;
+        start = end + 1;
+    }
+    return Operand{};
+}
+
 static PredicateResult evalPredicate(EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg)
 {
     if (!expr.isList() || expr.elements.empty())
@@ -557,6 +620,14 @@ static PredicateResult evalPredicate(EvalContext& ctx, TargetBuilder& target, co
 
     if (auto archPred = target.evalArchPredicate(ctx, expr, destReg))
         return *archPred;
+
+    // Value templates (e.g. (vm-reg a)) and arithmetic can appear wherever a predicate or comparison operand can
+    const TemplateOpSpec* spec = findTemplateOp(target, head);
+    if ((spec && spec->isValue) || head == "+" || head == "-" || head == "*" || head == "sizeof")
+    {
+        Operand value = evalExpr(*ctx.writer, ctx, target, expr, "");
+        return {value.text, value.prec};
+    }
 
     throw CompileError(expr, "Unknown predicate: " + head);
 }
@@ -620,32 +691,66 @@ static Operand evalConditionalBinding(CodeWriter& out, EvalContext& ctx, TargetB
     std::string cond = evalPredicate(ctx, target, expr.elements[1], "").text;
     TypeKind type = TypeKind::Void;
 
-    auto branch = [&](const SExpr& e) -> std::string {
+    // Allocating the result register one of two ways: the allocations are statements, the binding is the result register
+    auto isResultAlloc = [](const SExpr& e) {
+        return e.isList("alloc-result") || e.isList("alloc-result-reuse");
+    };
+    if (isResultAlloc(expr.elements[2]) && isResultAlloc(expr.elements[3]))
+    {
+        Operand result;
+        emitBlock(out, ctx, "if (" + cond + ")", [&]() {
+            result = evalExpr(out, ctx, target, expr.elements[2], "");
+        });
+        emitBlock(out, ctx, "else", [&]() {
+            evalExpr(out, ctx, target, expr.elements[3], "");
+        });
+        return result;
+    }
+
+    bool allocates = false;
+    int holderCount = 0;
+
+    // Each branch is an alloc-temp, an operand/value, or a nested if (a chain of conditions); `taken` is the full
+    // condition under which the branch is selected, for targets that allocate conditional temps up front
+    std::function<std::string(const SExpr&, const std::string&)> branch = [&](const SExpr& e, const std::string& taken) -> std::string {
         if (e.isList("alloc-temp"))
         {
             requireArity(e, 1, "alloc-temp requires 1 argument: (alloc-temp <type>)");
             TypeKind tk = parseRegType(e.elements[1], "alloc-temp");
-            std::optional<std::string> alloc = target.allocTempExpr(ctx, tk);
-            if (!alloc)
-                throw CompileError(e, "Conditional alloc-temp is not supported on " + target.archName());
             type = tk;
-            return *alloc;
+            allocates = true;
+            std::string holder = holderCount++ == 0 ? varName : varName + std::to_string(holderCount);
+            return target.conditionalTempExpr(out, ctx, tk, taken, holder);
         }
-        if (e.isList())
-            throw CompileError(e, "if branches in a let binding must be an alloc-temp or an operand");
+        if (e.isList("if"))
+        {
+            if (e.elements.size() != 4)
+                throw CompileError(e, "if used as a let binding value requires both a then and an else branch");
+            std::string inner = evalPredicate(ctx, target, e.elements[1], "").text;
+            std::string thenStr = branch(e.elements[2], "(" + taken + ") && (" + inner + ")");
+            std::string elseStr = branch(e.elements[3], "(" + taken + ") && !(" + inner + ")");
+            return "(" + inner + " ? " + thenStr + " : " + elseStr + ")";
+        }
+        bool isOperand = !e.isList() || e.isList("mem");
+        if (!isOperand)
+        {
+            const TemplateOpSpec* spec = findTemplateOp(target, e.elements[0].text);
+            isOperand = spec && spec->isValue;
+        }
+        if (!isOperand)
+            throw CompileError(e, "if branches in a let binding must be an alloc-temp, an operand, a value or a nested if");
 
         Operand op = evalExpr(out, ctx, target, e, "");
-        if (op.kind == OperandKind::Mem)
-            throw CompileError(e, "if branches in a let binding cannot be memory operands");
         if (type == TypeKind::Void)
             type = op.type;
-        return target.formatRegOperand(op);
+        return op.kind == OperandKind::Mem ? target.formatMemOperand(ctx, op, "") : target.formatRegOperand(op);
     };
 
-    std::string thenStr = branch(expr.elements[2]);
-    std::string elseStr = branch(expr.elements[3]);
+    std::string thenStr = branch(expr.elements[2], cond);
+    std::string elseStr = branch(expr.elements[3], "!(" + cond + ")");
 
-    out.line(target.regVarType() + " " + varName + " = " + cond + " ? " + thenStr + " : " + elseStr + ";");
+    // Choosing between registers declares a register local; choosing between values (offsets, indices) uses auto
+    out.line((allocates ? target.regVarType() : "auto") + " " + varName + " = " + cond + " ? " + thenStr + " : " + elseStr + ";");
     return Operand::makeReg(type, varName);
 }
 
@@ -714,6 +819,18 @@ static const std::unordered_map<std::string_view, ExprTrampolineSpec> kExprTramp
                 Precedence::Additive);
         }
     }},
+    {"-", {
+        "(- <lhs> <rhs>)",
+        "Compute constant subtraction expression",
+        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
+            requireArity(expr, 2, "- requires 2 arguments");
+            Operand a = evalExpr(out, ctx, target, expr.elements[1], "");
+            Operand b = evalExpr(out, ctx, target, expr.elements[2], "");
+            return Operand::makeImm(TypeKind::U64,
+                formatArithOperand(a, Precedence::Additive, false) + " - " + formatArithOperand(b, Precedence::Additive, true),
+                Precedence::Additive);
+        }
+    }},
     {"*", {
         "(* <lhs> <rhs>)",
         "Compute constant multiplication expression",
@@ -769,12 +886,12 @@ static const std::unordered_map<std::string_view, ExprTrampolineSpec> kExprTramp
             if (!selected)
                 throw CompileError(expr, "target-case has no branch for :" + targetArch);
 
+            // Like begin, the selected branch evaluates to its last expression (e.g. an alloc-result in a let binding)
             TargetArchGuard guard(ctx, targetArch);
+            Operand result;
             for (size_t j = 1; j < selected->elements.size(); ++j)
-            {
-                evalExpr(out, ctx, target, selected->elements[j], destReg);
-            }
-            return Operand{};
+                result = evalExpr(out, ctx, target, selected->elements[j], destReg);
+            return result;
         }
     }},
     {"cond", {
@@ -842,6 +959,39 @@ static const std::unordered_map<std::string_view, ExprTrampolineSpec> kExprTramp
             return result;
         }
     }},
+    {"block", {
+        "(block <body>...)",
+        "Evaluate the body in its own C++ block, so RAII helpers (spill guards, call wrappers, temps) end at its close",
+        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> Operand {
+            Operand result;
+            ScopeGuard guard(ctx.scope);
+            emitBlock(out, ctx, "", [&]() {
+                for (size_t i = 1; i < expr.elements.size(); ++i)
+                    result = evalExpr(out, ctx, target, expr.elements[i], destReg);
+            });
+            return result;
+        }
+    }},
+    {"for-range", {
+        "(for-range [<var> <from> <to>] <body>...)",
+        "Repeat the body at lowering time for <var> = <from> .. <to> - 1 (a C++ for loop, e.g. to copy a fixed number of values)",
+        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> Operand {
+            if (expr.elements.size() < 3 || !expr.elements[1].isList() || expr.elements[1].elements.size() != 3 || !expr.elements[1].elements[0].isSymbol())
+                throw CompileError(expr, "for-range requires [var from to] and a body");
+            const SExpr& spec = expr.elements[1];
+            std::string var = toCppVarName(spec.elements[0].text);
+            Operand from = evalExpr(out, ctx, target, spec.elements[1], "");
+            Operand to = evalExpr(out, ctx, target, spec.elements[2], "");
+
+            ScopeGuard guard(ctx.scope);
+            ctx.bind(spec.elements[0].text, Operand::makeImm(TypeKind::I32, var));
+            emitBlock(out, ctx, "for (int " + var + " = " + from.text + "; " + var + " < " + to.text + "; ++" + var + ")", [&]() {
+                for (size_t i = 2; i < expr.elements.size(); ++i)
+                    evalExpr(out, ctx, target, expr.elements[i], destReg);
+            });
+            return Operand{};
+        }
+    }},
     {"unsupported!", {
         "(unsupported!)",
         "Emit assertion failure for unhandled instruction form",
@@ -866,6 +1016,16 @@ static const std::unordered_map<std::string_view, ExprTrampolineSpec> kExprTramp
         }
     }},
 
+    {"alloc-label", {
+        "(alloc-label)",
+        "Declare a local Label for branches within the lowering; bind it with let and place it with set-label!",
+        [](CodeWriter& out, EvalContext& ctx, TargetBuilder&, const SExpr& expr, const std::string&) -> Operand {
+            requireArity(expr, 0, "alloc-label takes no arguments");
+            std::string name = ctx.takeBindingName("label");
+            out.line("Label " + name + ";");
+            return Operand::makeReg(TypeKind::Void, name);
+        }
+    }},
     {"alloc-result", {
         "(alloc-result <type>)",
         "Allocate the instruction's result register (inst.regA64/inst.regX64) and return it; bind it with let",
@@ -873,9 +1033,21 @@ static const std::unordered_map<std::string_view, ExprTrampolineSpec> kExprTramp
             return evalAllocResult(out, ctx, target, expr, false);
         }
     }},
+    {"alloc-result-in", {
+        "(alloc-result-in <physical-register> <type>)",
+        "Use the value already in a physical register (e.g. a call's return register) as the result: regs.takeReg(reg, index)",
+        [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
+            requireArity(expr, 2, "alloc-result-in requires a physical register and a type: (alloc-result-in <reg> <type>)");
+            Operand reg = evalExpr(out, ctx, target, expr.elements[1], "");
+            TypeKind tk = parseRegType(expr.elements[2], "alloc-result-in");
+            target.emitTakeResult(out, ctx, target.formatRegOperand(reg));
+            ctx.use("inst");
+            return Operand::makeReg(tk, target.destRegVar());
+        }
+    }},
     {"alloc-result-reuse", {
         "(alloc-result-reuse <type> <cand-or-[cands]>)",
-        "Allocate the result register, reusing a dying operand register when possible (X64 only considers the first candidate)",
+        "Allocate the result register, reusing the register of one of the candidate operands if it dies at this instruction",
         [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string&) -> Operand {
             return evalAllocResult(out, ctx, target, expr, true);
         }
@@ -903,8 +1075,24 @@ static const std::unordered_map<std::string_view, ExprTrampolineSpec> kExprTramp
                 throw CompileError(bindings, "let bindings must be a list");
 
             // Bindings that declare a C++ local: temporaries and register choices made with if
+            auto isValueTemplate = [&](const SExpr& valExpr) {
+                const TemplateOpSpec* spec = valExpr.isList() && !valExpr.elements.empty() ? findTemplateOp(target, valExpr.elements[0].text) : nullptr;
+                return spec && spec->isValue;
+            };
             auto isEager = [&](const SExpr& valExpr) {
-                return valExpr.isList("alloc-temp") || valExpr.isList("if");
+                return valExpr.isList("alloc-temp") || valExpr.isList("alloc-label") || valExpr.isList("if") || isValueTemplate(valExpr);
+            };
+
+            // [var (let ([x V]) stmts... x)] binds var to V and then runs stmts with x naming the same value, so a
+            // subrule can both choose a register and fill it (e.g. a64:double-operand) in a single binding
+            auto isOperandBlock = [](const SExpr& valExpr) {
+                if (!valExpr.isList("let") || valExpr.elements.size() < 3 || !valExpr.elements[1].isList() || valExpr.elements[1].elements.size() != 1)
+                    return false;
+                const SExpr& inner = valExpr.elements[1].elements[0];
+                return inner.isList() && inner.elements.size() == 2 && inner.elements[0].isSymbol() && valExpr.elements.back().isSymbol(inner.elements[0].text);
+            };
+            auto boundValue = [&](const SExpr& valExpr) -> const SExpr& {
+                return isOperandBlock(valExpr) ? valExpr.elements[1].elements[0].elements[1] : valExpr;
             };
 
             std::set<std::string> names;
@@ -915,7 +1103,7 @@ static const std::unordered_map<std::string_view, ExprTrampolineSpec> kExprTramp
                     throw CompileError(binding, "let binding must be [var expr]");
                 if (!names.insert(binding.elements[0].text).second)
                     throw CompileError(binding.elements[0], "Duplicate let binding '" + binding.elements[0].text + "'");
-                if (isEager(binding.elements[1]))
+                if (isEager(boundValue(binding.elements[1])))
                     declaredLocals.push_back(toCppVarName(binding.elements[0].text));
             }
 
@@ -926,11 +1114,20 @@ static const std::unordered_map<std::string_view, ExprTrampolineSpec> kExprTramp
                 for (const auto& binding : bindings.elements)
                 {
                     const std::string& varName = binding.elements[0].text;
-                    const SExpr& valExpr = binding.elements[1];
+                    const SExpr& valExpr = boundValue(binding.elements[1]);
 
                     if (valExpr.isList("if"))
                     {
                         ctx.bind(varName, evalConditionalBinding(out, ctx, target, valExpr, toCppVarName(varName)));
+                    }
+                    else if (isValueTemplate(valExpr))
+                    {
+                        // Helper results (addresses, call wrappers, indices) are computed once into a local
+                        std::string cppName = toCppVarName(varName);
+                        bool byReference = findTemplateOp(target, valExpr.elements[0].text)->bindsReference;
+                        Operand value = evalExpr(out, ctx, target, valExpr, "");
+                        out.line((byReference ? "auto& " : "auto ") + cppName + " = " + value.text + ";");
+                        ctx.bind(varName, Operand::makeReg(value.type, cppName));
                     }
                     else if (isEager(valExpr))
                     {
@@ -942,6 +1139,15 @@ static const std::unordered_map<std::string_view, ExprTrampolineSpec> kExprTramp
                     else
                     {
                         ctx.bind(varName, evalExpr(out, ctx, target, valExpr, ""));
+                    }
+
+                    if (isOperandBlock(binding.elements[1]))
+                    {
+                        const SExpr& block = binding.elements[1];
+                        ScopeGuard innerGuard(ctx.scope);
+                        ctx.bind(block.elements[1].elements[0].elements[0].text, *ctx.lookup(varName));
+                        for (size_t i = 2; i + 1 < block.elements.size(); ++i)
+                            evalExpr(out, ctx, target, block.elements[i], "");
                     }
                 }
 
@@ -1060,7 +1266,10 @@ Operand evalExpr(CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const
     }
     if (expr.isNumber())
     {
-        return Operand::makeImm(TypeKind::I32, std::to_string(expr.intValue));
+        // Keep the literal's spelling (hex, floating point) in the generated code
+        bool isFloat = expr.text.find_first_of(".eE") != std::string::npos && expr.text.find_first_of("xX") == std::string::npos;
+        std::string text = !expr.text.empty() && expr.text[0] == '+' ? expr.text.substr(1) : expr.text;
+        return Operand::makeImm(isFloat ? TypeKind::F64 : TypeKind::I32, text);
     }
     if (expr.isKeyword())
     {
@@ -1081,9 +1290,13 @@ Operand evalExpr(CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const
 
     size_t colonPos = head.find(':');
     if (colonPos != std::string::npos)
-    {
         validateArchTarget(ctx, expr, head, "operation");
 
+    if (auto result = evalTemplateOp(out, ctx, target, expr))
+        return *result;
+
+    if (colonPos != std::string::npos)
+    {
         std::vector<Operand> args;
         for (size_t i = 1; i < expr.elements.size(); ++i)
             args.push_back(evalExpr(out, ctx, target, expr.elements[i], ""));
@@ -1164,6 +1377,14 @@ void compileRules(std::ostream& os, TargetBuilder& target, const std::vector<Rul
             evalExpr(bodyWriter, ctx, target, expr, "");
         }
 
+        // Template operations reference these locals directly, so detect their use from the generated code
+        static const std::regex kLocalUse(R"((^|[^.\w])(build|regs|function|inst|index|next)\b)");
+        std::string generated = bodyWriter.str();
+        for (const auto& decl : bodyWriter.decls())
+            generated += "\n" + decl;
+        for (auto it = std::sregex_iterator(generated.begin(), generated.end(), kLocalUse); it != std::sregex_iterator(); ++it)
+            ctx.use((*it)[2].str());
+
         allFFlags.insert(ctx.fflags.begin(), ctx.fflags.end());
         allDFFlags.insert(ctx.dfflags.begin(), ctx.dfflags.end());
         compiledRules.push_back({std::move(fnName), bodyWriter.decls(), bodyWriter.str(), std::move(ctx.usedSymbols)});
@@ -1237,6 +1458,10 @@ void getCommonCoreDocs(std::vector<FormDoc>& out)
     {
         out.push_back({std::string(name), spec.syntax ? spec.syntax : "", spec.desc ? spec.desc : ""});
     }
+
+    std::vector<FormDoc> values;
+    getCoreTemplateDocs(out, values);
+    out.insert(out.end(), values.begin(), values.end());
 }
 
 void getCommonPredicateDocs(std::vector<FormDoc>& out)

@@ -1,5 +1,6 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "RuleCompiler.h"
+#include "OpTemplates.h"
 
 #include <functional>
 #include <string_view>
@@ -1380,6 +1381,202 @@ static const std::unordered_map<std::string_view, ArchOpSpecX64> kArchOpsX64 = {
     }}},
 };
 
+// Operations defined as C++ templates (see TemplateOpSpec for the placeholder syntax)
+static const TemplateOpTable kTemplateOpsX64 = {
+    // VM stack / constant slots (index is a VM register or constant index, e.g. (vm-reg a))
+    {"x64:luau-reg", {"luauReg({0:raw})", "xmmword operand for the TValue in VM register <0>", true}},
+    {"x64:luau-reg-tag", {"luauRegTag({0:raw})", "dword operand for the tag of VM register <0>", true}},
+    {"x64:luau-reg-value", {"luauRegValue({0:raw})", "qword operand for the value of VM register <0>", true}},
+    {"x64:luau-reg-value-int", {"luauRegValueInt({0:raw})", "dword operand for the int value of VM register <0>", true}},
+    {"x64:luau-reg-value-int64", {"luauRegValueInt64({0:raw})", "qword operand for the int64 value of VM register <0>", true}},
+    {"x64:luau-reg-extra", {"luauRegExtra({0:raw})", "dword operand for the extra field of VM register <0>", true}},
+    {"x64:luau-reg-value-vector", {"luauRegValueVector({0:raw}, {1:raw})", "dword operand for component <1> of the vector in VM register <0>", true}},
+    {"x64:luau-reg-address", {"luauRegAddress({0:raw})", "Address operand of the TValue in VM register <0>", true}},
+    {"x64:luau-node-key-tag", {"luauNodeKeyTag({0})", "dword operand for the key tag of LuaNode <0>", true}},
+    {"x64:luau-node-key-value", {"luauNodeKeyValue({0})", "qword operand for the key value of LuaNode <0>", true}},
+    {"x64:luau-constant", {"luauConstant({0:raw})", "xmmword operand for the TValue in constant <0>", true}},
+    {"x64:luau-constant-tag", {"luauConstantTag({0:raw})", "dword operand for the tag of constant <0>", true}},
+    {"x64:luau-constant-value", {"luauConstantValue({0:raw})", "qword operand for the value of constant <0>", true}},
+
+    // IR operands as register-or-memory operands (constants become data section references)
+    {"x64:mem-reg-double", {"lowering.memRegDoubleOp({0:raw})", "Register or memory operand holding double operand <0>", true}},
+    {"x64:mem-reg-int64", {"lowering.memRegInt64Op({0:raw})", "Register, memory or immediate operand holding int64 operand <0>", true}},
+    {"x64:mem-reg-uint", {"lowering.memRegUintOp({0:raw})", "Register, memory or immediate operand holding uint operand <0>", true}},
+    {"x64:mem-reg-tag", {"lowering.memRegTagOp({0:raw})", "Register or memory operand holding the tag operand <0>", true}},
+    {"x64:cond-int", {"getConditionInt({0})", "X64 condition for an IrCondition operand on int comparisons", true}},
+    {"x64:mem-reg-float", {"lowering.memRegFloatOp({0:raw})", "Register or memory operand holding float operand <0>", true}},
+
+    // Vector operands: vecOp returns the operand's register, or loads it into the given unallocated temp
+    {"x64:unallocated-temp", {"ScopedRegX64{regs}", "Temporary register holder that helpers like x64:vec-op allocate on demand", true}},
+    {"x64:vec-op", {"lowering.vecOp({0:raw}, {1:raw})", "Register holding vector operand <0>, using holder <1> if it must be loaded (may allocate)", true}},
+
+    // Constants placed in the code's data section
+    {"x64:f64", {"build.f64({0:double})", "Memory operand for a double constant (from a constant operand or literal)", true}},
+    {"x64:f32", {"build.f32({0:raw})", "Memory operand for a float literal", true}},
+    {"x64:f64x2", {"build.f64x2({0:raw}, {1:raw})", "Memory operand for two double literals", true}},
+    {"x64:f32x4", {"build.f32x4({0:raw}, {1:raw}, {2:raw}, {3:raw})", "Memory operand for four float literals", true}},
+    {"x64:u32x4", {"build.u32x4({0:raw}, {1:raw}, {2:raw}, {3:raw})", "Memory operand for four 32-bit integer literals", true}},
+    {"x64:i32", {"build.i32({0:raw})", "Memory operand for a 32-bit integer literal", true}},
+    {"x64:i64", {"build.i64({0:raw})", "Memory operand for a 64-bit integer literal", true}},
+
+    // Fixed registers: claim a physical register for the rest of the block (holder from x64:unallocated-temp)
+    {"x64:reg-of", {"{0:raw}.reg", "Register held by a ScopedRegX64 holder (from x64:unallocated-temp)", true}},
+    {"x64:alloc!", {"{0:raw}.alloc(SizeX64::{1:raw});", "Allocate a register of size <1> (e.g. :qword) in holder <0>"}},
+    {"x64:free!", {"{0:raw}.free();", "Release the register in holder <0> before the end of the block"}},
+    {"x64:release", {"{0:raw}.release()", "Register in holder <0>, handed over (the holder no longer frees it)", true}},
+    {"x64:take!", {"{0:raw}.take({1});", "Reserve physical register <1> in holder <0> (spilling its current value if needed)"}},
+
+    // Sized memory operands from address expressions
+    {"x64:ptr", {"{0:raw}[{1:raw}]", "Memory operand of size <0> (e.g. :byte, :dword) at address expression <1>", true}},
+    {"x64:ptr2", {"{0:raw}[{1} + {2}]", "Memory operand of size <0> at <1> + <2>", true}},
+    {"x64:ptr-scaled0", {"{0:raw}[{1} + {2} * {3:raw}]", "Memory operand of size <0> at <1> + <2> * <3>", true}},
+    {"x64:ptr-scaled", {"{0:raw}[{1} + {2} * {3:raw} + {4:raw}]", "Memory operand of size <0> at <1> + <2> * <3> + <4>", true}},
+    {"x64:buffer-addr", {"lowering.bufferAddrOp({0:raw}, {1:raw}, lowering.tagOp({2:raw}))", "Address of element <1> in buffer <0> (tag <2>)", true}},
+
+    // Register views and immediates
+    {"x64:byte-reg", {"byteReg({0})", "Low byte of register <0>", true}},
+    {"x64:word-reg", {"wordReg({0})", "Low 16 bits of register <0>", true}},
+    {"x64:dword-reg", {"dwordReg({0})", "Low 32 bits of register <0>", true}},
+    {"x64:qword-reg", {"qwordReg({0})", "Full 64 bits of register <0>", true}},
+    {"x64:imm-tag", {"OperandX64(lowering.tagOp({0:raw}))", "Immediate from tag constant <0>", true}},
+    {"x64:cond", {"ConditionX64::{0:raw}", "X64 condition code (e.g. :NotParity)", true}},
+    {"x64:imm", {"OperandX64({0:raw})", "Immediate operand <0>", true}},
+    {"x64:imm8", {"OperandX64(int8_t({0:int}))", "8-bit immediate from int constant <0>", true}},
+    {"x64:imm16", {"OperandX64(int16_t({0:int}))", "16-bit immediate from int constant <0>", true}},
+    {"x64:imm32", {"OperandX64({0:int})", "32-bit immediate from int constant <0>", true}},
+
+    // Runtime calls: spill guard and call wrapper are RAII helpers, so keep them in a (block ...)
+    {"x64:scoped-spills", {"ScopedSpills(regs)", "Spill guard: live registers are spilled before the call and restored at the end of the block", true}},
+    {"x64:call-wrapper", {"IrCallWrapperX64(regs, build)", "Call wrapper that moves arguments into ABI registers (may allocate)", true}},
+    {"x64:call-wrapper-at", {"IrCallWrapperX64(regs, build, index)", "Call wrapper for the current instruction (frees operands at their last use)", true}},
+    {"x64:call-arg!", {"{0:raw}.addArgument(SizeX64::{1:raw}, {2});", "Add argument <2> of size <1> (e.g. :qword) to call wrapper <0>"}},
+    {"x64:call-arg-op!", {"{0:raw}.addArgument(SizeX64::{1:raw}, {2}, {3:raw});", "Add argument <2> of size <1> for IR operand <3> (freed at its last use) to call wrapper <0>"}},
+    {"x64:call-arg-scoped!", {"{0:raw}.addArgument(SizeX64::{1:raw}, {2:raw});", "Hand the register in holder <2> to call wrapper <0> as an argument of size <1>"}},
+    {"x64:call-result!", {"{0:raw}.setResultRegister({1}, index);", "Have call wrapper <0> return its result in <1>"}},
+    {"x64:call!", {"{0:raw}.call({1});", "Call the function at <1> (e.g. a NativeContext slot) through wrapper <0>"}},
+    {"x64:call-next-arg-reg", {"{0:raw}.suggestNextArgumentRegister(SizeX64::{1:raw})", "Register call wrapper <0> will use for its next argument of size <1>", true}},
+    {"x64:addr", {"addr[{0} + {1:raw}]", "Address operand <0> + <1> (for lea and call arguments)", true}},
+    {"x64:fallback!", {"emitFallback(regs, build, {0:raw}, {1:uint});", "Call the VM implementation at NativeContext offset <0> for the instruction at pc <1>"}},
+    {"x64:luau-constant-address", {"luauConstantAddress({0:raw})", "Address operand of the TValue in constant <0>", true}},
+    {"x64:number-tvalue-bytes", {"[&]() { TValue n = {}; setnvalue(&n, {0:uint}); return build.bytes(&n, sizeof(n)); }()",
+        "Data-section copy of a number TValue holding uint constant <0>", true}},
+    {"x64:call-arith-helper!", {"callArithHelper(regs, build, {0:raw}, {1}, {2}, TMS({3:int}));", "VM arithmetic: R<0> = <1> op <2> for metamethod <3>"}},
+    {"x64:call-length-helper!", {"callLengthHelper(regs, build, {0:raw}, {1:raw});", "VM length: R<0> = #R<1>"}},
+    {"x64:call-get-table!", {"callGetTable(regs, build, {0:raw}, {1}, {2:raw});", "VM table read: R<2> = R<0>[<1>]"}},
+    {"x64:call-set-table!", {"callSetTable(regs, build, {0:raw}, {1}, {2:raw});", "VM table write: R<0>[<1>] = R<2>"}},
+    {"x64:call-step-gc!", {"callStepGc(regs, build);", "Run a GC step if the GC threshold is reached"}},
+    {"x64:preserve-and-free-inst-values!", {"regs.preserveAndFreeInstValues();", "Spill all instruction values so handler code can ignore the register state"}},
+    {"x64:assert-all-free!", {"regs.assertAllFree();", "Check that no registers are allocated"}},
+    {"x64:assert-no-spills!", {"regs.assertNoSpills();", "Check that no values are spilled"}},
+    {"x64:inst-setlist!", {"emitInstSetList(regs, build, {0:raw}, {1:raw}, {2:int}, {3:uint}, {4:raw});", "SETLIST: R<0>[<3>...] = R<1>.. (<2> values; <4> = known count or -1)"}},
+    {"x64:add-interrupt-handler!", {"{ Label resume = build.setLabel(); lowering.interruptHandlers.push_back({{0:raw}, {1:raw}, resume}); }",
+        "Register an interrupt handler: label <0> jumps out for pc <1>, and the handler resumes here"}},
+    {"x64:table-node-at-cached-slot!", {"getTableNodeAtCachedSlot(build, {0}, {1}, {2}, {3:uint});",
+        "<1> = node of table <2> at the slot cached in instruction <3> (scratch <0>)"}},
+    {"x64:convert-number-to-index-or-jump!", {"convertNumberToIndexOrJump(build, {0}, {1}, {2}, {3:raw});",
+        "<2> = int index of number <1>, or jump to <3> if it isn't an exact integer (scratch <0>)"}},
+    {"x64:check-object-barrier-conditions!", {"checkObjectBarrierConditions(build, {0}, {1}, {2}, {3:raw}, {4:raw}, {5:raw});",
+        "Jump to <5> unless storing value <3> (register <2>, tag <4> or -1) into object <1> needs a GC barrier (scratch <0>)"}},
+    {"x64:call-barrier-table-fast!", {"callBarrierTableFast(regs, build, {0}, {1:raw});", "Table back barrier for table <0> (IR operand <1>)"}},
+    {"x64:call-barrier-object!", {"callBarrierObject(regs, build, {0:raw}, {}, {1}, {2:raw}, {3:raw});",
+        "Object barrier for storing value <1> (IR operand <2>, tag <3> or -1) into object register <0>"}},
+    {"x64:free-last-use-reg!", {"regs.freeLastUseReg(lowering.function.instOp({0:raw}), index);", "Release operand <0>'s register now if this is its last use"}},
+    {"x64:ud2!", {"build.ud2();", "ud2 (trap)"}},
+    {"x64:emit-builtin!", {"emitBuiltin(regs, build, {0:uint}, {1:raw}, {2:raw}, {3:int});", "Inline builtin <0> with R<1> = f(R<2>...) and <3> results"}},
+    {"x64:inst-forgloop!", {"emitInstForGLoop(regs, build, {0:raw}, {1:int}, {2:raw});", "Generic for loop over R<0> with <1> variables, looping back to <2>"}},
+    {"x64:inst-return!", {"emitInstReturn(build, lowering.helpers, {0:raw}, {1:int}, lowering.function.variadic);", "Return <1> values starting at R<0>"}},
+    {"x64:inst-call!", {"emitInstCall(regs, build, lowering.helpers, {0:raw}, {1:int}, {2:int});", "Call R<0> with <1> arguments and <2> results"}},
+    {"x64:class-member-auth!", {"emitClassMemberAuthX64(build, regs, {0}, {1}, {2}, {3:raw});",
+        "Authorize private/const access to member slot <1> of class <0> (written object <2> or noreg), else jump to <3>"}},
+    {"x64:update-base!", {"emitUpdateBase(build);", "Reload rBase from L->base after a call that may reallocate the stack"}},
+
+    // Control flow
+    {"x64:jcc!", {"build.jcc(ConditionX64::{0:raw}, {1:raw});", "Jump to local label <1> if condition <0> (e.g. :Equal) holds"}},
+    {"x64:target-label", {"lowering.getTargetLabel({0:raw}, index, {1:raw})", "Label for branching to block/exit <0>, with fallback label <1>", true, true}},
+    {"x64:jump-or-abort-no-finalize!", {"lowering.jumpOrAbortOnUndefNoFinalize(ConditionX64::{0:raw}, {1:raw}, index, next, {2:raw});",
+        "Jump to block/exit <1> if condition <0> holds, sharing fallback label <2> (finalize once with x64:finalize-target-label!)"}},
+    {"x64:finalize-target-label!", {"lowering.finalizeTargetLabel({0:raw}, index, {1:raw});", "Emit the exit/abort code for fallback label <1> of target <0>"}},
+    {"x64:jump-or-abort-on-undef!", {"lowering.jumpOrAbortOnUndef(ConditionX64::{0:raw}, {1:raw}, index, next);",
+        "Jump to block/exit <1> if condition <0> holds (aborts if <1> is undef)"}},
+
+    // Instructions
+    {"x64:mov!", {"build.mov({0}, {1});", "mov <0>, <1>"}},
+    {"x64:add!", {"build.add({0}, {1});", "add <0>, <1>"}},
+    {"x64:sub!", {"build.sub({0}, {1});", "sub <0>, <1>"}},
+    {"x64:xor!", {"build.xor_({0}, {1});", "xor <0>, <1>"}},
+    {"x64:test!", {"build.test({0}, {1});", "test <0>, <1>"}},
+    {"x64:cmp-op!", {"build.cmp({0}, {1});", "cmp <0>, <1> (operands as given)"}},
+    // Shifts and rotates by mnemonic (e.g. :shl, :shr, :sar, :rol, :ror)
+    {"x64:shift-imm!", {"build.{0:raw}({1}, int8_t(unsigned({2:int})));", "<0> <1>, imm8 (byte-sized amount of int constant <2>)"}},
+    {"x64:shift-imm64!", {"build.{0:raw}({1}, int8_t(unsigned({2:int64})));", "<0> <1>, imm8 (byte-sized amount of int64 constant <2>)"}},
+    {"x64:shift-int8!", {"build.{0:raw}({1}, int8_t({2:raw}));", "<0> <1>, int8_t(<2>) for a compile-time amount <2>"}},
+    {"x64:neg-amount-u8", {"uint8_t(-{0:int64})", "Negated int64 constant <0> truncated to 8 bits (shift amount)", true}},
+    {"x64:shift-cl!", {"build.{0:raw}({1}, byteReg({2}));", "<0> <1>, cl (amount in the byte register of <2>, which must be rcx)"}},
+    {"x64:bsr!", {"build.bsr({0}, {1});", "bsr <0>, <1>"}},
+    {"x64:bsf!", {"build.bsf({0}, {1});", "bsf <0>, <1>"}},
+    {"x64:jmp-label!", {"build.jmp({0:raw});", "jmp to local label <0>"}},
+    {"x64:neg!", {"build.neg({0});", "neg <0>"}},
+    {"x64:lea-addr!", {"build.lea({0}, addr[{1} + {2:raw}]);", "lea <0>, [<1> + <2>]"}},
+    {"x64:jump-on-number-cmp!", {"jumpOnNumberCmp(build, {0}, {1}, {2}, {3}, {4:raw}, {5:raw});",
+        "Compare numbers <1> and <2> (scratch <0>) and jump to <4> if condition <3> holds; <5> selects float precision"}},
+    {"x64:cmov-cond!", {"build.cmov(ConditionX64::{0:raw}, {1}, {2});", "cmov<0> <1>, <2>"}},
+    {"x64:and!", {"build.and_({0}, {1});", "and <0>, <1>"}},
+    {"x64:or!", {"build.or_({0}, {1});", "or <0>, <1>"}},
+    {"x64:setcc!", {"build.setcc({0:raw}, {1});", "setcc <cond 0>, <1>"}},
+    {"x64:jump-if-truthy!", {"jumpIfTruthy(build, {0:raw}, {1:raw}, {2:raw});", "Jump to <1> if VM register <0> is truthy, to <2> if falsy"}},
+    {"x64:jump-if-falsy!", {"jumpIfFalsy(build, {0:raw}, {1:raw}, {2:raw});", "Jump to <1> if VM register <0> is falsy, to <2> if truthy"}},
+    {"x64:vpextrd!", {"build.vpextrd({0}, {1}, {2:raw});", "vpextrd <0>, <1>, <lane>"}},
+    {"x64:movsx!", {"build.movsx({0}, {1});", "movsx <0>, <1>"}},
+    {"x64:movzx!", {"build.movzx({0}, {1});", "movzx <0>, <1>"}},
+    {"x64:vcvtsi2sd-op!", {"build.vcvtsi2sd({0}, {1}, {2});", "vcvtsi2sd <0>, <1>, <2>"}},
+    {"x64:vucomisd-op!", {"build.vucomisd({0}, {1});", "vucomisd <0>, <1>"}},
+    {"x64:shift-raw!", {"build.{0:raw}({1}, {2:raw});", "<0> <1>, <2> (amount as given)"}},
+    {"x64:lea-addr3!", {"build.lea({0}, addr[{1} + {2} + {3:raw}]);", "lea <0>, [<1> + <2> + <3>]"}},
+    {"x64:dec!", {"build.dec({0});", "dec <0>"}},
+    {"x64:cqo!", {"build.cqo();", "cqo (sign-extend rax into rdx:rax)"}},
+    {"x64:idiv!", {"build.idiv({0});", "idiv <0> (signed rdx:rax / <0>)"}},
+    {"x64:div!", {"build.div({0});", "div <0> (unsigned rdx:rax / <0>)"}},
+    {"x64:mov-imm32!", {"build.mov({0}, int32_t({1:int64}));", "mov <0>, imm32 (sign-extended) from an int64 constant that fits in 32 bits"}},
+    {"x64:mov64!", {"build.mov64({0}, {1:int64});", "mov <0>, imm64 from an int64 constant"}},
+    // AVX arithmetic and data movement with operands as given (the "-op" variants avoid older ops of the same name)
+    {"x64:vmovsd3!", {"build.vmovsd({0}, {1}, {2});", "vmovsd <0>, <1>, <2> (merge low double)"}},
+    {"x64:vmovss3!", {"build.vmovss({0}, {1}, {2});", "vmovss <0>, <1>, <2> (merge low float)"}},
+    {"x64:vmovupd!", {"build.vmovupd({0}, {1});", "vmovupd <0>, <1>"}},
+    {"x64:vaddsd-op!", {"build.vaddsd({0}, {1}, {2});", "vaddsd <0>, <1>, <2>"}},
+    {"x64:vsubsd-op!", {"build.vsubsd({0}, {1}, {2});", "vsubsd <0>, <1>, <2>"}},
+    {"x64:vmulsd-op!", {"build.vmulsd({0}, {1}, {2});", "vmulsd <0>, <1>, <2>"}},
+    {"x64:vdivsd-op!", {"build.vdivsd({0}, {1}, {2});", "vdivsd <0>, <1>, <2>"}},
+    {"x64:vandpd!", {"build.vandpd({0}, {1}, {2});", "vandpd <0>, <1>, <2>"}},
+    {"x64:vandps!", {"build.vandps({0}, {1}, {2});", "vandps <0>, <1>, <2>"}},
+    {"x64:vorpd!", {"build.vorpd({0}, {1}, {2});", "vorpd <0>, <1>, <2>"}},
+    {"x64:vxorpd!", {"build.vxorpd({0}, {1}, {2});", "vxorpd <0>, <1>, <2>"}},
+    {"x64:vxorps!", {"build.vxorps({0}, {1}, {2});", "vxorps <0>, <1>, <2>"}},
+    {"x64:vcmpltsd!", {"build.vcmpltsd({0}, {1}, {2});", "vcmpltsd <0>, <1>, <2>"}},
+    {"x64:vcmpltss!", {"build.vcmpltss({0}, {1}, {2});", "vcmpltss <0>, <1>, <2>"}},
+    {"x64:vcmpeqsd!", {"build.vcmpeqsd({0}, {1}, {2});", "vcmpeqsd <0>, <1>, <2>"}},
+    {"x64:vblendvpd!", {"build.vblendvpd({0}, {1}, {2}, {3});", "vblendvpd <0>, <1>, <2>, <3> (mask)"}},
+    {"x64:vblendvps!", {"build.vblendvps({0}, {1}, {2}, {3});", "vblendvps <0>, <1>, <2>, <3> (mask)"}},
+    {"x64:vroundsd!", {"build.vroundsd({0}, {1}, {2}, {3:raw});", "vroundsd <0>, <1>, <2>, <rounding mode>"}},
+    {"x64:vfmadd213pd!", {"build.vfmadd213pd({0}, {1}, {2});", "vfmadd213pd <0>, <1>, <2> (<0> = <1> * <0> + <2>)"}},
+    {"x64:vaddps!", {"build.vaddps({0}, {1}, {2});", "vaddps <0>, <1>, <2>"}},
+    {"x64:vsubps!", {"build.vsubps({0}, {1}, {2});", "vsubps <0>, <1>, <2>"}},
+    {"x64:vmulps!", {"build.vmulps({0}, {1}, {2});", "vmulps <0>, <1>, <2>"}},
+    {"x64:vdivps!", {"build.vdivps({0}, {1}, {2});", "vdivps <0>, <1>, <2>"}},
+    {"x64:vminps!", {"build.vminps({0}, {1}, {2});", "vminps <0>, <1>, <2>"}},
+    {"x64:vmaxps!", {"build.vmaxps({0}, {1}, {2});", "vmaxps <0>, <1>, <2>"}},
+    {"x64:vcmpeqps!", {"build.vcmpeqps({0}, {1}, {2});", "vcmpeqps <0>, <1>, <2>"}},
+    {"x64:vroundps!", {"build.vroundps({0}, {1}, {2:raw});", "vroundps <0>, <1>, <rounding mode>"}},
+    {"x64:vdpps!", {"build.vdpps({0}, {1}, {2}, {3:raw});", "vdpps <0>, <1>, <2>, <mask>"}},
+    {"x64:vpshufps!", {"build.vpshufps({0}, {1}, {2}, {3:int});", "vpshufps <0>, <1>, <2>, <shuffle>"}},
+    {"x64:vpinsrd!", {"build.vpinsrd({0}, {1}, {2}, {3:raw});", "vpinsrd <0>, <1>, <2>, <lane>"}},
+    {"x64:vmovaps!", {"build.vmovaps({0}, {1});", "vmovaps <0>, <1>"}},
+    {"x64:vfmadd213ps!", {"build.vfmadd213ps({0}, {1}, {2});", "vfmadd213ps <0>, <1>, <2> (<0> = <1> * <0> + <2>)"}},
+    {"x64:store-float!", {"lowering.storeFloat({0}, {1:raw});", "Store float operand <1> (constant or register) to memory <0>"}},
+    {"x64:vmovss-op!", {"build.vmovss({0}, {1});", "vmovss <0>, <1> (operands as given)"}},
+    {"x64:vmovsd-op!", {"build.vmovsd({0}, {1});", "vmovsd <0>, <1> (operands as given)"}},
+    {"x64:vmovups-op!", {"build.vmovups({0}, {1});", "vmovups <0>, <1> (operands as given)"}},
+};
+
 class TargetBuilderX64 : public TargetBuilder
 {
 public:
@@ -1394,7 +1591,8 @@ public:
                 "#include \"IrLoweringX64.h\"\n"
                 "#include \"EmitCommonX64.h\"\n"
                 "#include \"EmitInstructionX64.h\"\n"
-                "#include \"lstate.h\"\n\n");
+                "#include \"lstate.h\"\n"
+                "#include \"lgc.h\"\n\n");
         for (const auto& flag : fflags)
             out.line("LUAU_FASTFLAG(" + flag + ")");
         for (const auto& flag : dfflags)
@@ -1424,9 +1622,10 @@ public:
         std::string sizeStr = sizeForTypeX64(type);
         if (isReuse)
         {
-            // Only the first candidate may be reused: x64 two-operand forms (mov res, a; op res, b) would
-            // clobber b before reading it if res were allocated in b's register
-            out.line("inst.regX64 = regs.allocRegOrReuse(" + sizeStr + ", index, {" + rawOps[0] + "});");
+            std::string ops;
+            for (size_t i = 0; i < rawOps.size(); ++i)
+                ops += (i > 0 ? ", " : "") + rawOps[i];
+            out.line("inst.regX64 = regs.allocRegOrReuse(" + sizeStr + ", index, {" + ops + "});");
         }
         else
             out.line("inst.regX64 = regs.allocReg(" + sizeStr + ", index);");
@@ -1455,7 +1654,40 @@ public:
         return baseOp.text;
     }
 
+    void emitTakeResult(CodeWriter& out, EvalContext& ctx, const std::string& physReg) override
+    {
+        ctx.use("regs");
+        out.line("inst.regX64 = regs.takeReg(" + physReg + ", index);");
+    }
+
     std::string regVarType() const override { return "RegisterX64"; }
+
+    std::string conditionalTempExpr(CodeWriter& out, EvalContext& ctx, TypeKind type, const std::string& cond, const std::string& varName) override
+    {
+        // ScopedRegX64 owns the register until the end of the enclosing block, so declare it unallocated and allocate on demand
+        ctx.use("regs");
+        std::string holder = varName + "_tmp";
+        out.line("ScopedRegX64 " + holder + "{regs};");
+        out.line("if (" + cond + ")");
+        out.line("    " + holder + ".alloc(" + sizeForTypeX64(type) + ");");
+        return holder + ".reg";
+    }
+
+    std::string formatMemOperand(EvalContext& ctx, const Operand& op, const std::string& size) const override
+    {
+        return formatMemX64(ctx, op, size);
+    }
+
+    const TemplateOpSpec* findTemplateOp(const std::string& name) const override
+    {
+        auto it = kTemplateOpsX64.find(name);
+        return it == kTemplateOpsX64.end() ? nullptr : &it->second;
+    }
+
+    void getTemplateOpDocs(std::vector<FormDoc>& ops, std::vector<FormDoc>& values) const override
+    {
+        getTemplateDocs(kTemplateOpsX64, ops, values);
+    }
 
     std::string formatRegOperand(const Operand& op) const override
     {
@@ -1465,7 +1697,20 @@ public:
     std::set<std::string> globalSymbols() const override
     {
         // rClosure is not a register on X64; loads through it are lowered via sClosure
-        return {"rState", "rBase", "rConstants", "rNativeContext", "rClosure", "sClosure", "sCode"};
+        std::set<std::string> globals = {"rState", "rBase", "rConstants", "rNativeContext", "rClosure", "sClosure", "sCode", "sTemporarySlot",
+            "sSpillArea", "noreg", "rip"};
+        // Physical registers, for fixed-register constraints (shifts, division) and ABI glue
+        for (const char* name : {"al", "cl", "dl", "bl", "spl", "bpl", "sil", "dil", "eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi",
+                 "rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi"})
+            globals.insert(name);
+        for (int i = 8; i < 16; ++i)
+        {
+            for (const char* suffix : {"", "b", "d"})
+                globals.insert("r" + std::to_string(i) + suffix);
+        }
+        for (int i = 0; i < 16; ++i)
+            globals.insert("xmm" + std::to_string(i));
+        return globals;
     }
 
     bool emitArchOp(CodeWriter& out, EvalContext& ctx, const std::string& opName, const std::vector<Operand>& rawArgs) override
@@ -1516,6 +1761,7 @@ void getX64Docs(std::vector<FormDoc>& ops, std::vector<FormDoc>& preds)
     TargetBuilderX64 target;
     target.getArchOpDocs(ops);
     target.getArchPredicateDocs(preds);
+    target.getTemplateOpDocs(ops, preds);
 }
 
 } // namespace Luwu::Dsl
