@@ -39,14 +39,14 @@ TEST_CASE_FIXTURE(IrCmdFixture, "commands_generate_the_enum_and_command_informat
             "(define-ircmd FIRST (operands [a :any] [b :any]) (result :int) (class :value) (lowering (two a b)))\n"
             "~ Shared docs\n"
             "~ A: int\n"
-            "(define-ircmd SECOND (operands [a :any] [b :any]) (class :guard) (flags :deprecated/is-unsafe-to-sink) (lowering (two a b)))\n"
+            "(define-ircmd SECOND (operands [a :any] [b :any]) (class :guard) (flags :deprecated/is-unsafe-to-sink) (dead-store (hook guard-uses)) (lowering (two a b)))\n"
             "\n"
             "(define-ircmd THIRD (class :terminator) (heap-effects :invalidates-safe-env) (flags :dirty-high-bits :deprecated/has-side-effects)\n"
             "  (lowering (none)))\n"
             "\n" +
             std::string(kRule2) + "(define-rule (none) (unsupported!))");
     requireOk();
-    CHECK(out.find("4 output(s) updated") != std::string::npos);
+    CHECK(out.find("5 output(s) updated") != std::string::npos);
 
     // Identical consecutive docs share one comment block
     std::string enumHeader = read("out/IrCmd.h");
@@ -157,7 +157,7 @@ TEST_CASE_FIXTURE(IrCmdFixture, "operand_kinds_generate_the_operand_table")
             "(define-ircmd GUARD (operands [a :Rn|:Kn] [b :const-tag] [c :block|:vmexit|:undef] [d :int|:none])\n"
             "  (target-specific [:x64 [a :inst-pointer]] [:a64 [d :Kn]])\n"
             "  (flag-specific [:DebugLuauAbortingChecks [b :tag]])\n"
-            "  (class :guard) (lowering (guard a b c d)))\n"
+            "  (class :guard) (vm-effects (maybe-use a)) (location-tracking :none) (dead-store :live-ins) (lowering (guard a b c d)))\n"
             "(define-rule (guard [a :op] [b :op] [c :label] [d :op]) (unsupported!))");
     requireOk();
 
@@ -198,7 +198,7 @@ TEST_CASE_FIXTURE(IrCmdFixture, "rule_parameter_types_must_be_able_to_read_the_o
 
     SUBCASE("extra kinds are checked too")
     {
-        compile("(define-ircmd C (operands [x :const-int]) (target-specific [:x64 [x :Rn]]) (class :effect) (lowering (lit x)))\n" + rule);
+        compile("(define-ircmd C (operands [x :const-int]) (target-specific [:x64 [x :Rn]]) (class :effect) (location-tracking :none) (lowering (lit x)))\n" + rule);
         requireError({"can be :Rn (on x64)"});
     }
 }
@@ -235,6 +235,92 @@ TEST_CASE_FIXTURE(IrCmdFixture, "operand_errors")
         compile(c.program);
         requireError({c.error});
     }
+}
+
+TEST_CASE_FIXTURE(IrCmdFixture, "effects_generate_the_effects_table")
+{
+    compile("(define-ircmd NOP (class :pseudo))\n"
+            "(define-ircmd STEP (operands [ra :Rn] [k :Rn|:Kn] [n :const-int] [m :const-uint] [fail :block|:vmexit|:undef])\n"
+            "  (class :guard)\n"
+            "  (vm-effects (def-range (+ ra 3) (low-byte n)) (use ra) (maybe-use k) (use-range (+ ra 1) m) (def ra) (hook step-uses))\n"
+            "  (location-tracking (invalidate-range (+ ra 2) :to-top) (restore-from-load k) (hook-before step-before))\n"
+            "  (dead-store :live-ins (store-hint ra k :double))\n"
+            "  (heap-effects :reenters-vm)\n"
+            "  (lowering (any5 ra k n m fail)))\n"
+            "(define-ircmd GC (operands [ra :Rn]) (class :effect) (vm-effects :none) (location-tracking :none) (heap-effects :may-gc)\n"
+            "  (dead-store (writes-allocation ra)) (lowering (any1 ra)))\n"
+            "(define-rule (any5 [a :op] [b :op] [c :op] [d :op] [e :label]) (unsupported!))\n"
+            "(define-rule (any1 [a :op]) (unsupported!))");
+    requireOk();
+
+    std::string effects = read("out/IrCmdEffects.h");
+    // Uses come first, in declaration order, then the defs
+    CHECK(effects.find("    // STEP\n"
+                       "    IrCmdEffects{}.vm(IrVmEffectKind::Use, 0).vm(IrVmEffectKind::MaybeUse, 1).vm(IrVmEffectKind::UseRange, 0, 1, {IrEffectCountKind::UintOperand, 3})"
+                       ".vm(IrVmEffectKind::DefRange, 0, 3, {IrEffectCountKind::LowByteOfIntOperand, 2}).vm(IrVmEffectKind::Def, 0)"
+                       ".vmHookIs(IrVmEffectsHook::StepUses)"
+                       ".before({IrLocationEffectKind::InvalidateRange, 0, 2, 0, {IrEffectCountKind::Literal, -1}})"
+                       ".after({IrLocationEffectKind::RestoreFromLoad, 1, 0, 0, {}})"
+                       ".beforeHook(IrLocationHook::StepBefore)"
+                       ".deadStoreIs(IrDeadStoreKind::LiveIns, 4).storeHint(0, 1, IrValueKind::Double).reentersVmIs(),\n") != std::string::npos);
+    CHECK(effects.find("    // GC\n    IrCmdEffects{}.vmNone().locationsNone().writesAllocation(0).mayGcIs(),\n") != std::string::npos);
+    CHECK(effects.find("    // NOP\n    IrCmdEffects{},\n") != std::string::npos);
+    CHECK(effects.find("enum class IrVmEffectsHook : uint8_t\n{\n    None,\n    StepUses,\n};") != std::string::npos);
+    CHECK(effects.find("inline constexpr int kMaxIrVmEffects = 5;") != std::string::npos);
+}
+
+TEST_CASE_FIXTURE(IrCmdFixture, "effect_errors")
+{
+    struct Case
+    {
+        const char* name;
+        std::string program;
+        const char* error;
+    };
+
+    std::string rule = "(define-rule (any1 [a :op]) (unsupported!))\n";
+    auto cmd = [&](const std::string& operands, const std::string& clauses, const char* cls = ":effect") {
+        return "(define-ircmd C (operands " + operands + ") (class " + cls + ") " + clauses + " (lowering (any1 a)))\n" + rule;
+    };
+
+    Case cases[] = {
+        {"vm-effects required", cmd("[a :Rn]", "(location-tracking :none)"), "C can have VM register operands, so it needs (vm-effects ...)"},
+        {"location-tracking required", cmd("[a :Rn]", "(vm-effects :none)"), "so it needs (location-tracking ...)"},
+        {"location-tracking required for target-specific Rn",
+            cmd("[a :double]", "(target-specific [:x64 [a :Rn]])"), "so it needs (location-tracking ...)"},
+        {"use needs Rn only", cmd("[a :Rn|:Kn]", "(vm-effects (use a)) (location-tracking :none)"), "can be something other than :Rn; use maybe-use/maybe-def"},
+        {"maybe-use needs Rn", cmd("[a :double]", "(vm-effects (maybe-use a))"), "can't be a VM register, so maybe-use never applies"},
+        {"count must be constant", "(define-ircmd C (operands [a :Rn] [n :int]) (class :effect) (vm-effects (use-range a n)) (location-tracking :none) (lowering (any2 a n)))\n"
+            "(define-rule (any2 [a :op] [b :op]) (unsupported!))", "Count operand 'n' has to be :const-int or :const-uint"},
+        {"low-byte must be const-int", "(define-ircmd C (operands [a :Rn] [n :const-uint]) (class :effect) (vm-effects (use-range a (low-byte n))) (location-tracking :none) (lowering (any2 a n)))\n"
+            "(define-rule (any2 [a :op] [b :op]) (unsupported!))", "(low-byte ...) needs a :const-int operand"},
+        {"none with other effects", cmd("[a :Rn]", "(vm-effects :none (use a)) (location-tracking :none)"), "vm-effects :none can't be combined with other effects"},
+        {"unknown vm effect", cmd("[a :Rn]", "(vm-effects (touch a)) (location-tracking :none)"), "Unknown vm-effects item 'touch'"},
+        {"two vm hooks", cmd("[a :Rn]", "(vm-effects (hook x) (hook y)) (location-tracking :none)"), "Only one vm-effects hook per command"},
+        {"unknown location effect", cmd("[a :Rn]", "(vm-effects :none) (location-tracking (forget a))"), "Unknown location-tracking item 'forget'"},
+        {"two effects before lowering", cmd("[a :Rn]", "(vm-effects :none) (location-tracking (invalidate a) (invalidate-keep-values a))"),
+            "Only one location-tracking effect before lowering per command"},
+        {"guard without live-ins", "(define-ircmd C (operands [f :block]) (class :guard) (lowering (any1 f)))\n(define-rule (any1 [a :label]) (unsupported!))",
+            "C is a guard, so dead-store elimination has to check its target's live-ins"},
+        {"live-ins on a non-guard", cmd("[a :any]", "(dead-store :live-ins)"), "dead-store :live-ins is for guards"},
+        {"live-outs on a non-terminator", cmd("[a :any]", "(dead-store :live-outs)"), "dead-store :live-outs is for terminators"},
+        {"two dead-store kinds", cmd("[a :any]", "(dead-store :visit :none)"), "dead-store takes one of"},
+        {"may-gc needs visit", cmd("[a :any]", "(dead-store :none) (heap-effects :may-gc)"), "only flushes GC object registers for :may-gc commands it visits"},
+        {"bad store-hint kind", cmd("[a :any]", "(dead-store (store-hint a a :bogus))"), "(store-hint <destination> <value> :double|:int|:int64|:pointer|:tvalue|:inferred)"},
+    };
+
+    for (const auto& c : cases)
+    {
+        CAPTURE(c.name);
+        compile(c.program);
+        requireError({c.error});
+    }
+}
+
+TEST_CASE_FIXTURE(IrCmdFixture, "pseudo_instructions_need_no_location_tracking")
+{
+    compile("(define-ircmd NOP (class :pseudo))\n(define-ircmd MARK (operands [a :Rn] [n :const-int]) (class :pseudo) (vm-effects (use-range a n)))");
+    requireOk();
 }
 
 TEST_CASE_FIXTURE(IrCmdFixture, "trailing_doc_on_the_header_line_documents_the_command")

@@ -5,6 +5,9 @@
 (define-ircmd ADJUST_STACK_TO_REG
   (operands [ra :Rn] [count :int])
   (class :effect)
+  (vm-effects (def-range ra :to-top))
+  (location-tracking (invalidate-range ra :to-top))
+  (dead-store :none)
   (lowering (adjust-stack-to-reg ra count)))
 
 ~ Check interrupt handler
@@ -12,11 +15,15 @@
 (define-ircmd INTERRUPT
   (operands [pc :const-uint])
   (class :effect)
+  (vm-effects :none)
+  (location-tracking :none)
+  (heap-effects :may-gc)
   (lowering (interrupt pc)))
 
 ~ Check and run GC assist if necessary
 (define-ircmd CHECK_GC
   (class :effect)
+  (heap-effects :may-gc)
   (lowering (check-gc)))
 
 ~ Close open upvalues for registers at specified index or higher
@@ -24,6 +31,8 @@
 (define-ircmd CLOSE_UPVALS
   (operands [ra :Rn])
   (class :effect)
+  (vm-effects :none)
+  (location-tracking :none)
   (lowering (close-upvals ra)))
 
 ~ While capture is a no-op right now, it might be useful to track register/upvalue lifetimes
@@ -32,6 +41,8 @@
 (define-ircmd CAPTURE
   (operands [ra :Rn|:UPn] [kind :const-uint])
   (class :effect)
+  (vm-effects (maybe-use ra) (hook capture))
+  (location-tracking :none)
   (lowering (capture ra kind)))
 
 ~ Set a list of values to table in target register
@@ -45,10 +56,13 @@
   (operands [pc :const-uint]
             [ra :Rn]
             [rb :Rn]
-            [count :int]
+            [count :const-int]
             [index-op :const-uint]
             [known-size :undef|:const-uint])
   (class :effect)
+  (vm-effects (use ra) (use-range rb count))
+  (location-tracking :none)
+  (heap-effects :reenters-vm)
   (lowering (setlist pc ra rb count index-op known-size)))
 
 ~ Increment coverage data (saturating 24 bit add)
@@ -64,4 +78,6 @@
   (operands [ra :Rn])
   (result :pointer)
   (class :value)
+  (vm-effects (use ra))
+  (location-tracking :none)
   (lowering (findupval ra)))

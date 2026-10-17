@@ -4,6 +4,9 @@
 (define-ircmd STORE_TAG
   (operands [a :Rn|:inst-pointer] [tag :tag])
   (class :effect)
+  (vm-effects (maybe-def a))
+  (location-tracking (invalidate-keep-values a))
+  (dead-store (hook store-tag))
   (lowering (store-tag a tag)))
 
 ~ Store an integer into the extra field of the TValue
@@ -12,6 +15,9 @@
 (define-ircmd STORE_EXTRA
   (operands [a :Rn] [extra :int])
   (class :effect)
+  (vm-effects (maybe-def a))
+  (location-tracking (invalidate a))
+  (dead-store (hook store-extra))
   (lowering (store-extra a extra)))
 
 ~ Store a pointer (*) into TValue
@@ -20,6 +26,9 @@
 (define-ircmd STORE_POINTER
   (operands [a :Rn|:inst-pointer] [val :pointer|:const-int])
   (class :effect)
+  (vm-effects (maybe-def a))
+  (location-tracking (invalidate a) (restore-from-store a val))
+  (dead-store (hook store-pointer) (store-hint a val :pointer))
   (lowering (store-pointer a val)))
 
 ~ Store a double number into TValue
@@ -28,6 +37,9 @@
 (define-ircmd STORE_DOUBLE
   (operands [a :Rn|:inst-pointer] [val :double])
   (class :effect)
+  (vm-effects (maybe-def a))
+  (location-tracking (invalidate a) (restore-from-store a val))
+  (dead-store (hook store-value) (store-hint a val :double))
   (lowering (store-double a val)))
 
 ~ Store an int into TValue
@@ -36,6 +48,9 @@
 (define-ircmd STORE_INT
   (operands [a :Rn] [val :int])
   (class :effect)
+  (vm-effects (maybe-def a))
+  (location-tracking (invalidate a) (restore-from-store a val))
+  (dead-store (hook store-value) (store-hint a val :int))
   (lowering (store-int a val)))
 
 ~ Store an int64 into TValue
@@ -44,6 +59,9 @@
 (define-ircmd STORE_INT64
   (operands [a :Rn] [val :int64])
   (class :effect)
+  (vm-effects (maybe-def a))
+  (location-tracking (invalidate a) (restore-from-store a val))
+  (dead-store (hook store-value) (store-hint a val :int64))
   (lowering (store-int64 a val)))
 
 ~ Store a vector into TValue
@@ -56,6 +74,9 @@
 (define-ircmd STORE_VECTOR
   (operands [a :Rn] [x :float] [y :float] [z :float] [tag :tag])
   (class :effect)
+  (vm-effects (maybe-def a))
+  (location-tracking (invalidate a))
+  (dead-store (hook store-vector))
   (lowering (store-vector a x y z tag)))
 
 ~ Store a TValue into memory
@@ -65,6 +86,9 @@
 (define-ircmd STORE_TVALUE
   (operands [a :Rn|:pointer] [val :tvalue] [offset :const-int])
   (class :effect)
+  (vm-effects (maybe-def a))
+  (location-tracking (invalidate a) (restore-from-store a val))
+  (dead-store (hook store-tvalue) (store-hint a val :tvalue))
   (lowering (store-tvalue a val offset)))
 
 ~ Store a pair of tag and value into memory
@@ -75,4 +99,7 @@
 (define-ircmd STORE_SPLIT_TVALUE
   (operands [a :Rn|:pointer] [tag :tag] [val :int|:int64|:double|:pointer] [offset :const-int])
   (class :effect)
+  (vm-effects (maybe-def a))
+  (location-tracking (invalidate a) (restore-from-store a val))
+  (dead-store (hook store-split-tvalue) (store-hint a val :inferred))
   (lowering (store-split-tvalue a tag val offset)))

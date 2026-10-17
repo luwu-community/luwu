@@ -185,11 +185,15 @@ int runDriver(const std::vector<std::string>& args, std::ostream& out, std::ostr
         std::ostringstream enumOut;
         Luwu::Dsl::emitIrCmdEnum(enumOut, cmds);
 
+        std::ostringstream effectsOut;
+        Luwu::Dsl::emitIrCmdEffects(effectsOut, cmds);
+
         std::vector<std::pair<std::string, std::string>> outputs = {
             {outputDir + "/LoweringRulesA64.h", a64Out.str()},
             {outputDir + "/LoweringRulesX64.h", x64Out.str()},
             {publicDir + "/IrCmdInfo.h", infoOut.str()},
             {publicDir + "/IrCmd.h", enumOut.str()},
+            {publicDir + "/IrCmdEffects.h", effectsOut.str()},
         };
 
         int updated = 0;

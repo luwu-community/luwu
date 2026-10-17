@@ -2,6 +2,7 @@
 #pragma once
 
 #include "Luau/IrData.h"
+#include "Luau/generated/IrCmdEffects.h"
 #include "Luau/LogBuilder.h"
 
 #include <array>
@@ -22,8 +23,11 @@ struct IrValueLocationTracking
 
     void processStoreLocationHint(const StoreLocationHint* hint);
 
+    // From (location-tracking ...) in Luna/defs/ir
     void beforeInstLowering(IrInst& inst);
     void afterInstLowering(IrInst& inst, uint32_t instIdx);
+    void applyLocationEffect(IrInst& inst, uint32_t instIdx, const IrLocationEffect& effect);
+    void recordNumToIntRestore(IrInst& inst, uint32_t instIdx);
 
     void recordRestoreOp(uint32_t instIdx, IrOp location);
     void invalidateRestoreOp(IrOp location, bool skipValueInvalidation);

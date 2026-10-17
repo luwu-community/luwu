@@ -5,7 +5,9 @@
 (define-ircmd FALLBACK_GETGLOBAL
   (operands [pc :const-uint] [ra :Rn] [k :Kn])
   (class :effect)
-  (heap-effects :invalidates-safe-env)
+  (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
+  (vm-effects (def ra))
+  (location-tracking (invalidate ra))
   (lowering (fallback-getglobal pc ra k)))
 
 ~ Store a value into global table at specified key
@@ -15,7 +17,9 @@
 (define-ircmd FALLBACK_SETGLOBAL
   (operands [pc :const-uint] [ra :Rn] [k :Kn])
   (class :effect)
-  (heap-effects :invalidates-safe-env)
+  (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
+  (vm-effects (use ra))
+  (location-tracking :none)
   (lowering (fallback-setglobal pc ra k)))
 
 ~ Load a value from table at specified key
@@ -26,7 +30,9 @@
 (define-ircmd FALLBACK_GETTABLEKS
   (operands [pc :const-uint] [ra :Rn] [rb :Rn] [k :Kn])
   (class :effect)
-  (heap-effects :invalidates-safe-env)
+  (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
+  (vm-effects (use rb) (def ra))
+  (location-tracking (invalidate ra))
   (lowering (fallback-gettableks pc ra rb k)))
 
 ~ Store a value into a table at specified key
@@ -37,7 +43,9 @@
 (define-ircmd FALLBACK_SETTABLEKS
   (operands [pc :const-uint] [ra :Rn] [rb :Rn] [k :Kn])
   (class :effect)
-  (heap-effects :invalidates-safe-env)
+  (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
+  (vm-effects (use ra) (use rb))
+  (location-tracking :none)
   (lowering (fallback-settableks pc ra rb k)))
 
 ~ Load function from source register using name into target register and copying source register into target register + 1
@@ -48,7 +56,9 @@
 (define-ircmd FALLBACK_NAMECALL
   (operands [pc :const-uint] [ra :Rn] [rb :Rn] [k :Kn])
   (class :effect)
-  (heap-effects :invalidates-safe-env)
+  (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
+  (vm-effects (use rb) (def-range ra 2))
+  (location-tracking (invalidate-range ra 2))
   (lowering (fallback-namecall pc ra rb k)))
 
 ~ Prepare stack for variadic functions so that GETVARARGS works correctly
@@ -57,6 +67,8 @@
 (define-ircmd FALLBACK_PREPVARARGS
   (operands [pc :const-uint] [numparams :int])
   (class :effect)
+  (vm-effects :none)
+  (location-tracking :none)
   (lowering (fallback-prepvarargs pc numparams)))
 
 ~ Copy variables into the target registers from vararg storage for current function
@@ -64,8 +76,10 @@
 ~ B: Rn (dest start)
 ~ C: int (count)
 (define-ircmd FALLBACK_GETVARARGS
-  (operands [pc :const-uint] [ra :Rn] [count :int])
+  (operands [pc :const-uint] [ra :Rn] [count :const-int])
   (class :effect)
+  (vm-effects (def-range ra count))
+  (location-tracking (invalidate-range ra count))
   (lowering (fallback-getvarargs pc ra count)))
 
 ~ Create closure from a pre-created function object (reusing it unless environments diverge)
@@ -75,6 +89,9 @@
 (define-ircmd FALLBACK_DUPCLOSURE
   (operands [pc :const-uint] [ra :Rn] [k :Kn])
   (class :effect)
+  (vm-effects (def ra))
+  (location-tracking (invalidate ra))
+  (heap-effects :may-gc :reenters-vm)
   (lowering (fallback-dupclosure pc ra k)))
 
 ~ Prepare loop variables for a generic for loop, jump to the loop back edge unconditionally
@@ -84,7 +101,9 @@
 (define-ircmd FALLBACK_FORGPREP
   (operands [pc :const-uint] [ra :Rn] [loop :block])
   (class :terminator)
-  (heap-effects :invalidates-safe-env)
+  (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
+  (vm-effects (use-range ra 3) (def-range ra 3))
+  (location-tracking (invalidate-range ra 3))
   (lowering (fallback-forgprep pc ra loop)))
 
 ~ Luwu Classes (rfcs/classes): construct an instance of a statically resolved class, using the
@@ -100,7 +119,9 @@
 (define-ircmd FALLBACK_NEWOBJECT
   (operands [pc :const-uint] [ra :Rn] [rb :Rn] [d :int] [e :int])
   (class :effect)
-  (heap-effects :invalidates-safe-env)
+  (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
+  (vm-effects (use rb) (hook fallback-new-object))
+  (location-tracking (hook-before fallback-new-object))
   (lowering (fallback-newobject pc ra rb)))
 
 ~ Luwu Classes (rfcs/classes): add a member (a method, a primary constructor's synthesized
@@ -112,5 +133,7 @@
 (define-ircmd FALLBACK_NEWCLASSMEMBER
   (operands [pc :const-uint] [ra :Rn] [rb :Rn])
   (class :effect)
-  (heap-effects :invalidates-safe-env)
+  (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
+  (vm-effects (use ra) (use rb))
+  (location-tracking :none)
   (lowering (fallback-newclassmember pc ra rb)))

@@ -6,6 +6,7 @@
   (operands [a :int64] [b :int64] [c :int64] [d :int64] [cond :cond])
   (result :int64)
   (class :value)
+  (location-tracking :none)
   (lowering (select-int64 a b c d cond)))
 
 ~ Perform a comparison of two integer numbers. Result is an integer register containing 0 or 1
@@ -31,6 +32,7 @@
 (define-ircmd JUMP
   (operands [target :block|:vmexit|:undef])
   (class :terminator)
+  (dead-store :none)
   (lowering (jump target)))
 
 ~ Perform a conditional jump based on the result of integer comparison
@@ -41,6 +43,7 @@
 (define-ircmd JUMP_CMP_INT
   (operands [a :int] [b :int] [cond :cond] [target-d :block] [target-e :block])
   (class :terminator)
+  (dead-store :live-outs)
   (lowering (jump-cmp-int a b cond target-d target-e)))
 
 ~ Guard against the result of integer comparison being false
@@ -51,6 +54,7 @@
 (define-ircmd CHECK_CMP_INT
   (operands [a :int] [b :int] [cond :cond] [fail :block|:vmexit|:undef])
   (class :guard)
+  (dead-store :live-ins)
   (lowering (check-cmp-int a b cond fail)))
 
 ~ Guard against the result of int64 comparison being false
@@ -61,4 +65,5 @@
 (define-ircmd CHECK_CMP_INT64
   (operands [a :int64] [b :int64] [cond :cond] [fail :block|:vmexit|:undef])
   (class :guard)
+  (dead-store :live-ins)
   (lowering (check-cmp-int64 a b cond fail)))

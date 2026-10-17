@@ -6,6 +6,7 @@
   (target-specific [:x64 [b :Rn|:Kn]])
   (result :double)
   (class :value)
+  (location-tracking :none)
   (lowering (mod-num a b)))
 
 ~ A * B + C
@@ -32,6 +33,7 @@
   (target-specific [:x64 [a :Rn]])
   (result :double)
   (class :value)
+  (location-tracking :none)
   (lowering (round-num a)))
 
 ~ Get absolute value of the argument (math.abs)
@@ -42,6 +44,7 @@
   (target-specific [:x64 [a :Rn]])
   (result :double)
   (class :value)
+  (location-tracking :none)
   (lowering (abs-num a)))
 
 ~ Get the sign of the argument (math.sign)

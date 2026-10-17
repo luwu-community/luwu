@@ -36,7 +36,10 @@ static const std::set<std::string> kClasses = {"value", "effect", "guard", "term
 // deprecated/ flags reproduce today's hand-written heuristics until side effects are derived from declared effects
 static const std::set<std::string> kFlags = {"deprecated/has-side-effects", "deprecated/is-unsafe-to-sink", "dirty-high-bits"};
 
-static const std::set<std::string> kHeapEffects = {"invalidates-safe-env"};
+// invalidates-safe-env: can run user code (canInvalidateSafeEnv)
+// may-gc: can trigger a GC assist, so values holding GC objects have to be stored on the stack first
+// reenters-vm: can run Luau code on the native stack, or its lowering needs no live values in registers
+static const std::set<std::string> kHeapEffects = {"invalidates-safe-env", "may-gc", "reenters-vm"};
 
 // Fast flags that can make extra operand kinds legal (flag-specific); the verifier checks each of them
 static const std::vector<std::string> kOperandFlags = {"DebugLuauAbortingChecks"};
@@ -157,6 +160,294 @@ static void checkClauseDocs(SExpr& expr, SExpr& form)
         checkClauseDocs(el, form);
 }
 
+static int operandIndex(const IrCmdDef& cmd, const SExpr& name)
+{
+    if (!name.isSymbol())
+        throw CompileError(name, "Expected an operand name");
+    for (size_t i = 0; i < cmd.operands.size(); ++i)
+    {
+        if (cmd.operands[i].name == name.text)
+            return int(i);
+    }
+    throw CompileError(name, "'" + name.text + "' isn't an operand of " + cmd.name);
+}
+
+static bool onlyKinds(const IrOperandDef& op, const std::set<std::string>& allowed)
+{
+    return std::all_of(op.kinds.begin(), op.kinds.end(), [&](const std::string& k) { return allowed.count(k) > 0; });
+}
+
+// A VM register: an operand name, or (+ <operand> N)
+static void parseRegisterRef(const IrCmdDef& cmd, const SExpr& expr, int& op, int& offset)
+{
+    offset = 0;
+    if (expr.isList("+"))
+    {
+        if (expr.elements.size() != 3 || !expr.elements[2].isNumber() || expr.elements[2].intValue < 0 || expr.elements[2].intValue > 255)
+            throw CompileError(expr, "Register offsets look like (+ <operand> N) with N in 0..255");
+        op = operandIndex(cmd, expr.elements[1]);
+        offset = int(expr.elements[2].intValue);
+        return;
+    }
+    op = operandIndex(cmd, expr);
+}
+
+// A register count: a number, :to-top (-1), a constant operand, or (low-byte <operand>)
+static IrEffectCountDef parseCount(const IrCmdDef& cmd, const SExpr& expr)
+{
+    IrEffectCountDef count;
+    if (expr.isNumber())
+    {
+        count.kind = "literal";
+        count.value = int(expr.intValue);
+    }
+    else if (expr.isKeyword(":to-top"))
+    {
+        count.kind = "literal";
+        count.value = -1;
+    }
+    else if (expr.isList("low-byte") && expr.elements.size() == 2)
+    {
+        count.kind = "low-byte";
+        count.value = operandIndex(cmd, expr.elements[1]);
+        if (!onlyKinds(cmd.operands[count.value], {"const-int"}))
+            throw CompileError(expr, "(low-byte ...) needs a :const-int operand");
+    }
+    else if (expr.isSymbol())
+    {
+        count.value = operandIndex(cmd, expr);
+        const IrOperandDef& op = cmd.operands[count.value];
+        if (onlyKinds(op, {"const-int"}))
+            count.kind = "int";
+        else if (onlyKinds(op, {"const-uint"}))
+            count.kind = "uint";
+        else
+            throw CompileError(expr, "Count operand '" + op.name + "' has to be :const-int or :const-uint");
+    }
+    else
+    {
+        throw CompileError(expr, "Expected a count: a number, :to-top, a constant operand or (low-byte <operand>)");
+    }
+    return count;
+}
+
+static bool allowsRn(const IrOperandDef& op)
+{
+    return std::find(op.kinds.begin(), op.kinds.end(), "Rn") != op.kinds.end();
+}
+
+static void parseEffectClause(IrCmdDef& cmd, const SExpr& clause)
+{
+    const std::string& kind = clause.elements[0].text;
+    if (clause.elements.size() < 2)
+        throw CompileError(clause, kind + " needs at least one effect (or :none)");
+
+    // In vm-effects and location-tracking, :none means "no effects"; in dead-store it's one of the kinds
+    auto isNone = [](const SExpr& e) { return e.isKeyword(":none"); };
+    bool none = kind != "dead-store" && std::any_of(clause.elements.begin() + 1, clause.elements.end(), isNone);
+    if (none && clause.elements.size() != 2)
+        throw CompileError(clause, kind + " :none can't be combined with other effects");
+
+    auto hookName = [&](const SExpr& item) {
+        if (item.elements.size() != 2 || !item.elements[1].isSymbol())
+            throw CompileError(item, "Hooks look like (" + item.elements[0].text + " <name>)");
+        return item.elements[1].text;
+    };
+
+    if (kind == "vm-effects")
+    {
+        cmd.hasVmEffects = true;
+        for (size_t i = 1; i < clause.elements.size() && !none; ++i)
+        {
+            const SExpr& item = clause.elements[i];
+            if (!item.isList() || item.elements.empty() || !item.elements[0].isSymbol())
+                throw CompileError(item, "vm-effects items look like (use a), (def-range a count), (hook <name>) or :none");
+
+            const std::string& effect = item.elements[0].text;
+            if (effect == "hook")
+            {
+                if (!cmd.vmHook.empty())
+                    throw CompileError(item, "Only one vm-effects hook per command");
+                cmd.vmHook = hookName(item);
+                continue;
+            }
+
+            static const std::set<std::string> kOneArg = {"use", "maybe-use", "def", "maybe-def", "use-varargs"};
+            static const std::set<std::string> kRange = {"use-range", "def-range"};
+            if (!kOneArg.count(effect) && !kRange.count(effect))
+                throw CompileError(item.elements[0], "Unknown vm-effects item '" + effect + "'");
+            if (item.elements.size() != (kRange.count(effect) ? 3u : 2u))
+                throw CompileError(item, kRange.count(effect) ? "(" + effect + " <register> <count>)" : "(" + effect + " <register>)");
+
+            IrVmEffectDef def;
+            def.kind = effect;
+            def.loc = item.loc;
+            parseRegisterRef(cmd, item.elements[1], def.op, def.offset);
+            if (kRange.count(effect))
+                def.count = parseCount(cmd, item.elements[2]);
+            if (def.offset != 0 && (effect == "maybe-use" || effect == "maybe-def"))
+                throw CompileError(item, effect + " doesn't take an offset");
+
+            // use/def and the ranges read the operand as a VM register; maybe-* only acts when it is one
+            const IrOperandDef& op = cmd.operands[def.op];
+            if (effect.rfind("maybe-", 0) == 0 ? !allowsRn(op) : !onlyKinds(op, {"Rn"}))
+                throw CompileError(item, std::string("Operand '") + op.name + "' " +
+                    (effect.rfind("maybe-", 0) == 0 ? "can't be a VM register, so " + effect + " never applies" : "can be something other than :Rn; use maybe-use/maybe-def"));
+
+            cmd.vmEffects.push_back(def);
+        }
+
+        // Uses come first: visitors rely on seeing all of an instruction's uses before its defs
+        std::stable_partition(cmd.vmEffects.begin(), cmd.vmEffects.end(), [](const IrVmEffectDef& e) { return e.kind.find("use") != std::string::npos; });
+    }
+    else if (kind == "location-tracking")
+    {
+        cmd.hasLocationTracking = true;
+        for (size_t i = 1; i < clause.elements.size() && !none; ++i)
+        {
+            const SExpr& item = clause.elements[i];
+            if (!item.isList() || item.elements.empty() || !item.elements[0].isSymbol())
+                throw CompileError(item, "location-tracking items look like (invalidate a), (restore-from-load a), (hook-before <name>) or :none");
+
+            const std::string& effect = item.elements[0].text;
+            if (effect == "hook-before" || effect == "hook-after")
+            {
+                std::string& hook = effect == "hook-before" ? cmd.locationBeforeHook : cmd.locationAfterHook;
+                if (!hook.empty())
+                    throw CompileError(item, "Only one " + effect + " per command");
+                hook = hookName(item);
+                continue;
+            }
+
+            IrLocationEffectDef def;
+            def.kind = effect;
+            if (effect == "invalidate" || effect == "invalidate-keep-values" || effect == "restore-from-load")
+            {
+                if (item.elements.size() != 2)
+                    throw CompileError(item, "(" + effect + " <operand>)");
+                def.op = operandIndex(cmd, item.elements[1]);
+            }
+            else if (effect == "invalidate-range")
+            {
+                if (item.elements.size() != 3)
+                    throw CompileError(item, "(invalidate-range <register> <count>)");
+                parseRegisterRef(cmd, item.elements[1], def.op, def.offset);
+                if (!onlyKinds(cmd.operands[def.op], {"Rn"}))
+                    throw CompileError(item, "invalidate-range needs a :Rn operand");
+                def.count = parseCount(cmd, item.elements[2]);
+            }
+            else if (effect == "restore-from-store")
+            {
+                if (item.elements.size() != 3)
+                    throw CompileError(item, "(restore-from-store <destination> <value>)");
+                def.op = operandIndex(cmd, item.elements[1]);
+                def.valueOp = operandIndex(cmd, item.elements[2]);
+            }
+            else
+            {
+                throw CompileError(item.elements[0], "Unknown location-tracking item '" + effect + "'");
+            }
+
+            bool after = effect.rfind("restore-", 0) == 0;
+            std::vector<IrLocationEffectDef>& list = after ? cmd.locationAfter : cmd.locationBefore;
+            if (!list.empty())
+                throw CompileError(item, std::string("Only one location-tracking effect ") + (after ? "after" : "before") + " lowering per command");
+            list.push_back(def);
+        }
+    }
+    else // dead-store
+    {
+        bool primary = false;
+        for (size_t i = 1; i < clause.elements.size(); ++i)
+        {
+            const SExpr& item = clause.elements[i];
+            auto setPrimary = [&](const std::string& value) {
+                if (primary)
+                    throw CompileError(item, "dead-store takes one of :visit, :none, :live-ins, :live-ins-no-exit-sync, :live-outs, :allocation, (hook <name>)");
+                primary = true;
+                cmd.deadStore = value;
+            };
+
+            if (item.isKeyword())
+            {
+                static const std::set<std::string> kKinds = {"visit", "none", "live-ins", "live-ins-no-exit-sync", "live-outs", "allocation"};
+                if (!kKinds.count(keywordName(item)))
+                    throw CompileError(item, "Unknown dead-store kind " + item.text);
+                setPrimary(keywordName(item));
+                continue;
+            }
+            if (!item.isList() || item.elements.empty() || !item.elements[0].isSymbol())
+                throw CompileError(item, "dead-store items look like :live-ins, (writes-allocation a), (store-hint a v :double) or (hook <name>)");
+
+            const std::string& effect = item.elements[0].text;
+            if (effect == "hook")
+            {
+                setPrimary("hook");
+                cmd.deadStoreHook = hookName(item);
+            }
+            else if (effect == "writes-allocation")
+            {
+                if (item.elements.size() != 2)
+                    throw CompileError(item, "(writes-allocation <pointer operand>)");
+                cmd.allocationWriteOp = operandIndex(cmd, item.elements[1]);
+            }
+            else if (effect == "store-hint")
+            {
+                static const std::map<std::string, std::string> kHintKinds = {
+                    {"double", "Double"}, {"int", "Int"}, {"int64", "Int64"}, {"pointer", "Pointer"}, {"tvalue", "Tvalue"}, {"inferred", "Unknown"}};
+                if (item.elements.size() != 4 || !item.elements[3].isKeyword() || !kHintKinds.count(keywordName(item.elements[3])))
+                    throw CompileError(item, "(store-hint <destination> <value> :double|:int|:int64|:pointer|:tvalue|:inferred)");
+                cmd.storeHintDest = operandIndex(cmd, item.elements[1]);
+                cmd.storeHintValue = operandIndex(cmd, item.elements[2]);
+                cmd.storeHintKind = kHintKinds.at(keywordName(item.elements[3]));
+            }
+            else
+            {
+                throw CompileError(item.elements[0], "Unknown dead-store item '" + effect + "'");
+            }
+        }
+    }
+}
+
+// Effects every command of a kind needs, so a forgotten declaration is an error here instead of a runtime assert
+static void checkEffects(IrCmdDef& cmd, const SExpr& form)
+{
+    bool baseRn = std::any_of(cmd.operands.begin(), cmd.operands.end(), allowsRn);
+    bool anyRn = baseRn;
+    for (const auto& group : cmd.targetSpecific)
+        anyRn = anyRn || std::any_of(group.operands.begin(), group.operands.end(), allowsRn);
+
+    if (baseRn && !cmd.hasVmEffects)
+        throw CompileError(form, cmd.name + " can have VM register operands, so it needs (vm-effects ...) (or (vm-effects :none))");
+    // Pseudo-instructions are never lowered, so value location tracking never sees them
+    if (anyRn && !cmd.hasLocationTracking && cmd.cls != "pseudo")
+        throw CompileError(form, cmd.name + " can have VM register operands, so it needs (location-tracking ...) (or (location-tracking :none))");
+
+    if (cmd.deadStore == "live-ins" || cmd.deadStore == "live-ins-no-exit-sync")
+    {
+        if (cmd.cls != "guard")
+            throw CompileError(form, cmd.name + ": dead-store :" + cmd.deadStore + " is for guards");
+        for (size_t i = 0; i < cmd.operands.size(); ++i)
+        {
+            const auto& kinds = cmd.operands[i].kinds;
+            if (std::find(kinds.begin(), kinds.end(), "block") != kinds.end() || std::find(kinds.begin(), kinds.end(), "vmexit") != kinds.end())
+            {
+                if (cmd.deadStoreTarget >= 0)
+                    throw CompileError(form, cmd.name + " has several target operands; dead-store :live-ins needs exactly one");
+                cmd.deadStoreTarget = int(i);
+            }
+        }
+        if (cmd.deadStoreTarget < 0)
+            throw CompileError(form, cmd.name + " has no :block/:vmexit operand for dead-store :live-ins");
+    }
+    if (cmd.cls == "guard" && cmd.deadStore != "live-ins" && cmd.deadStore != "live-ins-no-exit-sync" && cmd.deadStore != "hook")
+        throw CompileError(form, cmd.name + " is a guard, so dead-store elimination has to check its target's live-ins: (dead-store :live-ins)");
+    if (cmd.heapEffects.count("may-gc") && cmd.deadStore != "visit")
+        throw CompileError(form, cmd.name + ": dead-store elimination only flushes GC object registers for :may-gc commands it visits (dead-store :visit)");
+    if (cmd.deadStore == "live-outs" && cmd.cls != "terminator")
+        throw CompileError(form, cmd.name + ": dead-store :live-outs is for terminators");
+}
+
 static IrCmdDef parseIrCmd(const SExpr& original)
 {
     SExpr form = original;
@@ -174,6 +465,7 @@ static IrCmdDef parseIrCmd(const SExpr& original)
         cmd.docs.push_back(*form.trailingDoc);
 
     std::set<std::string> seenClauses;
+    std::vector<const SExpr*> effectClauses; // parsed once the operands are known
     for (size_t i = 2; i < form.elements.size(); ++i)
     {
         const SExpr& clause = form.elements[i];
@@ -276,6 +568,10 @@ static IrCmdDef parseIrCmd(const SExpr& original)
         {
             cmd.heapEffects = keywordArgs(kHeapEffects, "heap effect");
         }
+        else if (kind == "vm-effects" || kind == "location-tracking" || kind == "dead-store")
+        {
+            effectClauses.push_back(&clause);
+        }
         else if (kind == "lowering")
         {
             if (clause.elements.size() != 2)
@@ -294,7 +590,7 @@ static IrCmdDef parseIrCmd(const SExpr& original)
         }
         else
         {
-            throw CompileError(clause.elements[0], "Unknown define-ircmd clause '" + kind + "' (expected operands, target-specific, flag-specific, result, class, flags, heap-effects or lowering)");
+            throw CompileError(clause.elements[0], "Unknown define-ircmd clause '" + kind + "' (expected operands, target-specific, flag-specific, result, class, flags, heap-effects, vm-effects, location-tracking, dead-store or lowering)");
         }
     }
 
@@ -315,6 +611,10 @@ static IrCmdDef parseIrCmd(const SExpr& original)
 
     if (cmd.cls.empty())
         throw CompileError(form, cmd.name + " needs a (class ...) clause");
+
+    for (const SExpr* clause : effectClauses)
+        parseEffectClause(cmd, *clause);
+    checkEffects(cmd, form);
     if (cmd.cls == "value" && cmd.result.empty())
         throw CompileError(form, cmd.name + " is a :value command but has no (result ...)");
     if (cmd.cls == "effect" && !cmd.result.empty())
@@ -753,6 +1053,234 @@ void emitIrCmdInfo(std::ostream& os, const std::vector<IrCmdDef>& cmds)
     if (!cmds.empty())
         emitOperandTable(out, cmds);
 
+    out.line();
+    closeNamespaces(out);
+}
+
+static std::string pascalCase(const std::string& name)
+{
+    std::string result;
+    bool upperNext = true;
+    for (char c : name)
+    {
+        if (c == '-' || c == '_')
+        {
+            upperNext = true;
+            continue;
+        }
+        result += upperNext ? char(std::toupper(static_cast<unsigned char>(c))) : c;
+        upperNext = false;
+    }
+    return result;
+}
+
+static std::string countInit(const IrEffectCountDef& count)
+{
+    if (count.kind == "none")
+        return "{}";
+    static const std::map<std::string, std::string> kKinds = {
+        {"literal", "Literal"}, {"int", "IntOperand"}, {"uint", "UintOperand"}, {"low-byte", "LowByteOfIntOperand"}};
+    return "{IrEffectCountKind::" + kKinds.at(count.kind) + ", " + std::to_string(count.value) + "}";
+}
+
+void emitIrCmdEffects(std::ostream& os, const std::vector<IrCmdDef>& cmds)
+{
+    CodeWriter out(os);
+    out.raw(kHeaderBanner);
+    out.raw("// Per-command effects, from the vm-effects, location-tracking, dead-store and heap-effects clauses in Luna/defs/ir:\n"
+            "// read by visitVmRegDefsUses, IrValueLocationTracking and dead-store elimination\n"
+            "#pragma once\n\n"
+            "#include \"Luau/IrData.h\"\n\n"
+            "#include <stdint.h>\n\n");
+    openNamespaces(out);
+    out.line();
+
+    size_t maxVmEffects = 1;
+    for (const auto& cmd : cmds)
+        maxVmEffects = std::max(maxVmEffects, cmd.vmEffects.size());
+
+    std::vector<std::string> vmHooks, locationHooks, deadStoreHooks;
+    for (const auto& cmd : cmds)
+    {
+        auto add = [](std::vector<std::string>& to, const std::string& hook) {
+            if (!hook.empty() && std::find(to.begin(), to.end(), hook) == to.end())
+                to.push_back(hook);
+        };
+        add(vmHooks, cmd.vmHook);
+        add(locationHooks, cmd.locationBeforeHook);
+        add(locationHooks, cmd.locationAfterHook);
+        add(deadStoreHooks, cmd.deadStoreHook);
+    }
+
+    auto emitEnum = [&](const std::string& name, const std::string& comment, const std::vector<std::string>& values) {
+        out.line("// " + comment);
+        out.line("enum class " + name + " : uint8_t");
+        out.line("{");
+        out.indent();
+        for (const auto& value : values)
+            out.line(value + ",");
+        out.dedent();
+        out.line("};");
+        out.line();
+    };
+
+    emitEnum("IrVmEffectKind", "A VM register use or def (vm-effects)", {"Use", "MaybeUse", "UseRange", "UseVarargs", "Def", "MaybeDef", "DefRange"});
+    emitEnum("IrEffectCountKind", "A register count: a literal (-1 is up to the stack top) or a constant operand", {"None", "Literal", "IntOperand", "UintOperand", "LowByteOfIntOperand"});
+    emitEnum("IrLocationEffectKind", "A value location effect (location-tracking)", {"None", "Invalidate", "InvalidateKeepValues", "InvalidateRange", "RestoreFromLoad", "RestoreFromStore"});
+    emitEnum("IrDeadStoreKind", "How dead-store elimination treats a command (dead-store)", {"Visit", "None", "LiveIns", "LiveInsNoExitSync", "LiveOuts", "Allocation", "Hook"});
+
+    auto hookEnum = [&](const std::string& name, const std::string& comment, const std::vector<std::string>& hooks) {
+        std::vector<std::string> values = {"None"};
+        for (const auto& hook : hooks)
+            values.push_back(pascalCase(hook));
+        emitEnum(name, comment, values);
+    };
+    hookEnum("IrVmEffectsHook", "Hand-written vm-effects (IrVisitUseDef.h); runs after the declared uses and before the declared defs", vmHooks);
+    hookEnum("IrLocationHook", "Hand-written location-tracking (IrValueLocationTracking.cpp)", locationHooks);
+    hookEnum("IrDeadStoreHook", "Hand-written dead-store handling (OptimizeDeadStore.cpp)", deadStoreHooks);
+
+    out.block("struct IrEffectCount", [&]() {
+        out.line("IrEffectCountKind kind = IrEffectCountKind::None;");
+        out.line("int16_t value = 0; // the literal, or the operand index");
+    });
+    out.raw(";\n\n");
+    out.block("struct IrVmEffect", [&]() {
+        out.line("IrVmEffectKind kind = IrVmEffectKind::Use;");
+        out.line("uint8_t op = 0;");
+        out.line("uint8_t offset = 0; // added to the operand's register");
+        out.line("IrEffectCount count; // UseRange/DefRange");
+    });
+    out.raw(";\n\n");
+    out.block("struct IrLocationEffect", [&]() {
+        out.line("IrLocationEffectKind kind = IrLocationEffectKind::None;");
+        out.line("uint8_t op = 0;");
+        out.line("uint8_t offset = 0;");
+        out.line("uint8_t valueOp = 0; // RestoreFromStore");
+        out.line("IrEffectCount count; // InvalidateRange");
+    });
+    out.raw(";\n\n");
+
+    out.line("inline constexpr int kMaxIrVmEffects = " + std::to_string(maxVmEffects) + ";");
+    out.line();
+    out.block("struct IrCmdEffects", [&]() {
+        out.line("// vm-effects; without them the command has no VM register operands");
+        out.line("bool declaresVmRegs = false;");
+        out.line("uint8_t vmEffectCount = 0;");
+        out.line("IrVmEffect vmEffects[kMaxIrVmEffects] = {}; // uses first, then defs");
+        out.line("IrVmEffectsHook vmHook = IrVmEffectsHook::None;");
+        out.line();
+        out.line("// location-tracking; without it the command has no VM register operands");
+        out.line("bool declaresLocations = false;");
+        out.line("IrLocationEffect locationBefore;");
+        out.line("IrLocationEffect locationAfter;");
+        out.line("IrLocationHook locationBeforeHook = IrLocationHook::None;");
+        out.line("IrLocationHook locationAfterHook = IrLocationHook::None;");
+        out.line();
+        out.line("// dead-store");
+        out.line("IrDeadStoreKind deadStore = IrDeadStoreKind::Visit;");
+        out.line("uint8_t deadStoreTarget = 0; // LiveIns/LiveInsNoExitSync: the target operand");
+        out.line("IrDeadStoreHook deadStoreHook = IrDeadStoreHook::None;");
+        out.line("int8_t allocationWriteOp = -1; // writes-allocation: the pointer operand");
+        out.line("int8_t storeHintDest = -1;     // store-hint");
+        out.line("int8_t storeHintValue = -1;");
+        out.line("IrValueKind storeHintKind = IrValueKind::Unknown; // Unknown: the value's own kind");
+        out.line();
+        out.line("// heap-effects");
+        out.line("bool mayGc = false;");
+        out.line("bool reentersVm = false;");
+        out.line();
+        out.line("// Builders for the table below: each sets one thing and returns the result");
+        auto builder = [&](const std::string& signature, const std::vector<std::string>& body) {
+            out.block("constexpr IrCmdEffects " + signature + " const", [&]() {
+                out.line("IrCmdEffects e = *this;");
+                for (const auto& line : body)
+                    out.line(line);
+                out.line("return e;");
+            });
+        };
+        builder("vm(IrVmEffectKind kind, uint8_t op, uint8_t offset = 0, IrEffectCount count = {})",
+            {"e.declaresVmRegs = true;", "e.vmEffects[e.vmEffectCount++] = {kind, op, offset, count};"});
+        builder("vmNone()", {"e.declaresVmRegs = true;"});
+        builder("vmHookIs(IrVmEffectsHook hook)", {"e.declaresVmRegs = true;", "e.vmHook = hook;"});
+        builder("locationsNone()", {"e.declaresLocations = true;"});
+        builder("before(IrLocationEffect effect)", {"e.declaresLocations = true;", "e.locationBefore = effect;"});
+        builder("after(IrLocationEffect effect)", {"e.declaresLocations = true;", "e.locationAfter = effect;"});
+        builder("beforeHook(IrLocationHook hook)", {"e.declaresLocations = true;", "e.locationBeforeHook = hook;"});
+        builder("afterHook(IrLocationHook hook)", {"e.declaresLocations = true;", "e.locationAfterHook = hook;"});
+        builder("deadStoreIs(IrDeadStoreKind kind, uint8_t target = 0)", {"e.deadStore = kind;", "e.deadStoreTarget = target;"});
+        builder("deadStoreHookIs(IrDeadStoreHook hook)", {"e.deadStore = IrDeadStoreKind::Hook;", "e.deadStoreHook = hook;"});
+        builder("writesAllocation(int8_t op)", {"e.allocationWriteOp = op;"});
+        builder("storeHint(int8_t dest, int8_t value, IrValueKind kind)", {"e.storeHintDest = dest;", "e.storeHintValue = value;", "e.storeHintKind = kind;"});
+        builder("mayGcIs()", {"e.mayGc = true;"});
+        builder("reentersVmIs()", {"e.reentersVm = true;"});
+    });
+    out.raw(";\n\n");
+
+    out.line("inline constexpr IrCmdEffects kIrCmdEffects[] = {");
+    out.indent();
+    for (const auto& cmd : cmds)
+    {
+        static const std::map<std::string, std::string> kVmKinds = {{"use", "Use"}, {"maybe-use", "MaybeUse"}, {"use-range", "UseRange"},
+            {"use-varargs", "UseVarargs"}, {"def", "Def"}, {"maybe-def", "MaybeDef"}, {"def-range", "DefRange"}};
+        static const std::map<std::string, std::string> kLocationKinds = {{"invalidate", "Invalidate"}, {"invalidate-keep-values", "InvalidateKeepValues"},
+            {"invalidate-range", "InvalidateRange"}, {"restore-from-load", "RestoreFromLoad"}, {"restore-from-store", "RestoreFromStore"}};
+        static const std::map<std::string, std::string> kDeadStoreKinds = {{"visit", "Visit"}, {"none", "None"}, {"live-ins", "LiveIns"},
+            {"live-ins-no-exit-sync", "LiveInsNoExitSync"}, {"live-outs", "LiveOuts"}, {"allocation", "Allocation"}, {"hook", "Hook"}};
+
+        auto location = [&](const IrLocationEffectDef& e) {
+            return "{IrLocationEffectKind::" + kLocationKinds.at(e.kind) + ", " + std::to_string(e.op) + ", " + std::to_string(e.offset) + ", " +
+                   std::to_string(e.valueOp) + ", " + countInit(e.count) + "}";
+        };
+
+        std::string entry = "IrCmdEffects{}";
+        for (const auto& e : cmd.vmEffects)
+        {
+            entry += ".vm(IrVmEffectKind::" + kVmKinds.at(e.kind) + ", " + std::to_string(e.op);
+            if (e.offset || e.count.kind != "none")
+                entry += ", " + std::to_string(e.offset);
+            if (e.count.kind != "none")
+                entry += ", " + countInit(e.count);
+            entry += ")";
+        }
+        if (!cmd.vmHook.empty())
+            entry += ".vmHookIs(IrVmEffectsHook::" + pascalCase(cmd.vmHook) + ")";
+        else if (cmd.hasVmEffects && cmd.vmEffects.empty())
+            entry += ".vmNone()";
+
+        for (const auto& e : cmd.locationBefore)
+            entry += ".before(" + location(e) + ")";
+        for (const auto& e : cmd.locationAfter)
+            entry += ".after(" + location(e) + ")";
+        if (!cmd.locationBeforeHook.empty())
+            entry += ".beforeHook(IrLocationHook::" + pascalCase(cmd.locationBeforeHook) + ")";
+        if (!cmd.locationAfterHook.empty())
+            entry += ".afterHook(IrLocationHook::" + pascalCase(cmd.locationAfterHook) + ")";
+        if (cmd.hasLocationTracking && cmd.locationBefore.empty() && cmd.locationAfter.empty() && cmd.locationBeforeHook.empty() && cmd.locationAfterHook.empty())
+            entry += ".locationsNone()";
+
+        if (cmd.deadStore == "hook")
+            entry += ".deadStoreHookIs(IrDeadStoreHook::" + pascalCase(cmd.deadStoreHook) + ")";
+        else if (cmd.deadStore != "visit")
+            entry += ".deadStoreIs(IrDeadStoreKind::" + kDeadStoreKinds.at(cmd.deadStore) + (cmd.deadStoreTarget >= 0 ? ", " + std::to_string(cmd.deadStoreTarget) : "") + ")";
+        if (cmd.allocationWriteOp >= 0)
+            entry += ".writesAllocation(" + std::to_string(cmd.allocationWriteOp) + ")";
+        if (cmd.storeHintDest >= 0)
+            entry += ".storeHint(" + std::to_string(cmd.storeHintDest) + ", " + std::to_string(cmd.storeHintValue) + ", IrValueKind::" + cmd.storeHintKind + ")";
+        if (cmd.heapEffects.count("may-gc"))
+            entry += ".mayGcIs()";
+        if (cmd.heapEffects.count("reenters-vm"))
+            entry += ".reentersVmIs()";
+
+        out.line("// " + cmd.name);
+        out.line(entry + ",");
+    }
+    out.dedent();
+    out.line("};");
+    out.line("static_assert(sizeof(kIrCmdEffects) / sizeof(kIrCmdEffects[0]) == " + std::to_string(cmds.size()) + ", \"one entry per IrCmd\");");
+    out.line();
+    out.block("inline const IrCmdEffects& getCmdEffects(IrCmd cmd)", [&]() {
+        out.line("return kIrCmdEffects[unsigned(cmd)];");
+    });
     out.line();
     closeNamespaces(out);
 }

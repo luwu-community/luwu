@@ -34,4 +34,5 @@
   (result :int)
   (class :guard)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Branch operand targets a fallback block: can't appear in an exit sync sequence
+  (dead-store :live-ins)
   (lowering (try-num-to-index num fail)))

@@ -145,7 +145,7 @@ TEST_CASE_FIXTURE(LunaFixture, "unchanged_outputs_are_not_rewritten")
 
     run({"root.luna", "out"});
     requireOk();
-    CHECK(out.find("4 output(s) updated") != std::string::npos);
+    CHECK(out.find("5 output(s) updated") != std::string::npos);
 
     auto before = fs::last_write_time(dir / "out/LoweringRulesA64.h");
 

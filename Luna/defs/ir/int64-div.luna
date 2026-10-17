@@ -54,4 +54,5 @@
 (define-ircmd CHECK_DIV_INT64
   (operands [a :int64] [b :int64] [fail :block|:vmexit|:undef])
   (class :guard)
+  (dead-store :live-ins-no-exit-sync)
   (lowering (check-div-int64 a b fail)))

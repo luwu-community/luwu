@@ -5,8 +5,10 @@
 ~ C: Rn (first argument)
 ~ D: int (result count)
 (define-ircmd FASTCALL
-  (operands [bfid :const-uint] [ra :Rn] [arg :Rn] [nresults :int])
+  (operands [bfid :const-uint] [ra :Rn] [arg :Rn] [nresults :const-int])
   (class :effect)
+  (vm-effects (use arg) (def-range ra nresults))
+  (location-tracking (invalidate-range ra nresults))
   (lowering (fastcall bfid ra arg nresults)))
 
 ~ Call the fastcall builtin function
@@ -24,10 +26,12 @@
             [args :Rn|:Kn|:undef]
             [arg3 :Rn|:Kn|:undef]
             [nparams :int]
-            [nresults :int])
+            [nresults :const-int])
   (result :int)
   (class :value)
   (flags :deprecated/has-side-effects :dirty-high-bits)
+  (vm-effects (hook invoke-fastcall-uses) (def-range ra nresults))
+  (location-tracking (invalidate-range ra nresults))
   (lowering (invoke-fastcall bfid ra arg args arg3 nparams nresults)))
 
 ~ Calls native libm function with 1 or 2 arguments

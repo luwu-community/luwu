@@ -1586,12 +1586,19 @@ void compileRules(std::ostream& os, TargetBuilder& target, const std::vector<Low
 
 void getCommonCoreDocs(std::vector<FormDoc>& out)
 {
-    out.push_back({"define-ircmd", "(define-ircmd NAME (operands [<name> :<kind>|...]...) (target-specific [:<target> [<name> :<kind>|...]...]...) (flag-specific [:<flag> [<name> :<kind>|...]...]...) (result :<kind>) (class :<class>) (flags :<flag>...) (heap-effects :<effect>...) (lowering (<rule> <arg>...)))",
+    out.push_back({"define-ircmd", "(define-ircmd NAME (operands [<name> :<kind>|...]...) (target-specific [:<target> [<name> :<kind>|...]...]...) (flag-specific [:<flag> [<name> :<kind>|...]...]...) (result :<kind>) (class :<class>) (flags :<flag>...) (heap-effects :<effect>...) (vm-effects <effect>...) (location-tracking <effect>...) (dead-store <item>...) (lowering (<rule> <arg>...)))",
         "Declare an IR command (an IrCmd enumerator, in declaration order with NOP first). "
         "operands: each operand's kinds, joined with |: :int :int64 :double :float :tag (an instruction result or a matching constant), :pointer :tvalue, "
         ":inst-<kind> (only an instruction result), :const-int :const-uint :const-int64 :const-double :const-tag :import, :Rn :Kn :UPn, :block :vmexit :undef, :cond, "
         ":none (optional; trailing operands only), :any. target-specific / flag-specific: extra kinds when compiling for a target (:a64, :x64) / with a flag (:DebugLuauAbortingChecks). "
-        "The IR verifier (FFlag::DebugCodegenVerifyIr, on in tests) checks IR against these, and a lowering rule parameter's type must be able to read its operand's kinds. result: :tag :int :int64 :pointer :float :double :tvalue :unknown (none when absent). "
+        "The IR verifier (FFlag::DebugCodegenVerifyIr, on in tests) checks IR against these, and a lowering rule parameter's type must be able to read its operand's kinds. "
+        "vm-effects (VM register uses/defs, read by visitVmRegDefsUses; required when an operand can be :Rn): (use r) (maybe-use r) (def r) (maybe-def r) (use-range r count) (def-range r count) (use-varargs r) (hook <name>) or :none, "
+        "where r is an operand or (+ operand N) and count is a number, :to-top, a constant operand or (low-byte operand); uses run first, then the hook, then the defs. "
+        "location-tracking (IrValueLocationTracking; required when an operand can be :Rn, except for pseudo-instructions): (invalidate r) (invalidate-keep-values r) (invalidate-range r count) before lowering, "
+        "(restore-from-load r) (restore-from-store dest value) after, (hook-before <name>) (hook-after <name>), or :none. "
+        "dead-store: one of :visit (default) :none :live-ins :live-ins-no-exit-sync (guards; the target operand comes from the operand kinds) :live-outs (terminators) :allocation (hook <name>), "
+        "plus (writes-allocation ptr) and (store-hint dest value :double|:int|:int64|:pointer|:tvalue|:inferred). "
+        "heap-effects also: :may-gc (dead-store elimination flushes GC object registers first; needs dead-store :visit), :reenters-vm (pending stores can't be deferred past it). result: :tag :int :int64 :pointer :float :double :tvalue :unknown (none when absent). "
         "class: :value (has a result), :effect (none), :guard (may branch to a target and continue), :terminator (ends a block), :pseudo (never lowered)."
         "flags: :dirty-high-bits, :deprecated/has-side-effects (pot dangerous), :deprecated/is-unsafe-to-sink (pot dangerous), :invalidates-safe-env (heap effect)"
         "lowering names the define-rule that lowers it (generating lower_NAME), passing each rule parameter explicitly: an operand name or a number/keyword literal. "

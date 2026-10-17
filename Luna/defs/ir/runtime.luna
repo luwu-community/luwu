@@ -6,7 +6,9 @@
 (define-ircmd DO_ARITH
   (operands [ra :Rn] [rb :Rn|:Kn] [rc :Rn|:Kn] [tm :int])
   (class :effect)
-  (heap-effects :invalidates-safe-env)
+  (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
+  (vm-effects (maybe-use rb) (maybe-use rc) (def ra))
+  (location-tracking (invalidate ra))
   (lowering (do-arith ra rb rc tm)))
 
 ~ Get length of a TValue of any type
@@ -15,7 +17,9 @@
 (define-ircmd DO_LEN
   (operands [ra :Rn] [rb :Rn])
   (class :effect)
-  (heap-effects :invalidates-safe-env)
+  (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
+  (vm-effects (use rb) (def ra))
+  (location-tracking (invalidate ra))
   (lowering (do-len ra rb)))
 
 ~ Lookup a value in TValue of any type using a key of any type
@@ -25,7 +29,9 @@
 (define-ircmd GET_TABLE
   (operands [ra :Rn] [rb :Rn] [key :Rn|:const-uint])
   (class :effect)
-  (heap-effects :invalidates-safe-env)
+  (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
+  (vm-effects (use rb) (maybe-use key) (def ra))
+  (location-tracking (invalidate ra))
   (lowering (get-table ra rb key)))
 
 ~ Store a value into TValue of any type using a key of any type
@@ -35,7 +41,9 @@
 (define-ircmd SET_TABLE
   (operands [ra :Rn] [rb :Rn] [key :Rn|:const-uint])
   (class :effect)
-  (heap-effects :invalidates-safe-env)
+  (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
+  (vm-effects (use ra) (use rb) (maybe-use key))
+  (location-tracking :none)
   (lowering (set-table ra rb key)))
 
 ~ Concatenate multiple TValues into a string
@@ -46,7 +54,9 @@
 (define-ircmd CONCAT
   (operands [ra :Rn] [count :const-uint])
   (class :effect)
-  (heap-effects :invalidates-safe-env)
+  (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
+  (vm-effects (use-range ra count) (def-range ra count))
+  (location-tracking (invalidate-range ra count))
   (lowering (concat ra count)))
 
 ~ Returns the string name of a type based on tag, alternative for type(x)
@@ -64,4 +74,6 @@
   (result :pointer)
   (class :value)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Reads VM register: STORE_TAG/STORE_TVALUE/etc. to the same VM register
+  (vm-effects (use ra))
+  (location-tracking :none)
   (lowering (get-typeof ra)))

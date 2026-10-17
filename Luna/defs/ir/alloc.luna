@@ -41,6 +41,7 @@
   (operands [size :int] [utag :int])
   (result :pointer)
   (class :value)
+  (dead-store :allocation)
   (lowering (new-userdata size utag)))
 
 ~ Create new heap-allocated vector
@@ -51,6 +52,7 @@
   (operands [x :double] [y :double] [z :double])
   (result :pointer)
   (class :value)
+  (dead-store :allocation)
   (lowering (new-vector x y z)))
 
 ~ Luwu Classes (rfcs/classes): allocate an object of a class with its members uninitialized

@@ -26,6 +26,7 @@
   (result :pointer)
   (class :guard)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Branch operand targets a fallback block: can't appear in an exit sync sequence
+  (dead-store :live-ins)
   (lowering (try-object-member-addr obj pc k mismatch-op write)))
 
 ~ Luwu Classes (rfcs/classes): guard that NEWOBJECT's FIELDS form can construct this class
@@ -42,6 +43,7 @@
 (define-ircmd CHECK_CLASS_FIELDS_CONSTRUCTIBLE
   (operands [cls :pointer] [fail :block|:vmexit|:undef])
   (class :guard)
+  (dead-store :live-ins-no-exit-sync)
   (lowering (check-class-fields-constructible cls fail)))
 
 ~ Try to get the address of a static member on a Luwu Classes class object using the cached
@@ -57,6 +59,7 @@
   (result :pointer)
   (class :guard)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Branch operand targets a fallback block: can't appear in an exit sync sequence
+  (dead-store :live-ins)
   (lowering (try-class-member-addr cls pc k mismatch-op)))
 
 ~ Try to get the address of any member (instance field or static method) on a Luwu Classes
@@ -72,6 +75,7 @@
   (result :pointer)
   (class :guard)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Branch operand targets a fallback block: can't appear in an exit sync sequence
+  (dead-store :live-ins)
   (lowering (try-object-namecall-addr obj pc k mismatch-op)))
 
 ~ Create closure from a child proto
@@ -82,6 +86,7 @@
   (operands [nupvalues :const-uint] [env :pointer] [proto-index :const-uint])
   (result :pointer)
   (class :value)
+  (location-tracking :none)
   (lowering (newclosure nupvalues env proto-index)))
 
 ~ Perform a conditional jump based on the result of Proto ID comparison
@@ -92,4 +97,5 @@
 (define-ircmd JUMP_CMP_PROTOID
   (operands [closure :pointer] [protoid :const-uint] [if-eq :block] [if-ne :block])
   (class :terminator)
+  (dead-store :live-outs)
   (lowering (jump-cmp-protoid closure protoid if-eq if-ne)))

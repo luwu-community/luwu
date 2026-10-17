@@ -16,7 +16,9 @@
   (result :int)
   (class :value)
   (flags :deprecated/is-unsafe-to-sink :dirty-high-bits) ; unsafe to sink: Can execute user metamethods via luaV_equalval/luaV_lessthan/luaV_lessequal
-  (heap-effects :invalidates-safe-env)
+  (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
+  (vm-effects (use a) (use b))
+  (location-tracking :none)
   (lowering (cmp-any a b cond)))
 
 ~ Perform tag and value comparison. Result is an integer register containing 0 or 1
@@ -39,6 +41,9 @@
 (define-ircmd JUMP_EQ_TAG
   (operands [a :tag|:Rn] [b :tag] [if-eq :block] [if-ne :block])
   (class :terminator)
+  (vm-effects (maybe-use a))
+  (location-tracking :none)
+  (dead-store :live-outs)
   (lowering (jump-eq-tag a b if-eq if-ne)))
 
 ~ Perform a conditional jump based on the result of double comparison
@@ -51,6 +56,8 @@
   (operands [a :double] [b :double] [cond :cond] [if-true :block] [if-false :block])
   (target-specific [:x64 [a :Rn]])
   (class :terminator)
+  (location-tracking :none)
+  (dead-store :live-outs)
   (lowering (jump-cmp-num a b cond if-true if-false)))
 
 ~ Perform a conditional jump based on the result of float comparison
@@ -61,6 +68,7 @@
 (define-ircmd JUMP_CMP_FLOAT
   (operands [a :float] [b :float] [cond :cond] [if-true :block] [if-false :block])
   (class :terminator)
+  (dead-store :live-outs)
   (lowering (jump-cmp-float a b cond if-true if-false)))
 
 ~ Perform jump based on a numerical loop condition (step > 0 ? idx <= limit : limit <= idx)
@@ -72,6 +80,7 @@
 (define-ircmd JUMP_FORN_LOOP_COND
   (operands [idx :double] [limit :double] [step :double] [loop :block] [exit :block])
   (class :terminator)
+  (dead-store :live-outs)
   (lowering (jump-forn-loop-cond idx limit step loop exit)))
 
 ~ Guard against a falsy tag+value
@@ -83,6 +92,8 @@
   (operands [tag :tag] [val :any] [fail :block|:vmexit|:undef])
   (target-specific [:x64 [tag :Rn]])
   (class :guard)
+  (location-tracking :none)
+  (dead-store :live-ins-no-exit-sync)
   (lowering (check-truthy tag val fail)))
 
 ~ Guard against executing in unsafe environment, exits to VM on check failure
@@ -91,6 +102,7 @@
 (define-ircmd CHECK_SAFE_ENV
   (operands [fail :block|:vmexit|:undef])
   (class :guard)
+  (dead-store :live-ins)
   (lowering (check-safe-env fail)))
 
 ~ Guard against index overflowing the table array size
@@ -101,6 +113,7 @@
 (define-ircmd CHECK_ARRAY_SIZE
   (operands [table :pointer] [size :int] [fail :block|:vmexit|:undef])
   (class :guard)
+  (dead-store :live-ins)
   (lowering (check-array-size table size fail)))
 
 ~ Guard against the result of number comparison being false
@@ -111,4 +124,5 @@
 (define-ircmd CHECK_CMP_NUM
   (operands [a :double] [b :double] [cond :cond] [fail :block|:vmexit|:undef])
   (class :guard)
+  (dead-store :live-ins)
   (lowering (check-cmp-num a b cond fail)))

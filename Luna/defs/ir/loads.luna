@@ -5,6 +5,8 @@
   (result :tag)
   (class :value)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: VM register reads: STORE_TAG/STORE_DOUBLE/STORE_TVALUE/etc. to the same VM register
+  (vm-effects (maybe-use a))
+  (location-tracking (restore-from-load a))
   (lowering (load-tag a)))
 
 ~ Load a pointer (*) from TValue
@@ -14,6 +16,8 @@
   (result :pointer)
   (class :value)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: VM register reads: STORE_TAG/STORE_DOUBLE/STORE_TVALUE/etc. to the same VM register
+  (vm-effects (maybe-use a))
+  (location-tracking (restore-from-load a))
   (lowering (load-pointer a)))
 
 ~ Load a double number from TValue
@@ -23,6 +27,8 @@
   (result :double)
   (class :value)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: VM register reads: STORE_TAG/STORE_DOUBLE/STORE_TVALUE/etc. to the same VM register
+  (vm-effects (maybe-use a))
+  (location-tracking (restore-from-load a))
   (lowering (load-double a)))
 
 ~ Load an int from TValue
@@ -32,6 +38,8 @@
   (result :int)
   (class :value)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: VM register reads: STORE_TAG/STORE_DOUBLE/STORE_TVALUE/etc. to the same VM register
+  (vm-effects (maybe-use a))
+  (location-tracking (restore-from-load a))
   (lowering (load-int a)))
 
 ~ Load an int64 from TValue
@@ -41,6 +49,8 @@
   (result :int64)
   (class :value)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: VM register reads: STORE_TAG/STORE_DOUBLE/STORE_TVALUE/etc. to the same VM register
+  (vm-effects (maybe-use a))
+  (location-tracking (restore-from-load a))
   (lowering (load-int64 a)))
 
 ~ Load a float field from vector (use FLOAT_TO_NUM to convert to double)
@@ -51,6 +61,8 @@
   (result :float)
   (class :value)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: VM register reads: STORE_TAG/STORE_DOUBLE/STORE_TVALUE/etc. to the same VM register
+  (vm-effects (maybe-use a))
+  (location-tracking :none)
   (lowering (load-float a offset)))
 
 ~ Load a TValue from memory
@@ -62,4 +74,6 @@
   (result :tvalue)
   (class :value)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: VM register reads: STORE_TAG/STORE_DOUBLE/STORE_TVALUE/etc. to the same VM register
+  (vm-effects (maybe-use a))
+  (location-tracking (restore-from-load a))
   (lowering (load-tvalue a offset)))

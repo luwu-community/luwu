@@ -144,6 +144,7 @@ target_sources(Luwu.CodeGen PRIVATE
     CodeGen/include/Luau/BytecodeAnalysis.h
     CodeGen/include/Luau/BytecodeSummary.h
     CodeGen/include/Luau/generated/IrCmd.h
+    CodeGen/include/Luau/generated/IrCmdEffects.h
     CodeGen/include/Luau/generated/IrCmdInfo.h
     CodeGen/include/luacodegen.h
 

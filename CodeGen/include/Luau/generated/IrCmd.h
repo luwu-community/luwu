@@ -106,7 +106,6 @@ enum class IrCmd : uint8_t
 
     // Add/Sub/Mul/Div/Idiv/Mod two float numbers
     // A, B: float
-    // When compiling for X64, B can also be Rn or Kn
     ADD_FLOAT,
     SUB_FLOAT,
     MUL_FLOAT,

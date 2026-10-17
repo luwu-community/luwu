@@ -2,8 +2,11 @@
 ~ A: Rn (value start)
 ~ B: int (result count or -1 to return all values up to stack top)
 (define-ircmd RETURN
-  (operands [ra :Rn] [count :int])
+  (operands [ra :Rn] [count :const-int])
   (class :terminator)
+  (vm-effects (use-range ra count))
+  (location-tracking :none)
+  (dead-store :live-outs)
   (lowering (return ra count)))
 
 ~ Adjust loop variables for one iteration of a generic for loop, jump back to the loop header if loop needs to continue
@@ -12,8 +15,11 @@
 ~ C: block (repeat)
 ~ D: block (exit)
 (define-ircmd FORGLOOP
-  (operands [ra :Rn] [nvars :int] [loop :block] [exit :block])
+  (operands [ra :Rn] [nvars :const-int] [loop :block] [exit :block])
   (class :terminator)
+  (vm-effects (use (+ ra 1)) (use (+ ra 2)) (def (+ ra 2)) (def-range (+ ra 3) nvars))
+  (location-tracking (invalidate-range (+ ra 2) :to-top))
+  (heap-effects :reenters-vm)
   (lowering (forgloop ra nvars loop exit)))
 
 ~ Handle LOP_FORGLOOP fallback when variable being iterated is not a table
@@ -22,9 +28,11 @@
 ~ C: block (repeat)
 ~ D: block (exit)
 (define-ircmd FORGLOOP_FALLBACK
-  (operands [ra :Rn] [nvars :int] [loop :block] [exit :block])
+  (operands [ra :Rn] [nvars :const-int] [loop :block] [exit :block])
   (class :terminator)
-  (heap-effects :invalidates-safe-env)
+  (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
+  (vm-effects (use-range ra 3) (def (+ ra 2)) (def-range (+ ra 3) (low-byte nvars)))
+  (location-tracking (invalidate-range (+ ra 2) :to-top))
   (lowering (forgloop-fallback ra nvars loop exit)))
 
 ~ Fallback for generic for loop preparation when iterating over builtin pairs/ipairs
@@ -35,4 +43,6 @@
 (define-ircmd FORGPREP_XNEXT_FALLBACK
   (operands [pc :const-uint] [ra :Rn] [target :block])
   (class :terminator)
+  (vm-effects (use ra))
+  (location-tracking :none)
   (lowering (forgprep-xnext-fallback pc ra target)))

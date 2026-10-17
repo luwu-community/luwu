@@ -15,6 +15,7 @@
             [exact :double|:undef]
             [fail :block|:vmexit|:undef])
   (class :guard)
+  (dead-store :live-ins)
   (lowering (check-buffer-len buffer offset min max exact fail)))
 
 ~ Read i8 (sign-extended to int) from buffer storage at specified offset
@@ -47,6 +48,7 @@
 (define-ircmd BUFFER_WRITEI8
   (operands [a :pointer] [b :int] [val :int] [tag :tag])
   (class :effect)
+  (dead-store (writes-allocation a))
   (lowering (buffer-writei8 a b val tag)))
 
 ~ Read i16 (sign-extended to int) from buffer storage at specified offset
@@ -79,6 +81,7 @@
 (define-ircmd BUFFER_WRITEI16
   (operands [a :pointer] [b :int] [val :int] [tag :tag])
   (class :effect)
+  (dead-store (writes-allocation a))
   (lowering (buffer-writei16 a b val tag)))
 
 ~ Read i32 value from buffer storage at specified offset
@@ -100,6 +103,7 @@
 (define-ircmd BUFFER_WRITEI32
   (operands [a :pointer] [b :int] [val :int] [tag :tag])
   (class :effect)
+  (dead-store (writes-allocation a))
   (lowering (buffer-writei32 a b val tag)))
 
 ~ Read float value (use FLOAT_TO_NUM to convert to double) from buffer storage at specified offset
@@ -121,6 +125,7 @@
 (define-ircmd BUFFER_WRITEF32
   (operands [a :pointer] [b :int] [val :float] [tag :tag])
   (class :effect)
+  (dead-store (writes-allocation a))
   (lowering (buffer-writef32 a b val tag)))
 
 ~ Read double value from buffer storage at specified offset
@@ -142,6 +147,7 @@
 (define-ircmd BUFFER_WRITEF64
   (operands [a :pointer] [b :int] [val :double] [tag :tag])
   (class :effect)
+  (dead-store (writes-allocation a))
   (lowering (buffer-writef64 a b val tag)))
 
 ~ Read int64 value from buffer storage at specified offset
@@ -163,4 +169,5 @@
 (define-ircmd BUFFER_WRITEI64
   (operands [a :pointer] [b :int] [val :int64] [tag :tag])
   (class :effect)
+  (dead-store (writes-allocation a))
   (lowering (buffer-writei64 a b val tag)))

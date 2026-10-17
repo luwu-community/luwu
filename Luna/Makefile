@@ -13,7 +13,7 @@ TEST_TARGET = ../build/debug/luna-tests
 ROOT = defs/luwu.luna
 OUTPUT_DIR = ../CodeGen/src/generated
 PUBLIC_OUTPUT_DIR = ../CodeGen/include/Luau/generated
-OUTPUTS = $(OUTPUT_DIR)/LoweringRulesA64.h $(OUTPUT_DIR)/LoweringRulesX64.h $(PUBLIC_OUTPUT_DIR)/IrCmdInfo.h $(PUBLIC_OUTPUT_DIR)/IrCmd.h
+OUTPUTS = $(OUTPUT_DIR)/LoweringRulesA64.h $(OUTPUT_DIR)/LoweringRulesX64.h $(PUBLIC_OUTPUT_DIR)/IrCmdInfo.h $(PUBLIC_OUTPUT_DIR)/IrCmd.h $(PUBLIC_OUTPUT_DIR)/IrCmdEffects.h
 
 # Luna writes a depfile listing every file the root includes, so editing any of them reruns generation; the stamp
 # records the last successful run, since outputs that didn't change keep their old timestamps

@@ -5,6 +5,8 @@
   (result :tvalue)
   (class :value)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Upvalue read: SET_UPVALUE to the same upvalue slot
+  (vm-effects :none)
+  (location-tracking :none)
   (lowering (get-upvalue up)))
 
 ~ Call specified function
@@ -13,7 +15,9 @@
 ~ C: int (result count or -1 to preserve all results and adjust stack top)
 ~ Note: return values are placed starting from Rn specified in 'A'
 (define-ircmd CALL
-  (operands [ra :Rn] [nparams :int] [nresults :int])
+  (operands [ra :Rn] [nparams :const-int] [nresults :const-int])
   (class :effect)
-  (heap-effects :invalidates-safe-env)
+  (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
+  (vm-effects (use ra) (use-range (+ ra 1) nparams) (def-range ra nresults))
+  (location-tracking (invalidate-range ra :to-top))
   (lowering (call ra nparams nresults)))

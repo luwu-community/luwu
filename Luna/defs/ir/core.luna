@@ -97,6 +97,7 @@
   (target-specific [:x64 [b :Rn|:Kn]])
   (result :double)
   (class :value)
+  (location-tracking :none)
   (lowering (add-num a b)))
 
 ~ Add/Sub/Mul/Div/Idiv/Mod two double numbers
@@ -107,6 +108,7 @@
   (target-specific [:x64 [b :Rn|:Kn]])
   (result :double)
   (class :value)
+  (location-tracking :none)
   (lowering (sub-num a b)))
 
 ~ Add/Sub/Mul/Div/Idiv/Mod two double numbers
@@ -117,6 +119,7 @@
   (target-specific [:x64 [b :Rn|:Kn]])
   (result :double)
   (class :value)
+  (location-tracking :none)
   (lowering (mul-num a b)))
 
 ~ Add/Sub/Mul/Div/Idiv/Mod two double numbers
@@ -127,6 +130,7 @@
   (target-specific [:x64 [b :Rn|:Kn]])
   (result :double)
   (class :value)
+  (location-tracking :none)
   (lowering (div-num a b)))
 
 ~ Add/Sub/Mul/Div/Idiv/Mod two double numbers
@@ -137,6 +141,7 @@
   (target-specific [:x64 [b :Rn|:Kn]])
   (result :double)
   (class :value)
+  (location-tracking :none)
   (lowering (idiv-num a b)))
 
 ~ Get the minimum/maximum of two numbers
@@ -148,6 +153,7 @@
   (target-specific [:x64 [b :Rn|:Kn]])
   (result :double)
   (class :value)
+  (location-tracking :none)
   (lowering (min-num a b)))
 
 ~ Get the minimum/maximum of two numbers
@@ -159,6 +165,7 @@
   (target-specific [:x64 [b :Rn|:Kn]])
   (result :double)
   (class :value)
+  (location-tracking :none)
   (lowering (max-num a b)))
 
 ~ Round number to negative infinity (math.floor)
@@ -169,6 +176,7 @@
   (target-specific [:x64 [a :Rn]])
   (result :double)
   (class :value)
+  (location-tracking :none)
   (lowering (floor-num a)))
 
 ~ Round number to positive infinity (math.ceil)
@@ -179,6 +187,7 @@
   (target-specific [:x64 [a :Rn]])
   (result :double)
   (class :value)
+  (location-tracking :none)
   (lowering (ceil-num a)))
 
 ~ Get square root of the argument (math.sqrt)
@@ -189,44 +198,37 @@
   (target-specific [:x64 [a :Rn]])
   (result :double)
   (class :value)
+  (location-tracking :none)
   (lowering (sqrt-num a)))
 
 ~ Add/Sub/Mul/Div/Idiv/Mod two float numbers
 ~ A, B: float
-~ When compiling for X64, B can also be Rn or Kn
 (define-ircmd ADD_FLOAT
   (operands [a :float] [b :float])
-  (target-specific [:x64 [b :Rn|:Kn]])
   (result :float)
   (class :value)
   (lowering (add-float a b)))
 
 ~ Add/Sub/Mul/Div/Idiv/Mod two float numbers
 ~ A, B: float
-~ When compiling for X64, B can also be Rn or Kn
 (define-ircmd SUB_FLOAT
   (operands [a :float] [b :float])
-  (target-specific [:x64 [b :Rn|:Kn]])
   (result :float)
   (class :value)
   (lowering (sub-float a b)))
 
 ~ Add/Sub/Mul/Div/Idiv/Mod two float numbers
 ~ A, B: float
-~ When compiling for X64, B can also be Rn or Kn
 (define-ircmd MUL_FLOAT
   (operands [a :float] [b :float])
-  (target-specific [:x64 [b :Rn|:Kn]])
   (result :float)
   (class :value)
   (lowering (mul-float a b)))
 
 ~ Add/Sub/Mul/Div/Idiv/Mod two float numbers
 ~ A, B: float
-~ When compiling for X64, B can also be Rn or Kn
 (define-ircmd DIV_FLOAT
   (operands [a :float] [b :float])
-  (target-specific [:x64 [b :Rn|:Kn]])
   (result :float)
   (class :value)
   (lowering (div-float a b)))
@@ -280,6 +282,7 @@
 (define-ircmd JUMP_EQ_POINTER
   (operands [a :inst-pointer] [b :inst-pointer] [then-block :block] [else-block :block])
   (class :terminator)
+  (dead-store :live-outs)
   (lowering (jump-eq-pointer a b then-block else-block)))
 
 ~ Get string length
@@ -336,6 +339,7 @@
   (operands [a :double])
   (result :int)
   (class :value)
+  (location-tracking (hook-after num-to-int-restore))
   (lowering (num-to-int a)))
 
 ~ Converts a double number to a 64 bit integer. 'A' may be any representable integer in a double.
@@ -353,6 +357,7 @@
   (result :int)
   (class :value)
   (flags :dirty-high-bits)
+  (location-tracking (hook-after num-to-int-restore))
   (lowering (num-to-uint a)))
 
 ~ Converts a float number to a double
@@ -383,6 +388,8 @@
 ~ This is used to recover after calling a variadic function
 (define-ircmd ADJUST_STACK_TO_TOP
   (class :effect)
+  (vm-effects :none)
+  (location-tracking :none)
   (lowering (adjust-stack-to-top)))
 
 ~ Check that fastcall builtin function invocation was successful (negative result count jumps to fallback)
@@ -391,6 +398,7 @@
 (define-ircmd CHECK_FASTCALL_RES
   (operands [res :inst-int] [fallback :block])
   (class :guard)
+  (dead-store :live-ins)
   (lowering (check-fastcall-res res fallback)))
 
 ~ Guard against tag mismatch
@@ -404,6 +412,8 @@
   (target-specific [:x64 [a :Rn|:Kn]])
   (flag-specific [:DebugLuauAbortingChecks [a :Rn]])
   (class :guard)
+  (location-tracking :none)
+  (dead-store (hook check-tag))
   (lowering (check-tag a b fallback)))
 
 ~ Guard against readonly table
@@ -413,6 +423,7 @@
 (define-ircmd CHECK_READONLY
   (operands [table :inst-pointer] [fallback :block|:vmexit|:undef])
   (class :guard)
+  (dead-store :live-ins)
   (lowering (check-readonly table fallback)))
 
 ~ Guard against table having a metatable
@@ -422,6 +433,7 @@
 (define-ircmd CHECK_NO_METATABLE
   (operands [table :inst-pointer] [fallback :block|:vmexit|:undef])
   (class :guard)
+  (dead-store :live-ins)
   (lowering (check-no-metatable table fallback)))
 
 ~ Guard against table node with a linked next node to ensure that our lookup hits the main position of the key
@@ -431,6 +443,7 @@
 (define-ircmd CHECK_NODE_NO_NEXT
   (operands [node :inst-pointer] [fallback :block|:vmexit|:undef])
   (class :guard)
+  (dead-store :live-ins)
   (lowering (check-node-no-next node fallback)))
 
 ~ Guard against table node with 'nil' value
@@ -440,6 +453,7 @@
 (define-ircmd CHECK_NODE_VALUE
   (operands [node :inst-pointer] [fallback :block|:vmexit|:undef])
   (class :guard)
+  (dead-store :live-ins)
   (lowering (check-node-value node fallback)))
 
 ~ Guard against a Luwu Classes object not being an instance of a specific class (see rfcs/classes)
@@ -450,6 +464,7 @@
 (define-ircmd CHECK_OBJECT_CLASS
   (operands [obj :inst-pointer] [expected-class :inst-pointer] [fallback :block|:vmexit|:undef])
   (class :guard)
+  (dead-store :live-ins)
   (lowering (check-object-class obj expected-class fallback)))
 
 ~ Address of an instance member at a *known* offset on a Luwu Classes object, for a receiver whose
@@ -473,6 +488,7 @@
 (define-ircmd CHECK_BUFFER_MUTABLE
   (operands [buf :inst-pointer] [fallback :block|:vmexit|:undef])
   (class :guard)
+  (dead-store :live-ins)
   (lowering (check-buffer-mutable buf fallback)))
 
 ~ Guard against userdata tag mismatch
@@ -483,6 +499,7 @@
 (define-ircmd CHECK_USERDATA_TAG
   (operands [udata :inst-pointer] [tag :const-int] [fallback :block|:vmexit|:undef])
   (class :guard)
+  (dead-store :live-ins)
   (lowering (check-userdata-tag udata tag fallback)))
 
 ~ Update savedpc value

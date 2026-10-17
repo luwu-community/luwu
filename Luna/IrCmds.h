@@ -37,6 +37,33 @@ struct IrOperandExtras
     std::vector<IrOperandDef> operands;
 };
 
+// A register or count in an effect: an operand (by index), optionally plus an offset, or a literal
+struct IrEffectCountDef
+{
+    std::string kind = "none"; // "none", "literal", "int" (intOp), "uint" (uintOp), "low-byte" (uint8_t(intOp))
+    int value = 0;             // the literal, or the operand index
+};
+
+// (vm-effects ...) item: a VM register use or def
+struct IrVmEffectDef
+{
+    std::string kind; // "use", "maybe-use", "use-range", "use-varargs", "def", "maybe-def", "def-range"
+    int op = 0;
+    int offset = 0;
+    IrEffectCountDef count;
+    SourceLocation loc;
+};
+
+// (location-tracking ...) item
+struct IrLocationEffectDef
+{
+    std::string kind; // "invalidate", "invalidate-keep-values", "invalidate-range", "restore-from-load", "restore-from-store"
+    int op = 0;
+    int offset = 0;
+    int valueOp = 0; // restore-from-store: the stored value
+    IrEffectCountDef count;
+};
+
 // An IR command declared with define-ircmd
 struct IrCmdDef
 {
@@ -53,6 +80,27 @@ struct IrCmdDef
     std::set<std::string> flags;       // e.g. "deprecated/has-side-effects"
     std::set<std::string> heapEffects; // e.g. "invalidates-safe-env"
     std::optional<IrCmdLowering> lowering;
+
+    // (vm-effects ...): VM register uses and defs (uses first); the hook runs between uses and defs
+    bool hasVmEffects = false;
+    std::vector<IrVmEffectDef> vmEffects;
+    std::string vmHook;
+
+    // (location-tracking ...): saved value locations, before and after lowering
+    bool hasLocationTracking = false;
+    std::vector<IrLocationEffectDef> locationBefore;
+    std::vector<IrLocationEffectDef> locationAfter;
+    std::string locationBeforeHook;
+    std::string locationAfterHook;
+
+    // (dead-store ...)
+    std::string deadStore = "visit"; // "visit", "none", "live-ins", "live-ins-no-exit-sync", "live-outs", "allocation", "hook"
+    int deadStoreTarget = -1;        // live-ins: the guard's target operand
+    std::string deadStoreHook;
+    int allocationWriteOp = -1;      // (writes-allocation a)
+    int storeHintDest = -1;          // (store-hint dest value kind)
+    int storeHintValue = -1;
+    std::string storeHintKind;       // IrValueKind enumerator, or "Unknown" to infer it from the value
 };
 
 // Parses the define-ircmd forms of a program (other top-level forms are ignored) and checks them
@@ -67,6 +115,9 @@ std::vector<DispatchEntry> loweringDispatch(const std::vector<IrCmdDef>& cmds);
 
 // CodeGen/include/Luau/generated/IrCmdInfo.h: per-command information (names, result kinds, classification)
 void emitIrCmdInfo(std::ostream& os, const std::vector<IrCmdDef>& cmds);
+
+// CodeGen/include/Luau/generated/IrCmdEffects.h: per-command VM register, value location and dead-store effects
+void emitIrCmdEffects(std::ostream& os, const std::vector<IrCmdDef>& cmds);
 
 // CodeGen/include/Luau/generated/IrCmd.h: the IrCmd enum with its doc comments
 void emitIrCmdEnum(std::ostream& os, const std::vector<IrCmdDef>& cmds);
