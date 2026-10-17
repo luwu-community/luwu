@@ -171,6 +171,7 @@ target_sources(Luwu.CodeGen PRIVATE
     CodeGen/src/IrTranslateBuiltins.cpp
     CodeGen/src/IrTranslation.cpp
     CodeGen/src/IrUtils.cpp
+    CodeGen/src/IrValidation.cpp
     CodeGen/src/IrValueLocationTracking.cpp
     CodeGen/src/lcodegen.cpp
     CodeGen/src/NativeProtoExecData.cpp
@@ -201,6 +202,7 @@ target_sources(Luwu.CodeGen PRIVATE
     CodeGen/src/IrRegAllocA64.h
     CodeGen/src/IrTranslateBuiltins.h
     CodeGen/src/IrTranslation.h
+    CodeGen/src/IrValidation.h
     CodeGen/src/IrValueLocationTracking.h
     CodeGen/src/NativeState.h
 

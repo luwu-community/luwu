@@ -3,7 +3,7 @@
 ~ C, D: int64 (condition arguments)
 ~ E: condition
 (define-ircmd SELECT_INT64
-  (operands a b c d cond)
+  (operands [a :int64] [b :int64] [c :int64] [d :int64] [cond :cond])
   (result :int64)
   (class :value)
   (lowering (select-int64 a b c d cond)))
@@ -12,7 +12,7 @@
 ~ A, B: int
 ~ C: condition
 (define-ircmd CMP_INT
-  (operands a b cond)
+  (operands [a :int] [b :int] [cond :cond])
   (result :int)
   (class :value)
   (lowering (cmp-int a b cond)))
@@ -21,7 +21,7 @@
 ~ A, B: int64
 ~ C: condition
 (define-ircmd CMP_INT64
-  (operands a b cond)
+  (operands [a :int64] [b :int64] [cond :cond])
   (result :int)
   (class :value)
   (lowering (cmp-int64 a b cond)))
@@ -29,7 +29,7 @@
 ~ Unconditional jump
 ~ A: block/vmexit/undef
 (define-ircmd JUMP
-  (operands target)
+  (operands [target :block|:vmexit|:undef])
   (class :terminator)
   (lowering (jump target)))
 
@@ -39,7 +39,7 @@
 ~ D: block (if true)
 ~ E: block (if false)
 (define-ircmd JUMP_CMP_INT
-  (operands a b cond target-d target-e)
+  (operands [a :int] [b :int] [cond :cond] [target-d :block] [target-e :block])
   (class :terminator)
   (lowering (jump-cmp-int a b cond target-d target-e)))
 
@@ -49,7 +49,7 @@
 ~ D: block/vmexit/undef
 ~ When undef is specified instead of a block, execution is aborted on check failure
 (define-ircmd CHECK_CMP_INT
-  (operands a b cond fail)
+  (operands [a :int] [b :int] [cond :cond] [fail :block|:vmexit|:undef])
   (class :guard)
   (lowering (check-cmp-int a b cond fail)))
 
@@ -59,6 +59,6 @@
 ~ D: block/vmexit/undef
 ~ When undef is specified instead of a block, execution is aborted on check failure
 (define-ircmd CHECK_CMP_INT64
-  (operands a b cond fail)
+  (operands [a :int64] [b :int64] [cond :cond] [fail :block|:vmexit|:undef])
   (class :guard)
   (lowering (check-cmp-int64 a b cond fail)))

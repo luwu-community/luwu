@@ -1,8 +1,8 @@
 ~ Store a tag into TValue
-~ A: Rn
+~ A: Rn or pointer (TValue)
 ~ B: tag
 (define-ircmd STORE_TAG
-  (operands a tag)
+  (operands [a :Rn|:inst-pointer] [tag :tag])
   (class :effect)
   (lowering (store-tag a tag)))
 
@@ -10,23 +10,23 @@
 ~ A: Rn
 ~ B: int
 (define-ircmd STORE_EXTRA
-  (operands a extra)
+  (operands [a :Rn] [extra :int])
   (class :effect)
   (lowering (store-extra a extra)))
 
 ~ Store a pointer (*) into TValue
-~ A: Rn
-~ B: pointer
+~ A: Rn or pointer (TValue)
+~ B: pointer, or int 0 for a null pointer
 (define-ircmd STORE_POINTER
-  (operands a val)
+  (operands [a :Rn|:inst-pointer] [val :pointer|:const-int])
   (class :effect)
   (lowering (store-pointer a val)))
 
 ~ Store a double number into TValue
-~ A: Rn
+~ A: Rn or pointer (TValue)
 ~ B: double
 (define-ircmd STORE_DOUBLE
-  (operands a val)
+  (operands [a :Rn|:inst-pointer] [val :double])
   (class :effect)
   (lowering (store-double a val)))
 
@@ -34,7 +34,7 @@
 ~ A: Rn
 ~ B: int
 (define-ircmd STORE_INT
-  (operands a val)
+  (operands [a :Rn] [val :int])
   (class :effect)
   (lowering (store-int a val)))
 
@@ -42,7 +42,7 @@
 ~ A: Rn
 ~ B: int64
 (define-ircmd STORE_INT64
-  (operands a val)
+  (operands [a :Rn] [val :int64])
   (class :effect)
   (lowering (store-int64 a val)))
 
@@ -54,7 +54,7 @@
 ~ D: float (z)
 ~ E: tag (optional)
 (define-ircmd STORE_VECTOR
-  (operands a x y z tag)
+  (operands [a :Rn] [x :float] [y :float] [z :float] [tag :tag])
   (class :effect)
   (lowering (store-vector a x y z tag)))
 
@@ -63,16 +63,16 @@
 ~ B: TValue
 ~ C: int (optional 'A' pointer offset)
 (define-ircmd STORE_TVALUE
-  (operands a val offset)
+  (operands [a :Rn|:pointer] [val :tvalue] [offset :const-int])
   (class :effect)
   (lowering (store-tvalue a val offset)))
 
 ~ Store a pair of tag and value into memory
 ~ A: Rn or pointer (TValue)
 ~ B: tag (must be a constant)
-~ C: int/double/pointer
+~ C: int/int64/double/pointer
 ~ D: int (optional 'A' pointer offset)
 (define-ircmd STORE_SPLIT_TVALUE
-  (operands a tag val offset)
+  (operands [a :Rn|:pointer] [tag :tag] [val :int|:int64|:double|:pointer] [offset :const-int])
   (class :effect)
   (lowering (store-split-tvalue a tag val offset)))

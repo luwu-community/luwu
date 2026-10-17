@@ -4,7 +4,7 @@
 ~ B: pointer (the value's gc pointer, LuauObject; only dereferenced when A == LUA_TOBJECT)
 ~ C: pointer (the expected LuauClass)
 (define-ircmd CLASS_ISINSTANCE
-  (operands tag obj cls)
+  (operands [tag :tag] [obj :pointer] [cls :pointer])
   (result :int)
   (class :value)
   (lowering (class-isinstance tag obj cls)))
@@ -22,7 +22,7 @@
 ~    absent or 0 = read/GETTABLEKS, where const doesn't restrict access)
 ~ When undef is specified instead of a block, execution is aborted on check failure
 (define-ircmd TRY_OBJECT_MEMBER_ADDR
-  (operands obj pc k mismatch-op write)
+  (operands [obj :pointer] [pc :const-uint] [k :Kn] [mismatch-op :block|:undef] [write :const-uint])
   (result :pointer)
   (class :guard)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Branch operand targets a fallback block: can't appear in an exit sync sequence
@@ -40,7 +40,7 @@
 ~ B: block/vmexit/undef
 ~ When undef is specified instead of a block, execution is aborted on check failure
 (define-ircmd CHECK_CLASS_FIELDS_CONSTRUCTIBLE
-  (operands cls fail)
+  (operands [cls :pointer] [fail :block|:vmexit|:undef])
   (class :guard)
   (lowering (check-class-fields-constructible cls fail)))
 
@@ -53,7 +53,7 @@
 ~ D: block/undef
 ~ When undef is specified instead of a block, execution is aborted on check failure
 (define-ircmd TRY_CLASS_MEMBER_ADDR
-  (operands cls pc k mismatch-op)
+  (operands [cls :pointer] [pc :const-uint] [k :Kn] [mismatch-op :block|:undef])
   (result :pointer)
   (class :guard)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Branch operand targets a fallback block: can't appear in an exit sync sequence
@@ -68,7 +68,7 @@
 ~ D: block/undef
 ~ When undef is specified instead of a block, execution is aborted on check failure
 (define-ircmd TRY_OBJECT_NAMECALL_ADDR
-  (operands obj pc k mismatch-op)
+  (operands [obj :pointer] [pc :const-uint] [k :Kn] [mismatch-op :block|:undef])
   (result :pointer)
   (class :guard)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Branch operand targets a fallback block: can't appear in an exit sync sequence
@@ -79,7 +79,7 @@
 ~ B: pointer (table)
 ~ C: unsigned int (protoid)
 (define-ircmd NEWCLOSURE
-  (operands nupvalues env proto-index)
+  (operands [nupvalues :const-uint] [env :pointer] [proto-index :const-uint])
   (result :pointer)
   (class :value)
   (lowering (newclosure nupvalues env proto-index)))
@@ -90,6 +90,6 @@
 ~ C: block (if true)
 ~ D: block (if false)
 (define-ircmd JUMP_CMP_PROTOID
-  (operands closure protoid if-eq if-ne)
+  (operands [closure :pointer] [protoid :const-uint] [if-eq :block] [if-ne :block])
   (class :terminator)
   (lowering (jump-cmp-protoid closure protoid if-eq if-ne)))

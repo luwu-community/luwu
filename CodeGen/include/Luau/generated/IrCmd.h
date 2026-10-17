@@ -75,7 +75,7 @@ enum class IrCmd : uint8_t
 
     // Add/Sub/Mul/Div/Idiv/Mod two double numbers
     // A, B: double
-    // In final x64 lowering, B can also be Rn or Kn
+    // When compiling for X64, B can also be Rn or Kn
     ADD_NUM,
     SUB_NUM,
     MUL_NUM,
@@ -85,25 +85,28 @@ enum class IrCmd : uint8_t
     // Get the minimum/maximum of two numbers
     // If one of the values is NaN, 'B' is returned as the result
     // A, B: double
-    // In final x64 lowering, B can also be Rn or Kn
+    // When compiling for X64, B can also be Rn or Kn
     MIN_NUM,
     MAX_NUM,
 
     // Round number to negative infinity (math.floor)
     // A: double
+    // When compiling for X64, A can also be Rn
     FLOOR_NUM,
 
     // Round number to positive infinity (math.ceil)
     // A: double
+    // When compiling for X64, A can also be Rn
     CEIL_NUM,
 
     // Get square root of the argument (math.sqrt)
     // A: double
+    // When compiling for X64, A can also be Rn
     SQRT_NUM,
 
     // Add/Sub/Mul/Div/Idiv/Mod two float numbers
     // A, B: float
-    // In final x64 lowering, B can also be Rn or Kn
+    // When compiling for X64, B can also be Rn or Kn
     ADD_FLOAT,
     SUB_FLOAT,
     MUL_FLOAT,
@@ -193,7 +196,7 @@ enum class IrCmd : uint8_t
     // Guard against tag mismatch
     // A, B: tag
     // C: block/vmexit/undef
-    // In final x64 lowering, A can also be Rn
+    // When compiling for X64, A can also be Rn or Kn
     // When DebugLuauAbortingChecks flag is enabled, A can also be Rn
     // When undef is specified instead of a block, execution is aborted on check failure
     CHECK_TAG,
@@ -239,14 +242,9 @@ enum class IrCmd : uint8_t
     // B: unsigned int (member offset)
     OBJECT_MEMBER_ADDR,
 
-    // Guard against access at specified offset with [min, max) range of bytes overflowing the buffer length
-    // When base offset source number is provided, instruction will additionally validate that the integer and double versions of base are exact
+    // Guard against writing to a buffer whose contents can't be modified (Buffer::mode is LUA_BHOST_IMMUTABLE)
     // A: pointer (buffer)
-    // B: int (base offset)
-    // C: int (access range min inclusive)
-    // D: int (access range max exclusive)
-    // E: double/undef (base offset source double)
-    // F: block/vmexit/undef
+    // B: block/vmexit/undef
     // When undef is specified instead of a block, execution is aborted on check failure
     CHECK_BUFFER_MUTABLE,
 
@@ -331,11 +329,11 @@ enum class IrCmd : uint8_t
     CHECK_CMP_INT64,
 
     // Load a tag from TValue
-    // A: Rn or Kn
+    // A: Rn or Kn or pointer (TValue)
     LOAD_TAG,
 
     // Load a pointer (*) from TValue
-    // A: Rn or Kn
+    // A: Rn or Kn or pointer (TValue)
     LOAD_POINTER,
 
     // Load a double number from TValue
@@ -362,7 +360,7 @@ enum class IrCmd : uint8_t
     LOAD_TVALUE,
 
     // Store a tag into TValue
-    // A: Rn
+    // A: Rn or pointer (TValue)
     // B: tag
     STORE_TAG,
 
@@ -372,12 +370,12 @@ enum class IrCmd : uint8_t
     STORE_EXTRA,
 
     // Store a pointer (*) into TValue
-    // A: Rn
-    // B: pointer
+    // A: Rn or pointer (TValue)
+    // B: pointer, or int 0 for a null pointer
     STORE_POINTER,
 
     // Store a double number into TValue
-    // A: Rn
+    // A: Rn or pointer (TValue)
     // B: double
     STORE_DOUBLE,
 
@@ -409,13 +407,13 @@ enum class IrCmd : uint8_t
     // Store a pair of tag and value into memory
     // A: Rn or pointer (TValue)
     // B: tag (must be a constant)
-    // C: int/double/pointer
+    // C: int/int64/double/pointer
     // D: int (optional 'A' pointer offset)
     STORE_SPLIT_TVALUE,
 
     // Add/Sub/Mul/Div/Idiv/Mod two double numbers
     // A, B: double
-    // In final x64 lowering, B can also be Rn or Kn
+    // When compiling for X64, B can also be Rn or Kn
     MOD_NUM,
 
     // A * B + C
@@ -428,10 +426,12 @@ enum class IrCmd : uint8_t
 
     // Round number to nearest integer number, rounding half-way cases away from zero (math.round)
     // A: double
+    // When compiling for X64, A can also be Rn
     ROUND_NUM,
 
     // Get absolute value of the argument (math.abs)
     // A: double
+    // When compiling for X64, A can also be Rn
     ABS_NUM,
 
     // Get the sign of the argument (math.sign)
@@ -589,77 +589,91 @@ enum class IrCmd : uint8_t
     // Read i8 (sign-extended to int) from buffer storage at specified offset
     // A: pointer (buffer)
     // B: int (offset)
+    // C: tag (type of the value 'A' points into: buffer, userdata or vector, which decides where its data starts)
     BUFFER_READI8,
 
     // Read u8 (zero-extended to int) from buffer storage at specified offset
     // A: pointer (buffer)
     // B: int (offset)
+    // C: tag (type of the value 'A' points into: buffer, userdata or vector, which decides where its data starts)
     BUFFER_READU8,
 
     // Write i8/u8 value (int argument is truncated) to buffer storage at specified offset
     // A: pointer (buffer)
     // B: int (offset)
     // C: int (value)
+    // D: tag (type of the value 'A' points into: buffer, userdata or vector, which decides where its data starts)
     BUFFER_WRITEI8,
 
     // Read i16 (sign-extended to int) from buffer storage at specified offset
     // A: pointer (buffer)
     // B: int (offset)
+    // C: tag (type of the value 'A' points into: buffer, userdata or vector, which decides where its data starts)
     BUFFER_READI16,
 
     // Read u16 (zero-extended to int) from buffer storage at specified offset
     // A: pointer (buffer)
     // B: int (offset)
+    // C: tag (type of the value 'A' points into: buffer, userdata or vector, which decides where its data starts)
     BUFFER_READU16,
 
     // Write i16/u16 value (int argument is truncated) to buffer storage at specified offset
     // A: pointer (buffer)
     // B: int (offset)
     // C: int (value)
+    // D: tag (type of the value 'A' points into: buffer, userdata or vector, which decides where its data starts)
     BUFFER_WRITEI16,
 
     // Read i32 value from buffer storage at specified offset
     // A: pointer (buffer)
     // B: int (offset)
+    // C: tag (type of the value 'A' points into: buffer, userdata or vector, which decides where its data starts)
     BUFFER_READI32,
 
     // Write i32/u32 value to buffer storage at specified offset
     // A: pointer (buffer)
     // B: int (offset)
     // C: int (value)
+    // D: tag (type of the value 'A' points into: buffer, userdata or vector, which decides where its data starts)
     BUFFER_WRITEI32,
 
     // Read float value (use FLOAT_TO_NUM to convert to double) from buffer storage at specified offset
     // A: pointer (buffer)
     // B: int (offset)
+    // C: tag (type of the value 'A' points into: buffer, userdata or vector, which decides where its data starts)
     BUFFER_READF32,
 
     // Write float value (use NUM_TO_FLOAT to convert from double) to buffer storage at specified offset
     // A: pointer (buffer)
     // B: int (offset)
     // C: float (value)
+    // D: tag (type of the value 'A' points into: buffer, userdata or vector, which decides where its data starts)
     BUFFER_WRITEF32,
 
     // Read double value from buffer storage at specified offset
     // A: pointer (buffer)
     // B: int (offset)
+    // C: tag (type of the value 'A' points into: buffer, userdata or vector, which decides where its data starts)
     BUFFER_READF64,
 
     // Write double value to buffer storage at specified offset
     // A: pointer (buffer)
     // B: int (offset)
     // C: double (value)
+    // D: tag (type of the value 'A' points into: buffer, userdata or vector, which decides where its data starts)
     BUFFER_WRITEF64,
 
     // Read int64 value from buffer storage at specified offset
     // A: pointer (buffer)
     // B: int (offset)
+    // C: tag (type of the value 'A' points into: buffer, userdata or vector, which decides where its data starts)
     BUFFER_READI64,
 
     // Write i64/u64 value to buffer storage at specified offset
     // A: pointer (buffer)
     // B: int (offset)
     // C: int64 (value)
+    // D: tag (type of the value 'A' points into: buffer, userdata or vector, which decides where its data starts)
     BUFFER_WRITEI64,
 
     // Compute Luau 'not' operation on destructured TValue
@@ -668,6 +682,9 @@ enum class IrCmd : uint8_t
     NOT_ANY,
 
     // Perform a comparison of two tags. Result is an integer register containing 0 or 1
+    // A: tag or Rn
+    // B: tag
+    // C: condition
     CMP_TAG,
 
     // Jump if TValue is truthy
@@ -694,10 +711,16 @@ enum class IrCmd : uint8_t
     CMP_ANY,
 
     // Perform tag and value comparison. Result is an integer register containing 0 or 1
+    // A: tag
+    // B: tag
+    // C: value for the first tag
+    // D: value for the second tag
+    // E: condition
     CMP_SPLIT_TVALUE,
 
     // Jump if tags are equal
-    // A, B: tag
+    // A: tag or Rn
+    // B: tag
     // C: block (if true)
     // D: block (if false)
     JUMP_EQ_TAG,
@@ -707,6 +730,7 @@ enum class IrCmd : uint8_t
     // C: condition
     // D: block (if true)
     // E: block (if false)
+    // When compiling for X64, A can also be Rn
     JUMP_CMP_NUM,
 
     // Perform a conditional jump based on the result of float comparison
@@ -728,6 +752,7 @@ enum class IrCmd : uint8_t
     // A: tag
     // B: value
     // C: block/vmexit/undef
+    // When compiling for X64, A can also be Rn
     CHECK_TRUTHY,
 
     // Guard against executing in unsafe environment, exits to VM on check failure
@@ -827,7 +852,7 @@ enum class IrCmd : uint8_t
 
     // Perform an arithmetic operation on TValues of any type
     // A: Rn (where to store the result)
-    // B: Rn (lhs)
+    // B: Rn or Kn (lhs)
     // C: Rn or Kn (rhs)
     // D: int (TMS enum with arithmetic type)
     DO_ARITH,
@@ -976,7 +1001,7 @@ enum class IrCmd : uint8_t
 
     // Handle GC write barrier (forward) for a write into a table
     // A: pointer (LuaTable)
-    // B: Rn (TValue that was written to the object)
+    // B: Rn or Kn (TValue that was written to the object)
     // C: tag/undef (tag of the value that was written)
     BARRIER_TABLE_FORWARD,
 
@@ -996,7 +1021,7 @@ enum class IrCmd : uint8_t
     // Store an import from constant or the import path
     // A: Rn (where to store the result)
     // B: Kn
-    // C: unsigned int (import path)
+    // C: import (import path)
     // D: unsigned int (pcpos)
     GET_CACHED_IMPORT,
 

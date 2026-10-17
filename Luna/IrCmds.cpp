@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cctype>
 #include <map>
+#include <utility>
 #include <unordered_map>
 
 namespace Luwu::Dsl
@@ -36,6 +37,93 @@ static const std::set<std::string> kClasses = {"value", "effect", "guard", "term
 static const std::set<std::string> kFlags = {"deprecated/has-side-effects", "deprecated/is-unsafe-to-sink", "dirty-high-bits"};
 
 static const std::set<std::string> kHeapEffects = {"invalidates-safe-env"};
+
+// Fast flags that can make extra operand kinds legal (flag-specific); the verifier checks each of them
+static const std::vector<std::string> kOperandFlags = {"DebugLuauAbortingChecks"};
+
+// What an operand kind matches: IrOpKinds, plus the IrValueKinds of Inst operands and IrConstKinds of Constant ones
+struct OperandKindInfo
+{
+    std::vector<std::string> opKinds;
+    std::vector<std::string> valueKinds;
+    std::vector<std::string> constKinds;
+};
+
+static const std::map<std::string, OperandKindInfo> kOperandKinds = [] {
+    std::map<std::string, OperandKindInfo> kinds = {
+        // An instruction result or a constant of the same kind (float constants are Double constants)
+        {"int", {{"Inst", "Constant"}, {"Int"}, {"Int"}}},
+        {"int64", {{"Inst", "Constant"}, {"Int64"}, {"Int64"}}},
+        {"double", {{"Inst", "Constant"}, {"Double"}, {"Double"}}},
+        {"float", {{"Inst", "Constant"}, {"Float"}, {"Double"}}},
+        {"tag", {{"Inst", "Constant"}, {"Tag"}, {"Tag"}}},
+        {"pointer", {{"Inst"}, {"Pointer"}, {}}},
+        {"tvalue", {{"Inst"}, {"Tvalue"}, {}}},
+
+        {"const-int", {{"Constant"}, {}, {"Int"}}},
+        {"const-uint", {{"Constant"}, {}, {"Uint"}}},
+        {"const-int64", {{"Constant"}, {}, {"Int64"}}},
+        {"const-double", {{"Constant"}, {}, {"Double"}}},
+        {"const-tag", {{"Constant"}, {}, {"Tag"}}},
+        {"import", {{"Constant"}, {}, {"Import"}}},
+
+        {"Rn", {{"VmReg"}, {}, {}}},
+        {"Kn", {{"VmConst"}, {}, {}}},
+        {"UPn", {{"VmUpvalue"}, {}, {}}},
+        {"block", {{"Block"}, {}, {}}},
+        {"vmexit", {{"VmExit"}, {}, {}}},
+        {"undef", {{"Undef"}, {}, {}}},
+        {"cond", {{"Condition"}, {}, {}}},
+        {"none", {{"None"}, {}, {}}},
+        {"any", {{"Undef", "Constant", "Condition", "Inst", "Block", "VmReg", "VmConst", "VmUpvalue", "VmExit"},
+                    {"Tag", "Int", "Int64", "Pointer", "Float", "Double", "Tvalue"}, {"Int", "Int64", "Uint", "Double", "Tag", "Import"}}},
+    };
+    // Only an instruction result of that kind
+    for (const char* kind : {"int", "int64", "double", "float", "tag", "pointer", "tvalue"})
+        kinds[std::string("inst-") + kind] = {{"Inst"}, kinds[kind].valueKinds, {}};
+    return kinds;
+}();
+
+static std::string knownOperandKinds()
+{
+    std::string list;
+    for (const auto& [name, info] : kOperandKinds)
+        list += (list.empty() ? ":" : " :") + name;
+    return list;
+}
+
+// [name :kind|:kind...]
+static IrOperandDef parseOperand(const SExpr& op, const std::string& cmdName)
+{
+    if (op.kind != SExprKind::BracketList || op.elements.size() != 2 || !op.elements[0].isSymbol() || !op.elements[1].isKeyword())
+        throw CompileError(op, "Operand must be [name :kind] or [name :kind|:kind...] in " + cmdName);
+
+    IrOperandDef def;
+    def.name = op.elements[0].text;
+    def.loc = op.loc;
+
+    const std::string& text = op.elements[1].text;
+    size_t start = 0;
+    while (start <= text.size())
+    {
+        size_t end = text.find('|', start);
+        std::string part = text.substr(start, end == std::string::npos ? std::string::npos : end - start);
+        if (part.size() < 2 || part[0] != ':' || !kOperandKinds.count(part.substr(1)))
+            throw CompileError(op.elements[1], "Unknown operand kind '" + part + "' (expected " + knownOperandKinds() + ", joined with |)");
+        if (std::find(def.kinds.begin(), def.kinds.end(), part.substr(1)) != def.kinds.end())
+            throw CompileError(op.elements[1], "Duplicate operand kind " + part);
+        def.kinds.push_back(part.substr(1));
+        if (end == std::string::npos)
+            break;
+        start = end + 1;
+    }
+    return def;
+}
+
+static bool allowsKind(const IrOperandDef& op, const std::string& kind)
+{
+    return std::find(op.kinds.begin(), op.kinds.end(), kind) != op.kinds.end();
+}
 
 static std::string keywordName(const SExpr& expr)
 {
@@ -119,15 +207,54 @@ static IrCmdDef parseIrCmd(const SExpr& original)
             std::set<std::string> names;
             for (size_t j = 1; j < clause.elements.size(); ++j)
             {
-                const SExpr& op = clause.elements[j];
-                if (!op.isSymbol())
-                    throw CompileError(op, "Operand must be a name");
-                if (!names.insert(op.text).second)
-                    throw CompileError(op, "Duplicate operand '" + op.text + "' in " + cmd.name);
-                cmd.operands.push_back(op.text);
+                IrOperandDef op = parseOperand(clause.elements[j], cmd.name);
+                if (!names.insert(op.name).second)
+                    throw CompileError(clause.elements[j], "Duplicate operand '" + op.name + "' in " + cmd.name);
+
+                // Optional operands are trailing: once one can be absent, all later ones can be too
+                if (!cmd.operands.empty() && allowsKind(cmd.operands.back(), "none") && !allowsKind(op, "none"))
+                    throw CompileError(clause.elements[j], "Operand '" + op.name + "' follows optional operand '" + cmd.operands.back().name +
+                        "', so it has to allow :none as well");
+                cmd.operands.push_back(std::move(op));
             }
             if (cmd.operands.size() > kMaxOperands)
                 throw CompileError(clause, cmd.name + " has " + std::to_string(cmd.operands.size()) + " operands; IR instructions have at most 7 (A..G)");
+        }
+        else if (kind == "target-specific" || kind == "flag-specific")
+        {
+            // [:key [operand :kinds]...] groups; operands are resolved after all clauses are read
+            bool byTarget = kind == "target-specific";
+            const std::vector<std::string>& keys = byTarget ? knownTargets() : kOperandFlags;
+            std::vector<IrOperandExtras>& groups = byTarget ? cmd.targetSpecific : cmd.flagSpecific;
+
+            for (size_t j = 1; j < clause.elements.size(); ++j)
+            {
+                const SExpr& group = clause.elements[j];
+                if (group.kind != SExprKind::BracketList || group.elements.empty() || !group.elements[0].isKeyword())
+                    throw CompileError(group, kind + " groups look like [" + (byTarget ? ":x64" : ":DebugLuauAbortingChecks") + " [operand :kind]...]");
+
+                std::string key = keywordName(group.elements[0]);
+                if (std::find(keys.begin(), keys.end(), key) == keys.end())
+                {
+                    std::string list;
+                    for (const auto& k : keys)
+                        list += (list.empty() ? ":" : ", :") + k;
+                    throw CompileError(group.elements[0], std::string("Unknown ") + (byTarget ? "target" : "flag") + " " + group.elements[0].text + " (expected " + list + ")");
+                }
+                if (std::any_of(groups.begin(), groups.end(), [&](const IrOperandExtras& g) { return g.key == key; }))
+                    throw CompileError(group.elements[0], "Duplicate " + kind + " group for " + group.elements[0].text);
+                if (group.elements.size() < 2)
+                    throw CompileError(group, "The " + group.elements[0].text + " group needs at least one [operand :kind]");
+
+                IrOperandExtras extras;
+                extras.key = key;
+                extras.loc = group.loc;
+                for (size_t k = 1; k < group.elements.size(); ++k)
+                    extras.operands.push_back(parseOperand(group.elements[k], cmd.name));
+                groups.push_back(std::move(extras));
+            }
+            if (groups.empty())
+                throw CompileError(clause, kind + " needs at least one [" + (byTarget ? ":x64" : ":DebugLuauAbortingChecks") + " [operand :kind]...] group");
         }
         else if (kind == "result")
         {
@@ -167,7 +294,22 @@ static IrCmdDef parseIrCmd(const SExpr& original)
         }
         else
         {
-            throw CompileError(clause.elements[0], "Unknown define-ircmd clause '" + kind + "' (expected operands, result, class, flags, heap-effects or lowering)");
+            throw CompileError(clause.elements[0], "Unknown define-ircmd clause '" + kind + "' (expected operands, target-specific, flag-specific, result, class, flags, heap-effects or lowering)");
+        }
+    }
+
+    for (const auto* groups : {&cmd.targetSpecific, &cmd.flagSpecific})
+    {
+        for (const auto& group : *groups)
+        {
+            std::set<std::string> seen;
+            for (const auto& extra : group.operands)
+            {
+                if (std::none_of(cmd.operands.begin(), cmd.operands.end(), [&](const IrOperandDef& op) { return op.name == extra.name; }))
+                    throw CompileError(extra.loc, "'" + extra.name + "' isn't an operand of " + cmd.name);
+                if (!seen.insert(extra.name).second)
+                    throw CompileError(extra.loc, "Duplicate extra kinds for '" + extra.name + "' in the :" + group.key + " group");
+            }
         }
     }
 
@@ -213,6 +355,53 @@ std::vector<IrCmdDef> parseIrCmds(const std::vector<SExpr>& program)
     return cmds;
 }
 
+// The operand kinds a rule parameter can read: e.g. an :int parameter reads with intOp, which only handles constants
+static const std::map<std::string, std::set<std::string>> kParamKinds = [] {
+    std::set<std::string> instKinds;
+    for (const auto& [name, info] : kOperandKinds)
+    {
+        if (name.rfind("inst-", 0) == 0)
+            instKinds.insert(name);
+    }
+    return std::map<std::string, std::set<std::string>>{
+        {"int", {"const-int"}},
+        {"uint", {"const-uint"}},
+        {"tag", {"const-tag"}},
+        {"cond", {"cond"}},
+        {"upvalue", {"UPn"}},
+        {"reg", instKinds},
+        {"label", {"block", "vmexit", "undef"}},
+    };
+}();
+
+static void checkParamKinds(const IrCmdDef& cmd, const IrOperandDef& op, const RuleParam& param, const SExpr& arg)
+{
+    auto allowed = kParamKinds.find(param.type);
+    if (allowed == kParamKinds.end())
+        return; // :op parameters handle whatever they get
+
+    auto check = [&](const IrOperandDef& def, const std::string& where) {
+        for (const auto& kind : def.kinds)
+        {
+            // An absent optional operand is never read unless the rule checks it's there
+            if (kind != "none" && !allowed->second.count(kind))
+            {
+                throw CompileError(arg, cmd.name + " operand '" + op.name + "' can be :" + kind + where + ", but rule parameter '" + param.name +
+                    "' is :" + param.type + ", which can't read that; use an :op parameter or narrow the operand's kinds");
+            }
+        }
+    };
+    check(op, "");
+    for (const auto& group : cmd.targetSpecific)
+        for (const auto& extra : group.operands)
+            if (extra.name == op.name)
+                check(extra, " (on " + group.key + ")");
+    for (const auto& group : cmd.flagSpecific)
+        for (const auto& extra : group.operands)
+            if (extra.name == op.name)
+                check(extra, " (with " + group.key + ")");
+}
+
 std::vector<LoweringInstance> linkLowerings(const std::vector<IrCmdDef>& cmds, const std::vector<Rule>& rules)
 {
     std::unordered_map<std::string, size_t> ruleIndex;
@@ -241,18 +430,20 @@ std::vector<LoweringInstance> linkLowerings(const std::vector<IrCmdDef>& cmds, c
         LoweringInstance instance;
         instance.cmdName = cmd.name;
         instance.rule = &rule;
-        for (const auto& arg : lowering.args)
+        for (size_t i = 0; i < lowering.args.size(); ++i)
         {
+            const SExpr& arg = lowering.args[i];
             if (arg.isSymbol())
             {
-                auto op = std::find(cmd.operands.begin(), cmd.operands.end(), arg.text);
+                auto op = std::find_if(cmd.operands.begin(), cmd.operands.end(), [&](const IrOperandDef& o) { return o.name == arg.text; });
                 if (op == cmd.operands.end())
                 {
                     std::string list;
-                    for (const auto& name : cmd.operands)
-                        list += (list.empty() ? "" : ", ") + name;
+                    for (const auto& o : cmd.operands)
+                        list += (list.empty() ? "" : ", ") + o.name;
                     throw CompileError(arg, "'" + arg.text + "' isn't an operand of " + cmd.name + " (operands: " + (list.empty() ? "none" : list) + ")");
                 }
+                checkParamKinds(cmd, *op, rule.params[i], arg);
                 instance.operandIndex.push_back(int(op - cmd.operands.begin()));
                 instance.literals.emplace_back();
             }
@@ -353,6 +544,121 @@ static void emitPredicate(CodeWriter& out, const std::vector<IrCmdDef>& cmds, co
     });
 }
 
+static std::string upper(std::string text)
+{
+    for (char& c : text)
+        c = char(std::toupper(static_cast<unsigned char>(c)));
+    return text;
+}
+
+// IrCmdOperands field names: targetX64, flagDebugLuauAbortingChecks
+static std::string targetField(const std::string& target)
+{
+    return "target" + upper(target);
+}
+
+static std::string flagField(const std::string& flag)
+{
+    return "flag" + flag;
+}
+
+// {opKinds, valueKinds, constKinds} initializer for the union of an operand's kinds
+static std::string operandSpecInit(const std::vector<std::string>& kinds)
+{
+    std::vector<std::string> opKinds, valueKinds, constKinds;
+    auto add = [](std::vector<std::string>& to, const std::vector<std::string>& from) {
+        for (const auto& k : from)
+            if (std::find(to.begin(), to.end(), k) == to.end())
+                to.push_back(k);
+    };
+    for (const auto& kind : kinds)
+    {
+        const OperandKindInfo& info = kOperandKinds.at(kind);
+        add(opKinds, info.opKinds);
+        add(valueKinds, info.valueKinds);
+        add(constKinds, info.constKinds);
+    }
+
+    auto list = [](const char* fn, const char* type, const std::vector<std::string>& values) {
+        std::string text = std::string(fn) + "(";
+        for (size_t i = 0; i < values.size(); ++i)
+            text += (i ? ", " : "") + std::string(type) + "::" + values[i];
+        return text + ")";
+    };
+    return "{" + list("irOpKinds", "IrOpKind", opKinds) + ", " + list("irValueKinds", "IrValueKind", valueKinds) + ", " +
+           list("irConstKinds", "IrConstKind", constKinds) + "}";
+}
+
+static void emitOperandTable(CodeWriter& out, const std::vector<IrCmdDef>& cmds)
+{
+    out.line();
+    out.line("// Operand kinds of each command, from (operands ...): bits per IrOpKind, plus the IrValueKinds an Inst operand and the");
+    out.line("// IrConstKinds a Constant operand may have");
+    out.block("struct IrOperandSpec", [&]() {
+        out.line("uint16_t opKinds = 0;");
+        out.line("uint16_t valueKinds = 0;");
+        out.line("uint8_t constKinds = 0;");
+    });
+    out.raw(";\n\n");
+    out.block("struct IrCmdOperands", [&]() {
+        out.line("uint8_t count = 0;");
+        out.line("IrOperandSpec ops[7];");
+        for (const auto& target : knownTargets())
+            out.line("IrOperandSpec " + targetField(target) + "[7]; // extra kinds when compiling for " + upper(target) + " (target-specific)");
+        for (const auto& flag : kOperandFlags)
+            out.line("IrOperandSpec " + flagField(flag) + "[7]; // extra kinds with FFlag::" + flag + " (flag-specific)");
+    });
+    out.raw(";\n\n");
+    for (const auto& helper : {std::pair{"irOpKinds", "uint16_t"}, std::pair{"irValueKinds", "uint16_t"}, std::pair{"irConstKinds", "uint8_t"}})
+    {
+        std::string width = helper.second;
+        out.line("template<typename... Kinds>");
+        out.block("constexpr " + width + " " + helper.first + "(Kinds... kinds)", [&]() {
+            out.line("return " + width + "((0u | ... | (1u << unsigned(kinds))));");
+        });
+        out.line();
+    }
+
+    // One array per known target and flag, in the order the struct declares them
+    auto extrasInit = [&](const IrCmdDef& cmd, const std::vector<IrOperandExtras>& groups, const std::string& key) {
+        auto group = std::find_if(groups.begin(), groups.end(), [&](const IrOperandExtras& g) { return g.key == key; });
+        if (group == groups.end())
+            return std::string("{}");
+        std::string text = "{";
+        for (size_t i = 0; i < cmd.operands.size(); ++i)
+        {
+            auto it = std::find_if(group->operands.begin(), group->operands.end(), [&](const IrOperandDef& e) { return e.name == cmd.operands[i].name; });
+            text += (i ? ", " : "") + (it == group->operands.end() ? std::string("{}") : operandSpecInit(it->kinds));
+        }
+        return text + "}";
+    };
+
+    out.line("// Indexed by IrCmd: the enum and this table are both in declaration order");
+    out.line("inline constexpr IrCmdOperands kIrCmdOperands[] = {");
+    out.indent();
+    for (const auto& cmd : cmds)
+    {
+        std::string ops = "{";
+        for (size_t i = 0; i < cmd.operands.size(); ++i)
+            ops += (i ? ", " : "") + operandSpecInit(cmd.operands[i].kinds);
+        ops += "}";
+        out.line("// " + cmd.name);
+        std::string extras;
+        for (const auto& target : knownTargets())
+            extras += ", " + extrasInit(cmd, cmd.targetSpecific, target);
+        for (const auto& flag : kOperandFlags)
+            extras += ", " + extrasInit(cmd, cmd.flagSpecific, flag);
+        out.line("{" + std::to_string(cmd.operands.size()) + ", " + ops + extras + "},");
+    }
+    out.dedent();
+    out.line("};");
+    out.line("static_assert(sizeof(kIrCmdOperands) / sizeof(kIrCmdOperands[0]) == kIrCmdCount, \"one entry per IrCmd\");");
+    out.line();
+    out.block("inline const IrCmdOperands& getCmdOperands(IrCmd cmd)", [&]() {
+        out.line("return kIrCmdOperands[unsigned(cmd)];");
+    });
+}
+
 void emitIrCmdInfo(std::ostream& os, const std::vector<IrCmdDef>& cmds)
 {
     CodeWriter out(os);
@@ -443,6 +749,9 @@ void emitIrCmdInfo(std::ostream& os, const std::vector<IrCmdDef>& cmds)
         [](const IrCmdDef& c) { return c.flags.count("deprecated/is-unsafe-to-sink") > 0; });
     emitPredicate(out, cmds, "producesDirtyHighRegisterBits", "Instructions whose result register may have garbage in its high bits (flag :dirty-high-bits)",
         [](const IrCmdDef& c) { return c.flags.count("dirty-high-bits") > 0; });
+
+    if (!cmds.empty())
+        emitOperandTable(out, cmds);
 
     out.line();
     closeNamespaces(out);

@@ -1,8 +1,9 @@
 ~ Add/Sub/Mul/Div/Idiv/Mod two double numbers
 ~ A, B: double
-~ In final x64 lowering, B can also be Rn or Kn
+~ When compiling for X64, B can also be Rn or Kn
 (define-ircmd MOD_NUM
-  (operands a b)
+  (operands [a :double] [b :double])
+  (target-specific [:x64 [b :Rn|:Kn]])
   (result :double)
   (class :value)
   (lowering (mod-num a b)))
@@ -10,7 +11,7 @@
 ~ A * B + C
 ~ A, B, C: double
 (define-ircmd MULADD_NUM
-  (operands a b c)
+  (operands [a :double] [b :double] [c :double])
   (result :double)
   (class :value)
   (lowering (muladd-num a b c)))
@@ -18,23 +19,27 @@
 ~ Negate a double number
 ~ A: double
 (define-ircmd UNM_NUM
-  (operands a)
+  (operands [a :double])
   (result :double)
   (class :value)
   (lowering (unm-num a)))
 
 ~ Round number to nearest integer number, rounding half-way cases away from zero (math.round)
 ~ A: double
+~ When compiling for X64, A can also be Rn
 (define-ircmd ROUND_NUM
-  (operands a)
+  (operands [a :double])
+  (target-specific [:x64 [a :Rn]])
   (result :double)
   (class :value)
   (lowering (round-num a)))
 
 ~ Get absolute value of the argument (math.abs)
 ~ A: double
+~ When compiling for X64, A can also be Rn
 (define-ircmd ABS_NUM
-  (operands a)
+  (operands [a :double])
+  (target-specific [:x64 [a :Rn]])
   (result :double)
   (class :value)
   (lowering (abs-num a)))
@@ -42,7 +47,7 @@
 ~ Get the sign of the argument (math.sign)
 ~ A: double
 (define-ircmd SIGN_NUM
-  (operands a)
+  (operands [a :double])
   (result :double)
   (class :value)
   (lowering (sign-num a)))
@@ -50,7 +55,7 @@
 ~ Negate a float number
 ~ A: float
 (define-ircmd UNM_FLOAT
-  (operands a)
+  (operands [a :float])
   (result :float)
   (class :value)
   (lowering (unm-float a)))
@@ -58,7 +63,7 @@
 ~ Get absolute value of the argument
 ~ A: float
 (define-ircmd ABS_FLOAT
-  (operands a)
+  (operands [a :float])
   (result :float)
   (class :value)
   (lowering (abs-float a)))
@@ -66,7 +71,7 @@
 ~ Get the sign of the argument
 ~ A: float
 (define-ircmd SIGN_FLOAT
-  (operands a)
+  (operands [a :float])
   (result :float)
   (class :value)
   (lowering (sign-float a)))
@@ -75,7 +80,7 @@
 ~ A, B: double (endpoints)
 ~ C, D: double (condition arguments)
 (define-ircmd SELECT_NUM
-  (operands a b c d)
+  (operands [a :double] [b :double] [c :double] [d :double])
   (result :double)
   (class :value)
   (lowering (select-num a b c d)))

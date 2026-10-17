@@ -2,7 +2,7 @@
 ~ A: int64 (source)
 ~ B: int64 (shift amount; negative reverses direction, |amount| >= 64 returns 0 or sign-fill)
 (define-ircmd BITLSHIFT_INT64
-  (operands a b)
+  (operands [a :int64] [b :int64])
   (result :int64)
   (class :value)
   (lowering (bitlshift-int64 a b)))
@@ -11,7 +11,7 @@
 ~ A: int64 (source)
 ~ B: int64 (shift amount; negative reverses direction, |amount| >= 64 returns 0 or sign-fill)
 (define-ircmd BITRSHIFT_INT64
-  (operands a b)
+  (operands [a :int64] [b :int64])
   (result :int64)
   (class :value)
   (lowering (bitrshift-int64 a b)))
@@ -20,7 +20,7 @@
 ~ A: int64 (source)
 ~ B: int64 (shift amount; negative reverses direction, |amount| >= 64 returns 0 or sign-fill)
 (define-ircmd BITARSHIFT_INT64
-  (operands a b)
+  (operands [a :int64] [b :int64])
   (result :int64)
   (class :value)
   (lowering (bitarshift-int64 a b)))
@@ -29,7 +29,7 @@
 ~ A: int64 (source)
 ~ B: int64 (rotate amount, mod 64)
 (define-ircmd BITLROTATE_INT64
-  (operands a b)
+  (operands [a :int64] [b :int64])
   (result :int64)
   (class :value)
   (lowering (bitlrotate-int64 a b)))
@@ -38,7 +38,7 @@
 ~ A: int64 (source)
 ~ B: int64 (rotate amount, mod 64)
 (define-ircmd BITRROTATE_INT64
-  (operands a b)
+  (operands [a :int64] [b :int64])
   (result :int64)
   (class :value)
   (lowering (bitrrotate-int64 a b)))
@@ -47,7 +47,7 @@
 ~ Result is Int64 (not Int) for consistency with other int64 operations, even though value is in [0, 64]
 ~ A: int64
 (define-ircmd BITCOUNTLZ_INT64
-  (operands a)
+  (operands [a :int64])
   (result :int64)
   (class :value)
   (lowering (bitcountlz-int64 a)))
@@ -56,7 +56,7 @@
 ~ Result is Int64 (not Int) for consistency with other int64 operations, even though value is in [0, 64]
 ~ A: int64
 (define-ircmd BITCOUNTRZ_INT64
-  (operands a)
+  (operands [a :int64])
   (result :int64)
   (class :value)
   (lowering (bitcountrz-int64 a)))
@@ -65,7 +65,7 @@
 ~ A: int (source)
 ~ B: int (shift amount)
 (define-ircmd BITLSHIFT_UINT
-  (operands a b)
+  (operands [a :int] [b :int])
   (result :int)
   (class :value)
   (lowering (bitlshift-uint a b)))
@@ -74,7 +74,7 @@
 ~ A: int (source)
 ~ B: int (shift amount)
 (define-ircmd BITRSHIFT_UINT
-  (operands a b)
+  (operands [a :int] [b :int])
   (result :int)
   (class :value)
   (lowering (bitrshift-uint a b)))
@@ -83,7 +83,7 @@
 ~ A: int (source)
 ~ B: int (shift amount)
 (define-ircmd BITARSHIFT_UINT
-  (operands a b)
+  (operands [a :int] [b :int])
   (result :int)
   (class :value)
   (lowering (bitarshift-uint a b)))
@@ -92,7 +92,7 @@
 ~ A: int (source)
 ~ B: int (shift amount)
 (define-ircmd BITLROTATE_UINT
-  (operands a b)
+  (operands [a :int] [b :int])
   (result :int)
   (class :value)
   (lowering (bitlrotate-uint a b)))
@@ -101,7 +101,7 @@
 ~ A: int (source)
 ~ B: int (shift amount)
 (define-ircmd BITRROTATE_UINT
-  (operands a b)
+  (operands [a :int] [b :int])
   (result :int)
   (class :value)
   (lowering (bitrrotate-uint a b)))
@@ -109,7 +109,7 @@
 ~ Returns the number of consecutive zero bits in A starting from the left-most (most significant) bit.
 ~ A: int
 (define-ircmd BITCOUNTLZ_UINT
-  (operands a)
+  (operands [a :int])
   (result :int)
   (class :value)
   (lowering (bitcountlz-uint a)))
@@ -117,7 +117,7 @@
 ~ Returns the number of consecutive zero bits in A starting from the left-most (most significant) bit.
 ~ A: int
 (define-ircmd BITCOUNTRZ_UINT
-  (operands a)
+  (operands [a :int])
   (result :int)
   (class :value)
   (lowering (bitcountrz-uint a)))

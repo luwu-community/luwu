@@ -943,7 +943,7 @@ static const std::unordered_map<std::string_view, ExprTrampolineSpec> kExprTramp
                 for (char& c : arch)
                     c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
 
-                if (arch != "a64" && arch != "x64")
+                if (std::find(knownTargets().begin(), knownTargets().end(), arch) == knownTargets().end())
                     throw CompileError(branch.elements[0], "Unknown target-case architecture :" + arch + " (expected :a64 or :x64)");
                 if (!seenArchs.insert(arch).second)
                     throw CompileError(branch.elements[0], "Duplicate target-case branch for :" + arch);
@@ -1586,8 +1586,12 @@ void compileRules(std::ostream& os, TargetBuilder& target, const std::vector<Low
 
 void getCommonCoreDocs(std::vector<FormDoc>& out)
 {
-    out.push_back({"define-ircmd", "(define-ircmd NAME (operands <name>...) (result :<kind>) (class :<class>) (flags :<flag>...) (heap-effects :<effect>...) (lowering (<rule> <arg>...)))",
-        "Declare an IR command (an IrCmd enumerator, in declaration order with NOP first). result: :tag :int :int64 :pointer :float :double :tvalue :unknown (none when absent). "
+    out.push_back({"define-ircmd", "(define-ircmd NAME (operands [<name> :<kind>|...]...) (target-specific [:<target> [<name> :<kind>|...]...]...) (flag-specific [:<flag> [<name> :<kind>|...]...]...) (result :<kind>) (class :<class>) (flags :<flag>...) (heap-effects :<effect>...) (lowering (<rule> <arg>...)))",
+        "Declare an IR command (an IrCmd enumerator, in declaration order with NOP first). "
+        "operands: each operand's kinds, joined with |: :int :int64 :double :float :tag (an instruction result or a matching constant), :pointer :tvalue, "
+        ":inst-<kind> (only an instruction result), :const-int :const-uint :const-int64 :const-double :const-tag :import, :Rn :Kn :UPn, :block :vmexit :undef, :cond, "
+        ":none (optional; trailing operands only), :any. target-specific / flag-specific: extra kinds when compiling for a target (:a64, :x64) / with a flag (:DebugLuauAbortingChecks). "
+        "The IR verifier (FFlag::DebugCodegenVerifyIr, on in tests) checks IR against these, and a lowering rule parameter's type must be able to read its operand's kinds. result: :tag :int :int64 :pointer :float :double :tvalue :unknown (none when absent). "
         "class: :value (has a result), :effect (none), :guard (may branch to a target and continue), :terminator (ends a block), :pseudo (never lowered)."
         "flags: :dirty-high-bits, :deprecated/has-side-effects (pot dangerous), :deprecated/is-unsafe-to-sink (pot dangerous), :invalidates-safe-env (heap effect)"
         "lowering names the define-rule that lowers it (generating lower_NAME), passing each rule parameter explicitly: an operand name or a number/keyword literal. "

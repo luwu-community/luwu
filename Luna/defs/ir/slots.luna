@@ -4,7 +4,7 @@
 ~ C: block (if matches)
 ~ D: block (if it doesn't)
 (define-ircmd JUMP_SLOT_MATCH
-  (operands node key match mismatch-op)
+  (operands [node :pointer] [key :Kn] [match :block] [mismatch-op :block])
   (class :terminator)
   (lowering (jump-slot-match node key match mismatch-op)))
 
@@ -13,7 +13,7 @@
 ~ B: int (TMS enum)
 ~ C: block
 (define-ircmd TRY_CALL_FASTGETTM
-  (operands table tm fail)
+  (operands [table :pointer] [tm :int] [fail :block])
   (result :pointer)
   (class :guard)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Branch operand targets a fallback block: can't appear in an exit sync sequence
@@ -22,10 +22,10 @@
 ~ Store an import from constant or the import path
 ~ A: Rn (where to store the result)
 ~ B: Kn
-~ C: unsigned int (import path)
+~ C: import (import path)
 ~ D: unsigned int (pcpos)
 (define-ircmd GET_CACHED_IMPORT
-  (operands ra k import-id pc)
+  (operands [ra :Rn] [k :Kn] [import-id :import] [pc :const-uint])
   (class :effect)
   (lowering (get-cached-import ra k import-id pc)))
 
@@ -35,6 +35,6 @@
 ~ C: block/undef
 ~ When undef is specified instead of a block, execution is aborted on check failure
 (define-ircmd CHECK_SLOT_MATCH
-  (operands node key fail)
+  (operands [node :pointer] [key :Kn] [fail :block|:undef])
   (class :guard)
   (lowering (check-slot-match node key fail)))

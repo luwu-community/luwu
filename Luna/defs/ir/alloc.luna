@@ -1,7 +1,7 @@
 ~ Get table length
 ~ A: pointer (LuaTable)
 (define-ircmd TABLE_LEN
-  (operands table)
+  (operands [table :pointer])
   (result :int)
   (class :value)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Reads table array metadata: TABLE_SETNUM can grow the array and change the length
@@ -11,7 +11,7 @@
 ~ A: unsigned int (array element count)
 ~ B: unsigned int (node element count)
 (define-ircmd NEW_TABLE
-  (operands narray nhash)
+  (operands [narray :const-uint] [nhash :const-uint])
   (result :pointer)
   (class :value)
   (lowering (new-table narray nhash)))
@@ -19,7 +19,7 @@
 ~ Duplicate a table
 ~ A: pointer (LuaTable)
 (define-ircmd DUP_TABLE
-  (operands table)
+  (operands [table :pointer])
   (result :pointer)
   (class :value)
   (lowering (dup-table table)))
@@ -28,7 +28,7 @@
 ~ A: pointer (LuaTable)
 ~ B: int (key)
 (define-ircmd TABLE_SETNUM
-  (operands table key)
+  (operands [table :pointer] [key :int])
   (result :pointer)
   (class :value)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Mutates table array part, invalidating reads
@@ -38,7 +38,7 @@
 ~ A: int (size)
 ~ B: int (tag)
 (define-ircmd NEW_USERDATA
-  (operands size utag)
+  (operands [size :int] [utag :int])
   (result :pointer)
   (class :value)
   (lowering (new-userdata size utag)))
@@ -48,7 +48,7 @@
 ~ B: double (y)
 ~ C: double (z)
 (define-ircmd NEW_VECTOR
-  (operands x y z)
+  (operands [x :double] [y :double] [z :double])
   (result :pointer)
   (class :value)
   (lowering (new-vector x y z)))
@@ -57,7 +57,7 @@
 ~ (luaR_newobjectuninit). Every member must be stored before anything can collect or observe it.
 ~ A: pointer (LuauClass)
 (define-ircmd NEW_OBJECT
-  (operands cls)
+  (operands [cls :pointer])
   (result :pointer)
   (class :value)
   (lowering (new-object cls)))

@@ -3,7 +3,7 @@
 ~ B: TValue (if true)
 ~ C: TValue (if false)
 (define-ircmd SELECT_IF_TRUTHY
-  (operands cond-val lhs rhs)
+  (operands [cond-val :tvalue] [lhs :tvalue] [rhs :tvalue])
   (result :tvalue)
   (class :value)
   (lowering (select-if-truthy cond-val lhs rhs)))
@@ -12,7 +12,7 @@
 ~ A, B: Rn
 ~ C: condition
 (define-ircmd CMP_ANY
-  (operands a b cond)
+  (operands [a :Rn] [b :Rn] [cond :cond])
   (result :int)
   (class :value)
   (flags :deprecated/is-unsafe-to-sink :dirty-high-bits) ; unsafe to sink: Can execute user metamethods via luaV_equalval/luaV_lessthan/luaV_lessequal
@@ -20,18 +20,24 @@
   (lowering (cmp-any a b cond)))
 
 ~ Perform tag and value comparison. Result is an integer register containing 0 or 1
+~ A: tag
+~ B: tag
+~ C: value for the first tag
+~ D: value for the second tag
+~ E: condition
 (define-ircmd CMP_SPLIT_TVALUE
-  (operands tag-a tag-b val-a val-b cond)
+  (operands [tag-a :tag] [tag-b :tag] [val-a :any] [val-b :any] [cond :cond])
   (result :int)
   (class :value)
   (lowering (cmp-split-tvalue tag-a tag-b val-a val-b cond)))
 
 ~ Jump if tags are equal
-~ A, B: tag
+~ A: tag or Rn
+~ B: tag
 ~ C: block (if true)
 ~ D: block (if false)
 (define-ircmd JUMP_EQ_TAG
-  (operands a b if-eq if-ne)
+  (operands [a :tag|:Rn] [b :tag] [if-eq :block] [if-ne :block])
   (class :terminator)
   (lowering (jump-eq-tag a b if-eq if-ne)))
 
@@ -40,8 +46,10 @@
 ~ C: condition
 ~ D: block (if true)
 ~ E: block (if false)
+~ When compiling for X64, A can also be Rn
 (define-ircmd JUMP_CMP_NUM
-  (operands a b cond if-true if-false)
+  (operands [a :double] [b :double] [cond :cond] [if-true :block] [if-false :block])
+  (target-specific [:x64 [a :Rn]])
   (class :terminator)
   (lowering (jump-cmp-num a b cond if-true if-false)))
 
@@ -51,7 +59,7 @@
 ~ D: block (if true)
 ~ E: block (if false)
 (define-ircmd JUMP_CMP_FLOAT
-  (operands a b cond if-true if-false)
+  (operands [a :float] [b :float] [cond :cond] [if-true :block] [if-false :block])
   (class :terminator)
   (lowering (jump-cmp-float a b cond if-true if-false)))
 
@@ -62,7 +70,7 @@
 ~ D: block (if true)
 ~ E: block (if false)
 (define-ircmd JUMP_FORN_LOOP_COND
-  (operands idx limit step loop exit)
+  (operands [idx :double] [limit :double] [step :double] [loop :block] [exit :block])
   (class :terminator)
   (lowering (jump-forn-loop-cond idx limit step loop exit)))
 
@@ -70,8 +78,10 @@
 ~ A: tag
 ~ B: value
 ~ C: block/vmexit/undef
+~ When compiling for X64, A can also be Rn
 (define-ircmd CHECK_TRUTHY
-  (operands tag val fail)
+  (operands [tag :tag] [val :any] [fail :block|:vmexit|:undef])
+  (target-specific [:x64 [tag :Rn]])
   (class :guard)
   (lowering (check-truthy tag val fail)))
 
@@ -79,7 +89,7 @@
 ~ A: block/vmexit/undef
 ~ When undef is specified, execution is aborted on check failure
 (define-ircmd CHECK_SAFE_ENV
-  (operands fail)
+  (operands [fail :block|:vmexit|:undef])
   (class :guard)
   (lowering (check-safe-env fail)))
 
@@ -89,7 +99,7 @@
 ~ C: block/vmexit/undef
 ~ When undef is specified instead of a block, execution is aborted on check failure
 (define-ircmd CHECK_ARRAY_SIZE
-  (operands table size fail)
+  (operands [table :pointer] [size :int] [fail :block|:vmexit|:undef])
   (class :guard)
   (lowering (check-array-size table size fail)))
 
@@ -99,6 +109,6 @@
 ~ D: block/vmexit/undef
 ~ When undef is specified instead of a block, execution is aborted on check failure
 (define-ircmd CHECK_CMP_NUM
-  (operands a b cond fail)
+  (operands [a :double] [b :double] [cond :cond] [fail :block|:vmexit|:undef])
   (class :guard)
   (lowering (check-cmp-num a b cond fail)))

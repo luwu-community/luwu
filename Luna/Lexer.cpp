@@ -94,6 +94,7 @@ static bool isSymbolChar(char c)
     case '.':
     case '%':
     case '$':
+    case '|': // operand kind unions in define-ircmd, e.g. :Rn|:Kn
         return true;
     default:
         return false;

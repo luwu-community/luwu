@@ -5,7 +5,7 @@
 ~ C: Rn (first argument)
 ~ D: int (result count)
 (define-ircmd FASTCALL
-  (operands bfid ra arg nresults)
+  (operands [bfid :const-uint] [ra :Rn] [arg :Rn] [nresults :int])
   (class :effect)
   (lowering (fastcall bfid ra arg nresults)))
 
@@ -18,7 +18,13 @@
 ~ F: int (argument count or -1 to use all arguments up to stack top)
 ~ G: int (result count or -1 to preserve all results and adjust stack top)
 (define-ircmd INVOKE_FASTCALL
-  (operands bfid ra arg args arg3 nparams nresults)
+  (operands [bfid :const-uint]
+            [ra :Rn]
+            [arg :Rn]
+            [args :Rn|:Kn|:undef]
+            [arg3 :Rn|:Kn|:undef]
+            [nparams :int]
+            [nresults :int])
   (result :int)
   (class :value)
   (flags :deprecated/has-side-effects :dirty-high-bits)
@@ -29,7 +35,7 @@
 ~ B: double
 ~ C: double/int (optional, 2nd argument)
 (define-ircmd INVOKE_LIBM
-  (operands func a b)
+  (operands [func :const-uint] [a :double] [b :double|:int])
   (result :double)
   (class :value)
   (lowering (invoke-libm func a b)))

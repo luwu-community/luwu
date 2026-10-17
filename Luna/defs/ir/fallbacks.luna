@@ -3,7 +3,7 @@
 ~ B: Rn (dest)
 ~ C: Kn (key)
 (define-ircmd FALLBACK_GETGLOBAL
-  (operands pc ra k)
+  (operands [pc :const-uint] [ra :Rn] [k :Kn])
   (class :effect)
   (heap-effects :invalidates-safe-env)
   (lowering (fallback-getglobal pc ra k)))
@@ -13,7 +13,7 @@
 ~ B: Rn (value)
 ~ C: Kn (key)
 (define-ircmd FALLBACK_SETGLOBAL
-  (operands pc ra k)
+  (operands [pc :const-uint] [ra :Rn] [k :Kn])
   (class :effect)
   (heap-effects :invalidates-safe-env)
   (lowering (fallback-setglobal pc ra k)))
@@ -24,7 +24,7 @@
 ~ C: Rn (table)
 ~ D: Kn (key)
 (define-ircmd FALLBACK_GETTABLEKS
-  (operands pc ra rb k)
+  (operands [pc :const-uint] [ra :Rn] [rb :Rn] [k :Kn])
   (class :effect)
   (heap-effects :invalidates-safe-env)
   (lowering (fallback-gettableks pc ra rb k)))
@@ -35,7 +35,7 @@
 ~ C: Rn (table)
 ~ D: Kn (key)
 (define-ircmd FALLBACK_SETTABLEKS
-  (operands pc ra rb k)
+  (operands [pc :const-uint] [ra :Rn] [rb :Rn] [k :Kn])
   (class :effect)
   (heap-effects :invalidates-safe-env)
   (lowering (fallback-settableks pc ra rb k)))
@@ -46,7 +46,7 @@
 ~ C: Rn (source)
 ~ D: Kn (name)
 (define-ircmd FALLBACK_NAMECALL
-  (operands pc ra rb k)
+  (operands [pc :const-uint] [ra :Rn] [rb :Rn] [k :Kn])
   (class :effect)
   (heap-effects :invalidates-safe-env)
   (lowering (fallback-namecall pc ra rb k)))
@@ -55,7 +55,7 @@
 ~ A: unsigned int (bytecode instruction index)
 ~ B: int (numparams)
 (define-ircmd FALLBACK_PREPVARARGS
-  (operands pc numparams)
+  (operands [pc :const-uint] [numparams :int])
   (class :effect)
   (lowering (fallback-prepvarargs pc numparams)))
 
@@ -64,7 +64,7 @@
 ~ B: Rn (dest start)
 ~ C: int (count)
 (define-ircmd FALLBACK_GETVARARGS
-  (operands pc ra count)
+  (operands [pc :const-uint] [ra :Rn] [count :int])
   (class :effect)
   (lowering (fallback-getvarargs pc ra count)))
 
@@ -73,7 +73,7 @@
 ~ B: Rn (dest)
 ~ C: Kn (prototype)
 (define-ircmd FALLBACK_DUPCLOSURE
-  (operands pc ra k)
+  (operands [pc :const-uint] [ra :Rn] [k :Kn])
   (class :effect)
   (lowering (fallback-dupclosure pc ra k)))
 
@@ -82,7 +82,7 @@
 ~ B: Rn (loop state start, updates Rn Rn+1 Rn+2)
 ~ C: block
 (define-ircmd FALLBACK_FORGPREP
-  (operands pc ra loop)
+  (operands [pc :const-uint] [ra :Rn] [loop :block])
   (class :terminator)
   (heap-effects :invalidates-safe-env)
   (lowering (fallback-forgprep pc ra loop)))
@@ -98,7 +98,7 @@
 ~ D: int (form: LBC_NEWOBJECT_DEFAULT, LBC_NEWOBJECT_INIT or LBC_NEWOBJECT_FIELDS)
 ~ E: int (AUX: argument count for DEFAULT and INIT, field count for FIELDS)
 (define-ircmd FALLBACK_NEWOBJECT
-  (operands pc ra rb)
+  (operands [pc :const-uint] [ra :Rn] [rb :Rn] [d :int] [e :int])
   (class :effect)
   (heap-effects :invalidates-safe-env)
   (lowering (fallback-newobject pc ra rb)))
@@ -110,7 +110,7 @@
 ~ B: Rn (class)
 ~ C: Rn (member value)
 (define-ircmd FALLBACK_NEWCLASSMEMBER
-  (operands pc ra rb)
+  (operands [pc :const-uint] [ra :Rn] [rb :Rn])
   (class :effect)
   (heap-effects :invalidates-safe-env)
   (lowering (fallback-newclassmember pc ra rb)))

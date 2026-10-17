@@ -1015,6 +1015,7 @@ inline bool isNonTerminatingJump(IrCmd cmd)
     case IrCmd::CHECK_NODE_NO_NEXT:
     case IrCmd::CHECK_NODE_VALUE:
     case IrCmd::CHECK_OBJECT_CLASS:
+    case IrCmd::CHECK_BUFFER_MUTABLE:
     case IrCmd::CHECK_USERDATA_TAG:
     case IrCmd::CHECK_CMP_INT:
     case IrCmd::CHECK_CMP_INT64:
@@ -1220,6 +1221,516 @@ inline bool producesDirtyHighRegisterBits(IrCmd cmd)
     default:
         return false;
     }
+}
+
+// Operand kinds of each command, from (operands ...): bits per IrOpKind, plus the IrValueKinds an Inst operand and the
+// IrConstKinds a Constant operand may have
+struct IrOperandSpec
+{
+    uint16_t opKinds = 0;
+    uint16_t valueKinds = 0;
+    uint8_t constKinds = 0;
+}
+;
+
+struct IrCmdOperands
+{
+    uint8_t count = 0;
+    IrOperandSpec ops[7];
+    IrOperandSpec targetA64[7]; // extra kinds when compiling for A64 (target-specific)
+    IrOperandSpec targetX64[7]; // extra kinds when compiling for X64 (target-specific)
+    IrOperandSpec flagDebugLuauAbortingChecks[7]; // extra kinds with FFlag::DebugLuauAbortingChecks (flag-specific)
+}
+;
+
+template<typename... Kinds>
+constexpr uint16_t irOpKinds(Kinds... kinds)
+{
+    return uint16_t((0u | ... | (1u << unsigned(kinds))));
+}
+
+template<typename... Kinds>
+constexpr uint16_t irValueKinds(Kinds... kinds)
+{
+    return uint16_t((0u | ... | (1u << unsigned(kinds))));
+}
+
+template<typename... Kinds>
+constexpr uint8_t irConstKinds(Kinds... kinds)
+{
+    return uint8_t((0u | ... | (1u << unsigned(kinds))));
+}
+
+// Indexed by IrCmd: the enum and this table are both in declaration order
+inline constexpr IrCmdOperands kIrCmdOperands[] = {
+    // NOP
+    {0, {}, {}, {}, {}},
+    // SUBSTITUTE
+    {1, {{irOpKinds(IrOpKind::Undef, IrOpKind::Constant, IrOpKind::Condition, IrOpKind::Inst, IrOpKind::Block, IrOpKind::VmReg, IrOpKind::VmConst, IrOpKind::VmUpvalue, IrOpKind::VmExit), irValueKinds(IrValueKind::Tag, IrValueKind::Int, IrValueKind::Int64, IrValueKind::Pointer, IrValueKind::Float, IrValueKind::Double, IrValueKind::Tvalue), irConstKinds(IrConstKind::Int, IrConstKind::Int64, IrConstKind::Uint, IrConstKind::Double, IrConstKind::Tag, IrConstKind::Import)}}, {}, {}, {}},
+    // MARK_USED
+    {2, {{irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // MARK_DEAD
+    {2, {{irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // LOAD_BUFFER_DATA
+    {1, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}}, {}, {}, {}},
+    // LOAD_ENV
+    {0, {}, {}, {}, {}},
+    // GET_CLOSURE_UPVAL_ADDR
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Undef), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::VmUpvalue), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // LOAD_OWNER_CLASS
+    {0, {}, {}, {}, {}},
+    // ADD_INT
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // SUB_INT
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // ADD_INT64
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}}, {}, {}, {}},
+    // SUB_INT64
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}}, {}, {}, {}},
+    // MUL_INT64
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}}, {}, {}, {}},
+    // SEXTI8_INT
+    {1, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Int), irConstKinds()}}, {}, {}, {}},
+    // SEXTI16_INT
+    {1, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Int), irConstKinds()}}, {}, {}, {}},
+    // ADD_NUM
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}}, {}, {{}, {irOpKinds(IrOpKind::VmReg, IrOpKind::VmConst), irValueKinds(), irConstKinds()}}, {}},
+    // SUB_NUM
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}}, {}, {{}, {irOpKinds(IrOpKind::VmReg, IrOpKind::VmConst), irValueKinds(), irConstKinds()}}, {}},
+    // MUL_NUM
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}}, {}, {{}, {irOpKinds(IrOpKind::VmReg, IrOpKind::VmConst), irValueKinds(), irConstKinds()}}, {}},
+    // DIV_NUM
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}}, {}, {{}, {irOpKinds(IrOpKind::VmReg, IrOpKind::VmConst), irValueKinds(), irConstKinds()}}, {}},
+    // IDIV_NUM
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}}, {}, {{}, {irOpKinds(IrOpKind::VmReg, IrOpKind::VmConst), irValueKinds(), irConstKinds()}}, {}},
+    // MIN_NUM
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}}, {}, {{}, {irOpKinds(IrOpKind::VmReg, IrOpKind::VmConst), irValueKinds(), irConstKinds()}}, {}},
+    // MAX_NUM
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}}, {}, {{}, {irOpKinds(IrOpKind::VmReg, IrOpKind::VmConst), irValueKinds(), irConstKinds()}}, {}},
+    // FLOOR_NUM
+    {1, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}}, {}, {{irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}}, {}},
+    // CEIL_NUM
+    {1, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}}, {}, {{irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}}, {}},
+    // SQRT_NUM
+    {1, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}}, {}, {{irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}}, {}},
+    // ADD_FLOAT
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Float), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Float), irConstKinds(IrConstKind::Double)}}, {}, {{}, {irOpKinds(IrOpKind::VmReg, IrOpKind::VmConst), irValueKinds(), irConstKinds()}}, {}},
+    // SUB_FLOAT
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Float), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Float), irConstKinds(IrConstKind::Double)}}, {}, {{}, {irOpKinds(IrOpKind::VmReg, IrOpKind::VmConst), irValueKinds(), irConstKinds()}}, {}},
+    // MUL_FLOAT
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Float), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Float), irConstKinds(IrConstKind::Double)}}, {}, {{}, {irOpKinds(IrOpKind::VmReg, IrOpKind::VmConst), irValueKinds(), irConstKinds()}}, {}},
+    // DIV_FLOAT
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Float), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Float), irConstKinds(IrConstKind::Double)}}, {}, {{}, {irOpKinds(IrOpKind::VmReg, IrOpKind::VmConst), irValueKinds(), irConstKinds()}}, {}},
+    // MIN_FLOAT
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Float), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Float), irConstKinds(IrConstKind::Double)}}, {}, {}, {}},
+    // MAX_FLOAT
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Float), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Float), irConstKinds(IrConstKind::Double)}}, {}, {}, {}},
+    // FLOOR_FLOAT
+    {1, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Float), irConstKinds(IrConstKind::Double)}}, {}, {}, {}},
+    // CEIL_FLOAT
+    {1, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Float), irConstKinds(IrConstKind::Double)}}, {}, {}, {}},
+    // SQRT_FLOAT
+    {1, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Float), irConstKinds(IrConstKind::Double)}}, {}, {}, {}},
+    // JUMP_EQ_POINTER
+    {4, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Block), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Block), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // STRING_LEN
+    {1, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}}, {}, {}, {}},
+    // BUFFER_ISFROZEN
+    {1, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}}, {}, {}, {}},
+    // INT_TO_NUM
+    {1, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // INT64_TO_NUM
+    {1, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}}, {}, {}, {}},
+    // UINT_TO_NUM
+    {1, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // UINT_TO_FLOAT
+    {1, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // NUM_TO_INT
+    {1, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}}, {}, {}, {}},
+    // NUM_TO_INT64
+    {1, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}}, {}, {}, {}},
+    // NUM_TO_UINT
+    {1, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}}, {}, {}, {}},
+    // FLOAT_TO_NUM
+    {1, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Float), irConstKinds(IrConstKind::Double)}}, {}, {}, {}},
+    // NUM_TO_FLOAT
+    {1, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}}, {}, {}, {}},
+    // TRUNCATE_UINT
+    {1, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Int), irConstKinds()}}, {}, {}, {}},
+    // ADJUST_STACK_TO_TOP
+    {0, {}, {}, {}, {}},
+    // CHECK_FASTCALL_RES
+    {2, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Int), irConstKinds()}, {irOpKinds(IrOpKind::Block), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // CHECK_TAG
+    {3, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Tag), irConstKinds(IrConstKind::Tag)}, {irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Tag)}, {irOpKinds(IrOpKind::Block, IrOpKind::VmExit, IrOpKind::Undef), irValueKinds(), irConstKinds()}}, {}, {{irOpKinds(IrOpKind::VmReg, IrOpKind::VmConst), irValueKinds(), irConstKinds()}, {}, {}}, {{irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {}, {}}},
+    // CHECK_READONLY
+    {2, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Block, IrOpKind::VmExit, IrOpKind::Undef), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // CHECK_NO_METATABLE
+    {2, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Block, IrOpKind::VmExit, IrOpKind::Undef), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // CHECK_NODE_NO_NEXT
+    {2, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Block, IrOpKind::VmExit, IrOpKind::Undef), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // CHECK_NODE_VALUE
+    {2, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Block, IrOpKind::VmExit, IrOpKind::Undef), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // CHECK_OBJECT_CLASS
+    {3, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Block, IrOpKind::VmExit, IrOpKind::Undef), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // OBJECT_MEMBER_ADDR
+    {2, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}}, {}, {}, {}},
+    // CHECK_BUFFER_MUTABLE
+    {2, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Block, IrOpKind::VmExit, IrOpKind::Undef), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // CHECK_USERDATA_TAG
+    {3, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Block, IrOpKind::VmExit, IrOpKind::Undef), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // SET_SAVEDPC
+    {1, {{irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}}, {}, {}, {}},
+    // BITAND_INT64
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}}, {}, {}, {}},
+    // BITXOR_INT64
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}}, {}, {}, {}},
+    // BITOR_INT64
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}}, {}, {}, {}},
+    // BITNOT_INT64
+    {1, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}}, {}, {}, {}},
+    // BYTESWAP_INT64
+    {1, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}}, {}, {}, {}},
+    // BITAND_UINT
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // BITXOR_UINT
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // BITOR_UINT
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // BITNOT_UINT
+    {1, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // BYTESWAP_UINT
+    {1, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // SELECT_INT64
+    {5, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}, {irOpKinds(IrOpKind::Condition), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // CMP_INT
+    {3, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Condition), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // CMP_INT64
+    {3, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}, {irOpKinds(IrOpKind::Condition), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // JUMP
+    {1, {{irOpKinds(IrOpKind::Block, IrOpKind::VmExit, IrOpKind::Undef), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // JUMP_CMP_INT
+    {5, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Condition), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Block), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Block), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // CHECK_CMP_INT
+    {4, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Condition), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Block, IrOpKind::VmExit, IrOpKind::Undef), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // CHECK_CMP_INT64
+    {4, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}, {irOpKinds(IrOpKind::Condition), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Block, IrOpKind::VmExit, IrOpKind::Undef), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // LOAD_TAG
+    {1, {{irOpKinds(IrOpKind::VmReg, IrOpKind::VmConst, IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}}, {}, {}, {}},
+    // LOAD_POINTER
+    {1, {{irOpKinds(IrOpKind::VmReg, IrOpKind::VmConst, IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}}, {}, {}, {}},
+    // LOAD_DOUBLE
+    {1, {{irOpKinds(IrOpKind::VmReg, IrOpKind::VmConst), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // LOAD_INT
+    {1, {{irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // LOAD_INT64
+    {1, {{irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // LOAD_FLOAT
+    {2, {{irOpKinds(IrOpKind::VmReg, IrOpKind::VmConst), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // LOAD_TVALUE
+    {3, {{irOpKinds(IrOpKind::VmReg, IrOpKind::VmConst, IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Constant, IrOpKind::None), irValueKinds(), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant, IrOpKind::None), irValueKinds(IrValueKind::Tag), irConstKinds(IrConstKind::Tag)}}, {}, {}, {}},
+    // STORE_TAG
+    {2, {{irOpKinds(IrOpKind::VmReg, IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Tag), irConstKinds(IrConstKind::Tag)}}, {}, {}, {}},
+    // STORE_EXTRA
+    {2, {{irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // STORE_POINTER
+    {2, {{irOpKinds(IrOpKind::VmReg, IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Pointer), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // STORE_DOUBLE
+    {2, {{irOpKinds(IrOpKind::VmReg, IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}}, {}, {}, {}},
+    // STORE_INT
+    {2, {{irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // STORE_INT64
+    {2, {{irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}}, {}, {}, {}},
+    // STORE_VECTOR
+    {5, {{irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Float), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Float), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Float), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Tag), irConstKinds(IrConstKind::Tag)}}, {}, {}, {}},
+    // STORE_TVALUE
+    {3, {{irOpKinds(IrOpKind::VmReg, IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Tvalue), irConstKinds()}, {irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // STORE_SPLIT_TVALUE
+    {4, {{irOpKinds(IrOpKind::VmReg, IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Tag), irConstKinds(IrConstKind::Tag)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int, IrValueKind::Int64, IrValueKind::Double, IrValueKind::Pointer), irConstKinds(IrConstKind::Int, IrConstKind::Int64, IrConstKind::Double)}, {irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // MOD_NUM
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}}, {}, {{}, {irOpKinds(IrOpKind::VmReg, IrOpKind::VmConst), irValueKinds(), irConstKinds()}}, {}},
+    // MULADD_NUM
+    {3, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}}, {}, {}, {}},
+    // UNM_NUM
+    {1, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}}, {}, {}, {}},
+    // ROUND_NUM
+    {1, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}}, {}, {{irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}}, {}},
+    // ABS_NUM
+    {1, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}}, {}, {{irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}}, {}},
+    // SIGN_NUM
+    {1, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}}, {}, {}, {}},
+    // UNM_FLOAT
+    {1, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Float), irConstKinds(IrConstKind::Double)}}, {}, {}, {}},
+    // ABS_FLOAT
+    {1, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Float), irConstKinds(IrConstKind::Double)}}, {}, {}, {}},
+    // SIGN_FLOAT
+    {1, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Float), irConstKinds(IrConstKind::Double)}}, {}, {}, {}},
+    // SELECT_NUM
+    {4, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}}, {}, {}, {}},
+    // SELECT_VEC
+    {4, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Tvalue), irConstKinds()}, {irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Tvalue), irConstKinds()}, {irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Tvalue), irConstKinds()}, {irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Tvalue), irConstKinds()}}, {}, {}, {}},
+    // ADD_VEC
+    {2, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Tvalue), irConstKinds()}, {irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Tvalue), irConstKinds()}}, {}, {}, {}},
+    // SUB_VEC
+    {2, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Tvalue), irConstKinds()}, {irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Tvalue), irConstKinds()}}, {}, {}, {}},
+    // MUL_VEC
+    {2, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Tvalue), irConstKinds()}, {irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Tvalue), irConstKinds()}}, {}, {}, {}},
+    // DIV_VEC
+    {2, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Tvalue), irConstKinds()}, {irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Tvalue), irConstKinds()}}, {}, {}, {}},
+    // IDIV_VEC
+    {2, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Tvalue), irConstKinds()}, {irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Tvalue), irConstKinds()}}, {}, {}, {}},
+    // MULADD_VEC
+    {3, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Tvalue), irConstKinds()}, {irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Tvalue), irConstKinds()}, {irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Tvalue), irConstKinds()}}, {}, {}, {}},
+    // UNM_VEC
+    {1, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Tvalue), irConstKinds()}}, {}, {}, {}},
+    // MIN_VEC
+    {2, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Tvalue), irConstKinds()}, {irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Tvalue), irConstKinds()}}, {}, {}, {}},
+    // MAX_VEC
+    {2, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Tvalue), irConstKinds()}, {irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Tvalue), irConstKinds()}}, {}, {}, {}},
+    // FLOOR_VEC
+    {1, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Tvalue), irConstKinds()}}, {}, {}, {}},
+    // CEIL_VEC
+    {1, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Tvalue), irConstKinds()}}, {}, {}, {}},
+    // ABS_VEC
+    {1, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Tvalue), irConstKinds()}}, {}, {}, {}},
+    // DOT_VEC
+    {2, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Tvalue), irConstKinds()}, {irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Tvalue), irConstKinds()}}, {}, {}, {}},
+    // EXTRACT_VEC
+    {2, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Tvalue), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // FLOAT_TO_VEC
+    {1, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Float), irConstKinds(IrConstKind::Double)}}, {}, {}, {}},
+    // TAG_VECTOR
+    {1, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Tvalue), irConstKinds()}}, {}, {}, {}},
+    // DIV_INT64
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}}, {}, {}, {}},
+    // IDIV_INT64
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}}, {}, {}, {}},
+    // UDIV_INT64
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}}, {}, {}, {}},
+    // REM_INT64
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}}, {}, {}, {}},
+    // UREM_INT64
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}}, {}, {}, {}},
+    // MOD_INT64
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}}, {}, {}, {}},
+    // CHECK_DIV_INT64
+    {3, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}, {irOpKinds(IrOpKind::Block, IrOpKind::VmExit, IrOpKind::Undef), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // BITLSHIFT_INT64
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}}, {}, {}, {}},
+    // BITRSHIFT_INT64
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}}, {}, {}, {}},
+    // BITARSHIFT_INT64
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}}, {}, {}, {}},
+    // BITLROTATE_INT64
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}}, {}, {}, {}},
+    // BITRROTATE_INT64
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}}, {}, {}, {}},
+    // BITCOUNTLZ_INT64
+    {1, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}}, {}, {}, {}},
+    // BITCOUNTRZ_INT64
+    {1, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}}, {}, {}, {}},
+    // BITLSHIFT_UINT
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // BITRSHIFT_UINT
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // BITARSHIFT_UINT
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // BITLROTATE_UINT
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // BITRROTATE_UINT
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // BITCOUNTLZ_UINT
+    {1, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // BITCOUNTRZ_UINT
+    {1, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // CHECK_BUFFER_LEN
+    {6, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant, IrOpKind::Undef), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Block, IrOpKind::VmExit, IrOpKind::Undef), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // BUFFER_READI8
+    {3, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Tag), irConstKinds(IrConstKind::Tag)}}, {}, {}, {}},
+    // BUFFER_READU8
+    {3, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Tag), irConstKinds(IrConstKind::Tag)}}, {}, {}, {}},
+    // BUFFER_WRITEI8
+    {4, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Tag), irConstKinds(IrConstKind::Tag)}}, {}, {}, {}},
+    // BUFFER_READI16
+    {3, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Tag), irConstKinds(IrConstKind::Tag)}}, {}, {}, {}},
+    // BUFFER_READU16
+    {3, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Tag), irConstKinds(IrConstKind::Tag)}}, {}, {}, {}},
+    // BUFFER_WRITEI16
+    {4, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Tag), irConstKinds(IrConstKind::Tag)}}, {}, {}, {}},
+    // BUFFER_READI32
+    {3, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Tag), irConstKinds(IrConstKind::Tag)}}, {}, {}, {}},
+    // BUFFER_WRITEI32
+    {4, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Tag), irConstKinds(IrConstKind::Tag)}}, {}, {}, {}},
+    // BUFFER_READF32
+    {3, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Tag), irConstKinds(IrConstKind::Tag)}}, {}, {}, {}},
+    // BUFFER_WRITEF32
+    {4, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Float), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Tag), irConstKinds(IrConstKind::Tag)}}, {}, {}, {}},
+    // BUFFER_READF64
+    {3, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Tag), irConstKinds(IrConstKind::Tag)}}, {}, {}, {}},
+    // BUFFER_WRITEF64
+    {4, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Tag), irConstKinds(IrConstKind::Tag)}}, {}, {}, {}},
+    // BUFFER_READI64
+    {3, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Tag), irConstKinds(IrConstKind::Tag)}}, {}, {}, {}},
+    // BUFFER_WRITEI64
+    {4, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int64), irConstKinds(IrConstKind::Int64)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Tag), irConstKinds(IrConstKind::Tag)}}, {}, {}, {}},
+    // NOT_ANY
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Tag), irConstKinds(IrConstKind::Tag)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // CMP_TAG
+    {3, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant, IrOpKind::VmReg), irValueKinds(IrValueKind::Tag), irConstKinds(IrConstKind::Tag)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Tag), irConstKinds(IrConstKind::Tag)}, {irOpKinds(IrOpKind::Condition), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // JUMP_IF_TRUTHY
+    {3, {{irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Block), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Block), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // JUMP_IF_FALSY
+    {3, {{irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Block), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Block), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // SELECT_IF_TRUTHY
+    {3, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Tvalue), irConstKinds()}, {irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Tvalue), irConstKinds()}, {irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Tvalue), irConstKinds()}}, {}, {}, {}},
+    // CMP_ANY
+    {3, {{irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Condition), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // CMP_SPLIT_TVALUE
+    {5, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Tag), irConstKinds(IrConstKind::Tag)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Tag), irConstKinds(IrConstKind::Tag)}, {irOpKinds(IrOpKind::Undef, IrOpKind::Constant, IrOpKind::Condition, IrOpKind::Inst, IrOpKind::Block, IrOpKind::VmReg, IrOpKind::VmConst, IrOpKind::VmUpvalue, IrOpKind::VmExit), irValueKinds(IrValueKind::Tag, IrValueKind::Int, IrValueKind::Int64, IrValueKind::Pointer, IrValueKind::Float, IrValueKind::Double, IrValueKind::Tvalue), irConstKinds(IrConstKind::Int, IrConstKind::Int64, IrConstKind::Uint, IrConstKind::Double, IrConstKind::Tag, IrConstKind::Import)}, {irOpKinds(IrOpKind::Undef, IrOpKind::Constant, IrOpKind::Condition, IrOpKind::Inst, IrOpKind::Block, IrOpKind::VmReg, IrOpKind::VmConst, IrOpKind::VmUpvalue, IrOpKind::VmExit), irValueKinds(IrValueKind::Tag, IrValueKind::Int, IrValueKind::Int64, IrValueKind::Pointer, IrValueKind::Float, IrValueKind::Double, IrValueKind::Tvalue), irConstKinds(IrConstKind::Int, IrConstKind::Int64, IrConstKind::Uint, IrConstKind::Double, IrConstKind::Tag, IrConstKind::Import)}, {irOpKinds(IrOpKind::Condition), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // JUMP_EQ_TAG
+    {4, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant, IrOpKind::VmReg), irValueKinds(IrValueKind::Tag), irConstKinds(IrConstKind::Tag)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Tag), irConstKinds(IrConstKind::Tag)}, {irOpKinds(IrOpKind::Block), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Block), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // JUMP_CMP_NUM
+    {5, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Condition), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Block), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Block), irValueKinds(), irConstKinds()}}, {}, {{irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {}, {}, {}, {}}, {}},
+    // JUMP_CMP_FLOAT
+    {5, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Float), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Float), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Condition), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Block), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Block), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // JUMP_FORN_LOOP_COND
+    {5, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Block), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Block), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // CHECK_TRUTHY
+    {3, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Tag), irConstKinds(IrConstKind::Tag)}, {irOpKinds(IrOpKind::Undef, IrOpKind::Constant, IrOpKind::Condition, IrOpKind::Inst, IrOpKind::Block, IrOpKind::VmReg, IrOpKind::VmConst, IrOpKind::VmUpvalue, IrOpKind::VmExit), irValueKinds(IrValueKind::Tag, IrValueKind::Int, IrValueKind::Int64, IrValueKind::Pointer, IrValueKind::Float, IrValueKind::Double, IrValueKind::Tvalue), irConstKinds(IrConstKind::Int, IrConstKind::Int64, IrConstKind::Uint, IrConstKind::Double, IrConstKind::Tag, IrConstKind::Import)}, {irOpKinds(IrOpKind::Block, IrOpKind::VmExit, IrOpKind::Undef), irValueKinds(), irConstKinds()}}, {}, {{irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {}, {}}, {}},
+    // CHECK_SAFE_ENV
+    {1, {{irOpKinds(IrOpKind::Block, IrOpKind::VmExit, IrOpKind::Undef), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // CHECK_ARRAY_SIZE
+    {3, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Block, IrOpKind::VmExit, IrOpKind::Undef), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // CHECK_CMP_NUM
+    {4, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Condition), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Block, IrOpKind::VmExit, IrOpKind::Undef), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // FALLBACK_GETGLOBAL
+    {3, {{irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}, {irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::VmConst), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // FALLBACK_SETGLOBAL
+    {3, {{irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}, {irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::VmConst), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // FALLBACK_GETTABLEKS
+    {4, {{irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}, {irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::VmConst), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // FALLBACK_SETTABLEKS
+    {4, {{irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}, {irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::VmConst), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // FALLBACK_NAMECALL
+    {4, {{irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}, {irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::VmConst), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // FALLBACK_PREPVARARGS
+    {2, {{irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // FALLBACK_GETVARARGS
+    {3, {{irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}, {irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // FALLBACK_DUPCLOSURE
+    {3, {{irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}, {irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::VmConst), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // FALLBACK_FORGPREP
+    {3, {{irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}, {irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Block), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // FALLBACK_NEWOBJECT
+    {5, {{irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}, {irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // FALLBACK_NEWCLASSMEMBER
+    {3, {{irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}, {irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // DO_ARITH
+    {4, {{irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::VmReg, IrOpKind::VmConst), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::VmReg, IrOpKind::VmConst), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // DO_LEN
+    {2, {{irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // GET_TABLE
+    {3, {{irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::VmReg, IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}}, {}, {}, {}},
+    // SET_TABLE
+    {3, {{irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::VmReg, IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}}, {}, {}, {}},
+    // CONCAT
+    {2, {{irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}}, {}, {}, {}},
+    // GET_TYPE
+    {1, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Tag), irConstKinds(IrConstKind::Tag)}}, {}, {}, {}},
+    // GET_TYPEOF
+    {1, {{irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // TABLE_LEN
+    {1, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}}, {}, {}, {}},
+    // NEW_TABLE
+    {2, {{irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}, {irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}}, {}, {}, {}},
+    // DUP_TABLE
+    {1, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}}, {}, {}, {}},
+    // TABLE_SETNUM
+    {2, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // NEW_USERDATA
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // NEW_VECTOR
+    {3, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}}, {}, {}, {}},
+    // NEW_OBJECT
+    {1, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}}, {}, {}, {}},
+    // ADJUST_STACK_TO_REG
+    {2, {{irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // INTERRUPT
+    {1, {{irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}}, {}, {}, {}},
+    // CHECK_GC
+    {0, {}, {}, {}, {}},
+    // CLOSE_UPVALS
+    {1, {{irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // CAPTURE
+    {2, {{irOpKinds(IrOpKind::VmReg, IrOpKind::VmUpvalue), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}}, {}, {}, {}},
+    // SETLIST
+    {6, {{irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}, {irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}, {irOpKinds(IrOpKind::Undef, IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}}, {}, {}, {}},
+    // COVERAGE
+    {1, {{irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}}, {}, {}, {}},
+    // FINDUPVAL
+    {1, {{irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // GET_ARR_ADDR
+    {2, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // GET_SLOT_NODE_ADDR
+    {3, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}, {irOpKinds(IrOpKind::VmConst), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // GET_HASH_NODE_ADDR
+    {2, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}}, {}, {}, {}},
+    // TRY_NUM_TO_INDEX
+    {2, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Block), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // SET_UPVALUE
+    {3, {{irOpKinds(IrOpKind::VmUpvalue), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Tvalue), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant, IrOpKind::Undef), irValueKinds(IrValueKind::Tag), irConstKinds(IrConstKind::Tag)}}, {}, {}, {}},
+    // BARRIER_OBJ
+    {3, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant, IrOpKind::Undef), irValueKinds(IrValueKind::Tag), irConstKinds(IrConstKind::Tag)}}, {}, {}, {}},
+    // BARRIER_TABLE_BACK
+    {1, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}}, {}, {}, {}},
+    // BARRIER_TABLE_FORWARD
+    {3, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::VmReg, IrOpKind::VmConst), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant, IrOpKind::Undef), irValueKinds(IrValueKind::Tag), irConstKinds(IrConstKind::Tag)}}, {}, {}, {}},
+    // JUMP_SLOT_MATCH
+    {4, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::VmConst), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Block), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Block), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // TRY_CALL_FASTGETTM
+    {3, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Block), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // GET_CACHED_IMPORT
+    {4, {{irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::VmConst), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Import)}, {irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}}, {}, {}, {}},
+    // CHECK_SLOT_MATCH
+    {3, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::VmConst), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Block, IrOpKind::Undef), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // FASTCALL
+    {4, {{irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}, {irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // INVOKE_FASTCALL
+    {7, {{irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}, {irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::VmReg, IrOpKind::VmConst, IrOpKind::Undef), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::VmReg, IrOpKind::VmConst, IrOpKind::Undef), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // INVOKE_LIBM
+    {3, {{irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double), irConstKinds(IrConstKind::Double)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Double, IrValueKind::Int), irConstKinds(IrConstKind::Double, IrConstKind::Int)}}, {}, {}, {}},
+    // RETURN
+    {2, {{irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // FORGLOOP
+    {4, {{irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Block), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Block), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // FORGLOOP_FALLBACK
+    {4, {{irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Block), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Block), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // FORGPREP_XNEXT_FALLBACK
+    {3, {{irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}, {irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Block), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // GET_UPVALUE
+    {1, {{irOpKinds(IrOpKind::VmUpvalue), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // CALL
+    {3, {{irOpKinds(IrOpKind::VmReg), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}, {irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Int), irConstKinds(IrConstKind::Int)}}, {}, {}, {}},
+    // CLASS_ISINSTANCE
+    {3, {{irOpKinds(IrOpKind::Inst, IrOpKind::Constant), irValueKinds(IrValueKind::Tag), irConstKinds(IrConstKind::Tag)}, {irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}}, {}, {}, {}},
+    // TRY_OBJECT_MEMBER_ADDR
+    {5, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}, {irOpKinds(IrOpKind::VmConst), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Block, IrOpKind::Undef), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}}, {}, {}, {}},
+    // CHECK_CLASS_FIELDS_CONSTRUCTIBLE
+    {2, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Block, IrOpKind::VmExit, IrOpKind::Undef), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // TRY_CLASS_MEMBER_ADDR
+    {4, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}, {irOpKinds(IrOpKind::VmConst), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Block, IrOpKind::Undef), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // TRY_OBJECT_NAMECALL_ADDR
+    {4, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}, {irOpKinds(IrOpKind::VmConst), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Block, IrOpKind::Undef), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+    // NEWCLOSURE
+    {3, {{irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}, {irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}}, {}, {}, {}},
+    // JUMP_CMP_PROTOID
+    {4, {{irOpKinds(IrOpKind::Inst), irValueKinds(IrValueKind::Pointer), irConstKinds()}, {irOpKinds(IrOpKind::Constant), irValueKinds(), irConstKinds(IrConstKind::Uint)}, {irOpKinds(IrOpKind::Block), irValueKinds(), irConstKinds()}, {irOpKinds(IrOpKind::Block), irValueKinds(), irConstKinds()}}, {}, {}, {}},
+};
+static_assert(sizeof(kIrCmdOperands) / sizeof(kIrCmdOperands[0]) == kIrCmdCount, "one entry per IrCmd");
+
+inline const IrCmdOperands& getCmdOperands(IrCmd cmd)
+{
+    return kIrCmdOperands[unsigned(cmd)];
 }
 
 } // namespace CodeGen

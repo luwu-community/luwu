@@ -21,13 +21,33 @@ struct IrCmdLowering
     SourceLocation loc;
 };
 
+// [name :kind|:kind...]: an operand and the operand kinds it may have
+struct IrOperandDef
+{
+    std::string name;
+    std::vector<std::string> kinds; // e.g. {"Rn", "Kn"}
+    SourceLocation loc;
+};
+
+// One [:key [operand :kinds]...] group of target-specific or flag-specific extra operand kinds
+struct IrOperandExtras
+{
+    std::string key; // target ("x64") or flag ("DebugLuauAbortingChecks")
+    SourceLocation loc;
+    std::vector<IrOperandDef> operands;
+};
+
 // An IR command declared with define-ircmd
 struct IrCmdDef
 {
     std::string name; // e.g. "ADD_INT"
     SourceLocation loc;
     std::vector<std::string> docs;     // doc comments (~) before the form: the enum entry's comment
-    std::vector<std::string> operands; // operand names, positional (A..G)
+    std::vector<IrOperandDef> operands; // positional (A..G)
+    // (target-specific [:x64 [a :Rn] ...] ...) and (flag-specific [:DebugLuauAbortingChecks [a :Rn] ...] ...): extra kinds
+    // an operand may have when compiling for that target, or when that flag is enabled
+    std::vector<IrOperandExtras> targetSpecific;
+    std::vector<IrOperandExtras> flagSpecific;
     std::string result;                // IrValueKind enumerator ("Int", "Double", ...), empty for None
     std::string cls;                   // "value", "effect", "guard", "terminator" or "pseudo"
     std::set<std::string> flags;       // e.g. "deprecated/has-side-effects"

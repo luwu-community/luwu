@@ -55,6 +55,13 @@ void emitX64(std::ostream& os, const std::vector<LoweringInstance>& lowerings, c
 void getA64Docs(std::vector<FormDoc>& ops, std::vector<FormDoc>& preds);
 void getX64Docs(std::vector<FormDoc>& ops, std::vector<FormDoc>& preds);
 
+// Targets Luna generates lowering for, as written in target-case branches and target-specific groups (:a64, :x64)
+inline const std::vector<std::string>& knownTargets()
+{
+    static const std::vector<std::string> targets = {"a64", "x64"};
+    return targets;
+}
+
 std::string toCppIdent(const std::string& name);
 std::string toUpperIdent(const std::string& name);
 std::string toCppVarName(const std::string& name);

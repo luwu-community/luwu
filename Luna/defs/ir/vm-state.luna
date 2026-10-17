@@ -3,14 +3,14 @@
 ~ A: Rn
 ~ B: int (offset)
 (define-ircmd ADJUST_STACK_TO_REG
-  (operands ra count)
+  (operands [ra :Rn] [count :int])
   (class :effect)
   (lowering (adjust-stack-to-reg ra count)))
 
 ~ Check interrupt handler
 ~ A: unsigned int (pcpos)
 (define-ircmd INTERRUPT
-  (operands pc)
+  (operands [pc :const-uint])
   (class :effect)
   (lowering (interrupt pc)))
 
@@ -22,7 +22,7 @@
 ~ Close open upvalues for registers at specified index or higher
 ~ A: Rn (starting register index)
 (define-ircmd CLOSE_UPVALS
-  (operands ra)
+  (operands [ra :Rn])
   (class :effect)
   (lowering (close-upvals ra)))
 
@@ -30,7 +30,7 @@
 ~ A: Rn or UPn
 ~ B: unsigned int (1 for reference capture, 0 for value capture)
 (define-ircmd CAPTURE
-  (operands ra kind)
+  (operands [ra :Rn|:UPn] [kind :const-uint])
   (class :effect)
   (lowering (capture ra kind)))
 
@@ -42,21 +42,26 @@
 ~ E: unsigned int (table index to start from)
 ~ F: undef/unsigned int (target table known size)
 (define-ircmd SETLIST
-  (operands pc ra rb count index-op known-size)
+  (operands [pc :const-uint]
+            [ra :Rn]
+            [rb :Rn]
+            [count :int]
+            [index-op :const-uint]
+            [known-size :undef|:const-uint])
   (class :effect)
   (lowering (setlist pc ra rb count index-op known-size)))
 
 ~ Increment coverage data (saturating 24 bit add)
 ~ A: unsigned int (bytecode instruction index)
 (define-ircmd COVERAGE
-  (operands pc)
+  (operands [pc :const-uint])
   (class :effect)
   (lowering (coverage pc)))
 
 ~ Find or create an upval at the given level
 ~ A: Rn (level)
 (define-ircmd FINDUPVAL
-  (operands ra)
+  (operands [ra :Rn])
   (result :pointer)
   (class :value)
   (lowering (findupval ra)))

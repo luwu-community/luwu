@@ -1,7 +1,7 @@
 ~ Load buffer data (buffer->data) from a Buffer TValue
 ~ A: pointer (Buffer from LOAD_POINTER)
 (define-ircmd LOAD_BUFFER_DATA
-  (operands buf)
+  (operands [buf :inst-pointer])
   (result :pointer)
   (class :value)
   (lowering (load-buffer-data buf)))
@@ -17,7 +17,7 @@
 ~ B: UPn
 ~ When undef is specified, uses current function Closure.
 (define-ircmd GET_CLOSURE_UPVAL_ADDR
-  (operands cl upval)
+  (operands [cl :pointer|:undef] [upval :UPn])
   (result :pointer)
   (class :value)
   (lowering (get-closure-upval-addr cl upval)))
@@ -36,7 +36,7 @@
 ~ Add/Sub two integers together
 ~ A, B: int
 (define-ircmd ADD_INT
-  (operands a b)
+  (operands [a :int] [b :int])
   (result :int)
   (class :value)
   (lowering (add-int a b)))
@@ -44,7 +44,7 @@
 ~ Add/Sub two integers together
 ~ A, B: int
 (define-ircmd SUB_INT
-  (operands a b)
+  (operands [a :int] [b :int])
   (result :int)
   (class :value)
   (lowering (sub-int a b)))
@@ -52,7 +52,7 @@
 ~ Add two int64s
 ~ A, B: int64
 (define-ircmd ADD_INT64
-  (operands a b)
+  (operands [a :int64] [b :int64])
   (result :int64)
   (class :value)
   (lowering (add-int64 a b)))
@@ -60,7 +60,7 @@
 ~ Subtract two int64s
 ~ A, B: int64
 (define-ircmd SUB_INT64
-  (operands a b)
+  (operands [a :int64] [b :int64])
   (result :int64)
   (class :value)
   (lowering (sub-int64 a b)))
@@ -68,7 +68,7 @@
 ~ Multiply two int64s
 ~ A, B: int64
 (define-ircmd MUL_INT64
-  (operands a b)
+  (operands [a :int64] [b :int64])
   (result :int64)
   (class :value)
   (lowering (mul-int64 a b)))
@@ -76,7 +76,7 @@
 ~ Sign extend an 8-bit value
 ~ A: int
 (define-ircmd SEXTI8_INT
-  (operands val)
+  (operands [val :inst-int])
   (result :int)
   (class :value)
   (lowering (sexti8-int val)))
@@ -84,52 +84,57 @@
 ~ Sign extend a 16-bit value
 ~ A: int
 (define-ircmd SEXTI16_INT
-  (operands val)
+  (operands [val :inst-int])
   (result :int)
   (class :value)
   (lowering (sexti16-int val)))
 
 ~ Add/Sub/Mul/Div/Idiv/Mod two double numbers
 ~ A, B: double
-~ In final x64 lowering, B can also be Rn or Kn
+~ When compiling for X64, B can also be Rn or Kn
 (define-ircmd ADD_NUM
-  (operands a b)
+  (operands [a :double] [b :double])
+  (target-specific [:x64 [b :Rn|:Kn]])
   (result :double)
   (class :value)
   (lowering (add-num a b)))
 
 ~ Add/Sub/Mul/Div/Idiv/Mod two double numbers
 ~ A, B: double
-~ In final x64 lowering, B can also be Rn or Kn
+~ When compiling for X64, B can also be Rn or Kn
 (define-ircmd SUB_NUM
-  (operands a b)
+  (operands [a :double] [b :double])
+  (target-specific [:x64 [b :Rn|:Kn]])
   (result :double)
   (class :value)
   (lowering (sub-num a b)))
 
 ~ Add/Sub/Mul/Div/Idiv/Mod two double numbers
 ~ A, B: double
-~ In final x64 lowering, B can also be Rn or Kn
+~ When compiling for X64, B can also be Rn or Kn
 (define-ircmd MUL_NUM
-  (operands a b)
+  (operands [a :double] [b :double])
+  (target-specific [:x64 [b :Rn|:Kn]])
   (result :double)
   (class :value)
   (lowering (mul-num a b)))
 
 ~ Add/Sub/Mul/Div/Idiv/Mod two double numbers
 ~ A, B: double
-~ In final x64 lowering, B can also be Rn or Kn
+~ When compiling for X64, B can also be Rn or Kn
 (define-ircmd DIV_NUM
-  (operands a b)
+  (operands [a :double] [b :double])
+  (target-specific [:x64 [b :Rn|:Kn]])
   (result :double)
   (class :value)
   (lowering (div-num a b)))
 
 ~ Add/Sub/Mul/Div/Idiv/Mod two double numbers
 ~ A, B: double
-~ In final x64 lowering, B can also be Rn or Kn
+~ When compiling for X64, B can also be Rn or Kn
 (define-ircmd IDIV_NUM
-  (operands a b)
+  (operands [a :double] [b :double])
+  (target-specific [:x64 [b :Rn|:Kn]])
   (result :double)
   (class :value)
   (lowering (idiv-num a b)))
@@ -137,9 +142,10 @@
 ~ Get the minimum/maximum of two numbers
 ~ If one of the values is NaN, 'B' is returned as the result
 ~ A, B: double
-~ In final x64 lowering, B can also be Rn or Kn
+~ When compiling for X64, B can also be Rn or Kn
 (define-ircmd MIN_NUM
-  (operands a b)
+  (operands [a :double] [b :double])
+  (target-specific [:x64 [b :Rn|:Kn]])
   (result :double)
   (class :value)
   (lowering (min-num a b)))
@@ -147,69 +153,80 @@
 ~ Get the minimum/maximum of two numbers
 ~ If one of the values is NaN, 'B' is returned as the result
 ~ A, B: double
-~ In final x64 lowering, B can also be Rn or Kn
+~ When compiling for X64, B can also be Rn or Kn
 (define-ircmd MAX_NUM
-  (operands a b)
+  (operands [a :double] [b :double])
+  (target-specific [:x64 [b :Rn|:Kn]])
   (result :double)
   (class :value)
   (lowering (max-num a b)))
 
 ~ Round number to negative infinity (math.floor)
 ~ A: double
+~ When compiling for X64, A can also be Rn
 (define-ircmd FLOOR_NUM
-  (operands a)
+  (operands [a :double])
+  (target-specific [:x64 [a :Rn]])
   (result :double)
   (class :value)
   (lowering (floor-num a)))
 
 ~ Round number to positive infinity (math.ceil)
 ~ A: double
+~ When compiling for X64, A can also be Rn
 (define-ircmd CEIL_NUM
-  (operands a)
+  (operands [a :double])
+  (target-specific [:x64 [a :Rn]])
   (result :double)
   (class :value)
   (lowering (ceil-num a)))
 
 ~ Get square root of the argument (math.sqrt)
 ~ A: double
+~ When compiling for X64, A can also be Rn
 (define-ircmd SQRT_NUM
-  (operands a)
+  (operands [a :double])
+  (target-specific [:x64 [a :Rn]])
   (result :double)
   (class :value)
   (lowering (sqrt-num a)))
 
 ~ Add/Sub/Mul/Div/Idiv/Mod two float numbers
 ~ A, B: float
-~ In final x64 lowering, B can also be Rn or Kn
+~ When compiling for X64, B can also be Rn or Kn
 (define-ircmd ADD_FLOAT
-  (operands a b)
+  (operands [a :float] [b :float])
+  (target-specific [:x64 [b :Rn|:Kn]])
   (result :float)
   (class :value)
   (lowering (add-float a b)))
 
 ~ Add/Sub/Mul/Div/Idiv/Mod two float numbers
 ~ A, B: float
-~ In final x64 lowering, B can also be Rn or Kn
+~ When compiling for X64, B can also be Rn or Kn
 (define-ircmd SUB_FLOAT
-  (operands a b)
+  (operands [a :float] [b :float])
+  (target-specific [:x64 [b :Rn|:Kn]])
   (result :float)
   (class :value)
   (lowering (sub-float a b)))
 
 ~ Add/Sub/Mul/Div/Idiv/Mod two float numbers
 ~ A, B: float
-~ In final x64 lowering, B can also be Rn or Kn
+~ When compiling for X64, B can also be Rn or Kn
 (define-ircmd MUL_FLOAT
-  (operands a b)
+  (operands [a :float] [b :float])
+  (target-specific [:x64 [b :Rn|:Kn]])
   (result :float)
   (class :value)
   (lowering (mul-float a b)))
 
 ~ Add/Sub/Mul/Div/Idiv/Mod two float numbers
 ~ A, B: float
-~ In final x64 lowering, B can also be Rn or Kn
+~ When compiling for X64, B can also be Rn or Kn
 (define-ircmd DIV_FLOAT
-  (operands a b)
+  (operands [a :float] [b :float])
+  (target-specific [:x64 [b :Rn|:Kn]])
   (result :float)
   (class :value)
   (lowering (div-float a b)))
@@ -218,7 +235,7 @@
 ~ If one of the values is NaN, 'B' is returned as the result
 ~ A, B: float
 (define-ircmd MIN_FLOAT
-  (operands a b)
+  (operands [a :float] [b :float])
   (result :float)
   (class :value)
   (lowering (min-float a b)))
@@ -227,7 +244,7 @@
 ~ If one of the values is NaN, 'B' is returned as the result
 ~ A, B: float
 (define-ircmd MAX_FLOAT
-  (operands a b)
+  (operands [a :float] [b :float])
   (result :float)
   (class :value)
   (lowering (max-float a b)))
@@ -235,7 +252,7 @@
 ~ Round number to negative infinity
 ~ A: float
 (define-ircmd FLOOR_FLOAT
-  (operands a)
+  (operands [a :float])
   (result :float)
   (class :value)
   (lowering (floor-float a)))
@@ -243,7 +260,7 @@
 ~ Round number to positive infinity
 ~ A: float
 (define-ircmd CEIL_FLOAT
-  (operands a)
+  (operands [a :float])
   (result :float)
   (class :value)
   (lowering (ceil-float a)))
@@ -251,7 +268,7 @@
 ~ Get square root of the argument
 ~ A: float
 (define-ircmd SQRT_FLOAT
-  (operands a)
+  (operands [a :float])
   (result :float)
   (class :value)
   (lowering (sqrt-float a)))
@@ -261,14 +278,14 @@
 ~ C: block (if true)
 ~ D: block (if false)
 (define-ircmd JUMP_EQ_POINTER
-  (operands a b then-block else-block)
+  (operands [a :inst-pointer] [b :inst-pointer] [then-block :block] [else-block :block])
   (class :terminator)
   (lowering (jump-eq-pointer a b then-block else-block)))
 
 ~ Get string length
 ~ A: pointer (string)
 (define-ircmd STRING_LEN
-  (operands str)
+  (operands [str :inst-pointer])
   (result :int)
   (class :value)
   (lowering (string-len str)))
@@ -276,7 +293,7 @@
 ~ Check if buffer is frozen
 ~ A: pointer (Buffer)
 (define-ircmd BUFFER_ISFROZEN
-  (operands buf)
+  (operands [buf :inst-pointer])
   (result :int)
   (class :value)
   (lowering (buffer-isfrozen buf)))
@@ -284,7 +301,7 @@
 ~ Convert integer into a double number
 ~ A: int
 (define-ircmd INT_TO_NUM
-  (operands a)
+  (operands [a :int])
   (result :double)
   (class :value)
   (lowering (int-to-num a)))
@@ -292,7 +309,7 @@
 ~ Convert int64 into a double number
 ~ A: int64
 (define-ircmd INT64_TO_NUM
-  (operands a)
+  (operands [a :int64])
   (result :double)
   (class :value)
   (lowering (int64-to-num a)))
@@ -300,7 +317,7 @@
 ~ Convert unsigned integer into a double number
 ~ A: uint
 (define-ircmd UINT_TO_NUM
-  (operands a)
+  (operands [a :int])
   (result :double)
   (class :value)
   (lowering (uint-to-num a)))
@@ -308,7 +325,7 @@
 ~ Convert unsigned integer into a float number
 ~ A: uint
 (define-ircmd UINT_TO_FLOAT
-  (operands a)
+  (operands [a :int])
   (result :float)
   (class :value)
   (lowering (uint-to-float a)))
@@ -316,7 +333,7 @@
 ~ Converts a double number to an integer. 'A' may be any representable integer in a double.
 ~ A: double
 (define-ircmd NUM_TO_INT
-  (operands a)
+  (operands [a :double])
   (result :int)
   (class :value)
   (lowering (num-to-int a)))
@@ -324,7 +341,7 @@
 ~ Converts a double number to a 64 bit integer. 'A' may be any representable integer in a double.
 ~ A: double
 (define-ircmd NUM_TO_INT64
-  (operands a)
+  (operands [a :double])
   (result :int64)
   (class :value)
   (lowering (num-to-int64 a)))
@@ -332,7 +349,7 @@
 ~ Converts a double number to an unsigned integer. For out-of-range values of 'A', the result is arch-specific.
 ~ A: double
 (define-ircmd NUM_TO_UINT
-  (operands a)
+  (operands [a :double])
   (result :int)
   (class :value)
   (flags :dirty-high-bits)
@@ -341,7 +358,7 @@
 ~ Converts a float number to a double
 ~ A: float
 (define-ircmd FLOAT_TO_NUM
-  (operands a)
+  (operands [a :float])
   (result :double)
   (class :value)
   (lowering (float-to-num a)))
@@ -349,7 +366,7 @@
 ~ Converts a double number to a float
 ~ A: double
 (define-ircmd NUM_TO_FLOAT
-  (operands a)
+  (operands [a :double])
   (result :float)
   (class :value)
   (lowering (num-to-float a)))
@@ -357,7 +374,7 @@
 ~ Clear high register bits of an unsigned integer register. Used to sanitize value of 'producesDirtyHighRegisterBits' instructions.
 ~ A: uint
 (define-ircmd TRUNCATE_UINT
-  (operands val)
+  (operands [val :inst-int])
   (result :int)
   (class :value)
   (lowering (truncate-uint val)))
@@ -372,18 +389,20 @@
 ~ A: int (result count)
 ~ B: block (fallback)
 (define-ircmd CHECK_FASTCALL_RES
-  (operands res fallback)
+  (operands [res :inst-int] [fallback :block])
   (class :guard)
   (lowering (check-fastcall-res res fallback)))
 
 ~ Guard against tag mismatch
 ~ A, B: tag
 ~ C: block/vmexit/undef
-~ In final x64 lowering, A can also be Rn
+~ When compiling for X64, A can also be Rn or Kn
 ~ When DebugLuauAbortingChecks flag is enabled, A can also be Rn
 ~ When undef is specified instead of a block, execution is aborted on check failure
 (define-ircmd CHECK_TAG
-  (operands a b fallback)
+  (operands [a :tag] [b :const-tag] [fallback :block|:vmexit|:undef])
+  (target-specific [:x64 [a :Rn|:Kn]])
+  (flag-specific [:DebugLuauAbortingChecks [a :Rn]])
   (class :guard)
   (lowering (check-tag a b fallback)))
 
@@ -392,7 +411,7 @@
 ~ B: block/vmexit/undef
 ~ When undef is specified instead of a block, execution is aborted on check failure
 (define-ircmd CHECK_READONLY
-  (operands table fallback)
+  (operands [table :inst-pointer] [fallback :block|:vmexit|:undef])
   (class :guard)
   (lowering (check-readonly table fallback)))
 
@@ -401,7 +420,7 @@
 ~ B: block/vmexit/undef
 ~ When undef is specified instead of a block, execution is aborted on check failure
 (define-ircmd CHECK_NO_METATABLE
-  (operands table fallback)
+  (operands [table :inst-pointer] [fallback :block|:vmexit|:undef])
   (class :guard)
   (lowering (check-no-metatable table fallback)))
 
@@ -410,7 +429,7 @@
 ~ B: block/vmexit/undef
 ~ When undef is specified instead of a block, execution is aborted on check failure
 (define-ircmd CHECK_NODE_NO_NEXT
-  (operands node fallback)
+  (operands [node :inst-pointer] [fallback :block|:vmexit|:undef])
   (class :guard)
   (lowering (check-node-no-next node fallback)))
 
@@ -419,7 +438,7 @@
 ~ B: block/vmexit/undef
 ~ When undef is specified instead of a block, execution is aborted on check failure
 (define-ircmd CHECK_NODE_VALUE
-  (operands node fallback)
+  (operands [node :inst-pointer] [fallback :block|:vmexit|:undef])
   (class :guard)
   (lowering (check-node-value node fallback)))
 
@@ -429,7 +448,7 @@
 ~ C: block/vmexit/undef
 ~ When undef is specified instead of a block, execution is aborted on check failure
 (define-ircmd CHECK_OBJECT_CLASS
-  (operands obj expected-class fallback)
+  (operands [obj :inst-pointer] [expected-class :inst-pointer] [fallback :block|:vmexit|:undef])
   (class :guard)
   (lowering (check-object-class obj expected-class fallback)))
 
@@ -442,23 +461,18 @@
 ~ A: pointer (LuauObject)
 ~ B: unsigned int (member offset)
 (define-ircmd OBJECT_MEMBER_ADDR
-  (operands obj offset)
+  (operands [obj :inst-pointer] [offset :const-uint])
   (result :pointer)
   (class :value)
   (lowering (object-member-addr obj offset)))
 
-~ Guard against access at specified offset with [min, max) range of bytes overflowing the buffer length
-~ When base offset source number is provided, instruction will additionally validate that the integer and double versions of base are exact
+~ Guard against writing to a buffer whose contents can't be modified (Buffer::mode is LUA_BHOST_IMMUTABLE)
 ~ A: pointer (buffer)
-~ B: int (base offset)
-~ C: int (access range min inclusive)
-~ D: int (access range max exclusive)
-~ E: double/undef (base offset source double)
-~ F: block/vmexit/undef
+~ B: block/vmexit/undef
 ~ When undef is specified instead of a block, execution is aborted on check failure
 (define-ircmd CHECK_BUFFER_MUTABLE
-  (operands buf fallback)
-  (class :effect)
+  (operands [buf :inst-pointer] [fallback :block|:vmexit|:undef])
+  (class :guard)
   (lowering (check-buffer-mutable buf fallback)))
 
 ~ Guard against userdata tag mismatch
@@ -467,21 +481,21 @@
 ~ C: block/vmexit/undef
 ~ When undef is specified instead of a block, execution is aborted on check failure
 (define-ircmd CHECK_USERDATA_TAG
-  (operands udata tag fallback)
+  (operands [udata :inst-pointer] [tag :const-int] [fallback :block|:vmexit|:undef])
   (class :guard)
   (lowering (check-userdata-tag udata tag fallback)))
 
 ~ Update savedpc value
 ~ A: unsigned int (pcpos)
 (define-ircmd SET_SAVEDPC
-  (operands pc-offset)
+  (operands [pc-offset :const-uint])
   (class :effect)
   (lowering (set-savedpc pc-offset)))
 
 ~ Performs bitwise and/xor/or on two int64
 ~ A, B: int64
 (define-ircmd BITAND_INT64
-  (operands a b)
+  (operands [a :int64] [b :int64])
   (result :int64)
   (class :value)
   (lowering (bitand-int64 a b)))
@@ -489,7 +503,7 @@
 ~ Performs bitwise and/xor/or on two int64
 ~ A, B: int64
 (define-ircmd BITXOR_INT64
-  (operands a b)
+  (operands [a :int64] [b :int64])
   (result :int64)
   (class :value)
   (lowering (bitxor-int64 a b)))
@@ -497,7 +511,7 @@
 ~ Performs bitwise and/xor/or on two int64
 ~ A, B: int64
 (define-ircmd BITOR_INT64
-  (operands a b)
+  (operands [a :int64] [b :int64])
   (result :int64)
   (class :value)
   (lowering (bitor-int64 a b)))
@@ -505,7 +519,7 @@
 ~ Performs bitwise not on an int64
 ~ A: int64
 (define-ircmd BITNOT_INT64
-  (operands val)
+  (operands [val :int64])
   (result :int64)
   (class :value)
   (lowering (bitnot-int64 val)))
@@ -513,7 +527,7 @@
 ~ Swap byte order in A
 ~ A: int64
 (define-ircmd BYTESWAP_INT64
-  (operands val)
+  (operands [val :int64])
   (result :int64)
   (class :value)
   (lowering (byteswap-int64 val)))
@@ -521,7 +535,7 @@
 ~ Performs bitwise and/xor/or on two unsigned integers
 ~ A, B: int
 (define-ircmd BITAND_UINT
-  (operands a b)
+  (operands [a :int] [b :int])
   (result :int)
   (class :value)
   (lowering (bitand-uint a b)))
@@ -529,7 +543,7 @@
 ~ Performs bitwise and/xor/or on two unsigned integers
 ~ A, B: int
 (define-ircmd BITXOR_UINT
-  (operands a b)
+  (operands [a :int] [b :int])
   (result :int)
   (class :value)
   (lowering (bitxor-uint a b)))
@@ -537,7 +551,7 @@
 ~ Performs bitwise and/xor/or on two unsigned integers
 ~ A, B: int
 (define-ircmd BITOR_UINT
-  (operands a b)
+  (operands [a :int] [b :int])
   (result :int)
   (class :value)
   (lowering (bitor-uint a b)))
@@ -545,7 +559,7 @@
 ~ Performs bitwise not on an unsigned integer
 ~ A: int
 (define-ircmd BITNOT_UINT
-  (operands val)
+  (operands [val :int])
   (result :int)
   (class :value)
   (lowering (bitnot-uint val)))
@@ -553,7 +567,7 @@
 ~ Swap byte order in A
 ~ A: int
 (define-ircmd BYTESWAP_UINT
-  (operands val)
+  (operands [val :int])
   (result :int)
   (class :value)
   (lowering (byteswap-uint val)))

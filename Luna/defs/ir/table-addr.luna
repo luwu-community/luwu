@@ -2,7 +2,7 @@
 ~ A: pointer (LuaTable)
 ~ B: int
 (define-ircmd GET_ARR_ADDR
-  (operands table idx)
+  (operands [table :pointer] [idx :int])
   (result :pointer)
   (class :value)
   (lowering (get-arr-addr table idx)))
@@ -12,7 +12,7 @@
 ~ B: unsigned int (pcpos)
 ~ C: Kn
 (define-ircmd GET_SLOT_NODE_ADDR
-  (operands table pc)
+  (operands [table :pointer] [pc :const-uint] [c :Kn])
   (result :pointer)
   (class :value)
   (lowering (get-slot-node-addr table pc)))
@@ -21,7 +21,7 @@
 ~ A: pointer (LuaTable)
 ~ B: unsigned int (hash)
 (define-ircmd GET_HASH_NODE_ADDR
-  (operands table hash)
+  (operands [table :pointer] [hash :const-uint])
   (result :pointer)
   (class :value)
   (lowering (get-hash-node-addr table hash)))
@@ -30,7 +30,7 @@
 ~ A: double
 ~ B: block
 (define-ircmd TRY_NUM_TO_INDEX
-  (operands num fail)
+  (operands [num :double] [fail :block])
   (result :int)
   (class :guard)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Branch operand targets a fallback block: can't appear in an exit sync sequence

@@ -2,7 +2,7 @@
 ~ A: Rn (value start)
 ~ B: int (result count or -1 to return all values up to stack top)
 (define-ircmd RETURN
-  (operands ra count)
+  (operands [ra :Rn] [count :int])
   (class :terminator)
   (lowering (return ra count)))
 
@@ -12,7 +12,7 @@
 ~ C: block (repeat)
 ~ D: block (exit)
 (define-ircmd FORGLOOP
-  (operands ra nvars loop exit)
+  (operands [ra :Rn] [nvars :int] [loop :block] [exit :block])
   (class :terminator)
   (lowering (forgloop ra nvars loop exit)))
 
@@ -22,7 +22,7 @@
 ~ C: block (repeat)
 ~ D: block (exit)
 (define-ircmd FORGLOOP_FALLBACK
-  (operands ra nvars loop exit)
+  (operands [ra :Rn] [nvars :int] [loop :block] [exit :block])
   (class :terminator)
   (heap-effects :invalidates-safe-env)
   (lowering (forgloop-fallback ra nvars loop exit)))
@@ -33,6 +33,6 @@
 ~ B: Rn
 ~ C: block (forgloop location)
 (define-ircmd FORGPREP_XNEXT_FALLBACK
-  (operands pc ra target)
+  (operands [pc :const-uint] [ra :Rn] [target :block])
   (class :terminator)
   (lowering (forgprep-xnext-fallback pc ra target)))

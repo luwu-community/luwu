@@ -2,14 +2,17 @@
 ~ A: tag
 ~ B: int (value)
 (define-ircmd NOT_ANY
-  (operands tag val)
+  (operands [tag :tag] [val :int])
   (result :int)
   (class :value)
   (lowering (not-any tag val)))
 
 ~ Perform a comparison of two tags. Result is an integer register containing 0 or 1
+~ A: tag or Rn
+~ B: tag
+~ C: condition
 (define-ircmd CMP_TAG
-  (operands a b cond)
+  (operands [a :tag|:Rn] [b :tag] [cond :cond])
   (result :int)
   (class :value)
   (lowering (cmp-tag a b cond)))
@@ -19,7 +22,7 @@
 ~ B: block (if true)
 ~ C: block (if false)
 (define-ircmd JUMP_IF_TRUTHY
-  (operands a if-true if-false)
+  (operands [a :Rn] [if-true :block] [if-false :block])
   (class :terminator)
   (lowering (jump-if-truthy a if-true if-false)))
 
@@ -28,6 +31,6 @@
 ~ B: block (if true)
 ~ C: block (if false)
 (define-ircmd JUMP_IF_FALSY
-  (operands a if-false if-true)
+  (operands [a :Rn] [if-false :block] [if-true :block])
   (class :terminator)
   (lowering (jump-if-falsy a if-false if-true)))

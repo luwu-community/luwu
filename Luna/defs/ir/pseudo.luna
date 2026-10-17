@@ -4,6 +4,7 @@
 ~ Instruction that passes value through, it is produced by constant folding and users substitute it with the value
 ~ A: operand of any type
 (define-ircmd SUBSTITUTE
+  (operands [a :any])
   (result :unknown)
   (class :pseudo))
 
@@ -11,10 +12,12 @@
 ~ A: Rn (start)
 ~ B: int (count, -1 to mark all registers after start)
 (define-ircmd MARK_USED
+  (operands [a :Rn] [b :int])
   (class :pseudo))
 
 ~ Pseudo instruction to mark VM registers as dead at the location
 ~ A: Rn (start)
 ~ B: int (count, -1 to mark all registers after start)
 (define-ircmd MARK_DEAD
+  (operands [a :Rn] [b :int])
   (class :pseudo))
