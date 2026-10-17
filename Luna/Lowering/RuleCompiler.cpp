@@ -1065,7 +1065,7 @@ static const std::unordered_map<std::string_view, ExprTrampolineSpec> kExprTramp
     // Bindings
     {"let", {
         "(let ([<var> <expr>]...) <body>...)",
-        "Lexically scoped local binding; a binding [var (if <pred> <a> <b>)] picks one of two registers, where each branch is an operand or (alloc-temp <type>) (A64 only)",
+        "Lexically scoped local binding; a binding [var (if <pred> <a> <b>)] picks one of two registers, where each branch is an operand or (alloc-temp <type>)",
         [](CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg) -> Operand {
             if (expr.elements.size() < 3)
                 throw CompileError(expr, "let requires bindings and body");
@@ -1453,6 +1453,7 @@ void getCommonCoreDocs(std::vector<FormDoc>& out)
 {
     out.push_back({"define-rule", "(define-rule (<name> [<param> <type>]...) <body>...)", "Define top-level IR instruction lowering rule that compiles to C++ lower_<NAME>"});
     out.push_back({"define-subrule", "(define-subrule (<name> [<param> <type>]...) <body>...)", "Define compile-time macro template inlined at expansion sites"});
+    out.push_back({"include", "(include \"<path>.luna\")", "Top-level only: splice in another file's definitions at this point. The path is relative to the including file and may not leave the root file's directory; each file is included once, and include cycles are errors"});
 
     for (const auto& [name, spec] : kExprTrampolines)
     {

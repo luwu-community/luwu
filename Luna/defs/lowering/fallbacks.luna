@@ -1,0 +1,111 @@
+;; ============================================================================
+;; Fallbacks to VM instruction implementations
+;; ============================================================================
+
+;; Run the VM's implementation of the instruction at `pc` (handler is a NativeContext::execute* slot); all registers are
+;; spilled around the call
+(define-subrule (fallback! [handler :any] [pc :op])
+  (target-case
+    [:x64 (x64:fallback! handler pc)]
+    [:a64
+     (a64:spill-all!)
+     (a64:fallback! handler pc)]))
+
+(define-rule (fallback-getglobal [pc :op] [ra :op] [k :op])
+  (assert! (kind? ra :VmReg))
+  (assert! (kind? k :VmConst))
+  (fallback! :NativeContext.executeGETGLOBAL pc))
+
+(define-rule (fallback-setglobal [pc :op] [ra :op] [k :op])
+  (assert! (kind? ra :VmReg))
+  (assert! (kind? k :VmConst))
+  (fallback! :NativeContext.executeSETGLOBAL pc))
+
+(define-rule (fallback-gettableks [pc :op] [ra :op] [rb :op] [k :op])
+  (assert! (kind? ra :VmReg))
+  (assert! (kind? rb :VmReg))
+  (assert! (kind? k :VmConst))
+  (fallback! :NativeContext.executeGETTABLEKS pc))
+
+(define-rule (fallback-settableks [pc :op] [ra :op] [rb :op] [k :op])
+  (assert! (kind? ra :VmReg))
+  (assert! (kind? rb :VmReg))
+  (assert! (kind? k :VmConst))
+  (fallback! :NativeContext.executeSETTABLEKS pc))
+
+(define-rule (fallback-namecall [pc :op] [ra :op] [rb :op] [k :op])
+  (assert! (kind? ra :VmReg))
+  (assert! (kind? rb :VmReg))
+  (assert! (kind? k :VmConst))
+  (fallback! :NativeContext.executeNAMECALL pc))
+
+(define-rule (fallback-prepvarargs [pc :op] [numparams :op])
+  (assert! (constant? numparams))
+  (fallback! :NativeContext.executePREPVARARGS pc))
+
+(define-rule (fallback-dupclosure [pc :op] [ra :op] [k :op])
+  (assert! (kind? ra :VmReg))
+  (assert! (kind? k :VmConst))
+  (fallback! :NativeContext.executeDUPCLOSURE pc))
+
+(define-rule (fallback-forgprep [pc :op] [ra :op] [loop :label])
+  (fallback! :NativeContext.executeFORGPREP pc)
+  (jump-or-fallthrough! loop))
+
+(define-rule (fallback-newobject [pc :op] [ra :op] [rb :op])
+  (target-case
+    [:x64 (x64:fallback! :NativeContext.executeNEWOBJECT pc)]
+    [:a64
+     (assert! (kind? ra :VmReg))
+     (assert! (kind? rb :VmReg))
+     (a64:spill-all!)
+     (a64:fallback! :NativeContext.executeNEWOBJECT pc)]))
+
+(define-rule (fallback-newclassmember [pc :op] [ra :op] [rb :op])
+  (target-case
+    [:x64 (x64:fallback! :NativeContext.executeNEWCLASSMEMBER pc)]
+    [:a64
+     (assert! (kind? ra :VmReg))
+     (assert! (kind? rb :VmReg))
+     (a64:spill-all!)
+     (a64:fallback! :NativeContext.executeNEWCLASSMEMBER pc)]))
+
+(define-rule (fallback-getvarargs [pc :op] [ra :op] [count :op])
+  (assert! (kind? ra :VmReg))
+  (assert! (constant? count))
+  (target-case
+    [:x64
+     (if (= (int-val count) :LUA_MULTRET)
+         (let ([call-wrap (x64:call-wrapper)])
+           (x64:call-arg! call-wrap :qword rState)
+           (let ([reg (x64:call-next-arg-reg call-wrap :qword)])
+             (x64:mov! reg sCode)
+             (x64:call-arg! call-wrap :qword (x64:addr reg (* (uint-val pc) (sizeof :Instruction)))))
+           (x64:call-arg! call-wrap :qword rBase)
+           (x64:call-arg! call-wrap :dword (vm-reg ra))
+           (x64:call! call-wrap (mem rNativeContext :NativeContext.executeGETVARARGSMultRet :ptr))
+           (x64:update-base!))
+         (let ([call-wrap (x64:call-wrapper)])
+           (x64:call-arg! call-wrap :qword rState)
+           (x64:call-arg! call-wrap :qword rBase)
+           (x64:call-arg! call-wrap :dword (vm-reg ra))
+           (x64:call-arg! call-wrap :dword (int-val count))
+           (x64:call! call-wrap (mem rNativeContext :NativeContext.executeGETVARARGSConst :ptr))))]
+    [:a64
+     (a64:spill-all!)
+     (a64:mov! x0 rState)
+     (if (= (int-val count) :LUA_MULTRET)
+         (begin
+           (a64:emit-add-offset! x1 rCode (* (uint-val pc) (sizeof :Instruction)))
+           (a64:mov! x2 rBase)
+           (a64:mov! w3 (vm-reg ra))
+           (a64:ldr! x4 (mem rNativeContext :NativeContext.executeGETVARARGSMultRet))
+           (a64:blr! x4)
+           (a64:update-base!))
+         (begin
+           (a64:mov! x1 rBase)
+           (a64:mov! w2 (vm-reg ra))
+           (a64:mov! w3 (int-val count))
+           (a64:ldr! x4 (mem rNativeContext :NativeContext.executeGETVARARGSConst))
+           (a64:blr! x4)))]))
+           ;; executeGETVARARGSConst doesn't reallocate the stack, so rBase stays valid

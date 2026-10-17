@@ -1,0 +1,429 @@
+;; ============================================================================
+;; Generic comparisons and conditional jumps
+;; ============================================================================
+
+(define-rule (cmp-any [a :op] [b :op] [cond :cond])
+  (assert! (and (kind? a :VmReg) (kind? b :VmReg)))
+  (target-case
+    [:x64
+     (let ([res (alloc-result :i32)]
+           [skip (alloc-label)]
+           [exit (alloc-label)])
+       ;; luaV_equalval expects the tags to be equal before the call
+       (if (ir-cond-eq? cond)
+           (let ([tmp (alloc-temp :u32)])
+             (x64:mov! tmp (x64:mem-reg-tag a))
+             (x64:cmp-op! (x64:mem-reg-tag b) tmp)
+             ;; unequal tags skip the call with a result of 0
+             (x64:jcc! :NotEqual skip)))
+       (block
+         (let ([spill-guard (x64:scoped-spills)]
+               [call-wrap (x64:call-wrapper)])
+           (x64:call-arg! call-wrap :qword rState)
+           (x64:call-arg! call-wrap :qword (x64:luau-reg-address (vm-reg a)))
+           (x64:call-arg! call-wrap :qword (x64:luau-reg-address (vm-reg b)))
+           (x64:call-result! call-wrap res)
+           (cond
+             [(ir-cond-le? cond) (x64:call! call-wrap (mem rNativeContext :NativeContext.luaV_lessequal :ptr))]
+             [(ir-cond-lt? cond) (x64:call! call-wrap (mem rNativeContext :NativeContext.luaV_lessthan :ptr))]
+             [(ir-cond-eq? cond) (x64:call! call-wrap (mem rNativeContext :NativeContext.luaV_equalval :ptr))]
+             [else (unsupported!)])
+           (x64:update-base!)))
+       (if (ir-cond-eq? cond)
+           (begin
+             (x64:jmp-label! exit)
+             (set-label! skip)
+             (x64:xor! res res)
+             (set-label! exit))))]
+    [:a64
+     (let ([res (alloc-result :i32)]
+           [skip (alloc-label)]
+           [exit (alloc-label)])
+       ;; luaV_equalval expects the tags to be equal before the call
+       (if (ir-cond-eq? cond)
+           (let ([tempa (alloc-temp :u32)]
+                 [tempb (alloc-temp :u32)])
+             (a64:ldr! tempa (a64:temp-addr a :TValue.tt))
+             (a64:ldr! tempb (a64:temp-addr b :TValue.tt))
+             (a64:cmp-reg! tempa tempb)
+             ;; unequal tags skip the call with a result of 0
+             (a64:b-cond! (a64:cond :NotEqual) skip)))
+       ;; the result register is reserved; free it so it isn't recorded in the spill sequence
+       (a64:free-reg! res)
+       (let ([spills (a64:spill)])
+         (a64:mov! x0 rState)
+         (a64:add-imm! x1 rBase (* (vm-reg a) (sizeof :TValue)))
+         (a64:add-imm! x2 rBase (* (vm-reg b) (sizeof :TValue)))
+         (cond
+           [(ir-cond-le? cond) (a64:ldr! x3 (mem rNativeContext :NativeContext.luaV_lessequal))]
+           [(ir-cond-lt? cond) (a64:ldr! x3 (mem rNativeContext :NativeContext.luaV_lessthan))]
+           [(ir-cond-eq? cond) (a64:ldr! x3 (mem rNativeContext :NativeContext.luaV_equalval))]
+           [else (unsupported!)])
+         (a64:blr! x3)
+         (if (!= res w0)
+             (a64:mov! res w0))
+         (a64:take-reg! res)
+         (a64:update-base!)
+         (a64:restore! spills))
+       (if (ir-cond-eq? cond)
+           (begin
+             (a64:b-label! exit)
+             (set-label! skip)
+             (a64:mov! res 0)
+             (set-label! exit))))])
+  ;; after a call the high register bits aren't cleared; the only consumer (JUMP_CMP_INT) doesn't read them
+  )
+
+(define-rule (jump-eq-tag [a :op] [b :op] [if-eq :label] [if-ne :label])
+  (target-case
+    [:x64
+     (assert! (or (kind? b :Inst) (constant? b)))
+     (let ([opb (if (kind? b :Inst) b (x64:imm-tag b))])
+       (if (constant? a)
+           (x64:cmp-op! opb (tag-val a))
+           (x64:cmp-op! (x64:mem-reg-tag a) opb)))
+     (if (fallthrough? if-ne)
+         (begin
+           (x64:jcc! :Equal (label-of if-eq))
+           (jump-or-fallthrough! if-ne))
+         (begin
+           (x64:jcc! :NotEqual (label-of if-ne))
+           (jump-or-fallthrough! if-eq)))]
+    [:a64
+     (let ([a-reg (a64:tag-operand a)])
+       (a64:load-vm-tag! a-reg a)
+       (let ([b-reg (a64:tag-operand b)])
+         (a64:load-vm-tag! b-reg b)
+         ;; comparing against nil (tag 0) uses cbz/cbnz on the other operand
+         (let ([zr (if (and (constant? a) (= (tag-val a) 0)) b-reg (if (and (constant? b) (= (tag-val b) 0)) a-reg noreg))])
+           (cond
+             [(and (constant? a) (= (tag-val a) 0))] ; compared with cbz/cbnz below
+             [(and (constant? b) (= (tag-val b) 0))] ; compared with cbz/cbnz below
+             [(constant? b) (a64:cmp-imm! a-reg (tag-val b))]
+             [(constant? a) (a64:cmp-imm! b-reg (tag-val a))]
+             [else (a64:cmp-reg! a-reg b-reg)])
+           (if (fallthrough? if-ne)
+               (begin
+                 (if (!= zr noreg)
+                     (a64:cbz! zr (label-of if-eq))
+                     (a64:b-cond! (a64:cond :Equal) (label-of if-eq)))
+                 (jump-or-fallthrough! if-ne))
+               (begin
+                 (if (!= zr noreg)
+                     (a64:cbnz! zr (label-of if-ne))
+                     (a64:b-cond! (a64:cond :NotEqual) (label-of if-ne)))
+                 (jump-or-fallthrough! if-eq))))))]))
+
+(define-rule (jump-cmp-num [a :op] [b :op] [cond :cond] [if-true :label] [if-false :label])
+  (target-case
+    [:x64
+     (let ([tmp (alloc-temp :f64)])
+       (x64:jump-on-number-cmp! tmp (x64:mem-reg-double a) (x64:mem-reg-double b) cond (label-of if-true) :false))]
+    [:a64
+     (if (and (constant? b) (= (double-val b) 0.0))
+         (let ([temp (a64:double-operand a)])
+           (a64:fcmpz! temp))
+         (let ([temp1 (a64:double-operand a)]
+               [temp2 (a64:double-operand b)])
+           (a64:fcmp! temp1 temp2)))
+     (a64:b-cond! (a64:cond-fp-of cond) (label-of if-true))])
+  (jump-or-fallthrough! if-false))
+
+(define-rule (jump-cmp-float [a :op] [b :op] [cond :cond] [if-true :label] [if-false :label])
+  (target-case
+    [:x64
+     (let ([tmp (alloc-temp :f64)])
+       (x64:jump-on-number-cmp! tmp (x64:mem-reg-float a) (x64:mem-reg-float b) cond (label-of if-true) :true))]
+    [:a64
+     (if (and (constant? b) (= (to-float (double-val b)) 0.0f))
+         (let ([temp (a64:float-operand a)])
+           (a64:fcmpz! temp))
+         (let ([temp1 (a64:float-operand a)]
+               [temp2 (a64:float-operand b)])
+           (a64:fcmp! temp1 temp2)))
+     (a64:b-cond! (a64:cond-fp-of cond) (label-of if-true))])
+  (jump-or-fallthrough! if-false))
+
+;; Compare TValues given as tag/value pairs; the second tag must be a constant, since without it we wouldn't know how
+;; to compare the values
+(define-rule (cmp-split-tvalue [tag-a :op] [tag-b :op] [val-a :op] [val-b :op] [cond :cond])
+  (target-case
+    [:x64
+     ;; can't reuse an operand register: the target is modified before the comparison
+     (let ([res (alloc-result :i32)])
+       (assert! (constant? tag-b))
+       ;; setcc writes byte registers, which don't clear the high bits
+       (x64:xor! res res)
+       (assert! (or (ir-cond-eq? cond) (ir-cond-ne? cond)))
+       ;; check tag equality first
+       (let ([tmp1 (alloc-temp :u8)])
+         (if (not (constant? tag-a))
+             (begin
+               (x64:cmp-op! tag-a (tag-val tag-b))
+               (x64:setcc! (x64:cond-int cond) (x64:byte-reg tmp1)))
+             ;; constant folding had to handle different constant tags
+             (assert! (= (tag-val tag-a) (tag-val tag-b))))
+         (cond
+           [(= (tag-val tag-b) :LUA_TBOOLEAN)
+            (cond
+              [(constant? val-a) (x64:cmp-op! val-b (int-val val-a))] ; swapped arguments
+              [(constant? val-b) (x64:cmp-op! val-a (int-val val-b))]
+              [else (x64:cmp-op! val-a val-b)])
+            (x64:setcc! (x64:cond-int cond) (x64:byte-reg res))]
+           [(= (tag-val tag-b) :LUA_TSTRING)
+            (x64:cmp-op! val-a val-b)
+            (x64:setcc! (x64:cond-int cond) (x64:byte-reg res))]
+           [(= (tag-val tag-b) :LUA_TNUMBER)
+            (cond
+              [(constant? val-a) (x64:vucomisd-op! val-b (x64:mem-reg-double val-a))] ; swapped arguments
+              [(constant? val-b) (x64:vucomisd-op! val-a (x64:mem-reg-double val-b))]
+              [else (x64:vucomisd-op! val-a val-b)])
+            (if (same-op? val-a val-b)
+                ;; comparing a number with itself only needs the parity check to detect NaN
+                (if (ir-cond-eq? cond)
+                    (x64:setcc! (x64:cond :NotParity) (x64:byte-reg res))
+                    (x64:setcc! (x64:cond :Parity) (x64:byte-reg res)))
+                (let ([tmp2 (alloc-temp :u32)])
+                  (if (ir-cond-eq? cond)
+                      (begin
+                        (x64:mov! tmp2 0)
+                        (x64:setcc! (x64:cond :NotParity) (x64:byte-reg res))
+                        (x64:cmov-cond! :NotEqual res tmp2))
+                      (begin
+                        (x64:mov! tmp2 1)
+                        (x64:setcc! (x64:cond :Parity) (x64:byte-reg res))
+                        (x64:cmov-cond! :NotEqual res tmp2)))))]
+           [(= (tag-val tag-b) :LUA_TINTEGER)
+            (cond
+              [(constant? val-a) (x64:cmp-op! val-b (x64:mem-reg-int64 val-a))] ; swapped arguments
+              [(constant? val-b) (x64:cmp-op! val-a (x64:mem-reg-int64 val-b))]
+              [else (x64:cmp-op! val-a val-b)])
+            (x64:setcc! (x64:cond-int cond) (x64:byte-reg res))]
+           [else (unsupported!)])
+         (if (not (constant? tag-a))
+             (if (ir-cond-eq? cond)
+                 (x64:and! (x64:byte-reg res) (x64:byte-reg tmp1))
+                 (x64:or! (x64:byte-reg res) (x64:byte-reg tmp1))))))]
+    [:a64
+     (let ([res (alloc-result-reuse :i32 [tag-a tag-b])])
+       (assert! (constant? tag-b))
+       (assert! (or (ir-cond-eq? cond) (ir-cond-ne? cond)))
+       ;; check tag equality first
+       (let ([temp (alloc-temp :u32)])
+         (if (not (constant? tag-a))
+             (begin
+               (a64:cmp-imm! tag-a (tag-val tag-b))
+               (a64:cset! temp (a64:cond-int-of cond)))
+             ;; constant folding had to handle different constant tags
+             (assert! (= (tag-val tag-a) (tag-val tag-b))))
+         (cond
+           [(= (tag-val tag-b) :LUA_TBOOLEAN)
+            (cond
+              [(constant? val-a)
+               (assert! (or (= (int-val val-a) 0) (= (int-val val-a) 1)))
+               (a64:cmp-imm! val-b (int-val val-a))] ; swapped arguments
+              [(constant? val-b)
+               (assert! (or (= (int-val val-b) 0) (= (int-val val-b) 1)))
+               (a64:cmp-imm! val-a (int-val val-b))]
+              [else (a64:cmp-reg! val-a val-b)])
+            (a64:cset! res (a64:cond-int-of cond))]
+           [(= (tag-val tag-b) :LUA_TSTRING)
+            (a64:cmp-reg! val-a val-b)
+            (a64:cset! res (a64:cond-int-of cond))]
+           [(= (tag-val tag-b) :LUA_TNUMBER)
+            (let ([temp1 (a64:double-operand val-a)]
+                  [temp2 (a64:double-operand val-b)])
+              (a64:fcmp! temp1 temp2)
+              (a64:cset! res (a64:cond-fp-of cond)))]
+           [(= (tag-val tag-b) :LUA_TINTEGER)
+            (let ([temp1 (a64:int64-operand val-a)]
+                  [temp2 (a64:int64-operand val-b)])
+              (a64:cmp-reg! temp1 temp2)
+              (a64:cset! res (a64:cond-int64-of cond)))]
+           [else (unsupported!)])
+         (if (not (constant? tag-a))
+             (if (ir-cond-eq? cond)
+                 (a64:and-op! res res temp)
+                 (a64:orr-op! res res temp)))))]))
+
+(define-rule (jump-forn-loop-cond [idx :op] [limit :op] [step :op] [loop :label] [exit :label])
+  (target-case
+    [:x64
+     (let ([tmp1 (alloc-temp :f64)]
+           [tmp2 (alloc-temp :f64)]
+           [tmp3 (alloc-temp :f64)]
+           [index-reg (if (kind? idx :Inst) idx tmp1)]
+           [limit-reg (if (kind? limit :Inst) limit tmp2)]
+           [direct (alloc-label)])
+       (if (not (kind? idx :Inst))
+           (x64:vmovsd-op! tmp1 (x64:mem-reg-double idx)))
+       (if (not (kind? limit :Inst))
+           (x64:vmovsd-op! tmp2 (x64:mem-reg-double limit)))
+       ;; step > 0
+       (x64:jump-on-number-cmp! tmp3 (x64:mem-reg-double step) (x64:f64 0.0) (ir-condition :Greater) direct :false)
+       ;; !(limit <= index)
+       (x64:jump-on-number-cmp! noreg limit-reg index-reg (ir-condition :NotLessEqual) (label-of exit) :false)
+       (x64:jmp-label! (label-of loop))
+       ;; !(index <= limit)
+       (set-label! direct)
+       (x64:jump-on-number-cmp! noreg index-reg limit-reg (ir-condition :NotLessEqual) (label-of exit) :false))]
+    [:a64
+     (let ([index (a64:double-operand idx)]
+           [limit-reg (a64:double-operand limit)]
+           [step-reg (a64:double-operand step)])
+       (let ([direct (alloc-label)])
+         ;; step > 0
+         (a64:fcmpz! step-reg)
+         (a64:b-cond! (a64:cond-fp :Greater) direct)
+         ;; !(limit <= index)
+         (a64:fcmp! limit-reg index)
+         (a64:b-cond! (a64:cond-fp :NotLessEqual) (label-of exit))
+         (a64:b-label! (label-of loop))
+         ;; !(index <= limit)
+         (set-label! direct)
+         (a64:fcmp! index limit-reg)
+         (a64:b-cond! (a64:cond-fp :NotLessEqual) (label-of exit))))])
+  (jump-or-fallthrough! loop))
+
+(define-rule (select-if-truthy [cond-val :op] [lhs :op] [rhs :op])
+  ;; no reuse, since multiple inputs can be shared
+  (let ([res (alloc-result :vec)])
+    (target-case
+      [:x64
+       ;; place lhs as the result, overwritten with rhs below if the condition is falsy
+       (x64:vmovaps! res lhs)
+       ;; resolve the rhs register early, so a potential restore happens on both sides of the conditional control flow
+       (let ([c (reg-op rhs)]
+             [tmp (alloc-temp :u32)]
+             [save-rhs (alloc-label)]
+             [exit (alloc-label)])
+         ;; check the tag first
+         (x64:vpextrd! tmp cond-val 3)
+         (x64:cmp-op! tmp :LUA_TSYMNONE)
+         (x64:jcc! :Equal save-rhs) ; rhs if none (see l_isfalse)
+         (x64:cmp-op! tmp :LUA_TBOOLEAN)
+         (x64:jcc! :Below save-rhs) ; rhs if nil
+         (x64:jcc! :Above exit) ; keep lhs if not a boolean
+         ;; check the boolean value
+         (x64:vpextrd! tmp cond-val 0)
+         (x64:test! tmp tmp)
+         (x64:jcc! :NotZero exit) ; keep lhs if true
+         (set-label! save-rhs)
+         (x64:vmovaps! res c)
+         (set-label! exit))]
+      [:a64
+       ;; place lhs as the result, overwritten with rhs below if the condition is falsy
+       (a64:mov! res lhs)
+       ;; resolve the rhs register early, so a potential restore happens on both sides of the conditional control flow
+       (let ([c (reg-op rhs)]
+             [temp (alloc-temp :u32)]
+             [save-rhs (alloc-label)]
+             [exit (alloc-label)])
+         ;; check the tag first
+         (a64:umov-4s! temp cond-val 3)
+         (a64:cmp-imm! temp :LUA_TSYMNONE)
+         (a64:b-cond! (a64:cond :Equal) save-rhs) ; rhs if none (see l_isfalse)
+         (a64:cmp-imm! temp :LUA_TBOOLEAN)
+         (a64:b-cond! (a64:cond :UnsignedLess) save-rhs) ; rhs if nil
+         (a64:b-cond! (a64:cond :UnsignedGreater) exit) ; keep lhs if not a boolean
+         ;; check the boolean value
+         (a64:umov-4s! temp cond-val 0)
+         (a64:cbnz! temp exit) ; keep lhs if true
+         (set-label! save-rhs)
+         (a64:mov! res c)
+         (set-label! exit))])))
+
+(define-rule (check-cmp-num [a :op] [b :op] [cond :cond] [fail :label])
+  (target-case
+    [:x64
+     (let ([fresh-label (alloc-label)]
+           [fail-label (x64:target-label fail fresh-label)]
+           [tmp (alloc-temp :f64)])
+       (x64:jump-on-number-cmp! tmp (x64:mem-reg-double a) (x64:mem-reg-double b) (negated-cond cond) fail-label :false)
+       (x64:finalize-target-label! fail fresh-label))]
+    [:a64
+     (let ([fresh-label (alloc-label)]
+           [fail-label (a64:target-label fail fresh-label)]
+           [temp-a (a64:double-operand a)])
+       (let ([temp-b (a64:double-operand b)])
+         (a64:fcmp! temp-a temp-b)
+         (a64:b-cond! (a64:cond-fp-negated-of cond) fail-label))
+       (a64:finalize-target-label! fail fresh-label))]))
+
+(define-rule (check-truthy [tag :op] [val :op] [fail :label])
+  ;; constant tags that don't need the boolean value check should've been removed in constant folding
+  (assert! (or (not (constant? tag)) (= (tag-val tag) :LUA_TBOOLEAN)))
+  (target-case
+    [:x64
+     (let ([skip (alloc-label)])
+       (if (not (constant? tag))
+           (begin
+             ;; fail on nil (falsy)
+             (x64:cmp-op! (x64:mem-reg-tag tag) :LUA_TNIL)
+             (x64:jump-or-abort-on-undef! :Equal fail)
+             ;; skip the value test if it's not a boolean (truthy)
+             (x64:cmp-op! (x64:mem-reg-tag tag) :LUA_TBOOLEAN)
+             (x64:jcc! :NotEqual skip)))
+       ;; fail on a false boolean value (falsy)
+       (if (not (constant? val))
+           (begin
+             (x64:cmp-op! (x64:mem-reg-uint val) 0)
+             (x64:jump-or-abort-on-undef! :Equal fail))
+           (if (= (int-val val) 0)
+               (x64:jump-or-abort! fail)))
+       (if (not (constant? tag))
+           (set-label! skip)))]
+    [:a64
+     (let ([fresh-label (alloc-label)]
+           [target (a64:target-label fail fresh-label)]
+           [skip (alloc-label)])
+       (if (not (constant? tag))
+           (begin
+             ;; fail on nil (falsy)
+             (assert! (= :LUA_TNIL 0))
+             (a64:cbz! tag target)
+             ;; skip the value test if it's not a boolean (truthy)
+             (a64:cmp-imm! tag :LUA_TBOOLEAN)
+             (a64:b-cond! (a64:cond :NotEqual) skip)))
+       ;; fail on a false boolean value (falsy)
+       (if (not (constant? val))
+           (a64:cbz! val target)
+           (if (= (int-val val) 0)
+               (a64:b-label! target)))
+       (if (not (constant? tag))
+           (set-label! skip))
+       (a64:finalize-target-label! fail fresh-label))]))
+
+(define-rule (check-safe-env [fail :label])
+  (check-safe-env! fail))
+
+(define-rule (check-array-size [table :op] [size :op] [fail :label])
+  (target-case
+    [:x64
+     (cond
+       [(kind? size :Inst) (x64:cmp-op! (mem table :LuaTable.sizearray :u32) size)]
+       [(constant? size) (x64:cmp-op! (mem table :LuaTable.sizearray :u32) (int-val size))]
+       [else (unsupported!)])
+     (x64:jump-or-abort-on-undef! :BelowEqual fail)]
+    [:a64
+     (let ([fresh-label (alloc-label)]
+           [fail-label (a64:target-label fail fresh-label)]
+           [temp (alloc-temp :u32)])
+       (a64:ldr! temp (mem table :LuaTable.sizearray))
+       (cond
+         [(kind? size :Inst)
+          (a64:cmp-reg! temp size)
+          (a64:b-cond! (a64:cond :UnsignedLessEqual) fail-label)]
+         [(constant? size)
+          (cond
+            [(= (int-val size) 0) (a64:cbz! temp fail-label)]
+            [(<= (to-size (int-val size)) :AssemblyBuilderA64::kMaxImmediate)
+             (a64:cmp-imm! temp (int-val size))
+             (a64:b-cond! (a64:cond :UnsignedLessEqual) fail-label)]
+            [else
+             (let ([temp2 (alloc-temp :u32)])
+               (a64:mov! temp2 (int-val size))
+               (a64:cmp-reg! temp temp2)
+               (a64:b-cond! (a64:cond :UnsignedLessEqual) fail-label))])]
+         [else (unsupported!)])
+       (a64:finalize-target-label! fail fresh-label))]))

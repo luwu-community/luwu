@@ -1,0 +1,140 @@
+;; ============================================================================
+;; Generic for loops and returns
+;; ============================================================================
+
+(define-rule (forgloop [ra :op] [nvars :op] [loop :label] [exit :label])
+  (target-case
+    [:x64
+     (x64:assert-all-free!)
+     (x64:inst-forgloop! (vm-reg ra) nvars (label-of loop))]
+    [:a64
+     ;; register layout: ra + 1 = table, ra + 2 = internal index, ra + 3 .. ra + aux = iteration variables
+     (a64:spill-all!)
+     ;; clear the extra variables, since there may be more than two
+     (if (> (int-val nvars) 2)
+         (begin
+           (assert! (= :LUA_TNIL 0))
+           (for-range [i 2 (int-val nvars)]
+             (a64:str! wzr (mem rBase (+ (* (+ (+ (vm-reg ra) 3) i) (sizeof :TValue)) :TValue.tt))))))
+     ;; the full iteration fallback is used for now; array iteration could be accelerated here in the future
+     (a64:mov! x0 rState)
+     (a64:ldr! x1 (mem rBase (+ (* (+ (vm-reg ra) 1) (sizeof :TValue)) :TValue.value.gc)))
+     (a64:ldr! w2 (mem rBase (+ (* (+ (vm-reg ra) 2) (sizeof :TValue)) :TValue.value.p)))
+     (a64:vm-reg-address! x3 ra)
+     (a64:ldr! x4 (mem rNativeContext :NativeContext.forgLoopTableIter))
+     (a64:blr! x4)
+     ;; forgLoopTableIter doesn't reallocate the stack, so rBase stays valid
+     (a64:cbnz! w0 (label-of loop))])
+  (jump-or-fallthrough! exit))
+
+(define-rule (forgloop-fallback [ra :op] [nvars :op] [loop :label] [exit :label])
+  (target-case
+    [:x64
+     (let ([call-wrap (x64:call-wrapper-at)])
+       (x64:call-arg! call-wrap :qword rState)
+       (x64:call-arg! call-wrap :dword (vm-reg ra))
+       (x64:call-arg! call-wrap :dword (int-val nvars))
+       (if (fflag :LuauYieldIter2)
+           (begin
+             (x64:call! call-wrap (mem rNativeContext :NativeContext.forgLoopNonTableFallback :ptr))
+             (x64:update-base!)
+             (x64:test! eax eax)
+             (x64:jcc! :Less (helper-label :exitNoContinueVm))
+             (x64:jcc! :Greater (label-of loop)))
+           (begin
+             (x64:call! call-wrap (mem rNativeContext :NativeContext.forgLoopNonTableFallback_DEPRECATED :ptr))
+             (x64:update-base!)
+             (x64:test! al al)
+             (x64:jcc! :NotZero (label-of loop)))))]
+    [:a64
+     (a64:spill-all!)
+     (a64:mov! x0 rState)
+     (a64:mov! w1 (vm-reg ra))
+     (a64:mov! w2 (int-val nvars))
+     (if (fflag :LuauYieldIter2)
+         (begin
+           (a64:ldr! x3 (mem rNativeContext :NativeContext.forgLoopNonTableFallback))
+           (a64:blr! x3)
+           (a64:update-base!)
+           (a64:cmp-imm! w0 0)
+           (a64:b-cond! (a64:cond :Less) (helper-label :exitNoContinueVm))
+           (a64:b-cond! (a64:cond :Greater) (label-of loop)))
+         (begin
+           (a64:ldr! x3 (mem rNativeContext :NativeContext.forgLoopNonTableFallback_DEPRECATED))
+           (a64:blr! x3)
+           (a64:update-base!)
+           (a64:cbnz! w0 (label-of loop))))])
+  (jump-or-fallthrough! exit))
+
+(define-rule (forgprep-xnext-fallback [pc :op] [ra :op] [target :label])
+  (target-case
+    [:x64
+     (let ([call-wrap (x64:call-wrapper-at)])
+       (x64:call-arg! call-wrap :qword rState)
+       (x64:call-arg! call-wrap :qword (x64:luau-reg-address (vm-reg ra)))
+       (x64:call-arg! call-wrap :dword (+ (uint-val pc) 1))
+       (x64:call! call-wrap (mem rNativeContext :NativeContext.forgPrepXnextFallback :ptr)))]
+    [:a64
+     (a64:spill-all!)
+     (a64:mov! x0 rState)
+     (a64:vm-reg-address! x1 ra)
+     (a64:mov! w2 (+ (uint-val pc) 1))
+     (a64:ldr! x3 (mem rNativeContext :NativeContext.forgPrepXnextFallback))
+     (a64:blr! x3)])
+     ;; forgPrepXnextFallback doesn't reallocate the stack, so rBase stays valid
+  (jump-or-fallthrough! target))
+
+(define-rule (return [ra :op] [count :op])
+  (target-case
+    [:x64
+     (x64:assert-all-free!)
+     (x64:assert-no-spills!)
+     (x64:inst-return! (vm-reg ra) count)]
+    [:a64
+     (a64:spill-all!)
+     (cond
+       [(variadic?)
+        (a64:ldr! x1 (mem rState :lua_State.ci))
+        (a64:ldr! x1 (mem x1 :CallInfo.func))]
+       [(!= (int-val count) 1)
+        ;; invariant: ci->func + 1 == ci->base for non-variadic frames
+        (a64:sub-imm! x1 rBase (sizeof :TValue))])
+     (cond
+       [(= (int-val count) 0)
+        (a64:mov! w2 0)
+        (a64:b-label! (helper-label :return_))]
+       [(and (= (int-val count) 1) (not (variadic?)))
+        ;; fast path that minimizes x1 adjustments (x1 isn't computed above for this case)
+        (a64:ldr! q0 (mem rBase (* (vm-reg ra) (sizeof :TValue))))
+        (a64:str! q0 (mem rBase (- 0 (to-int (sizeof :TValue)))))
+        (a64:mov! x1 rBase)
+        (a64:mov! w2 1)
+        (a64:b-label! (helper-label :return_))]
+       [(and (>= (int-val count) 1) (<= (int-val count) 3))
+        (for-range [r 0 (int-val count)]
+          (a64:ldr! q0 (mem rBase (* (+ (vm-reg ra) r) (sizeof :TValue))))
+          (a64:str! q0 (a64:mem-post x1 (sizeof :TValue))))
+        (a64:mov! w2 (int-val count))
+        (a64:b-label! (helper-label :return_))]
+       [else
+        (a64:mov! w2 0)
+        ;; vali = ra
+        (a64:vm-reg-address! x3 ra)
+        ;; valend = (n == LUA_MULTRET) ? L->top : ra + n
+        (if (= (int-val count) :LUA_MULTRET)
+            (a64:ldr! x4 (mem rState :lua_State.top))
+            (a64:add-imm! x4 rBase (* (+ (vm-reg ra) (int-val count)) (sizeof :TValue))))
+        (let ([repeat-value-loop (alloc-label)]
+              [exit-value-loop (alloc-label)])
+          (if (= (int-val count) :LUA_MULTRET)
+              (begin
+                (a64:cmp-reg! x3 x4)
+                (a64:b-cond! (a64:cond :CarrySet) exit-value-loop))) ; CarrySet == UnsignedGreaterEqual
+          (set-label! repeat-value-loop)
+          (a64:ldr! q0 (a64:mem-post x3 (sizeof :TValue)))
+          (a64:str! q0 (a64:mem-post x1 (sizeof :TValue)))
+          (a64:add-imm! w2 w2 1)
+          (a64:cmp-reg! x3 x4)
+          (a64:b-cond! (a64:cond :CarryClear) repeat-value-loop) ; CarryClear == UnsignedLess
+          (set-label! exit-value-loop)
+          (a64:b-label! (helper-label :return_)))])]))

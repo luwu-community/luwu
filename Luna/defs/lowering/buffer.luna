@@ -1,0 +1,278 @@
+;; ============================================================================
+;; Buffer reads, writes and bounds checks
+;; ============================================================================
+
+(define-rule (buffer-readi8 [a :op] [b :op] [tag :op])
+  (let ([res (target-case
+               [:x64 (alloc-result-reuse :i32 [a b])]
+               [:a64 (alloc-result-reuse :i32 b)])])
+    (target-case
+      [:x64 (x64:movsx! res (x64:ptr :byte (x64:buffer-addr a b tag)))]
+      [:a64
+       (let ([addr (a64:temp-addr-buffer a b tag)])
+         (a64:ldrsb-op! res addr))])))
+
+(define-rule (buffer-readu8 [a :op] [b :op] [tag :op])
+  (let ([res (target-case
+               [:x64 (alloc-result-reuse :i32 [a b])]
+               [:a64 (alloc-result-reuse :i32 b)])])
+    (target-case
+      [:x64 (x64:movzx! res (x64:ptr :byte (x64:buffer-addr a b tag)))]
+      [:a64
+       (let ([addr (a64:temp-addr-buffer a b tag)])
+         (a64:ldrb-op! res addr))])))
+
+(define-rule (buffer-readi16 [a :op] [b :op] [tag :op])
+  (let ([res (target-case
+               [:x64 (alloc-result-reuse :i32 [a b])]
+               [:a64 (alloc-result-reuse :i32 b)])])
+    (target-case
+      [:x64 (x64:movsx! res (x64:ptr :word (x64:buffer-addr a b tag)))]
+      [:a64
+       (let ([addr (a64:temp-addr-buffer a b tag)])
+         (a64:ldrsh-op! res addr))])))
+
+(define-rule (buffer-readu16 [a :op] [b :op] [tag :op])
+  (let ([res (target-case
+               [:x64 (alloc-result-reuse :i32 [a b])]
+               [:a64 (alloc-result-reuse :i32 b)])])
+    (target-case
+      [:x64 (x64:movzx! res (x64:ptr :word (x64:buffer-addr a b tag)))]
+      [:a64
+       (let ([addr (a64:temp-addr-buffer a b tag)])
+         (a64:ldrh-op! res addr))])))
+
+(define-rule (buffer-readi32 [a :op] [b :op] [tag :op])
+  (let ([res (target-case
+               [:x64 (alloc-result-reuse :i32 [a b])]
+               [:a64 (alloc-result-reuse :i32 b)])])
+    (target-case
+      [:x64 (x64:mov! res (x64:ptr :dword (x64:buffer-addr a b tag)))]
+      [:a64
+       (let ([addr (a64:temp-addr-buffer a b tag)])
+         (a64:ldr! res addr))])))
+
+(define-rule (buffer-readf32 [a :op] [b :op] [tag :op])
+  (let ([res (alloc-result :f32)])
+    (target-case
+      [:x64 (x64:vmovss-op! res (x64:ptr :dword (x64:buffer-addr a b tag)))]
+      [:a64
+       (let ([addr (a64:temp-addr-buffer a b tag)])
+         (a64:ldr! res addr))])))
+
+(define-rule (buffer-readf64 [a :op] [b :op] [tag :op])
+  (let ([res (alloc-result :f64)])
+    (target-case
+      [:x64 (x64:vmovsd-op! res (x64:ptr :qword (x64:buffer-addr a b tag)))]
+      [:a64
+       (let ([addr (a64:temp-addr-buffer a b tag)])
+         (a64:ldr! res addr))])))
+
+(define-rule (buffer-readi64 [a :op] [b :op] [tag :op])
+  (let ([res (alloc-result :i64)])
+    (target-case
+      [:x64 (x64:mov! res (x64:ptr :qword (x64:buffer-addr a b tag)))]
+      [:a64
+       (let ([addr (a64:temp-addr-buffer a b tag)])
+         (a64:ldr! res addr))])))
+
+(define-rule (buffer-writei8 [a :op] [b :op] [val :op] [tag :op])
+  (target-case
+    [:x64
+     (let ([value (if (kind? val :Inst) (x64:byte-reg val) (x64:imm8 val))])
+       (x64:mov! (x64:ptr :byte (x64:buffer-addr a b tag)) value))]
+    [:a64
+     (let ([temp (a64:int-operand val)])
+       (let ([addr (a64:temp-addr-buffer a b tag)])
+         (a64:strb-op! temp addr)))]))
+
+(define-rule (buffer-writei16 [a :op] [b :op] [val :op] [tag :op])
+  (target-case
+    [:x64
+     (let ([value (if (kind? val :Inst) (x64:word-reg val) (x64:imm16 val))])
+       (x64:mov! (x64:ptr :word (x64:buffer-addr a b tag)) value))]
+    [:a64
+     (let ([temp (a64:int-operand val)])
+       (let ([addr (a64:temp-addr-buffer a b tag)])
+         (a64:strh-op! temp addr)))]))
+
+(define-rule (buffer-writei32 [a :op] [b :op] [val :op] [tag :op])
+  (target-case
+    [:x64
+     (let ([value (if (kind? val :Inst) val (x64:imm32 val))])
+       (x64:mov! (x64:ptr :dword (x64:buffer-addr a b tag)) value))]
+    [:a64
+     (let ([temp (a64:int-operand val)])
+       (let ([addr (a64:temp-addr-buffer a b tag)])
+         (a64:str! temp addr)))]))
+
+(define-rule (buffer-writef32 [a :op] [b :op] [val :op] [tag :op])
+  (target-case
+    [:x64 (x64:store-float! (x64:ptr :dword (x64:buffer-addr a b tag)) val)]
+    [:a64
+     (let ([temp (a64:float-operand val)])
+       (let ([addr (a64:temp-addr-buffer a b tag)])
+         (a64:str! temp addr)))]))
+
+(define-rule (buffer-writef64 [a :op] [b :op] [val :op] [tag :op])
+  (target-case
+    [:x64
+     (cond
+       [(constant? val)
+        (let ([tmp (alloc-temp :f64)])
+          (x64:vmovsd-op! tmp (x64:f64 val))
+          (x64:vmovsd-op! (x64:ptr :qword (x64:buffer-addr a b tag)) tmp))]
+       [(kind? val :Inst) (x64:vmovsd-op! (x64:ptr :qword (x64:buffer-addr a b tag)) val)]
+       [else (unsupported!)])]
+    [:a64
+     (let ([temp (a64:double-operand val)])
+       (let ([addr (a64:temp-addr-buffer a b tag)])
+         (a64:str! temp addr)))]))
+
+(define-rule (buffer-writei64 [a :op] [b :op] [val :op] [tag :op])
+  (target-case
+    [:x64
+     (cond
+       [(constant? val)
+        (let ([tmp (alloc-temp :i64)])
+          (x64:mov! tmp (x64:i64 (int64-val val)))
+          (x64:mov! (x64:ptr :qword (x64:buffer-addr a b tag)) tmp))]
+       [(kind? val :Inst) (x64:mov! (x64:ptr :qword (x64:buffer-addr a b tag)) val)]
+       [else (unsupported!)])]
+    [:a64
+     (let ([temp (a64:int64-operand val)])
+       (let ([addr (a64:temp-addr-buffer a b tag)])
+         (a64:str! temp addr)))]))
+
+;; Guard that [offset + min-offset, offset + max-offset) is within the buffer, and optionally that the offset was
+;; exactly representable (exact holds the original double)
+(define-rule (check-buffer-len [buffer :op] [offset :op] [min :op] [max :op] [exact :op] [fail :label])
+  (let ([min-offset (int-val min)]
+        [max-offset (int-val max)])
+    (assert! (< min-offset max-offset))
+    (target-case
+      [:x64
+       (let ([access-size (- max-offset min-offset)])
+         (assert! (> access-size 0))
+         ;; jumps to exit sync blocks need the same register allocation state at each potential taken branch
+         (let ([reg-a (if (kind? buffer :Inst) buffer noreg)]
+               [reg-b (if (kind? offset :Inst) offset noreg)]
+               [reg-e (if (not (kind? exact :Undef)) exact noreg)]
+               [tmp-xmm (x64:unallocated-temp)]
+               [tmp1 (x64:unallocated-temp)]
+               [tmp2 (x64:unallocated-temp)])
+           (if (not (kind? exact :Undef))
+               (x64:alloc! tmp-xmm :xmmword))
+           (if (and (kind? offset :Inst) (not (and (= access-size 1) (= min-offset 0))))
+               (begin
+                 (x64:alloc! tmp1 :qword)
+                 (x64:alloc! tmp2 :dword)))
+           (let ([fresh-label (alloc-label)])
+             ;; also guard that the offset is an exact integer
+             (if (not (kind? exact :Undef))
+                 (begin
+                   (assert! (= (cmd-value-kind offset) :IrValueKind::Int))
+                   (assert! (not (dirty-high-bits? offset)))
+                   (x64:vcvtsi2sd-op! (x64:reg-of tmp-xmm) (x64:reg-of tmp-xmm) reg-b)
+                   (x64:vucomisd-op! (x64:reg-of tmp-xmm) reg-e) ; ZF=1 if equal or NaN, PF=1 on NaN
+                   (x64:jump-or-abort-no-finalize! :NotZero fail fresh-label)
+                   (x64:jump-or-abort-no-finalize! :Parity fail fresh-label)))
+             (cond
+               [(kind? offset :Inst)
+                (assert! (not (dirty-high-bits? offset)))
+                (if (and (= access-size 1) (= min-offset 0))
+                    (begin
+                      (x64:cmp-op! (mem reg-a :Buffer.len :u32) reg-b)
+                      (x64:jump-or-abort-no-finalize! :BelowEqual fail fresh-label))
+                    (begin
+                      ;; a single-branch bounds check: the 32-bit index plus the offset in 64 bits can't wrap
+                      (if (>= min-offset 0)
+                          (x64:lea-addr! (x64:reg-of tmp1) (x64:qword-reg reg-b) max-offset)
+                          (begin
+                            ;; subtract a negative min offset in 32 bits first, then add the access size
+                            (x64:lea-addr! (x64:dword-reg (x64:reg-of tmp1)) reg-b min-offset)
+                            (x64:lea-addr! (x64:reg-of tmp1) (x64:reg-of tmp1) access-size)))
+                      (x64:mov! (x64:reg-of tmp2) (mem reg-a :Buffer.len :u32))
+                      (x64:cmp-op! (x64:qword-reg (x64:reg-of tmp2)) (x64:reg-of tmp1))
+                      (x64:jump-or-abort-no-finalize! :Below fail fresh-label)))]
+               [(constant? offset)
+                (let ([const-offset (int-val offset)]
+                      [end-offset (if (fflag :LuauCodegenFixBufferLenCheck) max-offset access-size)])
+                  ;; constant folding can take care of it, but for safety avoid overflow/underflow cases here
+                  (if (or (< const-offset 0) (>= (+ (to-unsigned const-offset) (to-unsigned end-offset)) (to-unsigned :INT_MAX)))
+                      (x64:jump-or-abort-no-finalize! :Count fail fresh-label)
+                      (x64:cmp-op! (mem reg-a :Buffer.len :u32) (+ const-offset end-offset)))
+                  (x64:jump-or-abort-no-finalize! :Below fail fresh-label))]
+               [else (unsupported!)])
+             (x64:finalize-target-label! fail fresh-label))))]
+      [:a64
+       (assert! (and (>= min-offset (- 0 (a64:max-imm))) (<= min-offset (a64:max-imm))))
+       (let ([access-size (- max-offset min-offset)])
+         (assert! (and (> access-size 0) (<= access-size (a64:max-imm))))
+         ;; jumps to exit sync blocks need the same register allocation state at each potential taken branch
+         (let ([reg-a (if (kind? buffer :Inst) buffer noreg)]
+               [reg-b (if (kind? offset :Inst) offset noreg)]
+               [reg-e (if (not (kind? exact :Undef)) exact noreg)]
+               [temp-w1 (alloc-temp :u32)]
+               [temp-w2 (alloc-temp :u32)]
+               [temp-d (alloc-temp :f64)])
+           ;; nothing else may be allocated in this multi-branch lowering
+           (a64:mark-exit-sync!)
+           (let ([fresh-label (alloc-label)]
+                 [target (a64:target-label fail fresh-label)])
+             ;; also guard that the offset is an exact integer
+             (if (not (kind? exact :Undef))
+                 (begin
+                   (assert! (= (cmd-value-kind offset) :IrValueKind::Int))
+                   (assert! (not (dirty-high-bits? offset)))
+                   (if (build-feature? :Feature_JSCVT)
+                       (begin
+                         (a64:fjcvtzs! temp-w1 reg-e) ; sets Z iff the conversion is exact
+                         (a64:b-cond! (a64:cond :NotEqual) target))
+                       (begin
+                         (a64:scvtf! temp-d reg-b)
+                         (a64:fcmp! reg-e temp-d)
+                         (a64:b-cond! (a64:cond :NotEqual) target)))))
+             (a64:ldr! temp-w1 (mem reg-a :Buffer.len))
+             (cond
+               [(kind? offset :Inst)
+                (assert! (not (dirty-high-bits? offset)))
+                (cond
+                  [(and (= access-size 1) (= min-offset 0))
+                   ;; fails if offset >= len
+                   (a64:cmp-op! temp-w1 reg-b)
+                   (a64:b-cond! (a64:cond :UnsignedLessEqual) target)]
+                  [(and (>= min-offset 0) (<= max-offset (a64:max-imm)))
+                   ;; fails if offset + size > len, computed as len - offset < size (signed 64-bit so a bad offset fails)
+                   (let ([tempx (a64:cast-x temp-w1)])
+                     (a64:sub-reg! tempx tempx reg-b) ; implicit uxtw
+                     (a64:cmp-imm! tempx max-offset)
+                     (a64:b-cond! (a64:cond :Less) target))]
+                  [else
+                   (let ([tempx (a64:cast-x temp-w1)]
+                         [temp2 (a64:cast-x temp-w2)])
+                     ;; base offset in 32 bits
+                     (if (>= min-offset 0)
+                         (a64:add-imm! (a64:cast-w temp2) reg-b min-offset)
+                         (a64:sub-imm! (a64:cast-w temp2) reg-b (- 0 min-offset)))
+                     ;; fail if uint64_t(uint32_t(offset + min-offset)) + access-size > length
+                     (a64:add-imm! temp2 temp2 access-size)
+                     (a64:cmp-op! temp2 tempx)
+                     (a64:b-cond! (a64:cond :UnsignedGreater) target))])]
+               [(constant? offset)
+                (let ([const-offset (int-val offset)]
+                      [end-offset (if (fflag :LuauCodegenFixBufferLenCheck) max-offset access-size)]
+                      [fail-cond (if (fflag :LuauCodegenFixBufferLenCheck) (a64:cond :UnsignedLess) (a64:cond :UnsignedLessEqual))])
+                  ;; constant folding can take care of it, but for safety avoid overflow/underflow cases here
+                  (cond
+                    [(or (< const-offset 0) (>= (+ (to-unsigned const-offset) (to-unsigned end-offset)) (to-unsigned :INT_MAX)))
+                     (a64:b-label! target)]
+                    [(<= (+ const-offset end-offset) (a64:max-imm))
+                     (a64:cmp-imm! temp-w1 (+ const-offset end-offset))
+                     (a64:b-cond! fail-cond target)]
+                    [else
+                     (a64:mov! temp-w2 (+ const-offset end-offset))
+                     (a64:cmp-op! temp-w1 temp-w2)
+                     (a64:b-cond! fail-cond target)]))]
+               [else (unsupported!)])
+             (a64:finalize-target-label! fail fresh-label))))])))
