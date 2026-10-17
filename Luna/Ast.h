@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 #include <iostream>
@@ -46,6 +47,14 @@ struct SExpr
     int64_t intValue = 0;
     std::vector<SExpr> elements;
     SourceLocation loc;
+    int endLine = 0; // line of the last token (the closing bracket for lists)
+
+    // Doc comments (~): kept and written into the generated C++. Leading ones are on their own lines before the
+    // expression, a trailing one follows it on the line where it ends.
+    std::vector<std::string> docs;
+    std::optional<std::string> trailingDoc;
+
+    bool hasDocs() const { return !docs.empty() || trailingDoc.has_value(); }
 
     bool isSymbol() const { return kind == SExprKind::Symbol; }
     bool isKeyword() const { return kind == SExprKind::Keyword; }

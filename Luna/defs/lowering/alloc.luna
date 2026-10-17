@@ -22,7 +22,7 @@
 
 ;; A64 call with a single pointer argument that is an instruction result: x0 = L, x1 = argument
 (define-subrule (a64:call-with-object! [handler :any] [obj :op])
-  ;; resolve the operand register before the spill so it isn't reloaded redundantly
+  ~ resolve the operand register before the spill so it isn't reloaded redundantly
   (let ([reg (reg-op obj)])
     (a64:spill-keeping! reg)
     (a64:mov! x1 reg)
@@ -55,16 +55,16 @@
        (x64:call-arg-op! call-wrap :qword table table)
        (x64:call! call-wrap (mem rNativeContext :NativeContext.luaH_getn :ptr))
        (let ([res (alloc-result-in eax :i32)])
-         (x64:mov! res res)))] ; clear the high register bits
+         (x64:mov! res res)))] ~ clear the high register bits
     [:a64
-     ;; resolve the operand register before the spill so it isn't reloaded redundantly
+     ~ resolve the operand register before the spill so it isn't reloaded redundantly
      (let ([reg (reg-op table)])
        (a64:spill-keeping! reg)
        (a64:mov! x0 reg)
        (a64:ldr! x1 (mem rNativeContext :NativeContext.luaH_getn))
        (a64:blr! x1)
        (let ([res (alloc-result-in w0 :i32)])
-         (a64:ubfx! res res 0 32)))])) ; clear the high register bits
+         (a64:ubfx! res res 0 32)))])) ~ clear the high register bits
 
 (define-rule (table-setnum [table :op] [key :op])
   (target-case
@@ -76,7 +76,7 @@
        (x64:call! call-wrap (mem rNativeContext :NativeContext.luaH_setnum :ptr))
        (alloc-result-in rax :ptr))]
     [:a64
-     ;; resolve the operand registers before the spill so they aren't reloaded redundantly
+     ~ resolve the operand registers before the spill so they aren't reloaded redundantly
      (let ([table-reg (reg-op table)]
            [key-reg (reg-op key)]
            [temp (alloc-temp :u32)])
@@ -86,7 +86,7 @@
              (a64:mov! x1 table-reg)
              (a64:mov! w2 key-reg))
            (begin
-             ;; the key is in w1, which the table argument overwrites
+             ~ the key is in w1, which the table argument overwrites
              (a64:mov! temp w1)
              (a64:mov! x1 table-reg)
              (a64:mov! w2 temp)))

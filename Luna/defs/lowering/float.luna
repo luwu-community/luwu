@@ -56,7 +56,7 @@
        (let ([tmp1 (alloc-temp :f64)]
              [tmp2 (alloc-temp :f64)])
          (x64:move-double-to! res a)
-         ;; res + copysign(0.49999999999999994, res), truncated
+         ~ res + copysign(0.49999999999999994, res), truncated
          (x64:vandpd! tmp1 res (x64:f64x2 -0.0 -0.0))
          (x64:vmovsd-op! tmp2 (x64:i64 0x3fdfffffffffffff))
          (x64:vorpd! tmp1 tmp1 tmp2)
@@ -74,11 +74,11 @@
              [tmp1 (alloc-temp :f64)]
              [tmp2 (alloc-temp :f64)])
          (x64:vxorpd! tmp0 tmp0 tmp0)
-         ;; tmp1 = arg < 0 ? -1 : 0
+         ~ tmp1 = arg < 0 ? -1 : 0
          (x64:vcmpltsd! tmp1 a tmp0)
          (x64:vmovsd-op! tmp2 (x64:f64 -1))
          (x64:vandpd! tmp1 tmp1 tmp2)
-         ;; mask = 0 < arg; result = mask ? 1.0 : tmp1
+         ~ mask = 0 < arg; result = mask ? 1.0 : tmp1
          (x64:vcmpltsd! res tmp0 a)
          (x64:vblendvpd! res tmp1 (x64:f64x2 1 1) res))]
       [:a64
@@ -100,11 +100,11 @@
              [tmp1 (alloc-temp :f64)]
              [tmp2 (alloc-temp :f64)])
          (x64:vxorps! tmp0 tmp0 tmp0)
-         ;; tmp1 = arg < 0 ? -1 : 0
+         ~ tmp1 = arg < 0 ? -1 : 0
          (x64:vcmpltss! tmp1 a tmp0)
          (x64:vmovss-op! tmp2 (x64:f32 -1.0f))
          (x64:vandps! tmp1 tmp1 tmp2)
-         ;; mask = 0 < arg; result = mask ? 1.0 : tmp1
+         ~ mask = 0 < arg; result = mask ? 1.0 : tmp1
          (x64:vcmpltss! res tmp0 a)
          (x64:vblendvps! res tmp1 (x64:f32x4 1 1 1 1) res))]
       [:a64

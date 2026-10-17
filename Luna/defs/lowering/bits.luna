@@ -11,7 +11,7 @@
       (if (not-reused? res a)
           (x64:mov! res (x64:mem-reg-uint a)))
       (if (constant? b)
-          (x64:shift-imm! insn res b) ; byte-sized amount
+          (x64:shift-imm! insn res b) ~ byte-sized amount
           (begin
             (x64:mov! (x64:reg-of shift-tmp) (x64:mem-reg-uint b))
             (x64:shift-cl! insn res (x64:reg-of shift-tmp)))))))
@@ -43,7 +43,7 @@
      (if (and (kind? a :Inst) (constant? b))
          (let ([res (alloc-result-reuse :u32 a)])
            (a64:rol-imm32! res a b))
-         ;; left rotate = right rotate by the negated amount; can't reuse a, which neg would clobber
+         ~ left rotate = right rotate by the negated amount; can't reuse a, which neg would clobber
          (let ([res (alloc-result-reuse :u32 b)]
                [temp1 (a64:uint-operand a)]
                [temp2 (a64:uint-operand b)])
@@ -136,7 +136,7 @@
 (define-subrule (x64:shift-int64-const! [pos-insn :any] [neg-insn :any] [res :reg] [b :op])
   (cond
     [(< (int64-val b) 0)
-     ;; shift the other way by -amount (truncated to a byte, as the instruction encodes it)
+     ~ shift the other way by -amount (truncated to a byte, as the instruction encodes it)
      (if (> (x64:neg-amount-u8 b) 63)
          (x64:xor! res res)
          (x64:shift-int8! neg-insn res (x64:neg-amount-u8 b)))]
@@ -150,7 +150,7 @@
         [out-of-range (alloc-label)]
         [done (alloc-label)])
     (x64:mov! (x64:reg-of shift-tmp) (x64:mem-reg-int64 b))
-    ;; |amount| > 63: (amount + 63) unsigned > 126
+    ~ |amount| > 63: (amount + 63) unsigned > 126
     (x64:lea-addr! tmp (x64:reg-of shift-tmp) 63)
     (x64:cmp-op! tmp 126)
     (x64:jcc! :Above out-of-range)
@@ -175,7 +175,7 @@
           [done (alloc-label)]
           [negative (alloc-label)]
           [out-of-range (alloc-label)])
-      ;; (amount + 63) > 126 == |amount| > 63
+      ~ (amount + 63) > 126 == |amount| > 63
       (a64:add-imm-u16! temp amount 63)
       (a64:cmp-imm! temp 126)
       (a64:b-cond! (a64:cond :UnsignedGreater) out-of-range)
@@ -217,9 +217,9 @@
              (x64:mov! res (x64:mem-reg-int64 a)))
          (if (constant? b)
              (cond
-               [(< (int64-val b) -63) (x64:xor! res res)] ; left shift by more than 63
+               [(< (int64-val b) -63) (x64:xor! res res)] ~ left shift by more than 63
                [(< (int64-val b) 0) (x64:shift-int8! :shl res (x64:neg-amount-u8 b))]
-               [(> (int64-val b) 63) (x64:shift-int8! :sar res 63)] ; sign-fill
+               [(> (int64-val b) 63) (x64:shift-int8! :sar res 63)] ~ sign-fill
                [else (x64:shift-int8! :sar res (int64-val b))])
              (let ([tmp (alloc-temp :i64)]
                    [negative (alloc-label)]
@@ -227,10 +227,10 @@
                    [out-of-range-negative (alloc-label)]
                    [done (alloc-label)])
                (x64:mov! (x64:reg-of shift-tmp) (x64:mem-reg-int64 b))
-               ;; amount > 63: sign-fill
+               ~ amount > 63: sign-fill
                (x64:cmp-op! (x64:reg-of shift-tmp) 63)
                (x64:jcc! :Greater out-of-range-positive)
-               ;; amount < -63: (amount + 63) < 0
+               ~ amount < -63: (amount + 63) < 0
                (x64:lea-addr! tmp (x64:reg-of shift-tmp) 63)
                (x64:test! tmp tmp)
                (x64:jcc! :Less out-of-range-negative)
@@ -257,10 +257,10 @@
              [negative (alloc-label)]
              [out-of-range-positive (alloc-label)]
              [out-of-range-negative (alloc-label)])
-         ;; amount > 63: arithmetic right shift fills with the sign
+         ~ amount > 63: arithmetic right shift fills with the sign
          (a64:cmp-imm! amount 63)
          (a64:b-cond! (a64:cond :Greater) out-of-range-positive)
-         ;; amount + 63 < 0: amount < -63
+         ~ amount + 63 < 0: amount < -63
          (a64:add-imm-u16! temp amount 63)
          (a64:cmp-imm! temp 0)
          (a64:b-cond! (a64:cond :Less) out-of-range-negative)
@@ -296,7 +296,7 @@
   (target-case
     [:x64 (x64:rotate-int64! :rol a b)]
     [:a64
-     ;; left rotate = right rotate by the negated amount; can't reuse a, which neg would clobber
+     ~ left rotate = right rotate by the negated amount; can't reuse a, which neg would clobber
      (let ([res (alloc-result-reuse :i64 b)]
            [source (a64:int64-operand a)]
            [amount (a64:int64-operand b)])

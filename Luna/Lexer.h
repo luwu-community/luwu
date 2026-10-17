@@ -19,6 +19,7 @@ enum class TokenType
     Keyword,     // e.g. :uint, :lua_State.ci
     Number,      // e.g. 123, 0x10
     String,      // e.g. "..."
+    DocComment,  // ~ to the end of the line; text excludes the ~ and one following space
     Eof,
 };
 
@@ -50,6 +51,7 @@ private:
     Token lexNumber(int startCol);
     Token lexSymbolOrKeyword(int startCol);
     Token lexString(int startCol);
+    Token lexDocComment(int startCol);
 
     std::string_view source;
     std::string filename;

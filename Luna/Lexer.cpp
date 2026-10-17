@@ -234,6 +234,32 @@ Token Lexer::lexString(int startCol)
     return tok;
 }
 
+Token Lexer::lexDocComment(int startCol)
+{
+    int startLine = line;
+    advance(); // ~
+    if (peek() == ' ')
+        advance();
+
+    std::string text;
+    while (!isAtEnd() && peek() != '\n')
+        text += advance();
+
+    while (!text.empty() && (text.back() == ' ' || text.back() == '\t' || text.back() == '\r'))
+        text.pop_back();
+
+    // The text becomes a // comment, where a trailing backslash would continue the comment onto the next C++ line
+    if (!text.empty() && text.back() == '\\')
+        throw CompileError(SourceLocation{filename, startLine, startCol}, "Doc comment can't end with a backslash (it would continue the C++ comment onto the next line)");
+
+    Token tok;
+    tok.type = TokenType::DocComment;
+    tok.text = std::move(text);
+    tok.line = startLine;
+    tok.col = startCol;
+    return tok;
+}
+
 Token Lexer::nextToken()
 {
     skipWhitespaceAndComments();
@@ -250,6 +276,9 @@ Token Lexer::nextToken()
     char c = peek();
     int curCol = col;
     int curLine = line;
+
+    if (c == '~')
+        return lexDocComment(curCol);
 
     if (c == '(')
     {

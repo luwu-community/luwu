@@ -9,7 +9,7 @@
        (cond
          [(kind? a :VmReg) (x64:mov! res (x64:luau-reg-tag (vm-reg a)))]
          [(kind? a :VmConst) (x64:mov! res (x64:luau-constant-tag (vm-const a)))]
-         ;; A register operand is assumed to hold a pointer to a TValue
+         ~ A register operand is assumed to hold a pointer to a TValue
          [(kind? a :Inst) (x64:mov! res (mem a :TValue.tt :u32))]
          [else (unsupported!)])]
       [:a64
@@ -23,7 +23,7 @@
        (cond
          [(kind? a :VmReg) (x64:mov! res (x64:luau-reg-value (vm-reg a)))]
          [(kind? a :VmConst) (x64:mov! res (x64:luau-constant-value (vm-const a)))]
-         ;; A register operand is assumed to hold a pointer to a TValue
+         ~ A register operand is assumed to hold a pointer to a TValue
          [(kind? a :Inst) (x64:mov! res (mem a :TValue.value :ptr))]
          [else (unsupported!)])]
       [:a64

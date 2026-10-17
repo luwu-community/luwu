@@ -58,13 +58,121 @@ static std::string stripLeadingColon(const std::string& s)
     return s;
 }
 
+// Doc comments end up next to the C++ a statement generates, so they're only allowed where Luna evaluates
+// statements. Everything else (op arguments, predicates, signatures, bound values) can't carry one, except that a
+// trailing doc on such an expression moves to the enclosing statement (or binding/clause) when that starts on the
+// same line: in `(if (constant? a) ~ fast path` the comment describes the if.
+static void rejectDocs(SExpr& expr, SExpr* stmt)
+{
+    if (expr.trailingDoc && expr.docs.empty() && stmt && stmt != &expr && stmt->loc.file == expr.loc.file &&
+        stmt->loc.line == expr.endLine && !stmt->trailingDoc)
+    {
+        stmt->trailingDoc = std::move(expr.trailingDoc);
+        expr.trailingDoc.reset();
+    }
+
+    if (expr.hasDocs())
+        throw CompileError(expr, "Doc comments (~) can only be attached to statements, not to this expression; move it to "
+            "the enclosing statement or use ; for a Luna-only comment");
+    for (auto& el : expr.elements)
+        rejectDocs(el, stmt);
+}
+
+static void checkStatementDocs(SExpr& stmt);
+
+// [var (let ([x V]) stmts... x)] operand blocks run statements; any other bound value is an expression
+static void checkBoundValueDocs(SExpr& value, SExpr* binding)
+{
+    bool isOperandBlock = value.isList("let") && value.elements.size() >= 3 && value.elements[1].isList() &&
+        value.elements[1].elements.size() == 1 && value.elements.back().isSymbol();
+    if (!isOperandBlock)
+        return rejectDocs(value, binding);
+
+    if (value.hasDocs())
+        throw CompileError(value, "Doc comments (~) can't be attached to a bound value; attach it to the binding");
+    rejectDocs(value.elements[0], binding);
+    rejectDocs(value.elements[1], binding);
+    for (size_t i = 2; i + 1 < value.elements.size(); ++i)
+        checkStatementDocs(value.elements[i]);
+    rejectDocs(value.elements.back(), binding);
+}
+
+static void checkStatementDocs(SExpr& stmt)
+{
+    if (!stmt.isList() || stmt.elements.empty())
+        return;
+
+    rejectDocs(stmt.elements[0], &stmt);
+    auto statementsFrom = [&](size_t first) {
+        for (size_t i = first; i < stmt.elements.size(); ++i)
+            checkStatementDocs(stmt.elements[i]);
+    };
+
+    const SExpr& head = stmt.elements[0];
+    if (head.isSymbol("let") && stmt.elements.size() >= 2 && stmt.elements[1].isList())
+    {
+        // The bindings list itself can't carry docs, but each binding can: they go next to its declaration
+        SExpr& bindings = stmt.elements[1];
+        if (bindings.hasDocs() && !(bindings.trailingDoc && bindings.docs.empty() && bindings.endLine == stmt.loc.line))
+            throw CompileError(bindings, "Doc comments (~) can't be attached to a let's binding list; attach them to a binding");
+        if (bindings.trailingDoc && !stmt.trailingDoc)
+        {
+            stmt.trailingDoc = std::move(bindings.trailingDoc);
+            bindings.trailingDoc.reset();
+        }
+        for (auto& binding : bindings.elements)
+        {
+            for (size_t i = 0; i < binding.elements.size(); ++i)
+            {
+                if (i == 1)
+                    checkBoundValueDocs(binding.elements[i], &binding);
+                else
+                    rejectDocs(binding.elements[i], &binding);
+            }
+        }
+        statementsFrom(2);
+    }
+    else if (head.isSymbol("begin") || head.isSymbol("block"))
+    {
+        statementsFrom(1);
+    }
+    else if (head.isSymbol("if") || head.isSymbol("for-range"))
+    {
+        if (stmt.elements.size() > 1)
+            rejectDocs(stmt.elements[1], &stmt);
+        statementsFrom(2);
+    }
+    else if (head.isSymbol("cond") || head.isSymbol("target-case"))
+    {
+        // Clauses/branches may carry docs (written before the branch); their first element is the test or arch
+        for (size_t i = 1; i < stmt.elements.size(); ++i)
+        {
+            SExpr& clause = stmt.elements[i];
+            for (size_t j = 0; j < clause.elements.size(); ++j)
+            {
+                if (j == 0)
+                    rejectDocs(clause.elements[j], &clause);
+                else
+                    checkStatementDocs(clause.elements[j]);
+            }
+        }
+    }
+    else
+    {
+        for (size_t i = 1; i < stmt.elements.size(); ++i)
+            rejectDocs(stmt.elements[i], &stmt);
+    }
+}
+
 std::vector<Rule> parseRules(const std::vector<SExpr>& program)
 {
     std::vector<Rule> rules;
     std::unordered_map<std::string, SourceLocation> seenNames;
 
-    for (const auto& expr : program)
+    for (const auto& original : program)
     {
+        // Doc placement checks may move trailing docs, so they work on a copy
+        SExpr expr = original;
         bool isDefineRule = expr.isList("define-rule");
         bool isDefineSubrule = expr.isList("define-subrule");
         if (!isDefineRule && !isDefineSubrule)
@@ -82,10 +190,18 @@ std::vector<Rule> parseRules(const std::vector<SExpr>& program)
         if (!sig.isList() || sig.elements.empty() || !sig.elements[0].isSymbol())
             throw CompileError(sig, formName + " signature must be a non-empty list starting with the rule name");
 
+        rejectDocs(expr.elements[0], &expr);
+        rejectDocs(expr.elements[1], &expr);
+        for (size_t i = 2; i < expr.elements.size(); ++i)
+            checkStatementDocs(expr.elements[i]);
+
         Rule rule;
         rule.name = sig.elements[0].text;
         rule.loc = expr.loc;
         rule.isSubrule = isDefineSubrule;
+        rule.docs = expr.docs;
+        if (expr.trailingDoc)
+            rule.docs.push_back(*expr.trailingDoc);
 
         auto [prev, inserted] = seenNames.emplace(rule.name, sig.elements[0].loc);
         if (!inserted)
@@ -403,6 +519,20 @@ private:
 
         stack.pop_back();
 
+        // The call site's docs belong to whatever the call expands to
+        auto withCallDocs = [&](SExpr result) {
+            if (!expr.hasDocs())
+                return result;
+            std::vector<std::string> docs = expr.docs;
+            docs.insert(docs.end(), result.docs.begin(), result.docs.end());
+            if (expr.trailingDoc && result.trailingDoc)
+                docs.push_back(*expr.trailingDoc);
+            else if (expr.trailingDoc)
+                result.trailingDoc = expr.trailingDoc;
+            result.docs = std::move(docs);
+            return result;
+        };
+
         if (!bindings.empty())
         {
             SExpr bindingsList;
@@ -414,13 +544,13 @@ private:
             rest.push_back(std::move(bindingsList));
             for (auto& b : expandedBody)
                 rest.push_back(std::move(b));
-            return makeForm("let", expr.loc, std::move(rest));
+            return withCallDocs(makeForm("let", expr.loc, std::move(rest)));
         }
 
         if (expandedBody.size() == 1)
-            return expandedBody[0];
+            return withCallDocs(expandedBody[0]);
 
-        return makeForm("begin", expr.loc, std::move(expandedBody));
+        return withCallDocs(makeForm("begin", expr.loc, std::move(expandedBody)));
     }
 
     const std::unordered_map<std::string, Rule>& ruleMap;

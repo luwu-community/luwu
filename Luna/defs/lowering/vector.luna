@@ -69,10 +69,10 @@
 ;; A64 min/max: compute the mask, then blend into whichever operand register the result already occupies
 (define-subrule (a64:select-by-mask! [res :reg] [a :op] [b :op] [mask :reg])
   (if (reused? res a)
-      ;; a is already at the target, select b where the mask is clear
+      ~ a is already at the target, select b where the mask is clear
       (a64:bif! res b mask)
       (begin
-        ;; store b at the target unless it's there, select a where the mask is set
+        ~ store b at the target unless it's there, select a where the mask is set
         (if (not-reused? res b)
             (a64:mov! res b))
         (a64:bit! res a mask))))
@@ -88,7 +88,7 @@
          (x64:vminps! res tmpa tmpb))]
       [:a64
        (let ([mask (alloc-temp :vec)])
-         ;; b > a == a < b
+         ~ b > a == a < b
          (a64:fcmgt-4s! mask b a)
          (a64:select-by-mask! res a b mask))])))
 
@@ -143,15 +143,15 @@
              [tmp2 (x64:unallocated-temp)]
              [tmpa (x64:vec-op a tmp1)]
              [tmpb (if (same-op? a b) tmpa (x64:vec-op b tmp2))])
-         ;; mask 0x71: sum the first 3 products into the first float
+         ~ mask 0x71: sum the first 3 products into the first float
          (x64:vdpps! res tmpa tmpb 0x71))]
       [:a64
        (let ([temp (alloc-temp :vec)]
              [temps (a64:cast-s temp)])
          (a64:fmul! temp a b)
-         (a64:faddp! res temps) ; x+y
+         (a64:faddp! res temps) ~ x+y
          (a64:dup-4s! temp temp 2)
-         (a64:fadd! res res temps))]))) ; +z
+         (a64:fadd! res res temps))]))) ~ +z
 
 (define-rule (extract-vec [a :op] [lane :op])
   (let ([res (target-case
@@ -161,7 +161,7 @@
       [:x64 (x64:vpshufps! res a a lane)]
       [:a64
        (if (= (int-val lane) 0)
-           ;; lane vN.s[0] can be read directly as sN
+           ~ lane vN.s[0] can be read directly as sN
            (a64:fmov! res (a64:cast-s a))
            (a64:dup-4s! res a lane))])))
 
@@ -208,7 +208,7 @@
          (x64:vblendvps! res (x64:vec-op a tmp1) (x64:vec-op b tmp2) res))]
       [:a64
        (let ([mask (alloc-temp :vec)])
-         ;; mask = c == d; res = mask ? b : a
+         ~ mask = c == d; res = mask ? b : a
          (a64:fcmeq-4s! mask c d)
          (a64:mov! res a)
          (a64:bit! res b mask))])))

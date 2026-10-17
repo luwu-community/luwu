@@ -322,7 +322,7 @@
   (let ([res (alloc-result :f64)])
     (target-case
       [:x64
-       ;; A uint produced by NUM_TO_UINT may have garbage in the upper half of its 64-bit register
+       ~ A uint produced by NUM_TO_UINT may have garbage in the upper half of its 64-bit register
        (if (cmd-is? a :NUM_TO_UINT)
            (let ([tmp (alloc-temp :u32)])
              (x64:mov-reg! tmp a)
@@ -338,7 +338,7 @@
   (let ([res (alloc-result :f32)])
     (target-case
       [:x64
-       ;; A uint produced by NUM_TO_UINT may have garbage in the upper half of its 64-bit register
+       ~ A uint produced by NUM_TO_UINT may have garbage in the upper half of its 64-bit register
        (if (cmd-is? a :NUM_TO_UINT)
            (let ([tmp (alloc-temp :u32)])
              (x64:mov-reg! tmp a)

@@ -1,9 +1,12 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "RuleCompiler.h"
+
+#include <algorithm>
 #include "OpTemplates.h"
 #include "CompileError.h"
 #include "Scope.h"
 
+#include <algorithm>
 #include <functional>
 #include <regex>
 #include <sstream>
@@ -60,6 +63,72 @@ static void emitBlock(CodeWriter& out, EvalContext& ctx, const std::string& head
     else
         out.block(header, fn);
     ctx.blockLocals.pop_back();
+}
+
+static std::string docLine(const std::string& text)
+{
+    return text.empty() ? "//" : "// " + text;
+}
+
+// Writes the doc comments attached to `holder` around the C++ that `emit` generates: leading docs as lines before it,
+// a trailing doc at the end of the line when exactly one line was generated (otherwise it leads as well)
+template <typename Fn>
+static Operand withDocs(CodeWriter& out, const SExpr& holder, Fn&& emit)
+{
+    for (const auto& doc : holder.docs)
+        out.line(docLine(doc));
+
+    if (!holder.trailingDoc)
+        return emit(out);
+
+    StringCodeWriter temp(out.indentLevel());
+    Operand result = emit(temp);
+    for (const auto& decl : temp.decls())
+        out.addDecl(decl);
+
+    std::string text = temp.str();
+    if (std::count(text.begin(), text.end(), '\n') == 1)
+    {
+        text.pop_back();
+        out.raw(text + " " + docLine(*holder.trailingDoc) + "\n");
+    }
+    else
+    {
+        out.line(docLine(*holder.trailingDoc));
+        out.raw(text);
+    }
+    return result;
+}
+
+// Generated code without // comments (outside string literals), for scanning which locals the code uses
+static std::string stripLineComments(const std::string& code)
+{
+    std::string result;
+    result.reserve(code.size());
+    for (size_t i = 0; i < code.size(); ++i)
+    {
+        char c = code[i];
+        if (c == '"' || c == '\'')
+        {
+            size_t j = i + 1;
+            while (j < code.size() && code[j] != c && code[j] != '\n')
+                j += code[j] == '\\' ? 2 : 1;
+            result.append(code, i, std::min(j + 1, code.size()) - i);
+            i = j;
+        }
+        else if (c == '/' && i + 1 < code.size() && code[i + 1] == '/')
+        {
+            while (i < code.size() && code[i] != '\n')
+                ++i;
+            if (i < code.size())
+                result += '\n';
+        }
+        else
+        {
+            result += c;
+        }
+    }
+    return result;
 }
 
 static void validateArchTarget(const EvalContext& ctx, const SExpr& expr, const std::string& head, const char* constructKind)
@@ -888,10 +957,12 @@ static const std::unordered_map<std::string_view, ExprTrampolineSpec> kExprTramp
 
             // Like begin, the selected branch evaluates to its last expression (e.g. an alloc-result in a let binding)
             TargetArchGuard guard(ctx, targetArch);
-            Operand result;
-            for (size_t j = 1; j < selected->elements.size(); ++j)
-                result = evalExpr(out, ctx, target, selected->elements[j], destReg);
-            return result;
+            return withDocs(out, *selected, [&](CodeWriter& w) {
+                Operand result;
+                for (size_t j = 1; j < selected->elements.size(); ++j)
+                    result = evalExpr(w, ctx, target, selected->elements[j], destReg);
+                return result;
+            });
         }
     }},
     {"cond", {
@@ -920,6 +991,12 @@ static const std::unordered_map<std::string_view, ExprTrampolineSpec> kExprTramp
                     std::string prefix = (i == 1) ? "if (" : "else if (";
                     header = prefix + condStr + ")";
                 }
+                // A clause's docs go before its if/else if/else line
+                for (const auto& doc : clause.docs)
+                    out.line(docLine(doc));
+                if (clause.trailingDoc)
+                    out.line(docLine(*clause.trailingDoc));
+
                 emitBlock(out, ctx, header, [&]() {
                     for (size_t j = 1; j < clause.elements.size(); ++j)
                     {
@@ -1113,42 +1190,46 @@ static const std::unordered_map<std::string_view, ExprTrampolineSpec> kExprTramp
             auto body = [&]() {
                 for (const auto& binding : bindings.elements)
                 {
-                    const std::string& varName = binding.elements[0].text;
-                    const SExpr& valExpr = boundValue(binding.elements[1]);
+                    // A binding's docs go next to its declaration
+                    withDocs(out, binding, [&](CodeWriter& bindingOut) {
+                        const std::string& varName = binding.elements[0].text;
+                        const SExpr& valExpr = boundValue(binding.elements[1]);
 
-                    if (valExpr.isList("if"))
-                    {
-                        ctx.bind(varName, evalConditionalBinding(out, ctx, target, valExpr, toCppVarName(varName)));
-                    }
-                    else if (isValueTemplate(valExpr))
-                    {
-                        // Helper results (addresses, call wrappers, indices) are computed once into a local
-                        std::string cppName = toCppVarName(varName);
-                        bool byReference = findTemplateOp(target, valExpr.elements[0].text)->bindsReference;
-                        Operand value = evalExpr(out, ctx, target, valExpr, "");
-                        out.line((byReference ? "auto& " : "auto ") + cppName + " = " + value.text + ";");
-                        ctx.bind(varName, Operand::makeReg(value.type, cppName));
-                    }
-                    else if (isEager(valExpr))
-                    {
-                        ctx.bindingName = toCppVarName(varName);
-                        Operand op = evalExpr(out, ctx, target, valExpr, "");
-                        ctx.bindingName.clear();
-                        ctx.bind(varName, op);
-                    }
-                    else
-                    {
-                        ctx.bind(varName, evalExpr(out, ctx, target, valExpr, ""));
-                    }
+                        if (valExpr.isList("if"))
+                        {
+                            ctx.bind(varName, evalConditionalBinding(bindingOut, ctx, target, valExpr, toCppVarName(varName)));
+                        }
+                        else if (isValueTemplate(valExpr))
+                        {
+                            // Helper results (addresses, call wrappers, indices) are computed once into a local
+                            std::string cppName = toCppVarName(varName);
+                            bool byReference = findTemplateOp(target, valExpr.elements[0].text)->bindsReference;
+                            Operand value = evalExpr(bindingOut, ctx, target, valExpr, "");
+                            bindingOut.line((byReference ? "auto& " : "auto ") + cppName + " = " + value.text + ";");
+                            ctx.bind(varName, Operand::makeReg(value.type, cppName));
+                        }
+                        else if (isEager(valExpr))
+                        {
+                            ctx.bindingName = toCppVarName(varName);
+                            Operand op = evalExpr(bindingOut, ctx, target, valExpr, "");
+                            ctx.bindingName.clear();
+                            ctx.bind(varName, op);
+                        }
+                        else
+                        {
+                            ctx.bind(varName, evalExpr(bindingOut, ctx, target, valExpr, ""));
+                        }
 
-                    if (isOperandBlock(binding.elements[1]))
-                    {
-                        const SExpr& block = binding.elements[1];
-                        ScopeGuard innerGuard(ctx.scope);
-                        ctx.bind(block.elements[1].elements[0].elements[0].text, *ctx.lookup(varName));
-                        for (size_t i = 2; i + 1 < block.elements.size(); ++i)
-                            evalExpr(out, ctx, target, block.elements[i], "");
-                    }
+                        if (isOperandBlock(binding.elements[1]))
+                        {
+                            const SExpr& block = binding.elements[1];
+                            ScopeGuard innerGuard(ctx.scope);
+                            ctx.bind(block.elements[1].elements[0].elements[0].text, *ctx.lookup(varName));
+                            for (size_t i = 2; i + 1 < block.elements.size(); ++i)
+                                evalExpr(bindingOut, ctx, target, block.elements[i], "");
+                        }
+                        return Operand{};
+                    });
                 }
 
                 for (size_t i = 2; i < expr.elements.size(); ++i)
@@ -1253,7 +1334,20 @@ struct SourceLocGuard
     }
 };
 
+static Operand evalExprNoDocs(CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg);
+
 Operand evalExpr(CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg)
+{
+    // Only statements carry docs (checked when parsing rules), so this is where a statement's docs get written
+    if (!expr.hasDocs())
+        return evalExprNoDocs(out, ctx, target, expr, destReg);
+
+    return withDocs(out, expr, [&](CodeWriter& w) {
+        return evalExprNoDocs(w, ctx, target, expr, destReg);
+    });
+}
+
+static Operand evalExprNoDocs(CodeWriter& out, EvalContext& ctx, TargetBuilder& target, const SExpr& expr, const std::string& destReg)
 {
     SourceLocGuard locGuard(ctx, expr.loc);
 
@@ -1327,6 +1421,7 @@ void compileRules(std::ostream& os, TargetBuilder& target, const std::vector<Rul
         std::vector<std::string> decls;
         std::string body;
         std::set<std::string> usedSymbols;
+        std::vector<std::string> docs;
     };
 
     std::set<std::string> allFFlags;
@@ -1379,7 +1474,7 @@ void compileRules(std::ostream& os, TargetBuilder& target, const std::vector<Rul
 
         // Template operations reference these locals directly, so detect their use from the generated code
         static const std::regex kLocalUse(R"((^|[^.\w])(build|regs|function|inst|index|next)\b)");
-        std::string generated = bodyWriter.str();
+        std::string generated = stripLineComments(bodyWriter.str());
         for (const auto& decl : bodyWriter.decls())
             generated += "\n" + decl;
         for (auto it = std::sregex_iterator(generated.begin(), generated.end(), kLocalUse); it != std::sregex_iterator(); ++it)
@@ -1387,13 +1482,15 @@ void compileRules(std::ostream& os, TargetBuilder& target, const std::vector<Rul
 
         allFFlags.insert(ctx.fflags.begin(), ctx.fflags.end());
         allDFFlags.insert(ctx.dfflags.begin(), ctx.dfflags.end());
-        compiledRules.push_back({std::move(fnName), bodyWriter.decls(), bodyWriter.str(), std::move(ctx.usedSymbols)});
+        compiledRules.push_back({std::move(fnName), bodyWriter.decls(), bodyWriter.str(), std::move(ctx.usedSymbols), rule.docs});
     }
 
     target.emitPreamble(writer, {allFFlags.begin(), allFFlags.end()}, {allDFFlags.begin(), allDFFlags.end()});
 
     for (const auto& cr : compiledRules)
     {
+        for (const auto& doc : cr.docs)
+            writer.line(docLine(doc));
         writer.block("inline void " + cr.fnName + "(" + target.loweringClass() + "& lowering, IrInst& inst, uint32_t index, const IrBlock& next)", [&]() {
             bool hasHeader = false;
             if (cr.usedSymbols.count("build"))
@@ -1453,6 +1550,7 @@ void getCommonCoreDocs(std::vector<FormDoc>& out)
 {
     out.push_back({"define-rule", "(define-rule (<name> [<param> <type>]...) <body>...)", "Define top-level IR instruction lowering rule that compiles to C++ lower_<NAME>"});
     out.push_back({"define-subrule", "(define-subrule (<name> [<param> <type>]...) <body>...)", "Define compile-time macro template inlined at expansion sites"});
+    out.push_back({"~", "~ <text>", "Doc comment: to the end of the line, kept and written into the generated C++ as a // comment (; comments stay Luna-only). Leading ones go on their own lines before a statement, a trailing one after code on the same line (it moves up to the statement when it lands on an argument of a statement starting on that line, e.g. (if (constant? a) ~ ...). Allowed on define-rule (written above lower_<NAME>) and statements: rule/subrule body items, let bindings, cond clauses, target-case branches and the bodies of let/begin/block/if/cond/target-case/for-range"});
     out.push_back({"include", "(include \"<path>.luna\")", "Top-level only: splice in another file's definitions at this point. The path is relative to the including file and may not leave the root file's directory; each file is included once, and include cycles are errors"});
 
     for (const auto& [name, spec] : kExprTrampolines)

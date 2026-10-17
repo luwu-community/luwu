@@ -107,5 +107,5 @@
            (a64:mov! w2 (vm-reg ra))
            (a64:mov! w3 (int-val count))
            (a64:ldr! x4 (mem rNativeContext :NativeContext.executeGETVARARGSConst))
+           ~ executeGETVARARGSConst doesn't reallocate the stack, so rBase stays valid
            (a64:blr! x4)))]))
-           ;; executeGETVARARGSConst doesn't reallocate the stack, so rBase stays valid

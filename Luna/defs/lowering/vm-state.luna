@@ -9,7 +9,7 @@
      (let ([temp1 (alloc-temp :ptr)]
            [temp2 (alloc-temp :ptr)]
            [skip (alloc-label)])
-       ;; GCthreshold and totalbytes are adjacent, so one ldp loads both
+       ~ GCthreshold and totalbytes are adjacent, so one ldp loads both
        (assert! (= :global_State.totalbytes (+ :global_State.GCthreshold (sizeof :global_State::GCthreshold))))
        (a64:ldp! temp1 temp2 (mem rGlobalState :global_State.GCthreshold))
        (a64:cmp-reg! temp1 temp2)
@@ -20,12 +20,12 @@
          (a64:ldr! x2 (mem rNativeContext :NativeContext.luaC_step))
          (a64:blr! x2)
          (a64:update-base!)
-         ;; restore before the skip label so the register state is the same on both paths
+         ~ restore before the skip label so the register state is the same on both paths
          (a64:restore! spills))
        (set-label! skip))]))
 
 (define-rule (capture [ra :op] [kind :op])
-  (begin)) ; no-op right now
+  (begin)) ~ no-op right now
 
 (define-rule (coverage [pc :op])
   (target-case
@@ -35,15 +35,15 @@
            [tmp3 (alloc-temp :u32)])
        (x64:mov! tmp1 sCode)
        (x64:add! tmp1 (* (uint-val pc) (sizeof :Instruction)))
-       ;; hits = LUAU_INSN_E(*pc)
+       ~ hits = LUAU_INSN_E(*pc)
        (x64:mov! tmp2 (x64:ptr :dword tmp1))
        (x64:shift-raw! :sar tmp2 8)
-       ;; hits = (hits < (1 << 23) - 1) ? hits + 1 : hits
+       ~ hits = (hits < (1 << 23) - 1) ? hits + 1 : hits
        (x64:xor! tmp3 tmp3)
        (x64:cmp-op! tmp2 0x7fffff)
        (x64:setcc! (x64:cond :NotEqual) (x64:byte-reg tmp3))
        (x64:add! tmp2 tmp3)
-       ;; VM_PATCH_E(pc, hits)
+       ~ VM_PATCH_E(pc, hits)
        (x64:shift-raw! :sal tmp2 8)
        (x64:movzx! tmp3 (x64:ptr :byte tmp1))
        (x64:or! tmp3 tmp2)
@@ -54,7 +54,7 @@
            [temp3 (alloc-temp :u32)])
        (a64:mov! temp1 (* (uint-val pc) (sizeof :Instruction)))
        (a64:ldr! temp2 (mem rCode temp1))
-       ;; increments E (the high 24 bits); if that overflows the 23-bit counter, the high bit becomes 1
+       ~ increments E (the high 24 bits); if that overflows the 23-bit counter, the high bit becomes 1
        (a64:add-imm! temp3 temp2 256)
        (a64:cmp-imm! temp3 0)
        (a64:csel! temp2 temp2 temp3 (a64:cond :Less))
@@ -64,8 +64,8 @@
   (target-case
     [:x64
      (let ([pcpos (uint-val pc)])
-       ;; spill unconditionally, so the interrupt handler doesn't need the register state; interrupts are on loop edges
-       ;; and calls/returns, where there's little register reuse to lose anyway
+       ~ spill unconditionally, so the interrupt handler doesn't need the register state; interrupts are on loop edges
+       ~ and calls/returns, where there's little register reuse to lose anyway
        (x64:preserve-and-free-inst-values!)
        (let ([tmp (alloc-temp :ptr)]
              [self (alloc-label)])
@@ -88,11 +88,11 @@
            [tmp2 (x64:unallocated-temp)])
        (x64:alloc! tmp1 :qword)
        (x64:alloc! tmp2 :qword)
-       ;; L->openupval != 0
+       ~ L->openupval != 0
        (x64:mov! (x64:reg-of tmp1) (mem rState :lua_State.openupval :ptr))
        (x64:test! (x64:reg-of tmp1) (x64:reg-of tmp1))
        (x64:jcc! :Zero skip)
-       ;; ra <= L->openupval->v
+       ~ ra <= L->openupval->v
        (x64:lea-addr! (x64:reg-of tmp2) rBase (* (vm-reg ra) (sizeof :TValue)))
        (x64:cmp-op! (x64:reg-of tmp2) (mem (x64:reg-of tmp1) :UpVal.v :ptr))
        (x64:jcc! :Above skip)
@@ -108,10 +108,10 @@
      (let ([skip (alloc-label)]
            [temp1 (alloc-temp :ptr)]
            [temp2 (alloc-temp :ptr)])
-       ;; L->openupval != 0
+       ~ L->openupval != 0
        (a64:ldr! temp1 (mem rState :lua_State.openupval))
        (a64:cbz! temp1 skip)
-       ;; ra <= L->openupval->v
+       ~ ra <= L->openupval->v
        (a64:ldr! temp1 (mem temp1 :UpVal.v))
        (a64:vm-reg-address! temp2 ra)
        (a64:cmp-reg! temp2 temp1)
@@ -121,7 +121,7 @@
          (a64:mov! x0 rState)
          (a64:ldr! x2 (mem rNativeContext :NativeContext.luaF_close))
          (a64:blr! x2)
-         ;; restore before the skip label so the register state is the same on both paths
+         ~ restore before the skip label so the register state is the same on both paths
          (a64:restore! spills))
        (set-label! skip))]))
 
@@ -173,6 +173,6 @@
           (a64:str! temp (mem rState :lua_State.top))]
          [(kind? count :Inst)
           (a64:vm-reg-address! temp ra)
-          (a64:add-shifted! temp temp count :kTValueSizeLog2) ; implicit uxtw
+          (a64:add-shifted! temp temp count :kTValueSizeLog2) ~ implicit uxtw
           (a64:str! temp (mem rState :lua_State.top))]
          [else (unsupported!)]))]))

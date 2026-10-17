@@ -26,6 +26,7 @@ struct Rule
     std::vector<SExpr> body;
     SourceLocation loc;
     bool isSubrule = false;
+    std::vector<std::string> docs; // doc comments (~) on the definition, written above the generated function
 };
 
 std::vector<Rule> parseRules(const std::vector<SExpr>& program);

@@ -113,7 +113,7 @@
       [:a64
        (assert! (= (sizeof :TString*) 8))
        (cond
-         [(kind? tag :Inst) (a64:add-shifted! res rGlobalState tag 3)] ; implicit uxtw
+         [(kind? tag :Inst) (a64:add-shifted! res rGlobalState tag 3)] ~ implicit uxtw
          [(constant? tag) (a64:add-imm! res rGlobalState (* (tag-val tag) 8))]
          [else (unsupported!)])
        (a64:ldr! res (mem res :global_State.ttypename))])))

@@ -144,8 +144,8 @@
        (let ([addr (a64:temp-addr-buffer a b tag)])
          (a64:str! temp addr)))]))
 
-;; Guard that [offset + min-offset, offset + max-offset) is within the buffer, and optionally that the offset was
-;; exactly representable (exact holds the original double)
+~ Guard that [offset + min-offset, offset + max-offset) is within the buffer, and optionally that the offset was
+~ exactly representable (exact holds the original double)
 (define-rule (check-buffer-len [buffer :op] [offset :op] [min :op] [max :op] [exact :op] [fail :label])
   (let ([min-offset (int-val min)]
         [max-offset (int-val max)])
@@ -154,7 +154,7 @@
       [:x64
        (let ([access-size (- max-offset min-offset)])
          (assert! (> access-size 0))
-         ;; jumps to exit sync blocks need the same register allocation state at each potential taken branch
+         ~ jumps to exit sync blocks need the same register allocation state at each potential taken branch
          (let ([reg-a (if (kind? buffer :Inst) buffer noreg)]
                [reg-b (if (kind? offset :Inst) offset noreg)]
                [reg-e (if (not (kind? exact :Undef)) exact noreg)]
@@ -168,13 +168,13 @@
                  (x64:alloc! tmp1 :qword)
                  (x64:alloc! tmp2 :dword)))
            (let ([fresh-label (alloc-label)])
-             ;; also guard that the offset is an exact integer
+             ~ also guard that the offset is an exact integer
              (if (not (kind? exact :Undef))
                  (begin
                    (assert! (= (cmd-value-kind offset) :IrValueKind::Int))
                    (assert! (not (dirty-high-bits? offset)))
                    (x64:vcvtsi2sd-op! (x64:reg-of tmp-xmm) (x64:reg-of tmp-xmm) reg-b)
-                   (x64:vucomisd-op! (x64:reg-of tmp-xmm) reg-e) ; ZF=1 if equal or NaN, PF=1 on NaN
+                   (x64:vucomisd-op! (x64:reg-of tmp-xmm) reg-e) ~ ZF=1 if equal or NaN, PF=1 on NaN
                    (x64:jump-or-abort-no-finalize! :NotZero fail fresh-label)
                    (x64:jump-or-abort-no-finalize! :Parity fail fresh-label)))
              (cond
@@ -185,11 +185,11 @@
                       (x64:cmp-op! (mem reg-a :Buffer.len :u32) reg-b)
                       (x64:jump-or-abort-no-finalize! :BelowEqual fail fresh-label))
                     (begin
-                      ;; a single-branch bounds check: the 32-bit index plus the offset in 64 bits can't wrap
+                      ~ a single-branch bounds check: the 32-bit index plus the offset in 64 bits can't wrap
                       (if (>= min-offset 0)
                           (x64:lea-addr! (x64:reg-of tmp1) (x64:qword-reg reg-b) max-offset)
                           (begin
-                            ;; subtract a negative min offset in 32 bits first, then add the access size
+                            ~ subtract a negative min offset in 32 bits first, then add the access size
                             (x64:lea-addr! (x64:dword-reg (x64:reg-of tmp1)) reg-b min-offset)
                             (x64:lea-addr! (x64:reg-of tmp1) (x64:reg-of tmp1) access-size)))
                       (x64:mov! (x64:reg-of tmp2) (mem reg-a :Buffer.len :u32))
@@ -198,7 +198,7 @@
                [(constant? offset)
                 (let ([const-offset (int-val offset)]
                       [end-offset (if (fflag :LuauCodegenFixBufferLenCheck) max-offset access-size)])
-                  ;; constant folding can take care of it, but for safety avoid overflow/underflow cases here
+                  ~ constant folding can take care of it, but for safety avoid overflow/underflow cases here
                   (if (or (< const-offset 0) (>= (+ (to-unsigned const-offset) (to-unsigned end-offset)) (to-unsigned :INT_MAX)))
                       (x64:jump-or-abort-no-finalize! :Count fail fresh-label)
                       (x64:cmp-op! (mem reg-a :Buffer.len :u32) (+ const-offset end-offset)))
@@ -209,25 +209,25 @@
        (assert! (and (>= min-offset (- 0 (a64:max-imm))) (<= min-offset (a64:max-imm))))
        (let ([access-size (- max-offset min-offset)])
          (assert! (and (> access-size 0) (<= access-size (a64:max-imm))))
-         ;; jumps to exit sync blocks need the same register allocation state at each potential taken branch
+         ~ jumps to exit sync blocks need the same register allocation state at each potential taken branch
          (let ([reg-a (if (kind? buffer :Inst) buffer noreg)]
                [reg-b (if (kind? offset :Inst) offset noreg)]
                [reg-e (if (not (kind? exact :Undef)) exact noreg)]
                [temp-w1 (alloc-temp :u32)]
                [temp-w2 (alloc-temp :u32)]
                [temp-d (alloc-temp :f64)])
-           ;; nothing else may be allocated in this multi-branch lowering
+           ~ nothing else may be allocated in this multi-branch lowering
            (a64:mark-exit-sync!)
            (let ([fresh-label (alloc-label)]
                  [target (a64:target-label fail fresh-label)])
-             ;; also guard that the offset is an exact integer
+             ~ also guard that the offset is an exact integer
              (if (not (kind? exact :Undef))
                  (begin
                    (assert! (= (cmd-value-kind offset) :IrValueKind::Int))
                    (assert! (not (dirty-high-bits? offset)))
                    (if (build-feature? :Feature_JSCVT)
                        (begin
-                         (a64:fjcvtzs! temp-w1 reg-e) ; sets Z iff the conversion is exact
+                         (a64:fjcvtzs! temp-w1 reg-e) ~ sets Z iff the conversion is exact
                          (a64:b-cond! (a64:cond :NotEqual) target))
                        (begin
                          (a64:scvtf! temp-d reg-b)
@@ -239,23 +239,23 @@
                 (assert! (not (dirty-high-bits? offset)))
                 (cond
                   [(and (= access-size 1) (= min-offset 0))
-                   ;; fails if offset >= len
+                   ~ fails if offset >= len
                    (a64:cmp-op! temp-w1 reg-b)
                    (a64:b-cond! (a64:cond :UnsignedLessEqual) target)]
                   [(and (>= min-offset 0) (<= max-offset (a64:max-imm)))
-                   ;; fails if offset + size > len, computed as len - offset < size (signed 64-bit so a bad offset fails)
+                   ~ fails if offset + size > len, computed as len - offset < size (signed 64-bit so a bad offset fails)
                    (let ([tempx (a64:cast-x temp-w1)])
-                     (a64:sub-reg! tempx tempx reg-b) ; implicit uxtw
+                     (a64:sub-reg! tempx tempx reg-b) ~ implicit uxtw
                      (a64:cmp-imm! tempx max-offset)
                      (a64:b-cond! (a64:cond :Less) target))]
                   [else
                    (let ([tempx (a64:cast-x temp-w1)]
                          [temp2 (a64:cast-x temp-w2)])
-                     ;; base offset in 32 bits
+                     ~ base offset in 32 bits
                      (if (>= min-offset 0)
                          (a64:add-imm! (a64:cast-w temp2) reg-b min-offset)
                          (a64:sub-imm! (a64:cast-w temp2) reg-b (- 0 min-offset)))
-                     ;; fail if uint64_t(uint32_t(offset + min-offset)) + access-size > length
+                     ~ fail if uint64_t(uint32_t(offset + min-offset)) + access-size > length
                      (a64:add-imm! temp2 temp2 access-size)
                      (a64:cmp-op! temp2 tempx)
                      (a64:b-cond! (a64:cond :UnsignedGreater) target))])]
@@ -263,7 +263,7 @@
                 (let ([const-offset (int-val offset)]
                       [end-offset (if (fflag :LuauCodegenFixBufferLenCheck) max-offset access-size)]
                       [fail-cond (if (fflag :LuauCodegenFixBufferLenCheck) (a64:cond :UnsignedLess) (a64:cond :UnsignedLessEqual))])
-                  ;; constant folding can take care of it, but for safety avoid overflow/underflow cases here
+                  ~ constant folding can take care of it, but for safety avoid overflow/underflow cases here
                   (cond
                     [(or (< const-offset 0) (>= (+ (to-unsigned const-offset) (to-unsigned end-offset)) (to-unsigned :INT_MAX)))
                      (a64:b-label! target)]

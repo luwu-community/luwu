@@ -116,6 +116,9 @@ void SourceLoader::loadFile(const std::string& path, const std::string& canonica
             continue;
         }
 
+        if (form.hasDocs())
+            throw CompileError(form, "Doc comments on include aren't written anywhere; use ; for a Luna-only comment");
+
         std::string includedCanonical;
         std::string includedPath = resolveInclude(form, path, includedCanonical);
 

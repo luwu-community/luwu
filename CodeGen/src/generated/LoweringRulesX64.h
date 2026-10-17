@@ -635,6 +635,7 @@ inline void lower_UINT_TO_NUM(IrLoweringX64& lowering, IrInst& inst, uint32_t in
     (void)next;
 
     inst.regX64 = regs.allocReg(SizeX64::xmmword, index);
+    // A uint produced by NUM_TO_UINT may have garbage in the upper half of its 64-bit register
     if (lowering.function.instOp(OP_A(inst)).cmd == IrCmd::NUM_TO_UINT)
     {
         ScopedRegX64 tmp{regs, SizeX64::dword};
@@ -655,6 +656,7 @@ inline void lower_UINT_TO_FLOAT(IrLoweringX64& lowering, IrInst& inst, uint32_t 
     (void)next;
 
     inst.regX64 = regs.allocReg(SizeX64::xmmword, index);
+    // A uint produced by NUM_TO_UINT may have garbage in the upper half of its 64-bit register
     if (lowering.function.instOp(OP_A(inst)).cmd == IrCmd::NUM_TO_UINT)
     {
         ScopedRegX64 tmp{regs, SizeX64::dword};
@@ -1210,6 +1212,7 @@ inline void lower_LOAD_TAG(IrLoweringX64& lowering, IrInst& inst, uint32_t index
     {
         build.mov(inst.regX64, luauConstantTag(vmConstOp(OP_A(inst))));
     }
+    // A register operand is assumed to hold a pointer to a TValue
     else if (OP_A(inst).kind == IrOpKind::Inst)
     {
         build.mov(inst.regX64, dword[lowering.regOp(OP_A(inst)) + offsetof(TValue, tt)]);
@@ -1235,6 +1238,7 @@ inline void lower_LOAD_POINTER(IrLoweringX64& lowering, IrInst& inst, uint32_t i
     {
         build.mov(inst.regX64, luauConstantValue(vmConstOp(OP_A(inst))));
     }
+    // A register operand is assumed to hold a pointer to a TValue
     else if (OP_A(inst).kind == IrOpKind::Inst)
     {
         build.mov(inst.regX64, qword[lowering.regOp(OP_A(inst)) + offsetof(TValue, value)]);
@@ -1663,6 +1667,7 @@ inline void lower_ROUND_NUM(IrLoweringX64& lowering, IrInst& inst, uint32_t inde
     {
         build.vmovsd(inst.regX64, inst.regX64, lowering.regOp(OP_A(inst)));
     }
+    // res + copysign(0.49999999999999994, res), truncated
     build.vandpd(tmp1.reg, inst.regX64, build.f64x2(-0.0, -0.0));
     build.vmovsd(tmp2.reg, build.i64(0x3fdfffffffffffff));
     build.vorpd(tmp1.reg, tmp1.reg, tmp2.reg);
@@ -1681,9 +1686,11 @@ inline void lower_SIGN_NUM(IrLoweringX64& lowering, IrInst& inst, uint32_t index
     ScopedRegX64 tmp1{regs, SizeX64::xmmword};
     ScopedRegX64 tmp2{regs, SizeX64::xmmword};
     build.vxorpd(tmp0.reg, tmp0.reg, tmp0.reg);
+    // tmp1 = arg < 0 ? -1 : 0
     build.vcmpltsd(tmp1.reg, lowering.regOp(OP_A(inst)), tmp0.reg);
     build.vmovsd(tmp2.reg, build.f64(-1));
     build.vandpd(tmp1.reg, tmp1.reg, tmp2.reg);
+    // mask = 0 < arg; result = mask ? 1.0 : tmp1
     build.vcmpltsd(inst.regX64, tmp0.reg, lowering.regOp(OP_A(inst)));
     build.vblendvpd(inst.regX64, tmp1.reg, build.f64x2(1, 1), inst.regX64);
 }
@@ -1699,9 +1706,11 @@ inline void lower_SIGN_FLOAT(IrLoweringX64& lowering, IrInst& inst, uint32_t ind
     ScopedRegX64 tmp1{regs, SizeX64::xmmword};
     ScopedRegX64 tmp2{regs, SizeX64::xmmword};
     build.vxorps(tmp0.reg, tmp0.reg, tmp0.reg);
+    // tmp1 = arg < 0 ? -1 : 0
     build.vcmpltss(tmp1.reg, lowering.regOp(OP_A(inst)), tmp0.reg);
     build.vmovss(tmp2.reg, build.f32(-1.0f));
     build.vandps(tmp1.reg, tmp1.reg, tmp2.reg);
+    // mask = 0 < arg; result = mask ? 1.0 : tmp1
     build.vcmpltss(inst.regX64, tmp0.reg, lowering.regOp(OP_A(inst)));
     build.vblendvps(inst.regX64, tmp1.reg, build.f32x4(1, 1, 1, 1), inst.regX64);
 }
@@ -1983,6 +1992,7 @@ inline void lower_DOT_VEC(IrLoweringX64& lowering, IrInst& inst, uint32_t index,
     auto tmp2 = ScopedRegX64{regs};
     auto tmpa = lowering.vecOp(OP_A(inst), tmp1);
     auto tmpb = OP_A(inst) == OP_B(inst) ? tmpa : lowering.vecOp(OP_B(inst), tmp2);
+    // mask 0x71: sum the first 3 products into the first float
     build.vdpps(inst.regX64, tmpa, tmpb, 0x71);
 }
 
@@ -2073,12 +2083,13 @@ inline void lower_DIV_INT64(IrLoweringX64& lowering, IrInst& inst, uint32_t inde
     auto& regs = lowering.regs;
     (void)next;
 
+    // idiv clobbers rax (quotient) and rdx (remainder)
     auto div_rax = ScopedRegX64{regs};
     auto div_rdx = ScopedRegX64{regs};
     div_rax.take(rax);
     div_rdx.take(rdx);
     build.mov(rax, lowering.memRegInt64Op(OP_A(inst)));
-    build.cqo();
+    build.cqo(); // sign-extend rax into rdx:rax
     build.idiv(lowering.memRegInt64Op(OP_B(inst)));
     inst.regX64 = regs.allocRegOrReuse(SizeX64::qword, index, {OP_A(inst), OP_B(inst)});
     build.mov(inst.regX64, rax);
@@ -2090,23 +2101,25 @@ inline void lower_IDIV_INT64(IrLoweringX64& lowering, IrInst& inst, uint32_t ind
     auto& regs = lowering.regs;
     (void)next;
 
+    // idiv clobbers rax (quotient) and rdx (remainder)
     auto div_rax = ScopedRegX64{regs};
     div_rax.take(rax);
     auto div_rdx = ScopedRegX64{regs};
     div_rdx.take(rdx);
     ScopedRegX64 temp_b{regs, SizeX64::qword};
     build.mov(temp_b.reg, lowering.memRegInt64Op(OP_B(inst)));
+    // idiv divides rdx:rax by the operand; quotient in rax, remainder in rdx
     build.mov(rax, lowering.memRegInt64Op(OP_A(inst)));
     build.cqo();
     build.idiv(temp_b.reg);
     inst.regX64 = regs.allocRegOrReuse(SizeX64::qword, index, {OP_A(inst), OP_B(inst)});
     Label done;
-    build.mov(inst.regX64, rax);
+    build.mov(inst.regX64, rax); // start with the truncated quotient
     build.test(rdx, rdx);
-    build.jcc(ConditionX64::Equal, done);
+    build.jcc(ConditionX64::Equal, done); // remainder == 0, no adjustment needed
     build.xor_(rdx, temp_b.reg);
-    build.jcc(ConditionX64::GreaterEqual, done);
-    build.sub(inst.regX64, 1);
+    build.jcc(ConditionX64::GreaterEqual, done); // same sign, no adjustment
+    build.sub(inst.regX64, 1); // floor adjustment
     build.setLabel(done);
 }
 
@@ -2116,12 +2129,13 @@ inline void lower_UDIV_INT64(IrLoweringX64& lowering, IrInst& inst, uint32_t ind
     auto& regs = lowering.regs;
     (void)next;
 
+    // div clobbers rax (quotient) and rdx (remainder)
     auto div_rax = ScopedRegX64{regs};
     auto div_rdx = ScopedRegX64{regs};
     div_rax.take(rax);
     div_rdx.take(rdx);
     build.mov(rax, lowering.memRegInt64Op(OP_A(inst)));
-    build.xor_(rdx, rdx);
+    build.xor_(rdx, rdx); // zero-extend rax into rdx:rax
     build.div(lowering.memRegInt64Op(OP_B(inst)));
     inst.regX64 = regs.allocRegOrReuse(SizeX64::qword, index, {OP_A(inst), OP_B(inst)});
     build.mov(inst.regX64, rax);
@@ -2133,6 +2147,7 @@ inline void lower_REM_INT64(IrLoweringX64& lowering, IrInst& inst, uint32_t inde
     auto& regs = lowering.regs;
     (void)next;
 
+    // idiv clobbers rax (quotient) and rdx (remainder)
     auto div_rax = ScopedRegX64{regs};
     auto div_rdx = ScopedRegX64{regs};
     div_rax.take(rax);
@@ -2141,6 +2156,7 @@ inline void lower_REM_INT64(IrLoweringX64& lowering, IrInst& inst, uint32_t inde
     ScopedRegX64 temp_a{regs, SizeX64::qword};
     build.mov(temp_a.reg, lowering.memRegInt64Op(OP_A(inst)));
     build.mov(temp_b.reg, lowering.memRegInt64Op(OP_B(inst)));
+    // INT64_MIN % -1 overflows idiv; the result is 0
     Label skip;
     Label done;
     ScopedRegX64 tmp_min{regs, SizeX64::qword};
@@ -2165,6 +2181,7 @@ inline void lower_MOD_INT64(IrLoweringX64& lowering, IrInst& inst, uint32_t inde
     auto& regs = lowering.regs;
     (void)next;
 
+    // idiv clobbers rax (quotient) and rdx (remainder)
     auto div_rax = ScopedRegX64{regs};
     div_rax.take(rax);
     auto div_rdx = ScopedRegX64{regs};
@@ -2177,6 +2194,7 @@ inline void lower_MOD_INT64(IrLoweringX64& lowering, IrInst& inst, uint32_t inde
     Label skip;
     Label done;
     ScopedRegX64 tmp_min{regs, SizeX64::qword};
+    // INT64_MIN % -1 overflows idiv; the result is 0
     build.cmp(temp_b.reg, -1);
     build.jcc(ConditionX64::NotEqual, skip);
     build.mov(inst.regX64, 0);
@@ -2188,6 +2206,7 @@ inline void lower_MOD_INT64(IrLoweringX64& lowering, IrInst& inst, uint32_t inde
     build.cqo();
     build.idiv(temp_b.reg);
     build.mov(inst.regX64, rdx);
+    // floored modulo: add b when the remainder is non-zero and its sign differs from b
     build.test(rdx, rdx);
     build.jcc(ConditionX64::Equal, done);
     build.xor_(rdx, temp_b.reg);
@@ -2202,12 +2221,13 @@ inline void lower_UREM_INT64(IrLoweringX64& lowering, IrInst& inst, uint32_t ind
     auto& regs = lowering.regs;
     (void)next;
 
+    // div clobbers rax (quotient) and rdx (remainder)
     auto div_rax = ScopedRegX64{regs};
     auto div_rdx = ScopedRegX64{regs};
     div_rax.take(rax);
     div_rdx.take(rdx);
     build.mov(rax, lowering.memRegInt64Op(OP_A(inst)));
-    build.xor_(rdx, rdx);
+    build.xor_(rdx, rdx); // zero-extend rax into rdx:rax
     build.div(lowering.memRegInt64Op(OP_B(inst)));
     inst.regX64 = regs.allocRegOrReuse(SizeX64::qword, index, {OP_A(inst), OP_B(inst)});
     build.mov(inst.regX64, rdx);
@@ -2222,8 +2242,10 @@ inline void lower_CHECK_DIV_INT64(IrLoweringX64& lowering, IrInst& inst, uint32_
     ScopedRegX64 tmp_b{regs, SizeX64::qword};
     build.mov(tmp_a.reg, lowering.memRegInt64Op(OP_A(inst)));
     build.mov(tmp_b.reg, lowering.memRegInt64Op(OP_B(inst)));
+    // guard against division by zero
     build.test(tmp_b.reg, tmp_b.reg);
     lowering.jumpOrAbortOnUndef(ConditionX64::Equal, OP_C(inst), index, next);
+    // guard against INT64_MIN / -1 (signed overflow)
     Label skip;
     ScopedRegX64 tmp_min{regs, SizeX64::qword};
     build.cmp(tmp_b.reg, -1);
@@ -2252,7 +2274,7 @@ inline void lower_BITLSHIFT_UINT(IrLoweringX64& lowering, IrInst& inst, uint32_t
     }
     if (OP_B(inst).kind == IrOpKind::Constant)
     {
-        build.shl(inst.regX64, int8_t(unsigned(lowering.intOp(OP_B(inst)))));
+        build.shl(inst.regX64, int8_t(unsigned(lowering.intOp(OP_B(inst))))); // byte-sized amount
     }
     else
     {
@@ -2279,7 +2301,7 @@ inline void lower_BITRSHIFT_UINT(IrLoweringX64& lowering, IrInst& inst, uint32_t
     }
     if (OP_B(inst).kind == IrOpKind::Constant)
     {
-        build.shr(inst.regX64, int8_t(unsigned(lowering.intOp(OP_B(inst)))));
+        build.shr(inst.regX64, int8_t(unsigned(lowering.intOp(OP_B(inst))))); // byte-sized amount
     }
     else
     {
@@ -2306,7 +2328,7 @@ inline void lower_BITARSHIFT_UINT(IrLoweringX64& lowering, IrInst& inst, uint32_
     }
     if (OP_B(inst).kind == IrOpKind::Constant)
     {
-        build.sar(inst.regX64, int8_t(unsigned(lowering.intOp(OP_B(inst)))));
+        build.sar(inst.regX64, int8_t(unsigned(lowering.intOp(OP_B(inst))))); // byte-sized amount
     }
     else
     {
@@ -2333,7 +2355,7 @@ inline void lower_BITRROTATE_UINT(IrLoweringX64& lowering, IrInst& inst, uint32_
     }
     if (OP_B(inst).kind == IrOpKind::Constant)
     {
-        build.ror(inst.regX64, int8_t(unsigned(lowering.intOp(OP_B(inst)))));
+        build.ror(inst.regX64, int8_t(unsigned(lowering.intOp(OP_B(inst))))); // byte-sized amount
     }
     else
     {
@@ -2360,7 +2382,7 @@ inline void lower_BITLROTATE_UINT(IrLoweringX64& lowering, IrInst& inst, uint32_
     }
     if (OP_B(inst).kind == IrOpKind::Constant)
     {
-        build.rol(inst.regX64, int8_t(unsigned(lowering.intOp(OP_B(inst)))));
+        build.rol(inst.regX64, int8_t(unsigned(lowering.intOp(OP_B(inst))))); // byte-sized amount
     }
     else
     {
@@ -2463,6 +2485,7 @@ inline void lower_BITLSHIFT_INT64(IrLoweringX64& lowering, IrInst& inst, uint32_
     {
         if (lowering.int64Op(OP_B(inst)) < 0)
         {
+            // shift the other way by -amount (truncated to a byte, as the instruction encodes it)
             if (uint8_t(-lowering.int64Op(OP_B(inst))) > 63)
             {
                 build.xor_(inst.regX64, inst.regX64);
@@ -2488,6 +2511,7 @@ inline void lower_BITLSHIFT_INT64(IrLoweringX64& lowering, IrInst& inst, uint32_
         Label out_of_range;
         Label done;
         build.mov(shift_tmp.reg, lowering.memRegInt64Op(OP_B(inst)));
+        // |amount| > 63: (amount + 63) unsigned > 126
         build.lea(tmp.reg, addr[shift_tmp.reg + 63]);
         build.cmp(tmp.reg, 126);
         build.jcc(ConditionX64::Above, out_of_range);
@@ -2525,6 +2549,7 @@ inline void lower_BITRSHIFT_INT64(IrLoweringX64& lowering, IrInst& inst, uint32_
     {
         if (lowering.int64Op(OP_B(inst)) < 0)
         {
+            // shift the other way by -amount (truncated to a byte, as the instruction encodes it)
             if (uint8_t(-lowering.int64Op(OP_B(inst))) > 63)
             {
                 build.xor_(inst.regX64, inst.regX64);
@@ -2550,6 +2575,7 @@ inline void lower_BITRSHIFT_INT64(IrLoweringX64& lowering, IrInst& inst, uint32_
         Label out_of_range;
         Label done;
         build.mov(shift_tmp.reg, lowering.memRegInt64Op(OP_B(inst)));
+        // |amount| > 63: (amount + 63) unsigned > 126
         build.lea(tmp.reg, addr[shift_tmp.reg + 63]);
         build.cmp(tmp.reg, 126);
         build.jcc(ConditionX64::Above, out_of_range);
@@ -2585,6 +2611,7 @@ inline void lower_BITARSHIFT_INT64(IrLoweringX64& lowering, IrInst& inst, uint32
     }
     if (OP_B(inst).kind == IrOpKind::Constant)
     {
+        // left shift by more than 63
         if (lowering.int64Op(OP_B(inst)) < -63)
         {
             build.xor_(inst.regX64, inst.regX64);
@@ -2593,6 +2620,7 @@ inline void lower_BITARSHIFT_INT64(IrLoweringX64& lowering, IrInst& inst, uint32
         {
             build.shl(inst.regX64, int8_t(uint8_t(-lowering.int64Op(OP_B(inst)))));
         }
+        // sign-fill
         else if (lowering.int64Op(OP_B(inst)) > 63)
         {
             build.sar(inst.regX64, int8_t(63));
@@ -2610,8 +2638,10 @@ inline void lower_BITARSHIFT_INT64(IrLoweringX64& lowering, IrInst& inst, uint32
         Label out_of_range_negative;
         Label done;
         build.mov(shift_tmp.reg, lowering.memRegInt64Op(OP_B(inst)));
+        // amount > 63: sign-fill
         build.cmp(shift_tmp.reg, 63);
         build.jcc(ConditionX64::Greater, out_of_range_positive);
+        // amount < -63: (amount + 63) < 0
         build.lea(tmp.reg, addr[shift_tmp.reg + 63]);
         build.test(tmp.reg, tmp.reg);
         build.jcc(ConditionX64::Less, out_of_range_negative);
@@ -2850,6 +2880,8 @@ inline void lower_BUFFER_WRITEI64(IrLoweringX64& lowering, IrInst& inst, uint32_
     }
 }
 
+// Guard that [offset + min-offset, offset + max-offset) is within the buffer, and optionally that the offset was
+// exactly representable (exact holds the original double)
 inline void lower_CHECK_BUFFER_LEN(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
 {
     auto& build = lowering.build;
@@ -2859,6 +2891,7 @@ inline void lower_CHECK_BUFFER_LEN(IrLoweringX64& lowering, IrInst& inst, uint32
     auto max_offset = lowering.intOp(OP_D(inst));
     CODEGEN_ASSERT(min_offset < max_offset);
     CODEGEN_ASSERT(max_offset - min_offset > 0);
+    // jumps to exit sync blocks need the same register allocation state at each potential taken branch
     auto reg_a = OP_A(inst).kind == IrOpKind::Inst ? lowering.regOp(OP_A(inst)) : noreg;
     auto reg_b = OP_B(inst).kind == IrOpKind::Inst ? lowering.regOp(OP_B(inst)) : noreg;
     auto reg_e = !(OP_E(inst).kind == IrOpKind::Undef) ? lowering.regOp(OP_E(inst)) : noreg;
@@ -2875,12 +2908,13 @@ inline void lower_CHECK_BUFFER_LEN(IrLoweringX64& lowering, IrInst& inst, uint32
         tmp2.alloc(SizeX64::dword);
     }
     Label fresh_label;
+    // also guard that the offset is an exact integer
     if (!(OP_E(inst).kind == IrOpKind::Undef))
     {
         CODEGEN_ASSERT(getCmdValueKind(lowering.function.instOp(OP_B(inst)).cmd) == IrValueKind::Int);
         CODEGEN_ASSERT(!(producesDirtyHighRegisterBits(lowering.function.instOp(OP_B(inst)).cmd)));
         build.vcvtsi2sd(tmp_xmm.reg, tmp_xmm.reg, reg_b);
-        build.vucomisd(tmp_xmm.reg, reg_e);
+        build.vucomisd(tmp_xmm.reg, reg_e); // ZF=1 if equal or NaN, PF=1 on NaN
         lowering.jumpOrAbortOnUndefNoFinalize(ConditionX64::NotZero, OP_F(inst), index, next, fresh_label);
         lowering.jumpOrAbortOnUndefNoFinalize(ConditionX64::Parity, OP_F(inst), index, next, fresh_label);
     }
@@ -2894,12 +2928,14 @@ inline void lower_CHECK_BUFFER_LEN(IrLoweringX64& lowering, IrInst& inst, uint32
         }
         else
         {
+            // a single-branch bounds check: the 32-bit index plus the offset in 64 bits can't wrap
             if (min_offset >= 0)
             {
                 build.lea(tmp1.reg, addr[qwordReg(reg_b) + max_offset]);
             }
             else
             {
+                // subtract a negative min offset in 32 bits first, then add the access size
                 build.lea(dwordReg(tmp1.reg), addr[reg_b + min_offset]);
                 build.lea(tmp1.reg, addr[tmp1.reg + (max_offset - min_offset)]);
             }
@@ -2912,6 +2948,7 @@ inline void lower_CHECK_BUFFER_LEN(IrLoweringX64& lowering, IrInst& inst, uint32
     {
         auto const_offset = lowering.intOp(OP_B(inst));
         auto end_offset = FFlag::LuauCodegenFixBufferLenCheck ? max_offset : max_offset - min_offset;
+        // constant folding can take care of it, but for safety avoid overflow/underflow cases here
         if (const_offset < 0 || (unsigned(const_offset) + unsigned(end_offset)) >= unsigned(INT_MAX))
         {
             lowering.jumpOrAbortOnUndefNoFinalize(ConditionX64::Count, OP_F(inst), index, next, fresh_label);
@@ -2935,7 +2972,9 @@ inline void lower_CMP_TAG(IrLoweringX64& lowering, IrInst& inst, uint32_t index,
     auto& regs = lowering.regs;
     (void)next;
 
+    // can't reuse an operand register: the target is modified before the comparison
     inst.regX64 = regs.allocReg(SizeX64::dword, index);
+    // setcc writes a byte register, which doesn't clear the high bits
     build.xor_(inst.regX64, inst.regX64);
     CODEGEN_ASSERT(conditionOp(OP_C(inst)) == IrCondition::Equal || conditionOp(OP_C(inst)) == IrCondition::NotEqual);
     if (lowering.tagOp(OP_B(inst)) == LUA_TNIL && OP_A(inst).kind == IrOpKind::Inst)
@@ -2961,6 +3000,7 @@ inline void lower_NOT_ANY(IrLoweringX64& lowering, IrInst& inst, uint32_t index,
     Label exit;
     if (OP_A(inst).kind == IrOpKind::Constant)
     {
+        // other cases should've been constant folded
         CODEGEN_ASSERT(lowering.tagOp(OP_A(inst)) == LUA_TBOOLEAN);
     }
     else
@@ -2974,6 +3014,7 @@ inline void lower_NOT_ANY(IrLoweringX64& lowering, IrInst& inst, uint32_t index,
     }
     if (OP_B(inst).kind == IrOpKind::Constant)
     {
+        // a value of 1 falls through to storing 0
         if (lowering.intOp(OP_B(inst)) == 0)
         {
             build.jmp(save_one);
@@ -3010,6 +3051,7 @@ inline void lower_JUMP_IF_FALSY(IrLoweringX64& lowering, IrInst& inst, uint32_t 
     lowering.jumpOrFallthrough(lowering.blockOp(OP_C(inst)), next);
 }
 
+// After the call the high register bits aren't cleared; the only consumer (JUMP_CMP_INT) doesn't read them
 inline void lower_CMP_ANY(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
 {
     auto& build = lowering.build;
@@ -3020,11 +3062,13 @@ inline void lower_CMP_ANY(IrLoweringX64& lowering, IrInst& inst, uint32_t index,
     inst.regX64 = regs.allocReg(SizeX64::dword, index);
     Label skip;
     Label exit;
+    // luaV_equalval expects the tags to be equal before the call
     if (conditionOp(OP_C(inst)) == IrCondition::Equal)
     {
         ScopedRegX64 tmp{regs, SizeX64::dword};
         build.mov(tmp.reg, lowering.memRegTagOp(OP_A(inst)));
         build.cmp(lowering.memRegTagOp(OP_B(inst)), tmp.reg);
+        // unequal tags skip the call with a result of 0
         build.jcc(ConditionX64::NotEqual, skip);
     }
     {
@@ -3110,16 +3154,21 @@ inline void lower_JUMP_CMP_FLOAT(IrLoweringX64& lowering, IrInst& inst, uint32_t
     lowering.jumpOrFallthrough(lowering.blockOp(OP_E(inst)), next);
 }
 
+// Compare TValues given as tag/value pairs; the second tag must be a constant, since without it we wouldn't know how
+// to compare the values
 inline void lower_CMP_SPLIT_TVALUE(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
 {
     auto& build = lowering.build;
     auto& regs = lowering.regs;
     (void)next;
 
+    // can't reuse an operand register: the target is modified before the comparison
     inst.regX64 = regs.allocReg(SizeX64::dword, index);
     CODEGEN_ASSERT(OP_B(inst).kind == IrOpKind::Constant);
+    // setcc writes byte registers, which don't clear the high bits
     build.xor_(inst.regX64, inst.regX64);
     CODEGEN_ASSERT(conditionOp(OP_E(inst)) == IrCondition::Equal || conditionOp(OP_E(inst)) == IrCondition::NotEqual);
+    // check tag equality first
     ScopedRegX64 tmp1{regs, SizeX64::byte};
     if (!(OP_A(inst).kind == IrOpKind::Constant))
     {
@@ -3128,10 +3177,12 @@ inline void lower_CMP_SPLIT_TVALUE(IrLoweringX64& lowering, IrInst& inst, uint32
     }
     else
     {
+        // constant folding had to handle different constant tags
         CODEGEN_ASSERT(lowering.tagOp(OP_A(inst)) == lowering.tagOp(OP_B(inst)));
     }
     if (lowering.tagOp(OP_B(inst)) == LUA_TBOOLEAN)
     {
+        // swapped arguments
         if (OP_C(inst).kind == IrOpKind::Constant)
         {
             build.cmp(lowering.regOp(OP_D(inst)), lowering.intOp(OP_C(inst)));
@@ -3153,6 +3204,7 @@ inline void lower_CMP_SPLIT_TVALUE(IrLoweringX64& lowering, IrInst& inst, uint32
     }
     else if (lowering.tagOp(OP_B(inst)) == LUA_TNUMBER)
     {
+        // swapped arguments
         if (OP_C(inst).kind == IrOpKind::Constant)
         {
             build.vucomisd(lowering.regOp(OP_D(inst)), lowering.memRegDoubleOp(OP_C(inst)));
@@ -3167,6 +3219,7 @@ inline void lower_CMP_SPLIT_TVALUE(IrLoweringX64& lowering, IrInst& inst, uint32
         }
         if (OP_C(inst) == OP_D(inst))
         {
+            // comparing a number with itself only needs the parity check to detect NaN
             if (conditionOp(OP_E(inst)) == IrCondition::Equal)
             {
                 build.setcc(ConditionX64::NotParity, byteReg(inst.regX64));
@@ -3195,6 +3248,7 @@ inline void lower_CMP_SPLIT_TVALUE(IrLoweringX64& lowering, IrInst& inst, uint32
     }
     else if (lowering.tagOp(OP_B(inst)) == LUA_TINTEGER)
     {
+        // swapped arguments
         if (OP_C(inst).kind == IrOpKind::Constant)
         {
             build.cmp(lowering.regOp(OP_D(inst)), lowering.memRegInt64Op(OP_C(inst)));
@@ -3246,9 +3300,12 @@ inline void lower_JUMP_FORN_LOOP_COND(IrLoweringX64& lowering, IrInst& inst, uin
     {
         build.vmovsd(tmp2.reg, lowering.memRegDoubleOp(OP_B(inst)));
     }
+    // step > 0
     jumpOnNumberCmp(build, tmp3.reg, lowering.memRegDoubleOp(OP_C(inst)), build.f64(0.0), IrCondition::Greater, direct, false);
+    // !(limit <= index)
     jumpOnNumberCmp(build, noreg, limit_reg, index_reg, IrCondition::NotLessEqual, lowering.labelOp(OP_E(inst)), false);
     build.jmp(lowering.labelOp(OP_D(inst)));
+    // !(index <= limit)
     build.setLabel(direct);
     jumpOnNumberCmp(build, noreg, index_reg, limit_reg, IrCondition::NotLessEqual, lowering.labelOp(OP_E(inst)), false);
     lowering.jumpOrFallthrough(lowering.blockOp(OP_D(inst)), next);
@@ -3260,21 +3317,26 @@ inline void lower_SELECT_IF_TRUTHY(IrLoweringX64& lowering, IrInst& inst, uint32
     auto& regs = lowering.regs;
     (void)next;
 
+    // no reuse, since multiple inputs can be shared
     inst.regX64 = regs.allocReg(SizeX64::xmmword, index);
+    // place lhs as the result, overwritten with rhs below if the condition is falsy
     build.vmovaps(inst.regX64, lowering.regOp(OP_B(inst)));
+    // resolve the rhs register early, so a potential restore happens on both sides of the conditional control flow
     auto c = lowering.regOp(OP_C(inst));
     ScopedRegX64 tmp{regs, SizeX64::dword};
     Label save_rhs;
     Label exit;
+    // check the tag first
     build.vpextrd(tmp.reg, lowering.regOp(OP_A(inst)), 3);
     build.cmp(tmp.reg, LUA_TSYMNONE);
-    build.jcc(ConditionX64::Equal, save_rhs);
+    build.jcc(ConditionX64::Equal, save_rhs); // rhs if none (see l_isfalse)
     build.cmp(tmp.reg, LUA_TBOOLEAN);
-    build.jcc(ConditionX64::Below, save_rhs);
-    build.jcc(ConditionX64::Above, exit);
+    build.jcc(ConditionX64::Below, save_rhs); // rhs if nil
+    build.jcc(ConditionX64::Above, exit); // keep lhs if not a boolean
+    // check the boolean value
     build.vpextrd(tmp.reg, lowering.regOp(OP_A(inst)), 0);
     build.test(tmp.reg, tmp.reg);
-    build.jcc(ConditionX64::NotZero, exit);
+    build.jcc(ConditionX64::NotZero, exit); // keep lhs if true
     build.setLabel(save_rhs);
     build.vmovaps(inst.regX64, c);
     build.setLabel(exit);
@@ -3297,15 +3359,19 @@ inline void lower_CHECK_TRUTHY(IrLoweringX64& lowering, IrInst& inst, uint32_t i
 {
     auto& build = lowering.build;
 
+    // constant tags that don't need the boolean value check should've been removed in constant folding
     CODEGEN_ASSERT(!(OP_A(inst).kind == IrOpKind::Constant) || lowering.tagOp(OP_A(inst)) == LUA_TBOOLEAN);
     Label skip;
     if (!(OP_A(inst).kind == IrOpKind::Constant))
     {
+        // fail on nil (falsy)
         build.cmp(lowering.memRegTagOp(OP_A(inst)), LUA_TNIL);
         lowering.jumpOrAbortOnUndef(ConditionX64::Equal, OP_C(inst), index, next);
+        // skip the value test if it's not a boolean (truthy)
         build.cmp(lowering.memRegTagOp(OP_A(inst)), LUA_TBOOLEAN);
         build.jcc(ConditionX64::NotEqual, skip);
     }
+    // fail on a false boolean value (falsy)
     if (!(OP_B(inst).kind == IrOpKind::Constant))
     {
         build.cmp(lowering.memRegUintOp(OP_B(inst)), 0);
@@ -3659,7 +3725,7 @@ inline void lower_TABLE_LEN(IrLoweringX64& lowering, IrInst& inst, uint32_t inde
     call_wrap.addArgument(SizeX64::qword, lowering.regOp(OP_A(inst)), OP_A(inst));
     call_wrap.call(qword[rNativeContext + offsetof(NativeContext, luaH_getn)]);
     inst.regX64 = regs.takeReg(eax, index);
-    build.mov(inst.regX64, inst.regX64);
+    build.mov(inst.regX64, inst.regX64); // clear the high register bits
 }
 
 inline void lower_TABLE_SETNUM(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
@@ -3721,6 +3787,8 @@ inline void lower_CAPTURE(IrLoweringX64& lowering, IrInst& inst, uint32_t index,
     (void)inst;
     (void)index;
     (void)next;
+
+    // no-op right now
 }
 
 inline void lower_COVERAGE(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
@@ -3735,12 +3803,15 @@ inline void lower_COVERAGE(IrLoweringX64& lowering, IrInst& inst, uint32_t index
     ScopedRegX64 tmp3{regs, SizeX64::dword};
     build.mov(tmp1.reg, sCode);
     build.add(tmp1.reg, lowering.uintOp(OP_A(inst)) * sizeof(Instruction));
+    // hits = LUAU_INSN_E(*pc)
     build.mov(tmp2.reg, dword[tmp1.reg]);
     build.sar(tmp2.reg, 8);
+    // hits = (hits < (1 << 23) - 1) ? hits + 1 : hits
     build.xor_(tmp3.reg, tmp3.reg);
     build.cmp(tmp2.reg, 0x7fffff);
     build.setcc(ConditionX64::NotEqual, byteReg(tmp3.reg));
     build.add(tmp2.reg, tmp3.reg);
+    // VM_PATCH_E(pc, hits)
     build.sal(tmp2.reg, 8);
     build.movzx(tmp3.reg, byte[tmp1.reg]);
     build.or_(tmp3.reg, tmp2.reg);
@@ -3755,6 +3826,8 @@ inline void lower_INTERRUPT(IrLoweringX64& lowering, IrInst& inst, uint32_t inde
     (void)next;
 
     auto pcpos = lowering.uintOp(OP_A(inst));
+    // spill unconditionally, so the interrupt handler doesn't need the register state; interrupts are on loop edges
+    // and calls/returns, where there's little register reuse to lose anyway
     regs.preserveAndFreeInstValues();
     ScopedRegX64 tmp{regs, SizeX64::qword};
     Label self;
@@ -3775,9 +3848,11 @@ inline void lower_CLOSE_UPVALS(IrLoweringX64& lowering, IrInst& inst, uint32_t i
     auto tmp2 = ScopedRegX64{regs};
     tmp1.alloc(SizeX64::qword);
     tmp2.alloc(SizeX64::qword);
+    // L->openupval != 0
     build.mov(tmp1.reg, qword[rState + offsetof(lua_State, openupval)]);
     build.test(tmp1.reg, tmp1.reg);
     build.jcc(ConditionX64::Zero, skip);
+    // ra <= L->openupval->v
     build.lea(tmp2.reg, addr[rBase + (vmRegOp(OP_A(inst)) * sizeof(TValue))]);
     build.cmp(tmp2.reg, qword[tmp1.reg + offsetof(UpVal, v)]);
     build.jcc(ConditionX64::Above, skip);
@@ -3891,6 +3966,7 @@ inline void lower_GET_HASH_NODE_ADDR(IrLoweringX64& lowering, IrInst& inst, uint
     auto& regs = lowering.regs;
     (void)next;
 
+    // a variable shift amount has to be in cl
     auto shift_tmp = ScopedRegX64{regs};
     shift_tmp.take(rcx);
     inst.regX64 = regs.allocReg(SizeX64::qword, index);
@@ -3922,6 +3998,8 @@ inline void lower_BARRIER_OBJ(IrLoweringX64& lowering, IrInst& inst, uint32_t in
     auto& regs = lowering.regs;
     (void)next;
 
+    // written out here (not via callBarrierObject) so the call wrapper gets this instruction's index and the real object
+    // operand: its last-use logic then releases the object register exactly once
     Label skip;
     auto tmp = ScopedRegX64{regs};
     auto ratag = OP_C(inst).kind == IrOpKind::Undef ? -1 : lowering.tagOp(OP_C(inst));
@@ -4000,16 +4078,20 @@ inline void lower_CHECK_SLOT_MATCH(IrLoweringX64& lowering, IrInst& inst, uint32
     (void)index;
     (void)next;
 
+    // an undef target aborts through a local label
     Label abort;
     auto& mismatch = (OP_C(inst).kind == IrOpKind::Undef ? abort : lowering.labelOp(OP_C(inst)));
     ScopedRegX64 tmp{regs, SizeX64::qword};
+    // the node key tag must be a string
     build.mov(dwordReg(tmp.reg), luauNodeKeyTag(lowering.regOp(OP_A(inst))));
     build.and_(dwordReg(tmp.reg), kTKeyTagMask);
     build.cmp(dwordReg(tmp.reg), LUA_TSTRING);
     build.jcc(ConditionX64::NotEqual, mismatch);
+    // the node key must be the expected string
     build.mov(tmp.reg, luauConstantValue(vmConstOp(OP_B(inst))));
     build.cmp(tmp.reg, luauNodeKeyValue(lowering.regOp(OP_A(inst))));
     build.jcc(ConditionX64::NotEqual, mismatch);
+    // the node value must not be nil
     build.cmp(dword[lowering.regOp(OP_A(inst)) + offsetof(LuaNode, val) + offsetof(TValue, tt)], LUA_TNIL);
     build.jcc(ConditionX64::Equal, mismatch);
     if (OP_C(inst).kind == IrOpKind::Undef)
@@ -4028,16 +4110,20 @@ inline void lower_JUMP_SLOT_MATCH(IrLoweringX64& lowering, IrInst& inst, uint32_
     auto& regs = lowering.regs;
     (void)index;
 
+    // an undef target aborts through a local label
     Label abort;
     auto& mismatch = (OP_D(inst).kind == IrOpKind::Undef ? abort : lowering.labelOp(OP_D(inst)));
     ScopedRegX64 tmp{regs, SizeX64::qword};
+    // the node key tag must be a string
     build.mov(dwordReg(tmp.reg), luauNodeKeyTag(lowering.regOp(OP_A(inst))));
     build.and_(dwordReg(tmp.reg), kTKeyTagMask);
     build.cmp(dwordReg(tmp.reg), LUA_TSTRING);
     build.jcc(ConditionX64::NotEqual, mismatch);
+    // the node key must be the expected string
     build.mov(tmp.reg, luauConstantValue(vmConstOp(OP_B(inst))));
     build.cmp(tmp.reg, luauNodeKeyValue(lowering.regOp(OP_A(inst))));
     build.jcc(ConditionX64::NotEqual, mismatch);
+    // the node value must not be nil
     build.cmp(dword[lowering.regOp(OP_A(inst)) + offsetof(LuaNode, val) + offsetof(TValue, tt)], LUA_TNIL);
     build.jcc(ConditionX64::Equal, mismatch);
     lowering.jumpOrFallthrough(lowering.blockOp(OP_C(inst)), next);
@@ -4053,6 +4139,7 @@ inline void lower_GET_CACHED_IMPORT(IrLoweringX64& lowering, IrInst& inst, uint3
     regs.assertNoSpills();
     Label skip;
     Label exit;
+    // a set import constant is used directly, otherwise the import path is looked up
     build.cmp(luauConstantTag(vmConstOp(OP_B(inst))), LUA_TNIL);
     build.jcc(ConditionX64::NotEqual, skip);
     {
@@ -4083,11 +4170,12 @@ inline void lower_TRY_CALL_FASTGETTM(IrLoweringX64& lowering, IrInst& inst, uint
     auto tmp = ScopedRegX64{regs};
     tmp.alloc(SizeX64::qword);
     build.mov(tmp.reg, qword[lowering.regOp(OP_A(inst)) + offsetof(LuaTable, metatable)]);
+    // release the table before the call if this is its last use
     regs.freeLastUseReg(lowering.function.instOp(OP_A(inst)), index);
     build.test(tmp.reg, tmp.reg);
-    build.jcc(ConditionX64::Zero, lowering.labelOp(OP_C(inst)));
+    build.jcc(ConditionX64::Zero, lowering.labelOp(OP_C(inst))); // no metatable
     build.test(byte[tmp.reg + offsetof(LuaTable, tmcache)], (1 << lowering.intOp(OP_B(inst))));
-    build.jcc(ConditionX64::NotZero, lowering.labelOp(OP_C(inst)));
+    build.jcc(ConditionX64::NotZero, lowering.labelOp(OP_C(inst))); // no tag method
     auto tmp2 = ScopedRegX64{regs};
     tmp2.alloc(SizeX64::qword);
     build.mov(tmp2.reg, qword[rState + offsetof(lua_State, global)]);
@@ -4101,7 +4189,7 @@ inline void lower_TRY_CALL_FASTGETTM(IrLoweringX64& lowering, IrInst& inst, uint
         call_wrap.call(qword[rNativeContext + offsetof(NativeContext, luaT_gettm)]);
     }
     build.test(inst.regX64, inst.regX64);
-    build.jcc(ConditionX64::Zero, lowering.labelOp(OP_C(inst)));
+    build.jcc(ConditionX64::Zero, lowering.labelOp(OP_C(inst))); // no tag method
 }
 
 inline void lower_FASTCALL(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
@@ -4121,6 +4209,7 @@ inline void lower_INVOKE_FASTCALL(IrLoweringX64& lowering, IrInst& inst, uint32_
     (void)next;
 
     auto args_alt = ScopedRegX64{regs};
+    // a third argument (arg3) is only produced by LOP_FASTCALL3: both extra arguments are copied to L->top
     if (!(OP_E(inst).kind == IrOpKind::Undef))
     {
         ScopedRegX64 tmp{regs, SizeX64::xmmword};
@@ -4157,6 +4246,7 @@ inline void lower_INVOKE_FASTCALL(IrLoweringX64& lowering, IrInst& inst, uint32_
     {
         auto reg = call_wrap.suggestNextArgumentRegister(SizeX64::qword);
         ScopedRegX64 tmp{regs, SizeX64::qword};
+        // L->top - (ra + 1)
         build.mov(reg, qword[rState + offsetof(lua_State, top)]);
         build.lea(tmp.reg, addr[rBase + ((vmRegOp(OP_B(inst)) + 1) * sizeof(TValue))]);
         build.sub(reg, tmp.reg);
@@ -4171,6 +4261,8 @@ inline void lower_INVOKE_FASTCALL(IrLoweringX64& lowering, IrInst& inst, uint32_
     func.alloc(SizeX64::qword);
     build.mov(func.reg, qword[rNativeContext + offsetof(NativeContext, luauF_table) + lowering.uintOp(OP_A(inst)) * sizeof(luau_FastFunction)]);
     call_wrap.call(func.release());
+    // the builtin's result is in eax; its high bits aren't cleared, as the only consumer (CHECK_FASTCALL_RES) doesn't
+    // read them
     inst.regX64 = regs.takeReg(eax, index);
 }
 
@@ -4246,6 +4338,7 @@ inline void lower_FORGPREP_XNEXT_FALLBACK(IrLoweringX64& lowering, IrInst& inst,
     call_wrap.addArgument(SizeX64::qword, luauRegAddress(vmRegOp(OP_B(inst))));
     call_wrap.addArgument(SizeX64::dword, lowering.uintOp(OP_A(inst)) + 1);
     call_wrap.call(qword[rNativeContext + offsetof(NativeContext, forgPrepXnextFallback)]);
+    // forgPrepXnextFallback doesn't reallocate the stack, so rBase stays valid
     lowering.jumpOrFallthrough(lowering.blockOp(OP_C(inst)), next);
 }
 
@@ -4284,8 +4377,10 @@ inline void lower_GET_UPVALUE(IrLoweringX64& lowering, IrInst& inst, uint32_t in
     Label skip;
     build.mov(tmp1.reg, sClosure);
     build.add(tmp1.reg, offsetof(Closure, l.uprefs) + sizeof(TValue) * vmUpvalueOp(OP_A(inst)));
+    // uprefs[] is either an actual value, or points to an UpVal object holding a pointer to the value
     build.cmp(dword[tmp1.reg + offsetof(TValue, tt)], LUA_TUPVAL);
     build.jcc(ConditionX64::NotEqual, skip);
+    // UpVal.v points to the value (on the stack, or on the heap inside the UpVal), so it can be read unconditionally
     build.mov(tmp1.reg, qword[tmp1.reg + offsetof(TValue, value.gc)]);
     build.mov(tmp1.reg, qword[tmp1.reg + offsetof(UpVal, v)]);
     build.setLabel(skip);
@@ -4299,6 +4394,7 @@ inline void lower_JUMP_CMP_PROTOID(IrLoweringX64& lowering, IrInst& inst, uint32
     (void)index;
 
     CODEGEN_ASSERT(OP_A(inst).kind == IrOpKind::Inst);
+    // C closures never match
     build.cmp(byte[lowering.regOp(OP_A(inst)) + offsetof(Closure, isC)], 0);
     build.jcc(ConditionX64::NotEqual, lowering.labelOp(OP_D(inst)));
     {
@@ -4316,9 +4412,12 @@ inline void lower_CLASS_ISINSTANCE(IrLoweringX64& lowering, IrInst& inst, uint32
     auto& regs = lowering.regs;
     (void)next;
 
+    // result = (tag == object) && (obj->lclass == cls); the dereference is guarded by the tag check, which constant
+    // propagation can fold to a known tag (e.g. after CHECKSELFCLASS)
     CODEGEN_ASSERT(OP_A(inst).kind == IrOpKind::Inst || OP_A(inst).kind == IrOpKind::Constant);
     inst.regX64 = regs.allocReg(SizeX64::dword, index);
     build.xor_(inst.regX64, inst.regX64);
+    // a value statically known not to be an object is never an instance
     if (!(OP_A(inst).kind == IrOpKind::Constant && lowering.tagOp(OP_A(inst)) != LUA_TOBJECT))
     {
         Label done;
@@ -4333,6 +4432,8 @@ inline void lower_CLASS_ISINSTANCE(IrLoweringX64& lowering, IrInst& inst, uint32
     }
 }
 
+// The runtime conditions of executeNEWOBJECT's member-copy case (see IrData.h): no member defaults, and a custom __init
+// (always a primary constructor here) that is either public or called from one of the class's own closures
 inline void lower_CHECK_CLASS_FIELDS_CONSTRUCTIBLE(IrLoweringX64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
 {
     auto& build = lowering.build;
@@ -4342,6 +4443,8 @@ inline void lower_CHECK_CLASS_FIELDS_CONSTRUCTIBLE(IrLoweringX64& lowering, IrIn
     Label fresh_label;
     auto& fail_label = lowering.getTargetLabel(OP_B(inst), index, fresh_label);
     auto class_reg = lowering.regOp(OP_A(inst));
+    // reserved before the first branch: `constructible` rejoins the main line, so a register evicted after a
+    // branch to it would only be stored on the path that skipped it
     ScopedRegX64 flags{regs, SizeX64::qword};
     ScopedRegX64 offset{regs, SizeX64::qword};
     Label constructible;
@@ -4353,6 +4456,7 @@ inline void lower_CHECK_CLASS_FIELDS_CONSTRUCTIBLE(IrLoweringX64& lowering, IrIn
     build.mov(dwordReg(offset.reg), dword[class_reg + offsetof(LuauClass, initoffset)]);
     build.test(byte[flags.reg + offset.reg], int8_t(LBC_CLASSMEMBER_PRIVATE));
     build.jcc(ConditionX64::Zero, constructible);
+    // private: only from one of the class's own methods (or a closure nested in one)
     build.mov(flags.reg, sClosure);
     build.mov(flags.reg, qword[flags.reg + offsetof(Closure, l.p)]);
     build.cmp(qword[flags.reg + offsetof(Proto, ownerclass)], class_reg);
@@ -4376,14 +4480,19 @@ inline void lower_TRY_OBJECT_MEMBER_ADDR(IrLoweringX64& lowering, IrInst& inst, 
     build.mov(slot.reg, sCode);
     build.movzx(dwordReg(slot.reg), byte[slot.reg + lowering.uintOp(OP_B(inst)) * sizeof(Instruction) + kOffsetOfInstructionC]);
     build.mov(lclass.reg, qword[lowering.regOp(OP_A(inst)) + offsetof(LuauObject, lclass)]);
+    // bounds check: the slot must be an instance member; a static member read through an object (`obj.method`,
+    // not a call) deliberately misses into the fallback, keeping field reads to one check
     build.cmp(dwordReg(slot.reg), dword[lclass.reg + offsetof(LuauClass, numberofinstancemembers)]);
     build.jcc(ConditionX64::AboveEqual, mismatch);
+    // authorize private/const access (or bail); must run before the key check clobbers lclass below
     auto written = HAS_OP_E(inst) && lowering.uintOp(OP_E(inst)) != 0 ? lowering.regOp(OP_A(inst)) : noreg;
     emitClassMemberAuthX64(build, regs, lclass.reg, slot.reg, written, mismatch);
     build.mov(key.reg, luauConstantValue(vmConstOp(OP_C(inst))));
     build.mov(lclass.reg, qword[lclass.reg + offsetof(LuauClass, offsettomember)]);
     build.cmp(key.reg, qword[lclass.reg + slot.reg * 8]);
     build.jcc(ConditionX64::NotEqual, mismatch);
+    // address = self + LUAR_OBJECT_MEMBERS_OFFSET + slot * sizeof(TValue); sizeof(TValue) isn't a valid SIB
+    // scale, so the index register is shifted instead
     build.shl(slot.reg, kTValueSizeLog2);
     build.lea(inst.regX64, addr[lowering.regOp(OP_A(inst)) + slot.reg + LUAR_OBJECT_MEMBERS_OFFSET]);
     if (OP_D(inst).kind == IrOpKind::Undef)
@@ -4411,8 +4520,10 @@ inline void lower_TRY_OBJECT_NAMECALL_ADDR(IrLoweringX64& lowering, IrInst& inst
     build.mov(slot.reg, sCode);
     build.movzx(dwordReg(slot.reg), byte[slot.reg + lowering.uintOp(OP_B(inst)) * sizeof(Instruction) + kOffsetOfInstructionC]);
     build.mov(lclass.reg, qword[lowering.regOp(OP_A(inst)) + offsetof(LuauObject, lclass)]);
+    // bounds check: the slot must be a member (instance or static)
     build.cmp(dwordReg(slot.reg), dword[lclass.reg + offsetof(LuauClass, numberofallmembers)]);
     build.jcc(ConditionX64::AboveEqual, mismatch);
+    // authorize private method access (or bail); method resolution is a read
     emitClassMemberAuthX64(build, regs, lclass.reg, slot.reg, noreg, mismatch);
     build.mov(key.reg, luauConstantValue(vmConstOp(OP_C(inst))));
     build.mov(inst.regX64, qword[lclass.reg + offsetof(LuauClass, offsettomember)]);
@@ -4422,9 +4533,11 @@ inline void lower_TRY_OBJECT_NAMECALL_ADDR(IrLoweringX64& lowering, IrInst& inst
     Label done;
     build.cmp(dwordReg(slot.reg), dword[lclass.reg + offsetof(LuauClass, numberofinstancemembers)]);
     build.jcc(ConditionX64::AboveEqual, is_static);
+    // instance: address = self + LUAR_OBJECT_MEMBERS_OFFSET + slot * sizeof(TValue)
     build.shl(slot.reg, kTValueSizeLog2);
     build.lea(inst.regX64, addr[lowering.regOp(OP_A(inst)) + slot.reg + LUAR_OBJECT_MEMBERS_OFFSET]);
     build.jmp(done);
+    // static: address = lclass->staticmembers + (slot - numberofinstancemembers) * sizeof(TValue)
     build.setLabel(is_static);
     build.sub(dwordReg(slot.reg), dword[lclass.reg + offsetof(LuauClass, numberofinstancemembers)]);
     build.shl(slot.reg, kTValueSizeLog2);
@@ -4455,15 +4568,19 @@ inline void lower_TRY_CLASS_MEMBER_ADDR(IrLoweringX64& lowering, IrInst& inst, u
     ScopedRegX64 key{regs, SizeX64::qword};
     build.mov(slot.reg, sCode);
     build.movzx(dwordReg(slot.reg), byte[slot.reg + lowering.uintOp(OP_B(inst)) * sizeof(Instruction) + kOffsetOfInstructionC]);
+    // bounds check: the slot must be a static member (instance members aren't readable here)
     build.cmp(dwordReg(slot.reg), dword[lowering.regOp(OP_A(inst)) + offsetof(LuauClass, numberofinstancemembers)]);
     build.jcc(ConditionX64::Below, mismatch);
     build.cmp(dwordReg(slot.reg), dword[lowering.regOp(OP_A(inst)) + offsetof(LuauClass, numberofallmembers)]);
     build.jcc(ConditionX64::AboveEqual, mismatch);
+    // authorize private static-member access (or bail); static access is read-only
     emitClassMemberAuthX64(build, regs, lowering.regOp(OP_A(inst)), slot.reg, noreg, mismatch);
     build.mov(key.reg, luauConstantValue(vmConstOp(OP_C(inst))));
     build.mov(tmp.reg, qword[lowering.regOp(OP_A(inst)) + offsetof(LuauClass, offsettomember)]);
     build.cmp(key.reg, qword[tmp.reg + slot.reg * 8]);
     build.jcc(ConditionX64::NotEqual, mismatch);
+    // address = staticmembers + (slot - numberofinstancemembers) * sizeof(TValue); sizeof(TValue) isn't a valid
+    // SIB scale, so the index register is shifted instead
     build.sub(dwordReg(slot.reg), dword[lowering.regOp(OP_A(inst)) + offsetof(LuauClass, numberofinstancemembers)]);
     build.shl(slot.reg, kTValueSizeLog2);
     build.mov(inst.regX64, qword[lowering.regOp(OP_A(inst)) + offsetof(LuauClass, staticmembers)]);

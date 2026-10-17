@@ -16,9 +16,9 @@
 (define-rule (cmp-tag [a :op] [b :op] [cond :cond])
   (target-case
     [:x64
-     ;; can't reuse an operand register: the target is modified before the comparison
+     ~ can't reuse an operand register: the target is modified before the comparison
      (let ([res (alloc-result :i32)])
-       ;; setcc writes a byte register, which doesn't clear the high bits
+       ~ setcc writes a byte register, which doesn't clear the high bits
        (x64:xor! res res)
        (assert! (or (ir-cond-eq? cond) (ir-cond-ne? cond)))
        (if (and (= (tag-val b) :LUA_TNIL) (kind? a :Inst))
@@ -51,7 +51,7 @@
              [save-zero (alloc-label)]
              [exit (alloc-label)])
          (if (constant? tag)
-             ;; other cases should've been constant folded
+             ~ other cases should've been constant folded
              (assert! (= (tag-val tag) :LUA_TBOOLEAN))
              (begin
                (x64:cmp-op! tag :LUA_TNIL)
@@ -61,7 +61,7 @@
                (x64:cmp-op! tag :LUA_TBOOLEAN)
                (x64:jcc! :NotEqual save-zero)))
          (if (constant? val)
-             ;; a value of 1 falls through to storing 0
+             ~ a value of 1 falls through to storing 0
              (if (= (int-val val) 0)
                  (x64:jmp-label! save-one))
              (begin
@@ -76,7 +76,7 @@
       [:a64
        (if (constant? tag)
            (begin
-             ;; other cases should've been constant folded
+             ~ other cases should've been constant folded
              (assert! (= (tag-val tag) :LUA_TBOOLEAN))
              (a64:eor-imm! res val 1))
            (let ([not-bool (alloc-label)]
@@ -87,9 +87,9 @@
                  (if (= (int-val val) 0)
                      (a64:mov! res 1)
                      (a64:mov! res 0))
-                 (a64:eor-imm! res val 1)) ; boolean: invert the value
+                 (a64:eor-imm! res val 1)) ~ boolean: invert the value
              (a64:b-label! exit)
-             ;; not a boolean: true iff the tag is nil or none (the other falsy tags; see l_isfalse)
+             ~ not a boolean: true iff the tag is nil or none (the other falsy tags; see l_isfalse)
              (set-label! not-bool)
              (let ([temp (alloc-temp :u32)])
                (a64:cmp-imm! tag :LUA_TNIL)
@@ -103,16 +103,16 @@
 (define-subrule (a64:branch-on-truthiness! [a :op] [temp :reg] [if-falsy :any] [if-truthy :any])
   (begin
     (a64:ldr! temp (mem rBase (+ (* (vm-reg a) (sizeof :TValue)) :TValue.tt)))
-    ;; nil => falsy
+    ~ nil => falsy
     (assert! (= :LUA_TNIL 0))
     (a64:cbz! temp if-falsy)
-    ;; none => falsy (see l_isfalse)
+    ~ none => falsy (see l_isfalse)
     (a64:cmp-imm! temp :LUA_TSYMNONE)
     (a64:b-cond! (a64:cond :Equal) if-falsy)
-    ;; not a boolean => truthy
+    ~ not a boolean => truthy
     (a64:cmp-imm! temp :LUA_TBOOLEAN)
     (a64:b-cond! (a64:cond :NotEqual) if-truthy)
-    ;; compare the boolean value
+    ~ compare the boolean value
     (a64:ldr! temp (mem rBase (+ (* (vm-reg a) (sizeof :TValue)) :TValue.value)))))
 
 (define-rule (jump-if-truthy [a :op] [if-true :label] [if-false :label])

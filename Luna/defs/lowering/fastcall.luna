@@ -13,7 +13,7 @@
   (target-case
     [:x64
      (let ([args-alt (x64:unallocated-temp)])
-       ;; a third argument (arg3) is only produced by LOP_FASTCALL3: both extra arguments are copied to L->top
+       ~ a third argument (arg3) is only produced by LOP_FASTCALL3: both extra arguments are copied to L->top
        (if (not (kind? arg3 :Undef))
            (let ([tmp (alloc-temp :vec)])
              (assert! (= (int-val nparams) 3))
@@ -41,7 +41,7 @@
          (if (= (int-val nparams) :LUA_MULTRET)
              (let ([reg (x64:call-next-arg-reg call-wrap :qword)]
                    [tmp (alloc-temp :ptr)])
-               ;; L->top - (ra + 1)
+               ~ L->top - (ra + 1)
                (x64:mov! reg (mem rState :lua_State.top :ptr))
                (x64:lea-addr! tmp rBase (* (+ (vm-reg ra) 1) (sizeof :TValue)))
                (x64:sub! reg tmp)
@@ -52,18 +52,18 @@
            (x64:alloc! func :qword)
            (x64:mov! (x64:reg-of func) (mem rNativeContext (+ :NativeContext.luauF_table (* (uint-val bfid) (sizeof :luau_FastFunction))) :ptr))
            (x64:call! call-wrap (x64:release func)))
-         ;; the builtin's result is in eax; its high bits aren't cleared, as the only consumer (CHECK_FASTCALL_RES) doesn't
-         ;; read them
+         ~ the builtin's result is in eax; its high bits aren't cleared, as the only consumer (CHECK_FASTCALL_RES) doesn't
+         ~ read them
          (alloc-result-in eax :i32)))]
     [:a64
-     ;; a temporary may be needed, and it has to be preserved over the spill
+     ~ a temporary may be needed, and it has to be preserved over the spill
      (let ([temp (alloc-temp :vec)])
        (a64:spill-keeping! temp)
        (a64:mov! x0 rState)
        (a64:vm-reg-address! x1 ra)
        (a64:vm-reg-address! x2 arg)
        (a64:mov! w3 (int-val nresults))
-       ;; a third argument (arg3) is only produced by LOP_FASTCALL3: both extra arguments are copied to L->top
+       ~ a third argument (arg3) is only produced by LOP_FASTCALL3: both extra arguments are copied to L->top
        (if (not (kind? arg3 :Undef))
            (begin
              (assert! (= (int-val nparams) 3))
@@ -76,10 +76,10 @@
              [(kind? args :VmReg) (a64:vm-reg-address! x4 args)]
              [(kind? args :VmConst) (a64:emit-add-offset! x4 rConstants (* (vm-const args) (sizeof :TValue)))]
              [else (assert! (kind? args :Undef))]))
-       ;; nparams
+       ~ nparams
        (if (= (int-val nparams) :LUA_MULTRET)
            (begin
-             ;; L->top - (ra + 1)
+             ~ L->top - (ra + 1)
              (a64:ldr! x5 (mem rState :lua_State.top))
              (a64:sub-reg! x5 x5 rBase)
              (a64:sub-imm! x5 x5 (* (+ (vm-reg ra) 1) (sizeof :TValue)))
@@ -87,7 +87,7 @@
            (a64:mov! w5 (int-val nparams)))
        (a64:ldr! x6 (mem rNativeContext (+ :NativeContext.luauF_table (* (uint-val bfid) (sizeof :luau_FastFunction)))))
        (a64:blr! x6)
-       ;; the high register bits aren't cleared, as the only consumer (CHECK_FASTCALL_RES) doesn't read them
+       ~ the high register bits aren't cleared, as the only consumer (CHECK_FASTCALL_RES) doesn't read them
        (alloc-result-in w0 :i32))]))
 
 (define-rule (invoke-libm [func :op] [a :op] [b :op])
@@ -112,7 +112,7 @@
              (if (true? is-int)
                  (a64:load-const-int! temp2 b)
                  (a64:load-const-double! temp2 b))
-             ;; spill frees all registers, so temp3 has to be allocated before it
+             ~ spill frees all registers, so temp3 has to be allocated before it
              (let ([temp3 (if (true? is-int) noreg (alloc-temp :f64))])
                (a64:spill-keeping2! temp1 temp2)
                (cond

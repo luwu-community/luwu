@@ -181,7 +181,7 @@
            (cond
              [(= (tag-val tag) :LUA_TBOOLEAN)
               (if (constant? val)
-                  ;; true booleans reuse the tag register (LUA_TBOOLEAN == 1), false ones use the zero register
+                  ~ true booleans reuse the tag register (LUA_TBOOLEAN == 1), false ones use the zero register
                   (begin
                     (assert! (= :LUA_TBOOLEAN 1))
                     (if (!= (int-val val) 0)

@@ -40,7 +40,7 @@ FORCE:
 
 -include $(DEPFILE)
 
-$(TEST_TARGET): $(TEST_SOURCES) $(HEADERS)
+$(TEST_TARGET): $(TEST_SOURCES) $(HEADERS) $(wildcard tests/*.h)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -I../extern $(TEST_SOURCES) -o $@
 
