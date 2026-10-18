@@ -43,7 +43,6 @@
 (define-ircmd JUMP_CMP_INT
   (operands [a :int] [b :int] [cond :cond] [target-d :block] [target-e :block])
   (class :terminator)
-  (dead-store :live-outs)
   (lowering (jump-cmp-int a b cond target-d target-e)))
 
 ~ Guard against the result of integer comparison being false
@@ -54,7 +53,6 @@
 (define-ircmd CHECK_CMP_INT
   (operands [a :int] [b :int] [cond :cond] [fail :block|:vmexit|:undef])
   (class :guard)
-  (dead-store :live-ins)
   (lowering (check-cmp-int a b cond fail)))
 
 ~ Guard against the result of int64 comparison being false
@@ -65,5 +63,4 @@
 (define-ircmd CHECK_CMP_INT64
   (operands [a :int64] [b :int64] [cond :cond] [fail :block|:vmexit|:undef])
   (class :guard)
-  (dead-store :live-ins)
   (lowering (check-cmp-int64 a b cond fail)))

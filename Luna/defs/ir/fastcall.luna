@@ -7,8 +7,7 @@
 (define-ircmd FASTCALL
   (operands [bfid :const-uint] [ra :Rn] [arg :Rn] [nresults :const-int])
   (class :effect)
-  (vm-effects (use arg) (def-range ra nresults))
-  (location-tracking (invalidate-range ra nresults))
+  (facts (reads (vm-slot arg)) (writes (vm-slots ra nresults)))
   (lowering (fastcall bfid ra arg nresults)))
 
 ~ Call the fastcall builtin function
@@ -25,13 +24,20 @@
             [arg :Rn]
             [args :Rn|:Kn|:undef]
             [arg3 :Rn|:Kn|:undef]
-            [nparams :int]
+            [nparams :const-int]
             [nresults :const-int])
   (result :int)
   (class :value)
   (flags :deprecated/has-side-effects :dirty-high-bits)
-  (vm-effects (hook invoke-fastcall-uses) (def-range ra nresults))
-  (location-tracking (invalidate-range ra nresults))
+  (facts
+    (cond [(= nparams -1) (reads (varargs arg))]
+          ; only LOP_FASTCALL3 has a third argument; without one in arg3, the arguments are consecutive registers
+          [(and (>= nparams 3) (kind? arg3 :Undef)) (reads (vm-slots arg nparams))]
+          [(>= nparams 3) (reads (vm-slot arg) (tvalue args) (tvalue arg3))]
+          [(= nparams 2) (reads (vm-slot arg) (tvalue args))]
+          [(= nparams 1) (reads (vm-slot arg))])
+    ; ADJUST_STACK_TO_REG would semantically define the result range; this defines it immediately
+    (writes (vm-slots ra nresults)))
   (lowering (invoke-fastcall bfid ra arg args arg3 nparams nresults)))
 
 ~ Calls native libm function with 1 or 2 arguments

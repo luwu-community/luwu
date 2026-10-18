@@ -118,61 +118,39 @@ void IrValueLocationTracking::applyLocationEffect(IrInst& inst, uint32_t instIdx
                 recordRestoreOp(value.index, op);
         }
         break;
+    case IrLocationEffectKind::Rematerialize:
+        recordRematerialization(instIdx, op, effect.conversion);
+        break;
     }
 }
 
 void IrValueLocationTracking::beforeInstLowering(IrInst& inst)
 {
-    const IrCmdEffects& effects = getCmdEffects(inst.cmd);
+    const IrCmdEffects& effects = getInstEffects(function, inst);
 
     if (!effects.declaresLocations)
     {
-        // All instructions which reference registers declare location-tracking
+        // All instructions which reference registers declare facts (or (location-tracking :none))
         for (auto& op : inst.ops)
             CODEGEN_ASSERT(op.kind != IrOpKind::VmReg);
         return;
     }
 
     applyLocationEffect(inst, kInvalidInstIdx, effects.locationBefore);
-
-    switch (effects.locationBeforeHook)
-    {
-    case IrLocationHook::None:
-        break;
-    case IrLocationHook::FallbackNewObject:
-        invalidateRestoreVmRegs(vmRegOp(OP_B(inst)), function.intOp(OP_D(inst)) == LBC_NEWOBJECT_INIT ? 3 : 1);
-        break;
-    case IrLocationHook::NumToIntRestore:
-        CODEGEN_ASSERT(!"NumToIntRestore runs after lowering");
-        break;
-    }
 }
 
 void IrValueLocationTracking::afterInstLowering(IrInst& inst, uint32_t instIdx)
 {
-    const IrCmdEffects& effects = getCmdEffects(inst.cmd);
-
-    applyLocationEffect(inst, instIdx, effects.locationAfter);
-
-    switch (effects.locationAfterHook)
-    {
-    case IrLocationHook::None:
-        break;
-    case IrLocationHook::NumToIntRestore:
-        recordNumToIntRestore(inst, instIdx);
-        break;
-    case IrLocationHook::FallbackNewObject:
-        CODEGEN_ASSERT(!"FallbackNewObject runs before lowering");
-        break;
-    }
+    applyLocationEffect(inst, instIdx, getInstEffects(function, inst).locationAfter);
 }
 
-// NUM_TO_UINT/NUM_TO_INT of a double loaded from a VM register: the result can be restored by converting that register
-void IrValueLocationTracking::recordNumToIntRestore(IrInst& inst, uint32_t instIdx)
+// A result recomputed from operand `source` (NUM_TO_INT/NUM_TO_UINT of a double loaded from a VM register): it can be
+// restored by applying `conversion` to that register's value
+void IrValueLocationTracking::recordRematerialization(uint32_t instIdx, IrOp source, IrCmd conversion)
 {
-    if (OP_A(inst).kind == IrOpKind::Inst)
+    if (source.kind == IrOpKind::Inst)
     {
-        ValueRestoreLocation ownerLoc = function.findRestoreLocation(OP_A(inst).index, /* limitToCurrentBlock */ true);
+        ValueRestoreLocation ownerLoc = function.findRestoreLocation(source.index, /* limitToCurrentBlock */ true);
 
         if (ownerLoc.op.kind == IrOpKind::VmReg && ownerLoc.kind == IrValueKind::Double && ownerLoc.conversionCmd == IrCmd::NOP && !ownerLoc.lazy)
         {
@@ -180,14 +158,13 @@ void IrValueLocationTracking::recordNumToIntRestore(IrInst& inst, uint32_t instI
 
             if (!function.cfg.captured.regs.test(reg) && vmRegDependent[reg] == kInvalidInstIdx)
             {
-                IrCmd forwardCmd = inst.cmd == IrCmd::NUM_TO_UINT ? IrCmd::UINT_TO_NUM : IrCmd::INT_TO_NUM;
-                function.recordRestoreLocation(instIdx, {ownerLoc.op, IrValueKind::Double, forwardCmd});
+                function.recordRestoreLocation(instIdx, {ownerLoc.op, IrValueKind::Double, conversion});
 
                 vmRegDependent[reg] = instIdx;
 
                 if (logger && logger->options.includeRegSpills)
                 {
-                    const char* conv = getConversionCmdSuffix(forwardCmd);
+                    const char* conv = getConversionCmdSuffix(conversion);
 
                     logger->formatAppendWithPrefix("  ; %%%u can be restored from R%d%s\n", instIdx, reg, conv);
                 }

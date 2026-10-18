@@ -26,7 +26,6 @@
   (result :pointer)
   (class :guard)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Branch operand targets a fallback block: can't appear in an exit sync sequence
-  (dead-store :live-ins)
   (lowering (try-object-member-addr obj pc k mismatch-op write)))
 
 ~ Luwu Classes (rfcs/classes): guard that NEWOBJECT's FIELDS form can construct this class
@@ -59,7 +58,6 @@
   (result :pointer)
   (class :guard)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Branch operand targets a fallback block: can't appear in an exit sync sequence
-  (dead-store :live-ins)
   (lowering (try-class-member-addr cls pc k mismatch-op)))
 
 ~ Try to get the address of any member (instance field or static method) on a Luwu Classes
@@ -75,7 +73,6 @@
   (result :pointer)
   (class :guard)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Branch operand targets a fallback block: can't appear in an exit sync sequence
-  (dead-store :live-ins)
   (lowering (try-object-namecall-addr obj pc k mismatch-op)))
 
 ~ Create closure from a child proto
@@ -97,5 +94,4 @@
 (define-ircmd JUMP_CMP_PROTOID
   (operands [closure :pointer] [protoid :const-uint] [if-eq :block] [if-ne :block])
   (class :terminator)
-  (dead-store :live-outs)
   (lowering (jump-cmp-protoid closure protoid if-eq if-ne)))

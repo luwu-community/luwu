@@ -63,8 +63,8 @@ struct RemoveDeadStoreState
         if (dest.kind != IrOpKind::VmReg)
             return;
 
-        // (dead-store (store-hint ...))
-        const IrCmdEffects& effects = getCmdEffects(storeInst.cmd);
+
+        const IrCmdEffects& effects = getInstEffects(function, storeInst);
         if (effects.storeHintValue < 0)
             return;
 
@@ -890,22 +890,23 @@ static void updateRemainingUses(RemoveDeadStoreState& state, IrInst& inst, uint3
     );
 }
 
-// (dead-store (hook ...)): the hand-written bookkeeping for stores, CHECK_TAG's known tag and MARK_DEAD
-static void markDeadStoresHook(
+// The hand-written dead-store engines: one per written TValue field (picked by a define-ircmd's (writes (tvalue ... <field>))),
+// and CHECK_TAG's known tag (its (establishes ...) fact)
+static void markDeadStoresEngine(
     RemoveDeadStoreState& state,
     IrBuilder& build,
     IrFunction& function,
     IrBlock& block,
     IrInst& inst,
     uint32_t index,
-    IrDeadStoreHook hook
+    IrDeadStoreEngine engine
 )
 {
-    switch (hook)
+    switch (engine)
     {
-    case IrDeadStoreHook::None:
+    case IrDeadStoreEngine::None:
         break;
-    case IrDeadStoreHook::StoreTag:
+    case IrDeadStoreEngine::StoreTag:
         if (OP_A(inst).kind == IrOpKind::VmReg)
         {
             int reg = vmRegOp(OP_A(inst));
@@ -937,7 +938,7 @@ static void markDeadStoresHook(
             state.hasGcoToClear |= regInfo.maybeGco;
         }
         break;
-    case IrDeadStoreHook::StoreExtra:
+    case IrDeadStoreEngine::StoreExtra:
         // To simplify, extra field store is preserved along with all other stores made so far
         if (OP_A(inst).kind == IrOpKind::VmReg)
         {
@@ -950,7 +951,7 @@ static void markDeadStoresHook(
             regInfo.ignoreAtExit = false;
         }
         break;
-    case IrDeadStoreHook::StorePointer:
+    case IrDeadStoreEngine::StorePointer:
         if (OP_A(inst).kind == IrOpKind::VmReg)
         {
             int reg = vmRegOp(OP_A(inst));
@@ -986,7 +987,7 @@ static void markDeadStoresHook(
             state.hasGcoToClear |= maybeGco;
         }
         break;
-    case IrDeadStoreHook::StoreValue:
+    case IrDeadStoreEngine::StoreValue:
         if (OP_A(inst).kind == IrOpKind::VmReg)
         {
             int reg = vmRegOp(OP_A(inst));
@@ -1013,7 +1014,7 @@ static void markDeadStoresHook(
             regInfo.maybeGco = false;
         }
         break;
-    case IrDeadStoreHook::StoreVector:
+    case IrDeadStoreEngine::StoreVector:
         if (OP_A(inst).kind == IrOpKind::VmReg)
         {
             int reg = vmRegOp(OP_A(inst));
@@ -1040,7 +1041,7 @@ static void markDeadStoresHook(
             regInfo.maybeGco = false;
         }
         break;
-    case IrDeadStoreHook::StoreTvalue:
+    case IrDeadStoreEngine::StoreTvalue:
         if (OP_A(inst).kind == IrOpKind::VmReg)
         {
             int reg = vmRegOp(OP_A(inst));
@@ -1066,7 +1067,7 @@ static void markDeadStoresHook(
             state.hasGcoToClear |= regInfo.maybeGco;
         }
         break;
-    case IrDeadStoreHook::StoreSplitTvalue:
+    case IrDeadStoreEngine::StoreSplitTvalue:
         if (OP_A(inst).kind == IrOpKind::VmReg)
         {
             int reg = vmRegOp(OP_A(inst));
@@ -1090,7 +1091,7 @@ static void markDeadStoresHook(
             state.hasGcoToClear |= regInfo.maybeGco;
         }
         break;
-    case IrDeadStoreHook::CheckTag:
+    case IrDeadStoreEngine::CheckTag:
         state.checkLiveIns(OP_C(inst), index, true);
 
         // Tag guard establishes the tag value of the register in the current block
@@ -1103,9 +1104,6 @@ static void markDeadStoresHook(
             regInfo.knownTag = function.tagOp(OP_B(inst));
         }
         break;
-    case IrDeadStoreHook::MarkDead:
-        state.markUnusedAtExit(vmRegOp(OP_A(inst)), function.intOp(OP_B(inst)));
-        break;
     }
 }
 
@@ -1113,8 +1111,8 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
 {
     updateRemainingUses(state, inst, index);
 
-    // From (dead-store ...) and heap-effects in Luna/defs/ir
-    const IrCmdEffects& effects = getCmdEffects(inst.cmd);
+    // From the facts, class and dead-store overrides, and heap-effects in Luna/defs/ir
+    const IrCmdEffects& effects = getInstEffects(function, inst);
 
     switch (effects.deadStore)
     {
@@ -1157,9 +1155,17 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
     case IrDeadStoreKind::Allocation:
         state.hasAllocations = true;
         break;
-    case IrDeadStoreKind::Hook:
-        markDeadStoresHook(state, build, function, block, inst, index, effects.deadStoreHook);
+    case IrDeadStoreKind::Engine:
+        markDeadStoresEngine(state, build, function, block, inst, index, effects.deadStoreEngine);
         break;
+    case IrDeadStoreKind::Kills:
+    {
+        // (kills ...): the registers' contents don't matter at exits from here on
+        const IrVmEffect& range = effects.kills;
+        int count = range.kind == IrVmEffectKind::DefRange ? getVmEffectCount(function, inst, range.count) : 1;
+        state.markUnusedAtExit(vmRegOp(getOp(inst, range.op)) + range.offset, count);
+        break;
+    }
     }
 
     // Pending stores with SSA operands must not be deferred to ExitSync blocks past instructions that can invalidate operand physical
@@ -1276,8 +1282,8 @@ static void markDeadStoresInBlockChain(
 
                 state.remainingUses[index] = inst.useCount;
 
-                // Writes into an allocation (dead-store (writes-allocation ...))
-                if (int8_t op = getCmdEffects(inst.cmd).allocationWriteOp; op >= 0)
+                // Writes into an allocation (a (writes (buffer ...)) fact)
+                if (int8_t op = getInstEffects(function, inst).allocationWriteOp; op >= 0)
                 {
                     state.remainingUses[getOp(inst, op).index]--;
 
@@ -1298,11 +1304,11 @@ static void markDeadStoresInBlockChain(
                 {
                     IrInst& inst = function.instructions[index];
 
-                    if (int8_t op = getCmdEffects(inst.cmd).allocationWriteOp; op >= 0 && state.remainingUses[getOp(inst, op).index] == 0)
+                    if (int8_t op = getInstEffects(function, inst).allocationWriteOp; op >= 0 && state.remainingUses[getOp(inst, op).index] == 0)
                     {
                         IrInst& pointer = function.instOp(getOp(inst, op));
 
-                        if (getCmdEffects(pointer.cmd).deadStore == IrDeadStoreKind::Allocation)
+                        if (getInstEffects(function, pointer).deadStore == IrDeadStoreKind::Allocation)
                             kill(function, inst);
                     }
                 }

@@ -5,8 +5,7 @@
 (define-ircmd SET_UPVALUE
   (operands [up :UPn] [val :tvalue] [tag :tag|:undef])
   (class :effect)
-  (vm-effects :none)
-  (location-tracking :none)
+  (facts (no-vm-effects))
   (lowering (set-upvalue up val tag)))
 
 ~ Handle GC write barrier (forward)
@@ -16,8 +15,7 @@
 (define-ircmd BARRIER_OBJ
   (operands [obj :pointer] [ra :Rn] [tag :tag|:undef])
   (class :effect)
-  (vm-effects (maybe-use ra))
-  (location-tracking :none)
+  (facts (reads (tvalue ra)))
   (lowering (barrier-obj obj ra tag)))
 
 ~ Handle GC write barrier (backwards) for a write into a table
@@ -34,6 +32,5 @@
 (define-ircmd BARRIER_TABLE_FORWARD
   (operands [table :pointer] [ra :Rn|:Kn] [tag :tag|:undef])
   (class :effect)
-  (vm-effects (maybe-use ra))
-  (location-tracking :none)
+  (facts (reads (tvalue ra)))
   (lowering (barrier-table-forward table ra tag)))

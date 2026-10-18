@@ -4,9 +4,7 @@
 (define-ircmd RETURN
   (operands [ra :Rn] [count :const-int])
   (class :terminator)
-  (vm-effects (use-range ra count))
-  (location-tracking :none)
-  (dead-store :live-outs)
+  (facts (reads (vm-slots ra count)))
   (lowering (return ra count)))
 
 ~ Adjust loop variables for one iteration of a generic for loop, jump back to the loop header if loop needs to continue
@@ -17,9 +15,12 @@
 (define-ircmd FORGLOOP
   (operands [ra :Rn] [nvars :const-int] [loop :block] [exit :block])
   (class :terminator)
-  (vm-effects (use (+ ra 1)) (use (+ ra 2)) (def (+ ra 2)) (def-range (+ ra 3) nvars))
-  (location-tracking (invalidate-range (+ ra 2) :to-top))
+  (facts
+    (reads (vm-slot (+ ra 1)) (vm-slot (+ ra 2)))
+    (writes (vm-slot (+ ra 2)) (vm-slots (+ ra 3) nvars))
+    (may-write (vm-slots (+ ra 2) :to-top)))
   (heap-effects :reenters-vm)
+  (dead-store :visit)
   (lowering (forgloop ra nvars loop exit)))
 
 ~ Handle LOP_FORGLOOP fallback when variable being iterated is not a table
@@ -31,8 +32,11 @@
   (operands [ra :Rn] [nvars :const-int] [loop :block] [exit :block])
   (class :terminator)
   (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
-  (vm-effects (use-range ra 3) (def (+ ra 2)) (def-range (+ ra 3) (low-byte nvars)))
-  (location-tracking (invalidate-range (+ ra 2) :to-top))
+  (facts
+    (reads (vm-slots ra 3))
+    (writes (vm-slot (+ ra 2)) (vm-slots (+ ra 3) (low-byte nvars)))
+    (may-write (vm-slots (+ ra 2) :to-top)))
+  (dead-store :visit)
   (lowering (forgloop-fallback ra nvars loop exit)))
 
 ~ Fallback for generic for loop preparation when iterating over builtin pairs/ipairs
@@ -43,6 +47,6 @@
 (define-ircmd FORGPREP_XNEXT_FALLBACK
   (operands [pc :const-uint] [ra :Rn] [target :block])
   (class :terminator)
-  (vm-effects (use ra))
-  (location-tracking :none)
+  (facts (reads (vm-slot ra)))
+  (dead-store :visit)
   (lowering (forgprep-xnext-fallback pc ra target)))

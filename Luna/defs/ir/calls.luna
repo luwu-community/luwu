@@ -5,8 +5,7 @@
   (result :tvalue)
   (class :value)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Upvalue read: SET_UPVALUE to the same upvalue slot
-  (vm-effects :none)
-  (location-tracking :none)
+  (facts (no-vm-effects))
   (lowering (get-upvalue up)))
 
 ~ Call specified function
@@ -18,6 +17,8 @@
   (operands [ra :Rn] [nparams :const-int] [nresults :const-int])
   (class :effect)
   (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
-  (vm-effects (use ra) (use-range (+ ra 1) nparams) (def-range ra nresults))
-  (location-tracking (invalidate-range ra :to-top))
+  (facts
+    (reads (vm-slot ra) (vm-slots (+ ra 1) nparams))
+    (writes (vm-slots ra nresults))
+    (may-write (vm-slots ra :to-top)))
   (lowering (call ra nparams nresults)))

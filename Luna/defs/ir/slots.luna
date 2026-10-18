@@ -6,7 +6,6 @@
 (define-ircmd JUMP_SLOT_MATCH
   (operands [node :pointer] [key :Kn] [match :block] [mismatch-op :block])
   (class :terminator)
-  (dead-store :live-outs)
   (lowering (jump-slot-match node key match mismatch-op)))
 
 ~ Try to get pointer to tag method TValue inside the table's metatable or jump if there is no such value or metatable
@@ -18,7 +17,6 @@
   (result :pointer)
   (class :guard)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Branch operand targets a fallback block: can't appear in an exit sync sequence
-  (dead-store :live-ins)
   (lowering (try-call-fastgettm table tm fail)))
 
 ~ Store an import from constant or the import path
@@ -29,8 +27,7 @@
 (define-ircmd GET_CACHED_IMPORT
   (operands [ra :Rn] [k :Kn] [import-id :import] [pc :const-uint])
   (class :effect)
-  (vm-effects (def ra))
-  (location-tracking (invalidate ra))
+  (facts (writes (vm-slot ra)))
   (heap-effects :may-gc :reenters-vm)
   (lowering (get-cached-import ra k import-id pc)))
 
@@ -42,5 +39,4 @@
 (define-ircmd CHECK_SLOT_MATCH
   (operands [node :pointer] [key :Kn] [fail :block|:undef])
   (class :guard)
-  (dead-store :live-ins)
   (lowering (check-slot-match node key fail)))

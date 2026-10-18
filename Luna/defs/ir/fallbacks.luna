@@ -6,8 +6,7 @@
   (operands [pc :const-uint] [ra :Rn] [k :Kn])
   (class :effect)
   (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
-  (vm-effects (def ra))
-  (location-tracking (invalidate ra))
+  (facts (writes (vm-slot ra)))
   (lowering (fallback-getglobal pc ra k)))
 
 ~ Store a value into global table at specified key
@@ -18,8 +17,7 @@
   (operands [pc :const-uint] [ra :Rn] [k :Kn])
   (class :effect)
   (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
-  (vm-effects (use ra))
-  (location-tracking :none)
+  (facts (reads (vm-slot ra)))
   (lowering (fallback-setglobal pc ra k)))
 
 ~ Load a value from table at specified key
@@ -31,8 +29,7 @@
   (operands [pc :const-uint] [ra :Rn] [rb :Rn] [k :Kn])
   (class :effect)
   (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
-  (vm-effects (use rb) (def ra))
-  (location-tracking (invalidate ra))
+  (facts (reads (vm-slot rb)) (writes (vm-slot ra)))
   (lowering (fallback-gettableks pc ra rb k)))
 
 ~ Store a value into a table at specified key
@@ -44,8 +41,7 @@
   (operands [pc :const-uint] [ra :Rn] [rb :Rn] [k :Kn])
   (class :effect)
   (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
-  (vm-effects (use ra) (use rb))
-  (location-tracking :none)
+  (facts (reads (vm-slot ra) (vm-slot rb)))
   (lowering (fallback-settableks pc ra rb k)))
 
 ~ Load function from source register using name into target register and copying source register into target register + 1
@@ -57,8 +53,7 @@
   (operands [pc :const-uint] [ra :Rn] [rb :Rn] [k :Kn])
   (class :effect)
   (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
-  (vm-effects (use rb) (def-range ra 2))
-  (location-tracking (invalidate-range ra 2))
+  (facts (reads (vm-slot rb)) (writes (vm-slots ra 2)))
   (lowering (fallback-namecall pc ra rb k)))
 
 ~ Prepare stack for variadic functions so that GETVARARGS works correctly
@@ -67,8 +62,7 @@
 (define-ircmd FALLBACK_PREPVARARGS
   (operands [pc :const-uint] [numparams :int])
   (class :effect)
-  (vm-effects :none)
-  (location-tracking :none)
+  (facts (no-vm-effects))
   (lowering (fallback-prepvarargs pc numparams)))
 
 ~ Copy variables into the target registers from vararg storage for current function
@@ -78,8 +72,7 @@
 (define-ircmd FALLBACK_GETVARARGS
   (operands [pc :const-uint] [ra :Rn] [count :const-int])
   (class :effect)
-  (vm-effects (def-range ra count))
-  (location-tracking (invalidate-range ra count))
+  (facts (writes (vm-slots ra count)))
   (lowering (fallback-getvarargs pc ra count)))
 
 ~ Create closure from a pre-created function object (reusing it unless environments diverge)
@@ -89,8 +82,7 @@
 (define-ircmd FALLBACK_DUPCLOSURE
   (operands [pc :const-uint] [ra :Rn] [k :Kn])
   (class :effect)
-  (vm-effects (def ra))
-  (location-tracking (invalidate ra))
+  (facts (writes (vm-slot ra)))
   (heap-effects :may-gc :reenters-vm)
   (lowering (fallback-dupclosure pc ra k)))
 
@@ -102,8 +94,8 @@
   (operands [pc :const-uint] [ra :Rn] [loop :block])
   (class :terminator)
   (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
-  (vm-effects (use-range ra 3) (def-range ra 3))
-  (location-tracking (invalidate-range ra 3))
+  (facts (reads (vm-slots ra 3)) (writes (vm-slots ra 3)))
+  (dead-store :visit)
   (lowering (fallback-forgprep pc ra loop)))
 
 ~ Luwu Classes (rfcs/classes): construct an instance of a statically resolved class, using the
@@ -117,11 +109,21 @@
 ~ D: int (form: LBC_NEWOBJECT_DEFAULT, LBC_NEWOBJECT_INIT or LBC_NEWOBJECT_FIELDS)
 ~ E: int (AUX: argument count for DEFAULT and INIT, field count for FIELDS)
 (define-ircmd FALLBACK_NEWOBJECT
-  (operands [pc :const-uint] [ra :Rn] [rb :Rn] [d :int] [e :int])
+  (operands [pc :const-uint] [ra :Rn] [rb :Rn] [form :const-int] [count :const-int])
   (class :effect)
   (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
-  (vm-effects (use rb) (hook fallback-new-object))
-  (location-tracking (hook-before fallback-new-object))
+  (facts
+    (reads (vm-slot rb))
+    ; The registers above the instance hold the constructor arguments (DEFAULT and INIT) or one value per field (FIELDS);
+    ; INIT also fills in __init and self for the CALL the compiler emits behind this instruction
+    (cond [(= form :LBC_NEWOBJECT_INIT)
+           (when (> count 0) (reads (vm-slots (+ ra 3) count)))
+           (writes (vm-slots ra 3))]
+          [else
+           (when (> count 0) (reads (vm-slots (+ ra 1) count)))
+           ; invalidated as a range like INIT's, which also covers ra+1 (invalidateRestoreVmRegs includes start + count)
+           (writes (vm-slot ra))
+           (may-write (vm-slots ra 1))]))
   (lowering (fallback-newobject pc ra rb)))
 
 ~ Luwu Classes (rfcs/classes): add a member (a method, a primary constructor's synthesized
@@ -134,6 +136,5 @@
   (operands [pc :const-uint] [ra :Rn] [rb :Rn])
   (class :effect)
   (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
-  (vm-effects (use ra) (use rb))
-  (location-tracking :none)
+  (facts (reads (vm-slot ra) (vm-slot rb)))
   (lowering (fallback-newclassmember pc ra rb)))

@@ -15,8 +15,7 @@
   (operands [a :tag|:Rn] [b :tag] [cond :cond])
   (result :int)
   (class :value)
-  (vm-effects (maybe-use a))
-  (location-tracking :none)
+  (facts (reads (tvalue a :tag)))
   (lowering (cmp-tag a b cond)))
 
 ~ Jump if TValue is truthy
@@ -26,9 +25,7 @@
 (define-ircmd JUMP_IF_TRUTHY
   (operands [a :Rn] [if-true :block] [if-false :block])
   (class :terminator)
-  (vm-effects (use a))
-  (location-tracking :none)
-  (dead-store :live-outs)
+  (facts (reads (vm-slot a)))
   (lowering (jump-if-truthy a if-true if-false)))
 
 ~ Jump if TValue is falsy
@@ -38,7 +35,5 @@
 (define-ircmd JUMP_IF_FALSY
   (operands [a :Rn] [if-false :block] [if-true :block])
   (class :terminator)
-  (vm-effects (use a))
-  (location-tracking :none)
-  (dead-store :live-outs)
+  (facts (reads (vm-slot a)))
   (lowering (jump-if-falsy a if-false if-true)))
