@@ -49,6 +49,10 @@ so `const geometry.{Point} = require("./geometry")`, `local Point = geometry.Poi
 A module exports a class's type whether it writes `export class Point`, `return { Point = Point }` or
 `return .{Point}`: a class in the table a module returns is exported under the table's key.
 
+A required module a module exports as a value (`export t = require("@self/t")`, or in the table it returns) keeps its
+types: `const .{Cat} = hub.t`, `hub.t.Cat(4)`, `const m = hub.t` then `m.Age`, and `type .{Age} = hub.t` all see
+`t`'s types.
+
 <!-- WIP: agent-written draft of `.{...}` construction. Audit the wording before it leaves WIP. -->
 
 ### Building tables with `.{...}`

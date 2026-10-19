@@ -2394,6 +2394,38 @@ AstStat* Parser::parseTypeAlias(const Location& start, bool exported, Position t
     return node;
 }
 
+// Luwu Destructuring (rfcs/destructuring.md): the module a type destructuring reads from, parsed as a type so a mistake
+// is one error: a required module's name, or a dotted path to a module it exports (`hub.t`), read as one name.
+// Nothing when the type isn't one.
+std::optional<Parser::Name> Parser::parseModulePath()
+{
+    AstType* value = parseType();
+    AstTypeReference* reference = value->as<AstTypeReference>();
+    if (!reference || reference->hasParameterList)
+    {
+        report(value->location, "A type destructuring reads types from a required module: 'type .{A, B} = module'");
+        return std::nullopt;
+    }
+
+    if (!reference->prefix)
+        return Name(reference->name, reference->location);
+
+    std::string path = std::string(reference->prefix->value) + "." + reference->name.value;
+    Location location = reference->location;
+
+    while (lexer.current().type == '.' && lexer.lookahead().type == Lexeme::Name)
+    {
+        nextLexeme();
+        Name field = parseName("module name");
+        path += ".";
+        path += field.name.value;
+        location = Location(location, field.location);
+    }
+
+    // No code can spell a name with a dot in it, so the path names nothing but the module
+    return Name(AstName(copy(path).data), location);
+}
+
 // Luwu Destructuring (rfcs/destructuring.md): `type .{A, B as C} = module` desugars to one alias per field, each reading
 // the module's exported type of that name:
 //
@@ -2404,6 +2436,9 @@ AstStat* Parser::parseTypeAlias(const Location& start, bool exported, Position t
 //
 // A generic type keeps its generics: ConstraintGenerator binds the alias to the imported type function itself. The
 // first alias is returned; the rest are left in pendingStatements for parseBlockNoScope.
+//
+// The module can be a field of one, `type .{Age} = hub.t`. Its aliases read from a prefix spelled `hub.t`, which
+// ConstraintGenerator registers for every module a required module exports.
 AstStat* Parser::parseTypeDestructuring(const Location& start, bool exported, const Location& typeKeywordLocation)
 {
     DestructureTarget target;
@@ -2416,14 +2451,9 @@ AstStat* Parser::parseTypeDestructuring(const Location& start, bool exported, co
     {
         equalsLocation = lexer.current().location;
         nextLexeme();
-        AstType* value = parseType();
 
-        AstTypeReference* reference = value->as<AstTypeReference>();
-        bool isModuleName = reference && !reference->prefix && !reference->hasParameterList;
-        if (isModuleName)
-            module = Name(reference->name, reference->location);
-        else
-            report(value->location, "A type destructuring reads types from a required module: 'type .{A, B} = module'");
+        if (std::optional<Name> path = parseModulePath())
+            module = *path;
     }
     else
     {
@@ -2434,6 +2464,7 @@ AstStat* Parser::parseTypeDestructuring(const Location& start, bool exported, co
 
     checkLuwuFeature(location, kDestructuringFeature, FFlag::LuwuDestructuring);
 
+    // A module path (`hub.t`) is no local's name, so it finds none
     AstLocal* moduleLocal = nullptr;
     if (FFlag::LuauTrackPrefixLocal)
     {

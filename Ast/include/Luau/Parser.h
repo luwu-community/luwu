@@ -251,6 +251,7 @@ private:
 
     // type Name `=' Type
     AstStat* parseTypeAlias(const Location& start, bool exported, Position typeKeywordPosition, const Location& typeKeywordLocation);
+    std::optional<Name> parseModulePath();
     AstStat* parseTypeDestructuring(const Location& start, bool exported, const Location& typeKeywordLocation);
 
     AstStat* parseClassStat(const Location& start, bool exported, const Location& classKeywordLocation);

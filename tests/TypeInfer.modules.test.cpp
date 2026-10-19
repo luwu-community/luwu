@@ -1436,6 +1436,72 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "every_common_way_to_export_a_class_brings_it
     LUAU_REQUIRE_NO_ERRORS(kitty);
 }
 
+// A module exported as a field (`hub.t`) keeps its types, however the hub exports it
+TEST_CASE_FIXTURE(BuiltinsFixture, "modules_exported_as_fields_keep_their_types")
+{
+    ScopedFastFlag sff[] = {
+        {FFlag::LuauExportValueSyntax, true},
+        {FFlag::LuauExportValueTypecheck, true},
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuDestructuring, true},
+    };
+
+    fileResolver.source["game/T"] = R"(
+        export type Age = number
+        export class Cat(age: Age) end
+    )";
+    fileResolver.source["game/Hub"] = R"(
+        export const t = require(game.T)
+    )";
+    fileResolver.source["game/AliasHub"] = R"(
+        const t_module = require(game.T)
+        export const t = t_module
+    )";
+    fileResolver.source["game/TableHub"] = R"(
+        const t = require(game.T)
+        return { t = t }
+    )";
+    // Two levels: `outer.inner.t`
+    fileResolver.source["game/Outer"] = R"(
+        export const inner = require(game.Hub)
+    )";
+
+    const std::vector<std::pair<std::string, std::string>> hubs = {
+        {"Hub", "hub.t"}, {"AliasHub", "hub.t"}, {"TableHub", "hub.t"}, {"Outer", "hub.inner.t"},
+    };
+    for (const auto& hubAndPath : hubs)
+    {
+        const std::string& path = hubAndPath.second;
+        INFO(hubAndPath.first);
+        fileResolver.source["game/Importer"] = format(
+            R"(
+            --!strict
+            const hub = require(game.%s)
+            const .{ Cat } = %s
+            const m = %s
+            type .{ Age } = %s
+            local c: Cat = Cat(3)
+            local d: Cat = %s.Cat(4)
+            local a: Age = 1
+            local e: m.Age = 2
+            local wrong: Age = "x"
+            )",
+            hubAndPath.first.c_str(),
+            path.c_str(),
+            path.c_str(),
+            path.c_str(),
+            path.c_str()
+        );
+        getFrontend().markDirty("game/Importer");
+
+        // `wrong` is the one error: the types are the module's, not `any`
+        CheckResult result = getFrontend().check("game/Importer");
+        LUAU_REQUIRE_ERROR_COUNT(1, result);
+        CHECK_EQ(result.errors[0].location.begin.line, 10);
+    }
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "destructured_types_report_what_the_module_does_not_export")
 {
     ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};

@@ -2863,4 +2863,23 @@ return f
     CHECK_EQ(result.warnings[0].text, "Variable 'unused' is never used; prefix with '_' to silence");
 }
 
+// `m.Age` uses a `const m = hub.t`, and `type .{X} = other.t` uses `other`
+TEST_CASE_FIXTURE(Fixture, "module_locals_are_used_by_types_reading_them")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    LintResult result = lint(R"(
+local hub = require("./hub")
+local other = require("./other")
+local m = hub.t
+type .{X} = other.t
+local function f(a: m.Age, x: X)
+    return a, x
+end
+return f
+)");
+
+    CHECK_EQ(result.warnings.size(), 0);
+}
+
 TEST_SUITE_END();

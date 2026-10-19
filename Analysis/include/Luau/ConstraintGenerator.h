@@ -329,7 +329,11 @@ private:
     ControlFlow visit(const ScopePtr& scope, AstStatLocal* local);
     void bindImportedClassTypes(const ScopePtr& scope, AstStatLocal* statLocal);
     std::optional<TypeFun> importedClassType(const ScopePtr& scope, const AstExprIndexName* index);
-    void exportReturnedClassTypes(const ScopePtr& scope, AstStatReturn* ret);
+    void exportReturnedTypes(const ScopePtr& scope, AstStatReturn* ret);
+    void bindModuleAliases(const ScopePtr& scope, AstStatLocal* statLocal);
+    void importExportedModules(const ScopePtr& scope, const Name& alias, const Module& imported, size_t depth);
+    std::optional<Name> importedModulePath(const ScopePtr& scope, const AstExpr* expr);
+    std::optional<ModuleName> findImportedModule(const ScopePtr& scope, const Name& path);
     ControlFlow visit(const ScopePtr& scope, AstStatFor* for_);
     ControlFlow visit(const ScopePtr& scope, AstStatForIn* forIn);
     ControlFlow visit(const ScopePtr& scope, AstStatWhile* while_);
