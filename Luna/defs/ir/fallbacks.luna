@@ -1,3 +1,11 @@
+~ The address of the instruction at bytecode index pc
+(define (instruction-address pc) (AddressOf (Index (Root :Code) pc sizeof-Instruction)))
+
+~ Runs the VM's implementation of the instruction at pc: NativeContext function `name` (L, pc, base, k)
+(define (vm-fallback name pc)
+  (seq (native-call :None name :Ptr (Root :State) :Ptr (instruction-address pc) :Ptr (Root :Stack) :Ptr (Root :Consts))
+           (reload-base)))
+
 ~ Load a value from global table at specified key
 ~ A: unsigned int (bytecode instruction index)
 ~ B: Rn (dest)
@@ -7,7 +15,8 @@
   (class :effect)
   (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
   (facts (writes (vm-slot ra)))
-  (lowering (fallback-getglobal pc ra k)))
+  (lowering
+    (vm-fallback :executeGETGLOBAL pc)))
 
 ~ Store a value into global table at specified key
 ~ A: unsigned int (bytecode instruction index)
@@ -18,7 +27,8 @@
   (class :effect)
   (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
   (facts (reads (vm-slot ra)))
-  (lowering (fallback-setglobal pc ra k)))
+  (lowering
+    (vm-fallback :executeSETGLOBAL pc)))
 
 ~ Load a value from table at specified key
 ~ A: unsigned int (bytecode instruction index)
@@ -30,7 +40,8 @@
   (class :effect)
   (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
   (facts (reads (vm-slot rb)) (writes (vm-slot ra)))
-  (lowering (fallback-gettableks pc ra rb k)))
+  (lowering
+    (vm-fallback :executeGETTABLEKS pc)))
 
 ~ Store a value into a table at specified key
 ~ A: unsigned int (bytecode instruction index)
@@ -42,7 +53,8 @@
   (class :effect)
   (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
   (facts (reads (vm-slot ra) (vm-slot rb)))
-  (lowering (fallback-settableks pc ra rb k)))
+  (lowering
+    (vm-fallback :executeSETTABLEKS pc)))
 
 ~ Load function from source register using name into target register and copying source register into target register + 1
 ~ A: unsigned int (bytecode instruction index)
@@ -54,7 +66,8 @@
   (class :effect)
   (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
   (facts (reads (vm-slot rb)) (writes (vm-slots ra 2)))
-  (lowering (fallback-namecall pc ra rb k)))
+  (lowering
+    (vm-fallback :executeNAMECALL pc)))
 
 ~ Prepare stack for variadic functions so that GETVARARGS works correctly
 ~ A: unsigned int (bytecode instruction index)
@@ -63,7 +76,8 @@
   (operands [pc :const-uint] [numparams :int])
   (class :effect)
   (facts (no-vm-effects))
-  (lowering (fallback-prepvarargs pc numparams)))
+  (lowering
+    (vm-fallback :executePREPVARARGS pc)))
 
 ~ Copy variables into the target registers from vararg storage for current function
 ~ A: unsigned int (bytecode instruction index)
@@ -73,7 +87,13 @@
   (operands [pc :const-uint] [ra :Rn] [count :const-int])
   (class :effect)
   (facts (writes (vm-slots ra count)))
-  (lowering (fallback-getvarargs pc ra count)))
+  (lowering
+    (choose (gen:== count :LUA_MULTRET)
+            (seq (native-call :None :executeGETVARARGSMultRet :Ptr (Root :State) :Ptr (instruction-address pc)
+                                  :Ptr (Root :Stack) :I32 (vm-reg ra))
+                     (reload-base))
+            ~ executeGETVARARGSConst doesn't reallocate the stack
+            (native-call :None :executeGETVARARGSConst :Ptr (Root :State) :Ptr (Root :Stack) :I32 (vm-reg ra) :I32 count))))
 
 ~ Create closure from a pre-created function object (reusing it unless environments diverge)
 ~ A: unsigned int (bytecode instruction index)
@@ -84,7 +104,8 @@
   (class :effect)
   (facts (writes (vm-slot ra)))
   (heap-effects :may-gc :reenters-vm)
-  (lowering (fallback-dupclosure pc ra k)))
+  (lowering
+    (vm-fallback :executeDUPCLOSURE pc)))
 
 ~ Prepare loop variables for a generic for loop, jump to the loop back edge unconditionally
 ~ A: unsigned int (bytecode instruction index)
@@ -96,7 +117,9 @@
   (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
   (facts (reads (vm-slots ra 3)) (writes (vm-slots ra 3)))
   (dead-store :visit)
-  (lowering (fallback-forgprep pc ra loop)))
+  (lowering
+    (vm-fallback :executeFORGPREP pc)
+    (Goto loop)))
 
 ~ Luwu Classes (rfcs/classes): construct an instance of a statically resolved class, using the
 ~ same C implementation the interpreter uses. It covers the forms the native lowering doesn't
@@ -124,7 +147,8 @@
            ; invalidated as a range like INIT's, which also covers ra+1 (invalidateRestoreVmRegs includes start + count)
            (writes (vm-slot ra))
            (may-write (vm-slots ra 1))]))
-  (lowering (fallback-newobject pc ra rb)))
+  (lowering
+    (vm-fallback :executeNEWOBJECT pc)))
 
 ~ Luwu Classes (rfcs/classes): add a member (a method, a primary constructor's synthesized
 ~ __init, or a __defaults closure) to a class under construction. Runs as a C fallback for the
@@ -137,4 +161,5 @@
   (class :effect)
   (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
   (facts (reads (vm-slot ra) (vm-slot rb)))
-  (lowering (fallback-newclassmember pc ra rb)))
+  (lowering
+    (vm-fallback :executeNEWCLASSMEMBER pc)))

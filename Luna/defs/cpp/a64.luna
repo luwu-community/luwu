@@ -1,0 +1,76 @@
+;; ============================================================================
+;; C++ bindings for A64 (IrLoweringA64, IrRegAllocA64, EmitCommonA64)
+;; ============================================================================
+
+(define (a64:reg name) (gen:typed :RegisterA64 (gen:name name)))
+
+;; Pinned A64 registers holding VM state and special hardware registers.
+(define a64:rBase (a64:reg :rBase))
+(define a64:rConstants (a64:reg :rConstants))
+(define a64:rState (a64:reg :rState))
+(define a64:rNativeContext (a64:reg :rNativeContext))
+(define a64:rClosure (a64:reg :rClosure))
+(define a64:rCode (a64:reg :rCode))
+(define a64:rGlobalState (a64:reg :rGlobalState))
+(define a64:wzr (a64:reg :wzr))
+(define a64:xzr (a64:reg :xzr))
+(define a64:sp (a64:reg :sp))
+(define a64:sTemporary (gen:typed :AddressA64 (gen:name :sTemporary)))
+
+~ Returns the KindA64 enumerator corresponding to value type t.
+(define (a64:kind t) (gen:enum :KindA64 (a64:kind-name t)))
+
+~ Returns the register kind keyword (:w, :x, :s, :d, :q) for value type t.
+(define (a64:kind-name t) (case t [(:I32 :U8 :S8 :U16 :S16) :w] [(:I64 :Ptr) :x] [:F32 :s] [:F64 :d] [:V128 :q]))
+
+~ Emits a register cast viewing register r as the specified kind (:w, :x, :s, :d, :q).
+(define (a64:cast kind r) (gen:typed :RegisterA64 (gen:call :castReg (gen:enum :KindA64 kind) r)))
+
+~ Allocates a temporary A64 register for value type t, freed at the end of the instruction.
+(define (a64:temp-init t) (gen:typed :RegisterA64 (gen:method cpp:regs :allocTemp (a64:kind t))))
+
+~ Retrieves the A64 register assigned to instruction result operand op.
+(define (a64:reg-op op) (gen:typed :RegisterA64 (gen:method cpp:lowering :regOp op)))
+
+~ Returns an A64 register holding IR operand op of type t, allocating a temporary if op is a constant.
+(define (a64:value-reg t op)
+  (gen:typed :RegisterA64
+    (case t
+      [:I32 (gen:method cpp:lowering :tempInt op)]
+      [:I64 (gen:method cpp:lowering :tempInt64 op)]
+      [:F64 (gen:method cpp:lowering :tempDouble op)]
+      [:F32 (gen:method cpp:lowering :tempFloat op)]
+      [else (gen:method cpp:lowering :regOp op)])))
+
+~ Constructs an A64 memory address operand at base + offset.
+(define (a64:mem base offset) (gen:typed :AddressA64 (gen:call :mem base offset)))
+~ Constructs an A64 indexed memory address operand at base + index.
+(define (a64:mem-indexed base index) (gen:typed :AddressA64 (gen:call :mem base index)))
+
+~ Returns an A64 Address referencing the TValue of IR operand op with an additional byte offset.
+(define (a64:tvalue-addr op offset) (gen:typed :AddressA64 (gen:method cpp:lowering :tempAddr op offset)))
+
+~ Emits an address calculation adding offset to src into dst, using an extra instruction if offset exceeds immediate limits.
+(define (a64:add-offset dst src offset) (gen:call :emitAddOffset cpp:build dst src (gen:cast :size_t offset)))
+
+~ Returns the A64 condition code for integer condition c.
+(define (a64:cond-int c) (gen:typed :ConditionA64 (gen:call :getConditionInt (cond-ir c))))
+~ Returns the A64 condition code for 64-bit integer condition c.
+(define (a64:cond-int64 c) (gen:typed :ConditionA64 (gen:call :getConditionInt64 (cond-ir c))))
+~ Returns the A64 condition code for floating-point condition c.
+(define (a64:cond-fp c) (gen:typed :ConditionA64 (gen:call :getConditionFP (cond-ir c))))
+~ Returns the A64 condition code for named condition.
+(define (a64:cond name) (gen:typed :ConditionA64 (gen:enum :ConditionA64 name)))
+
+;; Maximum 12-bit immediate supported by A64 arithmetic instructions (AssemblyBuilderA64::kMaxImmediate).
+(define a64:max-immediate 4095)
+~ Returns true if compile-time number n fits within an A64 12-bit unsigned immediate.
+(define (a64:imm12-number? n) (and (int? n) (>= n 0) (<= n a64:max-immediate)))
+
+~ Emits a lowering-time test checking whether value v fits into an A64 12-bit immediate.
+(define (a64:imm12? v) (gen:<= (gen:cast :uint64_t v) (gen:name :AssemblyBuilderA64::kMaxImmediate)))
+~ Emits a lowering-time test checking whether value v can be encoded as an A64 bitmask immediate.
+(define (a64:mask? v) (gen:call :AssemblyBuilderA64::isMaskSupported (gen:cast :uint32_t v)))
+
+~ Emits a test checking whether the target CPU supports feature name.
+(define (a64:feature? name) (gen:!= (gen:& (gen:field cpp:build :features) (gen:name name)) 0))

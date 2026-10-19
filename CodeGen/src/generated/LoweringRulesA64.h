@@ -1676,8 +1676,8 @@ inline void lower_LOAD_TAG(IrLoweringA64& lowering, IrInst& inst, uint32_t index
     (void)next;
 
     inst.regA64 = regs.allocReg(KindA64::w, index);
-    auto addr = lowering.tempAddr(OP_A(inst), offsetof(TValue, tt));
-    build.ldr(inst.regA64, addr);
+    auto addr_ = lowering.tempAddr(OP_A(inst), offsetof(TValue, tt));
+    build.ldr(inst.regA64, addr_);
 }
 
 inline void lower_LOAD_POINTER(IrLoweringA64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
@@ -1687,8 +1687,8 @@ inline void lower_LOAD_POINTER(IrLoweringA64& lowering, IrInst& inst, uint32_t i
     (void)next;
 
     inst.regA64 = regs.allocReg(KindA64::x, index);
-    auto addr = lowering.tempAddr(OP_A(inst), offsetof(TValue, value.gc));
-    build.ldr(inst.regA64, addr);
+    auto addr_ = lowering.tempAddr(OP_A(inst), offsetof(TValue, value.gc));
+    build.ldr(inst.regA64, addr_);
 }
 
 inline void lower_LOAD_DOUBLE(IrLoweringA64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
@@ -1698,8 +1698,8 @@ inline void lower_LOAD_DOUBLE(IrLoweringA64& lowering, IrInst& inst, uint32_t in
     (void)next;
 
     inst.regA64 = regs.allocReg(KindA64::d, index);
-    auto addr = lowering.tempAddr(OP_A(inst), offsetof(TValue, value.n));
-    build.ldr(inst.regA64, addr);
+    auto addr_ = lowering.tempAddr(OP_A(inst), offsetof(TValue, value.n));
+    build.ldr(inst.regA64, addr_);
 }
 
 inline void lower_LOAD_INT(IrLoweringA64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
@@ -1709,8 +1709,8 @@ inline void lower_LOAD_INT(IrLoweringA64& lowering, IrInst& inst, uint32_t index
     (void)next;
 
     inst.regA64 = regs.allocReg(KindA64::w, index);
-    auto addr = lowering.tempAddr(OP_A(inst), offsetof(TValue, value));
-    build.ldr(inst.regA64, addr);
+    auto addr_ = lowering.tempAddr(OP_A(inst), offsetof(TValue, value));
+    build.ldr(inst.regA64, addr_);
 }
 
 inline void lower_LOAD_INT64(IrLoweringA64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
@@ -1720,8 +1720,8 @@ inline void lower_LOAD_INT64(IrLoweringA64& lowering, IrInst& inst, uint32_t ind
     (void)next;
 
     inst.regA64 = regs.allocReg(KindA64::x, index);
-    auto addr = lowering.tempAddr(OP_A(inst), offsetof(TValue, value.l));
-    build.ldr(inst.regA64, addr);
+    auto addr_ = lowering.tempAddr(OP_A(inst), offsetof(TValue, value.l));
+    build.ldr(inst.regA64, addr_);
 }
 
 inline void lower_LOAD_FLOAT(IrLoweringA64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
@@ -1731,8 +1731,8 @@ inline void lower_LOAD_FLOAT(IrLoweringA64& lowering, IrInst& inst, uint32_t ind
     (void)next;
 
     inst.regA64 = regs.allocReg(KindA64::s, index);
-    auto addr = lowering.tempAddr(OP_A(inst), lowering.intOp(OP_B(inst)));
-    build.ldr(inst.regA64, addr);
+    auto addr_ = lowering.tempAddr(OP_A(inst), lowering.intOp(OP_B(inst)));
+    build.ldr(inst.regA64, addr_);
 }
 
 inline void lower_LOAD_TVALUE(IrLoweringA64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
@@ -1743,8 +1743,8 @@ inline void lower_LOAD_TVALUE(IrLoweringA64& lowering, IrInst& inst, uint32_t in
 
     inst.regA64 = regs.allocReg(KindA64::q, index);
     auto addr_offset = HAS_OP_B(inst) ? lowering.intOp(OP_B(inst)) : 0;
-    auto addr = lowering.tempAddr(OP_A(inst), addr_offset);
-    build.ldr(inst.regA64, addr);
+    auto addr_ = lowering.tempAddr(OP_A(inst), addr_offset);
+    build.ldr(inst.regA64, addr_);
 }
 
 inline void lower_STORE_TAG(IrLoweringA64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
@@ -1754,16 +1754,16 @@ inline void lower_STORE_TAG(IrLoweringA64& lowering, IrInst& inst, uint32_t inde
     (void)index;
     (void)next;
 
-    auto addr = lowering.tempAddr(OP_A(inst), offsetof(TValue, tt));
+    auto addr_ = lowering.tempAddr(OP_A(inst), offsetof(TValue, tt));
     if (lowering.tagOp(OP_B(inst)) == 0)
     {
-        build.str(wzr, addr);
+        build.str(wzr, addr_);
     }
     else
     {
         RegisterA64 temp = regs.allocTemp(KindA64::w);
         build.mov(temp, lowering.tagOp(OP_B(inst)));
-        build.str(temp, addr);
+        build.str(temp, addr_);
     }
 }
 
@@ -1773,15 +1773,15 @@ inline void lower_STORE_POINTER(IrLoweringA64& lowering, IrInst& inst, uint32_t 
     (void)index;
     (void)next;
 
-    auto addr = lowering.tempAddr(OP_A(inst), offsetof(TValue, value));
+    auto addr_ = lowering.tempAddr(OP_A(inst), offsetof(TValue, value));
     if (OP_B(inst).kind == IrOpKind::Constant)
     {
         CODEGEN_ASSERT(lowering.intOp(OP_B(inst)) == 0);
-        build.str(xzr, addr);
+        build.str(xzr, addr_);
     }
     else
     {
-        build.str(lowering.regOp(OP_B(inst)), addr);
+        build.str(lowering.regOp(OP_B(inst)), addr_);
     }
 }
 
@@ -1792,16 +1792,16 @@ inline void lower_STORE_EXTRA(IrLoweringA64& lowering, IrInst& inst, uint32_t in
     (void)index;
     (void)next;
 
-    auto addr = lowering.tempAddr(OP_A(inst), offsetof(TValue, extra));
+    auto addr_ = lowering.tempAddr(OP_A(inst), offsetof(TValue, extra));
     if (lowering.intOp(OP_B(inst)) == 0)
     {
-        build.str(wzr, addr);
+        build.str(wzr, addr_);
     }
     else
     {
         RegisterA64 temp = regs.allocTemp(KindA64::w);
         build.mov(temp, lowering.intOp(OP_B(inst)));
-        build.str(temp, addr);
+        build.str(temp, addr_);
     }
 }
 
@@ -1812,10 +1812,10 @@ inline void lower_STORE_DOUBLE(IrLoweringA64& lowering, IrInst& inst, uint32_t i
     (void)index;
     (void)next;
 
-    auto addr = lowering.tempAddr(OP_A(inst), offsetof(TValue, value));
+    auto addr_ = lowering.tempAddr(OP_A(inst), offsetof(TValue, value));
     if (OP_B(inst).kind == IrOpKind::Constant && getDoubleBits(lowering.doubleOp(OP_B(inst))) == 0)
     {
-        build.str(xzr, addr);
+        build.str(xzr, addr_);
     }
     else
     {
@@ -1832,7 +1832,7 @@ inline void lower_STORE_DOUBLE(IrLoweringA64& lowering, IrInst& inst, uint32_t i
                 emitLoadDoubleBits(build, temp, scratch, lowering.doubleOp(OP_B(inst)));
             }
         }
-        build.str(temp, addr);
+        build.str(temp, addr_);
     }
 }
 
@@ -1843,10 +1843,10 @@ inline void lower_STORE_INT(IrLoweringA64& lowering, IrInst& inst, uint32_t inde
     (void)index;
     (void)next;
 
-    auto addr = lowering.tempAddr(OP_A(inst), offsetof(TValue, value));
+    auto addr_ = lowering.tempAddr(OP_A(inst), offsetof(TValue, value));
     if (OP_B(inst).kind == IrOpKind::Constant && lowering.intOp(OP_B(inst)) == 0)
     {
-        build.str(wzr, addr);
+        build.str(wzr, addr_);
     }
     else
     {
@@ -1855,7 +1855,7 @@ inline void lower_STORE_INT(IrLoweringA64& lowering, IrInst& inst, uint32_t inde
         {
             build.mov(temp, lowering.intOp(OP_B(inst)));
         }
-        build.str(temp, addr);
+        build.str(temp, addr_);
     }
 }
 
@@ -1866,10 +1866,10 @@ inline void lower_STORE_INT64(IrLoweringA64& lowering, IrInst& inst, uint32_t in
     (void)index;
     (void)next;
 
-    auto addr = lowering.tempAddr(OP_A(inst), offsetof(TValue, value));
+    auto addr_ = lowering.tempAddr(OP_A(inst), offsetof(TValue, value));
     if (OP_B(inst).kind == IrOpKind::Constant && lowering.int64Op(OP_B(inst)) == 0)
     {
-        build.str(xzr, addr);
+        build.str(xzr, addr_);
     }
     else
     {
@@ -1878,7 +1878,7 @@ inline void lower_STORE_INT64(IrLoweringA64& lowering, IrInst& inst, uint32_t in
         {
             emitLoadInt64(build, temp, lowering.int64Op(OP_B(inst)));
         }
-        build.str(temp, addr);
+        build.str(temp, addr_);
     }
 }
 
@@ -1928,11 +1928,11 @@ inline void lower_STORE_VECTOR(IrLoweringA64& lowering, IrInst& inst, uint32_t i
             emitLoadFloatBits(build, temp3, scratch, float(lowering.doubleOp(OP_D(inst))));
         }
     }
-    auto addr = lowering.tempAddr(OP_A(inst), offsetof(TValue, value));
-    CODEGEN_ASSERT((addr.kind == AddressKindA64::imm && addr.data % 4 == 0 && unsigned(addr.data + 8) / 4 <= AddressA64::kMaxOffset));
-    build.str(temp1, AddressA64(addr.base, addr.data + 0));
-    build.str(temp2, AddressA64(addr.base, addr.data + 4));
-    build.str(temp3, AddressA64(addr.base, addr.data + 8));
+    auto addr_ = lowering.tempAddr(OP_A(inst), offsetof(TValue, value));
+    CODEGEN_ASSERT((addr_.kind == AddressKindA64::imm && addr_.data % 4 == 0 && unsigned(addr_.data + 8) / 4 <= AddressA64::kMaxOffset));
+    build.str(temp1, AddressA64(addr_.base, addr_.data + 0));
+    build.str(temp2, AddressA64(addr_.base, addr_.data + 4));
+    build.str(temp3, AddressA64(addr_.base, addr_.data + 8));
     if (HAS_OP_E(inst))
     {
         RegisterA64 temp = regs.allocTemp(KindA64::w);
@@ -1948,8 +1948,8 @@ inline void lower_STORE_TVALUE(IrLoweringA64& lowering, IrInst& inst, uint32_t i
     (void)next;
 
     auto addr_offset = HAS_OP_C(inst) ? lowering.intOp(OP_C(inst)) : 0;
-    auto addr = lowering.tempAddr(OP_A(inst), addr_offset);
-    build.str(lowering.regOp(OP_B(inst)), addr);
+    auto addr_ = lowering.tempAddr(OP_A(inst), addr_offset);
+    build.str(lowering.regOp(OP_B(inst)), addr_);
 }
 
 inline void lower_STORE_SPLIT_TVALUE(IrLoweringA64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
@@ -1964,7 +1964,7 @@ inline void lower_STORE_SPLIT_TVALUE(IrLoweringA64& lowering, IrInst& inst, uint
     auto addrt = lowering.tempAddr(OP_A(inst), (offsetof(TValue, tt) + addr_offset));
     build.mov(tempt, lowering.tagOp(OP_B(inst)));
     build.str(tempt, addrt);
-    auto addr = lowering.tempAddr(OP_A(inst), (offsetof(TValue, value) + addr_offset));
+    auto addr_ = lowering.tempAddr(OP_A(inst), (offsetof(TValue, value) + addr_offset));
     if (lowering.tagOp(OP_B(inst)) == LUA_TBOOLEAN)
     {
         if (OP_C(inst).kind == IrOpKind::Constant)
@@ -1973,16 +1973,16 @@ inline void lower_STORE_SPLIT_TVALUE(IrLoweringA64& lowering, IrInst& inst, uint
             CODEGEN_ASSERT(LUA_TBOOLEAN == 1);
             if (lowering.intOp(OP_C(inst)) != 0)
             {
-                build.str(tempt, addr);
+                build.str(tempt, addr_);
             }
             else
             {
-                build.str(wzr, addr);
+                build.str(wzr, addr_);
             }
         }
         else
         {
-            build.str(lowering.regOp(OP_C(inst)), addr);
+            build.str(lowering.regOp(OP_C(inst)), addr_);
         }
     }
     else if (lowering.tagOp(OP_B(inst)) == LUA_TNUMBER)
@@ -2000,7 +2000,7 @@ inline void lower_STORE_SPLIT_TVALUE(IrLoweringA64& lowering, IrInst& inst, uint
                 emitLoadDoubleBits(build, temp, scratch, lowering.doubleOp(OP_C(inst)));
             }
         }
-        build.str(temp, addr);
+        build.str(temp, addr_);
     }
     else if (lowering.tagOp(OP_B(inst)) == LUA_TINTEGER)
     {
@@ -2009,11 +2009,11 @@ inline void lower_STORE_SPLIT_TVALUE(IrLoweringA64& lowering, IrInst& inst, uint
         {
             emitLoadInt64(build, temp, lowering.int64Op(OP_C(inst)));
         }
-        build.str(temp, addr);
+        build.str(temp, addr_);
     }
     else if (isGCO(lowering.tagOp(OP_B(inst))))
     {
-        build.str(lowering.regOp(OP_C(inst)), addr);
+        build.str(lowering.regOp(OP_C(inst)), addr_);
     }
     else
     {
@@ -3160,8 +3160,8 @@ inline void lower_BUFFER_READI8(IrLoweringA64& lowering, IrInst& inst, uint32_t 
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::w, index, {OP_B(inst)});
-    auto addr = lowering.tempAddrBuffer(OP_A(inst), OP_B(inst), lowering.tagOp(OP_C(inst)));
-    build.ldrsb(inst.regA64, addr);
+    auto addr_ = lowering.tempAddrBuffer(OP_A(inst), OP_B(inst), lowering.tagOp(OP_C(inst)));
+    build.ldrsb(inst.regA64, addr_);
 }
 
 inline void lower_BUFFER_READU8(IrLoweringA64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
@@ -3171,8 +3171,8 @@ inline void lower_BUFFER_READU8(IrLoweringA64& lowering, IrInst& inst, uint32_t 
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::w, index, {OP_B(inst)});
-    auto addr = lowering.tempAddrBuffer(OP_A(inst), OP_B(inst), lowering.tagOp(OP_C(inst)));
-    build.ldrb(inst.regA64, addr);
+    auto addr_ = lowering.tempAddrBuffer(OP_A(inst), OP_B(inst), lowering.tagOp(OP_C(inst)));
+    build.ldrb(inst.regA64, addr_);
 }
 
 inline void lower_BUFFER_READI16(IrLoweringA64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
@@ -3182,8 +3182,8 @@ inline void lower_BUFFER_READI16(IrLoweringA64& lowering, IrInst& inst, uint32_t
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::w, index, {OP_B(inst)});
-    auto addr = lowering.tempAddrBuffer(OP_A(inst), OP_B(inst), lowering.tagOp(OP_C(inst)));
-    build.ldrsh(inst.regA64, addr);
+    auto addr_ = lowering.tempAddrBuffer(OP_A(inst), OP_B(inst), lowering.tagOp(OP_C(inst)));
+    build.ldrsh(inst.regA64, addr_);
 }
 
 inline void lower_BUFFER_READU16(IrLoweringA64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
@@ -3193,8 +3193,8 @@ inline void lower_BUFFER_READU16(IrLoweringA64& lowering, IrInst& inst, uint32_t
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::w, index, {OP_B(inst)});
-    auto addr = lowering.tempAddrBuffer(OP_A(inst), OP_B(inst), lowering.tagOp(OP_C(inst)));
-    build.ldrh(inst.regA64, addr);
+    auto addr_ = lowering.tempAddrBuffer(OP_A(inst), OP_B(inst), lowering.tagOp(OP_C(inst)));
+    build.ldrh(inst.regA64, addr_);
 }
 
 inline void lower_BUFFER_READI32(IrLoweringA64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
@@ -3204,8 +3204,8 @@ inline void lower_BUFFER_READI32(IrLoweringA64& lowering, IrInst& inst, uint32_t
     (void)next;
 
     inst.regA64 = regs.allocReuse(KindA64::w, index, {OP_B(inst)});
-    auto addr = lowering.tempAddrBuffer(OP_A(inst), OP_B(inst), lowering.tagOp(OP_C(inst)));
-    build.ldr(inst.regA64, addr);
+    auto addr_ = lowering.tempAddrBuffer(OP_A(inst), OP_B(inst), lowering.tagOp(OP_C(inst)));
+    build.ldr(inst.regA64, addr_);
 }
 
 inline void lower_BUFFER_READF32(IrLoweringA64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
@@ -3215,8 +3215,8 @@ inline void lower_BUFFER_READF32(IrLoweringA64& lowering, IrInst& inst, uint32_t
     (void)next;
 
     inst.regA64 = regs.allocReg(KindA64::s, index);
-    auto addr = lowering.tempAddrBuffer(OP_A(inst), OP_B(inst), lowering.tagOp(OP_C(inst)));
-    build.ldr(inst.regA64, addr);
+    auto addr_ = lowering.tempAddrBuffer(OP_A(inst), OP_B(inst), lowering.tagOp(OP_C(inst)));
+    build.ldr(inst.regA64, addr_);
 }
 
 inline void lower_BUFFER_READF64(IrLoweringA64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
@@ -3226,8 +3226,8 @@ inline void lower_BUFFER_READF64(IrLoweringA64& lowering, IrInst& inst, uint32_t
     (void)next;
 
     inst.regA64 = regs.allocReg(KindA64::d, index);
-    auto addr = lowering.tempAddrBuffer(OP_A(inst), OP_B(inst), lowering.tagOp(OP_C(inst)));
-    build.ldr(inst.regA64, addr);
+    auto addr_ = lowering.tempAddrBuffer(OP_A(inst), OP_B(inst), lowering.tagOp(OP_C(inst)));
+    build.ldr(inst.regA64, addr_);
 }
 
 inline void lower_BUFFER_READI64(IrLoweringA64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
@@ -3237,8 +3237,8 @@ inline void lower_BUFFER_READI64(IrLoweringA64& lowering, IrInst& inst, uint32_t
     (void)next;
 
     inst.regA64 = regs.allocReg(KindA64::x, index);
-    auto addr = lowering.tempAddrBuffer(OP_A(inst), OP_B(inst), lowering.tagOp(OP_C(inst)));
-    build.ldr(inst.regA64, addr);
+    auto addr_ = lowering.tempAddrBuffer(OP_A(inst), OP_B(inst), lowering.tagOp(OP_C(inst)));
+    build.ldr(inst.regA64, addr_);
 }
 
 inline void lower_BUFFER_WRITEI8(IrLoweringA64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
@@ -3253,8 +3253,8 @@ inline void lower_BUFFER_WRITEI8(IrLoweringA64& lowering, IrInst& inst, uint32_t
     {
         build.mov(temp, lowering.intOp(OP_C(inst)));
     }
-    auto addr = lowering.tempAddrBuffer(OP_A(inst), OP_B(inst), lowering.tagOp(OP_D(inst)));
-    build.strb(temp, addr);
+    auto addr_ = lowering.tempAddrBuffer(OP_A(inst), OP_B(inst), lowering.tagOp(OP_D(inst)));
+    build.strb(temp, addr_);
 }
 
 inline void lower_BUFFER_WRITEI16(IrLoweringA64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
@@ -3269,8 +3269,8 @@ inline void lower_BUFFER_WRITEI16(IrLoweringA64& lowering, IrInst& inst, uint32_
     {
         build.mov(temp, lowering.intOp(OP_C(inst)));
     }
-    auto addr = lowering.tempAddrBuffer(OP_A(inst), OP_B(inst), lowering.tagOp(OP_D(inst)));
-    build.strh(temp, addr);
+    auto addr_ = lowering.tempAddrBuffer(OP_A(inst), OP_B(inst), lowering.tagOp(OP_D(inst)));
+    build.strh(temp, addr_);
 }
 
 inline void lower_BUFFER_WRITEI32(IrLoweringA64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
@@ -3285,8 +3285,8 @@ inline void lower_BUFFER_WRITEI32(IrLoweringA64& lowering, IrInst& inst, uint32_
     {
         build.mov(temp, lowering.intOp(OP_C(inst)));
     }
-    auto addr = lowering.tempAddrBuffer(OP_A(inst), OP_B(inst), lowering.tagOp(OP_D(inst)));
-    build.str(temp, addr);
+    auto addr_ = lowering.tempAddrBuffer(OP_A(inst), OP_B(inst), lowering.tagOp(OP_D(inst)));
+    build.str(temp, addr_);
 }
 
 inline void lower_BUFFER_WRITEF32(IrLoweringA64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
@@ -3309,8 +3309,8 @@ inline void lower_BUFFER_WRITEF32(IrLoweringA64& lowering, IrInst& inst, uint32_
             emitLoadFloatBits(build, temp, scratch, float(lowering.doubleOp(OP_C(inst))));
         }
     }
-    auto addr = lowering.tempAddrBuffer(OP_A(inst), OP_B(inst), lowering.tagOp(OP_D(inst)));
-    build.str(temp, addr);
+    auto addr_ = lowering.tempAddrBuffer(OP_A(inst), OP_B(inst), lowering.tagOp(OP_D(inst)));
+    build.str(temp, addr_);
 }
 
 inline void lower_BUFFER_WRITEF64(IrLoweringA64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
@@ -3333,8 +3333,8 @@ inline void lower_BUFFER_WRITEF64(IrLoweringA64& lowering, IrInst& inst, uint32_
             emitLoadDoubleBits(build, temp, scratch, lowering.doubleOp(OP_C(inst)));
         }
     }
-    auto addr = lowering.tempAddrBuffer(OP_A(inst), OP_B(inst), lowering.tagOp(OP_D(inst)));
-    build.str(temp, addr);
+    auto addr_ = lowering.tempAddrBuffer(OP_A(inst), OP_B(inst), lowering.tagOp(OP_D(inst)));
+    build.str(temp, addr_);
 }
 
 inline void lower_BUFFER_WRITEI64(IrLoweringA64& lowering, IrInst& inst, uint32_t index, const IrBlock& next)
@@ -3349,8 +3349,8 @@ inline void lower_BUFFER_WRITEI64(IrLoweringA64& lowering, IrInst& inst, uint32_
     {
         emitLoadInt64(build, temp, lowering.int64Op(OP_C(inst)));
     }
-    auto addr = lowering.tempAddrBuffer(OP_A(inst), OP_B(inst), lowering.tagOp(OP_D(inst)));
-    build.str(temp, addr);
+    auto addr_ = lowering.tempAddrBuffer(OP_A(inst), OP_B(inst), lowering.tagOp(OP_D(inst)));
+    build.str(temp, addr_);
 }
 
 // Guard that [offset + min-offset, offset + max-offset) is within the buffer, and optionally that the offset was
@@ -3472,8 +3472,8 @@ inline void lower_CMP_TAG(IrLoweringA64& lowering, IrInst& inst, uint32_t index,
     RegisterA64 a_reg = OP_A(inst).kind == IrOpKind::Inst ? lowering.regOp(OP_A(inst)) : (OP_A(inst).kind == IrOpKind::VmReg ? regs.allocTemp(KindA64::w) : noreg);
     if (OP_A(inst).kind == IrOpKind::VmReg)
     {
-        auto addr = lowering.tempAddr(OP_A(inst), offsetof(TValue, tt));
-        build.ldr(a_reg, addr);
+        auto addr_ = lowering.tempAddr(OP_A(inst), offsetof(TValue, tt));
+        build.ldr(a_reg, addr_);
     }
     else
     {
@@ -3485,8 +3485,8 @@ inline void lower_CMP_TAG(IrLoweringA64& lowering, IrInst& inst, uint32_t index,
     RegisterA64 b_reg = OP_B(inst).kind == IrOpKind::Inst ? lowering.regOp(OP_B(inst)) : (OP_B(inst).kind == IrOpKind::VmReg ? regs.allocTemp(KindA64::w) : noreg);
     if (OP_B(inst).kind == IrOpKind::VmReg)
     {
-        auto addr = lowering.tempAddr(OP_B(inst), offsetof(TValue, tt));
-        build.ldr(b_reg, addr);
+        auto addr_ = lowering.tempAddr(OP_B(inst), offsetof(TValue, tt));
+        build.ldr(b_reg, addr_);
     }
     else
     {
@@ -3675,8 +3675,8 @@ inline void lower_JUMP_EQ_TAG(IrLoweringA64& lowering, IrInst& inst, uint32_t in
     RegisterA64 a_reg = OP_A(inst).kind == IrOpKind::Inst ? lowering.regOp(OP_A(inst)) : (OP_A(inst).kind == IrOpKind::VmReg ? regs.allocTemp(KindA64::w) : noreg);
     if (OP_A(inst).kind == IrOpKind::VmReg)
     {
-        auto addr = lowering.tempAddr(OP_A(inst), offsetof(TValue, tt));
-        build.ldr(a_reg, addr);
+        auto addr_ = lowering.tempAddr(OP_A(inst), offsetof(TValue, tt));
+        build.ldr(a_reg, addr_);
     }
     else
     {
@@ -3688,8 +3688,8 @@ inline void lower_JUMP_EQ_TAG(IrLoweringA64& lowering, IrInst& inst, uint32_t in
     RegisterA64 b_reg = OP_B(inst).kind == IrOpKind::Inst ? lowering.regOp(OP_B(inst)) : (OP_B(inst).kind == IrOpKind::VmReg ? regs.allocTemp(KindA64::w) : noreg);
     if (OP_B(inst).kind == IrOpKind::VmReg)
     {
-        auto addr = lowering.tempAddr(OP_B(inst), offsetof(TValue, tt));
-        build.ldr(b_reg, addr);
+        auto addr_ = lowering.tempAddr(OP_B(inst), offsetof(TValue, tt));
+        build.ldr(b_reg, addr_);
     }
     else
     {
@@ -5016,11 +5016,11 @@ inline void lower_BARRIER_TABLE_FORWARD(IrLoweringA64& lowering, IrInst& inst, u
     lowering.checkObjectBarrierConditions(lowering.regOp(OP_A(inst)), temp, noreg, OP_B(inst), ratag, skip);
     // resolve the operand register before the spill so it isn't reloaded redundantly
     auto reg = lowering.regOp(OP_A(inst));
-    auto addr = lowering.tempAddr(OP_B(inst), offsetof(TValue, value));
+    auto addr_ = lowering.tempAddr(OP_B(inst), offsetof(TValue, value));
     auto spills = regs.spill(index, {reg});
     build.mov(x1, reg);
     build.mov(x0, rState);
-    build.ldr(x2, addr);
+    build.ldr(x2, addr_);
     build.ldr(x3, mem(rNativeContext, offsetof(NativeContext, luaC_barriertable)));
     build.blr(x3);
     // restore before the skip label so the register state is the same on both paths
@@ -5080,8 +5080,8 @@ inline void lower_CHECK_SLOT_MATCH(IrLoweringA64& lowering, IrInst& inst, uint32
     build.ubfx(temp2, temp2, (kOffsetOfTKeyTagNext - 8) * 8, kTKeyTagBits);
     build.cmp(temp2, uint16_t(LUA_TSTRING));
     build.b(ConditionA64::NotEqual, mismatch);
-    auto addr = lowering.tempAddr(OP_B(inst), offsetof(TValue, value));
-    build.ldr(temp2, addr);
+    auto addr_ = lowering.tempAddr(OP_B(inst), offsetof(TValue, value));
+    build.ldr(temp2, addr_);
     build.cmp(temp1, temp2);
     build.b(ConditionA64::NotEqual, mismatch);
     build.ldr(temp1w, mem(lowering.regOp(OP_A(inst)), offsetof(LuaNode, val.tt)));
@@ -5112,8 +5112,8 @@ inline void lower_JUMP_SLOT_MATCH(IrLoweringA64& lowering, IrInst& inst, uint32_
     build.ubfx(temp2, temp2, (kOffsetOfTKeyTagNext - 8) * 8, kTKeyTagBits);
     build.cmp(temp2, uint16_t(LUA_TSTRING));
     build.b(ConditionA64::NotEqual, mismatch);
-    auto addr = lowering.tempAddr(OP_B(inst), offsetof(TValue, value));
-    build.ldr(temp2, addr);
+    auto addr_ = lowering.tempAddr(OP_B(inst), offsetof(TValue, value));
+    build.ldr(temp2, addr_);
     build.cmp(temp1, temp2);
     build.b(ConditionA64::NotEqual, mismatch);
     build.ldr(temp1w, mem(lowering.regOp(OP_A(inst)), offsetof(LuaNode, val.tt)));

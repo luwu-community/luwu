@@ -5,7 +5,8 @@
   (operands [a :Rn|:inst-pointer] [tag :tag])
   (class :effect)
   (facts (writes (tvalue a :tag) tag))
-  (lowering (store-tag a tag)))
+  (lowering
+    (Store :I32 (Field a :TValue.tt) (tag-val tag))))
 
 ~ Store an integer into the extra field of the TValue
 ~ A: Rn
@@ -14,7 +15,8 @@
   (operands [a :Rn] [extra :int])
   (class :effect)
   (facts (writes (tvalue a :extra) extra))
-  (lowering (store-extra a extra)))
+  (lowering
+    (Store :I32 (Field a :TValue.extra) extra)))
 
 ~ Store a pointer (*) into TValue
 ~ A: Rn or pointer (TValue)
@@ -23,7 +25,8 @@
   (operands [a :Rn|:inst-pointer] [val :pointer|:const-int])
   (class :effect)
   (facts (writes (tvalue a :value :pointer) val))
-  (lowering (store-pointer a val)))
+  (lowering
+    (Store :Ptr (Field a :TValue.value) val)))
 
 ~ Store a double number into TValue
 ~ A: Rn or pointer (TValue)
@@ -32,7 +35,8 @@
   (operands [a :Rn|:inst-pointer] [val :double])
   (class :effect)
   (facts (writes (tvalue a :value :double) val))
-  (lowering (store-double a val)))
+  (lowering
+    (Store :F64 (Field a :TValue.value) val)))
 
 ~ Store an int into TValue
 ~ A: Rn
@@ -41,7 +45,8 @@
   (operands [a :Rn] [val :int])
   (class :effect)
   (facts (writes (tvalue a :value :int) val))
-  (lowering (store-int a val)))
+  (lowering
+    (Store :I32 (Field a :TValue.value) val)))
 
 ~ Store an int64 into TValue
 ~ A: Rn
@@ -50,7 +55,8 @@
   (operands [a :Rn] [val :int64])
   (class :effect)
   (facts (writes (tvalue a :value :int64) val))
-  (lowering (store-int64 a val)))
+  (lowering
+    (Store :I64 (Field a :TValue.value) val)))
 
 ~ Store a vector into TValue
 ~ When optional 'E' tag is present, it is written out to the TValue as well
@@ -63,7 +69,11 @@
   (operands [a :Rn] [x :float] [y :float] [z :float] [tag :tag])
   (class :effect)
   (facts (writes (tvalue a :vector) x y z))
-  (lowering (store-vector a x y z tag)))
+  (lowering
+    (Store :F32 (Field a :TValue.value) x)
+    (Store :F32 (Field (Field a :TValue.value) 4) y)
+    (Store :F32 (Field (Field a :TValue.value) 8) z)
+    (choose (has-op? tag) (Store :I32 (Field a :TValue.tt) (tag-val tag)))))
 
 ~ Store a TValue into memory
 ~ A: Rn or pointer (TValue)
@@ -73,7 +83,8 @@
   (operands [a :Rn|:pointer] [val :tvalue] [offset :const-int])
   (class :effect)
   (facts (writes (tvalue a offset :tvalue) val))
-  (lowering (store-tvalue a val offset)))
+  (lowering
+    (Store :V128 (Field a offset) val)))
 
 ~ Store a pair of tag and value into memory
 ~ A: Rn or pointer (TValue)
@@ -84,4 +95,10 @@
   (operands [a :Rn|:pointer] [tag :tag] [val :int|:int64|:double|:pointer] [offset :const-int])
   (class :effect)
   (facts (writes (tvalue a offset :split) tag val))
-  (lowering (store-split-tvalue a tag val offset)))
+  (lowering
+    (Store :I32 (Field (Field a offset) :TValue.tt) (tag-val tag))
+    ~ the value by the tag: a boolean, a number, an integer, or a GC object pointer
+    (choose-cond [(gen:== (tag-val tag) :LUA_TBOOLEAN) (Store :I32 (Field (Field a offset) :TValue.value) val)]
+              [(gen:== (tag-val tag) :LUA_TNUMBER) (Store :F64 (Field (Field a offset) :TValue.value) val)]
+              [(gen:== (tag-val tag) :LUA_TINTEGER) (Store :I64 (Field (Field a offset) :TValue.value) val)]
+              [else (Store :Ptr (Field (Field a offset) :TValue.value) val)])))

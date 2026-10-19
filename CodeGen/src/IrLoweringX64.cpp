@@ -542,6 +542,23 @@ OperandX64 IrLoweringX64::memRegTagOp(IrOp op)
     return noreg;
 }
 
+OperandX64 IrLoweringX64::tvalueMemOp(IrOp op, int offset, SizeX64 size)
+{
+    switch (op.kind)
+    {
+    case IrOpKind::VmReg:
+        return OperandX64(size, noreg, 1, rBase, int32_t(vmRegOp(op) * sizeof(TValue)) + offset);
+    case IrOpKind::VmConst:
+        return OperandX64(size, noreg, 1, rConstants, int32_t(vmConstOp(op) * sizeof(TValue)) + offset);
+    case IrOpKind::Inst:
+        return OperandX64(size, noreg, 1, regOp(op), offset);
+    default:
+        CODEGEN_ASSERT(!"Unsupported operand kind");
+    }
+
+    return noreg;
+}
+
 RegisterX64 IrLoweringX64::regOp(IrOp op)
 {
     IrInst& inst = function.instOp(op);

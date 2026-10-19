@@ -13,18 +13,7 @@ struct IrCmdFixture : LunaFixture
         file("root.luna", program);
         run({"root.luna", "out"});
     }
-
-    // The generated A64 function for `cmd`
-    std::string lowering(const std::string& cmd)
-    {
-        std::string text = read("out/LoweringRulesA64.h");
-        size_t start = text.find("inline void lower_" + cmd + "(");
-        REQUIRE(start != std::string::npos);
-        return text.substr(start, text.find("\n}\n", start) - start);
-    }
 };
-
-const char* kRule2 = "(define-rule (two [a :op] [b :op]) (if (constant? a) (unsupported!)))\n";
 
 } // namespace
 
@@ -36,17 +25,15 @@ TEST_CASE_FIXTURE(IrCmdFixture, "commands_generate_the_enum_and_command_informat
             "\n"
             "~ Shared docs\n"
             "~ A: int\n"
-            "(define-ircmd FIRST (operands [a :any] [b :any]) (result :int) (class :value) (lowering (two a b)))\n"
+            "(define-ircmd FIRST (operands [a :any] [b :any]) (result :int) (class :value) (lowering 0))\n"
             "~ Shared docs\n"
             "~ A: int\n"
-            "(define-ircmd SECOND (operands [a :any] [b :block]) (class :guard) (flags :deprecated/is-unsafe-to-sink) (lowering (two a b)))\n"
+            "(define-ircmd SECOND (operands [a :any] [b :block]) (class :guard) (flags :deprecated/is-unsafe-to-sink) (lowering (Abort)))\n"
             "\n"
             "(define-ircmd THIRD (class :terminator) (heap-effects :invalidates-safe-env) (flags :dirty-high-bits :deprecated/has-side-effects)\n"
-            "  (lowering (none)))\n"
-            "\n" +
-            std::string(kRule2) + "(define-rule (none) (unsupported!))");
+            "  (lowering (Abort)))");
     requireOk();
-    CHECK(out.find("5 output(s) updated") != std::string::npos);
+    CHECK(out.find("3 output(s) updated") != std::string::npos);
 
     // Identical consecutive docs share one comment block
     std::string enumHeader = read("out/IrCmd.h");
@@ -78,31 +65,6 @@ TEST_CASE_FIXTURE(IrCmdFixture, "commands_generate_the_enum_and_command_informat
           std::string::npos);
 }
 
-TEST_CASE_FIXTURE(IrCmdFixture, "a_rule_shared_by_two_commands_generates_a_function_for_each")
-{
-    compile("(define-ircmd FIRST (operands [a :any] [b :any]) (class :effect) (lowering (two a b)))\n"
-            "(define-ircmd SECOND (operands [a :any] [b :any]) (class :effect) (lowering (two a b)))\n" +
-            std::string(kRule2));
-    requireOk();
-    CHECK(lowering("FIRST").find("OP_A(inst).kind == IrOpKind::Constant") != std::string::npos);
-    CHECK(lowering("SECOND").find("OP_A(inst).kind == IrOpKind::Constant") != std::string::npos);
-}
-
-TEST_CASE_FIXTURE(IrCmdFixture, "arguments_bind_rule_parameters_to_the_named_operands")
-{
-    compile("(define-ircmd SWAPPED (operands [x :any] [y :any]) (class :effect) (lowering (two y x)))\n" + std::string(kRule2));
-    requireOk();
-    CHECK(lowering("SWAPPED").find("if (OP_B(inst).kind == IrOpKind::Constant)") != std::string::npos);
-}
-
-TEST_CASE_FIXTURE(IrCmdFixture, "literal_arguments_bind_constants")
-{
-    compile("(define-ircmd WITH_LITERAL (operands [x :any]) (class :effect) (lowering (lit x 3)))\n"
-            "(define-rule (lit [a :op] [n :int]) (if (= n 3) (unsupported!)))");
-    requireOk();
-    CHECK(lowering("WITH_LITERAL").find("if (3 == 3)") != std::string::npos);
-}
-
 TEST_CASE_FIXTURE(IrCmdFixture, "command_errors")
 {
     struct Case
@@ -112,14 +74,14 @@ TEST_CASE_FIXTURE(IrCmdFixture, "command_errors")
         const char* error;
     };
 
-    std::string cmd = "(define-ircmd C (operands [a :any] [b :any]) (class :effect) (lowering (two a b)))\n";
+    std::string cmd = "(define-ircmd C (operands [a :any] [b :any]) (class :effect) (lowering (Abort)))\n";
     std::string manyPseudo;
     for (int i = 0; i < 257; ++i)
         manyPseudo += "(define-ircmd C" + std::to_string(i) + " (class :pseudo))\n";
 
     Case cases[] = {
-        {"duplicate command", cmd + cmd + kRule2, "Duplicate define-ircmd C"},
-        {"NOP not first", cmd + "(define-ircmd NOP (class :pseudo))\n" + kRule2, "NOP must be the first define-ircmd"},
+        {"duplicate command", cmd + cmd, "Duplicate define-ircmd C"},
+        {"NOP not first", cmd + "(define-ircmd NOP (class :pseudo))\n", "NOP must be the first define-ircmd"},
         {"lowercase name", "(define-ircmd lower (class :pseudo))", "needs an UPPER_SNAKE command name"},
         {"too many commands", manyPseudo, "More than 256 IR commands"},
         {"unknown clause", "(define-ircmd C (class :pseudo) (bogus))", "Unknown define-ircmd clause 'bogus'"},
@@ -129,17 +91,12 @@ TEST_CASE_FIXTURE(IrCmdFixture, "command_errors")
         {"unknown flag", "(define-ircmd C (class :pseudo) (flags :bogus))", "Unknown flag ':bogus'"},
         {"unknown heap effect", "(define-ircmd C (class :pseudo) (heap-effects :bogus))", "Unknown heap effect ':bogus'"},
         {"missing class", "(define-ircmd C (result :int))", "C needs a (class ...) clause"},
-        {"value without result", "(define-ircmd C (class :value) (lowering (none)))\n(define-rule (none) (unsupported!))", "is a :value command but has no (result ...)"},
-        {"effect with result", "(define-ircmd C (result :int) (class :effect) (lowering (none)))\n(define-rule (none) (unsupported!))", "is an :effect command but has a result"},
-        {"pseudo with lowering", "(define-ircmd C (class :pseudo) (lowering (none)))\n(define-rule (none) (unsupported!))", "C is a pseudo-instruction and isn't lowered"},
-        {"missing lowering", "(define-ircmd C (class :effect))", "C needs a (lowering (<rule> <args>...)) clause"},
-        {"semantics lowering", "(define-ircmd C (class :effect) (lowering :semantics))", "(lowering :semantics) isn't supported yet"},
+        {"value without result", "(define-ircmd C (class :value) (lowering (Abort)))", "is a :value command but has no (result ...)"},
+        {"effect with result", "(define-ircmd C (result :int) (class :effect) (lowering (Abort)))", "is an :effect command but has a result"},
+        {"pseudo with lowering", "(define-ircmd C (class :pseudo) (lowering (Abort)))", "C is a pseudo-instruction and isn't lowered"},
+        {"missing lowering", "(define-ircmd C (class :effect))", "C needs a (lowering ...) clause"},
         {"too many operands", "(define-ircmd C (operands [a :any] [b :any] [c :any] [d :any] [e :any] [f :any] [g :any] [h :any]) (class :pseudo))", "C has 8 operands"},
         {"duplicate operand", "(define-ircmd C (operands [a :any] [a :any]) (class :pseudo))", "Duplicate operand 'a'"},
-        {"unknown rule", "(define-ircmd C (class :effect) (lowering (nope)))", "C is lowered by 'nope', which isn't a define-rule"},
-        {"wrong argument count", "(define-ircmd C (operands [a :any]) (class :effect) (lowering (two a)))\n" + std::string(kRule2), "Rule two takes 2 argument(s), but C passes 1"},
-        {"unknown operand", "(define-ircmd C (operands [a :any]) (class :effect) (lowering (two a z)))\n" + std::string(kRule2), "'z' isn't an operand of C (operands: a)"},
-        {"unreferenced rule", "(define-ircmd NOP (class :pseudo))\n" + std::string(kRule2), "define-rule two isn't used by any define-ircmd"},
         {"docs inside the form", "(define-ircmd C\n  ~ the class\n  (class :pseudo))", "Doc comments (~) inside define-ircmd aren't supported yet"},
     };
 
@@ -157,8 +114,7 @@ TEST_CASE_FIXTURE(IrCmdFixture, "operand_kinds_generate_the_operand_table")
             "(define-ircmd GUARD (operands [a :Rn|:Kn] [b :const-tag] [c :block|:vmexit|:undef] [d :int|:none])\n"
             "  (target-specific [:x64 [a :inst-pointer]] [:a64 [d :Kn]])\n"
             "  (flag-specific [:DebugLuauAbortingChecks [b :tag]])\n"
-            "  (class :guard) (facts (reads (tvalue a))) (lowering (guard a b c d)))\n"
-            "(define-rule (guard [a :op] [b :op] [c :label] [d :op]) (unsupported!))");
+            "  (class :guard) (facts (reads (tvalue a))) (lowering (Abort)))");
     requireOk();
 
     std::string info = read("out/IrCmdInfo.h");
@@ -176,31 +132,6 @@ TEST_CASE_FIXTURE(IrCmdFixture, "operand_kinds_generate_the_operand_table")
     CHECK(info.find("IrOperandSpec targetX64[7];") != std::string::npos);
     CHECK(info.find("IrOperandSpec flagDebugLuauAbortingChecks[7];") != std::string::npos);
     CHECK(info.find("inline const IrCmdOperands& getCmdOperands(IrCmd cmd)") != std::string::npos);
-}
-
-TEST_CASE_FIXTURE(IrCmdFixture, "rule_parameter_types_must_be_able_to_read_the_operand_kinds")
-{
-    std::string rule = "(define-rule (lit [n :int]) (unsupported!))\n";
-
-    SUBCASE("an :int parameter can't read an instruction result")
-    {
-        compile("(define-ircmd C (operands [x :int]) (class :effect) (lowering (lit x)))\n" + rule);
-        requireError({"C operand 'x' can be :int, but rule parameter 'n' is :int, which can't read that"});
-    }
-
-    SUBCASE("constants, absent operands and literals are fine")
-    {
-        compile("(define-ircmd C (operands [x :const-int|:none]) (class :effect) (lowering (lit x)))\n"
-                "(define-ircmd D (operands [x :any]) (class :effect) (lowering (lit 3)))\n" +
-                rule);
-        requireOk();
-    }
-
-    SUBCASE("extra kinds are checked too")
-    {
-        compile("(define-ircmd C (operands [x :const-int]) (target-specific [:x64 [x :Rn]]) (class :effect) (location-tracking :none) (lowering (lit x)))\n" + rule);
-        requireError({"can be :Rn (on x64)"});
-    }
 }
 
 TEST_CASE_FIXTURE(IrCmdFixture, "operand_errors")
@@ -246,30 +177,27 @@ TEST_CASE_FIXTURE(IrCmdFixture, "facts_generate_the_effects_table")
             "  (facts (writes (vm-slots (+ ra 3) (low-byte n))) (reads (vm-slot ra) (tvalue k) (vm-slots (+ ra 1) m)) (writes (vm-slot ra))\n"
             "    (may-write (vm-slots (+ ra 2) :to-top)))\n"
             "  (heap-effects :reenters-vm)\n"
-            "  (lowering (any5 ra k n m fail)))\n"
+            "  (lowering (Abort)))\n"
             // A load whose result is the field restores the location; one whose result isn't doesn't
-            "(define-ircmd LOADD (operands [a :Rn|:Kn]) (result :double) (class :value) (facts (reads (tvalue a :value :double))) (lowering (any1 a)))\n"
-            "(define-ircmd CMPT (operands [a :Rn|:tag]) (result :int) (class :value) (facts (reads (tvalue a :tag))) (lowering (any1 a)))\n"
+            "(define-ircmd LOADD (operands [a :Rn|:Kn]) (result :double) (class :value) (facts (reads (tvalue a :value :double))) (lowering 0.0))\n"
+            "(define-ircmd CMPT (operands [a :Rn|:tag]) (result :int) (class :value) (facts (reads (tvalue a :tag))) (lowering 0))\n"
             // Stores pick the dead-store engine, the store hint and the location effects from the field
-            "(define-ircmd STORED (operands [a :Rn|:inst-pointer] [val :double]) (class :effect) (facts (writes (tvalue a :value :double) val)) (lowering (any1 a)))\n"
-            "(define-ircmd STORET (operands [a :Rn] [tag :tag]) (class :effect) (facts (writes (tvalue a :tag) tag)) (lowering (any1 a)))\n"
+            "(define-ircmd STORED (operands [a :Rn|:inst-pointer] [val :double]) (class :effect) (facts (writes (tvalue a :value :double) val)) (lowering (Abort)))\n"
+            "(define-ircmd STORET (operands [a :Rn] [tag :tag]) (class :effect) (facts (writes (tvalue a :tag) tag)) (lowering (Abort)))\n"
             "(define-ircmd STORES (operands [a :Rn|:pointer] [tag :tag] [val :int] [offset :const-int]) (class :effect)\n"
-            "  (facts (writes (tvalue a offset :split) tag val)) (lowering (any1 a)))\n"
+            "  (facts (writes (tvalue a offset :split) tag val)) (lowering (Abort)))\n"
             // Buffers and allocations
-            "(define-ircmd BUFW (operands [a :pointer] [b :int] [v :int]) (class :effect) (facts (writes (buffer a b 4) v)) (heap-effects :may-gc) (lowering (any1 a)))\n"
-            "(define-ircmd ALLOC (operands [a :int]) (result :pointer) (class :value) (facts (allocates :buffer-data)) (lowering (any1 a)))\n"
-            "(define-ircmd CHK (operands [a :tag] [b :const-tag] [fail :block]) (class :guard) (facts (establishes (tag-of a) b)) (lowering (any1 a)))\n"
+            "(define-ircmd BUFW (operands [a :pointer] [b :int] [v :int]) (class :effect) (facts (writes (buffer a b 4) v)) (heap-effects :may-gc) (lowering (Abort)))\n"
+            "(define-ircmd ALLOC (operands [a :int]) (result :pointer) (class :value) (facts (allocates :buffer-data)) (lowering 0))\n"
+            "(define-ircmd CHK (operands [a :tag] [b :const-tag] [fail :block]) (class :guard) (facts (establishes (tag-of a) b)) (lowering (Abort)))\n"
             // Kills, and results recomputed from an operand
             "(define-ircmd DEAD (operands [a :Rn] [n :const-int]) (class :pseudo) (facts (no-vm-effects) (kills (vm-slots a n))))\n"
-            "(define-ircmd TONUM (operands [a :int]) (result :double) (class :value) (lowering (any1 a)))\n"
-            "(define-ircmd TOINT (operands [a :double]) (result :int) (class :value) (facts (rematerialize-from a :via TONUM)) (lowering (any1 a)))\n"
+            "(define-ircmd TONUM (operands [a :int]) (result :double) (class :value) (lowering 0.0))\n"
+            "(define-ircmd TOINT (operands [a :double]) (result :int) (class :value) (facts (rematerialize-from a :via TONUM)) (lowering 0))\n"
             // Class defaults and overrides
-            "(define-ircmd UPV (operands [a :Rn]) (class :effect) (facts (no-vm-effects)) (lowering (any1 a)))\n"
-            "(define-ircmd JMP (operands [a :block]) (class :terminator) (lowering (any1l a)))\n"
-            "(define-ircmd LOOP (operands [a :block]) (class :terminator) (dead-store :visit) (lowering (any1l a)))\n"
-            "(define-rule (any5 [a :op] [b :op] [c :op] [d :op] [e :label]) (unsupported!))\n"
-            "(define-rule (any1 [a :op]) (unsupported!))\n"
-            "(define-rule (any1l [a :label]) (unsupported!))");
+            "(define-ircmd UPV (operands [a :Rn]) (class :effect) (facts (no-vm-effects)) (lowering (Abort)))\n"
+            "(define-ircmd JMP (operands [a :block]) (class :terminator) (lowering (Abort)))\n"
+            "(define-ircmd LOOP (operands [a :block]) (class :terminator) (dead-store :visit) (lowering (Abort)))");
     requireOk();
 
     std::string effects = read("out/IrCmdEffects.h");
@@ -319,11 +247,10 @@ TEST_CASE_FIXTURE(IrCmdFixture, "conditional_facts_generate_variants_and_a_selec
             "(define-ircmd NEWOBJ (operands [ra :Rn] [form :const-int] [count :const-int]) (class :effect)\n"
             "  (facts (cond [(= form :FORM_INIT) (when (> count 0) (reads (vm-slots (+ ra 3) count))) (writes (vm-slots ra 3))]\n"
             "               [else (writes (vm-slot ra))]))\n"
-            "  (lowering (any1 ra)))\n"
+            "  (lowering (Abort)))\n"
             "(define-ircmd CAP (operands [ra :Rn|:UPn] [kind :const-uint]) (class :effect)\n"
             "  (facts (reads (tvalue ra)) (when (and (= kind 1) (not (kind? ra :VmUpvalue))) (captures (vm-slot ra))))\n"
-            "  (lowering (any1 ra)))\n"
-            "(define-rule (any1 [a :op]) (unsupported!))");
+            "  (lowering (Abort)))");
     requireOk();
 
     std::string effects = read("out/IrCmdEffects.h");
@@ -367,9 +294,8 @@ TEST_CASE_FIXTURE(IrCmdFixture, "fact_and_effect_errors")
         const char* error;
     };
 
-    std::string rule = "(define-rule (any1 [a :op]) (unsupported!))\n";
     auto cmd = [&](const std::string& operands, const std::string& clauses, const char* cls = ":effect") {
-        return "(define-ircmd C (operands " + operands + ") (class " + cls + ") " + clauses + " (lowering (any1 a)))\n" + rule;
+        return "(define-ircmd C (operands " + operands + ") (class " + cls + ") " + clauses + " (lowering (Abort)))\n";
     };
 
     Case cases[] = {
@@ -405,7 +331,6 @@ TEST_CASE_FIXTURE(IrCmdFixture, "fact_and_effect_errors")
         {"unknown condition", cmd("[a :Rn] [n :const-int]", "(facts (when (like n 1) (reads (vm-slot a))))"), "Unknown condition 'like'"},
         {"unknown operand kind", cmd("[a :Rn] [n :const-int]", "(facts (when (kind? a :Bogus) (reads (vm-slot a))))"), "(kind? <operand> :<IrOpKind>)"},
         {"compared value", cmd("[a :Rn] [n :const-int]", "(facts (when (= n :lower) (reads (vm-slot a))))"), "Compared values are numbers or C++ constants"},
-        {"cond clause shape", cmd("[a :Rn] [n :const-int]", "(facts (cond ((= n 1) (reads (vm-slot a)))))"), "cond clauses look like [<condition> <fact>...]"},
         {"else not last", cmd("[a :Rn] [n :const-int]", "(facts (cond [else (reads (vm-slot a))] [(= n 1) (reads (vm-slot a))]))"),
             "[else ...] has to be the last cond clause"},
         {"whole-command fact in a branch", cmd("[a :Rn] [n :const-int]", "(facts (when (= n 1) (no-vm-effects)))"), "(no-vm-effects ...) can't be inside when/cond"},
@@ -414,7 +339,7 @@ TEST_CASE_FIXTURE(IrCmdFixture, "fact_and_effect_errors")
         {"captures one register", cmd("[a :Rn]", "(facts (reads (vm-slot a)) (captures (vm-slots a 2)))"), "captures takes (vm-slot r)"},
         {"kills registers", cmd("[a :Rn]", "(facts (reads (vm-slot a)) (kills (tvalue a)))"), "kills takes (vm-slot r) or (vm-slots r count)"},
         {"rematerialize needs a result", cmd("[a :double]", "(facts (rematerialize-from a :via C))"), "C has no result to rematerialize"},
-        {"rematerialize names a command", "(define-ircmd C (operands [a :double]) (result :int) (class :value) (facts (rematerialize-from a :via NOPE)) (lowering (any1 a)))\n" + rule,
+        {"rematerialize names a command", "(define-ircmd C (operands [a :double]) (result :int) (class :value) (facts (rematerialize-from a :via NOPE)) (lowering 0))\n",
             "C: (rematerialize-from ... :via NOPE) names no define-ircmd"},
         // What's left of the explicit clauses
         {"vm-effects is gone", cmd("[a :Rn]", "(vm-effects (hook x))"), "Unknown define-ircmd clause 'vm-effects'"},
@@ -459,7 +384,7 @@ TEST_CASE_FIXTURE(IrCmdFixture, "public_headers_can_go_to_a_separate_directory")
     requireOk();
     CHECK(fs::exists(dir / "public/IrCmd.h"));
     CHECK(fs::exists(dir / "public/IrCmdInfo.h"));
-    CHECK(fs::exists(dir / "out/LoweringRulesA64.h"));
+    CHECK(fs::exists(dir / "public/IrCmdEffects.h"));
     CHECK(!fs::exists(dir / "out/IrCmd.h"));
 }
 

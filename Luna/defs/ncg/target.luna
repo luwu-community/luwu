@@ -1,0 +1,29 @@
+;; ============================================================================
+;; The target being generated for, and the classes of template arguments
+;; ============================================================================
+
+(define %target #f) ; :a64 or :x64 while generating, else #f
+
+~ Whether code is being generated for target (:a64 or :x64)
+(define (target? target)
+  (unless %target (error "target? is only known while generating for a target"))
+  (equal? target %target))
+
+~ (thunk), with code generated for target (:a64 or :x64)
+(define (%with-target target thunk)
+  (let ([saved %target])
+    (set! %target target)
+    (let ([value (thunk)])
+      (set! %target saved)
+      value)))
+
+~ Whether v is an IR operand: a register or a constant, which is known only when lowering
+(define (ir? v) (equal? (cpp-type v) "IrOp"))
+
+~ Whether v is a register
+(define (reg? v) (if (member? (cpp-type v) '("RegisterA64" "RegisterX64")) #t #f))
+
+~ Whether v is a constant: a number, a keyword naming one, or a lowering-time C++ number
+(define (lit? v)
+  (or (number? v) (bool? v) (keyword? v)
+      (let ([t (cpp-type v)]) (and t (or (cpp-integral-type? t) (member? t '("double" "float")))))))

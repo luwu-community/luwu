@@ -5,7 +5,8 @@
   (operands [a :tvalue] [b :tvalue] [c :tvalue] [d :tvalue])
   (result :tvalue)
   (class :value)
-  (lowering (select-vec a b c d)))
+  (lowering
+    (Select :V128 (FCmp :eq :V128 c d) b a)))
 
 ~ Add/Sub/Mul/Div/Idiv two vectors
 ~ A, B: TValue (vector)
@@ -13,7 +14,8 @@
   (operands [a :tvalue] [b :tvalue])
   (result :tvalue)
   (class :value)
-  (lowering (add-vec a b)))
+  (lowering
+    (FAdd :V128 a b)))
 
 ~ Add/Sub/Mul/Div/Idiv two vectors
 ~ A, B: TValue (vector)
@@ -21,7 +23,8 @@
   (operands [a :tvalue] [b :tvalue])
   (result :tvalue)
   (class :value)
-  (lowering (sub-vec a b)))
+  (lowering
+    (FSub :V128 a b)))
 
 ~ Add/Sub/Mul/Div/Idiv two vectors
 ~ A, B: TValue (vector)
@@ -29,7 +32,8 @@
   (operands [a :tvalue] [b :tvalue])
   (result :tvalue)
   (class :value)
-  (lowering (mul-vec a b)))
+  (lowering
+    (FMul :V128 a b)))
 
 ~ Add/Sub/Mul/Div/Idiv two vectors
 ~ A, B: TValue (vector)
@@ -37,7 +41,8 @@
   (operands [a :tvalue] [b :tvalue])
   (result :tvalue)
   (class :value)
-  (lowering (div-vec a b)))
+  (lowering
+    (FDiv :V128 a b)))
 
 ~ Add/Sub/Mul/Div/Idiv two vectors
 ~ A, B: TValue (vector)
@@ -45,7 +50,8 @@
   (operands [a :tvalue] [b :tvalue])
   (result :tvalue)
   (class :value)
-  (lowering (idiv-vec a b)))
+  (lowering
+    (Floor :V128 (FDiv :V128 a b))))
 
 ~ Lanewise A * B + C
 ~ A, B, C: TValue (vector)
@@ -53,7 +59,8 @@
   (operands [a :tvalue] [b :tvalue] [c :tvalue])
   (result :tvalue)
   (class :value)
-  (lowering (muladd-vec a b c)))
+  (lowering
+    (Fma :V128 a b c)))
 
 ~ Negate a vector
 ~ A: TValue (vector)
@@ -61,7 +68,8 @@
   (operands [a :tvalue])
   (result :tvalue)
   (class :value)
-  (lowering (unm-vec a)))
+  (lowering
+    (FNeg :V128 a)))
 
 ~ Get the minimum/maximum of two vector elements
 ~ If one of the element values is NaN, 'B' is returned as the result
@@ -70,7 +78,8 @@
   (operands [a :tvalue] [b :tvalue])
   (result :tvalue)
   (class :value)
-  (lowering (min-vec a b)))
+  (lowering
+    (FMin :V128 a b)))
 
 ~ Get the minimum/maximum of two vector elements
 ~ If one of the element values is NaN, 'B' is returned as the result
@@ -79,7 +88,8 @@
   (operands [a :tvalue] [b :tvalue])
   (result :tvalue)
   (class :value)
-  (lowering (max-vec a b)))
+  (lowering
+    (FMax :V128 a b)))
 
 ~ Round vector elements to negative infinity
 ~ A: TValue (vector)
@@ -87,7 +97,8 @@
   (operands [a :tvalue])
   (result :tvalue)
   (class :value)
-  (lowering (floor-vec a)))
+  (lowering
+    (Floor :V128 a)))
 
 ~ Round vector elements to positive infinity
 ~ A: TValue (vector)
@@ -95,7 +106,8 @@
   (operands [a :tvalue])
   (result :tvalue)
   (class :value)
-  (lowering (ceil-vec a)))
+  (lowering
+    (Ceil :V128 a)))
 
 ~ Get absolute value of vector elements
 ~ A: TValue (vector)
@@ -103,7 +115,8 @@
   (operands [a :tvalue])
   (result :tvalue)
   (class :value)
-  (lowering (abs-vec a)))
+  (lowering
+    (FAbs :V128 a)))
 
 ~ Compute dot product between two vectors as a float number (use FLOAT_TO_NUM to convert to double)
 ~ A, B: TValue (vector)
@@ -111,7 +124,9 @@
   (operands [a :tvalue] [b :tvalue])
   (result :float)
   (class :value)
-  (lowering (dot-vec a b)))
+  (lowering
+    (let* ([products (FMul :V128 a b)])
+      (FAdd :F32 (FAdd :F32 (ExtractLane :F32 products 0) (ExtractLane :F32 products 1)) (ExtractLane :F32 products 2)))))
 
 ~ Extract a component of a vector (use FLOAT_TO_NUM to convert to double)
 ~ A: TValue (vector)
@@ -120,7 +135,8 @@
   (operands [a :tvalue] [lane :int])
   (result :float)
   (class :value)
-  (lowering (extract-vec a lane)))
+  (lowering
+    (ExtractLane :F32 a (int-val lane))))
 
 ~ Converts a float number to a vector with the value in X/Y/Z (use NUM_TO_FLOAT to convert from double)
 ~ A: float
@@ -128,7 +144,8 @@
   (operands [a :float])
   (result :tvalue)
   (class :value)
-  (lowering (float-to-vec a)))
+  (lowering
+    (Splat a)))
 
 ~ Adds VECTOR type tag to a vector, preserving X/Y/Z components
 ~ A: TValue
@@ -136,4 +153,5 @@
   (operands [a :tvalue])
   (result :tvalue)
   (class :value)
-  (lowering (tag-vector a)))
+  (lowering
+    (InsertLane :I32 a 3 :LUA_TVECTOR)))

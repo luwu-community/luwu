@@ -4,13 +4,15 @@
   (operands [buf :inst-pointer])
   (result :pointer)
   (class :value)
-  (lowering (load-buffer-data buf)))
+  (lowering
+    (LoadPtr buf :Buffer.data)))
 
 ~ Load current environment table
 (define-ircmd LOAD_ENV
   (result :pointer)
   (class :value)
-  (lowering (load-env)))
+  (lowering
+    (LoadPtr (Root :Closure) :Closure.env)))
 
 ~ Get pointer (TValue) to Closure upvalue.
 ~ A: pointer or undef (Closure)
@@ -20,7 +22,11 @@
   (operands [cl :pointer|:undef] [upval :UPn])
   (result :pointer)
   (class :value)
-  (lowering (get-closure-upval-addr cl upval)))
+  (lowering
+    ~ the current closure's upvalues when there's no closure operand
+    (choose (op-kind? cl :Undef)
+            (AddressOf (Index (Field (Root :Closure) :Closure.l.uprefs) upval sizeof-TValue))
+            (AddressOf (Index (Field cl :Closure.l.uprefs) upval sizeof-TValue)))))
 
 ~ Luwu Classes (rfcs/classes): load the class the currently executing closure's proto belongs
 ~ to (`Closure::l.p->ownerclass`), or NULL when it belongs to none. Backs the
@@ -31,7 +37,8 @@
 (define-ircmd LOAD_OWNER_CLASS
   (result :pointer)
   (class :value)
-  (lowering (load-owner-class)))
+  (lowering
+    (LoadPtr (Root :Closure) :Closure.l.p :Proto.ownerclass)))
 
 ~ Add/Sub two integers together
 ~ A, B: int
@@ -39,7 +46,8 @@
   (operands [a :int] [b :int])
   (result :int)
   (class :value)
-  (lowering (add-int a b)))
+  (lowering
+    (Add :I32 a b)))
 
 ~ Add/Sub two integers together
 ~ A, B: int
@@ -47,7 +55,8 @@
   (operands [a :int] [b :int])
   (result :int)
   (class :value)
-  (lowering (sub-int a b)))
+  (lowering
+    (Sub :I32 a b)))
 
 ~ Add two int64s
 ~ A, B: int64
@@ -55,7 +64,8 @@
   (operands [a :int64] [b :int64])
   (result :int64)
   (class :value)
-  (lowering (add-int64 a b)))
+  (lowering
+    (Add :I64 a b)))
 
 ~ Subtract two int64s
 ~ A, B: int64
@@ -63,7 +73,8 @@
   (operands [a :int64] [b :int64])
   (result :int64)
   (class :value)
-  (lowering (sub-int64 a b)))
+  (lowering
+    (Sub :I64 a b)))
 
 ~ Multiply two int64s
 ~ A, B: int64
@@ -71,7 +82,8 @@
   (operands [a :int64] [b :int64])
   (result :int64)
   (class :value)
-  (lowering (mul-int64 a b)))
+  (lowering
+    (Mul :I64 a b)))
 
 ~ Sign extend an 8-bit value
 ~ A: int
@@ -79,7 +91,8 @@
   (operands [val :inst-int])
   (result :int)
   (class :value)
-  (lowering (sexti8-int val)))
+  (lowering
+    (Extend :s :8 :I32 val)))
 
 ~ Sign extend a 16-bit value
 ~ A: int
@@ -87,7 +100,8 @@
   (operands [val :inst-int])
   (result :int)
   (class :value)
-  (lowering (sexti16-int val)))
+  (lowering
+    (Extend :s :16 :I32 val)))
 
 ~ Add/Sub/Mul/Div/Idiv/Mod two double numbers
 ~ A, B: double
@@ -98,7 +112,8 @@
   (result :double)
   (class :value)
   (location-tracking :none)
-  (lowering (add-num a b)))
+  (lowering
+    (FAdd :F64 a b)))
 
 ~ Add/Sub/Mul/Div/Idiv/Mod two double numbers
 ~ A, B: double
@@ -109,7 +124,8 @@
   (result :double)
   (class :value)
   (location-tracking :none)
-  (lowering (sub-num a b)))
+  (lowering
+    (FSub :F64 a b)))
 
 ~ Add/Sub/Mul/Div/Idiv/Mod two double numbers
 ~ A, B: double
@@ -120,7 +136,8 @@
   (result :double)
   (class :value)
   (location-tracking :none)
-  (lowering (mul-num a b)))
+  (lowering
+    (FMul :F64 a b)))
 
 ~ Add/Sub/Mul/Div/Idiv/Mod two double numbers
 ~ A, B: double
@@ -131,7 +148,8 @@
   (result :double)
   (class :value)
   (location-tracking :none)
-  (lowering (div-num a b)))
+  (lowering
+    (FDiv :F64 a b)))
 
 ~ Add/Sub/Mul/Div/Idiv/Mod two double numbers
 ~ A, B: double
@@ -142,7 +160,8 @@
   (result :double)
   (class :value)
   (location-tracking :none)
-  (lowering (idiv-num a b)))
+  (lowering
+    (Floor :F64 (FDiv :F64 a b))))
 
 ~ Get the minimum/maximum of two numbers
 ~ If one of the values is NaN, 'B' is returned as the result
@@ -154,7 +173,8 @@
   (result :double)
   (class :value)
   (location-tracking :none)
-  (lowering (min-num a b)))
+  (lowering
+    (FMin :F64 a b)))
 
 ~ Get the minimum/maximum of two numbers
 ~ If one of the values is NaN, 'B' is returned as the result
@@ -166,7 +186,8 @@
   (result :double)
   (class :value)
   (location-tracking :none)
-  (lowering (max-num a b)))
+  (lowering
+    (FMax :F64 a b)))
 
 ~ Round number to negative infinity (math.floor)
 ~ A: double
@@ -177,7 +198,8 @@
   (result :double)
   (class :value)
   (location-tracking :none)
-  (lowering (floor-num a)))
+  (lowering
+    (Floor :F64 a)))
 
 ~ Round number to positive infinity (math.ceil)
 ~ A: double
@@ -188,7 +210,8 @@
   (result :double)
   (class :value)
   (location-tracking :none)
-  (lowering (ceil-num a)))
+  (lowering
+    (Ceil :F64 a)))
 
 ~ Get square root of the argument (math.sqrt)
 ~ A: double
@@ -199,7 +222,8 @@
   (result :double)
   (class :value)
   (location-tracking :none)
-  (lowering (sqrt-num a)))
+  (lowering
+    (FSqrt :F64 a)))
 
 ~ Add/Sub/Mul/Div/Idiv/Mod two float numbers
 ~ A, B: float
@@ -207,7 +231,8 @@
   (operands [a :float] [b :float])
   (result :float)
   (class :value)
-  (lowering (add-float a b)))
+  (lowering
+    (FAdd :F32 a b)))
 
 ~ Add/Sub/Mul/Div/Idiv/Mod two float numbers
 ~ A, B: float
@@ -215,7 +240,8 @@
   (operands [a :float] [b :float])
   (result :float)
   (class :value)
-  (lowering (sub-float a b)))
+  (lowering
+    (FSub :F32 a b)))
 
 ~ Add/Sub/Mul/Div/Idiv/Mod two float numbers
 ~ A, B: float
@@ -223,7 +249,8 @@
   (operands [a :float] [b :float])
   (result :float)
   (class :value)
-  (lowering (mul-float a b)))
+  (lowering
+    (FMul :F32 a b)))
 
 ~ Add/Sub/Mul/Div/Idiv/Mod two float numbers
 ~ A, B: float
@@ -231,7 +258,8 @@
   (operands [a :float] [b :float])
   (result :float)
   (class :value)
-  (lowering (div-float a b)))
+  (lowering
+    (FDiv :F32 a b)))
 
 ~ Get the minimum/maximum of two numbers
 ~ If one of the values is NaN, 'B' is returned as the result
@@ -240,7 +268,8 @@
   (operands [a :float] [b :float])
   (result :float)
   (class :value)
-  (lowering (min-float a b)))
+  (lowering
+    (FMin :F32 a b)))
 
 ~ Get the minimum/maximum of two numbers
 ~ If one of the values is NaN, 'B' is returned as the result
@@ -249,7 +278,8 @@
   (operands [a :float] [b :float])
   (result :float)
   (class :value)
-  (lowering (max-float a b)))
+  (lowering
+    (FMax :F32 a b)))
 
 ~ Round number to negative infinity
 ~ A: float
@@ -257,7 +287,8 @@
   (operands [a :float])
   (result :float)
   (class :value)
-  (lowering (floor-float a)))
+  (lowering
+    (Floor :F32 a)))
 
 ~ Round number to positive infinity
 ~ A: float
@@ -265,7 +296,8 @@
   (operands [a :float])
   (result :float)
   (class :value)
-  (lowering (ceil-float a)))
+  (lowering
+    (Ceil :F32 a)))
 
 ~ Get square root of the argument
 ~ A: float
@@ -273,7 +305,8 @@
   (operands [a :float])
   (result :float)
   (class :value)
-  (lowering (sqrt-float a)))
+  (lowering
+    (FSqrt :F32 a)))
 
 ~ Jump if pointers are equal
 ~ A, B: pointer (*)
@@ -282,7 +315,8 @@
 (define-ircmd JUMP_EQ_POINTER
   (operands [a :inst-pointer] [b :inst-pointer] [then-block :block] [else-block :block])
   (class :terminator)
-  (lowering (jump-eq-pointer a b then-block else-block)))
+  (lowering
+    (Branch (ICmp :eq :Ptr a b) then-block else-block)))
 
 ~ Get string length
 ~ A: pointer (string)
@@ -290,7 +324,8 @@
   (operands [str :inst-pointer])
   (result :int)
   (class :value)
-  (lowering (string-len str)))
+  (lowering
+    (Load :I32 (Field str :TString.len))))
 
 ~ Check if buffer is frozen
 ~ A: pointer (Buffer)
@@ -298,7 +333,8 @@
   (operands [buf :inst-pointer])
   (result :int)
   (class :value)
-  (lowering (buffer-isfrozen buf)))
+  (lowering
+    (Select :I32 (ICmp :eq :I32 (Load :U8 (Field buf :Buffer.mode)) :LUA_BHOST_IMMUTABLE) 1 0)))
 
 ~ Convert integer into a double number
 ~ A: int
@@ -306,7 +342,8 @@
   (operands [a :int])
   (result :double)
   (class :value)
-  (lowering (int-to-num a)))
+  (lowering
+    (IntToFloat :s :F64 :I32 a)))
 
 ~ Convert int64 into a double number
 ~ A: int64
@@ -314,7 +351,8 @@
   (operands [a :int64])
   (result :double)
   (class :value)
-  (lowering (int64-to-num a)))
+  (lowering
+    (IntToFloat :s :F64 :I64 a)))
 
 ~ Convert unsigned integer into a double number
 ~ A: uint
@@ -322,7 +360,8 @@
   (operands [a :int])
   (result :double)
   (class :value)
-  (lowering (uint-to-num a)))
+  (lowering
+    (IntToFloat :u :F64 :I32 a)))
 
 ~ Convert unsigned integer into a float number
 ~ A: uint
@@ -330,7 +369,8 @@
   (operands [a :int])
   (result :float)
   (class :value)
-  (lowering (uint-to-float a)))
+  (lowering
+    (IntToFloat :u :F32 :I32 a)))
 
 ~ Converts a double number to an integer. 'A' may be any representable integer in a double.
 ~ A: double
@@ -339,7 +379,8 @@
   (result :int)
   (class :value)
   (facts (rematerialize-from a :via INT_TO_NUM))
-  (lowering (num-to-int a)))
+  (lowering
+    (FloatToInt :I32 :F64 a)))
 
 ~ Converts a double number to a 64 bit integer. 'A' may be any representable integer in a double.
 ~ A: double
@@ -347,7 +388,8 @@
   (operands [a :double])
   (result :int64)
   (class :value)
-  (lowering (num-to-int64 a)))
+  (lowering
+    (FloatToInt :I64 :F64 a)))
 
 ~ Converts a double number to an unsigned integer. For out-of-range values of 'A', the result is arch-specific.
 ~ A: double
@@ -357,7 +399,9 @@
   (class :value)
   (flags :dirty-high-bits)
   (facts (rematerialize-from a :via UINT_TO_NUM))
-  (lowering (num-to-uint a)))
+  (lowering
+    ~ through a 64-bit integer: doubles above INT32_MAX still convert
+    (Reduce (FloatToInt :I64 :F64 a))))
 
 ~ Converts a float number to a double
 ~ A: float
@@ -365,7 +409,8 @@
   (operands [a :float])
   (result :double)
   (class :value)
-  (lowering (float-to-num a)))
+  (lowering
+    (FloatConvert :F64 a)))
 
 ~ Converts a double number to a float
 ~ A: double
@@ -373,7 +418,8 @@
   (operands [a :double])
   (result :float)
   (class :value)
-  (lowering (num-to-float a)))
+  (lowering
+    (FloatConvert :F32 a)))
 
 ~ Clear high register bits of an unsigned integer register. Used to sanitize value of 'producesDirtyHighRegisterBits' instructions.
 ~ A: uint
@@ -381,14 +427,16 @@
   (operands [val :inst-int])
   (result :int)
   (class :value)
-  (lowering (truncate-uint val)))
+  (lowering
+    (Reduce val)))
 
 ~ Restore stack top (L->top) to point to the function stack top (L->ci->top)
 ~ This is used to recover after calling a variadic function
 (define-ircmd ADJUST_STACK_TO_TOP
   (class :effect)
   (facts (no-vm-effects))
-  (lowering (adjust-stack-to-top)))
+  (lowering
+    (Store :Ptr (Field (Root :State) :lua_State.top) (LoadPtr (Root :State) :lua_State.ci :CallInfo.top))))
 
 ~ Check that fastcall builtin function invocation was successful (negative result count jumps to fallback)
 ~ A: int (result count)
@@ -396,7 +444,8 @@
 (define-ircmd CHECK_FASTCALL_RES
   (operands [res :inst-int] [fallback :block])
   (class :guard)
-  (lowering (check-fastcall-res res fallback)))
+  (lowering
+    (Guard (ICmp :sge :I32 res 0) fallback)))
 
 ~ Guard against tag mismatch
 ~ A, B: tag
@@ -411,7 +460,11 @@
   (class :guard)
   (facts (establishes (tag-of a) b))
   (location-tracking :none)
-  (lowering (check-tag a b fallback)))
+  (lowering
+    ~ a VM register or constant's tag is read from it (X64, or with aborting checks)
+    (choose (gen:|| (op-kind? a :VmReg) (op-kind? a :VmConst))
+            (Guard (ICmp :eq :I32 (Load :I32 (Field a :TValue.tt)) b) fallback)
+            (Guard (ICmp :eq :I32 a b) fallback))))
 
 ~ Guard against readonly table
 ~ A: pointer (LuaTable)
@@ -420,7 +473,8 @@
 (define-ircmd CHECK_READONLY
   (operands [table :inst-pointer] [fallback :block|:vmexit|:undef])
   (class :guard)
-  (lowering (check-readonly table fallback)))
+  (lowering
+    (Guard (ICmp :eq :I32 (Load :U8 (Field table :LuaTable.readonly)) 0) fallback)))
 
 ~ Guard against table having a metatable
 ~ A: pointer (LuaTable)
@@ -429,7 +483,8 @@
 (define-ircmd CHECK_NO_METATABLE
   (operands [table :inst-pointer] [fallback :block|:vmexit|:undef])
   (class :guard)
-  (lowering (check-no-metatable table fallback)))
+  (lowering
+    (Guard (ICmp :eq :Ptr (LoadPtr table :LuaTable.metatable) 0) fallback)))
 
 ~ Guard against table node with a linked next node to ensure that our lookup hits the main position of the key
 ~ A: pointer (LuaNode)
@@ -438,7 +493,8 @@
 (define-ircmd CHECK_NODE_NO_NEXT
   (operands [node :inst-pointer] [fallback :block|:vmexit|:undef])
   (class :guard)
-  (lowering (check-node-no-next node fallback)))
+  (lowering
+    (Guard (ICmp :eq :I32 (ShrU :I32 (Load :I32 (Field (Field node :LuaNode.key) :kOffsetOfTKeyTagNext)) :kTKeyTagBits) 0) fallback)))
 
 ~ Guard against table node with 'nil' value
 ~ A: pointer (LuaNode)
@@ -447,7 +503,8 @@
 (define-ircmd CHECK_NODE_VALUE
   (operands [node :inst-pointer] [fallback :block|:vmexit|:undef])
   (class :guard)
-  (lowering (check-node-value node fallback)))
+  (lowering
+    (Guard (ICmp :ne :I32 (Load :I32 (Field node :LuaNode.val.tt)) :LUA_TNIL) fallback)))
 
 ~ Guard against a Luwu Classes object not being an instance of a specific class (see rfcs/classes)
 ~ A: pointer (LuauObject)
@@ -457,7 +514,8 @@
 (define-ircmd CHECK_OBJECT_CLASS
   (operands [obj :inst-pointer] [expected-class :inst-pointer] [fallback :block|:vmexit|:undef])
   (class :guard)
-  (lowering (check-object-class obj expected-class fallback)))
+  (lowering
+    (Guard (ICmp :eq :Ptr (LoadPtr obj :LuauObject.lclass) expected-class) fallback)))
 
 ~ Address of an instance member at a *known* offset on a Luwu Classes object, for a receiver whose
 ~ class the compiler has proven (a method's or inlined method's `self`, or a local in a `class.isinstance`
@@ -471,7 +529,8 @@
   (operands [obj :inst-pointer] [offset :const-uint])
   (result :pointer)
   (class :value)
-  (lowering (object-member-addr obj offset)))
+  (lowering
+    (AddressOf (Index (Field obj :LUAR_OBJECT_MEMBERS_OFFSET) offset sizeof-TValue))))
 
 ~ Guard against writing to a buffer whose contents can't be modified (Buffer::mode is LUA_BHOST_IMMUTABLE)
 ~ A: pointer (buffer)
@@ -480,7 +539,8 @@
 (define-ircmd CHECK_BUFFER_MUTABLE
   (operands [buf :inst-pointer] [fallback :block|:vmexit|:undef])
   (class :guard)
-  (lowering (check-buffer-mutable buf fallback)))
+  (lowering
+    (Guard (ICmp :ne :I32 (Load :U8 (Field buf :Buffer.mode)) :LUA_BHOST_IMMUTABLE) fallback)))
 
 ~ Guard against userdata tag mismatch
 ~ A: pointer (userdata)
@@ -490,14 +550,16 @@
 (define-ircmd CHECK_USERDATA_TAG
   (operands [udata :inst-pointer] [tag :const-int] [fallback :block|:vmexit|:undef])
   (class :guard)
-  (lowering (check-userdata-tag udata tag fallback)))
+  (lowering
+    (Guard (ICmp :eq :I32 (Load :U8 (Field udata :Udata.tag)) tag) fallback)))
 
 ~ Update savedpc value
 ~ A: unsigned int (pcpos)
 (define-ircmd SET_SAVEDPC
   (operands [pc-offset :const-uint])
   (class :effect)
-  (lowering (set-savedpc pc-offset)))
+  (lowering
+    (Store :Ptr (Field (LoadPtr (Root :State) :lua_State.ci) :CallInfo.savedpc) (AddressOf (Index (Root :Code) pc-offset sizeof-Instruction)))))
 
 ~ Performs bitwise and/xor/or on two int64
 ~ A, B: int64
@@ -505,7 +567,8 @@
   (operands [a :int64] [b :int64])
   (result :int64)
   (class :value)
-  (lowering (bitand-int64 a b)))
+  (lowering
+    (And :I64 a b)))
 
 ~ Performs bitwise and/xor/or on two int64
 ~ A, B: int64
@@ -513,7 +576,8 @@
   (operands [a :int64] [b :int64])
   (result :int64)
   (class :value)
-  (lowering (bitxor-int64 a b)))
+  (lowering
+    (Xor :I64 a b)))
 
 ~ Performs bitwise and/xor/or on two int64
 ~ A, B: int64
@@ -521,7 +585,8 @@
   (operands [a :int64] [b :int64])
   (result :int64)
   (class :value)
-  (lowering (bitor-int64 a b)))
+  (lowering
+    (Or :I64 a b)))
 
 ~ Performs bitwise not on an int64
 ~ A: int64
@@ -529,7 +594,8 @@
   (operands [val :int64])
   (result :int64)
   (class :value)
-  (lowering (bitnot-int64 val)))
+  (lowering
+    (Not :I64 val)))
 
 ~ Swap byte order in A
 ~ A: int64
@@ -537,7 +603,8 @@
   (operands [val :int64])
   (result :int64)
   (class :value)
-  (lowering (byteswap-int64 val)))
+  (lowering
+    (Bswap :I64 val)))
 
 ~ Performs bitwise and/xor/or on two unsigned integers
 ~ A, B: int
@@ -545,7 +612,8 @@
   (operands [a :int] [b :int])
   (result :int)
   (class :value)
-  (lowering (bitand-uint a b)))
+  (lowering
+    (And :I32 a b)))
 
 ~ Performs bitwise and/xor/or on two unsigned integers
 ~ A, B: int
@@ -553,7 +621,8 @@
   (operands [a :int] [b :int])
   (result :int)
   (class :value)
-  (lowering (bitxor-uint a b)))
+  (lowering
+    (Xor :I32 a b)))
 
 ~ Performs bitwise and/xor/or on two unsigned integers
 ~ A, B: int
@@ -561,7 +630,8 @@
   (operands [a :int] [b :int])
   (result :int)
   (class :value)
-  (lowering (bitor-uint a b)))
+  (lowering
+    (Or :I32 a b)))
 
 ~ Performs bitwise not on an unsigned integer
 ~ A: int
@@ -569,7 +639,8 @@
   (operands [val :int])
   (result :int)
   (class :value)
-  (lowering (bitnot-uint val)))
+  (lowering
+    (Not :I32 val)))
 
 ~ Swap byte order in A
 ~ A: int
@@ -577,4 +648,5 @@
   (operands [val :int])
   (result :int)
   (class :value)
-  (lowering (byteswap-uint val)))
+  (lowering
+    (Bswap :I32 val)))

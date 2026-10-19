@@ -5,7 +5,8 @@
   (result :int)
   (class :value)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Reads table array metadata: TABLE_SETNUM can grow the array and change the length
-  (lowering (table-len table)))
+  (lowering
+    (native-call :I32 :luaH_getn :Ptr table)))
 
 ~ Allocate new table
 ~ A: unsigned int (array element count)
@@ -14,7 +15,8 @@
   (operands [narray :const-uint] [nhash :const-uint])
   (result :pointer)
   (class :value)
-  (lowering (new-table narray nhash)))
+  (lowering
+    (native-call :Ptr :luaH_new :Ptr (Root :State) :I32 narray :I32 nhash)))
 
 ~ Duplicate a table
 ~ A: pointer (LuaTable)
@@ -22,7 +24,8 @@
   (operands [table :pointer])
   (result :pointer)
   (class :value)
-  (lowering (dup-table table)))
+  (lowering
+    (native-call :Ptr :luaH_clone :Ptr (Root :State) :Ptr table)))
 
 ~ Insert an integer key into a table and return the pointer to inserted value (TValue)
 ~ A: pointer (LuaTable)
@@ -32,7 +35,8 @@
   (result :pointer)
   (class :value)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Mutates table array part, invalidating reads
-  (lowering (table-setnum table key)))
+  (lowering
+    (native-call :Ptr :luaH_setnum :Ptr (Root :State) :Ptr table :I32 key)))
 
 ~ Create new tagged userdata
 ~ A: int (size)
@@ -42,7 +46,8 @@
   (result :pointer)
   (class :value)
   (facts (allocates :buffer-data))
-  (lowering (new-userdata size utag)))
+  (lowering
+    (native-call :Ptr :newUserdata :Ptr (Root :State) :I64 (int-val size) :I32 (int-val utag))))
 
 ~ Create new heap-allocated vector
 ~ A: double (x)
@@ -53,7 +58,8 @@
   (result :pointer)
   (class :value)
   (facts (allocates :buffer-data))
-  (lowering (new-vector x y z)))
+  (lowering
+    (native-call :Ptr :newVector :Ptr (Root :State) :F64 x :F64 y :F64 z)))
 
 ~ Luwu Classes (rfcs/classes): allocate an object of a class with its members uninitialized
 ~ (luaR_newobjectuninit). Every member must be stored before anything can collect or observe it.
@@ -62,4 +68,5 @@
   (operands [cls :pointer])
   (result :pointer)
   (class :value)
-  (lowering (new-object cls)))
+  (lowering
+    (native-call :Ptr :luaR_newobjectuninit :Ptr (Root :State) :Ptr cls)))

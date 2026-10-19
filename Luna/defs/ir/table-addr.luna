@@ -5,7 +5,8 @@
   (operands [table :pointer] [idx :int])
   (result :pointer)
   (class :value)
-  (lowering (get-arr-addr table idx)))
+  (lowering
+    (AddressOf (Index (LoadPtr table :LuaTable.array) idx sizeof-TValue))))
 
 ~ Get pointer (LuaNode) to table node element at the active cached slot index
 ~ A: pointer (LuaTable)
@@ -15,7 +16,11 @@
   (operands [table :pointer] [pc :const-uint] [c :Kn])
   (result :pointer)
   (class :value)
-  (lowering (get-slot-node-addr table pc)))
+  (lowering
+    ~ the cached slot is the C field of the instruction at pc (its most significant byte), masked by the node count
+    (let* ([slot (And :I32 (ShrU :I32 (Load :I32 (Index (Root :Code) pc sizeof-Instruction)) instruction-c-shift)
+                                      (Load :U8 (Field table :LuaTable.nodemask8)))])
+      (AddressOf (Index (LoadPtr table :LuaTable.node) slot sizeof-LuaNode)))))
 
 ~ Get pointer (LuaNode) to table node element at the main position of the specified key hash
 ~ A: pointer (LuaTable)
@@ -24,7 +29,10 @@
   (operands [table :pointer] [hash :const-uint])
   (result :pointer)
   (class :value)
-  (lowering (get-hash-node-addr table hash)))
+  (lowering
+    ~ the main position: hash & (2^lsizenode - 1)
+    (let* ([slot (And :I32 (Sub :I32 (Shl :I32 1 (Load :U8 (Field table :LuaTable.lsizenode))) 1) hash)])
+      (AddressOf (Index (LoadPtr table :LuaTable.node) slot sizeof-LuaNode)))))
 
 ~ Try to convert a double number into a table index (int) or jump if it's not an integer
 ~ A: double
@@ -34,4 +42,8 @@
   (result :int)
   (class :guard)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Branch operand targets a fallback block: can't appear in an exit sync sequence
-  (lowering (try-num-to-index num fail)))
+  (lowering
+    (let* ([index (FloatToInt :I32 :F64 num)]) (seq
+      ~ the number is an index when it converts back to itself
+      (Guard (FCmp :eq :F64 (IntToFloat :s :F64 :I32 index) num) fail)
+      index))))

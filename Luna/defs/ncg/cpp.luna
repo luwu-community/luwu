@@ -1,0 +1,1078 @@
+;; ============================================================================
+;; C++ code generation module
+;; ============================================================================
+
+(define-record cpp (kind text declared-type kids ctor-args cases ref? id ctype known-value lines comments))
+(define-record cpp-case (labels body))
+
+(define (cpp-code? x) (cpp? x))
+
+(define (%make-node kind text declared-type kids ctor-args cases ref? id ctype known-value lines comments)
+  (make-cpp kind text declared-type kids ctor-args cases ref? id ctype known-value lines comments))
+
+(define (%cpp-statement? k)
+  (case k
+    [(comment seq block if switch decl assign for assert) #t]
+    [else #f]))
+
+(define (%cpp-effectful? k)
+  (case k
+    [(call method with-value) #t]
+    [else #f]))
+
+(define (%cpp-has-comments? code)
+  (let ([c (cpp-comments code)])
+    (and (pair? c)
+         (or (and (pair? (first c)) (not (null? (first c))))
+             (and (pair? (rest c)) (pair? (second c)) (not (null? (second c))))))))
+
+(define (%cpp-with-comments code leading trailing)
+  (let* ([old-comments (cpp-comments code)]
+         [old-lead (if (and (pair? old-comments) (pair? (first old-comments))) (first old-comments) nil)]
+         [old-trail (if (and (pair? old-comments) (pair? (rest old-comments)) (pair? (second old-comments))) (second old-comments) nil)]
+         [new-lead (append (if (null? leading) nil leading) old-lead)]
+         [new-trail (append old-trail (if (null? trailing) nil trailing))])
+    (record-with code 'comments (list new-lead new-trail))))
+
+(define (%doc-statement-fn lines)
+  (apply gen:comment lines))
+
+;; ---- Type & Value Inspection -----------------------------------------------
+
+(define (%describe-kind v)
+  (cond [(null? v) "the empty list"]
+        [(bool? v) "a boolean"]
+        [(int? v) "an int"]
+        [(double? v) "a double"]
+        [(string? v) "a string"]
+        [(symbol? v) "a symbol"]
+        [(keyword? v) "a keyword"]
+        [(pair? v) "a list"]
+        [(procedure? v) "a procedure"]
+        [(record? v)
+         (let ([t (symbol->string (record-type v))])
+           (if (equal? t "cpp") "C++ code" (str "a " t " record")))]
+        [else "a value"]))
+
+(define (%to-string v)
+  (cond [(string? v) (string-escape v)]
+        [(bool? v) (if v "#t" "#f")]
+        [(null? v) "()"]
+        [(record? v)
+         (if (cpp? v)
+             (cpp->string v)
+             (str v))]
+        [else (str v)]))
+
+(define %cpp-name-chars "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_:")
+(define %alnum_ "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
+(define %digits "0123456789")
+
+(define (%valid-cpp-name-char? ch)
+  (number? (string-search %cpp-name-chars ch)))
+
+(define (%cpp-name-arg v fn)
+  (let ([s (cond [(keyword? v) (keyword->string v)]
+                 [(symbol? v) (symbol->string v)]
+                 [(string? v) v]
+                 [else (error (str fn " expects a C++ name (a keyword like :rBase), got " (%to-string v) " (" (%describe-kind v) ")"))])])
+    (when (equal? s "")
+      (error (str fn " got an empty name")))
+    (let loop ([i 0])
+      (when (< i (string-length s))
+        (let ([ch (substring s i (+ i 1))])
+          (unless (%valid-cpp-name-char? ch)
+            (error (str fn ": '" s "' isn't a C++ name")))
+          (loop (+ i 1)))))
+    s))
+
+(define (%type-arg v fn)
+  (if (or (keyword? v) (symbol? v) (string? v))
+      (let ([s (if (keyword? v) (keyword->string v) (if (symbol? v) (symbol->string v) v))])
+        (if (not (equal? s ""))
+            s
+            (error (str fn " expects a C++ type (a keyword like :uint16_t), got " (%to-string v)))))
+      (error (str fn " expects a C++ type (a keyword like :uint16_t), got " (%to-string v)))))
+
+(define (%int-literal v suffix)
+  (if (= v -9223372036854775808)
+      "(-9223372036854775807ll - 1)"
+      (str v suffix)))
+
+(define (%double-literal v)
+  (let* ([d (if (int? v) (* 1.0 v) v)]
+         [s (number->string d)])
+    (unless (or (string-search s ".") (string-search s "e"))
+      (error "A double literal must be finite"))
+    s))
+
+(define (%integral-cpp-type? t)
+  (and (string? t)
+       (member? t '("int" "unsigned" "int64_t" "uint64_t" "int32_t" "uint32_t"
+                    "int16_t" "uint16_t" "int8_t" "uint8_t" "size_t" "char"
+                    "unsigned int" "long" "bool"))
+       #t))
+
+~ Returns true if C++ type name t (a string) represents an integer type.
+(define (cpp-integral-type? t)
+  (and (string? t) (%integral-cpp-type? t)))
+
+~ Returns the C++ type of expression e as a string if known, or #f otherwise.
+(define (cpp-type e)
+  (cond [(and (cpp? e) (not (equal? (cpp-ctype e) ""))) (cpp-ctype e)]
+        [(int? e) "int"]
+        [else #f]))
+
+~ Returns the numeric value of v if it is an integer or a term with a known compile-time value, or #f otherwise.
+(define (known-number v)
+  (cond [(int? v) v]
+        [(and (cpp? v) (cpp-known-value v)) (cpp-known-value v)]
+        [else #f]))
+
+~ Deconstructs a C++ term node into a (kind text kids commented?) tuple, or returns #f if code is not a C++ node.
+(define (gen:parts code)
+  (if (not (cpp? code))
+      #f
+      (list (cpp-kind code)
+            (cpp-text code)
+            (cpp-kids code)
+            (%cpp-has-comments? code))))
+
+~ Returns the text of code if it is a plain C++ name node, or #f otherwise.
+(define (gen:name-of code)
+  (if (and (cpp? code) (equal? (cpp-kind code) 'name))
+      (cpp-text code)
+      #f))
+
+~ Deconstructs a C++ field access node into a (list obj name) pair, or returns #f if code is not a field node.
+(define (gen:field-parts code)
+  (if (and (cpp? code) (equal? (cpp-kind code) 'field))
+      (list (first (cpp-kids code)) (cpp-text code))
+      #f))
+
+~ Deconstructs a C++ with-value node into a (list statements value) pair, or returns #f otherwise.
+(define (gen:value-parts code)
+  (if (and (cpp? code) (equal? (cpp-kind code) 'with-value))
+      (list (first (cpp-kids code)) (second (cpp-kids code)))
+      #f))
+
+(define (%to-expr v fn)
+  (cond
+    [(cpp? v)
+     (when (%cpp-statement? (cpp-kind v))
+       (error (str fn " expects an expression, got a statement")))
+     v]
+    [(int? v)
+     (if (and (>= v -2147483648) (<= v 2147483647))
+         (%make-node 'literal (%int-literal v "") "int" nil nil nil #f 0 "int" #f nil nil)
+         (%make-node 'literal (str "int64_t(" (%int-literal v "ll") ")") "int64_t" nil nil nil #f 0 "int64_t" #f nil nil))]
+    [(double? v)
+     (%make-node 'literal (%double-literal v) "double" nil nil nil #f 0 "double" #f nil nil)]
+    [(bool? v)
+     (%make-node 'literal (if v "true" "false") "bool" nil nil nil #f 0 "bool" #f nil nil)]
+    [(keyword? v)
+     (let* ([s (keyword->string v)]
+            [dot (string-search s ".")])
+       (if dot
+           (let ([struct-name (substring s 0 dot)]
+                 [member-name (substring s (+ dot 1))])
+             (%make-node 'name (str "offsetof(" struct-name ", " member-name ")") "" nil nil nil #f 0 "size_t" #f nil nil))
+           (%make-node 'name (%cpp-name-arg v fn) "" nil nil nil #f 0 "" #f nil nil)))]
+    [else
+     (let ([hint (cond [(string? v) " (use gen:string for a string literal)"]
+                       [(symbol? v) " (use a keyword for a C++ name)"]
+                       [else ""])])
+       (error (str fn " expects a C++ expression, got " (%to-string v) " (" (%describe-kind v) ")" hint)))]))
+
+(define (%statement-arg v fn)
+  (cond [(null? v) nil]
+        [(not (cpp? v))
+         (error (str fn " expects a statement, got " (%to-string v) " (" (%describe-kind v) ")"))]
+        [(equal? (cpp-kind v) 'with-value)
+         (error (str fn ": its branches are statements, but this one has a value (gen:value); use gen:? to choose a value"))]
+        [(and (not (%cpp-statement? (cpp-kind v))) (not (%cpp-effectful? (cpp-kind v))))
+         (error (str fn ": a branch is an expression that does nothing as a statement"))]
+        [else v]))
+
+;; ---- Names, Literals & Assumed Sizes ---------------------------------------
+
+(define %assumed-sizes nil)
+
+~ Returns the recorded type sizes from gen:sizeof as a sorted list of ("sizeof(T)" size) pairs.
+(define (gen:assumed-sizes)
+  (sort %assumed-sizes (lambda (a b) (string<? (first a) (first b)))))
+
+~ Constructs a C++ name node from a symbol, keyword, or string.
+(define (gen:name name)
+  (%make-node 'name (%cpp-name-arg name "gen:name") "" nil nil nil #f 0 "" #f nil nil))
+
+~ Constructs a scoped C++ enum member reference node (Type::Member).
+(define (gen:enum type member)
+  (%make-node 'name (str (%cpp-name-arg type "gen:enum") "::" (%cpp-name-arg member "gen:enum")) "" nil nil nil #f 0 "" #f nil nil))
+
+~ Constructs an offsetof expression node for a struct and member field.
+(define (gen:offsetof . args)
+  (cond [(= (length args) 2)
+         (let ([struct-name (%cpp-name-arg (first args) "gen:offsetof")]
+               [member-name (%cpp-name-arg (second args) "gen:offsetof")])
+           (%make-node 'name (str "offsetof(" struct-name ", " member-name ")") "" nil nil nil #f 0 "size_t" #f nil nil))]
+        [(= (length args) 1)
+         (let ([a0 (first args)])
+           (if (and (keyword? a0) (number? (string-search (keyword->string a0) ".")))
+               (%to-expr a0 "gen:offsetof")
+               (error "gen:offsetof takes :Struct.member, or the struct and the member")))]
+        [else (error "gen:offsetof takes :Struct.member, or the struct and the member")]))
+
+~ Constructs a sizeof expression node for type. When an assumed size is supplied,
+~ Luna records the value for compile-time calculations and emits a static_assert in generated code.
+(define (gen:sizeof type . rest-size)
+  (let* ([t (%type-arg type "gen:sizeof")]
+         [text (str "sizeof(" t ")")])
+    (cond [(null? rest-size)
+           (%make-node 'name text "" nil nil nil #f 0 "size_t" #f nil nil)]
+          [(= (length rest-size) 1)
+           (let ([size (first rest-size)])
+             (unless (and (int? size) (> size 0))
+               (error (str "gen:sizeof's size is a positive number, got " (%to-string size))))
+             (let ([known (assoc text %assumed-sizes)])
+               (when (and known (not (= (second known) size)))
+                 (error (str text " was said to be " (second known) " before, now " (%to-string size))))
+               (unless known
+                 (set! %assumed-sizes (cons (list text size) %assumed-sizes))))
+             (%make-node 'name text "" nil nil nil #f 0 "size_t" size nil nil))]
+          [else (error "gen:sizeof takes a type and an optional size")])))
+
+~ Constructs a signed 32-bit integer literal node.
+(define (gen:int v)
+  (unless (and (int? v) (>= v -2147483648) (<= v 2147483647))
+    (error (str "gen:int expects an int in the 32-bit range, got " (%to-string v))))
+  (%make-node 'literal (%int-literal v "") "int" nil nil nil #f 0 "int" #f nil nil))
+
+~ Constructs an unsigned 32-bit integer literal node with a 'u' suffix.
+(define (gen:uint v)
+  (unless (and (int? v) (>= v 0) (<= v 4294967295))
+    (error (str "gen:uint expects an int in the unsigned 32-bit range, got " (%to-string v))))
+  (%make-node 'literal (str v "u") "unsigned" nil nil nil #f 0 "unsigned" #f nil nil))
+
+~ Constructs a signed 64-bit integer literal node, formatted as int64_t(...).
+(define (gen:i64 v)
+  (unless (int? v)
+    (error (str "gen:i64 expects an int, got " (%to-string v))))
+  (let ([suffix (if (or (> v 2147483647) (< v -2147483648)) "ll" "")])
+    (%make-node 'literal (str "int64_t(" (%int-literal v suffix) ")") "int64_t" nil nil nil #f 0 "int64_t" #f nil nil)))
+
+~ Constructs a double-precision floating-point literal node.
+(define (gen:double v)
+  (unless (number? v)
+    (error (str "gen:double expects a number, got " (%to-string v))))
+  (%make-node 'literal (%double-literal v) "double" nil nil nil #f 0 "double" #f nil nil))
+
+~ Constructs a boolean literal node ('true' or 'false').
+(define (gen:bool v)
+  (%make-node 'literal (if v "true" "false") "bool" nil nil nil #f 0 "bool" #f nil nil))
+
+~ Constructs an escaped C++ string literal node with type const char*.
+(define (gen:string s)
+  (unless (string? s)
+    (error (str "gen:string expects a string, got " (%to-string s))))
+  (%make-node 'literal (string-escape s) "const char*" nil nil nil #f 0 "const char*" #f nil nil))
+
+;; ---- Calls, Members & Operators --------------------------------------------
+
+~ Constructs a function call expression node invoking fn with args.
+(define (gen:call fn . args)
+  (%make-node 'call (%cpp-name-arg fn "gen:call") ""
+              (map (lambda (a) (%to-expr a "gen:call")) args)
+              nil nil #f 0 "" #f nil nil))
+
+~ Constructs a method call expression node invoking obj.name with args.
+(define (gen:method obj name . args)
+  (%make-node 'method (%cpp-name-arg name "gen:method") ""
+              (cons (%to-expr obj "gen:method")
+                    (map (lambda (a) (%to-expr a "gen:method")) args))
+              nil nil #f 0 "" #f nil nil))
+
+~ Annotates expression node e with explicit C++ type name type for type checking and overload resolution.
+(define (gen:typed type e)
+  (let ([t (%type-arg type "gen:typed")])
+    (record-with (%to-expr e "gen:typed") 'ctype t)))
+
+~ Constructs a field access expression node (obj.name).
+(define (gen:field obj name)
+  (%make-node 'field (%cpp-name-arg name "gen:field") ""
+              (list (%to-expr obj "gen:field"))
+              nil nil #f 0 "" #f nil nil))
+
+~ Constructs an array subscript expression node (a[i]).
+(define (gen:index a i)
+  (%make-node 'index "" ""
+              (list (%to-expr a "gen:index") (%to-expr i "gen:index"))
+              nil nil #f 0 "" #f nil nil))
+
+~ Constructs a functional cast expression node converting e to type.
+(define (gen:cast type e)
+  (let ([t (%type-arg type "gen:cast")])
+    (%make-node 'cast "" t
+                (list (%to-expr e "gen:cast"))
+                nil nil #f 0 t #f nil nil)))
+
+~ Constructs a braced initializer list node ({args...}).
+(define (gen:init-list . args)
+  (%make-node 'init-list "" ""
+              (map (lambda (a) (%to-expr a "gen:init-list")) args)
+              nil nil #f 0 "" #f nil nil))
+
+~ Constructs a ternary conditional expression node (c ? a : b).
+(define (gen:? c a b)
+  (let* ([ce (%to-expr c "gen:?")]
+         [ae (%to-expr a "gen:?")]
+         [be (%to-expr b "gen:?")]
+         [ctype (if (equal? (cpp-ctype ae) (cpp-ctype be)) (cpp-ctype ae) "")])
+    (%make-node 'ternary "" "" (list ce ae be) nil nil #f 0 ctype #f nil nil)))
+
+(define (%binary op args)
+  (let* ([fn (str "gen:" op)]
+         [boolean? (member? op '("==" "!=" "<" "<=" ">" ">=" "&&" "||"))])
+    (let loop ([acc (%to-expr (first args) fn)] [rest-args (rest args)])
+      (if (null? rest-args)
+          acc
+          (let* ([rhs (%to-expr (first rest-args) fn)]
+                 [t0 (cpp-ctype acc)]
+                 [t1 (cpp-ctype rhs)]
+                 [ctype (cond [boolean? "bool"]
+                              [(and (not (equal? t0 "")) (equal? t0 t1)) t0]
+                              [(and (%integral-cpp-type? t0) (%integral-cpp-type? t1)) "int64_t"]
+                              [else ""])])
+            (loop (%make-node 'binary op "" (list acc rhs) nil nil #f 0 ctype #f nil nil)
+                  (rest rest-args)))))))
+
+~ Constructs an addition expression node. When given a single operand, returns the operand itself.
+(define (gen:+ a . rest) (%binary "+" (cons a rest)))
+~ Constructs a multiplication expression node. When given a single operand, returns the operand itself.
+(define (gen:* a . rest) (%binary "*" (cons a rest)))
+~ Constructs a bitwise AND expression node. When given a single operand, returns the operand itself.
+(define (gen:& a . rest) (%binary "&" (cons a rest)))
+~ Constructs a bitwise OR expression node. When given a single operand, returns the operand itself.
+(define (gen:| a . rest) (%binary "|" (cons a rest)))
+~ Constructs a bitwise XOR expression node. When given a single operand, returns the operand itself.
+(define (gen:^ a . rest) (%binary "^" (cons a rest)))
+~ Constructs a logical AND expression node. When given a single operand, returns the operand itself.
+(define (gen:&& a . rest) (%binary "&&" (cons a rest)))
+~ Constructs a logical OR expression node. When given a single operand, returns the operand itself.
+(define (gen:|| a . rest) (%binary "||" (cons a rest)))
+
+~ Constructs a division expression node (a / b).
+(define (gen:/ a b) (%binary "/" (list a b)))
+~ Constructs a remainder expression node (a % b).
+(define (gen:% a b) (%binary "%" (list a b)))
+~ Constructs a left bit-shift expression node (a << b).
+(define (gen:<< a b) (%binary "<<" (list a b)))
+~ Constructs a right bit-shift expression node (a >> b).
+(define (gen:>> a b) (%binary ">>" (list a b)))
+~ Constructs an equality comparison expression node (a == b).
+(define (gen:== a b) (%binary "==" (list a b)))
+~ Constructs an inequality comparison expression node (a != b).
+(define (gen:!= a b) (%binary "!=" (list a b)))
+~ Constructs a less-than comparison expression node (a < b).
+(define (gen:< a b) (%binary "<" (list a b)))
+~ Constructs a less-than-or-equal comparison expression node (a <= b).
+(define (gen:<= a b) (%binary "<=" (list a b)))
+~ Constructs a greater-than comparison expression node (a > b).
+(define (gen:> a b) (%binary ">" (list a b)))
+~ Constructs a greater-than-or-equal comparison expression node (a >= b).
+(define (gen:>= a b) (%binary ">=" (list a b)))
+
+~ Constructs a subtraction or unary negation expression node.
+(define (gen:- a . rest)
+  (if (pair? rest)
+      (%binary "-" (cons a rest))
+      (%make-node 'unary "-" "" (list (%to-expr a "gen:-")) nil nil #f 0 "" #f nil nil)))
+
+~ Constructs an address-of expression node (&x) typed as const void*.
+(define (gen:address-of x)
+  (%make-node 'unary "&" "" (list (%to-expr x "gen:address-of")) nil nil #f 0 "const void*" #f nil nil))
+
+~ Constructs a logical NOT unary expression node (!a).
+(define (gen:! a)
+  (%make-node 'unary "!" "" (list (%to-expr a "gen:!")) nil nil #f 0 "" #f nil nil))
+
+~ Constructs a bitwise NOT unary expression node (~a).
+(define (gen:compl a)
+  (%make-node 'unary "~" "" (list (%to-expr a "gen:compl")) nil nil #f 0 "" #f nil nil))
+
+;; ---- Statements & Sequences ------------------------------------------------
+
+(define (%sequence args fn kind)
+  (let loop ([rem args] [idx 1] [seq-kids nil] [value #f])
+    (if (pair? rem)
+        (let ([a (first rem)])
+          (cond
+            [(null? a)
+             (loop (rest rem) (+ idx 1) seq-kids value)]
+            [(not (cpp? a))
+             (error (str fn " takes statements, got " (%to-string a) " (" (%describe-kind a) ") as argument " idx))]
+            [else
+             (let ([has-c? (%cpp-has-comments? a)])
+               (cond
+                 [(and (equal? (cpp-kind a) 'with-value) (not has-c?))
+                  (when (or (pair? (rest rem)) (equal? kind 'block))
+                    (error (str fn ": argument " idx " is a gen:value whose value would be lost"
+                                (if (equal? kind 'block) " (a gen:block has no value)" " (only the last one gives the sequence's value)"))))
+                  (let* ([inner-seq (first (cpp-kids a))]
+                         [inner-kids (cpp-kids inner-seq)]
+                         [val (second (cpp-kids a))])
+                    (loop (rest rem) (+ idx 1) (append seq-kids inner-kids) val))]
+                 [(and (not (%cpp-statement? (cpp-kind a))) (not (%cpp-effectful? (cpp-kind a))))
+                  (error (str fn ": argument " idx " is an expression that does nothing as a statement"))]
+                 [(and (equal? (cpp-kind a) 'seq) (not has-c?))
+                  (loop (rest rem) (+ idx 1) (append seq-kids (cpp-kids a)) value)]
+                 [else
+                  (loop (rest rem) (+ idx 1) (append seq-kids (list a)) value)]))]))
+        (if (not value)
+            (%make-node kind "" "" seq-kids nil nil #f 0 "" #f nil nil)
+            (let ([seq-node (%make-node kind "" "" seq-kids nil nil #f 0 "" #f nil nil)])
+              (%make-node 'with-value "" "" (list seq-node value) nil nil #f 0 (cpp-ctype value) #f nil nil))))))
+
+~ Constructs a sequence of statements executed in order. When the last element is a gen:value, the sequence produces that value.
+(define (gen:seq . args)
+  (%sequence args "gen:seq" 'seq))
+
+~ Constructs a compound block statement enclosed in braces ({ ... }), creating a new C++ scope.
+(define (gen:block . args)
+  (%sequence args "gen:block" 'block))
+
+~ Constructs a C++ if statement with an optional else branch.
+(define (gen:if c then . maybe-else)
+  (let ([ce (%to-expr c "gen:if")]
+        [te (%statement-arg then "gen:if")]
+        [ee (if (and (pair? maybe-else) (not (null? (first maybe-else))))
+                (%statement-arg (first maybe-else) "gen:if")
+                nil)])
+    (%make-node 'if "" "" (if ee (list ce te ee) (list ce te)) nil nil #f 0 "" #f nil nil)))
+
+~ Yields value expr after executing stmts. When used as an operand, the prepended statements are emitted prior to the enclosing statement.
+(define (gen:value first-arg . rest-args)
+  (let* ([args (cons first-arg rest-args)]
+         [n (length args)]
+         [stmts (take args (- n 1))]
+         [expr (last args)]
+         [seq (%sequence stmts "gen:value" 'seq)])
+    (when (equal? (cpp-kind seq) 'with-value)
+      (error "gen:value's statements can't have a value themselves"))
+    (let ([val (%to-expr expr "gen:value")])
+      (%make-node 'with-value "" "" (list seq val) nil nil #f 0 (cpp-ctype val) #f nil nil))))
+
+~ Emits a CODEGEN_ASSERT statement node for condition c.
+(define (gen:assert c)
+  (%make-node 'assert "" "" (list (%to-expr c "gen:assert")) nil nil #f 0 "" #f nil nil))
+
+~ Emits an assignment statement node from value to target.
+(define (gen:set! target value)
+  (let ([t (%to-expr target "gen:set!")])
+    (unless (member? (cpp-kind t) '(local field index name))
+      (error "gen:set! assigns to a local, a field, an element or a name"))
+    (%make-node 'assign "" "" (list t (%to-expr value "gen:set!")) nil nil #f 0 "" #f nil nil)))
+
+~ Attaches comments to C++ code or emits a standalone comment statement.
+~ When provided with :trailing, attaches a trailing line comment to code.
+(define (gen:comment . a)
+  (let* ([trailing (and (pair? a) (equal? (first a) :trailing))]
+         [rest-a (if trailing (rest a) a)])
+    (let loop ([cur rest-a] [lines nil])
+      (if (and (pair? cur) (string? (first cur)))
+          (loop (rest cur) (cons (first cur) lines))
+          (let ([lines (reverse lines)])
+            (cond [(null? lines)
+                   (error "gen:comment takes comment lines (strings), then optionally the C++ code they're about")]
+                  [(null? cur)
+                   (if trailing
+                       (error "A :trailing comment is about code: (gen:comment :trailing \"text\" code)")
+                       (%make-node 'comment "" "" nil nil nil #f 0 "" #f lines nil))]
+                  [(not (null? (rest cur)))
+                   (error "gen:comment takes comment lines (strings), then optionally the C++ code they're about")]
+                  [(not (cpp? (first cur)))
+                   (error (str "gen:comment comments C++ code, got " (%to-string (first cur)) " (" (%describe-kind (first cur)) ")"))]
+                  [trailing
+                   (%cpp-with-comments (first cur) nil lines)]
+                  [else
+                   (%cpp-with-comments (first cur) lines nil)]))))))
+
+;; ---- Macros & Declarations -------------------------------------------------
+
+(define %id-counter 0)
+(define (%next-id)
+  (set! %id-counter (+ %id-counter 1))
+  %id-counter)
+
+(define (%gen-decl name type is-ref? init ctor-args)
+  (let* ([t-str (if (and (string? type) (not (equal? type ""))) type "")]
+         [kids (if (null? init) nil (list (%to-expr init "gen:let")))]
+         [ctors (map (lambda (c) (%to-expr c "gen:let")) ctor-args)]
+         [ctype (if (not (equal? t-str ""))
+                    t-str
+                    (if (pair? kids) (cpp-ctype (first kids)) ""))])
+    (%make-node 'decl name t-str kids ctors nil is-ref? (%next-id) ctype #f nil nil)))
+
+(define (%gen-loop-var name)
+  (%make-node 'for name "" nil nil nil #f (%next-id) "" #f nil nil))
+
+(define (%gen-local node)
+  (let ([ctype (if (equal? (cpp-kind node) 'for) "int" (cpp-ctype node))])
+    (%make-node 'local (cpp-text node) "" nil nil nil #f (cpp-id node) ctype #f nil nil)))
+
+(define (%gen-let-body decls . body)
+  (let ([items (append decls body)])
+    (%sequence items "gen:let" 'seq)))
+
+(define (%gen-for var from to . body)
+  (let ([body-node (%sequence body "gen:for" 'seq)])
+    (when (equal? (cpp-kind body-node) 'with-value)
+      (error "A gen:for body has no value"))
+    (record-with var 'kids
+      (list (%to-expr from "gen:for")
+            (%to-expr to "gen:for")
+            body-node))))
+
+(define (%gen-switch e cases)
+  (let* ([target-expr (%to-expr e "gen:switch")]
+         [parsed-cases
+          (map (lambda (c)
+                 (let* ([labels (first c)]
+                        [body (second c)]
+                        [parsed-labels
+                         (if (null? labels)
+                             nil
+                             (map (lambda (l) (%to-expr l "gen:switch")) labels))]
+                        [parsed-body (%statement-arg body "gen:switch")])
+                   (make-cpp-case parsed-labels parsed-body)))
+               cases)])
+    (%make-node 'switch "" "" (list target-expr) nil parsed-cases #f 0 "" #f nil nil)))
+
+(define (%comment-split c)
+  (let loop ([c c] [wrappers nil])
+    (if (and (pair? c) (equal? (first c) 'doc-comment) (not (string? (last c))))
+        (loop (last c) (cons (reverse (rest (reverse (rest c)))) wrappers))
+        (list (reverse wrappers) c))))
+
+(define (%rewrap wrappers code)
+  (foldr (lambda (args acc) `(doc-comment ,@args ,acc)) code wrappers))
+
+(define (%parse-let-binding b)
+  (let* ([split (%comment-split b)]
+         [wrappers (first split)]
+         [binding (second split)])
+    (unless (and (pair? binding) (symbol? (first binding)))
+      (error "A gen:let binding is [name init], with options like (:type T), (:ref) or (:args a...) before the init"))
+    (let loop ([elems (rest binding)] [type ""] [ref? #f] [has-args #f] [ctor-args nil] [init nil] [has-init #f])
+      (if (pair? elems)
+          (let ([el (first elems)])
+            (if (and (pair? el) (keyword? (first el)))
+                (let ([key (first el)])
+                  (cond [(equal? key :type)
+                         (unless (and (= (length el) 2) (or (symbol? (second el)) (keyword? (second el)) (string? (second el))))
+                           (error "Unknown gen:let option; the options are (:type T), (:ref) and (:args a...)"))
+                         (let ([t (second el)])
+                           (loop (rest elems)
+                                 (if (keyword? t) (keyword->string t) (if (symbol? t) (symbol->string t) t))
+                                 ref? has-args ctor-args init has-init))]
+                        [(equal? key :ref)
+                         (unless (= (length el) 1)
+                           (error "Unknown gen:let option; the options are (:type T), (:ref) and (:args a...)"))
+                         (loop (rest elems) type #t has-args ctor-args init has-init)]
+                        [(equal? key :args)
+                         (loop (rest elems) type ref? #t (rest el) init has-init)]
+                        [else
+                         (error "Unknown gen:let option; the options are (:type T), (:ref) and (:args a...)")]))
+                (begin
+                  (unless (null? (rest elems))
+                    (error "A gen:let binding's init comes last: [name options... init]"))
+                  (loop (rest elems) type ref? has-args ctor-args el #t))))
+          (begin
+            (when (and has-args (or has-init (equal? type "")))
+              (error "(:args ...) constructs a (:type T) with braces, instead of an init"))
+            (when (and (not has-init) (not has-args) (equal? type ""))
+              (error "A gen:let binding without an init needs a (:type T) to declare"))
+            (list (first binding) type ref? has-init init ctor-args wrappers))))))
+
+~ Declares local C++ variables and evaluates body with each identifier bound to its local.
+~
+~ Bindings support options such as (:type T), (:ref), and (:args a...). Later initializers
+~ can reference previously declared variables. If body terminates in a gen:value, the
+~ entire construct yields that value.
+(define-macro (gen:let bindings . body)
+  (unless (list? bindings)
+    (error "gen:let takes bindings and a body: (gen:let ([x init]...) body...)"))
+  (let loop ([bs bindings] [let*-bindings nil] [decls nil])
+    (if (pair? bs)
+        (let* ([parsed (%parse-let-binding (first bs))]
+               [name (first parsed)]
+               [type (second parsed)]
+               [ref? (nth parsed 2)]
+               [has-init (nth parsed 3)]
+               [init (nth parsed 4)]
+               [ctor-args (nth parsed 5)]
+               [wrappers (nth parsed 6)]
+               [decl-var (gensym "decl")]
+               [type-expr (if (equal? type "") 'nil type)]
+               [init-expr (if has-init init 'nil)]
+               [decl-call (%rewrap wrappers `(%gen-decl ,(symbol->string name) ,type-expr ,ref? ,init-expr (list ,@ctor-args)))])
+          (loop (rest bs)
+                (cons `[,name (%gen-local ,decl-var)] (cons `[,decl-var ,decl-call] let*-bindings))
+                (cons decl-var decls)))
+        `(let* ,(reverse let*-bindings)
+           (%gen-let-body (list ,@(reverse decls)) ,@body)))))
+
+~ Emits a C++ for loop counting from 'from' up to 'to' with the induction variable bound in body.
+(define-macro (gen:for spec . body)
+  (unless (and (pair? spec) (= (length spec) 3) (symbol? (first spec)))
+    (error "gen:for is (gen:for (i from to) body...)"))
+  (let ([i-sym (first spec)]
+        [from-expr (second spec)]
+        [to-expr (nth spec 2)]
+        [from-var (gensym "from")]
+        [to-var (gensym "to")]
+        [loop-var (gensym "loop")])
+    `(let* ([,from-var ,from-expr]
+            [,to-var ,to-expr]
+            [,loop-var (%gen-loop-var ,(symbol->string i-sym))]
+            [,i-sym (%gen-local ,loop-var)])
+       (%gen-for ,loop-var ,from-var ,to-var ,@body))))
+
+~ Expands a multi-way conditional into nested C++ if/else-if/else statements.
+(define-macro (gen:cond . clauses)
+  (if (null? clauses)
+      nil
+      (let* ([split (%comment-split (first clauses))]
+             [clause (nth split 1)]
+             [body (%rewrap (first split) `(gen:seq ,@(rest clause)))])
+        (if (equal? (first clause) 'else)
+            body
+            `(gen:if ,(first clause) ,body (gen:cond ,@(rest clauses)))))))
+
+~ Emits a C++ switch statement over e with cases matching keys or numbers, and an optional else fallback.
+(define-macro (gen:switch e . clauses)
+  `(%gen-switch ,e
+     (list ,@(map (lambda (c)
+                    (let* ([split (%comment-split c)]
+                           [clause (nth split 1)]
+                           [body (%rewrap (first split) `(gen:seq ,@(rest clause)))]
+                           [key (first clause)])
+                      (cond [(equal? key 'else) `(list nil ,body)]
+                            [(pair? key) `(list (list ,@key) ,body)]
+                            [else `(list (list ,key) ,body)])))
+                   clauses))))
+
+~ Declares local C++ Label objects for each identifier and evaluates body with them bound.
+(define-macro (gen:label names . body)
+  `(gen:let ,(map (lambda (n) `(,n (:type Label))) names) ,@body))
+
+;; ---- C++ Printer (cpp->string) ----------------------------------------------
+
+(define %cpp-reserved-names
+  '("build" "regs" "lowering" "inst" "index" "next" "function" "byte" "word" "dword" "qword"
+    "xmmword" "ymmword" "addr" "noreg" "alignas" "alignof" "and" "auto" "bool" "break" "case"
+    "catch" "char" "class" "const" "constexpr" "continue" "default" "delete" "do" "double"
+    "else" "enum" "explicit" "extern" "false" "float" "for" "goto" "if" "inline" "int" "long"
+    "namespace" "new" "not" "nullptr" "operator" "or" "private" "protected" "public" "return"
+    "short" "signed" "sizeof" "static" "struct" "switch" "template" "this" "throw" "true"
+    "try" "typedef" "typename" "union" "unsigned" "using" "virtual" "void" "volatile" "while" "xor"))
+
+(define (%precedence e)
+  (case (cpp-kind e)
+    [(literal)
+     (let ([t (cpp-text e)])
+       (if (and (not (equal? t "")) (equal? (substring t 0 1) "-")) 15 16))]
+    [(unary) 15]
+    [(ternary) 2]
+    [(binary)
+     (let ([op (cpp-text e)])
+       (cond [(equal? op "||") 3]
+             [(equal? op "&&") 4]
+             [(equal? op "|") 5]
+             [(equal? op "^") 6]
+             [(equal? op "&") 7]
+             [(or (equal? op "==") (equal? op "!=")) 8]
+             [(or (equal? op "<") (equal? op "<=") (equal? op ">") (equal? op ">=")) 9]
+             [(or (equal? op "<<") (equal? op ">>")) 11]
+             [(or (equal? op "+") (equal? op "-")) 12]
+             [else 13]))]
+    [else 16]))
+
+(define (%warns-without-parens parent-op child)
+  (if (not (equal? (cpp-kind child) 'binary))
+      #f
+      (let* ([op (cpp-text child)]
+             [bitwise-parent (or (equal? parent-op "&") (equal? parent-op "|") (equal? parent-op "^"))]
+             [comparison (or (equal? op "==") (equal? op "!=") (equal? op "<")
+                             (equal? op "<=") (equal? op ">") (equal? op ">="))])
+        (or (and (equal? parent-op "||") (equal? op "&&"))
+            (and (equal? parent-op "|") (or (equal? op "&") (equal? op "^")))
+            (and (equal? parent-op "^") (equal? op "&"))
+            (and (or (equal? parent-op "<<") (equal? parent-op ">>"))
+                 (or (equal? op "+") (equal? op "-")))
+            (and bitwise-parent comparison)))))
+
+(define (%sanitize-name luna)
+  (let* ([base (if (and (>= (string-length luna) 2) (equal? (substring luna 0 2) "#:"))
+                   (substring luna 2)
+                   luna)]
+         [clean (let loop ([i 0] [acc ""])
+                  (if (= i (string-length base))
+                      acc
+                      (let ([ch (substring base i (+ i 1))])
+                        (cond [(number? (string-search %alnum_ ch))
+                               (loop (+ i 1) (str acc ch))]
+                              [(or (equal? ch "-") (equal? ch "."))
+                               (loop (+ i 1) (str acc "_"))]
+                              [else
+                               (loop (+ i 1) acc)]))))]
+         [non-empty (if (equal? clean "") "tmp" clean)])
+    (if (and (> (string-length non-empty) 0) (number? (string-search %digits (substring non-empty 0 1))))
+        (str "_" non-empty)
+        non-empty)))
+
+(define (%extract-identifiers text)
+  (let loop ([i 0] [cur ""] [ids nil])
+    (if (= i (string-length text))
+        (if (equal? cur "") ids (cons cur ids))
+        (let ([ch (substring text i (+ i 1))])
+          (if (number? (string-search %alnum_ ch))
+              (loop (+ i 1) (str cur ch) ids)
+              (loop (+ i 1) "" (if (equal? cur "") ids (cons cur ids))))))))
+
+(define (%collect-names n acc)
+  (if (or (null? n) (not (cpp? n)))
+      acc
+      (let* ([kind (cpp-kind n)]
+             [acc (if (or (equal? kind 'name) (equal? kind 'call))
+                      (let loop ([ids (%extract-identifiers (cpp-text n))] [cur acc])
+                        (if (null? ids)
+                            cur
+                            (loop (rest ids) (if (member? (first ids) cur) cur (cons (first ids) cur)))))
+                      acc)]
+             [acc (foldl (lambda (cur k) (%collect-names k cur)) acc (cpp-kids n))]
+             [acc (foldl (lambda (cur k) (%collect-names k cur)) acc (cpp-ctor-args n))]
+             [acc (foldl (lambda (cur c)
+                           (let* ([cur (foldl (lambda (cur l) (%collect-names l cur)) cur (cpp-case-labels c))]
+                                  [cur (%collect-names (cpp-case-body c) cur)])
+                             cur))
+                         acc
+                         (cpp-cases n))])
+        acc)))
+
+(define (%in-scope? name scopes)
+  (any? (lambda (s) (member? name (first s))) scopes))
+
+(define (%indent-spaces level)
+  (let loop ([n level] [acc ""])
+    (if (<= n 0) acc (loop (- n 1) (str acc "    ")))))
+
+(define (%list-update lst idx f)
+  (let loop ([cur lst] [i 0] [acc nil])
+    (cond [(null? cur) (reverse acc)]
+          [(= i idx)
+           (append (reverse acc) (cons (f (first cur)) (rest cur)))]
+          [else
+           (loop (rest cur) (+ i 1) (cons (first cur) acc))])))
+
+(define (%lift e pre lead trail conditional)
+  (let* ([comments (cpp-comments e)]
+         [new-lead (if (and (pair? comments) (pair? (first comments)))
+                       (append lead (first comments))
+                       lead)]
+         [new-trail (if (and (pair? comments) (pair? (rest comments)) (pair? (second comments)))
+                        (append trail (second comments))
+                        trail)]
+         [kind (cpp-kind e)])
+    (cond
+      [(equal? kind 'with-value)
+       (if conditional
+           (error "This value needs statements to run first, but it's in the conditional part of an &&, || or ?: (they would run unconditionally); bind it with gen:let before the expression")
+           (let* ([stmt (first (cpp-kids e))]
+                  [val (second (cpp-kids e))]
+                  [new-pre (append pre (list stmt))])
+             (%lift val new-pre new-lead new-trail #f)))]
+      [(%cpp-statement? kind)
+       (error "A statement can't be used as a value")]
+      [else
+       (let loop ([kids (cpp-kids e)] [idx 0] [lifted-kids nil] [cur-pre pre] [cur-lead new-lead] [cur-trail new-trail])
+         (if (null? kids)
+             (let* ([copy (record-with e 'comments nil)]
+                    [copy (record-with copy 'kids (reverse lifted-kids))])
+               (list copy cur-pre cur-lead cur-trail))
+             (let* ([kid (first kids)]
+                    [cond? (or conditional
+                               (and (equal? kind 'binary)
+                                    (or (equal? (cpp-text e) "&&") (equal? (cpp-text e) "||"))
+                                    (= idx 1))
+                               (and (equal? kind 'ternary)
+                                    (> idx 0)))]
+                    [res (%lift kid cur-pre cur-lead cur-trail cond?)]
+                    [lifted-k (first res)]
+                    [next-pre (second res)]
+                    [next-lead (nth res 2)]
+                    [next-trail (nth res 3)])
+               (loop (rest kids) (+ idx 1) (cons lifted-k lifted-kids) next-pre next-lead next-trail))))])))
+
+(define (%expression e min-prec parent-op names-map)
+  (let* ([kind (cpp-kind e)]
+         [s (case kind
+              [(name literal) (cpp-text e)]
+              [(local)
+               (let ([it (assoc (cpp-id e) names-map)])
+                 (if (not it)
+                     (error (str "The local '" (cpp-text e) "' is used outside the gen:let (or gen:for) that declares it"))
+                     (second it)))]
+              [(call)
+               (let ([args (string-join (map (lambda (k) (%expression k 0 "" names-map)) (cpp-kids e)) ", ")])
+                 (str (cpp-text e) "(" args ")"))]
+              [(method)
+               (let ([obj (%expression (first (cpp-kids e)) 16 "" names-map)]
+                     [args (string-join (map (lambda (k) (%expression k 0 "" names-map)) (rest (cpp-kids e))) ", ")])
+                 (str obj "." (cpp-text e) "(" args ")"))]
+              [(field)
+               (let ([obj (%expression (first (cpp-kids e)) 16 "" names-map)])
+                 (str obj "." (cpp-text e)))]
+              [(index)
+               (let ([arr (%expression (first (cpp-kids e)) 16 "" names-map)]
+                     [idx (%expression (second (cpp-kids e)) 0 "" names-map)])
+                 (str arr "[" idx "]"))]
+              [(cast)
+               (let ([arg (%expression (first (cpp-kids e)) 0 "" names-map)])
+                 (str (cpp-declared-type e) "(" arg ")"))]
+              [(unary)
+               (let* ([k (first (cpp-kids e))]
+                      [is-unary (equal? (cpp-kind k) 'unary)]
+                      [is-neg-lit (and (equal? (cpp-kind k) 'literal)
+                                       (not (equal? (cpp-text k) ""))
+                                       (equal? (substring (cpp-text k) 0 1) "-"))]
+                      [nested (or is-unary is-neg-lit)]
+                      [operand (%expression k 15 "" names-map)])
+                 (str (cpp-text e) (if nested (str "(" operand ")") operand)))]
+              [(binary)
+               (let* ([p (%precedence e)]
+                      [op (cpp-text e)]
+                      [lhs (%expression (first (cpp-kids e)) p op names-map)]
+                      [rhs (%expression (second (cpp-kids e)) (+ p 1) op names-map)])
+                 (str lhs " " op " " rhs))]
+              [(ternary)
+               (let ([c (%expression (first (cpp-kids e)) 3 "" names-map)]
+                     [a (%expression (second (cpp-kids e)) 3 "" names-map)]
+                     [b (%expression (nth (cpp-kids e) 2) 2 "" names-map)])
+                 (str c " ? " a " : " b))]
+              [(init-list)
+               (let ([args (string-join (map (lambda (k) (%expression k 0 "" names-map)) (cpp-kids e)) ", ")])
+                 (str "{" args "}"))]
+              [(with-value)
+               (%expression (second (cpp-kids e)) min-prec parent-op names-map)]
+              [else
+               (error "A statement can't be used as a value")])])
+    (if (equal? kind 'with-value)
+        s
+        (if (or (< (%precedence e) min-prec) (%warns-without-parens parent-op e))
+            (str "(" s ")")
+            s))))
+
+(define (%print-cpp term indent)
+  (let* ([reserved (%collect-names term %cpp-reserved-names)]
+         [lines nil]
+         [level indent]
+         [scopes (list (list nil nil))]
+         [names-map nil])
+    (define (emit text)
+      (set! lines (append lines (list (str (%indent-spaces level) text)))))
+    (define (open-scope)
+      (set! scopes (cons (list nil nil) scopes)))
+    (define (close-scope)
+      (let ([ids (second (first scopes))])
+        (set! names-map (filter (lambda (item) (not (member? (first item) ids))) names-map))
+        (set! scopes (rest scopes))))
+    (define (declare id luna)
+      (let* ([base (%sanitize-name luna)]
+             [name (let loop ([candidate base] [n 2])
+                     (if (or (member? candidate reserved) (%in-scope? candidate scopes))
+                         (loop (str base "_" n) (+ n 1))
+                         candidate))]
+             [cur-scope (first scopes)]
+             [new-scope (list (cons name (first cur-scope)) (cons id (second cur-scope)))])
+        (set! scopes (cons new-scope (rest scopes)))
+        (set! names-map (cons (list id name) names-map))
+        name))
+    (define (append-trailing first-idx trail)
+      (when (and (pair? trail) (< first-idx (length lines)))
+        (let ([text (string-join trail " ")])
+          (set! lines (%list-update lines first-idx (lambda (l) (str l " // " text)))))))
+    (define (expr e min-prec parent-op)
+      (%expression e min-prec parent-op names-map))
+    (define (braced body)
+      (emit "{")
+      (set! level (+ level 1))
+      (open-scope)
+      (when (and body (not (null? body)))
+        (if (and (equal? (cpp-kind body) 'block)
+                 (not (%cpp-has-comments? body)))
+            (for-each statement (cpp-kids body))
+            (statement body)))
+      (close-scope)
+      (set! level (- level 1))
+      (emit "}"))
+    (define (with-expressions n exprs make-fn)
+      (let* ([comments (cpp-comments n)]
+             [init-lead (if (and (pair? comments) (pair? (first comments))) (first comments) nil)]
+             [init-trail (if (and (pair? comments) (pair? (rest comments)) (pair? (second comments))) (second comments) nil)])
+        (let loop ([es exprs] [pre nil] [lead init-lead] [trail init-trail] [lifted nil])
+          (if (pair? es)
+              (let ([e (first es)])
+                (if (null? e)
+                    (loop (rest es) pre lead trail (cons nil lifted))
+                    (let* ([res (%lift e pre lead trail #f)]
+                           [l-e (first res)]
+                           [l-pre (second res)]
+                           [l-lead (nth res 2)]
+                           [l-trail (nth res 3)])
+                      (loop (rest es) l-pre l-lead l-trail (cons l-e lifted)))))
+              (begin
+                (for-each (lambda (c) (emit (if (equal? c "") "//" (str "// " c)))) lead)
+                (for-each statement pre)
+                (let ([first-idx (length lines)])
+                  (make-fn (reverse lifted))
+                  (append-trailing first-idx trail)))))))
+    (define (if-statement n prefix trailing)
+      (let* ([res (%lift (first (cpp-kids n)) nil nil trailing #f)]
+             [cond-node (first res)]
+             [pre (second res)]
+             [lead (nth res 2)]
+             [trail (nth res 3)])
+        (when (and (pair? pre) (not (equal? prefix "")))
+          (error "An else-if condition can't need statements first; bind its value with gen:let around the gen:if"))
+        (for-each (lambda (c) (emit (if (equal? c "") "//" (str "// " c)))) lead)
+        (for-each statement pre)
+        (let ([first-idx (length lines)])
+          (emit (str prefix "if (" (expr cond-node 0 "") ")"))
+          (append-trailing first-idx trail))
+        (braced (second (cpp-kids n)))
+        (when (and (> (length (cpp-kids n)) 2) (not (null? (nth (cpp-kids n) 2))))
+          (let* ([e (nth (cpp-kids n) 2)]
+                 [e-comments (cpp-comments e)]
+                 [e-lead (if (and (pair? e-comments) (pair? (first e-comments))) (first e-comments) nil)]
+                 [e-trail (if (and (pair? e-comments) (pair? (rest e-comments)) (pair? (second e-comments))) (second e-comments) nil)])
+            (if (and (equal? (cpp-kind e) 'if) (null? e-lead))
+                (if-statement e "else " e-trail)
+                (begin
+                  (for-each (lambda (c) (emit (if (equal? c "") "//" (str "// " c)))) e-lead)
+                  (emit "else")
+                  (braced e)))))))
+    (define (statement np)
+      (let* ([n np]
+             [kind (cpp-kind n)]
+             [comments (cpp-comments n)]
+             [lead (if (and (pair? comments) (pair? (first comments))) (first comments) nil)]
+             [trail (if (and (pair? comments) (pair? (rest comments)) (pair? (second comments))) (second comments) nil)])
+        (case kind
+          [(comment)
+           (for-each (lambda (c) (emit (if (equal? c "") "//" (str "// " c)))) lead)
+           (let ([first-idx (length lines)])
+             (for-each (lambda (l) (emit (if (equal? l "") "//" (str "// " l)))) (cpp-lines n))
+             (append-trailing first-idx trail))]
+          [(seq)
+           (for-each (lambda (c) (emit (if (equal? c "") "//" (str "// " c)))) lead)
+           (let ([first-idx (length lines)])
+             (for-each statement (cpp-kids n))
+             (append-trailing first-idx trail))]
+          [(block)
+           (for-each (lambda (c) (emit (if (equal? c "") "//" (str "// " c)))) lead)
+           (let ([first-idx (length lines)])
+             (emit "{")
+             (append-trailing first-idx trail)
+             (set! level (+ level 1))
+             (open-scope)
+             (for-each statement (cpp-kids n))
+             (close-scope)
+             (set! level (- level 1))
+             (emit "}"))]
+          [(if)
+           (for-each (lambda (c) (emit (if (equal? c "") "//" (str "// " c)))) lead)
+           (if-statement n "" trail)]
+          [(switch)
+           (with-expressions n (list (first (cpp-kids n)))
+             (lambda (e)
+               (emit (str "switch (" (expr (first e) 0 "") ")"))
+               (emit "{")
+               (for-each (lambda (c)
+                           (if (null? (cpp-case-labels c))
+                               (emit "default:")
+                               (for-each (lambda (l) (emit (str "case " (expr l 0 "") ":"))) (cpp-case-labels c)))
+                           (emit "{")
+                           (set! level (+ level 1))
+                           (open-scope)
+                           (when (cpp-case-body c)
+                             (statement (cpp-case-body c)))
+                           (emit "break;")
+                           (close-scope)
+                           (set! level (- level 1))
+                           (emit "}"))
+                         (cpp-cases n))
+               (emit "}")))]
+          [(decl)
+           (let ([exprs (append (cpp-kids n) (cpp-ctor-args n))])
+             (with-expressions n exprs
+               (lambda (e)
+                 (let* ([dt (cpp-declared-type n)]
+                        [type (str (if (equal? dt "") "auto" dt) (if (cpp-ref? n) "&" ""))]
+                        [var-name (declare (cpp-id n) (cpp-text n))])
+                   (cond [(pair? (cpp-ctor-args n))
+                          (let* ([ctor-e (drop e (length (cpp-kids n)))]
+                                 [a (string-join (map (lambda (x) (expr x 0 "")) ctor-e) ", ")])
+                            (emit (str type " " var-name "{" a "};")))]
+                         [(pair? (cpp-kids n))
+                          (emit (str type " " var-name " = " (expr (first e) 0 "") ";"))]
+                         [else
+                          (emit (str type " " var-name ";"))])))))]
+          [(assign)
+           (with-expressions n (cpp-kids n)
+             (lambda (e)
+               (emit (str (expr (first e) 0 "") " = " (expr (second e) 0 "") ";"))))]
+          [(for)
+           (with-expressions n (list (first (cpp-kids n)) (second (cpp-kids n)))
+             (lambda (e)
+               (open-scope)
+               (let ([i (declare (cpp-id n) (cpp-text n))])
+                 (emit (str "for (int " i " = " (expr (first e) 0 "") "; " i " < " (expr (second e) 0 "") "; ++" i ")"))
+                 (braced (nth (cpp-kids n) 2))
+                 (close-scope))))]
+          [(assert)
+           (with-expressions n (cpp-kids n)
+             (lambda (e)
+               (emit (str "CODEGEN_ASSERT(" (expr (first e) 0 "") ");"))))]
+          [(with-value)
+           (statement (first (cpp-kids n)))
+           (let ([val (second (cpp-kids n))])
+             (when (member? (cpp-kind val) '(call method))
+               (statement val)))]
+          [else
+           (let ([no-comments (record-with np 'comments nil)])
+             (with-expressions no-comments (list np)
+               (lambda (e)
+                 (emit (str (expr (first e) 0 "") ";")))))])))
+
+    (if (or (%cpp-statement? (cpp-kind term)) (equal? (cpp-kind term) 'with-value))
+        (statement term)
+        (let* ([res (%lift term nil nil nil #f)]
+               [e (first res)]
+               [pre (second res)]
+               [lead (nth res 2)]
+               [trail (nth res 3)])
+          (for-each (lambda (c) (emit (if (equal? c "") "//" (str "// " c)))) lead)
+          (for-each statement pre)
+          (let ([text (expr e 0 "")])
+            (if (pair? trail)
+                (emit (str text " // " (string-join trail " ")))
+                (emit text)))))
+    (string-join lines "\n")))
+
+~ Formats C++ term into indented source code, with lines indented by maybe-indent levels.
+(define (cpp->string term . maybe-indent)
+  (unless (cpp? term)
+    (error (str "cpp->string takes C++ code, got " (%to-string term))))
+  (let ([indent (if (and (pair? maybe-indent) (int? (first maybe-indent))) (first maybe-indent) 0)])
+    (%print-cpp term indent)))

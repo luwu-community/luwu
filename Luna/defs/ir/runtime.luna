@@ -1,3 +1,22 @@
+~ The luaV_doarith* helper for metamethod tm (a lowering-time TMS value), as the address CallC takes
+(define (arith-helper tm)
+  (let ([helpers '((:TM_ADD :luaV_doarithadd) (:TM_SUB :luaV_doarithsub) (:TM_MUL :luaV_doarithmul) (:TM_DIV :luaV_doarithdiv)
+                   (:TM_IDIV :luaV_doarithidiv) (:TM_MOD :luaV_doarithmod) (:TM_POW :luaV_doarithpow) (:TM_UNM :luaV_doarithunm))])
+    (Field (Root :NativeContext)
+           (foldr (lambda (h otherwise)
+                    (gen:typed :size_t (gen:? (gen:== tm (first h)) (gen:offsetof :NativeContext (second h)) otherwise)))
+                  (gen:typed :size_t (gen:offsetof :NativeContext (second (last helpers))))
+                  (take helpers (- (length helpers) 1))))))
+
+~ luaV_gettable/luaV_settable (L, &rb, key, &ra): the key is a VM register, or a number constant placed in the code
+~ as a TValue
+(define (table-access name ra rb key)
+  (seq (choose (op-kind? key :VmReg)
+                   (native-call :None name :Ptr (Root :State) :Ptr (AddressOf rb) :Ptr (AddressOf key) :Ptr (AddressOf ra))
+                   (native-call :None name :Ptr (Root :State) :Ptr (AddressOf rb) :Ptr (Const :Ptr (number-tvalue (uint-val key)))
+                                :Ptr (AddressOf ra)))
+           (reload-base)))
+
 ~ Perform an arithmetic operation on TValues of any type
 ~ A: Rn (where to store the result)
 ~ B: Rn or Kn (lhs)
@@ -8,7 +27,10 @@
   (class :effect)
   (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
   (facts (reads (tvalue rb) (tvalue rc)) (writes (vm-slot ra)))
-  (lowering (do-arith ra rb rc tm)))
+  (lowering
+    (CallC :None (arith-helper (int-val tm)) (list :Ptr (Root :State)) (list :Ptr (AddressOf ra)) (list :Ptr (AddressOf rb))
+           (list :Ptr (AddressOf rc)))
+    (reload-base)))
 
 ~ Get length of a TValue of any type
 ~ A: Rn (where to store the result)
@@ -18,7 +40,9 @@
   (class :effect)
   (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
   (facts (reads (vm-slot rb)) (writes (vm-slot ra)))
-  (lowering (do-len ra rb)))
+  (lowering
+    (native-call :None :luaV_dolen :Ptr (Root :State) :Ptr (AddressOf ra) :Ptr (AddressOf rb))
+    (reload-base)))
 
 ~ Lookup a value in TValue of any type using a key of any type
 ~ A: Rn (where to store the result)
@@ -29,7 +53,8 @@
   (class :effect)
   (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
   (facts (reads (vm-slot rb) (tvalue key)) (writes (vm-slot ra)))
-  (lowering (get-table ra rb key)))
+  (lowering
+    (table-access :luaV_gettable ra rb key)))
 
 ~ Store a value into TValue of any type using a key of any type
 ~ A: Rn (value to store)
@@ -40,7 +65,8 @@
   (class :effect)
   (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
   (facts (reads (vm-slot ra) (vm-slot rb) (tvalue key)))
-  (lowering (set-table ra rb key)))
+  (lowering
+    (table-access :luaV_settable ra rb key)))
 
 ~ Concatenate multiple TValues into a string
 ~ A: Rn (value start)
@@ -52,7 +78,9 @@
   (class :effect)
   (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
   (facts (reads (vm-slots ra count)) (writes (vm-slots ra count)))
-  (lowering (concat ra count)))
+  (lowering
+    (native-call :None :luaV_concat :Ptr (Root :State) :I32 count :I32 (gen:- (gen:+ (vm-reg ra) count) 1))
+    (reload-base)))
 
 ~ Returns the string name of a type based on tag, alternative for type(x)
 ~ A: tag
@@ -60,7 +88,8 @@
   (operands [tag :tag])
   (result :pointer)
   (class :value)
-  (lowering (get-type tag)))
+  (lowering
+    (Load :Ptr (Index (Field (Root :Global) :global_State.ttypename) tag (gen:sizeof :TString* 8)))))
 
 ~ Returns the string name of a type either from a __type metatable field or just based on the tag, alternative for typeof(x)
 ~ A: Rn
@@ -70,4 +99,5 @@
   (class :value)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Reads VM register: STORE_TAG/STORE_TVALUE/etc. to the same VM register
   (facts (reads (vm-slot ra)))
-  (lowering (get-typeof ra)))
+  (lowering
+    (native-call :Ptr :luaT_objtypenamestr :Ptr (Root :State) :Ptr (AddressOf ra))))

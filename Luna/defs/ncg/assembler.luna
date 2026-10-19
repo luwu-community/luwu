@@ -1,0 +1,83 @@
+;; ============================================================================
+;; Assembler instructions: their signatures, and gen:build checked against them
+;; ============================================================================
+
+;; Per target, the instructions declared so far: (insn exact? returns overloads), where an overload is a list of
+;; parameters (type defaulted?), types as C++ strings
+(define %assembler nil) ; ((target instructions) ...)
+
+(define (%type-string t) (cond [(symbol? t) (symbol->string t)] [(keyword? t) (keyword->string t)] [else t]))
+
+~ A declared parameter: (type defaulted?), from a type with = at its end for a defaulted one
+(define (%parameter t)
+  (let ([s (%type-string t)])
+    (if (string-suffix? s "=")
+        (list (substring s 0 (- (string-length s) 1)) #t)
+        (list s #f))))
+
+~ One instruction entry (insn options... (ParamType...)...) as (insn exact? returns overloads). Options: :exact (integer
+~ arguments have to be of exactly the declared type) and :returns T (the instruction makes a value of type T).
+(define (%instruction entry)
+  (let loop ([parts (rest entry)] [exact #f] [returns #f])
+    (cond [(and (pair? parts) (equal? (first parts) :exact)) (loop (rest parts) #t returns)]
+          [(and (pair? parts) (equal? (first parts) :returns)) (loop (rest (rest parts)) exact (%type-string (second parts)))]
+          [(and (pair? parts) (keyword? (first parts))) (error "define-assembler entry options are :exact and :returns T, got" (first parts))]
+          [else (list (first entry) exact returns (map (lambda (overload) (map %parameter overload)) parts))])))
+
+~ Declares assembler instructions for a target: (define-assembler :a64 (add (RegisterA64 RegisterA64 RegisterA64) ...) ...),
+~ each overload's parameter types (a trailing = marks a defaulted one); gen:build calls are checked against them
+(define-macro (define-assembler target . entries)
+  `(%declare-instructions! ,target ',entries))
+
+(define (%declare-instructions! target entries)
+  (let ([known (assoc target %assembler)] [added (map %instruction entries)])
+    (set! %assembler
+          (cons (list target (append (if known (second known) nil) added))
+                (filter (lambda (t) (not (equal? (first t) target))) %assembler)))
+    nil))
+
+(define (%instruction-of target insn)
+  (let ([table (assoc target %assembler)])
+    (and table (assoc insn (second table)))))
+
+~ Whether an argument of C++ type `arg` (#f when unknown, which always fits) can be passed for parameter type `param`
+(define (%fits? arg param exact)
+  (cond [(or (not arg) (equal? arg param)) #t]
+        ;; A64 deletes the template overloads that would convert integers implicitly: those need a cast first
+        [(cpp-integral-type? param) (and (not exact) (cpp-integral-type? arg))]
+        [(member? param '("double" "float")) (and (not exact) (or (cpp-integral-type? arg) (member? arg '("double" "float"))))]
+        [(and (equal? %target :x64) (equal? param "OperandX64")) (or (equal? arg "RegisterX64") (cpp-integral-type? arg))]
+        [(and (equal? %target :a64) (equal? param "AddressA64")) (equal? arg "RegisterA64")]
+        [else #f]))
+
+(define (%overload-fits? overload types exact)
+  (let ([required (length (filter (lambda (p) (not (second p))) overload))])
+    (and (>= (length types) required) (<= (length types) (length overload))
+         (all? (lambda (pair) (%fits? (first pair) (first (second pair)) exact)) (zip types overload)))))
+
+(define (%join strings separator)
+  (if (null? strings) "" (foldl (lambda (s x) (str s separator x)) (first strings) (rest strings))))
+
+~ Checks build.insn with arguments of C++ types `types` (#f when unknown) against the target's declarations
+(define (%check-instruction insn types)
+  (when %target
+    (let ([declared (%instruction-of %target insn)] [target (keyword->string %target)])
+      (unless declared
+        (error (str "build." (symbol->string insn) " isn't a declared :" target " instruction (declare it with define-assembler in defs/cpp/"
+                    target "-assembler.luna)")))
+      (unless (any? (lambda (o) (%overload-fits? o types (second declared))) (nth declared 3))
+        (error (str "No :" target " overload of build." (symbol->string insn) " takes ("
+                    (%join (map (lambda (t) (or t "?")) types) ", ") "); the declared ones are:"
+                    (apply str (map (lambda (o) (str "\n  build." (symbol->string insn) "("
+                                                     (%join (map (lambda (p) (if (second p) (str (first p) "=") (first p))) o) ", ") ")"))
+                                    (nth declared 3)))))))))
+
+~ (gen:build :insn args...): build.insn(args...), an assembler instruction, checked against the target's
+~ define-assembler signatures; typed by the declared :returns type when it makes a value
+(define (gen:build insn . args)
+  (let* ([name (string->symbol (keyword->string insn))]
+         [call (apply gen:method cpp:build insn args)]
+         [types (map cpp-type (rest (nth (gen:parts call) 2)))]
+         [declared (and %target (%instruction-of %target name))])
+    (%check-instruction name types)
+    (if (and declared (nth declared 2)) (gen:typed (string->keyword (nth declared 2)) call) call)))

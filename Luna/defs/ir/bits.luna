@@ -1,3 +1,12 @@
+~ Luau's int64 shift of a by n: with `toward` for 0 <= n <= 63, with `away` by -n for -63 <= n < 0, and 0 beyond
+~ that (everything is shifted out)
+(define (int64-shift toward away a n)
+  (let* ([amount n])
+    ~ |amount| > 63 is (amount + 63) > 126, unsigned
+    (Select :I64 (ICmp :ugt :I64 (Add :I64 amount 63) 126)
+            0
+            (Select :I64 (ICmp :slt :I64 amount 0) (away :I64 a (Sub :I64 0 amount)) (toward :I64 a amount)))))
+
 ~ Performs bitwise shift on an int64
 ~ A: int64 (source)
 ~ B: int64 (shift amount; negative reverses direction, |amount| >= 64 returns 0 or sign-fill)
@@ -5,7 +14,8 @@
   (operands [a :int64] [b :int64])
   (result :int64)
   (class :value)
-  (lowering (bitlshift-int64 a b)))
+  (lowering
+    (int64-shift Shl ShrU a b)))
 
 ~ Performs bitwise shift on an int64
 ~ A: int64 (source)
@@ -14,7 +24,8 @@
   (operands [a :int64] [b :int64])
   (result :int64)
   (class :value)
-  (lowering (bitrshift-int64 a b)))
+  (lowering
+    (int64-shift ShrU Shl a b)))
 
 ~ Performs bitwise shift on an int64
 ~ A: int64 (source)
@@ -23,7 +34,12 @@
   (operands [a :int64] [b :int64])
   (result :int64)
   (class :value)
-  (lowering (bitarshift-int64 a b)))
+  (lowering
+    (let* ([n b])
+      ~ beyond 63 to the right everything is the sign; beyond 63 to the left everything is shifted out
+      (Select :I64 (ICmp :sgt :I64 n 63) (ShrS :I64 a 63)
+              (Select :I64 (ICmp :slt :I64 n -63) 0
+                      (Select :I64 (ICmp :slt :I64 n 0) (Shl :I64 a (Sub :I64 0 n)) (ShrS :I64 a n)))))))
 
 ~ Performs bitwise rotate on an int64
 ~ A: int64 (source)
@@ -32,7 +48,9 @@
   (operands [a :int64] [b :int64])
   (result :int64)
   (class :value)
-  (lowering (bitlrotate-int64 a b)))
+  (lowering
+    ~ a left rotate is a right rotate by the negated amount
+    (RotR :I64 a (Sub :I64 0 b))))
 
 ~ Performs bitwise rotate on an int64
 ~ A: int64 (source)
@@ -41,7 +59,8 @@
   (operands [a :int64] [b :int64])
   (result :int64)
   (class :value)
-  (lowering (bitrrotate-int64 a b)))
+  (lowering
+    (RotR :I64 a b)))
 
 ~ Returns the number of consecutive zero bits in A
 ~ Result is Int64 (not Int) for consistency with other int64 operations, even though value is in [0, 64]
@@ -50,7 +69,8 @@
   (operands [a :int64])
   (result :int64)
   (class :value)
-  (lowering (bitcountlz-int64 a)))
+  (lowering
+    (Clz :I64 a)))
 
 ~ Returns the number of consecutive zero bits in A
 ~ Result is Int64 (not Int) for consistency with other int64 operations, even though value is in [0, 64]
@@ -59,7 +79,8 @@
   (operands [a :int64])
   (result :int64)
   (class :value)
-  (lowering (bitcountrz-int64 a)))
+  (lowering
+    (Ctz :I64 a)))
 
 ~ Performs bitwise shift/rotate on an unsigned integer
 ~ A: int (source)
@@ -68,7 +89,8 @@
   (operands [a :int] [b :int])
   (result :int)
   (class :value)
-  (lowering (bitlshift-uint a b)))
+  (lowering
+    (Shl :I32 a b)))
 
 ~ Performs bitwise shift/rotate on an unsigned integer
 ~ A: int (source)
@@ -77,7 +99,8 @@
   (operands [a :int] [b :int])
   (result :int)
   (class :value)
-  (lowering (bitrshift-uint a b)))
+  (lowering
+    (ShrU :I32 a b)))
 
 ~ Performs bitwise shift/rotate on an unsigned integer
 ~ A: int (source)
@@ -86,7 +109,8 @@
   (operands [a :int] [b :int])
   (result :int)
   (class :value)
-  (lowering (bitarshift-uint a b)))
+  (lowering
+    (ShrS :I32 a b)))
 
 ~ Performs bitwise shift/rotate on an unsigned integer
 ~ A: int (source)
@@ -95,7 +119,9 @@
   (operands [a :int] [b :int])
   (result :int)
   (class :value)
-  (lowering (bitlrotate-uint a b)))
+  (lowering
+    ~ a left rotate is a right rotate by the negated amount
+    (RotR :I32 a (Sub :I32 0 b))))
 
 ~ Performs bitwise shift/rotate on an unsigned integer
 ~ A: int (source)
@@ -104,7 +130,8 @@
   (operands [a :int] [b :int])
   (result :int)
   (class :value)
-  (lowering (bitrrotate-uint a b)))
+  (lowering
+    (RotR :I32 a b)))
 
 ~ Returns the number of consecutive zero bits in A starting from the left-most (most significant) bit.
 ~ A: int
@@ -112,7 +139,8 @@
   (operands [a :int])
   (result :int)
   (class :value)
-  (lowering (bitcountlz-uint a)))
+  (lowering
+    (Clz :I32 a)))
 
 ~ Returns the number of consecutive zero bits in A starting from the left-most (most significant) bit.
 ~ A: int
@@ -120,4 +148,5 @@
   (operands [a :int])
   (result :int)
   (class :value)
-  (lowering (bitcountrz-uint a)))
+  (lowering
+    (Ctz :I32 a)))

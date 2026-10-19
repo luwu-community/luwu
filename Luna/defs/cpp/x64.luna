@@ -1,0 +1,124 @@
+;; ============================================================================
+;; C++ bindings for X64 (IrLoweringX64, IrRegAllocX64, EmitCommonX64)
+;; ============================================================================
+
+(define (x64:reg name) (gen:typed :RegisterX64 (gen:name name)))
+(define (x64:operand name) (gen:typed :OperandX64 (gen:name name)))
+
+;; Pinned VM state registers, scratch registers, and stack slot operands.
+(define x64:rBase (x64:reg :rBase))
+(define x64:rConstants (x64:reg :rConstants))
+(define x64:rState (x64:reg :rState))
+(define x64:rNativeContext (x64:reg :rNativeContext))
+(define x64:sClosure (x64:operand :sClosure))
+(define x64:sCode (x64:operand :sCode))
+(define x64:sTemporarySlot (x64:operand :sTemporarySlot))
+(define x64:rax (x64:reg :rax))
+(define x64:rcx (x64:reg :rcx))
+(define x64:rdx (x64:reg :rdx))
+(define x64:rdi (x64:reg :rdi))
+(define x64:ecx (x64:reg :ecx))
+(define x64:cl (x64:reg :cl))
+
+~ Returns the SizeX64 enum member corresponding to value type t.
+(define (x64:size t)
+  (gen:enum :SizeX64 (case t [(:I32 :U8 :S8 :U16 :S16) :dword] [(:I64 :Ptr) :qword] [else :xmmword])))
+
+~ Returns the memory access size keyword (:byte, :word, :dword, :qword, :xmmword) for value type t.
+(define (x64:mem-size t)
+  (case t [(:U8 :S8) :byte] [(:U16 :S16) :word] [(:I32 :F32) :dword] [(:I64 :Ptr :F64) :qword] [:V128 :xmmword]))
+
+~ Emits a call converting register r to the specified size (:byte, :word, :dword, :qword).
+(define (x64:sized size r)
+  (gen:typed :RegisterX64 (gen:call (case size [:byte :byteReg] [:word :wordReg] [:dword :dwordReg] [:qword :qwordReg]) r)))
+
+~ Allocates a temporary scoped X64 register (ScopedRegX64) for value type t.
+(define (x64:temp-init t) (gen:typed :ScopedRegX64 (gen:call :ScopedRegX64 cpp:regs (x64:size t))))
+~ Retrieves the underlying RegisterX64 from a ScopedRegX64 wrapper.
+(define (x64:scoped-reg scoped) (gen:typed :RegisterX64 (gen:field scoped :reg)))
+
+~ Retrieves the RegisterX64 assigned to instruction result operand op.
+(define (x64:reg-op op) (gen:typed :RegisterX64 (gen:method cpp:lowering :regOp op)))
+
+~ Returns an OperandX64 for IR operand op of type t, using a register, memory location, or immediate as appropriate.
+(define (x64:value-operand t op)
+  (gen:typed :OperandX64
+    (case t
+      [:I32 (gen:method cpp:lowering :memRegUintOp op)]
+      [:I64 (gen:method cpp:lowering :memRegInt64Op op)]
+      [:F64 (gen:method cpp:lowering :memRegDoubleOp op)]
+      [:F32 (gen:method cpp:lowering :memRegFloatOp op)]
+      [else (x64:reg-op op)])))
+
+~ Constructs an X64 memory operand at size[base + offset].
+(define (x64:mem size base offset) (gen:typed :OperandX64 (gen:index (gen:name size) (cpp-plus base offset))))
+~ Constructs an X64 indexed memory operand at size[base + index * scale + offset].
+(define (x64:mem-indexed size base index scale offset)
+  (gen:typed :OperandX64
+    (gen:index (gen:name size) (cpp-plus (gen:+ base (if (equal? (known-number scale) 1) (x64:sized :qword index) (gen:* (x64:sized :qword index) scale))) offset))))
+
+~ Returns an OperandX64 referencing the TValue of IR operand op with an additional byte offset.
+(define (x64:tvalue-mem size op offset)
+  (gen:typed :OperandX64
+    (gen:? (op-kind? op :VmReg)
+           (gen:index (gen:name size) (gen:+ x64:rBase (cpp-plus (gen:* (vm-reg op) (gen:sizeof :TValue)) offset)))
+           (gen:? (op-kind? op :VmConst)
+                  (gen:index (gen:name size) (gen:+ x64:rConstants (cpp-plus (gen:* (vm-const op) (gen:sizeof :TValue)) offset)))
+                  (gen:index (gen:name size) (cpp-plus (x64:reg-op op) offset))))))
+
+~ Emits a constant-pool memory operand for double value v.
+(define (x64:f64 v) (gen:typed :OperandX64 (gen:build :f64 (cpp-double v))))
+~ Emits a constant-pool memory operand for float value v.
+(define (x64:f32 v) (gen:typed :OperandX64 (gen:build :f32 (gen:cast :float (cpp-double v)))))
+~ Emits a constant-pool memory operand for 64-bit integer value v.
+(define (x64:i64 v) (gen:typed :OperandX64 (gen:build :i64 (gen:cast :int64_t v))))
+~ Emits a constant-pool memory operand for 32-bit integer value v.
+(define (x64:i32 v) (gen:typed :OperandX64 (gen:build :i32 (gen:cast :int32_t v))))
+~ Emits a constant-pool memory operand for a 128-bit vector of four 32-bit unsigned integers.
+(define (x64:u32x4 x y z w) (gen:typed :OperandX64 (gen:build :u32x4 (gen:cast :uint32_t x) (gen:cast :uint32_t y) (gen:cast :uint32_t z) (gen:cast :uint32_t w))))
+~ Emits a constant-pool memory operand for a 128-bit vector of four 32-bit floats.
+(define (x64:f32x4 x y z w) (gen:typed :OperandX64 (gen:build :f32x4 (gen:cast :float (cpp-double x)) (gen:cast :float (cpp-double y)) (gen:cast :float (cpp-double z)) (gen:cast :float (cpp-double w)))))
+
+;; Masks that clear the sign bit of floating-point values for absolute-value calculations.
+(define x64:f64-abs-mask 0x7fffffffffffffff)
+(define x64:f32-abs-mask 0x7fffffff)
+
+~ Returns the ConditionX64 corresponding to integer condition c.
+(define (x64:cond-int c) (gen:typed :ConditionX64 (gen:call :getConditionInt (cond-ir c))))
+~ Returns the ConditionX64 enum member for named condition.
+(define (x64:cond name) (gen:typed :ConditionX64 (gen:enum :ConditionX64 name)))
+~ Returns the reverse condition code for cond.
+(define (x64:cond-negated cond) (gen:typed :ConditionX64 (gen:call :getReverseCondition cond)))
+
+;; AVX comparison predicate immediate values (vcmpsd, vcmpss, vcmpps).
+(define x64:EQ_OQ 0x00)
+(define x64:LT_OS 0x01)
+(define x64:LE_OS 0x02)
+(define x64:NEQ_UQ 0x04)
+(define x64:NLT_US 0x05)
+(define x64:NLE_US 0x06)
+(define x64:NGE_US 0x09)
+(define x64:NGT_US 0x0a)
+(define x64:GE_OS 0x0d)
+(define x64:GT_OS 0x0e)
+
+;; Mapping from float condition keywords to their AVX comparison predicate values.
+(define %x64-fp-predicates
+  (list (list :eq x64:EQ_OQ) (list :ne x64:NEQ_UQ) (list :lt x64:LT_OS) (list :le x64:LE_OS) (list :gt x64:GT_OS)
+        (list :ge x64:GE_OS) (list :nlt x64:NLT_US) (list :nle x64:NLE_US) (list :ngt x64:NGT_US) (list :nge x64:NGE_US)))
+
+~ Returns the AVX comparison predicate immediate for float condition c.
+(define (x64:fp-predicate c)
+  (if (keyword? c)
+      (let ([p (assoc c %x64-fp-predicates)])
+        (if p (second p) (error "x64:fp-predicate takes a float condition, got" c)))
+      (foldr (lambda (p otherwise)
+               (gen:typed :int (gen:? (gen:== (cond-ir c) (cond-ir (first p))) (second p) otherwise)))
+             (gen:typed :int (second (first %x64-fp-predicates)))
+             (rest %x64-fp-predicates))))
+
+~ Returns the RoundingModeX64 enum member for rounding mode name.
+(define (x64:rounding name) (gen:enum :RoundingModeX64 name))
+
+~ Emits a test checking whether the target CPU supports feature name.
+(define (x64:feature? name) (gen:!= (gen:& (gen:field cpp:build :features) (gen:name name)) 0))

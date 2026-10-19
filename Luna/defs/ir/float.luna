@@ -1,3 +1,6 @@
+~ 0.49999999999999994, the double just below 0.5 (bits 0x3fdfffffffffffff)
+(define round-half-down (gen:typed :double (gen:call :std::nextafter 0.5 0.0)))
+
 ~ Add/Sub/Mul/Div/Idiv/Mod two double numbers
 ~ A, B: double
 ~ When compiling for X64, B can also be Rn or Kn
@@ -7,7 +10,8 @@
   (result :double)
   (class :value)
   (location-tracking :none)
-  (lowering (mod-num a b)))
+  (lowering
+    (FSub :F64 a (FMul :F64 (Floor :F64 (FDiv :F64 a b)) b))))
 
 ~ A * B + C
 ~ A, B, C: double
@@ -15,7 +19,8 @@
   (operands [a :double] [b :double] [c :double])
   (result :double)
   (class :value)
-  (lowering (muladd-num a b c)))
+  (lowering
+    (Fma :F64 a b c)))
 
 ~ Negate a double number
 ~ A: double
@@ -23,7 +28,8 @@
   (operands [a :double])
   (result :double)
   (class :value)
-  (lowering (unm-num a)))
+  (lowering
+    (FNeg :F64 a)))
 
 ~ Round number to nearest integer number, rounding half-way cases away from zero (math.round)
 ~ A: double
@@ -34,7 +40,9 @@
   (result :double)
   (class :value)
   (location-tracking :none)
-  (lowering (round-num a)))
+  (lowering
+    ~ halfway cases round away from zero: a + copysign(0.49999999999999994, a), truncated (0.5 would round 0.49999999999999994 up)
+    (Trunc :F64 (FAdd :F64 a (Or :F64 (And :F64 a -0.0) round-half-down)))))
 
 ~ Get absolute value of the argument (math.abs)
 ~ A: double
@@ -45,7 +53,8 @@
   (result :double)
   (class :value)
   (location-tracking :none)
-  (lowering (abs-num a)))
+  (lowering
+    (FAbs :F64 a)))
 
 ~ Get the sign of the argument (math.sign)
 ~ A: double
@@ -53,7 +62,9 @@
   (operands [a :double])
   (result :double)
   (class :value)
-  (lowering (sign-num a)))
+  (lowering
+    ~ 0 for NaN, like for 0
+    (Select :F64 (FCmp :gt :F64 a 0.0) 1.0 (Select :F64 (FCmp :lt :F64 a 0.0) -1.0 0.0))))
 
 ~ Negate a float number
 ~ A: float
@@ -61,7 +72,8 @@
   (operands [a :float])
   (result :float)
   (class :value)
-  (lowering (unm-float a)))
+  (lowering
+    (FNeg :F32 a)))
 
 ~ Get absolute value of the argument
 ~ A: float
@@ -69,7 +81,8 @@
   (operands [a :float])
   (result :float)
   (class :value)
-  (lowering (abs-float a)))
+  (lowering
+    (FAbs :F32 a)))
 
 ~ Get the sign of the argument
 ~ A: float
@@ -77,7 +90,9 @@
   (operands [a :float])
   (result :float)
   (class :value)
-  (lowering (sign-float a)))
+  (lowering
+    ~ 0 for NaN, like for 0
+    (Select :F32 (FCmp :gt :F32 a 0.0) 1.0 (Select :F32 (FCmp :lt :F32 a 0.0) -1.0 0.0))))
 
 ~ Select B if C == D, otherwise select A
 ~ A, B: double (endpoints)
@@ -86,4 +101,5 @@
   (operands [a :double] [b :double] [c :double] [d :double])
   (result :double)
   (class :value)
-  (lowering (select-num a b c d)))
+  (lowering
+    (Select :F64 (FCmp :eq :F64 c d) b a)))

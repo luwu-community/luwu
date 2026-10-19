@@ -17,14 +17,9 @@ namespace LunaTest
 
 namespace fs = std::filesystem;
 
-// IR commands with the rules that lower them
-inline const char* kRuleA = "(define-ircmd RULE_A (operands [a :any]) (class :effect) (lowering (rule-a a)))\n"
-                            "(define-rule (rule-a [a :op]) (unsupported!))";
-inline const char* kRuleB = "(define-ircmd RULE_B (operands [a :any]) (class :effect) (lowering (rule-b a)))\n"
-                            "(define-rule (rule-b [a :op]) (unsupported!))";
-
-// Just the command, for tests that write rule-a themselves
-inline const char* kCmdA = "(define-ircmd RULE_A (operands [a :any]) (class :effect) (lowering (rule-a a)))\n";
+// IR commands (their lowering bodies aren't compiled while the micro-op pipeline replaces the rule compiler)
+inline const char* kCmdA = "(define-ircmd CMD_A (operands [a :any]) (class :effect) (lowering (Abort)))\n";
+inline const char* kCmdB = "(define-ircmd CMD_B (operands [a :any]) (class :effect) (lowering (Abort)))\n";
 
 // Fresh temporary directory that is also the working directory for the test, so paths in diagnostics stay short
 // and relative (e.g. "root.luna:1:1")

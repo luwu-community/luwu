@@ -1,13 +1,12 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Driver.h"
 
-#include "Ast.h"
-#include "IrCmds.h"
-#include "Loader.h"
-#include "Lowering/Emitter.h"
-#include "CompileError.h"
+#include "Core/Ast.h"
+#include "Core/Loader.h"
+#include "Core/CompileError.h"
 
-#include "Describe.h"
+#include "Core/Describe.h"
+#include "Core/Evaluator.h"
 
 #include <fstream>
 #include <ostream>
@@ -17,9 +16,10 @@
 #include <vector>
 
 static const char* kUsage =
-    "Usage: luwu-dsl-compiler <root.luna> <output-dir> [--public-output <dir>] [-MF <depfile> [-MT <target>]]\n"
+    "Usage: luwu-dsl-compiler <root.luna> <output-dir> [--public-output <dir>] [--lowering-output <dir>] [-MF <depfile> [-MT <target>]]\n"
     "       luwu-dsl-compiler --list-files <root.luna>\n"
-    "       luwu-dsl-compiler --describe [all|core|a64|x64]\n";
+    "       luwu-dsl-compiler --eval <file.luna>\n"
+    "       luwu-dsl-compiler --describe\n";
 
 // Leaves an up-to-date file untouched, so its timestamp doesn't trigger rebuilds of everything that includes it
 static bool writeIfChanged(const std::string& path, const std::string& text, bool& changed)
@@ -59,14 +59,14 @@ static std::string escapeMakePath(const std::string& path)
 
 // Make-style dependency file: the target depends on every loaded .luna file. Each file also gets an empty rule, so
 // deleting or renaming one doesn't break the build (like the compiler's -MP).
-static std::string makeDepfile(const std::string& target, const std::vector<Luwu::Dsl::SourceFile>& files)
+static std::string makeDepfile(const std::string& target, const std::vector<std::string>& files)
 {
     std::string text = escapeMakePath(target) + ":";
     for (const auto& file : files)
-        text += " \\\n  " + escapeMakePath(file.path);
+        text += " \\\n  " + escapeMakePath(file);
     text += "\n";
     for (const auto& file : files)
-        text += "\n" + escapeMakePath(file.path) + ":\n";
+        text += "\n" + escapeMakePath(file) + ":\n";
     return text;
 }
 
@@ -95,21 +95,41 @@ static void reportError(std::ostream& err, const Luwu::Dsl::CompileError& e, con
 namespace Luwu::Dsl
 {
 
+std::vector<std::string> installNcg(Evaluator& evaluator)
+{
+    SourceLoader loader;
+    // kept alive with the evaluator: closures point into the forms they were made from
+    for (const auto& form : loader.load(std::string(LUNA_DEFS_DIR) + "/ncg/cpp.luna"))
+        evaluator.eval(evaluator.keep(form));
+    for (const auto& form : loader.load(std::string(LUNA_DEFS_DIR) + "/ncg/ircmds.luna"))
+        evaluator.eval(evaluator.keep(form));
+
+    evaluator.resetGensym();
+
+    std::vector<std::string> files;
+    for (const auto& f : loader.files())
+        files.push_back(f.path);
+    return files;
+}
+
 int runDriver(const std::vector<std::string>& args, std::ostream& out, std::ostream& err)
 {
     std::vector<std::string> positional;
     std::string depfilePath;
     std::string depTarget;
     std::string publicOutputDir;
+    std::string loweringOutputDir;
     bool listFiles = false;
+    bool evalOnly = false;
 
     for (size_t i = 0; i < args.size(); ++i)
     {
         const std::string& arg = args[i];
         if (arg == "--describe" || arg == "--docs" || arg == "--list-forms")
         {
-            std::string filter = (i + 1 < args.size()) ? args[i + 1] : "";
-            Luwu::Dsl::printDocs(out, filter);
+            Luwu::Dsl::Evaluator evaluator;
+            Luwu::Dsl::installNcg(evaluator);
+            Luwu::Dsl::printDocs(out, evaluator);
             return 0;
         }
         if (arg == "--help" || arg == "-h")
@@ -121,9 +141,13 @@ int runDriver(const std::vector<std::string>& args, std::ostream& out, std::ostr
         {
             listFiles = true;
         }
-        else if ((arg == "-MF" || arg == "-MT" || arg == "--public-output") && i + 1 < args.size())
+        else if (arg == "--eval")
         {
-            (arg == "-MF" ? depfilePath : arg == "-MT" ? depTarget : publicOutputDir) = args[++i];
+            evalOnly = true;
+        }
+        else if ((arg == "-MF" || arg == "-MT" || arg == "--public-output" || arg == "--lowering-output") && i + 1 < args.size())
+        {
+            (arg == "-MF" ? depfilePath : arg == "-MT" ? depTarget : arg == "--public-output" ? publicOutputDir : loweringOutputDir) = args[++i];
         }
         else if (!arg.empty() && arg[0] == '-')
         {
@@ -136,7 +160,7 @@ int runDriver(const std::vector<std::string>& args, std::ostream& out, std::ostr
         }
     }
 
-    if (positional.size() != (listFiles ? 1u : 2u) || (!depTarget.empty() && depfilePath.empty()))
+    if (positional.size() != (listFiles || evalOnly ? 1u : 2u) || (!depTarget.empty() && depfilePath.empty()))
     {
         err << kUsage;
         return 1;
@@ -156,6 +180,18 @@ int runDriver(const std::vector<std::string>& args, std::ostream& out, std::ostr
             return 0;
         }
 
+        // The program is evaluated; its define-ircmd forms register the commands the headers are made from
+        Luwu::Dsl::Evaluator evaluator;
+        std::vector<std::string> moduleFiles = Luwu::Dsl::installNcg(evaluator);
+        Luwu::Dsl::Value last = evaluator.evalProgram(program);
+
+        // --eval prints the program's last value
+        if (evalOnly)
+        {
+            out << Luwu::Dsl::toString(last) << "\n";
+            return 0;
+        }
+
         auto trimDir = [](std::string dir) {
             while (!dir.empty() && (dir.back() == '/' || dir.back() == '\\'))
                 dir.pop_back();
@@ -166,35 +202,39 @@ int runDriver(const std::vector<std::string>& args, std::ostream& out, std::ostr
         // headers unless given
         std::string publicDir = publicOutputDir.empty() ? outputDir : trimDir(publicOutputDir);
 
-        std::vector<Luwu::Dsl::IrCmdDef> cmds = Luwu::Dsl::parseIrCmds(program);
-        std::vector<Luwu::Dsl::Rule> rules = Luwu::Dsl::parseRules(program);
-        rules = Luwu::Dsl::expandRules(rules);
-        std::vector<Luwu::Dsl::LoweringInstance> lowerings = Luwu::Dsl::linkLowerings(cmds, rules);
-
-        std::vector<Luwu::Dsl::DispatchEntry> dispatch = Luwu::Dsl::loweringDispatch(cmds);
-
-        std::ostringstream a64Out;
-        Luwu::Dsl::emitA64(a64Out, lowerings, dispatch);
-
-        std::ostringstream x64Out;
-        Luwu::Dsl::emitX64(x64Out, lowerings, dispatch);
-
-        std::ostringstream infoOut;
-        Luwu::Dsl::emitIrCmdInfo(infoOut, cmds);
-
-        std::ostringstream enumOut;
-        Luwu::Dsl::emitIrCmdEnum(enumOut, cmds);
-
-        std::ostringstream effectsOut;
-        Luwu::Dsl::emitIrCmdEffects(effectsOut, cmds);
-
-        std::vector<std::pair<std::string, std::string>> outputs = {
-            {outputDir + "/LoweringRulesA64.h", a64Out.str()},
-            {outputDir + "/LoweringRulesX64.h", x64Out.str()},
-            {publicDir + "/IrCmdInfo.h", infoOut.str()},
-            {publicDir + "/IrCmd.h", enumOut.str()},
-            {publicDir + "/IrCmdEffects.h", effectsOut.str()},
+        // The headers, from defs/ncg/ircmds.luna: ((:public|:lowering "name" text) ...)
+        auto call = [&](const std::string& name, std::vector<Luwu::Dsl::Value> args) {
+            const Luwu::Dsl::Value* fn = evaluator.globals()->lookup(name);
+            if (!fn)
+                throw Luwu::Dsl::CompileError(Luwu::Dsl::SourceLocation{}, name + " isn't defined (defs/ncg/ircmds.luna)");
+            return evaluator.apply(*fn, std::move(args), Luwu::Dsl::SExpr{});
         };
+        bool lowering = !loweringOutputDir.empty();
+        std::vector<Luwu::Dsl::Value> generated;
+        Luwu::Dsl::listToVector(call("ncg-outputs", {Luwu::Dsl::Value::boolean(lowering)}), generated);
+        std::vector<std::pair<std::string, std::string>> outputs;
+        for (const auto& g : generated)
+        {
+            std::vector<Luwu::Dsl::Value> parts;
+            Luwu::Dsl::listToVector(g, parts);
+            std::string dir = parts[0].text == ":lowering" ? trimDir(loweringOutputDir) : publicDir;
+            outputs.push_back({dir + "/" + parts[1].text, parts[2].text});
+        }
+
+        // The micro-op pipeline's lowering, written where asked (CodeGen's LoweringRules headers are frozen until it lowers
+        // everything)
+        if (lowering)
+        {
+            std::vector<Luwu::Dsl::Value> notLowered;
+            Luwu::Dsl::listToVector(call("ncg-not-lowered", {}), notLowered);
+            if (!notLowered.empty())
+            {
+                out << "luwu-dsl-compiler: " << notLowered.size() << " command(s) not lowered by the micro-op pipeline yet:";
+                for (const auto& name : notLowered)
+                    out << " " << name.text;
+                out << "\n";
+            }
+        }
 
         int updated = 0;
         for (const auto& [path, text] : outputs)
@@ -218,14 +258,17 @@ int runDriver(const std::vector<std::string>& args, std::ostream& out, std::ostr
             }
 
             bool changed = false;
-            if (!writeIfChanged(depfilePath, makeDepfile(target, loader.files()), changed))
+            std::vector<std::string> files = moduleFiles;
+            for (const auto& file : loader.files())
+                files.push_back(file.path);
+            if (!writeIfChanged(depfilePath, makeDepfile(target, files), changed))
             {
                 err << "Error: Could not write depfile: " << depfilePath << "\n";
                 return 1;
             }
         }
 
-        out << "luwu-dsl-compiler: compiled " << cmds.size() << " IR command(s) and " << rules.size() << " rule(s) from " << loader.files().size() << " file(s) ("
+        out << "luwu-dsl-compiler: compiled " << Luwu::Dsl::toString(call("ncg-command-count", {})) << " IR command(s) from " << loader.files().size() << " file(s) ("
                   << inputPath << ") -> " << outputDir << ", " << updated << " output(s) updated\n";
         return 0;
     }

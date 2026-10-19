@@ -282,6 +282,127 @@ inline void emitLoadFloatBits(AssemblyBuilderA64& build, RegisterA64 dst, Regist
     }
 }
 
+// A register move of either kind (omitted when the registers are the same)
+inline void emitMoveA64(AssemblyBuilderA64& build, RegisterA64 dst, RegisterA64 src)
+{
+    if (dst == src)
+        return;
+    if (dst.kind == KindA64::s || dst.kind == KindA64::d)
+        build.fmov(dst, src);
+    else
+        build.mov(dst, src); // general-purpose and vector registers
+}
+
+// A floating-point constant (a compile-time value, not an IR operand) into dst; scratch is a 64-bit register
+inline void emitLoadFpConst(AssemblyBuilderA64& build, RegisterA64 dst, RegisterA64 scratch, double val)
+{
+    if (dst.kind == KindA64::s)
+    {
+        if (AssemblyBuilderA64::isFmovSupportedFp32(float(val)))
+            build.fmov(dst, float(val));
+        else
+            emitLoadFloatBits(build, dst, scratch, float(val));
+    }
+    else if (AssemblyBuilderA64::isFmovSupportedFp64(val))
+        build.fmov(dst, val);
+    else
+        emitLoadDoubleBits(build, dst, scratch, val);
+}
+
+// Moves values into call argument registers as one parallel move: no source is overwritten before it's read. x16 and
+// q31 break cycles. The sources stay live across the spill before the call (see sources()).
+struct ArgMovesA64
+{
+    RegisterA64 dsts[16];
+    RegisterA64 srcs[16];
+    size_t count = 0;
+
+    void add(RegisterA64 dst, RegisterA64 src)
+    {
+        CODEGEN_ASSERT(count < 16);
+        dsts[count] = dst;
+        srcs[count] = src;
+        ++count;
+    }
+
+    const RegisterA64* sources() const
+    {
+        return srcs;
+    }
+
+    static bool sameReg(RegisterA64 a, RegisterA64 b)
+    {
+        bool fa = a.kind == KindA64::s || a.kind == KindA64::d || a.kind == KindA64::q;
+        bool fb = b.kind == KindA64::s || b.kind == KindA64::d || b.kind == KindA64::q;
+        return fa == fb && a.index == b.index;
+    }
+
+    void emit(AssemblyBuilderA64& build)
+    {
+        bool done[16] = {};
+        size_t remaining = count;
+        for (size_t i = 0; i < count; ++i)
+        {
+            if (sameReg(dsts[i], srcs[i]))
+            {
+                done[i] = true;
+                --remaining;
+            }
+        }
+
+        while (remaining)
+        {
+            bool progress = false;
+            for (size_t i = 0; i < count; ++i)
+            {
+                if (done[i])
+                    continue;
+                // A destination still holding another pending move's source has to wait
+                bool blocked = false;
+                for (size_t j = 0; j < count && !blocked; ++j)
+                    blocked = j != i && !done[j] && sameReg(srcs[j], dsts[i]);
+                if (blocked)
+                    continue;
+                move(build, dsts[i], srcs[i]);
+                done[i] = true;
+                --remaining;
+                progress = true;
+            }
+            if (progress)
+                continue;
+
+            // Only cycles are left: park one source in scratch and redirect its readers
+            for (size_t i = 0; i < count; ++i)
+            {
+                if (done[i])
+                    continue;
+                bool fp = srcs[i].kind == KindA64::s || srcs[i].kind == KindA64::d || srcs[i].kind == KindA64::q;
+                RegisterA64 scratch = fp ? castReg(srcs[i].kind, q31) : castReg(srcs[i].kind == KindA64::w ? KindA64::w : KindA64::x, x16);
+                RegisterA64 parked = srcs[i];
+                move(build, scratch, parked);
+                for (size_t j = 0; j < count; ++j)
+                {
+                    if (!done[j] && sameReg(srcs[j], parked))
+                        srcs[j] = castReg(srcs[j].kind, scratch);
+                }
+                break;
+            }
+        }
+    }
+
+    static void move(AssemblyBuilderA64& build, RegisterA64 dst, RegisterA64 src)
+    {
+        bool fd = dst.kind == KindA64::s || dst.kind == KindA64::d || dst.kind == KindA64::q;
+        bool fs = src.kind == KindA64::s || src.kind == KindA64::d || src.kind == KindA64::q;
+        if (fd != fs)
+            build.fmov(dst, src);
+        else if (fd)
+            build.fmov(dst, src);
+        else
+            build.mov(dst, src);
+    }
+};
+
 inline void emitLoadInt64(AssemblyBuilderA64& build, RegisterA64 dst, int64_t val)
 {
     uint64_t u = uint64_t(val);

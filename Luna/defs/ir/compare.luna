@@ -1,3 +1,11 @@
+~ A tag-and-value comparison (CMP_SPLIT_TVALUE) from the values' comparison (0 or 1). With a tag-a that isn't a
+~ constant, the tags are compared too: equal means both are, not equal means either is.
+(define (split-compare cond tag-a tag-b values)
+  (choose (constant? tag-a)
+          values
+          (let ([tags (Select :I32 (ICmp cond :I32 tag-a (tag-val tag-b)) 1 0)])
+            (choose (cond-is? cond :Equal) (And :I32 tags values) (Or :I32 tags values)))))
+
 ~ Select one of the TValues based on the truthyness of A
 ~ A: TValue
 ~ B: TValue (if true)
@@ -6,7 +14,21 @@
   (operands [cond-val :tvalue] [lhs :tvalue] [rhs :tvalue])
   (result :tvalue)
   (class :value)
-  (lowering (select-if-truthy cond-val lhs rhs)))
+  (lowering
+    (let ([result (variable :V128)] [rhs-value (Copy :V128 rhs)] [tag (ExtractLane :I32 cond-val 3)])
+      ~ the result is lhs, or rhs when the condition is falsy (nil, none or false). rhs is copied before the
+      ~ branches, so a reload of it happens on both paths.
+      (seq rhs-value
+           (Set result lhs)
+           (labels (use-rhs done)
+             (Guard (ICmp :ne :I32 tag :LUA_TSYMNONE) use-rhs)
+             (Guard (ICmp :ne :I32 tag :LUA_TNIL) use-rhs)
+             (Guard (ICmp :eq :I32 tag :LUA_TBOOLEAN) done)
+             (Guard (ICmp :eq :I32 (ExtractLane :I32 cond-val 0) 0) done)
+             (Label use-rhs)
+             (Set result rhs-value)
+             (Label done))
+           result))))
 
 ~ Perform a TValue comparison, supported conditions are LessEqual, Less and Equal
 ~ A, B: Rn
@@ -18,7 +40,20 @@
   (flags :deprecated/is-unsafe-to-sink :dirty-high-bits) ; unsafe to sink: Can execute user metamethods via luaV_equalval/luaV_lessthan/luaV_lessequal
   (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
   (facts (reads (vm-slot a) (vm-slot b)))
-  (lowering (cmp-any a b cond)))
+  (lowering
+    (let ([result (variable :I32)])
+      (labels (skip done)
+        ~ luaV_equalval wants equal tags: values with different tags are different, without the call
+        (choose (cond-is? cond :Equal)
+                (Guard (ICmp :eq :I32 (Load :I32 (Field a :TValue.tt)) (Load :I32 (Field b :TValue.tt))) skip))
+        (Set result (CallC :I32 (Field (Root :NativeContext)
+                                       (gen:? (cond-is? cond :LessEqual) (gen:offsetof :NativeContext :luaV_lessequal)
+                                              (gen:? (cond-is? cond :Less) (gen:offsetof :NativeContext :luaV_lessthan)
+                                                     (gen:offsetof :NativeContext :luaV_equalval))))
+                           (list :Ptr (Root :State)) (list :Ptr (AddressOf a)) (list :Ptr (AddressOf b))))
+        (reload-base)
+        (choose (cond-is? cond :Equal) (seq (Goto done) (Label skip) (Set result 0) (Label done)))
+        result))))
 
 ~ Perform tag and value comparison. Result is an integer register containing 0 or 1
 ~ A: tag
@@ -30,7 +65,13 @@
   (operands [tag-a :tag] [tag-b :tag] [val-a :any] [val-b :any] [cond :cond])
   (result :int)
   (class :value)
-  (lowering (cmp-split-tvalue tag-a tag-b val-a val-b cond)))
+  (lowering
+    ~ tag-b is a constant: it says how to compare the values
+    (choose-cond
+      [(gen:== (tag-val tag-b) :LUA_TBOOLEAN) (split-compare cond tag-a tag-b (Select :I32 (ICmp cond :I32 val-a val-b) 1 0))]
+      [(gen:== (tag-val tag-b) :LUA_TSTRING) (split-compare cond tag-a tag-b (Select :I32 (ICmp cond :Ptr val-a val-b) 1 0))]
+      [(gen:== (tag-val tag-b) :LUA_TNUMBER) (split-compare cond tag-a tag-b (Select :I32 (FCmp cond :F64 val-a val-b) 1 0))]
+      [else (split-compare cond tag-a tag-b (Select :I32 (ICmp cond :I64 val-a val-b) 1 0))])))
 
 ~ Jump if tags are equal
 ~ A: tag or Rn
@@ -41,7 +82,8 @@
   (operands [a :tag|:Rn] [b :tag] [if-eq :block] [if-ne :block])
   (class :terminator)
   (facts (reads (tvalue a :tag)))
-  (lowering (jump-eq-tag a b if-eq if-ne)))
+  (lowering
+    (with-tag a (lambda (t) (Branch (ICmp :eq :I32 t b) if-eq if-ne)))))
 
 ~ Perform a conditional jump based on the result of double comparison
 ~ A, B: double
@@ -54,7 +96,8 @@
   (target-specific [:x64 [a :Rn]])
   (class :terminator)
   (location-tracking :none)
-  (lowering (jump-cmp-num a b cond if-true if-false)))
+  (lowering
+    (Branch (FCmp cond :F64 a b) if-true if-false)))
 
 ~ Perform a conditional jump based on the result of float comparison
 ~ A, B: float
@@ -64,7 +107,8 @@
 (define-ircmd JUMP_CMP_FLOAT
   (operands [a :float] [b :float] [cond :cond] [if-true :block] [if-false :block])
   (class :terminator)
-  (lowering (jump-cmp-float a b cond if-true if-false)))
+  (lowering
+    (Branch (FCmp cond :F32 a b) if-true if-false)))
 
 ~ Perform jump based on a numerical loop condition (step > 0 ? idx <= limit : limit <= idx)
 ~ A: double (index)
@@ -75,7 +119,13 @@
 (define-ircmd JUMP_FORN_LOOP_COND
   (operands [idx :double] [limit :double] [step :double] [loop :block] [exit :block])
   (class :terminator)
-  (lowering (jump-forn-loop-cond idx limit step loop exit)))
+  (lowering
+    ~ with step > 0 the loop goes on while index <= limit, otherwise while limit <= index
+    (labels (counting-up)
+      (Guard (FCmp :ngt :F64 step 0.0) counting-up)
+      (Branch (FCmp :nle :F64 limit idx) exit loop)
+      (Label counting-up)
+      (Branch (FCmp :nle :F64 idx limit) exit loop))))
 
 ~ Guard against a falsy tag+value
 ~ A: tag
@@ -88,7 +138,17 @@
   (class :guard)
   (location-tracking :none)
   (dead-store :live-ins-no-exit-sync)
-  (lowering (check-truthy tag val fail)))
+  (lowering
+    ~ a constant tag is a boolean (constant folding removes the others)
+    (choose (constant? tag)
+            (Guard (ICmp :ne :I32 val 0) fail)
+            (with-tag tag (lambda (t)
+              (labels (truthy)
+                (Guard (ICmp :ne :I32 t :LUA_TNIL) fail)
+                ~ anything other than nil and booleans is truthy
+                (Guard (ICmp :eq :I32 t :LUA_TBOOLEAN) truthy)
+                (Guard (ICmp :ne :I32 val 0) fail)
+                (Label truthy)))))))
 
 ~ Guard against executing in unsafe environment, exits to VM on check failure
 ~ A: block/vmexit/undef
@@ -96,7 +156,8 @@
 (define-ircmd CHECK_SAFE_ENV
   (operands [fail :block|:vmexit|:undef])
   (class :guard)
-  (lowering (check-safe-env fail)))
+  (lowering
+    (Guard (ICmp :ne :I32 (Load :U8 (Field (LoadPtr (Root :Closure) :Closure.env) :LuaTable.safeenv)) 0) fail)))
 
 ~ Guard against index overflowing the table array size
 ~ A: pointer (LuaTable)
@@ -106,7 +167,8 @@
 (define-ircmd CHECK_ARRAY_SIZE
   (operands [table :pointer] [size :int] [fail :block|:vmexit|:undef])
   (class :guard)
-  (lowering (check-array-size table size fail)))
+  (lowering
+    (Guard (ICmp :ugt :I32 (Load :I32 (Field table :LuaTable.sizearray)) size) fail)))
 
 ~ Guard against the result of number comparison being false
 ~ A, B: number
@@ -116,4 +178,5 @@
 (define-ircmd CHECK_CMP_NUM
   (operands [a :double] [b :double] [cond :cond] [fail :block|:vmexit|:undef])
   (class :guard)
-  (lowering (check-cmp-num a b cond fail)))
+  (lowering
+    (Guard (FCmp cond :F64 a b) fail)))
