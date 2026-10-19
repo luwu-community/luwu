@@ -750,6 +750,11 @@ AstStat* Parser::parseStat()
                 nextLexeme();
                 return parseTypeAlias(expr->location, /* exported= */ true, typeKeywordPosition, typeKeywordLocation);
             }
+            // Luwu: `export value = y` is `export const value = y`
+            else if (current.type == Lexeme::Name)
+            {
+                return parseExportValue(expr->location, expr->location, AstArray<AstAttr*>({nullptr, 0}));
+            }
         }
         // TODO: remove with LuauExportValueSyntax
         else if (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "class")
@@ -3725,6 +3730,27 @@ AstStat* Parser::parseExportValue(
         return stat;
     };
 
+    // `constKeywordLocation` is the `const` of `export const function`, if written
+    auto exportFunctionStat = [&](std::optional<Location> constKeywordLocation) -> AstStat*
+    {
+        auto funcStat = parseLocal(start, keywordLocation, attributes, true, cstAttrLists);
+        if (!funcStat->is<AstStatLocalFunction>())
+            // parseLocal returned a parse error
+            return funcStat;
+
+        auto func = funcStat->as<AstStatLocalFunction>();
+
+        if (constKeywordLocation)
+            func->constKeywordBegin = constKeywordLocation->begin;
+
+        if (!checkDuplicateExport(func->name->name, func->name->location))
+            report(func->name->location, "Duplicate exported identifier '%s'", func->name->name.value);
+
+        func->name->isExported = true;
+        func->name->isConst = true;
+        return func;
+    };
+
     if (attributes.size != 0 && lexer.current().type != Lexeme::ReservedFunction)
     {
         report(
@@ -3749,31 +3775,16 @@ AstStat* Parser::parseExportValue(
     }
     else if (lexer.current().type == Lexeme::ReservedFunction)
     {
-        auto funcStat = parseLocal(start, keywordLocation, attributes, true, cstAttrLists);
-        if (!funcStat->is<AstStatLocalFunction>())
-            // parseLocal returned a parse error
-            return funcStat;
-
-        auto func = funcStat->as<AstStatLocalFunction>();
-
-        if (!checkDuplicateExport(func->name->name, func->name->location))
-            report(func->name->location, "Duplicate exported identifier '%s'", func->name->name.value);
-
-        func->name->isExported = true;
-        func->name->isConst = true;
-        return func;
+        return exportFunctionStat(std::nullopt);
     }
     else if (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "const")
     {
         Location constKeywordLocation = lexer.current().location;
         nextLexeme();
 
+        // Luwu: `export const function f()` is `export function f()`, which is already const. Upstream rejects it.
         if (lexer.current().type == Lexeme::ReservedFunction)
-        {
-            report(start, "'export' must be followed by an identifier or 'function'");
-            // still parse the function for error recovery
-            return parseLocal(start, constKeywordLocation, {nullptr, 0}, true);
-        }
+            return exportFunctionStat(constKeywordLocation);
 
         return exportLocalStat(parseLocal(start, constKeywordLocation, {nullptr, 0}, true), constKeywordLocation);
     }
@@ -3792,6 +3803,14 @@ AstStat* Parser::parseExportValue(
 
             classStat->name->isExported = true;
         }
+        return stat;
+    }
+    else if (lexer.current().type == Lexeme::Name)
+    {
+        // Luwu: `export value = y` is `export const value = y`. It has no `const` keyword to point at.
+        AstStat* stat = exportLocalStat(parseLocal(start, start, {nullptr, 0}, true), start);
+        if (AstStatLocal* localStat = stat->as<AstStatLocal>())
+            localStat->keywordLocation = std::nullopt;
         return stat;
     }
 

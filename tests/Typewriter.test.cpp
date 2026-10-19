@@ -7,6 +7,9 @@
 
 #include "doctest.h"
 
+LUAU_FASTFLAG(LuauExportValueSyntax)
+LUAU_FASTFLAG(LuauExportValueTypecheck)
+
 using namespace Luau;
 
 namespace
@@ -37,6 +40,14 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_blocks")
     checkTypewriting(*this, before, "local function f(x: number): number\n    return x + a\nend", kAfter);
     checkTypewriting(*this, before, "if a > 0 then\n    print(a)\nend", kAfter);
     checkTypewriting(*this, before, "for i = 1, a do\n    print(i)\nend", kAfter);
+}
+
+// Luwu: `export name = value`, which is `export const name = value`
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_exports")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}, {FFlag::LuauExportValueTypecheck, true}};
+
+    checkTypewriting(*this, "local a = 1\n", "export answer = a + 1", kAfter);
 }
 
 // Luwu Classes (rfcs/classes): declaring classes, and using them from the code below

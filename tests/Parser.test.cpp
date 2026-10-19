@@ -7794,10 +7794,8 @@ TEST_CASE_FIXTURE(Fixture, "export_value_parse_failures")
         return result;
     };
 
+    // Luwu: `export foo = 5` is `export const foo = 5`, so only the forms without a value fail
     for (const std::string source : {
-             R"(
-export foo = 5
-    )",
              R"(
 export foo
     )",
@@ -7919,6 +7917,36 @@ export function foo()
 end
     )");
 
+    // Luwu: `export const function` is `export function`, and `export name = value` is `export const name = value`
+    AstStatBlock* luwuForms = parse(R"(
+export const function bar()
+end
+export answer = 42
+export a, b: number = 1, 2
+    )");
+    REQUIRE(luwuForms != nullptr);
+    REQUIRE_EQ(3, luwuForms->body.size);
+
+    AstStatLocalFunction* bar = luwuForms->body.data[0]->as<AstStatLocalFunction>();
+    REQUIRE(bar != nullptr);
+    CHECK(bar->name->isExported);
+    CHECK(bar->name->isConst);
+
+    for (size_t i = 1; i < 3; ++i)
+    {
+        AstStatLocal* implied = luwuForms->body.data[i]->as<AstStatLocal>();
+        REQUIRE(implied != nullptr);
+        CHECK(implied->isExported);
+        CHECK(implied->isConst);
+        CHECK(!implied->keywordLocation);
+        for (AstLocal* local : implied->vars)
+        {
+            CHECK(local->isExported);
+            CHECK(local->isConst);
+        }
+    }
+
+    matchParseError("export answer", "Missing initializer in const declaration");
     matchParseError("export 42", "Incomplete statement: expected assignment or a function call");
     matchParseError("export if true then end", "Incomplete statement: expected assignment or a function call");
     matchParseError("export", "Incomplete statement: expected assignment or a function call");

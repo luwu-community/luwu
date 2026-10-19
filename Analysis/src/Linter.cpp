@@ -946,6 +946,10 @@ private:
         if (local->name.value[0] == '_')
             return;
 
+        // Luwu: an exported local is used by the modules that require it. Upstream reports it as unused.
+        if (local->isExported)
+            return;
+
         if (info.function)
             if (info.softUsed)
                 emitWarning(
