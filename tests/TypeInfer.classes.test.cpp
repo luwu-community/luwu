@@ -3916,6 +3916,55 @@ TEST_CASE_FIXTURE(ClassesFixture, "trait_from_another_module")
     CHECK_EQ("string", toString(requireType("game/B", "h")));
 }
 
+// A trait needing one from another module is linked to it, so what that trait provides reaches the classes implementing
+// it, and a trait implemented alongside that needs the same root sees it provided
+TEST_CASE_FIXTURE(ClassesFixture, "trait_needing_a_trait_from_another_module")
+{
+    ScopedFastFlag _[3]{{FFlag::LuauExportValueSyntax, true}, {FFlag::LuauExportValueTypecheck, true}, {FFlag::LuwuTraits, true}};
+
+    fileResolver.source["game/Core"] = R"(
+        export trait Markup
+            expect function render(self): string
+            function child_count(self): number
+                return 0
+            end
+        end
+
+        export trait Child needs Markup end
+
+        export trait Element needs Markup
+            expect const tag: string
+            function render(self): string
+                return `<{self.tag}>`
+            end
+        end
+    )";
+
+    fileResolver.source["game/Lists"] = R"(
+        local core = require(game.Core)
+
+        trait List needs core.Element
+            items: { string } = { "a", "b" }
+            function child_count(self): number
+                return #self.items
+            end
+        end
+
+        class UnorderedList implements List, core.Child
+            const tag = "ul"
+        end
+
+        local rendered = UnorderedList():render()
+        local count = UnorderedList():child_count()
+        local element: core.Element = UnorderedList()
+    )";
+
+    CheckResult result = getFrontend().check("game/Lists");
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("string", toString(requireType("game/Lists", "rendered")));
+    CHECK_EQ("number", toString(requireType("game/Lists", "count")));
+}
+
 TEST_CASE_FIXTURE(ClassesFixture, "trait_values_are_traits_not_classes")
 {
     ScopedFastFlag traits{FFlag::LuwuTraits, true};
