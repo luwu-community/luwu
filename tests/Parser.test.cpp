@@ -7813,9 +7813,32 @@ TEST_CASE_FIXTURE(Fixture, "destructuring_parse_errors")
     matchOnlyDestructuringError(*this, "local .{x} = a, b", "A destructuring declaration takes exactly one value");
     matchOnlyDestructuringError(*this, "local .{x as} = t", "Expected a name or '.{' after 'as', got '}'");
     matchOnlyDestructuringError(*this, "@deprecated local .{x} = t", "Attributes can't be applied to a destructuring declaration");
+}
 
-    ScopedFastFlag exportSyntax{FFlag::LuauExportValueSyntax, true};
-    matchOnlyDestructuringError(*this, "export const .{x} = t", "A destructuring declaration can't be exported");
+TEST_CASE_FIXTURE(Fixture, "exported_destructuring_exports_every_name_it_binds")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuDestructuring, true}, {FFlag::LuauExportValueSyntax, true}};
+
+    AstStatBlock* block = parse(R"(
+        export const .{x, y} = t
+        export local m.{z} = t
+        export .{w} = t
+    )");
+
+    // The hidden local of an unnamed pattern isn't exported; every name the declaration binds is
+    REQUIRE_EQ(block->body.size, 7);
+    const bool exported[] = {false, true, true, true, true, false, true};
+    for (size_t i = 0; i < 7; ++i)
+    {
+        AstStatLocal* local = destructuredLocal(block, i);
+        INFO(i);
+        CHECK(local->isExported);
+        CHECK_EQ(local->isConst, i != 3 && i != 4);
+        CHECK_EQ(local->vars.data[0]->isExported, exported[i]);
+    }
+
+    // `export .{w} = t` is const, with no keyword after `export`
+    CHECK(!destructuredLocal(block, 5)->keywordLocation);
 }
 
 TEST_CASE_FIXTURE(Fixture, "destructuring_mistakes_get_one_error_that_names_the_fix")

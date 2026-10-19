@@ -1251,13 +1251,14 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "non_exported_class")
             end
         end
 
-        return {Point=Point}
+        -- A class returned in the table would export its type (every_common_way_to_export_a_class_brings_its_type)
+        return {make = function() return Point { x = 0, y = 0 } end}
     )";
 
     fileResolver.source["game/B"] = R"(
         local A = require(game.A)
 
-        local a: A.Point = A.Point { x=2, y=3 }
+        local a: A.Point = A.make()
     )";
 
     CheckResult result = getFrontend().check("game/B");
@@ -1357,6 +1358,82 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "locals_bound_to_an_imported_class_bring_its_
 
     result = getFrontend().check("game/C");
     LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+// A class's type comes with its value however the module exports it and however it's imported
+TEST_CASE_FIXTURE(BuiltinsFixture, "every_common_way_to_export_a_class_brings_its_type")
+{
+    ScopedFastFlag sff[] = {
+        {FFlag::LuauExportValueSyntax, true},
+        {FFlag::LuauExportValueTypecheck, true},
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuDestructuring, true},
+    };
+
+    fileResolver.source["game/Keyword"] = R"(
+        export class Cat
+            name: string
+        end
+    )";
+    fileResolver.source["game/Table"] = R"(
+        class Cat
+            name: string
+        end
+        return { Cat = Cat, Kitty = Cat }
+    )";
+    fileResolver.source["game/DotTable"] = R"(
+        class Cat
+            name: string
+        end
+        return .{Cat}
+    )";
+    fileResolver.source["game/Hub"] = R"(
+        const animals = require(game.Keyword)
+        export const Cat = animals.Cat
+    )";
+    fileResolver.source["game/DestructuringHub"] = R"(
+        export const .{Cat} = require(game.Table)
+    )";
+    fileResolver.source["game/ImpliedConstHub"] = R"(
+        export .{Cat} = require(game.DotTable)
+    )";
+
+    for (const char* exporter : {"Keyword", "Table", "DotTable", "Hub", "DestructuringHub", "ImpliedConstHub"})
+    {
+        INFO(std::string(exporter));
+        fileResolver.source["game/Importer"] = format(
+            R"(
+            --!strict
+            const .{Cat} = require(game.%s)
+            const animals = require(game.%s)
+            const Inline = require(game.%s).Cat
+            local a: Cat = Cat { name = "a" }
+            local b: animals.Cat = animals.Cat { name = "b" }
+            local c: Inline = Inline { name = "c" }
+            local wrong: Cat = 5
+            )",
+            exporter,
+            exporter,
+            exporter
+        );
+        getFrontend().markDirty("game/Importer");
+
+        // `wrong` is the one error: the bound types are the class's, not `any`
+        CheckResult result = getFrontend().check("game/Importer");
+        LUAU_REQUIRE_ERROR_COUNT(1, result);
+        CHECK_EQ(result.errors[0].location.begin.line, 8);
+    }
+
+    // A returned table's key names the type
+    fileResolver.source["game/Importer"] = R"(
+        --!strict
+        const animals = require(game.Table)
+        local k: animals.Kitty = animals.Kitty { name = "k" }
+    )";
+    getFrontend().markDirty("game/Importer");
+    CheckResult kitty = getFrontend().check("game/Importer");
+    LUAU_REQUIRE_NO_ERRORS(kitty);
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "destructured_types_report_what_the_module_does_not_export")

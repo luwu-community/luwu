@@ -589,6 +589,11 @@ AstStat* Parser::parseStat()
     // Luwu Destructuring (rfcs/destructuring.md): `name.{x} = t` with no `local`/`const`, see parsePrimaryExpr.
     // `type .{A} = module` is a type destructuring (parseTypeDestructuring).
     AstName leading = getIdentifier(expr);
+
+    // Luwu Destructuring (rfcs/destructuring.md): `export .{x, y} = v` is `export const .{x, y} = v`
+    if (FFlag::LuauExportValueSyntax && destructurePatternFollows() && leading == "export")
+        return parseExportValue(expr->location, expr->location.begin, AstArray<AstAttr*>({nullptr, 0}));
+
     bool destructuringWithoutKeyword = destructurePatternFollows() && leading != "const" && leading != "type";
     if (destructuringWithoutKeyword)
     {
@@ -3840,31 +3845,42 @@ AstStat* Parser::parseExportValue(
         return true;
     };
 
+    auto exportLocals = [&](AstStatLocal* localStat)
+    {
+        for (AstLocal* local : localStat->vars)
+        {
+            // Luwu Destructuring (rfcs/destructuring.md): an unnamed pattern's hidden local isn't a binding to export
+            if (local->name == kDestructuredLocalName)
+                continue;
+
+            if (!checkDuplicateExport(local->name, local->location))
+            {
+                report(local->location, "Duplicate exported identifier '%s'", local->name.value);
+                continue;
+            }
+
+            local->isExported = true;
+        }
+    };
+
     auto exportLocalStat = [&](AstStat* stat, const Location& keywordLocation) -> AstStat*
     {
-        // Luwu Destructuring (rfcs/destructuring.md): not supported with `export` yet.
-        if (!pendingStatements.empty())
-        {
-            report(stat->location, "A destructuring declaration can't be exported");
-            return stat;
-        }
-
         if (AstStatLocal* localStat = stat->as<AstStatLocal>())
         {
             localStat->isExported = true;
-
-            for (AstLocal* local : localStat->vars)
-            {
-                if (!checkDuplicateExport(local->name, local->location))
-                {
-                    report(local->location, "Duplicate exported identifier '%s'", local->name.value);
-                    continue;
-                }
-
-                local->isExported = true;
-            }
-
+            exportLocals(localStat);
             localStat->keywordLocation = keywordLocation;
+
+            // Luwu Destructuring (rfcs/destructuring.md): `export const .{A, B} = t` exports every name it binds,
+            // which the desugared statements after this one declare
+            for (AstStat* desugared : pendingStatements)
+            {
+                if (AstStatLocal* field = desugared->as<AstStatLocal>())
+                {
+                    field->isExported = true;
+                    exportLocals(field);
+                }
+            }
         }
         else
             LUAU_ASSERT(!"Expected export local/const to parse as AstStatLocal");
@@ -3939,6 +3955,15 @@ AstStat* Parser::parseExportValue(
 
             classStat->name->isExported = true;
         }
+        return stat;
+    }
+    else if (destructurePatternFollows())
+    {
+        // Luwu Destructuring (rfcs/destructuring.md): `export .{x, y} = v` is `export const .{x, y} = v`. It has no
+        // `const` keyword to point at.
+        AstStat* stat = exportLocalStat(parseDestructuring(start, start, /* isConst= */ true), start);
+        if (AstStatLocal* localStat = stat->as<AstStatLocal>())
+            localStat->keywordLocation = std::nullopt;
         return stat;
     }
 

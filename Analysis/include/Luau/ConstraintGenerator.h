@@ -179,6 +179,8 @@ struct ConstraintGenerator
     DenseHashMap<AstExpr*, Inference> inferredExprCache{nullptr};
 
     DenseHashMap<AstLocal*, std::unique_ptr<ClassDeclRecord>> classDeclRecords{nullptr};
+    // Luwu Destructuring (rfcs/destructuring.md): locals bindImportedClassTypes gave a class's type
+    DenseHashSet<const AstLocal*> importedClassLocals{nullptr};
 
     DcrLogger* logger;
 
@@ -326,6 +328,8 @@ private:
     ControlFlow visit(const ScopePtr& scope, AstStatBlock* block);
     ControlFlow visit(const ScopePtr& scope, AstStatLocal* local);
     void bindImportedClassTypes(const ScopePtr& scope, AstStatLocal* statLocal);
+    std::optional<TypeFun> importedClassType(const ScopePtr& scope, const AstExprIndexName* index);
+    void exportReturnedClassTypes(const ScopePtr& scope, AstStatReturn* ret);
     ControlFlow visit(const ScopePtr& scope, AstStatFor* for_);
     ControlFlow visit(const ScopePtr& scope, AstStatForIn* forIn);
     ControlFlow visit(const ScopePtr& scope, AstStatWhile* while_);

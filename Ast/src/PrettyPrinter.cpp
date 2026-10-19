@@ -1092,10 +1092,12 @@ struct Printer
             {
                 writer.keyword("export");
 
+                // Luwu: `export value = y` has no keyword after `export`
                 if (a->keywordLocation.has_value())
+                {
                     advance(a->keywordLocation->begin);
-
-                writer.keyword(a->isConst ? "const" : "local");
+                    writer.keyword(a->isConst ? "const" : "local");
+                }
             }
             else if (a->isConst)
             {

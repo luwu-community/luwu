@@ -940,6 +940,7 @@ public:
     bool isExported = false;
 
     // Location of the leading `const` or `local` keyword token only.
+    // Luwu: none on an exported local without one, `export value = y`, which is const.
     std::optional<Location> keywordLocation;
     std::optional<Location> equalsSignLocation;
 

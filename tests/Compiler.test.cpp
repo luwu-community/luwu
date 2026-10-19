@@ -13805,6 +13805,28 @@ RETURN R2 1
     );
 }
 
+// Luwu Destructuring (rfcs/destructuring.md): the names a pattern binds go into the export table, its hidden local doesn't
+TEST_CASE("ExportDestructuringStoresTheNamesItBinds")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}, {FFlag::LuwuDestructuring, true}};
+
+    CHECK_EQ(
+        "\n" + compileFunction0("export const .{x, y} = ..."),
+        R"(
+GETVARARGS R0 1
+GETTABLEKS R1 R0 K0 ['x']
+NEWTABLE R2 0 0
+SETTABLEKS R1 R2 K0 ['x']
+GETTABLEKS R3 R0 K1 ['y']
+SETTABLEKS R3 R2 K1 ['y']
+GETIMPORT R4 4 [table.freeze]
+MOVE R5 R2
+CALL R4 1 1
+RETURN R4 1
+)"
+    );
+}
+
 TEST_CASE("ExportSyntaxRegression")
 {
     ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}};
