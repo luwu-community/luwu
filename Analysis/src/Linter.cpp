@@ -850,12 +850,16 @@ private:
 
     DenseHashMap<AstLocal*, Local> locals;
     DenseHashMap<AstName, AstLocal*> imports;
+    // Luwu Destructuring (rfcs/destructuring.md): locals read from a field, `local Cat = animals.Cat`, which bring a
+    // class's type along when the field is one
+    DenseHashMap<AstName, AstLocal*> fieldLocals;
     DenseHashMap<AstName, Global> globals;
     DenseHashMap<AstName, AstStatClass*> classes;
 
     LintLocalHygiene()
         : locals(NULL)
         , imports(AstName())
+        , fieldLocals(AstName())
         , globals(AstName())
         , classes(AstName())
     {
@@ -1035,6 +1039,8 @@ private:
 
             if (l.import)
                 imports[node->vars.data[0]->name] = node->vars.data[0];
+            else if (node->values.data[0]->is<AstExprIndexName>())
+                fieldLocals[node->vars.data[0]->name] = node->vars.data[0];
         }
         else
         {
@@ -1100,8 +1106,14 @@ private:
 
     bool visit(AstTypeReference* node) override
     {
+        // Luwu Destructuring (rfcs/destructuring.md): `c: Cat` uses a `Cat` holding a class, which is also its type
         if (!node->prefix)
+        {
+            if (AstLocal** fieldLocal = fieldLocals.find(node->name))
+                locals[*fieldLocal].used = true;
+
             return true;
+        }
 
         if (!imports.contains(*node->prefix))
             return true;
