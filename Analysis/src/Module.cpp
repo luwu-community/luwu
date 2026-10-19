@@ -390,6 +390,13 @@ void synthesizeExportReturn(NotNull<BuiltinTypes> builtinTypes, NotNull<Module> 
         if (TypeId* ty = module->astTypes.find(expr))
             return follow(*ty);
 
+        // Luwu: a call's type is its pack's first value (`export t = require(...)`). Upstream exports an error type.
+        if (TypePackId* pack = module->astTypePacks.find(expr))
+        {
+            if (std::optional<TypeId> first = Luau::first(*pack))
+                return follow(*first);
+        }
+
         return builtinTypes->errorType;
     };
 

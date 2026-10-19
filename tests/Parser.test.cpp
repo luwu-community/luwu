@@ -8089,12 +8089,36 @@ TEST_CASE_FIXTURE(Fixture, "type_destructuring_desugars_to_one_alias_per_type")
     CHECK(exported->destructure);
 }
 
+// `type .{Age} = hub.t` reads from a module `hub` exports: its alias's prefix is the whole path
+TEST_CASE_FIXTURE(Fixture, "type_destructuring_reads_from_a_path_to_a_module")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    AstStatBlock* block = parse(R"(
+        type .{Age} = hub.t
+        type .{Name} = hub.a.b
+    )");
+
+    REQUIRE_EQ(block->body.size, 2);
+    for (size_t i = 0; i < 2; ++i)
+    {
+        AstStatTypeAlias* alias = block->body.data[i]->as<AstStatTypeAlias>();
+        REQUIRE(alias);
+        AstTypeReference* reference = alias->destructuredReference();
+        REQUIRE(reference);
+        REQUIRE(reference->prefix);
+        CHECK_EQ(std::string(reference->prefix->value), i == 0 ? "hub.t" : "hub.a.b");
+        CHECK_EQ(std::string(alias->destructure->module.value), i == 0 ? "hub.t" : "hub.a.b");
+    }
+}
+
 TEST_CASE_FIXTURE(Fixture, "type_destructuring_mistakes_get_one_error_that_names_the_fix")
 {
     ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
 
     matchOnlyDestructuringError(*this, "type fs.{A} = fs", "A type destructuring declares only the types; drop 'fs' before '.{'");
-    matchOnlyDestructuringError(*this, "type .{A} = fs.inner", "A type destructuring reads types from a required module: 'type .{A, B} = module'");
+    matchOnlyDestructuringError(*this, "type .{A} = fs<number>", "A type destructuring reads types from a required module: 'type .{A, B} = module'");
+    matchOnlyDestructuringError(*this, "type .{A} = fs | other", "A type destructuring reads types from a required module: 'type .{A, B} = module'");
     matchOnlyDestructuringError(
         *this, "type .{A} = { x: number }", "A type destructuring reads types from a required module: 'type .{A, B} = module'"
     );

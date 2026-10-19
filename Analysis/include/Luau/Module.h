@@ -157,6 +157,10 @@ struct Module
 
     TypePackId returnType = nullptr;
     std::unordered_map<Name, TypeFun> exportedTypeBindings;
+    // Luwu Destructuring (rfcs/destructuring.md): the required modules this one exports as values, by the name they're
+    // exported under (`export t = require(...)`, `return { t = t }`), so `hub.t.Cat` and `type .{Cat} = hub.t` find
+    // their types in a module requiring this one
+    std::unordered_map<Name, ModuleName> exportedModules;
 
     // Arenas related to the DFG must persist after the DFG no longer exists, as
     // Module objects maintain raw pointers to objects in these arenas.

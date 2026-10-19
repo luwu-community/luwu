@@ -1115,15 +1115,38 @@ private:
             return true;
         }
 
-        if (!imports.contains(*node->prefix))
-            return true;
-
-        AstLocal* astLocal = imports[*node->prefix];
-        Local& local = locals[astLocal];
-        LUAU_ASSERT(local.import);
-        local.used = true;
+        if (AstLocal* import = findModuleLocal(imports, *node->prefix))
+        {
+            Local& local = locals[import];
+            LUAU_ASSERT(local.import);
+            local.used = true;
+        }
+        // Luwu Destructuring (rfcs/destructuring.md): `m.Age` uses a `const m = hub.t` holding a module
+        else if (AstLocal* fieldLocal = findModuleLocal(fieldLocals, *node->prefix))
+            locals[fieldLocal].used = true;
 
         return true;
+    }
+
+    // Luwu Destructuring (rfcs/destructuring.md): the local a type's prefix reads from. A path to a module another one
+    // exports (`type .{Age} = hub.t`) reads from the local it starts with.
+    static AstLocal* findModuleLocal(const DenseHashMap<AstName, AstLocal*>& byName, AstName prefix)
+    {
+        const char* dot = strchr(prefix.value, '.');
+        if (!dot)
+        {
+            AstLocal* const* found = byName.find(prefix);
+            return found ? *found : nullptr;
+        }
+
+        size_t length = size_t(dot - prefix.value);
+        for (const auto& [name, local] : byName)
+        {
+            if (strncmp(name.value, prefix.value, length) == 0 && name.value[length] == '\0')
+                return local;
+        }
+
+        return nullptr;
     }
 
     bool visit(AstExprFunction* node) override
