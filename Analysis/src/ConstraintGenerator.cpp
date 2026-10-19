@@ -2773,7 +2773,18 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
     }
 
     if (FFlag::LuwuTraits)
+    {
+        // Luwu Traits (rfcs/classes/traits.md): a trait can need one another module exports (`needs core.Element`), so the
+        // block's requires are imported before its traits are linked. Visiting each `local` imports it again, to the same
+        // types.
+        for (AstStat* stat : statements)
+        {
+            if (AstStatLocal* statLocal = stat->as<AstStatLocal>())
+                importRequiredTypes(scope, statLocal);
+        }
+
         linkTraitNeeds(scope, statements);
+    }
 
     if (hasTypeFunction)
         typeFunctionEnvScope = std::make_shared<Scope>(typeFunctionRuntime->rootScope);
@@ -3137,47 +3148,49 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatLocal* stat
         }
     }
 
-    if (statLocal->values.size > 0)
-    {
-        // To correctly handle 'require', we need to import the exported type bindings into the variable 'namespace'.
-        for (size_t i = 0; i < statLocal->values.size && i < statLocal->vars.size; ++i)
-        {
-            const AstExprCall* call = statLocal->values.data[i]->as<AstExprCall>();
-            if (!call)
-                continue;
-
-            auto maybeRequire = matchRequire(*call);
-            if (!maybeRequire)
-                continue;
-
-            AstExpr* require = *maybeRequire;
-
-            const Name name{statLocal->vars.data[i]->name.value};
-
-            auto moduleInfo = moduleResolver->resolveModuleInfo(module->name, *require);
-            ModulePtr module = moduleInfo ? moduleResolver->getModule(moduleInfo->name) : nullptr;
-            if (!module)
-            {
-                scope->unresolvedRequires.insert(name);
-                continue;
-            }
-
-            scope->importedTypeBindings[name] = module->exportedTypeBindings;
-            scope->importedModules[name] = moduleInfo->name;
-
-            // Imported typeArguments of requires that transitively refer to current module have to be replaced with 'any'
-            for (const auto& [location, path] : requireCycles)
-            {
-                if (path.empty() || path.front() != moduleInfo->name)
-                    continue;
-
-                for (auto& [name, tf] : scope->importedTypeBindings[name])
-                    tf = TypeFun{{}, {}, builtinTypes->anyType};
-            }
-        }
-    }
+    importRequiredTypes(scope, statLocal);
 
     return ControlFlow::None;
+}
+
+void ConstraintGenerator::importRequiredTypes(const ScopePtr& scope, AstStatLocal* statLocal)
+{
+    // To correctly handle 'require', we need to import the exported type bindings into the variable 'namespace'.
+    for (size_t i = 0; i < statLocal->values.size && i < statLocal->vars.size; ++i)
+    {
+        const AstExprCall* call = statLocal->values.data[i]->as<AstExprCall>();
+        if (!call)
+            continue;
+
+        auto maybeRequire = matchRequire(*call);
+        if (!maybeRequire)
+            continue;
+
+        AstExpr* require = *maybeRequire;
+
+        const Name name{statLocal->vars.data[i]->name.value};
+
+        auto moduleInfo = moduleResolver->resolveModuleInfo(module->name, *require);
+        ModulePtr module = moduleInfo ? moduleResolver->getModule(moduleInfo->name) : nullptr;
+        if (!module)
+        {
+            scope->unresolvedRequires.insert(name);
+            continue;
+        }
+
+        scope->importedTypeBindings[name] = module->exportedTypeBindings;
+        scope->importedModules[name] = moduleInfo->name;
+
+        // Imported typeArguments of requires that transitively refer to current module have to be replaced with 'any'
+        for (const auto& [location, path] : requireCycles)
+        {
+            if (path.empty() || path.front() != moduleInfo->name)
+                continue;
+
+            for (auto& [name, tf] : scope->importedTypeBindings[name])
+                tf = TypeFun{{}, {}, builtinTypes->anyType};
+        }
+    }
 }
 
 ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatFor* for_)
