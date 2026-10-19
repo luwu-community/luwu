@@ -405,6 +405,10 @@ void synthesizeExportReturn(NotNull<BuiltinTypes> builtinTypes, NotNull<Module> 
             for (size_t i = 0; i < localStat->vars.size; ++i)
             {
                 AstLocal* local = localStat->vars.data[i];
+                // Luwu Destructuring (rfcs/destructuring.md): an exported destructuring's hidden local isn't exported
+                if (!local->isExported)
+                    continue;
+
                 exportedLocals.insert(local);
 
                 if (localStat->vars.size != localStat->values.size || i >= localStat->values.size)

@@ -21,6 +21,8 @@ using namespace Luau;
 
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(LuwuDestructuring)
+LUAU_FASTFLAG(LuauExportValueSyntax)
+LUAU_FASTFLAG(LuauExportValueTypecheck)
 LUAU_FASTFLAG(LuauTruthyFalsy)
 
 LUAU_FASTFLAG(LuauInstantiateInSubtyping)
@@ -7501,6 +7503,18 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_destructuring")
     checkTypewriting(*this, before, "const p.{y as why, inner.{z}} = point", after);
     checkTypewriting(*this, before, "local .{x: number, y as label: string} = point", after);
     checkTypewriting(*this, before, "for _, .{x, y} in points do\n    print(x, y)\nend", after);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_exported_destructuring")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuDestructuring, true}, {FFlag::LuauExportValueSyntax, true}, {FFlag::LuauExportValueTypecheck, true}
+    };
+    const char* before = kDestructuringTypewriterBefore;
+    const char* after = kDestructuringTypewriterAfter;
+
+    checkTypewriting(*this, before, "export const .{x, y} = point", after);
+    checkTypewriting(*this, before, "export .{x, y} = point", after);
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "typing_dot_table_constructors")

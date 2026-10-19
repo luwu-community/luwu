@@ -1771,8 +1771,9 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatLocal* stat
 }
 
 // Luwu Destructuring (rfcs/destructuring.md): a local bound to a class a required module exports, `local Point =
-// geometry.Point` or a destructured `const geometry.{Point} = require(...)`, brings the class's type along, as if
-// `type Point = geometry.Point` were written next to it. A type the scope already declares under that name wins.
+// geometry.Point`, `local Point = require(...).Point` or a destructured `const geometry.{Point} = require(...)`, brings
+// the class's type along, as if `type Point = geometry.Point` were written next to it. An exported local exports the
+// type too. A type the scope already declares under that name wins.
 void ConstraintGenerator::bindImportedClassTypes(const ScopePtr& scope, AstStatLocal* statLocal)
 {
     for (size_t i = 0; i < statLocal->values.size && i < statLocal->vars.size; ++i)
@@ -1781,24 +1782,99 @@ void ConstraintGenerator::bindImportedClassTypes(const ScopePtr& scope, AstStatL
         if (!index)
             continue;
 
-        const AstExprLocal* moduleLocal = index->expr->as<AstExprLocal>();
-        if (!moduleLocal)
-            continue;
-
-        std::optional<TypeFun> imported = scope->lookupImportedType(moduleLocal->local->name.value, index->index.value);
+        std::optional<TypeFun> imported = importedClassType(scope, index);
         if (!imported)
             continue;
 
-        // An imported class's type is its object type, which knows its class
-        const ExternType* object = get<ExternType>(follow(imported->type));
-        if (!object || !object->relation || !object->relation->get_if<Klass>())
-            continue;
-
-        const Name name{statLocal->vars.data[i]->name.value};
+        AstLocal* local = statLocal->vars.data[i];
+        const Name name{local->name.value};
         if (scope->privateTypeBindings.count(name) || scope->exportedTypeBindings.count(name))
             continue;
 
-        scope->privateTypeBindings[name] = *imported;
+        if (local->isExported)
+            scope->exportedTypeBindings[name] = *imported;
+        else
+            scope->privateTypeBindings[name] = *imported;
+
+        importedClassLocals.insert(local);
+    }
+}
+
+// The class type a required module exports under `index`'s field name, read through a local holding the module
+// (`geometry.Point`) or straight off the require (`require(...).Point`)
+std::optional<TypeFun> ConstraintGenerator::importedClassType(const ScopePtr& scope, const AstExprIndexName* index)
+{
+    const Name field{index->index.value};
+    std::optional<TypeFun> imported;
+
+    if (const AstExprLocal* moduleLocal = index->expr->as<AstExprLocal>())
+        imported = scope->lookupImportedType(moduleLocal->local->name.value, field);
+    else if (const AstExprCall* call = index->expr->as<AstExprCall>())
+    {
+        std::optional<AstExpr*> require = matchRequire(*call);
+        std::optional<ModuleInfo> moduleInfo = require ? moduleResolver->resolveModuleInfo(module->name, **require) : std::nullopt;
+        ModulePtr required = moduleInfo ? moduleResolver->getModule(moduleInfo->name) : nullptr;
+        if (!required)
+            return std::nullopt;
+
+        // A module in a require cycle with this one has no types to give yet
+        for (const RequireCycle& cycle : requireCycles)
+        {
+            if (!cycle.path.empty() && cycle.path.front() == moduleInfo->name)
+                return std::nullopt;
+        }
+
+        if (auto it = required->exportedTypeBindings.find(field); it != required->exportedTypeBindings.end())
+            imported = it->second;
+    }
+
+    if (!imported)
+        return std::nullopt;
+
+    // An imported class's type is its object type, which knows its class
+    const ExternType* object = get<ExternType>(follow(imported->type));
+    if (!object || !object->relation || !object->relation->get_if<Klass>())
+        return std::nullopt;
+
+    return imported;
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): a module that returns its classes in a table, `return { Cat = Cat }` or
+// `return .{Cat}`, exports their types under the table's keys, like `export class` does
+void ConstraintGenerator::exportReturnedClassTypes(const ScopePtr& scope, AstStatReturn* ret)
+{
+    if (scope.get() != rootScope || ret->list.size != 1)
+        return;
+
+    const AstExprTable* table = ret->list.data[0]->as<AstExprTable>();
+    if (!table)
+        return;
+
+    for (const AstExprTable::Item& item : table->items)
+    {
+        if (item.kind != AstExprTable::Item::Kind::Record)
+            continue;
+
+        const AstExprConstantString* key = item.key->as<AstExprConstantString>();
+        if (!key)
+            continue;
+
+        // A class declared in this module is referenced as a global
+        std::optional<AstName> className;
+        if (const AstExprGlobal* global = item.value->as<AstExprGlobal>(); global && classGlobalNames.contains(global->name))
+            className = global->name;
+        else if (const AstExprLocal* local = item.value->as<AstExprLocal>(); local && importedClassLocals.contains(local->local))
+            className = local->local->name;
+
+        if (!className)
+            continue;
+
+        std::optional<TypeFun> classType = scope->lookupType(className->value);
+        const Name name{key->value.data, key->value.size};
+        if (!classType || scope->exportedTypeBindings.count(name))
+            continue;
+
+        scope->exportedTypeBindings[name] = *classType;
     }
 }
 
@@ -2107,6 +2183,9 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatReturn* ret
         expectedTypes.emplace_back(ty);
     TypePackId exprTypes = checkPack(scope, ret->list, expectedTypes).tp;
     addConstraint(scope, ret->location, PackSubtypeConstraint{exprTypes, scope->returnType, /*returns*/ true});
+
+    if (FFlag::LuwuClasses)
+        exportReturnedClassTypes(scope, ret);
 
     return ControlFlow::Returns;
 }

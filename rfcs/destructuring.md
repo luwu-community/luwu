@@ -33,15 +33,21 @@ const items = getitems() -- { Item }
 const store_info.{store as store_name, items} = getitems()
 ```
 
-We support destructuring in `local`, `const`, and `type` bindings, as well as `export type`, as well as in
-loop variables of `for ... in` loops. Note that `type` bindings *should* destructure a runtime binding from a `require`
+We support destructuring in `local`, `const`, and `type` bindings, as well as `export type`, `export local` and
+`export const`, as well as in loop variables of `for ... in` loops. `export .{x, y} = v` means `export const .{x, y} = v`,
+and exports every name it binds. Note that `type` bindings *should* destructure a runtime binding from a `require`
 call that magically contains types visible to the type system. We report a TypeError if a user incorrectly destructures
 a runtime binding that does not contain types. Supplying a top level variable in the destructure
 (`type Smth.{Ta, Tb} = smth`) is a syntax error, since such a type cannot exist.
 
 A `local` or `const` bound to a class a required module exports also brings in the class's type under the same name,
-so `const geometry.{Point} = require("./geometry")` and `local Point = geometry.Point` both make `Point` usable as a
-type without a separate `type .{Point} = geometry`. A type already declared under that name in the same scope wins.
+so `const geometry.{Point} = require("./geometry")`, `local Point = geometry.Point` and
+`local Point = require("./geometry").Point` all make `Point` usable as a type without a separate
+`type .{Point} = geometry`. A type already declared under that name in the same scope wins. An exported binding
+(`export const .{Point} = require("./geometry")`) exports the type too.
+
+A module exports a class's type whether it writes `export class Point`, `return { Point = Point }` or
+`return .{Point}`: a class in the table a module returns is exported under the table's key.
 
 <!-- WIP: agent-written draft of `.{...}` construction. Audit the wording before it leaves WIP. -->
 
