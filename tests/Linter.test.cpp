@@ -20,6 +20,8 @@ LUAU_FASTFLAG(LuauDeprecatedAttributeOnAnonymousFunctions)
 LUAU_FASTFLAG(LuauFunctionUnusedRecursiveLinting)
 LUAU_FASTFLAG(LuwuTableRemoveFootgunLint)
 LUAU_FASTFLAG(LuwuTableDrop)
+LUAU_FASTFLAG(LuauExportValueSyntax)
+LUAU_FASTFLAG(LuauExportValueTypecheck)
 
 using namespace Luau;
 
@@ -509,6 +511,26 @@ local _Roact = require(game.Packages.Roact)
 
     REQUIRE(1 == result.warnings.size());
     CHECK_EQ(result.warnings[0].text, "Import 'Roact' is never used; prefix with '_' to silence");
+}
+
+// Luwu: modules that require this one use what it exports. Upstream reports them as unused.
+TEST_CASE_FIXTURE(Fixture, "exported_locals_are_never_unused")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}, {FFlag::LuauExportValueTypecheck, true}};
+
+    LintResult result = lint(R"(
+export local version = "1.0"
+export const TAU = math.pi * 2
+export answer = 42
+export function greet()
+end
+export const function farewell()
+end
+local unused = 1
+)");
+
+    REQUIRE(1 == result.warnings.size());
+    CHECK_EQ(result.warnings[0].text, "Variable 'unused' is never used; prefix with '_' to silence");
 }
 
 TEST_CASE_FIXTURE(Fixture, "FunctionUnused")
