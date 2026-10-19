@@ -2844,4 +2844,23 @@ f({})
     CHECK_EQ(result.warnings[0].text, "Variable 'unused' is never used; prefix with '_' to silence");
 }
 
+// A local holding a class read from a module also binds the class's type, so a type naming it uses it
+TEST_CASE_FIXTURE(Fixture, "locals_read_from_a_field_are_used_by_types_naming_them")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    LintResult result = lint(R"(
+local animals = { Cat = 1, Dog = 2 }
+local Cat = animals.Cat
+local .{Dog, unused} = animals
+local function f(c: Cat, d: Dog)
+    return c, d
+end
+return f
+)");
+
+    REQUIRE_EQ(result.warnings.size(), 1);
+    CHECK_EQ(result.warnings[0].text, "Variable 'unused' is never used; prefix with '_' to silence");
+}
+
 TEST_SUITE_END();
