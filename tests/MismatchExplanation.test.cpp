@@ -1151,6 +1151,31 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_mismatched_property_notes_where_both_sides
     CHECK_EQ(notes[1].origin, result.errors[0].location);
 }
 
+// A missing property gets a note at the table it's missing from, which can be a few variables away from the error,
+// and one where the expected type requires it.
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_missing_property_notes_the_table_it_is_missing_from")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type Color = { r: number, g: number, b: number }
+        type Theme = { name: string, colors: { background: Color, text: Color } }
+        local function apply(_: Theme) end
+        local white = { r = 1, g = 1 }
+        local colors = { background = white, text = { r = 0, g = 0, b = 0 } }
+        apply({ name = "light", colors = colors })
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    const std::vector<DiagnosticNote>& notes = getMainModule()->notes;
+    REQUIRE_EQ(notes.size(), 2);
+    CHECK_EQ(notes[0].message, "Expected 'b: number' because of this");
+    CHECK_EQ(notes[0].location, Location{{1, 45}, {1, 46}});
+    CHECK_EQ(notes[1].message, "'colors.background' is missing 'b: number'");
+    CHECK_EQ(notes[1].location, Location{{4, 22}, {4, 38}});
+    CHECK_EQ(notes[1].origin, result.errors[0].location);
+}
+
 // A generic's property is declared once for both sides, where neither note would say anything.
 TEST_CASE_FIXTURE(BuiltinsFixture, "a_mismatch_inside_one_generic_declaration_has_no_notes")
 {

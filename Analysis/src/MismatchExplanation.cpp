@@ -1042,6 +1042,14 @@ struct Differ
         return std::nullopt;
     }
 
+    // Where a table is written, when it's written in source.
+    static std::optional<PropertySite> tableSite(const TableType* table)
+    {
+        if (!table || table->definitionModuleName.empty() || table->definitionLocation == Location())
+            return std::nullopt;
+        return PropertySite{table->definitionLocation, table->definitionModuleName};
+    }
+
     // Marks the differences from `from` on that are under the `kind` segment `i` or `j` right after `at` segments.
     void markSwapped(size_t from, size_t at, Segment::Kind kind, size_t i, size_t j)
     {
@@ -1133,6 +1141,8 @@ struct Differ
 
                 Difference missing{Difference::Kind::Missing, propertyPath, "", display(wanted)};
                 missing.similarName = similarlyNamed(name, subNames, superTable);
+                missing.givenSite = tableSite(tableOf(sub));
+                missing.expectedSite = propertySite(superTable, name);
                 push(std::move(missing), wanted);
                 continue;
             }
@@ -2402,8 +2412,27 @@ std::optional<MismatchExplanation> explainOnce(
     explanation.propertyFocus = focusOf(shownDifferences, given, expected);
     for (const Difference& d : shownDifferences)
     {
+        if (d.path.empty() || d.path.back().kind != Segment::Kind::Property)
+            continue;
+        // A typo's help already says where the property is
+        if (d.kind == Difference::Kind::Missing && !d.similarName)
+        {
+            const std::string& name = d.path.back().name;
+            if (d.expectedSite)
+                explanation.notes.push_back(MismatchNote{d.expectedSite->location, d.expectedSite->module, expectedPropertyNote(name, d.super)});
+            if (d.givenSite)
+            {
+                // The note's path isn't in the message, so it adds nothing to the message's legend
+                uint8_t notation = rendering.notation;
+                std::string table = rendering.givenPath(missingParent(d));
+                rendering.notation = notation;
+                explanation.notes.push_back(MismatchNote{d.givenSite->location, d.givenSite->module, missingPropertyNote(table, name, d.super)});
+            }
+            continue;
+        }
+
         bool doesNotFit = d.kind == Difference::Kind::Mismatch || d.kind == Difference::Kind::MismatchExactly;
-        if (!doesNotFit || d.path.empty() || d.path.back().kind != Segment::Kind::Property)
+        if (!doesNotFit)
             continue;
         // One declaration on both sides (a generic's `value: T`, instantiated twice) says nothing about the mismatch
         bool sameDeclaration = d.expectedSite && d.givenSite && d.expectedSite->location == d.givenSite->location &&
