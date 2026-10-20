@@ -1176,6 +1176,35 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_missing_property_notes_the_table_it_is_mis
     CHECK_EQ(notes[1].origin, result.errors[0].location);
 }
 
+// Inside a function, the table a property is missing from is named from its parameter, as the bullet names it.
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_missing_property_note_names_a_parameter")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type EnemyImpl = {
+            __index: EnemyImpl,
+            take_damage: (self: Enemy, amount: number) -> boolean,
+        }
+        type Enemy = typeof(setmetatable({} :: { name: string, health: number }, {} :: EnemyImpl))
+        type BossImpl = EnemyImpl & { phase: (self: Boss) -> number }
+        type Boss = typeof(setmetatable({} :: { name: string, health: number, enraged: boolean }, {} :: BossImpl))
+        local Boss = {} :: BossImpl
+        Boss.take_damage = function(self: Boss, amount: number): number
+            return self.health - amount
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    INFO(toString(result.errors[0]));
+    const std::vector<DiagnosticNote>& notes = getMainModule()->notes;
+    REQUIRE_EQ(notes.size(), 2);
+    CHECK_EQ(notes[0].message, "Expected 'enraged: boolean' because of this");
+    CHECK_EQ(notes[1].message, "'self' is missing 'enraged: boolean'");
+    // Enemy's own table, which is what reaches 'self'
+    CHECK_EQ(notes[1].location.begin.line, 5);
+}
+
 // A generic's property is declared once for both sides, where neither note would say anything.
 TEST_CASE_FIXTURE(BuiltinsFixture, "a_mismatch_inside_one_generic_declaration_has_no_notes")
 {

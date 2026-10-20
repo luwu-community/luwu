@@ -2421,13 +2421,7 @@ std::optional<MismatchExplanation> explainOnce(
             if (d.expectedSite)
                 explanation.notes.push_back(MismatchNote{d.expectedSite->location, d.expectedSite->module, expectedPropertyNote(name, d.super)});
             if (d.givenSite)
-            {
-                // The note's path isn't in the message, so it adds nothing to the message's legend
-                uint8_t notation = rendering.notation;
-                std::string table = rendering.givenPath(missingParent(d));
-                rendering.notation = notation;
-                explanation.notes.push_back(MismatchNote{d.givenSite->location, d.givenSite->module, missingPropertyNote(table, name, d.super)});
-            }
+                explanation.notes.push_back(MismatchNote{d.givenSite->location, d.givenSite->module, missingPropertyNote(d, rendering)});
             continue;
         }
 

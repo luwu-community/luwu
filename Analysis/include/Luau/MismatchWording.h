@@ -283,8 +283,9 @@ std::string misspelledValueHelp(const Difference& d, Rendering& rendering);
 // one, `'count' is 'string' here, but should be 'number'` at the given one.
 std::string expectedPropertyNote(const std::string& name, const std::string& expected);
 std::string givenPropertyNote(const std::string& name, const std::string& given, const std::string& expected);
-// At the table a required property is missing from: `'colors.background' is missing 'b: number'`.
-std::string missingPropertyNote(const std::string& table, const std::string& name, const std::string& expected);
+// At the table a required property is missing from: `'colors.background' is missing 'b: number'`. Inside a function
+// the table is named from its parameter, as the bullet does (`'self' is missing ...`).
+std::string missingPropertyNote(const Difference& d, Rendering& rendering);
 
 // Headers: the line introducing the bullets.
 std::string similarHeader(std::string_view arrival, size_t paths);
