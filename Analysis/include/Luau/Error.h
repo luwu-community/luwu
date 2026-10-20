@@ -822,6 +822,8 @@ struct MultipleNonviableOverloads
     // "Available overloads: ...", all on one line.
     std::string callee;
     std::vector<std::string> overloads;
+    // The arguments as a parameter list, `("chat", (message: number) -> ())`. Empty when they weren't recorded.
+    std::string arguments;
 
     bool operator==(const MultipleNonviableOverloads& rhs) const;
 };

@@ -820,10 +820,34 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "overloads_are_listed_in_one_error")
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK_EQ(
         toString(result.errors[0]),
-        "None of the overloads of 'on' accept these 2 arguments:\n"
+        "None of the overloads of 'on' accept '(\"chat\", (message: number) -> ())':\n"
         "  • #1 '(event: \"join\", fn: () -> ()) -> ()'\n"
         "  • #2 '(event: \"chat\", fn: (message: string) -> ()) -> ()'"
     );
+}
+
+// The receiver of a method call is its first argument, and literals are printed as written.
+TEST_CASE_FIXTURE(BuiltinsFixture, "overloads_error_lists_a_method_calls_arguments")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type Emitter = {
+            on: ((self: Emitter, event: "join", fn: () -> ()) -> ()) & ((self: Emitter, event: "chat", fn: (message: string) -> ()) -> ()),
+        }
+        local e: Emitter = nil :: any
+        e:on('say "hi"', true)
+        local function many(...: number)
+            e.on(e, "join", ...)
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    const std::string overloads =
+        "  • #1 '(self: Emitter, event: \"join\", fn: () -> ()) -> ()'\n"
+        "  • #2 '(self: Emitter, event: \"chat\", fn: (message: string) -> ()) -> ()'";
+    CHECK_EQ("None of the overloads of 'e:on' accept '(Emitter, \"say \\\"hi\\\"\", true)':\n" + overloads, toString(result.errors[0]));
+    CHECK_EQ("None of the overloads of 'e.on' accept '(Emitter, \"join\", ...number)':\n" + overloads, toString(result.errors[1]));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "overloads_taking_other_argument_counts_are_listed_in_one_error")
