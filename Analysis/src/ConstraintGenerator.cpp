@@ -6862,6 +6862,24 @@ TypeId ConstraintGenerator::resolveParameterAnnotation(
     bool replaceErrorWithFresh
 )
 {
+    // `literal<B>?` (`V<literal<B>>?`) is the literal parameter `literal<B>` that may be left out or nil
+    AstTypeUnion* optional = annotation->as<AstTypeUnion>();
+    if (optional && optional->types.size == 2 && optional->types.data[1]->is<AstTypeOptional>())
+    {
+        AstType* required = optional->types.data[0];
+        if (findLiteralReference(*scope, required))
+        {
+            size_t literalCount = literalParameters.size();
+            TypeId base = resolveParameterAnnotation(scope, required, argIndex, variadic, literalParameters, inTypeArguments, replaceErrorWithFresh);
+            LUAU_ASSERT(literalParameters.size() == literalCount + 1);
+            literalParameters.back().optional = true;
+
+            TypeId optionalBase = arena->addType(UnionType{{base, builtinTypes->nilType}});
+            module->astResolvedTypes[optional] = optionalBase;
+            return optionalBase;
+        }
+    }
+
     std::optional<ResolvedLiteral> literal;
     if (AstTypeReference* literalRef = findLiteralReference(*scope, annotation))
         literal = resolveLiteralAnnotation(scope, annotation, literalRef, inTypeArguments, replaceErrorWithFresh);

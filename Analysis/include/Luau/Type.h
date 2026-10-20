@@ -444,6 +444,8 @@ struct FunctionType
         // `validator`.
         TypeId validator;
         TypeId placeholder;
+        // `literal<B>?`: nil or a left-out argument is checked by nothing
+        bool optional = false;
     };
     std::vector<LiteralParameter> literalParameters;
 
