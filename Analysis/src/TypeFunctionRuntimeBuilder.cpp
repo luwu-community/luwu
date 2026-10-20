@@ -926,8 +926,8 @@ private:
         queue.emplace_back(ty, target);
 
         // Luwu: a type made here gets the documentation and metadata of what it was serialized from. Builtins, extern types
-        // and generics are shared by every use, so they keep their own.
-        if (target && ownsDeserializedType(ty))
+        // and generics are shared by every use, so they keep their own. A singleton can be a builtin too (`true`, `false`).
+        if (target && ownsDeserializedType(ty) && !target->persistent)
         {
             if (ty->origin)
                 asMutable(target)->documentationSymbol = ty->origin->documentationSymbol;
