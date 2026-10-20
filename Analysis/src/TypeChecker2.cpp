@@ -1806,6 +1806,98 @@ TypeId TypeChecker2::withoutSelfParameter(TypeId fnTy)
     return withoutFirstParameter(*module->internalTypes, fnTy);
 }
 
+// Luwu Traits (rfcs/classes/traits.md): the name of the first parameter `override` requires past those `overridden` takes,
+// if any. Luau's subtyping lets a function that wants more arguments stand in for one called with fewer, which would call
+// an override with nil for a parameter that can't be nil.
+std::optional<std::string> TypeChecker2::requiredExtraParameter(TypeId override, TypeId overridden)
+{
+    const FunctionType* overrideFn = get<FunctionType>(follow(override));
+    const FunctionType* overriddenFn = get<FunctionType>(follow(overridden));
+    if (!overrideFn || !overriddenFn)
+        return std::nullopt;
+
+    // A method's signature ends in an implicit `...any`; only a `...` the function writes takes more arguments
+    auto [overriddenParams, overriddenTail] = flatten(overriddenFn->argTypes);
+    bool writesVararg = overriddenFn->definition && overriddenFn->definition->varargLocation;
+    bool takesAnyMore = overriddenTail && (writesVararg || get<GenericTypePack>(follow(*overriddenTail)));
+    if (takesAnyMore)
+        return std::nullopt;
+
+    auto [overrideParams, _] = flatten(overrideFn->argTypes);
+    for (size_t i = overriddenParams.size(); i < overrideParams.size(); ++i)
+    {
+        if (isOptional(overrideParams[i]) || get<AnyType>(follow(overrideParams[i])) || get<UnknownType>(follow(overrideParams[i])))
+            continue;
+
+        bool named = i < overrideFn->argNames.size() && overrideFn->argNames[i];
+        return named ? overrideFn->argNames[i]->name : "#" + std::to_string(i + 1);
+    }
+    return std::nullopt;
+}
+
+static std::string extraRequiredParameterMessage(const Name& function, const std::string& parameter, const std::string& trait)
+{
+    return format(
+        "'%s' requires '%s', which trait '%s' doesn't pass when it calls '%s'; make '%s' optional",
+        function.c_str(),
+        parameter.c_str(),
+        trait.c_str(),
+        function.c_str(),
+        parameter.c_str()
+    );
+}
+
+// Luwu Traits (rfcs/classes/traits.md): traits whose versions of a function can't be called each other's way, which no
+// function in the class can stand in for
+static std::string conflictingTraitFunctionsMessage(
+    const std::string& className,
+    const Name& function,
+    const std::vector<std::pair<std::string, std::string>>& versions
+)
+{
+    std::string traits;
+    for (size_t i = 0; i < versions.size(); ++i)
+    {
+        if (i > 0)
+            traits += i + 1 == versions.size() ? " and " : ", ";
+        traits += "'" + versions[i].first + "'";
+    }
+
+    std::string message = format("Traits %s conflict on function '%s'.", traits.c_str(), function.c_str());
+    for (const auto& [trait, signature] : versions)
+        message += format("\n- '%s' has '%s: %s'", trait.c_str(), function.c_str(), signature.c_str());
+
+    message += format(
+        "\n\nHelp (conflicting trait functions):\n  - '%s' in class '%s' can't be called as each of these at once\n"
+        "  - Rename '%s' in one of the traits",
+        function.c_str(),
+        className.c_str(),
+        function.c_str()
+    );
+    return message;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a trait function as `classTy` has it, with the class for `Self`
+TypeId TypeChecker2::traitFunctionFor(const ExternType* traitType, TypeId classTy, const Name& name, TypeId function)
+{
+    const ExternType::TraitInfo& info = *traitType->traitInfo;
+    auto self = info.selfFunctions.find(name);
+    if (self == info.selfFunctions.end())
+        return function;
+
+    // As the class's copy of the trait function gets it (InstantiateNominalPropConstraint)
+    ApplyTypeFunction substitution{module->internalTypes.get()};
+    substitution.typeArguments[self->second.generic] = classTy;
+    substitution.typeArguments[self->second.selfType] = classTy;
+    std::optional<TypeId> substituted = substitution.substitute(function);
+    if (!substituted)
+        return function;
+
+    if (*substituted != function)
+        dropSubstitutedGenerics(*substituted);
+    return *substituted;
+}
+
 // Luwu Traits (rfcs/classes/traits.md): a trait field naming `Self`, as `classTy` has it
 std::optional<TypeId> TypeChecker2::selfFieldFor(const ExternType* traitType, TypeId classTy, const Name& name)
 {
@@ -1832,6 +1924,8 @@ void TypeChecker2::checkTraitFieldExpectations(AstStatClass* stat)
     // every member the class is missing, grouped by the `implements` entry it's reported on, so a class missing several
     // gets one error listing them rather than one error each
     std::vector<MissingTraitMembers> missing;
+    // each function the class writes in place of a trait's, with every trait's version of it
+    std::map<Name, std::vector<OverriddenTraitFunction>> overridden;
 
     for (TypeId trait : classType->implementedTraits)
     {
@@ -1874,6 +1968,20 @@ void TypeChecker2::checkTraitFieldExpectations(AstStatClass* stat)
             testIsSubtype(*found->readTy, providedTy, location);
         }
 
+        // A function the class writes in place of the trait's (checked below, with every other trait's version of it).
+        // Its `Self` is this class. One the trait has from a trait it needs is that trait's.
+        for (const auto& [name, provided] : traitType->props())
+        {
+            bool written = !traitFields->fieldNames.count(name) && !traitType->traitInfo->expectations.count(name);
+            bool checkable = written && name != "__init" && !traitType->traitInfo->fromNeeds.count(name) && provided.readTy;
+            if (!checkable || containsErrorType(*provided.readTy) || !classMemberLocation(stat, name))
+                continue;
+
+            TypeId providedFunction = traitFunctionFor(traitType, classTypeFun->type, name, *provided.readTy);
+            if (get<FunctionType>(follow(providedFunction)))
+                overridden[name].push_back(OverriddenTraitFunction{traitType, providedFunction});
+        }
+
         for (const auto& [name, optional] : traitType->traitInfo->expectations)
         {
             // an expected constructor is checked by checkTraitConstructorExpectation
@@ -1904,6 +2012,89 @@ void TypeChecker2::checkTraitFieldExpectations(AstStatClass* stat)
 
     for (const MissingTraitMembers& group : missing)
         reportMissingTraitMembers(classType, group);
+
+    for (const auto& [name, versions] : overridden)
+    {
+        const Property* found = findNominalMember(classType, name);
+        std::optional<Location> location = classMemberLocation(stat, name);
+        if (location && found && found->readTy && get<FunctionType>(follow(*found->readTy)))
+            checkTraitFunctionOverride(classType, name, *found->readTy, versions, *location);
+    }
+}
+
+// Luwu Traits (rfcs/classes/traits.md): whether `function` can be called as `as` is: it takes what `as` is passed (`self`
+// aside, and no more required arguments) and returns what `as` returns
+bool TypeChecker2::worksAsTraitFunction(TypeId function, TypeId as, NotNull<Scope> scope)
+{
+    if (requiredExtraParameter(function, as))
+        return false;
+    return subtyping->isSubtype(withoutSelfParameter(function), withoutSelfParameter(as), scope).isSubtype;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a class's function in place of one or more traits' has to work as each of them,
+// since code holding any of those traits calls it as that trait's (an override that can't be called the same way would
+// get the wrong arguments at runtime). When the traits' versions can't be called each other's way, no one function
+// works as all of them: that is reported once, naming them, since only renaming one of them fixes it.
+void TypeChecker2::checkTraitFunctionOverride(
+    const ExternType* classType,
+    const Name& name,
+    TypeId override,
+    const std::vector<OverriddenTraitFunction>& versions,
+    Location location
+)
+{
+    NotNull<Scope> scope{findInnermostScope(location)};
+
+    std::vector<const OverriddenTraitFunction*> unfit;
+    for (const OverriddenTraitFunction& version : versions)
+    {
+        if (!worksAsTraitFunction(override, version.function, scope))
+            unfit.push_back(&version);
+    }
+    if (unfit.empty())
+        return;
+
+    bool conflicting = false;
+    for (size_t i = 0; i < versions.size() && !conflicting; ++i)
+    {
+        for (size_t j = i + 1; j < versions.size() && !conflicting; ++j)
+        {
+            bool eitherWorks = worksAsTraitFunction(versions[i].function, versions[j].function, scope) ||
+                               worksAsTraitFunction(versions[j].function, versions[i].function, scope);
+            conflicting = !eitherWorks;
+        }
+    }
+
+    if (conflicting)
+    {
+        std::vector<std::pair<std::string, std::string>> signatures;
+        for (const OverriddenTraitFunction& version : versions)
+            signatures.emplace_back(version.trait->name, toString(withoutSelfParameter(version.function)));
+        reportError(GenericError{conflictingTraitFunctionsMessage(classType->name, name, signatures)}, location);
+        return;
+    }
+
+    std::vector<TypeId> reported;
+    for (const OverriddenTraitFunction* version : unfit)
+    {
+        // Traits with the same signature (each works as the other) get one error between them
+        bool sameAsReported = std::any_of(
+            reported.begin(),
+            reported.end(),
+            [&](TypeId other)
+            {
+                return worksAsTraitFunction(other, version->function, scope) && worksAsTraitFunction(version->function, other, scope);
+            }
+        );
+        if (sameAsReported)
+            continue;
+        reported.push_back(version->function);
+
+        if (std::optional<std::string> extra = requiredExtraParameter(override, version->function))
+            reportError(GenericError{extraRequiredParameterMessage(name, *extra, version->trait->name)}, location);
+        else
+            testIsSubtype(withoutSelfParameter(override), withoutSelfParameter(version->function), location);
+    }
 }
 
 // Luwu Traits (rfcs/classes/traits.md): "'C' implements 'Base<string>', but 'Mut<number>' needs 'Base<number>'"

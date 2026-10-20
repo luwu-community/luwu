@@ -3546,22 +3546,8 @@ bool ConstraintSolver::tryDispatch(const InstantiateNominalPropConstraint& c, No
 
     // Luwu Traits (rfcs/classes/traits.md): a trait function generic over `Self` has the implementing class substituted for
     // it, which leaves the class in the function's generics. The copy is fresh, so it can drop it.
-    FunctionType* substitutedFunction = *substituted != templateProp ? getMutable<FunctionType>(*substituted) : nullptr;
-    if (substitutedFunction)
-    {
-        std::vector<TypeId>& generics = substitutedFunction->generics;
-        generics.erase(
-            std::remove_if(
-                generics.begin(),
-                generics.end(),
-                [](TypeId generic)
-                {
-                    return !get<GenericType>(follow(generic));
-                }
-            ),
-            generics.end()
-        );
-    }
+    if (*substituted != templateProp)
+        dropSubstitutedGenerics(*substituted);
 
     bind(constraint, c.target, *substituted);
     return true;

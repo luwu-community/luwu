@@ -92,4 +92,8 @@ void resetNominalMembers(TypeId instantiation, TypeArena* arena, std::shared_ptr
 // member is still being solved
 std::optional<TypeId> pendingNominalMember(const ExternType& instantiation, const Name& name);
 
+// Luwu Traits (rfcs/classes/traits.md): removes from a freshly substituted function's generics the ones a substitution
+// replaced (a trait function generic over `Self`, given a class for it). `fn` must be the substitution's own copy.
+void dropSubstitutedGenerics(TypeId fn);
+
 } // namespace Luau
