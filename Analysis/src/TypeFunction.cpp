@@ -47,6 +47,9 @@ struct InstanceCollector : TypeOnceVisitor
     TypeOrTypePackIdSet shouldGuess{nullptr};
     std::vector<const void*> typeFunctionInstanceStack;
     std::vector<TypeId> cyclicInstance;
+    // Luwu: the instances inside an instantiation's type arguments (see TypeFunctionContext::reportedApplications)
+    DenseHashSet<TypeId> inTypeArguments{nullptr};
+    int typeArgumentDepth = 0;
 
 
     InstanceCollector()
@@ -74,6 +77,9 @@ struct InstanceCollector : TypeOnceVisitor
             tys.push_front(ty);
         }
 
+        if (typeArgumentDepth > 0)
+            inTypeArguments.insert(ty);
+
         for (TypeId p : tfit.typeArguments)
             traverse(p);
 
@@ -97,8 +103,19 @@ struct InstanceCollector : TypeOnceVisitor
         }
     }
 
-    bool visit(TypeId ty, const ExternType&) override
+    // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): an instantiation's type arguments can hold instances
+    // (`Box<Reject<"x">>`). Upstream skips extern types whole, which never have type arguments there.
+    bool visit(TypeId ty, const ExternType& etv) override
     {
+        if (etv.genericTemplate)
+        {
+            ++typeArgumentDepth;
+            for (TypeId argument : etv.instantiatedTypeParams)
+                traverse(argument);
+            for (TypePackId argument : etv.instantiatedTypePackParams)
+                traverse(argument);
+            --typeArgumentDepth;
+        }
         return false;
     }
 
@@ -196,6 +213,14 @@ struct UnscopedGenericFinder : TypeOnceVisitor
     }
 };
 
+// Luwu: see TypeFunctionContext::reportedApplications. Copies have copied arguments, so they are compared as printed.
+static std::string applicationOf(TypeId instance)
+{
+    const TypeFunctionInstanceType* tfit = get<TypeFunctionInstanceType>(instance);
+    LUAU_ASSERT(tfit);
+    return format("%p %s", (const void*)tfit->userFuncData.definition, toString(instance).c_str());
+}
+
 struct TypeFunctionReducer
 {
     NotNull<TypeFunctionContext> ctx;
@@ -210,6 +235,9 @@ struct TypeFunctionReducer
 
     // Local to the constraint being reduced.
     Location location;
+
+    // Luwu: see InstanceCollector::inTypeArguments
+    DenseHashSet<TypeId> inTypeArguments{nullptr};
 
     TypeFunctionReducer(
         VecDeque<TypeId> queuedTys,
@@ -392,7 +420,16 @@ struct TypeFunctionReducer
         {
             irreducible.insert(subject);
 
-            if (reduction.error.has_value())
+            bool alreadyReported = false;
+            if constexpr (std::is_same_v<T, TypeId>)
+            {
+                bool userDefined = get<TypeFunctionInstanceType>(subject)->function == &ctx->builtins->typeFunctions->userFunc;
+                bool onlyOnce = ctx->reportedApplications && userDefined && inTypeArguments.contains(subject);
+                if (onlyOnce && reduction.reductionStatus == Reduction::Erroneous)
+                    alreadyReported = !ctx->reportedApplications->insert(applicationOf(subject)).second;
+            }
+
+            if (reduction.error.has_value() && !alreadyReported)
                 result.errors.emplace_back(location, UserDefinedTypeFunctionError{*reduction.error});
 
             if (reduction.reductionStatus != Reduction::MaybeOk || force)
@@ -488,7 +525,18 @@ struct TypeFunctionReducer
                 irreducible.insert(subject);
 
                 if (skip == SkipTestResult::Generic)
+                {
                     setState(subject, TypeFunctionInstanceState::Solved);
+
+                    // Luwu: an instance from another module (`keyof<T>` in an imported generic function) keeps its
+                    // state, so the solver is told instead. Upstream leaves it looking blocked, and an argument pushed
+                    // into it widens before the push runs.
+                    if constexpr (std::is_same_v<T, TypeId>)
+                    {
+                        if (subject->owningArena != ctx->arena)
+                            result.irreducibleTypes.insert(subject);
+                    }
+                }
 
                 return false;
             }
@@ -659,12 +707,14 @@ static FunctionGraphReductionResult reduceFunctionsInternal(
     VecDeque<TypePackId> queuedTps,
     TypeOrTypePackIdSet shouldGuess,
     std::vector<TypeId> cyclics,
+    DenseHashSet<TypeId> inTypeArguments,
     Location location,
     NotNull<TypeFunctionContext> ctx,
     bool force
 )
 {
     TypeFunctionReducer reducer{std::move(queuedTys), std::move(queuedTps), std::move(shouldGuess), std::move(cyclics), location, ctx, force};
+    reducer.inTypeArguments = std::move(inTypeArguments);
     int iterationCount = 0;
 
     // If we are reducing a type function while reducing a type function,
@@ -713,6 +763,7 @@ FunctionGraphReductionResult reduceTypeFunctions(TypeId entrypoint, Location loc
         std::move(collector.tps),
         std::move(collector.shouldGuess),
         std::move(collector.cyclicInstance),
+        std::move(collector.inTypeArguments),
         location,
         ctx,
         force
@@ -740,6 +791,7 @@ FunctionGraphReductionResult reduceTypeFunctions(TypePackId entrypoint, Location
         std::move(collector.tps),
         std::move(collector.shouldGuess),
         std::move(collector.cyclicInstance),
+        std::move(collector.inTypeArguments),
         location,
         ctx,
         force

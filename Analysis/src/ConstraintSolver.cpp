@@ -1879,6 +1879,42 @@ static void patchUnconstrainedGenericsFromDefaults(TypeId overloadFn, NotNull<Sc
 
 static std::optional<TypeId> selectExpectedNominal(const FunctionType* ftv, TypeId expectedType);
 
+// Luwu: the first type function in an argument the solver hasn't reduced yet (`Same<'a>` in `Box<Same<'a>>`)
+struct PendingTypeFunctionFinder : TypeOnceVisitor
+{
+    NotNull<const ConstraintSolver> solver;
+    std::optional<TypeId> found;
+
+    explicit PendingTypeFunctionFinder(NotNull<const ConstraintSolver> solver)
+        : TypeOnceVisitor("PendingTypeFunctionFinder", /* skipBoundTypes */ true)
+        , solver(solver)
+    {
+    }
+
+    bool visit(TypeId ty) override
+    {
+        return !found;
+    }
+
+    bool visit(TypeId ty, const TypeFunctionInstanceType&) override
+    {
+        if (solver->isBlocked(ty))
+            found = ty;
+        return false;
+    }
+
+    // Only an instantiation's type arguments relate it to a parameter. Walking a class's members would only cost time.
+    bool visit(TypeId ty, const ExternType& etv) override
+    {
+        if (etv.genericTemplate)
+        {
+            for (TypeId argument : etv.instantiatedTypeParams)
+                traverse(argument);
+        }
+        return false;
+    }
+};
+
 bool ConstraintSolver::tryDispatch(const FunctionCallConstraint& c, NotNull<const Constraint> constraint, bool force)
 {
     TypeId fn = follow(c.fn);
@@ -1931,6 +1967,21 @@ bool ConstraintSolver::tryDispatch(const FunctionCallConstraint& c, NotNull<cons
 
     if (blocked)
         return false;
+
+    // Luwu: a generic callee's type arguments are fixed from the arguments' types when the call is dispatched. One
+    // still holding an unreduced type function (`Wrap(box)` with `box: Box<Same<'a>>`) would fix `T` before it says
+    // anything, and `T` would come out `unknown`, so the call waits for it. Upstream dispatches the call anyway.
+    const FunctionType* fnType = get<FunctionType>(fn);
+    bool mayInstantiate = !fnType || !fnType->generics.empty() || !fnType->genericPacks.empty();
+    if (mayInstantiate && !force)
+    {
+        PendingTypeFunctionFinder finder{NotNull{this}};
+        for (TypeId t : argsHead)
+            finder.traverse(t);
+
+        if (finder.found)
+            return block(*finder.found, constraint);
+    }
 
     auto collapse = [](const auto* t) -> std::optional<TypeId>
     {
