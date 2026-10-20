@@ -3310,6 +3310,38 @@ return f, g
 
 // Luwu Do Expressions (rfcs/do-expressions.md): a `do` body is indented one level past the line the `do` is on. A table
 // comprehension's `when` clauses, at the `for`'s indent or one level in, don't change that for `give do`.
+// Luwu Table Comprehensions: a comprehension's clauses are parts of the statement around it, so a nested `for` and its
+// `when` aligned with the first `for` aren't a statement spanning lines; a clause at the statement's own indent is
+TEST_CASE_FIXTURE(Fixture, "MultiLineStatementComprehensionClauses")
+{
+    ScopedFastFlag comprehensions{FFlag::LuwuTableComprehensions, true};
+
+    LintResult result = lint(R"(
+local grid = { { 1, 0 }, { 0, 3 } }
+local filled = {
+    for _, row in grid
+    for _, cell in row
+    when cell ~= 0
+    give cell
+}
+local nested = {
+    for _, row in grid
+        for _, cell in row
+            when cell ~= 0
+    give cell
+}
+local bad = {
+for _, row in grid
+    give row
+}
+return filled, nested, bad
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_MultiLineStatement);
+    REQUIRE_EQ(found.size(), 1);
+    CHECK_EQ(found[0].location.begin, Position(15, 0));
+}
+
 TEST_CASE_FIXTURE(Fixture, "MisleadingIndentationGiveDoInComprehensions")
 {
     ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};

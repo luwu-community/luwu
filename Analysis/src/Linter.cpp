@@ -966,6 +966,57 @@ private:
         return false;
     }
 
+    // Luwu Table Comprehensions: a comprehension is stored as nested loops, but its clauses are parts of the statement
+    // around it, so a nested `for` and the `when` under it are measured against that statement, as the first `for` is
+    bool visit(AstExprTableComprehension* node) override
+    {
+        visit(static_cast<AstExpr*>(node));
+        visitComprehensionClause(node->loop);
+
+        return false;
+    }
+
+    void visitComprehensionClause(AstStat* clause)
+    {
+        AstStatBlock* body = nullptr;
+        AstStatIf* guard = nullptr;
+        if (AstStatForIn* forIn = clause->as<AstStatForIn>())
+        {
+            checkStart(forIn->location);
+            for (AstExpr* value : forIn->values)
+                value->visit(this);
+            body = forIn->body;
+            guard = forIn->whenGuard;
+        }
+        else if (AstStatFor* forRange = clause->as<AstStatFor>())
+        {
+            checkStart(forRange->location);
+            forRange->from->visit(this);
+            forRange->to->visit(this);
+            if (forRange->step)
+                forRange->step->visit(this);
+            body = forRange->body;
+            guard = forRange->whenGuard;
+        }
+        else
+        {
+            // the item (`give ...`)
+            clause->visit(this);
+            return;
+        }
+
+        if (guard)
+        {
+            if (guard->clauses.size == 0)
+                checkStart(guard->ifLocation);
+            visitCondition(guard->condition, guard->clauses);
+            body = guard->thenbody;
+        }
+
+        for (AstStat* stat : body->body)
+            visitComprehensionClause(stat);
+    }
+
     // Luwu Do Expressions (rfcs/do-expressions.md): a statement on the line its `do` expression starts on starts
     // mid-line, so it's measured against the indentation of the statement around the expression. One on its own line
     // is measured against itself, as usual.
