@@ -24,6 +24,7 @@ LUAU_FASTINT(LuauTypeInferIterationLimit)
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
 
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
+LUAU_FASTFLAG(LuauRelaxConstraintOrderingForFunctionCheck)
 LUAU_FASTINT(LuauGenericCounterMaxSteps)
 LUAU_FASTINT(LuauSubtypingIterationLimit)
 LUAU_FASTINT(LuauStackGuardThreshold)
@@ -650,6 +651,34 @@ TEST_CASE_FIXTURE(Fixture, "comparison_to_nil_when_normalization_fails_should_no
             return t == nil
         end
     )"));
+}
+
+// Luwu: a call inside a table literal passed to a call (`rule("a", { color = token("text") })`) checks in linear time.
+// Blocking the outer call's function_check on the inner call forces a constraint per statement, and each forced one
+// restarts the solver's scan of every unsolved constraint: 8000 such statements take about 20 seconds. Upstream 0.732
+// stops blocking there (LuauRelaxConstraintOrderingForFunctionCheck).
+TEST_CASE_FIXTURE(BuiltinsFixture, "nested_calls_in_table_literal_arguments_check_in_linear_time" * doctest::timeout(15.0))
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuauRelaxConstraintOrderingForFunctionCheck, true},
+    };
+
+    std::string src = R"(
+        type Token = { name: string }
+        type Style = { margin: string?, color: Token?, display: ("flex" | "block")? }
+        local function token(name: "text" | "bg"): Token
+            return { name = name }
+        end
+        local function rule(_selector: string, _style: Style): number
+            return 1
+        end
+    )";
+    for (int i = 0; i < 8000; ++i)
+        src += "rule(\"a\", { margin = \"0\", color = token(\"text\"), display = \"flex\" })\n";
+
+    CheckResult result = check(src);
+    LUAU_REQUIRE_NO_ERRORS(result);
 }
 
 TEST_SUITE_END();
