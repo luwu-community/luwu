@@ -3310,28 +3310,58 @@ void TypeChecker2::checkLiteralValue(AstExpr* value, TypeId inferred, const Lite
     if (!check.validator)
         return;
 
+    // A validator given the same literal again says the same thing: only where it's said changes
+    std::optional<std::pair<TypeId, std::string>> key;
+    if (const SingletonType* singleton = get<SingletonType>(follow(literalTy)))
+    {
+        if (const StringSingleton* string = get<StringSingleton>(singleton))
+            key = {follow(check.validator), "s:" + string->value};
+        else if (const BooleanSingleton* boolean = get<BooleanSingleton>(singleton))
+            key = {follow(check.validator), boolean->value ? "b:true" : "b:false"};
+    }
+
+    auto report = [&](const ValidatedLiteral& validated)
+    {
+        auto relocated = [&](ErrorVec errors)
+        {
+            for (TypeError& error : errors)
+                error.location = value->location;
+            return errors;
+        };
+        reportErrors(relocated(validated.messages));
+        // The validator raised (`error(...)` in a user type function): that error says why
+        if (!validated.errors.empty())
+            reportErrors(relocated(validated.errors));
+        else if (validated.accepted)
+            testIsSubtype(literalTy, *validated.accepted, value->location);
+    };
+
+    if (key)
+    {
+        if (auto it = validatedLiterals.find(*key); it != validatedLiterals.end())
+        {
+            report(it->second);
+            return;
+        }
+    }
+
     std::optional<TypeId> instance = applyLiteralValidator(arena, check, follow(check.validator), literalTy);
     if (!instance)
         return;
 
     TypeFunctionContext context{NotNull{&arena}, builtinTypes, scope, NotNull{&normalizer}, typeFunctionRuntime, ice, limits, subtyping};
     FunctionGraphReductionResult reduction = reduceTypeFunctions(*instance, value->location, NotNull{&context}, /* force */ true);
-    reportErrors(std::move(reduction.messages));
 
-    // The validator raised (`error(...)` in a user type function): that error says why
-    if (!reduction.errors.empty())
-    {
-        reportErrors(std::move(reduction.errors));
-        return;
-    }
-
-    TypeId accepted = follow(*instance);
-
+    ValidatedLiteral validated;
+    validated.messages = std::move(reduction.messages);
+    validated.errors = std::move(reduction.errors);
     // Still unreduced, e.g. the value's type is a generic: nothing is known about it yet
-    if (get<TypeFunctionInstanceType>(accepted))
-        return;
+    if (TypeId accepted = follow(*instance); !get<TypeFunctionInstanceType>(accepted))
+        validated.accepted = accepted;
 
-    testIsSubtype(literalTy, accepted, value->location);
+    report(validated);
+    if (key)
+        validatedLiterals.emplace(*key, std::move(validated));
 }
 
 void TypeChecker2::checkLiteralFields(AstExpr* value, TypeId expected, NotNull<Scope> scope)

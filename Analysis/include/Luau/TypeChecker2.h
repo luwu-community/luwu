@@ -11,6 +11,7 @@
 #include "Luau/TypeFwd.h"
 #include "Luau/TypeUtils.h"
 
+#include <map>
 #include <memory>
 
 namespace Luau
@@ -268,6 +269,17 @@ private:
     // Luwu literal types: reports `value`, given where `check` applies, if it isn't a literal of `check`'s base or its
     // validator rejects it. A cast to a literal type and a forwarded value pass.
     void checkLiteralValue(AstExpr* value, TypeId inferred, const LiteralCheck& check, NotNull<Scope> scope);
+
+    // Luwu literal types: what a validator made of one literal value: its messages, the error it raised, and the type the
+    // value has to fit, when it reduced to one. The same field is often given the same literal (`margin = "0"`).
+    struct ValidatedLiteral
+    {
+        ErrorVec messages;
+        ErrorVec errors;
+        std::optional<TypeId> accepted;
+    };
+    // Keyed by the validator and the literal value (`s:0`, `b:true`)
+    std::map<std::pair<TypeId, std::string>, ValidatedLiteral> validatedLiterals;
     // Luwu literal types: `value` given for `expected`: a table literal is checked field by field against the literal
     // fields of `expected` (nested tables too), and any other table must already have been checked against them
     void checkLiteralFields(AstExpr* value, TypeId expected, NotNull<Scope> scope);

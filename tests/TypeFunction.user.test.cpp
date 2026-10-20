@@ -4793,6 +4793,34 @@ flag("--verbose")
     CHECK_EQ(toString(requireType("named")), R"("b"?)");
 }
 
+// Luwu literal types: a validator's verdict on a literal is reused for the same literal, and reported where each one is
+TEST_CASE_FIXTURE(BuiltinsFixture, "literal_validator_verdicts_are_reported_at_each_literal")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastFlag literalParameters{FFlag::LuwuLiteralTypes, true};
+
+    CheckResult result = check(R"(
+type function Short(s: type): type
+    if s:is("singleton") and #(s:value() :: string) <= 2 then
+        return s
+    end
+    return types.error("too long")
+end
+
+local function flag(short: Short<literal<string>>) end
+flag("-v")
+flag("--verbose")
+flag("-v")
+flag("--verbose")
+    )");
+
+    REQUIRE_EQ(result.errors.size(), 2);
+    CHECK_EQ(result.errors[0].location.begin.line, 10);
+    CHECK_EQ(toString(result.errors[0]), "too long");
+    CHECK_EQ(result.errors[1].location.begin.line, 12);
+    CHECK_EQ(toString(result.errors[1]), "too long");
+}
+
 // Luwu literal types: a nonstrict file knows `literal<B>` too
 TEST_CASE_FIXTURE(BuiltinsFixture, "literal_parameters_in_nonstrict_files")
 {
