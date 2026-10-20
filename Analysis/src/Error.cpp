@@ -1685,7 +1685,9 @@ UnknownSymbol unknownTypeReference(const Scope& scope, const AstTypeReference& r
     if (!reference.prefix)
     {
         UnknownSymbol error{reference.name.value, UnknownSymbol::Context::Type};
-        if (!FFlag::LuwuHelpfulSubtypingErrors)
+        // A value with this name (`keyof<Colours>` for a local `Colours`) is what was meant, not a type spelled like it
+        bool namesAValue = scope.linearSearchForBinding(error.name).has_value();
+        if (!FFlag::LuwuHelpfulSubtypingErrors || namesAValue)
             return error;
         if (std::optional<std::string> meant = closestSpelling(error.name, typeNamesInScope(scope)))
         {

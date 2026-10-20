@@ -2523,6 +2523,17 @@ bool looksLikeTypo(const std::string& written, const std::string& meant)
     return written.size() > kMaxTypoEdits && editDistanceWithin(written, meant, typoEditLimit(written)).has_value();
 }
 
+static std::string withoutDigits(const std::string& name)
+{
+    std::string letters;
+    for (char c : name)
+    {
+        if (!std::isdigit(static_cast<unsigned char>(c)))
+            letters += c;
+    }
+    return letters;
+}
+
 std::optional<std::string> closestSpelling(const std::string& written, const std::vector<std::string>& candidates)
 {
     if (written.size() <= kMaxTypoEdits)
@@ -2530,9 +2541,11 @@ std::optional<std::string> closestSpelling(const std::string& written, const std
 
     std::optional<std::string> best;
     size_t bestDistance = typoEditLimit(written) + 1;
+    const std::string writtenLetters = withoutDigits(written);
     for (const std::string& candidate : candidates)
     {
-        if (candidate == written)
+        // Names that differ only in digits are siblings (`Part8`, `Part0`), not misspellings of each other
+        if (candidate == written || withoutDigits(candidate) == writtenLetters)
             continue;
         std::optional<size_t> distance = editDistanceWithin(written, candidate, bestDistance - 1);
         if (distance)
