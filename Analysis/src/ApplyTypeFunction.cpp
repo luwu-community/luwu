@@ -315,13 +315,21 @@ static std::optional<TypeId> findPendingMember(const Property& prop)
     return finder.found;
 }
 
+// Whether nothing will finish what the template left pending: it was imported from another module, or the instantiation
+// is an exported one, which only imported modules build.
+static bool isTemplateFinal(const LazyNominalMembers& lazy, TypeId templateTy)
+{
+    return lazy.sharedArena != nullptr || templateTy->owningArena != lazy.arena;
+}
+
 std::optional<TypeId> pendingNominalMember(const ExternType& instantiation, const Name& name)
 {
     if (!instantiation.hasUnbuiltMembers() || !instantiation.genericTemplate)
         return std::nullopt;
 
-    const ExternType* templateEtv = get<ExternType>(follow(*instantiation.genericTemplate));
-    if (!templateEtv)
+    TypeId templateTy = follow(*instantiation.genericTemplate);
+    const ExternType* templateEtv = get<ExternType>(templateTy);
+    if (!templateEtv || isTemplateFinal(*instantiation.lazyMembers, templateTy))
         return std::nullopt;
 
     auto it = templateEtv->builtProps().find(name);
@@ -342,12 +350,14 @@ void buildNominalMembers(const ExternType& etv)
     if (lazy->built.load(std::memory_order_relaxed))
         return;
 
-    // An imported instantiation's template is final, so whatever it holds is built now: one left pending would be
-    // rewritten on later reads, under other threads reading it
-    const bool templateIsFinal = lazy->sharedArena != nullptr;
-
-    const ExternType* templateEtv = get<ExternType>(follow(*etv.genericTemplate));
+    TypeId templateTy = follow(*etv.genericTemplate);
+    const ExternType* templateEtv = get<ExternType>(templateTy);
     LUAU_ASSERT(templateEtv);
+
+    // A final template's members are built now, pending or not. An imported instantiation's would otherwise be rewritten
+    // on later reads, under other threads reading it. An imported template's (a type function of the class's generics
+    // its module left unreduced) would wait forever.
+    const bool templateIsFinal = isTemplateFinal(*lazy, templateTy);
 
     TypeArena* arena = lazy->arena;
     std::unique_lock<std::mutex> arenaGuard;

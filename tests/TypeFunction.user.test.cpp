@@ -3539,6 +3539,165 @@ local d: Tag<number> = "error"
     CHECK_EQ(toString(result.errors[1]), "types.error(...) can only be returned from a type function, not used inside another type");
 }
 
+// Luwu: a generic function's `Row<C>` is left unreduced by its module. A caller in another module used to re-push the
+// argument into it until the solver gave up ("Code is too complex", "failed to complete").
+TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_of_a_generic_parameter_from_another_module")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+
+    fileResolver.source["game/A"] = R"(
+export type function Row(columns: type): type
+    return types.newtable({ [types.singleton("x")] = types.string })
+end
+local function with_rows<C>(rows: { Row<C> }) end
+return { with_rows = with_rows }
+    )";
+
+    CheckResult result = check(R"(
+local A = require(game.A)
+A.with_rows({ { x = "a" } })
+A.with_rows({ { y = "a" } })
+    )");
+
+    // The mismatch is reported twice, in one module as well: both errors are the same one
+    REQUIRE_EQ(result.errors.size(), 2);
+    for (const TypeError& error : result.errors)
+    {
+        CHECK_EQ(error.location.begin.line, 3);
+        CHECK(get<TypeMismatch>(error));
+    }
+}
+
+// Luwu: an imported generic class's member that holds a type function of the class's generics (`Row<C>`,
+// `Append<Headings, N>`) is built as it is: nothing in the importing module will reduce it in the template.
+TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_of_class_generics_from_another_module")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+    ScopedFastFlag genericNominals{FFlag::LuwuGenericNominals, true};
+
+    fileResolver.source["game/A"] = R"(
+type function Append(prev: type, new: type): type
+    return new
+end
+export type function Row(columns: type): type
+    return types.newtable({ [types.singleton("x")] = types.string })
+end
+class Header<Headings = "">()
+    function column<N>(self, name: N | ""): Header<Append<Headings, N>>
+        return self
+    end
+end
+class Grid<C>
+    function with_rows(self, rows: { Row<C> }) end
+end
+return { Header = Header, Grid = Grid }
+    )";
+
+    CheckResult result = check(R"(
+local A = require(game.A)
+local h = A.Header():column("a"):column("b")
+A.Grid<<"x">>():with_rows({ { x = "a" } })
+A.Grid<<"x">>():with_rows({ { y = "a" } })
+    )");
+
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].location.begin.line, 4);
+    CHECK_EQ(toString(requireType("h")), R"(Header<"b">)");
+}
+
+// Luwu: a generic call waits for a type function in its argument (`Box<Same<'a>>`) to reduce, so `T` is what it reduces
+// to rather than `unknown`
+TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_in_an_argument_infers_the_generic")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+    ScopedFastFlag genericNominals{FFlag::LuwuGenericNominals, true};
+
+    CheckResult result = check(R"(
+type function Same(t: type): type
+    return t
+end
+
+class Box<T>()
+    function retag<N>(self, tag: N | ""): Box<Same<N>>
+        return self
+    end
+end
+
+class Wrap<T>(box: Box<T>) end
+
+local function wrap<T>(box: Box<T>): Wrap<T>
+    return Wrap(box)
+end
+
+local b = Box():retag("x")
+local constructed = Wrap(b)
+local called = wrap(Box():retag("y"))
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("constructed")), R"(Wrap<"x">)");
+    CHECK_EQ(toString(requireType("called")), R"(Wrap<"y">)");
+}
+
+// Luwu: `types.error` in a method's return type is reported at the call, once: not again where the value is used
+TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_types_error_in_a_method_return_type")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+    ScopedFastFlag genericNominals{FFlag::LuwuGenericNominals, true};
+
+    CheckResult result = check(R"(
+type function Reject(t: type): type
+    return types.error("rejected")
+end
+
+class Box<T>()
+    function retag<N>(self, tag: N | ""): Box<Reject<N>>
+        return self
+    end
+
+    function use(self) end
+end
+
+Box():retag("x")
+local used = Box():retag("y")
+used:use()
+    )");
+
+    REQUIRE_EQ(result.errors.size(), 2);
+    CHECK_EQ(result.errors[0].location.begin.line, 13);
+    CHECK_EQ(toString(result.errors[0]), "rejected");
+    CHECK_EQ(result.errors[1].location.begin.line, 14);
+    CHECK_EQ(toString(result.errors[1]), "rejected");
+}
+
+// Luwu: an imported generic function's `keyof<T>` is irreducible in the caller too, so a literal argument keeps its
+// literal type rather than widening while it waits for it
+TEST_CASE_FIXTURE(BuiltinsFixture, "keyof_of_a_generic_parameter_from_another_module")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+
+    fileResolver.source["game/A"] = R"(
+local function pick<T>(rows: { T }, column: keyof<T>) end
+local function picks<T>(rows: { T }, columns: { keyof<T> }) end
+return { pick = pick, picks = picks }
+    )";
+
+    CheckResult result = check(R"(
+local A = require(game.A)
+type Pet = { name: string, age: number }
+local pets: { Pet } = {}
+A.pick(pets, "name")
+A.picks(pets, { "name", "age" })
+A.pick(pets, "nam")
+    )");
+
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].location.begin.line, 6);
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "type_functions_keep_docs_and_parameter_names")
 {
     ScopedFastFlag serializeArgNames{FFlag::LuauTypeFunctionSerializeArgNames, true};

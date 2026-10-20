@@ -111,6 +111,8 @@ struct TypeChecker2
     mutable DenseHashMap<const AstExprFunction*, DenseHashSet<const AstLocal*>> initSelfAliases{nullptr};
 
     DenseHashSet<TypeId> seenTypeFunctionInstances{nullptr};
+    // Luwu: see TypeFunctionContext::reportedApplications
+    std::set<std::string> reportedTypeFunctionApplications;
 
     Normalizer normalizer;
     Subtyping _subtyping;
