@@ -276,13 +276,14 @@ std::string unionMembersHeader(bool noneFit, const std::string& unionName, const
 // Scalars that aren't the scalar expected: `'string' isn't a 'number'.`, `Neither ... nor ...`,
 // `None of ...`. `article` says whether the expected type takes an `a`.
 std::string scalarsHeader(const std::vector<std::string>& names, const std::string& expected, bool article);
-std::string closestMatchHeader(const std::string& label, const std::string& memberType);
+// The member chosen for a given value. `memberType` is nullopt when the union printed above already shows it.
+std::string closestMatchHeader(const std::string& label, const std::optional<std::string>& memberType);
 // `'leaving.kind' is '"leave"', so 'leaving' was compared with Event#2 = ...:`.
 std::string taggedMatchHeader(
     const std::string& field,
     const std::string& value,
     const std::string& label,
-    const std::string& memberType,
+    const std::optional<std::string>& memberType,
     Rendering& rendering
 );
 // `'Json' is unrelated to 'ServerConfig'.`, naming each type by its alias, or by its printed form

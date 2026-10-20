@@ -296,6 +296,14 @@ std::optional<std::string> misspelledSingleton(TypeId sub, TypeId super)
     return best;
 }
 
+// Whether `written` is a misspelling of the string `meant`.
+bool isMisspelledString(const SingletonType& written, const SingletonType& meant)
+{
+    const StringSingleton* writtenString = get<StringSingleton>(&written);
+    const StringSingleton* meantString = get<StringSingleton>(&meant);
+    return writtenString && meantString && writtenString->value != meantString->value && looksLikeTypo(writtenString->value, meantString->value);
+}
+
 // The singleton field that picked a member of an expected union: `kind` is `"leave"`.
 struct Tag
 {
@@ -922,8 +930,8 @@ struct Differ
     }
 
     // The member of an expected union whose singleton tag the given table carries, when exactly one
-    // member has it.
-    std::optional<size_t> taggedMember(TypeId sub, const std::vector<TypeId>& members, std::optional<Tag>* pickedBy)
+    // member has it. `misspelled` looks for the one member whose string tag the given one is a typo of instead.
+    std::optional<size_t> taggedMember(TypeId sub, const std::vector<TypeId>& members, std::optional<Tag>* pickedBy, bool misspelled)
     {
         const TableType* subTable = tableOf(sub);
         if (!subTable)
@@ -943,7 +951,8 @@ struct Differ
             {
                 std::optional<TypeId> memberTag = readProperty(members[i], name);
                 const SingletonType* memberSingleton = memberTag ? get<SingletonType>(follow(*memberTag)) : nullptr;
-                if (memberSingleton && *memberSingleton == *tag)
+                bool sameTag = memberSingleton && (misspelled ? isMisspelledString(*tag, *memberSingleton) : *memberSingleton == *tag);
+                if (sameTag)
                 {
                     onlyMatch = i;
                     ++matches;
@@ -952,7 +961,7 @@ struct Differ
 
             if (matches == 1)
             {
-                if (pickedBy)
+                if (pickedBy && !misspelled)
                     *pickedBy = Tag{name, display(*prop.readTy)};
                 return onlyMatch;
             }
@@ -964,7 +973,10 @@ struct Differ
     // tag it carries, or else the one it differs from least.
     std::optional<size_t> closestMember(TypeId sub, const std::vector<TypeId>& members, std::optional<Tag>* pickedBy)
     {
-        if (std::optional<size_t> tagged = taggedMember(sub, members, pickedBy))
+        if (std::optional<size_t> tagged = taggedMember(sub, members, pickedBy, false))
+            return tagged;
+        // A tag one typo from a member's (`kind = "leeve"`) still says which member was meant.
+        if (std::optional<size_t> tagged = taggedMember(sub, members, nullptr, true))
             return tagged;
 
         std::optional<size_t> best;
@@ -1315,6 +1327,23 @@ bool isNarrowedParameter(const Difference& d)
 {
     bool inFunction = d.anchor && d.anchor->at < d.path.size();
     return d.kind == Difference::Kind::CouldBeNil && inFunction && d.path[d.anchor->at].kind == Segment::Kind::Parameter;
+}
+
+// A misspelled string at a property path of the given table is a typo the caller can report at the string, when it
+// finds where the string is written.
+void misspelledValueTypo(const Difference& d, MismatchExplanation& explanation)
+{
+    std::vector<std::string> properties;
+    for (const Segment& segment : onGivenSide(d.path))
+    {
+        if (segment.kind != Segment::Kind::Property)
+            return;
+        properties.push_back(segment.name);
+    }
+    if (properties.empty() || !d.similarName)
+        return;
+    explanation.typo = {d.sub, *d.similarName};
+    explanation.typoProperties = std::move(properties);
 }
 
 // A difference only names a place when it has a path; one at the root restates the two printed types.
@@ -2097,7 +2126,10 @@ std::optional<MismatchExplanation> explainOnce(
             if (!located.empty())
             {
                 std::string label = rendering.expectedMember(*closest + 1);
-                std::string memberType = differ.display(expectedMembers[*closest]);
+                // A named union is printed above with this member spelled out (`type Event = … | { ... }`).
+                std::optional<std::string> memberType;
+                if (!expectedNamed)
+                    memberType = differ.display(expectedMembers[*closest]);
                 if (tag)
                     header = taggedMatchHeader(tag->field, tag->value, label, memberType, rendering);
                 else
@@ -2239,6 +2271,8 @@ std::optional<MismatchExplanation> explainOnce(
         const Difference& only = shownDifferences.front();
         if (shownDifferences.size() == 1 && only.kind == Difference::Kind::Missing)
             explanation.typo = misspelledFieldNames(only, rendering);
+        else if (shownDifferences.size() == 1 && only.kind == Difference::Kind::Mismatch)
+            misspelledValueTypo(only, explanation);
         header.clear();
         lines.clear();
         rendering.notation = 0;
@@ -2445,6 +2479,106 @@ std::vector<std::pair<Location, Typo>> literalPropertyTypos(const AstExprTable* 
         }
     }
     return typos;
+}
+
+// The types `ty` can be: each member of a union, else `ty` itself.
+static std::vector<TypeId> alternativesOf(TypeId ty)
+{
+    ty = follow(ty);
+    const UnionType* u = get<UnionType>(ty);
+    if (!u)
+        return {ty};
+    return std::vector<TypeId>(begin(u), end(u));
+}
+
+// The types the alternatives of `expected` give the property `name`.
+static std::vector<TypeId> expectedProperty(const std::vector<TypeId>& expected, const std::string& name)
+{
+    std::vector<TypeId> properties;
+    for (TypeId alternative : expected)
+    {
+        const TableType* table = get<TableType>(follow(alternative));
+        if (!table)
+            continue;
+        auto it = table->props.find(name);
+        if (it == table->props.end() || !it->second.readTy)
+            continue;
+        for (TypeId option : alternativesOf(*it->second.readTy))
+            properties.push_back(option);
+    }
+    return properties;
+}
+
+static TypeId withWrittenStrings(TypeId given, const AstExpr* literal, const std::vector<TypeId>& expected, TypeArena& arena)
+{
+    given = follow(given);
+    const AstExprTable* expr = literal->as<AstExprTable>();
+    const TableType* table = get<TableType>(given);
+    if (!expr || !table)
+        return given;
+
+    std::optional<TableType> copy;
+    for (const AstExprTable::Item& item : expr->items)
+    {
+        std::optional<std::string> name = literalPropertyName(item);
+        auto it = name ? table->props.find(*name) : table->props.end();
+        if (it == table->props.end() || !it->second.readTy)
+            continue;
+
+        TypeId checked = *it->second.readTy;
+        TypeId written = checked;
+        std::vector<TypeId> wanted = expectedProperty(expected, *name);
+        if (const AstExprConstantString* string = item.value->as<AstExprConstantString>())
+        {
+            bool wantsSingleton = std::any_of(
+                wanted.begin(),
+                wanted.end(),
+                [](TypeId ty)
+                {
+                    const SingletonType* singleton = get<SingletonType>(follow(ty));
+                    return singleton && get<StringSingleton>(singleton);
+                }
+            );
+            if (wantsSingleton && isString(checked))
+                written = arena.addType(SingletonType{StringSingleton{std::string(string->value.data, string->value.size)}});
+        }
+        else
+            written = withWrittenStrings(checked, item.value, wanted, arena);
+        if (written == checked)
+            continue;
+
+        if (!copy)
+            copy = *table;
+        copy->props[*name] = Property::rw(written);
+    }
+    return copy ? arena.addType(std::move(*copy)) : given;
+}
+
+TypeId withWrittenStrings(TypeId given, const AstExpr* literal, TypeId expected, TypeArena& arena)
+{
+    return withWrittenStrings(given, literal, alternativesOf(expected), arena);
+}
+
+std::optional<Location> literalValueLocation(const AstExpr* literal, const std::vector<std::string>& properties)
+{
+    for (const std::string& property : properties)
+    {
+        const AstExprTable* expr = literal->as<AstExprTable>();
+        if (!expr)
+            return std::nullopt;
+        auto found = std::find_if(
+            expr->items.begin(),
+            expr->items.end(),
+            [&](const AstExprTable::Item& item)
+            {
+                return literalPropertyName(item) == property;
+            }
+        );
+        if (found == expr->items.end())
+            return std::nullopt;
+        literal = found->value;
+    }
+    return literal->location;
 }
 
 std::optional<MismatchExplanation> explainMismatch(

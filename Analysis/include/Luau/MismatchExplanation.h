@@ -19,6 +19,7 @@ namespace Luau
 struct BuiltinTypes;
 struct Scope;
 struct Subtyping;
+struct TypeArena;
 
 // Luwu (helpful subtyping errors): explains a failed `given <: expected` test by diffing the two types
 // structurally, rather than narrating the subtyping test's own reasonings. Each bullet is a path from
@@ -64,6 +65,8 @@ struct MismatchExplanation
     // When the one thing wrong is a misspelling, what was written and what was meant (`"LeftCtrl"`,
     // `"LeftControl"`; `leaving.reson`, `leaving.reason`): the error is a typo, not a type mismatch.
     std::optional<std::pair<std::string, std::string>> typo;
+    // For a misspelled value inside the given table, the properties leading to it (`kind` of `{ kind = "leeve" }`).
+    std::vector<std::string> typoProperties;
 
 
 };
@@ -76,6 +79,14 @@ bool looksLikeTypo(const std::string& written, const std::string& meant);
 // Each is a property the type lacks, named like one the literal leaves out. For an optional property upstream reports
 // nothing: table types aren't exact, so the literal fits and the value is never read.
 std::vector<std::pair<Location, Typo>> literalPropertyTypos(const AstExprTable* expr, TypeId expectedType);
+
+// Luwu (helpful subtyping errors): `given`, the type of `literal`, with the strings written where `expected` wants a
+// string singleton typed as written. The checker widens a table literal's strings to `string`, which hides a
+// misspelled tag like `kind = "leeve"`.
+TypeId withWrittenStrings(TypeId given, const AstExpr* literal, TypeId expected, TypeArena& arena);
+
+// Where the value at `properties` is written inside the table literal `literal`, if it is.
+std::optional<Location> literalValueLocation(const AstExpr* literal, const std::vector<std::string>& properties);
 
 // Returns nullopt when the types are of a kind the differ doesn't take apart (generics, type
 // functions, classes), when no failing place can be found in two structured types, and when

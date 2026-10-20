@@ -1011,6 +1011,66 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_misspelled_string_is_a_typo")
     CHECK(get<TypeMismatch>(result.errors[3]));
 }
 
+// A misspelled tag in a table literal is a typo at the string, though the checker widens the literal's strings to
+// `string`. With another problem, a misspelled tag still picks the member it meant.
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_misspelled_tag_in_a_literal_is_a_typo")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type Event = { kind: "join", player: string } | { kind: "leave", player: string, reason: string }
+        local function emit(_: Event) end
+        emit({ kind = "laeve", player = "p", reason = "r" })
+        local _e: Event = { kind = "leavee", player = "p", reason = "r" }
+        emit({ kind = "leeve" :: "leeve", player = "p", reason = 1 })
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
+    REQUIRE(get<Typo>(result.errors[0]));
+    CHECK_EQ(toString(result.errors[0]), "Did you mean '\"leave\"' instead of '\"laeve\"'?");
+    CHECK_EQ(result.errors[0].location, Location{{3, 22}, {3, 29}});
+    REQUIRE(get<Typo>(result.errors[1]));
+    CHECK_EQ(toString(result.errors[1]), "Did you mean '\"leave\"' instead of '\"leavee\"'?");
+    CHECK_EQ(
+        toString(result.errors[2]),
+        "Expected this to be\n"
+        "    type Event = … | { kind: \"leave\", player: string, reason: string }\n"
+        "but was given\n"
+        "    '{ kind: \"leeve\", reason: number, … }'\n"
+        "\n"
+        "Help (typo):\n"
+        "  • Did you mean '\"leave\"' instead of '\"leeve\"' for 'given.kind'?\n"
+        "\n"
+        "The closest match is Event#2, but:\n"
+        "  • given.kind: expected '\"leave\"', got '\"leeve\"'\n"
+        "  • given.reason: expected 'string', got 'number'"
+    );
+}
+
+// The member a tag picked is spelled out in the union printed above, so the header only names it.
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_tagged_match_is_not_printed_twice")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type Shape = { kind: "circle", radius: number } | { kind: "rect", width: number, height: number }
+        local function draw(_: Shape) end
+        draw({ kind = "rect", width = 1, height = true })
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        toString(result.errors[0]),
+        "Expected this to be\n"
+        "    type Shape = … | { height: number, kind: \"rect\", width: number }\n"
+        "but was given\n"
+        "    '{ height: boolean, kind: \"rect\", … }'\n"
+        "\n"
+        "'given.kind' is '\"rect\"', so 'given' was compared with Shape#2:\n"
+        "  • given.height: expected 'number', got 'boolean'"
+    );
+}
+
 // Luwu: every help is written by a Helpifier, which gives nothing when help is off
 TEST_CASE("helpifier_writes_every_help_the_same_way")
 {

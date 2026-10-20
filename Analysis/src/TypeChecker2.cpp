@@ -5264,6 +5264,8 @@ void TypeChecker2::explainError(
     // which then fall through to the reasonings below.
     std::optional<MismatchExplanation> explanation;
     std::optional<std::string> variable;
+    // The mismatched expression, when it spans exactly the error.
+    const AstExpr* mismatched = nullptr;
     if (FFlag::LuwuHelpfulSubtypingErrors)
     {
         std::optional<std::string> callee;
@@ -5280,19 +5282,28 @@ void TypeChecker2::explainError(
             if (AstExpr* expr = node->asExpr(); expr && expr->location == location)
             {
                 variable = bindingName(expr);
+                mismatched = expr;
                 break;
             }
         }
         if (!variable)
             variable = destinationName(*sourceModule, location);
 
-        explanation = explainMismatch(subTy, superTy, subtyping, scope, builtinTypes, callee, arrival, variable, helpifier);
+        TypeId given = mismatched ? withWrittenStrings(subTy, mismatched, superTy, *module->internalTypes) : subTy;
+        explanation = explainMismatch(given, superTy, subtyping, scope, builtinTypes, callee, arrival, variable, helpifier);
     }
 
     if (explanation && explanation->typo)
     {
-        reportError(Typo{explanation->typo->first, explanation->typo->second}, location);
-        return;
+        // A misspelled value inside a table is reported at the string, when the table is written here.
+        std::optional<Location> typoLocation = location;
+        if (!explanation->typoProperties.empty())
+            typoLocation = mismatched ? literalValueLocation(mismatched, explanation->typoProperties) : std::nullopt;
+        if (typoLocation)
+        {
+            reportError(Typo{explanation->typo->first, explanation->typo->second}, *typoLocation);
+            return;
+        }
     }
 
     if (explanation)
