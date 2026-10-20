@@ -213,6 +213,14 @@ struct TypeChecker2
     bool testIsSubtype(TypeId subTy, TypeId superTy, Location location);
     bool testIsSubtype(TypePackId subTy, TypePackId superTy, Location location);
 
+    // Luwu Traits (rfcs/classes/traits.md): a trait's version of a function a class writes in place of it, with `Self` as
+    // the class
+    struct OverriddenTraitFunction
+    {
+        const ExternType* trait;
+        TypeId function;
+    };
+
 private:
     static bool allowsNoReturnValues(const TypePackId tp);
     static Location getEndLocation(const AstExprFunction* function);
@@ -255,8 +263,20 @@ private:
     void visit(AstStatDeclareGlobal* stat);
     void visit(AstStatDeclareExternType* stat);
     void visit(AstStatClass* stat);
-    // Luwu Traits (rfcs/classes/traits.md): the class's fields against the types of the fields its traits expect
+    bool worksAsTraitFunction(TypeId function, TypeId as, NotNull<Scope> scope);
+    void checkTraitFunctionOverride(
+        const ExternType* classType,
+        const Name& name,
+        TypeId override,
+        const std::vector<OverriddenTraitFunction>& versions,
+        Location location
+    );
+    // Luwu Traits (rfcs/classes/traits.md): the first parameter an override requires that the overridden function lacks
+    std::optional<std::string> requiredExtraParameter(TypeId override, TypeId overridden);
+    // Luwu Traits (rfcs/classes/traits.md): a trait function as a class has it, with the class for `Self`
+    TypeId traitFunctionFor(const ExternType* traitType, TypeId classTy, const Name& name, TypeId function);
     std::optional<TypeId> selfFieldFor(const ExternType* traitType, TypeId classTy, const Name& name);
+    // Luwu Traits (rfcs/classes/traits.md): the class's fields against the types of the fields its traits expect
     void checkTraitFieldExpectations(AstStatClass* stat);
     // Luwu Traits (rfcs/classes/traits.md): the class's constructor against the trait's expected `__init`
     void checkTraitConstructorExpectation(AstStatClass* stat, const ExternType* classType, const ExternType* traitType);

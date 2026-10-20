@@ -5544,4 +5544,99 @@ local count = Node():count()
     CHECK_EQ(toString(requireType("count")), "number");
 }
 
+// Luwu Traits (rfcs/classes/traits.md): a class's function in place of a trait's has to work as the trait's: code holding
+// the trait calls it the trait's way
+TEST_CASE_FIXTURE(ClassesFixture, "trait_function_overrides_fit_the_trait")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag luwuTraits{FFlag::LuwuTraits, true};
+    CheckResult result = check(R"(
+trait Layout
+    function column(self): Self
+        return self
+    end
+    function merge(self, other: Self): Self
+        return self
+    end
+    function label(self, text: string, size: number?): string
+        return text
+    end
+end
+
+class Fine implements Layout
+    function column(self, title: string?): Fine
+        return self
+    end
+    function merge(self, other: Fine): Fine
+        return self
+    end
+    function label(self, text: string, size: number?, bold: boolean?): string
+        return text
+    end
+end
+
+class Footer implements Layout
+    function column(self, title: string, links: { string }): Footer
+        return self
+    end
+    function label(self, text: number): string
+        return ""
+    end
+end
+    )");
+
+    REQUIRE_EQ(result.errors.size(), 2);
+    CHECK_EQ(result.errors[0].location.begin.line, 26);
+    CHECK_EQ(toString(result.errors[0]), "'column' requires 'title', which trait 'Layout' doesn't pass when it calls 'column'; make 'title' optional");
+    CHECK_EQ(result.errors[1].location.begin.line, 29);
+    CHECK(get<TypeMismatch>(result.errors[1]));
+}
+
+// Luwu Traits (rfcs/classes/traits.md): traits whose versions of a function can't be called each other's way conflict,
+// which no function in the class can resolve
+TEST_CASE_FIXTURE(ClassesFixture, "conflicting_trait_function_versions")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag luwuTraits{FFlag::LuwuTraits, true};
+    CheckResult result = check(R"(
+trait Named
+    function label(self, text: string): string
+        return text
+    end
+end
+trait Numbered
+    function label(self, index: number): number
+        return index
+    end
+end
+trait Titled
+    function label(self, text: string): string
+        return text
+    end
+end
+class Item implements Named, Numbered
+    function label(self, value: string): string
+        return value
+    end
+end
+class Same implements Named, Titled
+    function label(self, value: number): string
+        return ""
+    end
+end
+    )");
+
+    // `Same`'s traits agree, so it gets one ordinary mismatch rather than the conflict
+    REQUIRE_EQ(result.errors.size(), 2);
+    CHECK_EQ(result.errors[0].location.begin.line, 17);
+    CHECK_EQ(
+        toString(result.errors[0]),
+        "Traits 'Named' and 'Numbered' conflict on function 'label'.\n- 'Named' has 'label: (string) -> string'\n- 'Numbered' has 'label: "
+        "(number) -> number'\n\nHelp (conflicting trait functions):\n  - 'label' in class 'Item' can't be called as each of these at once\n"
+        "  - Rename 'label' in one of the traits"
+    );
+    CHECK_EQ(result.errors[1].location.begin.line, 22);
+    CHECK(get<TypeMismatch>(result.errors[1]));
+}
+
 TEST_SUITE_END();
