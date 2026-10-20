@@ -1071,6 +1071,60 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_tagged_match_is_not_printed_twice")
     );
 }
 
+// A swap the help names needs no bullets of its own; anything else wrong keeps its bullet.
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_swap_is_said_only_by_its_help")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        local function parse(input: string): (string?, boolean)
+            return nil, #input > 0
+        end
+        local _validate: (input: string) -> (boolean, string?) = parse
+        local function both(name: string, age: number) end
+        local _call: (age: number, name: string) -> () = both
+        local function partly(input: string): (string?, boolean, number)
+            return nil, true, 1
+        end
+        local _three: (input: string) -> (boolean, string?, string) = partly
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
+    CHECK_EQ(
+        toString(result.errors[0]),
+        "Expected 'parse' to be\n"
+        "    '(input: string) -> (boolean, string?)'\n"
+        "but was given\n"
+        "    '(input: string) -> (string?, boolean)'\n"
+        "\n"
+        "Help (return order):\n"
+        "  • The 1st and 2nd return values look like they're in the wrong order"
+    );
+    CHECK_EQ(
+        toString(result.errors[1]),
+        "Expected 'both' to be\n"
+        "    '(age: number, name: string) -> ()'\n"
+        "but was given\n"
+        "    '(name: string, age: number) -> ()'\n"
+        "\n"
+        "Help (parameter order):\n"
+        "  • The parameters 'name' and 'age' look like they're in the wrong order"
+    );
+    CHECK_EQ(
+        toString(result.errors[2]),
+        "Expected 'partly' to be\n"
+        "    '(input: string) -> (boolean, string?, string)'\n"
+        "but was given\n"
+        "    '(input: string) -> (string?, boolean, number)'\n"
+        "\n"
+        "Help (return order):\n"
+        "  • The 1st and 2nd return values look like they're in the wrong order\n"
+        "\n"
+        "This function should return:\n"
+        "  • 'string' as its 3rd value, not 'number'"
+    );
+}
+
 // A mismatched property gets a note where each side declares it, pointing back at the error: a deep path is hard to
 // trace back to the two declarations by hand.
 TEST_CASE_FIXTURE(BuiltinsFixture, "a_mismatched_property_notes_where_both_sides_declare_it")

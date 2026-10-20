@@ -152,6 +152,8 @@ struct Difference
     std::optional<std::string> subInFull;
     // For `ElementOfExpected`, the element type of the array expected.
     std::optional<std::string> element;
+    // At one of two parameters or return values written in the wrong order, which a help already says.
+    bool explainedBySwap = false;
     // For a difference at a property, where the given and the expected table declare it.
     std::optional<PropertySite> givenSite;
     std::optional<PropertySite> expectedSite;
