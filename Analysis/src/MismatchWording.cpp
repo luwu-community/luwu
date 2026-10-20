@@ -754,6 +754,11 @@ std::string givenPropertyNote(const std::string& name, const std::string& given,
     return quoted(name) + " is " + quoted(given) + " here, but should be " + quoted(expected);
 }
 
+std::string missingPropertyNote(const std::string& table, const std::string& name, const std::string& expected)
+{
+    return quoted(table) + " is missing " + quoted(name + ": " + expected);
+}
+
 std::string similarHeader(std::string_view arrival, size_t paths)
 {
     return "The " + std::string(arrival) + " type is similar, but has " + countedPaths(paths) + ":";

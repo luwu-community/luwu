@@ -154,7 +154,8 @@ struct Difference
     std::optional<std::string> element;
     // At one of two parameters or return values written in the wrong order, which a help already says.
     bool explainedBySwap = false;
-    // For a difference at a property, where the given and the expected table declare it.
+    // For a difference at a property, where the given and the expected table declare it. For `Missing`, the given
+    // site is the table the property is missing from.
     std::optional<PropertySite> givenSite;
     std::optional<PropertySite> expectedSite;
 };
@@ -282,6 +283,8 @@ std::string misspelledValueHelp(const Difference& d, Rendering& rendering);
 // one, `'count' is 'string' here, but should be 'number'` at the given one.
 std::string expectedPropertyNote(const std::string& name, const std::string& expected);
 std::string givenPropertyNote(const std::string& name, const std::string& given, const std::string& expected);
+// At the table a required property is missing from: `'colors.background' is missing 'b: number'`.
+std::string missingPropertyNote(const std::string& table, const std::string& name, const std::string& expected);
 
 // Headers: the line introducing the bullets.
 std::string similarHeader(std::string_view arrival, size_t paths);
