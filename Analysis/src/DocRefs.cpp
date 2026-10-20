@@ -280,6 +280,13 @@ private:
                 functions.emplace(function->location.begin.line, function);
                 return true;
             }
+
+            // A type function's doc resolves in the module, like any declaration's: its body's scope is the type
+            // function runtime's
+            bool visit(AstStatTypeFunction* typeFunction) override
+            {
+                return false;
+            }
         };
 
         Collector collector;
