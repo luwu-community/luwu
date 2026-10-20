@@ -1042,6 +1042,18 @@ struct Differ
         return std::nullopt;
     }
 
+    // Marks the differences from `from` on that are under the `kind` segment `i` or `j` right after `at` segments.
+    void markSwapped(size_t from, size_t at, Segment::Kind kind, size_t i, size_t j)
+    {
+        for (size_t k = from; k < differences.size(); ++k)
+        {
+            Difference& d = differences[k];
+            bool underSwapped = d.path.size() > at && d.path[at].kind == kind && (d.path[at].index == i || d.path[at].index == j);
+            if (underSwapped)
+                d.explainedBySwap = true;
+        }
+    }
+
     static std::optional<PropertySite> propertySite(const TableType* table, const std::string& name)
     {
         if (!table || table->definitionModuleName.empty())
@@ -1289,6 +1301,7 @@ struct Differ
             if (fits(withoutNil(expectedArgs[i]), givenArgs[j]) && fits(withoutNil(expectedArgs[j]), givenArgs[i]))
             {
                 helps.push_back(swappedParametersHelp(parameterName(given, i), parameterName(given, j), i, j, helpifier));
+                markSwapped(before, path.size(), Segment::Kind::Parameter, i, j);
                 break;
             }
         }
@@ -1323,6 +1336,7 @@ struct Differ
             if (fits(givenRets[i], expectedRets[j]) && fits(givenRets[j], expectedRets[i]))
             {
                 helps.push_back(swappedReturnsHelp(i, j, helpifier));
+                markSwapped(before, path.size(), Segment::Kind::Return, i, j);
                 break;
             }
         }
@@ -1382,16 +1396,29 @@ void misspelledValueTypo(const Difference& d, MismatchExplanation& explanation)
 }
 
 // A difference only names a place when it has a path; one at the root restates the two printed types.
-// One involving an unresolved type is dropped, and `suppressedAny` notes that it happened.
+// One involving an unresolved type is dropped, and `suppressedAny` notes that it happened. So is one at a swapped
+// pair of parameters or return values, which a help says, unless that's all there is.
 std::vector<Difference> locatedDifferences(const std::vector<Difference>& differences, bool& suppressedAny)
 {
     std::vector<Difference> located;
+    bool somethingElse = false;
     for (const Difference& d : differences)
     {
         if (d.suppressing)
             suppressedAny = true;
         else if (!d.path.empty())
+        {
             located.push_back(d);
+            somethingElse |= !d.explainedBySwap;
+        }
+    }
+    if (somethingElse)
+    {
+        auto swapped = [](const Difference& d)
+        {
+            return d.explainedBySwap;
+        };
+        located.erase(std::remove_if(located.begin(), located.end(), swapped), located.end());
     }
     return located;
 }
@@ -2308,6 +2335,20 @@ std::optional<MismatchExplanation> explainOnce(
             explanation.typo = misspelledFieldNames(only, rendering);
         else if (shownDifferences.size() == 1 && only.kind == Difference::Kind::Mismatch)
             misspelledValueTypo(only, explanation);
+    }
+
+    // Every problem is two parameters or return values in the wrong order, which the help says.
+    bool swapsOnly = !shownDifferences.empty() && std::all_of(
+                                                      shownDifferences.begin(),
+                                                      shownDifferences.end(),
+                                                      [](const Difference& d)
+                                                      {
+                                                          return d.explainedBySwap;
+                                                      }
+                                                  );
+    bool helpsSayAll = typosOnly || swapsOnly;
+    if (helpsSayAll)
+    {
         header.clear();
         lines.clear();
         rendering.notation = 0;
@@ -2315,7 +2356,7 @@ std::optional<MismatchExplanation> explainOnce(
         rendering.expectedMembersShown.clear();
     }
 
-    if (!header.empty() || typosOnly)
+    if (!header.empty() || helpsSayAll)
     {
         // A missing field with a similarly named one there, or a string one typo from an expected one, is
         // almost certainly a misspelling: the correction goes first, as a help, not buried in a bullet.
