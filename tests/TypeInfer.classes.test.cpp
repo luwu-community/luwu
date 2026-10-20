@@ -5508,4 +5508,40 @@ local value: unknown = nil
     checkTypewriting(*this, before, "if class.implements(value, Greeter) then\n    print(value:greet())\nend", kTraitTypewriterAfter);
 }
 
+// Luwu Classes (rfcs/classes): a method calling itself on another instance is checked like a recursive local function,
+// with the signature its body is checked with
+TEST_CASE_FIXTURE(ClassesFixture, "methods_call_themselves_on_other_instances")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    CheckResult result = check(R"(
+class Node
+    children: { Node } = {}
+
+    function all(self): { Node }
+        local nodes: { Node } = { self }
+        for _, child in self.children do
+            for _, node in child:all() do
+                nodes[#nodes + 1] = node
+            end
+        end
+        return nodes
+    end
+
+    function count(self)
+        local total = 1
+        for _, child in self.children do
+            total += Node.count(child)
+        end
+        return total
+    end
+end
+local all = Node():all()
+local count = Node():count()
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("all")), "{Node}");
+    CHECK_EQ(toString(requireType("count")), "number");
+}
+
 TEST_SUITE_END();
