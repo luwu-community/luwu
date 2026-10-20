@@ -201,26 +201,26 @@ static TypeId writtenLiteralType(TypeArena& arena, NotNull<BuiltinTypes> builtin
     return inferred;
 }
 
-// Luwu literal types: the table type `ty` is (alone, or with nil), if any
+// Luwu literal types: the table type `ty` is, or the one table type among its union's members (`Style | StyleInput`, a
+// class and a record). A union of several table types gives none: which one a table literal is meant for isn't known.
 static const TableType* tableTypeOf(TypeId ty)
 {
     ty = follow(ty);
-    if (const UnionType* options = get<UnionType>(ty))
+    const UnionType* options = get<UnionType>(ty);
+    if (!options)
+        return get<TableType>(ty);
+
+    const TableType* table = nullptr;
+    for (TypeId option : options)
     {
-        std::optional<TypeId> table;
-        for (TypeId option : options)
-        {
-            if (isNil(option))
-                continue;
-            if (table)
-                return nullptr;
-            table = option;
-        }
-        if (!table)
+        const TableType* member = get<TableType>(follow(option));
+        if (!member)
+            continue;
+        if (table)
             return nullptr;
-        ty = follow(*table);
+        table = member;
     }
-    return get<TableType>(ty);
+    return table;
 }
 
 // Luwu literal types: the check on field `name` of `table`, if it has one

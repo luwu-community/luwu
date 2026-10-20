@@ -5000,6 +5000,37 @@ type Bad = A.CssLength | Length<literal<string>>
     }
 }
 
+// Luwu literal types: a table literal given for a union with one table type among its members (a class beside a
+// record) is checked against that record's literal fields
+TEST_CASE_FIXTURE(BuiltinsFixture, "literal_fields_of_a_record_in_a_union")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastFlag literalParameters{FFlag::LuwuLiteralTypes, true};
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+
+    CheckResult result = check(std::string(kLengthValidator) + R"(
+type CssLength = Length<literal<string>>
+class Style() end
+type StyleInput = { padding: (CssLength | number)? }
+local function either(_x: StyleInput | number) end
+local function rule(_style: Style | StyleInput) end
+
+either({ padding = "2px" })
+either(4)
+rule(Style())
+rule({ padding = 1 })
+
+either({ padding = "2rx!" })
+rule({ padding = "3rx!" })
+    )");
+
+    REQUIRE_EQ(result.errors.size(), 2);
+    CHECK_EQ(result.errors[0].location.begin.line, 23);
+    CHECK_EQ(toString(result.errors[0]), "'2rx!' isn't a CSS length");
+    CHECK_EQ(result.errors[1].location.begin.line, 24);
+    CHECK_EQ(toString(result.errors[1]), "'3rx!' isn't a CSS length");
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "typing_literal_fields")
 {
     ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
