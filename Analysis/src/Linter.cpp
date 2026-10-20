@@ -5221,8 +5221,8 @@ private:
 
     bool visit(AstExprDo* node) override
     {
-        if (enabled.misleadingIndentation && !node->shorthand && !statementStarts.empty())
-            checkIndentation(node, statementStarts.back().column);
+        if (enabled.misleadingIndentation && !node->shorthand)
+            checkIndentation(node, startLineColumn(node->location.begin));
 
         doExprs.push_back(node->shorthand);
         node->body->visit(this);
@@ -5259,12 +5259,24 @@ private:
         return nullptr;
     }
 
+    // Where the line holding `position` is indented, as far as the statements around it tell: the first of them that starts
+    // on that line (a comprehension's `when` clauses and `for` start on lines of their own), or `position` itself
+    unsigned int startLineColumn(Position position) const
+    {
+        for (const Position& start : statementStarts)
+        {
+            if (start.line == position.line)
+                return std::min(start.column, position.column);
+        }
+        return position.column;
+    }
+
     // A `do` expression ends at its first `give`, `return`, `break` or `continue`, wherever that is. Typed above existing
     // code, an unfinished `do` takes that code as its block, up to the next `return`. A line in the block indented no
-    // deeper than the statement holding the `do` reads as code after it, so it is pointed out with the `do` and the
+    // deeper than the line the `do` is on reads as code after it, so it is pointed out with the `do` and the
     // keyword that ends it. Only the last statement may be outdented without a warning: some people indent the final
     // `give` or `return` like the code around the expression.
-    void checkIndentation(AstExprDo* node, unsigned int statementColumn)
+    void checkIndentation(AstExprDo* node, unsigned int startColumn)
     {
         AstArray<AstStat*> body = node->body->body;
         if (body.size == 0)
@@ -5281,7 +5293,7 @@ private:
         for (size_t i = 0; i + 1 < body.size && !outdented; i++)
         {
             Position begin = body.data[i]->location.begin;
-            if (begin.line > doLine && begin.column <= statementColumn)
+            if (begin.line > doLine && begin.column <= startColumn)
                 outdented = body.data[i];
         }
 

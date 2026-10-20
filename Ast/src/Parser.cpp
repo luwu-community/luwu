@@ -7408,7 +7408,8 @@ AstExpr* Parser::parseTableComprehension(const Location& start, const MatchLexem
     AstExpr* key = nullptr;
     AstExpr* value = nullptr;
     std::optional<AstExprBinary::Op> accumulate;
-    Location itemStart = lexer.current().location;
+    // The item starts at its `give`, as a statement starts at its keyword
+    Location itemStart = giveFollows ? doLocation : lexer.current().location;
 
     CstExprTable::Item cstItem{Position::missing(), Position::missing(), Position::missing(), CstExprTable::Separator::Missing, Position::missing()};
 

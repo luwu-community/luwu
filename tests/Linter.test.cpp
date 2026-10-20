@@ -3308,6 +3308,44 @@ return f, g
     CHECK_EQ(found[2].location, Location(Position(6, 4), Position(6, 10)));
 }
 
+// Luwu Do Expressions (rfcs/do-expressions.md): a `do` body is indented one level past the line the `do` is on. A table
+// comprehension's `when` clauses, at the `for`'s indent or one level in, don't change that for `give do`.
+TEST_CASE_FIXTURE(Fixture, "MisleadingIndentationGiveDoInComprehensions")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+    ScopedFastFlag comprehensions{FFlag::LuwuTableComprehensions, true};
+
+    LintResult result = lint(R"(
+local lines = { "a", "", "b" }
+local nested = {
+    for _, line in lines
+        when line ~= ""
+    give do
+        local key = string.upper(line)
+        give key
+}
+local flat = {
+    for _, line in lines
+    when line ~= ""
+    give do
+        local key = string.upper(line)
+        give key
+}
+local outdented = {
+    for _, line in lines
+    give do
+    local key = string.upper(line)
+        give key
+}
+return nested, flat, outdented
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_MisleadingIndentation);
+    REQUIRE_EQ(found.size(), 3);
+    CHECK_EQ(found[1].text, "This line is in the 'do' expression on line 19, but is indented like the code after it");
+    CHECK_EQ(found[1].location.begin, Position(19, 4));
+}
+
 // Luwu Do Expressions (rfcs/do-expressions.md): a statement that always runs a returning `do` ends the code path, and a
 // condition that can only be true after one returns guards a branch that never runs
 TEST_CASE_FIXTURE(Fixture, "UnreachableCodeAfterReturningDoExpressions")
