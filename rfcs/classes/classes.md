@@ -542,9 +542,12 @@ This library also serves as an obvious extension point for future features like 
 reflection using this library.
 
 The function `class.isinstance(o, Class)` returns `true` if the object `o` is an instance of `Class`. It returns `false` if `o` is the `Class` value
-itself. At runtime, it raises an error if the second argument is not a class. If the first argument is not an `object`, `class.isinstance` returns
-false. Even though the name `class.isinstance` is not ideal (we don't have "instances", we have "objects"; `isinstance` implies inheritance once Luau
-supports inheritance), we choose to keep the name `class.isinstance` from upstream just for a slightly better source-to-source compatibility for
+itself. At runtime, it raises an error if the second argument is neither a class nor a trait. Passing a trait always returns `false`: classes and
+traits are the same kind of value in the implementation, so a trait passes the argument check, and no object's class is a trait. To check whether an
+object's class implements a trait, use `class.implements` (see [traits.md](./traits.md)); the type checker reports a trait passed to
+`class.isinstance`. If the first argument is not an `object`, `class.isinstance` returns false. Even though the name `class.isinstance` is not
+ideal (we don't have "instances", we have "objects"; `isinstance` implies inheritance once Luau supports inheritance), we choose to keep the name
+`class.isinstance` from upstream just for a slightly better source-to-source compatibility for
 classes that don't inherit and have all fully qualified `public` fields. We will have specific syntax errors against the `extends` keyword in class
 declarations to help users migrating Luau code to Luwu. In the future, we may deprecate this function once we implement an `is` keyword that
 consolidates refinements between classes/objects, primitives, and extern types.

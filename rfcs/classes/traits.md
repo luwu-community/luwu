@@ -134,6 +134,7 @@ Specifically:
     - If a function is optional for the class to implement, its identifier should be followed by a `?` before the function parameter list.
   - A real `function __init` may not be defined by traits, but traits may `expect` a `function __init` of a certain shape.
   - Traits may define a real `function __create`, which allows them to be factories of concrete classes.
+  - Traits may define a `final function __implemented(cls)`, which runs once for each class that implements the trait.
   - The `final` modifier may precede any real field or function in the trait.
 - The trait body and trait definition ends with the `end` keyword.
 
@@ -263,6 +264,45 @@ trait HtmlComponent<Data>(tag: string)
 end
 ```
 
+Here every implementer has to call `HtmlComponent.register` itself, and forgetting to fails silently: `__create` just doesn't
+find the class. A trait can register its implementers itself with `__implemented`:
+
+```luwu
+const components: { [string]: class<Component>? } = {}
+
+trait Component
+    expect function __init(self)
+    expect function render(self): string
+
+    function __create(name: string): Component
+        const cls = components[name] or error(`no component called {name}`, 2)
+        return cls()
+    end
+
+    final function __implemented(cls: class<Component>)
+        components[class.name(cls)] = cls
+    end
+end
+
+class Button() implements Component
+    function render(self): string
+        return "<button>Save</button>"
+    end
+end
+
+print(Component("Button"):render())
+```
+
+- `__implemented` runs once for each class that implements the trait, after the class is fully defined and frozen, so `cls` is a
+  finished `class<Trait>`: `class.name(cls)` and `cls()` work.
+- It also runs for classes that implement the trait indirectly: a class implementing `Card` where `Card needs Component` calls
+  `Component`'s `__implemented`. Each trait's hook runs once per class, after the hooks of the traits it needs, even when the class
+  reaches a trait through several paths.
+- It only runs for classes. A trait that needs `Component` doesn't call it.
+- It must be `final`; a trait's `__implemented` without `final` is a syntax error. That way no implementing class or needing trait
+  can replace it and switch the registration off.
+- An error raised inside `__implemented` is reported at the class definition.
+
 A class (or another trait!) may override any non-final field or function provided by a trait:
 
 ```luwu
@@ -350,11 +390,19 @@ is interested in classical inheritance with `open class` and `extends`.
 - Since all fields/functions are resolved and copied into the class at class initialization time, there is no way to specify fields/functions that
   are only visible inside their traits. There's no way for a trait to have internal implementation details that a class that implements it cannot
   see or access (final fields and functions just prevent overriding).
+- `__implemented` runs when the module defining the class loads, so a class in a module nobody requires is never registered, the
+  same as with an explicit `register` call.
+- There's no opt-out: test doubles and internal base classes that implement the trait are registered too.
+- A registry keyed by class name, like the one above, collides when two libraries define classes with the same name.
+- The hook is only useful with state outside the trait, such as a module-level registry table, since traits hold no state of their own.
 
 ## Alternatives
 
 - Do classical inheritance
 - Do traits with only functions (no fields)
+- Instead of `__implemented`, a pull-based `class.implementers(Trait)`, where the VM tracks implementers weakly and `__create` searches
+  them. It has no side effects at definition time, but also no point at which a trait can validate an implementer. We prefer
+  `__implemented` because it composes with `__create`.
 
 <!-- What other designs have been considered? What is the impact of not doing this? -->
 
@@ -369,5 +417,7 @@ is interested in classical inheritance with `open class` and `extends`.
 <!-- How has this feature been influenced by other programming languages, theory, and practical use? -->
 
 This feature is heavily influenced by Rust, Scala 3, PHP traits, etc.
+
+`__implemented` follows Python's `__init_subclass__` and Ruby's `inherited` and `included` hooks.
 
 ## Implementation details (optional)
