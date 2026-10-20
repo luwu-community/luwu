@@ -1396,8 +1396,9 @@ void TypeChecker2::visit(AstStatClass* stat)
             if (paramDefault)
                 visit(paramDefault, ValueContext::RValue);
 
+            // A default is checked like a local's value: `{}` fits a table type whose fields are all optional
             if (paramDefault && param->annotation)
-                testIsSubtype(lookupType(paramDefault), lookupAnnotation(param->annotation), paramDefault->location);
+                testPotentialLiteralIsSubtype(paramDefault, lookupAnnotation(param->annotation));
         }
 
         // A class with a primary constructor has no table constructor, so a field the body gives no
@@ -2535,7 +2536,7 @@ void TypeChecker2::visit(AstExprFunction* fn)
                     testIsSubtype(argTy, annotatedArgTy, arg->location);
 
                     if (AstExpr* defaultValue = fn->argsDefaults.data[i])
-                        testIsSubtype(lookupType(defaultValue), annotatedArgTy, defaultValue->location);
+                        testPotentialLiteralIsSubtype(defaultValue, annotatedArgTy);
                 }
                 else
                 {
