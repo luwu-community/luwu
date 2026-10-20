@@ -3530,6 +3530,9 @@ void TypeChecker2::checkLiteralParameters(AstExprCall* call, const FunctionType*
         if (isErrorSuppressing(arg->location, literalTy))
             continue;
 
+        if (literal->optional && isNil(literalTy))
+            continue;
+
         if (isMissingLiteral(literal->base, literalTy))
         {
             reportError(GenericError{notALiteralMessage(literal->base, literalTy)}, arg->location);

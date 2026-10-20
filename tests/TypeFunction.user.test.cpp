@@ -4713,4 +4713,97 @@ local function numbers(n: Id<literal<number>>) end
     CHECK_EQ(toString(result.errors[0]), "there are no literals of type number");
 }
 
+// Luwu literal types: a validator is part of the module's public interface, so a call from another module runs it
+TEST_CASE_FIXTURE(BuiltinsFixture, "literal_validators_from_another_module")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastFlag literalParameters{FFlag::LuwuLiteralTypes, true};
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+
+    fileResolver.source["game/A"] = R"(
+type function HexColor(hex: type): type
+    if hex:is("singleton") and string.sub(hex:value() :: string, 1, 1) == "#" then
+        return hex
+    end
+    return types.error(`hex color is missing its '#'`)
+end
+
+class Color(r: number)
+    function from_hex(hex: HexColor<literal<string>>): Color
+        return Color(0)
+    end
+end
+
+local function from_hex(hex: HexColor<literal<string>>) end
+return { Color = Color, from_hex = from_hex }
+    )";
+
+    CheckResult result = check(R"(
+local A = require(game.A)
+local style = { Color = A.Color }
+A.Color.from_hex("#ff")
+A.Color.from_hex("ff")
+style.Color.from_hex("ff")
+A.from_hex("ff")
+    )");
+
+    REQUIRE_EQ(result.errors.size(), 3);
+    for (size_t i = 0; i < result.errors.size(); ++i)
+    {
+        CHECK_EQ(result.errors[i].location.begin.line, i + 4);
+        CHECK_EQ(toString(result.errors[i]), "hex color is missing its '#'");
+    }
+}
+
+// Luwu literal types: `literal<B>?` may be left out or nil; a given argument is checked like `literal<B>`'s
+TEST_CASE_FIXTURE(BuiltinsFixture, "literal_parameters_can_be_optional")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastFlag literalParameters{FFlag::LuwuLiteralTypes, true};
+
+    CheckResult result = check(R"(
+type function Short(s: type): type
+    if s:is("singleton") and #(s:value() :: string) <= 2 then
+        return s
+    end
+    return types.error("too long")
+end
+
+local function columns<A, B>(a: literal<A>, b: literal<B>?): B?
+    return b
+end
+local function flag(short: Short<literal<string>>?) end
+
+local named = columns("a", "b")
+columns("a")
+columns("a", nil)
+flag()
+flag("-v")
+local s: string = "q"
+columns("a", s)
+flag("--verbose")
+    )");
+
+    REQUIRE_EQ(result.errors.size(), 2);
+    CHECK_EQ(result.errors[0].location.begin.line, 19);
+    CHECK_EQ(toString(result.errors[0]), "expected a literal of type string, but got string");
+    CHECK_EQ(result.errors[1].location.begin.line, 20);
+    CHECK_EQ(toString(result.errors[1]), "too long");
+    CHECK_EQ(toString(requireType("named")), R"("b"?)");
+}
+
+// Luwu literal types: a nonstrict file knows `literal<B>` too
+TEST_CASE_FIXTURE(BuiltinsFixture, "literal_parameters_in_nonstrict_files")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastFlag literalParameters{FFlag::LuwuLiteralTypes, true};
+
+    CheckResult result = check(Mode::Nonstrict, R"(
+local function name<N>(n: literal<N>) end
+local function flag(short: literal<string>) end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
 TEST_SUITE_END();

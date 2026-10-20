@@ -252,6 +252,20 @@ void Tarjan::visitChildren(TypeId ty, int index)
 
         visitChild(ftv->argTypes);
         visitChild(ftv->retTypes);
+
+        // Luwu user-defined refinements and literal types: types held beside the signature. Unvisited, a copy (the
+        // module's public interface is one) keeps pointing into the arena it copied from.
+        if (ftv->truthyRefinement)
+            visitChild(ftv->truthyRefinement->type);
+        for (const FunctionType::LiteralParameter& literal : ftv->literalParameters)
+        {
+            visitChild(literal.base);
+            if (literal.validator)
+            {
+                visitChild(literal.validator);
+                visitChild(literal.placeholder);
+            }
+        }
     }
     else if (const TableType* ttv = get<TableType>(ty))
     {
@@ -934,12 +948,16 @@ void Substitution::replaceChildren(TypeId ty)
             ftv->truthyRefinement->type = replace(ftv->truthyRefinement->type);
 
         // Luwu literal types: a base or validator can name the function's or its class's generics (`literal<S>`,
-        // `V<literal<string>, T>`). The placeholder is in no substitution's map, so it comes through unchanged.
+        // `V<literal<string>, T>`). The placeholder is copied only with the validator (a copy of the module's public
+        // interface), so it stays the one inside it.
         for (FunctionType::LiteralParameter& literal : ftv->literalParameters)
         {
             literal.base = replace(literal.base);
             if (literal.validator)
+            {
                 literal.validator = replace(literal.validator);
+                literal.placeholder = replace(literal.placeholder);
+            }
         }
     }
     else if (TableType* ttv = getMutable<TableType>(ty))
