@@ -331,6 +331,26 @@ std::optional<TypeId> pendingNominalMember(const ExternType& instantiation, cons
     return findPendingMember(it->second);
 }
 
+void dropSubstitutedGenerics(TypeId fn)
+{
+    FunctionType* function = getMutable<FunctionType>(fn);
+    if (!function)
+        return;
+
+    std::vector<TypeId>& generics = function->generics;
+    generics.erase(
+        std::remove_if(
+            generics.begin(),
+            generics.end(),
+            [](TypeId generic)
+            {
+                return !get<GenericType>(follow(generic));
+            }
+        ),
+        generics.end()
+    );
+}
+
 void buildNominalMembers(const ExternType& etv)
 {
     const std::shared_ptr<LazyNominalMembers>& lazy = etv.lazyMembers;
