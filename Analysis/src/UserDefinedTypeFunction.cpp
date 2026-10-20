@@ -14,6 +14,8 @@
 #include "lualib.h"
 
 LUAU_FASTFLAG(LuauTypeFunctionSupportsFrozen)
+// Luwu: how long one evaluation of a user type function may run, in milliseconds; 0 for no limit
+LUAU_FASTINTVARIABLE(LuwuTypeFunctionTimeLimitMs, 2000)
 LUAU_FASTFLAG(LuauTypeFunctionStructuredErrors)
 
 namespace Luau
@@ -247,6 +249,16 @@ struct ErrorTypeFinder : TypeOnceVisitor
     }
 };
 
+// Luwu: calls the type function on the stack. One that raised (out of memory, past its time limit) may leave garbage
+// that holds most of the heap's limit, which every later evaluation would then run out of, so it's collected now.
+static int callTypeFunction(lua_State* L, int argumentCount)
+{
+    int status = lua_pcall(L, argumentCount, 1, 0);
+    if (status != LUA_OK)
+        lua_gc(L, LUA_GCCOLLECT, 0);
+    return status;
+}
+
 TypeFunctionReductionResult<TypeId> userDefinedTypeFunction(
     TypeId instance,
     const std::vector<TypeId>& typeParams,
@@ -460,19 +472,29 @@ TypeFunctionReductionResult<TypeId> userDefinedTypeFunction(
 
         if (ctx->limits->cancellationToken && ctx->limits->cancellationToken->requested())
             throw UserCancelError(ctx->ice->moduleName);
+
+        // Luwu: each evaluation has a time limit of its own, reported as the type function's error. Upstream stops only
+        // at the module's time limit, which an embedder may not set, so a loop in a type function being typed ran
+        // forever. Not during a GC step (`gc >= 0`), which can't raise an error.
+        bool overTime = gc < 0 && ctx->evaluationDeadline > 0.0 && TimeTrace::getClock() > ctx->evaluationDeadline;
+        if (overTime)
+            luaL_error(L, "type function ran for more than %d ms; does it loop forever?", FInt::LuwuTypeFunctionTimeLimitMs.value);
     };
+
+    double deadline = FInt::LuwuTypeFunctionTimeLimitMs > 0 ? TimeTrace::getClock() + FInt::LuwuTypeFunctionTimeLimitMs * 0.001 : 0.0;
+    ScopedAssign setDeadline(ctx->typeFunctionRuntime->evaluationDeadline, deadline);
 
     ctx->typeFunctionRuntime->messages.clear();
     ctx->typeFunctionRuntime->nominalMetadata.clear();
 
     if (FFlag::LuauTypeFunctionStructuredErrors)
     {
-        if (auto error = checkResultForError(L, name.value, lua_pcall(L, int(typeParams.size()), 1, 0)))
+        if (auto error = checkResultForError(L, name.value, callTypeFunction(L, int(typeParams.size()))))
             return {std::nullopt, Reduction::Erroneous, {}, {}, toString(*error), ctx->typeFunctionRuntime->messages};
     }
     else
     {
-        if (auto error = checkResultForError_DEPRECATED(L, name.value, lua_pcall(L, int(typeParams.size()), 1, 0)))
+        if (auto error = checkResultForError_DEPRECATED(L, name.value, callTypeFunction(L, int(typeParams.size()))))
             return {std::nullopt, Reduction::Erroneous, {}, {}, std::move(error), ctx->typeFunctionRuntime->messages};
     }
 

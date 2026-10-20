@@ -21,6 +21,8 @@ LUAU_DYNAMIC_FASTINT(LuauTypeFunctionSerdeIterationLimit)
 LUAU_FASTFLAG(LuauUdtfCreateSingletonFixErrorMessage)
 LUAU_FASTFLAG(LuauUdtfTypeToStringMetamethod)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTINT(LuwuTypeFunctionTimeLimitMs)
+LUAU_FASTINT(LuwuTypeFunctionMemoryLimitMb)
 LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FASTFLAG(LuwuTraits)
 
@@ -3696,6 +3698,41 @@ A.pick(pets, "nam")
 
     REQUIRE_EQ(result.errors.size(), 1);
     CHECK_EQ(result.errors[0].location.begin.line, 6);
+}
+
+// Luwu: a type function that loops or allocates without end (easy to have half-typed in an editor) stops at its own
+// limits, as a type function error, whether or not the embedder set a time limit for the module
+TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_runaway_loops_and_allocations_stop")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastInt timeLimit{FInt::LuwuTypeFunctionTimeLimitMs, 50};
+    ScopedFastInt memoryLimit{FInt::LuwuTypeFunctionMemoryLimitMb, 16};
+
+    CheckResult result = check(R"(
+type function Loop(t: type): type
+    while true do
+    end
+    return t
+end
+
+type function Hog(t: type): type
+    local all = {}
+    while true do
+        table.insert(all, table.create(1000, 1))
+    end
+    return t
+end
+
+local a: Loop<string> = "a"
+local b: Hog<string> = "b"
+    )");
+
+    // Each runtime error comes with the mismatch every type function error has ("Expected 'a' to be 'Loop<string>'")
+    REQUIRE_EQ(result.errors.size(), 4);
+    CHECK_EQ(result.errors[0].location.begin.line, 15);
+    CHECK(toString(result.errors[0]).find("type function ran for more than 50 ms") != std::string::npos);
+    CHECK_EQ(result.errors[2].location.begin.line, 16);
+    CHECK(toString(result.errors[2]).find("not enough memory") != std::string::npos);
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "type_functions_keep_docs_and_parameter_names")
