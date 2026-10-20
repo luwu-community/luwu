@@ -5,6 +5,7 @@
 #include "Luau/Error.h"
 
 #include <algorithm>
+#include <cctype>
 
 namespace Luau
 {
@@ -754,9 +755,27 @@ std::string givenPropertyNote(const std::string& name, const std::string& given,
     return quoted(name) + " is " + quoted(given) + " here, but should be " + quoted(expected);
 }
 
-std::string missingPropertyNote(const std::string& table, const std::string& name, const std::string& expected)
+std::string missingPropertyNote(const Difference& d, Rendering& rendering)
 {
-    return quoted(table) + " is missing " + quoted(name + ": " + expected);
+    LUAU_ASSERT(d.kind == Difference::Kind::Missing && !d.path.empty());
+
+    // The note's path isn't in the message, so it adds nothing to the message's legend
+    uint8_t notation = rendering.notation;
+    std::string table;
+    bool inFunction = d.anchor && d.anchor->at + 1 < d.path.size();
+    if (inFunction)
+    {
+        const Segment& slot = d.path[d.anchor->at];
+        bool named = slot.kind == Segment::Kind::Parameter && !slot.name.empty();
+        table = slotInProse(slotNoun(d.path, d.anchor->at, d.path.size() - 1, nullptr), named);
+        // `its 2nd argument` starts the sentence
+        table[0] = char(std::toupper(static_cast<unsigned char>(table[0])));
+    }
+    else
+        table = quoted(rendering.givenPath(onGivenSide(DiffPath{d.path.begin(), d.path.end() - 1})));
+    rendering.notation = notation;
+
+    return table + " is missing " + quoted(d.path.back().name + ": " + d.super);
 }
 
 std::string similarHeader(std::string_view arrival, size_t paths)
