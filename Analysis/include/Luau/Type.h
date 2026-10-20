@@ -379,31 +379,36 @@ struct LiteralCheck
     // `validator`.
     TypeId validator = nullptr;
     TypeId placeholder = nullptr;
-    // `literal<B>?`: nil or a left-out value is checked by nothing
-    bool optional = false;
+    // The rest of a union the check is one member of (`nil` for `literal<B>?`, `Token | number` for
+    // `V<literal<B>> | Token | number`): a value that fits it isn't checked. Null when there is none.
+    TypeId alternatives = nullptr;
 
     // Calls `f` on each type held, for the walks that copy or visit types. A copy that skips them (a module's public
     // interface is one) leaves them pointing into the arena it copied from.
     template<typename F>
     void forEachType(F&& f)
     {
-        f(base);
-        if (validator)
-        {
-            f(validator);
-            f(placeholder);
-        }
+        forEachTypeOf(*this, f);
     }
 
     template<typename F>
     void forEachType(F&& f) const
     {
-        f(base);
-        if (validator)
+        forEachTypeOf(*this, f);
+    }
+
+private:
+    template<typename Check, typename F>
+    static void forEachTypeOf(Check& check, F& f)
+    {
+        f(check.base);
+        if (check.validator)
         {
-            f(validator);
-            f(placeholder);
+            f(check.validator);
+            f(check.placeholder);
         }
+        if (check.alternatives)
+            f(check.alternatives);
     }
 };
 

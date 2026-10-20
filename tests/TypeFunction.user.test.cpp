@@ -4915,6 +4915,46 @@ local l: A.CssLength = "z!"
     CHECK_EQ(toString(result.errors[2]), "'z!' isn't a CSS length");
 }
 
+// Luwu literal types: a union with a literal member checks only what the rest of the union doesn't take
+TEST_CASE_FIXTURE(BuiltinsFixture, "literal_union_members")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastFlag literalParameters{FFlag::LuwuLiteralTypes, true};
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+
+    CheckResult result = check(std::string(kLengthValidator) + R"(
+class Token(const name: string) end
+type CssLength = Length<literal<string>>
+type Props = { padding: (CssLength | Token | number)? }
+local function rule(_props: Props) end
+local function pad(_x: CssLength | number | "auto") end
+
+rule({ padding = "1rem" })
+rule({ padding = 0 })
+rule({ padding = Token("x") })
+rule({})
+pad("2em")
+pad(3)
+pad("auto")
+
+rule({ padding = "1q!" })
+local s: string = "1px"
+rule({ padding = s })
+pad("bad!")
+type Two = { x: CssLength | Length<literal<string>> }
+    )");
+
+    REQUIRE_EQ(result.errors.size(), 4);
+    CHECK_EQ(result.errors[0].location.begin.line, 30);
+    CHECK_EQ(toString(result.errors[0]), "a union can have only one literal<T> member");
+    CHECK_EQ(result.errors[1].location.begin.line, 26);
+    CHECK_EQ(toString(result.errors[1]), "'1q!' isn't a CSS length");
+    CHECK_EQ(result.errors[2].location.begin.line, 28);
+    CHECK_EQ(toString(result.errors[2]), "expected a literal of type string, but got string");
+    CHECK_EQ(result.errors[3].location.begin.line, 29);
+    CHECK_EQ(toString(result.errors[3]), "'bad!' isn't a CSS length");
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "typing_literal_fields")
 {
     ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
@@ -4924,6 +4964,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_literal_fields")
     const char* after = "\nlocal unrelated = 1\nprint(unrelated + 1)\n";
     checkTypewriting(*this, before, "rule({ padding = \"1rem\" })", after);
     checkTypewriting(*this, before, "local checked: Props = { padding = \"2px\" }", after);
+    checkTypewriting(*this, before, "local function pad(_x: Length<literal<string>> | number) end", after);
 }
 
 TEST_SUITE_END();

@@ -6883,18 +6883,45 @@ ConstraintGenerator::ResolvedAnnotation ConstraintGenerator::resolveLiteralCheck
     bool replaceErrorWithFresh
 )
 {
-    // `X?`, with `X` possibly a literal annotation (`V<literal<B>>?`): a nil or left-out value passes unchecked
-    AstTypeUnion* optional = annotation->as<AstTypeUnion>();
-    if (optional && optional->types.size == 2 && optional->types.data[1]->is<AstTypeOptional>())
+    // A union with a literal annotation among its members (`V<literal<B>>?`, `V<literal<B>> | Token | number`): a value
+    // that fits the other members passes unchecked
+    if (AstTypeUnion* options = annotation->as<AstTypeUnion>(); options && options->types.size > 1)
     {
-        ResolvedAnnotation required = resolveLiteralCheckAnnotation(scope, optional->types.data[0], inTypeArguments, replaceErrorWithFresh);
-        TypeId nil = resolveType_(scope, optional->types.data[1], inTypeArguments, replaceErrorWithFresh);
-        if (required.check)
-            required.check->optional = true;
+        std::optional<LiteralCheck> check;
+        std::vector<TypeId> members;
+        std::vector<TypeId> alternatives;
+        for (AstType* option : options->types)
+        {
+            ResolvedAnnotation member = resolveLiteralCheckAnnotation(scope, option, inTypeArguments, replaceErrorWithFresh);
+            members.push_back(member.type);
+            if (!member.check)
+                alternatives.push_back(member.type);
+            else if (check)
+                reportError(option->location, GenericError{"a union can have only one literal<T> member"});
+            else
+            {
+                // A nested union's own alternatives (`(V<literal<B>> | Token)?`) are this one's too
+                check = member.check;
+                if (check->alternatives)
+                    alternatives.push_back(check->alternatives);
+            }
+        }
 
-        required.type = arena->addType(UnionType{{required.type, nil}});
-        module->astResolvedTypes[optional] = required.type;
-        return required;
+        TypeId unionTy = arena->addType(UnionType{std::move(members)});
+        module->astResolvedTypes[options] = unionTy;
+        // Every member literal (reported above) leaves no alternatives
+        if (check && alternatives.size() == 1)
+            check->alternatives = alternatives.front();
+        else if (check && alternatives.size() > 1)
+            check->alternatives = arena->addType(UnionType{std::move(alternatives)});
+        return ResolvedAnnotation{unionTy, check};
+    }
+
+    if (AstTypeGroup* group = annotation->as<AstTypeGroup>())
+    {
+        ResolvedAnnotation inner = resolveLiteralCheckAnnotation(scope, group->type, inTypeArguments, replaceErrorWithFresh);
+        module->astResolvedTypes[group] = inner.type;
+        return inner;
     }
 
     std::optional<ResolvedLiteral> literal;

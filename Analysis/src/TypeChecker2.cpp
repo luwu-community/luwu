@@ -240,7 +240,11 @@ static const LiteralCheck* findLiteralField(const TableType* table, const std::s
 static std::string literalFieldDisplay(const std::string& name, const LiteralCheck& check)
 {
     std::string annotation = check.validator ? toString(check.validator) : "literal<" + toString(check.base) + ">";
-    return name + ": " + annotation + (check.optional ? "?" : "");
+    if (!check.alternatives)
+        return name + ": " + annotation;
+    if (isNil(check.alternatives))
+        return name + ": " + annotation + "?";
+    return name + ": " + annotation + " | " + toString(check.alternatives);
 }
 
 struct TypeChecker2::DeclarationIndex
@@ -3293,7 +3297,8 @@ void TypeChecker2::checkLiteralValue(AstExpr* value, TypeId inferred, const Lite
     if (isErrorSuppressing(value->location, literalTy))
         return;
 
-    if (check.optional && isNil(literalTy))
+    // What the rest of the union allows (`nil` for `literal<B>?`) isn't checked
+    if (check.alternatives && subtyping->isSubtype(literalTy, check.alternatives, scope).isSubtype)
         return;
 
     if (isMissingLiteral(check.base, literalTy))
