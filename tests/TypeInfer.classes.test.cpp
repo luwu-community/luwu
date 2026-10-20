@@ -2654,6 +2654,28 @@ end
     CHECK_EQ(toString(missing->missing[0]), "Dog");
 }
 
+// Luwu Classes (rfcs/classes): a field holding `nil` shows up as `none` in `class.fields`, so `nil` in its type is `none`
+TEST_CASE_FIXTURE(ClassesFixture, "class_fields_types_nil_as_none")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    CheckResult result = check(R"(
+class Profile
+    name = "Ada"
+    nickname: string? = nil
+    gone: nil = nil
+end
+local fields = class.fields(Profile())
+local nickname = fields.nickname
+local name = fields.name
+local gone = fields.gone
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("nickname")), "none | string");
+    CHECK_EQ(toString(requireType("name")), "string");
+    CHECK_EQ(toString(requireType("gone")), "none");
+}
+
 // Luwu: a table in the union that the class can't fit (its `display` method against a `display` field) doesn't take the
 // class out of the true branch
 TEST_CASE_FIXTURE(ClassesFixture, "isinstance_keeps_the_class_beside_a_disjoint_table")
