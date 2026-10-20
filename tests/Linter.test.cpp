@@ -4594,6 +4594,37 @@ return f
     CHECK_EQ(countWarnings(result, LintWarning::Code_LuaAndOr), 2);
 }
 
+// Luwu Do Expressions (rfcs/do-expressions.md): an `or` that leaves has no value to pick
+TEST_CASE_FIXTURE(BuiltinsFixture, "AndOrThatLeavesIsNotATernary")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    LintResult result = lint(R"(
+for _, entry in { "hp=10", "broken" } do
+    local key, value = string.match(entry, "^(%a+)=(%d+)$")
+    key and value or continue
+    print(key, value)
+end
+
+local function first(list: { string }): string?
+    local item = list[1]
+    item and #item > 0 or return nil
+    local label = item and item:upper() or (do return nil)
+    return label
+end
+local function describe(name: string?)
+    return name and name:upper() or "nobody"
+end
+return first, describe
+)");
+
+    CHECK_EQ(countWarnings(result, LintWarning::Code_MisleadingAndOr), 0);
+    // Only the ternary in `describe`
+    std::vector<LintWarning> luaAndOr = warningsWithCode(result, LintWarning::Code_LuaAndOr);
+    REQUIRE_EQ(luaAndOr.size(), 1);
+    CHECK_EQ(luaAndOr[0].location.begin.line, 14);
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "AndOrUsedAsBooleanLogicIsNotATernary")
 {
     LintResult result = lint(R"(

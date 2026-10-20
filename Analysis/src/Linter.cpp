@@ -4279,6 +4279,11 @@ private:
         if (!and_ || and_->op != AstExprBinary::And)
             return true;
 
+        // Luwu Do Expressions (rfcs/do-expressions.md): `a and b or continue` leaves unless both are truthy, which is
+        // what it means. It has no value to pick, so it isn't a ternary.
+        if (asOrLeave(node))
+            return true;
+
         const char* alt = nullptr;
 
         if (and_->right->is<AstExprConstantNil>())
