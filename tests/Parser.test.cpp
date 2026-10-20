@@ -5691,7 +5691,7 @@ TEST_CASE_FIXTURE(Fixture, "an_unfinished_statement_stops_before_a_next_line_tha
     const std::string missingName = "Expected a variable name; the next line starts a new statement";
     const std::string missingValue = "Expected a value; the next line starts a new statement";
 
-    for (const auto& [source, message] : std::vector<std::pair<const char*, std::string>>{
+    for (const auto& testCase : std::vector<std::pair<const char*, std::string>>{
              {"local total = 0\nlocal\ntotal += 1\n", missingName},
              {"local total = 0\nconst\nprint(total)\n", missingName},
              {"local total = 0\nlocal\ntotal.x = 1\n", missingName},
@@ -5699,6 +5699,8 @@ TEST_CASE_FIXTURE(Fixture, "an_unfinished_statement_stops_before_a_next_line_tha
              {"local total = 0\ntotal =\ntotal = 2\n", missingValue},
          })
     {
+        const char* source = testCase.first;
+        const std::string& message = testCase.second;
         INFO(source);
         ParseResult result = tryParse(source);
         REQUIRE_EQ(result.errors.size(), 1);
