@@ -379,4 +379,19 @@ TEST_CASE_FIXTURE(Fixture, "doc_refs_are_off_without_the_flag")
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
+TEST_CASE_FIXTURE(DocRefsFixture, "doc_refs_on_a_type_function_resolve_in_the_module")
+{
+    CheckResult result = check(R"(
+        --!strict
+        local Header = {}
+
+        --- The headings of a [Header] with one more column.
+        type function Append(headings: type, name: type): type
+            return name
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
 TEST_SUITE_END();
