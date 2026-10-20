@@ -1071,6 +1071,83 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_tagged_match_is_not_printed_twice")
     );
 }
 
+// A mismatched property gets a note where each side declares it, pointing back at the error: a deep path is hard to
+// trace back to the two declarations by hand.
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_mismatched_property_notes_where_both_sides_declare_it")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type Stack = { id: string, count: number }
+        type Inventory = { byCategory: { [string]: { [string]: { Stack } } } }
+        local function load(raw: { [string]: { [string]: { { id: string, count: string } } } }): Inventory
+            return { byCategory = raw }
+        end
+        local _ = load
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    const std::vector<DiagnosticNote>& notes = getMainModule()->notes;
+    REQUIRE_EQ(notes.size(), 2);
+    CHECK_EQ(notes[0].message, "Expected 'count: number' because of this");
+    CHECK_EQ(notes[0].location, Location{{1, 35}, {1, 40}});
+    CHECK_EQ(notes[1].message, "'count' is 'string' here, but should be 'number'");
+    CHECK_EQ(notes[1].location, Location{{3, 73}, {3, 78}});
+    CHECK_EQ(notes[0].origin, result.errors[0].location);
+    CHECK_EQ(notes[1].origin, result.errors[0].location);
+}
+
+// A property misspelled from one the value has is a typo, read or written, on a table, a string or a library. One that
+// differs only in case keeps upstream's suggestion, and one with nothing close stays unknown.
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_misspelled_property_is_a_typo")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type Player = { name: string, level: number }
+        type Settings = { volume: number, muted: boolean? }
+        local function use(player: Player, settings: Settings, text: string)
+            local _ = player.nmae
+            settings.mutd = true
+            local _ = text:uper()
+            table.srot({ "b", "a" })
+            local _ = player.Name
+            local _ = player.zzzz
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(6, result);
+    const char* typos[] = {
+        "Did you mean 'player.name' instead of 'player.nmae'?",
+        "Did you mean 'settings.muted' instead of 'settings.mutd'?",
+        "Did you mean 'text:upper' instead of 'text:uper'?",
+        "Did you mean 'table.sort' instead of 'table.srot'?",
+    };
+    for (size_t i = 0; i < 4; ++i)
+    {
+        REQUIRE(get<Typo>(result.errors[i]));
+        CHECK_EQ(toString(result.errors[i]), typos[i]);
+    }
+    CHECK(get<UnknownPropButFoundLikeProp>(result.errors[4]));
+    CHECK(get<UnknownProperty>(result.errors[5]));
+}
+
+// A type name misspelled from one in scope is a typo too.
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_misspelled_type_name_is_a_typo")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type Player = { name: string }
+        local function greet(_: Plyer) end
+        local function count(_: Zzzzzz) end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ(toString(result.errors[0]), "Typo 'Plyer': Did you mean 'Player'?");
+    CHECK_EQ(toString(result.errors[1]), "Unknown type 'Zzzzzz'");
+}
+
 // Luwu: every help is written by a Helpifier, which gives nothing when help is off
 TEST_CASE("helpifier_writes_every_help_the_same_way")
 {

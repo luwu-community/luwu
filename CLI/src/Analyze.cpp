@@ -115,10 +115,31 @@ static bool reportModuleResult(Luau::Frontend& frontend, const Luau::ModuleName&
         return false;
     }
 
-    for (auto& error : cr->errors)
-        reportError(frontend, format, error);
-
     std::string humanReadableName = frontend.fileResolver->getHumanReadableModuleName(name);
+
+    // Luwu: notes (Module::notes) follow the error they're about, and any about no error reported here come after
+    Luau::ModulePtr module = frontend.moduleResolver.getModule(name);
+    std::vector<bool> notePrinted(module ? module->notes.size() : 0);
+    auto reportNotes = [&](std::optional<Luau::Location> origin)
+    {
+        for (size_t i = 0; i < notePrinted.size(); ++i)
+        {
+            const Luau::DiagnosticNote& note = module->notes[i];
+            if (notePrinted[i] || (origin && note.origin != origin))
+                continue;
+            report(format, humanReadableName.c_str(), note.location, "Note", note.message.c_str());
+            notePrinted[i] = true;
+        }
+    };
+
+    for (auto& error : cr->errors)
+    {
+        reportError(frontend, format, error);
+        if (error.moduleName == name)
+            reportNotes(error.location);
+    }
+    reportNotes(std::nullopt);
+
     for (auto& error : cr->lintResult.errors)
         reportWarning(format, humanReadableName.c_str(), error);
     for (auto& warning : cr->lintResult.warnings)

@@ -268,7 +268,8 @@ private:
     void visit(AstExprCall* call);
     std::optional<TypeId> tryStripUnionFromNil(TypeId ty) const;
     TypeId stripFromNilAndReport(TypeId ty, const Location& location);
-    void visitExprName(AstExpr* expr, Location location, const std::string& propName, ValueContext context, TypeId astIndexExprTy);
+    // `separator` is the `.` or `:` of `expr.propName`, and 0 for `expr["propName"]`.
+    void visitExprName(AstExpr* expr, Location location, const std::string& propName, ValueContext context, TypeId astIndexExprTy, char separator);
     void visit(AstExprIndexName* indexName, ValueContext context);
     void indexExprMetatableHelper(AstExprIndexExpr* indexExpr, const MetatableType* metaTable, TypeId exprType, TypeId indexType);
     void visit(AstExprIndexExpr* indexExpr, ValueContext context);
@@ -330,7 +331,18 @@ private:
     );
     // If the provided type does not have the named property, report an error.
     // Returns whether `tableTy` can't exist (a `never` the normalizer had to work out), for the caller to report.
-    bool checkIndexTypeFromType(TypeId tableTy, const std::string& prop, ValueContext context, const Location& location, TypeId astIndexExprType);
+    // `receiver` is how the indexed value is written before the property (`player.`), for a typo's message.
+    bool checkIndexTypeFromType(
+        TypeId tableTy,
+        const std::string& prop,
+        ValueContext context,
+        const Location& location,
+        TypeId astIndexExprType,
+        const std::string& receiver = ""
+    );
+    // Luwu (helpful subtyping errors): reports `error` for a property `tableTy` doesn't have, or a typo when it has one
+    // spelled almost the same.
+    void reportMissingProperty(TypeErrorData error, TypeId tableTy, const std::string& prop, const std::string& receiver, const Location& location);
     // If the named property is `private` on some user-defined class in tableTy's hierarchy, and
     // `location` falls outside of that class's own definition block, report an error.
     void checkPrivatePropertyAccess(TypeId tableTy, const std::string& prop, const Location& location);

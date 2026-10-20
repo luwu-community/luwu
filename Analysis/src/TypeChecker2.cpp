@@ -2946,13 +2946,23 @@ void TypeChecker2::checkPrivateConstructorAccess(TypeId classTy, const Location&
         reportError(PrivateConstructorAccess{classTy}, location);
 }
 
-void TypeChecker2::visitExprName(AstExpr* expr, Location location, const std::string& propName, ValueContext context, TypeId astIndexExprTy)
+void TypeChecker2::visitExprName(
+    AstExpr* expr,
+    Location location,
+    const std::string& propName,
+    ValueContext context,
+    TypeId astIndexExprTy,
+    char separator
+)
 {
     visit(expr, ValueContext::RValue);
     TypeId leftType = stripFromNilAndReport(lookupType(expr), location);
     if (reportImproperUse(expr, leftType, ImproperUse::Index))
         return;
-    if (checkIndexTypeFromType(leftType, propName, context, location, astIndexExprTy))
+    std::string receiver;
+    if (std::optional<std::string> name = separator ? bindingName(expr) : std::nullopt)
+        receiver = *name + separator;
+    if (checkIndexTypeFromType(leftType, propName, context, location, astIndexExprTy, receiver))
     {
         reportUnreachableUse(expr, ImproperUse::Index);
         return;
@@ -2966,7 +2976,7 @@ void TypeChecker2::visitExprName(AstExpr* expr, Location location, const std::st
 void TypeChecker2::visit(AstExprIndexName* indexName, ValueContext context)
 {
     // If we're indexing like _.foo - foo could either be a prop or a string.
-    visitExprName(indexName->expr, indexName->location, indexName->index.value, context, builtinTypes->stringType);
+    visitExprName(indexName->expr, indexName->location, indexName->index.value, context, builtinTypes->stringType, indexName->op);
 }
 
 void TypeChecker2::indexExprMetatableHelper(AstExprIndexExpr* indexExpr, const MetatableType* metaTable, TypeId exprType, TypeId indexType)
@@ -2994,7 +3004,7 @@ void TypeChecker2::visit(AstExprIndexExpr* indexExpr, ValueContext context)
     {
         TypeId astIndexExprType = lookupType(indexExpr->index);
         const std::string stringValue(str->value.data, str->value.size);
-        visitExprName(indexExpr->expr, indexExpr->location, stringValue, context, astIndexExprType);
+        visitExprName(indexExpr->expr, indexExpr->location, stringValue, context, astIndexExprType, 0);
         return;
     }
 
@@ -5323,6 +5333,13 @@ void TypeChecker2::explainError(
         };
         tm.contextVerb = contextVerb;
         reportError(std::move(tm), location);
+
+        // Where the mismatched properties are declared in this module, unless that's inside the error's own span
+        for (MismatchNote& note : explanation->notes)
+        {
+            if (note.module == module->name && !location.encloses(note.location))
+                module->notes.push_back({note.location, std::move(note.message), location});
+        }
         return;
     }
 
@@ -6011,7 +6028,8 @@ bool TypeChecker2::checkIndexTypeFromType(
     const std::string& prop,
     ValueContext context,
     const Location& location,
-    TypeId astIndexExprType
+    TypeId astIndexExprType,
+    const std::string& receiver
 )
 {
     std::shared_ptr<const NormalizedType> norm = normalizer.normalize(tableTy);
@@ -6051,12 +6069,12 @@ bool TypeChecker2::checkIndexTypeFromType(
             else if (auto et = get<ExternType>(tableTy))
             {
                 if (et->indexer)
-                    reportError(UnknownProperty{tableTy, prop}, location);
+                    reportMissingProperty(UnknownProperty{tableTy, prop}, tableTy, prop, receiver, location);
                 else
-                    reportError(PropertyAccessViolation{tableTy, prop, PropertyAccessViolation::CannotWrite}, location);
+                    reportMissingProperty(PropertyAccessViolation{tableTy, prop, PropertyAccessViolation::CannotWrite}, tableTy, prop, receiver, location);
             }
             else
-                reportError(CannotExtendTable{tableTy, CannotExtendTable::Property, prop}, location);
+                reportMissingProperty(CannotExtendTable{tableTy, CannotExtendTable::Property, prop}, tableTy, prop, receiver, location);
         }
         else if (context == ValueContext::RValue)
         {
@@ -6064,10 +6082,10 @@ bool TypeChecker2::checkIndexTypeFromType(
             if (rvPropTypes.foundOneProp() && rvPropTypes.noneMissingProp())
                 reportError(PropertyAccessViolation{tableTy, prop, PropertyAccessViolation::CannotRead}, location);
             else
-                reportError(UnknownProperty{tableTy, prop}, location);
+                reportMissingProperty(UnknownProperty{tableTy, prop}, tableTy, prop, receiver, location);
         }
         else
-            reportError(UnknownProperty{tableTy, prop}, location);
+            reportMissingProperty(UnknownProperty{tableTy, prop}, tableTy, prop, receiver, location);
     }
 
     return false;
@@ -6309,6 +6327,82 @@ void TypeChecker2::checkTypeInstantiation(
     }
 }
 
+
+// Luwu (helpful subtyping errors): a chain of `__index` tables (or of parent classes) longer than this isn't searched
+// for a name a property was misspelled from. Metatables can point at themselves.
+constexpr int kMaxIndexChain = 8;
+
+// Luwu (helpful subtyping errors): the names a value of type `ty` can be indexed with: a table's properties and its
+// metatable's `__index`, a string's methods, an object's fields and methods.
+static void collectIndexableNames(TypeId ty, std::vector<std::string>& names, int depth)
+{
+    if (depth > kMaxIndexChain)
+        return;
+    ty = follow(ty);
+
+    auto indexOf = [&](TypeId metatable)
+    {
+        const TableType* table = get<TableType>(follow(metatable));
+        if (!table)
+            return;
+        auto index = table->props.find("__index");
+        if (index != table->props.end() && index->second.readTy)
+            collectIndexableNames(*index->second.readTy, names, depth + 1);
+    };
+
+    if (const TableType* table = get<TableType>(ty))
+    {
+        for (const auto& [name, _] : table->props)
+            names.push_back(name);
+    }
+    else if (const MetatableType* metatable = get<MetatableType>(ty))
+    {
+        collectIndexableNames(metatable->table, names, depth + 1);
+        indexOf(metatable->metatable);
+    }
+    else if (const PrimitiveType* primitive = get<PrimitiveType>(ty); primitive && primitive->metatable)
+        indexOf(*primitive->metatable);
+    else if (const ExternType* extern_ = get<ExternType>(ty))
+    {
+        for (const auto& [name, _] : extern_->props)
+            names.push_back(name);
+        if (extern_->parent)
+            collectIndexableNames(*extern_->parent, names, depth + 1);
+    }
+}
+
+void TypeChecker2::reportMissingProperty(TypeErrorData error, TypeId tableTy, const std::string& prop, const std::string& receiver, const Location& location)
+{
+    std::optional<std::string> meant;
+    if (FFlag::LuwuHelpfulSubtypingErrors)
+    {
+        std::vector<std::string> names;
+        collectIndexableNames(tableTy, names, 0);
+        // Upstream suggests a property that differs only in case (UnknownPropButFoundLikeProp), which says more
+        bool differsInCase = std::any_of(
+            names.begin(),
+            names.end(),
+            [&](const std::string& name)
+            {
+                return name != prop && equalsLower(name, prop);
+            }
+        );
+        if (!differsInCase)
+            meant = closestSpelling(prop, names);
+    }
+    if (!meant)
+    {
+        reportError(std::move(error), location);
+        return;
+    }
+
+    Typo typo{receiver + prop, receiver + *meant};
+    // A compound assignment checks its target twice, as a write and then as a read
+    const TypeError* last = module->errors.empty() ? nullptr : &module->errors.back();
+    const Typo* lastTypo = last && last->location == location ? get<Typo>(*last) : nullptr;
+    if (!lastTypo || !(*lastTypo == typo))
+        reportError(std::move(typo), location);
+}
 
 void TypeChecker2::diagnoseMissingTableKey(UnknownProperty* utk, TypeErrorData& data) const
 {

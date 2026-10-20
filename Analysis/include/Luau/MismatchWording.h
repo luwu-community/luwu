@@ -2,6 +2,7 @@
 #pragma once
 
 #include "Luau/Helpifier.h"
+#include "Luau/Location.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -94,6 +95,13 @@ struct Anchor
     size_t at = 0;
 };
 
+// Where a table declares a property, in the source of `module`.
+struct PropertySite
+{
+    Location location;
+    std::string module;
+};
+
 struct Difference
 {
     enum class Kind
@@ -144,6 +152,9 @@ struct Difference
     std::optional<std::string> subInFull;
     // For `ElementOfExpected`, the element type of the array expected.
     std::optional<std::string> element;
+    // For a difference at a property, where the given and the expected table declare it.
+    std::optional<PropertySite> givenSite;
+    std::optional<PropertySite> expectedSite;
 };
 
 // The names paths hang off, and what the text rendered so far needs a legend for. Every piece of text
@@ -264,6 +275,11 @@ std::pair<std::string, std::string> misspelledFieldNames(const Difference& d, Re
 std::string misspelledFieldHelp(const Difference& d, Rendering& rendering);
 // A string one typo from an expected one, inside a table.
 std::string misspelledValueHelp(const Difference& d, Rendering& rendering);
+
+// Notes at the two declarations of a mismatched property: `Expected 'count: number' because of this` at the expected
+// one, `'count' is 'string' here, but should be 'number'` at the given one.
+std::string expectedPropertyNote(const std::string& name, const std::string& expected);
+std::string givenPropertyNote(const std::string& name, const std::string& given, const std::string& expected);
 
 // Headers: the line introducing the bullets.
 std::string similarHeader(std::string_view arrival, size_t paths);
