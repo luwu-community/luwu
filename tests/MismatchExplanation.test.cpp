@@ -1257,6 +1257,27 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_misspelled_property_is_a_typo")
     CHECK(get<UnknownProperty>(result.errors[5]));
 }
 
+// Names that differ only in digits are siblings, and a type name that is a value in scope wants `typeof`: neither is
+// a typo.
+TEST_CASE_FIXTURE(BuiltinsFixture, "numbered_names_and_values_are_not_typos")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type Weld = { Part0: number, Part1: number }
+        local function use(weld: Weld)
+            local _ = weld.Part8
+        end
+        local Colours = { Red = 1 }
+        type Colour = keyof<Colours>
+        local _ = use
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK(get<UnknownProperty>(result.errors[0]));
+    CHECK_EQ(toString(result.errors[1]), "Unknown type 'Colours'");
+}
+
 // A type name misspelled from one in scope is a typo too.
 TEST_CASE_FIXTURE(BuiltinsFixture, "a_misspelled_type_name_is_a_typo")
 {

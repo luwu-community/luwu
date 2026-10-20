@@ -26,6 +26,7 @@ LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FASTFLAG(LuauHigherOrderGenericInference)
 LUAU_FASTFLAG(LuauSolverV2)
 LUAU_FASTFLAG(LuauAllowIntersectionOfOneTableWithExtern)
+LUAU_FASTFLAG(LuwuHelpfulSubtypingErrors)
 
 TEST_SUITE_BEGIN("TypeInferExternTypes");
 
@@ -990,8 +991,20 @@ TEST_CASE_FIXTURE(Fixture, "extern_type_check_missing_key")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, results);
-    auto err = get<UnknownProperty>(results.errors[0]);
-    CHECK_EQ("IsEnabled", err->key);
+    // Luwu (helpful subtyping errors): `IsEnabled` is one typo from `Enabled`
+    if (FFlag::LuwuHelpfulSubtypingErrors)
+    {
+        const Typo* typo = get<Typo>(results.errors[0]);
+        REQUIRE(typo);
+        CHECK_EQ("foo.IsEnabled", typo->written);
+        CHECK_EQ("foo.Enabled", typo->meant);
+    }
+    else
+    {
+        auto err = get<UnknownProperty>(results.errors[0]);
+        REQUIRE(err);
+        CHECK_EQ("IsEnabled", err->key);
+    }
 }
 
 TEST_CASE_FIXTURE(Fixture, "extern_type_check_present_key_in_superclass")

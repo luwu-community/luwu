@@ -32,6 +32,7 @@ LUAU_FASTFLAG(LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier)
 LUAU_FASTFLAG(LuauBetterMissingPropertiesTypeError)
 LUAU_FASTFLAG(LuauIndexerModifierMismatchErrors)
 LUAU_FASTFLAG(LuauAlwaysIntersectTablesWithTables)
+LUAU_FASTFLAG(LuwuHelpfulSubtypingErrors)
 
 TEST_SUITE_BEGIN("TableTests");
 
@@ -5833,7 +5834,11 @@ TEST_CASE_FIXTURE(Fixture, "stop_refining_new_table_indices_for_non_primitive_ta
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    LUAU_CHECK_ERROR(result, UnknownProperty);
+    // Luwu (helpful subtyping errors): `vall` is one typo from `val`
+    if (FFlag::LuwuHelpfulSubtypingErrors)
+        LUAU_CHECK_ERROR(result, Typo);
+    else
+        LUAU_CHECK_ERROR(result, UnknownProperty);
 }
 
 TEST_CASE_FIXTURE(Fixture, "fuzz_match_literal_type_crash_again")
