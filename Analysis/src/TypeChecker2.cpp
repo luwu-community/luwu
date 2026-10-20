@@ -5490,6 +5490,20 @@ static std::optional<std::string> unionDisplayName(const UnionType* utv)
     return std::nullopt;
 }
 
+const std::vector<std::string>& TypeChecker2::requiredProperties(const TableType* table)
+{
+    if (const std::vector<std::string>* cached = requiredPropertiesCache.find(table))
+        return *cached;
+
+    std::vector<std::string> required;
+    for (const auto& [name, prop] : table->props)
+    {
+        if (prop.readTy && !isOptional(*prop.readTy))
+            required.push_back(name);
+    }
+    return requiredPropertiesCache[table] = std::move(required);
+}
+
 bool TypeChecker2::testPotentialLiteralIsSubtype(AstExpr* expr, TypeId expectedType)
 {
     auto exprType = follow(lookupType(expr));
@@ -5560,14 +5574,8 @@ bool TypeChecker2::testPotentialLiteralIsSubtype(AstExpr* expr, TypeId expectedT
     }
 
     Set<std::optional<std::string>> missingKeys{{}};
-    for (const auto& [name, prop] : expectedTableType->props)
-    {
-        if (prop.readTy)
-        {
-            if (!isOptional(*prop.readTy))
-                missingKeys.insert(name);
-        }
-    }
+    for (const std::string& name : requiredProperties(expectedTableType))
+        missingKeys.insert(name);
 
     bool isArrayLike = false;
     if (expectedTableType->indexer)

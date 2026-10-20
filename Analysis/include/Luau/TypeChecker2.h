@@ -115,6 +115,8 @@ struct TypeChecker2
     mutable DenseHashMap<const AstExprFunction*, DenseHashSet<const AstLocal*>> initSelfAliases{nullptr};
 
     DenseHashSet<TypeId> seenTypeFunctionInstances{nullptr};
+    // Luwu: see requiredProperties
+    DenseHashMap<const TableType*, std::vector<std::string>> requiredPropertiesCache{nullptr};
 
     Normalizer normalizer;
     Subtyping _subtyping;
@@ -313,6 +315,9 @@ private:
     bool testLiteralOrAstTypeIsSubtype(AstExpr* expr, TypeId expectedType);
 
     bool testPotentialLiteralIsSubtype(AstExpr* expr, TypeId expectedType);
+    // Luwu: the properties a table literal checked against `table` has to write: readable and not optional. Cached, so
+    // literals checked against one wide record (150 optional fields) don't each test every field.
+    const std::vector<std::string>& requiredProperties(const TableType* table);
 
     void maybeReportSubtypingError(TypeId subTy, TypeId superTy, const Location& location);
     // Tests whether subTy is a subtype of superTy in the context of a function iterator for a for-in statement.
