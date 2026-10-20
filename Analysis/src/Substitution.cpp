@@ -119,6 +119,8 @@ static TypeId shallowClone(TypeId ty, TypeArena& dest, const TxnLog* log, bool t
             clone.instantiatedTypeParams = a.instantiatedTypeParams;
             clone.instantiatedTypePackParams = a.instantiatedTypePackParams;
             clone.tags = a.tags;
+            // Luwu literal types
+            clone.literalFields = a.literalFields;
             return dest.addType(std::move(clone));
         }
         else if constexpr (std::is_same_v<T, MetatableType>)
@@ -243,6 +245,17 @@ void Tarjan::visitChildren(TypeId ty, int index)
     };
     visitMetadata(ty->metadata);
 
+    // Luwu literal types: a function's literal parameters and a table's literal fields
+    auto visitLiteralCheck = [&](const LiteralCheck& check)
+    {
+        check.forEachType(
+            [&](TypeId checkTy)
+            {
+                visitChild(checkTy);
+            }
+        );
+    };
+
     if (const FunctionType* ftv = get<FunctionType>(ty))
     {
         for (TypeId generic : ftv->generics)
@@ -258,14 +271,7 @@ void Tarjan::visitChildren(TypeId ty, int index)
         if (ftv->truthyRefinement)
             visitChild(ftv->truthyRefinement->type);
         for (const FunctionType::LiteralParameter& literal : ftv->literalParameters)
-        {
-            visitChild(literal.base);
-            if (literal.validator)
-            {
-                visitChild(literal.validator);
-                visitChild(literal.placeholder);
-            }
-        }
+            visitLiteralCheck(literal);
     }
     else if (const TableType* ttv = get<TableType>(ty))
     {
@@ -288,6 +294,10 @@ void Tarjan::visitChildren(TypeId ty, int index)
 
         for (TypePackId itp : ttv->instantiatedTypePackParams)
             visitChild(itp);
+
+        // Luwu literal types
+        for (const auto& [_, check] : ttv->literalFields)
+            visitLiteralCheck(check);
     }
     else if (const MetatableType* mtv = get<MetatableType>(ty))
     {
@@ -933,6 +943,17 @@ void Substitution::replaceChildren(TypeId ty)
     };
     replaceMetadata(asMutable(ty)->metadata);
 
+    // Luwu literal types: see Tarjan::visitChildren
+    auto replaceLiteralCheck = [&](LiteralCheck& check)
+    {
+        check.forEachType(
+            [&](TypeId& checkTy)
+            {
+                checkTy = replace(checkTy);
+            }
+        );
+    };
+
     if (FunctionType* ftv = getMutable<FunctionType>(ty))
     {
         for (TypeId& generic : ftv->generics)
@@ -948,17 +969,9 @@ void Substitution::replaceChildren(TypeId ty)
             ftv->truthyRefinement->type = replace(ftv->truthyRefinement->type);
 
         // Luwu literal types: a base or validator can name the function's or its class's generics (`literal<S>`,
-        // `V<literal<string>, T>`). The placeholder is copied only with the validator (a copy of the module's public
-        // interface), so it stays the one inside it.
+        // `V<literal<string>, T>`)
         for (FunctionType::LiteralParameter& literal : ftv->literalParameters)
-        {
-            literal.base = replace(literal.base);
-            if (literal.validator)
-            {
-                literal.validator = replace(literal.validator);
-                literal.placeholder = replace(literal.placeholder);
-            }
-        }
+            replaceLiteralCheck(literal);
     }
     else if (TableType* ttv = getMutable<TableType>(ty))
     {
@@ -983,6 +996,10 @@ void Substitution::replaceChildren(TypeId ty)
 
         for (TypePackId& itp : ttv->instantiatedTypePackParams)
             itp = replace(itp);
+
+        // Luwu literal types
+        for (auto& [_, check] : ttv->literalFields)
+            replaceLiteralCheck(check);
     }
     else if (MetatableType* mtv = getMutable<MetatableType>(ty))
     {
