@@ -32,6 +32,7 @@ struct LuauTempThreadPopper
 
 using StateRef = std::unique_ptr<lua_State, void (*)(lua_State*)>;
 
+// Luwu: `ud` is the TypeFunctionRuntime whose heap this is, or null for none
 void* typeFunctionAlloc(void* ud, void* ptr, size_t osize, size_t nsize);
 
 struct TypeFunctionPrimitiveType
@@ -357,6 +358,12 @@ struct TypeFunctionRuntime
 
     // Evaluation of type functions should only be performed in the absence of parse errors in the source module
     bool allowEvaluation = true;
+
+    // Luwu: the bytes `state` has allocated, which typeFunctionAlloc caps at LuwuTypeFunctionMemoryLimitMb
+    size_t allocatedBytes = 0;
+    // Luwu: when the type function being evaluated has run for LuwuTypeFunctionTimeLimitMs (a TimeTrace::getClock time),
+    // or 0 between evaluations
+    double evaluationDeadline = 0.0;
 
     // Root scope in which the type function operates in, set up by ConstraintGenerator
     ScopePtr rootScope;

@@ -28,6 +28,8 @@
 #include <vector>
 
 LUAU_DYNAMIC_FASTINT(LuauTypeFunctionSerdeIterationLimit)
+// Luwu: the most memory the type functions' Lua state may hold, in MiB; 0 for no limit (typeFunctionAlloc)
+LUAU_FASTINTVARIABLE(LuwuTypeFunctionMemoryLimitMb, 256)
 LUAU_FASTFLAG(LuauIntegerType2)
 
 LUAU_FASTFLAGVARIABLE(LuauTypeFunctionSupportsFrozen)
@@ -240,7 +242,7 @@ void TypeFunctionRuntime::prepareState()
     if (state)
         return;
 
-    state = StateRef(lua_newstate(typeFunctionAlloc, nullptr), lua_close);
+    state = StateRef(lua_newstate(typeFunctionAlloc, this), lua_close);
     lua_State* L = state.get();
 
     lua_setthreaddata(L, this);
@@ -259,6 +261,17 @@ constexpr int kTypeUserdataTag = 42;
 
 void* typeFunctionAlloc(void* ud, void* ptr, size_t osize, size_t nsize)
 {
+    // Luwu: the type functions' heap is capped, so one that allocates without end (`while true do t[#t + 1] = {} end`,
+    // easy to have half-typed in an editor) fails with "not enough memory" instead of taking the machine's memory.
+    // Upstream doesn't limit it. Refusing leaves `ptr` as it was, which Lua expects.
+    TypeFunctionRuntime* runtime = static_cast<TypeFunctionRuntime*>(ud);
+    size_t limit = size_t(std::max(FInt::LuwuTypeFunctionMemoryLimitMb.value, 0)) << 20;
+    if (runtime && limit > 0 && nsize > osize && runtime->allocatedBytes + (nsize - osize) > limit)
+        return nullptr;
+
+    if (runtime)
+        runtime->allocatedBytes = runtime->allocatedBytes + nsize - osize;
+
     if (nsize == 0)
     {
         ::operator delete(ptr);
