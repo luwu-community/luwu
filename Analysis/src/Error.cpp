@@ -1435,6 +1435,8 @@ struct ErrorConverter
 
         std::string function = e.callee.empty() ? "this function" : "'" + e.callee + "'";
         std::string arguments = e.attemptedArgCount == 1 ? "this argument" : "these " + std::to_string(e.attemptedArgCount) + " arguments";
+        if (!e.arguments.empty())
+            arguments = "'" + e.arguments + "'";
         return "None of the overloads of " + function + " accept " + arguments + ":\n" + numberedOverloads(e.overloads);
     }
 
@@ -2064,7 +2066,7 @@ bool GenericTypePackCountMismatch::operator==(const GenericTypePackCountMismatch
 
 bool MultipleNonviableOverloads::operator==(const MultipleNonviableOverloads& rhs) const
 {
-    return attemptedArgCount == rhs.attemptedArgCount && callee == rhs.callee && overloads == rhs.overloads;
+    return attemptedArgCount == rhs.attemptedArgCount && callee == rhs.callee && overloads == rhs.overloads && arguments == rhs.arguments;
 }
 
 std::string numberedOverloads(const std::vector<std::string>& signatures)

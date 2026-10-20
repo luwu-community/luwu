@@ -2144,15 +2144,47 @@ void TypeChecker2::visit(AstExprVarargs* expr)
 }
 
 // Luwu (helpful subtyping errors): each overload as the message lists it, with its parameter names.
-static std::vector<std::string> overloadSignatures(const std::vector<TypeId>& overloads)
+static ToStringOptions overloadPrintOptions()
 {
     ToStringOptions options;
     options.functionTypeArguments = true;
     options.sortUnionMembers = false;
+    return options;
+}
+
+static std::vector<std::string> overloadSignatures(const std::vector<TypeId>& overloads)
+{
     std::vector<std::string> signatures;
     for (TypeId overload : overloads)
-        signatures.push_back(toString(overload, options));
+        signatures.push_back(toString(overload, overloadPrintOptions()));
     return signatures;
+}
+
+// Luwu (helpful subtyping errors): a call's arguments as a parameter list, printed like the overloads they're compared
+// with. A string or boolean literal is printed as written, since its type has been widened by now.
+static std::string argumentList(const AstExprCall* call, TypePackId arguments)
+{
+    const auto [head, tail] = flatten(arguments);
+    // A method call's arguments start with the receiver, which the call's AST arguments don't include
+    const size_t receivers = call->self ? 1 : 0;
+
+    std::string printed;
+    for (size_t i = 0; i < head.size(); ++i)
+    {
+        if (i > 0)
+            printed += ", ";
+
+        const AstExpr* written = i >= receivers && i - receivers < call->args.size ? call->args.data[i - receivers] : nullptr;
+        if (const AstExprConstantString* string = written ? written->as<AstExprConstantString>() : nullptr)
+            printed += "\"" + escape(std::string_view(string->value.data, string->value.size)) + "\"";
+        else if (const AstExprConstantBool* boolean = written ? written->as<AstExprConstantBool>() : nullptr)
+            printed += boolean->value ? "true" : "false";
+        else
+            printed += toString(head[i], overloadPrintOptions());
+    }
+    if (tail)
+        printed += std::string(head.empty() ? "" : ", ") + toString(*tail, overloadPrintOptions());
+    return "(" + printed + ")";
 }
 
 static void reportAvailableOverloads(ErrorVec& errors, Location location, const ModuleName& moduleName, const std::vector<TypeId>& overloads)
@@ -2553,6 +2585,7 @@ void TypeChecker2::visitCall(AstExprCall* call)
             MultipleNonviableOverloads error{argHead.size()};
             error.callee = calleeDisplayName(call->func);
             error.overloads = overloadSignatures(overloadsToReport);
+            error.arguments = argumentList(call, argsPack);
             reportError(std::move(error), call->location);
         }
         else if (!overloadsToReport.empty())
