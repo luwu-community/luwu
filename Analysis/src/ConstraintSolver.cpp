@@ -2500,8 +2500,31 @@ bool ConstraintSolver::tryDispatch(const HasPropConstraint& c, NotNull<const Con
         return false;
     }
 
-    bind(constraint, resultType, result.value_or(builtinTypes->anyType));
+    TypeId found = result.value_or(builtinTypes->anyType);
+    if (std::optional<TypeId> signature = methodSignatureInItsBody(found, constraint))
+        found = *signature;
+
+    bind(constraint, resultType, found);
     return true;
+}
+
+// Luwu Classes (rfcs/classes): a class method is the result of generalizing it, which waits for its body. Read in its own
+// body (`child:all()` in `all`), it would wait for itself, so it is the signature the body was checked with instead, as
+// a recursive local function is.
+std::optional<TypeId> ConstraintSolver::methodSignatureInItsBody(TypeId member, NotNull<const Constraint> constraint) const
+{
+    const BlockedType* pending = get<BlockedType>(follow(member));
+    const Constraint* owner = pending ? pending->getOwner() : nullptr;
+    const GeneralizationConstraint* generalization = owner ? get<GeneralizationConstraint>(*owner) : nullptr;
+    if (!generalization)
+        return std::nullopt;
+
+    for (const Scope* scope = constraint->scope.get(); scope; scope = scope->parent.get())
+    {
+        if (scope == owner->scope.get())
+            return generalization->sourceType;
+    }
+    return std::nullopt;
 }
 
 bool ConstraintSolver::tryDispatchHasIndexer(
