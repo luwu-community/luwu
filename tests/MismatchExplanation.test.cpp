@@ -1151,6 +1151,23 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_mismatched_property_notes_where_both_sides
     CHECK_EQ(notes[1].origin, result.errors[0].location);
 }
 
+// A generic's property is declared once for both sides, where neither note would say anything.
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_mismatch_inside_one_generic_declaration_has_no_notes")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type Box<T> = { value: T }
+        local function wrap(b: Box<string>): Box<number>
+            return b
+        end
+        local _ = wrap
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(getMainModule()->notes.empty());
+}
+
 // A property misspelled from one the value has is a typo, read or written, on a table, a string or a library. One that
 // differs only in case keeps upstream's suggestion, and one with nothing close stays unknown.
 TEST_CASE_FIXTURE(BuiltinsFixture, "a_misspelled_property_is_a_typo")

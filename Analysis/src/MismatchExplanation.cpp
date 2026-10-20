@@ -2405,6 +2405,11 @@ std::optional<MismatchExplanation> explainOnce(
         bool doesNotFit = d.kind == Difference::Kind::Mismatch || d.kind == Difference::Kind::MismatchExactly;
         if (!doesNotFit || d.path.empty() || d.path.back().kind != Segment::Kind::Property)
             continue;
+        // One declaration on both sides (a generic's `value: T`, instantiated twice) says nothing about the mismatch
+        bool sameDeclaration = d.expectedSite && d.givenSite && d.expectedSite->location == d.givenSite->location &&
+                               d.expectedSite->module == d.givenSite->module;
+        if (sameDeclaration)
+            continue;
         const std::string& name = d.path.back().name;
         if (d.expectedSite)
             explanation.notes.push_back(MismatchNote{d.expectedSite->location, d.expectedSite->module, expectedPropertyNote(name, d.super)});
