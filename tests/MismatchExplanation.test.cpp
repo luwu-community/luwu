@@ -1027,4 +1027,25 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "show_help_off_leaves_no_help_in_type_errors"
         CHECK_EQ(toString(error).find("Help"), std::string::npos);
 }
 
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_read_only_array_is_printed_with_read")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuwuHelpfulSubtypingErrors, true},
+    };
+
+    CheckResult result = check(R"(
+        type Item = string | number
+        local function give_back(items: { read Item }?): { Item }
+            local result: { Item } = items or {}
+            return result
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    std::string message = toString(result.errors[0]);
+    INFO(message);
+    CHECK(message.find("got '{read Item}'") != std::string::npos);
+}
+
 TEST_SUITE_END();

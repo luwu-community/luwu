@@ -481,10 +481,11 @@ struct Differ
         {
             TypeId key = follow(table->indexer->indexType);
             std::optional<std::string> value = displayWalk(table->indexer->indexResultType, walking);
+            const char* access = table->indexer->isReadOnly ? "read " : "";
             if (key == follow(builtinTypes->numberType))
-                shown = value ? std::optional<std::string>{"{" + *value + "}"} : std::nullopt;
+                shown = value ? std::optional<std::string>{"{" + std::string(access) + *value + "}"} : std::nullopt;
             else if (std::optional<std::string> keyShown = value ? displayWalk(key, walking) : std::nullopt)
-                shown = "{ [" + *keyShown + "]: " + *value + " }";
+                shown = "{ " + std::string(access) + "[" + *keyShown + "]: " + *value + " }";
         }
         else if (const UnionType* u = get<UnionType>(ty))
             shown = joinMembers(
