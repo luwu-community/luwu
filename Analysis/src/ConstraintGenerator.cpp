@@ -291,6 +291,9 @@ static const char* literalNotSupportedHereMessage()
            "argument of a type function there (`name: Validate<literal<string>>`)";
 }
 
+// Luwu literal types: a union with two literal members could check a literal two ways
+static const char* const kOneLiteralMemberMessage = "a union can have only one literal<T> member";
+
 // Luwu literal types: the variadic type of `...: T`, which is where a variadic parameter's annotation is
 static AstType* variadicParameterAnnotation(AstTypePack* tail)
 {
@@ -3868,13 +3871,13 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatTypeAlias* 
     ScopePtr defnScope = *defnScopePtr;
     resolveGenericDefaultParameters(defnScope, alias, bindingIt->second);
 
-    // Luwu literal types: `type Alias = V<literal<B>>` (or `literal<B>`) names a literal parameter's annotation
+    // Luwu literal types: `type Alias = V<literal<B>>` (or `literal<B>`, or a union with one of those as a member) names a
+    // literal annotation
     TypeId ty = nullptr;
-    if (AstTypeReference* literalRef = findLiteralReference(*defnScope, alias->type))
+    if (FFlag::LuwuLiteralTypes && hasLiteralMember(*defnScope, alias->type))
     {
         polarity = Polarity::Positive;
-        ResolvedLiteral literal = resolveLiteralAnnotation(defnScope, alias->type, literalRef, /* inTypeArguments */ false, false);
-        ty = literal.validator ? literal.validator : literal.placeholder;
+        ty = resolveLiteralAliasBody(defnScope, alias->type);
     }
     else
         ty = resolveType(
@@ -6876,6 +6879,95 @@ TypeId ConstraintGenerator::resolveParameterAnnotation(
     return resolved.type;
 }
 
+// Luwu literal types: whether `annotation` is a literal annotation, or a union (in parentheses or not) with one as a member
+bool ConstraintGenerator::hasLiteralMember(const Scope& scope, AstType* annotation)
+{
+    if (findLiteralReference(scope, annotation))
+        return true;
+    if (AstTypeGroup* group = annotation->as<AstTypeGroup>())
+        return hasLiteralMember(scope, group->type);
+    if (AstTypeUnion* options = annotation->as<AstTypeUnion>())
+    {
+        for (AstType* option : options->types)
+        {
+            if (hasLiteralMember(scope, option))
+                return true;
+        }
+    }
+    return false;
+}
+
+TypeId ConstraintGenerator::resolveLiteralAliasBody(const ScopePtr& scope, AstType* annotation)
+{
+    TypeId result = nullptr;
+    if (AstTypeReference* literalRef = findLiteralReference(*scope, annotation))
+    {
+        ResolvedLiteral literal = resolveLiteralAnnotation(scope, annotation, literalRef, /* inTypeArguments */ false, false);
+        result = literal.validator ? literal.validator : literal.placeholder;
+    }
+    else if (AstTypeGroup* group = annotation->as<AstTypeGroup>())
+        result = resolveLiteralAliasBody(scope, group->type);
+    else if (AstTypeUnion* options = annotation->as<AstTypeUnion>())
+    {
+        std::vector<TypeId> members;
+        bool seenLiteral = false;
+        for (AstType* option : options->types)
+        {
+            // A member can be an alias of a literal annotation (`CssLength`), so it's resolved before it's counted
+            TypeId member = resolveLiteralAliasBody(scope, option);
+            bool literal = literalOfType(member) || literalUnionOfType(member);
+            if (literal && seenLiteral)
+                reportError(option->location, GenericError{kOneLiteralMemberMessage});
+            seenLiteral = seenLiteral || literal;
+            members.push_back(member);
+        }
+        result = arena->addType(UnionType{std::move(members)});
+    }
+    else
+        return resolveType_(scope, annotation, /* inTypeArguments */ false);
+
+    module->astResolvedTypes[annotation] = result;
+    return result;
+}
+
+std::optional<ConstraintGenerator::ResolvedAnnotation> ConstraintGenerator::literalUnionOfType(TypeId ty)
+{
+    const UnionType* options = get<UnionType>(follow(ty));
+    if (!options)
+        return std::nullopt;
+
+    std::optional<LiteralCheck> check;
+    std::vector<TypeId> members;
+    std::vector<TypeId> alternatives;
+    for (TypeId option : options)
+    {
+        std::optional<ResolvedLiteral> literal = literalOfType(option);
+        if (!literal)
+        {
+            members.push_back(option);
+            alternatives.push_back(option);
+            continue;
+        }
+
+        // Two literal members were reported where the alias is written
+        if (check)
+            return std::nullopt;
+
+        TypeId placeholder = literal->validator ? literal->placeholder : nullptr;
+        check = LiteralCheck{literal->base, literal->validator, placeholder};
+        members.push_back(literal->base);
+    }
+
+    if (!check)
+        return std::nullopt;
+
+    if (alternatives.size() == 1)
+        check->alternatives = alternatives.front();
+    else if (alternatives.size() > 1)
+        check->alternatives = arena->addType(UnionType{std::move(alternatives)});
+    return ResolvedAnnotation{arena->addType(UnionType{std::move(members)}), check};
+}
+
 ConstraintGenerator::ResolvedAnnotation ConstraintGenerator::resolveLiteralCheckAnnotation(
     const ScopePtr& scope,
     AstType* annotation,
@@ -6897,7 +6989,7 @@ ConstraintGenerator::ResolvedAnnotation ConstraintGenerator::resolveLiteralCheck
             if (!member.check)
                 alternatives.push_back(member.type);
             else if (check)
-                reportError(option->location, GenericError{"a union can have only one literal<T> member"});
+                reportError(option->location, GenericError{kOneLiteralMemberMessage});
             else
             {
                 // A nested union's own alternatives (`(V<literal<B>> | Token)?`) are this one's too
@@ -6929,11 +7021,18 @@ ConstraintGenerator::ResolvedAnnotation ConstraintGenerator::resolveLiteralCheck
         literal = resolveLiteralAnnotation(scope, annotation, literalRef, inTypeArguments, replaceErrorWithFresh);
     else
     {
-        // An alias of one (`type Alias = V<literal<string>>`, then `name: Alias`)
+        // An alias of one (`type Alias = V<literal<string>>`, then `name: Alias`), or of a union with one as a member
         TypeId resolved = resolveType_(scope, annotation, inTypeArguments, replaceErrorWithFresh);
         literal = literalOfType(resolved);
         if (!literal)
-            return ResolvedAnnotation{resolved, std::nullopt};
+        {
+            std::optional<ResolvedAnnotation> fromUnion = literalUnionOfType(resolved);
+            if (!fromUnion)
+                return ResolvedAnnotation{resolved, std::nullopt};
+
+            module->astResolvedTypes[annotation] = fromUnion->type;
+            return *fromUnion;
+        }
     }
 
     // The annotation declares the value's type, which is `B`. TypeChecker2 checks the value against it.

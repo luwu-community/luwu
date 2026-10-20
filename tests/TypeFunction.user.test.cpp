@@ -4955,6 +4955,51 @@ type Two = { x: CssLength | Length<literal<string>> }
     CHECK_EQ(toString(result.errors[3]), "'bad!' isn't a CSS length");
 }
 
+// Luwu literal types: an alias of a union with a literal member checks like the union written out, `?` included
+TEST_CASE_FIXTURE(BuiltinsFixture, "literal_union_aliases")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastFlag literalParameters{FFlag::LuwuLiteralTypes, true};
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+
+    fileResolver.source["game/A"] = std::string(kLengthValidator) + R"(
+export type CssLength = Length<literal<string>>
+return {}
+    )";
+
+    CheckResult result = check(std::string(kLengthValidator) + R"(
+local A = require(game.A)
+class Token(const css: string) end
+type LengthU = A.CssLength | Token | number
+type Direct = Length<literal<string>> | number
+local function b(_p: { padding: LengthU? }) end
+local function d(_x: LengthU) end
+local function e(_x: Direct?) end
+
+b({ padding = "1rem" })
+b({ padding = 0 })
+b({ padding = Token("x") })
+b({})
+d("1rem")
+e(2)
+e()
+
+b({ padding = "1x!" })
+d("1x!")
+e("1x!")
+type Bad = A.CssLength | Length<literal<string>>
+    )");
+
+    REQUIRE_EQ(result.errors.size(), 4);
+    CHECK_EQ(result.errors[0].location.begin.line, 31);
+    CHECK_EQ(toString(result.errors[0]), "a union can have only one literal<T> member");
+    for (size_t i = 1; i < result.errors.size(); ++i)
+    {
+        CHECK_EQ(result.errors[i].location.begin.line, 27 + i);
+        CHECK_EQ(toString(result.errors[i]), "'1x!' isn't a CSS length");
+    }
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "typing_literal_fields")
 {
     ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};

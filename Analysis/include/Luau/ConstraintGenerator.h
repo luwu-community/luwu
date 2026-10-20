@@ -543,6 +543,13 @@ private:
         std::optional<LiteralCheck> check;
     };
     ResolvedAnnotation resolveLiteralCheckAnnotation(const ScopePtr& scope, AstType* annotation, bool inTypeArguments, bool replaceErrorWithFresh);
+    // Luwu literal types: an alias of a union with a literal member (`type Length = CssLength | Token | number`), as
+    // resolveLiteralCheckAnnotation resolves the union written out
+    std::optional<ResolvedAnnotation> literalUnionOfType(TypeId ty);
+    // Luwu literal types: an alias body that is a literal annotation or a union with one among its members. A literal
+    // member resolves to its validator (or its placeholder), which use sites recognize (literalOfType).
+    static bool hasLiteralMember(const Scope& scope, AstType* annotation);
+    TypeId resolveLiteralAliasBody(const ScopePtr& scope, AstType* annotation);
 
     // Luwu literal types: resolves a parameter's annotation (resolveLiteralCheckAnnotation), recording its check in
     // `literalParameters`
