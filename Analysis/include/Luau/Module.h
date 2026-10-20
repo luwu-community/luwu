@@ -131,9 +131,9 @@ struct Module
     DenseHashMap<const AstExpr*, TypePackId> astTypePacks{nullptr};
     DenseHashMap<const AstExpr*, TypeId> astExpectedTypes{nullptr};
 
-    // Luwu literal types: each parameter annotated `literal<B>` or `V<literal<B>>`, with its validator (null for a bare
-    // `literal<B>`). Its argument was checked where the function was called, so passing it on unchanged passes a literal.
-    DenseHashMap<const AstLocal*, TypeId> literalParameterLocals{nullptr};
+    // Luwu literal types: each parameter and local annotated `literal<B>`, `V<literal<B>>` or an alias of either, with its
+    // check. Its value was checked where it was given, so passing it on unchanged passes a literal.
+    DenseHashMap<const AstLocal*, LiteralCheck> literalLocals{nullptr};
     // Luwu literal types: `x :: literal<B>` (or `:: V<literal<B>>`, or an alias of either), which is a `B` the code says is a
     // literal: it passes as one, unchecked, like a cast to `any` does
     DenseHashSet<const AstExpr*> literalAssertions{nullptr};

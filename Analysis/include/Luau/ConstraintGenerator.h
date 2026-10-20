@@ -534,8 +534,18 @@ private:
     void checkFunctionBody(const ScopePtr& scope, AstExprFunction* fn);
     std::optional<FunctionType::TruthyRefinement> resolveTruthyRefinement(const ScopePtr& signatureScope, AstExprFunction* fn);
 
-    // Luwu literal types: resolves a parameter's annotation. For `literal<B>` and `V<literal<B>>` that is `B`, recorded in
-    // `literalParameters` with the validator if there is one. Any other annotation resolves as usual.
+    // Luwu literal types: a parameter's, local's or table field's annotation, resolved. For `literal<B>`, `V<literal<B>>`,
+    // an alias of either, or one of those followed by `?`, `type` is `B` (or `B?`) and `check` is what a value given for
+    // it must be. Any other annotation resolves as usual, with no check.
+    struct ResolvedAnnotation
+    {
+        TypeId type;
+        std::optional<LiteralCheck> check;
+    };
+    ResolvedAnnotation resolveLiteralCheckAnnotation(const ScopePtr& scope, AstType* annotation, bool inTypeArguments, bool replaceErrorWithFresh);
+
+    // Luwu literal types: resolves a parameter's annotation (resolveLiteralCheckAnnotation), recording its check in
+    // `literalParameters`
     TypeId resolveParameterAnnotation(
         const ScopePtr& scope,
         AstType* annotation,

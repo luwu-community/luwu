@@ -257,15 +257,24 @@ private:
     void visit(AstExprVarargs* expr);
     void visitCall(AstExprCall* call);
     void checkUnionMethodSelves(AstExprIndexName* indexExpr);
-    // Luwu literal types: reports an argument for a `literal<B>` parameter that isn't a literal, and runs a `V<literal<B>>`
-    // parameter's validator on its argument
-    void checkLiteralParameters(AstExprCall* call, const FunctionType* fty, size_t selfOffset, NotNull<Scope> scope);
-    // Luwu literal types: whether `value` is a cast to a literal type (`s :: literal<string>`)
-    bool isLiteralAssertion(AstExpr* value) const;
-    // Luwu literal types: whether a local's annotation is `literal<B>`
-    bool isLiteralAnnotation(AstType* annotation);
-    // Luwu literal types: reports a value given for a `local x: literal<B>` that isn't a literal
-    void checkLiteralLocal(TypeId valueTy, TypeId base, Location location);
+    // Luwu literal types: a value already checked where it was given (a literal parameter or local, a literal field read),
+    // named for messages
+    struct ForwardedLiteral
+    {
+        std::string name;
+        LiteralCheck check;
+    };
+    std::optional<ForwardedLiteral> forwardedLiteral(AstExpr* written);
+    // Luwu literal types: reports `value`, given where `check` applies, if it isn't a literal of `check`'s base or its
+    // validator rejects it. A cast to a literal type and a forwarded value pass.
+    void checkLiteralValue(AstExpr* value, TypeId inferred, const LiteralCheck& check, NotNull<Scope> scope);
+    // Luwu literal types: `value` given for `expected`: a table literal is checked field by field against the literal
+    // fields of `expected` (nested tables too), and any other table must already have been checked against them
+    void checkLiteralFields(AstExpr* value, TypeId expected, NotNull<Scope> scope);
+    // Luwu literal types: a local's value, against the local's literal check or its annotation's literal fields
+    void checkLiteralLocalValue(AstLocal* var, AstExpr* value, TypeId valueType, TypeId annotationType);
+    // Luwu literal types: each argument of a call, against its parameter's literal check or literal fields
+    void checkLiteralArguments(AstExprCall* call, const FunctionType* fty, size_t selfOffset, NotNull<Scope> scope);
     void visit(AstExprCall* call);
     std::optional<TypeId> tryStripUnionFromNil(TypeId ty) const;
     TypeId stripFromNilAndReport(TypeId ty, const Location& location);

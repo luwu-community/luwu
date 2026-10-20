@@ -4,6 +4,7 @@
 
 #include "ClassFixture.h"
 #include "Fixture.h"
+#include "Typewriter.h"
 
 #include "doctest.h"
 
@@ -4495,22 +4496,22 @@ name(s)
     CHECK_EQ(toString(requireType("foo")), "Symbol<\"foo\">");
 }
 
-TEST_CASE_FIXTURE(BuiltinsFixture, "literal_outside_parameters_and_locals")
+TEST_CASE_FIXTURE(BuiltinsFixture, "literal_outside_parameters_locals_and_fields")
 {
     ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
     ScopedFastFlag literalTypes{FFlag::LuwuLiteralTypes, true};
 
     CheckResult result = check(R"(
-type T = { kind: literal<string> }
 local function ret(): literal<string> return "a" end
+local function many(): { literal<string> } return {} end
     )");
 
     REQUIRE_EQ(result.errors.size(), 2);
     for (const TypeError& error : result.errors)
         CHECK_EQ(
             toString(error),
-            "literal<T> only works in the annotation of a function parameter, a local or a type alias, or as the argument of a "
-            "type function there (`name: Validate<literal<string>>`)"
+            "literal<T> only works in the annotation of a function parameter, a local, a table field or a type alias, or as the "
+            "argument of a type function there (`name: Validate<literal<string>>`)"
         );
 }
 
@@ -4804,6 +4805,125 @@ local function flag(short: literal<string>) end
     )");
 
     LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+// Luwu literal types: the CSS length validator the table field tests share
+static const char* const kLengthValidator = R"(
+type function Length(value: type): type
+    if not value:is("singleton") then
+        return types.error("expected a literal length")
+    end
+    local text = value:value()
+    if typeof(text) ~= "string" or not string.match(text, "^%-?[%d%.]+[a-z%%]*$") then
+        return types.error(`'{tostring(text)}' isn't a CSS length`)
+    end
+    return value
+end
+)";
+
+// Luwu literal types: a `literal<B>` field is checked wherever a value flows into it. A cast passes, and so does a value
+// already checked by the same validator; a table that wasn't checked against the field doesn't.
+TEST_CASE_FIXTURE(BuiltinsFixture, "literal_fields_are_checked_where_values_flow_in")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastFlag literalParameters{FFlag::LuwuLiteralTypes, true};
+
+    CheckResult result = check(std::string(kLengthValidator) + R"(
+type CssLength = Length<literal<string>>
+type Props = { padding: CssLength?, margin: Length<literal<string>>? }
+type Nested = { inner: Props }
+local function rule(_props: Props) end
+local function nested(_n: Nested) end
+
+rule({ padding = "1rem", margin = "2px" })
+rule({})
+local p: CssLength = "3px"
+local q: Length<literal<string>> = "3px"
+local s: string = "1px"
+rule({ padding = s :: CssLength })
+rule({ padding = p, margin = q })
+local checked: Props = { padding = "4px" }
+rule(checked)
+rule({ margin = checked.padding })
+checked.padding = "6px"
+nested({ inner = { padding = "9px" } })
+local function make(): Props
+    return { padding = "1px" }
+end
+
+rule({ padding = "1rx!" })
+local bad: CssLength = "3pq!"
+rule({ padding = s })
+checked.padding = "6zz!"
+nested({ inner = { padding = "9!" } })
+local function remake(): Props
+    return { margin = "x!" }
+end
+local raw: { padding: string } = { padding = "5px" }
+rule(raw)
+    )");
+
+    // `rule(raw)` also gets the read/write mismatch for `padding`, which isn't optional in `raw`'s type
+    REQUIRE_EQ(result.errors.size(), 9);
+    const std::vector<std::pair<int, std::string>> expected = {
+        {34, "'1rx!' isn't a CSS length"},
+        {35, "'3pq!' isn't a CSS length"},
+        {36, "expected a literal of type string, but got string"},
+        {37, "'6zz!' isn't a CSS length"},
+        {38, "'9!' isn't a CSS length"},
+        {40, "'x!' isn't a CSS length"},
+        {43,
+         "'raw' wasn't checked against 'padding: Length<literal<string>>?'; pass a table literal here, or annotate 'raw' with a type "
+         "that has that field"},
+    };
+    for (size_t i = 0; i < expected.size(); ++i)
+    {
+        CHECK_EQ(result.errors[i].location.begin.line, expected[i].first);
+        CHECK_EQ(toString(result.errors[i]), expected[i].second);
+    }
+}
+
+// Luwu literal types: a table type's literal fields are part of its module's public interface
+TEST_CASE_FIXTURE(BuiltinsFixture, "literal_fields_from_another_module")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastFlag literalParameters{FFlag::LuwuLiteralTypes, true};
+
+    fileResolver.source["game/A"] = std::string(kLengthValidator) + R"(
+export type CssLength = Length<literal<string>>
+export type Props = { padding: CssLength?, margin: Length<literal<string>>? }
+local function rule(props: Props): Props
+    return props
+end
+return { rule = rule }
+    )";
+
+    CheckResult result = check(R"(
+local A = require(game.A)
+A.rule({ padding = "1px", margin = "2em" })
+A.rule({ padding = "1p!" })
+local p: A.Props = { margin = "q!" }
+local l: A.CssLength = "z!"
+    )");
+
+    REQUIRE_EQ(result.errors.size(), 3);
+    CHECK_EQ(result.errors[0].location.begin.line, 3);
+    CHECK_EQ(toString(result.errors[0]), "'1p!' isn't a CSS length");
+    CHECK_EQ(result.errors[1].location.begin.line, 4);
+    CHECK_EQ(toString(result.errors[1]), "'q!' isn't a CSS length");
+    CHECK_EQ(result.errors[2].location.begin.line, 5);
+    CHECK_EQ(toString(result.errors[2]), "'z!' isn't a CSS length");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_literal_fields")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastFlag literalParameters{FFlag::LuwuLiteralTypes, true};
+
+    std::string before = std::string(kLengthValidator) + "type Props = { padding: Length<literal<string>>? }\nlocal function rule(_p: Props) end\n";
+    const char* after = "\nlocal unrelated = 1\nprint(unrelated + 1)\n";
+    checkTypewriting(*this, before, "rule({ padding = \"1rem\" })", after);
+    checkTypewriting(*this, before, "local checked: Props = { padding = \"2px\" }", after);
 }
 
 TEST_SUITE_END();

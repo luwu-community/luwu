@@ -368,6 +368,45 @@ struct MagicFunction
     virtual ~MagicFunction() {}
 };
 
+// Luwu literal types: what a value given for `literal<B>`, `V<literal<B>>` or an alias of either must be (a parameter's
+// argument, a local's value, a table field's value). It must be a literal of type `B` (`"-f"`, not a `string`). For
+// `V<literal<B>>`, it is also checked against `validator` with `placeholder` replaced by its literal type, so a user type
+// function can accept or reject the value itself.
+struct LiteralCheck
+{
+    TypeId base = nullptr;
+    // Both null for a bare `literal<B>`. Otherwise `placeholder` is the GenericType `literal<B>` resolved to inside
+    // `validator`.
+    TypeId validator = nullptr;
+    TypeId placeholder = nullptr;
+    // `literal<B>?`: nil or a left-out value is checked by nothing
+    bool optional = false;
+
+    // Calls `f` on each type held, for the walks that copy or visit types. A copy that skips them (a module's public
+    // interface is one) leaves them pointing into the arena it copied from.
+    template<typename F>
+    void forEachType(F&& f)
+    {
+        f(base);
+        if (validator)
+        {
+            f(validator);
+            f(placeholder);
+        }
+    }
+
+    template<typename F>
+    void forEachType(F&& f) const
+    {
+        f(base);
+        if (validator)
+        {
+            f(validator);
+            f(placeholder);
+        }
+    }
+};
+
 struct FunctionType
 {
     // Global monomorphic function
@@ -431,21 +470,12 @@ struct FunctionType
     std::optional<TruthyRefinement> truthyRefinement;
 
     // Luwu literal types: a parameter annotated `literal<B>` or `V<literal<B>>` has type `B` in the function's argument
-    // pack, which is what its body sees. Its argument at each call keeps its literal type (`"-f"`, not `string`) and must
-    // be a literal. For `V<literal<B>>`, the call also checks the argument against `validator` with `placeholder` replaced
-    // by that literal type, so a user type function can accept or reject the value itself.
-    struct LiteralParameter
+    // pack, which is what its body sees. Its argument at each call is checked as LiteralCheck says.
+    struct LiteralParameter : LiteralCheck
     {
         // Counting `self`. For the variadic parameter, the first argument it covers.
-        size_t argIndex;
-        bool variadic;
-        TypeId base;
-        // Both null for a bare `literal<B>`. Otherwise `placeholder` is the GenericType `literal<B>` resolved to inside
-        // `validator`.
-        TypeId validator;
-        TypeId placeholder;
-        // `literal<B>?`: nil or a left-out argument is checked by nothing
-        bool optional = false;
+        size_t argIndex = 0;
+        bool variadic = false;
     };
     std::vector<LiteralParameter> literalParameters;
 
@@ -599,6 +629,10 @@ struct TableType
     // Some constraints will use this information to decide whether or not they
     // are able to dispatch.
     size_t remainingProps = 0;
+
+    // Luwu literal types: the fields annotated `literal<B>`, `V<literal<B>>` or an alias of either. The property's type is
+    // `B` (or `B?`); a value given for the field is checked as LiteralCheck says, wherever it flows in.
+    std::vector<std::pair<Name, LiteralCheck>> literalFields;
 };
 
 // Represents a metatable attached to a table type. Somewhat analogous to a bound type.

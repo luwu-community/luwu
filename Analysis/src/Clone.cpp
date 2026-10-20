@@ -354,14 +354,17 @@ private:
         // Luwu literal types: the cloner maps each type once, so the placeholder inside the cloned validator is the
         // cloned placeholder
         for (FunctionType::LiteralParameter& literal : t->literalParameters)
-        {
-            literal.base = shallowClone(literal.base);
-            if (literal.validator)
+            cloneLiteralCheck(literal);
+    }
+
+    void cloneLiteralCheck(LiteralCheck& check)
+    {
+        check.forEachType(
+            [this](TypeId& ty)
             {
-                literal.validator = shallowClone(literal.validator);
-                literal.placeholder = shallowClone(literal.placeholder);
+                ty = shallowClone(ty);
             }
-        }
+        );
     }
 
     void cloneChildren(TableType* t)
@@ -380,6 +383,10 @@ private:
 
         for (TypePackId& tp : t->instantiatedTypePackParams)
             tp = shallowClone(tp);
+
+        // Luwu literal types
+        for (auto& [_, check] : t->literalFields)
+            cloneLiteralCheck(check);
     }
 
     void cloneChildren(MetatableType* t)

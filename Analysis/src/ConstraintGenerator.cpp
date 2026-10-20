@@ -283,12 +283,12 @@ std::optional<ConstraintGenerator::ResolvedLiteral> ConstraintGenerator::literal
     return std::nullopt;
 }
 
-// Luwu literal types: where `literal<B>` doesn't work yet, which is everywhere but the annotation of a parameter or a local,
-// and the type arguments of a parameter's validator
+// Luwu literal types: where `literal<B>` doesn't work yet, which is everywhere but the annotation of a parameter, a local
+// or a table field, and the type arguments of a validator there
 static const char* literalNotSupportedHereMessage()
 {
-    return "literal<T> only works in the annotation of a function parameter, a local or a type alias, or as the argument of a "
-           "type function there (`name: Validate<literal<string>>`)";
+    return "literal<T> only works in the annotation of a function parameter, a local, a table field or a type alias, or as the "
+           "argument of a type function there (`name: Validate<literal<string>>`)";
 }
 
 // Luwu literal types: the variadic type of `...: T`, which is where a variadic parameter's annotation is
@@ -3137,22 +3137,30 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatLocal* stat
         if (!firstValueType)
             firstValueType = assignee;
 
-        AstTypeReference* literalRef = local->annotation ? local->annotation->as<AstTypeReference>() : nullptr;
-        if (literalRef && isLiteralTypeReference(*scope, literalRef))
+        ResolvedAnnotation annotation{nullptr, std::nullopt};
+        if (local->annotation)
         {
             polarity = Polarity::Positive;
-            TypeId base = resolveLiteralBase(scope, literalRef, /* inTypeArguments */ false, /* replaceErrorWithFresh */ false);
+            if (FFlag::LuwuLiteralTypes)
+                annotation = resolveLiteralCheckAnnotation(scope, local->annotation, /* inTypeArguments */ false, /* replaceErrorWithFresh */ false);
+            else
+                annotation.type = resolveType(scope, local->annotation, /* inTypeArguments */ false);
+        }
+
+        if (annotation.check)
+        {
             literalLocals[assignees.size() - 1] = true;
+            module->literalLocals[local] = *annotation.check;
 
             annotatedTypes.push_back(builtinTypes->unknownType);
-            expectedTypes.emplace_back(base);
+            expectedTypes.emplace_back(annotation.type);
             scope->bindings[local] = Binding{builtinTypes->unknownType, location};
             inferredBindings[local] = {scope.get(), location, {assignee}};
         }
         else if (local->annotation)
         {
             hasAnnotation = true;
-            TypeId annotationTy = resolveType(scope, local->annotation, /* inTypeArguments */ false);
+            TypeId annotationTy = annotation.type;
             annotatedTypes.push_back(annotationTy);
             expectedTypes.emplace_back(annotationTy);
             scope->bindings[local] = Binding{annotationTy, location};
@@ -4536,7 +4544,7 @@ void ConstraintGenerator::visitClass(const ScopePtr& scope, AstStatClass* statCl
                     /* replaceErrorWithFresh */ false
                 );
                 if (primaryCtorLiteralParams.size() > literalsBefore)
-                    module->literalParameterLocals[param] = primaryCtorLiteralParams.back().validator;
+                    module->literalLocals[param] = primaryCtorLiteralParams.back();
 
                 // as with a default function argument, the default has to fit the annotation
                 if (paramDefault)
@@ -6631,7 +6639,7 @@ ConstraintGenerator::FunctionSignature ConstraintGenerator::checkFunctionSignatu
                 /* replaceErrorWithFresh*/ true
             );
             if (literalParameters.size() > literalsBefore)
-                module->literalParameterLocals[local] = literalParameters.back().validator;
+                module->literalLocals[local] = literalParameters.back();
             hasSpecifiedArgTy = true;
         }
         else
@@ -6862,22 +6870,31 @@ TypeId ConstraintGenerator::resolveParameterAnnotation(
     bool replaceErrorWithFresh
 )
 {
-    // `literal<B>?` (`V<literal<B>>?`) is the literal parameter `literal<B>` that may be left out or nil
+    ResolvedAnnotation resolved = resolveLiteralCheckAnnotation(scope, annotation, inTypeArguments, replaceErrorWithFresh);
+    if (resolved.check)
+        literalParameters.push_back(FunctionType::LiteralParameter{*resolved.check, argIndex, variadic});
+    return resolved.type;
+}
+
+ConstraintGenerator::ResolvedAnnotation ConstraintGenerator::resolveLiteralCheckAnnotation(
+    const ScopePtr& scope,
+    AstType* annotation,
+    bool inTypeArguments,
+    bool replaceErrorWithFresh
+)
+{
+    // `X?`, with `X` possibly a literal annotation (`V<literal<B>>?`): a nil or left-out value passes unchecked
     AstTypeUnion* optional = annotation->as<AstTypeUnion>();
     if (optional && optional->types.size == 2 && optional->types.data[1]->is<AstTypeOptional>())
     {
-        AstType* required = optional->types.data[0];
-        if (findLiteralReference(*scope, required))
-        {
-            size_t literalCount = literalParameters.size();
-            TypeId base = resolveParameterAnnotation(scope, required, argIndex, variadic, literalParameters, inTypeArguments, replaceErrorWithFresh);
-            LUAU_ASSERT(literalParameters.size() == literalCount + 1);
-            literalParameters.back().optional = true;
+        ResolvedAnnotation required = resolveLiteralCheckAnnotation(scope, optional->types.data[0], inTypeArguments, replaceErrorWithFresh);
+        TypeId nil = resolveType_(scope, optional->types.data[1], inTypeArguments, replaceErrorWithFresh);
+        if (required.check)
+            required.check->optional = true;
 
-            TypeId optionalBase = arena->addType(UnionType{{base, builtinTypes->nilType}});
-            module->astResolvedTypes[optional] = optionalBase;
-            return optionalBase;
-        }
+        required.type = arena->addType(UnionType{{required.type, nil}});
+        module->astResolvedTypes[optional] = required.type;
+        return required;
     }
 
     std::optional<ResolvedLiteral> literal;
@@ -6889,15 +6906,14 @@ TypeId ConstraintGenerator::resolveParameterAnnotation(
         TypeId resolved = resolveType_(scope, annotation, inTypeArguments, replaceErrorWithFresh);
         literal = literalOfType(resolved);
         if (!literal)
-            return resolved;
+            return ResolvedAnnotation{resolved, std::nullopt};
     }
 
-    // The annotation declares the parameter's type, which is `B`. TypeChecker2 checks the parameter against it.
+    // The annotation declares the value's type, which is `B`. TypeChecker2 checks the value against it.
     module->astResolvedTypes[annotation] = literal->base;
 
     TypeId placeholder = literal->validator ? literal->placeholder : nullptr;
-    literalParameters.push_back(FunctionType::LiteralParameter{argIndex, variadic, literal->base, literal->validator, placeholder});
-    return literal->base;
+    return ResolvedAnnotation{literal->base, LiteralCheck{literal->base, literal->validator, placeholder}};
 }
 
 ConstraintGenerator::ResolvedLiteral ConstraintGenerator::resolveLiteralAnnotation(
@@ -7189,6 +7205,7 @@ TypeId ConstraintGenerator::resolveTableType(const ScopePtr& scope, AstType* ty,
 {
     TableType::Props props;
     std::optional<TableIndexer> indexer;
+    std::vector<std::pair<Name, LiteralCheck>> literalFields;
 
     Polarity p = polarity;
     for (const AstTableProp& prop : tab->props)
@@ -7198,7 +7215,16 @@ TypeId ConstraintGenerator::resolveTableType(const ScopePtr& scope, AstType* ty,
         // Set the polarity for the inner type
         polarity = polarityOfAccess(prop.access, p);
 
-        TypeId propTy = resolveType_(scope, prop.type, inTypeArguments);
+        TypeId propTy;
+        if (FFlag::LuwuLiteralTypes)
+        {
+            ResolvedAnnotation resolved = resolveLiteralCheckAnnotation(scope, prop.type, inTypeArguments, /* replaceErrorWithFresh */ false);
+            propTy = resolved.type;
+            if (resolved.check)
+                literalFields.emplace_back(prop.name.value, *resolved.check);
+        }
+        else
+            propTy = resolveType_(scope, prop.type, inTypeArguments);
 
         propRef.typeLocation = prop.location;
 
@@ -7264,6 +7290,7 @@ TypeId ConstraintGenerator::resolveTableType(const ScopePtr& scope, AstType* ty,
 
     ttv->definitionModuleName = module->name;
     ttv->definitionLocation = tab->location;
+    ttv->literalFields = std::move(literalFields);
 
     return tableTy;
 }
