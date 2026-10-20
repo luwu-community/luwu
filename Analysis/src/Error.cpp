@@ -4,6 +4,7 @@
 #include "Luau/Clone.h"
 #include "Luau/Common.h"
 #include "Luau/FileResolver.h"
+#include "Luau/MismatchExplanation.h"
 #include "Luau/NotNull.h"
 #include "Luau/Scope.h"
 #include "Luau/StringUtils.h"
@@ -23,6 +24,7 @@ LUAU_FASTINTVARIABLE(LuauIndentTypeMismatchMaxTypeLength, 10)
 LUAU_FASTFLAGVARIABLE(LuauTweakAccessViolationReporting)
 LUAU_FASTFLAGVARIABLE(LuauBetterMissingPropertiesTypeError)
 LUAU_FASTFLAG(LuauBetterPackAndVariadicMismatchErrors)
+LUAU_FASTFLAG(LuwuHelpfulSubtypingErrors)
 
 static std::string wrongNumberOfArgsString(
     size_t expectedCount,
@@ -505,6 +507,9 @@ struct ErrorConverter
             case UnknownSymbol::Qualifier::Unknown:
                 break;
             }
+            // Luwu: a type name misspelled from one in scope reads like a misspelled local
+            if (e.unbound == UnknownSymbol::Unbound::Typo)
+                return unknownVariableMessage(e);
             return "Unknown type '" + e.name + "'";
         }
 
@@ -1661,10 +1666,34 @@ bool UnknownSymbol::operator==(const UnknownSymbol& rhs) const
     return name == rhs.name && qualifier == rhs.qualifier && unbound == rhs.unbound && meant == rhs.meant && definition == rhs.definition;
 }
 
+// Luwu (helpful subtyping errors): the type names in scope at `scope`, nearest first.
+static std::vector<std::string> typeNamesInScope(const Scope& scope)
+{
+    std::vector<std::string> names;
+    for (const Scope* s = &scope; s; s = s->parent.get())
+    {
+        for (const auto& [name, _] : s->exportedTypeBindings)
+            names.push_back(name);
+        for (const auto& [name, _] : s->privateTypeBindings)
+            names.push_back(name);
+    }
+    return names;
+}
+
 UnknownSymbol unknownTypeReference(const Scope& scope, const AstTypeReference& reference)
 {
     if (!reference.prefix)
-        return UnknownSymbol{reference.name.value, UnknownSymbol::Context::Type};
+    {
+        UnknownSymbol error{reference.name.value, UnknownSymbol::Context::Type};
+        if (!FFlag::LuwuHelpfulSubtypingErrors)
+            return error;
+        if (std::optional<std::string> meant = closestSpelling(error.name, typeNamesInScope(scope)))
+        {
+            error.unbound = UnknownSymbol::Unbound::Typo;
+            error.meant = *meant;
+        }
+        return error;
+    }
 
     std::string module = reference.prefix->value;
     std::string member = reference.name.value;

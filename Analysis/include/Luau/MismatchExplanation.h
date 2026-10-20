@@ -26,6 +26,14 @@ struct TypeArena;
 // the given value (its variable, else its alias, else `given`) down to one place the types disagree,
 // so the reader can find it in what they wrote. How similar the two types are decides how much is
 // said: unrelated types get one line, because the two printed types already say the rest.
+// A remark at a place in source that a bullet is about: where a mismatched property is declared, on either side.
+struct MismatchNote
+{
+    Location location;
+    std::string module;
+    std::string message;
+};
+
 struct MismatchExplanation
 {
     // Appended after the expected/got block. Starts with a line break; empty when there is nothing
@@ -67,6 +75,8 @@ struct MismatchExplanation
     std::optional<std::pair<std::string, std::string>> typo;
     // For a misspelled value inside the given table, the properties leading to it (`kind` of `{ kind = "leeve" }`).
     std::vector<std::string> typoProperties;
+    // Where the bullets' mismatched properties are declared, said there.
+    std::vector<MismatchNote> notes;
 
 
 };
@@ -74,6 +84,10 @@ struct MismatchExplanation
 // Whether `written` is close enough to `meant` to be a misspelling of it: a few edits apart, and long enough that a
 // few edits don't make it a different word.
 bool looksLikeTypo(const std::string& written, const std::string& meant);
+
+// The candidate `written` is most likely a misspelling of: the fewest edits away within a typo's limit, the first of
+// those on a tie. Nullopt when none is that close. `written` itself is never one.
+std::optional<std::string> closestSpelling(const std::string& written, const std::vector<std::string>& candidates);
 
 // Luwu (helpful subtyping errors): the misspelled properties of a table literal whose expected type is `expectedType`.
 // Each is a property the type lacks, named like one the literal leaves out. For an optional property upstream reports

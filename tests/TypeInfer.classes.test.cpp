@@ -17,6 +17,7 @@ LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass);
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
+LUAU_FASTFLAG(LuwuHelpfulSubtypingErrors)
 
 
 TEST_SUITE_BEGIN("TypeInferClasses");
@@ -1821,6 +1822,24 @@ TEST_CASE_FIXTURE(ClassesFixture, "missing_key_error_names_the_class_or_object_n
     LUAU_REQUIRE_ERROR_COUNT(2, result);
     CHECK_EQ("Key 'age' not found in object 'Dog'", toString(result.errors[0]));
     CHECK_EQ("Key 'age' not found in class 'Dog'", toString(result.errors[1]));
+}
+
+// A compound assignment checks its target as a write and as a read; the typo is reported once.
+TEST_CASE_FIXTURE(ClassesFixture, "misspelled_field_is_one_typo")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        class Player(name: string, level: number)
+            function promote(self)
+                self.levle += 1
+            end
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    REQUIRE(get<Typo>(result.errors[0]));
+    CHECK_EQ(toString(result.errors[0]), "Did you mean 'self.level' instead of 'self.levle'?");
 }
 
 TEST_CASE_FIXTURE(ClassesFixture, "generic_class_instantiated_from_inside_its_own_body")

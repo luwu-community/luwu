@@ -1042,6 +1042,39 @@ struct Differ
         return std::nullopt;
     }
 
+    static std::optional<PropertySite> propertySite(const TableType* table, const std::string& name)
+    {
+        if (!table || table->definitionModuleName.empty())
+            return std::nullopt;
+        auto it = table->props.find(name);
+        if (it == table->props.end())
+            return std::nullopt;
+        std::optional<Location> at = it->second.typeLocation ? it->second.typeLocation : it->second.location;
+        if (!at)
+            return std::nullopt;
+        return PropertySite{*at, table->definitionModuleName};
+    }
+
+    // Where the two tables declare `name`, on the differences from `from` on that are at the property itself
+    // (`pathLength` segments long) rather than inside it.
+    void notePropertySites(size_t from, size_t pathLength, const TableType* given, const TableType* expected, const std::string& name)
+    {
+        if (from == differences.size())
+            return;
+        std::optional<PropertySite> givenSite = propertySite(given, name);
+        std::optional<PropertySite> expectedSite = propertySite(expected, name);
+        for (size_t i = from; i < differences.size(); ++i)
+        {
+            Difference& d = differences[i];
+            if (d.path.size() != pathLength)
+                continue;
+            if (!d.givenSite)
+                d.givenSite = givenSite;
+            if (!d.expectedSite)
+                d.expectedSite = expectedSite;
+        }
+    }
+
     // `leafIfClean`: when nothing more specific is found, whether to report the two tables themselves.
     void diffTables(TypeId sub, TypeId super, const DiffPath& path, int depth, bool leafIfClean = true)
     {
@@ -1092,7 +1125,9 @@ struct Differ
                 continue;
             }
 
+            size_t found = differences.size();
             diff(*have, wanted, propertyPath, depth + 1);
+            notePropertySites(found, propertyPath.size(), tableOf(sub), superTable, name);
         }
 
         if (superTable->indexer && canDescend())
@@ -2326,6 +2361,17 @@ std::optional<MismatchExplanation> explainOnce(
     explanation.propertyFocus = focusOf(shownDifferences, given, expected);
     for (const Difference& d : shownDifferences)
     {
+        bool doesNotFit = d.kind == Difference::Kind::Mismatch || d.kind == Difference::Kind::MismatchExactly;
+        if (!doesNotFit || d.path.empty() || d.path.back().kind != Segment::Kind::Property)
+            continue;
+        const std::string& name = d.path.back().name;
+        if (d.expectedSite)
+            explanation.notes.push_back(MismatchNote{d.expectedSite->location, d.expectedSite->module, expectedPropertyNote(name, d.super)});
+        if (d.givenSite)
+            explanation.notes.push_back(MismatchNote{d.givenSite->location, d.givenSite->module, givenPropertyNote(name, d.sub, d.super)});
+    }
+    for (const Difference& d : shownDifferences)
+    {
         // What an alias allows only matters where a value doesn't fit it. A `nil` that could arrive, or an
         // array where one value goes, is wrong whatever the alias holds.
         bool doesNotFit = d.kind == Difference::Kind::Mismatch || d.kind == Difference::Kind::MismatchExactly;
@@ -2406,6 +2452,27 @@ std::string printedMessage(const MismatchExplanation& explanation, TypeId given,
 bool looksLikeTypo(const std::string& written, const std::string& meant)
 {
     return written.size() > kMaxTypoEdits && editDistanceWithin(written, meant, typoEditLimit(written)).has_value();
+}
+
+std::optional<std::string> closestSpelling(const std::string& written, const std::vector<std::string>& candidates)
+{
+    if (written.size() <= kMaxTypoEdits)
+        return std::nullopt;
+
+    std::optional<std::string> best;
+    size_t bestDistance = typoEditLimit(written) + 1;
+    for (const std::string& candidate : candidates)
+    {
+        if (candidate == written)
+            continue;
+        std::optional<size_t> distance = editDistanceWithin(written, candidate, bestDistance - 1);
+        if (distance)
+        {
+            best = candidate;
+            bestDistance = *distance;
+        }
+    }
+    return best;
 }
 
 // The name of a literal's property, when it's written as one (`name = v` or `["name"] = v`).

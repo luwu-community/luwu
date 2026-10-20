@@ -744,6 +744,16 @@ std::string misspelledValueHelp(const Difference& d, Rendering& rendering)
     return rendering.helpifier("typo", {"Did you mean " + quoted(*d.similarName) + " instead of " + quoted(d.sub) + " for " + quoted(path) + "?"});
 }
 
+std::string expectedPropertyNote(const std::string& name, const std::string& expected)
+{
+    return "Expected " + quoted(name + ": " + expected) + " because of this";
+}
+
+std::string givenPropertyNote(const std::string& name, const std::string& given, const std::string& expected)
+{
+    return quoted(name) + " is " + quoted(given) + " here, but should be " + quoted(expected);
+}
+
 std::string similarHeader(std::string_view arrival, size_t paths)
 {
     return "The " + std::string(arrival) + " type is similar, but has " + countedPaths(paths) + ":";
