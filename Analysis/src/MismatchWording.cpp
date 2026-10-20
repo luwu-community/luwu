@@ -802,21 +802,23 @@ static std::string labelled(const std::string& label, const std::string& type, c
     return label + " =\n    " + type + "\n" + rest;
 }
 
-std::string closestMatchHeader(const std::string& label, const std::string& memberType)
+std::string closestMatchHeader(const std::string& label, const std::optional<std::string>& memberType)
 {
-    return labelled("The closest match is " + label, memberType, ", but:");
+    std::string subject = "The closest match is " + label;
+    return memberType ? labelled(subject, *memberType, ", but:") : subject + ", but:";
 }
 
 std::string taggedMatchHeader(
     const std::string& field,
     const std::string& value,
     const std::string& label,
-    const std::string& memberType,
+    const std::optional<std::string>& memberType,
     Rendering& rendering
 )
 {
     std::string root = rendering.givenName();
-    return labelled(quoted(root + "." + field) + " is " + quoted(value) + ", so " + quoted(root) + " was compared with " + label, memberType, ":");
+    std::string subject = quoted(root + "." + field) + " is " + quoted(value) + ", so " + quoted(root) + " was compared with " + label;
+    return memberType ? labelled(subject, *memberType, ":") : subject + ":";
 }
 
 std::string unrelatedSentence(const std::optional<std::string>& givenAlias, const std::string& printedGiven, const std::string& printedExpected)
