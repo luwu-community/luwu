@@ -1,0 +1,24 @@
+~ Load function upvalue
+~ A: UPn
+(define-ircmd GET_UPVALUE
+  (operands [up :UPn])
+  (result :tvalue)
+  (class :value)
+  (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Upvalue read: SET_UPVALUE to the same upvalue slot
+  (facts (no-vm-effects))
+  (lowering (lower-get-upvalue up)))
+
+~ Call specified function
+~ A: Rn (function, followed by arguments)
+~ B: int (argument count or -1 to use all arguments up to stack top)
+~ C: int (result count or -1 to preserve all results and adjust stack top)
+~ Note: return values are placed starting from Rn specified in 'A'
+(define-ircmd CALL
+  (operands [ra :Rn] [nparams :const-int] [nresults :const-int])
+  (class :effect)
+  (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
+  (facts
+    (reads (vm-slot ra) (vm-slots (+ ra 1) nparams))
+    (writes (vm-slots ra nresults))
+    (may-write (vm-slots ra :to-top)))
+  (lowering (lower-call ra nparams nresults)))

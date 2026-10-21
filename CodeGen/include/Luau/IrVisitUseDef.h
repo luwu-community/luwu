@@ -3,265 +3,85 @@
 
 #include "Luau/Common.h"
 #include "Luau/IrData.h"
+#include "Luau/generated/IrCmdEffects.h"
+
 
 namespace Luau
 {
 namespace CodeGen
 {
 
+// A register count from a fact's (vm-slots r count): a literal (-1 is up to the stack top) or a constant operand
+inline int getVmEffectCount(IrFunction& function, IrInst& inst, IrEffectCount count)
+{
+    switch (count.kind)
+    {
+    case IrEffectCountKind::None:
+        break;
+    case IrEffectCountKind::Literal:
+        return count.value;
+    case IrEffectCountKind::IntOperand:
+        return function.intOp(getOp(inst, count.value));
+    case IrEffectCountKind::UintOperand:
+        return function.uintOp(getOp(inst, count.value));
+    case IrEffectCountKind::LowByteOfIntOperand:
+        return uint8_t(function.intOp(getOp(inst, count.value)));
+    }
+
+    CODEGEN_ASSERT(!"Missing register count");
+    return 0;
+}
+
+template<typename T>
+static void visitVmEffect(T& visitor, IrFunction& function, IrInst& inst, const IrVmEffect& effect)
+{
+    IrOp op = getOp(inst, effect.op);
+
+    switch (effect.kind)
+    {
+    case IrVmEffectKind::Use:
+        visitor.use(op, effect.offset);
+        break;
+    case IrVmEffectKind::MaybeUse:
+        visitor.maybeUse(op);
+        break;
+    case IrVmEffectKind::UseRange:
+        visitor.useRange(vmRegOp(op) + effect.offset, getVmEffectCount(function, inst, effect.count));
+        break;
+    case IrVmEffectKind::UseVarargs:
+        visitor.useVarargs(vmRegOp(op) + effect.offset);
+        break;
+    case IrVmEffectKind::Capture:
+        visitor.capture(vmRegOp(op) + effect.offset);
+        break;
+    case IrVmEffectKind::Def:
+        visitor.def(op, effect.offset);
+        break;
+    case IrVmEffectKind::MaybeDef:
+        visitor.maybeDef(op);
+        break;
+    case IrVmEffectKind::DefRange:
+        visitor.defRange(vmRegOp(op) + effect.offset, getVmEffectCount(function, inst, effect.count));
+        break;
+    }
+}
+
+// VM register uses, captures and defs, from the facts in Luna/defs/ir: all uses are visited before the defs
 template<typename T>
 static void visitVmRegDefsUses(T& visitor, IrFunction& function, IrInst& inst)
 {
-    // For correct analysis, all instruction uses must be handled before handling the definitions
-    switch (inst.cmd)
+    const IrCmdEffects& effects = getInstEffects(function, inst);
+
+    if (!effects.declaresVmRegs)
     {
-    case IrCmd::LOAD_TAG:
-    case IrCmd::LOAD_POINTER:
-    case IrCmd::LOAD_DOUBLE:
-    case IrCmd::LOAD_INT:
-    case IrCmd::LOAD_INT64:
-    case IrCmd::LOAD_FLOAT:
-    case IrCmd::LOAD_TVALUE:
-        visitor.maybeUse(OP_A(inst)); // Argument can also be a VmConst
-        break;
-    case IrCmd::STORE_TAG:
-    case IrCmd::STORE_EXTRA:
-    case IrCmd::STORE_POINTER:
-    case IrCmd::STORE_DOUBLE:
-    case IrCmd::STORE_INT:
-    case IrCmd::STORE_INT64:
-    case IrCmd::STORE_VECTOR:
-    case IrCmd::STORE_TVALUE:
-    case IrCmd::STORE_SPLIT_TVALUE:
-        visitor.maybeDef(OP_A(inst)); // Argument can also be a pointer value
-        break;
-    case IrCmd::CMP_ANY:
-        visitor.use(OP_A(inst));
-        visitor.use(OP_B(inst));
-        break;
-    case IrCmd::CMP_TAG:
-        visitor.maybeUse(OP_A(inst));
-        break;
-    case IrCmd::JUMP_IF_TRUTHY:
-    case IrCmd::JUMP_IF_FALSY:
-        visitor.use(OP_A(inst));
-        break;
-    case IrCmd::JUMP_EQ_TAG:
-        visitor.maybeUse(OP_A(inst));
-        break;
-        // A <- B, C
-    case IrCmd::DO_ARITH:
-        visitor.maybeUse(OP_B(inst)); // Argument can also be a VmConst
-        visitor.maybeUse(OP_C(inst)); // Argument can also be a VmConst
-
-        visitor.def(OP_A(inst));
-        break;
-    case IrCmd::GET_TABLE:
-        visitor.use(OP_B(inst));
-        visitor.maybeUse(OP_C(inst)); // Argument can also be a VmConst
-
-        visitor.def(OP_A(inst));
-        break;
-    case IrCmd::SET_TABLE:
-        visitor.use(OP_A(inst));
-        visitor.use(OP_B(inst));
-        visitor.maybeUse(OP_C(inst)); // Argument can also be a VmConst
-        break;
-        // A <- B
-    case IrCmd::DO_LEN:
-        visitor.use(OP_B(inst));
-
-        visitor.def(OP_A(inst));
-        break;
-    case IrCmd::GET_CACHED_IMPORT:
-        visitor.def(OP_A(inst));
-        break;
-    case IrCmd::CONCAT:
-        visitor.useRange(vmRegOp(OP_A(inst)), function.uintOp(OP_B(inst)));
-
-        visitor.defRange(vmRegOp(OP_A(inst)), function.uintOp(OP_B(inst)));
-        break;
-    case IrCmd::GET_UPVALUE:
-        break;
-    case IrCmd::SET_UPVALUE:
-        break;
-    case IrCmd::INTERRUPT:
-        break;
-    case IrCmd::BARRIER_OBJ:
-    case IrCmd::BARRIER_TABLE_FORWARD:
-        visitor.maybeUse(OP_B(inst));
-        break;
-    case IrCmd::CLOSE_UPVALS:
-        // Closing an upvalue should be counted as a register use (it copies the fresh register value)
-        // But we lack the required information about the specific set of registers that are affected
-        // Because we don't plan to optimize captured registers atm, we skip full dataflow analysis for them right now
-        break;
-    case IrCmd::CAPTURE:
-        visitor.maybeUse(OP_A(inst));
-
-        if (function.uintOp(OP_B(inst)) == 1)
-            visitor.capture(vmRegOp(OP_A(inst)));
-        break;
-    case IrCmd::SETLIST:
-        visitor.use(OP_B(inst));
-        visitor.useRange(vmRegOp(OP_C(inst)), function.intOp(OP_D(inst)));
-        break;
-    case IrCmd::CALL:
-        visitor.use(OP_A(inst));
-        visitor.useRange(vmRegOp(OP_A(inst)) + 1, function.intOp(OP_B(inst)));
-
-        visitor.defRange(vmRegOp(OP_A(inst)), function.intOp(OP_C(inst)));
-        break;
-    case IrCmd::RETURN:
-        visitor.useRange(vmRegOp(OP_A(inst)), function.intOp(OP_B(inst)));
-        break;
-
-    case IrCmd::FASTCALL:
-        visitor.use(OP_C(inst));
-
-        visitor.defRange(vmRegOp(OP_B(inst)), function.intOp(OP_D(inst)));
-        break;
-    case IrCmd::INVOKE_FASTCALL:
-        if (int count = function.intOp(OP_F(inst)); count != -1)
-        {
-            // Only LOP_FASTCALL3 lowering is allowed to have third optional argument
-            if (count >= 3 && OP_E(inst).kind == IrOpKind::Undef)
-            {
-                CODEGEN_ASSERT(OP_D(inst).kind == IrOpKind::VmReg && vmRegOp(OP_D(inst)) == vmRegOp(OP_C(inst)) + 1);
-
-                visitor.useRange(vmRegOp(OP_C(inst)), count);
-            }
-            else
-            {
-                if (count >= 1)
-                    visitor.use(OP_C(inst));
-
-                if (count >= 2)
-                    visitor.maybeUse(OP_D(inst)); // Argument can also be a VmConst
-
-                if (count >= 3)
-                    visitor.maybeUse(OP_E(inst)); // Argument can also be a VmConst
-            }
-        }
-        else
-        {
-            visitor.useVarargs(vmRegOp(OP_C(inst)));
-        }
-
-        // While ADJUST_STACK_TO_REG would semantically define the result range, we need to define it immediately
-        visitor.defRange(vmRegOp(OP_B(inst)), function.intOp(OP_G(inst)));
-        break;
-    case IrCmd::FORGLOOP:
-        // First register is not used by instruction, we check that it's still 'nil' with CHECK_TAG
-        visitor.use(OP_A(inst), 1);
-        visitor.use(OP_A(inst), 2);
-
-        visitor.def(OP_A(inst), 2);
-        visitor.defRange(vmRegOp(OP_A(inst)) + 3, function.intOp(OP_B(inst)));
-        break;
-    case IrCmd::FORGLOOP_FALLBACK:
-        visitor.useRange(vmRegOp(OP_A(inst)), 3);
-
-        visitor.def(OP_A(inst), 2);
-        visitor.defRange(vmRegOp(OP_A(inst)) + 3, uint8_t(function.intOp(OP_B(inst)))); // ignore most significant bit
-        break;
-    case IrCmd::FORGPREP_XNEXT_FALLBACK:
-        visitor.use(OP_B(inst));
-        break;
-    case IrCmd::FALLBACK_GETGLOBAL:
-        visitor.def(OP_B(inst));
-        break;
-    case IrCmd::FALLBACK_SETGLOBAL:
-        visitor.use(OP_B(inst));
-        break;
-    case IrCmd::FALLBACK_GETTABLEKS:
-        visitor.use(OP_C(inst));
-
-        visitor.def(OP_B(inst));
-        break;
-    case IrCmd::FALLBACK_SETTABLEKS:
-        visitor.use(OP_B(inst));
-        visitor.use(OP_C(inst));
-        break;
-    case IrCmd::FALLBACK_NAMECALL:
-        visitor.use(OP_C(inst));
-
-        visitor.defRange(vmRegOp(OP_B(inst)), 2);
-        break;
-    case IrCmd::FALLBACK_PREPVARARGS:
-        // No effect on explicitly referenced registers
-        break;
-    case IrCmd::FALLBACK_GETVARARGS:
-        visitor.defRange(vmRegOp(OP_B(inst)), function.intOp(OP_C(inst)));
-        break;
-    case IrCmd::FALLBACK_DUPCLOSURE:
-        visitor.def(OP_B(inst));
-        break;
-    case IrCmd::FALLBACK_FORGPREP:
-        // This instruction doesn't always redefine Rn, Rn+1, Rn+2, so we have to mark it as implicit use
-        visitor.useRange(vmRegOp(OP_B(inst)), 3);
-
-        visitor.defRange(vmRegOp(OP_B(inst)), 3);
-        break;
-    case IrCmd::FALLBACK_NEWCLASSMEMBER:
-        visitor.use(OP_B(inst));
-        visitor.use(OP_C(inst));
-        break;
-    case IrCmd::FALLBACK_NEWOBJECT:
-    {
-        // See IrData.h for the operand shapes. The class is read in place, and the registers above
-        // the instance hold either the constructor arguments (LBC_NEWOBJECT_DEFAULT and _INIT) or one
-        // value per field (LBC_NEWOBJECT_FIELDS); the INIT form additionally fills in __init and self
-        // for the CALL the compiler emits behind this instruction.
-        int ra = vmRegOp(OP_B(inst));
-        int form = function.intOp(OP_D(inst));
-        int count = function.intOp(OP_E(inst));
-
-        visitor.use(OP_C(inst));
-
-        if (form == LBC_NEWOBJECT_INIT)
-        {
-            if (count > 0)
-                visitor.useRange(ra + 3, count);
-
-            visitor.defRange(ra, 3);
-        }
-        else
-        {
-            if (count > 0)
-                visitor.useRange(ra + 1, count);
-
-            visitor.def(OP_B(inst));
-        }
-        break;
-    }
-    case IrCmd::ADJUST_STACK_TO_REG:
-        visitor.defRange(vmRegOp(OP_A(inst)), -1);
-        break;
-    case IrCmd::ADJUST_STACK_TO_TOP:
-        // While this can be considered to be a vararg consumer, it is already handled in fastcall instructions
-        break;
-    case IrCmd::GET_TYPEOF:
-        visitor.use(OP_A(inst));
-        break;
-
-    case IrCmd::FINDUPVAL:
-        visitor.use(OP_A(inst));
-        break;
-
-    case IrCmd::MARK_USED:
-        visitor.useRange(vmRegOp(OP_A(inst)), function.intOp(OP_B(inst)));
-        break;
-    case IrCmd::MARK_DEAD:
-        // Does not affect VM def/use info
-        break;
-
-    default:
-        // All instructions which reference registers have to be handled explicitly
+        // All instructions which reference registers declare facts (or no-vm-effects)
         for (auto& op : inst.ops)
             CODEGEN_ASSERT(op.kind != IrOpKind::VmReg);
-        break;
+        return;
     }
+
+    for (int i = 0; i < effects.vmEffectCount; ++i)
+        visitVmEffect(visitor, function, inst, effects.vmEffects[i]);
 }
 
 template<typename T>

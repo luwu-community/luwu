@@ -73,6 +73,7 @@ public:
     void mov(OperandX64 lhs, OperandX64 rhs);
     void mov64(RegisterX64 lhs, int64_t imm);
     void movsx(RegisterX64 lhs, OperandX64 rhs);
+    void movsxd(RegisterX64 lhs, OperandX64 rhs); // sign-extend a dword to a qword
     void movzx(RegisterX64 lhs, OperandX64 rhs);
 
     // Base one operand instruction with 2 opcode selection
@@ -183,6 +184,10 @@ public:
     void vminss(OperandX64 dst, OperandX64 src1, OperandX64 src2);
 
     void vcmpeqsd(OperandX64 dst, OperandX64 src1, OperandX64 src2);
+    // Compare with an AVX predicate (e.g. 0x0e: greater-than, ordered): each lane is all ones where it holds
+    void vcmpsd(OperandX64 dst, OperandX64 src1, OperandX64 src2, uint8_t predicate);
+    void vcmpss(OperandX64 dst, OperandX64 src1, OperandX64 src2, uint8_t predicate);
+    void vcmpps(OperandX64 dst, OperandX64 src1, OperandX64 src2, uint8_t predicate);
     void vcmpltsd(OperandX64 dst, OperandX64 src1, OperandX64 src2);
     void vcmpltss(OperandX64 dst, OperandX64 src1, OperandX64 src2);
     void vcmpeqps(OperandX64 dst, OperandX64 src1, OperandX64 src2);
