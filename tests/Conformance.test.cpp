@@ -5867,10 +5867,10 @@ bagSum = Bag.sum
 }
 
 // Luwu Traits (rfcs/classes/traits.md): a class implementing a trait from another chunk gets copies the VM makes at
-// runtime, after native code compiled the trait's chunk. Native code compiles each copy when it is made
-// (lua_ExecutionCallbacks::functioncopied), but only of a function that has native code itself. Invisible to any
-// behavioral test, so check the copies' protos.
-TEST_CASE("TraitsCopiedFromAnotherChunkCompileNatively")
+// runtime, after native code compiled the trait's chunk. Each copy runs the native code of the function it copies,
+// nested functions included, without compiling its own (lua_ExecutionCallbacks::functioncopied). A copy of an
+// interpreted function stays interpreted. Invisible to any behavioral test, so check the copies' protos.
+TEST_CASE("TraitsCopiedFromAnotherChunkShareNativeCode")
 {
     if (!luau_codegen_supported())
         return;
@@ -5914,6 +5914,15 @@ trait Summing
         end
         return total
     end
+    public function summer(self): () -> number
+        return function()
+            local total = 0
+            for _, v in self.items do
+                total += v
+            end
+            return total
+        end
+    end
 end
 NativeSumming = Summing
 )",
@@ -5937,15 +5946,43 @@ class Bag(items: { number }) implements NativeSumming, InterpretedCounting
 end
 bag = Bag({ 1, 2, 3 })
 bagSum = Bag.sum
+bagSummer = Bag.summer
 bagCount = Bag.count
+traitSum = NativeSumming.sum
+traitSummer = NativeSumming.summer
 )",
         /* native */ false);
+
+    // `Trait.method` reads as a dispatcher whose third upvalue is the trait's own closure, the one classes copy
+    auto traitOwnFunction = [&](const char* global) -> const Closure*
+    {
+        lua_getglobal(L, global);
+        REQUIRE(lua_iscfunction(L, -1));
+        REQUIRE(lua_getupvalue(L, -1, 3));
+        const Closure* own = static_cast<const Closure*>(lua_topointer(L, -1));
+        lua_pop(L, 2);
+        REQUIRE(own);
+        REQUIRE(!own->isC);
+        return own;
+    };
 
     lua_getglobal(L, "bagSum");
     const Closure* sum = static_cast<const Closure*>(lua_topointer(L, -1));
     REQUIRE(sum);
     REQUIRE(!sum->isC);
     CHECK(sum->l.p->execdata != nullptr);
+    CHECK(sum->l.p->execdata == traitOwnFunction("traitSum")->l.p->execdata);
+
+    lua_getglobal(L, "bagSummer");
+    const Closure* summer = static_cast<const Closure*>(lua_topointer(L, -1));
+    REQUIRE(summer);
+    REQUIRE(!summer->isC);
+    REQUIRE(summer->l.p->sizep == 1);
+    const Closure* ownSummer = traitOwnFunction("traitSummer");
+    REQUIRE(ownSummer->l.p->sizep == 1);
+    CHECK(summer->l.p->p[0] != ownSummer->l.p->p[0]);
+    CHECK(summer->l.p->p[0]->execdata != nullptr);
+    CHECK(summer->l.p->p[0]->execdata == ownSummer->l.p->p[0]->execdata);
 
     lua_getglobal(L, "bagCount");
     const Closure* count = static_cast<const Closure*>(lua_topointer(L, -1));
@@ -5956,6 +5993,17 @@ bagCount = Bag.count
     lua_getglobal(L, "bagSum");
     lua_getglobal(L, "bag");
     REQUIRE(lua_pcall(L, 1, 1, 0) == LUA_OK);
+    CHECK(lua_tonumber(L, -1) == 6);
+    lua_pop(L, 1);
+
+    // the closure the shared native code creates is over the copy's nested proto, and runs natively too
+    lua_getglobal(L, "bagSummer");
+    lua_getglobal(L, "bag");
+    REQUIRE(lua_pcall(L, 1, 1, 0) == LUA_OK);
+    const Closure* created = static_cast<const Closure*>(lua_topointer(L, -1));
+    REQUIRE(created);
+    CHECK(created->l.p == summer->l.p->p[0]);
+    REQUIRE(lua_pcall(L, 0, 1, 0) == LUA_OK);
     CHECK(lua_tonumber(L, -1) == 6);
 }
 
