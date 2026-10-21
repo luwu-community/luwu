@@ -3045,6 +3045,19 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                     else if (body->args.size > 0 && body->args.data[0]->name == "self")
                         report(name.location, "'__create' can't take 'self'");
                 }
+                else if (name.name == "__implemented")
+                {
+                    // Luwu Traits (rfcs/classes/traits.md): `__implemented` runs once for each class implementing the trait, given
+                    // the class. It's final so that no implementing class or needing trait can switch it off.
+                    if (!isTrait)
+                        report(name.location, "Only traits can define '__implemented'");
+                    else if (expectLocation)
+                        report(name.location, "'__implemented' can't be expected");
+                    else if (!finalLocation)
+                        report(name.location, "'__implemented' must be final: write 'final function __implemented'");
+                    else if (body->args.size > 0 && body->args.data[0]->name == "self")
+                        report(name.location, "'__implemented' can't take 'self'; it's given the implementing class");
+                }
                 else if (name.name == "__init" && isTrait && !expectLocation)
                 {
                     // Luwu Traits (rfcs/classes/traits.md): construction belongs to the class. A trait's state comes from its field defaults and
@@ -3073,7 +3086,8 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                 }
                 else if (EXPLICITLY_DISALLOWED_METAMETHODS.count(name.name.value) > 0)
                     report(name.location, "%s cannot define '%s' as a metamethod", isTrait ? "Traits" : "Classes", name.name.value);
-                else if (ALLOWED_METAMETHODS.count(name.name.value) == 0)
+                // Luwu: not while the parameter list is missing, which is how a special name being typed (`__ini`) reads
+                else if (ALLOWED_METAMETHODS.count(name.name.value) == 0 && body->argLocation)
                     report(name.location, "Cannot use '%s' as a method name: names starting with '__' are reserved", name.name.value);
             }
 

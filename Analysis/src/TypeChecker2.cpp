@@ -2460,6 +2460,10 @@ void TypeChecker2::checkTraitOverrides(AstStatClass* stat)
 
     for (const Declared& mine : declared)
     {
+        // each trait's `__implemented` hook is its own: a needing trait's doesn't override the needed trait's
+        if (mine.name == "__implemented")
+            continue;
+
         const Property* myProp = findNominalMember(traitType, mine.name);
 
         for (const ExternType* other : needed)

@@ -153,6 +153,8 @@ type Trait = {
     rank: number,
     create: boolean,
     tostring: boolean,
+    -- has a `__implemented` hook, which logs `<trait>:<class>` in `shared.hooks` for each class implementing it
+    hooked: boolean,
     implementors: { Cls },
 }
 
@@ -952,6 +954,7 @@ local function generate(seed: number): (string, string)
                 rank = rng.int(1, 1000),
                 create = false,
                 tostring = rng.chance(0.2),
+                hooked = rng.chance(0.4),
                 implementors = {},
             }
 
@@ -1297,6 +1300,13 @@ local function generate(seed: number): (string, string)
             table.insert(out, `        return "<{t.name}>"`)
             table.insert(out, "    end")
         end
+        if t.hooked then
+            table.insert(out, "    public final function __implemented(cls)")
+            table.insert(out, "        local log = shared.hooks or {}")
+            table.insert(out, "        shared.hooks = log")
+            table.insert(out, `        table.insert(log, "{t.name}:" .. class.name(cls))`)
+            table.insert(out, "    end")
+        end
         if t.create then
             -- a factory: constructs its implementing classes, through their private constructors too
             local makeable = filter(t.implementors, function(c)
@@ -1331,8 +1341,39 @@ local function generate(seed: number): (string, string)
             local kind = rng.pick({
                 "call", "dispatch", "dispatch_wrong", "implements", "refine", "type", "blocked", "ctor", "field",
                 "maybe", "isolated", "gc", "coroutine", "static", "tostring", "fields", "annotated", "private_fn", "overridden",
-                "settle",
+                "settle", "hooks",
             })
+
+            if kind == "hooks" and t.hooked then
+                -- each hooked trait logs each class implementing it exactly once, after the traits it needs
+                local lines = {
+                    "local log = shared.hooks or {}",
+                    "local function at(entry)",
+                    "    local found, count = nil, 0",
+                    "    for i, e in log do",
+                    "        if e == entry then",
+                    "            found = found or i",
+                    "            count += 1",
+                    "        end",
+                    "    end",
+                    "    return found, count",
+                    "end",
+                    `local mine, count = at("{t.name}:{c.name}")`,
+                }
+                if implements then
+                    table.insert(lines, `check(count == 1, "{t.name}'s hook ran " .. count .. " times for {c.name}")`)
+                    for _, needed in t.needs do
+                        if needed.hooked then
+                            table.insert(lines, `local theirs = at("{needed.name}:{c.name}")`)
+                            table.insert(lines, `check(theirs and mine and theirs < mine, "{needed.name}'s hook didn't run before {t.name}'s for {c.name}")`)
+                        end
+                    end
+                else
+                    table.insert(lines, `check(count == 0, "{t.name}'s hook ran for {c.name}, which doesn't implement it")`)
+                end
+                table.insert(lines, "return count")
+                op("t_hooks", lines, false, true)
+            end
 
             if kind == "overridden" then
                 -- a class implementing a trait that overrides a needed trait's function runs the override, unless it

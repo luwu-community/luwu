@@ -5454,6 +5454,56 @@ TEST_CASE_FIXTURE(ClassesFixture, "typing_trait_declarations")
     checkTypewriting(*this, before, access, kTraitTypewriterAfter);
 }
 
+// Luwu Traits (rfcs/classes/traits.md): an unannotated `__implemented` is given a `class<Trait>`, the hook isn't a member of
+// the implementing class, and a needing trait's own hook doesn't override the needed trait's final one
+TEST_CASE_FIXTURE(ClassesFixture, "implemented_hook_is_given_the_class")
+{
+    ScopedFastFlag _{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait Component
+            expect function render(self): string
+            final function __implemented(cls)
+                local _n: number = cls
+            end
+        end
+
+        trait Card needs Component
+            final function __implemented(cls) end
+        end
+
+        class Button implements Component
+            function render(self): string
+                return "button"
+            end
+        end
+
+        local _ = Button.__implemented
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 4);
+    const TypeMismatch* tm = get<TypeMismatch>(result.errors[0]);
+    REQUIRE(tm);
+    CHECK_EQ(toString(tm->givenType), "class<Component>");
+    CHECK_EQ(result.errors[1].location.begin.line, 18);
+    CHECK(get<UnknownProperty>(result.errors[1]));
+}
+
+// Luwu Traits (rfcs/classes/traits.md): typing a trait's `__implemented` hook
+TEST_CASE_FIXTURE(ClassesFixture, "typing_an_implemented_hook")
+{
+    ScopedFastFlag _{FFlag::LuwuTraits, true};
+    const char* before = "local a = 1\n";
+    const char* hook = "trait Component\n"
+                       "    final function __implemented(cls)\n"
+                       "        local registered = cls\n"
+                       "        print(registered)\n"
+                       "    end\n"
+                       "end";
+    checkTypewriting(*this, before, hook, kTraitTypewriterAfter);
+}
+
 TEST_CASE_FIXTURE(ClassesFixture, "typing_traits_that_need_and_classes_that_implement")
 {
     ScopedFastFlag _[2]{{FFlag::LuwuTraits, true}, {FFlag::LuwuDefaultArguments, true}};
