@@ -4429,7 +4429,7 @@ struct Compiler
     //   name clashes behave exactly as they do for a trait from another module.
     // - Copies every function with a body, including defaults the class overrides: an override can still call the trait's
     //   version with `Trait.method(self)`, and that runs the trait's code through this copy. Skips `expect` functions
-    //   (no body) and a factory's `__create`, which belongs to the trait, not the class.
+    //   (no body), a factory's `__create` and the `__implemented` hook, which belong to the trait, not the class.
     // - Also copies each trait's `__traitinit`, which construction runs for every object (LOP_INITTRAITS), so the trait's
     //   fields are computed natively too.
     void buildTraitFunctionCopies(AstStatBlock* root, Allocator& allocator, std::vector<AstExprFunction*>& functionsToCompile)
@@ -4458,7 +4458,8 @@ struct Compiler
                 {
                     const AstClassMethod* method = member.get_if<AstClassMethod>();
 
-                    if (!method || method->expectLocation || method->functionName == "__create")
+                    bool traitOnly = method && (method->functionName == "__create" || method->functionName == "__implemented");
+                    if (!method || method->expectLocation || traitOnly)
                         continue;
 
                     AstExprFunction* copy = copyTraitFunction(decl, method->function, method->nameLocation, allocator, functionsToCompile);

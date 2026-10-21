@@ -1882,9 +1882,10 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
             uint8_t flags = trait->memberflags[off];
             bool isfield = off < trait->numberofinstancemembers;
 
-            // a factory's `__create` belongs to the trait alone
-            bool iscreate = name && luaR_hasreservedprefix(name) && name == luaS_newliteral(L, "__create");
-            bool provided = name && !(flags & LBC_CLASSMEMBER_EXPECTED) && !luaR_istraitinternal(L, name) && !iscreate;
+            // a factory's `__create` and the `__implemented` hook belong to the trait alone
+            bool traitonly = name && luaR_hasreservedprefix(name) &&
+                             (name == luaS_newliteral(L, "__create") || name == luaS_newliteral(L, "__implemented"));
+            bool provided = name && !(flags & LBC_CLASSMEMBER_EXPECTED) && !luaR_istraitinternal(L, name) && !traitonly;
             if (!provided)
                 continue;
 
@@ -2348,6 +2349,22 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
     classdef->traitspending = false;
     // every compiled copy the class uses is a member, a trait default or a trait initializer by now
     classdef->compiledtraitcopies = NULL;
+
+    // Each trait's `__implemented` hook, given the finished class, in dependency order: a trait's needed traits' hooks run
+    // before its own. An error in one is raised from the class statement.
+    for (int i = 0; i < numtraits; i++)
+    {
+        LuauClass* trait = classvalue(L->base + orderbase + i);
+        const TValue* hook = luaR_findstaticmember(L, trait, "__implemented");
+        if (!hook)
+            continue;
+
+        luaD_checkstack(L, 2);
+        setobj2s(L, L->top, hook);
+        setclassvalue(L, L->top + 1, classdef);
+        L->top += 2;
+        luaD_call(L, L->top - 2, 0);
+    }
 
     L->top = restorestack(L, oldtop);
 }

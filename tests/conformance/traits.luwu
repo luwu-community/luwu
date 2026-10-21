@@ -614,6 +614,59 @@ assert(Fallible(1) == 1 and Fallible(-1) == nil)
 expectfail("__create through a class", "'__create'", function() return Implementer.__create end)
 expectfail("trait without __create", "trait 'Greeter' can't be called: it has no '__create'", function() return Greeter() end)
 
+-- `__implemented` runs once for each class implementing the trait, directly or through `needs`, given the finished
+-- class, after the hooks of the traits it needs. It isn't copied into the class.
+local implementedorder = {}
+local registry = {}
+trait Registered
+    expect function __init(self)
+    function __create(name: string)
+        return registry[name]()
+    end
+    final function __implemented(cls)
+        registry[class.name(cls)] = cls
+        table.insert(implementedorder, "Registered:" .. class.name(cls))
+    end
+end
+trait Widget needs Registered
+    final function __implemented(cls)
+        table.insert(implementedorder, "Widget:" .. class.name(cls))
+    end
+end
+trait Labeled needs Registered end
+
+class Knob() implements Widget, Labeled end
+class Dial() implements Registered end
+
+assert(table.concat(implementedorder, " ") == "Registered:Knob Widget:Knob Registered:Dial", table.concat(implementedorder, " "))
+assert(class.isinstance(Registered("Knob"), Knob) and class.isinstance(Registered("Dial"), Dial))
+expectfail("__implemented through a class", "'__implemented'", function() return Knob.__implemented end)
+
+-- a hook that raises fails the class statement, and the hook can construct the class it's given
+expectfail("a failing hook", "refusing Bad", function()
+    return chunk([[
+trait Strict
+    final function __implemented(cls)
+        error(`refusing {class.name(cls)}`)
+    end
+end
+class Bad() implements Strict end
+]])
+end)
+do
+    local made = chunk([[
+local made = {}
+trait Eager
+    final function __implemented(cls)
+        table.insert(made, cls())
+    end
+end
+class Thing() implements Eager end
+return made
+]])
+    assert(#made == 1 and class.name(class.of(made[1])) == "Thing")
+end
+
 do
     local co = coroutine.wrap(function()
         return Fallible(coroutine.yield(1))
